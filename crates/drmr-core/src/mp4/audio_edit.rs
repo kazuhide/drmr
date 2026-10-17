@@ -133,7 +133,8 @@ impl AudioEdit {
     }
 
     /// Replace the trim and compensate decode times, keeping presentation timestamps fixed.
-    /// Fragment offsets remain valid: only the separate moov grows; moof sizes do not change.
+    /// Fragment-relative offsets stay valid because moof sizes do not change. Optional
+    /// random-access indexes are omitted; absolute media offsets are rejected.
     pub(crate) fn restore(
         &self,
         init: &Path,
@@ -143,7 +144,7 @@ impl AudioEdit {
         let (rewritten, shift) = self.rewrite_init(&data)?;
         let mut rewritten_segments = Vec::new();
         for path in segments {
-            let mut bytes = std::fs::read(path)?;
+            let mut bytes = without_indexes(&std::fs::read(path)?)?;
             shift_decode_times(&mut bytes, shift)?;
             rewritten_segments.push((path, bytes));
         }
@@ -217,7 +218,7 @@ fn rewrite(data: &[u8], nodes: &[Mp4Box], edit: &[u8]) -> Result<Vec<u8>, Mp4Err
     let mut out = Vec::new();
     for node in nodes {
         let kind = node.kind();
-        if kind == *b"edts" {
+        if matches!(&kind, b"edts" | b"mfra" | b"sidx" | b"ssix") {
             continue;
         }
         if matches!(&kind, b"moov" | b"trak") {
@@ -237,6 +238,17 @@ fn rewrite(data: &[u8], nodes: &[Mp4Box], edit: &[u8]) -> Result<Vec<u8>, Mp4Err
         }
     }
     Ok(out)
+}
+
+// Optional indexes can contain absolute offsets or pre-edit times. External manifests
+// locate these fragments; omit indexes rather than leave stale seek targets behind.
+fn without_indexes(data: &[u8]) -> Result<Vec<u8>, Mp4Error> {
+    let boxes = parse_boxes(data)?;
+    Ok(boxes
+        .iter()
+        .filter(|node| !matches!(&node.kind(), b"mfra" | b"sidx" | b"ssix"))
+        .flat_map(|node| node.header.bytes(data).iter().copied())
+        .collect())
 }
 
 fn shift_decode_times(data: &mut [u8], shift: i128) -> Result<(), Mp4Error> {
@@ -380,5 +392,110 @@ mod tests {
         assert_eq!(AudioEdit::from_bytes(&movie(&complex), 0), Err(UNSUPPORTED));
         let target = [movie(&[]), fragment(0, u64::from(u32::MAX))].concat();
         assert_eq!(edit.rewrite_init(&target), Err(UNSUPPORTED));
+    }
+
+    fn indexed_target() -> Vec<u8> {
+        let movie = movie(&[]);
+        let fragment = [fragment(0, 94976), boxed(*b"mdat", b"AAC payload")].concat();
+        let mut index = vec![0; 4];
+        index.extend(1u32.to_be_bytes());
+        index.extend(48000u32.to_be_bytes());
+        index.extend(94976u32.to_be_bytes());
+        index.extend(u32::try_from(movie.len()).unwrap().to_be_bytes());
+        index.extend([0, 0, 0, 1]);
+        index.extend(u32::try_from(fragment.len()).unwrap().to_be_bytes());
+        index.extend(1024u32.to_be_bytes());
+        index.extend(0x9000_0000u32.to_be_bytes());
+        let index = boxed(*b"sidx", &index);
+        let mut tfra = vec![1, 0, 0, 0];
+        tfra.extend(1u32.to_be_bytes());
+        tfra.extend(0u32.to_be_bytes());
+        tfra.extend(1u32.to_be_bytes());
+        tfra.extend(94976u64.to_be_bytes());
+        tfra.extend(
+            u64::try_from(index.len() + movie.len())
+                .unwrap()
+                .to_be_bytes(),
+        );
+        tfra.extend([1, 1, 1]);
+        let tfra = boxed(*b"tfra", &tfra);
+        let mfra_size = u32::try_from(8 + tfra.len() + 16).unwrap();
+        let footer = boxed(
+            *b"mfro",
+            &[vec![0; 4], mfra_size.to_be_bytes().to_vec()].concat(),
+        );
+        let mfra = boxed(*b"mfra", &[tfra, footer].concat());
+        [index, movie, fragment, mfra].concat()
+    }
+
+    fn assert_index_offsets_are_valid(data: &[u8]) {
+        let boxes = parse_boxes(data).unwrap();
+        for node in walk(&boxes) {
+            let payload = node.header.payload(data);
+            let offset = match &node.kind() {
+                b"tfra" => usize::try_from(u64::from_be_bytes(payload[24..32].try_into().unwrap()))
+                    .unwrap(),
+                b"sidx" => {
+                    node.header.offset
+                        + node.header.size
+                        + usize::try_from(u32::from_be_bytes(payload[16..20].try_into().unwrap()))
+                            .unwrap()
+                }
+                _ => continue,
+            };
+            assert_eq!(
+                data.get(offset + 4..offset + 8),
+                Some(b"moof".as_slice()),
+                "an index must point at the actual moof offset"
+            );
+        }
+    }
+
+    #[test]
+    fn rewritten_audio_never_retains_stale_random_access_indexes() {
+        let edit = AudioEdit {
+            media_time: 1024,
+            timescale: 48000,
+        };
+        let target = indexed_target();
+        assert_index_offsets_are_valid(&target);
+        let (restored, _) = edit.rewrite_init(&target).unwrap();
+        assert_index_offsets_are_valid(&restored);
+        let boxes = parse_boxes(&restored).unwrap();
+        assert!(
+            walk(&boxes)
+                .iter()
+                .all(|node| !matches!(&node.kind(), b"mfra" | b"tfra" | b"sidx" | b"ssix"))
+        );
+        assert!(
+            restored
+                .windows(b"AAC payload".len())
+                .any(|bytes| bytes == b"AAC payload")
+        );
+
+        let directory = tempfile::tempdir().unwrap();
+        let init = directory.path().join("init.mp4");
+        let segment = directory.path().join("segment.m4s");
+        std::fs::write(&init, movie(&[])).unwrap();
+        // A separately stored segment can carry its own relative segment index.
+        let target_boxes = parse_boxes(&target).unwrap();
+        let mut bytes = target_boxes[0].header.bytes(&target).to_vec();
+        bytes[24..28].copy_from_slice(&0u32.to_be_bytes());
+        for node in target_boxes
+            .iter()
+            .filter(|node| matches!(&node.kind(), b"moof" | b"mdat"))
+        {
+            bytes.extend(node.header.bytes(&target));
+        }
+        bytes.extend(boxed(*b"ssix", &[0; 8]));
+        assert_index_offsets_are_valid(&bytes);
+        std::fs::write(&segment, bytes).unwrap();
+        edit.restore(&init, std::slice::from_ref(&segment)).unwrap();
+        let bytes = std::fs::read(segment).unwrap();
+        assert!(
+            walk(&parse_boxes(&bytes).unwrap())
+                .iter()
+                .all(|node| !matches!(&node.kind(), b"mfra" | b"tfra" | b"sidx" | b"ssix"))
+        );
     }
 }
