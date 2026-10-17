@@ -184,7 +184,7 @@ fn runners_share_a_limit_across_real_child_processes_and_nested_pools() {
                         let result = runner
                             .run_tool(
                                 &[
-                                    "python3".into(),
+                                    PYTHON.into(),
                                     "-c".into(),
                                     script.into(),
                                     database.to_string_lossy().into_owned(),
@@ -216,7 +216,7 @@ fn a_larger_capture_override_is_charged_before_spawning() {
     let normal = Claim::for_workload(Workload::default(), 16 * 1024 * 1024, 1024 * 1024);
     let runner = ToolRunner::new(Arc::new(Secrets::new()), Arc::new(NoSink))
         .with_limiter(Arc::new(Limiter::new(1, normal.memory_bytes)));
-    let argv = ["python3".into(), "-c".into(), "print('complete')".into()];
+    let argv = [PYTHON.into(), "-c".into(), "print('complete')".into()];
     assert_eq!(
         runner
             .run_tool(&argv, "metadata", &RunOptions::default())
@@ -257,7 +257,7 @@ fn admission_waits_obey_the_call_deadline_and_cancel_without_spawning() {
     let _held = limiter.acquire(claim, None, None).unwrap();
     let runner = ToolRunner::new(Arc::new(Secrets::new()), Arc::new(NoSink)).with_limiter(limiter);
     let argv = [
-        "python3".into(),
+        PYTHON.into(),
         "-c".into(),
         "import pathlib,sys; pathlib.Path(sys.argv[1]).write_text('spawned')".into(),
         marker.to_string_lossy().into_owned(),
@@ -305,7 +305,7 @@ fn a_capture_failure_returns_its_reservation_for_the_next_child() {
         runner
             .run_tool(
                 &[
-                    "python3".into(),
+                    PYTHON.into(),
                     "-c".into(),
                     "print('x'*(20*1024*1024))".into()
                 ],
@@ -319,7 +319,7 @@ fn a_capture_failure_returns_its_reservation_for_the_next_child() {
     assert_eq!(
         runner
             .run_tool(
-                &["python3".into(), "-c".into(), "print('complete')".into()],
+                &[PYTHON.into(), "-c".into(), "print('complete')".into()],
                 "next-child",
                 &RunOptions {
                     timeout: Some(Duration::from_secs(1)),
