@@ -1,0 +1,19 @@
+{
+ "resume_log": "{\"schema_version\": \"1\"}\n{\"asset_id\":\"a\",\"outcome\":\"done-fail\",\"reason\":\"content-fail\",\"attempts\":1,\"ts\":\"2026-10-17T00:00:00+00:00\"}\n{\"asset_id\":\"b\",\"outcome\":\"done-pass\",\"reason\":\"ok\",\"attempts\":2,\"ts\":\"2026-10-17T00:00:01.000001+00:00\"}\n{\"asset_id\":\"c\",\"outcome\":\"done-fail\",\"reason\":\"retries-exhausted:asset-timeout\",\"attempts\":3,\"ts\":\"t\\u00e9\"}\n",
+ "repaired_complete_tail": "{\"schema_version\": \"1\"}\n{\"asset_id\":\"a\",\"outcome\":\"done-pass\",\"reason\":\"ok\",\"attempts\":1,\"ts\":\"x\"}\n{\"asset_id\":\"b\",\"outcome\":\"done-pass\",\"reason\":\"ok\",\"attempts\":1,\"ts\":\"y\"}\n",
+ "repaired_cut_tail": "{\"schema_version\": \"1\"}\n{\"asset_id\":\"a\",\"outcome\":\"done-pass\",\"reason\":\"ok\",\"attempts\":1,\"ts\":\"x\"}\n{\"asset_id\":\"b\",\"outcome\":\"done-pass\",\"reason\":\"ok\",\"attempts\":1,\"ts\":\"y\"}\n",
+ "repaired_garbage_without_newline": "{\"asset_id\":\"b\",\"outcome\":\"done-pass\",\"reason\":\"ok\",\"attempts\":1,\"ts\":\"y\"}\n",
+ "report_json": "{\n  \"schema_version\": \"1\",\n  \"total\": 3,\n  \"passed\": 1,\n  \"failed\": 2,\n  \"skipped\": 2,\n  \"retried\": 1,\n  \"outcomes\": [\n    {\n      \"asset_id\": \"f\",\n      \"outcome\": \"done-fail\",\n      \"reason\": \"unclassified\",\n      \"attempts\": 1.5,\n      \"ts\": null\n    },\n    {\n      \"asset_id\": \"g\",\n      \"outcome\": \"done-pass\",\n      \"reason\": \"ok\",\n      \"attempts\": true,\n      \"ts\": [\n        1\n      ]\n    },\n    {\n      \"asset_id\": \"h\",\n      \"outcome\": \"done-fail\",\n      \"reason\": \"missing-key\",\n      \"attempts\": 2,\n      \"ts\": \"z\"\n    }\n  ],\n  \"reasons\": {\n    \"unclassified\": 1,\n    \"ok\": 1,\n    \"missing-key\": 1\n  },\n  \"cpu_count\": 8,\n  \"max_workers\": null,\n  \"wall_clock_s\": 12.5,\n  \"throughput_assets_per_h\": 288.0\n}",
+ "report_md": "# Batch report\n\nTotal: 3; passed: 1; failed: 2; skipped: 2\n\n| Asset | Outcome | Reason | Attempts |\n|---|---|---|---|\n| f | done-fail | unclassified | 1.5 |\n| g | done-pass | ok | True |\n| h | done-fail | missing-key | 2 |\n",
+ "report_zero_json": "{\n  \"schema_version\": \"1\",\n  \"total\": 0,\n  \"passed\": 0,\n  \"failed\": 0,\n  \"skipped\": 0,\n  \"retried\": 0,\n  \"outcomes\": [],\n  \"reasons\": {},\n  \"cpu_count\": 1,\n  \"max_workers\": 4,\n  \"wall_clock_s\": 0.0,\n  \"throughput_assets_per_h\": 0\n}",
+ "plan": [
+  "{\"asset_id\": \"f\", \"action\": \"quarantine\", \"reason\": \"unclassified\"}",
+  "{\"asset_id\": \"g\", \"action\": \"skip\", \"reason\": \"ok\"}",
+  "{\"asset_id\": \"n\", \"action\": \"run\", \"reason\": null}"
+ ],
+ "plan_retry_failed": [
+  "{\"asset_id\": \"f\", \"action\": \"run\", \"reason\": \"unclassified\"}",
+  "{\"asset_id\": \"g\", \"action\": \"skip\", \"reason\": \"ok\"}",
+  "{\"asset_id\": \"n\", \"action\": \"run\", \"reason\": null}"
+ ]
+}

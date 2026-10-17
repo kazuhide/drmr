@@ -1,0 +1,3000 @@
+{
+ "bento4": "(Bento4 Version 1.6.0.0)",
+ "cases": [
+  {
+   "name": "cbcs-video",
+   "hex": "000000186674797069736f360000000069736f3664617368000001c46d6f6f76000001437472616b0000013b6d646961000000206d64686400000000000000000000000000015f900000000055c400000000002d68646c72000000000000000076696465000000000000000000000000566964656f48616e646c657200000000e66d696e66000000de7374626c000000d6737473640000000000000001000000c6656e637600000000000000010000000000000000000000000000000000400040004800000048000000000000000100000000000000000000000000000000000000000000000000000000000000000018ffff0000000f617663430164001fffe0000000006173696e660000000c66726d6161766331000000147363686d00000000636263730001000000000039736368690000003174656e630100000000190100000102030405060708090a0b0c0d0e0f1020202020202020202020202020202020000000327073736800000000edef8ba979d64acea3c827dcd51d21ed000000121210000102030405060708090a0b0c0d0e0f000000477073736801000000000102030405060708090a0b0c0d0e0f00000002000102030405060708090a0b0c0d0e0f0000000000000000000000000000000000000003616263",
+   "tree": [
+    {
+     "name": "ftyp",
+     "header_size": 8,
+     "size": 24,
+     "major_brand": "iso6",
+     "minor_version": 0,
+     "compatible_brand": "dash"
+    },
+    {
+     "name": "moov",
+     "header_size": 8,
+     "size": 452,
+     "children": [
+      {
+       "name": "trak",
+       "header_size": 8,
+       "size": 323,
+       "children": [
+        {
+         "name": "mdia",
+         "header_size": 8,
+         "size": 315,
+         "children": [
+          {
+           "name": "mdhd",
+           "header_size": 12,
+           "size": 32,
+           "timescale": 90000,
+           "duration": 0,
+           "duration(ms)": 0,
+           "language": "und"
+          },
+          {
+           "name": "hdlr",
+           "header_size": 12,
+           "size": 45,
+           "handler_type": "vide",
+           "handler_name": "VideoHandler"
+          },
+          {
+           "name": "minf",
+           "header_size": 8,
+           "size": 230,
+           "children": [
+            {
+             "name": "stbl",
+             "header_size": 8,
+             "size": 222,
+             "children": [
+              {
+               "name": "stsd",
+               "header_size": 12,
+               "size": 214,
+               "entry_count": 1,
+               "children": [
+                {
+                 "name": "encv",
+                 "header_size": 8,
+                 "size": 198,
+                 "data_reference_index": 1,
+                 "width": 64,
+                 "height": 64,
+                 "compressor": "",
+                 "children": [
+                  {
+                   "name": "avcC",
+                   "header_size": 8,
+                   "size": 15,
+                   "Configuration Version": 1,
+                   "Profile": "High",
+                   "Profile Compatibility": 0,
+                   "Level": 31,
+                   "NALU Length Size": 4
+                  },
+                  {
+                   "name": "sinf",
+                   "header_size": 8,
+                   "size": 97,
+                   "children": [
+                    {
+                     "name": "frma",
+                     "header_size": 8,
+                     "size": 12,
+                     "original_format": "avc1"
+                    },
+                    {
+                     "name": "schm",
+                     "header_size": 12,
+                     "size": 20,
+                     "scheme_type": "cbcs",
+                     "scheme_version": 65536
+                    },
+                    {
+                     "name": "schi",
+                     "header_size": 8,
+                     "size": 57,
+                     "children": [
+                      {
+                       "name": "tenc",
+                       "header_size": 12,
+                       "size": 49,
+                       "version": 1,
+                       "default_isProtected": 1,
+                       "default_Per_Sample_IV_Size": 0,
+                       "default_KID": "[00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f]",
+                       "default_crypt_byte_block": 1,
+                       "default_skip_byte_block": 9,
+                       "default_constant_IV_size": 16,
+                       "default_constant_IV": "[20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20]"
+                      }
+                     ]
+                    }
+                   ]
+                  }
+                 ]
+                }
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "name": "pssh",
+       "header_size": 12,
+       "size": 50,
+       "system_id": "[ed ef 8b a9 79 d6 4a ce a3 c8 27 dc d5 1d 21 ed]",
+       "data_size": 18
+      },
+      {
+       "name": "pssh",
+       "header_size": 12,
+       "size": 71,
+       "version": 1,
+       "system_id": "[00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f]",
+       "data_size": 3,
+       "kid 0": "[00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f]",
+       "kid 1": "[00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00]"
+      }
+     ]
+    }
+   ],
+   "init_probe": {
+    "ok": [
+     "cbcs",
+     "20202020202020202020202020202020",
+     "000102030405060708090a0b0c0d0e0f",
+     0
+    ]
+   },
+   "tenc_constant_iv_hex": {
+    "ok": "20202020202020202020202020202020"
+   },
+   "fragment_boundary": {
+    "ok": null
+   },
+   "tenc_pattern": {
+    "ok": [
+     1,
+     9
+    ]
+   }
+  },
+  {
+   "name": "cbcs-audio",
+   "hex": "000000186674797069736f360000000069736f36646173680000010a6d6f6f76000001027472616b000000fa6d646961000000206d64686400000000000000000000000000015f900000000055c400000000002d68646c72000000000000000076696465000000000000000000000000566964656f48616e646c657200000000a56d696e660000009d7374626c0000009573747364000000000000000100000085656e6361000000000000000100000000000000000002001000000000bb8000000000006173696e660000000c66726d616d703461000000147363686d00000000636263730001000000000039736368690000003174656e630100000000000100000102030405060708090a0b0c0d0e0f1020202020202020202020202020202020",
+   "tree": [
+    {
+     "name": "ftyp",
+     "header_size": 8,
+     "size": 24,
+     "major_brand": "iso6",
+     "minor_version": 0,
+     "compatible_brand": "dash"
+    },
+    {
+     "name": "moov",
+     "header_size": 8,
+     "size": 266,
+     "children": [
+      {
+       "name": "trak",
+       "header_size": 8,
+       "size": 258,
+       "children": [
+        {
+         "name": "mdia",
+         "header_size": 8,
+         "size": 250,
+         "children": [
+          {
+           "name": "mdhd",
+           "header_size": 12,
+           "size": 32,
+           "timescale": 90000,
+           "duration": 0,
+           "duration(ms)": 0,
+           "language": "und"
+          },
+          {
+           "name": "hdlr",
+           "header_size": 12,
+           "size": 45,
+           "handler_type": "vide",
+           "handler_name": "VideoHandler"
+          },
+          {
+           "name": "minf",
+           "header_size": 8,
+           "size": 165,
+           "children": [
+            {
+             "name": "stbl",
+             "header_size": 8,
+             "size": 157,
+             "children": [
+              {
+               "name": "stsd",
+               "header_size": 12,
+               "size": 149,
+               "entry_count": 1,
+               "children": [
+                {
+                 "name": "enca",
+                 "header_size": 8,
+                 "size": 133,
+                 "data_reference_index": 1,
+                 "channel_count": 2,
+                 "sample_size": 16,
+                 "sample_rate": 48000,
+                 "children": [
+                  {
+                   "name": "sinf",
+                   "header_size": 8,
+                   "size": 97,
+                   "children": [
+                    {
+                     "name": "frma",
+                     "header_size": 8,
+                     "size": 12,
+                     "original_format": "mp4a"
+                    },
+                    {
+                     "name": "schm",
+                     "header_size": 12,
+                     "size": 20,
+                     "scheme_type": "cbcs",
+                     "scheme_version": 65536
+                    },
+                    {
+                     "name": "schi",
+                     "header_size": 8,
+                     "size": 57,
+                     "children": [
+                      {
+                       "name": "tenc",
+                       "header_size": 12,
+                       "size": 49,
+                       "version": 1,
+                       "default_isProtected": 1,
+                       "default_Per_Sample_IV_Size": 0,
+                       "default_KID": "[00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f]",
+                       "default_crypt_byte_block": 0,
+                       "default_skip_byte_block": 0,
+                       "default_constant_IV_size": 16,
+                       "default_constant_IV": "[20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20]"
+                      }
+                     ]
+                    }
+                   ]
+                  }
+                 ]
+                }
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "init_probe": {
+    "ok": [
+     "cbcs",
+     "20202020202020202020202020202020",
+     "000102030405060708090a0b0c0d0e0f",
+     0
+    ]
+   },
+   "tenc_constant_iv_hex": {
+    "ok": "20202020202020202020202020202020"
+   },
+   "fragment_boundary": {
+    "ok": null
+   },
+   "tenc_pattern": {
+    "ok": [
+     0,
+     0
+    ]
+   }
+  },
+  {
+   "name": "cenc-v0",
+   "hex": "000000186674797069736f360000000069736f36646173680000012b6d6f6f76000001237472616b0000011b6d646961000000206d64686400000000000000000000000000015f900000000055c400000000002d68646c72000000000000000076696465000000000000000000000000566964656f48616e646c657200000000c66d696e66000000be7374626c000000b6737473640000000000000001000000a6656e637600000000000000010000000000000000000000000000000000400040004800000048000000000000000100000000000000000000000000000000000000000000000000000000000000000018ffff0000005073696e660000000c66726d6161766331000000147363686d0000000063656e630001000000000028736368690000002074656e630000000000000108000102030405060708090a0b0c0d0e0f",
+   "tree": [
+    {
+     "name": "ftyp",
+     "header_size": 8,
+     "size": 24,
+     "major_brand": "iso6",
+     "minor_version": 0,
+     "compatible_brand": "dash"
+    },
+    {
+     "name": "moov",
+     "header_size": 8,
+     "size": 299,
+     "children": [
+      {
+       "name": "trak",
+       "header_size": 8,
+       "size": 291,
+       "children": [
+        {
+         "name": "mdia",
+         "header_size": 8,
+         "size": 283,
+         "children": [
+          {
+           "name": "mdhd",
+           "header_size": 12,
+           "size": 32,
+           "timescale": 90000,
+           "duration": 0,
+           "duration(ms)": 0,
+           "language": "und"
+          },
+          {
+           "name": "hdlr",
+           "header_size": 12,
+           "size": 45,
+           "handler_type": "vide",
+           "handler_name": "VideoHandler"
+          },
+          {
+           "name": "minf",
+           "header_size": 8,
+           "size": 198,
+           "children": [
+            {
+             "name": "stbl",
+             "header_size": 8,
+             "size": 190,
+             "children": [
+              {
+               "name": "stsd",
+               "header_size": 12,
+               "size": 182,
+               "entry_count": 1,
+               "children": [
+                {
+                 "name": "encv",
+                 "header_size": 8,
+                 "size": 166,
+                 "data_reference_index": 1,
+                 "width": 64,
+                 "height": 64,
+                 "compressor": "",
+                 "children": [
+                  {
+                   "name": "sinf",
+                   "header_size": 8,
+                   "size": 80,
+                   "children": [
+                    {
+                     "name": "frma",
+                     "header_size": 8,
+                     "size": 12,
+                     "original_format": "avc1"
+                    },
+                    {
+                     "name": "schm",
+                     "header_size": 12,
+                     "size": 20,
+                     "scheme_type": "cenc",
+                     "scheme_version": 65536
+                    },
+                    {
+                     "name": "schi",
+                     "header_size": 8,
+                     "size": 40,
+                     "children": [
+                      {
+                       "name": "tenc",
+                       "header_size": 12,
+                       "size": 32,
+                       "default_isProtected": 1,
+                       "default_Per_Sample_IV_Size": 8,
+                       "default_KID": "[00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f]"
+                      }
+                     ]
+                    }
+                   ]
+                  }
+                 ]
+                }
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "init_probe": {
+    "ok": [
+     "cenc",
+     null,
+     "000102030405060708090a0b0c0d0e0f",
+     8
+    ]
+   },
+   "tenc_constant_iv_hex": {
+    "ok": null
+   },
+   "fragment_boundary": {
+    "ok": null
+   },
+   "tenc_pattern": {
+    "ok": [
+     0,
+     0
+    ]
+   }
+  },
+  {
+   "name": "cenc-v0-trailing",
+   "hex": "000000186674797069736f360000000069736f36646173680000013c6d6f6f76000001347472616b0000012c6d646961000000206d64686400000000000000000000000000015f900000000055c400000000002d68646c72000000000000000076696465000000000000000000000000566964656f48616e646c657200000000d76d696e66000000cf7374626c000000c7737473640000000000000001000000b7656e637600000000000000010000000000000000000000000000000000400040004800000048000000000000000100000000000000000000000000000000000000000000000000000000000000000018ffff0000006173696e660000000c66726d6161766331000000147363686d0000000063656e630001000000000039736368690000003174656e630000000000000110000102030405060708090a0b0c0d0e0f1020202020202020202020202020202020",
+   "tree": [
+    {
+     "name": "ftyp",
+     "header_size": 8,
+     "size": 24,
+     "major_brand": "iso6",
+     "minor_version": 0,
+     "compatible_brand": "dash"
+    },
+    {
+     "name": "moov",
+     "header_size": 8,
+     "size": 316,
+     "children": [
+      {
+       "name": "trak",
+       "header_size": 8,
+       "size": 308,
+       "children": [
+        {
+         "name": "mdia",
+         "header_size": 8,
+         "size": 300,
+         "children": [
+          {
+           "name": "mdhd",
+           "header_size": 12,
+           "size": 32,
+           "timescale": 90000,
+           "duration": 0,
+           "duration(ms)": 0,
+           "language": "und"
+          },
+          {
+           "name": "hdlr",
+           "header_size": 12,
+           "size": 45,
+           "handler_type": "vide",
+           "handler_name": "VideoHandler"
+          },
+          {
+           "name": "minf",
+           "header_size": 8,
+           "size": 215,
+           "children": [
+            {
+             "name": "stbl",
+             "header_size": 8,
+             "size": 207,
+             "children": [
+              {
+               "name": "stsd",
+               "header_size": 12,
+               "size": 199,
+               "entry_count": 1,
+               "children": [
+                {
+                 "name": "encv",
+                 "header_size": 8,
+                 "size": 183,
+                 "data_reference_index": 1,
+                 "width": 64,
+                 "height": 64,
+                 "compressor": "",
+                 "children": [
+                  {
+                   "name": "sinf",
+                   "header_size": 8,
+                   "size": 97,
+                   "children": [
+                    {
+                     "name": "frma",
+                     "header_size": 8,
+                     "size": 12,
+                     "original_format": "avc1"
+                    },
+                    {
+                     "name": "schm",
+                     "header_size": 12,
+                     "size": 20,
+                     "scheme_type": "cenc",
+                     "scheme_version": 65536
+                    },
+                    {
+                     "name": "schi",
+                     "header_size": 8,
+                     "size": 57,
+                     "children": [
+                      {
+                       "name": "tenc",
+                       "header_size": 12,
+                       "size": 49,
+                       "default_isProtected": 1,
+                       "default_Per_Sample_IV_Size": 16,
+                       "default_KID": "[00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f]"
+                      }
+                     ]
+                    }
+                   ]
+                  }
+                 ]
+                }
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "init_probe": {
+    "ok": [
+     "cenc",
+     null,
+     "000102030405060708090a0b0c0d0e0f",
+     16
+    ]
+   },
+   "tenc_constant_iv_hex": {
+    "ok": null
+   },
+   "fragment_boundary": {
+    "ok": null
+   },
+   "tenc_pattern": {
+    "ok": [
+     0,
+     0
+    ]
+   }
+  },
+  {
+   "name": "unprotected-constant-iv",
+   "hex": "000000186674797069736f360000000069736f36646173680000013c6d6f6f76000001347472616b0000012c6d646961000000206d64686400000000000000000000000000015f900000000055c400000000002d68646c72000000000000000076696465000000000000000000000000566964656f48616e646c657200000000d76d696e66000000cf7374626c000000c7737473640000000000000001000000b7656e637600000000000000010000000000000000000000000000000000400040004800000048000000000000000100000000000000000000000000000000000000000000000000000000000000000018ffff0000006173696e660000000c66726d6161766331000000147363686d00000000636263730001000000000039736368690000003174656e630100000000190000000102030405060708090a0b0c0d0e0f1020202020202020202020202020202020",
+   "tree": [
+    {
+     "name": "ftyp",
+     "header_size": 8,
+     "size": 24,
+     "major_brand": "iso6",
+     "minor_version": 0,
+     "compatible_brand": "dash"
+    },
+    {
+     "name": "moov",
+     "header_size": 8,
+     "size": 316,
+     "children": [
+      {
+       "name": "trak",
+       "header_size": 8,
+       "size": 308,
+       "children": [
+        {
+         "name": "mdia",
+         "header_size": 8,
+         "size": 300,
+         "children": [
+          {
+           "name": "mdhd",
+           "header_size": 12,
+           "size": 32,
+           "timescale": 90000,
+           "duration": 0,
+           "duration(ms)": 0,
+           "language": "und"
+          },
+          {
+           "name": "hdlr",
+           "header_size": 12,
+           "size": 45,
+           "handler_type": "vide",
+           "handler_name": "VideoHandler"
+          },
+          {
+           "name": "minf",
+           "header_size": 8,
+           "size": 215,
+           "children": [
+            {
+             "name": "stbl",
+             "header_size": 8,
+             "size": 207,
+             "children": [
+              {
+               "name": "stsd",
+               "header_size": 12,
+               "size": 199,
+               "entry_count": 1,
+               "children": [
+                {
+                 "name": "encv",
+                 "header_size": 8,
+                 "size": 183,
+                 "data_reference_index": 1,
+                 "width": 64,
+                 "height": 64,
+                 "compressor": "",
+                 "children": [
+                  {
+                   "name": "sinf",
+                   "header_size": 8,
+                   "size": 97,
+                   "children": [
+                    {
+                     "name": "frma",
+                     "header_size": 8,
+                     "size": 12,
+                     "original_format": "avc1"
+                    },
+                    {
+                     "name": "schm",
+                     "header_size": 12,
+                     "size": 20,
+                     "scheme_type": "cbcs",
+                     "scheme_version": 65536
+                    },
+                    {
+                     "name": "schi",
+                     "header_size": 8,
+                     "size": 57,
+                     "children": [
+                      {
+                       "name": "tenc",
+                       "header_size": 12,
+                       "size": 49,
+                       "version": 1,
+                       "default_isProtected": 0,
+                       "default_Per_Sample_IV_Size": 0,
+                       "default_KID": "[00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f]",
+                       "default_crypt_byte_block": 1,
+                       "default_skip_byte_block": 9,
+                       "default_constant_IV_size": 16,
+                       "default_constant_IV": "[20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20]"
+                      }
+                     ]
+                    }
+                   ]
+                  }
+                 ]
+                }
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "init_probe": {
+    "ok": [
+     "cbcs",
+     "20202020202020202020202020202020",
+     "000102030405060708090a0b0c0d0e0f",
+     0
+    ]
+   },
+   "tenc_constant_iv_hex": {
+    "ok": "20202020202020202020202020202020"
+   },
+   "fragment_boundary": {
+    "ok": null
+   },
+   "tenc_pattern": {
+    "ok": [
+     1,
+     9
+    ]
+   }
+  },
+  {
+   "name": "eight-byte-iv",
+   "hex": "000000186674797069736f360000000069736f3664617368000001346d6f6f760000012c7472616b000001246d646961000000206d64686400000000000000000000000000015f900000000055c400000000002d68646c72000000000000000076696465000000000000000000000000566964656f48616e646c657200000000cf6d696e66000000c77374626c000000bf737473640000000000000001000000af656e637600000000000000010000000000000000000000000000000000400040004800000048000000000000000100000000000000000000000000000000000000000000000000000000000000000018ffff0000005973696e660000000c66726d6161766331000000147363686d00000000636263730001000000000031736368690000002974656e630100000000190100000102030405060708090a0b0c0d0e0f082020202020202020",
+   "tree": [
+    {
+     "name": "ftyp",
+     "header_size": 8,
+     "size": 24,
+     "major_brand": "iso6",
+     "minor_version": 0,
+     "compatible_brand": "dash"
+    },
+    {
+     "name": "moov",
+     "header_size": 8,
+     "size": 308,
+     "children": [
+      {
+       "name": "trak",
+       "header_size": 8,
+       "size": 300,
+       "children": [
+        {
+         "name": "mdia",
+         "header_size": 8,
+         "size": 292,
+         "children": [
+          {
+           "name": "mdhd",
+           "header_size": 12,
+           "size": 32,
+           "timescale": 90000,
+           "duration": 0,
+           "duration(ms)": 0,
+           "language": "und"
+          },
+          {
+           "name": "hdlr",
+           "header_size": 12,
+           "size": 45,
+           "handler_type": "vide",
+           "handler_name": "VideoHandler"
+          },
+          {
+           "name": "minf",
+           "header_size": 8,
+           "size": 207,
+           "children": [
+            {
+             "name": "stbl",
+             "header_size": 8,
+             "size": 199,
+             "children": [
+              {
+               "name": "stsd",
+               "header_size": 12,
+               "size": 191,
+               "entry_count": 1,
+               "children": [
+                {
+                 "name": "encv",
+                 "header_size": 8,
+                 "size": 175,
+                 "data_reference_index": 1,
+                 "width": 64,
+                 "height": 64,
+                 "compressor": "",
+                 "children": [
+                  {
+                   "name": "sinf",
+                   "header_size": 8,
+                   "size": 89,
+                   "children": [
+                    {
+                     "name": "frma",
+                     "header_size": 8,
+                     "size": 12,
+                     "original_format": "avc1"
+                    },
+                    {
+                     "name": "schm",
+                     "header_size": 12,
+                     "size": 20,
+                     "scheme_type": "cbcs",
+                     "scheme_version": 65536
+                    },
+                    {
+                     "name": "schi",
+                     "header_size": 8,
+                     "size": 49,
+                     "children": [
+                      {
+                       "name": "tenc",
+                       "header_size": 12,
+                       "size": 41,
+                       "version": 1,
+                       "default_isProtected": 1,
+                       "default_Per_Sample_IV_Size": 0,
+                       "default_KID": "[00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f]",
+                       "default_crypt_byte_block": 1,
+                       "default_skip_byte_block": 9,
+                       "default_constant_IV_size": 8,
+                       "default_constant_IV": "[20 20 20 20 20 20 20 20]"
+                      }
+                     ]
+                    }
+                   ]
+                  }
+                 ]
+                }
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "init_probe": {
+    "ok": [
+     "cbcs",
+     "2020202020202020",
+     "000102030405060708090a0b0c0d0e0f",
+     0
+    ]
+   },
+   "tenc_constant_iv_hex": {
+    "ok": "2020202020202020"
+   },
+   "fragment_boundary": {
+    "ok": null
+   },
+   "tenc_pattern": {
+    "ok": [
+     1,
+     9
+    ]
+   }
+  },
+  {
+   "name": "empty-constant-iv",
+   "hex": "000000186674797069736f360000000069736f36646173680000012c6d6f6f76000001247472616b0000011c6d646961000000206d64686400000000000000000000000000015f900000000055c400000000002d68646c72000000000000000076696465000000000000000000000000566964656f48616e646c657200000000c76d696e66000000bf7374626c000000b7737473640000000000000001000000a7656e637600000000000000010000000000000000000000000000000000400040004800000048000000000000000100000000000000000000000000000000000000000000000000000000000000000018ffff0000005173696e660000000c66726d6161766331000000147363686d00000000636263730001000000000029736368690000002174656e630100000000190100000102030405060708090a0b0c0d0e0f00",
+   "tree": [
+    {
+     "name": "ftyp",
+     "header_size": 8,
+     "size": 24,
+     "major_brand": "iso6",
+     "minor_version": 0,
+     "compatible_brand": "dash"
+    },
+    {
+     "name": "moov",
+     "header_size": 8,
+     "size": 300,
+     "children": [
+      {
+       "name": "trak",
+       "header_size": 8,
+       "size": 292,
+       "children": [
+        {
+         "name": "mdia",
+         "header_size": 8,
+         "size": 284,
+         "children": [
+          {
+           "name": "mdhd",
+           "header_size": 12,
+           "size": 32,
+           "timescale": 90000,
+           "duration": 0,
+           "duration(ms)": 0,
+           "language": "und"
+          },
+          {
+           "name": "hdlr",
+           "header_size": 12,
+           "size": 45,
+           "handler_type": "vide",
+           "handler_name": "VideoHandler"
+          },
+          {
+           "name": "minf",
+           "header_size": 8,
+           "size": 199,
+           "children": [
+            {
+             "name": "stbl",
+             "header_size": 8,
+             "size": 191,
+             "children": [
+              {
+               "name": "stsd",
+               "header_size": 12,
+               "size": 183,
+               "entry_count": 1,
+               "children": [
+                {
+                 "name": "encv",
+                 "header_size": 8,
+                 "size": 167,
+                 "data_reference_index": 1,
+                 "width": 64,
+                 "height": 64,
+                 "compressor": "",
+                 "children": [
+                  {
+                   "name": "sinf",
+                   "header_size": 8,
+                   "size": 81,
+                   "children": [
+                    {
+                     "name": "frma",
+                     "header_size": 8,
+                     "size": 12,
+                     "original_format": "avc1"
+                    },
+                    {
+                     "name": "schm",
+                     "header_size": 12,
+                     "size": 20,
+                     "scheme_type": "cbcs",
+                     "scheme_version": 65536
+                    },
+                    {
+                     "name": "schi",
+                     "header_size": 8,
+                     "size": 41,
+                     "children": [
+                      {
+                       "name": "tenc",
+                       "header_size": 12,
+                       "size": 33,
+                       "version": 1,
+                       "default_isProtected": 1,
+                       "default_Per_Sample_IV_Size": 0,
+                       "default_KID": "[00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f]",
+                       "default_crypt_byte_block": 1,
+                       "default_skip_byte_block": 9,
+                       "default_constant_IV_size": 0,
+                       "default_constant_IV": "[]"
+                      }
+                     ]
+                    }
+                   ]
+                  }
+                 ]
+                }
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "init_probe": {
+    "error": "ValueError"
+   },
+   "tenc_constant_iv_hex": {
+    "error": "ValueError"
+   },
+   "fragment_boundary": {
+    "ok": null
+   },
+   "tenc_pattern": {
+    "ok": [
+     1,
+     9
+    ]
+   }
+  },
+  {
+   "name": "tenc-truncated",
+   "hex": "000000186674797069736f360000000069736f36646173680000012b6d6f6f76000001237472616b0000011b6d646961000000206d64686400000000000000000000000000015f900000000055c400000000002d68646c72000000000000000076696465000000000000000000000000566964656f48616e646c657200000000c66d696e66000000be7374626c000000b6737473640000000000000001000000a6656e637600000000000000010000000000000000000000000000000000400040004800000048000000000000000100000000000000000000000000000000000000000000000000000000000000000018ffff0000005073696e660000000c66726d6161766331000000147363686d00000000636263730001000000000028736368690000002074656e630100000000190100000102030405060708090a0b0c0d0e0f",
+   "tree": [
+    {
+     "name": "ftyp",
+     "header_size": 8,
+     "size": 24,
+     "major_brand": "iso6",
+     "minor_version": 0,
+     "compatible_brand": "dash"
+    },
+    {
+     "name": "moov",
+     "header_size": 8,
+     "size": 299,
+     "children": [
+      {
+       "name": "trak",
+       "header_size": 8,
+       "size": 291,
+       "children": [
+        {
+         "name": "mdia",
+         "header_size": 8,
+         "size": 283,
+         "children": [
+          {
+           "name": "mdhd",
+           "header_size": 12,
+           "size": 32,
+           "timescale": 90000,
+           "duration": 0,
+           "duration(ms)": 0,
+           "language": "und"
+          },
+          {
+           "name": "hdlr",
+           "header_size": 12,
+           "size": 45,
+           "handler_type": "vide",
+           "handler_name": "VideoHandler"
+          },
+          {
+           "name": "minf",
+           "header_size": 8,
+           "size": 198,
+           "children": [
+            {
+             "name": "stbl",
+             "header_size": 8,
+             "size": 190,
+             "children": [
+              {
+               "name": "stsd",
+               "header_size": 12,
+               "size": 182,
+               "entry_count": 1,
+               "children": [
+                {
+                 "name": "encv",
+                 "header_size": 8,
+                 "size": 166,
+                 "data_reference_index": 1,
+                 "width": 64,
+                 "height": 64,
+                 "compressor": "",
+                 "children": [
+                  {
+                   "name": "sinf",
+                   "header_size": 8,
+                   "size": 80,
+                   "children": [
+                    {
+                     "name": "frma",
+                     "header_size": 8,
+                     "size": 12,
+                     "original_format": "avc1"
+                    },
+                    {
+                     "name": "schm",
+                     "header_size": 12,
+                     "size": 20,
+                     "scheme_type": "cbcs",
+                     "scheme_version": 65536
+                    },
+                    {
+                     "name": "schi",
+                     "header_size": 8,
+                     "size": 40,
+                     "children": [
+                      {
+                       "name": "tenc",
+                       "header_size": 8,
+                       "size": 32
+                      }
+                     ]
+                    }
+                   ]
+                  }
+                 ]
+                }
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "init_probe": {
+    "ok": [
+     "cbcs",
+     null,
+     null,
+     null
+    ]
+   },
+   "tenc_constant_iv_hex": {
+    "ok": null
+   },
+   "fragment_boundary": {
+    "ok": null
+   },
+   "tenc_pattern": {
+    "ok": [
+     0,
+     0
+    ]
+   }
+  },
+  {
+   "name": "tenc-iv-17",
+   "hex": "000000186674797069736f360000000069736f36646173680000013d6d6f6f76000001357472616b0000012d6d646961000000206d64686400000000000000000000000000015f900000000055c400000000002d68646c72000000000000000076696465000000000000000000000000566964656f48616e646c657200000000d86d696e66000000d07374626c000000c8737473640000000000000001000000b8656e637600000000000000010000000000000000000000000000000000400040004800000048000000000000000100000000000000000000000000000000000000000000000000000000000000000018ffff0000006273696e660000000c66726d6161766331000000147363686d0000000063626373000100000000003a736368690000003274656e630100000000190100000102030405060708090a0b0c0d0e0f112020202020202020202020202020202021",
+   "tree": [
+    {
+     "name": "ftyp",
+     "header_size": 8,
+     "size": 24,
+     "major_brand": "iso6",
+     "minor_version": 0,
+     "compatible_brand": "dash"
+    },
+    {
+     "name": "moov",
+     "header_size": 8,
+     "size": 317,
+     "children": [
+      {
+       "name": "trak",
+       "header_size": 8,
+       "size": 309,
+       "children": [
+        {
+         "name": "mdia",
+         "header_size": 8,
+         "size": 301,
+         "children": [
+          {
+           "name": "mdhd",
+           "header_size": 12,
+           "size": 32,
+           "timescale": 90000,
+           "duration": 0,
+           "duration(ms)": 0,
+           "language": "und"
+          },
+          {
+           "name": "hdlr",
+           "header_size": 12,
+           "size": 45,
+           "handler_type": "vide",
+           "handler_name": "VideoHandler"
+          },
+          {
+           "name": "minf",
+           "header_size": 8,
+           "size": 216,
+           "children": [
+            {
+             "name": "stbl",
+             "header_size": 8,
+             "size": 208,
+             "children": [
+              {
+               "name": "stsd",
+               "header_size": 12,
+               "size": 200,
+               "entry_count": 1,
+               "children": [
+                {
+                 "name": "encv",
+                 "header_size": 8,
+                 "size": 184,
+                 "data_reference_index": 1,
+                 "width": 64,
+                 "height": 64,
+                 "compressor": "",
+                 "children": [
+                  {
+                   "name": "sinf",
+                   "header_size": 8,
+                   "size": 98,
+                   "children": [
+                    {
+                     "name": "frma",
+                     "header_size": 8,
+                     "size": 12,
+                     "original_format": "avc1"
+                    },
+                    {
+                     "name": "schm",
+                     "header_size": 12,
+                     "size": 20,
+                     "scheme_type": "cbcs",
+                     "scheme_version": 65536
+                    },
+                    {
+                     "name": "schi",
+                     "header_size": 8,
+                     "size": 58,
+                     "children": [
+                      {
+                       "name": "tenc",
+                       "header_size": 8,
+                       "size": 50
+                      }
+                     ]
+                    }
+                   ]
+                  }
+                 ]
+                }
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "init_probe": {
+    "ok": [
+     "cbcs",
+     null,
+     null,
+     null
+    ]
+   },
+   "tenc_constant_iv_hex": {
+    "ok": null
+   },
+   "fragment_boundary": {
+    "ok": null
+   },
+   "tenc_pattern": {
+    "ok": [
+     0,
+     0
+    ]
+   }
+  },
+  {
+   "name": "tenc-iv-short",
+   "hex": "000000186674797069736f360000000069736f3664617368000001306d6f6f76000001287472616b000001206d646961000000206d64686400000000000000000000000000015f900000000055c400000000002d68646c72000000000000000076696465000000000000000000000000566964656f48616e646c657200000000cb6d696e66000000c37374626c000000bb737473640000000000000001000000ab656e637600000000000000010000000000000000000000000000000000400040004800000048000000000000000100000000000000000000000000000000000000000000000000000000000000000018ffff0000005573696e660000000c66726d6161766331000000147363686d0000000063626373000100000000002d736368690000002574656e630100000000190100000102030405060708090a0b0c0d0e0f1020202020",
+   "tree": [
+    {
+     "name": "ftyp",
+     "header_size": 8,
+     "size": 24,
+     "major_brand": "iso6",
+     "minor_version": 0,
+     "compatible_brand": "dash"
+    },
+    {
+     "name": "moov",
+     "header_size": 8,
+     "size": 304,
+     "children": [
+      {
+       "name": "trak",
+       "header_size": 8,
+       "size": 296,
+       "children": [
+        {
+         "name": "mdia",
+         "header_size": 8,
+         "size": 288,
+         "children": [
+          {
+           "name": "mdhd",
+           "header_size": 12,
+           "size": 32,
+           "timescale": 90000,
+           "duration": 0,
+           "duration(ms)": 0,
+           "language": "und"
+          },
+          {
+           "name": "hdlr",
+           "header_size": 12,
+           "size": 45,
+           "handler_type": "vide",
+           "handler_name": "VideoHandler"
+          },
+          {
+           "name": "minf",
+           "header_size": 8,
+           "size": 203,
+           "children": [
+            {
+             "name": "stbl",
+             "header_size": 8,
+             "size": 195,
+             "children": [
+              {
+               "name": "stsd",
+               "header_size": 12,
+               "size": 187,
+               "entry_count": 1,
+               "children": [
+                {
+                 "name": "encv",
+                 "header_size": 8,
+                 "size": 171,
+                 "data_reference_index": 1,
+                 "width": 64,
+                 "height": 64,
+                 "compressor": "",
+                 "children": [
+                  {
+                   "name": "sinf",
+                   "header_size": 8,
+                   "size": 85,
+                   "children": [
+                    {
+                     "name": "frma",
+                     "header_size": 8,
+                     "size": 12,
+                     "original_format": "avc1"
+                    },
+                    {
+                     "name": "schm",
+                     "header_size": 12,
+                     "size": 20,
+                     "scheme_type": "cbcs",
+                     "scheme_version": 65536
+                    },
+                    {
+                     "name": "schi",
+                     "header_size": 8,
+                     "size": 45,
+                     "children": [
+                      {
+                       "name": "tenc",
+                       "header_size": 8,
+                       "size": 37
+                      }
+                     ]
+                    }
+                   ]
+                  }
+                 ]
+                }
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "init_probe": {
+    "ok": [
+     "cbcs",
+     null,
+     null,
+     null
+    ]
+   },
+   "tenc_constant_iv_hex": {
+    "ok": null
+   },
+   "fragment_boundary": {
+    "ok": null
+   },
+   "tenc_pattern": {
+    "ok": [
+     0,
+     0
+    ]
+   }
+  },
+  {
+   "name": "schm-short",
+   "hex": "000000186674797069736f360000000069736f3664617368000001386d6f6f76000001307472616b000001286d646961000000206d64686400000000000000000000000000015f900000000055c400000000002d68646c72000000000000000076696465000000000000000000000000566964656f48616e646c657200000000d36d696e66000000cb7374626c000000c3737473640000000000000001000000b3656e637600000000000000010000000000000000000000000000000000400040004800000048000000000000000100000000000000000000000000000000000000000000000000000000000000000018ffff0000005d73696e660000000c66726d6161766331000000107363686d000000006362637300000039736368690000003174656e630100000000190100000102030405060708090a0b0c0d0e0f1020202020202020202020202020202020",
+   "tree": [
+    {
+     "name": "ftyp",
+     "header_size": 8,
+     "size": 24,
+     "major_brand": "iso6",
+     "minor_version": 0,
+     "compatible_brand": "dash"
+    },
+    {
+     "name": "moov",
+     "header_size": 8,
+     "size": 312,
+     "children": [
+      {
+       "name": "trak",
+       "header_size": 8,
+       "size": 304,
+       "children": [
+        {
+         "name": "mdia",
+         "header_size": 8,
+         "size": 296,
+         "children": [
+          {
+           "name": "mdhd",
+           "header_size": 12,
+           "size": 32,
+           "timescale": 90000,
+           "duration": 0,
+           "duration(ms)": 0,
+           "language": "und"
+          },
+          {
+           "name": "hdlr",
+           "header_size": 12,
+           "size": 45,
+           "handler_type": "vide",
+           "handler_name": "VideoHandler"
+          },
+          {
+           "name": "minf",
+           "header_size": 8,
+           "size": 211,
+           "children": [
+            {
+             "name": "stbl",
+             "header_size": 8,
+             "size": 203,
+             "children": [
+              {
+               "name": "stsd",
+               "header_size": 12,
+               "size": 195,
+               "entry_count": 1,
+               "children": [
+                {
+                 "name": "encv",
+                 "header_size": 8,
+                 "size": 179,
+                 "data_reference_index": 1,
+                 "width": 64,
+                 "height": 64,
+                 "compressor": "",
+                 "children": [
+                  {
+                   "name": "sinf",
+                   "header_size": 8,
+                   "size": 93,
+                   "children": [
+                    {
+                     "name": "frma",
+                     "header_size": 8,
+                     "size": 12,
+                     "original_format": "avc1"
+                    },
+                    {
+                     "name": "schm",
+                     "header_size": 8,
+                     "size": 16
+                    },
+                    {
+                     "name": "schi",
+                     "header_size": 8,
+                     "size": 57,
+                     "children": [
+                      {
+                       "name": "tenc",
+                       "header_size": 12,
+                       "size": 49,
+                       "version": 1,
+                       "default_isProtected": 1,
+                       "default_Per_Sample_IV_Size": 0,
+                       "default_KID": "[00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f]",
+                       "default_crypt_byte_block": 1,
+                       "default_skip_byte_block": 9,
+                       "default_constant_IV_size": 16,
+                       "default_constant_IV": "[20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20]"
+                      }
+                     ]
+                    }
+                   ]
+                  }
+                 ]
+                }
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "init_probe": {
+    "ok": [
+     null,
+     "20202020202020202020202020202020",
+     "000102030405060708090a0b0c0d0e0f",
+     0
+    ]
+   },
+   "tenc_constant_iv_hex": {
+    "ok": "20202020202020202020202020202020"
+   },
+   "fragment_boundary": {
+    "ok": null
+   },
+   "tenc_pattern": {
+    "ok": [
+     1,
+     9
+    ]
+   }
+  },
+  {
+   "name": "schm-odd-4cc",
+   "hex": "000000186674797069736f360000000069736f3664617368000001576d6f6f760000014f7472616b000001476d646961000000206d64686400000000000000000000000000015f900000000055c400000000002d68646c72000000000000000076696465000000000000000000000000566964656f48616e646c657200000000f26d696e66000000ea7374626c000000e2737473640000000000000001000000d2656e637600000000000000010000000000000000000000000000000000400040004800000048000000000000000100000000000000000000000000000000000000000000000000000000000000000018ffff0000007c73696e660000000c66726d61617663310000002f7363686d00000001636200730000000768747470733a2f2f782e6578616d706c652e696e76616c69642f0000000039736368690000003174656e630100000000190100000102030405060708090a0b0c0d0e0f1020202020202020202020202020202020",
+   "tree": [
+    {
+     "name": "ftyp",
+     "header_size": 8,
+     "size": 24,
+     "major_brand": "iso6",
+     "minor_version": 0,
+     "compatible_brand": "dash"
+    },
+    {
+     "name": "moov",
+     "header_size": 8,
+     "size": 343,
+     "children": [
+      {
+       "name": "trak",
+       "header_size": 8,
+       "size": 335,
+       "children": [
+        {
+         "name": "mdia",
+         "header_size": 8,
+         "size": 327,
+         "children": [
+          {
+           "name": "mdhd",
+           "header_size": 12,
+           "size": 32,
+           "timescale": 90000,
+           "duration": 0,
+           "duration(ms)": 0,
+           "language": "und"
+          },
+          {
+           "name": "hdlr",
+           "header_size": 12,
+           "size": 45,
+           "handler_type": "vide",
+           "handler_name": "VideoHandler"
+          },
+          {
+           "name": "minf",
+           "header_size": 8,
+           "size": 242,
+           "children": [
+            {
+             "name": "stbl",
+             "header_size": 8,
+             "size": 234,
+             "children": [
+              {
+               "name": "stsd",
+               "header_size": 12,
+               "size": 226,
+               "entry_count": 1,
+               "children": [
+                {
+                 "name": "encv",
+                 "header_size": 8,
+                 "size": 210,
+                 "data_reference_index": 1,
+                 "width": 64,
+                 "height": 64,
+                 "compressor": "",
+                 "children": [
+                  {
+                   "name": "sinf",
+                   "header_size": 8,
+                   "size": 124,
+                   "children": [
+                    {
+                     "name": "frma",
+                     "header_size": 8,
+                     "size": 12,
+                     "original_format": "avc1"
+                    },
+                    {
+                     "name": "schm",
+                     "header_size": 12,
+                     "size": 47,
+                     "flags": 1,
+                     "scheme_type": "cb",
+                     "scheme_version": 7,
+                     "scheme_uri": "https://x.example.invalid/"
+                    },
+                    {
+                     "name": "schi",
+                     "header_size": 8,
+                     "size": 57,
+                     "children": [
+                      {
+                       "name": "tenc",
+                       "header_size": 12,
+                       "size": 49,
+                       "version": 1,
+                       "default_isProtected": 1,
+                       "default_Per_Sample_IV_Size": 0,
+                       "default_KID": "[00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f]",
+                       "default_crypt_byte_block": 1,
+                       "default_skip_byte_block": 9,
+                       "default_constant_IV_size": 16,
+                       "default_constant_IV": "[20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20]"
+                      }
+                     ]
+                    }
+                   ]
+                  }
+                 ]
+                }
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "init_probe": {
+    "ok": [
+     "cb",
+     "20202020202020202020202020202020",
+     "000102030405060708090a0b0c0d0e0f",
+     0
+    ]
+   },
+   "tenc_constant_iv_hex": {
+    "ok": "20202020202020202020202020202020"
+   },
+   "fragment_boundary": {
+    "ok": null
+   },
+   "tenc_pattern": {
+    "ok": [
+     1,
+     9
+    ]
+   }
+  },
+  {
+   "name": "unencrypted",
+   "hex": "000000186674797069736f360000000069736f3664617368000000ea6d6f6f76000000e27472616b000000da6d646961000000206d64686400000000000000000000000000015f900000000055c400000000002d68646c72000000000000000076696465000000000000000000000000566964656f48616e646c657200000000856d696e660000007d7374626c00000075737473640000000000000001000000656176633100000000000000010000000000000000000000000000000000400040004800000048000000000000000100000000000000000000000000000000000000000000000000000000000000000018ffff0000000f617663430164001fffe000",
+   "tree": [
+    {
+     "name": "ftyp",
+     "header_size": 8,
+     "size": 24,
+     "major_brand": "iso6",
+     "minor_version": 0,
+     "compatible_brand": "dash"
+    },
+    {
+     "name": "moov",
+     "header_size": 8,
+     "size": 234,
+     "children": [
+      {
+       "name": "trak",
+       "header_size": 8,
+       "size": 226,
+       "children": [
+        {
+         "name": "mdia",
+         "header_size": 8,
+         "size": 218,
+         "children": [
+          {
+           "name": "mdhd",
+           "header_size": 12,
+           "size": 32,
+           "timescale": 90000,
+           "duration": 0,
+           "duration(ms)": 0,
+           "language": "und"
+          },
+          {
+           "name": "hdlr",
+           "header_size": 12,
+           "size": 45,
+           "handler_type": "vide",
+           "handler_name": "VideoHandler"
+          },
+          {
+           "name": "minf",
+           "header_size": 8,
+           "size": 133,
+           "children": [
+            {
+             "name": "stbl",
+             "header_size": 8,
+             "size": 125,
+             "children": [
+              {
+               "name": "stsd",
+               "header_size": 12,
+               "size": 117,
+               "entry_count": 1,
+               "children": [
+                {
+                 "name": "avc1",
+                 "header_size": 8,
+                 "size": 101,
+                 "data_reference_index": 1,
+                 "width": 64,
+                 "height": 64,
+                 "compressor": "",
+                 "children": [
+                  {
+                   "name": "avcC",
+                   "header_size": 8,
+                   "size": 15,
+                   "Configuration Version": 1,
+                   "Profile": "High",
+                   "Profile Compatibility": 0,
+                   "Level": 31,
+                   "NALU Length Size": 4
+                  }
+                 ]
+                }
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "init_probe": {
+    "ok": [
+     null,
+     null,
+     null,
+     null
+    ]
+   },
+   "tenc_constant_iv_hex": {
+    "ok": null
+   },
+   "fragment_boundary": {
+    "ok": null
+   },
+   "tenc_pattern": {
+    "ok": [
+     0,
+     0
+    ]
+   }
+  },
+  {
+   "name": "audio-v1-entry",
+   "hex": "000000186674797069736f360000000069736f36646173680000011a6d6f6f76000001127472616b0000010a6d646961000000206d64686400000000000000000000000000015f900000000055c400000000002d68646c72000000000000000076696465000000000000000000000000566964656f48616e646c657200000000b56d696e66000000ad7374626c000000a573747364000000000000000100000095656e6361000000000000000100010000000000000002001000000000bb800000000000000000000000000000000000000000006173696e660000000c66726d616d703461000000147363686d00000000636263730001000000000039736368690000003174656e630100000000000100000102030405060708090a0b0c0d0e0f1020202020202020202020202020202020",
+   "tree": [
+    {
+     "name": "ftyp",
+     "header_size": 8,
+     "size": 24,
+     "major_brand": "iso6",
+     "minor_version": 0,
+     "compatible_brand": "dash"
+    },
+    {
+     "name": "moov",
+     "header_size": 8,
+     "size": 282,
+     "children": [
+      {
+       "name": "trak",
+       "header_size": 8,
+       "size": 274,
+       "children": [
+        {
+         "name": "mdia",
+         "header_size": 8,
+         "size": 266,
+         "children": [
+          {
+           "name": "mdhd",
+           "header_size": 12,
+           "size": 32,
+           "timescale": 90000,
+           "duration": 0,
+           "duration(ms)": 0,
+           "language": "und"
+          },
+          {
+           "name": "hdlr",
+           "header_size": 12,
+           "size": 45,
+           "handler_type": "vide",
+           "handler_name": "VideoHandler"
+          },
+          {
+           "name": "minf",
+           "header_size": 8,
+           "size": 181,
+           "children": [
+            {
+             "name": "stbl",
+             "header_size": 8,
+             "size": 173,
+             "children": [
+              {
+               "name": "stsd",
+               "header_size": 12,
+               "size": 165,
+               "entry_count": 1,
+               "children": [
+                {
+                 "name": "enca",
+                 "header_size": 8,
+                 "size": 149,
+                 "data_reference_index": 1,
+                 "channel_count": 2,
+                 "sample_size": 16,
+                 "sample_rate": 48000,
+                 "qt_version": 1,
+                 "children": [
+                  {
+                   "name": "sinf",
+                   "header_size": 8,
+                   "size": 97,
+                   "children": [
+                    {
+                     "name": "frma",
+                     "header_size": 8,
+                     "size": 12,
+                     "original_format": "mp4a"
+                    },
+                    {
+                     "name": "schm",
+                     "header_size": 12,
+                     "size": 20,
+                     "scheme_type": "cbcs",
+                     "scheme_version": 65536
+                    },
+                    {
+                     "name": "schi",
+                     "header_size": 8,
+                     "size": 57,
+                     "children": [
+                      {
+                       "name": "tenc",
+                       "header_size": 12,
+                       "size": 49,
+                       "version": 1,
+                       "default_isProtected": 1,
+                       "default_Per_Sample_IV_Size": 0,
+                       "default_KID": "[00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f]",
+                       "default_crypt_byte_block": 0,
+                       "default_skip_byte_block": 0,
+                       "default_constant_IV_size": 16,
+                       "default_constant_IV": "[20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20]"
+                      }
+                     ]
+                    }
+                   ]
+                  }
+                 ]
+                }
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "init_probe": {
+    "ok": [
+     "cbcs",
+     "20202020202020202020202020202020",
+     "000102030405060708090a0b0c0d0e0f",
+     0
+    ]
+   },
+   "tenc_constant_iv_hex": {
+    "ok": "20202020202020202020202020202020"
+   },
+   "fragment_boundary": {
+    "ok": null
+   },
+   "tenc_pattern": {
+    "ok": [
+     0,
+     0
+    ]
+   }
+  },
+  {
+   "name": "frag-v0",
+   "hex": "00000018737479706d736468000000006d7364686d736978000000656d6f6f66000000106d66686400000000000000010000004d747261660000001074666864000200000000000100000010746664740000000000046400000000147472756e000000010000011900000064000000117361697a000000000000000500000000106d6461740000000000000000",
+   "tree": [
+    {
+     "name": "styp",
+     "header_size": 8,
+     "size": 24
+    },
+    {
+     "name": "moof",
+     "header_size": 8,
+     "size": 101,
+     "children": [
+      {
+       "name": "mfhd",
+       "header_size": 12,
+       "size": 16,
+       "sequence number": 1
+      },
+      {
+       "name": "traf",
+       "header_size": 8,
+       "size": 77,
+       "children": [
+        {
+         "name": "tfhd",
+         "header_size": 12,
+         "size": 16,
+         "flags": 131072,
+         "track ID": 1
+        },
+        {
+         "name": "tfdt",
+         "header_size": 12,
+         "size": 16,
+         "base media decode time": 287744
+        },
+        {
+         "name": "trun",
+         "header_size": 12,
+         "size": 20,
+         "flags": 1,
+         "sample count": 281,
+         "data offset": 100
+        },
+        {
+         "name": "saiz",
+         "header_size": 12,
+         "size": 17,
+         "default sample info size": 0,
+         "sample count": 0
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "name": "mdat",
+     "header_size": 8,
+     "size": 16
+    }
+   ],
+   "init_probe": {
+    "ok": [
+     null,
+     null,
+     null,
+     null
+    ]
+   },
+   "tenc_constant_iv_hex": {
+    "ok": null
+   },
+   "fragment_boundary": {
+    "ok": {
+     "base_media_decode_time": 287744,
+     "sample_count": 281
+    }
+   },
+   "tenc_pattern": {
+    "ok": [
+     0,
+     0
+    ]
+   }
+  },
+  {
+   "name": "frag-v1",
+   "hex": "00000018737479706d736468000000006d7364686d7369780000006c6d6f6f66000000106d66686400000000000000010000005474726166000000107466686400020000000000010000001474666474010000000000010000000005000000287472756e01000305000000020000006400000007000003e800000032000003e800000032000000106d6461740000000000000000",
+   "tree": [
+    {
+     "name": "styp",
+     "header_size": 8,
+     "size": 24
+    },
+    {
+     "name": "moof",
+     "header_size": 8,
+     "size": 108,
+     "children": [
+      {
+       "name": "mfhd",
+       "header_size": 12,
+       "size": 16,
+       "sequence number": 1
+      },
+      {
+       "name": "traf",
+       "header_size": 8,
+       "size": 84,
+       "children": [
+        {
+         "name": "tfhd",
+         "header_size": 12,
+         "size": 16,
+         "flags": 131072,
+         "track ID": 1
+        },
+        {
+         "name": "tfdt",
+         "header_size": 12,
+         "size": 20,
+         "version": 1,
+         "base media decode time": 1099511627781
+        },
+        {
+         "name": "trun",
+         "header_size": 12,
+         "size": 40,
+         "version": 1,
+         "flags": 773,
+         "sample count": 2,
+         "data offset": 100,
+         "first sample flags": 7
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "name": "mdat",
+     "header_size": 8,
+     "size": 16
+    }
+   ],
+   "init_probe": {
+    "ok": [
+     null,
+     null,
+     null,
+     null
+    ]
+   },
+   "tenc_constant_iv_hex": {
+    "ok": null
+   },
+   "fragment_boundary": {
+    "ok": {
+     "base_media_decode_time": 1099511627781,
+     "sample_count": 2
+    }
+   },
+   "tenc_pattern": {
+    "ok": [
+     0,
+     0
+    ]
+   }
+  },
+  {
+   "name": "frag-trun-records-do-not-fit",
+   "hex": "00000018737479706d736468000000006d7364686d736978000000546d6f6f66000000106d66686400000000000000010000003c747261660000001074666864000200000000000100000010746664740000000000000009000000147472756e000001000000000300000001000000106d6461740000000000000000",
+   "tree": [
+    {
+     "name": "styp",
+     "header_size": 8,
+     "size": 24
+    },
+    {
+     "name": "moof",
+     "header_size": 8,
+     "size": 84,
+     "children": [
+      {
+       "name": "mfhd",
+       "header_size": 12,
+       "size": 16,
+       "sequence number": 1
+      },
+      {
+       "name": "traf",
+       "header_size": 8,
+       "size": 60,
+       "children": [
+        {
+         "name": "tfhd",
+         "header_size": 12,
+         "size": 16,
+         "flags": 131072,
+         "track ID": 1
+        },
+        {
+         "name": "tfdt",
+         "header_size": 12,
+         "size": 16,
+         "base media decode time": 9
+        },
+        {
+         "name": "trun",
+         "header_size": 12,
+         "size": 20,
+         "flags": 256,
+         "sample count": 0
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "name": "mdat",
+     "header_size": 8,
+     "size": 16
+    }
+   ],
+   "init_probe": {
+    "ok": [
+     null,
+     null,
+     null,
+     null
+    ]
+   },
+   "tenc_constant_iv_hex": {
+    "ok": null
+   },
+   "fragment_boundary": {
+    "ok": {
+     "base_media_decode_time": 9,
+     "sample_count": 0
+    }
+   },
+   "tenc_pattern": {
+    "ok": [
+     0,
+     0
+    ]
+   }
+  },
+  {
+   "name": "frag-trun-no-records",
+   "hex": "00000018737479706d736468000000006d7364686d736978000000506d6f6f66000000106d666864000000000000000100000038747261660000001074666864000200000000000100000010746664740000000000000009000000107472756e0000000000000003000000106d6461740000000000000000",
+   "tree": [
+    {
+     "name": "styp",
+     "header_size": 8,
+     "size": 24
+    },
+    {
+     "name": "moof",
+     "header_size": 8,
+     "size": 80,
+     "children": [
+      {
+       "name": "mfhd",
+       "header_size": 12,
+       "size": 16,
+       "sequence number": 1
+      },
+      {
+       "name": "traf",
+       "header_size": 8,
+       "size": 56,
+       "children": [
+        {
+         "name": "tfhd",
+         "header_size": 12,
+         "size": 16,
+         "flags": 131072,
+         "track ID": 1
+        },
+        {
+         "name": "tfdt",
+         "header_size": 12,
+         "size": 16,
+         "base media decode time": 9
+        },
+        {
+         "name": "trun",
+         "header_size": 12,
+         "size": 16,
+         "sample count": 3
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "name": "mdat",
+     "header_size": 8,
+     "size": 16
+    }
+   ],
+   "init_probe": {
+    "ok": [
+     null,
+     null,
+     null,
+     null
+    ]
+   },
+   "tenc_constant_iv_hex": {
+    "ok": null
+   },
+   "fragment_boundary": {
+    "ok": {
+     "base_media_decode_time": 9,
+     "sample_count": 3
+    }
+   },
+   "tenc_pattern": {
+    "ok": [
+     0,
+     0
+    ]
+   }
+  },
+  {
+   "name": "frag-two-moofs",
+   "hex": "00000018737479706d736468000000006d7364686d736978000000506d6f6f66000000106d66686400000000000000010000003874726166000000107466686400020000000000010000001074666474000000000000000b000000107472756e0000000000000004000000106d6461740000000000000000000000306d6f6f66000000287472616600000010746664740000000000000016000000107472756e0000000000000005",
+   "tree": [
+    {
+     "name": "styp",
+     "header_size": 8,
+     "size": 24
+    },
+    {
+     "name": "moof",
+     "header_size": 8,
+     "size": 80,
+     "children": [
+      {
+       "name": "mfhd",
+       "header_size": 12,
+       "size": 16,
+       "sequence number": 1
+      },
+      {
+       "name": "traf",
+       "header_size": 8,
+       "size": 56,
+       "children": [
+        {
+         "name": "tfhd",
+         "header_size": 12,
+         "size": 16,
+         "flags": 131072,
+         "track ID": 1
+        },
+        {
+         "name": "tfdt",
+         "header_size": 12,
+         "size": 16,
+         "base media decode time": 11
+        },
+        {
+         "name": "trun",
+         "header_size": 12,
+         "size": 16,
+         "sample count": 4
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "name": "mdat",
+     "header_size": 8,
+     "size": 16
+    },
+    {
+     "name": "moof",
+     "header_size": 8,
+     "size": 48,
+     "children": [
+      {
+       "name": "traf",
+       "header_size": 8,
+       "size": 40,
+       "children": [
+        {
+         "name": "tfdt",
+         "header_size": 12,
+         "size": 16,
+         "base media decode time": 22
+        },
+        {
+         "name": "trun",
+         "header_size": 12,
+         "size": 16,
+         "sample count": 5
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "init_probe": {
+    "ok": [
+     null,
+     null,
+     null,
+     null
+    ]
+   },
+   "tenc_constant_iv_hex": {
+    "ok": null
+   },
+   "fragment_boundary": {
+    "ok": {
+     "base_media_decode_time": 11,
+     "sample_count": 4
+    }
+   },
+   "tenc_pattern": {
+    "ok": [
+     0,
+     0
+    ]
+   }
+  },
+  {
+   "name": "frag-trun-short",
+   "hex": "00000018737479706d736468000000006d7364686d736978000000666d6f6f66000000106d6668640000000000000001000000367472616600000010746668640002000000000001000000107466647400000000000000030000000e7472756e0000000000000000001874726166000000107472756e0000000000000006000000106d6461740000000000000000",
+   "tree": [
+    {
+     "name": "styp",
+     "header_size": 8,
+     "size": 24
+    },
+    {
+     "name": "moof",
+     "header_size": 8,
+     "size": 102,
+     "children": [
+      {
+       "name": "mfhd",
+       "header_size": 12,
+       "size": 16,
+       "sequence number": 1
+      },
+      {
+       "name": "traf",
+       "header_size": 8,
+       "size": 54,
+       "children": [
+        {
+         "name": "tfhd",
+         "header_size": 12,
+         "size": 16,
+         "flags": 131072,
+         "track ID": 1
+        },
+        {
+         "name": "tfdt",
+         "header_size": 12,
+         "size": 16,
+         "base media decode time": 3
+        },
+        {
+         "name": "trun",
+         "header_size": 12,
+         "size": 14,
+         "sample count": 0
+        }
+       ]
+      },
+      {
+       "name": "traf",
+       "header_size": 8,
+       "size": 24,
+       "children": [
+        {
+         "name": "trun",
+         "header_size": 12,
+         "size": 16,
+         "sample count": 6
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "name": "mdat",
+     "header_size": 8,
+     "size": 16
+    }
+   ],
+   "init_probe": {
+    "ok": [
+     null,
+     null,
+     null,
+     null
+    ]
+   },
+   "tenc_constant_iv_hex": {
+    "ok": null
+   },
+   "fragment_boundary": {
+    "ok": {
+     "base_media_decode_time": 3,
+     "sample_count": 0
+    }
+   },
+   "tenc_pattern": {
+    "ok": [
+     0,
+     0
+    ]
+   }
+  },
+  {
+   "name": "frag-without-tfdt",
+   "hex": "00000018737479706d736468000000006d7364686d736978000000406d6f6f66000000106d6668640000000000000001000000287472616600000010746668640002000000000001000000107472756e0000000000000003000000106d6461740000000000000000",
+   "tree": [
+    {
+     "name": "styp",
+     "header_size": 8,
+     "size": 24
+    },
+    {
+     "name": "moof",
+     "header_size": 8,
+     "size": 64,
+     "children": [
+      {
+       "name": "mfhd",
+       "header_size": 12,
+       "size": 16,
+       "sequence number": 1
+      },
+      {
+       "name": "traf",
+       "header_size": 8,
+       "size": 40,
+       "children": [
+        {
+         "name": "tfhd",
+         "header_size": 12,
+         "size": 16,
+         "flags": 131072,
+         "track ID": 1
+        },
+        {
+         "name": "trun",
+         "header_size": 12,
+         "size": 16,
+         "sample count": 3
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "name": "mdat",
+     "header_size": 8,
+     "size": 16
+    }
+   ],
+   "init_probe": {
+    "ok": [
+     null,
+     null,
+     null,
+     null
+    ]
+   },
+   "tenc_constant_iv_hex": {
+    "ok": null
+   },
+   "fragment_boundary": {
+    "ok": null
+   },
+   "tenc_pattern": {
+    "ok": [
+     0,
+     0
+    ]
+   }
+  },
+  {
+   "name": "frag-tfdt-v1-short",
+   "hex": "00000018737479706d736468000000006d7364686d736978000000506d6f6f66000000106d666864000000000000000100000038747261660000001074666864000200000000000100000010746664740100000000000009000000107472756e0000000000000003000000106d6461740000000000000000",
+   "tree": [
+    {
+     "name": "styp",
+     "header_size": 8,
+     "size": 24
+    },
+    {
+     "name": "moof",
+     "header_size": 8,
+     "size": 80,
+     "children": [
+      {
+       "name": "mfhd",
+       "header_size": 12,
+       "size": 16,
+       "sequence number": 1
+      },
+      {
+       "name": "traf",
+       "header_size": 8,
+       "size": 56,
+       "children": [
+        {
+         "name": "tfhd",
+         "header_size": 12,
+         "size": 16,
+         "flags": 131072,
+         "track ID": 1
+        },
+        {
+         "name": "tfdt",
+         "header_size": 12,
+         "size": 16,
+         "version": 1,
+         "base media decode time": 38654705680
+        },
+        {
+         "name": "trun",
+         "header_size": 12,
+         "size": 16,
+         "sample count": 3
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "name": "mdat",
+     "header_size": 8,
+     "size": 16
+    }
+   ],
+   "init_probe": {
+    "ok": [
+     null,
+     null,
+     null,
+     null
+    ]
+   },
+   "tenc_constant_iv_hex": {
+    "ok": null
+   },
+   "fragment_boundary": {
+    "ok": {
+     "base_media_decode_time": 38654705680,
+     "sample_count": 3
+    }
+   },
+   "tenc_pattern": {
+    "ok": [
+     0,
+     0
+    ]
+   }
+  },
+  {
+   "name": "frag-tfdt-short-at-eof",
+   "hex": "000000306d6f6f660000002874726166000000107472756e000000000000000300000010746664740100000000000009",
+   "tree": [
+    {
+     "name": "moof",
+     "header_size": 8,
+     "size": 48,
+     "children": [
+      {
+       "name": "traf",
+       "header_size": 8,
+       "size": 40,
+       "children": [
+        {
+         "name": "trun",
+         "header_size": 12,
+         "size": 16,
+         "sample count": 3
+        },
+        {
+         "name": "tfdt",
+         "header_size": 12,
+         "size": 16,
+         "version": 1,
+         "base media decode time": 0
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "init_probe": {
+    "ok": [
+     null,
+     null,
+     null,
+     null
+    ]
+   },
+   "tenc_constant_iv_hex": {
+    "ok": null
+   },
+   "fragment_boundary": {
+    "ok": {
+     "base_media_decode_time": 0,
+     "sample_count": 3
+    }
+   },
+   "tenc_pattern": {
+    "ok": [
+     0,
+     0
+    ]
+   }
+  },
+  {
+   "name": "frag-trun-count-at-eof",
+   "hex": "0000002c6d6f6f660000002474726166000000107466647400000000000000050000000c7472756e00000001",
+   "tree": [
+    {
+     "name": "moof",
+     "header_size": 8,
+     "size": 44,
+     "children": [
+      {
+       "name": "traf",
+       "header_size": 8,
+       "size": 36,
+       "children": [
+        {
+         "name": "tfdt",
+         "header_size": 12,
+         "size": 16,
+         "base media decode time": 5
+        },
+        {
+         "name": "trun",
+         "header_size": 12,
+         "size": 12,
+         "flags": 1,
+         "sample count": 0,
+         "data offset": 0
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "init_probe": {
+    "ok": [
+     null,
+     null,
+     null,
+     null
+    ]
+   },
+   "tenc_constant_iv_hex": {
+    "ok": null
+   },
+   "fragment_boundary": {
+    "ok": {
+     "base_media_decode_time": 5,
+     "sample_count": 0
+    }
+   },
+   "tenc_pattern": {
+    "ok": [
+     0,
+     0
+    ]
+   }
+  },
+  {
+   "name": "largesize-free-and-uuid",
+   "hex": "0000000166726565000000000000001800000000000000000000001b75756964000102030405060708090a0b0c0d0e0f61626300000018737479706d736468000000006d7364686d736978000000506d6f6f66000000106d66686400000000000000010000003874726166000000107466686400020000000000010000001074666474000000000000002a000000107472756e0000000000000007000000106d6461740000000000000000",
+   "tree": [
+    {
+     "name": "free",
+     "header_size": 16,
+     "size": 24
+    },
+    {
+     "name": "000102030405-0607-0809-0A0B-0C0D0E0F",
+     "header_size": 24,
+     "size": 27
+    },
+    {
+     "name": "styp",
+     "header_size": 8,
+     "size": 24
+    },
+    {
+     "name": "moof",
+     "header_size": 8,
+     "size": 80,
+     "children": [
+      {
+       "name": "mfhd",
+       "header_size": 12,
+       "size": 16,
+       "sequence number": 1
+      },
+      {
+       "name": "traf",
+       "header_size": 8,
+       "size": 56,
+       "children": [
+        {
+         "name": "tfhd",
+         "header_size": 12,
+         "size": 16,
+         "flags": 131072,
+         "track ID": 1
+        },
+        {
+         "name": "tfdt",
+         "header_size": 12,
+         "size": 16,
+         "base media decode time": 42
+        },
+        {
+         "name": "trun",
+         "header_size": 12,
+         "size": 16,
+         "sample count": 7
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "name": "mdat",
+     "header_size": 8,
+     "size": 16
+    }
+   ],
+   "init_probe": {
+    "ok": [
+     null,
+     null,
+     null,
+     null
+    ]
+   },
+   "tenc_constant_iv_hex": {
+    "ok": null
+   },
+   "fragment_boundary": {
+    "ok": {
+     "base_media_decode_time": 42,
+     "sample_count": 7
+    }
+   },
+   "tenc_pattern": {
+    "ok": [
+     0,
+     0
+    ]
+   }
+  },
+  {
+   "name": "size-zero-mdat",
+   "hex": "000000186674797069736f360000000069736f36646173680000013c6d6f6f76000001347472616b0000012c6d646961000000206d64686400000000000000000000000000015f900000000055c400000000002d68646c72000000000000000076696465000000000000000000000000566964656f48616e646c657200000000d76d696e66000000cf7374626c000000c7737473640000000000000001000000b7656e637600000000000000010000000000000000000000000000000000400040004800000048000000000000000100000000000000000000000000000000000000000000000000000000000000000018ffff0000006173696e660000000c66726d6161766331000000147363686d00000000636263730001000000000039736368690000003174656e630100000000190100000102030405060708090a0b0c0d0e0f1020202020202020202020202020202020000000006d646174010203",
+   "tree": [
+    {
+     "name": "ftyp",
+     "header_size": 8,
+     "size": 24,
+     "major_brand": "iso6",
+     "minor_version": 0,
+     "compatible_brand": "dash"
+    },
+    {
+     "name": "moov",
+     "header_size": 8,
+     "size": 316,
+     "children": [
+      {
+       "name": "trak",
+       "header_size": 8,
+       "size": 308,
+       "children": [
+        {
+         "name": "mdia",
+         "header_size": 8,
+         "size": 300,
+         "children": [
+          {
+           "name": "mdhd",
+           "header_size": 12,
+           "size": 32,
+           "timescale": 90000,
+           "duration": 0,
+           "duration(ms)": 0,
+           "language": "und"
+          },
+          {
+           "name": "hdlr",
+           "header_size": 12,
+           "size": 45,
+           "handler_type": "vide",
+           "handler_name": "VideoHandler"
+          },
+          {
+           "name": "minf",
+           "header_size": 8,
+           "size": 215,
+           "children": [
+            {
+             "name": "stbl",
+             "header_size": 8,
+             "size": 207,
+             "children": [
+              {
+               "name": "stsd",
+               "header_size": 12,
+               "size": 199,
+               "entry_count": 1,
+               "children": [
+                {
+                 "name": "encv",
+                 "header_size": 8,
+                 "size": 183,
+                 "data_reference_index": 1,
+                 "width": 64,
+                 "height": 64,
+                 "compressor": "",
+                 "children": [
+                  {
+                   "name": "sinf",
+                   "header_size": 8,
+                   "size": 97,
+                   "children": [
+                    {
+                     "name": "frma",
+                     "header_size": 8,
+                     "size": 12,
+                     "original_format": "avc1"
+                    },
+                    {
+                     "name": "schm",
+                     "header_size": 12,
+                     "size": 20,
+                     "scheme_type": "cbcs",
+                     "scheme_version": 65536
+                    },
+                    {
+                     "name": "schi",
+                     "header_size": 8,
+                     "size": 57,
+                     "children": [
+                      {
+                       "name": "tenc",
+                       "header_size": 12,
+                       "size": 49,
+                       "version": 1,
+                       "default_isProtected": 1,
+                       "default_Per_Sample_IV_Size": 0,
+                       "default_KID": "[00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f]",
+                       "default_crypt_byte_block": 1,
+                       "default_skip_byte_block": 9,
+                       "default_constant_IV_size": 16,
+                       "default_constant_IV": "[20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20]"
+                      }
+                     ]
+                    }
+                   ]
+                  }
+                 ]
+                }
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "name": "mdat",
+     "header_size": 8,
+     "size": 11
+    }
+   ],
+   "init_probe": {
+    "ok": [
+     "cbcs",
+     "20202020202020202020202020202020",
+     "000102030405060708090a0b0c0d0e0f",
+     0
+    ]
+   },
+   "tenc_constant_iv_hex": {
+    "ok": "20202020202020202020202020202020"
+   },
+   "fragment_boundary": {
+    "ok": null
+   },
+   "tenc_pattern": {
+    "ok": [
+     1,
+     9
+    ]
+   }
+  }
+ ]
+}

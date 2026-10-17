@@ -1,0 +1,2 @@
+# Golden Markdown reports use two trailing spaces for explicit line breaks.
+crates/drmr-core/tests/fixtures/pipeline_report*.expected.md whitespace=-blank-at-eol

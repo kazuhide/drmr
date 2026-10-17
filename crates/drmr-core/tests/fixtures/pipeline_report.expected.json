@@ -1,0 +1,172 @@
+{
+  "schema_version": "1",
+  "asset_id": "report-asset",
+  "renditions": [
+    {
+      "rendition_id": "v0",
+      "content_type": "video",
+      "clear_path": "out/report-asset/clear/video/v0/clear.mp4",
+      "cbcs_init_path": "out/report-asset/cbcs/video/v0/init.mp4",
+      "cbcs_segment_paths": [
+        "out/report-asset/cbcs/video/v0/seg_0.m4s",
+        "out/report-asset/cbcs/video/v0/seg_1.m4s",
+        "out/report-asset/cbcs/video/v0/seg_2.m4s"
+      ],
+      "source_segment_count": 3,
+      "output_segment_count": 3,
+      "number_origin_map": [
+        [
+          1,
+          0
+        ],
+        [
+          2,
+          1
+        ],
+        [
+          3,
+          2
+        ]
+      ],
+      "requested_segment_duration_s": 6.0,
+      "checks": {
+        "6-1.segment-duration": "PASS",
+        "6-1.number-origin": "PASS",
+        "6-1.iv-agreement": "FAIL: no constant IV found in output init segment",
+        "6-1.boundary-agreement": "FAIL: segment 0 boundary diverges (source sample_count=281, output sample_count=282)",
+        "6-1.pssh-agreement": "SKIP: verified during manifest validation",
+        "6-4.framemd5": "SKIP: gated on 6-1 duration/number-origin/boundary-agreement PASS"
+      }
+    },
+    {
+      "rendition_id": "a0 \u65e5\u672c\u8a9e",
+      "content_type": "audio",
+      "clear_path": "out/report-asset/clear/audio/a0/clear.mp4",
+      "cbcs_init_path": "out/report-asset/cbcs/audio/a0/init.mp4",
+      "cbcs_segment_paths": [],
+      "source_segment_count": 2,
+      "output_segment_count": 0,
+      "number_origin_map": [],
+      "requested_segment_duration_s": 5.333333333333333,
+      "checks": {
+        "source.decrypt": "FAIL: exit 5",
+        "6-1.segment-duration": "SKIP: upstream step failed",
+        "6-1.number-origin": "SKIP: upstream step failed",
+        "6-1.iv-agreement": "SKIP: upstream step failed",
+        "6-1.boundary-agreement": "SKIP: upstream step failed",
+        "6-1.pssh-agreement": "SKIP: upstream step failed",
+        "6-4.framemd5": "SKIP: upstream step failed"
+      }
+    },
+    {
+      "rendition_id": "v1",
+      "content_type": "video",
+      "clear_path": "/abs/clear.mp4",
+      "cbcs_init_path": "/abs/init.mp4",
+      "cbcs_segment_paths": [
+        "/abs/seg_0.m4s"
+      ],
+      "source_segment_count": 1,
+      "output_segment_count": 1,
+      "number_origin_map": [
+        [
+          1,
+          0
+        ]
+      ],
+      "requested_segment_duration_s": 1e+19,
+      "checks": {
+        "6-1.segment-duration": "PASS",
+        "6-4.framemd5": "FAIL: \"quoted\" \\ back\tslash"
+      }
+    }
+  ],
+  "all_pass": false,
+  "full_enumeration": true,
+  "round_trip_verified": true,
+  "manifests": {
+    "dash": {
+      "output_mpd_path": "out/report-asset/manifests/manifest.example.test/t/dash/manifest.mpd",
+      "adaptation_sets_patched": 1,
+      "playready_pssh_b64": "UFNTSA==",
+      "playready_pro_b64": "UFJP",
+      "widevine_unchanged": true,
+      "checks": {
+        "6-1.dash-scheme-cbcs": "PASS",
+        "6-1.dash-playready-sync": "PASS",
+        "6-1.dash-widevine-unchanged": "PASS",
+        "6-1.dash-segmenttemplate-unchanged": "PASS",
+        "6-5.dash-out-of-scope-untouched": "PASS"
+      }
+    },
+    "hls": {
+      "output_master_path": "out/report-asset/manifests/manifest.example.test/t/hls/manifest.m3u8",
+      "output_media_playlist_paths": [
+        "out/report-asset/manifests/variants.example.test/t/video/hv0/video_100_x.m3u8"
+      ],
+      "audio_groups_consolidated": 0,
+      "ts_audio_groups_removed": 0,
+      "ext_x_map_added": 1,
+      "segment_refs_repointed": 2,
+      "iv_verified": true,
+      "variant_mapping": [
+        {
+          "hls_playlist": "/download/variants.example.test/t/video/hv0/video_100_x.m3u8",
+          "dash_rendition": {
+            "rep_id": "v0",
+            "content_type": "video",
+            "codec": "avc1.42C00C",
+            "timescale": 24000,
+            "segment_duration_ticks": 144000,
+            "start_number": 0,
+            "init_path": "/download/cdn.example.test/t/video/v0/init.mp4",
+            "segment_paths": [
+              "/download/cdn.example.test/t/video/v0/seg_0.m4s",
+              "/download/cdn.example.test/t/video/v0/seg_1.m4s"
+            ],
+            "rel_dir": "video/v0",
+            "widevine_pssh_hex": "46414b45",
+            "width": 320,
+            "height": 180,
+            "frame_rate": "24",
+            "lang": null
+          },
+          "signals": {
+            "content_type": "video",
+            "codec_family": "avc1",
+            "hls_bandwidth": "100000",
+            "odd\"key\\": "tab\tline\n\u00e9"
+          },
+          "content_gate": "waived:TS-H264"
+        }
+      ],
+      "checks": {
+        "6-1.hls-iv-agreement": "PASS",
+        "6-1.hls-segment-count": "PASS",
+        "6-1.hls-version-unchanged": "PASS",
+        "6-2.audio-consolidation-structure": "PASS",
+        "6-2.audio-pcm-identity": "SKIP: run audio_pcm_consolidation_gate with key material",
+        "6-1.hls-content-gate": "SKIP: run content_identity_gate with key material + DASH clear output",
+        "6-1.hls-extinf": "SKIP: run check_extinf_gate (mp4dump/ffprobe over the CBCS output)",
+        "6-5.hls-master-untouched": "PASS"
+      }
+    },
+    "checks": {
+      "6-1.dash-scheme-cbcs": "PASS",
+      "6-1.dash-playready-sync": "PASS",
+      "6-1.dash-widevine-unchanged": "PASS",
+      "6-1.dash-segmenttemplate-unchanged": "PASS",
+      "6-5.dash-out-of-scope-untouched": "PASS",
+      "6-2.audio-pcm-identity": "SKIP: run audio_pcm_consolidation_gate with key material",
+      "6-1.hls-iv-agreement": "PASS",
+      "6-1.hls-segment-count": "PASS",
+      "6-1.hls-version-unchanged": "PASS",
+      "6-2.audio-consolidation-structure": "PASS",
+      "6-1.hls-content-gate": "SKIP: TS H.264 decryption is not supported; segment count, duration, and key signaling checked separately",
+      "6-1.hls-extinf": "PASS",
+      "6-5.hls-master-untouched": "PASS",
+      "6-1.pssh-agreement": "PASS",
+      "6-6.dash-conformance": "SKIP: DASH-IF validator not yet integrated"
+    }
+  }
+}

@@ -1,0 +1,484 @@
+{
+ "float": [
+  [
+   "inf",
+   "ok",
+   "inf"
+  ],
+  [
+   "-Infinity",
+   "ok",
+   "-inf"
+  ],
+  [
+   "nan",
+   "ok",
+   "nan"
+  ],
+  [
+   "+NaN",
+   "ok",
+   "nan"
+  ],
+  [
+   "1_0.5",
+   "ok",
+   "10.5"
+  ],
+  [
+   "1__0",
+   "ValueError",
+   "could not convert string to float: '1__0'"
+  ],
+  [
+   "_1",
+   "ValueError",
+   "could not convert string to float: '_1'"
+  ],
+  [
+   "1e5",
+   "ok",
+   "100000.0"
+  ],
+  [
+   "1E+5",
+   "ok",
+   "100000.0"
+  ],
+  [
+   ".5",
+   "ok",
+   "0.5"
+  ],
+  [
+   "5.",
+   "ok",
+   "5.0"
+  ],
+  [
+   "1e",
+   "ValueError",
+   "could not convert string to float: '1e'"
+  ],
+  [
+   "e5",
+   "ValueError",
+   "could not convert string to float: 'e5'"
+  ],
+  [
+   " 2.000000 ",
+   "ok",
+   "2.0"
+  ],
+  [
+   "\u00a02\u00a0",
+   "ok",
+   "2.0"
+  ],
+  [
+   "0x10",
+   "ValueError",
+   "could not convert string to float: '0x10'"
+  ],
+  [
+   "1_000",
+   "ok",
+   "1000.0"
+  ],
+  [
+   "infinity",
+   "ok",
+   "inf"
+  ],
+  [
+   "iNf",
+   "ok",
+   "inf"
+  ],
+  [
+   "- 1",
+   "ValueError",
+   "could not convert string to float: '- 1'"
+  ],
+  [
+   "1.5e-3_0",
+   "ok",
+   "1.5e-30"
+  ],
+  [
+   "1.5e3_0",
+   "ok",
+   "1.5e+30"
+  ],
+  [
+   "2.400000",
+   "ok",
+   "2.4"
+  ],
+  [
+   "0.1",
+   "ok",
+   "0.1"
+  ],
+  [
+   "1e400",
+   "ok",
+   "inf"
+  ],
+  [
+   "-0",
+   "ok",
+   "-0.0"
+  ],
+  [
+   "1_e5",
+   "ValueError",
+   "could not convert string to float: '1_e5'"
+  ],
+  [
+   "1._5",
+   "ValueError",
+   "could not convert string to float: '1._5'"
+  ],
+  [
+   "\u001c3\u001f",
+   "ValueError",
+   "could not convert string to float: '\\x1c3\\x1f'"
+  ],
+  [
+   "",
+   "ValueError",
+   "could not convert string to float: ''"
+  ],
+  [
+   " ",
+   "ValueError",
+   "could not convert string to float: ' '"
+  ]
+ ],
+ "int": [
+  [
+   "12",
+   "ok",
+   "12"
+  ],
+  [
+   " 12 ",
+   "ok",
+   "12"
+  ],
+  [
+   "+0012",
+   "ok",
+   "12"
+  ],
+  [
+   "1_000",
+   "ok",
+   "1000"
+  ],
+  [
+   "1__0",
+   "ValueError",
+   "invalid literal for int() with base 10: '1__0'"
+  ],
+  [
+   "_1",
+   "ValueError",
+   "invalid literal for int() with base 10: '_1'"
+  ],
+  [
+   "1_",
+   "ValueError",
+   "invalid literal for int() with base 10: '1_'"
+  ],
+  [
+   "-5",
+   "ok",
+   "-5"
+  ],
+  [
+   "1.0",
+   "ValueError",
+   "invalid literal for int() with base 10: '1.0'"
+  ],
+  [
+   "",
+   "ValueError",
+   "invalid literal for int() with base 10: ''"
+  ],
+  [
+   "\u00a012",
+   "ok",
+   "12"
+  ],
+  [
+   "-_1",
+   "ValueError",
+   "invalid literal for int() with base 10: '-_1'"
+  ],
+  [
+   "+-1",
+   "ValueError",
+   "invalid literal for int() with base 10: '+-1'"
+  ],
+  [
+   "99999999999999999999",
+   "ok",
+   "99999999999999999999"
+  ],
+  [
+   "\u001c7\u001f",
+   "ValueError",
+   "invalid literal for int() with base 10: '\\x1c7\\x1f'"
+  ],
+  [
+   "0_0",
+   "ok",
+   "0"
+  ]
+ ],
+ "fraction": [
+  [
+   "1/90000",
+   "ok",
+   "1",
+   "90000"
+  ],
+  [
+   "2/180000",
+   "ok",
+   "1",
+   "90000"
+  ],
+  [
+   "0/1",
+   "ok",
+   "0",
+   "1"
+  ],
+  [
+   "-1/90000",
+   "ok",
+   "-1",
+   "90000"
+  ],
+  [
+   " 1/2 ",
+   "ok",
+   "1",
+   "2"
+  ],
+  [
+   "1 /2",
+   "ValueError",
+   "Invalid literal for Fraction: '1 /2'"
+  ],
+  [
+   "1/0",
+   "ZeroDivisionError",
+   "Fraction(1, 0)"
+  ],
+  [
+   ".5",
+   "ok",
+   "1",
+   "2"
+  ],
+  [
+   "1.",
+   "ok",
+   "1",
+   "1"
+  ],
+  [
+   "1e3",
+   "ok",
+   "1000",
+   "1"
+  ],
+  [
+   "1.5e-2",
+   "ok",
+   "3",
+   "200"
+  ],
+  [
+   "1_0/3",
+   "ok",
+   "10",
+   "3"
+  ],
+  [
+   "abc",
+   "ValueError",
+   "Invalid literal for Fraction: 'abc'"
+  ],
+  [
+   "1/-2",
+   "ValueError",
+   "Invalid literal for Fraction: '1/-2'"
+  ],
+  [
+   "+3",
+   "ok",
+   "3",
+   "1"
+  ],
+  [
+   "1/2_0",
+   "ok",
+   "1",
+   "20"
+  ],
+  [
+   "-0/5",
+   "ok",
+   "0",
+   "1"
+  ],
+  [
+   "1E-2_0",
+   "ok",
+   "1",
+   "100000000000000000000"
+  ],
+  [
+   "",
+   "ValueError",
+   "Invalid literal for Fraction: ''"
+  ],
+  [
+   ".",
+   "ValueError",
+   "Invalid literal for Fraction: '.'"
+  ],
+  [
+   "1/",
+   "ValueError",
+   "Invalid literal for Fraction: '1/'"
+  ],
+  [
+   "/2",
+   "ValueError",
+   "Invalid literal for Fraction: '/2'"
+  ],
+  [
+   "0x1",
+   "ValueError",
+   "Invalid literal for Fraction: '0x1'"
+  ]
+ ],
+ "splitlines": [
+  [
+   "a\u001cb\u0085c\u2028d\re\r\nf\u000bg\fh\u001di\u001ej\nk",
+   [
+    "a",
+    "b",
+    "c",
+    "d",
+    "e",
+    "f",
+    "g",
+    "h",
+    "i",
+    "j",
+    "k"
+   ]
+  ],
+  [
+   "x\n",
+   [
+    "x"
+   ]
+  ],
+  [
+   "",
+   []
+  ],
+  [
+   "\n",
+   [
+    ""
+   ]
+  ],
+  [
+   "a\n\nb",
+   [
+    "a",
+    "",
+    "b"
+   ]
+  ],
+  [
+   "\r\n\r\n",
+   [
+    "",
+    ""
+   ]
+  ],
+  [
+   "a\u2029",
+   [
+    "a"
+   ]
+  ]
+ ],
+ "fromhex": [
+  [
+   "00112233",
+   "ok",
+   "00112233"
+  ],
+  [
+   "00 11\t22\n33",
+   "ok",
+   "00112233"
+  ],
+  [
+   " 0011 ",
+   "ok",
+   "0011"
+  ],
+  [
+   "0 011",
+   "ValueError",
+   "non-hexadecimal number found in fromhex() arg at position 1"
+  ],
+  [
+   "abc",
+   "ValueError",
+   "non-hexadecimal number found in fromhex() arg at position 3"
+  ],
+  [
+   "zz",
+   "ValueError",
+   "non-hexadecimal number found in fromhex() arg at position 0"
+  ],
+  [
+   "001",
+   "ValueError",
+   "non-hexadecimal number found in fromhex() arg at position 3"
+  ],
+  [
+   "0011 2",
+   "ValueError",
+   "non-hexadecimal number found in fromhex() arg at position 6"
+  ],
+  [
+   "",
+   "ok",
+   ""
+  ],
+  [
+   "   ",
+   "ok",
+   ""
+  ],
+  [
+   "aB",
+   "ok",
+   "ab"
+  ]
+ ]
+}

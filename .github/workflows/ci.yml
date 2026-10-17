@@ -1,0 +1,172 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  verify:
+    name: Rust / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14]
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install Linux test tools
+        if: runner.os == 'Linux'
+        env:
+          BENTO4_ZIP: Bento4-SDK-1-6-0-641.x86_64-unknown-linux.zip
+          BENTO4_SHA256: d48dc6b164941212e5614237b4d9aeff81d4d111ee8b1508892764078a0870e8
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg python3 nodejs unzip
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 \
+            -o "$RUNNER_TEMP/bento4.zip" \
+            "https://www.bok.net/Bento4/binaries/${BENTO4_ZIP}"
+          printf '%s  %s\n' "$BENTO4_SHA256" "$RUNNER_TEMP/bento4.zip" | sha256sum --check --strict -
+          unzip -q "$RUNNER_TEMP/bento4.zip" -d "$RUNNER_TEMP/bento4"
+          printf '%s\n' "$RUNNER_TEMP/bento4/${BENTO4_ZIP%.zip}/bin" >> "$GITHUB_PATH"
+
+      - name: Install macOS test tools
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          brew install ffmpeg bento4 python@3.13 node@22
+          printf '%s\n' "$(brew --prefix python@3.13)/libexec/bin" >> "$GITHUB_PATH"
+          printf '%s\n' "$(brew --prefix node@22)/bin" >> "$GITHUB_PATH"
+
+      - name: Verify external test tools
+        run: |
+          set -euo pipefail
+          command -v ffmpeg ffprobe mp4dump python3 node
+          python3 --version
+          node --version
+          ffmpeg -hide_banner -version | sed -n '1p'
+          ffprobe -hide_banner -version | sed -n '1p'
+          ffmpeg -v error -f lavfi -i testsrc=duration=0.2:size=64x64:rate=5 \
+            -pix_fmt yuv420p "$RUNNER_TEMP/smoke.mp4"
+          mp4dump --format json "$RUNNER_TEMP/smoke.mp4" > /dev/null
+
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install --no-self-update
+          cargo --version
+          rustc --version
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Check Clippy warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Run all Rust tests
+        id: rust-tests
+        run: |
+          set -euo pipefail
+          cargo test --workspace --locked -- --nocapture 2>&1 | tee "$RUNNER_TEMP/rust-tests.log"
+
+      - name: Reject unexpected test skips
+        if: ${{ !cancelled() && steps.rust-tests.outcome != 'skipped' }}
+        run: |
+          python3 - <<'PYTHON'
+          import os
+          from pathlib import Path
+          import re
+
+          log = Path(os.environ["RUNNER_TEMP"], "rust-tests.log")
+          if not log.is_file():
+              raise SystemExit("The Rust test log is missing; skip coverage cannot be checked.")
+          text = log.read_text(errors="replace")
+          notes = re.findall(r"skipped: [^\n]*", text)
+          allowed = (
+              r"skipped: ffmpeg [0-6] omits packet timing on this fixture(?: \(.*\))?",
+              r"skipped: host FFmpeg lacks TTML-in-MP4 muxing",
+          )
+          unexpected = [note for note in notes if not any(re.fullmatch(pattern, note) for pattern in allowed)]
+          for note in sorted(set(notes)):
+              print(note)
+          if unexpected:
+              raise SystemExit("Unexpected skipped tests detected: " + repr(unexpected))
+          # These helpers run in child processes with isolated environment or working directory.
+          expected_ignored = {
+              "child_reads_the_process_environment":
+                  "run by load_key_material_reads_the_process_environment in a child process",
+              "child_transcrypts_with_relative_paths":
+                  "run by transcrypt_relative_paths_are_spelled_as_pathlib_spells_them in a child",
+          }
+          pending = []
+          seen = set()
+          for line in text.splitlines():
+              ignored = re.search(r"\btest (\S+) \.\.\. ignored(?:, (.*))?", line)
+              if ignored:
+                  name, reason = ignored.groups()
+                  if expected_ignored.get(name) != reason or name in seen:
+                      raise SystemExit("Unexpected ignored test: " + line)
+                  pending.append(name)
+                  seen.add(name)
+              summary = re.search(r"test result:.*; ([0-9]+) ignored;", line)
+              if summary:
+                  if int(summary.group(1)) != len(pending):
+                      raise SystemExit("Ignored-test summary does not match named helpers: " + line)
+                  pending.clear()
+          if pending or seen != set(expected_ignored):
+              raise SystemExit("Missing ignored-test names or summary for the known child helpers.")
+          print("No unexpected test skips; both child-process helpers accounted for.")
+          PYTHON
+
+      - name: Run browser unit tests
+        run: node --test crates/drmr-server/tests/js/*.test.cjs
+
+      - name: Build release CLI
+        run: cargo build --release --locked -p drmr
+
+      - name: Package CLI and user documentation
+        env:
+          PACKAGE_NAME: drmr-${{ runner.os }}-${{ runner.arch }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/$PACKAGE_NAME/docs"
+          cp target/release/drmr README.md LICENSE "$RUNNER_TEMP/$PACKAGE_NAME/"
+          cp docs/usage.md "$RUNNER_TEMP/$PACKAGE_NAME/docs/"
+          tar -czf "$RUNNER_TEMP/$PACKAGE_NAME.tar.gz" -C "$RUNNER_TEMP" "$PACKAGE_NAME"
+
+      - name: Upload CLI archive
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: drmr-${{ runner.os }}-${{ runner.arch }}
+          path: ${{ runner.temp }}/drmr-${{ runner.os }}-${{ runner.arch }}.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload Rust test log
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: rust-tests-${{ runner.os }}-${{ runner.arch }}
+          path: ${{ runner.temp }}/rust-tests.log
+          if-no-files-found: warn
+          retention-days: 14

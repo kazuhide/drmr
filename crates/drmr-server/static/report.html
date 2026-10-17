@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Conversion report</title>
+<script>(function(){try{var l=localStorage.getItem('drmr-language');document.documentElement.lang=l==='ja'?'ja':'en';}catch(e){}})();</script>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<a class="skip-link" href="#main" data-i18n="skipToContent">Skip to content</a>
+<div class="report-shell">
+  <header class="report-topbar">
+    <a href="/" data-i18n="backConsole">Back to the console</a>
+    <div class="prefs">
+      <label><span class="sr-only" data-i18n="language">Language</span><select id="language-select" aria-label="Language" data-i18n-aria="language"><option value="en" selected>English</option><option value="ja">日本語</option></select></label>
+      <button type="button" class="btn btn-sm" id="report-reload" data-i18n="reportRetry">Reload</button>
+    </div>
+  </header>
+  <main id="main" class="report-main">
+    <h1 data-i18n="reportTitle">Conversion report</h1>
+    <div id="report-state" role="status" aria-live="polite"></div>
+    <div id="report-content" class="card" hidden>
+      <h2 id="report-asset" class="mono"></h2>
+      <div id="report-view"></div>
+    </div>
+  </main>
+</div>
+<script src="/static/js/api.js"></script>
+<script src="/static/js/i18n.js"></script>
+<script src="/static/js/ui.js"></script>
+<script src="/static/js/reportview.js"></script>
+<script src="/static/js/report.js"></script>
+</body>
+</html>

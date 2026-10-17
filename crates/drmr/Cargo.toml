@@ -1,0 +1,27 @@
+[package]
+name = "drmr"
+description = "Command-line tools for inspecting and repackaging encrypted streaming media"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "drmr"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+drmr-core = { path = "../drmr-core" }
+# `drmr serve`: the console server (axum on tokio) lives in drmr-server; drmr-core stays free
+# of both.
+drmr-server = { path = "../drmr-server" }
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

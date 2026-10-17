@@ -1,0 +1,388 @@
+/* Shaka Player adapter for local ClearKey playback and track selection. */
+(function () {
+  'use strict';
+  var App = (window.App = window.App || {});
+
+  // RFC 6381 codec strings start with a 4-char sample-entry code ("avc1", "hvc1", "hev1",
+  // "mp4a", ...) -- the part before the first '.'. That prefix is the "codec family" Shaka's
+  // `preferredVideoCodecs` matches against (one family per load). Shared with
+  // console.js (loaded after this file) so both use ONE definition.
+  function codecFamily(codec) {
+    var s = String(codec == null ? '' : codec);
+    var dot = s.indexOf('.');
+    return dot === -1 ? s : s.slice(0, dot);
+  }
+  App.codecFamily = codecFamily;
+
+  // base64url -> lowercase hex (W3C ClearKey JWK `k`/`kid` are unpadded base64url; Shaka's
+  // clearKeys map is hex). In-memory only, never emitted or logged.
+  function b64urlToHex(s) {
+    s = String(s).replace(/-/g, '+').replace(/_/g, '/');
+    while (s.length % 4) s += '=';
+    var bin = atob(s), hex = '';
+    for (var i = 0; i < bin.length; i++) hex += bin.charCodeAt(i).toString(16).padStart(2, '0');
+    return hex;
+  }
+
+  // Keyless ClearKey: fetch this asset's license endpoint, convert its JWK Set into Shaka's
+  // client-side clearKeys hex map in memory. Returns Promise<{'<kidHex>': '<keyHex>'}>.
+  function fetchKeylessClearKeys(assetId, licenseUrl) {
+    return fetch(licenseUrl || '/clearkey/license?asset_id=' + encodeURIComponent(assetId),
+      licenseUrl ? {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'} : undefined).then(function (r) {
+      if (!r.ok) throw new Error('ClearKey license fetch failed: HTTP ' + r.status);
+      return r.json();
+    }).then(function (jwk) {
+      var map = {};
+      ((jwk && jwk.keys) || []).forEach(function (k) { map[b64urlToHex(k.kid)] = b64urlToHex(k.k); });
+      if (!Object.keys(map).length) throw new Error('ClearKey license response contained no keys');
+      return map;
+    });
+  }
+
+  // rep_id is `track.originalVideoId` for a DASH variant -- NOT Shaka's own internal numeric
+  // `track.id`, which is unrelated to the manifest's own Representation@id.
+  function repIdForTrack(t) {
+    return t.originalVideoId != null ? String(t.originalVideoId) : String(t.id);
+  }
+
+  function createShakaPlayer(videoEl) {
+    var shakaPlayer = null;
+    var generation = 0;
+    var sourceRenditions = [];
+    var pendingDestroy = Promise.resolve();
+    var bufferPollTimer = null;
+    var listeners = { event: [], state: [] };
+
+    var state = {
+      status: 'idle', // idle | loading | playing | error
+      url: null,
+      renditions: [], // [{id, label}] -- Shaka's own view, one row per distinct DASH rep_id
+      currentRenditionId: null, // last-selected rendition (video OR audio rep_id) / active video id
+      selectedVideoId: null, // the VIDEO rep_id pinned/active -- unlike currentRenditionId, never an audio id
+      abrEnabled: true, // false once a rendition is manually picked
+      keyStatus: 'n/a',
+      bufferSeconds: null,
+      currentTime: null,
+      lastError: null,
+      preferredVideoCodecs: [], // codec family last requested via load()
+      loadedVideoFamily: null, // codec family of the tracks Shaka ACTUALLY exposes after load()
+    };
+    // The one pending `playing` listener (see load()); tracked so stop() can detach it and
+    // repeated loads never stack listeners on the same <video>.
+    var onPlayingHandler = null;
+
+    function emitEvent(level, message) {
+      var rec = { ts: new Date().toISOString(), level: level, message: message };
+      listeners.event.forEach(function (cb) { cb(rec); });
+      if (level === 'error') console.error('[player]', message);
+      else console.log('[player]', message);
+    }
+    function emitState() {
+      var snapshot = getState();
+      listeners.state.forEach(function (cb) { cb(snapshot); });
+    }
+    function getState() {
+      return {
+        status: state.status,
+        url: state.url,
+        renditions: state.renditions.slice(),
+        currentRenditionId: state.currentRenditionId,
+        abrEnabled: state.abrEnabled,
+        keyStatus: state.keyStatus,
+        bufferSeconds: state.bufferSeconds,
+        currentTime: state.currentTime,
+        lastError: state.lastError,
+        preferredVideoCodecs: state.preferredVideoCodecs.slice(),
+        loadedVideoFamily: state.loadedVideoFamily,
+      };
+    }
+
+    function clearRenditions() {
+      state.renditions = [];
+      state.currentRenditionId = null;
+      state.selectedVideoId = null;
+      state.loadedVideoFamily = null;
+      sourceRenditions = [];
+    }
+
+    function detachPlayingHandler() {
+      if (onPlayingHandler) {
+        videoEl.removeEventListener('playing', onPlayingHandler);
+        onPlayingHandler = null;
+      }
+    }
+
+    function startBufferPoll() {
+      stopBufferPoll();
+      bufferPollTimer = setInterval(function () {
+        try {
+          if (videoEl.buffered && videoEl.buffered.length) {
+            var end = videoEl.buffered.end(videoEl.buffered.length - 1);
+            state.bufferSeconds = Math.max(0, end - videoEl.currentTime);
+          } else {
+            state.bufferSeconds = null;
+          }
+          state.currentTime = videoEl.currentTime;
+        } catch (_e) {
+          state.bufferSeconds = null;
+          state.currentTime = null;
+        }
+        emitState();
+      }, 500);
+    }
+    function stopBufferPoll() {
+      if (bufferPollTimer) {
+        clearInterval(bufferPollTimer);
+        bufferPollTimer = null;
+      }
+    }
+
+    function stop() {
+      // Invalidate pending license/load callbacks immediately, before asynchronous destroy.
+      var stoppedGeneration = ++generation;
+      stopBufferPoll();
+      detachPlayingHandler();
+      if (shakaPlayer) pendingDestroy = shakaPlayer.destroy().catch(function () {});
+      shakaPlayer = null;
+      // A second stop/load must still wait for an earlier destroy: that instance owns the
+      // same <video> until teardown finishes, even though shakaPlayer is already null.
+      return pendingDestroy.then(function () {
+        if (generation !== stoppedGeneration) return;
+        clearRenditions();
+        state.status = 'idle';
+        state.url = null;
+        state.abrEnabled = true;
+        state.keyStatus = 'n/a';
+        state.preferredVideoCodecs = [];
+        state.bufferSeconds = null;
+        state.currentTime = null;
+        state.lastError = null;
+        emitEvent('info', 'stopped');
+        emitState();
+      });
+    }
+
+    function populateRenditions() {
+      var tracks = shakaPlayer.getVariantTracks();
+      // getVariantTracks() is (video, audio) PAIRS, so one video rep_id repeats once per audio
+      // pairing -- keep ONE row per distinct id.
+      var seen = {};
+      state.renditions = [];
+      tracks.forEach(function (t) {
+        var id = repIdForTrack(t);
+        if (seen[id]) return;
+        seen[id] = true;
+        state.renditions.push({
+          id: id,
+          label: '#' + id + ' ' + (t.width || '?') + 'x' + (t.height || '?') + ' ' +
+            Math.round((t.bandwidth || 0) / 1000) + 'kbps',
+        });
+      });
+      var active = tracks.filter(function (t) { return t.active; })[0];
+      state.currentRenditionId = active ? repIdForTrack(active) : (tracks[0] ? repIdForTrack(tracks[0]) : null);
+      state.selectedVideoId = active && active.originalVideoId != null ? String(active.originalVideoId) : null;
+      // Shaka keeps ONE video codec family per load (see header), so the first track that has a
+      // video codec names the family that is really loaded -- which can differ from what
+      // load() requested (e.g. requested [] -> Shaka's own pick; requested an unsupported family).
+      var withVideo = tracks.filter(function (t) { return t.videoCodec; })[0];
+      state.loadedVideoFamily = withVideo ? codecFamily(withVideo.videoCodec) : null;
+      emitState();
+    }
+
+    // Returns true/false (found/not found). Falls back to selectAudioRendition when no video
+    // variant matches `repId` (it may name an audio-only representation).
+    function sourceVariant(repId, tracks) {
+      var source = sourceRenditions.filter(function (r) { return String(r.rep_id) === String(repId) && r.content_type === 'video'; })[0];
+      if (!source) return null;
+      function family(codec) { return codec === 'h264' ? 'avc1' : codec === 'hevc' ? 'hvc1' : codecFamily(codec); }
+      var matches = tracks.filter(function (track) {
+        return track.width === source.width && track.height === source.height && family(track.videoCodec) === family(source.codec);
+      });
+      // Prefer the exact master BANDWIDTH, including audio. If an origin omitted it,
+      // only an unambiguous video identity is selectable; never pick by list order.
+      var exact = matches.filter(function (track) { return Number(track.bandwidth) === Number(source.bandwidth); });
+      if (exact.length) matches = exact;
+      var ids = new Set(matches.map(function (track) { return track.videoId == null ? repIdForTrack(track) : String(track.videoId); }));
+      return ids.size === 1 ? matches[0] : null;
+    }
+
+    function selectRendition(repId) {
+      if (!shakaPlayer) return false;
+      var tracks = shakaPlayer.getVariantTracks();
+      var track = tracks.filter(function (t) { return repIdForTrack(t) === String(repId); })[0];
+      if (!track) track = sourceVariant(repId, tracks);
+      if (!track) return selectAudioRendition(repId);
+      shakaPlayer.configure('abr.enabled', false);
+      state.abrEnabled = false;
+      shakaPlayer.selectVariantTrack(track, /* clearBuffer= */ true);
+      state.currentRenditionId = repIdForTrack(track);
+      if (track.originalVideoId != null) state.selectedVideoId = String(track.originalVideoId);
+      emitEvent('info', 'switched to rendition #' + state.currentRenditionId + ' (ABR disabled)');
+      emitState();
+      return true;
+    }
+
+    // Matches `originalAudioId`, preferring a variant that also keeps the video the viewer is
+    // on, so switching audio doesn't silently change video quality too. "The video the viewer
+    // is on" is: with ABR on, whatever variant is active right now (ABR keeps moving it); with
+    // ABR off, the video that was pinned (falling back to the active one). NOT
+    // `currentRenditionId`, which holds an AUDIO rep_id after a previous audio pick.
+    function selectAudioRendition(repId) {
+      if (!shakaPlayer) return false;
+      var tracks = shakaPlayer.getVariantTracks();
+      var matches = tracks.filter(function (t) { return t.originalAudioId != null && String(t.originalAudioId) === String(repId); });
+      if (!matches.length) return false;
+      var activeTrack = tracks.filter(function (t) { return t.active; })[0];
+      var activeVideoId = activeTrack && activeTrack.originalVideoId != null ? String(activeTrack.originalVideoId) : null;
+      var keepVideoId = state.abrEnabled
+        ? (activeVideoId || state.selectedVideoId)
+        : (state.selectedVideoId || activeVideoId);
+      var keepingCurrentVideo = keepVideoId == null ? null : matches.filter(function (t) {
+        return t.originalVideoId != null && String(t.originalVideoId) === String(keepVideoId);
+      })[0];
+      var track = keepingCurrentVideo || matches[0];
+      shakaPlayer.configure('abr.enabled', false);
+      state.abrEnabled = false;
+      shakaPlayer.selectVariantTrack(track, /* clearBuffer= */ true);
+      if (track.originalVideoId != null) state.selectedVideoId = String(track.originalVideoId);
+      state.currentRenditionId = String(repId);
+      emitEvent('info', 'switched to audio rendition #' + repId + ' (ABR disabled)');
+      emitState();
+      return true;
+    }
+
+    function selectTextRendition(repId) {
+      if (!shakaPlayer) return false;
+      if (repId == null || repId === '') {
+        shakaPlayer.setTextTrackVisibility(false);
+        return true;
+      }
+      var matches = shakaPlayer.getTextTracks().filter(function (track) {
+        return track.originalTextId != null && String(track.originalTextId) === String(repId);
+      });
+      if (matches.length !== 1) return false;
+      shakaPlayer.selectTextTrack(matches[0]);
+      shakaPlayer.setTextTrackVisibility(true);
+      return true;
+    }
+
+    function enableAbr() {
+      if (!shakaPlayer) return;
+      shakaPlayer.configure('abr.enabled', true);
+      state.abrEnabled = true;
+      emitEvent('info', 'ABR (auto) re-enabled');
+      emitState();
+    }
+
+    // load(assetId, url, preferredVideoCodecs) -- always stop()s first so a re-load never
+    // races two shaka.Player instances against the same <video>.
+    function load(assetId, url, preferredVideoCodecs, options) {
+      options = options || {};
+      var stopped = stop();
+      var loadGeneration = generation;
+      function isCurrent() { return generation === loadGeneration; }
+      return stopped.then(function () {
+        if (!isCurrent()) return;
+        sourceRenditions = options.clear ? (options.sourceRenditions || []).slice() : [];
+        state.url = url;
+        state.status = 'loading';
+        emitState();
+
+        videoEl.style.display = '';
+        shaka.polyfill.installAll();
+        if (!shaka.Player.isBrowserSupported()) {
+          var unsupported = Object.assign(new Error('browser not supported by Shaka Player'), { url: url });
+          // Reflect the failure in the player STATE (not only in the rejection), so a UI that
+          // renders purely from onState() -- console.js does -- never stays stuck on "loading".
+          state.status = 'error';
+          state.lastError = { message: unsupported.message, url: url };
+          emitEvent('error', 'load failed: ' + unsupported.message + ' (url: ' + url + ')');
+          emitState();
+          throw unsupported;
+        }
+        var player = new shaka.Player(videoEl);
+        shakaPlayer = player;
+        player.configure('abr.enabled', true);
+        state.abrEnabled = true;
+        player.configure('preferredVideoCodecs', preferredVideoCodecs || []);
+        state.preferredVideoCodecs = preferredVideoCodecs || [];
+        player.addEventListener('error', function (e) {
+          if (!isCurrent()) return;
+          var detail = e.detail || {};
+          var isDrm = false;
+          try { isDrm = detail.category === shaka.util.Error.Category.DRM; } catch (_e) { /* defensive */ }
+          if (isDrm) state.keyStatus = 'error';
+          state.status = 'error';
+          state.lastError = { message: 'shaka error ' + (detail.code || ''), url: url };
+          emitEvent('error', 'ERROR ' + JSON.stringify(detail));
+          emitState();
+        });
+        player.addEventListener('trackschanged', function () {
+          if (isCurrent()) populateRenditions();
+        });
+
+        state.keyStatus = options.clear ? 'n/a' : 'requesting';
+        emitState();
+        var keyFetchFailed = false;
+        return (options.clear ? Promise.resolve(null) : fetchKeylessClearKeys(assetId, options.licenseUrl))
+          .catch(function (err) {
+            keyFetchFailed = true;
+            throw err;
+          })
+          .then(function (clearKeys) {
+            if (!isCurrent()) return;
+            // See file header: ignoreDrmInfo is required alongside clearKeys, or a real
+            // Widevine CDM still prefers the manifest's own DRM signaling and fails 6012.
+            if (clearKeys) player.configure({ drm: { clearKeys: clearKeys }, manifest: { dash: { ignoreDrmInfo: true } } });
+            return player.load(url);
+          })
+          .then(function () {
+            if (!isCurrent()) return;
+            emitEvent('info', 'loaded ' + url);
+            populateRenditions();
+            detachPlayingHandler();
+            onPlayingHandler = function () {
+              if (!isCurrent()) return;
+              detachPlayingHandler();
+              state.status = 'playing';
+              state.keyStatus = options.clear ? 'n/a' : 'usable';
+              emitEvent('info', 'playing');
+              emitState();
+            };
+            videoEl.addEventListener('playing', onPlayingHandler);
+            startBufferPoll();
+          })
+          .catch(function (e) {
+            if (!isCurrent()) return;
+            // A key-related failure (the ClearKey license fetch, or a Shaka DRM-category error
+            // such as 6012) is a key error. Anything else (manifest/network/media) says nothing
+            // about the key, so don't leave a stale "requesting" showing next to the error.
+            var isKeyError = keyFetchFailed;
+            try { isKeyError = isKeyError || (e && e.category === shaka.util.Error.Category.DRM); } catch (_e) { /* defensive */ }
+            state.keyStatus = isKeyError ? 'error' : 'n/a';
+            state.status = 'error';
+            state.lastError = { message: e.message, url: url };
+            emitEvent('error', 'load failed: ' + (e.code || '') + ' ' + e.message + ' (url: ' + url + ')');
+            emitState();
+            var wrapped = e instanceof Error ? e : new Error(String(e));
+            wrapped.url = url;
+            throw wrapped;
+          });
+      });
+    }
+
+    return {
+      load: load,
+      stop: stop,
+      selectRendition: selectRendition,
+      selectAudioRendition: selectAudioRendition,
+      selectTextRendition: selectTextRendition,
+      enableAbr: enableAbr,
+      getState: getState,
+      onEvent: function (cb) { listeners.event.push(cb); },
+      onState: function (cb) { listeners.state.push(cb); },
+    };
+  }
+
+  App.createShakaPlayer = createShakaPlayer;
+})();
