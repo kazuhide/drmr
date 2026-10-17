@@ -1,0 +1,3557 @@
+{
+ "b64decode": [
+  [
+   "AAEC",
+   false,
+   {
+    "ok": "000102"
+   }
+  ],
+  [
+   "AAEC",
+   true,
+   {
+    "ok": "000102"
+   }
+  ],
+  [
+   "AAECAw==",
+   false,
+   {
+    "ok": "00010203"
+   }
+  ],
+  [
+   "AAECAw==",
+   true,
+   {
+    "ok": "00010203"
+   }
+  ],
+  [
+   "AAECAw=",
+   false,
+   {
+    "error": "Incorrect padding",
+    "type": "Error"
+   }
+  ],
+  [
+   "AAECAw=",
+   true,
+   {
+    "error": "Incorrect padding",
+    "type": "Error"
+   }
+  ],
+  [
+   "AAECAw",
+   false,
+   {
+    "error": "Incorrect padding",
+    "type": "Error"
+   }
+  ],
+  [
+   "AAECAw",
+   true,
+   {
+    "error": "Incorrect padding",
+    "type": "Error"
+   }
+  ],
+  [
+   "AAECA",
+   false,
+   {
+    "error": "Invalid base64-encoded string: number of data characters (5) cannot be 1 more than a multiple of 4",
+    "type": "Error"
+   }
+  ],
+  [
+   "AAECA",
+   true,
+   {
+    "error": "Invalid base64-encoded string: number of data characters (5) cannot be 1 more than a multiple of 4",
+    "type": "Error"
+   }
+  ],
+  [
+   "A",
+   false,
+   {
+    "error": "Invalid base64-encoded string: number of data characters (1) cannot be 1 more than a multiple of 4",
+    "type": "Error"
+   }
+  ],
+  [
+   "A",
+   true,
+   {
+    "error": "Invalid base64-encoded string: number of data characters (1) cannot be 1 more than a multiple of 4",
+    "type": "Error"
+   }
+  ],
+  [
+   "=AAEC",
+   false,
+   {
+    "ok": "000102"
+   }
+  ],
+  [
+   "=AAEC",
+   true,
+   {
+    "error": "Leading padding not allowed",
+    "type": "Error"
+   }
+  ],
+  [
+   "AA==AA",
+   false,
+   {
+    "ok": "00"
+   }
+  ],
+  [
+   "AA==AA",
+   true,
+   {
+    "error": "Excess data after padding",
+    "type": "Error"
+   }
+  ],
+  [
+   "AA=A",
+   false,
+   {
+    "error": "Incorrect padding",
+    "type": "Error"
+   }
+  ],
+  [
+   "AA=A",
+   true,
+   {
+    "error": "Discontinuous padding not allowed",
+    "type": "Error"
+   }
+  ],
+  [
+   "AAEC\nAw==",
+   false,
+   {
+    "ok": "00010203"
+   }
+  ],
+  [
+   "AAEC\nAw==",
+   true,
+   {
+    "error": "Only base64 data is allowed",
+    "type": "Error"
+   }
+  ],
+  [
+   "AA EC",
+   false,
+   {
+    "ok": "000102"
+   }
+  ],
+  [
+   "AA EC",
+   true,
+   {
+    "error": "Only base64 data is allowed",
+    "type": "Error"
+   }
+  ],
+  [
+   "AA!EC",
+   false,
+   {
+    "ok": "000102"
+   }
+  ],
+  [
+   "AA!EC",
+   true,
+   {
+    "error": "Only base64 data is allowed",
+    "type": "Error"
+   }
+  ],
+  [
+   "AAECAw===",
+   false,
+   {
+    "ok": "00010203"
+   }
+  ],
+  [
+   "AAECAw===",
+   true,
+   {
+    "error": "Excess data after padding",
+    "type": "Error"
+   }
+  ],
+  [
+   "AAECAw==AAEC",
+   false,
+   {
+    "ok": "00010203"
+   }
+  ],
+  [
+   "AAECAw==AAEC",
+   true,
+   {
+    "error": "Excess data after padding",
+    "type": "Error"
+   }
+  ],
+  [
+   "",
+   false,
+   {
+    "ok": ""
+   }
+  ],
+  [
+   "",
+   true,
+   {
+    "ok": ""
+   }
+  ],
+  [
+   "=",
+   false,
+   {
+    "ok": ""
+   }
+  ],
+  [
+   "=",
+   true,
+   {
+    "error": "Leading padding not allowed",
+    "type": "Error"
+   }
+  ],
+  [
+   "==",
+   false,
+   {
+    "ok": ""
+   }
+  ],
+  [
+   "==",
+   true,
+   {
+    "error": "Leading padding not allowed",
+    "type": "Error"
+   }
+  ],
+  [
+   "AB=",
+   false,
+   {
+    "error": "Incorrect padding",
+    "type": "Error"
+   }
+  ],
+  [
+   "AB=",
+   true,
+   {
+    "error": "Incorrect padding",
+    "type": "Error"
+   }
+  ],
+  [
+   "AB==",
+   false,
+   {
+    "ok": "00"
+   }
+  ],
+  [
+   "AB==",
+   true,
+   {
+    "ok": "00"
+   }
+  ],
+  [
+   "ABC=",
+   false,
+   {
+    "ok": "0010"
+   }
+  ],
+  [
+   "ABC=",
+   true,
+   {
+    "ok": "0010"
+   }
+  ],
+  [
+   "ABC==",
+   false,
+   {
+    "ok": "0010"
+   }
+  ],
+  [
+   "ABC==",
+   true,
+   {
+    "error": "Excess data after padding",
+    "type": "Error"
+   }
+  ],
+  [
+   "-_8=",
+   false,
+   {
+    "error": "Invalid base64-encoded string: number of data characters (1) cannot be 1 more than a multiple of 4",
+    "type": "Error"
+   }
+  ],
+  [
+   "-_8=",
+   true,
+   {
+    "error": "Only base64 data is allowed",
+    "type": "Error"
+   }
+  ],
+  [
+   "\u00e9",
+   false,
+   {
+    "error": "string argument should contain only ASCII characters",
+    "type": "ValueError"
+   }
+  ],
+  [
+   "\u00e9",
+   true,
+   {
+    "error": "string argument should contain only ASCII characters",
+    "type": "ValueError"
+   }
+  ],
+  [
+   "AA\u00e9",
+   false,
+   {
+    "error": "string argument should contain only ASCII characters",
+    "type": "ValueError"
+   }
+  ],
+  [
+   "AA\u00e9",
+   true,
+   {
+    "error": "string argument should contain only ASCII characters",
+    "type": "ValueError"
+   }
+  ],
+  [
+   "AAA=A",
+   false,
+   {
+    "ok": "0000"
+   }
+  ],
+  [
+   "AAA=A",
+   true,
+   {
+    "error": "Excess data after padding",
+    "type": "Error"
+   }
+  ],
+  [
+   "A=B=",
+   false,
+   {
+    "error": "Incorrect padding",
+    "type": "Error"
+   }
+  ],
+  [
+   "A=B=",
+   true,
+   {
+    "error": "Discontinuous padding not allowed",
+    "type": "Error"
+   }
+  ],
+  [
+   "AB=C",
+   false,
+   {
+    "error": "Incorrect padding",
+    "type": "Error"
+   }
+  ],
+  [
+   "AB=C",
+   true,
+   {
+    "error": "Discontinuous padding not allowed",
+    "type": "Error"
+   }
+  ],
+  [
+   "ABCD=",
+   false,
+   {
+    "ok": "001083"
+   }
+  ],
+  [
+   "ABCD=",
+   true,
+   {
+    "ok": "001083"
+   }
+  ],
+  [
+   "ABCD==",
+   false,
+   {
+    "ok": "001083"
+   }
+  ],
+  [
+   "ABCD==",
+   true,
+   {
+    "ok": "001083"
+   }
+  ],
+  [
+   "A===",
+   false,
+   {
+    "error": "Invalid base64-encoded string: number of data characters (1) cannot be 1 more than a multiple of 4",
+    "type": "Error"
+   }
+  ],
+  [
+   "A===",
+   true,
+   {
+    "error": "Invalid base64-encoded string: number of data characters (1) cannot be 1 more than a multiple of 4",
+    "type": "Error"
+   }
+  ],
+  [
+   "AB=\n=",
+   false,
+   {
+    "ok": "00"
+   }
+  ],
+  [
+   "AB=\n=",
+   true,
+   {
+    "error": "Only base64 data is allowed",
+    "type": "Error"
+   }
+  ],
+  [
+   "ABC=D",
+   false,
+   {
+    "ok": "0010"
+   }
+  ],
+  [
+   "ABC=D",
+   true,
+   {
+    "error": "Excess data after padding",
+    "type": "Error"
+   }
+  ],
+  [
+   "====",
+   false,
+   {
+    "ok": ""
+   }
+  ],
+  [
+   "====",
+   true,
+   {
+    "error": "Leading padding not allowed",
+    "type": "Error"
+   }
+  ],
+  [
+   "AAAA====",
+   false,
+   {
+    "ok": "000000"
+   }
+  ],
+  [
+   "AAAA====",
+   true,
+   {
+    "ok": "000000"
+   }
+  ],
+  [
+   "AB\u0000CD",
+   false,
+   {
+    "ok": "001083"
+   }
+  ],
+  [
+   "AB\u0000CD",
+   true,
+   {
+    "error": "Only base64 data is allowed",
+    "type": "Error"
+   }
+  ]
+ ],
+ "etree": [
+  [
+   "<a>&#xD800;</a>",
+   {
+    "error": "reference to invalid character number: line 1, column 3"
+   }
+  ],
+  [
+   "<a>&#x110000;</a>",
+   {
+    "error": "reference to invalid character number: line 1, column 3"
+   }
+  ],
+  [
+   "<a>&#0;</a>",
+   {
+    "error": "reference to invalid character number: line 1, column 3"
+   }
+  ],
+  [
+   "<a>&#x1;</a>",
+   {
+    "error": "reference to invalid character number: line 1, column 3"
+   }
+  ],
+  [
+   "<a>&#xFFFE;</a>",
+   {
+    "error": "reference to invalid character number: line 1, column 3"
+   }
+  ],
+  [
+   "<a>&#9;</a>",
+   {
+    "ok": {
+     "attrib": {},
+     "tag": "a",
+     "text": "\t"
+    }
+   }
+  ],
+  [
+   "<a b='&#xD800;'/>",
+   {
+    "error": "reference to invalid character number: line 1, column 6"
+   }
+  ],
+  [
+   "<a><![CDATA[&#xD800;]]></a>",
+   {
+    "ok": {
+     "attrib": {},
+     "tag": "a",
+     "text": "&#xD800;"
+    }
+   }
+  ],
+  [
+   "<a><!-- &#xD800; --></a>",
+   {
+    "ok": {
+     "attrib": {},
+     "tag": "a",
+     "text": null
+    }
+   }
+  ],
+  [
+   "<a>&#x;</a>",
+   {
+    "error": "not well-formed (invalid token): line 1, column 6"
+   }
+  ],
+  [
+   "<a>&#;</a>",
+   {
+    "error": "not well-formed (invalid token): line 1, column 5"
+   }
+  ],
+  [
+   "<a>&#12a;</a>",
+   {
+    "error": "not well-formed (invalid token): line 1, column 7"
+   }
+  ],
+  [
+   "<a>x&#xD800;</a>",
+   {
+    "error": "reference to invalid character number: line 1, column 4"
+   }
+  ],
+  [
+   "<a>\n  &#xD800;</a>",
+   {
+    "error": "reference to invalid character number: line 2, column 2"
+   }
+  ],
+  [
+   "<a>&#x10FFFF;&#xE000;&#x20;&#65;</a>",
+   {
+    "ok": {
+     "attrib": {},
+     "tag": "a",
+     "text": "\udbff\udfff\ue000 A"
+    }
+   }
+  ],
+  [
+   "<a>&#x41;&#97;&amp;&lt;&gt;&quot;&apos;</a>",
+   {
+    "ok": {
+     "attrib": {},
+     "tag": "a",
+     "text": "Aa&<>\"'"
+    }
+   }
+  ],
+  [
+   "<a b='&#x41;&#xD;&#xA;&#9;'/>",
+   {
+    "ok": {
+     "attrib": {
+      "b": "A\r\n\t"
+     },
+     "tag": "a",
+     "text": null
+    }
+   }
+  ],
+  [
+   "<a b='&#x1;'/>",
+   {
+    "error": "reference to invalid character number: line 1, column 6"
+   }
+  ],
+  [
+   "<a/>x",
+   {
+    "error": "junk after document element: line 1, column 4"
+   }
+  ],
+  [
+   "<a/><b/>",
+   {
+    "error": "junk after document element: line 1, column 4"
+   }
+  ],
+  [
+   "<a></a>\n junk",
+   {
+    "error": "junk after document element: line 2, column 1"
+   }
+  ],
+  [
+   "<a/><!-- c -->",
+   {
+    "ok": {
+     "attrib": {},
+     "tag": "a",
+     "text": null
+    }
+   }
+  ],
+  [
+   "<a/>  ",
+   {
+    "ok": {
+     "attrib": {},
+     "tag": "a",
+     "text": null
+    }
+   }
+  ],
+  [
+   "<a/>\n<?p x?>\n",
+   {
+    "ok": {
+     "attrib": {},
+     "tag": "a",
+     "text": null
+    }
+   }
+  ],
+  [
+   "<a/>&amp;",
+   {
+    "error": "not well-formed (invalid token): line 1, column 4"
+   }
+  ],
+  [
+   "<a xmlns:p=''/>",
+   {
+    "error": "must not undeclare prefix: line 1, column 0"
+   }
+  ],
+  [
+   "<a xmlns='u' xmlns='v'/>",
+   {
+    "error": "duplicate attribute: line 1, column 13"
+   }
+  ],
+  [
+   "<a xmlns:xmlns='u'/>",
+   {
+    "error": "reserved prefix (xmlns) must not be declared or undeclared: line 1, column 0"
+   }
+  ],
+  [
+   "<:a/>",
+   {
+    "error": "not well-formed (invalid token): line 1, column 1"
+   }
+  ],
+  [
+   "<a><?a:b c?></a>",
+   {
+    "error": "not well-formed (invalid token): line 1, column 6"
+   }
+  ],
+  [
+   "<a b='1' b='2'/>",
+   {
+    "error": "duplicate attribute: line 1, column 9"
+   }
+  ],
+  [
+   "<a b='1' c='2' b='3'/>",
+   {
+    "error": "duplicate attribute: line 1, column 15"
+   }
+  ],
+  [
+   "<a :b='1'/>",
+   {
+    "error": "not well-formed (invalid token): line 1, column 3"
+   }
+  ],
+  [
+   "<a xmlns:p='u' xmlns:p='v'/>",
+   {
+    "error": "duplicate attribute: line 1, column 15"
+   }
+  ],
+  [
+   "<a><?xml x?></a>",
+   {
+    "error": "XML or text declaration not at start of entity: line 1, column 3"
+   }
+  ],
+  [
+   "<a><?XML x?></a>",
+   {
+    "error": "not well-formed (invalid token): line 1, column 8"
+   }
+  ],
+  [
+   "<a><?Xml?></a>",
+   {
+    "error": "not well-formed (invalid token): line 1, column 8"
+   }
+  ],
+  [
+   "<?xml version='1.0' standalone='maybe'?><a/>",
+   {
+    "error": "XML declaration not well-formed: line 1, column 32"
+   }
+  ],
+  [
+   "<?xml version='1.0' standalone='yes'?><a/>",
+   {
+    "ok": {
+     "attrib": {},
+     "tag": "a",
+     "text": null
+    }
+   }
+  ],
+  [
+   "<?xml version='1.0' standalone=\"no\"?><a/>",
+   {
+    "ok": {
+     "attrib": {},
+     "tag": "a",
+     "text": null
+    }
+   }
+  ],
+  [
+   "<a>\r&amp;b</a>",
+   {
+    "ok": {
+     "attrib": {},
+     "tag": "a",
+     "text": "\n&b"
+    }
+   }
+  ],
+  [
+   "<a b='x\r\ny'/>",
+   {
+    "ok": {
+     "attrib": {
+      "b": "x y"
+     },
+     "tag": "a",
+     "text": null
+    }
+   }
+  ],
+  [
+   "<a>x\r\ny\rz</a>",
+   {
+    "ok": {
+     "attrib": {},
+     "tag": "a",
+     "text": "x\ny\nz"
+    }
+   }
+  ],
+  [
+   "<a b='x\ry\tz\nw'/>",
+   {
+    "ok": {
+     "attrib": {
+      "b": "x y z w"
+     },
+     "tag": "a",
+     "text": null
+    }
+   }
+  ],
+  [
+   "<a>\r</a>",
+   {
+    "ok": {
+     "attrib": {},
+     "tag": "a",
+     "text": "\n"
+    }
+   }
+  ],
+  [
+   "<p:a xmlns:p='u' p:b='1' b='2'/>",
+   {
+    "ok": {
+     "attrib": {
+      "b": "2",
+      "{u}b": "1"
+     },
+     "tag": "{u}a",
+     "text": null
+    }
+   }
+  ],
+  [
+   "<a b='x>y'>t</a>",
+   {
+    "ok": {
+     "attrib": {
+      "b": "x>y"
+     },
+     "tag": "a",
+     "text": "t"
+    }
+   }
+  ],
+  [
+   "<a><!-- <b> & --></a>",
+   {
+    "ok": {
+     "attrib": {},
+     "tag": "a",
+     "text": null
+    }
+   }
+  ],
+  [
+   "<a><![CDATA[<b>&]]>t</a>",
+   {
+    "ok": {
+     "attrib": {},
+     "tag": "a",
+     "text": "<b>&t"
+    }
+   }
+  ],
+  [
+   "<a>]]></a>",
+   {
+    "error": "not well-formed (invalid token): line 1, column 5"
+   }
+  ],
+  [
+   "<a b=\"'\" c='\"'/>",
+   {
+    "ok": {
+     "attrib": {
+      "b": "'",
+      "c": "\""
+     },
+     "tag": "a",
+     "text": null
+    }
+   }
+  ],
+  [
+   "",
+   {
+    "error": "no element found: line 1, column 0"
+   }
+  ],
+  [
+   "<",
+   {
+    "error": "unclosed token: line 1, column 0"
+   }
+  ],
+  [
+   "<a",
+   {
+    "error": "unclosed token: line 1, column 0"
+   }
+  ],
+  [
+   "<a ",
+   {
+    "error": "unclosed token: line 1, column 0"
+   }
+  ],
+  [
+   "<a b",
+   {
+    "error": "unclosed token: line 1, column 0"
+   }
+  ],
+  [
+   "<a b=",
+   {
+    "error": "unclosed token: line 1, column 0"
+   }
+  ],
+  [
+   "<a b='",
+   {
+    "error": "unclosed token: line 1, column 0"
+   }
+  ],
+  [
+   "<a b='1",
+   {
+    "error": "unclosed token: line 1, column 0"
+   }
+  ],
+  [
+   "<a b='1'",
+   {
+    "error": "unclosed token: line 1, column 0"
+   }
+  ],
+  [
+   "<a b='1'>",
+   {
+    "error": "no element found: line 1, column 9"
+   }
+  ],
+  [
+   "<a b='1'><",
+   {
+    "error": "unclosed token: line 1, column 9"
+   }
+  ],
+  [
+   "<a b='1'><!",
+   {
+    "error": "unclosed token: line 1, column 9"
+   }
+  ],
+  [
+   "<a b='1'><!-",
+   {
+    "error": "unclosed token: line 1, column 9"
+   }
+  ],
+  [
+   "<a b='1'><!--",
+   {
+    "error": "unclosed token: line 1, column 9"
+   }
+  ],
+  [
+   "<a b='1'><!-- ",
+   {
+    "error": "unclosed token: line 1, column 9"
+   }
+  ],
+  [
+   "<a b='1'><!-- c",
+   {
+    "error": "unclosed token: line 1, column 9"
+   }
+  ],
+  [
+   "<a b='1'><!-- c ",
+   {
+    "error": "unclosed token: line 1, column 9"
+   }
+  ],
+  [
+   "<a b='1'><!-- c -",
+   {
+    "error": "unclosed token: line 1, column 9"
+   }
+  ],
+  [
+   "<a b='1'><!-- c --",
+   {
+    "error": "unclosed token: line 1, column 9"
+   }
+  ],
+  [
+   "<a b='1'><!-- c -->",
+   {
+    "error": "no element found: line 1, column 19"
+   }
+  ],
+  [
+   "<a b='1'><!-- c --><",
+   {
+    "error": "unclosed token: line 1, column 19"
+   }
+  ],
+  [
+   "<a b='1'><!-- c --><?",
+   {
+    "error": "unclosed token: line 1, column 19"
+   }
+  ],
+  [
+   "<a b='1'><!-- c --><?p",
+   {
+    "error": "unclosed token: line 1, column 19"
+   }
+  ],
+  [
+   "<a b='1'><!-- c --><?p ",
+   {
+    "error": "unclosed token: line 1, column 19"
+   }
+  ],
+  [
+   "<a b='1'><!-- c --><?p d",
+   {
+    "error": "unclosed token: line 1, column 19"
+   }
+  ],
+  [
+   "<a b='1'><!-- c --><?p d?",
+   {
+    "error": "unclosed token: line 1, column 19"
+   }
+  ],
+  [
+   "<a b='1'><!-- c --><?p d?>",
+   {
+    "error": "no element found: line 1, column 26"
+   }
+  ],
+  [
+   "<a b='1'><!-- c --><?p d?><",
+   {
+    "error": "unclosed token: line 1, column 26"
+   }
+  ],
+  [
+   "<a b='1'><!-- c --><?p d?><!",
+   {
+    "error": "unclosed token: line 1, column 26"
+   }
+  ],
+  [
+   "<a b='1'><!-- c --><?p d?><![",
+   {
+    "error": "unclosed token: line 1, column 26"
+   }
+  ],
+  [
+   "<a b='1'><!-- c --><?p d?><![C",
+   {
+    "error": "unclosed token: line 1, column 26"
+   }
+  ],
+  [
+   "<a b='1'><!-- c --><?p d?><![CD",
+   {
+    "error": "unclosed token: line 1, column 26"
+   }
+  ],
+  [
+   "<a b='1'><!-- c --><?p d?><![CDA",
+   {
+    "error": "unclosed token: line 1, column 26"
+   }
+  ],
+  [
+   "<a b='1'><!-- c --><?p d?><![CDAT",
+   {
+    "error": "unclosed token: line 1, column 26"
+   }
+  ],
+  [
+   "<a b='1'><!-- c --><?p d?><![CDATA",
+   {
+    "error": "unclosed token: line 1, column 26"
+   }
+  ],
+  [
+   "<a b='1'><!-- c --><?p d?><![CDATA[",
+   {
+    "error": "unclosed CDATA section: line 1, column 35"
+   }
+  ],
+  [
+   "<a b='1'><!-- c --><?p d?><![CDATA[x",
+   {
+    "error": "unclosed CDATA section: line 1, column 36"
+   }
+  ],
+  [
+   "<a b='1'><!-- c --><?p d?><![CDATA[x]",
+   {
+    "error": "unclosed CDATA section: line 1, column 36"
+   }
+  ],
+  [
+   "<a b='1'><!-- c --><?p d?><![CDATA[x]]",
+   {
+    "error": "unclosed CDATA section: line 1, column 36"
+   }
+  ],
+  [
+   "<a b='1'><!-- c --><?p d?><![CDATA[x]]>",
+   {
+    "error": "no element found: line 1, column 39"
+   }
+  ],
+  [
+   "<a b='1'><!-- c --><?p d?><![CDATA[x]]>&",
+   {
+    "error": "unclosed token: line 1, column 39"
+   }
+  ],
+  [
+   "<a b='1'><!-- c --><?p d?><![CDATA[x]]>&a",
+   {
+    "error": "unclosed token: line 1, column 39"
+   }
+  ],
+  [
+   "<a b='1'><!-- c --><?p d?><![CDATA[x]]>&am",
+   {
+    "error": "unclosed token: line 1, column 39"
+   }
+  ],
+  [
+   "<a b='1'><!-- c --><?p d?><![CDATA[x]]>&amp",
+   {
+    "error": "unclosed token: line 1, column 39"
+   }
+  ],
+  [
+   "<a b='1'><!-- c --><?p d?><![CDATA[x]]>&amp;",
+   {
+    "error": "no element found: line 1, column 44"
+   }
+  ],
+  [
+   "<a b='1'><!-- c --><?p d?><![CDATA[x]]>&amp;&",
+   {
+    "error": "unclosed token: line 1, column 44"
+   }
+  ],
+  [
+   "<a b='1'><!-- c --><?p d?><![CDATA[x]]>&amp;&#",
+   {
+    "error": "unclosed token: line 1, column 44"
+   }
+  ],
+  [
+   "<a b='1'><!-- c --><?p d?><![CDATA[x]]>&amp;&#6",
+   {
+    "error": "unclosed token: line 1, column 44"
+   }
+  ],
+  [
+   "<a b='1'><!-- c --><?p d?><![CDATA[x]]>&amp;&#65",
+   {
+    "error": "unclosed token: line 1, column 44"
+   }
+  ],
+  [
+   "<a b='1'><!-- c --><?p d?><![CDATA[x]]>&amp;&#65;",
+   {
+    "error": "no element found: line 1, column 49"
+   }
+  ],
+  [
+   "<a b='1'><!-- c --><?p d?><![CDATA[x]]>&amp;&#65;<",
+   {
+    "error": "unclosed token: line 1, column 49"
+   }
+  ],
+  [
+   "<a b='1'><!-- c --><?p d?><![CDATA[x]]>&amp;&#65;<c",
+   {
+    "error": "unclosed token: line 1, column 49"
+   }
+  ],
+  [
+   "<a b='1'><!-- c --><?p d?><![CDATA[x]]>&amp;&#65;<c/",
+   {
+    "error": "unclosed token: line 1, column 49"
+   }
+  ],
+  [
+   "<a b='1'><!-- c --><?p d?><![CDATA[x]]>&amp;&#65;<c/>",
+   {
+    "error": "no element found: line 1, column 53"
+   }
+  ],
+  [
+   "<a b='1'><!-- c --><?p d?><![CDATA[x]]>&amp;&#65;<c/><",
+   {
+    "error": "unclosed token: line 1, column 53"
+   }
+  ],
+  [
+   "<a b='1'><!-- c --><?p d?><![CDATA[x]]>&amp;&#65;<c/></",
+   {
+    "error": "unclosed token: line 1, column 53"
+   }
+  ]
+ ],
+ "fnmatch": [
+  [
+   "seg_*.m4s",
+   [
+    "seg_1.m4s",
+    "seg_10.m4s",
+    "seg_.m4s"
+   ]
+  ],
+  [
+   "*",
+   [
+    "seg_1.m4s",
+    "seg_10.m4s",
+    "seg_.m4s",
+    "a",
+    "b",
+    "c",
+    "d",
+    "e",
+    "z",
+    "-",
+    "]",
+    "^",
+    "&",
+    "~",
+    "|",
+    "\\",
+    "[",
+    "ab",
+    "",
+    "a\nb",
+    "aXb",
+    "aXbYc",
+    "acb",
+    "xyz",
+    "*",
+    "seg_1.m4s.bak",
+    "a]",
+    "[a",
+    "abcd",
+    "abYce",
+    "abYcf",
+    "!",
+    "out_1.m4s",
+    "x.m4s",
+    "\u00e9",
+    "aab",
+    "[]"
+   ]
+  ],
+  [
+   "?",
+   [
+    "a",
+    "b",
+    "c",
+    "d",
+    "e",
+    "z",
+    "-",
+    "]",
+    "^",
+    "&",
+    "~",
+    "|",
+    "\\",
+    "[",
+    "*",
+    "!",
+    "\u00e9"
+   ]
+  ],
+  [
+   "seg_?.m4s",
+   [
+    "seg_1.m4s"
+   ]
+  ],
+  [
+   "[abc]",
+   [
+    "a",
+    "b",
+    "c"
+   ]
+  ],
+  [
+   "[!abc]",
+   [
+    "d",
+    "e",
+    "z",
+    "-",
+    "]",
+    "^",
+    "&",
+    "~",
+    "|",
+    "\\",
+    "[",
+    "*",
+    "!",
+    "\u00e9"
+   ]
+  ],
+  [
+   "[a-c]",
+   [
+    "a",
+    "b",
+    "c"
+   ]
+  ],
+  [
+   "[!a-c]",
+   [
+    "d",
+    "e",
+    "z",
+    "-",
+    "]",
+    "^",
+    "&",
+    "~",
+    "|",
+    "\\",
+    "[",
+    "*",
+    "!",
+    "\u00e9"
+   ]
+  ],
+  [
+   "[]a]",
+   [
+    "a",
+    "]"
+   ]
+  ],
+  [
+   "[!]a]",
+   [
+    "b",
+    "c",
+    "d",
+    "e",
+    "z",
+    "-",
+    "^",
+    "&",
+    "~",
+    "|",
+    "\\",
+    "[",
+    "*",
+    "!",
+    "\u00e9"
+   ]
+  ],
+  [
+   "[a-]",
+   [
+    "a",
+    "-"
+   ]
+  ],
+  [
+   "[-a]",
+   [
+    "a",
+    "-"
+   ]
+  ],
+  [
+   "[!-a]",
+   [
+    "b",
+    "c",
+    "d",
+    "e",
+    "z",
+    "]",
+    "^",
+    "&",
+    "~",
+    "|",
+    "\\",
+    "[",
+    "*",
+    "!",
+    "\u00e9"
+   ]
+  ],
+  [
+   "[z-a]",
+   []
+  ],
+  [
+   "[!z-a]",
+   [
+    "a",
+    "b",
+    "c",
+    "d",
+    "e",
+    "z",
+    "-",
+    "]",
+    "^",
+    "&",
+    "~",
+    "|",
+    "\\",
+    "[",
+    "*",
+    "!",
+    "\u00e9"
+   ]
+  ],
+  [
+   "[a--z]",
+   [
+    "z"
+   ]
+  ],
+  [
+   "[a-xc-by-k]",
+   [
+    "a",
+    "b",
+    "c",
+    "d",
+    "e"
+   ]
+  ],
+  [
+   "[",
+   [
+    "["
+   ]
+  ],
+  [
+   "[abc",
+   []
+  ],
+  [
+   "a[",
+   []
+  ],
+  [
+   "[\\]",
+   [
+    "\\"
+   ]
+  ],
+  [
+   "[a\\-z]",
+   [
+    "a",
+    "b",
+    "c",
+    "d",
+    "e",
+    "z",
+    "]",
+    "^",
+    "\\"
+   ]
+  ],
+  [
+   "[&~|]",
+   [
+    "&",
+    "~",
+    "|"
+   ]
+  ],
+  [
+   "[^a]",
+   [
+    "a",
+    "^"
+   ]
+  ],
+  [
+   "[[a]",
+   [
+    "a",
+    "["
+   ]
+  ],
+  [
+   "*a*b*",
+   [
+    "ab",
+    "a\nb",
+    "aXb",
+    "aXbYc",
+    "acb",
+    "abcd",
+    "abYce",
+    "abYcf",
+    "aab"
+   ]
+  ],
+  [
+   "a*b?c[de]",
+   [
+    "abYce"
+   ]
+  ],
+  [
+   "\\*",
+   [
+    "\\"
+   ]
+  ],
+  [
+   "[!]",
+   []
+  ],
+  [
+   "[]",
+   [
+    "[]"
+   ]
+  ],
+  [
+   "[]-]",
+   [
+    "-",
+    "]"
+   ]
+  ],
+  [
+   "[a-c-e]",
+   [
+    "a",
+    "b",
+    "c",
+    "e",
+    "-"
+   ]
+  ],
+  [
+   "[--]",
+   [
+    "-"
+   ]
+  ],
+  [
+   "[!--a]",
+   [
+    "b",
+    "c",
+    "d",
+    "e",
+    "z",
+    "&",
+    "~",
+    "|",
+    "*",
+    "!",
+    "\u00e9"
+   ]
+  ],
+  [
+   "*?*",
+   [
+    "seg_1.m4s",
+    "seg_10.m4s",
+    "seg_.m4s",
+    "a",
+    "b",
+    "c",
+    "d",
+    "e",
+    "z",
+    "-",
+    "]",
+    "^",
+    "&",
+    "~",
+    "|",
+    "\\",
+    "[",
+    "ab",
+    "a\nb",
+    "aXb",
+    "aXbYc",
+    "acb",
+    "xyz",
+    "*",
+    "seg_1.m4s.bak",
+    "a]",
+    "[a",
+    "abcd",
+    "abYce",
+    "abYcf",
+    "!",
+    "out_1.m4s",
+    "x.m4s",
+    "\u00e9",
+    "aab",
+    "[]"
+   ]
+  ],
+  [
+   "a**b",
+   [
+    "ab",
+    "a\nb",
+    "aXb",
+    "acb",
+    "aab"
+   ]
+  ],
+  [
+   "[a-\\]",
+   []
+  ],
+  [
+   "[\\-a]",
+   [
+    "a",
+    "]",
+    "^",
+    "\\"
+   ]
+  ],
+  [
+   "seg_[0-9]*.m4s",
+   [
+    "seg_1.m4s",
+    "seg_10.m4s"
+   ]
+  ],
+  [
+   "out_*.m4s",
+   [
+    "out_1.m4s"
+   ]
+  ],
+  [
+   "*.m4s",
+   [
+    "seg_1.m4s",
+    "seg_10.m4s",
+    "seg_.m4s",
+    "out_1.m4s",
+    "x.m4s"
+   ]
+  ]
+ ],
+ "fromhex": [
+  [
+   "000102030405060708090a0b0c0d0e0f",
+   {
+    "ok": "000102030405060708090a0b0c0d0e0f"
+   }
+  ],
+  [
+   "00 01 02",
+   {
+    "ok": "000102"
+   }
+  ],
+  [
+   " 0001 ",
+   {
+    "ok": "0001"
+   }
+  ],
+  [
+   "0 1",
+   {
+    "error": "non-hexadecimal number found in fromhex() arg at position 1",
+    "type": "ValueError"
+   }
+  ],
+  [
+   "abc",
+   {
+    "error": "non-hexadecimal number found in fromhex() arg at position 3",
+    "type": "ValueError"
+   }
+  ],
+  [
+   "zz",
+   {
+    "error": "non-hexadecimal number found in fromhex() arg at position 0",
+    "type": "ValueError"
+   }
+  ],
+  [
+   "00\t01\n02\u000b03\f04\r05",
+   {
+    "ok": "000102030405"
+   }
+  ],
+  [
+   "\u00e90",
+   {
+    "error": "non-hexadecimal number found in fromhex() arg at position 0",
+    "type": "ValueError"
+   }
+  ],
+  [
+   "",
+   {
+    "ok": ""
+   }
+  ],
+  [
+   "AABB",
+   {
+    "ok": "aabb"
+   }
+  ],
+  [
+   "0x00",
+   {
+    "error": "non-hexadecimal number found in fromhex() arg at position 1",
+    "type": "ValueError"
+   }
+  ],
+  [
+   "0001 ",
+   {
+    "ok": "0001"
+   }
+  ],
+  [
+   "00\u001c01",
+   {
+    "error": "non-hexadecimal number found in fromhex() arg at position 2",
+    "type": "ValueError"
+   }
+  ]
+ ],
+ "int10": [
+  [
+   "0",
+   {
+    "ok": 0
+   }
+  ],
+  [
+   "6",
+   {
+    "ok": 6
+   }
+  ],
+  [
+   " 12 ",
+   {
+    "ok": 12
+   }
+  ],
+  [
+   "+5",
+   {
+    "ok": 5
+   }
+  ],
+  [
+   "-0",
+   {
+    "ok": 0
+   }
+  ],
+  [
+   "-17",
+   {
+    "ok": -17
+   }
+  ],
+  [
+   "1_000",
+   {
+    "ok": 1000
+   }
+  ],
+  [
+   "1__0",
+   {
+    "error": "invalid literal for int() with base 10: '1__0'",
+    "type": "ValueError"
+   }
+  ],
+  [
+   "_1",
+   {
+    "error": "invalid literal for int() with base 10: '_1'",
+    "type": "ValueError"
+   }
+  ],
+  [
+   "1_",
+   {
+    "error": "invalid literal for int() with base 10: '1_'",
+    "type": "ValueError"
+   }
+  ],
+  [
+   "",
+   {
+    "error": "invalid literal for int() with base 10: ''",
+    "type": "ValueError"
+   }
+  ],
+  [
+   " ",
+   {
+    "error": "invalid literal for int() with base 10: ' '",
+    "type": "ValueError"
+   }
+  ],
+  [
+   "abc",
+   {
+    "error": "invalid literal for int() with base 10: 'abc'",
+    "type": "ValueError"
+   }
+  ],
+  [
+   "1.5",
+   {
+    "error": "invalid literal for int() with base 10: '1.5'",
+    "type": "ValueError"
+   }
+  ],
+  [
+   "0x10",
+   {
+    "error": "invalid literal for int() with base 10: '0x10'",
+    "type": "ValueError"
+   }
+  ],
+  [
+   "\u0663",
+   {
+    "ok": 3
+   }
+  ],
+  [
+   "\uff11\uff12",
+   {
+    "ok": 12
+   }
+  ],
+  [
+   "\uff11_\uff12",
+   {
+    "ok": 12
+   }
+  ],
+  [
+   "\u001c12\u001f",
+   {
+    "error": "invalid literal for int() with base 10: '\\x1c12\\x1f'",
+    "type": "ValueError"
+   }
+  ],
+  [
+   "\u00a012\u3000",
+   {
+    "ok": 12
+   }
+  ],
+  [
+   "12\n",
+   {
+    "ok": 12
+   }
+  ],
+  [
+   "9223372036854775807",
+   {
+    "ok": 9223372036854775807
+   }
+  ],
+  [
+   "-9223372036854775808",
+   {
+    "ok": -9223372036854775808
+   }
+  ],
+  [
+   "007",
+   {
+    "ok": 7
+   }
+  ],
+  [
+   "1 2",
+   {
+    "error": "invalid literal for int() with base 10: '1 2'",
+    "type": "ValueError"
+   }
+  ],
+  [
+   "+",
+   {
+    "error": "invalid literal for int() with base 10: '+'",
+    "type": "ValueError"
+   }
+  ],
+  [
+   "-",
+   {
+    "error": "invalid literal for int() with base 10: '-'",
+    "type": "ValueError"
+   }
+  ],
+  [
+   "+-1",
+   {
+    "error": "invalid literal for int() with base 10: '+-1'",
+    "type": "ValueError"
+   }
+  ],
+  [
+   "12a",
+   {
+    "error": "invalid literal for int() with base 10: '12a'",
+    "type": "ValueError"
+   }
+  ],
+  [
+   "\ud835\udfce\ud835\udfd9",
+   {
+    "ok": 1
+   }
+  ],
+  [
+   "\u0663\u0664",
+   {
+    "ok": 34
+   }
+  ],
+  [
+   "1_0_0",
+   {
+    "ok": 100
+   }
+  ],
+  [
+   "-_1",
+   {
+    "error": "invalid literal for int() with base 10: '-_1'",
+    "type": "ValueError"
+   }
+  ],
+  [
+   "+_1",
+   {
+    "error": "invalid literal for int() with base 10: '+_1'",
+    "type": "ValueError"
+   }
+  ],
+  [
+   "0_0",
+   {
+    "ok": 0
+   }
+  ],
+  [
+   "\u0e53",
+   {
+    "ok": 3
+   }
+  ],
+  [
+   "\u00b2",
+   {
+    "error": "invalid literal for int() with base 10: '\u00b2'",
+    "type": "ValueError"
+   }
+  ]
+ ],
+ "int_list_repr": [
+  [
+   [],
+   "[]"
+  ],
+  [
+   [
+    1
+   ],
+   "[1]"
+  ],
+  [
+   [
+    1,
+    3
+   ],
+   "[1, 3]"
+  ],
+  [
+   [
+    -1,
+    0,
+    12
+   ],
+   "[-1, 0, 12]"
+  ]
+ ],
+ "join": [
+  [
+   "out",
+   "id",
+   "out/id"
+  ],
+  [
+   "out",
+   "/abs",
+   "/abs"
+  ],
+  [
+   "out/",
+   "",
+   "out"
+  ],
+  [
+   "/a",
+   "b/c",
+   "/a/b/c"
+  ],
+  [
+   "a",
+   "..",
+   "a/.."
+  ],
+  [
+   "/tmp/x",
+   "title-abc123",
+   "/tmp/x/title-abc123"
+  ],
+  [
+   "out",
+   "a/./b",
+   "out/a/b"
+  ],
+  [
+   "",
+   "x",
+   "x"
+  ]
+ ],
+ "purepath": [
+  [
+   "",
+   {
+    "is_absolute": false,
+    "name": "",
+    "parent": ".",
+    "parts": [],
+    "repr": "PosixPath('.')",
+    "stem": "",
+    "str": ".",
+    "suffix": ""
+   }
+  ],
+  [
+   ".",
+   {
+    "is_absolute": false,
+    "name": "",
+    "parent": ".",
+    "parts": [],
+    "repr": "PosixPath('.')",
+    "stem": "",
+    "str": ".",
+    "suffix": ""
+   }
+  ],
+  [
+   "/",
+   {
+    "is_absolute": true,
+    "name": "",
+    "parent": "/",
+    "parts": [
+     "/"
+    ],
+    "repr": "PosixPath('/')",
+    "stem": "",
+    "str": "/",
+    "suffix": ""
+   }
+  ],
+  [
+   "//",
+   {
+    "is_absolute": true,
+    "name": "",
+    "parent": "//",
+    "parts": [
+     "//"
+    ],
+    "repr": "PosixPath('//')",
+    "stem": "",
+    "str": "//",
+    "suffix": ""
+   }
+  ],
+  [
+   "///",
+   {
+    "is_absolute": true,
+    "name": "",
+    "parent": "/",
+    "parts": [
+     "/"
+    ],
+    "repr": "PosixPath('/')",
+    "stem": "",
+    "str": "/",
+    "suffix": ""
+   }
+  ],
+  [
+   "a",
+   {
+    "is_absolute": false,
+    "name": "a",
+    "parent": ".",
+    "parts": [
+     "a"
+    ],
+    "repr": "PosixPath('a')",
+    "stem": "a",
+    "str": "a",
+    "suffix": ""
+   }
+  ],
+  [
+   "a/",
+   {
+    "is_absolute": false,
+    "name": "a",
+    "parent": ".",
+    "parts": [
+     "a"
+    ],
+    "repr": "PosixPath('a')",
+    "stem": "a",
+    "str": "a",
+    "suffix": ""
+   }
+  ],
+  [
+   "a//b",
+   {
+    "is_absolute": false,
+    "name": "b",
+    "parent": "a",
+    "parts": [
+     "a",
+     "b"
+    ],
+    "repr": "PosixPath('a/b')",
+    "stem": "b",
+    "str": "a/b",
+    "suffix": ""
+   }
+  ],
+  [
+   "./a",
+   {
+    "is_absolute": false,
+    "name": "a",
+    "parent": ".",
+    "parts": [
+     "a"
+    ],
+    "repr": "PosixPath('a')",
+    "stem": "a",
+    "str": "a",
+    "suffix": ""
+   }
+  ],
+  [
+   "a/./b",
+   {
+    "is_absolute": false,
+    "name": "b",
+    "parent": "a",
+    "parts": [
+     "a",
+     "b"
+    ],
+    "repr": "PosixPath('a/b')",
+    "stem": "b",
+    "str": "a/b",
+    "suffix": ""
+   }
+  ],
+  [
+   "a/../b",
+   {
+    "is_absolute": false,
+    "name": "b",
+    "parent": "a/..",
+    "parts": [
+     "a",
+     "..",
+     "b"
+    ],
+    "repr": "PosixPath('a/../b')",
+    "stem": "b",
+    "str": "a/../b",
+    "suffix": ""
+   }
+  ],
+  [
+   "/a/b",
+   {
+    "is_absolute": true,
+    "name": "b",
+    "parent": "/a",
+    "parts": [
+     "/",
+     "a",
+     "b"
+    ],
+    "repr": "PosixPath('/a/b')",
+    "stem": "b",
+    "str": "/a/b",
+    "suffix": ""
+   }
+  ],
+  [
+   "//a/b",
+   {
+    "is_absolute": true,
+    "name": "b",
+    "parent": "//a",
+    "parts": [
+     "//",
+     "a",
+     "b"
+    ],
+    "repr": "PosixPath('//a/b')",
+    "stem": "b",
+    "str": "//a/b",
+    "suffix": ""
+   }
+  ],
+  [
+   "///a/b",
+   {
+    "is_absolute": true,
+    "name": "b",
+    "parent": "/a",
+    "parts": [
+     "/",
+     "a",
+     "b"
+    ],
+    "repr": "PosixPath('/a/b')",
+    "stem": "b",
+    "str": "/a/b",
+    "suffix": ""
+   }
+  ],
+  [
+   "video/v0/seg_$Number$.m4s",
+   {
+    "is_absolute": false,
+    "name": "seg_$Number$.m4s",
+    "parent": "video/v0",
+    "parts": [
+     "video",
+     "v0",
+     "seg_$Number$.m4s"
+    ],
+    "repr": "PosixPath('video/v0/seg_$Number$.m4s')",
+    "stem": "seg_$Number$",
+    "str": "video/v0/seg_$Number$.m4s",
+    "suffix": ".m4s"
+   }
+  ],
+  [
+   "seg.m4s",
+   {
+    "is_absolute": false,
+    "name": "seg.m4s",
+    "parent": ".",
+    "parts": [
+     "seg.m4s"
+    ],
+    "repr": "PosixPath('seg.m4s')",
+    "stem": "seg",
+    "str": "seg.m4s",
+    "suffix": ".m4s"
+   }
+  ],
+  [
+   "https://cdn/x/seg.m4s",
+   {
+    "is_absolute": false,
+    "name": "seg.m4s",
+    "parent": "https:/cdn/x",
+    "parts": [
+     "https:",
+     "cdn",
+     "x",
+     "seg.m4s"
+    ],
+    "repr": "PosixPath('https:/cdn/x/seg.m4s')",
+    "stem": "seg",
+    "str": "https:/cdn/x/seg.m4s",
+    "suffix": ".m4s"
+   }
+  ],
+  [
+   "../x/seg.m4s",
+   {
+    "is_absolute": false,
+    "name": "seg.m4s",
+    "parent": "../x",
+    "parts": [
+     "..",
+     "x",
+     "seg.m4s"
+    ],
+    "repr": "PosixPath('../x/seg.m4s')",
+    "stem": "seg",
+    "str": "../x/seg.m4s",
+    "suffix": ".m4s"
+   }
+  ],
+  [
+   ".hidden",
+   {
+    "is_absolute": false,
+    "name": ".hidden",
+    "parent": ".",
+    "parts": [
+     ".hidden"
+    ],
+    "repr": "PosixPath('.hidden')",
+    "stem": ".hidden",
+    "str": ".hidden",
+    "suffix": ""
+   }
+  ],
+  [
+   "a.b.c",
+   {
+    "is_absolute": false,
+    "name": "a.b.c",
+    "parent": ".",
+    "parts": [
+     "a.b.c"
+    ],
+    "repr": "PosixPath('a.b.c')",
+    "stem": "a.b",
+    "str": "a.b.c",
+    "suffix": ".c"
+   }
+  ],
+  [
+   "a.",
+   {
+    "is_absolute": false,
+    "name": "a.",
+    "parent": ".",
+    "parts": [
+     "a."
+    ],
+    "repr": "PosixPath('a.')",
+    "stem": "a.",
+    "str": "a.",
+    "suffix": ""
+   }
+  ],
+  [
+   "..",
+   {
+    "is_absolute": false,
+    "name": "..",
+    "parent": ".",
+    "parts": [
+     ".."
+    ],
+    "repr": "PosixPath('..')",
+    "stem": "..",
+    "str": "..",
+    "suffix": ""
+   }
+  ],
+  [
+   "a/..",
+   {
+    "is_absolute": false,
+    "name": "..",
+    "parent": "a",
+    "parts": [
+     "a",
+     ".."
+    ],
+    "repr": "PosixPath('a/..')",
+    "stem": "..",
+    "str": "a/..",
+    "suffix": ""
+   }
+  ],
+  [
+   "x/it's",
+   {
+    "is_absolute": false,
+    "name": "it's",
+    "parent": "x",
+    "parts": [
+     "x",
+     "it's"
+    ],
+    "repr": "PosixPath(\"x/it's\")",
+    "stem": "it's",
+    "str": "x/it's",
+    "suffix": ""
+   }
+  ],
+  [
+   "/a/b/",
+   {
+    "is_absolute": true,
+    "name": "b",
+    "parent": "/a",
+    "parts": [
+     "/",
+     "a",
+     "b"
+    ],
+    "repr": "PosixPath('/a/b')",
+    "stem": "b",
+    "str": "/a/b",
+    "suffix": ""
+   }
+  ],
+  [
+   "a.tar.gz",
+   {
+    "is_absolute": false,
+    "name": "a.tar.gz",
+    "parent": ".",
+    "parts": [
+     "a.tar.gz"
+    ],
+    "repr": "PosixPath('a.tar.gz')",
+    "stem": "a.tar",
+    "str": "a.tar.gz",
+    "suffix": ".gz"
+   }
+  ],
+  [
+   "seg_1.m4s.bak",
+   {
+    "is_absolute": false,
+    "name": "seg_1.m4s.bak",
+    "parent": ".",
+    "parts": [
+     "seg_1.m4s.bak"
+    ],
+    "repr": "PosixPath('seg_1.m4s.bak')",
+    "stem": "seg_1.m4s",
+    "str": "seg_1.m4s.bak",
+    "suffix": ".bak"
+   }
+  ],
+  [
+   ".a.b",
+   {
+    "is_absolute": false,
+    "name": ".a.b",
+    "parent": ".",
+    "parts": [
+     ".a.b"
+    ],
+    "repr": "PosixPath('.a.b')",
+    "stem": ".a",
+    "str": ".a.b",
+    "suffix": ".b"
+   }
+  ],
+  [
+   "a..b",
+   {
+    "is_absolute": false,
+    "name": "a..b",
+    "parent": ".",
+    "parts": [
+     "a..b"
+    ],
+    "repr": "PosixPath('a..b')",
+    "stem": "a.",
+    "str": "a..b",
+    "suffix": ".b"
+   }
+  ]
+ ],
+ "repr": [
+  [
+   "",
+   "''"
+  ],
+  [
+   "a",
+   "'a'"
+  ],
+  [
+   "it's",
+   "\"it's\""
+  ],
+  [
+   "say \"hi\"",
+   "'say \"hi\"'"
+  ],
+  [
+   "both ' and \"",
+   "'both \\' and \"'"
+  ],
+  [
+   "back\\slash",
+   "'back\\\\slash'"
+  ],
+  [
+   "tab\tnl\nret\r",
+   "'tab\\tnl\\nret\\r'"
+  ],
+  [
+   "\u0000\u0001\u001f\u007f",
+   "'\\x00\\x01\\x1f\\x7f'"
+  ],
+  [
+   "\u0080\u009f\u00a0\u00ad\u00ff",
+   "'\\x80\\x9f\\xa0\\xad\u00ff'"
+  ],
+  [
+   "\u00e9\u65e5\u672c",
+   "'\u00e9\u65e5\u672c'"
+  ],
+  [
+   "\u2028\u2029\u200b\ufeff",
+   "'\\u2028\\u2029\\u200b\\ufeff'"
+  ],
+  [
+   "\ue000",
+   "'\\ue000'"
+  ],
+  [
+   "\ud83d\ude00",
+   "'\ud83d\ude00'"
+  ],
+  [
+   "\udb40\udc01",
+   "'\\U000e0001'"
+  ],
+  [
+   "../../../ESCAPED_MARKER_A",
+   "'../../../ESCAPED_MARKER_A'"
+  ],
+  [
+   "\u3000x\u1680",
+   "'\\u3000x\\u1680'"
+  ],
+  [
+   "a'b\"c\\",
+   "'a\\'b\"c\\\\'"
+  ]
+ ],
+ "strip": [
+  [
+   "  a  ",
+   "a"
+  ],
+  [
+   "\u001c a \u001f",
+   "a"
+  ],
+  [
+   "\u00a0a\u3000",
+   "a"
+  ],
+  [
+   "\u200ba\u200b",
+   "\u200ba\u200b"
+  ],
+  [
+   "\u180ea",
+   "\u180ea"
+  ],
+  [
+   "\t\n\u000b\f\r a",
+   "a"
+  ],
+  [
+   "",
+   ""
+  ],
+  [
+   "   ",
+   ""
+  ],
+  [
+   "\u2028a\u2029",
+   "a"
+  ],
+  [
+   "\u0085a\u0085",
+   "a"
+  ]
+ ],
+ "urljoin": [
+  [
+   "https://cdn.example.test/title-abc123/",
+   "video/v0/init.mp4",
+   {
+    "ok": "https://cdn.example.test/title-abc123/video/v0/init.mp4"
+   }
+  ],
+  [
+   "https://cdn.example.test/title-abc123/",
+   "/abs/init.mp4",
+   {
+    "ok": "https://cdn.example.test/abs/init.mp4"
+   }
+  ],
+  [
+   "https://cdn.example.test/title-abc123/",
+   "../x/init.mp4",
+   {
+    "ok": "https://cdn.example.test/x/init.mp4"
+   }
+  ],
+  [
+   "https://cdn.example.test/title-abc123/",
+   "../../../../x",
+   {
+    "ok": "https://cdn.example.test/x"
+   }
+  ],
+  [
+   "https://cdn.example.test/title-abc123/",
+   "https://other/x",
+   {
+    "ok": "https://other/x"
+   }
+  ],
+  [
+   "https://cdn.example.test/title-abc123/",
+   "https://../../../ESCAPED_MARKER_C/work/init.mp4",
+   {
+    "ok": "https://../../../ESCAPED_MARKER_C/work/init.mp4"
+   }
+  ],
+  [
+   "https://cdn.example.test/title-abc123/",
+   "//other/x",
+   {
+    "ok": "https://other/x"
+   }
+  ],
+  [
+   "https://cdn.example.test/title-abc123/",
+   "?q",
+   {
+    "ok": "https://cdn.example.test/title-abc123/?q"
+   }
+  ],
+  [
+   "https://cdn.example.test/title-abc123/",
+   "#f",
+   {
+    "ok": "https://cdn.example.test/title-abc123/#f"
+   }
+  ],
+  [
+   "https://cdn.example.test/title-abc123/",
+   "",
+   {
+    "ok": "https://cdn.example.test/title-abc123/"
+   }
+  ],
+  [
+   "https://cdn.example.test/title-abc123/",
+   ".",
+   {
+    "ok": "https://cdn.example.test/title-abc123/"
+   }
+  ],
+  [
+   "https://cdn.example.test/title-abc123/",
+   "..",
+   {
+    "ok": "https://cdn.example.test/"
+   }
+  ],
+  [
+   "https://cdn.example.test/title-abc123/",
+   "./a/./b/../c",
+   {
+    "ok": "https://cdn.example.test/title-abc123/a/c"
+   }
+  ],
+  [
+   "https://cdn.example.test/title-abc123/",
+   "a//b",
+   {
+    "ok": "https://cdn.example.test/title-abc123/a/b"
+   }
+  ],
+  [
+   "https://cdn.example.test/title-abc123/",
+   "http://cdn/x",
+   {
+    "ok": "http://cdn/x"
+   }
+  ],
+  [
+   "https://cdn.example.test/title-abc123/",
+   "init.mp4;p",
+   {
+    "ok": "https://cdn.example.test/title-abc123/init.mp4;p"
+   }
+  ],
+  [
+   "https://cdn.example.test/title-abc123/",
+   "g;x?y#s",
+   {
+    "ok": "https://cdn.example.test/title-abc123/g;x?y#s"
+   }
+  ],
+  [
+   "https://cdn.example.test/title-abc123/",
+   "a/b/..",
+   {
+    "ok": "https://cdn.example.test/title-abc123/a/"
+   }
+  ],
+  [
+   "https://cdn.example.test/title-abc123/",
+   "a/.",
+   {
+    "ok": "https://cdn.example.test/title-abc123/a/"
+   }
+  ],
+  [
+   "https://cdn.example.test/title-abc123/",
+   "../../../ESCAPED_MARKER_B/work/init.mp4",
+   {
+    "ok": "https://cdn.example.test/ESCAPED_MARKER_B/work/init.mp4"
+   }
+  ],
+  [
+   "",
+   "x",
+   {
+    "ok": "x"
+   }
+  ],
+  [
+   "https://cdn/a/b",
+   "c",
+   {
+    "ok": "https://cdn/a/c"
+   }
+  ],
+  [
+   "https://cdn",
+   "c",
+   {
+    "ok": "https://cdn/c"
+   }
+  ],
+  [
+   "https://cdn/a/b/",
+   "../../../c",
+   {
+    "ok": "https://cdn/c"
+   }
+  ],
+  [
+   "ftp://h/a/b",
+   "c",
+   {
+    "ok": "ftp://h/a/c"
+   }
+  ],
+  [
+   "custom://h/a",
+   "b",
+   {
+    "ok": "b"
+   }
+  ],
+  [
+   "https://cdn/a?q",
+   "",
+   {
+    "ok": "https://cdn/a?q"
+   }
+  ],
+  [
+   "https://cdn/a?q",
+   "#f",
+   {
+    "ok": "https://cdn/a?q#f"
+   }
+  ],
+  [
+   "https://cdn/a;p",
+   "b",
+   {
+    "ok": "https://cdn/b"
+   }
+  ],
+  [
+   "https://cdn/a;p",
+   "",
+   {
+    "ok": "https://cdn/a;p"
+   }
+  ],
+  [
+   "https://cdn/a/b;p?q",
+   ";x",
+   {
+    "ok": "https://cdn/a/;x"
+   }
+  ],
+  [
+   "mailto:a",
+   "b",
+   {
+    "ok": "b"
+   }
+  ],
+  [
+   "https://cdn/a/b",
+   "//x",
+   {
+    "ok": "https://x"
+   }
+  ],
+  [
+   "https://cdn/a/b",
+   "c:d",
+   {
+    "ok": "c:d"
+   }
+  ],
+  [
+   "https:",
+   "c",
+   {
+    "ok": "https:///c"
+   }
+  ],
+  [
+   "https://cdn/a/",
+   "./",
+   {
+    "ok": "https://cdn/a/"
+   }
+  ],
+  [
+   "https://cdn/a/",
+   "b/./",
+   {
+    "ok": "https://cdn/a/b/"
+   }
+  ],
+  [
+   "https://cdn/",
+   "../..",
+   {
+    "ok": "https://cdn/"
+   }
+  ],
+  [
+   "https://cdn",
+   "../a",
+   {
+    "ok": "https://cdn/a"
+   }
+  ],
+  [
+   "//cdn/a",
+   "b",
+   {
+    "ok": "//cdn/b"
+   }
+  ],
+  [
+   "a/b",
+   "c",
+   {
+    "ok": "a/c"
+   }
+  ],
+  [
+   "/a/b",
+   "../c",
+   {
+    "ok": "/c"
+   }
+  ],
+  [
+   "https://cdn/a",
+   "https:b",
+   {
+    "ok": "https://cdn/b"
+   }
+  ],
+  [
+   "https://cdn/a/b",
+   "https:/c",
+   {
+    "ok": "https://cdn/c"
+   }
+  ]
+ ],
+ "urlparse": [
+  [
+   "https://cdn.example.test/title-abc123/",
+   {
+    "ok": [
+     "https",
+     "cdn.example.test",
+     "/title-abc123/",
+     "",
+     "",
+     ""
+    ]
+   }
+  ],
+  [
+   "https://cdn.example.test/../../../../ESCAPED_ASSET_ID/",
+   {
+    "ok": [
+     "https",
+     "cdn.example.test",
+     "/../../../../ESCAPED_ASSET_ID/",
+     "",
+     "",
+     ""
+    ]
+   }
+  ],
+  [
+   "https://h/a;p?q#f",
+   {
+    "ok": [
+     "https",
+     "h",
+     "/a",
+     "p",
+     "q",
+     "f"
+    ]
+   }
+  ],
+  [
+   "https://h/a/b;p",
+   {
+    "ok": [
+     "https",
+     "h",
+     "/a/b",
+     "p",
+     "",
+     ""
+    ]
+   }
+  ],
+  [
+   "HTTPS://H/x",
+   {
+    "ok": [
+     "https",
+     "H",
+     "/x",
+     "",
+     "",
+     ""
+    ]
+   }
+  ],
+  [
+   "//h/p",
+   {
+    "ok": [
+     "",
+     "h",
+     "/p",
+     "",
+     "",
+     ""
+    ]
+   }
+  ],
+  [
+   "/p",
+   {
+    "ok": [
+     "",
+     "",
+     "/p",
+     "",
+     "",
+     ""
+    ]
+   }
+  ],
+  [
+   "p",
+   {
+    "ok": [
+     "",
+     "",
+     "p",
+     "",
+     "",
+     ""
+    ]
+   }
+  ],
+  [
+   "",
+   {
+    "ok": [
+     "",
+     "",
+     "",
+     "",
+     "",
+     ""
+    ]
+   }
+  ],
+  [
+   "1http://x",
+   {
+    "ok": [
+     "",
+     "",
+     "1http://x",
+     "",
+     "",
+     ""
+    ]
+   }
+  ],
+  [
+   "a+b.c-d://x",
+   {
+    "ok": [
+     "a+b.c-d",
+     "x",
+     "",
+     "",
+     "",
+     ""
+    ]
+   }
+  ],
+  [
+   "mailto:x@y",
+   {
+    "ok": [
+     "mailto",
+     "",
+     "x@y",
+     "",
+     "",
+     ""
+    ]
+   }
+  ],
+  [
+   "https://[::1]/x",
+   {
+    "ok": [
+     "https",
+     "[::1]",
+     "/x",
+     "",
+     "",
+     ""
+    ]
+   }
+  ],
+  [
+   "https://[::1/x",
+   {
+    "error": "Invalid IPv6 URL",
+    "type": "ValueError"
+   }
+  ],
+  [
+   "https://h]/x",
+   {
+    "error": "Invalid IPv6 URL",
+    "type": "ValueError"
+   }
+  ],
+  [
+   "  https://h/x",
+   {
+    "ok": [
+     "https",
+     "h",
+     "/x",
+     "",
+     "",
+     ""
+    ]
+   }
+  ],
+  [
+   "ht\ttps://h/x",
+   {
+    "ok": [
+     "https",
+     "h",
+     "/x",
+     "",
+     "",
+     ""
+    ]
+   }
+  ],
+  [
+   "https://h/x\n",
+   {
+    "ok": [
+     "https",
+     "h",
+     "/x",
+     "",
+     "",
+     ""
+    ]
+   }
+  ],
+  [
+   "https://h:8080/x",
+   {
+    "ok": [
+     "https",
+     "h:8080",
+     "/x",
+     "",
+     "",
+     ""
+    ]
+   }
+  ],
+  [
+   "https://user@h/x",
+   {
+    "ok": [
+     "https",
+     "user@h",
+     "/x",
+     "",
+     "",
+     ""
+    ]
+   }
+  ],
+  [
+   "data:text/plain;base64,AAAA",
+   {
+    "ok": [
+     "data",
+     "",
+     "text/plain;base64,AAAA",
+     "",
+     "",
+     ""
+    ]
+   }
+  ],
+  [
+   "x:y",
+   {
+    "ok": [
+     "x",
+     "",
+     "y",
+     "",
+     "",
+     ""
+    ]
+   }
+  ],
+  [
+   "https:x",
+   {
+    "ok": [
+     "https",
+     "",
+     "x",
+     "",
+     "",
+     ""
+    ]
+   }
+  ],
+  [
+   "https:/x",
+   {
+    "ok": [
+     "https",
+     "",
+     "/x",
+     "",
+     "",
+     ""
+    ]
+   }
+  ],
+  [
+   "https://h/a;b/c;d",
+   {
+    "ok": [
+     "https",
+     "h",
+     "/a;b/c",
+     "d",
+     "",
+     ""
+    ]
+   }
+  ],
+  [
+   "https://h#f?q",
+   {
+    "ok": [
+     "https",
+     "h",
+     "",
+     "",
+     "",
+     "f?q"
+    ]
+   }
+  ],
+  [
+   "https://h?q#f",
+   {
+    "ok": [
+     "https",
+     "h",
+     "",
+     "",
+     "q",
+     "f"
+    ]
+   }
+  ],
+  [
+   "file:///a/b",
+   {
+    "ok": [
+     "file",
+     "",
+     "/a/b",
+     "",
+     "",
+     ""
+    ]
+   }
+  ],
+  [
+   "\u0000https://h/x",
+   {
+    "ok": [
+     "https",
+     "h",
+     "/x",
+     "",
+     "",
+     ""
+    ]
+   }
+  ],
+  [
+   "https://[v1.x]/a",
+   {
+    "ok": [
+     "https",
+     "[v1.x]",
+     "/a",
+     "",
+     "",
+     ""
+    ]
+   }
+  ],
+  [
+   "https://[127.0.0.1]/a",
+   {
+    "error": "An IPv4 address cannot be in brackets",
+    "type": "ValueError"
+   }
+  ],
+  [
+   "https://[zz]/a",
+   {
+    "error": "'zz' does not appear to be an IPv4 or IPv6 address",
+    "type": "ValueError"
+   }
+  ],
+  [
+   "tel:+1;x",
+   {
+    "ok": [
+     "tel",
+     "",
+     "+1",
+     "x",
+     "",
+     ""
+    ]
+   }
+  ],
+  [
+   "https://a/b?c;d",
+   {
+    "ok": [
+     "https",
+     "a",
+     "/b",
+     "",
+     "c;d",
+     ""
+    ]
+   }
+  ],
+  [
+   "https://h/;p",
+   {
+    "ok": [
+     "https",
+     "h",
+     "/",
+     "p",
+     "",
+     ""
+    ]
+   }
+  ],
+  [
+   "https:",
+   {
+    "ok": [
+     "https",
+     "",
+     "",
+     "",
+     "",
+     ""
+    ]
+   }
+  ]
+ ],
+ "utf16le": [
+  [
+   "3c00",
+   {
+    "ok": "<"
+   }
+  ],
+  [
+   "3c",
+   {
+    "error": "'utf-16-le' codec can't decode byte 0x3c in position 0: truncated data",
+    "type": "UnicodeDecodeError"
+   }
+  ],
+  [
+   "3c0041",
+   {
+    "error": "'utf-16-le' codec can't decode byte 0x41 in position 2: truncated data",
+    "type": "UnicodeDecodeError"
+   }
+  ],
+  [
+   "00d8",
+   {
+    "error": "'utf-16-le' codec can't decode bytes in position 0-1: unexpected end of data",
+    "type": "UnicodeDecodeError"
+   }
+  ],
+  [
+   "00d841",
+   {
+    "error": "'utf-16-le' codec can't decode bytes in position 0-2: unexpected end of data",
+    "type": "UnicodeDecodeError"
+   }
+  ],
+  [
+   "00d80000",
+   {
+    "error": "'utf-16-le' codec can't decode bytes in position 0-1: illegal UTF-16 surrogate",
+    "type": "UnicodeDecodeError"
+   }
+  ],
+  [
+   "00dc",
+   {
+    "error": "'utf-16-le' codec can't decode bytes in position 0-1: illegal encoding",
+    "type": "UnicodeDecodeError"
+   }
+  ],
+  [
+   "3d0000dc",
+   {
+    "error": "'utf-16-le' codec can't decode bytes in position 2-3: illegal encoding",
+    "type": "UnicodeDecodeError"
+   }
+  ],
+  [
+   "00d800dc",
+   {
+    "ok": "\ud800\udc00"
+   }
+  ],
+  [
+   "ffd8ffdf",
+   {
+    "ok": "\ud8ff\udfff"
+   }
+  ],
+  [
+   "",
+   {
+    "ok": ""
+   }
+  ],
+  [
+   "fffe3c00",
+   {
+    "ok": "\ufeff<"
+   }
+  ],
+  [
+   "3c0000d8",
+   {
+    "error": "'utf-16-le' codec can't decode bytes in position 2-3: unexpected end of data",
+    "type": "UnicodeDecodeError"
+   }
+  ],
+  [
+   "3c0000d841",
+   {
+    "error": "'utf-16-le' codec can't decode bytes in position 2-4: unexpected end of data",
+    "type": "UnicodeDecodeError"
+   }
+  ],
+  [
+   "00dc3c",
+   {
+    "error": "'utf-16-le' codec can't decode bytes in position 0-1: illegal encoding",
+    "type": "UnicodeDecodeError"
+   }
+  ],
+  [
+   "41004100410000d8",
+   {
+    "error": "'utf-16-le' codec can't decode bytes in position 6-7: unexpected end of data",
+    "type": "UnicodeDecodeError"
+   }
+  ]
+ ]
+}

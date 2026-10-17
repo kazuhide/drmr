@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DRM Packaging Console</title>
+<script>(function(){try{var l=localStorage.getItem('drmr-language');document.documentElement.lang=l==='ja'?'ja':'en';}catch(e){}})();</script>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<a class="skip-link" href="#detail" data-i18n="skipToContent">Skip to content</a>
+<header class="top">
+  <div class="brand"><span class="brand-mark" aria-hidden="true">DRM</span><span class="brand-name" data-i18n="brandName">DRM Packaging Console</span></div>
+  <p class="lease" id="lease"><span id="lease-text" role="status" aria-live="polite"></span><span id="lease-elapsed" class="lease-elapsed" aria-hidden="true"></span></p>
+  <div class="top-actions">
+    <button type="button" class="btn btn-sm" id="add-btn" data-i18n="addContent">Add content</button>
+    <button type="button" class="btn btn-sm" id="conventions-btn" aria-expanded="false" aria-controls="conventions" data-i18n="conventions">Settings and conventions</button>
+    <label class="lang"><span class="sr-only" data-i18n="language">Language</span><select id="language-select" aria-label="Language" data-i18n-aria="language"><option value="en" selected>English</option><option value="ja">日本語</option></select></label>
+  </div>
+</header>
+
+<div class="console">
+  <aside class="list-pane" aria-labelledby="list-title">
+    <div class="list-head"><h2 id="list-title" data-i18n="contents">Contents</h2><span class="muted" id="list-count"></span><button type="button" class="btn-link" id="list-refresh" data-i18n="refresh">Refresh</button></div>
+    <input type="search" class="filter" id="list-filter" autocomplete="off" aria-label="Filter contents" data-i18n-aria="filterAria" placeholder="Filter by ID or label" data-i18n-placeholder="filterPlaceholder">
+    <p class="notice notice-fail" id="list-error" role="alert" hidden></p>
+    <p class="help" id="list-truncated" hidden data-i18n="listTruncated">Older runs were not loaded (latest 500 only).</p>
+    <div class="bulk-bar" id="bulk-bar" hidden>
+      <span id="bulk-count"></span>
+      <button type="button" class="btn btn-primary btn-sm" id="bulk-queue-btn" data-i18n="bulkQueue">Convert in order</button>
+      <button type="button" class="btn btn-quiet btn-sm" id="bulk-clear-btn" data-i18n="bulkClear">Clear selection</button>
+    </div>
+    <div class="queue-pane" id="queue-pane" hidden>
+      <div class="queue-head"><span data-i18n="queuePending">Queue</span></div>
+      <ul class="queue-list" id="queue-list"></ul>
+      <ul class="queue-list" id="queue-skipped"></ul>
+    </div>
+    <p class="state-line" id="queue-notice" role="status" aria-live="polite"></p>
+    <ul class="contents" id="content-list"></ul>
+  </aside>
+
+  <main class="detail-pane" id="detail">
+    <section class="empty-state" id="detail-empty">
+      <h1 data-i18n="emptyTitle">Select a content</h1>
+    </section>
+
+    <section class="card" id="add-content" aria-labelledby="add-title" hidden>
+      <h1 id="add-title" tabindex="-1" data-i18n="addTitle">Add content</h1>
+      <div class="add-kinds">
+        <section class="add-kind" aria-labelledby="add-catalog-title">
+          <h2 id="add-catalog-title" data-i18n="addCatalogTitle">Existing DRM content (DASH CENC + HLS FairPlay)</h2>
+          <p class="help" data-i18n="addCatalogHelp">Stage the DASH (CENC) manifest, the HLS (FairPlay) master, the segments and keys.env in one directory under the catalog root, then press &quot;Refresh the list&quot;.</p>
+          <pre class="tree" id="add-catalog-tree"></pre>
+          <div class="actions"><button type="button" class="btn" id="add-rescan-btn" data-i18n="rescan">Refresh the list</button><button type="button" class="btn btn-quiet" id="add-conventions-btn" data-i18n="conventions">Settings and conventions</button></div>
+          <div id="add-rescan-state" role="status" aria-live="polite"></div>
+        </section>
+        <section class="add-kind" aria-labelledby="add-hls-title">
+          <h2 id="add-hls-title" data-i18n="addHlsTitle">Clear HLS (unencrypted HLS)</h2>
+          <p class="help" data-i18n="addHlsHelp">Analyzes the URL of a VOD master playlist and registers it. DRM parameters are entered at packaging time.</p>
+          <div class="form-grid">
+            <label class="field field-mono"><span data-i18n="sourceUrl">Master playlist URL</span><input id="hls-url" type="url" autocomplete="off" spellcheck="false" placeholder="https://media.example/title/master.m3u8"><small data-i18n="sourceUrlHelp">The URL is not stored.</small></label>
+            <label class="field field-mono"><span data-i18n="outputName">Output name (automatic, editable)</span><input id="hls-asset-id" autocomplete="off" spellcheck="false"><small data-i18n="outputNameHelp">Becomes the output folder name (letters, digits, _ . -; cannot change later).</small></label>
+          </div>
+          <div class="actions"><button type="button" class="btn btn-primary" id="analyze-btn" disabled data-i18n="analyze">Start analysis</button></div>
+          <div id="add-state" role="status" aria-live="polite"></div>
+        </section>
+      </div>
+      <div class="actions"><button type="button" class="btn btn-quiet" id="add-cancel-btn" data-i18n="close">Close</button></div>
+    </section>
+
+    <article id="content" hidden>
+      <header class="content-head">
+        <div class="content-title"><h1 id="content-id" class="mono" tabindex="-1"></h1><p class="muted" id="content-label"></p></div>
+        <div class="content-chips" id="content-chips"></div>
+        <div class="actions" id="content-actions"></div>
+      </header>
+      <nav class="anchors" aria-label="Sections" data-i18n-aria="sectionsAria">
+        <a href="#sec-input" data-i18n="secInput">Input</a><a href="#sec-transform" data-i18n="secTransform">Transformation</a><a href="#sec-runs" data-i18n="secRuns">Log</a><a href="#sec-report" data-i18n="secReport">Report</a><a href="#sec-playback" data-i18n="secPlayback">Playback</a>
+      </nav>
+      <div id="content-notice" role="status" aria-live="polite"></div>
+
+      <section class="card" id="sec-input" aria-labelledby="sec-input-title">
+        <h2 id="sec-input-title" data-i18n="secInput">Input</h2>
+        <div id="input-state" role="status" aria-live="polite"></div>
+        <dl class="kv" id="input-kv"></dl>
+        <div id="input-findings"></div>
+        <div id="input-table"></div>
+        <label class="field" id="audio-choice" hidden><span data-i18n="audioSource">Audio source</span><select id="audio-source-select"></select><small data-i18n="audioSourceHelp">When several video variants carry muxed audio in one group, choose which one supplies the audio.</small></label>
+      </section>
+
+      <section class="card" id="sec-transform" aria-labelledby="sec-transform-title">
+        <h2 id="sec-transform-title" data-i18n="secTransform">Transformation</h2>
+        <p class="transform-line" id="transform-summary"></p>
+        <details class="disclosure" id="transform-details">
+          <summary><span class="info-mark" aria-hidden="true">i</span><span data-i18n="transformDetails">What is done, and the checks</span></summary>
+          <div class="disclosure-body">
+            <p class="help" id="transform-help"></p>
+            <ol class="rules" id="transform-rules"></ol>
+          </div>
+        </details>
+        <form id="drm-form" autocomplete="off" novalidate hidden>
+          <p class="help" data-i18n="drmHelp">Never stored in the browser; cleared after submission.</p>
+          <div class="drm-systems" role="group" aria-label="Target DRM" data-i18n-aria="drmSystemsLabel"><span class="chip"><b>Widevine</b> DASH</span><span class="chip"><b>PlayReady</b> DASH</span><span class="chip"><b>FairPlay</b> HLS</span></div>
+          <div class="form-grid">
+            <label class="field field-mono"><span data-i18n="kidLabel">KID (16-byte hex)</span><input id="drm-kid" aria-describedby="drm-kid-error" type="text" data-masked="true" autocomplete="off" spellcheck="false" autocapitalize="off" autocorrect="off" required maxlength="36"><small class="field-error" id="drm-kid-error"></small></label>
+            <label class="field field-mono"><span data-i18n="keyLabel">Content key (16-byte hex)</span><input id="drm-key" aria-describedby="drm-key-error" type="text" data-masked="true" autocomplete="off" spellcheck="false" autocapitalize="off" autocorrect="off" required maxlength="32"><small class="field-error" id="drm-key-error"></small></label>
+            <label class="field field-mono"><span data-i18n="ivLabel">IV (16-byte hex)</span><input id="drm-iv" aria-describedby="drm-iv-error" type="text" data-masked="true" autocomplete="off" spellcheck="false" autocapitalize="off" autocorrect="off" required maxlength="32"><small class="field-error" id="drm-iv-error"></small></label>
+            <label class="field field-mono"><span data-i18n="psshLabel">Widevine PSSH (base64 or hex)</span><input id="drm-widevine-pssh" aria-describedby="drm-widevine-pssh-error" type="text" data-masked="true" autocomplete="off" spellcheck="false" autocapitalize="off" autocorrect="off" required><small class="field-error" id="drm-widevine-pssh-error"></small></label>
+            <label class="field field-mono"><span data-i18n="laUrlLabel">PlayReady LA_URL</span><input id="drm-playready-la-url" aria-describedby="drm-playready-la-url-error" type="text" data-masked="true" autocomplete="off" spellcheck="false" autocapitalize="off" autocorrect="off" required><small class="field-error" id="drm-playready-la-url-error"></small></label>
+            <label class="field field-mono"><span data-i18n="fpsUriLabel">FairPlay skd:// URI</span><input id="drm-fairplay-uri" aria-describedby="drm-fairplay-uri-error" type="text" data-masked="true" autocomplete="off" spellcheck="false" autocapitalize="off" autocorrect="off" required><small class="field-error" id="drm-fairplay-uri-error"></small></label>
+          </div>
+          <div class="actions"><button type="button" class="btn btn-primary" id="package-btn" disabled data-i18n="packageHls">Package for three DRMs</button><button type="button" class="btn btn-sm" id="drm-sample" data-i18n="sampleValues">Fill sample values</button><button type="button" class="btn btn-quiet btn-sm" id="drm-reveal" aria-pressed="false">Show values</button></div>
+        </form>
+        <div id="transform-state" role="status" aria-live="polite"></div>
+      </section>
+
+      <section class="card" id="sec-runs" aria-labelledby="sec-runs-title">
+        <h2 id="sec-runs-title" data-i18n="secRuns">Log</h2>
+        <ul class="runs" id="runs-list"></ul>
+        <div class="log-panel" id="log-panel" hidden>
+          <div class="log-head">
+            <span class="mono" id="log-title"></span><span class="chip" id="log-chip"></span><span class="muted" id="log-stage"></span><span class="muted mono" id="log-count"></span>
+            <span class="log-tools"><button type="button" class="btn btn-quiet btn-sm" id="log-json" aria-pressed="false">JSON</button><a class="btn btn-quiet btn-sm" id="log-download" download data-i18n="logDownload" hidden>Download</a><button type="button" class="btn btn-quiet btn-sm" id="log-close" data-i18n="close">Close</button></span>
+          </div>
+          <p class="state-line" id="log-notice" role="status" aria-live="polite"></p>
+          <div id="log-strips"></div>
+          <div class="log" id="log-list" role="log" aria-live="off"></div>
+        </div>
+      </section>
+
+      <section class="card" id="sec-report" aria-labelledby="sec-report-title">
+        <h2 id="sec-report-title" data-i18n="secReport">Report</h2>
+        <div id="report-state" role="status" aria-live="polite"></div>
+        <div id="report-view"></div>
+      </section>
+
+      <section class="card" id="sec-playback" aria-labelledby="sec-playback-title">
+        <h2 id="sec-playback-title" data-i18n="secPlayback">Playback</h2>
+        <p class="help" data-i18n="playbackHelp">Local playback with ClearKey, never a production license.</p>
+        <div class="actions"><button type="button" class="btn" id="preview-btn" disabled data-i18n="preview">Prepare playback</button></div>
+        <form id="preview-credentials" autocomplete="off" hidden>
+          <p class="help" data-i18n="previewCredentialsHelp">No key context remains (for example after a server restart). Enter the KID and content key; they are not stored.</p>
+          <div class="form-grid">
+            <label class="field field-mono"><span>KID</span><input id="preview-kid" type="text" data-masked="true" autocomplete="off" spellcheck="false" autocapitalize="off" autocorrect="off"></label>
+            <label class="field field-mono"><span data-i18n="contentKey">Content key</span><input id="preview-key" type="text" data-masked="true" autocomplete="off" spellcheck="false" autocapitalize="off" autocorrect="off"></label>
+          </div>
+          <div class="actions"><button class="btn" type="submit" data-i18n="preview">Prepare playback</button></div>
+        </form>
+        <div id="preview-state" role="status" aria-live="polite"></div>
+        <div id="play-section" hidden>
+          <div class="players">
+            <div class="player">
+              <h3><span data-i18n="before">Before</span></h3>
+              <video id="video-old" controls muted playsinline></video>
+              <div class="player-controls">
+                <button type="button" class="btn btn-sm" id="play-old-btn" disabled data-i18n="play">Play</button>
+                <select id="old-rendition-select" aria-label="Original rendition" data-i18n-aria="oldRendition" disabled></select>
+                <span class="help" id="old-text-field" hidden data-i18n="subtitles">Subtitles</span>
+                <select id="old-text-select" aria-label="Original subtitles" data-i18n-aria="oldSubtitles" disabled hidden></select>
+              </div>
+              <p class="player-state" id="old-state" role="status" aria-live="polite"></p>
+            </div>
+            <div class="player">
+              <h3><span data-i18n="after">After (CBCS)</span></h3>
+              <video id="video-new" controls muted playsinline></video>
+              <div class="player-controls">
+                <button type="button" class="btn btn-sm" id="play-new-btn" disabled data-i18n="play">Play</button>
+                <select id="new-rendition-select" aria-label="Packaged rendition" data-i18n-aria="newRendition" disabled></select>
+                <span class="help" id="new-text-field" hidden data-i18n="subtitles">Subtitles</span>
+                <select id="new-text-select" aria-label="Packaged subtitles" data-i18n-aria="newSubtitles" disabled hidden></select>
+              </div>
+              <p class="player-state" id="new-state" role="status" aria-live="polite"></p>
+            </div>
+          </div>
+          <details class="disclosure" open><summary data-i18n="encryptionComparison">Encryption comparison</summary>
+            <div class="disclosure-body table-wrap"><table class="data compare">
+              <thead><tr><th data-i18n="field">Field</th><th data-i18n="before">Before</th><th data-i18n="after">After (CBCS)</th></tr></thead>
+              <tbody>
+                <tr><th data-i18n="scheme">Protection scheme</th><td id="sum-scheme-old"></td><td id="sum-scheme-new"></td></tr>
+                <tr><th data-i18n="prVersion">PlayReady version</th><td id="sum-pr-version-old"></td><td id="sum-pr-version-new"></td></tr>
+                <tr><th data-i18n="prAlgid">PlayReady ALGID</th><td id="sum-pr-algid-old"></td><td id="sum-pr-algid-new"></td></tr>
+                <tr><th>KID</th><td id="sum-kid-old" class="mono"></td><td id="sum-kid-new" class="mono"></td></tr>
+              </tbody>
+            </table></div>
+          </details>
+        </div>
+      </section>
+    </article>
+  </main>
+</div>
+
+<aside class="sheet" id="conventions" role="region" aria-labelledby="conventions-title" hidden>
+  <div class="sheet-head"><h2 id="conventions-title" data-i18n="convTitle">Settings and conventions</h2><button type="button" class="btn btn-quiet btn-sm" id="conventions-close" data-i18n="close">Close</button></div>
+  <div id="conventions-body"></div>
+</aside>
+
+<!-- All assets are local: Shaka Player and the fonts are vendored (see static/vendor/). -->
+<script src="/static/vendor/shaka-player/shaka-player.compiled.js"></script>
+<script src="/static/js/api.js"></script>
+<script src="/static/js/i18n.js"></script>
+<script src="/static/js/ui.js"></script>
+<script src="/static/js/jobs.js"></script>
+<script src="/static/js/player.js"></script>
+<script src="/static/js/model.js"></script>
+<script src="/static/js/reportview.js"></script>
+<script src="/static/js/playback.js"></script>
+<script src="/static/js/console.js"></script>
+</body>
+</html>

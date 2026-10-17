@@ -1,0 +1,717 @@
+{
+ "argv": [
+  [
+   "decrypt",
+   {
+    "real": [
+     "packager",
+     "input={root}/in/enc.mp4,stream=0,output={root}/out/clear.mp4",
+     "--enable_raw_key_decryption",
+     "--keys",
+     "label=:key_id=000102030405060708090a0b0c0d0e0f:key=10101010101010101010101010101010"
+    ],
+    "redacted": [
+     "packager",
+     "input={root}/in/enc.mp4,stream=0,output={root}/out/clear.mp4",
+     "--enable_raw_key_decryption",
+     "--keys",
+     "label=:key_id=000102030405060708090a0b0c0d0e0f:key=***REDACTED***"
+    ]
+   }
+  ],
+  [
+   "decrypt-bin",
+   {
+    "real": [
+     "{root}/bin//packager",
+     "input={root}/enc.mp4,stream=0,output={root}/clear.mp4",
+     "--enable_raw_key_decryption",
+     "--keys",
+     "label=:key_id=000102030405060708090a0b0c0d0e0f:key=10101010101010101010101010101010"
+    ],
+    "redacted": [
+     "{root}/bin//packager",
+     "input={root}/enc.mp4,stream=0,output={root}/clear.mp4",
+     "--enable_raw_key_decryption",
+     "--keys",
+     "label=:key_id=000102030405060708090a0b0c0d0e0f:key=***REDACTED***"
+    ]
+   }
+  ],
+  [
+   "encrypt-6",
+   {
+    "real": [
+     "packager",
+     "input={root}/clear.mp4,stream=0,init_segment={root}/cbcs/init.mp4,segment_template={root}/cbcs//seg_$Number$.m4s",
+     "--enable_raw_key_encryption",
+     "--protection_scheme",
+     "cbcs",
+     "--iv",
+     "20202020202020202020202020202020",
+     "--segment_duration",
+     "6",
+     "--clear_lead",
+     "0",
+     "--pssh",
+     "deadbeef",
+     "--keys",
+     "label=:key_id=000102030405060708090a0b0c0d0e0f:key=10101010101010101010101010101010"
+    ],
+    "redacted": [
+     "packager",
+     "input={root}/clear.mp4,stream=0,init_segment={root}/cbcs/init.mp4,segment_template={root}/cbcs//seg_$Number$.m4s",
+     "--enable_raw_key_encryption",
+     "--protection_scheme",
+     "cbcs",
+     "--iv",
+     "***REDACTED***",
+     "--segment_duration",
+     "6",
+     "--clear_lead",
+     "0",
+     "--pssh",
+     "deadbeef",
+     "--keys",
+     "label=:key_id=000102030405060708090a0b0c0d0e0f:key=***REDACTED***"
+    ]
+   }
+  ],
+  [
+   "encrypt-none",
+   {
+    "real": [
+     "packager",
+     "input={root}/clear.mp4,stream=0,init_segment={root}/cbcs/init.mp4,segment_template={root}/cbcs//seg_$Number$.m4s",
+     "--enable_raw_key_encryption",
+     "--protection_scheme",
+     "cbcs",
+     "--iv",
+     "20202020202020202020202020202020",
+     "--segment_duration",
+     "6",
+     "--clear_lead",
+     "0",
+     "--keys",
+     "label=:key_id=000102030405060708090a0b0c0d0e0f:key=10101010101010101010101010101010"
+    ],
+    "redacted": [
+     "packager",
+     "input={root}/clear.mp4,stream=0,init_segment={root}/cbcs/init.mp4,segment_template={root}/cbcs//seg_$Number$.m4s",
+     "--enable_raw_key_encryption",
+     "--protection_scheme",
+     "cbcs",
+     "--iv",
+     "***REDACTED***",
+     "--segment_duration",
+     "6",
+     "--clear_lead",
+     "0",
+     "--keys",
+     "label=:key_id=000102030405060708090a0b0c0d0e0f:key=***REDACTED***"
+    ]
+   }
+  ],
+  [
+   "encrypt-empty",
+   {
+    "real": [
+     "packager",
+     "input={root}/clear.mp4,stream=0,init_segment={root}/cbcs/init.mp4,segment_template={root}/cbcs//seg_$Number$.m4s",
+     "--enable_raw_key_encryption",
+     "--protection_scheme",
+     "cbcs",
+     "--iv",
+     "20202020202020202020202020202020",
+     "--segment_duration",
+     "6",
+     "--clear_lead",
+     "0",
+     "--keys",
+     "label=:key_id=000102030405060708090a0b0c0d0e0f:key=10101010101010101010101010101010"
+    ],
+    "redacted": [
+     "packager",
+     "input={root}/clear.mp4,stream=0,init_segment={root}/cbcs/init.mp4,segment_template={root}/cbcs//seg_$Number$.m4s",
+     "--enable_raw_key_encryption",
+     "--protection_scheme",
+     "cbcs",
+     "--iv",
+     "***REDACTED***",
+     "--segment_duration",
+     "6",
+     "--clear_lead",
+     "0",
+     "--keys",
+     "label=:key_id=000102030405060708090a0b0c0d0e0f:key=***REDACTED***"
+    ]
+   }
+  ],
+  [
+   "encrypt-blank",
+   {
+    "real": [
+     "packager",
+     "input={root}/clear.mp4,stream=0,init_segment={root}/cbcs/init.mp4,segment_template={root}/cbcs//seg_$Number$.m4s",
+     "--enable_raw_key_encryption",
+     "--protection_scheme",
+     "cbcs",
+     "--iv",
+     "20202020202020202020202020202020",
+     "--segment_duration",
+     "6",
+     "--clear_lead",
+     "0",
+     "--pssh",
+     "",
+     "--keys",
+     "label=:key_id=000102030405060708090a0b0c0d0e0f:key=10101010101010101010101010101010"
+    ],
+    "redacted": [
+     "packager",
+     "input={root}/clear.mp4,stream=0,init_segment={root}/cbcs/init.mp4,segment_template={root}/cbcs//seg_$Number$.m4s",
+     "--enable_raw_key_encryption",
+     "--protection_scheme",
+     "cbcs",
+     "--iv",
+     "***REDACTED***",
+     "--segment_duration",
+     "6",
+     "--clear_lead",
+     "0",
+     "--pssh",
+     "",
+     "--keys",
+     "label=:key_id=000102030405060708090a0b0c0d0e0f:key=***REDACTED***"
+    ]
+   }
+  ],
+  [
+   "encrypt-6006",
+   {
+    "real": [
+     "packager",
+     "input={root}/clear.mp4,stream=0,init_segment={root}/cbcs/init.mp4,segment_template={root}/cbcs//seg_$Number$.m4s",
+     "--enable_raw_key_encryption",
+     "--protection_scheme",
+     "cbcs",
+     "--iv",
+     "20202020202020202020202020202020",
+     "--segment_duration",
+     "6.006",
+     "--clear_lead",
+     "0",
+     "--pssh",
+     "dead",
+     "--keys",
+     "label=:key_id=000102030405060708090a0b0c0d0e0f:key=10101010101010101010101010101010"
+    ],
+    "redacted": [
+     "packager",
+     "input={root}/clear.mp4,stream=0,init_segment={root}/cbcs/init.mp4,segment_template={root}/cbcs//seg_$Number$.m4s",
+     "--enable_raw_key_encryption",
+     "--protection_scheme",
+     "cbcs",
+     "--iv",
+     "***REDACTED***",
+     "--segment_duration",
+     "6.006",
+     "--clear_lead",
+     "0",
+     "--pssh",
+     "dead",
+     "--keys",
+     "label=:key_id=000102030405060708090a0b0c0d0e0f:key=***REDACTED***"
+    ]
+   }
+  ],
+  [
+   "encrypt-iso",
+   {
+    "real": [
+     "packager",
+     "input={root}/clear.mp4,stream=0,init_segment={root}/cbcs/init.mp4,segment_template={root}/cbcs//seg_$Number$.m4s",
+     "--enable_raw_key_encryption",
+     "--protection_scheme",
+     "cbcs",
+     "--iv",
+     "20202020202020202020202020202020",
+     "--segment_duration",
+     "1000000",
+     "--clear_lead",
+     "0",
+     "--pssh",
+     "dead",
+     "--keys",
+     "label=:key_id=000102030405060708090a0b0c0d0e0f:key=10101010101010101010101010101010"
+    ],
+    "redacted": [
+     "packager",
+     "input={root}/clear.mp4,stream=0,init_segment={root}/cbcs/init.mp4,segment_template={root}/cbcs//seg_$Number$.m4s",
+     "--enable_raw_key_encryption",
+     "--protection_scheme",
+     "cbcs",
+     "--iv",
+     "***REDACTED***",
+     "--segment_duration",
+     "1000000",
+     "--clear_lead",
+     "0",
+     "--pssh",
+     "dead",
+     "--keys",
+     "label=:key_id=000102030405060708090a0b0c0d0e0f:key=***REDACTED***"
+    ]
+   }
+  ]
+ ],
+ "format_duration": [
+  [
+   "6.0",
+   {
+    "ok": "6"
+   }
+  ],
+  [
+   "6",
+   {
+    "ok": "6"
+   }
+  ],
+  [
+   "4.0",
+   {
+    "ok": "4"
+   }
+  ],
+  [
+   "6.006",
+   {
+    "ok": "6.006"
+   }
+  ],
+  [
+   "1000000.0",
+   {
+    "ok": "1000000"
+   }
+  ],
+  [
+   "1000000.5",
+   {
+    "ok": "1000000.5"
+   }
+  ],
+  [
+   "1e+16",
+   {
+    "ok": "10000000000000000"
+   }
+  ],
+  [
+   "1e+17",
+   {
+    "ok": "100000000000000000"
+   }
+  ],
+  [
+   "1e+300",
+   {
+    "ok": "1000000000000000052504760255204420248704468581108159154915854115511802457988908195786371375080447864043704443832883878176942523235360430575644792184786706982848387200926575803737830233794788090059368953234970799945081119038967640880074652742780142494579258788820056842838115669472196386865459400540160"
+   }
+  ],
+  [
+   "0.30000000000000004",
+   {
+    "ok": "0.30000000000000004"
+   }
+  ],
+  [
+   "-0.0",
+   {
+    "ok": "0"
+   }
+  ],
+  [
+   "2.5e-05",
+   {
+    "ok": "2.5e-05"
+   }
+  ],
+  [
+   "123456789.123",
+   {
+    "ok": "123456789.123"
+   }
+  ],
+  [
+   "-6.0",
+   {
+    "ok": "-6"
+   }
+  ],
+  [
+   "5e-324",
+   {
+    "ok": "5e-324"
+   }
+  ],
+  [
+   "1.7976931348623157e+308",
+   {
+    "ok": "179769313486231570814527423731704356798070567525844996598917476803157260780028538760589558632766878171540458953514382464234321326889464182768467546703537516986049910576551282076245490090389328944075868508455133942304583236903222948165808559332123348274797826204144723168738177180919299881250404026184124858368"
+   }
+  ],
+  [
+   "nan",
+   {
+    "error": "cannot convert float NaN to integer",
+    "type": "ValueError"
+   }
+  ],
+  [
+   "inf",
+   {
+    "error": "cannot convert float infinity to integer",
+    "type": "OverflowError"
+   }
+  ],
+  [
+   "-inf",
+   {
+    "error": "cannot convert float infinity to integer",
+    "type": "OverflowError"
+   }
+  ]
+ ],
+ "isolating_segment_duration_s": 1000000.0,
+ "isolation_violation_rc": 251,
+ "renumber": [
+  {
+   "after": [
+    [
+     "seg_1.m4s",
+     "seg_1.m4s"
+    ],
+    [
+     "seg_3.m4s",
+     "seg_3.m4s"
+    ]
+   ],
+   "error": "staged segments are not the contiguous 1..N Shaka emits: [1, 3]",
+   "names": [
+    "seg_1.m4s",
+    "seg_3.m4s"
+   ],
+   "start": 0,
+   "type": "ValueError"
+  },
+  {
+   "after": [
+    [
+     "seg_abc.m4s",
+     "seg_abc.m4s"
+    ]
+   ],
+   "error": "invalid literal for int() with base 10: 'abc'",
+   "names": [
+    "seg_abc.m4s"
+   ],
+   "start": 0,
+   "type": "ValueError"
+  },
+  {
+   "after": [
+    [
+     "seg_.m4s",
+     "seg_.m4s"
+    ]
+   ],
+   "error": "invalid literal for int() with base 10: ''",
+   "names": [
+    "seg_.m4s"
+   ],
+   "start": 0,
+   "type": "ValueError"
+  },
+  {
+   "after": [
+    [
+     "seg_0.m4s",
+     "seg_ 1.m4s"
+    ],
+    [
+     "seg_1.m4s",
+     "seg_2.m4s"
+    ]
+   ],
+   "names": [
+    "seg_ 1.m4s",
+    "seg_2.m4s"
+   ],
+   "ok": {
+    "1": 0,
+    "2": 1
+   },
+   "start": 0
+  },
+  {
+   "after": [
+    [
+     "seg_5.m4s",
+     "seg_1.m4s"
+    ],
+    [
+     "seg_6.m4s",
+     "seg_2.m4s"
+    ],
+    [
+     "seg_7.m4s",
+     "seg_3.m4s"
+    ]
+   ],
+   "names": [
+    "seg_1.m4s",
+    "seg_2.m4s",
+    "seg_3.m4s"
+   ],
+   "ok": {
+    "1": 5,
+    "2": 6,
+    "3": 7
+   },
+   "start": 5
+  },
+  {
+   "after": [
+    [
+     "other.txt",
+     "other.txt"
+    ],
+    [
+     "seg_0.m4s",
+     "seg_1.m4s"
+    ],
+    [
+     "seg_2.m4s.tmp",
+     "seg_2.m4s.tmp"
+    ]
+   ],
+   "names": [
+    "seg_1.m4s",
+    "other.txt",
+    "seg_2.m4s.tmp"
+   ],
+   "ok": {
+    "1": 0
+   },
+   "start": 0
+  },
+  {
+   "after": [],
+   "names": [],
+   "ok": {},
+   "start": 0
+  },
+  {
+   "after": [
+    [
+     "seg_0.m4s",
+     "seg_01.m4s"
+    ],
+    [
+     "seg_1.m4s",
+     "seg_2.m4s"
+    ]
+   ],
+   "names": [
+    "seg_01.m4s",
+    "seg_2.m4s"
+   ],
+   "ok": {
+    "1": 0,
+    "2": 1
+   },
+   "start": 0
+  },
+  {
+   "after": [
+    [
+     "seg_0.m4s",
+     "seg_1.m4s"
+    ],
+    [
+     "seg_1.m4s",
+     "seg_2.m4s"
+    ],
+    [
+     "seg_3.m4s",
+     "<dir>"
+    ]
+   ],
+   "names": [
+    "seg_1.m4s",
+    "seg_2.m4s",
+    "dir:seg_3.m4s"
+   ],
+   "ok": {
+    "1": 0,
+    "2": 1
+   },
+   "start": 0
+  },
+  {
+   "after": [
+    [
+     "seg_1.m4s",
+     "seg_1.m4s"
+    ],
+    [
+     "seg_1_0.m4s",
+     "seg_1_0.m4s"
+    ]
+   ],
+   "error": "staged segments are not the contiguous 1..N Shaka emits: [1, 10]",
+   "names": [
+    "seg_1.m4s",
+    "seg_1_0.m4s"
+   ],
+   "start": 1,
+   "type": "ValueError"
+  },
+  {
+   "after": [
+    [
+     "seg_2.m4s",
+     "seg_2.m4s"
+    ],
+    [
+     "seg_3.m4s",
+     "seg_3.m4s"
+    ]
+   ],
+   "error": "staged segments are not the contiguous 1..N Shaka emits: [2, 3]",
+   "names": [
+    "seg_2.m4s",
+    "seg_3.m4s"
+   ],
+   "start": 0,
+   "type": "ValueError"
+  },
+  {
+   "after": [
+    [
+     "seg_0.m4s",
+     "seg_\u0661.m4s"
+    ],
+    [
+     "seg_1.m4s",
+     "seg_2.m4s"
+    ]
+   ],
+   "names": [
+    "seg_\u0661.m4s",
+    "seg_2.m4s"
+   ],
+   "ok": {
+    "1": 0,
+    "2": 1
+   },
+   "start": 0
+  },
+  {
+   "after": [
+    [
+     "seg_-1.m4s",
+     "seg_-1.m4s"
+    ]
+   ],
+   "error": "staged segments are not the contiguous 1..N Shaka emits: [-1]",
+   "names": [
+    "seg_-1.m4s"
+   ],
+   "start": 0,
+   "type": "ValueError"
+  }
+ ],
+ "root_placeholder": "{root}",
+ "scrub": [
+  [
+   "key=10101010101010101010101010101010 iv=20202020202020202020202020202020",
+   [
+    "10101010101010101010101010101010",
+    "20202020202020202020202020202020"
+   ],
+   "key=***REDACTED*** iv=***REDACTED***"
+  ],
+  [
+   "nothing here",
+   [
+    "10101010101010101010101010101010",
+    "20202020202020202020202020202020"
+   ],
+   "nothing here"
+  ],
+  [
+   "AbCd abcd ABCD",
+   [
+    "AbCd"
+   ],
+   "***REDACTED*** ***REDACTED*** ***REDACTED***"
+  ],
+  [
+   "x",
+   [
+    ""
+   ],
+   "x"
+  ]
+ ],
+ "stderr_tail_chars": 4000,
+ "transcrypt_relative": {
+  "calls": [
+   [
+    "input=_persegment_work/seg_0/source.mp4,stream=0,output=_persegment_work/seg_0/clear.mp4",
+    "--enable_raw_key_decryption",
+    "--keys",
+    "label=:key_id=000102030405060708090a0b0c0d0e0f:key=***REDACTED***"
+   ],
+   [
+    "input=_persegment_work/seg_0/clear.mp4,stream=0,init_segment=_persegment_work/seg_0/init.mp4,segment_template=_persegment_work/seg_0/out_$Number$.m4s",
+    "--enable_raw_key_encryption",
+    "--protection_scheme",
+    "cbcs",
+    "--iv",
+    "***REDACTED***",
+    "--segment_duration",
+    "1000000",
+    "--clear_lead",
+    "0",
+    "--keys",
+    "label=:key_id=000102030405060708090a0b0c0d0e0f:key=***REDACTED***"
+   ],
+   [
+    "input=seg_0/source.mp4,stream=0,output=seg_0/clear.mp4",
+    "--enable_raw_key_decryption",
+    "--keys",
+    "label=:key_id=000102030405060708090a0b0c0d0e0f:key=***REDACTED***"
+   ],
+   [
+    "input=seg_0/clear.mp4,stream=0,init_segment=seg_0/init.mp4,segment_template=seg_0/out_$Number$.m4s",
+    "--enable_raw_key_encryption",
+    "--protection_scheme",
+    "cbcs",
+    "--iv",
+    "***REDACTED***",
+    "--segment_duration",
+    "1000000",
+    "--clear_lead",
+    "0",
+    "--keys",
+    "label=:key_id=000102030405060708090a0b0c0d0e0f:key=***REDACTED***"
+   ]
+  ],
+  "returncode": 251,
+  "stderr_tail": "per-segment isolation produced 0 segments for source segment index 0 (expected exactly 1)"
+ }
+}

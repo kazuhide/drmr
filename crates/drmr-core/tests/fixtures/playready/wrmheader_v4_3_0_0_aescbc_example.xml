@@ -1,0 +1,12 @@
+<WRMHEADER xmlns="http://schemas.microsoft.com/DRM/2007/03/PlayReadyHeader" version="4.3.0.0">
+  <DATA>
+    <PROTECTINFO>
+      <KIDS>
+        <KID ALGID="AESCBC" VALUE="PV1LM/VEVk+kEOB8qqcWDg=="></KID>
+        <KID ALGID="AESCBC" VALUE="tuhDoKUN7EyxDPtMRNmhyA=="></KID>
+      </KIDS>
+    </PROTECTINFO>
+    <LA_URL>http://rm.contoso.com/rightsmanager.asmx</LA_URL>
+    <DS_ID>AH+03juKbUGbHl1V/QIwRA==</DS_ID>
+  </DATA>
+</WRMHEADER>

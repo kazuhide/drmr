@@ -1,0 +1,3 @@
+# Byte-exact fixtures (canonical JSON bytes, their SHA-256, Python float reprs): never
+# converted on checkout.
+* -text

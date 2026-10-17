@@ -1,0 +1,9 @@
+[
+{"path": "/tmp/input/master.m3u8", "as_uri": "file:///tmp/input/master.m3u8", "quote": "/tmp/input/master.m3u8"},
+{"path": "/tmp/in put/a b.m3u8", "as_uri": "file:///tmp/in%20put/a%20b.m3u8", "quote": "/tmp/in%20put/a%20b.m3u8"},
+{"path": "/tmp/\u00fcn\u00ef/\u00e7.ts", "as_uri": "file:///tmp/%C3%BCn%C3%AF/%C3%A7.ts", "quote": "/tmp/%C3%BCn%C3%AF/%C3%A7.ts"},
+{"path": "/tmp/a%b/c#d?e.ts", "as_uri": "file:///tmp/a%25b/c%23d%3Fe.ts", "quote": "/tmp/a%25b/c%23d%3Fe.ts"},
+{"path": "/tmp/~user/x_y-z.m3u8", "as_uri": "file:///tmp/~user/x_y-z.m3u8", "quote": "/tmp/~user/x_y-z.m3u8"},
+{"path": "/tmp/sp\tecial;=+&@!$'()*,.ts", "as_uri": "file:///tmp/sp%09ecial%3B%3D%2B%26%40%21%24%27%28%29%2A%2C.ts", "quote": "/tmp/sp%09ecial%3B%3D%2B%26%40%21%24%27%28%29%2A%2C.ts"},
+{"path": "/", "as_uri": "file:///", "quote": "/"}
+]

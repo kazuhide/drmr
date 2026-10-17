@@ -1,0 +1,51 @@
+[package]
+name = "drmr-core"
+description = "Media repackaging, manifest processing, and validation for drmr"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+base64.workspace = true
+clap.workspace = true
+hex.workspace = true
+memchr.workspace = true
+num-bigint.workspace = true
+num-integer.workspace = true
+num-rational.workspace = true
+num-traits.workspace = true
+regex.workspace = true
+roxmltree.workspace = true
+rustix.workspace = true
+rustls.workspace = true
+rusty-s3.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+unicode-normalization.workspace = true
+ureq.workspace = true
+webpki-roots.workspace = true
+zeroize.workspace = true
+zmij.workspace = true
+
+[[test]]
+name = "batch_worker"
+harness = false
+
+# The S3 credential chain and endpoint from the environment: each probe runs in a child process
+# with an explicit environment (this process's environment is never mutated).
+[[test]]
+name = "storage_env"
+harness = false
+
+[dev-dependencies]
+rcgen.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

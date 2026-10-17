@@ -1,0 +1,383 @@
+/* UI strings (English default, Japanese). Only the language preference is ever persisted; no
+ * secret, URL or server text passes through this table. `has(key)` lets callers translate
+ * server classifications when a message exists and fall back safely otherwise. */
+(function () {
+  'use strict';
+  var App = (window.App = window.App || {});
+
+  var ja = {
+    // chrome
+    skipToContent: '本文へ移動', brandName: 'DRM Packaging Console', language: '言語', close: '閉じる', refresh: '更新',
+    contents: 'コンテンツ', listCount: '{n} 件', listCountOne: '1 件', filterPlaceholder: 'ID・ラベルで絞り込み', filterAria: 'コンテンツを絞り込む',
+    listEmpty: 'コンテンツがありません。「コンテンツを追加」から始めてください。', listNone: '一致するコンテンツがありません。', listLoadFailed: '一覧を読み込めませんでした。', listTruncated: '古い実行は一覧に読み込まれていません（最新 500 件まで）。',
+    addContent: 'コンテンツを追加', rescan: '一覧を更新', rescanned: '一覧を更新しました（{n} 件）。配置したはずのコンテンツが無い場合は、サーバーログの catalog-entry-skipped を確認してください。', conventions: '設定と規約', sectionsAria: 'セクション',
+    leaseIdle: '実行中のジョブはありません', leaseRunning: '実行中: {asset} · {kind}', leaseQueued: '待機 {n} 件',
+    // kinds and states
+    kind_catalog: 'DASH CENC + HLS FairPlay', kind_hls: 'HLS（Clear）', group_catalog: '既存の DRM コンテンツ（DASH CENC・HLS FairPlay → CBCS）', group_hls: 'Clear HLS（→ CBCS）', kind_convert: 'CBCS 変換', kind_analysis: 'ソース解析', kind_package: 'DRM パッケージ',
+    state_running: '実行中', state_succeeded: '完了', state_failed: '失敗', state_interrupted: '中断',
+    cstate_ready: '未変換', cstate_running: '実行中', cstate_queued: '待機中', cstate_packaged: 'パッケージ済み', cstate_failed: '失敗', cstate_analyzed: '解析済み', cstate_orphan: 'エントリなし',
+    orphanNotice: 'このコンテンツのカタログエントリは見つかりません。実行の記録とログだけを表示しています。', reportNoneOrphan: 'カタログエントリがないため、レポートは取得できません。',
+    // empty / add
+    emptyTitle: 'コンテンツを選択',
+    addTitle: 'コンテンツを追加',
+    addCatalogTitle: '既存の DRM コンテンツ（DASH CENC・HLS FairPlay）', addCatalogHelp: 'DASH（CENC）マニフェスト、HLS（FairPlay）マスター、セグメント、keys.env をカタログルート直下の 1 ディレクトリに配置し、「一覧を更新」を押します。',
+    addHlsTitle: 'Clear HLS（暗号化されていない HLS）', addHlsHelp: 'VOD のマスタープレイリスト URL を解析して登録します。DRM パラメーターはパッケージ時に入力します。',
+    sourceUrl: 'マスタープレイリスト URL', sourceUrlHelp: 'URL は保存されません。',
+    outputName: '出力名（自動・編集可）', outputNameHelp: '出力フォルダー名になります（英数字・_ . -、後から変更できません）。', analyze: '解析を開始',
+    analysisStarting: '解析を開始しています…', analyzing: '解析中…', analysisLoading: '解析結果を読み込んでいます…',
+    analysisJobFailed: '解析ジョブが失敗しました。ログを確認してください。', analysisUnavailable: 'この解析結果は利用できなくなりました。別の出力名で解析し直してください。',
+    // content head and actions
+    convert: '変換を開始', convertAgain: '再変換', convertStarting: '変換を開始しています…', converting: '変換中…', convertStartFailed: '変換を開始できませんでした。',
+    convertDone: '変換が完了しました（{elapsed}）。', convertFailed: '変換に失敗しました（終了コード {code}、{elapsed}）。ログを確認してください。',
+    addToQueue: '待機列に追加', queueAddFailed: '待機列に追加できませんでした。',
+    viewReport: '詳細レポート', viewReportLabel: '{asset} の詳細レポート', openReportPage: 'レポートを別ページで開く', preview: '再生確認を準備', packageHls: '3 DRM 向けにパッケージ',
+    secInput: '入力', secTransform: '変換', secRuns: 'ログ', secReport: 'レポート', secPlayback: '再生確認',
+    // bulk
+    bulkSelected: '{n} 件を選択中', bulkQueue: '順に変換', bulkClear: '選択解除',
+    queuePending: '待機列', queueRemove: '取り消し', queueRemoveLabel: '{asset} を待機列から外す', queueSkipped: '{asset} は実行されませんでした（{reason}）。', queueAdded: '{n} 件を待機列に追加しました。', queueSkippedTitle: '実行されなかった項目', dismiss: '了解', dismissLabel: '{asset} の通知を閉じる',
+    'qreason_asset-not-found': 'カタログにエントリがありません', 'qreason_asset-already-exists': 'この ID は Clear HLS で使用済みです', 'qreason_job-launch-failed': 'ジョブを起動できませんでした', 'qreason_catalog-scan-failed': 'カタログを読み取れませんでした',
+    // input section
+    inputEntry: 'カタログのエントリ', inputMpd: 'DASH マニフェスト', inputHlsMaster: 'HLS マスター', inputKeys: '鍵情報', inputKeysCatalog: 'エントリの keys.env（画面には表示されません）',
+    inputHlsWhere: '解析スナップショット', inputHlsSnapshot: 'output/{id}/clear/source/（元の URL は保存されません）',
+    scheme: '保護方式', prVersion: 'PlayReady バージョン', prAlgid: 'PlayReady ALGID', drmState: 'DRM', drmStateExisting: 'あり — {scheme}（{systems}）、HLS は FairPlay', drmStateClear: 'なし（Clear）', muxing: 'muxing',
+    loading: '読み込み中…', inspectLoadFailed: 'マニフェストを読み込めませんでした。',
+    analysisPass: 'ソース検査が通りました。DRM パラメーターを入力するとパッケージできます。', analysisRejected: 'このソースはパッケージできません。指摘事項を確認してください。', analysisPending: '解析結果はまだありません。',
+    audioSource: '音声の取得元', audioSourceHelp: '複数の映像に多重化された音声が同じグループにある場合、使用する取得元を選びます。', chooseAudio: '取得元を選択',
+    noTracks: 'トラックがありません。',
+    muxedAudio: '多重化音声', defaultTrack: '既定',
+    colTrack: 'トラック', colType: '種類', colDetail: '内容', colCodec: 'コーデック', colMuxing: 'muxing', colBitrate: 'ビットレート', colSegments: 'セグメント',
+    type_video: '映像', type_audio: '音声', type_text: '字幕', type_subtitle: '字幕',
+    finding_fail: 'エラー', finding_warn: '警告', finding_info: '情報',
+    'finding_encrypted-source-unsupported': 'ソースは暗号化済みです。暗号化されていない HLS のみ対応しています。',
+    'finding_live-unsupported': 'ライブ / 進行中のプレイリストは対応していません。VOD のみです。',
+    'finding_discontinuity-unsupported': 'EXT-X-DISCONTINUITY を含むソースは対応していません。',
+    'finding_unsupported-container': '対応していないコンテナーです（TS / fMP4 のみ）。',
+    'finding_unsupported-source-track': '対応していないトラックが含まれています。',
+    'finding_non-independent-video': 'セグメントが独立していません（各セグメントはキーフレームで始まる必要があります）。',
+    'finding_source-not-allowed': 'この URL のオリジンは許可されていません。ホストのアクセスプロファイルを確認してください。',
+    'finding_source-http-failed': 'ソースの取得に失敗しました（HTTP エラー）。',
+    'finding_source-fetch-failed': 'ソースの取得に失敗しました。',
+    'finding_multiple-audio-group-selection-required': '複数の音声グループに多重化音声があるため、自動選択できません。',
+    'finding_analysis-failed': '解析ジョブが失敗しました。ログを確認してください。', 'finding_analysis-interrupted': '解析ジョブが中断されました。', 'finding_analysis-running': '解析中です。',
+    // transformation section
+    transformInput: '入力:', transformOutput: '出力:', inputExisting: '既存 DRM（DASH CENC・HLS FairPlay）', inputClear: 'Clear HLS（{muxing}）', outputsList: 'DASH CBCS（Widevine・PlayReady）、HLS CBCS（FairPlay）', transformDetails: '処理の内訳と検証項目',
+    sampleValues: 'サンプル値を入力', sampleValuesNote: '書式確認用の合成値です（本物の鍵ではありません）。',
+    transformCatalogPending: '変換すると次の処理を行い、各項目を全レンディションで検証します。再エンコードはしません。',
+    transformCatalogDone: '次の処理を行いました。各項目の検証結果はレポートからの値です。',
+    transformHlsPending: 'DRM パラメーターを入力してパッケージすると次の処理を行います。再エンコードはしません。',
+    transformHlsDone: '次の処理を行いました。各項目の検証結果は結果レポートからの値です。',
+    transformHlsBlocked: '解析が通ったソースだけをパッケージできます。',
+    rule_noReencode: '映像・音声は再エンコードしない（復号 → CBCS 再暗号化はビット単位で同一）', rule_scheme: '暗号化方式を AES-CTR（cenc）から AES-CBC（cbcs）へ。KID とコンテンツキーは変更しない',
+    rule_boundaries: 'セグメント境界はソース由来の 6 秒を維持し、セグメント番号の起点を揃える', rule_iv: 'IV を明示指定し、既存 HLS の EXT-X-KEY IV= と一致させる',
+    rule_playready: 'PlayReady PRO を再生成（v4.3.0.0・AESCBC・CHECKSUM なし）し、init セグメントとマニフェストで同一にする', rule_widevineFairplay: 'Widevine PSSH と FairPlay skd:// URI はそのまま引き継ぐ',
+    rule_dashPatch: 'DASH マニフェストは差分パッチのみ（SegmentTemplate・URL 構造・Representation ID は不変）', rule_hlsPatch: 'HLS は TS 参照を fMP4（.m4s）に置き換え、EXT-X-MAP を追加、音声グループを統合、バージョンとセグメント数は不変',
+    rule_outOfScope: '対象外トラック（VP9・字幕）には触れない', rule_conformance: '規格適合（DASH-IF）の検証',
+    rule_hlsNoReencode: '映像・音声はストリームコピー（再エンコードなし）。セグメントごとにタイミング・パケット数・復号結果の同一性を検証', rule_hlsScheme: '入力した KID・コンテンツキー・IV で AES-CBC（cbcs）暗号化し、出力のシグナリングを検証',
+    rule_hlsSignaling: '3 つの DRM シグナリング: Widevine PSSH（入力値）、PlayReady PRO v4.3 AESCBC（再生成）、FairPlay skd://（入力値）', rule_hlsManifests: 'DASH MPD と HLS マスター / メディアプレイリストを生成（セグメントは明示列挙）',
+    rule_hlsSubtitles: '字幕（WebVTT / IMSC1）は暗号化せずタイミングを対応付ける', rule_hlsAudioChoice: '音声の取得元を選んだ場合はその選択を記録', rule_hlsEvidence: '実ライセンスでの再生確認と規格適合は別途の検証（このツールでは未検証）',
+    check_PASS: 'Pass', check_FAIL: 'Fail', check_SKIP: '未実施', check_UNKNOWN: '不明', checkPending: '未検証', checkHelpLabel: '「{check}」の説明',
+    'check_6-4.framemd5': '全フレームのハッシュ一致（ffmpeg framemd5）', 'check_6-2.audio-pcm-identity': '音声 PCM の同一性', 'check_6-1.dash-scheme-cbcs': 'DASH の保護方式が cbcs',
+    'check_6-1.segment-duration': 'セグメント長 6 秒', 'check_6-1.boundary-agreement': '境界タイムスタンプの一致', 'check_6-1.number-origin': 'セグメント番号の起点',
+    'check_6-1.iv-agreement': 'tenc の IV と設定値の一致', 'check_6-1.hls-iv-agreement': 'HLS の IV= と設定値の一致', 'check_6-1.pssh-agreement': 'init の pssh とマニフェストの一致',
+    'check_6-1.dash-playready-sync': 'cenc:pssh と mspr:pro の同期', 'check_6-1.dash-widevine-unchanged': 'Widevine PSSH 不変', 'check_6-1.dash-segmenttemplate-unchanged': 'SegmentTemplate 不変',
+    'check_6-1.hls-segment-count': 'HLS セグメント数の一致', 'check_6-1.hls-version-unchanged': 'HLS バージョン不変', 'check_6-2.audio-consolidation-structure': '音声グループ統合の構造', 'check_6-1.hls-content-gate': 'HLS の内容同一性', 'check_6-1.hls-extinf': 'EXTINF の一致',
+    'check_6-5.dash-out-of-scope-untouched': '対象外 AdaptationSet 不変', 'check_6-5.hls-master-untouched': 'HLS マスターの対象外部分不変', 'check_6-6.dash-conformance': 'DASH-IF 適合性',
+    'check_source-correspondence-pass': 'ソースとの対応', 'check_timing-pass': 'タイミング', 'check_decoded-identity-pass': '復号結果の同一性', 'check_cbcs-signaling-pass': 'CBCS シグナリング',
+    'check_text-payload-pass': '字幕ペイロード', 'check_text-timing-map-pass': '字幕タイミング対応', 'check_selection-recorded': '選択の記録',
+    // what each check verifies (shown behind the (i) of a check; ids as the reports name them)
+    'help_6-4.framemd5': '復号した元ストリームと、CBCS 出力を再復号したストリームを ffmpeg の framemd5 で比較し、全フレームのハッシュが一致することを確認します。6-1 のセグメント長・番号起点・境界が通った場合にだけ実行します。',
+    'help_6-2.audio-pcm-identity': 'HLS マスターの ts_AUDIO と fmp4_AUDIO の各ペアを復号して PCM にデコードし、同一であることを確認します。これが音声グループを 1 つに統合する根拠です。ペアが無ければ未実施です。',
+    'help_6-1.dash-scheme-cbcs': '出力 MPD の対象 AdaptationSet で、ContentProtection の value が cbcs になり、cenc:default_KID が元のままであることを確認します。',
+    'help_6-1.segment-duration': 'Shaka Packager の CBCS 暗号化が正常終了したことを記録します。映像はソースのマニフェストから求めたセグメント長で一括して暗号化し、セグメント長が AAC フレーム（1024 サンプル）で割り切れない音声はソースのセグメント単位で暗号化します。出力のセグメント長そのものは 6-1.boundary-agreement で比較します。',
+    'help_6-1.boundary-agreement': 'セグメントごとに、ソースと出力の同じ位置のフラグメント情報（tfdt の開始時刻と trun のサンプル数）が一致することを確認します。合計ではなく 1 セグメントずつ比較します。',
+    'help_6-1.number-origin': '出力セグメントの番号をソースの startNumber の起点に合わせ直し、出力のセグメント数がソースと等しいことを確認します。',
+    'help_6-1.iv-agreement': '出力 init セグメントの tenc ボックスにある constant IV が、設定した IV と一致することを確認します。値そのものは表示しません。',
+    'help_6-1.hls-iv-agreement': '既存 HLS メディアプレイリストの EXT-X-KEY IV= が設定した IV と一致することを確認します。不一致なら書き換えを中止します。',
+    'help_6-1.pssh-agreement': 'アセット単位で 1 回、CBCS の init セグメントがあるすべてのレンディションについて、再生成した PlayReady の pssh ボックスがバイト列のまま含まれていることを確認します（マニフェストの cenc:pssh / mspr:pro と同じ 1 回の生成から作った値）。アセット単位の確認のため、レンディション別の行は常に未実施です。',
+    'help_6-1.dash-playready-sync': '対象 AdaptationSet の PlayReady の cenc:pssh と mspr:pro が、今回 1 回だけ生成した pssh ボックスと PRO（v4.3.0.0・AESCBC・CHECKSUM なしで生成）とそれぞれ一致することを確認します。対象 AdaptationSet に PlayReady が無ければ未実施です。',
+    'help_6-1.dash-widevine-unchanged': 'Widevine の cenc:pssh が、すべての AdaptationSet でソースの MPD から変わっていないことを確認します。',
+    'help_6-1.dash-segmenttemplate-unchanged': '対象 AdaptationSet の SegmentTemplate の 5 つの属性（timescale・duration・media・initialization・startNumber）がソースから変わっていないことを確認します。',
+    'help_6-1.hls-segment-count': '対応付けた各メディアプレイリスト（映像バリアントと fMP4 音声）のセグメント数が、対応する DASH レンディションと等しいことを確認します。不一致なら書き換えを中止します。',
+    'help_6-1.hls-version-unchanged': 'HLS マスターの EXT-X-VERSION がソースと同じで、メディアプレイリストが VERSION:7 のままであることを確認します。',
+    'help_6-2.audio-consolidation-structure': '各 ts_AUDIO-N に同じ番号の fmp4_AUDIO-N があり、統合後にどの #EXT-X-STREAM-INF の AUDIO= も削除したグループを指していないことを確認します。満たさなければ書き換えを中止します。',
+    'help_6-1.hls-content-gate': '既存（ソース）の HLS fMP4 バリアントを復号してデコードし、対応する DASH レンディションの復号ストリームと同一であることを確認します（映像は framemd5、音声は PCM）。TS H.264 バリアントは比較しません（映像を復号しないため）。比較したバリアントがすべて一致すれば Pass、比較できるものが一つも無いときだけ未実施になります。',
+    'help_6-1.hls-extinf': '対応付けた各メディアプレイリストの EXTINF を、対応する DASH レンディションのセグメントから tfdt の差で実測した長さと比べ、本数が等しく、すべて 5 ms 以内で一致することを確認します。対応付けが無ければ未実施です。',
+    'help_6-5.dash-out-of-scope-untouched': '対象外の AdaptationSet（VP9 など）がソースの MPD と文字列として同一であることを確認します。',
+    'help_6-5.hls-master-untouched': 'HLS マスターをソースと行単位で比べ、消えた行・増えた行が #EXT-X-STREAM-INF 行と、削除した ts_AUDIO の #EXT-X-MEDIA 行だけであることを確認します。ほかの行はすべてソースと同じ内容で残っている必要があります。STREAM-INF 行は行全体として許容し、行内のどの属性が変わったかは比べません（書き換えが変えるのは AUDIO= だけです）。',
+    'help_6-6.dash-conformance': 'DASH-IF 適合性ツールによる検証です。まだ統合していないため、未実施として記録します。',
+    'help_source-correspondence-pass': 'ソースのセグメント 1 つから出力セグメントがちょうど 1 つ作られ、隣り合う出力セグメントの間に欠落や重複が無いことを確認します。',
+    'help_timing-pass': 'セグメントごとに、再多重化後と暗号化後のパケットの数・PTS・DTS・長さが、共通オフセットを除いてソースと一致することを確認します。',
+    'help_decoded-identity-pass': 'セグメントごとに、暗号化出力を復号してデコードした結果のダイジェストが、ソースをデコードした結果と同一であることを確認します。全セグメントを完全にデコードします。',
+    'help_cbcs-signaling-pass': '各セグメントの出力 init で、保護方式が cbcs、KID と constant IV が入力値と一致、暗号化パターンが映像 1:9 / 音声 0:0、Widevine と再生成した PlayReady の pssh が含まれることを確認します。',
+    'help_text-payload-pass': '字幕の内容をソースのまま保持したことを確認します。IMSC1 はセグメントごとにパケットのハッシュを比較し、WebVTT はキューを変更せずに書き出します（タイムスタンプの対応行だけを補正）。',
+    'help_text-timing-map-pass': '字幕のタイミングを映像・音声と同じ共通オフセットで対応付けたことを確認します。IMSC1 はセグメントごとにパケットのタイミングを比較し、WebVTT は X-TIMESTAMP-MAP を一律に補正します。',
+    'help_selection-recorded': '同じグループに多重化音声が複数あり、利用者が選ぶか、PCM が同一と確認できてツールが自動で選んだとき、選ばれなかったトラックを選択外として記録したことを示します。',
+    drmHelp: 'ブラウザには保存されず、送信後に消去されます。', drmSystemsLabel: '対象 DRM',
+    kidLabel: 'KID（16 バイト HEX）', keyLabel: 'コンテンツキー（16 バイト HEX）', ivLabel: 'IV（16 バイト HEX）', psshLabel: 'Widevine PSSH（Base64 または HEX）', laUrlLabel: 'PlayReady LA_URL', fpsUriLabel: 'FairPlay skd:// URI',
+    showValues: '値を表示', hideValues: '値を隠す',
+    required: '必須です。', hexError: '32 桁の 16 進数を入力してください。', psshError: 'Base64 または HEX 形式の PSSH を入力してください。', laUrlError: 'https:// または http:// の URL を入力してください。', fpsError: 'skd:// で始まる URI を入力してください。',
+    packaging: 'パッケージ中…', packageDone: 'パッケージが完了しました（{elapsed}）。', packageFailed: 'パッケージに失敗しました。ログを確認してください。', packageInterrupted: 'パッケージが中断されました。',
+    reenterDrm: 'DRM パラメーターを再入力してください（送信時に消去されています）。', resultLoading: '結果を読み込んでいます…', resultUnavailable: 'この結果は利用できなくなりました（出力が削除または変更された可能性があります）。', retryResult: '結果を再読み込み',
+    // runs / log section
+    runsEmpty: 'まだ実行はありません。',
+    openLog: 'ログ', logLive: 'ライブ', logReplay: '保存済みログ', logLoading: 'ログを読み込んでいます…', exitCode: '終了コード {code}', timeUnknown: '日時不明',
+    logJson: 'JSON', logFormatted: '整形表示', logDownload: 'ダウンロード', logExit: '終了コード {code}', logTruncated: '一部省略', toolOutputEmpty: '出力なし',
+    logInterrupted: 'ログの一部は受信できませんでした。件数と進捗は参考値です。',
+    strip_pending: '待機', strip_running: '処理中', strip_done: '完了', strip_failed: '失敗', strip_unknown: '不明（ログ未受信）',
+    stageStarting: '開始しています…', stageMerge: 'セグメントを結合', stageDecrypt: '復号', stageEncrypt: 'CBCS 暗号化', stageVerify: '検証', stageManifest: 'マニフェスト作成', stageWorking: '処理中', stagePackaging: 'パッケージ中', stageAnalyzing: '解析中',
+    outcomeSucceeded: '完了', outcomeInterrupted: '中断', outcomeFailed: '失敗',
+    srcAnalysisStarted: '解析開始', srcPlaylistStarted: 'プレイリストを読み込み', srcSegmentDownloaded: 'セグメントを取得', srcProbeStarted: 'セグメントを検査', srcSegmentProbed: 'セグメント検査完了', srcPlaylistComplete: 'プレイリスト完了', srcAnalysisComplete: '解析完了',
+    'log_job-progress': '処理中', 'log_track-started': 'トラックのパッケージ開始', 'log_track-packaged': 'トラックのパッケージ完了', 'log_track-failed': 'トラックのパッケージ失敗', 'log_packaging-complete': 'パッケージ完了', 'log_packaging-failed': 'パッケージ失敗', 'log_analysis-complete': '解析完了',
+    jobNotFound: 'ジョブが見つかりません。サーバーが再起動された可能性があります。もう一度開始してください。', jobUnreachable: 'サーバーに接続できないため状態を確認できません。サーバーを確認してページを再読み込みしてください。',
+    jobStillRunning: 'ログの接続が切れましたが、ジョブはサーバー側で継続中です。完了を待っています…', serverRetrying: 'サーバーに接続できません。再試行しています…', logDropped: 'ログの接続が切れました。状態を確認しています…', jobLost: '不明',
+    removeHistory: '履歴から削除', removeHistoryLabel: '{asset} のジョブを履歴から削除', historyHelp: '履歴から削除しても出力ファイル・解析結果・ログは保持されます。', deleteFailed: '履歴から削除できませんでした。',
+    unitMinSec: '{m} 分 {s} 秒', unitSec: '{s} 秒',
+    // report section / page
+    reportTitle: '変換レポート', backConsole: 'コンソールへ戻る', reportLoading: 'レポートを読み込んでいます…', reportRetry: '再読み込み', reportNotFound: 'レポートが見つかりません。結果 ID と出力ディレクトリを確認してください。', reportUnavailable: 'レポートを取得できませんでした（出力が削除または変更された可能性があります）。',
+    reportNoneCatalog: '変換が完了するとレポートが作成されます。', reportNoneHls: 'パッケージが完了するとレポートが作成されます。',
+    reportIdentifier: '結果 ID', reportDate: '作成日時', reportChecks: '検証項目', reportTracks: 'トラック別検証', reportSegments: 'セグメント詳細', reportDisposition: '扱い',
+    reportComparison: '変換前後の再生比較',
+    reportFullEnumeration: '全レンディション検証', reportRoundTrip: '復号往復の同一性', reportIncomplete: '一部の検証が実施されていません。', reportNotChecked: '未実施',
+    reportEvidence: '検証の範囲', evidence_packaging: 'パッケージ処理', evidence_real_license: '実ライセンスでの再生', evidence_conformance: '規格適合性', 'ev_measured-local': 'ローカルで実測', 'ev_not-verified': '未検証', ev_failed: '失敗',
+    checksPass: 'すべての検証項目が通りました。', checksFail: '通らなかった検証項目があります。',
+    dashManifest: 'DASH MPD', hlsManifest: 'HLS マスター', pass: 'Pass',
+    kind: '種類', codec: 'コーデック', container: 'コンテナー', languageCol: '言語', reportResolution: '解像度', reportBandwidth: 'ビットレート (bit/s)', reportSourceCount: 'ソースセグメント数', reportOutputCount: '出力セグメント数', reportSegmentDuration: 'セグメント長 (s)', reportDuration: '長さ (s)',
+    source_index: 'ソース', output_index: '出力', timescale: 'タイムスケール', presentation_start: '開始 (ticks)', duration: '長さ (ticks)', sample_count: 'サンプル数',
+    // playback section
+    playbackHelp: 'ClearKey によるローカル再生です。本番のライセンスは使いません。', previewStarting: '再生セッションを準備しています…', previewReady: '準備できました。各プレーヤーの再生を押してください。',
+    previewCredentialsHelp: 'サーバー再起動などで鍵コンテキストが残っていません。KID とコンテンツキーを入力してください（保存されません）。', sessionUrlInvalid: '再生セッションの URL が不正なため、再生を準備できませんでした。', previewCredentialsRejected: '入力された KID またはコンテンツキーがこの結果と一致しません。確認して入力し直してください。', contentKey: 'コンテンツキー', playbackInfoFailed: '再生情報を取得できませんでした。',
+    before: '変換前', after: '変換後（CBCS）', play: '再生', autoAbr: '自動（ABR）', audioSuffix: '[音声]', subtitles: '字幕', subtitlesOff: 'オフ', subtitleUnavailable: 'この字幕はこの読み込みでは利用できません。', renditionUnavailable: 'このレンディションは再生できません。',
+    oldRendition: '変換前のレンディション', newRendition: '変換後のレンディション', oldSubtitles: '変換前の字幕', newSubtitles: '変換後の字幕',
+    playerIdle: '停止中', playerLoading: '読み込み中', playerPlaying: '再生中', playerError: 'エラー', keyRequesting: '鍵を要求中', keyUsable: '鍵 OK', keyError: '鍵エラー', errorDetail: 'エラー', errorPrefix: 'エラー:',
+    noManifest: '再生できるマニフェストがありません。', autoplayBlocked: '自動再生がブロックされました。動画の再生ボタンを押してください。', playFailed: '再生を開始できませんでした',
+    encryptionComparison: '暗号化方式の比較', field: '項目',
+    // conventions panel
+    convTitle: '設定と規約',
+    convInstance: 'インスタンス', convCatalogRoot: 'カタログルート', convOutputRoot: '出力ルート', convJobsDir: 'ジョブログ', convProfiles: 'アクセスプロファイル（Clear HLS）', convProfilesNone: '未設定（入力 URL と同じ公開 HTTPS オリジンのみ許可）', convAllowHttp: 'HTTP 可', convConcurrency: '同時実行', convConcurrencyValue: '1 ジョブ（カタログ変換・解析・パッケージ共通）',
+    convInput: '入力の規約', convInputNotes: 'asset_id は英数字・_ . - のみ、カタログ内で一意。keys.env は download/ の外に置きます。不備のあるエントリは一覧から除外され、理由はサーバーログに出ます。',
+    convClearHls: 'Clear HLS は URL と出力名、アクセスプロファイルで解析します。DRM パラメーターはパッケージ時に入力し、送信後に消去されます。',
+    convOutput: '出力の規約', convServed: '配信', convPrivate: '非公開', convOutputNotes: 'cbcs/ と manifests/ だけが /output/<asset_id>/ で配信されます。clear/（復号済みまたはソースのスナップショット）・_work/・reports/ は配信されません。',
+    convLogs: 'ログ', convLogsNotes: 'ジョブログには外部ツールのコマンドと引数、その出力を上限まで記録します（省略した分は明示）。鍵と IV はどの表記でも伏せられ、メディアの中身は記録されません。',
+    convKeys: '鍵の渡し方', convKeysPath: '経路', convKeysHow: '鍵', convKeysRow1a: '画面 · カタログ', convKeysRow1b: 'エントリの keys.env（DRM_KID / DRM_KEY / DRM_IV）。変換開始時にジョブごとの環境変数として渡され、画面には出ません',
+    convKeysRow2a: '画面 · Clear HLS', convKeysRow2b: 'パッケージ時にフォームで入力。保存せず、送信直後に消去', convKeysRow3a: '一括 · カタログ（batch CLI）', convKeysRow3b: '--key-provider file --key-file <jsonl>（mode 0600、出力ルートの外、1 行 {asset_id, kid, key, iv}）。dash-cenc・hls-clear 両方の KID / コンテンツキー / IV はこのファイルから渡されます',
+    convKeysRow4a: '一括 · Clear HLS（batch CLI）', convKeysRow4b: '--hls-config-dir の <asset_id>.json（0600）が source_config（URL とポリシー）と drm_config（Widevine PSSH・PlayReady LA_URL・FairPlay skd のシグナリングのみ）を指します。KID / コンテンツキー / IV は --key-file から', convKeysRow5a: '鍵サーバー連携', convKeysRow5b: '未実装',
+    convTreeMirror: '（マニフェストとセグメントを URL のホスト名 + パスのまま配置）', convCmdKeys: '全項目の KID / 鍵 / IV（両方の種類）', convCmdHls: 'hls-clear 項目のソースとシグナリングの設定',
+    convBulk: '一括実行', convBulkHelp: '画面では、カタログのコンテンツを複数選んで「順に変換」すると待機列に入り 1 件ずつ変換します（待機列はサーバーのメモリ上にあり、再起動で消えます）。大量処理と Clear HLS の一括処理は batch コマンドで行います:',
+    convBulkFormats: '作業リストと再開ログは JSON Lines で、先頭行は {"schema_version": "1"} です。作業リスト: {asset_id, kind: dash-cenc | hls-clear, dash_manifest, hls_master}。再開ログ: {asset_id, outcome, reason, attempts, ts}。',
+    batchAvailable: 'batch コマンド: 利用可', batchUnavailable: 'batch コマンド: このインストールには含まれていません',
+    convLimits: '制限', convLimit1: '同時に実行できるジョブは 1 件です。', convLimit2: '待機列と実行中ジョブの状態はメモリ上です。再起動すると待機中の項目は消え、実行中だったジョブは「中断」として記録されます。出力・レポート・ジョブ記録・ログはディスクに残ります。', convLimit3: 'Clear HLS のコンテンツ ID は再利用できません。再変換は別の ID で解析し直します。',
+    convLoadFailed: '設定を読み込めませんでした。',
+    // errors
+    networkError: 'サーバーに接続できません。接続を確認してください。', requestError: 'リクエストを完了できませんでした。入力とログを確認してください。',
+    busyError: '別のジョブが実行中です。完了を待ってください。', assetExistsError: 'この出力名は使用済みです。一覧から開くか、別の出力名を指定してください。',
+    resultExistsError: 'このコンテンツの出力は作成済みです。再変換する場合は別の出力名で解析してください。', conflictError: '現在の状態と競合するため実行できませんでした。一覧を更新してください。',
+    runningDeleteError: '実行中のジョブは履歴から削除できません。', queuedError: 'このコンテンツはすでに待機列にあるか実行中です。', queuedErrorAsset: '{asset} はすでに待機列にあるか実行中です。', assetExistsErrorAsset: '{asset} は Clear HLS で使用済みの ID です。', assetNotFoundErrorAsset: '{asset} はカタログにありません。一覧を更新してください。', queueItemError: '待機列にありません。',
+    invalidError: '必須項目と値の形式を確認してください。', notFoundError: 'データが見つかりません。ページを更新してください。', expiredError: '再生セッションが期限切れです。再生確認を準備し直してください。', forbiddenError: 'この操作は許可されていません。',
+  };
+
+  var en = {
+    skipToContent: 'Skip to content', brandName: 'DRM Packaging Console', language: 'Language', close: 'Close', refresh: 'Refresh',
+    contents: 'Contents', listCount: '{n} items', listCountOne: '1 item', filterPlaceholder: 'Filter by ID or label', filterAria: 'Filter contents',
+    listEmpty: 'No contents yet. Start from "Add content".', listNone: 'No content matches the filter.', listLoadFailed: 'Could not load the list.', listTruncated: 'Older runs were not loaded (latest 500 only).',
+    addContent: 'Add content', rescan: 'Refresh the list', rescanned: 'List refreshed ({n} items). If a staged content is missing, check catalog-entry-skipped in the server log.', conventions: 'Settings and conventions', sectionsAria: 'Sections',
+    leaseIdle: 'No job running', leaseRunning: 'Running: {asset} · {kind}', leaseQueued: '{n} waiting',
+    kind_catalog: 'DASH CENC + HLS FairPlay', kind_hls: 'HLS (clear)', group_catalog: 'Existing DRM content (DASH CENC + HLS FairPlay → CBCS)', group_hls: 'Clear HLS (→ CBCS)', kind_convert: 'CBCS conversion', kind_analysis: 'Source analysis', kind_package: 'DRM packaging',
+    state_running: 'Running', state_succeeded: 'Succeeded', state_failed: 'Failed', state_interrupted: 'Interrupted',
+    cstate_ready: 'Not converted', cstate_running: 'Running', cstate_queued: 'Queued', cstate_packaged: 'Packaged', cstate_failed: 'Failed', cstate_analyzed: 'Analyzed', cstate_orphan: 'Entry removed',
+    orphanNotice: 'The catalog entry of this content is gone. Only its run records and logs are shown.', reportNoneOrphan: 'No report can be fetched without the catalog entry.',
+    emptyTitle: 'Select a content',
+    addTitle: 'Add content',
+    addCatalogTitle: 'Existing DRM content (DASH CENC + HLS FairPlay)', addCatalogHelp: 'Stage the DASH (CENC) manifest, the HLS (FairPlay) master, the segments and keys.env in one directory under the catalog root, then press "Refresh the list".',
+    addHlsTitle: 'Clear HLS (unencrypted HLS)', addHlsHelp: 'Analyzes the URL of a VOD master playlist and registers it. DRM parameters are entered at packaging time.',
+    sourceUrl: 'Master playlist URL', sourceUrlHelp: 'The URL is not stored.',
+    outputName: 'Output name (automatic, editable)', outputNameHelp: 'Becomes the output folder name (letters, digits, _ . -; cannot change later).', analyze: 'Start analysis',
+    analysisStarting: 'Starting analysis…', analyzing: 'Analyzing…', analysisLoading: 'Loading the analysis…',
+    analysisJobFailed: 'The analysis job failed. Check the log.', analysisUnavailable: 'This analysis is no longer available. Analyze again under another output name.',
+    convert: 'Start conversion', convertAgain: 'Convert again', convertStarting: 'Starting conversion…', converting: 'Converting…', convertStartFailed: 'Could not start the conversion.',
+    convertDone: 'Conversion finished ({elapsed}).', convertFailed: 'Conversion failed (exit code {code}, {elapsed}). Check the log.',
+    addToQueue: 'Add to queue', queueAddFailed: 'Could not add to the queue.',
+    viewReport: 'Detailed report', viewReportLabel: 'Detailed report for {asset}', openReportPage: 'Open the report on its own page', preview: 'Prepare playback', packageHls: 'Package for three DRMs',
+    secInput: 'Input', secTransform: 'Transformation', secRuns: 'Log', secReport: 'Report', secPlayback: 'Playback',
+    bulkSelected: '{n} selected', bulkQueue: 'Convert in order', bulkClear: 'Clear selection',
+    queuePending: 'Queue', queueRemove: 'Remove', queueRemoveLabel: 'Remove {asset} from the queue', queueSkipped: '{asset} was not run ({reason}).', queueAdded: 'Added {n} to the queue.', queueSkippedTitle: 'Not run', dismiss: 'Dismiss', dismissLabel: 'Dismiss the notice for {asset}',
+    'qreason_asset-not-found': 'no catalog entry', 'qreason_asset-already-exists': 'this ID is used by a clear-HLS content', 'qreason_job-launch-failed': 'the job could not be launched', 'qreason_catalog-scan-failed': 'the catalog could not be read',
+    inputEntry: 'Catalog entry', inputMpd: 'DASH manifest', inputHlsMaster: 'HLS master', inputKeys: 'Keys', inputKeysCatalog: 'The entry\'s keys.env (never shown here)',
+    inputHlsWhere: 'Analysis snapshot', inputHlsSnapshot: 'output/{id}/clear/source/ (the original URL is not stored)',
+    scheme: 'Protection scheme', prVersion: 'PlayReady version', prAlgid: 'PlayReady ALGID', drmState: 'DRM', drmStateExisting: 'yes — {scheme} ({systems}), HLS FairPlay', drmStateClear: 'none (clear)', muxing: 'muxing',
+    loading: 'Loading…', inspectLoadFailed: 'Could not load the manifest.',
+    analysisPass: 'The source passed inspection. Enter the DRM parameters to package it.', analysisRejected: 'This source cannot be packaged. Review the findings.', analysisPending: 'No analysis yet.',
+    audioSource: 'Audio source', audioSourceHelp: 'When several video variants carry muxed audio in one group, choose which one supplies the audio.', chooseAudio: 'Choose a source',
+    noTracks: 'No tracks.',
+    muxedAudio: 'Muxed audio', defaultTrack: 'Default',
+    colTrack: 'Track', colType: 'Type', colDetail: 'Detail', colCodec: 'Codec', colMuxing: 'Muxing', colBitrate: 'Bitrate', colSegments: 'Segments',
+    type_video: 'Video', type_audio: 'Audio', type_text: 'Subtitles', type_subtitle: 'Subtitles',
+    finding_fail: 'Error', finding_warn: 'Warning', finding_info: 'Info',
+    'finding_encrypted-source-unsupported': 'The source is already encrypted. Only unencrypted HLS is supported.',
+    'finding_live-unsupported': 'Live or event playlists are not supported. VOD only.',
+    'finding_discontinuity-unsupported': 'Sources with EXT-X-DISCONTINUITY are not supported.',
+    'finding_unsupported-container': 'Unsupported container (TS or fMP4 only).',
+    'finding_unsupported-source-track': 'The source contains an unsupported track.',
+    'finding_non-independent-video': 'Segments are not independent (each must start with a keyframe).',
+    'finding_source-not-allowed': 'This origin is not allowed. Check the host access profile.',
+    'finding_source-http-failed': 'Fetching the source failed (HTTP error).',
+    'finding_source-fetch-failed': 'Fetching the source failed.',
+    'finding_multiple-audio-group-selection-required': 'Muxed audio exists in several audio groups; it cannot be selected automatically.',
+    'finding_analysis-failed': 'The analysis job failed. Check the log.', 'finding_analysis-interrupted': 'The analysis job was interrupted.', 'finding_analysis-running': 'Analysis is still running.',
+    transformInput: 'Input:', transformOutput: 'Output:', inputExisting: 'existing DRM (DASH CENC + HLS FairPlay)', inputClear: 'clear HLS ({muxing})', outputsList: 'DASH CBCS (Widevine, PlayReady), HLS CBCS (FairPlay)', transformDetails: 'What is done, and the checks',
+    sampleValues: 'Fill sample values', sampleValuesNote: 'Synthetic values that show the format only (not real keys).',
+    transformCatalogPending: 'Converting performs the following and verifies each item on every rendition. Nothing is re-encoded.',
+    transformCatalogDone: 'The following was performed. Each item\'s verification comes from the report.',
+    transformHlsPending: 'Packaging with the DRM parameters below performs the following. Nothing is re-encoded.',
+    transformHlsDone: 'The following was performed. Each item\'s verification comes from the result report.',
+    transformHlsBlocked: 'Only a source that passed analysis can be packaged.',
+    rule_noReencode: 'Video and audio are not re-encoded (decrypt → CBCS re-encrypt is bit-identical)', rule_scheme: 'Scheme AES-CTR (cenc) → AES-CBC (cbcs); KID and content key unchanged',
+    rule_boundaries: 'Segment boundaries keep the source\'s 6 s; segment number origin reconciled', rule_iv: 'IV passed explicitly and equal to the existing HLS EXT-X-KEY IV=',
+    rule_playready: 'PlayReady PRO regenerated (v4.3.0.0, AESCBC, no CHECKSUM), identical in init segments and manifest', rule_widevineFairplay: 'Widevine PSSH and the FairPlay skd:// URI carried over unchanged',
+    rule_dashPatch: 'DASH manifest patched surgically (SegmentTemplate, URL structure and Representation ids unchanged)', rule_hlsPatch: 'HLS: TS references become fMP4 (.m4s) with EXT-X-MAP, audio groups merged, versions and segment counts unchanged',
+    rule_outOfScope: 'Out-of-scope tracks (VP9, subtitles) untouched', rule_conformance: 'Formal conformance (DASH-IF)',
+    rule_hlsNoReencode: 'Video and audio are stream-copied (no re-encode); timing, packet counts and decoded identity gated per segment', rule_hlsScheme: 'AES-CBC (cbcs) with the entered KID, key and IV; signaling verified in the output',
+    rule_hlsSignaling: 'Three DRM signalings: Widevine PSSH (entered), PlayReady PRO v4.3 AESCBC (regenerated), FairPlay skd:// (entered)', rule_hlsManifests: 'DASH MPD and HLS master/media playlists generated (segments listed explicitly)',
+    rule_hlsSubtitles: 'Subtitles (WebVTT / IMSC1) kept clear with their timing mapped', rule_hlsAudioChoice: 'The chosen audio source is recorded when a choice was required', rule_hlsEvidence: 'Real-license playback and conformance are separate checks (not verified by this tool)',
+    check_PASS: 'Pass', check_FAIL: 'Fail', check_SKIP: 'Not run', check_UNKNOWN: 'Unknown', checkPending: 'Not verified yet', checkHelpLabel: 'About {check}',
+    'check_6-4.framemd5': 'Every frame hash equal (ffmpeg framemd5)', 'check_6-2.audio-pcm-identity': 'Audio PCM identity', 'check_6-1.dash-scheme-cbcs': 'DASH scheme is cbcs',
+    'check_6-1.segment-duration': '6 s segments', 'check_6-1.boundary-agreement': 'Boundary timestamps agree', 'check_6-1.number-origin': 'Segment number origin',
+    'check_6-1.iv-agreement': 'tenc IV equals the configured IV', 'check_6-1.hls-iv-agreement': 'HLS IV= equals the configured IV', 'check_6-1.pssh-agreement': 'init pssh equals the manifest',
+    'check_6-1.dash-playready-sync': 'cenc:pssh and mspr:pro in sync', 'check_6-1.dash-widevine-unchanged': 'Widevine PSSH unchanged', 'check_6-1.dash-segmenttemplate-unchanged': 'SegmentTemplate unchanged',
+    'check_6-1.hls-segment-count': 'HLS segment counts equal', 'check_6-1.hls-version-unchanged': 'HLS versions unchanged', 'check_6-2.audio-consolidation-structure': 'Audio group merge structure', 'check_6-1.hls-content-gate': 'HLS content identity', 'check_6-1.hls-extinf': 'EXTINF agree',
+    'check_6-5.dash-out-of-scope-untouched': 'Out-of-scope AdaptationSets unchanged', 'check_6-5.hls-master-untouched': 'HLS master out-of-scope parts unchanged', 'check_6-6.dash-conformance': 'DASH-IF conformance',
+    'check_source-correspondence-pass': 'Source correspondence', 'check_timing-pass': 'Timing', 'check_decoded-identity-pass': 'Decoded identity', 'check_cbcs-signaling-pass': 'CBCS signaling',
+    'check_text-payload-pass': 'Subtitle payload', 'check_text-timing-map-pass': 'Subtitle timing map', 'check_selection-recorded': 'Selection recorded',
+    'help_6-4.framemd5': 'Compares the decrypted source stream with the CBCS output decrypted again, frame hash by frame hash (ffmpeg framemd5); every hash must be equal. Runs only after the 6-1 segment-duration, number-origin and boundary checks pass.',
+    'help_6-2.audio-pcm-identity': 'Decrypts each ts_AUDIO / fmp4_AUDIO pair of the HLS master, decodes both to PCM and requires them to be identical; this is what justifies merging the audio groups. Not run when there is no pair.',
+    'help_6-1.dash-scheme-cbcs': 'In every in-scope AdaptationSet of the output MPD, the ContentProtection value is cbcs and cenc:default_KID is unchanged.',
+    'help_6-1.segment-duration': 'Records that the Shaka Packager CBCS encryption exited successfully. Video is encrypted in one pass with the segment duration derived from the source manifest; audio whose AAC frames do not divide that duration is encrypted one source segment at a time. The output segment lengths themselves are compared by 6-1.boundary-agreement.',
+    'help_6-1.boundary-agreement': 'For each segment, the fragment metadata of the source and of the output at the same position (tfdt start time, trun sample count) must agree; compared segment by segment, never as a total.',
+    'help_6-1.number-origin': 'Renumbers the output segments to the source\'s startNumber origin and requires the output segment count to equal the source\'s.',
+    'help_6-1.iv-agreement': 'The constant IV in the output init segment\'s tenc box equals the configured IV. The value itself is never shown.',
+    'help_6-1.hls-iv-agreement': 'The existing HLS media playlists\' EXT-X-KEY IV= equals the configured IV; on a mismatch the rewrite stops.',
+    'help_6-1.pssh-agreement': 'Checked once per asset: every rendition\'s CBCS init segment contains the regenerated PlayReady pssh box byte for byte (the single generation the manifest\'s cenc:pssh / mspr:pro also come from). Because the check runs per asset, the per-rendition rows always read Not run.',
+    'help_6-1.dash-playready-sync': 'In every in-scope AdaptationSet, the PlayReady cenc:pssh equals the generated pssh box and mspr:pro the generated PRO (generated as v4.3.0.0, AESCBC, no CHECKSUM). Not run when no in-scope AdaptationSet carries PlayReady.',
+    'help_6-1.dash-widevine-unchanged': 'The Widevine cenc:pssh is unchanged from the source MPD in every AdaptationSet.',
+    'help_6-1.dash-segmenttemplate-unchanged': 'The five SegmentTemplate attributes of every in-scope AdaptationSet (timescale, duration, media, initialization, startNumber) are unchanged from the source.',
+    'help_6-1.hls-segment-count': 'Every mapped media playlist (video variants and fMP4 audio) has as many segments as its DASH rendition; a mismatch stops the rewrite.',
+    'help_6-1.hls-version-unchanged': 'The HLS master keeps its EXT-X-VERSION and the media playlists stay at VERSION:7.',
+    'help_6-2.audio-consolidation-structure': 'Every ts_AUDIO-N has an fmp4_AUDIO-N with the same number, and after the merge no #EXT-X-STREAM-INF AUDIO= points at a removed group; otherwise the rewrite stops.',
+    'help_6-1.hls-content-gate': 'Decrypts and decodes each existing (source) HLS fMP4 variant and requires it to equal the mapped DASH rendition\'s decrypted stream (framemd5 for video, PCM for audio). TS H.264 variants are not compared (their video is never decrypted); the row reads Pass when every compared variant matched and Not run only when none could be compared.',
+    'help_6-1.hls-extinf': 'Each retained EXTINF of every mapped media playlist is compared with the duration measured from the mapped DASH rendition\'s segments (tfdt differences): equal counts, all within 5 ms. Not run without a mapping.',
+    'help_6-5.dash-out-of-scope-untouched': 'Out-of-scope AdaptationSets (VP9 and the like) are string-identical to the source MPD.',
+    'help_6-5.hls-master-untouched': 'Compares the HLS master with the source line by line: the only lines that may disappear or appear are #EXT-X-STREAM-INF lines and the removed ts_AUDIO #EXT-X-MEDIA lines; every other source line must still be present unchanged. A changed STREAM-INF line is accepted as a whole; which attribute changed inside it is not compared (the rewrite only switches AUDIO=).',
+    'help_6-6.dash-conformance': 'Validation with the DASH-IF conformance tool. Not yet integrated, so it is recorded as not run.',
+    'help_source-correspondence-pass': 'Each source segment yields exactly one output segment, and adjacent output segments meet without a gap or an overlap.',
+    'help_timing-pass': 'Per segment, the packet count, PTS, DTS and durations after remuxing and after encryption equal the source\'s apart from the common offset.',
+    'help_decoded-identity-pass': 'Per segment, the encrypted output is decrypted again and decoded; its digest must equal the decoded source\'s. Every segment is decoded in full.',
+    'help_cbcs-signaling-pass': 'In the output init of every segment: scheme cbcs, KID and constant IV equal to the entered values, crypt pattern 1:9 for video and 0:0 for audio, and the Widevine and regenerated PlayReady pssh boxes present.',
+    'help_text-payload-pass': 'The subtitle content is carried over unchanged: IMSC1 segments are compared by packet hash; WebVTT cues are written as they are (only the timestamp map line is adjusted).',
+    'help_text-timing-map-pass': 'Subtitle timing is mapped with the same common offset as video and audio: IMSC1 packet timing is compared per segment; WebVTT X-TIMESTAMP-MAP lines are shifted uniformly.',
+    'help_selection-recorded': 'When several muxed audio copies shared a group and one was chosen (by the user, or automatically after all decoded to identical PCM), the others are recorded as not selected.',
+    drmHelp: 'Never stored in the browser; cleared after submission.', drmSystemsLabel: 'Target DRM',
+    kidLabel: 'KID (16-byte hex)', keyLabel: 'Content key (16-byte hex)', ivLabel: 'IV (16-byte hex)', psshLabel: 'Widevine PSSH (base64 or hex)', laUrlLabel: 'PlayReady LA_URL', fpsUriLabel: 'FairPlay skd:// URI',
+    showValues: 'Show values', hideValues: 'Hide values',
+    required: 'Required.', hexError: 'Enter 32 hexadecimal digits.', psshError: 'Enter the PSSH as base64 or hex.', laUrlError: 'Enter an https:// or http:// URL.', fpsError: 'Enter a URI starting with skd://.',
+    packaging: 'Packaging…', packageDone: 'Packaging finished ({elapsed}).', packageFailed: 'Packaging failed. Check the log.', packageInterrupted: 'Packaging was interrupted.',
+    reenterDrm: 'Re-enter the DRM parameters (they were cleared on submission).', resultLoading: 'Loading the result…', resultUnavailable: 'This result is no longer available (its output may have been removed or changed).', retryResult: 'Reload result',
+    runsEmpty: 'No runs yet.',
+    openLog: 'Log', logLive: 'Live', logReplay: 'Saved log', logLoading: 'Loading the log…', exitCode: 'Exit code {code}', timeUnknown: 'Unknown time',
+    logJson: 'JSON', logFormatted: 'Formatted', logDownload: 'Download', logExit: 'exit code {code}', logTruncated: 'partly omitted', toolOutputEmpty: 'no output',
+    logInterrupted: 'Part of the log was not received; counts and progress are indicative.',
+    strip_pending: 'Pending', strip_running: 'Running', strip_done: 'Done', strip_failed: 'Failed', strip_unknown: 'Unknown (log not received)',
+    stageStarting: 'Starting…', stageMerge: 'Merging segments', stageDecrypt: 'Decrypting', stageEncrypt: 'Encrypting (CBCS)', stageVerify: 'Verifying', stageManifest: 'Writing manifests', stageWorking: 'Working', stagePackaging: 'Packaging', stageAnalyzing: 'Analyzing',
+    outcomeSucceeded: 'Finished', outcomeInterrupted: 'Interrupted', outcomeFailed: 'Failed',
+    srcAnalysisStarted: 'Analysis started', srcPlaylistStarted: 'Loading playlist', srcSegmentDownloaded: 'Segment downloaded', srcProbeStarted: 'Inspecting segment', srcSegmentProbed: 'Segment inspected', srcPlaylistComplete: 'Playlist complete', srcAnalysisComplete: 'Analysis complete',
+    'log_job-progress': 'Working', 'log_track-started': 'Track packaging started', 'log_track-packaged': 'Track packaged', 'log_track-failed': 'Track packaging failed', 'log_packaging-complete': 'Packaging complete', 'log_packaging-failed': 'Packaging failed', 'log_analysis-complete': 'Analysis complete',
+    jobNotFound: 'Job not found. The server may have restarted. Start again.', jobUnreachable: 'Cannot verify the job status because the server is unreachable. Check the server and reload.',
+    jobStillRunning: 'Log connection lost; the job is still running on the server. Waiting…', serverRetrying: 'Cannot reach the server. Retrying…', logDropped: 'Log connection lost. Checking status…', jobLost: 'Unknown',
+    removeHistory: 'Remove from history', removeHistoryLabel: 'Remove the job of {asset} from history', historyHelp: 'Removing from history keeps the output files, analysis and logs.', deleteFailed: 'Could not remove from history.',
+    unitMinSec: '{m} min {s} s', unitSec: '{s} s',
+    reportTitle: 'Conversion report', backConsole: 'Back to the console', reportLoading: 'Loading report…', reportRetry: 'Reload', reportNotFound: 'Report not found. Check the result ID and the output directory.', reportUnavailable: 'The report could not be fetched (its output may have been removed or changed).',
+    reportNoneCatalog: 'The report is created when the conversion finishes.', reportNoneHls: 'The report is created when packaging finishes.',
+    reportIdentifier: 'Result ID', reportDate: 'Created', reportChecks: 'Checks', reportTracks: 'Track validation', reportSegments: 'Segment details', reportDisposition: 'Disposition',
+    reportComparison: 'Before/after playback comparison',
+    reportFullEnumeration: 'All renditions verified', reportRoundTrip: 'Decoded round-trip identity', reportIncomplete: 'Some checks were not run.', reportNotChecked: 'Not run',
+    reportEvidence: 'Scope of verification', evidence_packaging: 'Packaging', evidence_real_license: 'Real-license playback', evidence_conformance: 'Conformance', 'ev_measured-local': 'Measured locally', 'ev_not-verified': 'Not verified', ev_failed: 'Failed',
+    checksPass: 'Every check passed.', checksFail: 'Some checks did not pass.',
+    dashManifest: 'DASH MPD', hlsManifest: 'HLS master', pass: 'Pass',
+    kind: 'Kind', codec: 'Codec', container: 'Container', languageCol: 'Language', reportResolution: 'Resolution', reportBandwidth: 'Bandwidth (bit/s)', reportSourceCount: 'Source segments', reportOutputCount: 'Output segments', reportSegmentDuration: 'Segment duration (s)', reportDuration: 'Duration (s)',
+    source_index: 'Source', output_index: 'Output', timescale: 'Timescale', presentation_start: 'Start (ticks)', duration: 'Duration (ticks)', sample_count: 'Samples',
+    playbackHelp: 'Local playback with ClearKey, never a production license.', previewStarting: 'Preparing a playback session…', previewReady: 'Ready. Press play on either player.',
+    previewCredentialsHelp: 'No key context remains (for example after a server restart). Enter the KID and content key; they are not stored.', sessionUrlInvalid: 'The playback session returned an unusable URL; playback was not prepared.', previewCredentialsRejected: 'The entered KID or content key does not match this result. Check them and try again.', contentKey: 'Content key', playbackInfoFailed: 'Could not load playback details.',
+    before: 'Before', after: 'After (CBCS)', play: 'Play', autoAbr: 'Auto (ABR)', audioSuffix: '[audio]', subtitles: 'Subtitles', subtitlesOff: 'Off', subtitleUnavailable: 'This subtitle track is not available in this load.', renditionUnavailable: 'This rendition cannot play.',
+    oldRendition: 'Original rendition', newRendition: 'Packaged rendition', oldSubtitles: 'Original subtitles', newSubtitles: 'Packaged subtitles',
+    playerIdle: 'Stopped', playerLoading: 'Loading', playerPlaying: 'Playing', playerError: 'Error', keyRequesting: 'Requesting key', keyUsable: 'Key usable', keyError: 'Key error', errorDetail: 'Error', errorPrefix: 'Error:',
+    noManifest: 'No playable manifest.', autoplayBlocked: 'Autoplay was blocked. Press play on the video.', playFailed: 'Could not start playback',
+    encryptionComparison: 'Encryption comparison', field: 'Field',
+    convTitle: 'Settings and conventions',
+    convInstance: 'Instance', convCatalogRoot: 'Catalog root', convOutputRoot: 'Output root', convJobsDir: 'Job logs', convProfiles: 'Access profiles (clear HLS)', convProfilesNone: 'None configured (only the public HTTPS origin of the entered URL is allowed)', convAllowHttp: 'HTTP allowed', convConcurrency: 'Concurrency', convConcurrencyValue: '1 job (conversions, analyses and packaging share it)',
+    convInput: 'Input conventions', convInputNotes: 'asset_id uses letters, digits, _ . - and is unique in the catalog. keys.env sits outside download/. Entries with problems are left out of the list; the reason is in the server log.',
+    convClearHls: 'Clear HLS is analyzed from a URL, an output name and an access profile. DRM parameters are entered at packaging time and cleared after submission.',
+    convOutput: 'Output conventions', convServed: 'served', convPrivate: 'private', convOutputNotes: 'Only cbcs/ and manifests/ are served under /output/<asset_id>/. clear/ (decrypted copies or the source snapshot), _work/ and reports/ are never served.',
+    convLogs: 'Logs', convLogsNotes: 'Job logs record every external tool command with its arguments and its output, complete up to a bound with cuts marked. The key and IV are redacted in every form; the media itself is never recorded.',
+    convKeys: 'How keys are passed', convKeysPath: 'Path', convKeysHow: 'Keys', convKeysRow1a: 'Page · catalog', convKeysRow1b: 'The entry\'s keys.env (DRM_KID / DRM_KEY / DRM_IV), passed to the job as its own environment at launch; never shown on the page',
+    convKeysRow2a: 'Page · clear HLS', convKeysRow2b: 'Entered in the form at packaging time; not stored, cleared right after submission', convKeysRow3a: 'Bulk · catalog (batch CLI)', convKeysRow3b: '--key-provider file --key-file <jsonl> (mode 0600, outside the output root, one {asset_id, kid, key, iv} per line); it supplies KID / key / IV for dash-cenc and hls-clear items alike',
+    convKeysRow4a: 'Bulk · clear HLS (batch CLI)', convKeysRow4b: '<asset_id>.json (0600) under --hls-config-dir naming source_config (URL and policy) and drm_config (the Widevine PSSH, PlayReady LA_URL and FairPlay skd signaling only); KID / key / IV come from --key-file', convKeysRow5a: 'Key-server integration', convKeysRow5b: 'Not implemented',
+    convTreeMirror: '(manifests and segments mirrored by URL host + path)', convCmdKeys: 'KID / key / IV for every item (both kinds)', convCmdHls: 'source + signaling configs for hls-clear items',
+    convBulk: 'Bulk execution', convBulkHelp: 'In the page, select several catalog contents and choose "Convert in order": they enter a queue and convert one at a time (the queue lives in server memory and is dropped by a restart). Fleets and bulk clear HLS use the batch command:',
+    convBulkFormats: 'The work list and the resume log are JSON Lines whose first line is {"schema_version": "1"}. Work list: {asset_id, kind: dash-cenc | hls-clear, dash_manifest, hls_master}. Resume log: {asset_id, outcome, reason, attempts, ts}.',
+    batchAvailable: 'batch command: available', batchUnavailable: 'batch command: not included in this installation',
+    convLimits: 'Limits', convLimit1: 'One job runs at a time.', convLimit2: 'The queue and the running job\'s liveness are in memory: a restart drops queued items and records a job that was running as interrupted; outputs, reports, job records and logs stay on disk.', convLimit3: 'A clear-HLS content ID is never reused; to repackage, analyze again under another ID.',
+    convLoadFailed: 'Could not load the settings.',
+    networkError: 'Cannot reach the server. Check the connection.', requestError: 'The request could not be completed. Check the input and the log.',
+    busyError: 'Another job is running. Wait for it to finish.', assetExistsError: 'This output name is already in use. Open it from the list, or choose another output name.',
+    resultExistsError: 'Output already exists for this content. To repackage, analyze with another output name.', conflictError: 'This action conflicts with the current state. Refresh the list.',
+    runningDeleteError: 'A running job cannot be removed from history.', queuedError: 'This content is already queued or running.', queuedErrorAsset: '{asset} is already queued or running.', assetExistsErrorAsset: '{asset} is an ID used by a clear-HLS content.', assetNotFoundErrorAsset: '{asset} is not in the catalog. Refresh the list.', queueItemError: 'Not in the queue.',
+    invalidError: 'Check the required fields and their values.', notFoundError: 'Data not found. Refresh this page.', expiredError: 'The playback session expired. Prepare playback again.', forbiddenError: 'This action is not allowed.',
+  };
+
+  var messages = { ja: ja, en: en };
+  var language = 'en';
+  try { language = localStorage.getItem('drmr-language') === 'ja' ? 'ja' : 'en'; } catch (_e) { /* storage unavailable */ }
+
+  function has(key) { return Object.prototype.hasOwnProperty.call(messages[language], key) || Object.prototype.hasOwnProperty.call(ja, key); }
+  function t(key, values) {
+    var text = Object.prototype.hasOwnProperty.call(messages[language], key) ? messages[language][key] : (Object.prototype.hasOwnProperty.call(ja, key) ? ja[key] : key);
+    if (values) Object.keys(values).forEach(function (name) { text = text.split('{' + name + '}').join(String(values[name])); });
+    return text;
+  }
+  function keys(lang) { return Object.keys(messages[lang] || ja); }
+  function apply() {
+    document.documentElement.lang = language;
+    var nodes = document.querySelectorAll('[data-i18n]');
+    for (var i = 0; i < nodes.length; i++) nodes[i].textContent = t(nodes[i].dataset.i18n);
+    var aria = document.querySelectorAll('[data-i18n-aria]');
+    for (var j = 0; j < aria.length; j++) aria[j].setAttribute('aria-label', t(aria[j].dataset.i18nAria));
+    var placeholders = document.querySelectorAll('[data-i18n-placeholder]');
+    for (var k = 0; k < placeholders.length; k++) placeholders[k].setAttribute('placeholder', t(placeholders[k].dataset.i18nPlaceholder));
+    var select = document.getElementById('language-select');
+    if (select) select.value = language;
+  }
+  // Server error classes map to fixed sentences; allowlisted conflict codes are translated
+  function error(e) {
+    if (!e || !e.status) return t('networkError');
+    var code = e.body && e.body.error;
+    var asset = e.body && typeof e.body.asset_id === 'string' && /^[A-Za-z0-9_-][A-Za-z0-9._-]{0,200}$/.test(e.body.asset_id) ? e.body.asset_id : null;
+    if (e.status === 409) {
+      var conflicts = { 'asset-already-exists': 'assetExistsError', 'result-already-exists': 'resultExistsError', 'result-already-published': 'resultExistsError', 'job-busy': 'busyError', 'a conversion job is already running': 'busyError', 'job-running-cannot-delete': 'runningDeleteError', 'asset-already-queued': 'queuedError' };
+      if (code === 'asset-already-queued' && asset) return t('queuedErrorAsset', { asset: asset });
+      if (code === 'asset-already-exists' && asset) return t('assetExistsErrorAsset', { asset: asset });
+      return t(Object.prototype.hasOwnProperty.call(conflicts, code) ? conflicts[code] : 'conflictError');
+    }
+    if (e.status === 403) return t('forbiddenError');
+    if (e.status === 422 || e.status === 400 || e.status === 415) return t('invalidError');
+    if (e.status === 404) return code === 'queue-item-not-found' ? t('queueItemError') : code === 'asset-not-found' && asset ? t('assetNotFoundErrorAsset', { asset: asset }) : t('notFoundError');
+    if (e.status === 410) return t('expiredError');
+    return t('requestError');
+  }
+  function setLanguage(value) {
+    language = value === 'ja' ? 'ja' : 'en';
+    try { localStorage.setItem('drmr-language', language); } catch (_e) { /* storage unavailable */ }
+    apply();
+    document.dispatchEvent(new Event('workbench-language'));
+  }
+  function getLanguage() { return language; }
+
+  App.I18n = { t: t, has: has, keys: keys, apply: apply, error: error, setLanguage: setLanguage, getLanguage: getLanguage };
+})();

@@ -1,0 +1,1509 @@
+[
+ {
+  "input": "<a/>",
+  "tree": {
+   "attrib": [],
+   "children": [],
+   "tag": "a",
+   "tail": null,
+   "text": null
+  }
+ },
+ {
+  "input": "<a></a>",
+  "tree": {
+   "attrib": [],
+   "children": [],
+   "tag": "a",
+   "tail": null,
+   "text": null
+  }
+ },
+ {
+  "input": "<a b='1' c=\"2\"/>",
+  "tree": {
+   "attrib": [
+    [
+     "b",
+     "1"
+    ],
+    [
+     "c",
+     "2"
+    ]
+   ],
+   "children": [],
+   "tag": "a",
+   "tail": null,
+   "text": null
+  }
+ },
+ {
+  "input": "<a  b = \"1\"\n\tc=\"2\" >x</a >",
+  "tree": {
+   "attrib": [
+    [
+     "b",
+     "1"
+    ],
+    [
+     "c",
+     "2"
+    ]
+   ],
+   "children": [],
+   "tag": "a",
+   "tail": null,
+   "text": "x"
+  }
+ },
+ {
+  "input": "<a>x&lt;&gt;&amp;&apos;&quot;y</a>",
+  "tree": {
+   "attrib": [],
+   "children": [],
+   "tag": "a",
+   "tail": null,
+   "text": "x<>&'\"y"
+  }
+ },
+ {
+  "input": "<a b=\"&lt;&amp;&#65;&#x42;&#x1F600;\"/>",
+  "tree": {
+   "attrib": [
+    [
+     "b",
+     "<&AB😀"
+    ]
+   ],
+   "children": [],
+   "tag": "a",
+   "tail": null,
+   "text": null
+  }
+ },
+ {
+  "input": "<a>&#65;&#x42;&#x1f600;</a>",
+  "tree": {
+   "attrib": [],
+   "children": [],
+   "tag": "a",
+   "tail": null,
+   "text": "AB😀"
+  }
+ },
+ {
+  "input": "<a><![CDATA[<x>&amp;]]></a>",
+  "tree": {
+   "attrib": [],
+   "children": [],
+   "tag": "a",
+   "tail": null,
+   "text": "<x>&amp;"
+  }
+ },
+ {
+  "input": "<a>ab<!--c-->cd<b/>ef</a>",
+  "tree": {
+   "attrib": [],
+   "children": [
+    {
+     "attrib": [],
+     "children": [],
+     "tag": "b",
+     "tail": "ef",
+     "text": null
+    }
+   ],
+   "tag": "a",
+   "tail": null,
+   "text": "abcd"
+  }
+ },
+ {
+  "input": "<a>ab<?pi x?>cd<b/></a>",
+  "tree": {
+   "attrib": [],
+   "children": [
+    {
+     "attrib": [],
+     "children": [],
+     "tag": "b",
+     "tail": null,
+     "text": null
+    }
+   ],
+   "tag": "a",
+   "tail": null,
+   "text": "abcd"
+  }
+ },
+ {
+  "input": "<a>x<b>y</b>z<c/>w</a>",
+  "tree": {
+   "attrib": [],
+   "children": [
+    {
+     "attrib": [],
+     "children": [],
+     "tag": "b",
+     "tail": "z",
+     "text": "y"
+    },
+    {
+     "attrib": [],
+     "children": [],
+     "tag": "c",
+     "tail": "w",
+     "text": null
+    }
+   ],
+   "tag": "a",
+   "tail": null,
+   "text": "x"
+  }
+ },
+ {
+  "input": "<a xmlns=\"urn:x\"><b/><c xmlns=\"\"/></a>",
+  "tree": {
+   "attrib": [],
+   "children": [
+    {
+     "attrib": [],
+     "children": [],
+     "tag": "{urn:x}b",
+     "tail": null,
+     "text": null
+    },
+    {
+     "attrib": [],
+     "children": [],
+     "tag": "c",
+     "tail": null,
+     "text": null
+    }
+   ],
+   "tag": "{urn:x}a",
+   "tail": null,
+   "text": null
+  }
+ },
+ {
+  "input": "<p:a xmlns:p=\"urn:p\" p:x=\"1\" y=\"2\"><p:b/></p:a>",
+  "tree": {
+   "attrib": [
+    [
+     "{urn:p}x",
+     "1"
+    ],
+    [
+     "y",
+     "2"
+    ]
+   ],
+   "children": [
+    {
+     "attrib": [],
+     "children": [],
+     "tag": "{urn:p}b",
+     "tail": null,
+     "text": null
+    }
+   ],
+   "tag": "{urn:p}a",
+   "tail": null,
+   "text": null
+  }
+ },
+ {
+  "input": "<p:a p:x=\"1\" xmlns:p=\"urn:p\"/>",
+  "tree": {
+   "attrib": [
+    [
+     "{urn:p}x",
+     "1"
+    ]
+   ],
+   "children": [],
+   "tag": "{urn:p}a",
+   "tail": null,
+   "text": null
+  }
+ },
+ {
+  "input": "<a xmlns:p=\"urn:p\"><b xmlns:p=\"urn:q\" p:z=\"3\"/></a>",
+  "tree": {
+   "attrib": [],
+   "children": [
+    {
+     "attrib": [
+      [
+       "{urn:q}z",
+       "3"
+      ]
+     ],
+     "children": [],
+     "tag": "b",
+     "tail": null,
+     "text": null
+    }
+   ],
+   "tag": "a",
+   "tail": null,
+   "text": null
+  }
+ },
+ {
+  "input": "<a xml:lang=\"en\"/>",
+  "tree": {
+   "attrib": [
+    [
+     "{http://www.w3.org/XML/1998/namespace}lang",
+     "en"
+    ]
+   ],
+   "children": [],
+   "tag": "a",
+   "tail": null,
+   "text": null
+  }
+ },
+ {
+  "input": "<a xmlns:xml=\"http://www.w3.org/XML/1998/namespace\"/>",
+  "tree": {
+   "attrib": [],
+   "children": [],
+   "tag": "a",
+   "tail": null,
+   "text": null
+  }
+ },
+ {
+  "input": "<a>x\r\ny\rz\n</a>",
+  "tree": {
+   "attrib": [],
+   "children": [],
+   "tag": "a",
+   "tail": null,
+   "text": "x\ny\nz\n"
+  }
+ },
+ {
+  "input": "<a b=\"\t\n\r x\r\ny\"/>",
+  "tree": {
+   "attrib": [
+    [
+     "b",
+     "    x y"
+    ]
+   ],
+   "children": [],
+   "tag": "a",
+   "tail": null,
+   "text": null
+  }
+ },
+ {
+  "input": "<a b=\"&#10;&#9;&#13;x\"/>",
+  "tree": {
+   "attrib": [
+    [
+     "b",
+     "\n\t\rx"
+    ]
+   ],
+   "children": [],
+   "tag": "a",
+   "tail": null,
+   "text": null
+  }
+ },
+ {
+  "input": "﻿<a/>",
+  "tree": {
+   "attrib": [],
+   "children": [],
+   "tag": "a",
+   "tail": null,
+   "text": null
+  }
+ },
+ {
+  "input": "<?xml version=\"1.0\"?><a/>",
+  "tree": {
+   "attrib": [],
+   "children": [],
+   "tag": "a",
+   "tail": null,
+   "text": null
+  }
+ },
+ {
+  "input": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<a/>",
+  "tree": {
+   "attrib": [],
+   "children": [],
+   "tag": "a",
+   "tail": null,
+   "text": null
+  }
+ },
+ {
+  "input": "<?xml version='1.0' encoding='utf-8' standalone='yes'?><a/>",
+  "tree": {
+   "attrib": [],
+   "children": [],
+   "tag": "a",
+   "tail": null,
+   "text": null
+  }
+ },
+ {
+  "input": "<?xml version=\"1.0\" standalone=\"no\"?>\n<a/>\n",
+  "tree": {
+   "attrib": [],
+   "children": [],
+   "tag": "a",
+   "tail": null,
+   "text": null
+  }
+ },
+ {
+  "input": "<?xml version=\"1.1\"?><a/>",
+  "tree": {
+   "attrib": [],
+   "children": [],
+   "tag": "a",
+   "tail": null,
+   "text": null
+  }
+ },
+ {
+  "input": "<?xml version=\"1.0\" encoding=\"foo\"?><a/>",
+  "tree": {
+   "attrib": [],
+   "children": [],
+   "tag": "a",
+   "tail": null,
+   "text": null
+  }
+ },
+ {
+  "input": "<?xml version=\"1.0\" encoding=\"x-y_z.1\"?><a/>",
+  "tree": {
+   "attrib": [],
+   "children": [],
+   "tag": "a",
+   "tail": null,
+   "text": null
+  }
+ },
+ {
+  "input": "<!-- c --><?pi?>\n<a/><!-- d -->\n<?e f?>\n",
+  "tree": {
+   "attrib": [],
+   "children": [],
+   "tag": "a",
+   "tail": null,
+   "text": null
+  }
+ },
+ {
+  "input": "<a>]] ]></a>",
+  "tree": {
+   "attrib": [],
+   "children": [],
+   "tag": "a",
+   "tail": null,
+   "text": "]] ]>"
+  }
+ },
+ {
+  "input": "<a>></a>",
+  "tree": {
+   "attrib": [],
+   "children": [],
+   "tag": "a",
+   "tail": null,
+   "text": ">"
+  }
+ },
+ {
+  "input": "<a b=\">\"/>",
+  "tree": {
+   "attrib": [
+    [
+     "b",
+     ">"
+    ]
+   ],
+   "children": [],
+   "tag": "a",
+   "tail": null,
+   "text": null
+  }
+ },
+ {
+  "input": "<é ü=\"ö\">日本</é>",
+  "tree": {
+   "attrib": [
+    [
+     "ü",
+     "ö"
+    ]
+   ],
+   "children": [],
+   "tag": "é",
+   "tail": null,
+   "text": "日本"
+  }
+ },
+ {
+  "input": "<a> �𐀀</a>",
+  "tree": {
+   "attrib": [],
+   "children": [],
+   "tag": "a",
+   "tail": null,
+   "text": " �𐀀"
+  }
+ },
+ {
+  "input": "<a>-- - --></a>",
+  "tree": {
+   "attrib": [],
+   "children": [],
+   "tag": "a",
+   "tail": null,
+   "text": "-- - -->"
+  }
+ },
+ {
+  "input": "<a><!-- a - b --></a>",
+  "tree": {
+   "attrib": [],
+   "children": [],
+   "tag": "a",
+   "tail": null,
+   "text": null
+  }
+ },
+ {
+  "input": "<a><?pi?></a>",
+  "tree": {
+   "attrib": [],
+   "children": [],
+   "tag": "a",
+   "tail": null,
+   "text": null
+  }
+ },
+ {
+  "input": "<a><?pi   ?></a>",
+  "tree": {
+   "attrib": [],
+   "children": [],
+   "tag": "a",
+   "tail": null,
+   "text": null
+  }
+ },
+ {
+  "input": "<a:b xmlns:a=\"urn:a\"></a:b>",
+  "tree": {
+   "attrib": [],
+   "children": [],
+   "tag": "{urn:a}b",
+   "tail": null,
+   "text": null
+  }
+ },
+ {
+  "input": "<_a-b.c_1/>",
+  "tree": {
+   "attrib": [],
+   "children": [],
+   "tag": "_a-b.c_1",
+   "tail": null,
+   "text": null
+  }
+ },
+ {
+  "input": "<a b.c-d_e=\"1\"/>",
+  "tree": {
+   "attrib": [
+    [
+     "b.c-d_e",
+     "1"
+    ]
+   ],
+   "children": [],
+   "tag": "a",
+   "tail": null,
+   "text": null
+  }
+ },
+ {
+  "input": "<a\n/>",
+  "tree": {
+   "attrib": [],
+   "children": [],
+   "tag": "a",
+   "tail": null,
+   "text": null
+  }
+ },
+ {
+  "input": "<a/>\n\n",
+  "tree": {
+   "attrib": [],
+   "children": [],
+   "tag": "a",
+   "tail": null,
+   "text": null
+  }
+ },
+ {
+  "input": "\n\n<a/>",
+  "tree": {
+   "attrib": [],
+   "children": [],
+   "tag": "a",
+   "tail": null,
+   "text": null
+  }
+ },
+ {
+  "input": "<a>\t</a>",
+  "tree": {
+   "attrib": [],
+   "children": [],
+   "tag": "a",
+   "tail": null,
+   "text": "\t"
+  }
+ },
+ {
+  "input": "<a><b/>\n<c/>\n</a>",
+  "tree": {
+   "attrib": [],
+   "children": [
+    {
+     "attrib": [],
+     "children": [],
+     "tag": "b",
+     "tail": "\n",
+     "text": null
+    },
+    {
+     "attrib": [],
+     "children": [],
+     "tag": "c",
+     "tail": "\n",
+     "text": null
+    }
+   ],
+   "tag": "a",
+   "tail": null,
+   "text": null
+  }
+ },
+ {
+  "input": "<a xmlns=\"\">x</a>",
+  "tree": {
+   "attrib": [],
+   "children": [],
+   "tag": "a",
+   "tail": null,
+   "text": "x"
+  }
+ },
+ {
+  "input": "<a><![CDATA[]]]]></a>",
+  "tree": {
+   "attrib": [],
+   "children": [],
+   "tag": "a",
+   "tail": null,
+   "text": "]]"
+  }
+ },
+ {
+  "input": "<a><![CDATA[x]y]]z]]></a>",
+  "tree": {
+   "attrib": [],
+   "children": [],
+   "tag": "a",
+   "tail": null,
+   "text": "x]y]]z"
+  }
+ },
+ {
+  "input": "<a><![CDATA[a\r\nb\rc]]></a>",
+  "tree": {
+   "attrib": [],
+   "children": [],
+   "tag": "a",
+   "tail": null,
+   "text": "a\nb\nc"
+  }
+ },
+ {
+  "input": "<a xmlns:p='urn:p' p:b='1' c=\"2\" p:d='3'/>",
+  "tree": {
+   "attrib": [
+    [
+     "{urn:p}b",
+     "1"
+    ],
+    [
+     "c",
+     "2"
+    ],
+    [
+     "{urn:p}d",
+     "3"
+    ]
+   ],
+   "children": [],
+   "tag": "a",
+   "tail": null,
+   "text": null
+  }
+ },
+ {
+  "input": "<a xmlnsfoo=\"1\" xmlns:p=\"u\" b=\"2\"/>",
+  "tree": {
+   "attrib": [
+    [
+     "xmlnsfoo",
+     "1"
+    ],
+    [
+     "b",
+     "2"
+    ]
+   ],
+   "children": [],
+   "tag": "a",
+   "tail": null,
+   "text": null
+  }
+ },
+ {
+  "input": "<a>😀</a>",
+  "tree": {
+   "attrib": [],
+   "children": [],
+   "tag": "a",
+   "tail": null,
+   "text": "😀"
+  }
+ },
+ {
+  "input": "<a b=\"😀\"/>",
+  "tree": {
+   "attrib": [
+    [
+     "b",
+     "😀"
+    ]
+   ],
+   "children": [],
+   "tag": "a",
+   "tail": null,
+   "text": null
+  }
+ },
+ {
+  "error": "no element found: line 1, column 0",
+  "input": ""
+ },
+ {
+  "error": "no element found: line 1, column 1",
+  "input": " "
+ },
+ {
+  "error": "no element found: line 1, column 3",
+  "input": "<a>"
+ },
+ {
+  "error": "no element found: line 1, column 6",
+  "input": "<a><b>"
+ },
+ {
+  "error": "no element found: line 1, column 7",
+  "input": "<a>text"
+ },
+ {
+  "error": "mismatched tag: line 1, column 8",
+  "input": "<a><b></a>"
+ },
+ {
+  "error": "mismatched tag: line 1, column 5",
+  "input": "<a></b>"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 1",
+  "input": "</a>"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 8",
+  "input": "<a></a></b>"
+ },
+ {
+  "error": "junk after document element: line 1, column 4",
+  "input": "<a/><b/>"
+ },
+ {
+  "error": "junk after document element: line 1, column 8",
+  "input": "<a>x</a>junk"
+ },
+ {
+  "error": "junk after document element: line 2, column 2",
+  "input": "<a>x</a>\n  junk"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 4",
+  "input": "<a/>&amp;"
+ },
+ {
+  "error": "unclosed token: line 1, column 4",
+  "input": "<a/><!-- x"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 1",
+  "input": "x<a/>"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 1",
+  "input": "1<a/>"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 0",
+  "input": "&amp;<a/>"
+ },
+ {
+  "error": "syntax error: line 1, column 11",
+  "input": "<!-- x --> x <a/>"
+ },
+ {
+  "error": "unclosed token: line 1, column 0",
+  "input": "<a"
+ },
+ {
+  "error": "unclosed token: line 1, column 0",
+  "input": "<a b"
+ },
+ {
+  "error": "unclosed token: line 1, column 0",
+  "input": "<a b="
+ },
+ {
+  "error": "unclosed token: line 1, column 0",
+  "input": "<a b=\"1"
+ },
+ {
+  "error": "unclosed token: line 1, column 0",
+  "input": "<a b=\"1\""
+ },
+ {
+  "error": "unclosed token: line 1, column 0",
+  "input": "<a b=\"1\"/"
+ },
+ {
+  "error": "unclosed token: line 1, column 3",
+  "input": "<a><!--"
+ },
+ {
+  "error": "unclosed token: line 1, column 3",
+  "input": "<a><!-- x"
+ },
+ {
+  "error": "unclosed token: line 1, column 3",
+  "input": "<a><!-- x -"
+ },
+ {
+  "error": "unclosed CDATA section: line 1, column 13",
+  "input": "<a><![CDATA[x"
+ },
+ {
+  "error": "unclosed CDATA section: line 1, column 13",
+  "input": "<a><![CDATA[x]]"
+ },
+ {
+  "error": "unclosed CDATA section: line 1, column 13",
+  "input": "<a><![CDATA[x]"
+ },
+ {
+  "error": "unclosed CDATA section: line 1, column 13",
+  "input": "<a><![CDATA[x\r"
+ },
+ {
+  "error": "unclosed token: line 1, column 3",
+  "input": "<a><?pi"
+ },
+ {
+  "error": "unclosed token: line 1, column 3",
+  "input": "<a><?pi x"
+ },
+ {
+  "error": "unclosed token: line 1, column 3",
+  "input": "<a>&amp"
+ },
+ {
+  "error": "unclosed token: line 1, column 3",
+  "input": "<a>&#"
+ },
+ {
+  "error": "unclosed token: line 1, column 3",
+  "input": "<a>&#x"
+ },
+ {
+  "error": "unclosed token: line 1, column 3",
+  "input": "<a>&"
+ },
+ {
+  "error": "unclosed token: line 1, column 3",
+  "input": "<a></a"
+ },
+ {
+  "error": "unclosed token: line 1, column 3",
+  "input": "<a></"
+ },
+ {
+  "error": "unclosed token: line 1, column 0",
+  "input": "<?xml version=\"1.0\""
+ },
+ {
+  "error": "unclosed token: line 1, column 0",
+  "input": "<?xml"
+ },
+ {
+  "error": "duplicate attribute: line 1, column 9",
+  "input": "<a x=\"1\" x=\"2\"/>"
+ },
+ {
+  "error": "duplicate attribute: line 1, column 15",
+  "input": "<a x=\"1\" y=\"2\" x=\"3\"/>"
+ },
+ {
+  "error": "duplicate attribute: line 1, column 0",
+  "input": "<a xmlns:p=\"u\" xmlns:q=\"u\" p:x=\"1\" q:x=\"2\"/>"
+ },
+ {
+  "error": "duplicate attribute: line 1, column 23",
+  "input": "<a xmlns:p=\"u\" p:x=\"1\" p:x=\"2\"/>"
+ },
+ {
+  "error": "undefined entity: line 1, column 3",
+  "input": "<a>&nbsp;</a>"
+ },
+ {
+  "error": "undefined entity: line 1, column 0",
+  "input": "<a b=\"&nbsp;\"/>"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 3",
+  "input": "<a>\u0001</a>"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 6",
+  "input": "<a b=\"\u0001\"/>"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 3",
+  "input": "<a>￾</a>"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 3",
+  "input": "<a>￿</a>"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 6",
+  "input": "<a b=\"<\"/>"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 9",
+  "input": "<a b=\"a&b\"/>"
+ },
+ {
+  "error": "reference to invalid character number: line 1, column 6",
+  "input": "<a b=\"&#0;\"/>"
+ },
+ {
+  "error": "unbound prefix: line 1, column 3",
+  "input": "<a><p:b/></a>"
+ },
+ {
+  "error": "unbound prefix: line 1, column 0",
+  "input": "<a p:x=\"1\"/>"
+ },
+ {
+  "error": "unbound prefix: line 1, column 0",
+  "input": "<p:a/>"
+ },
+ {
+  "error": "unbound prefix: line 4, column 0",
+  "input": "\n\n  <a>\n<b c=\"d\" p:x=\"1\"/></a>"
+ },
+ {
+  "error": "unbound prefix: line 1, column 4",
+  "input": "<a>é<p:b/></a>"
+ },
+ {
+  "error": "mismatched tag: line 1, column 8",
+  "input": "<a>ééé</b>"
+ },
+ {
+  "error": "mismatched tag: line 1, column 6",
+  "input": "<a>😀</b>"
+ },
+ {
+  "error": "mismatched tag: line 3, column 5",
+  "input": "<a>\r\n\r\n<b></a>"
+ },
+ {
+  "error": "mismatched tag: line 3, column 5",
+  "input": "<a>\r\r<b></a>"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 5",
+  "input": "<a b=1/>"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 5",
+  "input": "<a b=/>"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 4",
+  "input": "<a b\"1\"/>"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 9",
+  "input": "<a b =\"1\"c=\"2\"/>"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 8",
+  "input": "<a b=\"1\"c=\"2\"/>"
+ },
+ {
+  "error": "unclosed token: line 1, column 0",
+  "input": "<a b='1\"/>"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 3",
+  "input": "<a/ >"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 9",
+  "input": "<a b=\"1\"/ >"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 12",
+  "input": "<a><!-- x -- y --></a>"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 12",
+  "input": "<a><!-- x ---></a>"
+ },
+ {
+  "input": "<a><!--- x --></a>",
+  "tree": {
+   "attrib": [],
+   "children": [],
+   "tag": "a",
+   "tail": null,
+   "text": null
+  }
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 5",
+  "input": "<a>]]></a>"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 6",
+  "input": "<a>x]]>y</a>"
+ },
+ {
+  "error": "must not undeclare prefix: line 1, column 0",
+  "input": "<a xmlns:p=\"\"/>"
+ },
+ {
+  "input": "<a xmlns=\"\"/>",
+  "tree": {
+   "attrib": [],
+   "children": [],
+   "tag": "a",
+   "tail": null,
+   "text": null
+  }
+ },
+ {
+  "error": "reserved prefix (xml) must not be undeclared or bound to another namespace name: line 1, column 0",
+  "input": "<a xmlns:xml=\"u\"/>"
+ },
+ {
+  "error": "reserved prefix (xmlns) must not be declared or undeclared: line 1, column 0",
+  "input": "<a xmlns:xmlns=\"u\"/>"
+ },
+ {
+  "error": "prefix must not be bound to one of the reserved namespace names: line 1, column 0",
+  "input": "<a xmlns:p=\"http://www.w3.org/XML/1998/namespace\"/>"
+ },
+ {
+  "error": "prefix must not be bound to one of the reserved namespace names: line 1, column 0",
+  "input": "<a xmlns:p=\"http://www.w3.org/2000/xmlns/\"/>"
+ },
+ {
+  "error": "prefix must not be bound to one of the reserved namespace names: line 1, column 0",
+  "input": "<a xmlns=\"http://www.w3.org/XML/1998/namespace\"/>"
+ },
+ {
+  "error": "prefix must not be bound to one of the reserved namespace names: line 1, column 0",
+  "input": "<a xmlns=\"http://www.w3.org/2000/xmlns/\"/>"
+ },
+ {
+  "error": "unbound prefix: line 1, column 0",
+  "input": "<xmlns:a/>"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 9",
+  "input": "<a xmlns:=\"u\"/>"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 5",
+  "input": "<a b:=\"1\"/>"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 3",
+  "input": "<a :b=\"1\"/>"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 1",
+  "input": "<:a/>"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 3",
+  "input": "<a:/>"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 4",
+  "input": "<a:b:c/>"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 6",
+  "input": "<a b:c:d=\"1\" xmlns:b=\"u\"/>"
+ },
+ {
+  "error": "XML or text declaration not at start of entity: line 1, column 1",
+  "input": " <?xml version=\"1.0\"?><a/>"
+ },
+ {
+  "error": "XML or text declaration not at start of entity: line 2, column 0",
+  "input": "\n<?xml version=\"1.0\"?><a/>"
+ },
+ {
+  "error": "junk after document element: line 1, column 4",
+  "input": "<a/><?xml version=\"1.0\"?>"
+ },
+ {
+  "error": "XML or text declaration not at start of entity: line 1, column 3",
+  "input": "<a><?xml version=\"1.0\"?></a>"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 8",
+  "input": "<a><?XML x?></a>"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 8",
+  "input": "<a><?xMl x?></a>"
+ },
+ {
+  "input": "<a><?xml-stylesheet x?></a>",
+  "tree": {
+   "attrib": [],
+   "children": [],
+   "tag": "a",
+   "tail": null,
+   "text": null
+  }
+ },
+ {
+  "error": "XML declaration not well-formed: line 1, column 32",
+  "input": "<?xml version=\"1.0\" standalone=\"maybe\"?><a/>"
+ },
+ {
+  "error": "XML declaration not well-formed: line 1, column 30",
+  "input": "<?xml version=\"1.0\" encoding=\"\"?><a/>"
+ },
+ {
+  "error": "XML declaration not well-formed: line 1, column 6",
+  "input": "<?xml encoding=\"utf-8\"?><a/>"
+ },
+ {
+  "error": "XML declaration not well-formed: line 1, column 19",
+  "input": "<?xml version=\"1.0\"encoding=\"utf-8\"?><a/>"
+ },
+ {
+  "input": "<?xml version=\"1.0\" ?><a/>",
+  "tree": {
+   "attrib": [],
+   "children": [],
+   "tag": "a",
+   "tail": null,
+   "text": null
+  }
+ },
+ {
+  "input": "<?xml version = \"1.0\" ?><a/>",
+  "tree": {
+   "attrib": [],
+   "children": [],
+   "tag": "a",
+   "tail": null,
+   "text": null
+  }
+ },
+ {
+  "error": "XML declaration not well-formed: line 1, column 20",
+  "input": "<?xml version=\"1.0\" foo=\"bar\"?><a/>"
+ },
+ {
+  "error": "XML declaration not well-formed: line 1, column 18",
+  "input": "<?xml version=\"abc def\"?><a/>"
+ },
+ {
+  "error": "XML declaration not well-formed: line 1, column 5",
+  "input": "<?xml?><a/>"
+ },
+ {
+  "error": "XML declaration not well-formed: line 1, column 5",
+  "input": "<?xml ?><a/>"
+ },
+ {
+  "error": "XML declaration not well-formed: line 1, column 30",
+  "input": "<?xml version=\"1.0\" encoding=\"1x\"?><a/>"
+ },
+ {
+  "input": "<?xml version=\"1.0\" standalone=\"yes\" ?><a/>",
+  "tree": {
+   "attrib": [],
+   "children": [],
+   "tag": "a",
+   "tail": null,
+   "text": null
+  }
+ },
+ {
+  "error": "XML declaration not well-formed: line 1, column 37",
+  "input": "<?xml version=\"1.0\" standalone=\"yes\" x?><a/>"
+ },
+ {
+  "error": "XML declaration not well-formed: line 1, column 15",
+  "input": "<?xml version=\"é\"?><a/>"
+ },
+ {
+  "error": "reference to invalid character number: line 1, column 3",
+  "input": "<a>&#0;</a>"
+ },
+ {
+  "error": "reference to invalid character number: line 1, column 3",
+  "input": "<a>&#x110000;</a>"
+ },
+ {
+  "error": "reference to invalid character number: line 1, column 3",
+  "input": "<a>&#xD800;</a>"
+ },
+ {
+  "error": "reference to invalid character number: line 1, column 3",
+  "input": "<a>&#xFFFE;</a>"
+ },
+ {
+  "error": "reference to invalid character number: line 1, column 3",
+  "input": "<a>&#1;</a>"
+ },
+ {
+  "input": "<a>&#9;&#xA;&#xD;</a>",
+  "tree": {
+   "attrib": [],
+   "children": [],
+   "tag": "a",
+   "tail": null,
+   "text": "\t\n\r"
+  }
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 5",
+  "input": "<a>&#;</a>"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 6",
+  "input": "<a>&#x;</a>"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 6",
+  "input": "<a>&#xZZ;</a>"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 5",
+  "input": "<a>&#X41;</a>"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 7",
+  "input": "<a>&#12a;</a>"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 4",
+  "input": "<a>&;</a>"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 4",
+  "input": "<a>& ;</a>"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 4",
+  "input": "<a>&1a;</a>"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 5",
+  "input": "<a>&a b;</a>"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 7",
+  "input": "<a>&amp</a>"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 5",
+  "input": "<a>&a:b;</a>"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 5",
+  "input": "<a></ a>"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 1",
+  "input": "< a/>"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 1",
+  "input": "<1a/>"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 4",
+  "input": "<a><1/></a>"
+ },
+ {
+  "error": "syntax error: line 1, column 0",
+  "input": "<!doctype a><a/>"
+ },
+ {
+  "error": "syntax error: line 1, column 0",
+  "input": "<!ELEMENT a><a/>"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 5",
+  "input": "<a><!x></a>"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 10",
+  "input": "<a><![CDAT[x]]></a>"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 6",
+  "input": "<a><!-x--></a>"
+ },
+ {
+  "error": "junk after document element: line 1, column 9",
+  "input": "<a>x</a >y"
+ },
+ {
+  "error": "unbound prefix: line 1, column 0",
+  "input": "<a b=\"1\" b:c=\"2\"/>"
+ },
+ {
+  "input": "<a xmlns:b=\"u\" b:c=\"2\" c=\"3\"/>",
+  "tree": {
+   "attrib": [
+    [
+     "{u}c",
+     "2"
+    ],
+    [
+     "c",
+     "3"
+    ]
+   ],
+   "children": [],
+   "tag": "a",
+   "tail": null,
+   "text": null
+  }
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 1",
+  "input": "<𐀀/>"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 2",
+  "input": "<a𐀀/>"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 4",
+  "input": "<a b𐀀=\"1\"/>"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 3",
+  "input": "<a>\u0000</a>"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 3",
+  "input": "<a>\u000b</a>"
+ },
+ {
+  "error": "no element found: line 1, column 4",
+  "input": "﻿<a>"
+ },
+ {
+  "error": "no element found: line 1, column 1",
+  "input": "﻿"
+ },
+ {
+  "error": "no element found: line 4, column 0",
+  "input": "<a>\n\n\n"
+ },
+ {
+  "error": "no element found: line 2, column 0",
+  "input": "<a>\r\n"
+ },
+ {
+  "error": "not well-formed (invalid token): line 2, column 0",
+  "input": "<a b=\"\r\n<\"/>"
+ },
+ {
+  "error": "undefined entity: line 3, column 0",
+  "input": "<a>\r\n\r\n&x;</a>"
+ },
+ {
+  "error": "undefined entity: line 2, column 2",
+  "input": "<a>\n𐀀&x;</a>"
+ },
+ {
+  "error": "syntax error: line 1, column 0",
+  "input": "<a xmlns:p=\"a}b\"/>"
+ },
+ {
+  "error": "syntax error: line 1, column 0",
+  "input": "<a xmlns=\"a}b\"/>"
+ },
+ {
+  "error": "syntax error: line 1, column 0",
+  "input": "<a xmlns:xml=\"a}b\"/>"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 8",
+  "input": "<a><?pi \u0001?></a>"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 8",
+  "input": "<a><!-- \u0001 --></a>"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 12",
+  "input": "<a><![CDATA[\u0001]]></a>"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 6",
+  "input": "<a><?p:i?></a>"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 8",
+  "input": "<a><?pi?x?></a>"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 5",
+  "input": "<a><??></a>"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 5",
+  "input": "<a><?1?></a>"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 17",
+  "input": "<a>&#x41;&#65;&lt</a>"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 20",
+  "input": "<a b=\"&#x41;&#65;&lt\"/>"
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 4",
+  "input": "<a/>\u0001"
+ },
+ {
+  "error": "junk after document element: line 1, column 4",
+  "input": "<a/>]]>"
+ },
+ {
+  "error": "junk after document element: line 1, column 4",
+  "input": "<a/>'x'"
+ },
+ {
+  "error": "unclosed token: line 1, column 4",
+  "input": "<a/>'x"
+ },
+ {
+  "error": "junk after document element: line 1, column 4",
+  "input": "<a/>("
+ },
+ {
+  "error": "unclosed token: line 1, column 4",
+  "input": "<a/>\""
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 4",
+  "input": "<a/>="
+ },
+ {
+  "error": "not well-formed (invalid token): line 1, column 0",
+  "input": "\u0001<a/>"
+ },
+ {
+  "error": "syntax error: line 1, column 0",
+  "input": ">"
+ },
+ {
+  "error": "syntax error: line 1, column 0",
+  "input": "[<a/>"
+ },
+ {
+  "error": "syntax error: line 1, column 0",
+  "input": "\"x\" <a/>"
+ },
+ {
+  "error": "unclosed token: line 2, column 0",
+  "input": "<!--x-->\n<!--"
+ },
+ {
+  "error": "junk after document element: line 1, column 11",
+  "input": "<a b='1' />x"
+ },
+ {
+  "input": "<a></a>\r\n\r\n",
+  "tree": {
+   "attrib": [],
+   "children": [],
+   "tag": "a",
+   "tail": null,
+   "text": null
+  }
+ },
+ {
+  "error": "not well-formed (invalid token): line 2, column 9",
+  "input": "<a>x</a>\n<!-- y -- z -->"
+ },
+ {
+  "error": "XML or text declaration not at start of entity: line 1, column 6",
+  "input": "<?pi?><?xml version='1.0'?><a/>"
+ }
+]

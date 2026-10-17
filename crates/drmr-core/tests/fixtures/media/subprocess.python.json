@@ -1,0 +1,1272 @@
+{
+ "spec": {
+  "files": {
+   "probe.json": "{\n    \"packets\": [\n        {\n            \"codec_type\": \"video\",\n            \"stream_index\": 0,\n            \"pts\": 7500,\n            \"pts_time\": \"0.083333\",\n            \"dts\": 0,\n            \"dts_time\": \"0.000000\",\n            \"duration\": 3750,\n            \"size\": \"1616\",\n            \"flags\": \"K__\"\n        },\n        {\n            \"codec_type\": \"audio\",\n            \"stream_index\": 1,\n            \"pts\": 0,\n            \"pts_time\": \"0.000000\",\n            \"dts\": 0,\n            \"dts_time\": \"0.000000\",\n            \"duration\": 1024,\n            \"size\": \"210\",\n            \"flags\": \"K__\"\n        },\n        {\n            \"codec_type\": \"video\",\n            \"stream_index\": 0,\n            \"pts\": 11250,\n            \"dts\": 3750,\n            \"duration\": 3750,\n            \"size\": \"900\",\n            \"flags\": \"___\"\n        },\n        {\n            \"codec_type\": \"audio\",\n            \"stream_index\": 1,\n            \"pts\": 1024,\n            \"dts\": 1024,\n            \"duration\": 512,\n            \"size\": \"180\",\n            \"flags\": \"K__\"\n        }\n    ],\n    \"streams\": [\n        {\n            \"index\": 0,\n            \"codec_name\": \"h264\",\n            \"codec_type\": \"video\",\n            \"time_base\": \"1/90000\",\n            \"avg_frame_rate\": \"24/1\"\n        },\n        {\n            \"index\": 1,\n            \"codec_name\": \"aac\",\n            \"codec_type\": \"audio\",\n            \"time_base\": \"1/48000\",\n            \"avg_frame_rate\": \"0/0\"\n        }\n    ]\n}",
+   "data.json": "{\n    \"packets\": [\n        {\n            \"codec_type\": \"subtitle\",\n            \"stream_index\": 0,\n            \"pts\": 0,\n            \"dts\": 0,\n            \"duration\": 90000,\n            \"size\": \"13\",\n            \"data\": \"\\n00000000: 000b 4865 6c6c 6f20 776f 726c 64         ..Hello world\\n\"\n        },\n        {\n            \"codec_type\": \"video\",\n            \"stream_index\": 1,\n            \"pts\": 0,\n            \"dts\": 0,\n            \"duration\": 1,\n            \"size\": \"2\",\n            \"data\": \"\\n00000000: 0102                                     ..\\n\"\n        }\n    ]\n}",
+   "hash.json": "{\n    \"packets\": [\n        {\n            \"stream_index\": 0,\n            \"data_hash\": \"SHA256:bdee71977a986979d4362fc304dda19ebaa331502cc4547cb6309a14a94c7fc3\"\n        },\n        {\n            \"stream_index\": 1,\n            \"data_hash\": \"SHA256:a12871fee210fb8619291eaea194581cbd2531e4b23759d225f6806923f63222\"\n        }\n    ]\n}",
+   "timing.json": "{\n    \"packets\": [\n        {\n            \"pts_time\": \"0.000000\"\n        },\n        {\n            \"pts_time\": \"0.041667\"\n        }\n    ],\n    \"format\": {\n        \"duration\": \"2.000000\"\n    }\n}",
+   "framemd5.txt": "#format: frame checksums\n#version: 2\n#hash: MD5\n#tb 0: 1/24\n#stream#, dts,        pts, duration,     size, hash\n0,          0,          0,        1,     6144, c463c2fa2a6cf8a8519de1a7311848cb\r\n0,          1,          1,        1,     6144, 6feb2a7969f1527f661713bc47738e52\n  \n0,          2,          2,        1,     6144,   0123456789abcdef0123456789abcdef  \n",
+   "tree.json": "[\n  {\n    \"name\": \"ftyp\",\n    \"header_size\": 8,\n    \"size\": 24,\n    \"major_brand\": \"iso6\"\n  },\n  {\n    \"name\": \"moov\",\n    \"header_size\": 8,\n    \"size\": 300,\n    \"children\": [\n      {\n        \"name\": \"trak\",\n        \"children\": [\n          {\n            \"name\": \"schm\",\n            \"scheme_type\": \"cbcs\",\n            \"scheme_version\": 65536\n          },\n          {\n            \"name\": \"tenc\",\n            \"header_size\": 12,\n            \"size\": 49,\n            \"version\": 1,\n            \"default_isProtected\": 1,\n            \"default_Per_Sample_IV_Size\": 0,\n            \"default_KID\": \"[00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f]\",\n            \"default_crypt_byte_block\": 1,\n            \"default_skip_byte_block\": 9,\n            \"default_constant_IV_size\": 16,\n            \"default_constant_IV\": \"[20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20]\"\n          }\n        ]\n      }\n    ]\n  },\n  {\n    \"name\": \"moof\",\n    \"children\": [\n      {\n        \"name\": \"traf\",\n        \"children\": [\n          {\n            \"name\": \"tfdt\",\n            \"version\": 1,\n            \"base media decode time\": 180000\n          },\n          {\n            \"name\": \"trun\",\n            \"sample count\": 48\n          },\n          {\n            \"name\": \"saiz\",\n            \"sample count\": 999\n          }\n        ]\n      }\n    ]\n  }\n]"
+  },
+  "pcm_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff",
+  "stubs": {
+   "ffprobe": "#!/bin/sh\ncase \"$*\" in\n  *missing*) echo \"missing: No such file or directory\" >&2; exit 1 ;;\n  *-show_streams*) cat @DIR@/probe.json ;;\n  *-show_data_hash*) cat @DIR@/hash.json ;;\n  *-show_data*) cat @DIR@/data.json ;;\n  *format=duration*) cat @DIR@/timing.json ;;\n  *) exit 3 ;;\nesac\n",
+   "ffmpeg": "#!/bin/sh\nfor a in \"$@\"; do last=\"$a\"; done\ncase \"$*\" in\n  *broken*) printf 'broken: Invalid data found when processing input\\r\\n' >&2; exit 183 ;;\n  *-f\\ framemd5\\ -*) cat @DIR@/framemd5.txt ;;\n  *-f\\ s32le*) cat @DIR@/pcm.bin ;;\n  *-f\\ framemd5*) cp @DIR@/framemd5.txt \"$last\" ;;\n  *) : > \"$last\" ;;\nesac\n",
+   "mp4dump": "#!/bin/sh\ncase \"$*\" in\n  *missing*) echo \"ERROR: cannot open input file (@IV_SPACED@)\" >&2; exit 1 ;;\n  *) cat @DIR@/tree.json ;;\nesac\n"
+  }
+ },
+ "iv": "20202020202020202020202020202020",
+ "kid": "000102030405060708090a0b0c0d0e0f",
+ "cases": [
+  {
+   "name": "probe_packets",
+   "outcome": {
+    "ok": {
+     "timescale": 48000,
+     "pts": [
+      0,
+      1024
+     ],
+     "dts": [
+      0,
+      1024
+     ],
+     "durations": [
+      1024,
+      512
+     ],
+     "frame_rate": "0/0"
+    }
+   },
+   "records": [
+    {
+     "level": "info",
+     "message": "command",
+     "event": "command",
+     "argv": [
+      "ffprobe",
+      "-v",
+      "error",
+      "-show_streams",
+      "-show_packets",
+      "-of",
+      "json",
+      "<dir>/media.mp4"
+     ],
+     "stage": "tool",
+     "tool": "ffprobe"
+    },
+    {
+     "level": "info",
+     "message": "tool-output",
+     "event": "tool-output",
+     "returncode": 0,
+     "stdout": "{\n    \"packets\": [\n        {\n            \"codec_type\": \"video\",\n            \"stream_index\": 0,\n            \"pts\": 7500,\n            \"pts_time\": \"0.083333\",\n            \"dts\": 0,\n            \"dts_time\": \"0.000000\",\n            \"duration\": 3750,\n            \"size\": \"1616\",\n            \"flags\": \"K__\"\n        },\n        {\n            \"codec_type\": \"audio\",\n            \"stream_index\": 1,\n            \"pts\": 0,\n            \"pts_time\": \"0.000000\",\n            \"dts\": 0,\n            \"dts_time\": \"0.000000\",\n            \"duration\": 1024,\n            \"size\": \"210\",\n            \"flags\": \"K__\"\n        },\n        {\n            \"codec_type\": \"video\",\n            \"stream_index\": 0,\n            \"pts\": 11250,\n            \"dts\": 3750,\n            \"duration\": 3750,\n            \"size\": \"900\",\n            \"flags\": \"___\"\n        },\n        {\n            \"codec_type\": \"audio\",\n            \"stream_index\": 1,\n            \"pts\": 1024,\n            \"dts\": 1024,\n            \"duration\": 512,\n            \"size\": \"180\",\n            \"flags\": \"K__\"\n        }\n    ],\n    \"streams\": [\n        {\n            \"index\": 0,\n            \"codec_name\": \"h264\",\n            \"codec_type\": \"video\",\n            \"time_base\": \"1/90000\",\n            \"avg_frame_rate\": \"24/1\"\n        },\n        {\n            \"index\": 1,\n            \"codec_name\": \"aac\",\n            \"codec_type\": \"audio\",\n            \"time_base\": \"1/48000\",\n            \"avg_frame_rate\": \"0/0\"\n        }\n    ]\n}",
+     "stderr": "",
+     "truncated": false,
+     "stage": "tool",
+     "tool": "ffprobe"
+    }
+   ]
+  },
+  {
+   "name": "probe_packets-missing-stream",
+   "outcome": {
+    "error": "HlsMediaError",
+    "message": "source-stream-missing"
+   },
+   "records": [
+    {
+     "level": "info",
+     "message": "command",
+     "event": "command",
+     "argv": [
+      "ffprobe",
+      "-v",
+      "error",
+      "-show_streams",
+      "-show_packets",
+      "-of",
+      "json",
+      "<dir>/media.mp4"
+     ],
+     "stage": "tool",
+     "tool": "ffprobe"
+    },
+    {
+     "level": "info",
+     "message": "tool-output",
+     "event": "tool-output",
+     "returncode": 0,
+     "stdout": "{\n    \"packets\": [\n        {\n            \"codec_type\": \"video\",\n            \"stream_index\": 0,\n            \"pts\": 7500,\n            \"pts_time\": \"0.083333\",\n            \"dts\": 0,\n            \"dts_time\": \"0.000000\",\n            \"duration\": 3750,\n            \"size\": \"1616\",\n            \"flags\": \"K__\"\n        },\n        {\n            \"codec_type\": \"audio\",\n            \"stream_index\": 1,\n            \"pts\": 0,\n            \"pts_time\": \"0.000000\",\n            \"dts\": 0,\n            \"dts_time\": \"0.000000\",\n            \"duration\": 1024,\n            \"size\": \"210\",\n            \"flags\": \"K__\"\n        },\n        {\n            \"codec_type\": \"video\",\n            \"stream_index\": 0,\n            \"pts\": 11250,\n            \"dts\": 3750,\n            \"duration\": 3750,\n            \"size\": \"900\",\n            \"flags\": \"___\"\n        },\n        {\n            \"codec_type\": \"audio\",\n            \"stream_index\": 1,\n            \"pts\": 1024,\n            \"dts\": 1024,\n            \"duration\": 512,\n            \"size\": \"180\",\n            \"flags\": \"K__\"\n        }\n    ],\n    \"streams\": [\n        {\n            \"index\": 0,\n            \"codec_name\": \"h264\",\n            \"codec_type\": \"video\",\n            \"time_base\": \"1/90000\",\n            \"avg_frame_rate\": \"24/1\"\n        },\n        {\n            \"index\": 1,\n            \"codec_name\": \"aac\",\n            \"codec_type\": \"audio\",\n            \"time_base\": \"1/48000\",\n            \"avg_frame_rate\": \"0/0\"\n        }\n    ]\n}",
+     "stderr": "",
+     "truncated": false,
+     "stage": "tool",
+     "tool": "ffprobe"
+    }
+   ]
+  },
+  {
+   "name": "packet_payloads",
+   "outcome": {
+    "ok": [
+     "000b48656c6c6f20776f726c64"
+    ]
+   },
+   "records": [
+    {
+     "level": "info",
+     "message": "command",
+     "event": "command",
+     "argv": [
+      "ffprobe",
+      "-v",
+      "error",
+      "-show_packets",
+      "-show_data",
+      "-of",
+      "json",
+      "<dir>/media.mp4"
+     ],
+     "stage": "tool",
+     "tool": "ffprobe"
+    },
+    {
+     "level": "info",
+     "message": "tool-output",
+     "event": "tool-output",
+     "returncode": 0,
+     "stdout": "(stdout not logged: 570 bytes consumed as data)",
+     "stderr": "",
+     "truncated": false,
+     "stage": "tool",
+     "tool": "ffprobe"
+    }
+   ]
+  },
+  {
+   "name": "payload_hashes",
+   "outcome": {
+    "ok": [
+     "SHA256:bdee71977a986979d4362fc304dda19ebaa331502cc4547cb6309a14a94c7fc3"
+    ]
+   },
+   "records": [
+    {
+     "level": "info",
+     "message": "command",
+     "event": "command",
+     "argv": [
+      "ffprobe",
+      "-v",
+      "error",
+      "-show_packets",
+      "-show_data_hash",
+      "sha256",
+      "-of",
+      "json",
+      "<dir>/media.mp4"
+     ],
+     "stage": "tool",
+     "tool": "ffprobe"
+    },
+    {
+     "level": "info",
+     "message": "tool-output",
+     "event": "tool-output",
+     "returncode": 0,
+     "stdout": "{\n    \"packets\": [\n        {\n            \"stream_index\": 0,\n            \"data_hash\": \"SHA256:bdee71977a986979d4362fc304dda19ebaa331502cc4547cb6309a14a94c7fc3\"\n        },\n        {\n            \"stream_index\": 1,\n            \"data_hash\": \"SHA256:a12871fee210fb8619291eaea194581cbd2531e4b23759d225f6806923f63222\"\n        }\n    ]\n}",
+     "stderr": "",
+     "truncated": false,
+     "stage": "tool",
+     "tool": "ffprobe"
+    }
+   ]
+  },
+  {
+   "name": "normalize_segment-video",
+   "outcome": {
+    "ok": "<dir>/out-video.ts"
+   },
+   "records": [
+    {
+     "level": "info",
+     "message": "command",
+     "event": "command",
+     "argv": [
+      "ffmpeg",
+      "-v",
+      "error",
+      "-y",
+      "-copyts",
+      "-i",
+      "<dir>/media.mp4",
+      "-map",
+      "0:0",
+      "-c",
+      "copy",
+      "-avoid_negative_ts",
+      "disabled",
+      "-output_ts_offset",
+      "2.0",
+      "-mpegts_copyts",
+      "1",
+      "-muxdelay",
+      "0",
+      "-muxpreload",
+      "0",
+      "-f",
+      "mpegts",
+      "<dir>/out-video.ts"
+     ],
+     "stage": "tool",
+     "tool": "ffmpeg"
+    },
+    {
+     "level": "info",
+     "message": "tool-output",
+     "event": "tool-output",
+     "returncode": 0,
+     "stdout": "",
+     "stderr": "",
+     "truncated": false,
+     "stage": "tool",
+     "tool": "ffmpeg"
+    }
+   ]
+  },
+  {
+   "name": "normalize_segment-audio",
+   "outcome": {
+    "ok": "<dir>/out-audio.ts"
+   },
+   "records": [
+    {
+     "level": "info",
+     "message": "command",
+     "event": "command",
+     "argv": [
+      "ffprobe",
+      "-v",
+      "error",
+      "-show_streams",
+      "-show_packets",
+      "-of",
+      "json",
+      "<dir>/media.mp4"
+     ],
+     "stage": "tool",
+     "tool": "ffprobe"
+    },
+    {
+     "level": "info",
+     "message": "tool-output",
+     "event": "tool-output",
+     "returncode": 0,
+     "stdout": "{\n    \"packets\": [\n        {\n            \"codec_type\": \"video\",\n            \"stream_index\": 0,\n            \"pts\": 7500,\n            \"pts_time\": \"0.083333\",\n            \"dts\": 0,\n            \"dts_time\": \"0.000000\",\n            \"duration\": 3750,\n            \"size\": \"1616\",\n            \"flags\": \"K__\"\n        },\n        {\n            \"codec_type\": \"audio\",\n            \"stream_index\": 1,\n            \"pts\": 0,\n            \"pts_time\": \"0.000000\",\n            \"dts\": 0,\n            \"dts_time\": \"0.000000\",\n            \"duration\": 1024,\n            \"size\": \"210\",\n            \"flags\": \"K__\"\n        },\n        {\n            \"codec_type\": \"video\",\n            \"stream_index\": 0,\n            \"pts\": 11250,\n            \"dts\": 3750,\n            \"duration\": 3750,\n            \"size\": \"900\",\n            \"flags\": \"___\"\n        },\n        {\n            \"codec_type\": \"audio\",\n            \"stream_index\": 1,\n            \"pts\": 1024,\n            \"dts\": 1024,\n            \"duration\": 512,\n            \"size\": \"180\",\n            \"flags\": \"K__\"\n        }\n    ],\n    \"streams\": [\n        {\n            \"index\": 0,\n            \"codec_name\": \"h264\",\n            \"codec_type\": \"video\",\n            \"time_base\": \"1/90000\",\n            \"avg_frame_rate\": \"24/1\"\n        },\n        {\n            \"index\": 1,\n            \"codec_name\": \"aac\",\n            \"codec_type\": \"audio\",\n            \"time_base\": \"1/48000\",\n            \"avg_frame_rate\": \"0/0\"\n        }\n    ]\n}",
+     "stderr": "",
+     "truncated": false,
+     "stage": "tool",
+     "tool": "ffprobe"
+    },
+    {
+     "level": "info",
+     "message": "command",
+     "event": "command",
+     "argv": [
+      "ffmpeg",
+      "-v",
+      "error",
+      "-y",
+      "-copyts",
+      "-i",
+      "<dir>/media.mp4",
+      "-map",
+      "0:1",
+      "-c",
+      "copy",
+      "-avoid_negative_ts",
+      "disabled",
+      "-output_ts_offset",
+      "2.0",
+      "-movie_timescale",
+      "48000",
+      "-movflags",
+      "+frag_keyframe+delay_moov+default_base_moof",
+      "-f",
+      "mp4",
+      "<dir>/out-audio.ts"
+     ],
+     "stage": "tool",
+     "tool": "ffmpeg"
+    },
+    {
+     "level": "info",
+     "message": "tool-output",
+     "event": "tool-output",
+     "returncode": 0,
+     "stdout": "",
+     "stderr": "",
+     "truncated": false,
+     "stage": "tool",
+     "tool": "ffmpeg"
+    }
+   ]
+  },
+  {
+   "name": "normalize_segment-text",
+   "outcome": {
+    "ok": "<dir>/out-text.ts"
+   },
+   "records": [
+    {
+     "level": "info",
+     "message": "command",
+     "event": "command",
+     "argv": [
+      "ffprobe",
+      "-v",
+      "error",
+      "-show_streams",
+      "-show_packets",
+      "-of",
+      "json",
+      "<dir>/media.mp4"
+     ],
+     "stage": "tool",
+     "tool": "ffprobe"
+    },
+    {
+     "level": "info",
+     "message": "tool-output",
+     "event": "tool-output",
+     "returncode": 0,
+     "stdout": "{\n    \"packets\": [\n        {\n            \"codec_type\": \"video\",\n            \"stream_index\": 0,\n            \"pts\": 7500,\n            \"pts_time\": \"0.083333\",\n            \"dts\": 0,\n            \"dts_time\": \"0.000000\",\n            \"duration\": 3750,\n            \"size\": \"1616\",\n            \"flags\": \"K__\"\n        },\n        {\n            \"codec_type\": \"audio\",\n            \"stream_index\": 1,\n            \"pts\": 0,\n            \"pts_time\": \"0.000000\",\n            \"dts\": 0,\n            \"dts_time\": \"0.000000\",\n            \"duration\": 1024,\n            \"size\": \"210\",\n            \"flags\": \"K__\"\n        },\n        {\n            \"codec_type\": \"video\",\n            \"stream_index\": 0,\n            \"pts\": 11250,\n            \"dts\": 3750,\n            \"duration\": 3750,\n            \"size\": \"900\",\n            \"flags\": \"___\"\n        },\n        {\n            \"codec_type\": \"audio\",\n            \"stream_index\": 1,\n            \"pts\": 1024,\n            \"dts\": 1024,\n            \"duration\": 512,\n            \"size\": \"180\",\n            \"flags\": \"K__\"\n        }\n    ],\n    \"streams\": [\n        {\n            \"index\": 0,\n            \"codec_name\": \"h264\",\n            \"codec_type\": \"video\",\n            \"time_base\": \"1/90000\",\n            \"avg_frame_rate\": \"24/1\"\n        },\n        {\n            \"index\": 1,\n            \"codec_name\": \"aac\",\n            \"codec_type\": \"audio\",\n            \"time_base\": \"1/48000\",\n            \"avg_frame_rate\": \"0/0\"\n        }\n    ]\n}",
+     "stderr": "",
+     "truncated": false,
+     "stage": "tool",
+     "tool": "ffprobe"
+    },
+    {
+     "level": "info",
+     "message": "command",
+     "event": "command",
+     "argv": [
+      "ffmpeg",
+      "-v",
+      "error",
+      "-y",
+      "-copyts",
+      "-i",
+      "<dir>/media.mp4",
+      "-map",
+      "0:0",
+      "-c",
+      "copy",
+      "-avoid_negative_ts",
+      "disabled",
+      "-output_ts_offset",
+      "2.0",
+      "-movie_timescale",
+      "90000",
+      "-movflags",
+      "+frag_keyframe+delay_moov+default_base_moof",
+      "-frag_duration",
+      "1",
+      "-f",
+      "mp4",
+      "<dir>/out-text.ts"
+     ],
+     "stage": "tool",
+     "tool": "ffmpeg"
+    },
+    {
+     "level": "info",
+     "message": "tool-output",
+     "event": "tool-output",
+     "returncode": 0,
+     "stdout": "",
+     "stderr": "",
+     "truncated": false,
+     "stage": "tool",
+     "tool": "ffmpeg"
+    }
+   ]
+  },
+  {
+   "name": "normalize_segment-offset",
+   "outcome": {
+    "ok": "<dir>/out.ts"
+   },
+   "records": [
+    {
+     "level": "info",
+     "message": "command",
+     "event": "command",
+     "argv": [
+      "ffmpeg",
+      "-v",
+      "error",
+      "-y",
+      "-copyts",
+      "-i",
+      "<dir>/media.mp4",
+      "-map",
+      "0:0",
+      "-c",
+      "copy",
+      "-avoid_negative_ts",
+      "disabled",
+      "-output_ts_offset",
+      "3.3333333333333335",
+      "-mpegts_copyts",
+      "1",
+      "-muxdelay",
+      "0",
+      "-muxpreload",
+      "0",
+      "-f",
+      "mpegts",
+      "<dir>/out.ts"
+     ],
+     "stage": "tool",
+     "tool": "ffmpeg"
+    },
+    {
+     "level": "info",
+     "message": "tool-output",
+     "event": "tool-output",
+     "returncode": 0,
+     "stdout": "",
+     "stderr": "",
+     "truncated": false,
+     "stage": "tool",
+     "tool": "ffmpeg"
+    }
+   ]
+  },
+  {
+   "name": "decoded_digest-video",
+   "outcome": {
+    "ok": "ad74b114e12e854680f4c3da7682f3c302d1f9c87b0906475d8475bcd6025c25"
+   },
+   "records": [
+    {
+     "stage": "tool",
+     "level": "info",
+     "message": "command",
+     "event": "command",
+     "tool": "ffmpeg",
+     "argv": [
+      "ffmpeg",
+      "-v",
+      "error",
+      "-threads",
+      "1",
+      "-i",
+      "<dir>/media.mp4",
+      "-map",
+      "0:0",
+      "-fps_mode",
+      "passthrough",
+      "-f",
+      "framemd5",
+      "-"
+     ]
+    },
+    {
+     "stage": "tool",
+     "level": "info",
+     "message": "tool-output",
+     "event": "tool-output",
+     "tool": "ffmpeg",
+     "returncode": 0,
+     "stdout": "",
+     "stderr": "",
+     "truncated": false
+    }
+   ]
+  },
+  {
+   "name": "decoded_digest-audio",
+   "outcome": {
+    "ok": "f3a25aa93aa2fbba28d79260535bbd6a5eb0fc1c24a8b0f04e12b484c1dfe363"
+   },
+   "records": [
+    {
+     "stage": "tool",
+     "level": "info",
+     "message": "command",
+     "event": "command",
+     "tool": "ffmpeg",
+     "argv": [
+      "ffmpeg",
+      "-v",
+      "error",
+      "-threads",
+      "1",
+      "-i",
+      "<dir>/media.mp4",
+      "-map",
+      "0:1",
+      "-f",
+      "s32le",
+      "-acodec",
+      "pcm_s32le",
+      "-"
+     ]
+    },
+    {
+     "stage": "tool",
+     "level": "info",
+     "message": "tool-output",
+     "event": "tool-output",
+     "tool": "ffmpeg",
+     "returncode": 0,
+     "stdout": "",
+     "stderr": "",
+     "truncated": false
+    }
+   ]
+  },
+  {
+   "name": "decoded_digest-failed",
+   "outcome": {
+    "error": "HlsMediaError",
+    "message": "media-decode-failed"
+   },
+   "records": [
+    {
+     "stage": "tool",
+     "level": "info",
+     "message": "command",
+     "event": "command",
+     "tool": "ffmpeg",
+     "argv": [
+      "ffmpeg",
+      "-v",
+      "error",
+      "-threads",
+      "1",
+      "-i",
+      "<dir>/broken.mp4",
+      "-map",
+      "0:0",
+      "-fps_mode",
+      "passthrough",
+      "-f",
+      "framemd5",
+      "-"
+     ]
+    },
+    {
+     "stage": "tool",
+     "level": "error",
+     "message": "tool-output",
+     "event": "tool-output",
+     "tool": "ffmpeg",
+     "returncode": 183,
+     "stdout": "",
+     "stderr": "",
+     "truncated": false
+    }
+   ]
+  },
+  {
+   "name": "run_media-failed",
+   "outcome": {
+    "error": "HlsMediaError",
+    "message": "media-tool-failed"
+   },
+   "records": [
+    {
+     "level": "info",
+     "message": "command",
+     "event": "command",
+     "argv": [
+      "ffprobe",
+      "-v",
+      "error",
+      "<dir>/media.mp4"
+     ],
+     "stage": "tool",
+     "tool": "ffprobe"
+    },
+    {
+     "level": "error",
+     "message": "tool-output",
+     "event": "tool-output",
+     "returncode": 3,
+     "stdout": "",
+     "stderr": "",
+     "truncated": false,
+     "stage": "tool",
+     "tool": "ffprobe"
+    }
+   ]
+  },
+  {
+   "name": "run_media-unavailable",
+   "outcome": {
+    "error": "HlsMediaError",
+    "message": "media-tool-unavailable"
+   },
+   "records": [
+    {
+     "level": "info",
+     "message": "command",
+     "event": "command",
+     "argv": [
+      "absent-tool",
+      "-version"
+     ],
+     "stage": "tool",
+     "tool": "absent-tool"
+    },
+    {
+     "level": "error",
+     "message": "tool-output",
+     "event": "tool-output",
+     "returncode": null,
+     "stdout": "",
+     "stderr": "could not run: [Errno 2] No such file or directory: '<dir>/absent-tool'",
+     "truncated": false,
+     "stage": "tool",
+     "tool": "absent-tool"
+    }
+   ]
+  },
+  {
+   "name": "run_media-unlogged",
+   "outcome": {
+    "ok": 570
+   },
+   "records": [
+    {
+     "level": "info",
+     "message": "command",
+     "event": "command",
+     "argv": [
+      "ffprobe",
+      "-show_data",
+      "<dir>/media.mp4"
+     ],
+     "stage": "tool",
+     "tool": "ffprobe"
+    },
+    {
+     "level": "info",
+     "message": "tool-output",
+     "event": "tool-output",
+     "returncode": 0,
+     "stdout": "(stdout not logged: 570 bytes consumed as data)",
+     "stderr": "",
+     "truncated": false,
+     "stage": "tool",
+     "tool": "ffprobe"
+    }
+   ]
+  },
+  {
+   "name": "compute_framemd5",
+   "outcome": {
+    "ok": "#format: frame checksums\n#version: 2\n#hash: MD5\n#tb 0: 1/24\n#stream#, dts,        pts, duration,     size, hash\n0,          0,          0,        1,     6144, c463c2fa2a6cf8a8519de1a7311848cb\n0,          1,          1,        1,     6144, 6feb2a7969f1527f661713bc47738e52\n  \n0,          2,          2,        1,     6144,   0123456789abcdef0123456789abcdef  \n"
+   },
+   "records": [
+    {
+     "level": "info",
+     "message": "command",
+     "event": "command",
+     "argv": [
+      "ffmpeg",
+      "-v",
+      "error",
+      "-i",
+      "<dir>/media.mp4",
+      "-f",
+      "framemd5",
+      "-"
+     ],
+     "stage": "tool",
+     "tool": "ffmpeg"
+    },
+    {
+     "level": "info",
+     "message": "tool-output",
+     "event": "tool-output",
+     "returncode": 0,
+     "stdout": "#format: frame checksums\n#version: 2\n#hash: MD5\n#tb 0: 1/24\n#stream#, dts,        pts, duration,     size, hash\n0,          0,          0,        1,     6144, c463c2fa2a6cf8a8519de1a7311848cb\n0,          1,          1,        1,     6144, 6feb2a7969f1527f661713bc47738e52\n  \n0,          2,          2,        1,     6144,   0123456789abcdef0123456789abcdef  \n",
+     "stderr": "",
+     "truncated": false,
+     "stage": "tool",
+     "tool": "ffmpeg"
+    }
+   ]
+  },
+  {
+   "name": "compute_framemd5-failed",
+   "outcome": {
+    "error": "RuntimeError",
+    "message": "ffmpeg framemd5 failed for <dir>/broken.mp4: broken: Invalid data found when processing input"
+   },
+   "records": [
+    {
+     "level": "info",
+     "message": "command",
+     "event": "command",
+     "argv": [
+      "ffmpeg",
+      "-v",
+      "error",
+      "-i",
+      "<dir>/broken.mp4",
+      "-f",
+      "framemd5",
+      "-"
+     ],
+     "stage": "tool",
+     "tool": "ffmpeg"
+    },
+    {
+     "level": "error",
+     "message": "tool-output",
+     "event": "tool-output",
+     "returncode": 183,
+     "stdout": "",
+     "stderr": "broken: Invalid data found when processing input\n",
+     "truncated": false,
+     "stage": "tool",
+     "tool": "ffmpeg"
+    }
+   ]
+  },
+  {
+   "name": "probe_segment_timing",
+   "outcome": {
+    "ok": {
+     "duration_s": 2.0,
+     "packet_count": 2
+    }
+   },
+   "records": [
+    {
+     "level": "info",
+     "message": "command",
+     "event": "command",
+     "argv": [
+      "ffprobe",
+      "-v",
+      "error",
+      "-show_entries",
+      "format=duration",
+      "-show_entries",
+      "packet=pts_time",
+      "-of",
+      "json",
+      "<dir>/media.mp4"
+     ],
+     "stage": "tool",
+     "tool": "ffprobe"
+    },
+    {
+     "level": "info",
+     "message": "tool-output",
+     "event": "tool-output",
+     "returncode": 0,
+     "stdout": "{\n    \"packets\": [\n        {\n            \"pts_time\": \"0.000000\"\n        },\n        {\n            \"pts_time\": \"0.041667\"\n        }\n    ],\n    \"format\": {\n        \"duration\": \"2.000000\"\n    }\n}",
+     "stderr": "",
+     "truncated": false,
+     "stage": "tool",
+     "tool": "ffprobe"
+    }
+   ]
+  },
+  {
+   "name": "probe_segment_timing-failed",
+   "outcome": {
+    "error": "RuntimeError",
+    "message": "ffprobe failed for <dir>/missing.mp4: missing: No such file or directory"
+   },
+   "records": [
+    {
+     "level": "info",
+     "message": "command",
+     "event": "command",
+     "argv": [
+      "ffprobe",
+      "-v",
+      "error",
+      "-show_entries",
+      "format=duration",
+      "-show_entries",
+      "packet=pts_time",
+      "-of",
+      "json",
+      "<dir>/missing.mp4"
+     ],
+     "stage": "tool",
+     "tool": "ffprobe"
+    },
+    {
+     "level": "error",
+     "message": "tool-output",
+     "event": "tool-output",
+     "returncode": 1,
+     "stdout": "",
+     "stderr": "missing: No such file or directory\n",
+     "truncated": false,
+     "stage": "tool",
+     "tool": "ffprobe"
+    }
+   ]
+  },
+  {
+   "name": "read_tenc_constant_iv_hex",
+   "outcome": {
+    "ok": true
+   },
+   "records": [
+    {
+     "level": "info",
+     "message": "command",
+     "event": "command",
+     "argv": [
+      "mp4dump",
+      "--format",
+      "json",
+      "<dir>/media.mp4"
+     ],
+     "stage": "tool",
+     "tool": "mp4dump"
+    },
+    {
+     "level": "info",
+     "message": "tool-output",
+     "event": "tool-output",
+     "returncode": 0,
+     "stdout": "[\n  {\n    \"name\": \"ftyp\",\n    \"header_size\": 8,\n    \"size\": 24,\n    \"major_brand\": \"iso6\"\n  },\n  {\n    \"name\": \"moov\",\n    \"header_size\": 8,\n    \"size\": 300,\n    \"children\": [\n      {\n        \"name\": \"trak\",\n        \"children\": [\n          {\n            \"name\": \"schm\",\n            \"scheme_type\": \"cbcs\",\n            \"scheme_version\": 65536\n          },\n          {\n            \"name\": \"tenc\",\n            \"header_size\": 12,\n            \"size\": 49,\n            \"version\": 1,\n            \"default_isProtected\": 1,\n            \"default_Per_Sample_IV_Size\": 0,\n            \"default_KID\": \"[00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f]\",\n            \"default_crypt_byte_block\": 1,\n            \"default_skip_byte_block\": 9,\n            \"default_constant_IV_size\": 16,\n            \"default_constant_IV\": \"[***REDACTED***]\"\n          }\n        ]\n      }\n    ]\n  },\n  {\n    \"name\": \"moof\",\n    \"children\": [\n      {\n        \"name\": \"traf\",\n        \"children\": [\n          {\n            \"name\": \"tfdt\",\n            \"version\": 1,\n            \"base media decode time\": 180000\n          },\n          {\n            \"name\": \"trun\",\n            \"sample count\": 48\n          },\n          {\n            \"name\": \"saiz\",\n            \"sample count\": 999\n          }\n        ]\n      }\n    ]\n  }\n]",
+     "stderr": "",
+     "truncated": false,
+     "stage": "tool",
+     "tool": "mp4dump"
+    }
+   ]
+  },
+  {
+   "name": "read_tenc_constant_iv_hex-failed",
+   "outcome": {
+    "error": "RuntimeError",
+    "message": "mp4dump failed for <dir>/missing.mp4: ERROR: cannot open input file (20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20)"
+   },
+   "records": [
+    {
+     "level": "info",
+     "message": "command",
+     "event": "command",
+     "argv": [
+      "mp4dump",
+      "--format",
+      "json",
+      "<dir>/missing.mp4"
+     ],
+     "stage": "tool",
+     "tool": "mp4dump"
+    },
+    {
+     "level": "error",
+     "message": "tool-output",
+     "event": "tool-output",
+     "returncode": 1,
+     "stdout": "",
+     "stderr": "ERROR: cannot open input file (***REDACTED***)\n",
+     "truncated": false,
+     "stage": "tool",
+     "tool": "mp4dump"
+    }
+   ]
+  },
+  {
+   "name": "probe_init_segment",
+   "outcome": {
+    "ok": [
+     "cbcs",
+     true,
+     "000102030405060708090a0b0c0d0e0f",
+     0
+    ]
+   },
+   "records": [
+    {
+     "level": "info",
+     "message": "command",
+     "event": "command",
+     "argv": [
+      "mp4dump",
+      "--format",
+      "json",
+      "<dir>/media.mp4"
+     ],
+     "stage": "tool",
+     "tool": "mp4dump"
+    },
+    {
+     "level": "info",
+     "message": "tool-output",
+     "event": "tool-output",
+     "returncode": 0,
+     "stdout": "[\n  {\n    \"name\": \"ftyp\",\n    \"header_size\": 8,\n    \"size\": 24,\n    \"major_brand\": \"iso6\"\n  },\n  {\n    \"name\": \"moov\",\n    \"header_size\": 8,\n    \"size\": 300,\n    \"children\": [\n      {\n        \"name\": \"trak\",\n        \"children\": [\n          {\n            \"name\": \"schm\",\n            \"scheme_type\": \"cbcs\",\n            \"scheme_version\": 65536\n          },\n          {\n            \"name\": \"tenc\",\n            \"header_size\": 12,\n            \"size\": 49,\n            \"version\": 1,\n            \"default_isProtected\": 1,\n            \"default_Per_Sample_IV_Size\": 0,\n            \"default_KID\": \"[00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f]\",\n            \"default_crypt_byte_block\": 1,\n            \"default_skip_byte_block\": 9,\n            \"default_constant_IV_size\": 16,\n            \"default_constant_IV\": \"[***REDACTED***]\"\n          }\n        ]\n      }\n    ]\n  },\n  {\n    \"name\": \"moof\",\n    \"children\": [\n      {\n        \"name\": \"traf\",\n        \"children\": [\n          {\n            \"name\": \"tfdt\",\n            \"version\": 1,\n            \"base media decode time\": 180000\n          },\n          {\n            \"name\": \"trun\",\n            \"sample count\": 48\n          },\n          {\n            \"name\": \"saiz\",\n            \"sample count\": 999\n          }\n        ]\n      }\n    ]\n  }\n]",
+     "stderr": "",
+     "truncated": false,
+     "stage": "tool",
+     "tool": "mp4dump"
+    }
+   ]
+  },
+  {
+   "name": "read_fragment_boundary",
+   "outcome": {
+    "ok": {
+     "base_media_decode_time": 180000,
+     "sample_count": 48
+    }
+   },
+   "records": [
+    {
+     "level": "info",
+     "message": "command",
+     "event": "command",
+     "argv": [
+      "mp4dump",
+      "--format",
+      "json",
+      "<dir>/media.mp4"
+     ],
+     "stage": "tool",
+     "tool": "mp4dump"
+    },
+    {
+     "level": "info",
+     "message": "tool-output",
+     "event": "tool-output",
+     "returncode": 0,
+     "stdout": "[\n  {\n    \"name\": \"ftyp\",\n    \"header_size\": 8,\n    \"size\": 24,\n    \"major_brand\": \"iso6\"\n  },\n  {\n    \"name\": \"moov\",\n    \"header_size\": 8,\n    \"size\": 300,\n    \"children\": [\n      {\n        \"name\": \"trak\",\n        \"children\": [\n          {\n            \"name\": \"schm\",\n            \"scheme_type\": \"cbcs\",\n            \"scheme_version\": 65536\n          },\n          {\n            \"name\": \"tenc\",\n            \"header_size\": 12,\n            \"size\": 49,\n            \"version\": 1,\n            \"default_isProtected\": 1,\n            \"default_Per_Sample_IV_Size\": 0,\n            \"default_KID\": \"[00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f]\",\n            \"default_crypt_byte_block\": 1,\n            \"default_skip_byte_block\": 9,\n            \"default_constant_IV_size\": 16,\n            \"default_constant_IV\": \"[***REDACTED***]\"\n          }\n        ]\n      }\n    ]\n  },\n  {\n    \"name\": \"moof\",\n    \"children\": [\n      {\n        \"name\": \"traf\",\n        \"children\": [\n          {\n            \"name\": \"tfdt\",\n            \"version\": 1,\n            \"base media decode time\": 180000\n          },\n          {\n            \"name\": \"trun\",\n            \"sample count\": 48\n          },\n          {\n            \"name\": \"saiz\",\n            \"sample count\": 999\n          }\n        ]\n      }\n    ]\n  }\n]",
+     "stderr": "",
+     "truncated": false,
+     "stage": "tool",
+     "tool": "mp4dump"
+    }
+   ]
+  },
+  {
+   "name": "measure_segment_durations_s",
+   "outcome": {
+    "ok": [
+     0.0,
+     0.0
+    ]
+   },
+   "records": [
+    {
+     "level": "info",
+     "message": "command",
+     "event": "command",
+     "argv": [
+      "mp4dump",
+      "--format",
+      "json",
+      "<dir>/media.mp4"
+     ],
+     "stage": "tool",
+     "tool": "mp4dump"
+    },
+    {
+     "level": "info",
+     "message": "tool-output",
+     "event": "tool-output",
+     "returncode": 0,
+     "stdout": "[\n  {\n    \"name\": \"ftyp\",\n    \"header_size\": 8,\n    \"size\": 24,\n    \"major_brand\": \"iso6\"\n  },\n  {\n    \"name\": \"moov\",\n    \"header_size\": 8,\n    \"size\": 300,\n    \"children\": [\n      {\n        \"name\": \"trak\",\n        \"children\": [\n          {\n            \"name\": \"schm\",\n            \"scheme_type\": \"cbcs\",\n            \"scheme_version\": 65536\n          },\n          {\n            \"name\": \"tenc\",\n            \"header_size\": 12,\n            \"size\": 49,\n            \"version\": 1,\n            \"default_isProtected\": 1,\n            \"default_Per_Sample_IV_Size\": 0,\n            \"default_KID\": \"[00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f]\",\n            \"default_crypt_byte_block\": 1,\n            \"default_skip_byte_block\": 9,\n            \"default_constant_IV_size\": 16,\n            \"default_constant_IV\": \"[***REDACTED***]\"\n          }\n        ]\n      }\n    ]\n  },\n  {\n    \"name\": \"moof\",\n    \"children\": [\n      {\n        \"name\": \"traf\",\n        \"children\": [\n          {\n            \"name\": \"tfdt\",\n            \"version\": 1,\n            \"base media decode time\": 180000\n          },\n          {\n            \"name\": \"trun\",\n            \"sample count\": 48\n          },\n          {\n            \"name\": \"saiz\",\n            \"sample count\": 999\n          }\n        ]\n      }\n    ]\n  }\n]",
+     "stderr": "",
+     "truncated": false,
+     "stage": "tool",
+     "tool": "mp4dump"
+    },
+    {
+     "level": "info",
+     "message": "command",
+     "event": "command",
+     "argv": [
+      "mp4dump",
+      "--format",
+      "json",
+      "<dir>/media.mp4"
+     ],
+     "stage": "tool",
+     "tool": "mp4dump"
+    },
+    {
+     "level": "info",
+     "message": "tool-output",
+     "event": "tool-output",
+     "returncode": 0,
+     "stdout": "[\n  {\n    \"name\": \"ftyp\",\n    \"header_size\": 8,\n    \"size\": 24,\n    \"major_brand\": \"iso6\"\n  },\n  {\n    \"name\": \"moov\",\n    \"header_size\": 8,\n    \"size\": 300,\n    \"children\": [\n      {\n        \"name\": \"trak\",\n        \"children\": [\n          {\n            \"name\": \"schm\",\n            \"scheme_type\": \"cbcs\",\n            \"scheme_version\": 65536\n          },\n          {\n            \"name\": \"tenc\",\n            \"header_size\": 12,\n            \"size\": 49,\n            \"version\": 1,\n            \"default_isProtected\": 1,\n            \"default_Per_Sample_IV_Size\": 0,\n            \"default_KID\": \"[00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f]\",\n            \"default_crypt_byte_block\": 1,\n            \"default_skip_byte_block\": 9,\n            \"default_constant_IV_size\": 16,\n            \"default_constant_IV\": \"[***REDACTED***]\"\n          }\n        ]\n      }\n    ]\n  },\n  {\n    \"name\": \"moof\",\n    \"children\": [\n      {\n        \"name\": \"traf\",\n        \"children\": [\n          {\n            \"name\": \"tfdt\",\n            \"version\": 1,\n            \"base media decode time\": 180000\n          },\n          {\n            \"name\": \"trun\",\n            \"sample count\": 48\n          },\n          {\n            \"name\": \"saiz\",\n            \"sample count\": 999\n          }\n        ]\n      }\n    ]\n  }\n]",
+     "stderr": "",
+     "truncated": false,
+     "stage": "tool",
+     "tool": "mp4dump"
+    },
+    {
+     "level": "info",
+     "message": "command",
+     "event": "command",
+     "argv": [
+      "ffprobe",
+      "-v",
+      "error",
+      "-show_entries",
+      "format=duration",
+      "-show_entries",
+      "packet=pts_time",
+      "-of",
+      "json",
+      "<tmp>/tail.mp4"
+     ],
+     "stage": "tool",
+     "tool": "ffprobe"
+    },
+    {
+     "level": "info",
+     "message": "tool-output",
+     "event": "tool-output",
+     "returncode": 0,
+     "stdout": "{\n    \"packets\": [\n        {\n            \"pts_time\": \"0.000000\"\n        },\n        {\n            \"pts_time\": \"0.041667\"\n        }\n    ],\n    \"format\": {\n        \"duration\": \"2.000000\"\n    }\n}",
+     "stderr": "",
+     "truncated": false,
+     "stage": "tool",
+     "tool": "ffprobe"
+    }
+   ]
+  },
+  {
+   "name": "decode_media_to_pcm",
+   "outcome": {
+    "ok": "<dir>/pcm/out.pcm"
+   },
+   "records": [
+    {
+     "level": "info",
+     "message": "command",
+     "event": "command",
+     "argv": [
+      "ffmpeg",
+      "-v",
+      "error",
+      "-y",
+      "-i",
+      "<dir>/media.mp4",
+      "-vn",
+      "-f",
+      "s16le",
+      "-ac",
+      "2",
+      "-ar",
+      "48000",
+      "<dir>/pcm/out.pcm"
+     ],
+     "stage": "tool",
+     "tool": "ffmpeg"
+    },
+    {
+     "level": "info",
+     "message": "tool-output",
+     "event": "tool-output",
+     "returncode": 0,
+     "stdout": "",
+     "stderr": "",
+     "truncated": false,
+     "stage": "tool",
+     "tool": "ffmpeg"
+    }
+   ]
+  },
+  {
+   "name": "decode_media_to_pcm-failed",
+   "outcome": {
+    "error": "RuntimeError",
+    "message": "ffmpeg PCM decode failed for broken.mp4"
+   },
+   "records": [
+    {
+     "level": "info",
+     "message": "command",
+     "event": "command",
+     "argv": [
+      "ffmpeg",
+      "-v",
+      "error",
+      "-y",
+      "-i",
+      "<dir>/broken.mp4",
+      "-vn",
+      "-f",
+      "s16le",
+      "-ac",
+      "2",
+      "-ar",
+      "48000",
+      "<dir>/out.pcm"
+     ],
+     "stage": "tool",
+     "tool": "ffmpeg"
+    },
+    {
+     "level": "error",
+     "message": "tool-output",
+     "event": "tool-output",
+     "returncode": 183,
+     "stdout": "",
+     "stderr": "broken: Invalid data found when processing input\n",
+     "truncated": false,
+     "stage": "tool",
+     "tool": "ffmpeg"
+    }
+   ]
+  },
+  {
+   "name": "decode_hls_media_playlist-pcm",
+   "outcome": {
+    "ok": "<dir>/decoded/out.pcm"
+   },
+   "records": [
+    {
+     "level": "info",
+     "message": "command",
+     "event": "command",
+     "argv": [
+      "ffmpeg",
+      "-v",
+      "error",
+      "-y",
+      "-allowed_extensions",
+      "ALL",
+      "-i",
+      "<dir>/media.mp4",
+      "-vn",
+      "-f",
+      "s16le",
+      "-ac",
+      "2",
+      "-ar",
+      "48000",
+      "<dir>/decoded/out.pcm"
+     ],
+     "stage": "tool",
+     "tool": "ffmpeg"
+    },
+    {
+     "level": "info",
+     "message": "tool-output",
+     "event": "tool-output",
+     "returncode": 0,
+     "stdout": "",
+     "stderr": "",
+     "truncated": false,
+     "stage": "tool",
+     "tool": "ffmpeg"
+    }
+   ]
+  },
+  {
+   "name": "decode_hls_media_playlist-framemd5",
+   "outcome": {
+    "ok": "<dir>/decoded/out.framemd5"
+   },
+   "records": [
+    {
+     "level": "info",
+     "message": "command",
+     "event": "command",
+     "argv": [
+      "ffmpeg",
+      "-v",
+      "error",
+      "-y",
+      "-allowed_extensions",
+      "ALL",
+      "-i",
+      "<dir>/media.mp4",
+      "-an",
+      "-f",
+      "framemd5",
+      "<dir>/decoded/out.framemd5"
+     ],
+     "stage": "tool",
+     "tool": "ffmpeg"
+    },
+    {
+     "level": "info",
+     "message": "tool-output",
+     "event": "tool-output",
+     "returncode": 0,
+     "stdout": "",
+     "stderr": "",
+     "truncated": false,
+     "stage": "tool",
+     "tool": "ffmpeg"
+    }
+   ]
+  },
+  {
+   "name": "decode_hls_media_playlist-wav",
+   "outcome": {
+    "error": "ValueError",
+    "message": "unknown decode mode 'wav' (expected 'pcm' | 'framemd5')"
+   },
+   "records": []
+  },
+  {
+   "name": "decode_hls_media_playlist-failed",
+   "outcome": {
+    "error": "RuntimeError",
+    "message": "ffmpeg SAMPLE-AES decode (pcm) failed for broken.m3u8"
+   },
+   "records": [
+    {
+     "level": "info",
+     "message": "command",
+     "event": "command",
+     "argv": [
+      "ffmpeg",
+      "-v",
+      "error",
+      "-y",
+      "-allowed_extensions",
+      "ALL",
+      "-i",
+      "<dir>/broken.m3u8",
+      "-vn",
+      "-f",
+      "s16le",
+      "-ac",
+      "2",
+      "-ar",
+      "48000",
+      "<dir>/out.pcm"
+     ],
+     "stage": "tool",
+     "tool": "ffmpeg"
+    },
+    {
+     "level": "error",
+     "message": "tool-output",
+     "event": "tool-output",
+     "returncode": 183,
+     "stdout": "",
+     "stderr": "broken: Invalid data found when processing input\n",
+     "truncated": false,
+     "stage": "tool",
+     "tool": "ffmpeg"
+    }
+   ]
+  }
+ ]
+}

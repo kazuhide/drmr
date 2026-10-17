@@ -1,0 +1,7 @@
+/target/
+.env
+.env.*
+keys*.env
+/output/
+*.log
+.DS_Store

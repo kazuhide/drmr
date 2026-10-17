@@ -1,0 +1,46 @@
+[package]
+name = "drmr-server"
+description = "HTTP API and embedded browser console for drmr"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+repository.workspace = true
+build = "build.rs"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "drmr-server"
+path = "src/main.rs"
+
+[dependencies]
+axum.workspace = true
+base64.workspace = true
+clap.workspace = true
+drmr-core = { path = "../drmr-core" }
+getrandom.workspace = true
+hex.workspace = true
+http-body.workspace = true
+include_dir.workspace = true
+indexmap.workspace = true
+libc.workspace = true
+regex.workspace = true
+roxmltree.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+# The content key a preview session and a pending job hold in memory is wiped on drop.
+zeroize.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+# The tests' HTTP client is ureq 3; drmr-core's S3 storage pins ureq 2 under the workspace key, so
+# this one is declared here.
+ureq = { version = "3", default-features = false }
+
+[lints]
+workspace = true
