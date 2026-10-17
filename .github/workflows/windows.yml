@@ -52,8 +52,47 @@ jobs:
       - name: Test native access controls, descendants, CLI and batch as a regular user
         run: ./.github/scripts/windows-native-tests.ps1
 
+      - name: Preserve native test results
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v4
+        with:
+          name: windows-native-results
+          path: |
+            ${{ runner.temp }}/drmr-native-user/bbb-media-report.json
+            ${{ runner.temp }}/drmr-native-user/conversion-report.json
+            ${{ runner.temp }}/drmr-native-user/stdout.log
+            ${{ runner.temp }}/drmr-native-user/stderr.log
+          if-no-files-found: warn
+
       - name: Build native CLI
         run: cargo build --release --locked -p drmr
 
       - name: Check native CLI help
         run: .\target\release\drmr.exe --help
+
+      - name: Inspect native runtime dependencies
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $installation = & $vswhere -latest -products '*' -property installationPath
+          $dumpbin = Get-ChildItem (Join-Path $installation 'VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe') | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $dumpbin) { throw 'PE dependency inspection tool is unavailable' }
+          & $dumpbin.FullName /DEPENDENTS .\target\release\drmr.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Native runtime dependency inspection failed' }
+
+      - name: Package native CLI and user documentation
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'drmr-windows-x86_64'
+          New-Item -ItemType Directory -Path $archive | Out-Null
+          Copy-Item .\target\release\drmr.exe, .\LICENSE, .\README.md $archive
+          New-Item -ItemType Directory -Path "$archive\docs" | Out-Null
+          Copy-Item .\docs\*.md "$archive\docs"
+          Compress-Archive -Path "$archive\*" -DestinationPath "$archive.zip"
+
+      - name: Upload native CLI archive
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v4
+        with:
+          name: drmr-windows-x86_64
+          path: ${{ runner.temp }}/drmr-windows-x86_64.zip
+          if-no-files-found: error

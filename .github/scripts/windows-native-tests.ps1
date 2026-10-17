@@ -58,6 +58,7 @@ $tools = (Get-Content (Join-Path $PSScriptRoot 'media-tools.txt')).Trim()
 $python = (Get-Content (Join-Path $PSScriptRoot 'python.txt')).Trim()
 $env:PATH = "$(Split-Path $python);$tools;$env:PATH"
 $env:DRMR_MEDIA_REPORT = Join-Path $PSScriptRoot 'bbb-media-report.json'
+$env:DRMR_CONVERSION_REPORT = Join-Path $PSScriptRoot 'conversion-report.json'
 foreach ($tool in @('ffmpeg', 'ffprobe', 'mp4dump', 'mp4encrypt', 'packager', 'python')) {
     if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) { throw "Required media tool unavailable: $tool" }
 }
