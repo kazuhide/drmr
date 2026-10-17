@@ -10,7 +10,7 @@ The CLI is the primary interface. A local web console is experimental. A desktop
 
 ## Install
 
-Use macOS or Linux with Rust 1.99.0. The repository pins this version in `rust-toolchain.toml`.
+Use Rust 1.99.0. The repository pins this version in `rust-toolchain.toml`. The commands below use a macOS/Linux shell; see the [Windows guide](docs/windows.md) for PowerShell, native paths, and protected configuration.
 
 From the repository root:
 
