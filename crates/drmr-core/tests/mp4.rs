@@ -52,8 +52,10 @@ fn cat(parts: &[&[u8]]) -> Vec<u8> {
 }
 
 fn on_path(tool: &str) -> bool {
-    let found = std::env::var_os("PATH")
-        .is_some_and(|paths| std::env::split_paths(&paths).any(|dir| dir.join(tool).is_file()));
+    let found = std::env::var_os("PATH").is_some_and(|paths| {
+        std::env::split_paths(&paths)
+            .any(|dir| drmr_test_support::program_path(&dir.join(tool)).is_file())
+    });
     if !found {
         eprintln!("skipped: {tool} not on PATH");
     }

@@ -17,8 +17,10 @@ const KEY: &str = "10101010101010101010101010101010";
 const IV: &str = "20202020202020202020202020202020";
 
 fn on_path(tool: &str) -> bool {
-    let found = std::env::var_os("PATH")
-        .is_some_and(|paths| std::env::split_paths(&paths).any(|dir| dir.join(tool).is_file()));
+    let found = std::env::var_os("PATH").is_some_and(|paths| {
+        std::env::split_paths(&paths)
+            .any(|dir| drmr_test_support::program_path(&dir.join(tool)).is_file())
+    });
     if !found {
         eprintln!("skipped: {tool} not on PATH");
     }
