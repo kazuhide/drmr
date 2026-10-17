@@ -227,7 +227,11 @@ impl Converter {
         // Inspect all private snapshots before selecting a content-aware worker count.
         let mut sources = Vec::new();
         for (ordinal, track) in request.tracks.iter().enumerate() {
-            let source = work.join(format!("source-{ordinal}.mp4"));
+            // A completed tool seals only its own track directory, while sibling tools
+            // may still have writable output handles open on Windows.
+            let directory = work.join(format!("normalize-{ordinal:04}"));
+            super::files::create_dir(&directory)?;
+            let source = directory.join("source.mp4");
             copy_private(&track.source, &source)?;
             let prepared = prepare(&source, track.index, track.kind, request.input_keys)?;
             let profile = self.backend.profile_stream(&source, track.index)?;
@@ -244,7 +248,11 @@ impl Converter {
         }
         let clears = self.run_tracks(sources.len(), |ordinal| {
             let source = &sources[ordinal];
-            let clear = work.join(format!("clear-{ordinal}.mp4"));
+            let clear = source
+                .media
+                .parent()
+                .ok_or(ConversionError("temporary-workspace-unavailable"))?
+                .join("clear.mp4");
             self.backend.package_stream(
                 &source.media,
                 source.index,
