@@ -65,13 +65,13 @@ fn work_list_of(path: &Path, rows: &[(String, String)]) {
 }
 
 struct Paths {
-    temp: tempfile::TempDir,
+    temp: common::PrivateTempDir,
 }
 
 impl Paths {
     fn new() -> Paths {
         Paths {
-            temp: tempfile::tempdir().unwrap(),
+            temp: common::private_tempdir().unwrap(),
         }
     }
     fn path(&self, name: &str) -> PathBuf {

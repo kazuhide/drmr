@@ -1,6 +1,4 @@
 //! Worker entry points and per-asset child processes with isolated environments.
-// unix only (open decision #23): a `harness = false` binary needs its own `main`, so it cannot be
-// gated with `#![cfg(unix)]` like the harness tests; it does not compile elsewhere today.
 
 mod common;
 
@@ -158,12 +156,12 @@ fn fake_run(args: &[String]) -> i32 {
 }
 
 struct Fixture {
-    temp: tempfile::TempDir,
+    temp: common::PrivateTempDir,
     download: std::path::PathBuf,
 }
 
 fn fixture(title: &str) -> (Fixture, ObjectRef) {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = common::private_tempdir().unwrap();
     let store = temp.path().join("store");
     let built = build_synthetic_dash_asset(&store, &[h264_rep("v")], title);
     let download = store.join("download");
@@ -171,9 +169,10 @@ fn fixture(title: &str) -> (Fixture, ObjectRef) {
         .mpd_path
         .strip_prefix(&download)
         .unwrap()
-        .to_str()
-        .unwrap()
-        .to_string();
+        .components()
+        .map(|part| part.as_os_str().to_str().unwrap())
+        .collect::<Vec<_>>()
+        .join("/");
     (
         Fixture { temp, download },
         ObjectRef::new(manifest).unwrap(),
