@@ -34,6 +34,8 @@ Media processing uses these external tools. Follow their installation instructio
 | `mp4dump` | [Bento4](https://www.bento4.com/downloads/) | Inspect MP4 structure |
 | `packager` | [Shaka Packager](https://github.com/shaka-project/shaka-packager#readme) | Encrypt and package media |
 
+The real-media regression is qualified with FFmpeg 9.0.2 and Shaka Packager 3.8.0. Some older FFmpeg builds omit packet durations needed for encrypted audio verification; drmr refuses incomplete timing evidence. See [media processing](docs/media-processing.md) for details.
+
 ## Start here
 
 ```sh

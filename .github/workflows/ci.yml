@@ -40,10 +40,19 @@ jobs:
         env:
           BENTO4_ZIP: Bento4-SDK-1-6-0-641.x86_64-unknown-linux.zip
           BENTO4_SHA256: d48dc6b164941212e5614237b4d9aeff81d4d111ee8b1508892764078a0870e8
+          FFMPEG_ARCHIVE: ffmpeg-n9.0.2-17-g2a571b6068-linux64-gpl-9.0.tar.xz
+          FFMPEG_SHA256: 68ee646831adaae2495618346f3bba94ff207ff83bbd34d643e7004730d66269
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ffmpeg python3 nodejs unzip
+          sudo apt-get install -y --no-install-recommends python3 nodejs unzip xz-utils
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 \
+            -o "$RUNNER_TEMP/ffmpeg.tar.xz" \
+            "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-30-13-08/${FFMPEG_ARCHIVE}"
+          printf '%s  %s\n' "$FFMPEG_SHA256" "$RUNNER_TEMP/ffmpeg.tar.xz" | sha256sum --check --strict -
+          mkdir -p "$RUNNER_TEMP/ffmpeg"
+          tar -xJf "$RUNNER_TEMP/ffmpeg.tar.xz" -C "$RUNNER_TEMP/ffmpeg"
+          printf '%s\n' "$RUNNER_TEMP/ffmpeg/${FFMPEG_ARCHIVE%.tar.xz}/bin" >> "$GITHUB_PATH"
           curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 \
             -o "$RUNNER_TEMP/bento4.zip" \
             "https://www.bok.net/Bento4/binaries/${BENTO4_ZIP}"
