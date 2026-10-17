@@ -2,7 +2,25 @@
 
 The examples below assume `drmr` is installed and the external tools are on `PATH`. Run `drmr doctor` first. Commands process existing media; they do not encode new video qualities.
 
-## Inspect a local DASH asset
+## Inspect media and plan a conversion
+
+```sh
+drmr inspect media.mp4
+drmr inspect master.m3u8 --json
+drmr plan manifest.mpd --to cbcs --format dash,hls --json
+```
+
+`inspect` detects local MP4, DASH, and HLS by their contents. The JSON report has `schema_version: 1`, a format, protection per track or sample description, known key identifiers, DRM system labels, and explanation tokens in `findings`. It excludes encryption keys, initialization vectors, license URLs, and key URLs. Generated track identifiers are local to the report.
+
+Manifest reports describe declarations. MP4 reports read initialization metadata and skip media payloads. Both return `media_verified: false`; they do not decrypt, decode, validate every sample, or prove device playback. Unsupported or incomplete protection remains `unknown`. An HLS `SAMPLE-AES` declaration alone does not establish the underlying MP4 encryption scheme.
+
+HLS inspection follows only local child playlists inside the input playlist's directory tree. It never fetches remote playlists, media segments, or keys. Remote, missing, cyclic, and escaping child references remain unresolved. Limits are 4 MiB per manifest, 16 MiB total, 32 playlists, and 128 references. Each track permits at most 64 key identifiers; DASH also limits inherited protection declarations to 64, and HLS permits at most 64 active key formats. MP4 movie metadata is limited to 16 MiB. This command is separate from `analyze-hls`, which downloads and probes media under an explicit source policy.
+
+`plan INPUT --to clear|cenc|cbcs|hls-aes128` describes the requested operations and independent input/output key roles. `--format mp4|dash|hls` selects output packaging; comma-separated values are accepted. Omitting it retains the input format. An HLS AES-128 target requires HLS output. CENC output to HLS is currently rejected. Unsupported source protection or unresolved encryption is reported as incompatible.
+
+A compatible plan is a description of intent. `execution_available: false` explicitly means the generic conversion is not implemented. Continue using `run` and `package-hls` for their supported processing paths. Plans contain no secret key values and cannot be submitted as trusted execution artifacts.
+
+## List a prepared DASH asset
 
 `plan` and `run` use a downloaded media tree. URLs in the DASH manifest resolve to local files under `download/<host>/<path>`. For example:
 

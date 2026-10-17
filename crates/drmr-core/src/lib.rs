@@ -16,6 +16,7 @@ pub mod events;
 pub mod hls_cli;
 pub mod hls_pipeline;
 pub mod hls_pipeline_deps;
+pub mod inspection;
 pub mod m3u8;
 pub mod manifest_dash;
 pub mod manifest_gen;

@@ -40,10 +40,19 @@ jobs:
         env:
           BENTO4_ZIP: Bento4-SDK-1-6-0-641.x86_64-unknown-linux.zip
           BENTO4_SHA256: d48dc6b164941212e5614237b4d9aeff81d4d111ee8b1508892764078a0870e8
+          FFMPEG_ARCHIVE: ffmpeg-n9.0.2-17-g2a571b6068-linux64-gpl-9.0.tar.xz
+          FFMPEG_SHA256: 68ee646831adaae2495618346f3bba94ff207ff83bbd34d643e7004730d66269
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ffmpeg python3 nodejs unzip
+          sudo apt-get install -y --no-install-recommends python3 nodejs unzip xz-utils
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 \
+            -o "$RUNNER_TEMP/ffmpeg.tar.xz" \
+            "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-30-13-08/${FFMPEG_ARCHIVE}"
+          printf '%s  %s\n' "$FFMPEG_SHA256" "$RUNNER_TEMP/ffmpeg.tar.xz" | sha256sum --check --strict -
+          mkdir -p "$RUNNER_TEMP/ffmpeg"
+          tar -xJf "$RUNNER_TEMP/ffmpeg.tar.xz" -C "$RUNNER_TEMP/ffmpeg"
+          printf '%s\n' "$RUNNER_TEMP/ffmpeg/${FFMPEG_ARCHIVE%.tar.xz}/bin" >> "$GITHUB_PATH"
           curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 \
             -o "$RUNNER_TEMP/bento4.zip" \
             "https://www.bok.net/Bento4/binaries/${BENTO4_ZIP}"
@@ -71,6 +80,36 @@ jobs:
             -pix_fmt yuv420p "$RUNNER_TEMP/smoke.mp4"
           mp4dump --format json "$RUNNER_TEMP/smoke.mp4" > /dev/null
 
+      - name: Install pinned media packager
+        run: |
+          set -euo pipefail
+          case "${RUNNER_OS}-${RUNNER_ARCH}" in
+            Linux-X64)
+              asset=packager-linux-x64
+              digest=225a33d1c3523dc1e80ead90b44266a4f545e8dbdb6ac30e553b8a7e4066096d ;;
+            macOS-ARM64)
+              asset=packager-osx-arm64
+              digest=c8a26c3639cf2ebfa542dd9b638a2ea3299090ed9b9485d47179d4aa1fdb96b7 ;;
+            macOS-X64)
+              asset=packager-osx-x64
+              digest=736d24def62d1f4944cc827fec728b830d6c619149ef0e5f9828ee2bd5a73ed7 ;;
+            *) exit 1 ;;
+          esac
+          mkdir -p "$RUNNER_TEMP/media-tools"
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 \
+            "https://github.com/shaka-project/shaka-packager/releases/download/v3.8.0/$asset" \
+            -o "$RUNNER_TEMP/media-tools/packager"
+          python3 - "$RUNNER_TEMP/media-tools/packager" "$digest" <<'PYTHON'
+          import hashlib
+          from pathlib import Path
+          import sys
+          if hashlib.sha256(Path(sys.argv[1]).read_bytes()).hexdigest() != sys.argv[2]:
+              raise SystemExit("Packager checksum mismatch")
+          PYTHON
+          chmod +x "$RUNNER_TEMP/media-tools/packager"
+          "$RUNNER_TEMP/media-tools/packager" --version
+          printf '%s\n' "$RUNNER_TEMP/media-tools" >> "$GITHUB_PATH"
+
       - name: Install pinned Rust toolchain
         run: |
           rustup toolchain install --no-self-update
@@ -85,6 +124,8 @@ jobs:
 
       - name: Run all Rust tests
         id: rust-tests
+        env:
+          DRMR_MEDIA_REPORT: ${{ runner.temp }}/bbb-media-report.json
         run: |
           set -euo pipefail
           cargo test --workspace --locked -- --nocapture 2>&1 | tee "$RUNNER_TEMP/rust-tests.log"
@@ -151,7 +192,7 @@ jobs:
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/$PACKAGE_NAME/docs"
           cp target/release/drmr README.md LICENSE "$RUNNER_TEMP/$PACKAGE_NAME/"
-          cp docs/usage.md "$RUNNER_TEMP/$PACKAGE_NAME/docs/"
+          cp docs/*.md "$RUNNER_TEMP/$PACKAGE_NAME/docs/"
           tar -czf "$RUNNER_TEMP/$PACKAGE_NAME.tar.gz" -C "$RUNNER_TEMP" "$PACKAGE_NAME"
 
       - name: Upload CLI archive
@@ -169,4 +210,13 @@ jobs:
           name: rust-tests-${{ runner.os }}-${{ runner.arch }}
           path: ${{ runner.temp }}/rust-tests.log
           if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload real-media test results
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: bbb-media-${{ runner.os }}-${{ runner.arch }}
+          path: ${{ runner.temp }}/bbb-media-report.json
+          if-no-files-found: error
           retention-days: 14

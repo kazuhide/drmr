@@ -34,15 +34,21 @@ Media processing uses these external tools. Follow their installation instructio
 | `mp4dump` | [Bento4](https://www.bento4.com/downloads/) | Inspect MP4 structure |
 | `packager` | [Shaka Packager](https://github.com/shaka-project/shaka-packager#readme) | Encrypt and package media |
 
+The real-media regression is qualified with FFmpeg 9.0.2 and Shaka Packager 3.8.0. Some older FFmpeg builds omit packet durations needed for encrypted audio verification; drmr refuses incomplete timing evidence. See [media processing](docs/media-processing.md) for details.
+
 ## Start here
 
 ```sh
 drmr doctor
+drmr inspect /path/to/media.mp4
+drmr plan /path/to/manifest.mpd --to cbcs --format dash,hls
 drmr plan --mpd /path/to/asset/download/manifest.example.test/sample/dash/manifest.mpd
 drmr run --help
 ```
 
-`doctor` checks whether the four executable files can be found. It does not run them, validate their versions, or prove that a particular asset can be processed. `plan` reads a prepared local DASH asset and lists supported renditions without writing output or requiring keys.
+`inspect` reads local MP4 metadata or DASH/HLS declarations without keys or external tools. `plan INPUT --to ...` describes conversion intent and separates input decryption keys from output encryption keys. Neither command verifies media samples or executes a conversion. `plan --mpd` keeps the original prepared-DASH rendition listing.
+
+`doctor` checks whether the four executable files can be found. It does not run them, validate their versions, or prove that a particular asset can be processed.
 
 For clear HLS, start with `analyze-hls`, then package the saved snapshot with `package-hls`. See the [usage guide](docs/usage.md) for configuration examples, the expected local layout, key handling, and output.
 
@@ -59,7 +65,8 @@ drmr packages supplied media and signaling. It does not provide a DRM license se
 | Command | Purpose |
 | --- | --- |
 | `doctor` | Check external tool availability; use `--json` for scripts |
-| `plan` | List supported renditions in a local DASH asset |
+| `inspect` | Read local MP4, DASH, or HLS metadata; use `--json` for scripts |
+| `plan` | Describe a target conversion; `--mpd` lists prepared DASH renditions |
 | `run` | Repackage one local DASH asset and check its output |
 | `analyze-hls` | Download and analyze a clear HLS presentation into a saved snapshot |
 | `package-hls` | Package a verified HLS snapshot with DRM signaling |
@@ -70,3 +77,5 @@ drmr packages supplied media and signaling. It does not provide a DRM license se
 | `version` | Print the version |
 
 Use `drmr help <COMMAND>` for command options. See [usage](docs/usage.md) for examples and exit codes.
+
+See [media processing](docs/media-processing.md) for encryption terminology, segment boundaries, and the checks behind the reported results.

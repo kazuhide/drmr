@@ -8,6 +8,7 @@ use crate::config::KeyMaterial;
 use crate::manifest_gen::{self, PackagedPresentation, PrivateFairPlaySignaling};
 use crate::manifest_support::py::PyErr;
 use crate::media::{self, InitProbe, MediaEngine, MediaError, PacketInfo};
+use crate::mp4::audio_edit::AudioEdit;
 use crate::packager::{self, PackagerResult};
 use crate::pipeline_deps::EncryptCbcs;
 use crate::source::{self, Failure, SourceAnalysis};
@@ -170,8 +171,18 @@ impl PipelineDeps for Ports {
         offset: &BigRational,
         content_type: &str,
     ) -> Result<PathBuf, MediaError> {
-        self.engine
-            .normalize_segment(path, destination, stream_index, offset, content_type)
+        let edit = if content_type == "audio" {
+            AudioEdit::read(path, stream_index)?
+        } else {
+            None
+        };
+        let normalized =
+            self.engine
+                .normalize_segment(path, destination, stream_index, offset, content_type)?;
+        if let Some(edit) = edit {
+            edit.restore(&normalized, &[])?;
+        }
+        Ok(normalized)
     }
 
     fn same_timing(
@@ -219,14 +230,47 @@ impl PipelineDeps for Ports {
             .iter()
             .map(String::as_str)
             .collect();
-        self.packager(call.packager_bin).encrypt_cbcs(
+        let edit = AudioEdit::read(call.input_mp4, 0).map_err(edit_error)?;
+        let result = self.packager(call.packager_bin).encrypt_cbcs(
             call.input_mp4,
             call.init_output,
             call.segment_template,
             call.key,
             call.segment_duration_seconds,
             &pssh,
-        )
+        )?;
+        if result.returncode == 0
+            && let Some(edit) = edit
+        {
+            let template = Path::new(call.segment_template);
+            let filename = template
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or_else(|| {
+                    packager::Error::Value("unsupported-audio-segment-template".into())
+                })?;
+            let (prefix, suffix) = filename.split_once("$Number$").ok_or_else(|| {
+                packager::Error::Value("unsupported-audio-segment-template".into())
+            })?;
+            let mut segments = Vec::new();
+            for entry in std::fs::read_dir(template.parent().unwrap_or(Path::new(".")))? {
+                let entry = entry?;
+                if entry
+                    .file_name()
+                    .to_str()
+                    .and_then(|name| name.strip_prefix(prefix))
+                    .and_then(|name| name.strip_suffix(suffix))
+                    .is_some_and(|number| {
+                        !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
+                    })
+                {
+                    segments.push(entry.path());
+                }
+            }
+            edit.restore(call.init_output, &segments)
+                .map_err(edit_error)?;
+        }
+        Ok(result)
     }
 
     fn decrypt_cenc(
@@ -236,8 +280,16 @@ impl PipelineDeps for Ports {
         key: &KeyMaterial,
         packager_bin: &str,
     ) -> Result<PackagerResult, packager::Error> {
-        self.packager(packager_bin)
-            .decrypt_cenc(input_mp4, output_mp4, key)
+        let edit = AudioEdit::read(input_mp4, 0).map_err(edit_error)?;
+        let result = self
+            .packager(packager_bin)
+            .decrypt_cenc(input_mp4, output_mp4, key)?;
+        if result.returncode == 0
+            && let Some(edit) = edit
+        {
+            edit.restore(output_mp4, &[]).map_err(edit_error)?;
+        }
+        Ok(result)
     }
 
     fn verify_source_snapshot(&self, analysis: &SourceAnalysis) -> Result<(), Failure> {
@@ -259,5 +311,12 @@ impl PipelineDeps for Ports {
         fairplay: &PrivateFairPlaySignaling,
     ) -> Result<Vec<PathBuf>, PyErr> {
         manifest_gen::write_hls(presentation, path, fairplay)
+    }
+}
+
+fn edit_error(error: MediaError) -> packager::Error {
+    match error {
+        MediaError::Os(error) => packager::Error::Io(error),
+        error => packager::Error::Value(error.to_string()),
     }
 }

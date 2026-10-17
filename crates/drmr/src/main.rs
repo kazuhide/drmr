@@ -3,6 +3,7 @@
 //! command expects.
 
 mod doctor;
+mod inspect_cli;
 
 use clap::{Parser, Subcommand};
 #[cfg(unix)]
@@ -32,7 +33,7 @@ const EXIT_INVALID: u8 = 2;
     name = "drmr",
     version,
     about = "Inspect and repackage streaming media with digital rights management (DRM)",
-    after_help = "Getting started:\n  drmr doctor                       Check external media tools\n  drmr plan --mpd manifest.mpd       Inspect a DASH manifest without writing files\n  drmr run --help                    See packaging options and examples\n\nDASH and HLS are streaming formats that describe media using manifests or playlists.\nUse 'drmr help <COMMAND>' for detailed command help."
+    after_help = "Getting started:\n  drmr doctor                       Check external media tools\n  drmr inspect media.mp4             Read local media metadata without keys\n  drmr plan media.mp4 --to cbcs       Describe conversion intent\n  drmr plan --mpd manifest.mpd       List prepared DASH renditions\n  drmr run --help                    See existing DASH packaging options\n\nDASH and HLS are streaming formats that describe media using manifests or playlists.\nUse 'drmr help <COMMAND>' for detailed command help."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -69,9 +70,18 @@ enum Command {
         /// Any JSON file.
         path: PathBuf,
     },
-    /// Media packaging and read-only planning commands.
-    #[command(flatten)]
-    Repackage(cli::Commands),
+    /// Repackage the supported downloaded DASH catalog layout.
+    #[command(about = cli::RUN_ABOUT, args_override_self = true, infer_long_args = true)]
+    Run(cli::RunArgs),
+    /// Inspect local MP4, DASH, or HLS metadata without keys or output files.
+    Inspect(inspect_cli::InspectArgs),
+    /// Describe conversion intent, or list catalog renditions with --mpd.
+    #[command(
+        args_override_self = true,
+        infer_long_args = true,
+        after_help = "With INPUT: describe a requested conversion without executing it.\nWith --mpd: enumerate renditions only; writes nothing (read-only)."
+    )]
+    Plan(inspect_cli::PlanArgs),
     /// Repackage multiple assets sequentially, with support for restarting.
     #[cfg(unix)]
     Batch(BatchArgs),
@@ -108,7 +118,15 @@ fn main() -> ExitCode {
         Command::Doctor { json } => doctor::run(json),
         Command::VerifySnapshot { path, files } => verify(&path, files),
         Command::Canonical { path } => canonical(&path),
-        Command::Repackage(command) => repackage(&command),
+        Command::Run(args) => repackage(&cli::Commands::Run(args)),
+        Command::Inspect(args) => inspect_cli::inspect(&args),
+        Command::Plan(args) => match &args.mpd {
+            Some(mpd) => repackage(&cli::Commands::Plan(cli::PlanArgs {
+                mpd: mpd.clone(),
+                asset_id: args.asset_id.clone(),
+            })),
+            None => inspect_cli::plan(&args),
+        },
         #[cfg(unix)]
         Command::Batch(args) => batch(&args),
         Command::Serve(args) => serve(&args),
