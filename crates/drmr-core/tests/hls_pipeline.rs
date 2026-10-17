@@ -216,13 +216,18 @@ impl PipelineDeps for Fake {
     }
 
     fn decoded_digest(&self, path: &Path, _c: &str, _s: i64) -> Result<String, MediaError> {
-        let text = path.display().to_string();
         let Some(track) = self.mismatch.as_deref() else {
             return Ok("same".to_string());
         };
-        let of_track =
-            text.contains(&format!("/{track}/")) || text.contains(&format!("/{track}.mp4"));
-        let differing = text.contains("decrypted_") || text.contains("audio-equivalence");
+        let of_track = path.components().any(|part| part.as_os_str() == track)
+            || path.file_stem().is_some_and(|stem| stem == track);
+        let differing = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("decrypted_"))
+            || path
+                .components()
+                .any(|part| part.as_os_str() == "audio-equivalence");
         Ok(if of_track && differing {
             "other".to_string()
         } else {
@@ -239,7 +244,11 @@ impl PipelineDeps for Fake {
     }
 
     fn box_tree(&self, path: &Path) -> Result<Value, MediaError> {
-        let audio = path.display().to_string().contains("/a0");
+        let audio = path.components().any(|part| {
+            part.as_os_str()
+                .to_str()
+                .is_some_and(|name| name.starts_with("a0"))
+        });
         let (crypt, skip) = if audio { (0, 0) } else { (1, 9) };
         Ok(json!([{"name": "moov", "children": [
             {"name": "tenc", "default_crypt_byte_block": crypt, "default_skip_byte_block": skip}

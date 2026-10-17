@@ -215,6 +215,7 @@ fn os_errors_print_like_python() {
     };
     assert_eq!(*kind, std::io::ErrorKind::NotFound);
     assert_eq!(*errno, Some(2));
+    #[cfg(unix)]
     assert_eq!(
         message,
         &format!(
@@ -222,6 +223,20 @@ fn os_errors_print_like_python() {
             repr_str(missing.to_str().unwrap())
         )
     );
+    #[cfg(windows)]
+    {
+        let native = std::fs::read(&missing).unwrap_err();
+        assert_eq!(native.kind(), std::io::ErrorKind::NotFound);
+        let native = native.to_string();
+        let detail = native.strip_suffix(" (os error 2)").unwrap();
+        assert_eq!(
+            message,
+            &format!(
+                "[Errno 2] {detail}: {}",
+                repr_str(missing.to_str().unwrap())
+            )
+        );
+    }
 }
 
 #[test]

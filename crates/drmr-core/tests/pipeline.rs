@@ -1,5 +1,9 @@
 //! Catalog repackaging, ordered checks, failure handling, and report serialization.
 
+#[path = "support/paths.rs"]
+mod paths;
+use paths::portable_path;
+
 mod pipeline_fakes;
 
 use drmr_core::canonical::Dumps;
@@ -796,13 +800,10 @@ fn repackage_rendition_audio_uses_boundary_preserving_per_segment_path() {
     assert_eq!(
         transcrypts,
         [PackagerCall::Transcrypt {
-            template: output_dir
-                .join("cbcs/audio/a0/seg_$Number$.m4s")
-                .display()
-                .to_string(),
+            template: portable_path(&output_dir.join("cbcs/audio/a0/seg_$Number$.m4s")),
             segments: 4,
             pssh_hex: None,
-            work_dir: Some(output_dir.join("_work/a0/persegment")),
+            work_dir: Some(output_dir.join("_work").join("a0").join("persegment")),
         }]
     );
 }
@@ -1107,8 +1108,8 @@ fn repackage_rendition_refuses_to_write_outside_output_dir() {
         refused,
         Err(PyError::Value(format!(
             "refusing to write outside {}: {}",
-            root.join("output").display(),
-            root.parent().unwrap().join("escaped").display()
+            portable_path(&root.join("output")),
+            portable_path(&root.parent().unwrap().join("escaped"))
         )))
     );
     let safe = output_dir.join("clear/video/v0/clear.mp4");
@@ -1413,13 +1414,11 @@ fn rewrite_asset_manifests_records_extinf_probe_errors_and_emits_local_forms() {
     let calls = fakes.manifests.calls();
     assert!(calls.contains(&format!(
         "rewrite_dash_manifest {} Some(\"http://127.0.0.1:8080/output/local\")",
-        manifests_root
-            .join("local/manifest.example.test/local/dash/manifest.mpd")
-            .display()
+        portable_path(&manifests_root.join("local/manifest.example.test/local/dash/manifest.mpd"))
     )));
     assert!(calls.contains(&format!(
         "rewrite_hls {} Some(\"http://127.0.0.1:8080/output/local\")",
-        manifests_root.join("local").display()
+        portable_path(&manifests_root.join("local"))
     )));
     // The FAIL rows are logged in sorted id order, then the manifests verdict.
     let records = collector.records();
@@ -2566,10 +2565,7 @@ fn a_report_under_a_relative_output_root_prints_normalized_paths() {
     let clear = report["renditions"][0]["clear_path"].as_str().unwrap();
     assert_eq!(
         clear,
-        dir.path()
-            .join("out/norm/clear/video/v0/clear.mp4")
-            .display()
-            .to_string()
+        portable_path(&dir.path().join("out/norm/clear/video/v0/clear.mp4"))
     );
     assert!(!clear.contains("/./"));
     assert_eq!(

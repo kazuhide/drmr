@@ -5,6 +5,10 @@
 //! fixture carries their text. Native fixtures execute the same canned cases on every platform.
 //! Record bounds remain checked against outputs larger than each limit.
 
+#[path = "support/paths.rs"]
+mod paths;
+use paths::portable_path;
+
 use drmr_core::canonical::Dumps;
 use drmr_core::events::{Collector, Record};
 use drmr_core::media::{
@@ -130,6 +134,19 @@ fn normalized(record: &Record, dir: &Path) -> Value {
                 }
                 .to_string();
                 out.insert(key.clone(), json!(argv));
+            }
+            "tool" => {
+                let name = Path::new(value.as_str().unwrap())
+                    .file_name()
+                    .unwrap()
+                    .to_str()
+                    .unwrap();
+                let name = if cfg!(windows) {
+                    name.strip_suffix(".exe").unwrap_or(name)
+                } else {
+                    name
+                };
+                out.insert(key.clone(), json!(name));
             }
             "stdout" | "stderr" => {
                 out.insert(
@@ -553,8 +570,10 @@ fn the_engine_is_a_shareable_trait_object_for_the_segment_pools() {
 
 // Only strings containing the actual temporary root carry native path spelling.
 fn native_text(value: &str, dir: &str) -> String {
-    let normalized = value.replace(dir, "<dir>");
-    if cfg!(windows) && value.contains(dir) {
+    let portable = portable_path(Path::new(dir));
+    let has_root = value.contains(dir) || value.contains(&portable);
+    let normalized = value.replace(dir, "<dir>").replace(&portable, "<dir>");
+    if cfg!(windows) && has_root {
         normalized.replace('\\', "/")
     } else {
         normalized

@@ -1,5 +1,9 @@
 //! Generated DASH and HLS manifests for synthetic packaged tracks.
 
+#[path = "support/paths.rs"]
+mod paths;
+use paths::portable_path;
+
 #[path = "manifest_fixture/common.rs"]
 #[allow(
     dead_code,
@@ -343,13 +347,7 @@ fn emit(name: &str, change: impl Fn(&mut PackagedPresentation), hls: bool, dash:
     let root = tmp.path();
     let mut p = presentation(root);
     change(&mut p);
-    let relative = |path: &Path| {
-        path.strip_prefix(root)
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .to_string()
-    };
+    let relative = |path: &Path| portable_path(path.strip_prefix(root).unwrap());
     if hls {
         let result = write_hls(&p, &root.join("manifests/master.m3u8"), &fairplay())
             .map(|paths| paths.iter().map(|p| relative(p)).collect::<Vec<_>>());

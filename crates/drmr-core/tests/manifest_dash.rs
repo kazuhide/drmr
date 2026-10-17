@@ -1,5 +1,9 @@
 //! DASH protection rewrites and byte preservation using synthetic manifests.
 
+#[path = "support/paths.rs"]
+mod paths;
+use paths::portable_path;
+
 #[path = "manifest_fixture/common.rs"]
 #[allow(
     dead_code,
@@ -1188,7 +1192,7 @@ fn analyze_and_parse_errors_match_python() {
         std::fs::write(&bad, body).unwrap();
         let err = analyze_dash_manifest(&bad).unwrap_err();
         let (class, message) = error_of(&errors[name]);
-        let message = message.replace("{path}", bad.to_str().unwrap());
+        let message = message.replace("{path}", &portable_path(&bad));
         assert_eq!(class_and_message(&err), (class, message), "{name}");
     }
     let parse_cases: Vec<(&str, String)> = vec![
@@ -1253,10 +1257,25 @@ fn a_missing_source_is_an_os_error_and_a_non_utf8_source_a_unicode_error() {
     let err =
         rewrite_dash_manifest(&missing, &tmp.path().join("o.mpd"), &playready(), None).unwrap_err();
     assert_eq!(class_and_message(&err).0, "OSError");
+    #[cfg(unix)]
     assert!(
         err.to_string()
             .starts_with("[Errno 2] No such file or directory: '")
     );
+    #[cfg(windows)]
+    {
+        let native = std::fs::read(&missing).unwrap_err();
+        assert_eq!(native.kind(), std::io::ErrorKind::NotFound);
+        let native = native.to_string();
+        let detail = native.strip_suffix(" (os error 2)").unwrap();
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "[Errno 2] {detail}: {}",
+                drmr_core::manifest_support::py::repr_str(missing.to_str().unwrap())
+            )
+        );
+    }
     let latin1 = tmp.path().join("latin1.mpd");
     std::fs::write(&latin1, b"<MPD>\xe9</MPD>").unwrap();
     let err = analyze_dash_manifest(&latin1).unwrap_err();

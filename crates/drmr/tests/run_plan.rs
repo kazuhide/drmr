@@ -33,6 +33,11 @@ fn assert_clean(output: &Output) {
 
 fn usage_error(output: &Output, message: &str) {
     assert_eq!(output.status.code(), Some(2), "{}", text(&output.stderr));
+    let message = if cfg!(windows) {
+        message.replace(r"\\?\", "").replace('\\', "/")
+    } else {
+        message.to_string()
+    };
     assert_eq!(text(&output.stderr), format!("error: {message}\n"));
     assert_eq!(text(&output.stdout), "");
     assert_clean(output);
@@ -123,8 +128,10 @@ fn run_and_plan_check_their_arguments_in_order() {
             &wrong_bin,
         ]),
         &format!(
-            "--packager-bin must be a directory containing 'packager', or a file named \
-             'packager' (got {wrong_bin})"
+            "--packager-bin must be a directory containing 'packager{}', or a file named \
+             'packager{}' (got {wrong_bin})",
+            std::env::consts::EXE_SUFFIX,
+            std::env::consts::EXE_SUFFIX
         ),
     );
     usage_error(

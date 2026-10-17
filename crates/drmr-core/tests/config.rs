@@ -1,5 +1,9 @@
 //! Synthetic asset discovery, rendition metadata, path confinement, and key validation.
 
+#[path = "support/paths.rs"]
+mod paths;
+use paths::portable_path;
+
 #[path = "support/dash_fixture.rs"]
 mod dash_fixture;
 
@@ -369,7 +373,10 @@ fn load_asset_derives_asset_id_from_base_url_title_segment() {
     let asset = build_synthetic_dash_asset(&root, &[h264_rep("v0")], "the-title-id");
     let loaded = load_asset(&asset.mpd_path, key(), &root.join("output"), None).unwrap();
     assert_eq!(loaded.asset_id, "the-title-id");
-    assert_eq!(loaded.output_dir, root.join("output/the-title-id"));
+    assert_eq!(
+        portable_path(&loaded.output_dir),
+        portable_path(&root.join("output/the-title-id"))
+    );
     assert_eq!(loaded.renditions.len(), 1);
 }
 
@@ -449,7 +456,12 @@ fn enumerate_renditions_rejects_path_traversal_in_media_template() {
     );
     let message = value_error(enumerate_renditions(&mpd_path));
     assert!(
-        message.contains("unsafe path segments") || message.contains("escapes the download root"),
+        if cfg!(windows) {
+            message == "unsafe native media path"
+        } else {
+            message.contains("unsafe path segments")
+                || message.contains("escapes the download root")
+        },
         "{message}"
     );
     assert!(!root.join("ESCAPED_MARKER_B").exists());
@@ -537,7 +549,7 @@ fn expected(outcome: &Value) -> Result<String, String> {
 }
 
 fn rendition_json(rendition: &Rendition, root: &str) -> Value {
-    let shown = |path: &Path| path.to_string_lossy().replace(root, "{root}");
+    let shown = |path: &Path| portable_path(path).replace(root, "{root}");
     json!({
         "rep_id": rendition.rep_id,
         "content_type": rendition.content_type,
@@ -547,7 +559,7 @@ fn rendition_json(rendition: &Rendition, root: &str) -> Value {
         "start_number": rendition.start_number,
         "init_path": shown(&rendition.init_path),
         "segment_paths": rendition.segment_paths.iter().map(|path| shown(path)).collect::<Vec<_>>(),
-        "rel_dir": rendition.rel_dir.to_string_lossy(),
+        "rel_dir": portable_path(&rendition.rel_dir),
         "widevine_pssh_hex": rendition.widevine_pssh_hex,
         "width": rendition.width,
         "height": rendition.height,
@@ -570,7 +582,7 @@ fn kind(error: &ConfigError) -> &'static str {
 fn run_case(case: &Value, base: &Path) -> Result<Value, (String, &'static str)> {
     let name = case["name"].as_str().unwrap();
     let root = base.join(name);
-    let root_text = root.to_string_lossy().into_owned();
+    let root_text = portable_path(&root);
     let mpd_path = root
         .join(case["where"].as_str().unwrap())
         .join("manifest.mpd");
@@ -592,7 +604,7 @@ fn run_case(case: &Value, base: &Path) -> Result<Value, (String, &'static str)> 
         let placeholder = KeyMaterial::new(VALID_KID, "0".repeat(32), "0".repeat(32)).unwrap();
         let asset =
             load_asset(&mpd_path, placeholder, &root.join("output"), None).map_err(error)?;
-        let shown = |path: &Path| path.to_string_lossy().replace(&root_text, "{root}");
+        let shown = |path: &Path| portable_path(path).replace(&root_text, "{root}");
         return Ok(json!({
             "asset_id": asset.asset_id,
             "mpd_path": shown(&asset.mpd_path),
@@ -627,7 +639,18 @@ fn enumerate_renditions_and_load_asset_match_python() {
                     python_kind
                 };
                 assert_eq!(kind, python_kind, "{name}");
-                assert_eq!(message, case["error"].as_str().unwrap(), "{name}");
+                let expected = if cfg!(windows)
+                    && matches!(
+                        name,
+                        "media-without-directory"
+                            | "absolute-media-directory"
+                            | "traversal-media-template"
+                    ) {
+                    "unsafe native media path"
+                } else {
+                    case["error"].as_str().unwrap()
+                };
+                assert_eq!(message, expected, "{name}");
             }
             (outcome, _) => panic!("{name}: {outcome:?} against {case}"),
         }

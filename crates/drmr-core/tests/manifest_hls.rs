@@ -1,5 +1,9 @@
 //! HLS playlist mapping, structural rewrites, and media verification gates.
 
+#[path = "support/paths.rs"]
+mod paths;
+use paths::portable_path;
+
 #[path = "manifest_fixture/common.rs"]
 #[allow(
     dead_code,
@@ -93,7 +97,7 @@ fn resolved_root(asset: &SyntheticHlsAsset) -> PathBuf {
 
 fn mapping_json(mapping: &HlsVariantMapping, root: &Path) -> Value {
     json!({
-        "hls_playlist": mapping.hls_playlist.strip_prefix(root).unwrap().to_str().unwrap(),
+        "hls_playlist": portable_path(mapping.hls_playlist.strip_prefix(root).unwrap()),
         "dash_rep_id": mapping.dash_rendition.rep_id,
         "signals": mapping.signals.iter().map(|(k, v)| json!([k, v])).collect::<Vec<_>>(),
         "content_gate": mapping.content_gate,
@@ -116,13 +120,7 @@ fn summary_json(summary: &HlsManifestSummary) -> Value {
 }
 
 fn result_json(result: &HlsRewriteResult, out_root: &Path) -> Value {
-    let relative = |p: &Path| {
-        p.strip_prefix(out_root)
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .to_string()
-    };
+    let relative = |p: &Path| portable_path(p.strip_prefix(out_root).unwrap());
     json!({
         "output_master_path": relative(&result.output_master_path),
         "output_media_playlist_paths": result.output_media_playlist_paths.iter().map(|p| relative(p)).collect::<Vec<_>>(),
@@ -1416,8 +1414,8 @@ fn bbb_like_asset_inputs_mappings_and_outputs_match_python() {
         .iter()
         .map(|(a, b)| {
             json!([
-                a.strip_prefix(&resolved).unwrap().to_str().unwrap(),
-                b.strip_prefix(&resolved).unwrap().to_str().unwrap()
+                portable_path(a.strip_prefix(&resolved).unwrap()),
+                portable_path(b.strip_prefix(&resolved).unwrap())
             ])
         })
         .collect();
@@ -1505,7 +1503,7 @@ fn malformed_masters_and_playlists_fail_like_python() {
     let (class, message) = error_of(&errors["no_download_root"]);
     assert_eq!(
         class_and_message(&err),
-        (class, message.replace("{path}", outside.to_str().unwrap()))
+        (class, message.replace("{path}", &portable_path(&outside)))
     );
 }
 

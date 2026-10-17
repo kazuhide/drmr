@@ -1,6 +1,10 @@
 //! Catalog command parsing, exit codes, readable summaries, and scrubbed JSON Lines.
 //! The pipeline dependencies are fakes and all keys are synthetic.
 
+#[path = "support/paths.rs"]
+mod paths;
+use paths::portable_path;
+
 mod pipeline_fakes;
 
 use base64::Engine as _;
@@ -278,7 +282,13 @@ fn plan_missing_mpd_is_usage_error() {
     let ran = cli.main(&["plan", "--mpd", &missing], &Env::new());
 
     assert_eq!(ran.code, EXIT_USAGE_ERROR);
-    assert_eq!(ran.stderr, format!("error: --mpd not found: {missing}\n"));
+    assert_eq!(
+        ran.stderr,
+        format!(
+            "error: --mpd not found: {}\n",
+            portable_path(Path::new(&missing))
+        )
+    );
     assert_eq!(ran.stdout, "");
 }
 
@@ -372,7 +382,10 @@ fn run_missing_hls_master_file_is_usage_error() {
     assert_eq!(ran.code, EXIT_USAGE_ERROR);
     assert_eq!(
         ran.stderr,
-        format!("error: --hls-master not found: {missing}\n")
+        format!(
+            "error: --hls-master not found: {}\n",
+            portable_path(Path::new(&missing))
+        )
     );
 }
 
@@ -751,9 +764,11 @@ fn run_packager_bin_file_must_be_named_packager() {
     assert_eq!(
         ran.stderr,
         format!(
-            "error: --packager-bin must be a directory containing 'packager', or a file named \
-             'packager' (got {})\n",
-            wrong.display()
+            "error: --packager-bin must be a directory containing 'packager{}', or a file named \
+             'packager{}' (got {})\n",
+            std::env::consts::EXE_SUFFIX,
+            std::env::consts::EXE_SUFFIX,
+            portable_path(&wrong)
         )
     );
 }

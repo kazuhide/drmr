@@ -1,5 +1,9 @@
 //! Shaka Packager arguments, secret scrubbing, segment numbering, and failure handling.
 
+#[path = "support/paths.rs"]
+mod paths;
+use paths::portable_path;
+
 use drmr_core::config::KeyMaterial;
 use drmr_core::events::{Collector, NoSink, Record};
 use drmr_core::packager::{
@@ -121,7 +125,7 @@ fn merge_segments_is_byte_exact_init_then_segments() {
         .collect();
     let out = root.join("merged/encrypted.mp4"); // the nested parent is created
     let result = merge_segments(&init, &segments, &out).unwrap();
-    assert_eq!(result, out);
+    assert_eq!(portable_path(&result), portable_path(&out));
     assert_eq!(std::fs::read(&out).unwrap(), b"INITAAABBCCCC");
     assert_eq!(std::fs::metadata(&out).unwrap().len(), 4 + 3 + 2 + 4);
 }
@@ -214,7 +218,7 @@ fn merge_segments_rejects_a_segment_without_a_number() {
         error.to_string(),
         format!(
             "segment file {} has no numeric index",
-            root.join("segment.m4s").display()
+            portable_path(&root.join("segment.m4s"))
         )
     );
 }
@@ -399,7 +403,7 @@ fn argv_matches_python_byte_for_byte() {
         .unwrap(),
     )
     .unwrap();
-    let root_text = root.to_string_lossy().into_owned();
+    let root_text = portable_path(&root);
     let argv_file = root.join("argv.txt");
     let env = [("STUB_PACKAGER_ARGV_FILE", argv_file.to_str().unwrap())];
     let cases: BTreeMap<String, Value> = oracle["argv"]
