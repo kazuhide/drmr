@@ -129,3 +129,121 @@ fn native_catalog_paths_resolve_and_keep_their_filename_components() {
     assert_eq!(pure.parent().name(), "missing");
     assert_eq!(native::resolve_path(&pure.to_path_buf()).unwrap(), resolved);
 }
+
+#[test]
+fn batch_and_storage_resolve_windows_paths_without_reinterpreting_the_drive() {
+    use drmr_core::{batch_support, storage::LocalStorageBackend};
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("future/child");
+    assert_eq!(
+        batch_support::resolve(&path).unwrap(),
+        native::resolve_path(&path).unwrap()
+    );
+    let store = LocalStorageBackend::new(temp.path()).unwrap();
+    assert_eq!(
+        drmr_core::storage::StorageBackend::root(&store).unwrap(),
+        temp.path().canonicalize().unwrap()
+    );
+}
+
+#[test]
+fn native_local_storage_stages_and_publishes_with_private_atomic_files() {
+    use drmr_core::storage::{LocalStorageBackend, ObjectRef, StorageBackend};
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("store");
+    std::fs::create_dir_all(root.join("input/nested")).unwrap();
+    std::fs::write(root.join("input/nested/source.bin"), b"original").unwrap();
+    let backend = LocalStorageBackend::new(&root).unwrap();
+    let input = ObjectRef::new("input/nested/source.bin").unwrap();
+    let listed = backend
+        .list_prefix(&ObjectRef::new("input").unwrap())
+        .unwrap();
+    assert_eq!(listed.as_slice(), std::slice::from_ref(&input));
+    let staged = backend
+        .get_many(&[input], &temp.path().join("stage"))
+        .unwrap();
+    assert_eq!(std::fs::read(&staged[0]).unwrap(), b"original");
+    private_fs::verify(&native::open_private_read(&staged[0]).unwrap()).unwrap();
+    let item = (
+        staged[0].clone(),
+        ObjectRef::new("output/native/data.bin").unwrap(),
+    );
+    backend.put_many(std::slice::from_ref(&item)).unwrap();
+    backend.put_many(std::slice::from_ref(&item)).unwrap();
+    assert_eq!(
+        std::fs::read(root.join("output/native/data.bin")).unwrap(),
+        b"original"
+    );
+    assert_eq!(
+        backend
+            .delete_prefix(&ObjectRef::new("input").unwrap())
+            .unwrap_err()
+            .token(),
+        "output-prefix-invalid"
+    );
+    backend
+        .delete_prefix(&ObjectRef::new("output/native").unwrap())
+        .unwrap();
+    assert!(!root.join("output/native/data.bin").exists());
+    assert!(root.join("input/nested/source.bin").is_file());
+}
+
+#[test]
+fn native_storage_refuses_device_stream_and_normalized_alias_keys() {
+    use drmr_core::storage::{LocalStorageBackend, ObjectRef, StorageBackend};
+    let temp = tempfile::tempdir().unwrap();
+    let backend = LocalStorageBackend::new(temp.path()).unwrap();
+    for key in [
+        "input/NUL",
+        "input/x:stream",
+        "input/trailing.",
+        "input/trailing ",
+    ] {
+        let error = backend
+            .object_size(&ObjectRef::new(key).unwrap())
+            .unwrap_err();
+        assert_eq!(error.token(), "storage-path-invalid");
+    }
+}
+
+#[test]
+fn native_resume_appends_repair_the_tail_through_one_private_handle() {
+    use drmr_core::batch::{AssetOutcome, ResumeEntry, append_resume_entry, load_resume_log};
+    use std::io::{Seek, SeekFrom};
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("private/resume.jsonl");
+    let first = ResumeEntry::new("first", AssetOutcome::DonePass, "ok", 1, "time").unwrap();
+    let second =
+        ResumeEntry::new("second", AssetOutcome::DoneFail, "missing-key", 1, "time").unwrap();
+    append_resume_entry(&path, &first).unwrap();
+    {
+        let mut file = native::create_private_update(&path).unwrap();
+        file.seek(SeekFrom::End(0)).unwrap();
+        file.write_all(b"{partial").unwrap();
+    }
+    append_resume_entry(&path, &second).unwrap();
+    let log = load_resume_log(&path).unwrap();
+    assert_eq!(log.get("first").unwrap(), &first);
+    assert_eq!(log.get("second").unwrap(), &second);
+    private_fs::verify(&native::open_private_read(&path).unwrap()).unwrap();
+}
+
+#[test]
+fn native_file_key_provider_rejects_inherited_access_without_changing_it() {
+    use drmr_core::batch::FileKeyProvider;
+    let temp = tempfile::tempdir().unwrap();
+    let private = temp.path().join("private");
+    native::create_private_dir_all(&private).unwrap();
+    let path = private.join("keys.jsonl");
+    native::create_private_new(&path).unwrap();
+    FileKeyProvider::new(&path, &temp.path().join("output")).unwrap();
+    let inherited = temp.path().join("inherited.jsonl");
+    std::fs::write(&inherited, b"").unwrap();
+    assert_eq!(
+        FileKeyProvider::new(&inherited, &temp.path().join("output"))
+            .unwrap_err()
+            .token(),
+        "key-provider-invalid"
+    );
+    assert!(native::open_private_read(&inherited).is_err());
+}

@@ -249,12 +249,31 @@ pub(crate) fn owned(object: &ObjectRef, prefix: &str) -> Result<(), StorageError
     Ok(())
 }
 
+fn is_redirect(path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        path.is_symlink()
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        std::fs::symlink_metadata(path)
+            .is_ok_and(|metadata| metadata.file_attributes() & 0x400 != 0)
+    }
+}
+
 /// `_confined`: `root/<key>` resolved inside the resolved root, with no symbolic link between
 /// the root and the object; else `storage-path-invalid`.
 pub(crate) fn confined(root: &Path, object: &ObjectRef) -> Result<PathBuf, StorageError> {
-    let root = resolve(root);
+    #[cfg(windows)]
+    crate::native::validate_windows_relative_path(object.key())
+        .map_err(|_| StorageError::new("storage-path-invalid"))?;
+    let root = resolve(root).map_err(|_| StorageError::new("storage-path-invalid"))?;
     let path = root.join(object.key());
-    if !is_relative_to(&resolve(&path), &root) {
+    if !is_relative_to(
+        &resolve(&path).map_err(|_| StorageError::new("storage-path-invalid"))?,
+        &root,
+    ) {
         return Err(StorageError::new("storage-path-invalid"));
     }
     let mut current = path.as_path();
@@ -262,7 +281,7 @@ pub(crate) fn confined(root: &Path, object: &ObjectRef) -> Result<PathBuf, Stora
         if current == root || !is_relative_to(current, &root) {
             break;
         }
-        if current.is_symlink() {
+        if is_redirect(current) {
             return Err(StorageError::new("storage-path-invalid"));
         }
         match current.parent() {
@@ -288,13 +307,16 @@ impl From<io::Error> for CopyError {
 /// `_atomic_copy`: a regular, non-link `source` of at most `cap` bytes copied to a temporary
 /// file beside `target`, synced, checked against `cap` again and renamed over `target`.
 pub(crate) fn atomic_copy(source: &Path, target: &Path, cap: u64) -> Result<(), CopyError> {
-    if source.is_symlink() || !source.is_file() || std::fs::metadata(source)?.len() > cap {
+    if is_redirect(source) || !source.is_file() || std::fs::metadata(source)?.len() > cap {
         return Err(CopyError::Storage(StorageError::new(
             "storage-object-invalid",
         )));
     }
     let parent = target.parent().unwrap_or_else(|| Path::new("."));
+    #[cfg(unix)]
     std::fs::create_dir_all(parent)?;
+    #[cfg(windows)]
+    crate::native::create_private_dir_all(parent)?;
     let mut temporary = transfer_file(parent)?;
     let mut reader = File::open(source)?;
     copy_chunks(&mut reader, temporary.as_file_mut())?;
@@ -311,10 +333,16 @@ pub(crate) fn atomic_copy(source: &Path, target: &Path, cap: u64) -> Result<(), 
 
 /// `tempfile.mkstemp(prefix=".transfer-", dir=parent)`: removed unless persisted.
 pub(crate) fn transfer_file(parent: &Path) -> io::Result<tempfile::NamedTempFile> {
-    tempfile::Builder::new()
-        .prefix(".transfer-")
-        .rand_bytes(8)
-        .tempfile_in(parent)
+    let mut builder = tempfile::Builder::new();
+    builder.prefix(".transfer-").rand_bytes(8);
+    #[cfg(unix)]
+    {
+        builder.tempfile_in(parent)
+    }
+    #[cfg(windows)]
+    {
+        builder.make_in(parent, crate::native::create_private_new)
+    }
 }
 
 /// `shutil.copyfileobj(reader, writer, length=1 MiB)`.
@@ -427,7 +455,7 @@ impl LocalStorageBackend {
         let policy = policy.validate()?;
         ObjectRef::new(output_prefix)?;
         Ok(LocalStorageBackend {
-            root: resolve(root),
+            root: resolve(root).map_err(|_| StorageError::new("storage-path-invalid"))?,
             policy,
             output_prefix: output_prefix.to_string(),
         })
@@ -447,7 +475,7 @@ impl LocalStorageBackend {
         entries.sort();
         let mut directories = Vec::new();
         for path in entries {
-            if path.is_symlink() {
+            if is_redirect(&path) {
                 return Err(StorageError::new("storage-path-invalid"));
             }
             if path.is_file() {
@@ -457,6 +485,8 @@ impl LocalStorageBackend {
                 let key = relative
                     .to_str()
                     .ok_or_else(|| StorageError::new("object-key-invalid"))?;
+                #[cfg(windows)]
+                let key = key.replace('\\', "/");
                 paths.push(ObjectRef::new(key)?);
                 if paths.len() > self.policy.object_budget() {
                     return Err(StorageError::new("storage-object-budget"));
@@ -497,7 +527,8 @@ impl StorageBackend for LocalStorageBackend {
     }
 
     fn get_many(&self, refs: &[ObjectRef], dest_root: &Path) -> Result<Vec<PathBuf>, StorageError> {
-        let dest_root = resolve(dest_root);
+        let dest_root =
+            resolve(dest_root).map_err(|_| StorageError::new("storage-path-invalid"))?;
         if is_relative_to(&dest_root, &self.root) || is_relative_to(&self.root, &dest_root) {
             return Err(StorageError::new("storage-stage-overlap"));
         }

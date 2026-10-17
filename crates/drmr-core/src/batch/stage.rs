@@ -69,8 +69,15 @@ pub fn source_overlaps_output(url: &str, config: &BatchConfig) -> Result<bool, A
     let parsed = urlsplit(url, "").map_err(value_error)?;
     let prefix = config.output_prefix.as_str();
     if parsed.scheme == "file" {
-        let local = resolve(Path::new(&unquote(&parsed.path)));
-        if is_relative_to(&local, &resolve(&config.output_root)) {
+        #[cfg(unix)]
+        let local = PathBuf::from(unquote(&parsed.path));
+        #[cfg(windows)]
+        let local = crate::source::pypath::from_file_uri(url).map_err(|_| AttemptError::Other)?;
+        let local = resolve(&local).map_err(|_| AttemptError::Other)?;
+        if is_relative_to(
+            &local,
+            &resolve(&config.output_root).map_err(|_| AttemptError::Other)?,
+        ) {
             return Ok(true);
         }
         return Ok(config
@@ -246,7 +253,7 @@ pub fn stage_inputs(
         .output_root
         .join(&work.asset_id)
         .join("clear/_batch-stage/download");
-    std::fs::create_dir_all(&stage).map_err(|_| AttemptError::Other)?;
+    crate::native::create_private_dir_all(&stage).map_err(|_| AttemptError::Other)?;
     if work.kind == "hls-clear" {
         stage_clear(work, config, &stage, source)?;
         return Ok(stage);
@@ -488,14 +495,12 @@ pub fn preflight_source_graphs(
     source: &dyn HlsSource,
 ) -> Result<(), RunError> {
     let temporary_root = config.output_root.join("_batch");
-    std::fs::create_dir_all(&temporary_root)?;
+    crate::native::create_private_dir_all(&temporary_root)?;
     for work in work_list {
         if work.kind != "dash-cenc" && work.kind != "hls-clear" {
             continue;
         }
-        let result = tempfile::Builder::new()
-            .prefix("preflight-")
-            .tempdir_in(&temporary_root)
+        let result = crate::native::private_tempdir_in(&temporary_root, "preflight-")
             .map_err(|_| AttemptError::Other)
             .and_then(|directory| {
                 if work.kind == "hls-clear" {
@@ -628,7 +633,7 @@ fn preflight_clear(
         .hls_config_dir
         .as_deref()
         .ok_or_else(|| BatchError::new("hls-config-invalid"))?;
-    let profiles = resolve(profiles);
+    let profiles = resolve(profiles).map_err(|_| AttemptError::Other)?;
     let settings = private_config(
         &profiles.join(format!("{}.json", work.asset_id)),
         &config.output_root,
@@ -637,18 +642,24 @@ fn preflight_clear(
         .get("source_config")
         .and_then(Value::as_str)
         .ok_or(AttemptError::Other)?;
-    let source_config = private_config(&resolve(&profiles.join(source_name)), &config.output_root)?;
+    let source_config = private_config(
+        &resolve(&profiles.join(source_name)).map_err(|_| AttemptError::Other)?,
+        &config.output_root,
+    )?;
     let mut location = source_config
         .get("url")
         .and_then(Value::as_str)
         .ok_or(AttemptError::Other)?
         .to_string();
-    if urlsplit(&location, "")
+    let local_path = urlsplit(&location, "")
         .map_err(value_error)?
         .scheme
-        .is_empty()
-    {
-        location = as_uri(&resolve(Path::new(&location)));
+        .is_empty();
+    #[cfg(windows)]
+    let local_path = local_path || crate::source::pypath::is_native_path(&location);
+    if local_path {
+        location = as_uri(&resolve(Path::new(&location)).map_err(|_| AttemptError::Other)?)
+            .map_err(|_| AttemptError::Other)?;
     }
     let empty = Value::Object(serde_json::Map::new());
     let policy = source_config.get("policy").unwrap_or(&empty);

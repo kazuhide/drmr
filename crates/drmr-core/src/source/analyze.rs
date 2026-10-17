@@ -108,6 +108,10 @@ pub fn analyze_hls(
 
 /// `[A-Za-z0-9][A-Za-z0-9_.-]{0,127}`.
 fn valid_asset_id(asset_id: &str) -> bool {
+    #[cfg(windows)]
+    if crate::native::validate_windows_relative_path(asset_id).is_err() {
+        return false;
+    }
     let bytes = asset_id.as_bytes();
     !bytes.is_empty()
         && bytes.len() <= 128

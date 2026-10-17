@@ -41,6 +41,9 @@ jobs:
       - name: Test Windows access controls and descendant cleanup
         run: cargo test -p drmr-core --lib --test native --test windows_cli --locked -- --nocapture
 
+      - name: Test native batch CLI and worker protocol
+        run: cargo test -p drmr --test native_batch --locked -- --nocapture
+
       - name: Build native CLI
         run: cargo build --release --locked -p drmr
 

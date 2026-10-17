@@ -1,11 +1,7 @@
 //! Media repackaging, manifest handling, source snapshots, and secure tool execution.
 
-// The batch layer and its storage are POSIX-only (process groups, file modes).
-#[cfg(unix)]
 pub mod batch;
-#[cfg(unix)]
 pub mod batch_cli;
-#[cfg(unix)]
 pub mod batch_support;
 pub mod canonical;
 pub mod checks;
@@ -32,7 +28,6 @@ pub mod playready;
 pub mod pycompat;
 pub mod snapshot;
 pub mod source;
-#[cfg(unix)]
 pub mod storage;
 pub mod toolrun;
 

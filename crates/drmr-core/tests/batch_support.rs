@@ -101,7 +101,7 @@ fn unquote_and_quote_match_python() {
         assert_eq!(quote_from_bytes(&bytes, b"/"), text(&row[1]));
     }
     for row in rows(&oracle, "as_uri") {
-        assert_eq!(as_uri(Path::new(text(&row[0]))), text(&row[1]));
+        assert_eq!(as_uri(Path::new(text(&row[0]))).unwrap(), text(&row[1]));
     }
 }
 
@@ -214,19 +214,28 @@ fn resolve_follows_links_of_existing_components_and_keeps_the_rest() {
     let root = std::fs::canonicalize(temp.path()).unwrap();
     std::fs::create_dir_all(root.join("real/inner")).unwrap();
     std::os::unix::fs::symlink(root.join("real"), root.join("alias")).unwrap();
-    assert_eq!(resolve(&root.join("alias/inner")), root.join("real/inner"));
     assert_eq!(
-        resolve(&root.join("alias/missing/x")),
+        resolve(&root.join("alias/inner")).unwrap(),
+        root.join("real/inner")
+    );
+    assert_eq!(
+        resolve(&root.join("alias/missing/x")).unwrap(),
         root.join("real/missing/x")
     );
-    assert_eq!(resolve(&root.join("alias/../real")), root.join("real"));
-    assert_eq!(resolve(&root.join("missing/../real")), root.join("real"));
+    assert_eq!(
+        resolve(&root.join("alias/../real")).unwrap(),
+        root.join("real")
+    );
+    assert_eq!(
+        resolve(&root.join("missing/../real")).unwrap(),
+        root.join("real")
+    );
     std::os::unix::fs::symlink("loop", root.join("loop")).unwrap();
     // A loop resolves to the link itself plus the rest (realpath, non-strict).
-    assert_eq!(resolve(&root.join("loop/x")), root.join("loop/x"));
+    assert_eq!(resolve(&root.join("loop/x")).unwrap(), root.join("loop/x"));
     assert!(is_relative_to(&root.join("real/inner"), &root.join("real")));
     assert!(!is_relative_to(&root.join("realm"), &root.join("real")));
-    assert!(resolve(Path::new("relative")).is_absolute());
+    assert!(resolve(Path::new("relative")).unwrap().is_absolute());
 }
 
 #[test]
@@ -369,14 +378,14 @@ fn default_source_lines_child_urls_and_policies_are_the_source_port() {
 #[test]
 fn default_source_reads_admitted_local_playlists_and_verified_snapshots() {
     let temp = tempfile::tempdir().unwrap();
-    let master = resolve(temp.path()).join("master.m3u8");
+    let master = resolve(temp.path()).unwrap().join("master.m3u8");
     std::fs::write(
         &master,
         b"#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\nmedia.m3u8\n",
     )
     .unwrap();
-    let location = as_uri(&master);
-    let root = resolve(temp.path());
+    let location = as_uri(&master).unwrap();
+    let root = resolve(temp.path()).unwrap();
     let policy = json!({"allowed_local_roots": [root.to_str().unwrap()]});
     let mut fetcher = DefaultHlsSource
         .open_fetcher(&policy, temp.path())

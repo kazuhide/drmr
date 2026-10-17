@@ -5,10 +5,15 @@
 
 mod files;
 pub use files::{
-    create_private_dir_all, create_private_dir_new, create_private_new, create_private_or_truncate,
-    open_private_read,
+    PrivateTempDir, PrivateTempFile, create_private_dir_all, create_private_dir_new,
+    create_private_new, create_private_or_truncate, create_private_update, open_private_read,
+    private_tempdir_in, private_tempfile,
 };
 mod process;
-pub use process::ManagedChild;
+pub(crate) use process::mark_asset_worker;
+pub use process::{ManagedChild, in_asset_worker};
 mod paths;
 pub use paths::resolve_path;
+
+#[cfg(windows)]
+pub(crate) use paths::validate_windows_relative_path;

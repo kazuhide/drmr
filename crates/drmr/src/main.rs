@@ -7,23 +7,19 @@ mod doctor;
 mod inspect_cli;
 
 use clap::{Parser, Subcommand};
-#[cfg(unix)]
 use drmr_core::batch_cli::{self, BatchArgs};
 use drmr_core::canonical::Dumps;
 use drmr_core::cli;
-#[cfg(unix)]
 use drmr_core::events::JsonLinesWriter;
 use drmr_core::hls_cli;
 use drmr_core::pipeline_deps::Ports;
 use drmr_core::snapshot::{self, SnapshotError, SnapshotReport};
-#[cfg(unix)]
 use drmr_core::toolrun::Secrets;
 use drmr_server::{JobCli, ServeArgs};
 use serde_json::{Map, Value};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-#[cfg(unix)]
 use std::sync::Arc;
 
 const EXIT_CHANGED: u8 = 1;
@@ -88,7 +84,6 @@ enum Command {
     )]
     Plan(inspect_cli::PlanArgs),
     /// Repackage multiple assets sequentially, with support for restarting.
-    #[cfg(unix)]
     Batch(BatchArgs),
     /// Start the local web console, configured using DRMR_* environment variables.
     Serve(ServeArgs),
@@ -111,7 +106,6 @@ enum Command {
 fn main() -> ExitCode {
     // The asset worker of `batch`: this executable, invoked with exactly the worker
     // argument, reads its private configuration from stdin and never parses a command line.
-    #[cfg(unix)]
     if invoked_as_worker() {
         return process_exit(drmr_core::batch::worker_main());
     }
@@ -134,7 +128,6 @@ fn main() -> ExitCode {
             })),
             None => inspect_cli::plan(&args),
         },
-        #[cfg(unix)]
         Command::Batch(args) => batch(&args),
         Command::Serve(args) => serve(&args),
         Command::AnalyzeHls(args) => {
@@ -152,14 +145,12 @@ fn package_hls(args: &hls_cli::PackageArgs) -> ExitCode {
 }
 
 /// `serve`: `drmr-server` inside this executable, with this executable as the jobs' CLI; that
-/// CLI carries `batch` where the batch layer is built (POSIX), which `GET /api/platform`
-/// reports as `batch_available`.
+/// CLI carries `batch`, which `GET /api/platform` reports as available.
 fn serve(args: &ServeArgs) -> ExitCode {
-    drmr_server::run_server(args, JobCli::this_executable(cfg!(unix)), "drmr serve")
+    drmr_server::run_server(args, JobCli::this_executable(true), "drmr serve")
 }
 
 /// The worker protocol accepts exactly `[WORKER_ARG]`.
-#[cfg(unix)]
 fn invoked_as_worker() -> bool {
     let mut args = std::env::args_os().skip(1);
     matches!(
@@ -176,7 +167,6 @@ fn process_exit(code: i32) -> ExitCode {
 /// `batch`: the records go to stdout as JSON Lines (one JSON object per line); the keys
 /// of the fleet never reach this process's records (the workers hold them), so the writer
 /// scrubs nothing.
-#[cfg(unix)]
 fn batch(args: &BatchArgs) -> ExitCode {
     let writer = JsonLinesWriter::new(std::io::stdout(), Arc::new(Secrets::new()));
     let code = batch_cli::cmd_batch(args, &writer);

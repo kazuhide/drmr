@@ -206,6 +206,9 @@ impl From<io::Error> for RunError {
 
 /// `_asset_id`: `[A-Za-z0-9][A-Za-z0-9_.-]{0,127}`, else `asset-id-invalid`.
 pub fn validate_asset_id(value: &str) -> Result<(), BatchError> {
+    #[cfg(windows)]
+    crate::native::validate_windows_relative_path(value)
+        .map_err(|_| BatchError::new("asset-id-invalid"))?;
     let bytes = value.as_bytes();
     let valid = !bytes.is_empty()
         && bytes.len() <= 128
@@ -303,19 +306,32 @@ impl fmt::Debug for FileKeyProvider {
 impl FileKeyProvider {
     /// Read and validate the file; every failure is `key-provider-invalid`.
     pub fn new(path: &Path, output_root: &Path) -> Result<FileKeyProvider, BatchError> {
+        #[cfg(unix)]
         use std::os::unix::fs::PermissionsExt;
         let invalid = || BatchError::new("key-provider-invalid");
         if path.is_symlink() {
             return Err(invalid());
         }
         let metadata = std::fs::metadata(path).map_err(|_| invalid())?;
-        if metadata.permissions().mode() & 0o777 != 0o600
-            || is_relative_to(&resolve(path), &resolve(output_root))
-            || metadata.len() > 128 * 1024 * 1024
+        #[cfg(unix)]
+        if metadata.permissions().mode() & 0o777 != 0o600 {
+            return Err(invalid());
+        }
+        if is_relative_to(
+            &resolve(path).map_err(|_| invalid())?,
+            &resolve(output_root).map_err(|_| invalid())?,
+        ) || metadata.len() > 128 * 1024 * 1024
         {
             return Err(invalid());
         }
-        let bytes = std::fs::read(path).map_err(|_| invalid())?;
+        let file = crate::native::open_private_read(path).map_err(|_| invalid())?;
+        let mut bytes = Vec::new();
+        file.take(128 * 1024 * 1024 + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|_| invalid())?;
+        if bytes.len() > 128 * 1024 * 1024 {
+            return Err(invalid());
+        }
         let text = universal_newlines(&String::from_utf8(bytes).map_err(|_| invalid())?);
         let mut keys = HashMap::new();
         for line in py_splitlines(&text) {
@@ -598,19 +614,19 @@ impl BatchConfig {
             return Err(BatchError::new("worker-bound-invalid").into());
         }
         ObjectRef::new(self.output_prefix.as_str())?;
-        let root = resolve(&self.output_root);
+        let root = resolve(&self.output_root)?;
         if let Some(storage_root) = self.storage.root()
             && (is_relative_to(&root, storage_root) || is_relative_to(storage_root, &root))
         {
             return Err(BatchError::new("storage-output-overlap").into());
         }
         if let KeyProviderKind::File(path) = self.keys.kind()
-            && is_relative_to(&resolve(path), &root)
+            && is_relative_to(&resolve(path)?, &root)
         {
             return Err(BatchError::new("key-provider-invalid").into());
         }
         if let Some(directory) = &self.hls_config_dir
-            && is_relative_to(&resolve(directory), &root)
+            && is_relative_to(&resolve(directory)?, &root)
         {
             return Err(BatchError::new("hls-config-invalid").into());
         }
@@ -829,12 +845,16 @@ pub fn read_work_list(path: &Path) -> Result<Vec<AssetWorkItem>, BatchError> {
             return Err(invalid());
         }
         let asset_id = row["asset_id"].as_str().ok_or_else(invalid)?;
-        if seen.contains(asset_id)
+        #[cfg(unix)]
+        let comparison_id = asset_id.to_string();
+        #[cfg(windows)]
+        let comparison_id = asset_id.to_ascii_lowercase();
+        if seen.contains(&comparison_id)
             || (kind == "dash-cenc" && !crate::batch_support::py_truthy(&row["dash_manifest"]))
         {
             return Err(invalid());
         }
-        seen.insert(asset_id.to_string());
+        seen.insert(comparison_id);
         let dash = optional_ref(&row["dash_manifest"]).map_err(|_| invalid())?;
         let hls = optional_ref(&row["hls_master"]).map_err(|_| invalid())?;
         items.push(AssetWorkItem::new(asset_id, kind, dash, hls).map_err(|_| invalid())?);
@@ -920,41 +940,49 @@ pub fn load_resume_log(path: &Path) -> Result<ResumeLog, BatchError> {
 /// unparsable incomplete tail is cut back to the last newline, a complete-but-unterminated
 /// record gets its newline.
 pub fn append_resume_entry(path: &Path, entry: &ResumeEntry) -> Result<(), RunError> {
-    use std::os::unix::fs::OpenOptionsExt;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
     if path.is_symlink() {
         return Err(BatchError::new("resume-log-invalid").into());
     }
-    let mut created = !path.exists();
-    if !created {
-        let content = std::fs::read(path)?;
-        let text = std::str::from_utf8(&content)
-            .map_err(|_| RunError::Value("resume-log-not-utf-8".to_string()))?;
-        if partial_header(text) {
-            truncate(path, 0)?;
-            created = true;
-        } else if !content.is_empty() && !content.ends_with(b"\n") {
-            let cut = content
-                .iter()
-                .rposition(|byte| *byte == b'\n')
-                .map_or(0, |i| i + 1);
-            if serde_json::from_slice::<Value>(&content[cut..]).is_ok() {
-                let mut handle = std::fs::OpenOptions::new().append(true).open(path)?;
-                handle.write_all(b"\n")?;
-                handle.flush()?;
-                handle.sync_all()?;
-            } else {
-                truncate(path, u64::try_from(cut).expect("a length fits u64"))?;
-            }
+    if let Some(parent) = path.parent() {
+        #[cfg(unix)]
+        std::fs::create_dir_all(parent)?;
+        #[cfg(windows)]
+        crate::native::create_private_dir_all(parent)?;
+    }
+    #[cfg(unix)]
+    let mut handle = {
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .read(true)
+            .append(true)
+            .create(true)
+            .mode(0o600)
+            .open(path)?
+    };
+    // This Windows handle denies concurrent write/delete sharing. Validate the
+    // same held object before repairing or appending any resume record.
+    #[cfg(windows)]
+    let mut handle = crate::native::create_private_update(path)?;
+    let mut content = Vec::new();
+    handle.read_to_end(&mut content)?;
+    let text = std::str::from_utf8(&content)
+        .map_err(|_| RunError::Value("resume-log-not-utf-8".to_string()))?;
+    let created = partial_header(text);
+    if created {
+        handle.set_len(0)?;
+    } else if !content.is_empty() && !content.ends_with(b"\n") {
+        let cut = content
+            .iter()
+            .rposition(|byte| *byte == b'\n')
+            .map_or(0, |i| i + 1);
+        if serde_json::from_slice::<Value>(&content[cut..]).is_ok() {
+            handle.seek(io::SeekFrom::End(0))?;
+            handle.write_all(b"\n")?;
+        } else {
+            handle.set_len(u64::try_from(cut).expect("a length fits u64"))?;
         }
     }
-    let mut handle = std::fs::OpenOptions::new()
-        .append(true)
-        .create(true)
-        .mode(0o600)
-        .open(path)?;
+    handle.seek(io::SeekFrom::End(0))?;
     let mut payload = String::new();
     if created {
         payload.push_str(HEADER_SPACED);
@@ -968,12 +996,6 @@ pub fn append_resume_entry(path: &Path, entry: &ResumeEntry) -> Result<(), RunEr
     }
     handle.sync_all()?;
     Ok(())
-}
-
-fn truncate(path: &Path, length: u64) -> io::Result<()> {
-    let handle = std::fs::OpenOptions::new().write(true).open(path)?;
-    handle.set_len(length)?;
-    handle.sync_all()
 }
 
 /// `plan_batch`: `{asset_id, action, reason}` per item — `run`, `skip` (done-pass) or
@@ -1011,16 +1033,24 @@ pub fn plan_batch(
 
 /// `_write_private`: the bytes written to a new or truncated mode-0600 file, synced.
 pub(crate) fn write_private(path: &Path, data: &[u8]) -> io::Result<()> {
-    use std::os::unix::fs::OpenOptionsExt;
     if let Some(parent) = path.parent() {
+        #[cfg(unix)]
         std::fs::create_dir_all(parent)?;
+        #[cfg(windows)]
+        crate::native::create_private_dir_all(parent)?;
     }
-    let mut handle = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(path)?;
+    #[cfg(unix)]
+    let mut handle = {
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?
+    };
+    #[cfg(windows)]
+    let mut handle = crate::native::create_private_or_truncate(path)?;
     handle.write_all(data)?;
     handle.flush()?;
     handle.sync_all()
@@ -1445,17 +1475,21 @@ fn check_work_list(work_list: &[AssetWorkItem], config: &BatchConfig) -> Result<
     let mut ids = HashSet::new();
     for work in work_list {
         validate_asset_id(&work.asset_id)?;
-        if !ids.insert(work.asset_id.as_str()) {
+        #[cfg(unix)]
+        let id = work.asset_id.clone();
+        #[cfg(windows)]
+        let id = work.asset_id.to_ascii_lowercase();
+        if !ids.insert(id) {
             return Err(BatchError::new("duplicate-asset-id").into());
         }
     }
-    let resume = resolve(&config.resume_log);
+    let resume = resolve(&config.resume_log)?;
     for work in work_list {
         let asset_dir = config.output_root.join(&work.asset_id);
         if asset_dir.is_symlink() {
             return Err(BatchError::new("unsafe-output-path").into());
         }
-        if is_relative_to(&resume, &resolve(&asset_dir)) {
+        if is_relative_to(&resume, &resolve(&asset_dir)?) {
             return Err(BatchError::new("resume-output-overlap").into());
         }
         for object in [&work.dash_manifest, &work.hls_master]

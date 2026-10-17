@@ -4,7 +4,7 @@
 //! process group. Configuration travels over stdin, heartbeats report progress, and
 //! the supervisor terminates the whole group at the asset deadline or attempt end.
 
-use super::commands::{IN_ASSET_WORKER, after, exit_code};
+use super::commands::{after, exit_code};
 use super::{
     AssetWorkItem, AttemptError, BatchConfig, BatchError, CliRunner, EnvKeyProvider, FATAL,
     FileKeyProvider, KeyNotAvailable, KeyProvider, KeyProviderKind, RETRYABLE, RetryPolicy, Seams,
@@ -23,7 +23,6 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -151,7 +150,7 @@ impl KeyProvider for ProvidedKeys {
 /// staging and per-asset commands, print `[reason, retryable]` and exit 0. A crash (a panic,
 /// an interruption) exits non-zero without an answer.
 pub fn worker_main() -> i32 {
-    IN_ASSET_WORKER.store(true, Ordering::SeqCst);
+    crate::native::mark_asset_worker();
     let mut input = Vec::new();
     let read = std::io::stdin()
         .lock()
@@ -337,9 +336,8 @@ pub fn supervise_attempt(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
-    std::os::unix::process::CommandExt::process_group(&mut child_command, 0);
-    let mut child = child_command.spawn().map_err(|_| AttemptError::Other)?;
-    let group = rustix::process::Pid::from_child(&child);
+    let mut child =
+        crate::native::ManagedChild::spawn(child_command, true).map_err(|_| AttemptError::Other)?;
     let mut stdin = child.stdin.take().expect("stdin is piped");
     let mut stdout = child.stdout.take().expect("stdout is piped");
     // The payload is written and the pipe closed on a thread: a worker that never reads its
@@ -354,7 +352,7 @@ pub fn supervise_attempt(
         let _ = sender.send(raw);
     });
     let waited = wait(&mut child, &receiver, config, heartbeat);
-    let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
+    let _ = child.kill();
     let _ = child.wait();
     let Some((status, raw)) = waited? else {
         return Ok(("asset-timeout".to_string(), true));
@@ -370,7 +368,7 @@ pub fn supervise_attempt(
 /// Wait for the worker to exit and close its stdout (`communicate`), with heartbeats; `None`
 /// at the deadline.
 fn wait(
-    child: &mut std::process::Child,
+    child: &mut crate::native::ManagedChild,
     receiver: &mpsc::Receiver<Vec<u8>>,
     config: &BatchConfig,
     heartbeat: &dyn Fn(),

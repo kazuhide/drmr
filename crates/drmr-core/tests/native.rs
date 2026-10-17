@@ -31,6 +31,21 @@ fn native_resolution_applies_parent_components_after_resolving_a_link() {
 }
 
 #[test]
+fn temporary_capture_files_are_private_and_support_cloned_handles() {
+    use std::io::{Seek, SeekFrom};
+    let mut capture = native::private_tempfile().unwrap();
+    let mut writer = capture.try_clone().unwrap();
+    writer.write_all(b"private output").unwrap();
+    drop(writer);
+    capture.seek(SeekFrom::Start(0)).unwrap();
+    let mut contents = String::new();
+    capture.read_to_string(&mut contents).unwrap();
+    assert_eq!(contents, "private output");
+    #[cfg(windows)]
+    private_fs::verify(&capture).unwrap();
+}
+
+#[test]
 fn private_replacement_validates_before_truncating() {
     let temp = tempfile::tempdir().unwrap();
     let directory = temp.path().join("private");

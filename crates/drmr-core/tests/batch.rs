@@ -1512,9 +1512,10 @@ fn clear_hls_graphs_preflight_through_the_source_port() {
         "#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXTINF:6,\ns.ts\n#EXT-X-ENDLIST\n",
     );
     preflight_clear(&config).unwrap();
-    let owned = drmr_core::batch_support::as_uri(&drmr_core::batch_support::resolve(
-        &config.output_root.join("a/s.ts"),
-    ));
+    let owned = drmr_core::batch_support::as_uri(
+        &drmr_core::batch_support::resolve(&config.output_root.join("a/s.ts")).unwrap(),
+    )
+    .unwrap();
     write(
         &media,
         format!("#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXTINF:6,\n{owned}\n#EXT-X-ENDLIST\n"),

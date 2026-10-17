@@ -81,6 +81,14 @@ pub fn create_private_new(path: &Path) -> io::Result<File> {
     }
 }
 
+/// Open a private file for updates, or exclusively create it if it is absent.
+pub fn create_private_update(path: &Path) -> io::Result<File> {
+    match create_private_new(path) {
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => open_private(path, true),
+        result => result,
+    }
+}
+
 /// Create a private file, or truncate an existing file only after validating it.
 pub fn create_private_or_truncate(path: &Path) -> io::Result<File> {
     match create_private_new(path) {
@@ -160,4 +168,77 @@ fn private_error(error: private_fs::Error) -> io::Error {
         }
         _ => io::Error::new(io::ErrorKind::PermissionDenied, "private file required"),
     }
+}
+
+/// A private capture file whose backing directory is removed after its handle closes.
+#[derive(Debug)]
+pub struct PrivateTempFile {
+    file: File,
+    // Fields drop in declaration order: close the file before removing its directory.
+    _directory: Option<tempfile::TempDir>,
+}
+
+impl std::ops::Deref for PrivateTempFile {
+    type Target = File;
+
+    fn deref(&self) -> &Self::Target {
+        &self.file
+    }
+}
+
+impl std::ops::DerefMut for PrivateTempFile {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.file
+    }
+}
+
+/// Create a private capture file without writing into an inherited Windows ACL.
+pub fn private_tempfile() -> io::Result<PrivateTempFile> {
+    #[cfg(unix)]
+    {
+        Ok(PrivateTempFile {
+            file: tempfile::tempfile()?,
+            _directory: None,
+        })
+    }
+    #[cfg(windows)]
+    {
+        let directory = tempfile::tempdir()?;
+        let private = directory.path().join("private");
+        create_private_dir_all(&private)?;
+        Ok(PrivateTempFile {
+            file: create_private_new(&private.join("capture"))?,
+            _directory: Some(directory),
+        })
+    }
+}
+
+/// An exclusively created private staging directory with automatic cleanup.
+#[derive(Debug)]
+pub struct PrivateTempDir {
+    path: std::path::PathBuf,
+}
+
+impl PrivateTempDir {
+    /// The directory's native path.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for PrivateTempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
+/// Create a private temporary directory below an existing private parent.
+pub fn private_tempdir_in(parent: &Path, prefix: &str) -> io::Result<PrivateTempDir> {
+    let ((), path) = tempfile::Builder::new()
+        .prefix(prefix)
+        .make_in(parent, create_private_dir_new)?
+        .into_parts();
+    Ok(PrivateTempDir {
+        path: path.keep().map_err(|error| error.error)?,
+    })
 }
