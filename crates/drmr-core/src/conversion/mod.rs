@@ -1,0 +1,312 @@
+//! Local, no-transcode conversion with explicit key roles and independent round-trip checks.
+//!
+//! The first backend route handles one MP4 audio or video track. Unknown protection,
+//! manifest inputs, and unsupported output profiles fail before running a backend.
+//! Shaka's raw-key interface passes keys to its child process as arguments. Records and
+//! errors are redacted, but operating-system process inspection can observe those arguments.
+mod backend;
+mod keys;
+mod verify;
+use crate::{
+    inspection::{self, InputFormat, Inspection, Protection, TargetProtection, TrackKind},
+    toolrun::ToolRunner,
+};
+use backend::Backend;
+pub use keys::{ContentKey, InputKeys, OutputKey};
+use serde::Serialize;
+use std::{
+    fs::{self, File, OpenOptions},
+    io::{Read, Write},
+    path::{Component, Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
+pub use verify::{VerificationChecks, VerificationReport};
+const MAX_MEDIA_BYTES: u64 = 16 * 1024 * 1024 * 1024;
+/// Fixed failure codes contain no paths, key material, or backend output.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("{0}")]
+pub struct ConversionError(pub &'static str);
+#[derive(Clone, Debug, Serialize)]
+pub struct ConversionReport {
+    pub schema_version: u32,
+    pub input: Inspection,
+    pub output: Inspection,
+    pub verification: VerificationReport,
+}
+/// Explicit backend configuration; no executable is selected from source metadata.
+pub struct Converter {
+    backend: Backend,
+}
+impl Converter {
+    pub fn new(
+        runner: Arc<ToolRunner>,
+        packager: impl Into<String>,
+        ffmpeg: impl Into<String>,
+    ) -> Self {
+        Self {
+            backend: Backend {
+                runner,
+                packager: packager.into(),
+                ffmpeg: ffmpeg.into(),
+                ffprobe: "ffprobe".into(),
+                timeout: Duration::from_secs(3600),
+            },
+        }
+    }
+    #[must_use]
+    pub fn with_ffprobe(mut self, binary: impl Into<String>) -> Self {
+        self.backend.ffprobe = binary.into();
+        self
+    }
+    #[must_use]
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.backend.timeout = timeout;
+        self
+    }
+    pub fn convert_mp4(
+        &self,
+        input: &Path,
+        output: &Path,
+        target: TargetProtection,
+        input_keys: &InputKeys,
+        output_key: Option<&OutputKey>,
+    ) -> Result<ConversionReport, ConversionError> {
+        if target == TargetProtection::HlsAes128 {
+            return Err(ConversionError("target-requires-hls-output"));
+        }
+        if target != TargetProtection::Clear && output_key.is_none() {
+            return Err(ConversionError("output-key-required"));
+        }
+        if target == TargetProtection::Clear && output_key.is_some() {
+            return Err(ConversionError("output-key-not-used"));
+        }
+        let destination = destination(output)?;
+        let workspace = workspace()?;
+        let snapshot = workspace.path().join("source.mp4");
+        copy_private(input, &snapshot)?;
+        let input_report = validate(&snapshot, input_keys)?;
+        self.backend.profile(&snapshot)?;
+        let clear = workspace.path().join("clear.mp4");
+        self.backend.package(
+            &snapshot,
+            &clear,
+            (input_report.protection != Protection::Clear).then_some(input_keys),
+            None,
+        )?;
+        let candidate = workspace.path().join("candidate.mp4");
+        self.backend.package(
+            &clear,
+            &candidate,
+            None,
+            output_key.map(|key| (key, target)),
+        )?;
+        let output_report =
+            inspection::inspect(&candidate).map_err(|_| ConversionError("invalid-output-media"))?;
+        let expected = match target {
+            TargetProtection::Clear => Protection::Clear,
+            TargetProtection::Cenc => Protection::Cenc,
+            TargetProtection::Cbcs => Protection::Cbcs,
+            TargetProtection::HlsAes128 => unreachable!(),
+        };
+        if output_report.protection != expected || output_report.tracks.len() != 1 {
+            return Err(ConversionError("output-protection-mismatch"));
+        }
+        if let Some(key) = output_key
+            && output_report.tracks[0].key_ids != [key.0.id_hex()]
+        {
+            return Err(ConversionError("output-key-id-mismatch"));
+        }
+        let verified = workspace.path().join("verified.mp4");
+        let output_keys = output_key
+            .map(|key| {
+                InputKeys::new(vec![ContentKey::from_hex(
+                    &key.0.id_hex(),
+                    &key.0.key_hex(),
+                )?])
+            })
+            .transpose()?
+            .unwrap_or_default();
+        self.backend.package(
+            &candidate,
+            &verified,
+            output_key.map(|_| &output_keys),
+            None,
+        )?;
+        let verification = self.backend.verify_clear(&clear, &verified)?;
+        if !verification.passed {
+            return Err(ConversionError("round-trip-verification-failed"));
+        }
+        publish(&candidate, &destination)?;
+        Ok(ConversionReport {
+            schema_version: 1,
+            input: input_report,
+            output: output_report,
+            verification,
+        })
+    }
+    pub fn verify_mp4(
+        &self,
+        input: &Path,
+        input_keys: &InputKeys,
+        output: &Path,
+        output_keys: &InputKeys,
+    ) -> Result<VerificationReport, ConversionError> {
+        let workspace = workspace()?;
+        let source = workspace.path().join("source.mp4");
+        let result = workspace.path().join("result.mp4");
+        copy_private(input, &source)?;
+        copy_private(output, &result)?;
+        let source_report = validate(&source, input_keys)?;
+        let result_report = validate(&result, output_keys)?;
+        self.backend.profile(&source)?;
+        self.backend.profile(&result)?;
+        let clear_source = workspace.path().join("source-clear.mp4");
+        let clear_result = workspace.path().join("result-clear.mp4");
+        self.backend.package(
+            &source,
+            &clear_source,
+            (source_report.protection != Protection::Clear).then_some(input_keys),
+            None,
+        )?;
+        self.backend.package(
+            &result,
+            &clear_result,
+            (result_report.protection != Protection::Clear).then_some(output_keys),
+            None,
+        )?;
+        self.backend.verify_clear(&clear_source, &clear_result)
+    }
+}
+fn validate(path: &Path, keys: &InputKeys) -> Result<Inspection, ConversionError> {
+    let report = inspection::inspect(path).map_err(|_| ConversionError("invalid-input-media"))?;
+    if report.format != InputFormat::Mp4 {
+        return Err(ConversionError("input-format-not-supported"));
+    }
+    if report.tracks.len() != 1 {
+        return Err(ConversionError("single-track-mp4-required"));
+    }
+    if !matches!(report.tracks[0].kind, TrackKind::Audio | TrackKind::Video) {
+        return Err(ConversionError("media-track-not-supported"));
+    }
+    if !matches!(
+        report.protection,
+        Protection::Clear | Protection::Cenc | Protection::Cbcs
+    ) {
+        return Err(ConversionError("input-protection-not-supported"));
+    }
+    if report
+        .findings
+        .iter()
+        .any(|finding| finding.code == "sample-groups-not-verified")
+    {
+        return Err(ConversionError("sample-groups-not-supported"));
+    }
+    if report.protection != Protection::Clear
+        && (report.tracks[0].key_ids.is_empty()
+            || report.tracks[0].key_ids.iter().any(|id| !keys.contains(id)))
+    {
+        return Err(ConversionError("input-key-required"));
+    }
+    Ok(report)
+}
+fn workspace() -> Result<tempfile::TempDir, ConversionError> {
+    if !cfg!(unix) {
+        return Err(ConversionError("private-files-not-supported-on-platform"));
+    }
+    tempfile::Builder::new()
+        .prefix("drmr-convert-")
+        .tempdir()
+        .map_err(|_| ConversionError("temporary-workspace-unavailable"))
+}
+fn destination(path: &Path) -> Result<PathBuf, ConversionError> {
+    if path
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+        || fs::symlink_metadata(path).is_ok()
+    {
+        return Err(ConversionError("output-exists-or-unsafe"));
+    }
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    if fs::symlink_metadata(parent)
+        .map_err(|_| ConversionError("output-parent-unavailable"))?
+        .file_type()
+        .is_symlink()
+    {
+        return Err(ConversionError("output-parent-unsafe"));
+    }
+    let parent = parent
+        .canonicalize()
+        .map_err(|_| ConversionError("output-parent-unavailable"))?;
+    let name = path
+        .file_name()
+        .ok_or(ConversionError("output-path-invalid"))?;
+    Ok(parent.join(name))
+}
+fn copy_private(source: &Path, destination: &Path) -> Result<(), ConversionError> {
+    let metadata = fs::symlink_metadata(source).map_err(|_| ConversionError("input-unreadable"))?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > MAX_MEDIA_BYTES
+    {
+        return Err(ConversionError("input-not-regular-or-too-large"));
+    }
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits().cast_signed());
+    }
+    let source = options
+        .open(source)
+        .map_err(|_| ConversionError("input-unreadable"))?;
+    let mut output = OpenOptions::new();
+    output.create_new(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        output.mode(0o600);
+    }
+    let mut output = output
+        .open(destination)
+        .map_err(|_| ConversionError("temporary-file-unavailable"))?;
+    let count = std::io::copy(&mut source.take(MAX_MEDIA_BYTES + 1), &mut output)
+        .map_err(|_| ConversionError("media-copy-failed"))?;
+    if count > MAX_MEDIA_BYTES {
+        return Err(ConversionError("media-size-limit"));
+    }
+    Ok(())
+}
+fn private_file_mode(path: &Path) -> Result<(), ConversionError> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+            .map_err(|_| ConversionError("private-file-permissions-failed"))?;
+    }
+    Ok(())
+}
+fn publish(source: &Path, destination: &Path) -> Result<(), ConversionError> {
+    let mut staged = tempfile::NamedTempFile::new_in(
+        destination
+            .parent()
+            .ok_or(ConversionError("output-path-invalid"))?,
+    )
+    .map_err(|_| ConversionError("output-staging-failed"))?;
+    let mut input = File::open(source).map_err(|_| ConversionError("output-staging-failed"))?;
+    std::io::copy(&mut input, staged.as_file_mut())
+        .map_err(|_| ConversionError("output-staging-failed"))?;
+    staged
+        .flush()
+        .map_err(|_| ConversionError("output-staging-failed"))?;
+    staged
+        .as_file()
+        .sync_all()
+        .map_err(|_| ConversionError("output-staging-failed"))?;
+    staged
+        .persist_noclobber(destination)
+        .map_err(|_| ConversionError("output-exists-or-publish-failed"))?;
+    Ok(())
+}
