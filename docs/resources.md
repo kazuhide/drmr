@@ -73,11 +73,14 @@ exit code. A forced fallback is marked `cleanup: unconfirmed`: killing only the 
 process group cannot cover media children that own separate groups. The label is not
 independent operating-system proof of every descendant's exit.
 
-Pipes left open after the direct child exits get a two-second close deadline, including
-calls without an explicit command timeout. Windows jobs retain ordinary descendants;
+If pipes remain open after the direct child exits, cleanup starts after two seconds,
+including calls without an explicit command timeout. Windows jobs retain ordinary descendants;
 Unix uses an owned process group, or the inherited supervisor group inside an asset
 worker. A Unix child that deliberately starts a separate session can escape group
 termination; nonblocking pipe readers still stop and join at the capture deadline.
+On Windows, the 30-second job-notification wait does not bound reader joins when operating-system
+I/O remains blocked. Unconfirmed cleanup is an error, never a completed cancellation;
+see [Windows cleanup limits](windows.md#unconfirmed-process-cleanup).
 
 Ordered task producers submit at most 128 unconsumed tasks per coordinator. Source
 downloads and probes share a 128-task window, including probes waiting for initialization

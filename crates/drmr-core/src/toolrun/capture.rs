@@ -243,6 +243,51 @@ mod lifecycle_tests {
     use super::*;
 
     #[test]
+    fn cleanup_failure_overrides_active_cancellation() {
+        let root = tempfile::tempdir().unwrap();
+        let ready = root.path().join("ready");
+        let tool = drmr_test_support::program_path(&root.path().join("response"));
+        drmr_test_support::install(
+            &tool,
+            &drmr_test_support::ToolSpec::default()
+                .with("ready_file", ready.to_str().unwrap())
+                .with(
+                    "release_file",
+                    root.path().join("release").to_str().unwrap(),
+                ),
+        )
+        .unwrap();
+        let argv = vec![tool.to_str().unwrap().to_string()];
+        let stop = crate::concurrency::Stop::new();
+        let options = RunOptions {
+            stop: Some(&stop),
+            timeout: Some(Duration::from_secs(20)),
+            ..RunOptions::default()
+        };
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                let deadline = Instant::now() + Duration::from_secs(15);
+                while !ready.is_file() {
+                    assert!(Instant::now() < deadline, "tool did not become ready");
+                    std::thread::sleep(POLL);
+                }
+                stop.set();
+            });
+            let mut attempts = 0;
+            let error = execute_with_cleanup(&argv, &options, None, |child| {
+                attempts += 1;
+                child.finish()?;
+                Err(io::Error::other("private cleanup diagnostic"))
+            })
+            .expect_err("cancellation must not conceal unconfirmed cleanup");
+            assert!(stop.is_set());
+            assert_eq!(error.kind, "cleanup-unconfirmed");
+            assert_eq!(error.text, "process tree cleanup could not be confirmed");
+            assert_eq!(attempts, 1);
+        });
+    }
+
+    #[test]
     fn cleanup_failure_overrides_completed_and_timed_out_tools() {
         let root = tempfile::tempdir().unwrap();
         let tool = drmr_test_support::program_path(&root.path().join("response"));
