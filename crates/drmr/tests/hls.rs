@@ -215,7 +215,10 @@ fn analyze_hls_reports_source_errors_with_their_token() {
         )
     };
     assert_ends(&run("../x"), "analysis", "invalid-asset-id", 1);
+    #[cfg(unix)]
     std::fs::create_dir_all(out.join("synth/clear/source")).unwrap();
+    #[cfg(windows)]
+    drmr_core::native::create_private_dir_all(&out.join("synth/clear/source")).unwrap();
     assert_ends(&run("synth"), "analysis", "source-snapshot-exists", 1);
 }
 

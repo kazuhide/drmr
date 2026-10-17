@@ -315,27 +315,69 @@ impl From<io::Error> for CopyError {
 /// `_atomic_copy`: a regular, non-link `source` of at most `cap` bytes copied to a temporary
 /// file beside `target`, synced, checked against `cap` again and renamed over `target`.
 pub(crate) fn atomic_copy(source: &Path, target: &Path, cap: u64) -> Result<(), CopyError> {
-    if is_redirect(source) || !source.is_file() || std::fs::metadata(source)?.len() > cap {
+    atomic_copy_observed(source, target, cap, &|_, _| {})
+}
+
+fn copy_step<T>(
+    phase: &'static str,
+    result: io::Result<T>,
+    observer: &dyn Fn(&'static str, &io::Error),
+) -> Result<T, CopyError> {
+    result.map_err(|error| {
+        observer(phase, &error);
+        CopyError::Io
+    })
+}
+
+fn atomic_copy_observed(
+    source: &Path,
+    target: &Path,
+    cap: u64,
+    observer: &dyn Fn(&'static str, &io::Error),
+) -> Result<(), CopyError> {
+    if is_redirect(source)
+        || !source.is_file()
+        || copy_step("source-metadata", std::fs::metadata(source), observer)?.len() > cap
+    {
         return Err(CopyError::Storage(StorageError::new(
             "storage-object-invalid",
         )));
     }
     let parent = target.parent().unwrap_or_else(|| Path::new("."));
     #[cfg(unix)]
-    std::fs::create_dir_all(parent)?;
+    copy_step("prepare-parent", std::fs::create_dir_all(parent), observer)?;
     #[cfg(windows)]
-    crate::native::create_private_dir_all(parent)?;
-    let mut temporary = transfer_file(parent)?;
-    let mut reader = File::open(source)?;
-    copy_chunks(&mut reader, temporary.as_file_mut())?;
-    temporary.as_file_mut().flush()?;
-    temporary.as_file().sync_all()?;
-    if std::fs::metadata(temporary.path())?.len() > cap {
+    copy_step(
+        "prepare-parent",
+        crate::native::create_private_dir_all(parent),
+        observer,
+    )?;
+    let mut temporary = copy_step("create-temporary", transfer_file(parent), observer)?;
+    let mut reader = copy_step("open-source", File::open(source), observer)?;
+    copy_step(
+        "copy-bytes",
+        copy_chunks(&mut reader, temporary.as_file_mut()),
+        observer,
+    )?;
+    copy_step("flush", temporary.as_file_mut().flush(), observer)?;
+    copy_step("sync", temporary.as_file().sync_all(), observer)?;
+    if copy_step(
+        "copied-metadata",
+        std::fs::metadata(temporary.path()),
+        observer,
+    )?
+    .len()
+        > cap
+    {
         return Err(CopyError::Storage(StorageError::new(
             "storage-object-invalid",
         )));
     }
-    temporary.persist(target).map_err(|error| error.error)?;
+    copy_step(
+        "persist",
+        temporary.persist(target).map_err(|error| error.error),
+        observer,
+    )?;
     Ok(())
 }
 
@@ -600,5 +642,60 @@ impl StorageBackend for LocalStorageBackend {
         Some(StorageLocation::Local {
             root: self.root.clone(),
         })
+    }
+}
+
+#[cfg(all(test, windows))]
+mod native_copy_tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    #[test]
+    fn parallel_nested_private_copies_preserve_every_source_and_target() {
+        let temporary = crate::native::private_tempdir().unwrap();
+        let input = temporary.path().join("input");
+        let output = temporary.path().join("output");
+        crate::native::create_private_dir_all(&output).unwrap();
+        let _output_guard = crate::native::pin_private_directory(&output).unwrap();
+        let mut transfers = Vec::new();
+        for track in ["audio/a", "video/v"] {
+            for index in 0..8 {
+                let key = format!("cdn.example.test/title/{track}/segment_{index}.m4s");
+                let source = input.join(&key);
+                std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+                let bytes = format!("synthetic-media:{track}:{index}").into_bytes();
+                std::fs::write(&source, &bytes).unwrap();
+                transfers.push((source, output.join(key), bytes));
+            }
+        }
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = transfers
+                .iter()
+                .map(|(source, target, bytes)| {
+                    scope.spawn(move || {
+                        let diagnostics = Mutex::new(Vec::new());
+                        let result = atomic_copy_observed(source, target, 1024, &|phase, error| {
+                            diagnostics.lock().unwrap().push((
+                                phase,
+                                error.kind(),
+                                error.raw_os_error(),
+                            ));
+                        });
+                        assert!(
+                            result.is_ok(),
+                            "copy phases: {:?}",
+                            diagnostics.into_inner().unwrap()
+                        );
+                        assert_eq!(std::fs::read(source).unwrap(), *bytes);
+                        assert_eq!(std::fs::read(target).unwrap(), *bytes);
+                        let held = crate::native::open_private_read(target).unwrap();
+                        private_fs::verify(&held).unwrap();
+                    })
+                })
+                .collect();
+            for handle in handles {
+                handle.join().unwrap();
+            }
+        });
     }
 }

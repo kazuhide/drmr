@@ -1800,7 +1800,7 @@ fn test_first_resume_header_interruption_recovers_only_known_prefix() {
     for partial in [&b""[..], b"{\"schema_", b"{\"schema_version\": \""] {
         let fixture = fixture();
         let log = &fixture.config.resume_log;
-        std::fs::write(log, partial).unwrap();
+        write_mode(log, partial, 0o600);
         assert!(load_resume_log(log).unwrap().is_empty());
         append_resume_entry(
             log,
@@ -2035,12 +2035,13 @@ fn dash_commands_are_the_run_command_with_python_s_flags() {
         .map(|arg| arg.to_string_lossy().into_owned())
         .collect();
     let output = config.output_root.to_string_lossy().into_owned();
+    let manifest = stage.join("host/a/manifest.mpd").display().to_string();
     assert_eq!(
         argv,
         [
             "run",
             "--mpd",
-            "/stage/download/host/a/manifest.mpd",
+            &manifest,
             "--asset-id",
             "a",
             "--output",
@@ -2060,14 +2061,8 @@ fn dash_commands_are_the_run_command_with_python_s_flags() {
         .iter()
         .map(|arg| arg.to_string_lossy().into_owned())
         .collect();
-    assert_eq!(
-        &argv[8..],
-        [
-            "jsonl",
-            "--hls-master",
-            "/stage/download/host/a/master.m3u8"
-        ]
-    );
+    let master = stage.join("host/a/master.m3u8").display().to_string();
+    assert_eq!(&argv[8..], ["jsonl", "--hls-master", &master]);
 }
 
 #[test]
@@ -2175,7 +2170,7 @@ fn the_resume_log_is_python_s_byte_for_byte() {
     ];
     for (name, content) in cases {
         let path = temp.path().join(name);
-        std::fs::write(&path, content).unwrap();
+        write_mode(&path, content, 0o600);
         append_resume_entry(
             &path,
             &ResumeEntry::new("b", AssetOutcome::DonePass, "ok", 1, "y").unwrap(),
