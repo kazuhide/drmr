@@ -1,5 +1,4 @@
 //! Batch completion, durable resume records, retries, timeouts, and worker supervision.
-#![cfg(unix)] // the modules under test exist on unix only (open decision #23)
 
 mod common;
 
@@ -24,14 +23,100 @@ use drmr_core::source::{
 use drmr_core::storage::{
     LocalStorageBackend, ObjectRef, StorageBackend, StorageError, StorageLocation, TransferPolicy,
 };
+use drmr_test_support::{ToolSpec, install};
 use serde_json::{Value, json};
 use std::ffi::OsString;
 use std::fmt::Write as _;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+
+fn assert_private(path: &Path) {
+    #[cfg(unix)]
+    assert_eq!(
+        std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    #[cfg(windows)]
+    {
+        let file = drmr_core::native::open_private_read(path).unwrap();
+        private_fs::verify(&file).unwrap();
+    }
+}
+
+fn make_public_copy(path: &Path) {
+    #[cfg(unix)]
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    #[cfg(windows)]
+    {
+        let bytes = std::fs::read(path).unwrap();
+        let ordinary = tempfile::tempdir().unwrap();
+        let copy = ordinary.path().join("inherited-acl.json");
+        // Move a fresh ordinary file so the private parent does not supply its ACL.
+        std::fs::write(&copy, bytes).unwrap();
+        std::fs::remove_file(path).unwrap();
+        std::fs::rename(copy, path).unwrap();
+    }
+}
+
+fn native_worker(root: &Path, spec: &ToolSpec) -> Vec<OsString> {
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    let path = root.join(format!("worker-{}", NEXT.fetch_add(1, Ordering::SeqCst)));
+    vec![install(&path, spec).unwrap().into_os_string()]
+}
+
+fn native_command(root: &Path, spec: &ToolSpec, subcommand: &str) -> CliCommand {
+    CliCommand::new(native_worker(root, spec), subcommand)
+}
+
+fn assert_descendant_stopped(pidfile: &Path, lockfile: &Path) {
+    let pid = std::fs::read_to_string(pidfile).unwrap();
+    let pid: u32 = pid.trim().parse().unwrap();
+    assert!(
+        lockfile.with_extension("lock.ready").is_file(),
+        "descendant reached held-lock readiness"
+    );
+    #[cfg(unix)]
+    {
+        let state = std::process::Command::new("ps")
+            .args(["-o", "stat=", "-p", &pid.to_string()])
+            .output()
+            .unwrap();
+        let state = String::from_utf8_lossy(&state.stdout);
+        let state = state.trim();
+        assert!(
+            state.is_empty() || state.starts_with('Z'),
+            "the grandchild survived: {state}"
+        );
+    }
+    #[cfg(windows)]
+    {
+        let state = std::process::Command::new("tasklist.exe")
+            .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
+            .output()
+            .unwrap();
+        assert!(
+            state.status.success(),
+            "tasklist must establish descendant liveness"
+        );
+        let state = String::from_utf8_lossy(&state.stdout);
+        assert!(
+            !state.lines().any(|line| line
+                .split(',')
+                .nth(1)
+                .is_some_and(|column| column.trim_matches('"') == pid.to_string())),
+            "the grandchild survived: {state}"
+        );
+        let _released = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(lockfile)
+            .expect("the terminated descendant released its exclusive Windows lock");
+    }
+}
 
 // ------------------------------------------------------------------------------------------
 // Fixtures (the `config` fixture, `item`, `runner` and `Keys` of the fixture).
@@ -54,7 +139,7 @@ impl KeyProvider for Keys {
 }
 
 struct Fixture {
-    temp: tempfile::TempDir,
+    temp: common::PrivateTempDir,
     config: BatchConfig,
 }
 
@@ -65,7 +150,7 @@ impl Fixture {
 }
 
 fn fixture() -> Fixture {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = common::private_tempdir().unwrap();
     let root = temp.path().join("store");
     std::fs::create_dir(&root).unwrap();
     let config = BatchConfig {
@@ -254,7 +339,15 @@ fn find_named(root: &Path, name: &str) -> Vec<PathBuf> {
 }
 
 fn relative_key(path: &Path, root: &Path) -> ObjectRef {
-    ObjectRef::new(path.strip_prefix(root).unwrap().to_str().unwrap()).unwrap()
+    ObjectRef::new(
+        path.strip_prefix(root)
+            .unwrap()
+            .components()
+            .map(|part| part.as_os_str().to_str().unwrap())
+            .collect::<Vec<_>>()
+            .join("/"),
+    )
+    .unwrap()
 }
 
 // ------------------------------------------------------------------------------------------
@@ -263,7 +356,7 @@ fn relative_key(path: &Path, root: &Path) -> ObjectRef {
 
 #[test]
 fn test_terminal_resume_latest_and_private_mode() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = common::private_tempdir().unwrap();
     let path = temp.path().join("resume");
     append_resume_entry(
         &path,
@@ -279,10 +372,7 @@ fn test_terminal_resume_latest_and_private_mode() {
         load_resume_log(&path).unwrap().get("a").unwrap().outcome,
         AssetOutcome::DonePass
     );
-    assert_eq!(
-        std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
-        0o600
-    );
+    assert_private(&path);
     let first = std::fs::read_to_string(&path)
         .unwrap()
         .lines()
@@ -297,7 +387,7 @@ fn test_terminal_resume_latest_and_private_mode() {
 
 #[test]
 fn test_worklist_rejects_keys_unknown_and_duplicates() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = common::private_tempdir().unwrap();
     let path = temp.path().join("work");
     let row = json!({"asset_id": "a", "kind": "dash-cenc", "dash_manifest": "host/a/main.mpd", "hls_master": null});
     std::fs::write(
@@ -338,7 +428,7 @@ fn test_worklist_rejects_keys_unknown_and_duplicates() {
 
 #[test]
 fn work_list_rows_follow_python_s_rules() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = common::private_tempdir().unwrap();
     let path = temp.path().join("work");
     let header = "{\"schema_version\": \"1\"}\n";
     let valid = [
@@ -512,7 +602,7 @@ fn test_plan_has_no_storage_or_writes() {
 
 #[test]
 fn test_keyfile_permissions_location_and_missing() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = common::private_tempdir().unwrap();
     let path = temp.path().join("private.jsonl");
     let row = json!({"asset_id": "a", "kid": KID, "key": KEY, "iv": IV});
     write_mode(
@@ -531,7 +621,7 @@ fn test_keyfile_permissions_location_and_missing() {
         !shown.contains(path.to_str().unwrap()) && !shown.contains(KEY),
         "{shown}"
     );
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    make_public_copy(&path);
     let error = FileKeyProvider::new(&path, &temp.path().join("output")).unwrap_err();
     assert_eq!(error.token(), "key-provider-invalid");
     assert!(!error.to_string().contains(path.to_str().unwrap()));
@@ -539,7 +629,7 @@ fn test_keyfile_permissions_location_and_missing() {
 
 #[test]
 fn key_files_are_refused_under_the_output_root_or_malformed() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = common::private_tempdir().unwrap();
     let output = temp.path().join("output");
     let inside = output.join("keys.jsonl");
     let row = Dumps::DEFAULT.dumps(&json!({"asset_id": "a", "kid": KID, "key": KEY, "iv": IV}));
@@ -573,10 +663,16 @@ fn key_files_are_refused_under_the_output_root_or_malformed() {
             .unwrap_err(),
         KeyNotAvailable
     );
-    std::os::unix::fs::symlink(&path, temp.path().join("link.jsonl")).unwrap();
-    assert!(FileKeyProvider::new(&temp.path().join("link.jsonl"), &output).is_err());
+    let alias = temp.path().join("link.jsonl");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&path, &alias).unwrap();
+    #[cfg(windows)]
+    std::fs::hard_link(&path, &alias).unwrap();
+    assert!(FileKeyProvider::new(&alias, &output).is_err());
+    // Restore the single-link key file before checking its output-root relationship.
+    std::fs::remove_file(alias).unwrap();
     // A key file under the run's output root is refused by the configuration too.
-    let store = tempfile::tempdir().unwrap();
+    let store = common::private_tempdir().unwrap();
     let config_error = BatchConfig {
         keys: Arc::new(FileKeyProvider::new(&path, &output).unwrap()),
         ..BatchConfig::new(
@@ -711,13 +807,15 @@ fn supervisor_heartbeat_handshake_releases_the_worker_after_two_events() {
     };
     let seams = Seams {
         preflight: Some(&no_preflight),
-        worker_command: Some(vec![
-            "/bin/sh".into(),
-            "-c".into(),
-            "cat > /dev/null; while [ ! -f \"$1\" ]; do sleep 0.01; done; printf '[\"ok\", false]\\n'".into(),
-            "heartbeat-worker".into(),
-            heartbeat.release.clone().into(),
-        ]),
+        worker_command: Some(native_worker(
+            fixture.temp.path(),
+            &ToolSpec {
+                stdout: b"[\"ok\", false]\n".to_vec(),
+                ..ToolSpec::default()
+            }
+            .with("drain_stdin", "1")
+            .with("release_file", heartbeat.release.to_str().unwrap()),
+        )),
         ..Seams::default()
     };
     let config = BatchConfig {
@@ -763,16 +861,18 @@ impl Sink for HeartbeatRelease {
 fn test_timeout_kills_descendants() {
     let fixture = fixture();
     let pidfile = fixture.temp.path().join("child.pid");
-    let script = "sleep 60 & echo $! > \"$1\"; sleep 60";
+    let lockfile = fixture.temp.path().join("child.lock");
     let seams = Seams {
         preflight: Some(&no_preflight),
-        worker_command: Some(vec![
-            "/bin/sh".into(),
-            "-c".into(),
-            script.into(),
-            "sh".into(),
-            pidfile.clone().into(),
-        ]),
+        worker_command: Some(native_worker(
+            fixture.temp.path(),
+            &ToolSpec {
+                sleep_ms: 60_000,
+                ..ToolSpec::default()
+            }
+            .with("descendant_pid_file", pidfile.to_str().unwrap())
+            .with("descendant_lock_file", lockfile.to_str().unwrap()),
+        )),
         ..Seams::default()
     };
     let config = BatchConfig {
@@ -788,16 +888,7 @@ fn test_timeout_kills_descendants() {
     let report = run_batch_with(&[item("a")], &config, None, None, &seams).unwrap();
     assert_eq!(report.outcomes[0].reason, "retries-exhausted:asset-timeout");
     assert!(start.elapsed() < Duration::from_secs(5));
-    let pid = std::fs::read_to_string(&pidfile).unwrap();
-    let state = std::process::Command::new("ps")
-        .args(["-o", "stat=", "-p", pid.trim()])
-        .output()
-        .unwrap();
-    let state = String::from_utf8_lossy(&state.stdout).trim().to_string();
-    assert!(
-        state.is_empty() || state.starts_with('Z'),
-        "the grandchild survived: {state}"
-    );
+    assert_descendant_stopped(&pidfile, &lockfile);
 }
 
 #[test]
@@ -805,15 +896,16 @@ fn test_whole_asset_budget_includes_storage_phases() {
     for hang in ["stage", "upload"] {
         let fixture = fixture();
         // A worker that reads its private configuration and stalls in either storage phase.
-        let script = "cat > /dev/null; sleep 60";
         let seams = Seams {
             preflight: Some(&no_preflight),
-            worker_command: Some(vec![
-                "/bin/sh".into(),
-                "-c".into(),
-                script.into(),
-                hang.into(),
-            ]),
+            worker_command: Some(native_worker(
+                fixture.temp.path(),
+                &ToolSpec {
+                    sleep_ms: 60_000,
+                    ..ToolSpec::default()
+                }
+                .with("drain_stdin", "1"),
+            )),
             ..Seams::default()
         };
         let config = BatchConfig {
@@ -1665,9 +1757,11 @@ fn test_real_analysis_child_transient_segment_failure_crosses_boundary_safely() 
     // records naming the signed URL, then the closing analysis record — and the classification
     // crosses the boundary without the URL.
     let fixture = fixture();
-    let script = "echo '{\"stage\": \"tool\", \"argv\": [\"https://media.invalid/master?token=sentinel\"]}'; \
-                  echo '{\"stage\": \"analysis\", \"level\": \"error\", \"message\": \"source-http-failed\"}'; exit 1";
-    let command = CliCommand::new(["/bin/sh", "-c", script], "analyze-hls");
+    let command = native_command(fixture.temp.path(), &ToolSpec {
+        stdout: b"{\"stage\": \"tool\", \"argv\": [\"https://media.invalid/master?token=sentinel\"]}\n{\"stage\": \"analysis\", \"level\": \"error\", \"message\": \"source-http-failed\"}\n".to_vec(),
+        exit_code: 1,
+        ..ToolSpec::default()
+    }, "analyze-hls");
     let error = run_commands(&[command], &fixture.config, None, &|| {}).unwrap_err();
     assert_eq!(error, AttemptError::Retry("storage-transient".to_string()));
     assert!(!format!("{error} {error:?}").contains("sentinel"));
@@ -1676,10 +1770,27 @@ fn test_real_analysis_child_transient_segment_failure_crosses_boundary_safely() 
 #[test]
 fn test_analysis_child_transient_failure_is_found_behind_large_tool_output() {
     let fixture = fixture();
-    let script = "x=$(printf '%500s' '' | tr ' ' x); i=0; while [ $i -lt 400 ]; do \
-                  echo \"{\\\"stage\\\": \\\"tool\\\", \\\"event\\\": \\\"tool-output\\\", \\\"stdout\\\": \\\"$x\\\"}\"; i=$((i+1)); done; \
-                  echo '{\"stage\": \"analysis\", \"level\": \"error\", \"message\": \"source-fetch-failed\"}'; exit 1";
-    let command = CliCommand::new(["/bin/sh", "-c", script], "analyze-hls");
+    let mut output = String::new();
+    for _ in 0..400 {
+        writeln!(
+            output,
+            "{{\"stage\": \"tool\", \"event\": \"tool-output\", \"stdout\": \"{}\"}}",
+            "x".repeat(500)
+        )
+        .unwrap();
+    }
+    output.push_str(
+        "{\"stage\": \"analysis\", \"level\": \"error\", \"message\": \"source-fetch-failed\"}\n",
+    );
+    let command = native_command(
+        fixture.temp.path(),
+        &ToolSpec {
+            stdout: output.into_bytes(),
+            exit_code: 1,
+            ..ToolSpec::default()
+        },
+        "analyze-hls",
+    );
     let error = run_commands(&[command], &fixture.config, None, &|| {}).unwrap_err();
     assert_eq!(error, AttemptError::Retry("storage-transient".to_string()));
 }
@@ -1894,11 +2005,7 @@ fn test_hls_dispatch_uses_private_configs_and_environment() {
         "3",
         "the per-asset worker bound reaches the clear-HLS packaging as it reaches run"
     );
-    std::fs::set_permissions(
-        directory.join("drm.json"),
-        std::fs::Permissions::from_mode(0o644),
-    )
-    .unwrap();
+    make_public_copy(&directory.join("drm.json"));
     let error = commands(
         &work,
         &config,
@@ -2024,7 +2131,7 @@ fn formats() -> Value {
 #[test]
 fn the_resume_log_is_python_s_byte_for_byte() {
     let oracle = formats();
-    let temp = tempfile::tempdir().unwrap();
+    let temp = common::private_tempdir().unwrap();
     let log = temp.path().join("nested/resume.jsonl");
     for (asset, outcome, reason, attempts, ts) in [
         (
@@ -2085,7 +2192,7 @@ fn the_resume_log_is_python_s_byte_for_byte() {
 #[test]
 fn reports_and_plans_are_python_s_byte_for_byte() {
     let oracle = formats();
-    let temp = tempfile::tempdir().unwrap();
+    let temp = common::private_tempdir().unwrap();
     let log = temp.path().join("odd.jsonl");
     std::fs::write(&log, "{\"schema_version\":\"1\"}\n\
         {\"asset_id\":\"f\",\"outcome\":\"done-fail\",\"reason\":\"unclassified\",\"attempts\":1.5,\"ts\":null}\n\
@@ -2188,11 +2295,7 @@ fn a_run_writes_the_report_files_and_python_s_batch_records() {
         std::fs::read_to_string(fixture.config.output_root.join("_batch/batch-report.md")).unwrap();
     assert_eq!(markdown, report.markdown());
     for name in ["batch-report.json", "batch-report.md"] {
-        let mode = std::fs::metadata(fixture.config.output_root.join("_batch").join(name))
-            .unwrap()
-            .permissions()
-            .mode();
-        assert_eq!(mode & 0o777, 0o600);
+        assert_private(&fixture.config.output_root.join("_batch").join(name));
     }
     let records = logs.records();
     let messages: Vec<&str> = records
@@ -2332,28 +2435,31 @@ fn backoff_waits_between_attempts_within_the_cap() {
 }
 
 #[test]
-fn run_commands_classifies_timeouts_codes_and_the_deadline() {
+fn run_commands_classifies_timeouts_and_exit_codes() {
     let fixture = fixture();
-    let sh =
-        |script: &str, subcommand: &str| CliCommand::new(["/bin/sh", "-c", script], subcommand);
+    let command =
+        |spec: ToolSpec, subcommand| native_command(fixture.temp.path(), &spec, subcommand);
+    let exit = |code| {
+        command(
+            ToolSpec {
+                exit_code: code,
+                ..ToolSpec::default()
+            },
+            "run",
+        )
+    };
     let config = &fixture.config;
     assert_eq!(
-        run_commands(
-            &[
-                sh("exit 0", "run"),
-                sh("exit 3", "run"),
-                sh("exit 1", "run")
-            ],
-            config,
-            None,
-            &|| {}
-        )
-        .unwrap(),
+        run_commands(&[exit(0), exit(3), exit(1)], config, None, &|| {}).unwrap(),
         3
     );
     let error = run_commands(
-        &[sh(
-            "echo 'packager: Timed Out after 30s' >&2; exit 2",
+        &[command(
+            ToolSpec {
+                stderr: b"packager: Timed Out after 30s\n".to_vec(),
+                exit_code: 2,
+                ..ToolSpec::default()
+            },
             "run",
         )],
         config,
@@ -2363,30 +2469,69 @@ fn run_commands_classifies_timeouts_codes_and_the_deadline() {
     .unwrap_err();
     assert_eq!(error, AttemptError::Retry("packager-timeout".to_string()));
     // Not an analysis command: its records are not read.
-    let script = "echo '{\"stage\": \"analysis\", \"message\": \"source-timeout\"}'; exit 1";
     assert_eq!(
-        run_commands(&[sh(script, "package-hls")], config, None, &|| {}).unwrap(),
+        run_commands(
+            &[command(
+                ToolSpec {
+                    stdout: b"{\"stage\": \"analysis\", \"message\": \"source-timeout\"}\n"
+                        .to_vec(),
+                    exit_code: 1,
+                    ..ToolSpec::default()
+                },
+                "package-hls"
+            )],
+            config,
+            None,
+            &|| {}
+        )
+        .unwrap(),
         1
     );
+    #[cfg(unix)]
     assert_eq!(
-        run_commands(&[sh("kill -9 $$", "run")], config, None, &|| {}).unwrap(),
+        run_commands(
+            &[CliCommand::new(["/bin/sh", "-c", "kill -9 $$"], "run")],
+            config,
+            None,
+            &|| {}
+        )
+        .unwrap(),
         -9
     );
+    #[cfg(windows)]
+    assert_eq!(run_commands(&[exit(17)], config, None, &|| {}).unwrap(), 17);
     // The key material reaches the child's environment, never its argv.
     let witness = fixture.temp.path().join("env");
-    let script = format!(
-        "printf '%s %s %s' \"$DRM_KID\" \"$DRM_KEY\" \"$DRM_IV\" > '{}'",
-        witness.display()
-    );
+    let argv = fixture.temp.path().join("key-command-argv");
     assert_eq!(
-        run_commands(&[sh(&script, "run")], config, Some(&key()), &|| {}).unwrap(),
+        run_commands(
+            &[command(
+                ToolSpec::default()
+                    .with("drm_env_file", witness.to_str().unwrap())
+                    .with("argv_file", argv.to_str().unwrap()),
+                "run"
+            )],
+            config,
+            Some(&key()),
+            &|| {}
+        )
+        .unwrap(),
         0
     );
     assert_eq!(
         std::fs::read_to_string(&witness).unwrap(),
         format!("{KID} {KEY} {IV}")
     );
-    // The per-asset deadline kills the child's whole group.
+    assert_eq!(std::fs::read(argv).unwrap(), [] as [u8; 0]);
+}
+
+#[test]
+fn run_commands_deadline_kills_descendants() {
+    let fixture = fixture();
+    let config = &fixture.config;
+    let command =
+        |spec: ToolSpec, subcommand| native_command(fixture.temp.path(), &spec, subcommand);
+    // The per-asset deadline kills the child's whole process tree.
     let deadline = BatchConfig {
         retry: RetryPolicy {
             per_asset_timeout_s: 0.3,
@@ -2396,21 +2541,21 @@ fn run_commands_classifies_timeouts_codes_and_the_deadline() {
         ..config.clone()
     };
     let pidfile = fixture.temp.path().join("grandchild.pid");
-    let script = format!("sleep 60 & echo $! > '{}'; sleep 60", pidfile.display());
+    let lockfile = fixture.temp.path().join("grandchild.lock");
+    let child = command(
+        ToolSpec {
+            sleep_ms: 60_000,
+            ..ToolSpec::default()
+        }
+        .with("descendant_pid_file", pidfile.to_str().unwrap())
+        .with("descendant_lock_file", lockfile.to_str().unwrap()),
+        "run",
+    );
     let start = Instant::now();
-    let error = run_commands(&[sh(&script, "run")], &deadline, None, &|| {}).unwrap_err();
+    let error = run_commands(&[child], &deadline, None, &|| {}).unwrap_err();
     assert_eq!(error, AttemptError::Retry("asset-timeout".to_string()));
     assert!(start.elapsed() < Duration::from_secs(5));
-    let pid = std::fs::read_to_string(&pidfile).unwrap();
-    let state = std::process::Command::new("ps")
-        .args(["-o", "stat=", "-p", pid.trim()])
-        .output()
-        .unwrap();
-    let state = String::from_utf8_lossy(&state.stdout).trim().to_string();
-    assert!(
-        state.is_empty() || state.starts_with('Z'),
-        "the grandchild survived: {state}"
-    );
+    assert_descendant_stopped(&pidfile, &lockfile);
 }
 
 #[test]
@@ -2428,14 +2573,9 @@ fn command_heartbeat_handshake_releases_the_child_after_two_callbacks() {
         },
         ..fixture.config.clone()
     };
-    let command = CliCommand::new(
-        [
-            OsString::from("/bin/sh"),
-            "-c".into(),
-            "while [ ! -f \"$1\" ]; do sleep 0.01; done".into(),
-            "heartbeat-child".into(),
-            heartbeat.release.clone().into(),
-        ],
+    let command = native_command(
+        fixture.temp.path(),
+        &ToolSpec::default().with("release_file", heartbeat.release.to_str().unwrap()),
         "run",
     );
     assert_eq!(
@@ -2446,9 +2586,15 @@ fn command_heartbeat_handshake_releases_the_child_after_two_callbacks() {
     assert!(heartbeat.release.is_file());
 }
 
-fn answer_worker(answer: &str) -> Vec<OsString> {
-    let script = format!("cat > /dev/null; printf '%s\\n' '{answer}'");
-    vec!["/bin/sh".into(), "-c".into(), script.into()]
+fn answer_worker(root: &Path, answer: &str) -> Vec<OsString> {
+    native_worker(
+        root,
+        &ToolSpec {
+            stdout: format!("{answer}\n").into_bytes(),
+            ..ToolSpec::default()
+        }
+        .with("drain_stdin", "1"),
+    )
 }
 
 #[test]
@@ -2456,18 +2602,30 @@ fn supervision_reads_the_worker_answer_and_treats_garbage_as_a_crash() {
     let fixture = fixture();
     let work = item("a");
     let config = &fixture.config;
-    let ok = supervise_attempt(&work, config, &|| {}, &answer_worker("[\"ok\", false]")).unwrap();
+    let ok = supervise_attempt(
+        &work,
+        config,
+        &|| {},
+        &answer_worker(fixture.temp.path(), "[\"ok\", false]"),
+    )
+    .unwrap();
     assert_eq!(ok, ("ok".to_string(), false));
     let retry = supervise_attempt(
         &work,
         config,
         &|| {},
-        &answer_worker("[\"storage-transient\", true]"),
+        &answer_worker(fixture.temp.path(), "[\"storage-transient\", true]"),
     )
     .unwrap();
     assert_eq!(retry, ("storage-transient".to_string(), true));
     for invalid in ["[\"bogus\", false]", "[\"ok\", 1]", "[5, false]"] {
-        let error = supervise_attempt(&work, config, &|| {}, &answer_worker(invalid)).unwrap_err();
+        let error = supervise_attempt(
+            &work,
+            config,
+            &|| {},
+            &answer_worker(fixture.temp.path(), invalid),
+        )
+        .unwrap_err();
         assert_eq!(
             error,
             AttemptError::Batch(BatchError::new("worker-result-invalid")),
@@ -2475,29 +2633,45 @@ fn supervision_reads_the_worker_answer_and_treats_garbage_as_a_crash() {
         );
     }
     assert_eq!(
-        supervise_attempt(&work, config, &|| {}, &answer_worker("[[1], false]")).unwrap_err(),
+        supervise_attempt(
+            &work,
+            config,
+            &|| {},
+            &answer_worker(fixture.temp.path(), "[[1], false]")
+        )
+        .unwrap_err(),
         AttemptError::Other
     );
     let long = format!("[\"ok\", false]{}", " ".repeat(300));
     for crash in ["not json", "[\"ok\"]", "5", long.as_str()] {
-        let error = supervise_attempt(&work, config, &|| {}, &answer_worker(crash)).unwrap_err();
+        let error = supervise_attempt(
+            &work,
+            config,
+            &|| {},
+            &answer_worker(fixture.temp.path(), crash),
+        )
+        .unwrap_err();
         assert_eq!(
             error,
             AttemptError::Interrupted("batch-worker-interrupted".to_string()),
             "{crash:?}"
         );
     }
-    let exit = vec![
-        "/bin/sh".into(),
-        "-c".into(),
-        "cat > /dev/null; echo '[\"ok\", false]'; exit 3".into(),
-    ];
+    let exit = native_worker(
+        fixture.temp.path(),
+        &ToolSpec {
+            stdout: b"[\"ok\", false]\n".to_vec(),
+            exit_code: 3,
+            ..ToolSpec::default()
+        }
+        .with("drain_stdin", "1"),
+    );
     let error = supervise_attempt(&work, config, &|| {}, &exit).unwrap_err();
     assert!(matches!(error, AttemptError::Interrupted(_)));
     // In run_batch, a crashed worker ends the run with no terminal line.
     let seams = Seams {
         preflight: Some(&no_preflight),
-        worker_command: Some(answer_worker("garbage")),
+        worker_command: Some(answer_worker(fixture.temp.path(), "garbage")),
         ..Seams::default()
     };
     assert!(matches!(
@@ -2511,13 +2685,23 @@ fn supervision_reads_the_worker_answer_and_treats_garbage_as_a_crash() {
 fn the_private_configuration_travels_over_stdin_only() {
     let fixture = fixture();
     let captured = fixture.temp.path().join("payload.json");
-    let script = format!(
-        "cat > '{}'; echo '[\"missing-key\", false]'",
-        captured.display()
+    let argv = fixture.temp.path().join("worker-argv");
+    let command = native_worker(
+        fixture.temp.path(),
+        &ToolSpec {
+            stdout: b"[\"missing-key\", false]\n".to_vec(),
+            ..ToolSpec::default()
+        }
+        .with("stdin_file", captured.to_str().unwrap())
+        .with("argv_file", argv.to_str().unwrap()),
     );
-    let command: Vec<OsString> = vec!["/bin/sh".into(), "-c".into(), script.into()];
     let answer = supervise_attempt(&item("a"), &fixture.config, &|| {}, &command).unwrap();
     assert_eq!(answer, ("missing-key".to_string(), false));
+    assert_eq!(
+        std::fs::read(&argv).unwrap(),
+        [] as [u8; 0],
+        "private settings never enter argv"
+    );
     let payload: Value = serde_json::from_slice(&std::fs::read(&captured).unwrap()).unwrap();
     let keys: Vec<&str> = payload
         .as_object()
@@ -2556,7 +2740,10 @@ fn the_private_configuration_travels_over_stdin_only() {
     // In a run, a supervised `missing-key` is quarantined like the in-process one.
     let seams = Seams {
         preflight: Some(&no_preflight),
-        worker_command: Some(answer_worker("[\"missing-key\", false]")),
+        worker_command: Some(answer_worker(
+            fixture.temp.path(),
+            "[\"missing-key\", false]",
+        )),
         ..Seams::default()
     };
     let report = run_batch_with(&[item("a")], &fixture.config, None, None, &seams).unwrap();
@@ -2631,9 +2818,9 @@ fn absurd_but_finite_timeouts_are_accepted_like_python() {
         ..fixture.config.clone()
     };
     assert!(config.validate().is_ok());
-    let quick = CliCommand::new(["/bin/sh", "-c", "exit 0"], "run");
+    let quick = native_command(fixture.temp.path(), &ToolSpec::default(), "run");
     assert_eq!(run_commands(&[quick], &config, None, &|| {}).unwrap(), 0);
-    let worker = answer_worker("[\"ok\", false]");
+    let worker = answer_worker(fixture.temp.path(), "[\"ok\", false]");
     let answer = supervise_attempt(&item("a"), &config, &|| {}, &worker).unwrap();
     assert_eq!(answer, ("ok".to_string(), false));
 }
