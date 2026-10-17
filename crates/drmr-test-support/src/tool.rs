@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 mod protocol;
+mod server;
 use protocol::{Mode, ToolSpec};
 use std::{
     env,
@@ -51,7 +52,7 @@ fn install(path: &Path) -> io::Result<()> {
     Ok(())
 }
 fn main() {
-    let args: Vec<String> = env::args().skip(1).collect();
+    let args: Vec<std::ffi::OsString> = env::args_os().skip(1).collect();
     if args.first().is_some_and(|a| a == "--install") {
         if args.len() != 2 || install(Path::new(&args[1])).is_err() {
             std::process::exit(1);
@@ -64,7 +65,7 @@ fn main() {
         Err(_) => std::process::exit(125),
     }
 }
-fn run(args: &[String]) -> io::Result<i32> {
+fn run(raw_args: &[std::ffi::OsString]) -> io::Result<i32> {
     let mut spec = ToolSpec::decode(File::open(config_path(&env::current_exe()?))?)?;
     if spec.mode == Mode::Response
         && let Some(path) = spec.values.get("status_file")
@@ -75,13 +76,25 @@ fn run(args: &[String]) -> io::Result<i32> {
         }
         spec = state;
     }
+    if spec.mode == Mode::ServerCli {
+        return server::run(raw_args, &spec);
+    }
+    let args: Vec<String> = raw_args
+        .iter()
+        .map(|a| {
+            a.to_str()
+                .map(str::to_owned)
+                .ok_or_else(|| io::Error::other("fixture arguments require UTF-8"))
+        })
+        .collect::<io::Result<_>>()?;
     if let Some(path) = spec.values.get("argv_file") {
         fs::write(path, args.join("\n"))?;
     }
     match spec.mode {
         Mode::Response => {}
-        Mode::Packager => return packager(args, &spec),
-        Mode::Ffprobe | Mode::Ffmpeg | Mode::Mp4dump => return media(args, &spec),
+        Mode::Packager => return packager(&args, &spec),
+        Mode::Ffprobe | Mode::Ffmpeg | Mode::Mp4dump => return media(&args, &spec),
+        Mode::ServerCli => return Err(io::Error::other("invalid fixture dispatch")),
     };
     if let Some(name) = spec.values.get("stdout_env") {
         let value = env::var(name).map_err(|_| io::Error::other("fixture environment unavailable"))?;

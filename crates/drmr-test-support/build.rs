@@ -2,6 +2,7 @@ use std::{env, path::PathBuf, process::Command};
 fn main() {
     println!("cargo:rerun-if-changed=src/tool.rs");
     println!("cargo:rerun-if-changed=src/protocol.rs");
+    println!("cargo:rerun-if-changed=src/server.rs");
     let target = env::var("TARGET").unwrap();
     let native = env::var("HOST").unwrap() == target;
     let suffix = if target.contains("windows") {

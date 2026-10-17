@@ -131,3 +131,115 @@ fn a_response_can_report_a_selected_child_environment_value_exactly() {
     );
     assert_eq!(output.stderr, [] as [u8; 0]);
 }
+
+#[test]
+fn server_cli_records_environment_and_arguments_before_hold_release() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::create_dir(d.path().join("calls")).unwrap();
+    std::fs::write(d.path().join("hold"), b"").unwrap();
+    std::fs::write(d.path().join("lines"), b"one\r\ntwo\n").unwrap();
+    let tool = install(
+        &d.path().join("drmr"),
+        &ToolSpec {
+            mode: Mode::ServerCli,
+            ..Default::default()
+        }
+        .with("control_dir", d.path().to_str().unwrap()),
+    )
+    .unwrap();
+    let mut child = std::process::Command::new(tool)
+        .args(["run", "--asset-id", "映像"])
+        .env("DRM_KID", "synthetic-id")
+        .env("DRM_KEY", "synthetic-key")
+        .env_remove("DRM_IV")
+        .env("PATH", "fixture-path")
+        .env("AMBIENT_MARKER", "marker")
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let ready = d.path().join("calls/0/inherited");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !ready.is_file() {
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(
+        std::fs::read(d.path().join("calls/0/argv")).unwrap(),
+        "run\n--asset-id\n映像\n".as_bytes()
+    );
+    assert_eq!(
+        std::fs::read(d.path().join("calls/0/drm")).unwrap(),
+        b"synthetic-id\nsynthetic-key\n\n"
+    );
+    assert_eq!(std::fs::read(ready).unwrap(), b"fixture-path\nmarker\n");
+    assert!(child.try_wait().unwrap().is_none());
+    std::fs::write(d.path().join("release"), b"7").unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert_eq!(out.status.code(), Some(7));
+    assert_eq!(out.stdout, b"one\r\ntwo\n");
+    assert!(!d.path().join("release").exists());
+}
+
+#[test]
+fn server_cli_copies_synthetic_conversion_tree_and_rewrites_the_manifest() {
+    let d = tempfile::tempdir().unwrap();
+    let control = d.path().join("cli");
+    std::fs::create_dir_all(control.join("calls")).unwrap();
+    for name in ["convert", "hold"] {
+        std::fs::write(control.join(name), b"").unwrap();
+    }
+    std::fs::write(control.join("code"), b"7").unwrap();
+    let source = d
+        .path()
+        .join("download/manifest.example.test/asset/dash/manifest.mpd");
+    std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+    let original = "<MPD><BaseURL>https://cdn.example.test/asset/</BaseURL><ContentProtection value=\"cenc\"/></MPD>\n";
+    std::fs::write(&source, original).unwrap();
+    let media = d.path().join("download/cdn.example.test/asset/video/v0");
+    std::fs::create_dir_all(&media).unwrap();
+    std::fs::write(media.join("init.mp4"), b"INIT").unwrap();
+    std::fs::write(media.join("seg_0.m4s"), b"SEGMENT").unwrap();
+    let tool = install(
+        &control.join("drmr"),
+        &ToolSpec {
+            mode: Mode::ServerCli,
+            ..Default::default()
+        }
+        .with("control_dir", control.to_str().unwrap()),
+    )
+    .unwrap();
+    let output = d.path().join("output with spaces");
+    let result = std::process::Command::new(tool)
+        .arg("run")
+        .arg("--mpd")
+        .arg(&source)
+        .arg("--output")
+        .arg(&output)
+        .args([
+            "--asset-id",
+            "asset",
+            "--manifest-local-url-base",
+            "/local/asset/",
+        ])
+        .output()
+        .unwrap();
+    assert!(result.status.success());
+    assert_eq!(
+        result.stdout,
+        b"{\"stage\": \"report\", \"level\": \"info\", \"message\": \"converted\"}\n"
+    );
+    assert_eq!(
+        std::fs::read(output.join("asset/cbcs/video/v0/seg_0.m4s")).unwrap(),
+        b"SEGMENT"
+    );
+    assert_eq!(
+        std::fs::read(output.join("asset/cbcs/video/v0/init.mp4")).unwrap(),
+        b"INIT"
+    );
+    assert_eq!(
+        std::fs::read_to_string(output.join("asset/manifests/local/host/asset/dash/manifest.mpd"))
+            .unwrap(),
+        "<MPD><BaseURL>/local/asset/</BaseURL><ContentProtection value=\"cbcs\"/></MPD>\n"
+    );
+    assert_eq!(std::fs::read_to_string(source).unwrap(), original);
+}
