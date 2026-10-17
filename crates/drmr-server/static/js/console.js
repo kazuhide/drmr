@@ -14,7 +14,7 @@
 
   var state = {
     catalog: [], jobs: [], queue: { running: null, pending: [], recent: [] }, contents: [],
-    filter: '', checked: {}, listError: null, loaded: false, dismissedSkips: {}, seenSkips: {}, announcedSkips: {}, jobsTruncated: false, loadSeq: 0, loadAgain: false, loadAgainFull: false, finishedJobs: {}, logRaw: false, nameEdited: false, sampleRevealed: false,
+    filter: '', checked: Object.create(null), listError: null, loaded: false, dismissedSkips: {}, seenSkips: {}, announcedSkips: {}, jobsTruncated: false, loadSeq: 0, loadAgain: false, loadAgainFull: false, finishedJobs: Object.create(null), logRaw: false, nameEdited: false, sampleRevealed: false,
     selectedId: null, selectToken: 0, openInfo: {}, // openInfo: the transformation's (i) panels open for this selection
     detail: { catalogInfo: null, analysis: null, analysisError: null, result: null, resultError: null, report: null, reportError: null },
     run: null, lastRun: null, logView: null,
@@ -30,7 +30,7 @@
   function selected() { return state.contents.filter(function (c) { return c.asset_id === state.selectedId; })[0] || null; }
   function newLogView(jobId, assetId, kind, live) {
     return { jobId: jobId, assetId: assetId, kind: kind, live: live, lines: [], watcher: null, interrupted: false, outcome: null, notice: '',
-      progress: { lastRec: null, renditions: {}, tracks: {} } };
+      progress: { lastRec: null, renditions: Object.create(null), tracks: Object.create(null) } };
   }
 
   // ========================================================================================
@@ -232,7 +232,7 @@
   function enqueue(assetIds) {
     return App.Api.postQueue(assetIds).then(function () {
       UI.setText(els.queueNotice, t('queueAdded', { n: assetIds.length }));
-      state.checked = {};
+      state.checked = Object.create(null);
       return loadAll();
     }, function (e) { UI.setText(els.queueNotice, t('queueAddFailed') + ' ' + App.I18n.error(e)); });
   }
@@ -1016,7 +1016,7 @@
       if (!parts.length || /^(master|index|playlist|manifest)$/i.test(base)) base = host + (parts.length ? '-' + parts[parts.length - 1] : '');
     } catch (_e) { return ''; }
     base = base.replace(/\.[^.]*$/, '').replace(/[^A-Za-z0-9_.-]+/g, '-').replace(/^[^A-Za-z0-9]+/, '').replace(/-+$/, '').slice(0, 60) || 'hls';
-    var taken = {};
+    var taken = Object.create(null);
     state.contents.forEach(function (c) { taken[c.asset_id] = true; });
     var candidate = base, n = 2;
     while (taken[candidate]) candidate = base + '-' + (n++);
@@ -1170,7 +1170,7 @@
     els.listRefresh.addEventListener('click', function () { loadAll(); });
     els.listFilter.addEventListener('input', function () { state.filter = els.listFilter.value; renderList(); });
     els.bulkQueueBtn.addEventListener('click', function () { var ids = Object.keys(state.checked); if (ids.length) enqueue(ids); });
-    els.bulkClearBtn.addEventListener('click', function () { state.checked = {}; renderList(); });
+    els.bulkClearBtn.addEventListener('click', function () { state.checked = Object.create(null); renderList(); });
     els.hlsUrl.addEventListener('input', function () { syncSuggestedName(); refreshControls(); });
     els.hlsAssetId.addEventListener('input', function () { state.nameEdited = els.hlsAssetId.value.trim() !== ''; if (!state.nameEdited) syncSuggestedName(); refreshControls(); });
     els.drmSample.addEventListener('click', fillSampleDrm);
