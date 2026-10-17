@@ -3,6 +3,8 @@
 
 pub mod dash;
 pub mod fake_s3;
+#[cfg(windows)]
+pub mod windows;
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;

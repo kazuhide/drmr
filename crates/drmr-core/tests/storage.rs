@@ -1,5 +1,4 @@
 //! Local and S3 storage semantics with isolated temporary stores and HTTP fixtures.
-#![cfg(unix)] // the modules under test exist on unix only (open decision #23)
 
 mod common;
 
@@ -208,10 +207,17 @@ fn test_local_symlinks_and_overlapping_stage_refused() {
     let root = temp.path().join("store");
     std::fs::create_dir(&root).unwrap();
     write(&temp.path().join("secret"), b"private");
+    #[cfg(unix)]
     std::os::unix::fs::symlink(temp.path().join("secret"), root.join("alias")).unwrap();
+    #[cfg(windows)]
+    {
+        write(&temp.path().join("secret-directory/data"), b"private");
+        common::windows::junction(&root.join("alias"), &temp.path().join("secret-directory"));
+    }
+    let alias = if cfg!(windows) { "alias/data" } else { "alias" };
     let backend = LocalStorageBackend::new(&root).unwrap();
     let error = backend
-        .get_many(&refs(&["alias"]), &temp.path().join("stage"))
+        .get_many(&refs(&[alias]), &temp.path().join("stage"))
         .unwrap_err();
     assert_eq!(error.token(), "storage-path-invalid");
     write(&root.join("plain"), b"plain");
@@ -705,9 +711,20 @@ fn a_failed_transfer_reports_the_earliest_failure_in_item_order() {
         let error = backend.get_many(&order, &stage).unwrap_err();
         assert_eq!(error.token(), "storage-read-failed");
     }
+    #[cfg(unix)]
     std::os::unix::fs::symlink(store.join("input/ok"), store.join("input/link")).unwrap();
+    #[cfg(windows)]
+    {
+        write(&store.join("redirected/ok"), b"x");
+        common::windows::junction(&store.join("input/link"), &store.join("redirected"));
+    }
+    let link = if cfg!(windows) {
+        "input/link/ok"
+    } else {
+        "input/link"
+    };
     let error = backend
-        .get_many(&refs(&["input/big", "input/link"]), &stage)
+        .get_many(&refs(&["input/big", link]), &stage)
         .unwrap_err();
     assert_eq!(error.token(), "storage-path-invalid");
 }
@@ -740,7 +757,16 @@ fn local_listing_is_sorted_refuses_links_and_returns_a_file_prefix_itself() {
             .unwrap(),
         Vec::<ObjectRef>::new()
     );
+    #[cfg(unix)]
     std::os::unix::fs::symlink(store.join("host/other"), store.join("host/t/b/link")).unwrap();
+    #[cfg(windows)]
+    {
+        std::fs::create_dir(store.join("host/other-directory")).unwrap();
+        common::windows::junction(
+            &store.join("host/t/b/link"),
+            &store.join("host/other-directory"),
+        );
+    }
     let error = backend
         .list_prefix(&ObjectRef::new("host/t").unwrap())
         .unwrap_err();

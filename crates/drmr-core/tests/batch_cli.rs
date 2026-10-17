@@ -1,5 +1,4 @@
 //! Batch CLI validation, planning, and optional dependency isolation.
-#![cfg(unix)] // the modules under test exist on unix only (open decision #23)
 
 mod common;
 
@@ -357,7 +356,13 @@ fn resumed_runs_exit_0_when_every_asset_passed_and_1_when_any_failed() {
             .mpd_path
             .strip_prefix(paths.path("store/download"))
             .unwrap();
-        rows.push((id.to_string(), key.to_str().unwrap().to_string()));
+        // Object keys use URL separators, independent of native filesystem paths.
+        rows.push((
+            id.to_string(),
+            key.to_str()
+                .unwrap()
+                .replace(std::path::MAIN_SEPARATOR, "/"),
+        ));
     }
     work_list_of(&paths.path("w.jsonl"), &rows);
     let args = parse(&[
