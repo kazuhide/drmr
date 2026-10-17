@@ -182,3 +182,65 @@ fn wait_drains_descendant_handles_and_pending_io_after_parent_exit() {
 fn drop_drains_descendant_handles_and_pending_io_before_workspace_cleanup() {
     assert_drained("drop");
 }
+
+#[test]
+fn job_completion_ignores_start_packets_and_keeps_terminal_state_after_polling() {
+    use drmr_test_support::{ToolSpec, install};
+    use process_wrap::std::{ChildWrapper, CommandWrap, JobObject, JobObjectChild};
+    struct Reap(Box<dyn ChildWrapper>);
+    impl Drop for Reap {
+        fn drop(&mut self) {
+            // This response fixture has no descendants. Cleanup remains possible
+            // even when the completion-port assertion being tested has failed.
+            let _ = self.0.inner_mut().start_kill();
+            let _ = self.0.inner_mut().wait();
+        }
+    }
+    let root = tempfile::tempdir().unwrap();
+    let program = drmr_test_support::program_path(&root.path().join("response"));
+    let marker = root.path().join("ready");
+    let release = root.path().join("release");
+    install(
+        &program,
+        &ToolSpec::default()
+            .with("ready_file", marker.to_str().unwrap())
+            .with("release_file", release.to_str().unwrap()),
+    )
+    .unwrap();
+    let mut command = CommandWrap::from(Command::new(program));
+    command.wrap(JobObject);
+    let mut child = Reap(command.spawn().unwrap());
+    ready(|| marker.is_file());
+    let started = Instant::now();
+    let wrapper = (&mut *child.0 as &mut dyn std::any::Any)
+        .downcast_mut::<JobObjectChild>()
+        .unwrap();
+    assert!(
+        !wrapper
+            .wait_for_tree_timeout(Duration::from_millis(20))
+            .unwrap(),
+        "a process-start packet must not count as completed cleanup"
+    );
+    assert!(started.elapsed() < Duration::from_secs(1));
+    std::fs::write(release, b"exit").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let status = loop {
+        if let Some(status) = child.0.try_wait().unwrap() {
+            break status;
+        }
+        assert!(Instant::now() < deadline, "fixture did not finish");
+        std::thread::sleep(Duration::from_millis(1));
+    };
+    assert!(status.success());
+    let wrapper = (&mut *child.0 as &mut dyn std::any::Any)
+        .downcast_mut::<JobObjectChild>()
+        .unwrap();
+    assert!(
+        wrapper
+            .wait_for_tree_timeout(Duration::from_secs(5))
+            .unwrap()
+    );
+    assert!(wrapper.wait_for_tree_timeout(Duration::ZERO).unwrap());
+    assert!(child.0.try_wait().unwrap().unwrap().success());
+    assert!(child.0.wait().unwrap().success());
+}

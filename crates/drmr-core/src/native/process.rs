@@ -15,7 +15,7 @@ pub struct ManagedChild {
     #[cfg(windows)]
     child: Box<dyn process_wrap::std::ChildWrapper>,
     #[cfg(windows)]
-    job: std::sync::Arc<win32job::Job>,
+    _job: std::sync::Arc<win32job::Job>,
     /// The child's piped standard input, if requested.
     pub stdin: Option<ChildStdin>,
     /// The child's piped standard output, if requested.
@@ -62,7 +62,7 @@ impl ManagedChild {
                 stdout: child.stdout().take(),
                 stderr: child.stderr().take(),
                 child,
-                job,
+                _job: job,
             })
         }
     }
@@ -118,8 +118,16 @@ impl ManagedChild {
         #[cfg(windows)]
         {
             self.child.start_kill()?;
-            windows::drain(&self.job)?;
-            self.child.inner_mut().wait().map(|_| ())
+            let wrapper = (&mut *self.child as &mut dyn std::any::Any)
+                .downcast_mut::<process_wrap::std::JobObjectChild>()
+                .ok_or_else(|| io::Error::other("process tree supervisor unavailable"))?;
+            if !wrapper.wait_for_tree_timeout(std::time::Duration::from_secs(30))? {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "process tree cleanup timed out",
+                ));
+            }
+            self.child.wait().map(|_| ())
         }
     }
 }
@@ -165,14 +173,6 @@ mod windows {
         Job::create_with_limit_info(&limits)
             .map(Arc::new)
             .map_err(io::Error::other)
-    }
-
-    pub(super) fn drain(job: &Job) -> io::Result<()> {
-        super::wait_for_job_empty(|| {
-            job.query_process_id_list()
-                .map(|processes| processes.is_empty())
-                .map_err(io::Error::from)
-        })
     }
 
     #[derive(Debug)]
@@ -240,44 +240,4 @@ pub fn in_asset_worker() -> bool {
 
 pub(crate) fn mark_asset_worker() {
     IN_ASSET_WORKER.store(true, std::sync::atomic::Ordering::SeqCst);
-}
-
-#[cfg(any(windows, test))]
-fn wait_for_job_empty(mut query: impl FnMut() -> io::Result<bool>) -> io::Result<()> {
-    loop {
-        match query() {
-            Ok(true) => return Ok(()),
-            Ok(false) => {}
-            // The pinned job wrapper has a fixed process-list buffer. A larger
-            // terminating tree is still active, never proof of completion.
-            Err(error) if error.raw_os_error() == Some(234) => {}
-            Err(error) => return Err(error),
-        }
-        std::thread::sleep(std::time::Duration::from_millis(1));
-    }
-}
-
-#[cfg(test)]
-mod drain_tests {
-    use super::*;
-    #[test]
-    fn an_oversized_or_nonempty_job_is_never_admitted_as_drained() {
-        let mut calls = 0;
-        wait_for_job_empty(|| {
-            calls += 1;
-            match calls {
-                1 => Err(io::Error::from_raw_os_error(234)),
-                2 => Ok(false),
-                3 => Ok(true),
-                _ => panic!("queried after completion"),
-            }
-        })
-        .unwrap();
-        assert_eq!(calls, 3);
-    }
-    #[test]
-    fn a_job_query_failure_propagates_without_claiming_completion() {
-        let error = wait_for_job_empty(|| Err(io::Error::from_raw_os_error(5))).unwrap_err();
-        assert_eq!(error.raw_os_error(), Some(5));
-    }
 }
