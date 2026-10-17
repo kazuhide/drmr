@@ -40,15 +40,20 @@ impl From<io::Error> for HttpError {
 
 impl HttpError {
     /// Whether this is how a kept-alive connection the server had already closed shows before
-    /// any response (`RemoteDisconnected`, `ConnectionResetError`, `BrokenPipeError`): only
-    /// then is a retry free.
+    /// any response (`RemoteDisconnected`, reset/broken pipe, or Windows WSAECONNABORTED).
+    /// The caller grants a free replacement only for an already reused connection before
+    /// response headers; fresh-connection failures and timeouts still spend an attempt.
     pub fn is_dropped(&self) -> bool {
         match self {
             HttpError::RemoteDisconnected => true,
-            HttpError::Io(error) => matches!(
-                error.kind(),
-                io::ErrorKind::ConnectionReset | io::ErrorKind::BrokenPipe
-            ),
+            HttpError::Io(error) => {
+                // Windows reports a peer-closed idle TCP socket as WSAECONNABORTED
+                // for both plain HTTP and TLS. Do not classify timeout errors here.
+                matches!(
+                    error.kind(),
+                    io::ErrorKind::ConnectionReset | io::ErrorKind::BrokenPipe
+                ) || (cfg!(windows) && error.raw_os_error() == Some(10053))
+            }
             HttpError::Protocol | HttpError::Invalid => false,
         }
     }
