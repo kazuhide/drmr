@@ -41,6 +41,21 @@ fn segment_keys_need_no_mp4_identifier_and_keep_uris_private() {
 }
 
 #[test]
+fn sample_encryption_can_supply_an_explicit_hls_key_location_without_changing_key_type() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("keys.json");
+    config(
+        &file,
+        r#"{"schema_version":1,"output":{"kid":"00000000000000000000000000000002","key":"22222222222222222222222222222222","hls_key_uri":"keys/credential-sentinel"}}"#,
+    );
+    let keys = read(&file).unwrap();
+    assert!(keys.output.is_some());
+    assert!(keys.hls_output.is_none());
+    assert_eq!(keys.hls_output_uri(), Some("keys/credential-sentinel"));
+    assert!(!format!("{keys:?}").contains("sentinel"));
+}
+
+#[test]
 fn malformed_unknown_and_duplicate_fields_fail_without_exposing_contents() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("credential-sentinel.json");
