@@ -319,7 +319,11 @@ fn a_capture_failure_returns_its_reservation_for_the_next_child() {
     assert_eq!(
         runner
             .run_tool(
-                &[PYTHON.into(), "-c".into(), "print('complete')".into()],
+                &[
+                    PYTHON.into(),
+                    "-c".into(),
+                    "import os; os.write(1,b'complete\\n')".into()
+                ],
                 "next-child",
                 &RunOptions {
                     timeout: Some(Duration::from_secs(1)),
