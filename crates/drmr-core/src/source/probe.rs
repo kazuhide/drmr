@@ -195,7 +195,7 @@ impl<'r> FfprobeProber<'r> {
             text: false,
             timeout: Some(Duration::from_secs(30)),
             workload: Some(Workload {
-                largest_segment_bytes: argv
+                input_buffer_bytes: argv
                     .last()
                     .and_then(|path| std::fs::metadata(path).ok())
                     .map(|metadata| metadata.len()),

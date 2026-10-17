@@ -11,7 +11,7 @@ const MIB: u64 = 1024 * 1024;
 fn small_video() -> Workload {
     Workload {
         max_pixels: Some(640 * 360),
-        largest_segment_bytes: Some(MIB),
+        input_buffer_bytes: Some(MIB),
         tracks: 2,
     }
 }
@@ -75,7 +75,7 @@ fn large_frames_and_segments_reduce_parallelism_without_raising_the_user_cap() {
         hardware,
         Workload {
             max_pixels: Some(3840 * 2160),
-            largest_segment_bytes: Some(128 * MIB),
+            input_buffer_bytes: Some(128 * MIB),
             tracks: 2,
         },
         Some(16),
@@ -167,7 +167,7 @@ fn real_ports_register_verified_content_and_preserve_the_worker_upper_bound() {
     let analysis = admitted_small_source(directory.path());
     let workload = Workload::from_analysis(&analysis).unwrap();
     assert_eq!(workload.max_pixels, Some(640 * 360));
-    assert_eq!(workload.largest_segment_bytes, Some(188));
+    assert_eq!(workload.input_buffer_bytes, Some(188));
     assert_eq!(workload.tracks, 1);
     let claim = Claim::for_workload(workload, 16 * 1024 * 1024, 1024 * 1024);
     let runner = Arc::new(

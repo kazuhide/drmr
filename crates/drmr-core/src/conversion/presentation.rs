@@ -139,7 +139,8 @@ impl Converter {
         };
         let mut output_tracks = Vec::new();
         let mut input_tracks = Vec::new();
-        for (ordinal, source) in sources.iter().enumerate() {
+        let verified_tracks = self.run_tracks(sources.len(), |ordinal| {
+            let source = &sources[ordinal];
             let track_dir = stage.join(format!("track-{ordinal:04}"));
             let combined = work.join(format!("result-{ordinal}.mp4"));
             let (reference, actual) = if let Some(key) = request.hls_output_key {
@@ -192,21 +193,22 @@ impl Converter {
                 StreamView::new(&reference, 0, request.output_key.map(|k| &k.0))
                     .with_metadata(&combined),
             )?;
-            checks
-                .stream_metadata
-                .include(verified.checks.stream_metadata);
-            checks.packet_payloads_equal &= verified.checks.packet_payloads_equal;
-            checks.packet_timing_equal &= verified.checks.packet_timing_equal;
-            checks.decoded_content_equal &= verified.checks.decoded_content_equal;
             let mut output = actual.tracks[0].clone();
             output.id = format!("track-{ordinal:04}");
             if request.target == TargetProtection::HlsAes128 {
                 output.protection = Protection::HlsAes128;
             }
-            output_tracks.push(output);
             let mut input = source.report.tracks[0].clone();
             input.id = format!("track-{ordinal:04}");
+            Ok((verified.checks, input, output))
+        })?;
+        for (verified, input, output) in verified_tracks {
+            checks.stream_metadata.include(verified.stream_metadata);
+            checks.packet_payloads_equal &= verified.packet_payloads_equal;
+            checks.packet_timing_equal &= verified.packet_timing_equal;
+            checks.decoded_content_equal &= verified.decoded_content_equal;
             input_tracks.push(input);
+            output_tracks.push(output);
         }
         let passed = checks.stream_metadata.is_pass()
             && checks.packet_payloads_equal
@@ -222,8 +224,8 @@ impl Converter {
         request: &TrackConversionRequest<'_>,
         work: &Path,
     ) -> Result<(Vec<Prepared>, Vec<PathBuf>), ConversionError> {
+        // Inspect all private snapshots before selecting a content-aware worker count.
         let mut sources = Vec::new();
-        let mut clears = Vec::new();
         for (ordinal, track) in request.tracks.iter().enumerate() {
             let source = work.join(format!("source-{ordinal}.mp4"));
             copy_private(&track.source, &source)?;
@@ -238,28 +240,31 @@ impl Converter {
             {
                 return Err(ConversionError("track-role-mismatch"));
             }
+            sources.push(prepared);
+        }
+        let clears = self.run_tracks(sources.len(), |ordinal| {
+            let source = &sources[ordinal];
             let clear = work.join(format!("clear-{ordinal}.mp4"));
             self.backend.package_stream(
-                &source,
-                track.index,
+                &source.media,
+                source.index,
                 &clear,
-                (prepared.key_id.is_some()).then_some(request.input_keys),
+                source.key_id.is_some().then_some(request.input_keys),
                 None,
             )?;
             let normalization = self.backend.verify_streams(
-                &source,
-                track.index,
+                &source.source,
+                source.index,
                 &clear,
                 0,
-                key_for(&prepared, request.input_keys),
+                key_for(source, request.input_keys),
                 None,
             )?;
             if !normalization.passed {
                 return Err(ConversionError("source-normalization-verification-failed"));
             }
-            sources.push(prepared);
-            clears.push(clear);
-        }
+            Ok(clear)
+        })?;
         Ok((sources, clears))
     }
     fn package_joint(
@@ -512,16 +517,24 @@ impl Converter {
             packet_timing_equal: true,
             decoded_content_equal: true,
         };
-        for (a, b) in source.iter().zip(&result) {
-            if a.report.tracks[0].kind != b.report.tracks[0].kind {
-                return Err(ConversionError("presentation-track-role-mismatch"));
-            }
-            let check = self.backend.verify_views(
+        if source
+            .iter()
+            .zip(&result)
+            .any(|(a, b)| a.report.tracks[0].kind != b.report.tracks[0].kind)
+        {
+            return Err(ConversionError("presentation-track-role-mismatch"));
+        }
+        let verified_tracks = self.run_tracks(source.len(), |ordinal| {
+            let a = &source[ordinal];
+            let b = &result[ordinal];
+            self.backend.verify_views(
                 StreamView::new(&a.source, a.index, key_for(a, request.source.input_keys))
                     .with_metadata(&a.media),
                 StreamView::new(&b.source, b.index, key_for(b, request.output.input_keys))
                     .with_metadata(&b.media),
-            )?;
+            )
+        })?;
+        for check in verified_tracks {
             checks.stream_metadata.include(check.checks.stream_metadata);
             checks.packet_payloads_equal &= check.checks.packet_payloads_equal;
             checks.packet_timing_equal &= check.checks.packet_timing_equal;

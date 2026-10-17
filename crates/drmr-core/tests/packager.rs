@@ -250,6 +250,8 @@ fn decrypt_cenc_argv_shape() {
     ));
     decrypt(&packager, &root).unwrap();
     let argv = recorded(&argv_file);
+    assert!(argv.contains(&"--single_threaded".to_string()));
+    assert!(argv.contains(&"--io_cache_size=0".to_string()));
     assert!(argv.iter().any(|token| token.starts_with("input=")
         && token.contains("stream=0")
         && token.contains("output=")));
@@ -394,7 +396,7 @@ fn encrypt_cbcs_never_emits_protection_systems() {
 }
 
 #[test]
-fn argv_matches_python_byte_for_byte() {
+fn media_arguments_match_the_reference_with_explicit_resource_limits() {
     // Every builder against the argv Python built for the same paths: path normalization
     // (`str(Path(...))` on the descriptors, the segment template as given), the duration text,
     // the pssh concatenation, the redaction positions.
@@ -424,10 +426,13 @@ fn argv_matches_python_byte_for_byte() {
             .collect()
     };
     let check = |name: &str, bin: &str, result: PackagerResult| {
-        let (real, redacted) = (
+        let (mut real, mut redacted) = (
             strings(&cases[name]["real"]),
             strings(&cases[name]["redacted"]),
         );
+        for arguments in [&mut real, &mut redacted] {
+            arguments.extend(["--single_threaded".into(), "--io_cache_size=0".into()]);
+        }
         assert_eq!(recorded(&argv_file), real[1..], "{name}: the child's argv");
         assert_eq!(result.argv_redacted[0], bin, "{name}");
         assert_eq!(
@@ -1063,8 +1068,11 @@ fn transcrypt_relative_paths_are_spelled_as_pathlib_spells_them() {
         .unwrap(),
     )
     .unwrap();
-    let expected: Vec<Vec<String>> =
+    let mut expected: Vec<Vec<String>> =
         serde_json::from_value(oracle["transcrypt_relative"]["calls"].clone()).unwrap();
+    for argv in &mut expected {
+        argv.extend(["--single_threaded".into(), "--io_cache_size=0".into()]);
+    }
     let redacted: Vec<Vec<String>> = calls(&argv_dir)
         .into_iter()
         .map(|argv| {

@@ -20,7 +20,7 @@ parallelism, rounded up, while always allowing at least one CPU token. Default w
 recommendations stop at 32; explicit maximums must be between 1 and 64.
 
 Each child is estimated to need 64 MiB, 24 bytes per video pixel, twice the largest
-source resource size, and four times its configured output capture caps. Unknown video
+estimated input working set, and four times its configured output capture caps. Unknown video
 dimensions assume 3840 × 2160 pixels; an unknown resource size assumes 32 MiB. Audio-only
 sources omit the video term. If memory cannot be queried, the allowance is 512 MiB,
 including estimated track state, with one child at a time. A workload that cannot fit
@@ -106,3 +106,22 @@ maximum produced these warm-run ranges (two warm runs after one first launch):
 Every run preserved the full decoded video, audio, and packet timeline. These short runs
 show some admission/capture overhead; they do not demonstrate a throughput improvement.
 First analysis launches took about 0.57 s in both measurements.
+
+
+## Generic conversion
+
+`convert` and `verify` accept `--max-workers 1` through `64` as an upper bound.
+With no option, independent tracks share the CPU and memory admission described above.
+Snapshots and stream metadata are checked before parallel normalization. Results retain
+presentation order, and a failed track prevents publication. All content checks still run.
+
+Whole-track inputs are streamed: the estimate includes up to a 32 MiB input window,
+not the entire file size. Segment-based pipelines include their largest retained input
+resource. Video dimensions, capture caps, and track metadata are charged separately.
+Unknown media uses the conservative fallback until observed stream metadata is available.
+This estimate does not enforce an absolute resident-memory limit on third-party tools.
+
+FFmpeg and ffprobe use one decoder thread; FFmpeg output encoders and filters also use
+one thread. Shaka Packager uses `--single_threaded` and `--io_cache_size=0`, disabling its
+otherwise separate per-file threaded I/O caches. Parallel work is coordinated outside
+these tools. The tradeoff is measured with the same complete verification in both modes.

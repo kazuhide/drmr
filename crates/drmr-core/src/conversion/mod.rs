@@ -9,6 +9,7 @@ mod aes128;
 mod audio;
 mod backend;
 pub(crate) mod dash;
+mod execution;
 pub mod key_file;
 pub use aes128::{
     Aes128Key, HlsInputKeys, HlsOutputKey, SegmentIv, decrypt_segment, encrypt_segment,
@@ -68,6 +69,7 @@ impl std::fmt::Debug for LocalTrack {
 /// Explicit backend configuration; no executable is selected from source metadata.
 pub struct Converter {
     backend: Backend,
+    maximum_workers: Option<usize>,
 }
 impl Converter {
     pub fn new(
@@ -76,6 +78,7 @@ impl Converter {
         ffmpeg: impl Into<String>,
     ) -> Self {
         Self {
+            maximum_workers: None,
             backend: Backend {
                 runner,
                 packager: packager.into(),

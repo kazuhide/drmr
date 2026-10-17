@@ -460,6 +460,11 @@ impl ToolRunner {
         self
     }
 
+    /// The conservative observation currently registered for this runner.
+    pub(crate) fn registered_workload(&self) -> Option<Workload> {
+        *self.workload.read().unwrap_or_else(PoisonError::into_inner)
+    }
+
     /// Register known source metadata before scheduling its tools. The first observation
     /// replaces the unknown fallback; later observations can only raise the estimate.
     pub fn register_workload(&self, workload: Workload) {

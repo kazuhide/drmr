@@ -78,8 +78,9 @@ impl Hardware {
 pub struct Workload {
     /// Largest video width times height; zero means audio or text only. Unknown assumes 4K.
     pub max_pixels: Option<u64>,
-    /// Largest input resource. Unknown assumes 32 MiB until sizes become available.
-    pub largest_segment_bytes: Option<u64>,
+    /// Estimated input working set. Segment pipelines include their largest resource;
+    /// streaming whole-track readers use a bounded window. Unknown assumes 32 MiB.
+    pub input_buffer_bytes: Option<u64>,
     /// Tracks with retained metadata and intermediate state, including audio and text.
     pub tracks: usize,
 }
@@ -110,7 +111,7 @@ impl Workload {
         }
         Ok(Self {
             max_pixels: Some(pixels),
-            largest_segment_bytes: Some(largest),
+            input_buffer_bytes: Some(largest),
             tracks: analysis.tracks.len(),
         })
     }
@@ -125,10 +126,10 @@ impl Workload {
                     .unwrap_or(3840 * 2160)
                     .max(other.max_pixels.unwrap_or(3840 * 2160)),
             ),
-            largest_segment_bytes: Some(
-                self.largest_segment_bytes
+            input_buffer_bytes: Some(
+                self.input_buffer_bytes
                     .unwrap_or(32 * MIB)
-                    .max(other.largest_segment_bytes.unwrap_or(32 * MIB)),
+                    .max(other.input_buffer_bytes.unwrap_or(32 * MIB)),
             ),
             tracks: self.tracks.max(other.tracks),
         }
@@ -138,7 +139,7 @@ impl Workload {
     /// third-party codecs and allocators can exceed it.
     pub fn estimated_child_bytes(self, stdout_bytes: usize, stderr_bytes: usize) -> u64 {
         let pixels = self.max_pixels.unwrap_or(3840 * 2160);
-        let segment = self.largest_segment_bytes.unwrap_or(32 * MIB);
+        let segment = self.input_buffer_bytes.unwrap_or(32 * MIB);
         let captured = u64::try_from(stdout_bytes.min(MAX_CAPTURE_BYTES))
             .unwrap_or(u64::MAX)
             .saturating_add(u64::try_from(stderr_bytes.min(MAX_CAPTURE_BYTES)).unwrap_or(u64::MAX));

@@ -22,6 +22,9 @@ impl Backend {
         secrets: &[&str],
     ) -> Result<Vec<u8>, ConversionError> {
         let mut effective = Zeroizing::new(argv.to_vec());
+        if tool == "ffprobe" {
+            effective.splice(1..1, ["-threads".into(), "1".into()]);
+        }
         if matches!(tool, "ffmpeg" | "ffprobe") {
             let input = effective
                 .iter()
@@ -35,6 +38,9 @@ impl Backend {
                 let at = if tool == "ffmpeg" { input - 1 } else { input };
                 effective.splice(at..at, ["-allowed_extensions".into(), "ALL".into()]);
             }
+        }
+        if tool == "packager" {
+            effective.extend(crate::packager::RESOURCE_FLAGS.map(String::from));
         }
         let shown = vec![tool.to_string(), "[arguments redacted]".into()];
         let options = RunOptions {
@@ -56,10 +62,13 @@ impl Backend {
             .runner
             .run_tool(&effective, tool, &options)
             .map_err(|error| {
-                ConversionError(if error.kind == "cleanup-unconfirmed" {
-                    "media-cleanup-unconfirmed"
-                } else {
-                    "media-tool-unavailable-or-timeout"
+                ConversionError(match error.kind {
+                    "cleanup-unconfirmed" => "media-cleanup-unconfirmed",
+                    "output-limit" => "media-output-limit",
+                    "resource-budget" => "resource-budget",
+                    "timeout" | "pipe-timeout" => "media-tool-timeout",
+                    "cancelled" => "cancelled",
+                    _ => "media-tool-unavailable-or-timeout",
                 })
             })?;
         if completed.returncode != Some(0) {
@@ -257,7 +266,10 @@ impl Backend {
             "language".into(),
             stream["tags"]["language"].as_str().unwrap_or("und").into(),
         );
-        Ok(serde_json::Value::Object(profile))
+        let profile = serde_json::Value::Object(profile);
+        self.runner
+            .register_workload(super::execution::observe_profile(&profile, path)?);
+        Ok(profile)
     }
     pub fn packets_stream(
         &self,

@@ -132,3 +132,25 @@ fn invalid_key_configuration_fails_without_echoing_secrets_or_publishing_output(
     assert!(!text(&result.stderr).contains("sentinel"));
     assert!(!output.exists());
 }
+
+#[test]
+fn generic_worker_limits_are_optional_positive_upper_bounds() {
+    for command in ["convert", "verify"] {
+        let help = run(&[command, "--help"]);
+        assert!(text(&help.stdout).contains("--max-workers"));
+    }
+    for limit in ["0", "65"] {
+        let result = run(&[
+            "convert",
+            "source.mp4",
+            "--to",
+            "clear",
+            "--output",
+            "new.mp4",
+            "--max-workers",
+            limit,
+        ]);
+        assert_eq!(result.status.code(), Some(2));
+        assert!(text(&result.stderr).contains("invalid value"));
+    }
+}
