@@ -211,7 +211,7 @@ fn private_ancestors(absolute: &Path) -> io::Result<Vec<File>> {
                 // FILE_LIST_DIRECTORY participates in sharing checks; metadata
                 // access alone does not prevent a later rename or write open.
                 .access_mode(0x81) // FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES
-                .share_mode(1) // Deny write and delete sharing during acquisition.
+                .share_mode(3) // Allow child-entry updates; deny directory deletion/rename.
                 .security_qos_flags(0x0001_0000)
                 .custom_flags(0x0220_0000) // BACKUP_SEMANTICS | OPEN_REPARSE_POINT
                 .open(&prefix)?;

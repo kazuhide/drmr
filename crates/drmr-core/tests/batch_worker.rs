@@ -147,6 +147,13 @@ fn fake_run(args: &[String]) -> i32 {
         return 1;
     }
     let root = Path::new(&output).join(&asset);
+    #[cfg(windows)]
+    {
+        // Real conversions create private output directories before payloads.
+        // Preserve that boundary in this command double so marker writes can use it.
+        drmr_core::native::create_private_dir_all(&root.join("cbcs/v")).unwrap();
+        drmr_core::native::create_private_dir_all(&root.join("reports")).unwrap();
+    }
     write(&root.join("cbcs/v/seg_1.m4s"), format!("CBCS:{asset}"));
     write(
         &root.join("reports/phase1-summary.json"),

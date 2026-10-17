@@ -1,5 +1,7 @@
 //! Media probing and decoded-content inspection using synthetic media.
 
+mod common;
+
 use drmr_core::events::{Collector, NoSink, Sink};
 use drmr_core::media::{
     HexSecret, InitProbe, MediaEngine, MediaError, Subprocess, extract_hls_iv_hex_values,
@@ -813,7 +815,7 @@ fn segment_durations_are_tfdt_steps_and_the_last_ends_at_ffprobes_duration() {
     if !(on_path("ffmpeg") && on_path("ffprobe") && on_path("mp4dump")) {
         return;
     }
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::private_tempdir().unwrap();
     let (init, segments) = fragments(dir.path());
     let engine = engine();
     let durations = engine

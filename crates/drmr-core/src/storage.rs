@@ -688,8 +688,6 @@ mod native_copy_tests {
                         );
                         assert_eq!(std::fs::read(source).unwrap(), *bytes);
                         assert_eq!(std::fs::read(target).unwrap(), *bytes);
-                        let held = crate::native::open_private_read(target).unwrap();
-                        private_fs::verify(&held).unwrap();
                     })
                 })
                 .collect();
@@ -697,5 +695,11 @@ mod native_copy_tests {
                 handle.join().unwrap();
             }
         });
+        // Private reads pin their ancestors without write/delete sharing. Wait
+        // for all legitimate directory-creation handles before validating them.
+        for (_, target, _) in &transfers {
+            let held = crate::native::open_private_read(target).unwrap();
+            private_fs::verify(&held).unwrap();
+        }
     }
 }
