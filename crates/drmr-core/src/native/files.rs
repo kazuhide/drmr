@@ -109,16 +109,23 @@ pub fn open_private_read(path: &Path) -> io::Result<File> {
 fn open_private(path: &Path, write: bool) -> io::Result<File> {
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        if !std::fs::metadata(path)?.is_file() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "regular file required",
-            ));
-        }
-        let file = OpenOptions::new().read(true).write(write).open(path)?;
+        use rustix::fs::{Mode, OFlags};
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let access = if write { OFlags::RDWR } else { OFlags::RDONLY };
+        // Inspect the object actually opened. NOFOLLOW prevents redirecting an
+        // update to another file; NONBLOCK keeps a FIFO replacement from hanging.
+        let descriptor = rustix::fs::open(
+            path,
+            access | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
+            Mode::empty(),
+        )?;
+        let file = File::from(descriptor);
         let metadata = file.metadata()?;
-        if !metadata.is_file() || metadata.permissions().mode() & 0o077 != 0 {
+        if !metadata.is_file()
+            || metadata.uid() != rustix::process::geteuid().as_raw()
+            || metadata.nlink() != 1
+            || metadata.permissions().mode() & 0o077 != 0
+        {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 "private file required",

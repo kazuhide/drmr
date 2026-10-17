@@ -30,6 +30,59 @@ fn native_resolution_applies_parent_components_after_resolving_a_link() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn private_reads_and_updates_reject_links_before_truncating_any_contents() {
+    use std::os::unix::fs::symlink;
+    for hard_link in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let target = temp.path().join("target");
+        native::create_private_new(&target)
+            .unwrap()
+            .write_all(b"unchanged")
+            .unwrap();
+        let alias = temp.path().join("alias");
+        if hard_link {
+            std::fs::hard_link(&target, &alias).unwrap();
+        } else {
+            symlink(&target, &alias).unwrap();
+        }
+        let outcomes = [
+            native::open_private_read(&alias).is_err(),
+            native::create_private_update(&alias).is_err(),
+            native::create_private_or_truncate(&alias).is_err(),
+        ];
+        assert_eq!(std::fs::read(&target).unwrap(), b"unchanged");
+        assert!(outcomes.into_iter().all(|rejected| rejected));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn private_fifo_inputs_are_rejected_without_waiting_for_a_writer() {
+    use std::time::{Duration, Instant};
+    let temp = tempfile::tempdir().unwrap();
+    assert!(
+        Command::new("/usr/bin/mkfifo")
+            .args(["-m", "600"])
+            .arg(temp.path().join("fifo"))
+            .status()
+            .unwrap()
+            .success()
+    );
+    let mut child =
+        native::ManagedChild::spawn(probe_command("private-fifo", temp.path()), true).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            assert!(status.success());
+            break;
+        }
+        assert!(Instant::now() < deadline, "private FIFO admission blocked");
+        std::thread::park_timeout(Duration::from_millis(10));
+    }
+}
+
 #[test]
 fn temporary_capture_files_are_private_and_support_cloned_handles() {
     use std::io::{Seek, SeekFrom};
@@ -339,6 +392,14 @@ fn child_probe() {
     if mode == "echo" {
         println!("drmr-native-probe: quotes ' \" and 日本語");
     } else {
+        #[cfg(unix)]
+        if mode == "private-fifo" {
+            let directory = std::env::var_os("DRMR_TEST_NATIVE_DIRECTORY").unwrap();
+            let path = Path::new(&directory).join("fifo");
+            assert!(native::open_private_read(&path).is_err());
+            assert!(native::create_private_update(&path).is_err());
+            assert!(native::create_private_or_truncate(&path).is_err());
+        }
         #[cfg(windows)]
         windows_probe(
             &mode,
