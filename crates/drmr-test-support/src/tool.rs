@@ -83,6 +83,16 @@ fn run(args: &[String]) -> io::Result<i32> {
         Mode::Packager => return packager(args, &spec),
         Mode::Ffprobe | Mode::Ffmpeg | Mode::Mp4dump => return media(args, &spec),
     };
+    if let Some(name) = spec.values.get("stdout_env") {
+        let value = env::var(name).map_err(|_| io::Error::other("fixture environment unavailable"))?;
+        for text in [
+            spec.values.get("stdout_env_prefix").map_or("", String::as_str),
+            &value,
+            spec.values.get("stdout_env_suffix").map_or("", String::as_str),
+        ] {
+            io::stdout().write_all(text.as_bytes())?;
+        }
+    }
     io::stdout().write_all(&spec.stdout)?;
     io::stderr().write_all(&spec.stderr)?;
     if let Some(path) = spec.values.get("stdout_file") {

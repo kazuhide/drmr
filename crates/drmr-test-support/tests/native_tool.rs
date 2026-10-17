@@ -108,3 +108,26 @@ fn response_state_changes_status_without_rewriting_executable_or_mode_config() {
     assert_eq!(output.stderr, b"changed\n");
     assert_eq!(std::fs::read(tool).unwrap(), bytes);
 }
+
+#[test]
+fn a_response_can_report_a_selected_child_environment_value_exactly() {
+    let directory = tempfile::tempdir().unwrap();
+    let tool = install(
+        &directory.path().join("environment"),
+        &ToolSpec::default()
+            .with("stdout_env", "PATH")
+            .with("stdout_env_prefix", "probed ")
+            .with("stdout_env_suffix", "\n"),
+    )
+    .unwrap();
+    let output = std::process::Command::new(tool)
+        .env("PATH", "native-path;spaces and 日本語")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(
+        output.stdout,
+        "probed native-path;spaces and 日本語\n".as_bytes()
+    );
+    assert_eq!(output.stderr, [] as [u8; 0]);
+}
