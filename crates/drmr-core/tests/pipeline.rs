@@ -1196,14 +1196,26 @@ fn manifest_rendition_result(
         .join("cbcs")
         .join(&rendition.rel_dir)
         .join("init.mp4");
-    fs::create_dir_all(init_path.parent().unwrap()).unwrap();
-    fs::write(&init_path, init_bytes).unwrap();
+    drmr_core::native::create_private_dir_all(init_path.parent().unwrap()).unwrap();
+    {
+        use std::io::Write as _;
+        drmr_core::native::create_private_or_truncate(&init_path)
+            .unwrap()
+            .write_all(init_bytes)
+            .unwrap();
+    }
     let clear_path = output_dir
         .join("clear")
         .join(&rendition.rel_dir)
         .join("clear.mp4");
-    fs::create_dir_all(clear_path.parent().unwrap()).unwrap();
-    fs::write(&clear_path, b"FAKE-CLEAR-CONTENT").unwrap();
+    drmr_core::native::create_private_dir_all(clear_path.parent().unwrap()).unwrap();
+    {
+        use std::io::Write as _;
+        drmr_core::native::create_private_or_truncate(&clear_path)
+            .unwrap()
+            .write_all(b"FAKE-CLEAR-CONTENT")
+            .unwrap();
+    }
     RenditionResult {
         rendition_id: rendition.rep_id.clone(),
         content_type: rendition.content_type.clone(),

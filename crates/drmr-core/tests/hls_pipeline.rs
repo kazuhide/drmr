@@ -142,10 +142,11 @@ impl Fake {
     }
 
     fn write(path: &Path, payload: &[u8]) -> Result<PathBuf, MediaError> {
+        use std::io::Write as _;
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
+            drmr_core::native::create_private_dir_all(parent)?;
         }
-        fs::write(path, payload)?;
+        drmr_core::native::create_private_or_truncate(path)?.write_all(payload)?;
         Ok(path.to_path_buf())
     }
 
