@@ -76,15 +76,32 @@ if [ -f "$CTL/code" ]; then exit "$(cat "$CTL/code")"; fi
 exit 0
 "#;
 
+/// Let a child own the writable descriptor so sibling test spawns cannot inherit it.
+fn write_executable(path: &Path, contents: &str) {
+    let output = std::process::Command::new("/bin/sh")
+        .args([
+            "-c",
+            "printf '%s' \"$2\" > \"$1\" && chmod 755 \"$1\"",
+            "drmr-fixture-writer",
+        ])
+        .arg(path)
+        .arg(contents)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "fixture writer failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 impl FakeCli {
     /// A fake CLI under `root/cli`.
     pub fn new(root: &Path) -> FakeCli {
-        use std::os::unix::fs::PermissionsExt;
         let dir = root.join("cli");
         std::fs::create_dir_all(dir.join("calls")).unwrap();
         let script = dir.join("drmr");
-        std::fs::write(&script, SCRIPT.replace("__CTL__", dir.to_str().unwrap())).unwrap();
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        write_executable(&script, &SCRIPT.replace("__CTL__", dir.to_str().unwrap()));
         FakeCli { dir, script }
     }
 
