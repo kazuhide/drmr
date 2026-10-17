@@ -53,7 +53,11 @@ fn process_drain_helper() {
             .unwrap();
         lock.write_all(b"pending descendant I/O").unwrap();
         let mut stream = TcpStream::connect(address).unwrap();
-        std::fs::write(directory.join(format!("{index}.ready")), b"ready").unwrap();
+        std::fs::write(
+            directory.join(format!("{index}.ready")),
+            std::process::id().to_string(),
+        )
+        .unwrap();
         // The test supervisor holds the other endpoint open without sending data.
         // Termination must cancel this read and release the exclusive file handle.
         let mut byte = [0];
@@ -77,7 +81,32 @@ fn assert_drained(mode: &str) {
     let address = listener.local_addr().unwrap().to_string();
     let mut child = ManagedChild::spawn(command("parent", directory, &address), false).unwrap();
     let mut peers = Vec::new();
-    ready(|| (0..COUNT).all(|i| directory.join(format!("{i}.ready")).exists()));
+    ready(|| {
+        (0..COUNT).all(|index| {
+            std::fs::read_to_string(directory.join(format!("{index}.ready")))
+                .ok()
+                .and_then(|value| value.parse::<u32>().ok())
+                .is_some()
+        })
+    });
+    // Keep native process identities while all descendants are blocked in I/O.
+    // A zero-time wait distinguishes job membership from completed termination.
+    let processes: Vec<_> = (0..COUNT)
+        .map(|index| {
+            let pid = std::fs::read_to_string(directory.join(format!("{index}.ready")))
+                .unwrap()
+                .parse::<u32>()
+                .unwrap();
+            winsafe::HPROCESS::OpenProcess(winsafe::co::PROCESS::SYNCHRONIZE, false, pid).unwrap()
+        })
+        .collect();
+    let assert_released = || {
+        for process in &processes {
+            let state = process.WaitForSingleObject(Some(0));
+            eprintln!("descendant termination state after {mode}: {state:?}");
+        }
+        assert_handles_released(directory);
+    };
     for _ in 0..COUNT {
         let end = Instant::now() + Duration::from_secs(5);
         loop {
@@ -97,14 +126,14 @@ fn assert_drained(mode: &str) {
     match mode {
         "kill" => {
             child.kill().unwrap();
-            assert_handles_released(directory);
+            assert_released();
             child.wait().unwrap();
             drop(child);
         }
         "wait" => {
             std::fs::write(directory.join("release-parent"), b"exit").unwrap();
             assert!(child.wait().unwrap().success());
-            assert_handles_released(directory);
+            assert_released();
             drop(child);
         }
         "drop" => drop(child),
@@ -112,7 +141,7 @@ fn assert_drained(mode: &str) {
     }
     // No eventual polling here: cleanup has already returned. Every descendant's
     // exclusive handle and blocked I/O must have been released at this boundary.
-    assert_handles_released(directory);
+    assert_released();
     for index in 0..COUNT {
         std::fs::remove_file(directory.join(format!("{index}.lock"))).unwrap();
     }
