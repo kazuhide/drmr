@@ -148,9 +148,9 @@ impl AudioEdit {
             shift_decode_times(&mut bytes, shift)?;
             rewritten_segments.push((path, bytes));
         }
-        std::fs::write(init, rewritten)?;
+        crate::media::write_output_file(init, &rewritten)?;
         for (path, bytes) in rewritten_segments {
-            std::fs::write(path, bytes)?;
+            crate::media::write_output_file(path, &bytes)?;
         }
         Ok(())
     }
@@ -474,9 +474,11 @@ mod tests {
         );
 
         let directory = tempfile::tempdir().unwrap();
-        let init = directory.path().join("init.mp4");
-        let segment = directory.path().join("segment.m4s");
-        std::fs::write(&init, movie(&[])).unwrap();
+        let work = directory.path().join("private");
+        crate::media::create_output_dir(&work).unwrap();
+        let init = work.join("init.mp4");
+        let segment = work.join("segment.m4s");
+        crate::media::write_output_file(&init, &movie(&[])).unwrap();
         // A separately stored segment can carry its own relative segment index.
         let target_boxes = parse_boxes(&target).unwrap();
         let mut bytes = target_boxes[0].header.bytes(&target).to_vec();
@@ -489,7 +491,7 @@ mod tests {
         }
         bytes.extend(boxed(*b"ssix", &[0; 8]));
         assert_index_offsets_are_valid(&bytes);
-        std::fs::write(&segment, bytes).unwrap();
+        crate::media::write_output_file(&segment, &bytes).unwrap();
         edit.restore(&init, std::slice::from_ref(&segment)).unwrap();
         let bytes = std::fs::read(segment).unwrap();
         assert!(

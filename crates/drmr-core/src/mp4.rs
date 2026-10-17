@@ -116,7 +116,7 @@ pub fn split_fragmented(data: &[u8]) -> Result<(Vec<u8>, Vec<Vec<u8>>), HlsMedia
 pub fn split_fragmented_mp4(source: &Path, init: &Path) -> Result<Vec<Vec<u8>>, MediaError> {
     let data = std::fs::read(source)?;
     let (initialization, media) = split_fragmented(&data)?;
-    std::fs::write(init, initialization)?;
+    crate::media::write_output_file(init, &initialization)?;
     Ok(media)
 }
 

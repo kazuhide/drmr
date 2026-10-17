@@ -46,6 +46,21 @@ pub fn create_media_new(path: &Path) -> io::Result<fs::File> {
     }
 }
 
+/// Prepare a private parent and create a strict media file, or validate and
+/// truncate an existing private file. Strict and prepared media parents are
+/// accepted. The media parent is retained while the target is opened. Links and
+/// insecure existing targets are rejected before any contents are changed.
+pub fn create_media_or_truncate(path: &Path) -> io::Result<fs::File> {
+    #[cfg(windows)]
+    {
+        windows::create_or_truncate(path)
+    }
+    #[cfg(unix)]
+    {
+        super::create_private_or_truncate(path)
+    }
+}
+
 /// Verify generated media, then give every file the strict private-file policy.
 /// No unsafe ACL or filesystem entry is silently repaired. Files are private
 /// throughout generation; sealing protects them from later ACL inheritance.

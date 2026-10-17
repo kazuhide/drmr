@@ -6,6 +6,7 @@ $ErrorActionPreference = 'Stop'
 $builds = @(
     @('-p', 'drmr-core', '--lib', '--tests'),
     @('-p', 'drmr', '--tests'),
+    @('-p', 'drmr-server', '--lib', '--tests'),
     @('-p', 'drmr-test-support', '--tests')
 )
 $executables = @()

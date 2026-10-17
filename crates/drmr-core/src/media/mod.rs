@@ -5,6 +5,7 @@
 //! on drop, and key-bearing tool calls use the secure runner.
 
 mod files;
+pub(crate) use files::{create_output_dir, create_output_file, write_output_file};
 mod parse;
 mod playlist;
 pub mod python;

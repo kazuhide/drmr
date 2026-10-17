@@ -19,4 +19,6 @@ pub use paths::resolve_path;
 pub use paths::validate_windows_relative_path;
 
 mod workspace;
-pub use workspace::{create_media_dir_all, create_media_new, seal_media_tree};
+pub use workspace::{
+    create_media_dir_all, create_media_new, create_media_or_truncate, seal_media_tree,
+};

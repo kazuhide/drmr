@@ -44,7 +44,7 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Check native platform warnings
-        run: cargo clippy -p drmr-core -p drmr -p drmr-test-support --all-targets --locked -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - name: Check elevated media execution is refused before payload creation
         run: cargo test -p drmr-core --test native media_workspace_checks_default_ownership_before_generating_payloads --locked -- --nocapture

@@ -9,15 +9,43 @@ use std::path::{Path, PathBuf};
 /// `media::concatenate`: `paths` byte for byte into `output` (its directory created first),
 /// in order; returns `output`.
 pub fn concatenate<P: AsRef<Path>>(paths: &[P], output: &Path) -> Result<PathBuf, MediaError> {
+    #[cfg(unix)]
     if let Some(parent) = output.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let mut dest = std::fs::File::create(output)?;
+    let mut dest = create_output_file(output)?;
     for path in paths {
         let mut source = std::fs::File::open(path)?;
         std::io::copy(&mut source, &mut dest)?;
     }
     Ok(output.to_path_buf())
+}
+
+/// Open a known output without exposing its payload through inherited access.
+pub(crate) fn create_output_file(path: &Path) -> std::io::Result<std::fs::File> {
+    #[cfg(windows)]
+    {
+        crate::native::create_media_or_truncate(path)
+    }
+    #[cfg(unix)]
+    {
+        std::fs::File::create(path)
+    }
+}
+
+pub(crate) fn write_output_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    create_output_file(path)?.write_all(bytes)
+}
+
+pub(crate) fn create_output_dir(path: &Path) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        crate::native::create_private_dir_all(path)
+    }
+    #[cfg(unix)]
+    {
+        std::fs::create_dir_all(path)
+    }
 }
 
 /// `media::codec_from_init`: the RFC 6381 codec string from the first `avcC` (`avc1.PPCCLL`)

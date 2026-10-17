@@ -128,12 +128,17 @@ pub fn read_text(path: &Path) -> Result<String, PyErr> {
 
 /// `Path.write_bytes(data)`.
 pub fn write_bytes(path: &Path, data: &[u8]) -> Result<(), PyErr> {
-    std::fs::write(path, data).map_err(|err| PyErr::Os(PyOsError::from_io(&err, path)))
+    crate::media::write_output_file(path, data)
+        .map_err(|err| PyErr::Os(PyOsError::from_io(&err, path)))
 }
 
 /// `Path.mkdir(parents=True, exist_ok=True)`.
 pub fn mkdir_parents(path: &Path) -> Result<(), PyErr> {
-    std::fs::create_dir_all(path).map_err(|err| PyErr::Os(PyOsError::from_io(&err, path)))
+    #[cfg(unix)]
+    let result = std::fs::create_dir_all(path);
+    #[cfg(windows)]
+    let result = crate::native::create_private_dir_all(path);
+    result.map_err(|err| PyErr::Os(PyOsError::from_io(&err, path)))
 }
 
 /// `Path.stat.st_size`.

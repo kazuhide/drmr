@@ -207,6 +207,47 @@ pub(super) fn seal(path: &Path) -> io::Result<()> {
 // caller can write any payload. This policy is separate from strict secret-file
 // acquisition: inherited media directories never become valid secret parents.
 pub(super) fn create_new(path: &Path) -> io::Result<File> {
+    open_file(path, true)
+}
+
+pub(super) fn create_or_truncate(path: &Path) -> io::Result<File> {
+    let absolute = std::path::absolute(path)?;
+    let parent = absolute.parent().ok_or_else(invalid)?;
+    match private_fs::PrivateDir::open(parent) {
+        Ok(_) => return crate::native::create_private_or_truncate(path),
+        Err(private_fs::Error::InsecureAcl) => {
+            // Fixed-output writers validate their own held target below. An
+            // already prepared parent can contain concurrent sibling outputs;
+            // do not walk or mutate those unrelated files while they are open.
+            let policy = Policy::new()?;
+            let directory = open(parent)?;
+            policy.verify(&directory, true, true)?;
+            let descriptor = GetSecurityInfo(
+                &directory,
+                SeObjectType::SE_FILE_OBJECT,
+                SecurityInformation::Dacl,
+            )?;
+            if ace_text(&descriptor)?.1 != policy.media_ace {
+                return Err(invalid());
+            }
+        }
+        Err(private_fs::Error::Io(error)) if error.kind() == io::ErrorKind::NotFound => {
+            crate::native::create_private_dir_all(parent)?;
+            return crate::native::create_private_or_truncate(path);
+        }
+        Err(_) => return Err(invalid()),
+    }
+    match create_new(path) {
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            let file = open_file(path, false)?;
+            file.set_len(0)?;
+            Ok(file)
+        }
+        result => result,
+    }
+}
+
+fn open_file(path: &Path, create: bool) -> io::Result<File> {
     let absolute = std::path::absolute(path)?;
     let path = absolute.as_path();
     let parent = path.parent().ok_or_else(invalid)?;
@@ -234,7 +275,7 @@ pub(super) fn create_new(path: &Path) -> io::Result<File> {
         .share_mode(1)
         .security_qos_flags(0x0001_0000)
         .custom_flags(0x0020_0000)
-        .create_new(true)
+        .create_new(create)
         .open(path)?;
     policy.verify(&file, false, false)?;
     policy.set(&mut file, false)?;

@@ -248,6 +248,29 @@ fn media_file_creation_is_exclusive_and_strict_before_payload_writes() {
 }
 
 #[test]
+fn media_updates_validate_existing_objects_before_truncation() {
+    let temp = tempfile::tempdir().unwrap();
+    let workspace = temp.path().join("media");
+    native::create_media_dir_all(&workspace).unwrap();
+    let path = workspace.join("output.mp4");
+    native::create_media_or_truncate(&path)
+        .unwrap()
+        .write_all(b"first")
+        .unwrap();
+    let mut file = native::create_media_or_truncate(&path).unwrap();
+    assert_eq!(file.metadata().unwrap().len(), 0);
+    #[cfg(windows)]
+    private_fs::verify(&file).unwrap();
+    file.write_all(b"unchanged").unwrap();
+    drop(file);
+    let alias = workspace.join("alias.mp4");
+    std::fs::hard_link(&path, &alias).unwrap();
+    assert!(native::create_media_or_truncate(&path).is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), b"unchanged");
+    assert_eq!(std::fs::read(&alias).unwrap(), b"unchanged");
+}
+
+#[test]
 fn media_sealing_preserves_a_strict_secret_child_directory() {
     let temp = tempfile::tempdir().unwrap();
     let workspace = temp.path().join("media");

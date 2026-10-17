@@ -709,13 +709,18 @@ type Prepared = (PathBuf, PacketInfo, PathBuf, PathBuf);
 /// `shutil.copyfile(source, destination)`: the bytes only (no permission bits).
 fn copyfile(source: &Path, destination: &Path) -> std::io::Result<()> {
     let mut from = fs::File::open(source)?;
-    let mut to = fs::File::create(destination)?;
+    let mut to = media::create_output_file(destination)?;
     std::io::copy(&mut from, &mut to)?;
     Ok(())
 }
 
 /// `Path.mkdir(exist_ok=True)`: the parent must exist; an existing directory is fine.
 fn mkdir_exist_ok(path: &Path) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        media::create_output_dir(path)
+    }
+    #[cfg(unix)]
     match fs::create_dir(path) {
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists && path.is_dir() => Ok(()),
         other => other,
@@ -920,8 +925,8 @@ pub fn package_track<'scope>(
 ) -> Result<OutputTrack, TrackError> {
     let track = job.track;
     let (folder, work) = track_directories(track, asset_dir)?;
-    fs::create_dir_all(&folder)?;
-    fs::create_dir_all(&work)?;
+    media::create_output_dir(&folder)?;
+    media::create_output_dir(&work)?;
     let prepare_units: Vec<Unit<'scope, Prepared, TrackError>> = track
         .segments
         .iter()
@@ -1084,9 +1089,9 @@ fn concatenate_after_init(
 ) -> Result<PathBuf, TrackError> {
     let Some(init) = init else {
         if let Some(parent) = output.parent() {
-            fs::create_dir_all(parent)?;
+            media::create_output_dir(parent)?;
         }
-        fs::File::create(output)?;
+        media::create_output_file(output)?;
         return Err(TrackError::Escaped(PipelineError::Infrastructure(
             "'NoneType' object has no attribute 'open'".to_string(),
         )));
@@ -1105,8 +1110,8 @@ fn copy_imsc(
 ) -> Result<OutputTrack, TrackError> {
     let unsupported = || TrackError::Media("unsupported-subtitle-profile".to_string());
     let (folder, work) = track_directories(track, asset_dir)?;
-    fs::create_dir_all(&folder)?;
-    fs::create_dir_all(&work)?;
+    media::create_output_dir(&folder)?;
+    media::create_output_dir(&work)?;
     let mut sources: Vec<(PathBuf, PacketInfo)> = Vec::new();
     for (number, segment) in track.segments.iter().enumerate() {
         let source = concatenate_after_init(
@@ -1160,7 +1165,7 @@ fn copy_imsc(
     for (number, ((source, before), segment)) in sources.iter().zip(&track.segments).enumerate() {
         let count = before.pts.len();
         let path = folder.join(format!("seg_{number}.m4s"));
-        fs::write(&path, fragments[cursor..cursor + count].concat())?;
+        media::write_output_file(&path, &fragments[cursor..cursor + count].concat())?;
         cursor += count;
         let joined = deps.concatenate(&[init.clone(), path.clone()], &work.join("output.mp4"))?;
         let after = deps.probe_packets(&joined, 0)?;
@@ -1322,7 +1327,7 @@ pub fn copy_text(
         return copy_imsc(track, asset_dir, deps);
     }
     let unsupported = || TrackError::Media("unsupported-subtitle-profile".to_string());
-    fs::create_dir_all(&folder)?;
+    media::create_output_dir(&folder)?;
     let map_line = Regex::new(r"(?m)^X-TIMESTAMP-MAP=LOCAL:([0-9:.]+),MPEGTS:([0-9]+)[ \t]*\r?$")
         .expect("a valid pattern");
     let wrap = frac(1 << 33, 90000);
@@ -1376,7 +1381,7 @@ pub fn copy_text(
                 }
             }
         }
-        fs::write(&path, content)?;
+        media::write_output_file(&path, content.as_bytes())?;
         let ticks = vtt_ticks(segment.duration);
         output.push(OutputSegment {
             source_index: segment.index,
@@ -1795,7 +1800,7 @@ fn write_manifests(
     presentation: &PackagedPresentation,
     manifest_dir: &Path,
 ) -> Result<Option<Vec<PathBuf>>, PipelineError> {
-    fs::create_dir_all(manifest_dir).map_err(|error| os_value(&error))?;
+    media::create_output_dir(manifest_dir).map_err(|error| os_value(&error))?;
     let fairplay = PrivateFairPlaySignaling {
         uri: run.signaling.fairplay_uri.clone(),
         iv_hex: run.keys.iv_hex().to_string(),
@@ -1839,10 +1844,10 @@ fn write_report(
         production_verified: false,
     };
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|error| os_value(&error))?;
+        media::create_output_dir(parent).map_err(|error| os_value(&error))?;
     }
     let text = format!("{}\n", Dumps::INDENT2.dumps(&report.to_public_dict()));
-    fs::write(&path, text).map_err(|error| os_value(&error))?;
+    media::write_output_file(&path, text.as_bytes()).map_err(|error| os_value(&error))?;
     Ok(report)
 }
 

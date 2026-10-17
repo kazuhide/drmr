@@ -290,6 +290,8 @@ impl MediaEngine for Subprocess {
             ]));
         }
         argv.push(path_str(destination)?);
+        #[cfg(windows)]
+        drop(super::create_output_file(destination)?);
         self.run_media(&argv, true)?;
         Ok(destination.to_path_buf())
     }
@@ -428,9 +430,12 @@ impl MediaEngine for Subprocess {
         input_path: &Path,
         output_path: &Path,
     ) -> Result<PathBuf, MediaError> {
+        #[cfg(unix)]
         if let Some(parent) = output_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
+        #[cfg(windows)]
+        drop(super::create_output_file(output_path)?);
         let mut argv = strings(&[
             &self.ffmpeg_bin,
             "-v",
@@ -456,6 +461,7 @@ impl MediaEngine for Subprocess {
         output_path: &Path,
         mode: &str,
     ) -> Result<PathBuf, MediaError> {
+        #[cfg(unix)]
         if let Some(parent) = output_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -479,6 +485,8 @@ impl MediaEngine for Subprocess {
                 )));
             }
         }
+        #[cfg(windows)]
+        drop(super::create_output_file(output_path)?);
         argv.push(path_str(output_path)?);
         if self.run_ffmpeg_decode(&argv)? != Some(0) {
             // stderr may name the localized playlist or the key file's path, never the key.

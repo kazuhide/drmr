@@ -891,7 +891,7 @@ fn fresh_dir(dir: &Path) -> Result<(), PyError> {
         }
         fs::remove_dir_all(dir).map_err(|error| PyError::os(&error, dir))?;
     }
-    fs::create_dir_all(dir).map_err(|error| PyError::os(&error, dir))
+    crate::media::create_output_dir(dir).map_err(|error| PyError::os(&error, dir))
 }
 
 /// `path.unlink(missing_ok=True)`.
@@ -1226,6 +1226,14 @@ pub fn rewrite_asset_manifests(
         .prefix("drmr-manifest-gates-")
         .tempdir()
         .map_err(|error| PyError::os(&error, &std::env::temp_dir()))?;
+    #[cfg(unix)]
+    let scratch_path = scratch.path().to_path_buf();
+    #[cfg(windows)]
+    let scratch_path = {
+        let path = scratch.path().join("private");
+        crate::native::create_private_dir_all(&path).map_err(|error| PyError::os(&error, &path))?;
+        path
+    };
     let run = ManifestRun {
         asset,
         playready_objects,
@@ -1235,7 +1243,7 @@ pub fn rewrite_asset_manifests(
         hls_master_path: py_path(options.hls_master_path),
         manifests_root,
         dash_output_mpd,
-        work_dir: scratch.path().to_path_buf(),
+        work_dir: scratch_path,
     };
     run.audio_pcm_gate(&mut checks)?;
     let hls_result = run.hls(&mut checks)?;
@@ -1659,16 +1667,22 @@ pub fn repackage_asset_with(
 /// `_write_report`: `phase1-summary.json` (`json.dumps(..., indent=2)`) and
 /// `phase1-summary.md`.
 pub fn write_report(asset_result: &AssetResult, reports_dir: &Path) -> Result<(), PyError> {
-    fs::create_dir_all(reports_dir).map_err(|error| PyError::os(&error, reports_dir))?;
+    crate::media::create_output_dir(reports_dir)
+        .map_err(|error| PyError::os(&error, reports_dir))?;
     let json_path = reports_dir.join("phase1-summary.json");
-    fs::write(
+    crate::media::write_output_file(
         &json_path,
-        Dumps::INDENT2.dumps(&asset_result_to_json(asset_result)),
+        Dumps::INDENT2
+            .dumps(&asset_result_to_json(asset_result))
+            .as_bytes(),
     )
     .map_err(|error| PyError::os(&error, &json_path))?;
     let markdown_path = reports_dir.join("phase1-summary.md");
-    fs::write(&markdown_path, asset_result_to_markdown(asset_result))
-        .map_err(|error| PyError::os(&error, &markdown_path))
+    crate::media::write_output_file(
+        &markdown_path,
+        asset_result_to_markdown(asset_result).as_bytes(),
+    )
+    .map_err(|error| PyError::os(&error, &markdown_path))
 }
 
 fn object<const N: usize>(fields: [(&str, Value); N]) -> Value {

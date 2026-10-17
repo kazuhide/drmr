@@ -4,6 +4,8 @@
 //! (`fixtures/media/mp4dump.cases.json`, CI) and live where mp4dump, ffmpeg and mp4encrypt are
 //! on PATH (skipped otherwise). Synthetic KID / key / IV only.
 
+mod common;
+
 use drmr_core::events::NoSink;
 use drmr_core::media::{
     FragmentBoundary, HexSecret, MediaEngine, MediaError, Subprocess, parse_fragment_boundary,
@@ -103,7 +105,7 @@ fn split_keeps_every_box_byte_and_groups_each_moof_with_its_mdats() {
         vec![cat(&[&moof1, &mdat1]), cat(&[&moof2, &mdat2, &mdat3])]
     );
 
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::private_tempdir().unwrap();
     let (source, init_path) = (
         dir.path().join("normalized.mp4"),
         dir.path().join("init.mp4"),
@@ -207,7 +209,7 @@ fn split_rejects_malformed_framing_with_pythons_tokens() {
     }
 
     // A failed split writes no init; an unreadable source is an OSError.
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::private_tempdir().unwrap();
     let (source, init) = (dir.path().join("bad.mp4"), dir.path().join("init.mp4"));
     std::fs::write(&source, cat(&[&ftyp, &moov])).unwrap();
     let error = split_fragmented_mp4(&source, &init).unwrap_err();
@@ -225,7 +227,7 @@ fn pssh_box_present_is_an_exact_byte_containment() {
         0,
         &cat(&[&[0xed; 16], &3u32.to_be_bytes(), b"abc"]),
     );
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::private_tempdir().unwrap();
     let init = dir.path().join("init.mp4");
     std::fs::write(&init, cat(&[&bx(*b"ftyp", b"iso6"), &bx(*b"moov", &pssh)])).unwrap();
     assert!(pssh_box_present(&init, &pssh).unwrap());
@@ -586,7 +588,7 @@ fn live_mp4dump_trees_equal_the_recorded_ones_and_the_native_reads() {
         return;
     }
     let engine = engine();
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::private_tempdir().unwrap();
     for case in fixture["cases"].as_array().unwrap() {
         let name = case["name"].as_str().unwrap();
         let data = hex::decode(case["hex"].as_str().unwrap()).unwrap();
@@ -652,7 +654,7 @@ fn native_readers_match_mp4dump_on_ffmpeg_and_bento4_output() {
     if !(on_path("ffmpeg") && on_path("mp4dump")) {
         return;
     }
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::private_tempdir().unwrap();
     let engine = engine();
     let (init, segments) = synthetic_fragments(dir.path());
     let mut files = vec![init.clone()];
@@ -744,7 +746,7 @@ fn ffmpeg_fragments_split_back_into_the_original_bytes() {
     if !on_path("ffmpeg") {
         return;
     }
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::private_tempdir().unwrap();
     let (init, segments) = synthetic_fragments(dir.path());
     let original = std::fs::read(dir.path().join("av.mp4")).unwrap();
     let mut rebuilt = std::fs::read(&init).unwrap();

@@ -1,5 +1,7 @@
 //! Media parsing, exact packet timing, and subprocess operations on synthetic clips.
 
+mod common;
+
 use drmr_core::events::{Collector, NoSink};
 use drmr_core::media::{
     MediaEngine, MediaError, PacketInfo, Subprocess, codec_from_init, concatenate,
@@ -527,7 +529,7 @@ fn payload_hashes_and_segment_timing_parse_as_python_does() {
 #[test]
 fn codec_from_init_agrees_with_python_on_every_recorded_case() {
     let fixture = fixture();
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::private_tempdir().unwrap();
     for case in fixture["codec_from_init"].as_array().unwrap() {
         let name = case[0].as_str().unwrap();
         let path = dir.path().join(format!("{name}.mp4"));
@@ -555,7 +557,7 @@ fn codec_from_init_agrees_with_python_on_every_recorded_case() {
 
 #[test]
 fn concatenate_joins_files_in_order_and_creates_the_directory() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::private_tempdir().unwrap();
     let parts: Vec<PathBuf> = ["a", "b", "c"]
         .iter()
         .map(|name| {
@@ -622,7 +624,7 @@ fn real_imsc_payload_splits_into_one_fragment() {
     if !on_path("ffmpeg") {
         return;
     }
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::private_tempdir().unwrap();
     let source = dir.path().join("subs.srt");
     std::fs::write(&source, "1\n00:00:00,000 --> 00:00:02,000\nHello\n").unwrap();
     let mp4 = dir.path().join("subtitle.mp4");
@@ -654,7 +656,7 @@ fn real_imsc_payloads_are_every_packet_and_never_logged() {
     if !on_path("ffmpeg") || !on_path("ffprobe") {
         return;
     }
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::private_tempdir().unwrap();
     let source = dir.path().join("subs.srt");
     std::fs::write(&source, "1\n00:00:00,000 --> 00:00:02,000\nHello\n").unwrap();
     let base = dir.path().join("base.mp4");
@@ -780,10 +782,16 @@ fn hls_fmp4(dir: &Path, codec: &str) -> PathBuf {
         "fmp4",
         "-hls_playlist_type",
         "vod",
-        playlist.to_str().unwrap(),
+        "source.m3u8",
     ]);
     assert!(
-        ffmpeg(&argv).status.success(),
+        std::process::Command::new("ffmpeg")
+            .current_dir(dir)
+            .args(&argv)
+            .output()
+            .unwrap()
+            .status
+            .success(),
         "synthetic fixture encoding unavailable"
     );
     playlist
@@ -794,7 +802,7 @@ fn probe_packets_keeps_the_partial_final_aac_packet() {
     if !(on_path("ffmpeg") && on_path("ffprobe")) {
         return;
     }
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::private_tempdir().unwrap();
     hls_fmp4(dir.path(), "libx264");
     let mut segments: Vec<PathBuf> = std::fs::read_dir(dir.path())
         .unwrap()
@@ -823,7 +831,7 @@ fn normalized_segments_keep_their_timing_shifted_by_two_seconds() {
     if !(on_path("ffmpeg") && on_path("ffprobe")) {
         return;
     }
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::private_tempdir().unwrap();
     hls_fmp4(dir.path(), "libx264");
     let source = concatenate(
         &[dir.path().join("init.mp4"), dir.path().join("source1.m4s")],
@@ -858,7 +866,7 @@ fn decoded_digests_compare_content_not_files() {
     if !on_path("ffmpeg") {
         return;
     }
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::private_tempdir().unwrap();
     let make = |name: &str, pattern: &str| {
         let path = dir.path().join(name);
         let source = format!("{pattern}=duration=1:size=64x64:rate=5");
@@ -916,7 +924,7 @@ fn codec_from_init_reads_a_real_x264_init() {
     if !on_path("ffmpeg") {
         return;
     }
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::private_tempdir().unwrap();
     hls_fmp4(dir.path(), "libx264");
     let init = std::fs::read(dir.path().join("init.mp4")).unwrap();
     let at = init.windows(4).position(|w| w == b"avcC").unwrap();
