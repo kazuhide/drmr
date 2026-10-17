@@ -38,7 +38,6 @@ fn video(path: &Path) {
         .unwrap();
     assert!(status.success());
 }
-#[cfg(unix)]
 #[test]
 fn mp4_to_aes128_hls_and_back_preserves_all_media_for_each_mp4_scheme() {
     let directory = tempfile::tempdir().unwrap();
@@ -108,7 +107,6 @@ fn mp4_to_aes128_hls_and_back_preserves_all_media_for_each_mp4_scheme() {
         }
     }
 }
-#[cfg(unix)]
 #[test]
 fn aes128_hls_wrong_or_missing_mapping_never_fetches_key_uri_or_publishes_output() {
     let directory = tempfile::tempdir().unwrap();
@@ -148,7 +146,6 @@ fn aes128_hls_wrong_or_missing_mapping_never_fetches_key_uri_or_publishes_output
         assert!(!output.exists());
     }
 }
-#[cfg(unix)]
 #[test]
 fn key_uri_iv_and_secret_never_reach_hls_conversion_records() {
     let directory = tempfile::tempdir().unwrap();
@@ -174,7 +171,6 @@ fn key_uri_iv_and_secret_never_reach_hls_conversion_records() {
     assert!(!records.contains("IV="));
 }
 
-#[cfg(unix)]
 #[test]
 fn aes128_to_aes128_uses_separate_key_roles_and_fresh_explicit_vectors() {
     let directory = tempfile::tempdir().unwrap();
@@ -212,7 +208,6 @@ fn aes128_to_aes128_uses_separate_key_roles_and_fresh_explicit_vectors() {
         std::fs::read(second.join("segment-000001.m4s")).unwrap()
     );
 }
-#[cfg(unix)]
 #[test]
 fn encrypted_map_requires_explicit_iv_and_resource_escapes_fail_before_publication() {
     let directory = tempfile::tempdir().unwrap();
@@ -260,7 +255,6 @@ fn encrypted_map_requires_explicit_iv_and_resource_escapes_fail_before_publicati
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn imported_key_rotation_and_implicit_sequence_vectors_preserve_media() {
     use drmr_core::conversion::{SegmentIv, decrypt_segment, encrypt_segment};

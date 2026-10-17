@@ -8,7 +8,7 @@ use crate::inspection::{
     self, Evidence, InputFormat, Inspection, OutputFormat, Protection, TargetProtection, TrackKind,
 };
 use std::{
-    fs::{self, OpenOptions},
+    fs,
     io::Write,
     path::{Path, PathBuf},
 };
@@ -58,12 +58,10 @@ impl Converter {
         let parent = destination
             .parent()
             .ok_or(ConversionError("output-path-invalid"))?;
-        let stage = tempfile::Builder::new()
-            .prefix(".drmr-stage-")
-            .tempdir_in(parent)
-            .map_err(|_| ConversionError("output-staging-failed"))?;
+        let stage = super::files::Stage::new(Some(parent))?;
         let clear_stage = work.path().join("packaged");
-        fs::create_dir(&clear_stage).map_err(|_| ConversionError("output-staging-failed"))?;
+        super::files::create_dir(&clear_stage)
+            .map_err(|_| ConversionError("output-staging-failed"))?;
         let package_root = if request.target == TargetProtection::HlsAes128 {
             clear_stage.as_path()
         } else {
@@ -74,7 +72,8 @@ impl Converter {
             for ordinal in 0..clears.len() {
                 let name = format!("track-{ordinal:04}");
                 let output = stage.path().join(&name);
-                fs::create_dir(&output).map_err(|_| ConversionError("output-staging-failed"))?;
+                super::files::create_dir(&output)
+                    .map_err(|_| ConversionError("output-staging-failed"))?;
                 hls::encrypt_media(&package_root.join(name), &output, key)?;
             }
             copy_private(
@@ -149,7 +148,7 @@ impl Converter {
                     super::Aes128Key(key.key.0.clone()),
                 )])?;
                 let localized_dir = work.join(format!("localized-{ordinal}"));
-                fs::create_dir(&localized_dir)
+                super::files::create_dir(&localized_dir)
                     .map_err(|_| ConversionError("output-staging-failed"))?;
                 let localized =
                     hls::localize(&track_dir.join("media.m3u8"), &localized_dir, &keys)?;
@@ -276,7 +275,7 @@ impl Converter {
         for (index, path) in clear.iter().enumerate() {
             let name = format!("track-{index:04}");
             let dir = root.join(&name);
-            fs::create_dir(&dir).map_err(|_| ConversionError("output-staging-failed"))?;
+            super::files::create_dir(&dir).map_err(|_| ConversionError("output-staging-failed"))?;
             let input = descriptor_path(path)?;
             let output = descriptor_path(&dir)?;
             argv.push(format!("input={input},stream=0,init_segment={output}/init.mp4,segment_template={output}/seg_$Number$.m4s,playlist_name={name}/media.m3u8"));
@@ -291,14 +290,14 @@ impl Converter {
             argv.extend([
                 "--generate_static_live_mpd".into(),
                 "--mpd_output".into(),
-                descriptor_path(&root.join("manifest.mpd"))?.into(),
+                descriptor_path(&root.join("manifest.mpd"))?,
             ]);
         } else {
             argv.extend([
                 "--hls_playlist_type".into(),
                 "VOD".into(),
                 "--hls_master_playlist_output".into(),
-                descriptor_path(&root.join("master.m3u8"))?.into(),
+                descriptor_path(&root.join("master.m3u8"))?,
             ]);
         }
         let secret = request.output_key.map(|k| k.0.key_hex());
@@ -329,8 +328,8 @@ impl Converter {
         Ok(())
     }
 }
-fn descriptor_path(path: &Path) -> Result<&str, ConversionError> {
-    let value = path.to_str().ok_or(ConversionError("unsupported-path"))?;
+fn descriptor_path(path: &Path) -> Result<String, ConversionError> {
+    let value = super::files::tool_path(path)?;
     if value.contains([',', '\n', '\r']) {
         return Err(ConversionError("unsupported-path"));
     }
@@ -448,16 +447,7 @@ fn combine_generated(directory: &Path, output: &Path) -> Result<(), ConversionEr
     if segments.is_empty() || segments.len() > 100_000 {
         return Err(ConversionError("packaged-segment-count-limit"));
     }
-    let mut options = OpenOptions::new();
-    options.create_new(true).write(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        options.mode(0o600);
-    }
-    let mut file = options
-        .open(output)
-        .map_err(|_| ConversionError("output-staging-failed"))?;
+    let mut file = super::files::create_new(output)?;
     let mut total = 0u64;
     for path in
         std::iter::once(directory.join("init.mp4")).chain(segments.into_iter().map(|(_, p)| p))
@@ -481,23 +471,7 @@ fn combine_generated(directory: &Path, output: &Path) -> Result<(), ConversionEr
     Ok(())
 }
 fn secure_tree(root: &Path) -> Result<(), ConversionError> {
-    for entry in fs::read_dir(root).map_err(|_| ConversionError("output-staging-failed"))? {
-        let entry = entry.map_err(|_| ConversionError("output-staging-failed"))?;
-        let kind = entry
-            .file_type()
-            .map_err(|_| ConversionError("output-staging-failed"))?;
-        if kind.is_symlink() {
-            return Err(ConversionError("invalid-packaged-resource"));
-        }
-        if kind.is_dir() {
-            secure_tree(&entry.path())?;
-        } else if kind.is_file() {
-            super::private_file_mode(&entry.path())?;
-        } else {
-            return Err(ConversionError("invalid-packaged-resource"));
-        }
-    }
-    Ok(())
+    super::files::seal(root)
 }
 
 /// Independent key roles for one actual local media input, never an inspection artifact.
@@ -521,9 +495,9 @@ impl Converter {
         let work = workspace()?;
         let source_dir = work.path().join("source");
         let result_dir = work.path().join("result");
-        fs::create_dir(&source_dir)
+        super::files::create_dir(&source_dir)
             .map_err(|_| ConversionError("temporary-workspace-unavailable"))?;
-        fs::create_dir(&result_dir)
+        super::files::create_dir(&result_dir)
             .map_err(|_| ConversionError("temporary-workspace-unavailable"))?;
         let mut source = prepare_presentation(&request.source, &source_dir)?;
         let mut result = prepare_presentation(&request.output, &result_dir)?;
@@ -606,7 +580,7 @@ fn prepare_presentation(
             let mut tracks = Vec::new();
             for (ordinal, path) in paths.iter().enumerate() {
                 let directory = stage.join(format!("track-{ordinal:04}"));
-                fs::create_dir(&directory)
+                super::files::create_dir(&directory)
                     .map_err(|_| ConversionError("temporary-workspace-unavailable"))?;
                 let localized = hls::localize(path, &directory, input.hls_keys)?;
                 let actual = inspection::inspect(&localized.combined)
@@ -635,7 +609,7 @@ fn prepare_presentation(
     }
 }
 fn hls_media_paths(path: &Path) -> Result<Vec<PathBuf>, ConversionError> {
-    let bytes = inspection::read_manifest(path)
+    let bytes = super::files::read_manifest(path)
         .map_err(|_| ConversionError("hls-manifest-unreadable-or-too-large"))?;
     let text = std::str::from_utf8(&bytes).map_err(|_| ConversionError("hls-invalid-utf8"))?;
     if !text

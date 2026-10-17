@@ -209,35 +209,10 @@ pub fn read(path: &Path) -> Result<OperatorKeys, ConversionError> {
     })
 }
 
-#[cfg(unix)]
 fn private_file(path: &Path) -> Result<std::fs::File, ConversionError> {
-    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
-    let metadata = std::fs::symlink_metadata(path).map_err(|_| INVALID)?;
-    if !metadata.is_file() {
-        return Err(INVALID);
-    }
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(
-            (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK)
-                .bits()
-                .cast_signed(),
-        )
-        .open(path)
-        .map_err(|_| INVALID)?;
-    let metadata = file.metadata().map_err(|_| INVALID)?;
-    if !metadata.is_file()
-        || metadata.len() > LIMIT
-        || metadata.mode() & 0o077 != 0
-        || metadata.nlink() != 1
-        || metadata.uid() != rustix::process::geteuid().as_raw()
-    {
+    let file = crate::native::open_private_read(path).map_err(|_| INVALID)?;
+    if file.metadata().map_err(|_| INVALID)?.len() > LIMIT {
         return Err(INVALID);
     }
     Ok(file)
-}
-
-#[cfg(not(unix))]
-fn private_file(_path: &Path) -> Result<std::fs::File, ConversionError> {
-    Err(INVALID)
 }

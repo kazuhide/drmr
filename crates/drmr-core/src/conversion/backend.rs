@@ -42,6 +42,13 @@ impl Backend {
             secrets,
             timeout: Some(self.timeout),
             max_output_chars: 0,
+            max_stdout_bytes: if tool == "ffprobe"
+                && effective.iter().any(|arg| arg == "-show_packets")
+            {
+                32 * 1024 * 1024
+            } else {
+                RunOptions::default().max_stdout_bytes
+            },
             log_stdout: false,
             ..RunOptions::default()
         };
@@ -72,8 +79,8 @@ impl Backend {
         encryption: Option<(&OutputKey, TargetProtection)>,
     ) -> Result<(), ConversionError> {
         super::audio::require_supported_audio(input, index)?;
-        let input = input.to_str().ok_or(ConversionError("unsupported-path"))?;
-        let output = output.to_str().ok_or(ConversionError("unsupported-path"))?;
+        let input = super::files::tool_path(input)?;
+        let output = super::files::tool_path(output)?;
         if input.contains([',', '\n', '\r']) || output.contains([',', '\n', '\r']) {
             return Err(ConversionError("unsupported-path"));
         }
@@ -122,13 +129,13 @@ impl Backend {
         }
         let secrets: Vec<_> = key_hex.iter().map(|value| value.as_str()).collect();
         self.run(&argv, "packager", &secrets)?;
-        super::private_file_mode(Path::new(output))?;
+        super::private_file_mode(Path::new(&output))?;
         Ok(())
     }
     pub fn package_hls(&self, input: &Path, output: &Path) -> Result<(), ConversionError> {
         super::audio::require_supported_audio(input, 0)?;
-        let input = input.to_str().ok_or(ConversionError("unsupported-path"))?;
-        let output = output.to_str().ok_or(ConversionError("unsupported-path"))?;
+        let input = super::files::tool_path(input)?;
+        let output = super::files::tool_path(output)?;
         if input.contains(',') || output.contains(',') {
             return Err(ConversionError("unsupported-path"));
         }
@@ -177,9 +184,7 @@ impl Backend {
             "sha256".into(),
             "-of".into(),
             "json".into(),
-            path.to_str()
-                .ok_or(ConversionError("unsupported-path"))?
-                .into(),
+            super::files::tool_path(path)?,
         ];
         let bytes = self.run(&argv, "ffprobe", &[])?;
         if bytes.len() > 1024 * 1024 {
@@ -276,9 +281,7 @@ impl Backend {
             "packet=stream_index,pts,dts,duration".into(),
             "-of".into(),
             "json".into(),
-            path.to_str()
-                .ok_or(ConversionError("unsupported-path"))?
-                .into(),
+            super::files::tool_path(path)?,
         ];
         let bytes = self.run(&argv, "ffprobe", &[])?;
         if bytes.len() > 32 * 1024 * 1024 {
@@ -334,9 +337,7 @@ impl Backend {
             "-protocol_whitelist".into(),
             "file,crypto".into(),
             "-i".into(),
-            path.to_str()
-                .ok_or(ConversionError("unsupported-path"))?
-                .into(),
+            super::files::tool_path(path)?,
             "-map".into(),
             format!("0:{index}"),
         ];

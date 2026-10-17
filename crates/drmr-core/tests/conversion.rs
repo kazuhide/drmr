@@ -45,7 +45,6 @@ fn keys_validate_without_exposing_values_in_debug_or_errors() {
         .is_err()
     );
 }
-#[cfg(unix)]
 #[test]
 fn real_mp4_clear_cenc_cbcs_nine_routes_use_independent_output_keys() {
     let directory = tempfile::tempdir().unwrap();
@@ -114,7 +113,6 @@ fn real_mp4_clear_cenc_cbcs_nine_routes_use_independent_output_keys() {
         }
     }
 }
-#[cfg(unix)]
 #[test]
 fn wrong_input_key_and_overwrite_fail_without_publishing_output() {
     let directory = tempfile::tempdir().unwrap();
@@ -158,7 +156,6 @@ fn wrong_input_key_and_overwrite_fail_without_publishing_output() {
     );
     assert_eq!(std::fs::read(&output).unwrap(), b"keep");
 }
-#[cfg(unix)]
 #[test]
 fn mismatched_media_does_not_pass_verification() {
     let directory = tempfile::tempdir().unwrap();
@@ -172,7 +169,6 @@ fn mismatched_media_does_not_pass_verification() {
     assert!(!report.passed);
     assert!(!report.checks.decoded_content_equal);
 }
-#[cfg(unix)]
 #[test]
 fn keys_never_reach_retained_tool_records_or_reports() {
     let directory = tempfile::tempdir().unwrap();
@@ -221,7 +217,6 @@ fn output_symlinks_are_rejected_without_modifying_their_target() {
     assert_eq!(std::fs::read(&victim).unwrap(), b"keep");
 }
 
-#[cfg(unix)]
 #[test]
 fn missing_keys_unsupported_profiles_and_multi_track_inputs_fail_closed() {
     let directory = tempfile::tempdir().unwrap();
@@ -292,9 +287,9 @@ fn missing_keys_unsupported_profiles_and_multi_track_inputs_fail_closed() {
     );
     assert!(!output.exists());
 }
-#[cfg(unix)]
 #[test]
 fn cbcs_output_uses_fresh_random_initialization_vectors_and_private_permissions() {
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt as _;
     let directory = tempfile::tempdir().unwrap();
     let source = directory.path().join("input.mp4");
@@ -313,10 +308,13 @@ fn cbcs_output_uses_fresh_random_initialization_vectors_and_private_permissions(
                 Some(&key),
             )
             .unwrap();
+        #[cfg(unix)]
         assert_eq!(
             std::fs::metadata(&output).unwrap().permissions().mode() & 0o777,
             0o600
         );
+        #[cfg(windows)]
+        private_fs::verify(&drmr_core::native::open_private_read(&output).unwrap()).unwrap();
         let bytes = std::fs::read(&output).unwrap();
         let entries = drmr_core::mp4::sample_entries(&bytes).unwrap();
         let tenc = entries[0].tenc.as_ref().unwrap();
@@ -325,7 +323,6 @@ fn cbcs_output_uses_fresh_random_initialization_vectors_and_private_permissions(
     assert_ne!(vectors[0], vectors[1]);
 }
 
-#[cfg(unix)]
 #[test]
 fn generic_conversion_preserves_original_aac_priming_and_presentation() {
     let directory = tempfile::tempdir().unwrap();
@@ -409,7 +406,6 @@ fn generic_conversion_preserves_original_aac_priming_and_presentation() {
     assert_eq!(timing(&input), timing(&output));
 }
 
-#[cfg(unix)]
 fn add_open_ended_audio_trim(path: &Path, ticks: u64) {
     fn boxed(kind: [u8; 4], payload: &[u8]) -> Vec<u8> {
         let mut bytes = u32::try_from(payload.len() + 8)
@@ -449,7 +445,6 @@ fn add_open_ended_audio_trim(path: &Path, ticks: u64) {
     std::fs::write(path, rewrite(&bytes, &boxes, &edit)).unwrap();
 }
 
-#[cfg(unix)]
 #[test]
 fn middle_packet_timestamp_changes_fail_even_when_payloads_and_duration_match() {
     fn boxed(kind: [u8; 4], payload: &[u8]) -> Vec<u8> {
@@ -509,7 +504,6 @@ fn middle_packet_timestamp_changes_fail_even_when_payloads_and_duration_match() 
     assert!(!report.passed);
 }
 
-#[cfg(unix)]
 #[test]
 fn fragmented_b_frame_input_keeps_its_original_presentation_timeline() {
     let directory = tempfile::tempdir().unwrap();
@@ -547,7 +541,6 @@ fn fragmented_b_frame_input_keeps_its_original_presentation_timeline() {
     assert!(report.verification.passed);
 }
 
-#[cfg(unix)]
 #[test]
 fn progressive_aac_with_finite_tail_padding_fails_before_publication() {
     let directory = tempfile::tempdir().unwrap();
@@ -583,7 +576,6 @@ fn progressive_aac_with_finite_tail_padding_fails_before_publication() {
     assert!(!output.exists());
 }
 
-#[cfg(unix)]
 #[test]
 fn a_changed_audio_sample_clock_cannot_pass_with_identical_silent_samples() {
     let directory = tempfile::tempdir().unwrap();
@@ -641,7 +633,6 @@ fn a_changed_audio_sample_clock_cannot_pass_with_identical_silent_samples() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn in_band_events_after_media_are_refused_before_publication() {
     let directory = tempfile::tempdir().unwrap();

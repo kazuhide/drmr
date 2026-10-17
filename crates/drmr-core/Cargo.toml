@@ -59,6 +59,7 @@ win32job = "=2.0.3"
 url = "=2.5.8"
 
 windows-permissions = "=0.2.4"
+winsafe = { version = "=0.0.29", default-features = false, features = ["kernel"] }
 
 [lints]
 workspace = true

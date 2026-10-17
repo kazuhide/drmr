@@ -26,9 +26,9 @@ def prepare_source(destination):
     for role in ("video", "audio"):
         (destination / role).mkdir()
         streams.append(
-            f"in={FIXTURE / 'clip.mp4'},stream={role},"
-            f"init_segment={destination / role}/init.mp4,"
-            f"segment_template={destination / role}/seg_$Number$.m4s")
+            f"in={(FIXTURE / 'clip.mp4').as_posix()},stream={role},"
+            f"init_segment={(destination / role).as_posix()}/init.mp4,"
+            f"segment_template={(destination / role).as_posix()}/seg_$Number$.m4s")
     run(["packager", *streams, "--segment_duration", "2", "--fragment_duration", "2",
          "--mp4_reset_initial_composition_offset_to_zero=false", "--generate_static_live_mpd",
          "--mpd_output", destination / "manifest.mpd"])
@@ -57,7 +57,7 @@ def convert(binary, source, protection, destination, keys, environment):
 def regression(binary, destination):
     metadata = verify_fixture()
     destination.mkdir(parents=True, exist_ok=True)
-    environment = {name: value for name, value in os.environ.items() if not name.startswith("DRM_")}
+    environment = {name: value for name, value in os.environ.items() if not (name.upper() if os.name == "nt" else name).startswith("DRM_")}
     clear = prepare_source(destination / "clear-source")
     sources = {"clear": clear}
     for protection in PROTECTIONS[1:]:
@@ -103,7 +103,8 @@ def regression(binary, destination):
                                                ("packager", "packager", "--version"),
                                                ("drmr", binary, "--version"))},
             "evidence": {"real_license": "not-verified", "device_playback": "not-verified",
-                         "independent_conformance": "not-verified"}}
+                         "independent_conformance": "not-verified",
+                         "windows": "measured-native" if os.name == "nt" else "not-tested"}}
 
 
 def main():

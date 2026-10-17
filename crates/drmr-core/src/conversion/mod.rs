@@ -13,6 +13,7 @@ pub mod key_file;
 pub use aes128::{
     Aes128Key, HlsInputKeys, HlsOutputKey, SegmentIv, decrypt_segment, encrypt_segment,
 };
+mod files;
 mod hls;
 mod keys;
 mod presentation;
@@ -29,8 +30,8 @@ use backend::Backend;
 pub use keys::{ContentKey, InputKeys, OutputKey};
 use serde::Serialize;
 use std::{
-    fs::{self, File, OpenOptions},
-    io::{Read, Write},
+    fs::{self, File},
+    io::Read,
     path::{Component, Path, PathBuf},
     sync::Arc,
     time::Duration,
@@ -265,16 +266,12 @@ fn validate(path: &Path, keys: &InputKeys) -> Result<Inspection, ConversionError
     }
     Ok(report)
 }
-fn workspace() -> Result<tempfile::TempDir, ConversionError> {
-    if !cfg!(unix) {
-        return Err(ConversionError("private-files-not-supported-on-platform"));
-    }
-    tempfile::Builder::new()
-        .prefix("drmr-convert-")
-        .tempdir()
-        .map_err(|_| ConversionError("temporary-workspace-unavailable"))
+fn workspace() -> Result<files::Stage, ConversionError> {
+    files::Stage::new(None)
 }
 fn destination(path: &Path) -> Result<PathBuf, ConversionError> {
+    #[cfg(windows)]
+    files::check_destination(path)?;
     if path
         .components()
         .any(|component| matches!(component, Component::ParentDir))
@@ -307,31 +304,9 @@ fn copy_private(source: &Path, destination: &Path) -> Result<(), ConversionError
     {
         return Err(ConversionError("input-not-regular-or-too-large"));
     }
-    let mut options = OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        options.custom_flags(
-            (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK)
-                .bits()
-                .cast_signed(),
-        );
-    }
-    let source = options
-        .open(source)
-        .map_err(|_| ConversionError("input-unreadable"))?;
+    let source = files::regular_input(source)?;
     validate_held_input(&source)?;
-    let mut output = OpenOptions::new();
-    output.create_new(true).write(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        output.mode(0o600);
-    }
-    let mut output = output
-        .open(destination)
-        .map_err(|_| ConversionError("temporary-file-unavailable"))?;
+    let mut output = files::create_new(destination)?;
     let count = std::io::copy(&mut source.take(MAX_MEDIA_BYTES + 1), &mut output)
         .map_err(|_| ConversionError("media-copy-failed"))?;
     if count > MAX_MEDIA_BYTES {
@@ -340,35 +315,13 @@ fn copy_private(source: &Path, destination: &Path) -> Result<(), ConversionError
     Ok(())
 }
 fn private_file_mode(path: &Path) -> Result<(), ConversionError> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o600))
-            .map_err(|_| ConversionError("private-file-permissions-failed"))?;
-    }
-    Ok(())
+    files::seal(
+        path.parent()
+            .ok_or(ConversionError("private-file-permissions-failed"))?,
+    )
 }
 fn publish(source: &Path, destination: &Path) -> Result<(), ConversionError> {
-    let mut staged = tempfile::NamedTempFile::new_in(
-        destination
-            .parent()
-            .ok_or(ConversionError("output-path-invalid"))?,
-    )
-    .map_err(|_| ConversionError("output-staging-failed"))?;
-    let mut input = File::open(source).map_err(|_| ConversionError("output-staging-failed"))?;
-    std::io::copy(&mut input, staged.as_file_mut())
-        .map_err(|_| ConversionError("output-staging-failed"))?;
-    staged
-        .flush()
-        .map_err(|_| ConversionError("output-staging-failed"))?;
-    staged
-        .as_file()
-        .sync_all()
-        .map_err(|_| ConversionError("output-staging-failed"))?;
-    staged
-        .persist_noclobber(destination)
-        .map_err(|_| ConversionError("output-exists-or-publish-failed"))?;
-    Ok(())
+    files::publish_file(source, destination)
 }
 
 fn validate_held_input(file: &File) -> Result<(), ConversionError> {
