@@ -240,7 +240,21 @@ fn held_directories(path: &Path) -> Result<Vec<File>, ConversionError> {
     Ok(held)
 }
 
-pub(super) fn publish_file(source: &Path, destination: &Path) -> Result<(), ConversionError> {
+pub(super) fn publish_file(
+    source: &Path,
+    destination: &Path,
+    stop: Option<&crate::concurrency::Stop>,
+) -> Result<(), ConversionError> {
+    publish_file_observed(source, destination, stop, |_| {})
+}
+
+fn publish_file_observed(
+    source: &Path,
+    destination: &Path,
+    stop: Option<&crate::concurrency::Stop>,
+    after_copy: impl FnOnce(&Path),
+) -> Result<(), ConversionError> {
+    check_cancelled(stop)?;
     let parent = destination.parent().ok_or(PUBLISH_ERROR)?;
     let stage = Stage::new(Some(parent))?;
     let path = stage.path().join("verified-output");
@@ -250,14 +264,40 @@ pub(super) fn publish_file(source: &Path, destination: &Path) -> Result<(), Conv
     output.flush().map_err(|_| PUBLISH_ERROR)?;
     output.sync_all().map_err(|_| PUBLISH_ERROR)?;
     drop(output);
+    after_copy(&path);
     seal(stage.path())?;
+    check_cancelled(stop)?;
     atomic_move(&path, destination)
 }
 
-pub(super) fn publish_directory(source: &Path, destination: &Path) -> Result<(), ConversionError> {
+pub(super) fn publish_directory(
+    source: &Path,
+    destination: &Path,
+    stop: Option<&crate::concurrency::Stop>,
+) -> Result<(), ConversionError> {
+    publish_directory_observed(source, destination, stop, |_| {})
+}
+
+fn publish_directory_observed(
+    source: &Path,
+    destination: &Path,
+    stop: Option<&crate::concurrency::Stop>,
+    before_seal: impl FnOnce(&Path),
+) -> Result<(), ConversionError> {
+    check_cancelled(stop)?;
+    before_seal(source);
     seal(source)?;
+    check_cancelled(stop)?;
     atomic_move(source, destination)
 }
+fn check_cancelled(stop: Option<&crate::concurrency::Stop>) -> Result<(), ConversionError> {
+    if stop.is_some_and(crate::concurrency::Stop::is_set) {
+        Err(ConversionError("cancelled"))
+    } else {
+        Ok(())
+    }
+}
+
 fn atomic_move(source: &Path, destination: &Path) -> Result<(), ConversionError> {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
@@ -291,6 +331,45 @@ fn atomic_move(source: &Path, destination: &Path) -> Result<(), ConversionError>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cancellation_after_file_copy_prevents_publication_and_preserves_source() {
+        let parent = tempfile::tempdir().unwrap();
+        let source = Stage::new(None).unwrap();
+        let input = source.path().join("input");
+        let bytes = b"verified source bytes";
+        create_new(&input).unwrap().write_all(bytes).unwrap();
+        let destination = parent.path().join("cancelled-result");
+        let stop = crate::concurrency::Stop::new();
+        let result = publish_file_observed(&input, &destination, Some(&stop), |copied| {
+            assert_eq!(std::fs::read(copied).unwrap(), bytes);
+            stop.set();
+        });
+        assert_eq!(result.unwrap_err(), ConversionError("cancelled"));
+        assert!(!destination.exists());
+        assert_eq!(std::fs::read(&input).unwrap(), bytes);
+        assert_eq!(std::fs::read_dir(parent.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn cancellation_during_directory_preparation_preserves_source_and_publishes_nothing() {
+        let parent = tempfile::tempdir().unwrap();
+        let source = Stage::new(None).unwrap();
+        let input = source.path().join("input");
+        let bytes = b"verified directory payload";
+        create_new(&input).unwrap().write_all(bytes).unwrap();
+        let destination = parent.path().join("cancelled-result");
+        let stop = crate::concurrency::Stop::new();
+        let result =
+            publish_directory_observed(source.path(), &destination, Some(&stop), |directory| {
+                assert_eq!(std::fs::read(directory.join("input")).unwrap(), bytes);
+                stop.set();
+            });
+        assert_eq!(result.unwrap_err(), ConversionError("cancelled"));
+        assert!(!destination.exists());
+        assert_eq!(std::fs::read(&input).unwrap(), bytes);
+        assert_eq!(std::fs::read_dir(parent.path()).unwrap().count(), 0);
+    }
 
     #[test]
     fn staged_payload_is_private_before_publication_and_owned_stage_is_cleaned() {
@@ -335,7 +414,7 @@ mod tests {
             if populated {
                 std::fs::write(target.join("sentinel"), b"keep").unwrap();
             }
-            assert!(publish_directory(candidate, &target).is_err());
+            assert!(publish_directory(candidate, &target, None).is_err());
             assert_eq!(
                 std::fs::read(candidate.join("media")).unwrap(),
                 b"candidate"
@@ -351,7 +430,7 @@ mod tests {
             .write_all(b"verified")
             .unwrap();
         let target = parent.path().join("published");
-        publish_directory(stage.path(), &target).unwrap();
+        publish_directory(stage.path(), &target, None).unwrap();
         drop(stage);
         assert_eq!(std::fs::read(target.join("media")).unwrap(), b"verified");
     }
@@ -367,10 +446,10 @@ mod tests {
             .unwrap();
         let target = parent.path().join("result");
         std::fs::write(&target, b"keep").unwrap();
-        assert!(publish_file(&source, &target).is_err());
+        assert!(publish_file(&source, &target, None).is_err());
         assert_eq!(std::fs::read(&target).unwrap(), b"keep");
         std::fs::remove_file(&target).unwrap();
-        publish_file(&source, &target).unwrap();
+        publish_file(&source, &target, None).unwrap();
         assert_eq!(std::fs::read(&target).unwrap(), b"new bytes");
         #[cfg(windows)]
         private_fs::verify(&std::fs::File::open(target).unwrap()).unwrap();

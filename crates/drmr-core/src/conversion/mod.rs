@@ -97,11 +97,11 @@ impl Converter {
     }
     fn publish(&self, source: &Path, destination: &Path) -> Result<(), ConversionError> {
         self.backend.check_cancelled()?;
-        files::publish_file(source, destination)
+        files::publish_file(source, destination, Some(&self.backend.stop))
     }
     fn publish_directory(&self, source: &Path, destination: &Path) -> Result<(), ConversionError> {
         self.backend.check_cancelled()?;
-        files::publish_directory(source, destination)
+        files::publish_directory(source, destination, Some(&self.backend.stop))
     }
     #[must_use]
     pub fn with_ffprobe(mut self, binary: impl Into<String>) -> Self {
@@ -339,7 +339,7 @@ fn private_file_mode(path: &Path) -> Result<(), ConversionError> {
     )
 }
 fn publish(source: &Path, destination: &Path) -> Result<(), ConversionError> {
-    files::publish_file(source, destination)
+    files::publish_file(source, destination, None)
 }
 
 fn validate_held_input(file: &File) -> Result<(), ConversionError> {
