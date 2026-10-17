@@ -506,9 +506,10 @@ fn source_serves_a_file_under_download() {
     let rel = mpd
         .strip_prefix(entry.join("download"))
         .unwrap()
-        .to_str()
-        .unwrap()
-        .to_string();
+        .iter()
+        .map(|part| part.to_str().unwrap())
+        .collect::<Vec<_>>()
+        .join("/");
     assert_eq!(h.client.get(&format!("/source/src1/{rel}")).status, 200);
 }
 
@@ -590,9 +591,10 @@ fn source_serves_old_segments_when_the_entry_directory_name_differs_from_the_ass
     let rel = mpd
         .strip_prefix(entry.join("download"))
         .unwrap()
-        .to_str()
-        .unwrap()
-        .to_string();
+        .iter()
+        .map(|part| part.to_str().unwrap())
+        .collect::<Vec<_>>()
+        .join("/");
     assert_eq!(h.client.get(&format!("/source/alpha/{rel}")).status, 200);
     for blocked in ["keys.env", "asset.json", "../keys.env", "../asset.json"] {
         assert_eq!(

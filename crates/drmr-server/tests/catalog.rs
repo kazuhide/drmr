@@ -168,8 +168,16 @@ fn discover_rejects_keys_in_served_download_tree() {
         let mut descriptor: Value =
             serde_json::from_slice(&std::fs::read(entry.join("asset.json")).unwrap()).unwrap();
         if through_symlink {
-            support::file_link(&keys, &entry.join("keys.env"));
-            descriptor["keys_file"] = json!("keys.env");
+            #[cfg(unix)]
+            {
+                support::file_link(&keys, &entry.join("keys.env"));
+                descriptor["keys_file"] = json!("keys.env");
+            }
+            #[cfg(windows)]
+            {
+                support::directory_link(&entry.join("download"), &entry.join("linked-download"));
+                descriptor["keys_file"] = json!("linked-download/secret.env");
+            }
         } else {
             descriptor["keys_file"] = json!("download/secret.env");
         }
@@ -516,13 +524,12 @@ fn on_skip_reports_an_escaping_reference_by_field() {
         },
     );
     let skipped = skips(&root);
-    assert!(
-        skipped[0]
-            .1
-            .contains("keys_file: path escapes the entry directory"),
-        "{}",
-        skipped[0].1
-    );
+    let expected = if cfg!(windows) {
+        "keys_file: invalid relative path"
+    } else {
+        "keys_file: path escapes the entry directory"
+    };
+    assert!(skipped[0].1.contains(expected), "{}", skipped[0].1);
 }
 
 #[test]
