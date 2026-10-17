@@ -5,6 +5,8 @@ use drmr_core::toolrun::{RunOptions, Secrets, ToolRunner};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+const PYTHON: &str = if cfg!(windows) { "python" } else { "python3" };
+
 #[test]
 fn capture_measurement_worker() {
     let measurement = std::env::var("DRMR_CAPTURE_MEASURE_BYTES").ok();
@@ -12,7 +14,7 @@ fn capture_measurement_worker() {
     let runner = ToolRunner::new(Arc::new(Secrets::new()), Arc::new(NoSink));
     let started = Instant::now();
     let output = runner.run_tool(&[
-        "python3".into(), "-c".into(),
+        PYTHON.into(), "-c".into(),
         "import os,sys; n=int(sys.argv[1]); chunk=b'x'*65536; [(os.write(fd,chunk)) for fd in (1,2) for _ in range(n//len(chunk))]".into(),
         amount.to_string(),
     ], "capture-measurement", &RunOptions { timeout: Some(Duration::from_secs(30)), log_stdout: false, max_output_chars: 0, ..RunOptions::default() });
@@ -42,7 +44,7 @@ fn run_python(
     script: &str,
 ) -> Result<drmr_core::toolrun::Completed, drmr_core::toolrun::ToolError> {
     ToolRunner::new(Arc::new(Secrets::new()), Arc::new(NoSink)).run_tool(
-        &["python3".into(), "-c".into(), script.into()],
+        &[PYTHON.into(), "-c".into(), script.into()],
         "resource-test",
         &RunOptions {
             timeout: Some(Duration::from_secs(5)),
@@ -85,7 +87,7 @@ fn exact_byte_boundaries_are_complete_and_one_extra_byte_fails() {
     let result = runner
         .run_tool(
             &[
-                "python3".into(),
+                PYTHON.into(),
                 "-c".into(),
                 "import sys; sys.stdout.write('abc'); sys.stderr.write('def')".into(),
             ],
@@ -97,7 +99,7 @@ fn exact_byte_boundaries_are_complete_and_one_extra_byte_fails() {
     assert_eq!(result.stderr, b"def");
     let error = runner
         .run_tool(
-            &["python3".into(), "-c".into(), "print('abcd',end='')".into()],
+            &[PYTHON.into(), "-c".into(), "print('abcd',end='')".into()],
             "boundary",
             &options,
         )
@@ -113,7 +115,7 @@ fn escaped_descendant_pipes_do_not_leave_blocked_reader_threads() {
     let runner = ToolRunner::new(Arc::new(Secrets::new()), Arc::new(NoSink));
     let started = Instant::now();
     let error = runner.run_tool(&[
-        "python3".into(), "-c".into(),
+        PYTHON.into(), "-c".into(),
         "import pathlib,subprocess,sys; child=subprocess.Popen([sys.executable,'-c','import time;time.sleep(10)'],start_new_session=True); pathlib.Path(sys.argv[1]).write_text(str(child.pid))".into(),
         pid_file.to_string_lossy().into_owned(),
     ], "inherited-pipes", &RunOptions { timeout: Some(Duration::from_millis(200)), ..RunOptions::default() }).unwrap_err();
@@ -135,7 +137,7 @@ fn inherited_pipes_get_a_close_deadline_even_without_a_command_timeout() {
     let runner = ToolRunner::new(Arc::new(Secrets::new()), Arc::new(NoSink));
     let started = Instant::now();
     let error = runner.run_tool(&[
-        "python3".into(), "-c".into(),
+        PYTHON.into(), "-c".into(),
         "import subprocess,sys; subprocess.Popen([sys.executable,'-c','import time;time.sleep(30)'])".into(),
     ], "inherited-pipes", &RunOptions::default()).unwrap_err();
     assert_eq!(error.kind, "pipe-timeout");

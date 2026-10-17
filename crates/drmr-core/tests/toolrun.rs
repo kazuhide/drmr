@@ -1,7 +1,6 @@
 //! The tool runner and the secret registry against the cases of the fixture cases.
 //! Secrets here are synthetic (the sample IV of the fixtures), never real key material.
-//! The tools run are `sh` (echo, printf, sleep) and `true`: unix only.
-#![cfg(unix)]
+//! Controlled subprocess output uses a native fixture executable on every platform.
 
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, STANDARD_NO_PAD, URL_SAFE};
@@ -19,6 +18,55 @@ const IV: &str = "0f0e0d0c0b0a09080706050403020100";
 
 fn argv(items: &[&str]) -> Vec<String> {
     items.iter().map(ToString::to_string).collect()
+}
+
+struct Response {
+    _directory: tempfile::TempDir,
+    arguments: Vec<String>,
+}
+
+impl std::ops::Deref for Response {
+    type Target = [String];
+    fn deref(&self) -> &Self::Target {
+        &self.arguments
+    }
+}
+
+fn fixture_response(spec: &drmr_test_support::ToolSpec, arguments: &[&str]) -> Response {
+    let directory = tempfile::tempdir().unwrap();
+    let tool = drmr_test_support::install(&directory.path().join("response"), spec).unwrap();
+    let mut command = vec![tool.to_str().unwrap().to_string()];
+    command.extend(arguments.iter().map(|arg| (*arg).to_string()));
+    Response {
+        _directory: directory,
+        arguments: command,
+    }
+}
+
+fn response(stdout: &[u8], stderr: &[u8], exit_code: i32, arguments: &[&str]) -> Response {
+    fixture_response(
+        &drmr_test_support::ToolSpec {
+            stdout: stdout.to_vec(),
+            stderr: stderr.to_vec(),
+            exit_code,
+            ..drmr_test_support::ToolSpec::default()
+        },
+        arguments,
+    )
+}
+
+fn sleeping_response(sleep_ms: u64) -> Response {
+    fixture_response(
+        &drmr_test_support::ToolSpec {
+            sleep_ms,
+            ..drmr_test_support::ToolSpec::default()
+        },
+        &[],
+    )
+}
+
+fn python() -> &'static str {
+    if cfg!(windows) { "python" } else { "python3" }
 }
 
 fn runner() -> (Arc<ToolRunner>, Arc<Collector>, Arc<Secrets>) {
@@ -113,16 +161,12 @@ fn registered_secrets_are_scrubbed_in_every_encoding_from_every_record() {
     // the way mp4dump prints the tenc constant IV.
     let completed = runner
         .run_tool(
-            &argv(&[
-                "sh",
-                "-c",
-                "printf '%s\\n' \"$1\"; printf 'default_constant_IV: [%s]\\n' \"$2\" >&2",
-                "sh",
-                &joined,
-                &spaced,
-                "--iv",
-                IV,
-            ]),
+            &response(
+                format!("{joined}\n").as_bytes(),
+                format!("default_constant_IV: [{spaced}]\n").as_bytes(),
+                0,
+                &[&joined, &spaced, "--iv", IV],
+            ),
             "mp4dump",
             &RunOptions::default(),
         )
@@ -308,11 +352,7 @@ fn output_is_bounded_and_marked_truncated() {
     let (runner, collector, _) = runner();
     let completed = runner
         .run_tool(
-            &argv(&[
-                "sh",
-                "-c",
-                "i=0; while [ $i -lt 300 ]; do printf x; i=$((i+1)); done",
-            ]),
+            &response(&vec![b'x'; 300], b"", 0, &[]),
             "demo",
             &RunOptions {
                 max_output_chars: 100,
@@ -339,11 +379,7 @@ fn output_consumed_as_data_is_not_logged() {
     let (runner, collector, _) = runner();
     let completed = runner
         .run_tool(
-            &argv(&[
-                "sh",
-                "-c",
-                "i=0; while [ $i -lt 10 ]; do printf payload-; printf bytes; i=$((i+1)); done",
-            ]),
+            &response(b"payload-bytes".repeat(10).as_slice(), b"", 0, &[]),
             "ffprobe",
             &RunOptions {
                 text: false,
@@ -372,7 +408,7 @@ fn timeout_and_spawn_failures_raise_tool_errors_without_the_argv() {
     let start = Instant::now();
     let error = runner
         .run_tool(
-            &argv(&["sh", "-c", "exec sleep 5"]),
+            &sleeping_response(5_000),
             "packager",
             &RunOptions {
                 timeout: Some(Duration::from_millis(200)),
@@ -400,7 +436,7 @@ fn timeout_and_spawn_failures_raise_tool_errors_without_the_argv() {
     assert_eq!(records[1]["call_id"], records[0]["call_id"]);
     let error = runner
         .run_tool(
-            &argv(&["sh", "-c", "exec sleep 5"]),
+            &sleeping_response(5_000),
             "packager",
             &RunOptions {
                 timeout: Some(Duration::from_secs(1)),
@@ -434,11 +470,7 @@ fn timeout_and_spawn_failures_raise_tool_errors_without_the_argv() {
     assert_eq!(records[5]["returncode"], Value::Null);
 
     let exit = runner
-        .run_tool(
-            &argv(&["sh", "-c", "exit 3"]),
-            "demo",
-            &RunOptions::default(),
-        )
+        .run_tool(&response(b"", b"", 3, &[]), "demo", &RunOptions::default())
         .unwrap();
     assert_eq!(exit.returncode, Some(3));
     assert_eq!(
@@ -456,7 +488,7 @@ fn a_grandchild_holding_the_pipes_cannot_outlive_the_timeout() {
     let start = Instant::now();
     let error = runner
         .run_tool(
-            &argv(&["sh", "-c", "sleep 3 & exit 0"]),
+            &argv(&[python(), "-c", "import subprocess,sys; subprocess.Popen([sys.executable,'-c','import time;time.sleep(3)'])"]),
             "packager",
             &RunOptions {
                 timeout: Some(Duration::from_millis(500)),
@@ -478,9 +510,12 @@ fn a_grandchild_holding_the_pipes_cannot_outlive_the_timeout() {
 #[test]
 fn text_mode_records_universal_newlines_and_bytes_mode_keeps_them() {
     let (runner, collector, _) = runner();
-    let script = "printf 'a\\r\\nb\\rc'; printf 'x\\r\\n' >&2";
     let completed = runner
-        .run_tool(&argv(&["sh", "-c", script]), "demo", &RunOptions::default())
+        .run_tool(
+            &response(b"a\r\nb\rc", b"x\r\n", 0, &[]),
+            "demo",
+            &RunOptions::default(),
+        )
         .unwrap();
     assert_eq!(completed.stdout, b"a\r\nb\rc", "the caller's bytes are raw");
     let records = collector.records();
@@ -492,7 +527,7 @@ fn text_mode_records_universal_newlines_and_bytes_mode_keeps_them() {
     assert_eq!(records[1]["stderr"], json!("x\n"));
     runner
         .run_tool(
-            &argv(&["sh", "-c", script]),
+            &response(b"a\r\nb\rc", b"x\r\n", 0, &[]),
             "demo",
             &RunOptions {
                 text: false,
@@ -511,9 +546,10 @@ fn text_mode_records_universal_newlines_and_bytes_mode_keeps_them() {
 fn a_per_call_secret_on_the_shown_argv_is_scrubbed_without_argv_redacted() {
     let secret = "cafebabecafebabecafebabecafebabe";
     let (runner, collector, _) = runner();
+    let command = response(b"", b"", 0, &["--key", secret]);
     runner
         .run_tool(
-            &argv(&["sh", "-c", "true", "sh", "--key", secret]),
+            &command,
             "packager",
             &RunOptions {
                 secrets: &[secret],
@@ -523,10 +559,11 @@ fn a_per_call_secret_on_the_shown_argv_is_scrubbed_without_argv_redacted() {
         .unwrap();
     assert_eq!(
         collector.records()[0]["argv"],
-        json!(["sh", "-c", "true", "sh", "--key", REDACTED])
+        json!([command.arguments[0].as_str(), "--key", REDACTED])
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn a_signal_is_recorded_as_a_negative_return_code() {
     let (runner, collector, _) = runner();
@@ -548,7 +585,7 @@ fn run_tool_records_carry_the_rendition_id() {
     let (runner, collector, _) = runner();
     runner
         .run_tool(
-            &argv(&["true"]),
+            &response(b"", b"", 0, &[]),
             "ffmpeg",
             &RunOptions {
                 rendition_id: Some("v001"),
@@ -568,7 +605,7 @@ fn text_output_consumed_as_data_is_noted_in_characters() {
     let (runner, collector, _) = runner();
     runner
         .run_tool(
-            &argv(&["sh", "-c", "printf 'caf\\303\\251 ok'"]),
+            &response("café ok".as_bytes(), b"", 0, &[]),
             "ffprobe",
             &RunOptions {
                 log_stdout: false,
@@ -636,14 +673,14 @@ fn each_command_and_its_output_share_a_call_id() {
     let (runner, collector, _) = runner();
     runner
         .run_tool(
-            &argv(&["sh", "-c", "echo 1"]),
+            &response(b"1\n", b"", 0, &[]),
             "demo",
             &RunOptions::default(),
         )
         .unwrap();
     runner
         .run_tool(
-            &argv(&["sh", "-c", "echo 2"]),
+            &response(b"2\n", b"", 0, &[]),
             "demo",
             &RunOptions::default(),
         )
@@ -703,7 +740,7 @@ fn call_ids_pair_commands_with_their_outputs_across_threads() {
                     let marker = format!("marker-{n}-{k}");
                     runner
                         .run_tool(
-                            &argv(&["sh", "-c", "echo \"$0\"", &marker]),
+                            &response(format!("{marker}\n").as_bytes(), b"", 0, &[&marker]),
                             "demo",
                             &RunOptions::default(),
                         )
@@ -757,14 +794,15 @@ fn command_and_output_records_carry_the_redacted_argv_and_the_per_call_secrets_s
         secret,
         "not registered: the per-call list does it"
     );
-    let script = format!(
-        "echo \"out {secret} ok\"; echo \"err {}\" >&2; exit 3",
-        secret.to_uppercase()
-    );
     let shown = argv(&["sh", "-c", "<script>"]);
     let completed = runner
         .run_tool(
-            &argv(&["sh", "-c", &script]),
+            &response(
+                format!("out {secret} ok\n").as_bytes(),
+                format!("err {}\n", secret.to_uppercase()).as_bytes(),
+                3,
+                &[secret],
+            ),
             "demo",
             &RunOptions {
                 argv_redacted: Some(&shown),
@@ -843,7 +881,7 @@ fn bytes_mode_keeps_the_raw_output_and_decodes_for_the_record_only() {
     let (runner, collector, _) = runner();
     let completed = runner
         .run_tool(
-            &argv(&["sh", "-c", "printf '\\377\\376abc'"]),
+            &response(b"\xff\xfeabc", b"", 0, &[]),
             "demo",
             &RunOptions {
                 text: false,
@@ -872,7 +910,7 @@ fn without_a_sink_nothing_is_emitted_and_tools_run_as_before() {
     let runner = ToolRunner::new(Arc::new(Secrets::new()), Arc::new(NoSink));
     let completed = runner
         .run_tool(
-            &argv(&["sh", "-c", "echo quiet"]),
+            &response(b"quiet\n", b"", 0, &[]),
             "demo",
             &RunOptions::default(),
         )
@@ -896,7 +934,12 @@ fn the_json_lines_writer_serializes_emission_across_threads_and_scrubs_every_lin
                 for _ in 0..3 {
                     runner
                         .run_tool(
-                            &argv(&["sh", "-c", &format!("echo {IV}; echo {IV} >&2")]),
+                            &response(
+                                format!("{IV}\n").as_bytes(),
+                                format!("{IV}\n").as_bytes(),
+                                0,
+                                &[IV],
+                            ),
                             "demo",
                             &RunOptions::default(),
                         )
@@ -968,7 +1011,12 @@ fn debug_output_of_the_secret_holding_types_never_prints_a_secret() {
     let (runner, _, _) = runner();
     let completed = runner
         .run_tool(
-            &argv(&["sh", "-c", &format!("echo {IV}; echo {IV} >&2")]),
+            &response(
+                format!("{IV}\n").as_bytes(),
+                format!("{IV}\n").as_bytes(),
+                0,
+                &[IV],
+            ),
             "mp4dump",
             &RunOptions::default(),
         )
@@ -983,6 +1031,7 @@ fn debug_output_of_the_secret_holding_types_never_prints_a_secret() {
     assert!(!format!("{failed:?}").contains(IV));
 }
 
+#[cfg(unix)]
 #[test]
 fn a_runner_with_its_own_path_looks_bare_names_up_there_and_records_them_bare() {
     // `cli`'s --packager-bin prepends a directory to os.environ["PATH"]: every tool the job
@@ -1020,4 +1069,34 @@ fn runner_without_path() -> (Arc<ToolRunner>, Arc<Collector>, Arc<Secrets>) {
     let (runner, collector, secrets) = runner();
     assert_eq!(runner.path(), None);
     (runner, collector, secrets)
+}
+
+#[cfg(windows)]
+#[test]
+fn a_runner_with_its_own_path_looks_bare_windows_names_up_and_preserves_child_path() {
+    let directory = tempfile::tempdir().unwrap();
+    drmr_test_support::install(
+        &directory.path().join("drmr-path-probe"),
+        &drmr_test_support::ToolSpec::default()
+            .with("stdout_env", "PATH")
+            .with("stdout_env_prefix", "probed ")
+            .with("stdout_env_suffix", "\n"),
+    )
+    .unwrap();
+    let path = directory.path().to_str().unwrap();
+    let collector = Arc::new(Collector::default());
+    let runner = ToolRunner::new(Arc::new(Secrets::new()), collector.clone()).with_path(path);
+    assert_eq!(runner.path(), Some(std::ffi::OsStr::new(path)));
+    let arguments = argv(&["drmr-path-probe"]);
+    let completed = runner
+        .run_tool(&arguments, "probe", &RunOptions::default())
+        .unwrap();
+    assert_eq!(completed.returncode, Some(0));
+    assert_eq!(completed.stdout_text(), format!("probed {path}\n"));
+    assert_eq!(collector.records()[0]["argv"], json!(arguments));
+    let (plain, _, _) = runner_without_path();
+    let error = plain
+        .run_tool(&arguments, "probe", &RunOptions::default())
+        .unwrap_err();
+    assert_eq!((error.tool.as_str(), error.kind), ("probe", "unavailable"));
 }

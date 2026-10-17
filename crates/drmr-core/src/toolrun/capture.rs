@@ -29,12 +29,6 @@ fn prepare_pipe(pipe: &impl std::os::fd::AsFd) -> io::Result<()> {
     Ok(())
 }
 
-#[cfg(not(unix))]
-fn prepare_pipe<T>(_: &T) -> io::Result<()> {
-    // ManagedChild's Windows job forbids breakaway; killing it closes inherited writers.
-    Ok(())
-}
-
 fn read_bounded(mut pipe: impl Read, limit: usize, state: &State, done: u8) -> Vec<u8> {
     let mut bytes = Vec::new();
     let mut chunk = [0_u8; 8192];
@@ -143,10 +137,13 @@ pub(super) fn execute(
     if let Some(path) = path {
         command.env("PATH", path);
     }
-    let mut child = ManagedChild::spawn(command, true)
+    let mut child = ManagedChild::spawn(command, !crate::native::in_asset_worker())
         .map_err(|error| failure("unavailable", format!("could not run: {error}")))?;
     let stdout = child.stdout.take().expect("stdout is piped");
     let stderr = child.stderr.take().expect("stderr is piped");
+    // Windows uses the managed job to close inherited writers. Unix pipes are
+    // nonblocking so a descendant outside the process group cannot retain a reader.
+    #[cfg(unix)]
     prepare_pipe(&stdout)
         .and_then(|()| prepare_pipe(&stderr))
         .map_err(|error| {
