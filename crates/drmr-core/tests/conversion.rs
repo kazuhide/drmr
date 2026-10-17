@@ -546,3 +546,39 @@ fn fragmented_b_frame_input_keeps_its_original_presentation_timeline() {
         .unwrap();
     assert!(report.verification.passed);
 }
+
+#[cfg(unix)]
+#[test]
+fn progressive_aac_with_finite_tail_padding_fails_before_publication() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("source.mp4");
+    let status = std::process::Command::new("ffmpeg")
+        .args([
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:sample_rate=48000",
+            "-t",
+            "1",
+            "-c:a",
+            "aac",
+        ])
+        .arg(&source)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let output = directory.path().join("output.mp4");
+    let failure = converter()
+        .convert_mp4(
+            &source,
+            &output,
+            TargetProtection::Cbcs,
+            &InputKeys::default(),
+            Some(&OutputKey::from_hex(KID_OUT, KEY_OUT).unwrap()),
+        )
+        .unwrap_err();
+    assert_eq!(failure, ConversionError("finite-audio-tail-not-supported"));
+    assert!(!output.exists());
+}

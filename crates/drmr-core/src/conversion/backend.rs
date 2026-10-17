@@ -61,6 +61,7 @@ impl Backend {
         decryption: Option<&InputKeys>,
         encryption: Option<(&OutputKey, TargetProtection)>,
     ) -> Result<(), ConversionError> {
+        super::audio::require_supported_audio(input, 0)?;
         let input = input.to_str().ok_or(ConversionError("unsupported-path"))?;
         let output = output.to_str().ok_or(ConversionError("unsupported-path"))?;
         if input.contains([',', '\n', '\r']) || output.contains([',', '\n', '\r']) {
@@ -115,6 +116,7 @@ impl Backend {
         Ok(())
     }
     pub fn package_hls(&self, input: &Path, output: &Path) -> Result<(), ConversionError> {
+        super::audio::require_supported_audio(input, 0)?;
         let input = input.to_str().ok_or(ConversionError("unsupported-path"))?;
         let output = output.to_str().ok_or(ConversionError("unsupported-path"))?;
         if input.contains(',') || output.contains(',') {

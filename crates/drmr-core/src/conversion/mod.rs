@@ -5,6 +5,7 @@
 //! Shaka's raw-key interface passes keys to its child process as arguments. Records and
 //! errors are redacted, but operating-system process inspection can observe those arguments.
 mod aes128;
+mod audio;
 mod backend;
 pub(crate) mod dash;
 pub mod key_file;
@@ -247,13 +248,7 @@ fn validate(path: &Path, keys: &InputKeys) -> Result<Inspection, ConversionError
     ) {
         return Err(ConversionError("input-protection-not-supported"));
     }
-    if report
-        .findings
-        .iter()
-        .any(|finding| finding.code == "sample-groups-not-verified")
-    {
-        return Err(ConversionError("sample-groups-not-supported"));
-    }
+    audio::validate_sample_groups(path)?;
     if report.protection != Protection::Clear
         && (report.tracks[0].key_ids.is_empty()
             || report.tracks[0].key_ids.iter().any(|id| !keys.contains(id)))
