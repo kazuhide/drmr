@@ -6,7 +6,9 @@
 
 use regex::Regex;
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
+#[cfg(unix)]
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fmt::{self, Write as _};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -471,7 +473,18 @@ impl PurePosixPath {
 
     /// `PurePosixPath(str(path))` of a native path (lossy for a path that is not UTF-8).
     pub fn from_path(path: &Path) -> Self {
-        PurePosixPath::new(&path.to_string_lossy())
+        #[cfg(unix)]
+        let text = path.to_string_lossy();
+        #[cfg(windows)]
+        let text = {
+            let text = path.to_string_lossy().replace('\\', "/");
+            if let Some(unc) = text.strip_prefix("//?/UNC/") {
+                format!("//{unc}")
+            } else {
+                text.strip_prefix("//?/").unwrap_or(&text).to_string()
+            }
+        };
+        PurePosixPath::new(&text)
     }
 
     /// `path.parts`: the root (when there is one), then each part.
@@ -569,6 +582,7 @@ pub enum ResolveError {
 }
 
 /// `posixpath.split`.
+#[cfg(unix)]
 fn posix_split(path: &str) -> (String, String) {
     let index = path.rfind('/').map_or(0, |index| index + 1);
     let (head, tail) = path.split_at(index);
@@ -581,6 +595,7 @@ fn posix_split(path: &str) -> (String, String) {
 }
 
 /// `posixpath.join(path, name)`.
+#[cfg(unix)]
 fn posix_join(path: &str, name: &str) -> String {
     if name.starts_with('/') {
         name.to_string()
@@ -592,6 +607,7 @@ fn posix_join(path: &str, name: &str) -> String {
 }
 
 /// `posixpath.normpath`.
+#[cfg(unix)]
 fn normpath(path: &str) -> String {
     if path.is_empty() {
         return ".".to_string();
@@ -620,10 +636,12 @@ fn normpath(path: &str) -> String {
     }
 }
 
+#[cfg(unix)]
 type Seen = HashMap<String, Option<String>>;
 
 /// `posixpath._joinrealpath` in non-strict mode: symbolic links resolved as they are met,
 /// missing components kept as written, a loop ending the walk with the rest unresolved.
+#[cfg(unix)]
 fn join_realpath(
     mut path: String,
     rest: &str,
@@ -683,6 +701,7 @@ fn join_realpath(
 
 /// `Path(path).resolve` (non-strict, `CPython` 3.11): `os.path.realpath`, made absolute against
 /// the working directory, then a `stat` that turns a symlink loop into an error.
+#[cfg(unix)]
 pub fn resolve(path: &Path) -> Result<PathBuf, ResolveError> {
     let text = path.to_string_lossy();
     let (joined, _) = join_realpath(String::new(), &text, &mut Seen::new())?;
@@ -700,6 +719,12 @@ pub fn resolve(path: &Path) -> Result<PathBuf, ResolveError> {
         return Err(ResolveError::SymlinkLoop(repr_str(&resolved_text)));
     }
     Ok(resolved.to_path_buf())
+}
+
+/// Resolve a native Windows path, retaining missing suffixes and lookup errors.
+#[cfg(windows)]
+pub fn resolve(path: &Path) -> Result<PathBuf, ResolveError> {
+    crate::native::resolve_path(path).map_err(ResolveError::Io)
 }
 
 // ------------------------------------------------------------------------------------------
@@ -730,6 +755,7 @@ const ELOOP: i32 = 40;
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
 const ELOOP: i32 = 62;
 
+#[cfg(unix)]
 fn is_loop(error: &std::io::Error) -> bool {
     error.raw_os_error() == Some(ELOOP)
 }

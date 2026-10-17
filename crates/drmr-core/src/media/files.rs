@@ -74,7 +74,10 @@ fn hevc_codec(conf: &[u8]) -> String {
 /// private mode is this implementation's (private key-file handling).
 pub fn write_raw_key_file(key_hex: &str, dest: &Path) -> Result<PathBuf, MediaError> {
     if let Some(parent) = dest.parent() {
+        #[cfg(unix)]
         std::fs::create_dir_all(parent)?;
+        #[cfg(windows)]
+        crate::native::create_private_dir_all(parent)?;
     }
     let key = python::fromhex(key_hex)?;
     let mut file = open_private(dest)?;
@@ -83,6 +86,12 @@ pub fn write_raw_key_file(key_hex: &str, dest: &Path) -> Result<PathBuf, MediaEr
 }
 
 /// `dest` opened for writing, empty and private (see [`write_raw_key_file`]).
+#[cfg(windows)]
+fn open_private(dest: &Path) -> std::io::Result<std::fs::File> {
+    crate::native::create_private_or_truncate(dest)
+}
+
+#[cfg(unix)]
 fn open_private(dest: &Path) -> std::io::Result<std::fs::File> {
     let mut fresh = std::fs::OpenOptions::new();
     fresh.write(true).create_new(true);

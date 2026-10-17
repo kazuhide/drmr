@@ -117,3 +117,15 @@ fn a_windows_local_path_is_analyzed_and_the_frozen_snapshot_reopens() {
     source::verify_source_snapshot(&restored).unwrap();
     private_fs::verify(&native::open_private_read(&analysis.snapshot_path).unwrap()).unwrap();
 }
+
+#[test]
+fn native_catalog_paths_resolve_and_keep_their_filename_components() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("missing/manifest.mpd");
+    let resolved = drmr_core::pycompat::resolve(&path).unwrap();
+    assert_eq!(resolved, native::resolve_path(&path).unwrap());
+    let pure = drmr_core::pycompat::PurePosixPath::from_path(&resolved);
+    assert_eq!(pure.name(), "manifest.mpd");
+    assert_eq!(pure.parent().name(), "missing");
+    assert_eq!(native::resolve_path(&pure.to_path_buf()).unwrap(), resolved);
+}

@@ -257,5 +257,8 @@ pub fn disk_free(path: &Path) -> io::Result<u64> {
 /// Free bytes available to the current Windows user on the containing volume.
 #[cfg(windows)]
 pub fn disk_free(path: &Path) -> io::Result<u64> {
+    // fs4 queries the containing volume even when its suffix does not exist.
+    // Preserve lookup failures so a missing or inaccessible workspace fails closed.
+    std::fs::metadata(path)?;
     fs4::available_space(path)
 }

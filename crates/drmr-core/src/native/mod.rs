@@ -5,7 +5,8 @@
 
 mod files;
 pub use files::{
-    create_private_dir_all, create_private_dir_new, create_private_new, open_private_read,
+    create_private_dir_all, create_private_dir_new, create_private_new, create_private_or_truncate,
+    open_private_read,
 };
 mod process;
 pub use process::ManagedChild;

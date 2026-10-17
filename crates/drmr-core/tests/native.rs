@@ -31,6 +31,23 @@ fn native_resolution_applies_parent_components_after_resolving_a_link() {
 }
 
 #[test]
+fn private_replacement_validates_before_truncating() {
+    let temp = tempfile::tempdir().unwrap();
+    let directory = temp.path().join("private");
+    native::create_private_dir_all(&directory).unwrap();
+    let path = directory.join("key.bin");
+    native::create_private_new(&path)
+        .unwrap()
+        .write_all(b"old contents")
+        .unwrap();
+    native::create_private_or_truncate(&path)
+        .unwrap()
+        .write_all(b"new")
+        .unwrap();
+    assert_eq!(std::fs::read(path).unwrap(), b"new");
+}
+
+#[test]
 fn private_directory_creation_is_exclusive() {
     let temp = tempfile::tempdir().unwrap();
     let parent = temp.path().join("private");
@@ -147,6 +164,7 @@ fn inherited_access_is_rejected_without_hardening_or_truncation() {
     std::fs::write(&path, b"unchanged").unwrap();
     assert!(native::open_private_read(&path).is_err());
     assert!(native::create_private_new(&path).is_err());
+    assert!(native::create_private_or_truncate(&path).is_err());
     assert_eq!(std::fs::read(&path).unwrap(), b"unchanged");
 }
 
@@ -235,6 +253,7 @@ fn null_acl_and_an_extra_reader_are_rejected_without_repair() {
         )
         .unwrap();
         assert!(native::open_private_read(&path).is_err());
+        assert!(native::create_private_or_truncate(&path).is_err());
         assert_eq!(std::fs::read(&path).unwrap(), b"unchanged");
         // Restore through the same handle so the temporary directory can clean up.
         windows_permissions::wrappers::SetSecurityInfo(

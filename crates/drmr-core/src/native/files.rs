@@ -81,8 +81,24 @@ pub fn create_private_new(path: &Path) -> io::Result<File> {
     }
 }
 
+/// Create a private file, or truncate an existing file only after validating it.
+pub fn create_private_or_truncate(path: &Path) -> io::Result<File> {
+    match create_private_new(path) {
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            let file = open_private(path, true)?;
+            file.set_len(0)?;
+            Ok(file)
+        }
+        result => result,
+    }
+}
+
 /// Open a private regular file without changing its ownership, ACL or contents.
 pub fn open_private_read(path: &Path) -> io::Result<File> {
+    open_private(path, false)
+}
+
+fn open_private(path: &Path, write: bool) -> io::Result<File> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -92,7 +108,7 @@ pub fn open_private_read(path: &Path) -> io::Result<File> {
                 "regular file required",
             ));
         }
-        let file = File::open(path)?;
+        let file = OpenOptions::new().read(true).write(write).open(path)?;
         let metadata = file.metadata()?;
         if !metadata.is_file() || metadata.permissions().mode() & 0o077 != 0 {
             return Err(io::Error::new(
@@ -121,6 +137,7 @@ pub fn open_private_read(path: &Path) -> io::Result<File> {
         // handle. Deny write/delete sharing while the admitted file is being read.
         let file = OpenOptions::new()
             .read(true)
+            .write(write)
             .share_mode(FILE_SHARE_READ)
             .security_qos_flags(SECURITY_IDENTIFICATION)
             .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
