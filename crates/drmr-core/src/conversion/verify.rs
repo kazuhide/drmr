@@ -27,12 +27,25 @@ impl Backend {
         source_key: Option<&ContentKey>,
         result_key: Option<&ContentKey>,
     ) -> Result<VerificationReport, ConversionError> {
-        let packet_payloads_equal =
-            self.hash(source, true, source_key)? == self.hash(result, true, result_key)?;
-        let decoded_content_equal =
-            self.hash(source, false, source_key)? == self.hash(result, false, result_key)?;
-        let packet_timing_equal = self.profile(source)? == self.profile(result)?
-            && self.packets(source)? == self.packets(result)?;
+        self.verify_streams(source, 0, result, 0, source_key, result_key)
+    }
+    pub fn verify_streams(
+        &self,
+        source: &Path,
+        source_index: usize,
+        result: &Path,
+        result_index: usize,
+        source_key: Option<&ContentKey>,
+        result_key: Option<&ContentKey>,
+    ) -> Result<VerificationReport, ConversionError> {
+        let packet_payloads_equal = self.hash_stream(source, source_index, true, source_key)?
+            == self.hash_stream(result, result_index, true, result_key)?;
+        let decoded_content_equal = self.hash_stream(source, source_index, false, source_key)?
+            == self.hash_stream(result, result_index, false, result_key)?;
+        let packet_timing_equal = self.profile_stream(source, source_index)?
+            == self.profile_stream(result, result_index)?
+            && self.packets_stream(source, source_index)?
+                == self.packets_stream(result, result_index)?;
         let passed = packet_payloads_equal && decoded_content_equal && packet_timing_equal;
         Ok(VerificationReport {
             schema_version: 1,

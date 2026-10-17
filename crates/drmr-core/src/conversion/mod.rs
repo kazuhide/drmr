@@ -1,7 +1,8 @@
 //! Local, no-transcode conversion with explicit key roles and independent round-trip checks.
 //!
-//! The first backend route handles one MP4 audio or video track. Unknown protection,
-//! manifest inputs, and unsupported output profiles fail before running a backend.
+//! Qualified local MP4, static DASH, and fragmented-MP4 HLS inputs use fresh source bytes.
+//! Joint DASH/HLS output preserves audio and video without transcoding. MP4 output is
+//! limited to one track. Unknown protection and unsupported presentation features fail closed.
 //! Shaka's raw-key interface passes keys to its child process as arguments. Records and
 //! errors are redacted, but operating-system process inspection can observe those arguments.
 mod aes128;
@@ -14,6 +15,11 @@ pub use aes128::{
 };
 mod hls;
 mod keys;
+mod presentation;
+mod timing;
+pub use presentation::{
+    ConversionRequest, TrackConversionRequest, VerificationRequest, VerificationSource,
+};
 mod verify;
 use crate::{
     inspection::{self, InputFormat, Inspection, Protection, TargetProtection, TrackKind},
@@ -304,11 +310,16 @@ fn copy_private(source: &Path, destination: &Path) -> Result<(), ConversionError
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt as _;
-        options.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits().cast_signed());
+        options.custom_flags(
+            (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK)
+                .bits()
+                .cast_signed(),
+        );
     }
     let source = options
         .open(source)
         .map_err(|_| ConversionError("input-unreadable"))?;
+    validate_held_input(&source)?;
     let mut output = OpenOptions::new();
     output.create_new(true).write(true);
     #[cfg(unix)]
@@ -356,4 +367,35 @@ fn publish(source: &Path, destination: &Path) -> Result<(), ConversionError> {
         .persist_noclobber(destination)
         .map_err(|_| ConversionError("output-exists-or-publish-failed"))?;
     Ok(())
+}
+
+fn validate_held_input(file: &File) -> Result<(), ConversionError> {
+    let metadata = file
+        .metadata()
+        .map_err(|_| ConversionError("input-unreadable"))?;
+    if !metadata.is_file() || metadata.len() > MAX_MEDIA_BYTES {
+        return Err(ConversionError("input-not-regular-or-too-large"));
+    }
+    Ok(())
+}
+#[cfg(all(test, unix))]
+mod snapshot_tests {
+    use super::*;
+    #[test]
+    fn opened_handle_must_be_a_bounded_regular_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let held_directory = File::open(directory.path()).unwrap();
+        assert_eq!(
+            validate_held_input(&held_directory).unwrap_err().0,
+            "input-not-regular-or-too-large"
+        );
+        let path = directory.path().join("sparse");
+        let file = File::create(path).unwrap();
+        validate_held_input(&file).unwrap();
+        file.set_len(MAX_MEDIA_BYTES + 1).unwrap();
+        assert_eq!(
+            validate_held_input(&file).unwrap_err().0,
+            "input-not-regular-or-too-large"
+        );
+    }
 }

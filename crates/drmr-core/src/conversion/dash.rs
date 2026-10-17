@@ -146,7 +146,7 @@ fn integer(text: Option<&str>, default: u64) -> Result<u64, ConversionError> {
 fn sequence(
     templates: &[Node<'_, '_>],
     remaining: usize,
-) -> Result<Vec<(u64, u64)>, ConversionError> {
+) -> Result<Vec<(u64, u64, u64)>, ConversionError> {
     if integer(attribute(templates, "timescale"), 1)? == 0
         || integer(attribute(templates, "presentationTimeOffset"), 0)? != 0
     {
@@ -181,7 +181,7 @@ fn sequence(
             let number = start
                 .checked_add(u64::try_from(values.len()).expect("bounded count"))
                 .ok_or(error("dash-template-number-overflow"))?;
-            values.push((number, end));
+            values.push((number, end, duration));
             end = end
                 .checked_add(duration)
                 .ok_or(error("dash-template-number-overflow"))?;
@@ -211,9 +211,13 @@ fn append(
     stage: &Path,
     output: &mut File,
     total: &mut u64,
+    timing: Option<(&mut super::timing::FragmentClock, (u64, u64, u64))>,
 ) -> Result<(), ConversionError> {
     let piece = stage.join("dash-piece");
     super::copy_private(source, &piece)?;
+    if let Some((clock, (time, duration, scale))) = timing {
+        clock.check_dash(&piece, time, duration, scale)?;
+    }
     let size = piece
         .metadata()
         .map_err(|_| error("media-copy-failed"))?
@@ -301,18 +305,26 @@ fn snapshot_representation(
         &base,
         &expand(initialization, id, bandwidth, values[0].0, values[0].1)?,
     )?;
-    append(&initialization, stage, &mut combined, &mut total)?;
+    append(&initialization, stage, &mut combined, &mut total, None)?;
+    let mut clock = super::timing::FragmentClock::read(&source)?;
+    let scale = integer(attribute(&templates, "timescale"), 1)?;
     let mut seen = HashSet::new();
-    for (number, time) in values {
+    for (number, time, duration) in values {
         let segment = reference(
-            &directory,
+            directory,
             &base,
             &expand(media, id, bandwidth, number, time)?,
         )?;
         if !seen.insert(segment.clone()) {
             return Err(error("dash-repeated-resource-not-supported"));
         }
-        append(&segment, stage, &mut combined, &mut total)?;
+        append(
+            &segment,
+            stage,
+            &mut combined,
+            &mut total,
+            Some((&mut clock, (time, duration, scale))),
+        )?;
     }
     combined
         .sync_all()

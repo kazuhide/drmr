@@ -30,6 +30,8 @@ struct Playlist {
     has_map: bool,
     ended: bool,
     pending_duration: bool,
+    declared_duration: f64,
+    clock: Option<super::timing::FragmentClock>,
     singleton_tags: std::collections::BTreeSet<String>,
 }
 #[derive(Default)]
@@ -37,7 +39,7 @@ struct Cipher<'a> {
     key: Option<&'a Aes128Key>,
     iv: Option<SegmentIv>,
 }
-fn attributes(value: &str) -> Result<crate::m3u8::Attributes, ConversionError> {
+pub(super) fn attributes(value: &str) -> Result<crate::m3u8::Attributes, ConversionError> {
     parse_attributes(value).map_err(|_| ConversionError("hls-invalid-attributes"))
 }
 fn private_new(path: &Path) -> Result<File, ConversionError> {
@@ -52,7 +54,7 @@ fn private_new(path: &Path) -> Result<File, ConversionError> {
         .open(path)
         .map_err(|_| ConversionError("temporary-file-unavailable"))
 }
-fn local_resource(root: &Path, uri: &str) -> Result<PathBuf, ConversionError> {
+pub(super) fn local_resource(root: &Path, uri: &str) -> Result<PathBuf, ConversionError> {
     if uri.is_empty()
         || uri.contains([':', '\\', '?', '#', '\0'])
         || Path::new(uri)
@@ -139,6 +141,14 @@ impl Playlist {
             self.reference.push_str("#EXT-X-KEY:METHOD=NONE\n");
             copied
         };
+        if map {
+            self.clock = Some(super::timing::FragmentClock::read(&plaintext)?);
+        } else {
+            self.clock
+                .as_mut()
+                .ok_or(ConversionError("hls-map-required"))?
+                .check(&plaintext, self.declared_duration)?;
+        }
         let mut input =
             File::open(plaintext).map_err(|_| ConversionError("hls-resource-unreadable"))?;
         std::io::copy(&mut input, &mut self.combined)
@@ -228,6 +238,9 @@ impl Localizer<'_> {
         }
         writeln!(self.playlist.reference, "#EXTINF:{duration},")
             .expect("writing a string cannot fail");
+        self.playlist.declared_duration = duration
+            .parse()
+            .map_err(|_| ConversionError("hls-invalid-duration"))?;
         self.playlist.pending_duration = true;
         Ok(())
     }
@@ -406,6 +419,8 @@ pub(super) fn localize(
         has_map: false,
         ended: false,
         pending_duration: false,
+        declared_duration: 0.0,
+        clock: None,
         singleton_tags: std::collections::BTreeSet::new(),
     };
     let mut localizer = Localizer {
@@ -531,7 +546,16 @@ impl Converter {
         Ok(report)
     }
 }
-fn encrypt_presentation(
+pub(super) fn encrypt_presentation(
+    clear_hls: &Path,
+    stage: &Path,
+    output_key: &HlsOutputKey,
+) -> Result<(), ConversionError> {
+    encrypt_media(clear_hls, stage, output_key)?;
+    super::copy_private(&clear_hls.join("master.m3u8"), &stage.join("master.m3u8"))?;
+    Ok(())
+}
+pub(super) fn encrypt_media(
     clear_hls: &Path,
     stage: &Path,
     output_key: &HlsOutputKey,
@@ -594,10 +618,9 @@ fn encrypt_presentation(
     private_new(&stage.join("media.m3u8"))?
         .write_all(encrypted.as_bytes())
         .map_err(|_| ConversionError("output-staging-failed"))?;
-    super::copy_private(&clear_hls.join("master.m3u8"), &stage.join("master.m3u8"))?;
     Ok(())
 }
-fn publish_directory(source: &Path, destination: &Path) -> Result<(), ConversionError> {
+pub(super) fn publish_directory(source: &Path, destination: &Path) -> Result<(), ConversionError> {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         rustix::fs::renameat_with(

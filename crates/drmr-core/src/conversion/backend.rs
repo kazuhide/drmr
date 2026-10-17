@@ -61,7 +61,17 @@ impl Backend {
         decryption: Option<&InputKeys>,
         encryption: Option<(&OutputKey, TargetProtection)>,
     ) -> Result<(), ConversionError> {
-        super::audio::require_supported_audio(input, 0)?;
+        self.package_stream(input, 0, output, decryption, encryption)
+    }
+    pub fn package_stream(
+        &self,
+        input: &Path,
+        index: usize,
+        output: &Path,
+        decryption: Option<&InputKeys>,
+        encryption: Option<(&OutputKey, TargetProtection)>,
+    ) -> Result<(), ConversionError> {
+        super::audio::require_supported_audio(input, index)?;
         let input = input.to_str().ok_or(ConversionError("unsupported-path"))?;
         let output = output.to_str().ok_or(ConversionError("unsupported-path"))?;
         if input.contains([',', '\n', '\r']) || output.contains([',', '\n', '\r']) {
@@ -70,7 +80,7 @@ impl Backend {
         let mut argv = Zeroizing::new(vec![
             self.packager.clone(),
             "--mp4_reset_initial_composition_offset_to_zero=false".into(),
-            format!("input={input},stream=0,output={output}"),
+            format!("input={input},stream={index},output={output}"),
             "--clear_lead".into(),
             "0".into(),
         ]);
@@ -139,12 +149,21 @@ impl Backend {
         Ok(())
     }
     pub fn profile(&self, path: &Path) -> Result<serde_json::Value, ConversionError> {
+        self.profile_stream(path, 0)
+    }
+    pub fn profile_stream(
+        &self,
+        path: &Path,
+        index: usize,
+    ) -> Result<serde_json::Value, ConversionError> {
         let argv = vec![
             self.ffprobe.clone(),
             "-v".into(),
             "error".into(),
             "-protocol_whitelist".into(),
             "file,crypto".into(),
+            "-select_streams".into(),
+            index.to_string(),
             "-count_packets".into(),
             "-show_entries".into(),
             "stream=index,codec_name,codec_type,time_base,start_pts,duration_ts,nb_read_packets"
@@ -169,6 +188,9 @@ impl Backend {
             return Err(ConversionError("single-track-mp4-required"));
         }
         let stream = &streams[0];
+        if stream["index"].as_u64() != Some(index as u64) {
+            return Err(ConversionError("stream-selector-mismatch"));
+        }
         if !matches!(stream["codec_type"].as_str(), Some("audio" | "video"))
             || !stream["nb_read_packets"]
                 .as_str()
@@ -177,13 +199,7 @@ impl Backend {
             return Err(ConversionError("media-packets-missing"));
         }
         let mut profile = serde_json::Map::new();
-        for name in [
-            "index",
-            "codec_name",
-            "codec_type",
-            "time_base",
-            "nb_read_packets",
-        ] {
+        for name in ["codec_name", "codec_type", "time_base", "nb_read_packets"] {
             profile.insert(
                 name.into(),
                 stream
@@ -194,15 +210,27 @@ impl Backend {
         }
         Ok(serde_json::Value::Object(profile))
     }
-    pub fn packets(&self, path: &Path) -> Result<Vec<(i64, i64, i64)>, ConversionError> {
+    pub fn packets_stream(
+        &self,
+        path: &Path,
+        index: usize,
+    ) -> Result<Vec<(i64, i64, i64)>, ConversionError> {
         // The demuxer itself bounds the emitted packet count; an incomplete presentation fails.
         const MAX_PACKETS: usize = 100_000;
+        let profile = self.profile_stream(path, index)?;
+        let expected = profile["nb_read_packets"]
+            .as_str()
+            .and_then(|s| s.parse::<usize>().ok())
+            .filter(|n| *n <= MAX_PACKETS)
+            .ok_or(ConversionError("packet-evidence-count-limit"))?;
         let argv = vec![
             self.ffprobe.clone(),
             "-v".into(),
             "error".into(),
             "-protocol_whitelist".into(),
             "file,crypto".into(),
+            "-select_streams".into(),
+            index.to_string(),
             "-read_intervals".into(),
             format!("%+#{}", MAX_PACKETS + 1),
             "-show_packets".into(),
@@ -223,13 +251,13 @@ impl Backend {
         let packets = value["packets"]
             .as_array()
             .ok_or(ConversionError("invalid-packet-evidence"))?;
-        if packets.is_empty() || packets.len() > MAX_PACKETS {
+        if packets.is_empty() || packets.len() > MAX_PACKETS || packets.len() != expected {
             return Err(ConversionError("packet-evidence-count-limit"));
         }
         packets
             .iter()
             .map(|packet| {
-                if packet["stream_index"].as_u64() != Some(0) {
+                if packet["stream_index"].as_u64() != Some(index as u64) {
                     return Err(ConversionError("single-track-mp4-required"));
                 }
                 let pts = packet["pts"]
@@ -246,9 +274,10 @@ impl Backend {
             })
             .collect()
     }
-    pub fn hash(
+    pub fn hash_stream(
         &self,
         path: &Path,
+        index: usize,
         copy: bool,
         key: Option<&ContentKey>,
     ) -> Result<String, ConversionError> {
@@ -267,7 +296,7 @@ impl Backend {
                 .ok_or(ConversionError("unsupported-path"))?
                 .into(),
             "-map".into(),
-            "0:0".into(),
+            format!("0:{index}"),
         ];
         let secret = key.map(ContentKey::key_hex);
         if let Some(secret) = &secret {
