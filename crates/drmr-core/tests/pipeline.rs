@@ -1417,11 +1417,17 @@ fn rewrite_asset_manifests_records_extinf_probe_errors_and_emits_local_forms() {
     let calls = fakes.manifests.calls();
     assert!(calls.contains(&format!(
         "rewrite_dash_manifest {} Some(\"http://127.0.0.1:8080/output/local\")",
-        portable_path(&manifests_root.join("local/manifest.example.test/local/dash/manifest.mpd"))
+        manifests_root
+            .join("local")
+            .join("manifest.example.test")
+            .join("local")
+            .join("dash")
+            .join("manifest.mpd")
+            .display()
     )));
     assert!(calls.contains(&format!(
         "rewrite_hls {} Some(\"http://127.0.0.1:8080/output/local\")",
-        portable_path(&manifests_root.join("local"))
+        manifests_root.join("local").display()
     )));
     // The FAIL rows are logged in sorted id order, then the manifests verdict.
     let records = collector.records();

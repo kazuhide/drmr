@@ -528,6 +528,16 @@ fn localize_rewrites_key_to_identity_and_local_file() {
     );
 }
 
+fn localized_fixture_path(path: &str) -> String {
+    let absolute = std::path::absolute(path).unwrap();
+    let text = absolute.to_str().unwrap();
+    if cfg!(windows) {
+        text.replace('\\', "/")
+    } else {
+        text.to_string()
+    }
+}
+
 #[test]
 fn localize_rewrites_segments_to_local_paths() {
     let dir = tempfile::tempdir().unwrap();
@@ -540,8 +550,8 @@ fn localize_rewrites_segments_to_local_paths() {
     assert_eq!(
         segment_lines(&out),
         [
-            "/local/vod.test/t/s/audio/uuid/seg_0.ts",
-            "/local/vod.test/t/s/audio/uuid/seg_1.ts"
+            localized_fixture_path("/local/vod.test/t/s/audio/uuid/seg_0.ts"),
+            localized_fixture_path("/local/vod.test/t/s/audio/uuid/seg_1.ts")
         ]
     );
     assert!(out.contains("#EXT-X-TARGETDURATION:6") && out.contains("#EXT-X-ENDLIST"));
@@ -553,10 +563,15 @@ fn localize_rewrites_ext_x_map_uri() {
     let out =
         localize_hls_media_playlist(SYNTH_FMP4_PLAYLIST, &key_file(dir.path()), fake_resolver)
             .unwrap();
-    assert!(out.contains("#EXT-X-MAP:URI=\"/local/vod.test/t/s/video/uuid/init.mp4\""));
+    assert!(out.contains(&format!(
+        "#EXT-X-MAP:URI=\"{}\"",
+        localized_fixture_path("/local/vod.test/t/s/video/uuid/init.mp4"),
+    )));
     assert_eq!(
         segment_lines(&out),
-        ["/local/vod.test/t/s/video/uuid/seg_0.m4s"]
+        [localized_fixture_path(
+            "/local/vod.test/t/s/video/uuid/seg_0.m4s"
+        )]
     );
 }
 

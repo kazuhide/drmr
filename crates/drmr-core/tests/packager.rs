@@ -1025,6 +1025,10 @@ fn transcrypt_relative_paths_are_spelled_as_pathlib_spells_them() {
     // `_persegment_work`, and `work_dir="."` puts the segment directories at `seg_<i>` — the
     // argv Python builds (no `./` prefix).
     let (_dir, root) = tempdir();
+    // The child uses its current directory as a media workspace. Prepare its
+    // inheritable owner-only policy before native helpers or inputs are created.
+    #[cfg(windows)]
+    drmr_core::native::create_media_dir_all(&root).unwrap();
     std::fs::create_dir(root.join("source")).unwrap();
     std::fs::write(root.join("source/init.mp4"), b"I").unwrap();
     std::fs::write(root.join("source/seg_0.m4s"), b"S").unwrap();
@@ -1045,11 +1049,13 @@ fn transcrypt_relative_paths_are_spelled_as_pathlib_spells_them() {
         ])
         .current_dir(&root)
         .env("DRMR_TEST_PACKAGER_STUB", &bin)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
+        .output()
         .unwrap();
-    assert!(status.success());
+    assert!(
+        status.status.success(),
+        "relative-path child failed: {}",
+        String::from_utf8_lossy(&status.stderr)
+    );
     let oracle: Value = serde_json::from_slice(
         &std::fs::read(
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/packager.oracle.json"),
