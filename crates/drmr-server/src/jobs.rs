@@ -38,6 +38,9 @@ pub enum JobError {
     /// The log file or the child could not be created (`OSError`).
     #[error("job launch failed")]
     Launch(#[source] std::io::Error),
+    /// Process-tree cleanup failed; the execution lease remains held.
+    #[error("cleanup-unconfirmed")]
+    CleanupUnconfirmed,
 }
 
 /// `_ensure_jsonl(line)`: a line that is valid JSON as it is, otherwise a synthetic
@@ -70,24 +73,74 @@ struct State {
     process: Option<ManagedChild>,
     log_file: Option<File>,
     exit_code: Option<i32>,
+    cleanup_unconfirmed: bool,
     /// Exit codes of jobs that finished and were replaced as the current job.
     finished: HashMap<String, i32>,
 }
 
 impl State {
-    /// `_refresh()`: observe the current child's exit (and close the parent's log handle).
-    fn refresh(&mut self) {
+    /// Observe an exit, retaining ownership until process-tree cleanup is confirmed.
+    fn refresh(&mut self) -> Result<(), JobError> {
+        self.refresh_with(
+            |child| observed_exit(&child.try_wait()),
+            ManagedChild::finish,
+        )
+    }
+
+    fn refresh_with(
+        &mut self,
+        observe: impl FnOnce(&mut ManagedChild) -> Option<i32>,
+        finish: impl FnOnce(&mut ManagedChild) -> std::io::Result<()>,
+    ) -> Result<(), JobError> {
+        self.check_cleanup()?;
         if self.exit_code.is_none()
             && let Some(child) = self.process.as_mut()
+            && let Some(code) = observe(child)
         {
-            let code = observed_exit(&child.try_wait());
-            if code.is_some() {
-                // Finish ownership of descendants before publishing a terminal state.
-                self.process = None;
-                self.exit_code = code;
-                self.log_file = None;
-            }
+            let cleanup = finish(child);
+            self.complete(code, &cleanup)?;
         }
+        Ok(())
+    }
+
+    fn stop(&mut self) -> Result<(), JobError> {
+        self.stop_with(ManagedChild::finish)
+    }
+
+    fn stop_with(
+        &mut self,
+        finish: impl FnOnce(&mut ManagedChild) -> std::io::Result<()>,
+    ) -> Result<(), JobError> {
+        self.check_cleanup()?;
+        if let Some(child) = self.process.as_mut() {
+            let cleanup = finish(child);
+            let code = if cleanup.is_ok() {
+                observed_exit(&child.try_wait()).unwrap_or(1)
+            } else {
+                1
+            };
+            self.complete(code, &cleanup)?;
+        }
+        Ok(())
+    }
+
+    fn check_cleanup(&self) -> Result<(), JobError> {
+        if self.cleanup_unconfirmed {
+            Err(JobError::CleanupUnconfirmed)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn complete(&mut self, code: i32, cleanup: &std::io::Result<()>) -> Result<(), JobError> {
+        if cleanup.is_err() {
+            self.cleanup_unconfirmed = true;
+            return Err(JobError::CleanupUnconfirmed);
+        }
+        self.process = None;
+        self.exit_code = Some(code);
+        self.log_file = None;
+        Ok(())
     }
 
     fn busy(&self) -> bool {
@@ -167,6 +220,7 @@ impl ConversionJobManager {
                 process: None,
                 log_file: None,
                 exit_code: None,
+                cleanup_unconfirmed: false,
                 finished: HashMap::new(),
             }),
             #[cfg(windows)]
@@ -196,7 +250,7 @@ impl ConversionJobManager {
     /// key material in a fresh environment.
     pub fn submit(&self, entry: &CatalogEntry, output_root: &Path) -> Result<JobHandle, JobError> {
         let mut state = self.lock();
-        state.refresh();
+        state.refresh()?;
         if state.busy() {
             return Err(JobError::AlreadyRunning);
         }
@@ -237,7 +291,7 @@ impl ConversionJobManager {
         env: &[(OsString, OsString)],
     ) -> Result<JobHandle, JobError> {
         let mut state = self.lock();
-        state.refresh();
+        state.refresh()?;
         if state.busy() {
             return Err(JobError::AlreadyRunning);
         }
@@ -284,7 +338,7 @@ impl ConversionJobManager {
     /// `is_busy()`: the lease is taken.
     pub fn is_busy(&self) -> bool {
         let mut state = self.lock();
-        state.refresh();
+        let _ = state.refresh();
         state.busy()
     }
 
@@ -294,7 +348,7 @@ impl ConversionJobManager {
         let exit_code = {
             let mut state = self.lock();
             if state.current_job_id.as_deref() == Some(job_id) {
-                state.refresh();
+                state.refresh()?;
                 state.exit_code
             } else if let Some(code) = state.finished.get(job_id) {
                 Some(*code)
@@ -315,23 +369,20 @@ impl ConversionJobManager {
     }
 
     /// `_job_has_exited(job_id)`: a job replaced as the current one has necessarily exited.
-    fn job_has_exited(&self, job_id: &str) -> bool {
+    fn job_has_exited(&self, job_id: &str) -> Result<bool, TailError> {
         let mut state = self.lock();
         if state.current_job_id.as_deref() != Some(job_id) {
-            return true;
+            return Ok(true);
         }
-        state.refresh();
-        state.exit_code.is_some()
+        state.refresh().map_err(|_| TailError::CleanupUnconfirmed)?;
+        Ok(state.exit_code.is_some())
     }
 
     /// Stop the current child (used by the tests to clean up a job that never ends).
     pub fn kill_current(&self) {
         let mut state = self.lock();
-        if let Some(child) = state.process.as_mut() {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
-        state.refresh();
+        // A failed cleanup remains visible through status and keeps the lease occupied.
+        let _ = state.stop();
     }
 
     /// `read_log(job_id)`: every record of a persisted log, without liveness, for a job this
@@ -353,7 +404,7 @@ impl ConversionJobManager {
     pub fn tail_log(&self, job_id: &str, poll_interval: Duration) -> Result<TailLog<'_>, JobError> {
         let handle = self.status(job_id)?;
         let job_id = job_id.to_string();
-        Ok(TailLog::new(
+        Ok(TailLog::checked(
             handle.log_path,
             poll_interval,
             Box::new(move || self.job_has_exited(&job_id)),
@@ -430,12 +481,15 @@ pub enum TailError {
     /// Strict UTF-8 decoding failed (`UnicodeDecodeError`).
     #[error("job log is not UTF-8")]
     Decode,
+    /// The writer's process-tree cleanup could not be confirmed.
+    #[error("cleanup-unconfirmed")]
+    CleanupUnconfirmed,
 }
 
 /// The iterator `tail_log` returns: blocking, polling the file every `poll_interval`.
 pub struct TailLog<'a> {
     /// `_job_has_exited(job_id)`: asked only after a read found nothing new.
-    has_exited: Box<dyn FnMut() -> bool + Send + 'a>,
+    has_exited: Box<dyn FnMut() -> Result<bool, TailError> + Send + 'a>,
     log_path: PathBuf,
     poll_interval: Duration,
     file: Option<File>,
@@ -455,6 +509,15 @@ impl<'a> TailLog<'a> {
         log_path: PathBuf,
         poll_interval: Duration,
         has_exited: Box<dyn FnMut() -> bool + Send + 'a>,
+    ) -> Self {
+        let mut has_exited = has_exited;
+        Self::checked(log_path, poll_interval, Box::new(move || Ok(has_exited())))
+    }
+
+    fn checked(
+        log_path: PathBuf,
+        poll_interval: Duration,
+        has_exited: Box<dyn FnMut() -> Result<bool, TailError> + Send + 'a>,
     ) -> Self {
         TailLog {
             has_exited,
@@ -538,11 +601,17 @@ impl Iterator for TailLog<'_> {
                 }
                 return None;
             }
-            if (self.has_exited)() {
-                // The file is final, but the child may have written between the read above and
-                // this check: read once more before stopping.
-                self.exited = true;
-                continue;
+            match (self.has_exited)() {
+                Ok(true) => {
+                    // Drain the final writes only after ownership cleanup succeeded.
+                    self.exited = true;
+                    continue;
+                }
+                Ok(false) => {}
+                Err(error) => {
+                    self.done = true;
+                    return Some(Err(error));
+                }
             }
             std::thread::sleep(self.poll_interval);
         }
@@ -553,6 +622,123 @@ impl Iterator for TailLog<'_> {
 mod tests {
     use super::*;
     use std::io::Write as _;
+
+    fn state_with_child(root: &Path) -> State {
+        let executable = drmr_test_support::install(
+            &root.join("child"),
+            &drmr_test_support::ToolSpec {
+                sleep_ms: 60_000,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        State {
+            current_job_id: Some("job".into()),
+            process: Some(ManagedChild::spawn(Command::new(executable), true).unwrap()),
+            log_file: Some(File::create(root.join("job.jsonl")).unwrap()),
+            exit_code: None,
+            cleanup_unconfirmed: false,
+            finished: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn an_exit_requires_confirmed_cleanup_before_releasing_the_lease() {
+        for code in [0, 7] {
+            let root = tempfile::tempdir().unwrap();
+            let mut state = state_with_child(root.path());
+            let result = state.refresh_with(
+                |_| Some(code),
+                |_| Err(std::io::Error::other("sensitive diagnostic")),
+            );
+            assert!(matches!(result, Err(JobError::CleanupUnconfirmed)));
+            assert_eq!(result.unwrap_err().to_string(), "cleanup-unconfirmed");
+            assert!(state.busy());
+            assert!(state.process.is_some());
+            assert!(state.log_file.is_some());
+            assert_eq!(state.exit_code, None);
+            assert!(state.finished.is_empty());
+            assert!(matches!(
+                state.refresh_with(
+                    |_| panic!("must not poll again"),
+                    |_| panic!("must not retry")
+                ),
+                Err(JobError::CleanupUnconfirmed)
+            ));
+            assert!(matches!(
+                state.stop_with(|_| panic!("must not retry cleanup")),
+                Err(JobError::CleanupUnconfirmed)
+            ));
+            let manager = ConversionJobManager::new(
+                &root.path().join("jobs"),
+                Vec::new(),
+                std::sync::Arc::new(Vec::new),
+            )
+            .unwrap();
+            *manager.lock() = state;
+            assert!(manager.is_busy());
+            assert!(matches!(
+                manager.status("job"),
+                Err(JobError::CleanupUnconfirmed)
+            ));
+            assert!(matches!(
+                manager.submit_command(&[], &[]),
+                Err(JobError::CleanupUnconfirmed)
+            ));
+            assert!(matches!(
+                manager.tail_log("job", Duration::ZERO),
+                Err(JobError::CleanupUnconfirmed)
+            ));
+        }
+    }
+
+    #[test]
+    fn a_requested_stop_retains_ownership_when_cleanup_fails() {
+        let root = tempfile::tempdir().unwrap();
+        let mut state = state_with_child(root.path());
+        assert!(matches!(
+            state.stop_with(|_| Err(std::io::Error::other("private failure"))),
+            Err(JobError::CleanupUnconfirmed)
+        ));
+        assert!(state.busy());
+        assert!(state.process.is_some());
+        assert!(state.log_file.is_some());
+        assert_eq!(state.exit_code, None);
+    }
+
+    #[test]
+    fn confirmed_cleanup_preserves_the_observed_exit_code() {
+        for code in [0, 7] {
+            let root = tempfile::tempdir().unwrap();
+            let mut state = state_with_child(root.path());
+            state
+                .refresh_with(|_| Some(code), ManagedChild::finish)
+                .unwrap();
+            assert!(!state.busy());
+            assert!(state.process.is_none());
+            assert!(state.log_file.is_none());
+            assert_eq!(state.exit_code, Some(code));
+        }
+    }
+
+    #[test]
+    fn a_tail_reports_unconfirmed_cleanup_without_a_done_transition() {
+        let root = tempfile::tempdir().unwrap();
+        let private = root.path().join("private");
+        native::create_private_dir_all(&private).unwrap();
+        let log = private.join("job.jsonl");
+        native::create_private_new(&log).unwrap();
+        let mut tail = TailLog::checked(
+            log,
+            Duration::ZERO,
+            Box::new(|| Err(TailError::CleanupUnconfirmed)),
+        );
+        let error = tail.next().unwrap().unwrap_err();
+        assert!(matches!(error, TailError::CleanupUnconfirmed));
+        assert_eq!(error.to_string(), "cleanup-unconfirmed");
+        assert!(!tail.exited);
+        assert!(tail.next().is_none());
+    }
 
     #[cfg(windows)]
     #[test]
