@@ -7,9 +7,9 @@ use super::{
     AssetWorkItem, AttemptError, BatchConfig, BatchError, HlsSource, RunError, TRANSIENT_SOURCE,
     classify, commands, is_output_key, private_config, run_commands,
 };
-use crate::batch_support::{
-    as_uri, is_relative_to, py_splitlines, py_strip, resolve, unquote, urljoin, urlsplit,
-};
+#[cfg(unix)]
+use crate::batch_support::is_relative_to;
+use crate::batch_support::{as_uri, py_splitlines, py_strip, resolve, unquote, urljoin, urlsplit};
 use crate::m3u8::parse_attributes;
 use crate::storage::{ObjectRef, StorageError};
 use serde_json::Value;
@@ -73,16 +73,32 @@ pub fn source_overlaps_output(url: &str, config: &BatchConfig) -> Result<bool, A
         #[cfg(windows)]
         let local = crate::source::pypath::from_file_uri(url).map_err(|_| AttemptError::Other)?;
         let local = resolve(&local).map_err(|_| AttemptError::Other)?;
-        if is_relative_to(
-            &local,
-            &resolve(&config.output_root).map_err(|_| AttemptError::Other)?,
-        ) {
-            return Ok(true);
+        #[cfg(unix)]
+        {
+            if is_relative_to(
+                &local,
+                &resolve(&config.output_root).map_err(|_| AttemptError::Other)?,
+            ) {
+                return Ok(true);
+            }
+            return Ok(config
+                .storage
+                .root()
+                .is_some_and(|root| is_relative_to(&local, &root.join(&config.output_prefix))));
         }
-        return Ok(config
-            .storage
-            .root()
-            .is_some_and(|root| is_relative_to(&local, &root.join(&config.output_prefix))));
+        #[cfg(windows)]
+        {
+            if super::local_path_is_within(&local, &config.output_root)? {
+                return Ok(true);
+            }
+            return match config.storage.root() {
+                Some(root) => Ok(super::local_path_is_within(
+                    &local,
+                    &root.join(&config.output_prefix),
+                )?),
+                None => Ok(false),
+            };
+        }
     }
     if !matches!(parsed.scheme.as_str(), "https" | "http") {
         return Ok(false);

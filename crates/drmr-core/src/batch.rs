@@ -1529,22 +1529,29 @@ pub(crate) fn is_output_key(key: &str, config: &BatchConfig) -> Result<bool, Sto
         let invalid = || StorageError::new("storage-path-invalid");
         crate::native::validate_windows_relative_path(key).map_err(|_| invalid())?;
         crate::native::validate_windows_relative_path(prefix).map_err(|_| invalid())?;
-        let output = match same_file::Handle::from_path(root.join(prefix)) {
-            Ok(handle) => handle,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        return local_path_is_within(&root.join(key), &root.join(prefix));
+    }
+    Ok(false)
+}
+
+/// Compare an existing local directory with a path's existing ancestor identities.
+#[cfg(windows)]
+pub(crate) fn local_path_is_within(path: &Path, directory: &Path) -> Result<bool, StorageError> {
+    let invalid = || StorageError::new("storage-path-invalid");
+    let directory = match same_file::Handle::from_path(directory) {
+        Ok(handle) => handle,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(_) => return Err(invalid()),
+    };
+    for (depth, ancestor) in path.ancestors().enumerate() {
+        if depth >= 256 {
+            return Err(invalid());
+        }
+        match same_file::Handle::from_path(ancestor) {
+            Ok(handle) if handle == directory => return Ok(true),
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(_) => return Err(invalid()),
-        };
-        let source = root.join(key);
-        for ancestor in source.ancestors() {
-            match same_file::Handle::from_path(ancestor) {
-                Ok(handle) if handle == output => return Ok(true),
-                Ok(_) => {}
-                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-                Err(_) => return Err(invalid()),
-            }
-            if ancestor == root {
-                break;
-            }
         }
     }
     Ok(false)

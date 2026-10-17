@@ -1734,6 +1734,8 @@ fn an_analysis_record_that_is_not_an_object_escapes_commands_unclassified() {
     let analysis = config.output_root.join("a/clear/source/analysis.json");
     let work = AssetWorkItem::new("a", "hls-clear", None, None).unwrap();
     let stage = fixture.temp.path().join("stage");
+    #[cfg(windows)]
+    drmr_core::native::create_private_dir_all(&config.output_root).unwrap();
     write(&analysis, b"[]");
     assert_eq!(
         commands(&work, &config, &stage, &DefaultHlsSource).unwrap_err(),
@@ -2769,6 +2771,8 @@ fn the_private_configuration_travels_over_stdin_only() {
 fn every_attempt_starts_from_clean_scratch_and_keeps_a_frozen_clear_source() {
     let fixture = fixture();
     let asset = fixture.config.output_root.join("h");
+    #[cfg(windows)]
+    drmr_core::native::create_private_dir_all(&fixture.config.output_root).unwrap();
     write(&asset.join("clear/source/analysis.json"), b"{}");
     write(&asset.join("clear/_work/x"), b"scratch");
     write(&asset.join("cbcs/old.m4s"), b"stale");
@@ -2921,4 +2925,48 @@ fn local_batch_rejects_case_aliased_media_graphs_before_output_deletion() {
     );
     assert_eq!(std::fs::read(&source).unwrap(), b"original-source");
     assert!(!config.resume_log.exists());
+}
+
+#[cfg(windows)]
+#[test]
+fn local_file_urls_reject_output_prefix_and_scratch_directory_aliases() {
+    let fixture = fixture();
+    for source in [
+        fixture.root().join("OUTPUT/a/segment.ts"),
+        fixture.temp.path().join("OUT/a/segment.ts"),
+    ] {
+        write(&source, b"original-source");
+        let url = drmr_core::batch_support::as_uri(&source).unwrap();
+        assert!(source_overlaps_output(&url, &fixture.config).unwrap());
+        assert_eq!(std::fs::read(source).unwrap(), b"original-source");
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn local_hls_file_url_aliases_are_rejected_before_any_source_is_deleted() {
+    for child_playlist in [false, true] {
+        let fixture = fixture();
+        let roots = json!([fixture.temp.path().display().to_string()]);
+        let (config, inputs) = local_clear_source(&fixture, &json!({"allowed_local_roots": roots}));
+        let source = fixture.root().join("OUTPUT/a/original.m3u8");
+        write(&source, b"original-source-never-delete");
+        let alias = fixture.root().join("output/a/original.m3u8");
+        let owned = drmr_core::batch_support::as_uri(&alias).unwrap();
+        let playlist = if child_playlist {
+            format!("#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\n{owned}\n")
+        } else {
+            format!("#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXTINF:6,\n{owned}\n#EXT-X-ENDLIST\n")
+        };
+        write(&inputs.join("media.m3u8"), playlist);
+        assert_eq!(
+            run(&clear_item(), &config, &fail, &Seams::default()).unwrap_err(),
+            RunError::Batch(BatchError::unsafe_source_graph("source-output-overlap"))
+        );
+        assert_eq!(
+            std::fs::read(&source).unwrap(),
+            b"original-source-never-delete"
+        );
+        assert!(!config.resume_log.exists());
+    }
 }
