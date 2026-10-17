@@ -1,8 +1,4 @@
 //! Shaka Packager arguments, secret scrubbing, segment numbering, and failure handling.
-#![cfg(unix)]
-
-#[path = "common/executable.rs"]
-mod executable;
 
 use drmr_core::config::KeyMaterial;
 use drmr_core::events::{Collector, NoSink, Record};
@@ -14,8 +10,6 @@ use drmr_core::packager::{
 use drmr_core::toolrun::{REDACTED, Secrets, ToolRunner};
 use serde_json::Value;
 use std::collections::BTreeMap;
-use std::fmt::Write as _;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -50,55 +44,19 @@ fn tempdir() -> (tempfile::TempDir, PathBuf) {
 
 // ---- the stub packager ------------------------------------------------------------------------
 
-fn python3_available() -> bool {
-    std::process::Command::new("python3")
-        .arg("--version")
-        .output()
-        .is_ok_and(|output| output.status.success())
-}
-
-/// Locate the stub packager and make it executable only when necessary.
-/// Changing permissions requires ownership of the fixture file.
-fn stub_script() -> PathBuf {
-    let stub = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/stub_packager.py")
-        .canonicalize()
-        .unwrap();
-    let mode = std::fs::metadata(&stub).unwrap().permissions().mode();
-    if mode & 0o111 == 0 {
-        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
-    stub
-}
-
-macro_rules! require_stub {
-    () => {
-        if !python3_available() {
-            eprintln!("skipped: python3 not on PATH (tests/fixtures/stub_packager.py needs it)");
-            return;
-        }
-    };
-}
-
-/// A wrapper at `path` that clears the stub's variables, sets `env` and runs the stub: the
-/// stub configuration supplied separately for each test.
+/// A native fixture with per-invocation configuration; no process environment is changed.
 fn stub_at(path: &Path, env: &[(&str, &str)]) -> String {
-    let quote = |text: &str| format!("'{}'", text.replace('\'', "'\\''"));
-    let mut script = String::from(
-        "#!/bin/sh\nunset STUB_PACKAGER_ARGV_FILE STUB_PACKAGER_ARGV_DIR STUB_PACKAGER_STDERR \
-         STUB_PACKAGER_EXIT STUB_PACKAGER_HANG STUB_PACKAGER_SEGMENT_COUNT\n",
-    );
+    let mut spec = drmr_test_support::ToolSpec {
+        mode: drmr_test_support::Mode::Packager,
+        ..Default::default()
+    };
     for (name, value) in env {
-        writeln!(script, "{name}={}; export {name}", quote(value)).unwrap();
+        spec = spec.with(*name, *value);
     }
-    writeln!(
-        script,
-        "exec {} \"$@\"",
-        quote(&stub_script().to_string_lossy())
-    )
-    .unwrap();
-    executable::write_executable(path, script);
-    path.to_string_lossy().into_owned()
+    drmr_test_support::install(path, &spec)
+        .unwrap()
+        .to_string_lossy()
+        .into_owned()
 }
 
 /// A stub wrapper in its own directory under `root`.
@@ -277,7 +235,6 @@ fn merge_segments_reads_paths_as_pathlib_spells_them() {
 
 #[test]
 fn decrypt_cenc_argv_shape() {
-    require_stub!();
     let (_dir, root) = tempdir();
     let argv_file = root.join("recorded_argv.txt");
     let (packager, _) = packager(&stub(
@@ -311,7 +268,6 @@ fn decrypt_cenc_argv_shape() {
 fn encrypt_cbcs_emits_source_derived_segment_duration() {
     // The duration is a required argument (the signature is checked by the
     // compile_fail example on `Packager::encrypt_cbcs`); 6 s from the source, never 4.
-    require_stub!();
     let (_dir, root) = tempdir();
     let argv_file = root.join("argv.txt");
     let (packager, _) = packager(&stub(
@@ -331,7 +287,6 @@ fn encrypt_cbcs_emits_source_derived_segment_duration() {
 fn encrypt_cbcs_emits_clear_lead_zero() {
     // Shaka's --clear_lead defaults to 5 s (< the 6 s segment): without 0 the whole first
     // segment of every rendition would stay in the clear.
-    require_stub!();
     let (_dir, root) = tempdir();
     let argv_file = root.join("argv.txt");
     let (packager, _) = packager(&stub(
@@ -345,7 +300,6 @@ fn encrypt_cbcs_emits_clear_lead_zero() {
 #[test]
 fn encrypt_cbcs_forwards_iv() {
     // : the explicit --iv is the configured 16-byte IV.
-    require_stub!();
     let (_dir, root) = tempdir();
     let argv_file = root.join("argv.txt");
     let (packager, _) = packager(&stub(
@@ -359,7 +313,6 @@ fn encrypt_cbcs_forwards_iv() {
 #[test]
 fn encrypt_cbcs_argv_is_deterministic_across_runs() {
     // At the argument layer: a fixed --iv makes two runs identical.
-    require_stub!();
     let (_dir, root) = tempdir();
     let argv_file = root.join("argv.txt");
     let (packager, _) = packager(&stub(
@@ -375,7 +328,6 @@ fn encrypt_cbcs_argv_is_deterministic_across_runs() {
 #[test]
 fn encrypt_cbcs_forwards_kid_and_uses_cbcs_scheme() {
     // : the KID unchanged; the scheme is cbcs, not cenc.
-    require_stub!();
     let (_dir, root) = tempdir();
     let argv_file = root.join("argv.txt");
     let (packager, _) = packager(&stub(
@@ -393,7 +345,6 @@ fn encrypt_cbcs_forwards_kid_and_uses_cbcs_scheme() {
 fn encrypt_cbcs_forwards_pssh_concatenated() {
     // : the caller's boxes concatenated verbatim into one --pssh value;
     // --protection_systems never.
-    require_stub!();
     let (_dir, root) = tempdir();
     let argv_file = root.join("argv.txt");
     let (packager, _) = packager(&stub(
@@ -409,7 +360,6 @@ fn encrypt_cbcs_forwards_pssh_concatenated() {
 #[test]
 fn encrypt_cbcs_omits_pssh_when_none_or_empty() {
     // Python's None and [] are both the empty slice here; [""] still emits an empty --pssh.
-    require_stub!();
     let (_dir, root) = tempdir();
     let argv_file = root.join("argv.txt");
     let (packager, _) = packager(&stub(
@@ -426,7 +376,6 @@ fn encrypt_cbcs_omits_pssh_when_none_or_empty() {
 
 #[test]
 fn encrypt_cbcs_never_emits_protection_systems() {
-    require_stub!();
     let (_dir, root) = tempdir();
     let argv_file = root.join("argv.txt");
     let (packager, _) = packager(&stub(
@@ -442,7 +391,6 @@ fn argv_matches_python_byte_for_byte() {
     // Every builder against the argv Python built for the same paths: path normalization
     // (`str(Path(...))` on the descriptors, the segment template as given), the duration text,
     // the pssh concatenation, the redaction positions.
-    require_stub!();
     let (_dir, root) = tempdir();
     let oracle: Value = serde_json::from_slice(
         &std::fs::read(
@@ -662,7 +610,6 @@ fn renumber_matches_python_on_every_case() {
 
 #[test]
 fn argv_redacted_hides_key_and_iv() {
-    require_stub!();
     for mode in ["decrypt", "encrypt"] {
         let (_dir, root) = tempdir();
         let (packager, _) = packager(&stub(&root, &[]));
@@ -688,7 +635,6 @@ fn argv_redacted_hides_key_and_iv() {
 
 #[test]
 fn stderr_tail_is_scrubbed_of_key_and_iv() {
-    require_stub!();
     let (_dir, root) = tempdir();
     let (packager, _) = packager(&stub(&root, &[("STUB_PACKAGER_STDERR", "echo_argv")]));
     let result = encrypt(&packager, &root, &[]).unwrap();
@@ -699,7 +645,6 @@ fn stderr_tail_is_scrubbed_of_key_and_iv() {
 
 #[test]
 fn nonzero_returncode_is_returned_not_raised_and_scrubbed() {
-    require_stub!();
     let (_dir, root) = tempdir();
     let (packager, _) = packager(&stub(
         &root,
@@ -716,7 +661,6 @@ fn nonzero_returncode_is_returned_not_raised_and_scrubbed() {
 
 #[test]
 fn stderr_tail_is_the_last_4000_characters_after_the_scrub() {
-    require_stub!();
     let (_dir, root) = tempdir();
     // A secret straddling the tail boundary must not survive: the scrub runs first.
     let noise = format!("{}{VALID_KEY}{}END", "x".repeat(5000), "y".repeat(3990));
@@ -744,7 +688,6 @@ fn assert_secret_free_error(error: &PackagerError) {
 #[test]
 fn timeout_raises_error_with_no_secret_in_message_or_debug() {
     // (b): the timeout is a scrubbed PackagerError with no cause behind it.
-    require_stub!();
     let (_dir, root) = tempdir();
     let (packager, _) = packager(&stub(&root, &[("STUB_PACKAGER_HANG", "1")]));
     let packager = packager.with_timeout(Some(0.5));
@@ -780,7 +723,6 @@ fn spawn_failure_raises_scrubbed_error() {
 fn argv_reaches_the_child_verbatim_without_a_shell() {
     // (c): the argv is a list handed to the tool, never to a shell -- shell syntax in
     // a path stays literal text.
-    require_stub!();
     let (_dir, root) = tempdir();
     let argv_file = root.join("argv.txt");
     let (packager, _) = packager(&stub(
@@ -843,7 +785,6 @@ fn calls(argv_dir: &Path) -> Vec<Vec<String>> {
 fn transcrypt_produces_one_origin_staging_series_and_single_init() {
     // Source segment i -> staging seg_{i+1} (Shaka's 1-origin, as encrypt_cbcs) + ONE init,
     // so renumber_to_source_origin reconciles the output with no change.
-    require_stub!();
     let (_dir, root) = tempdir();
     let (packager, _) = packager(&stub(&root, &[("STUB_PACKAGER_SEGMENT_COUNT", "1")]));
     let (init, segments) = make_source(&root, 4);
@@ -862,7 +803,6 @@ fn transcrypt_produces_one_origin_staging_series_and_single_init() {
 
 #[test]
 fn transcrypt_runs_decrypt_then_encrypt_per_segment() {
-    require_stub!();
     let (_dir, root) = tempdir();
     let argv_dir = root.join("argv");
     let (packager, _) = packager(&stub(
@@ -894,7 +834,6 @@ fn transcrypt_runs_decrypt_then_encrypt_per_segment() {
 fn transcrypt_encrypt_uses_isolating_duration_not_six_or_four() {
     // The isolating --segment_duration (>> any asset) forces Shaka's floor grid to 0, so it
     // emits ONE segment == the source boundary. Never 6 (re-decided boundaries), never 4.
-    require_stub!();
     let (_dir, root) = tempdir();
     let argv_dir = root.join("argv");
     let (packager, _) = packager(&stub(
@@ -926,7 +865,6 @@ fn transcrypt_encrypt_uses_isolating_duration_not_six_or_four() {
 
 #[test]
 fn transcrypt_forwards_pssh_to_each_segment() {
-    require_stub!();
     let (_dir, root) = tempdir();
     let argv_dir = root.join("argv");
     let (packager, _) = packager(&stub(
@@ -958,7 +896,6 @@ fn transcrypt_forwards_pssh_to_each_segment() {
 
 #[test]
 fn transcrypt_result_hides_key_and_iv() {
-    require_stub!();
     let (_dir, root) = tempdir();
     let (packager, _) = packager(&stub(&root, &[("STUB_PACKAGER_SEGMENT_COUNT", "1")]));
     let (init, segments) = make_source(&root, 2);
@@ -971,7 +908,6 @@ fn transcrypt_result_hides_key_and_iv() {
 #[test]
 fn transcrypt_returns_nonzero_on_subprocess_failure_scrubbed() {
     // A per-segment non-zero exit is RETURNED (not raised) and scrubbed.
-    require_stub!();
     let (_dir, root) = tempdir();
     let (packager, _) = packager(&stub(
         &root,
@@ -991,7 +927,6 @@ fn transcrypt_returns_nonzero_on_subprocess_failure_scrubbed() {
 fn transcrypt_refuses_multi_segment_output_from_one_source_segment() {
     // If the isolating duration ever fails to isolate, the source boundary would be lost: the
     // call refuses with a scrubbed non-zero result instead of keeping one and dropping data.
-    require_stub!();
     let (_dir, root) = tempdir();
     let (packager, _) = packager(&stub(&root, &[("STUB_PACKAGER_SEGMENT_COUNT", "2")]));
     let (init, segments) = make_source(&root, 2);
@@ -1008,7 +943,6 @@ fn transcrypt_refuses_multi_segment_output_from_one_source_segment() {
 #[test]
 fn transcrypt_leaves_source_inputs_byte_identical() {
     // HARD INVARIANT: the source init and segments are read-only.
-    require_stub!();
     let (_dir, root) = tempdir();
     let (packager, _) = packager(&stub(&root, &[("STUB_PACKAGER_SEGMENT_COUNT", "1")]));
     let (init, segments) = make_source(&root, 3);
@@ -1083,7 +1017,6 @@ fn transcrypt_relative_paths_are_spelled_as_pathlib_spells_them() {
     // `Path(".") / "x"` is `x`: the work directory under a bare init name is
     // `_persegment_work`, and `work_dir="."` puts the segment directories at `seg_<i>` — the
     // argv Python builds (no `./` prefix).
-    require_stub!();
     let (_dir, root) = tempdir();
     std::fs::create_dir(root.join("source")).unwrap();
     std::fs::write(root.join("source/init.mp4"), b"I").unwrap();
@@ -1147,7 +1080,6 @@ fn events(records: &[Record]) -> Vec<&str> {
 fn each_call_emits_one_redacted_command_and_one_tool_output_record() {
     // The stub echoes its REAL command line (key + IV) to stderr: the operator still sees
     // what Shaka printed, with only the secrets scrubbed out.
-    require_stub!();
     for mode in ["decrypt", "encrypt"] {
         let (_dir, root) = tempdir();
         let (packager, collector) =
@@ -1187,7 +1119,6 @@ fn each_call_emits_one_redacted_command_and_one_tool_output_record() {
 fn records_never_carry_key_or_iv_even_when_the_tool_prints_them() {
     // A failing run whose output carries both secrets in lower AND upper case: the non-zero
     // exit is returned (not raised) and nothing reaches the log unscrubbed.
-    require_stub!();
     let leaked = format!("leaked: {}", key_material_variants().join(" "));
     for mode in ["decrypt", "encrypt"] {
         let (_dir, root) = tempdir();
@@ -1217,7 +1148,6 @@ fn records_never_carry_key_or_iv_even_when_the_tool_prints_them() {
 
 #[test]
 fn every_per_segment_invocation_is_logged_redacted() {
-    require_stub!();
     let (_dir, root) = tempdir();
     let (packager, collector) = packager(&stub(
         &root,
@@ -1248,7 +1178,6 @@ fn every_per_segment_invocation_is_logged_redacted() {
 
 #[test]
 fn timeout_is_logged_and_raised_with_no_key_material() {
-    require_stub!();
     let (_dir, root) = tempdir();
     let (packager, collector) = packager(&stub(&root, &[("STUB_PACKAGER_HANG", "1")]));
     let packager = packager.with_timeout(Some(0.5));
@@ -1294,7 +1223,6 @@ fn spawn_failure_is_logged_and_raised() {
 #[test]
 fn without_a_sink_nothing_is_emitted_and_behaviour_is_unchanged() {
     // Logged or not, the child gets the same real argv and the caller the same result.
-    require_stub!();
     let (_dir, root) = tempdir();
     let argv_file = root.join("argv.txt");
     let bin = stub(

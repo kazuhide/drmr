@@ -491,6 +491,7 @@ dependencies = [
  "base64 0.22.1",
  "cbc",
  "clap",
+ "drmr-test-support",
  "fs4",
  "getrandom 0.4.3",
  "hex",
@@ -545,6 +546,13 @@ dependencies = [
  "tokio",
  "ureq 3.4.2",
  "zeroize",
+]
+
+[[package]]
+name = "drmr-test-support"
+version = "0.1.0"
+dependencies = [
+ "tempfile",
 ]
 
 [[package]]

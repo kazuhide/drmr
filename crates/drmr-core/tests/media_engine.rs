@@ -2,12 +2,8 @@
 //! (`fixtures/media/subprocess.python.json`): the same argv, the
 //! same `command` / `tool-output` records (ts, duration and call id aside), the same results,
 //! error classes and messages. The stubs are `sh` scripts printing canned, synthetic output; the
-//! fixture carries their text. Also the record bounds of each call site, proven against their
-//! mutation. Unix only (`sh`).
-#![cfg(unix)]
-
-#[path = "common/executable.rs"]
-mod executable;
+//! fixture carries their text. Native fixtures execute the same canned cases on every platform.
+//! Record bounds remain checked against outputs larger than each limit.
 
 use drmr_core::canonical::Dumps;
 use drmr_core::events::{Collector, Record};
@@ -35,10 +31,6 @@ fn spaced(hex: &str) -> String {
         .join(" ")
 }
 
-fn write_script(path: &Path, text: &str) {
-    executable::write_executable(path, text);
-}
-
 /// The fixture's canned files and stub tools in `dir`.
 fn materialize(dir: &Path, oracle: &Value) {
     let spec = &oracle["spec"];
@@ -51,13 +43,20 @@ fn materialize(dir: &Path, oracle: &Value) {
     )
     .unwrap();
     let iv = oracle["iv"].as_str().unwrap();
-    for (name, text) in spec["stubs"].as_object().unwrap() {
-        let script = text
-            .as_str()
-            .unwrap()
-            .replace("@DIR@", dir.to_str().unwrap())
-            .replace("@IV_SPACED@", &spaced(iv));
-        write_script(&dir.join(name), &script);
+    for name in spec["stubs"].as_object().unwrap().keys() {
+        let mode = match name.as_str() {
+            "ffmpeg" => drmr_test_support::Mode::Ffmpeg,
+            "ffprobe" => drmr_test_support::Mode::Ffprobe,
+            "mp4dump" => drmr_test_support::Mode::Mp4dump,
+            _ => panic!("unknown fixture tool"),
+        };
+        let spec = drmr_test_support::ToolSpec {
+            mode,
+            ..Default::default()
+        }
+        .with("root", dir.to_str().unwrap())
+        .with("iv_spaced", spaced(iv));
+        drmr_test_support::install(&dir.join(name), &spec).unwrap();
     }
     std::fs::write(dir.join("media.mp4"), [0u8; 32]).unwrap();
 }
@@ -80,9 +79,18 @@ fn harness(oracle: &Value) -> Harness {
         secrets.clone(),
         collector.clone(),
     )));
-    engine.ffmpeg_bin = dir.join("ffmpeg").to_str().unwrap().to_string();
-    engine.ffprobe_bin = dir.join("ffprobe").to_str().unwrap().to_string();
-    engine.mp4dump_bin = dir.join("mp4dump").to_str().unwrap().to_string();
+    engine.ffmpeg_bin = drmr_test_support::program_path(&dir.join("ffmpeg"))
+        .to_str()
+        .unwrap()
+        .to_string();
+    engine.ffprobe_bin = drmr_test_support::program_path(&dir.join("ffprobe"))
+        .to_str()
+        .unwrap()
+        .to_string();
+    engine.mp4dump_bin = drmr_test_support::program_path(&dir.join("mp4dump"))
+        .to_str()
+        .unwrap()
+        .to_string();
     Harness {
         _temp: temp,
         dir,
@@ -105,22 +113,28 @@ fn normalized(record: &Record, dir: &Path) -> Value {
                     .as_array()
                     .unwrap()
                     .iter()
-                    .map(|token| token.as_str().unwrap().replace(dir, "<dir>"))
+                    .map(|token| native_text(token.as_str().unwrap(), dir))
                     .map(|token| {
-                        if token.ends_with("/tail.mp4") {
+                        if token.ends_with("/tail.mp4") || token.ends_with("\\tail.mp4") {
                             "<tmp>/tail.mp4".to_string()
                         } else {
                             token
                         }
                     })
                     .collect();
-                argv[0] = argv[0].rsplit('/').next().unwrap().to_string();
+                let basename = Path::new(&argv[0]).file_name().unwrap().to_str().unwrap();
+                argv[0] = if cfg!(windows) {
+                    basename.strip_suffix(".exe").unwrap_or(basename)
+                } else {
+                    basename
+                }
+                .to_string();
                 out.insert(key.clone(), json!(argv));
             }
             "stdout" | "stderr" => {
                 out.insert(
                     key.clone(),
-                    json!(value.as_str().unwrap().replace(dir, "<dir>")),
+                    json!(native_text(value.as_str().unwrap(), dir)),
                 );
             }
             _ => {
@@ -136,7 +150,7 @@ fn outcome(result: Result<Value, MediaError>, dir: &Path) -> Value {
         Ok(value) => json!({"ok": value}),
         Err(error) => json!({
             "error": error.python_class(),
-            "message": error.to_string().replace(dir.to_str().unwrap(), "<dir>"),
+            "message": native_text(&error.to_string(),dir.to_str().unwrap()),
         }),
     }
 }
@@ -147,11 +161,7 @@ fn packet_json(info: &PacketInfo) -> Value {
 }
 
 fn shown(path: &Path, dir: &Path) -> Value {
-    json!(
-        path.to_str()
-            .unwrap()
-            .replace(dir.to_str().unwrap(), "<dir>")
-    )
+    json!(native_text(path.to_str().unwrap(), dir.to_str().unwrap()))
 }
 
 fn fraction(numerator: i64, denominator: i64) -> BigRational {
@@ -315,15 +325,18 @@ fn every_call_site_runs_pythons_argv_and_emits_pythons_records() {
 
 /// A stub that prints `count` times the character `fill` (to stdout, or stderr).
 fn chatty(dir: &Path, name: &str, count: usize, to_stderr: bool) -> String {
-    let path = dir.join(name);
-    let redirect = if to_stderr { " >&2" } else { "" };
-    write_script(
-        &path,
-        &format!(
-            "#!/bin/sh\nawk 'BEGIN {{ for (i = 0; i < {count}; i++) printf \"x\" }}'{redirect}\n"
-        ),
+    let spec = drmr_test_support::ToolSpec::default().with(
+        if to_stderr {
+            "stderr_repeat"
+        } else {
+            "stdout_repeat"
+        },
+        count.to_string(),
     );
-    path.to_str().unwrap().to_string()
+    drmr_test_support::install(&dir.join(name), &spec)
+        .unwrap()
+        .to_string_lossy()
+        .into_owned()
 }
 
 fn last_output(collector: &Collector) -> Record {
@@ -536,4 +549,14 @@ fn the_engine_is_a_shareable_trait_object_for_the_segment_pools() {
             .values()
             .all(|events| events == &["command", "tool-output"])
     );
+}
+
+// Only strings containing the actual temporary root carry native path spelling.
+fn native_text(value: &str, dir: &str) -> String {
+    let normalized = value.replace(dir, "<dir>");
+    if cfg!(windows) && value.contains(dir) {
+        normalized.replace('\\', "/")
+    } else {
+        normalized
+    }
 }

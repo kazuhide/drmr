@@ -47,6 +47,7 @@ name = "storage_env"
 harness = false
 
 [dev-dependencies]
+drmr-test-support = { path = "../drmr-test-support" }
 rcgen.workspace = true
 tempfile.workspace = true
 
