@@ -989,29 +989,29 @@ fn a_runner_with_its_own_path_looks_bare_names_up_there_and_records_them_bare() 
     // runs by a bare name resolves there first, and the records show the bare name.
     let dir = tempfile::tempdir().unwrap();
     let tool = dir.path().join("drmr-path-probe");
-    std::fs::write(&tool, "#!/bin/sh\necho probed \"$PATH\"\n").unwrap();
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    // Executing a freshly written script can race sibling process spawns on Linux:
+    // an inherited writable descriptor remains open until exec, causing ETXTBSY.
+    // Alias an existing executable so PATH discovery does not depend on that race.
+    std::os::unix::fs::symlink("/bin/sh", &tool).unwrap();
     let path = format!("{}:/usr/bin:/bin", dir.path().display());
     let collector = Arc::new(Collector::default());
     let runner = ToolRunner::new(Arc::new(Secrets::new()), collector.clone()).with_path(&path);
     assert_eq!(runner.path(), Some(std::ffi::OsStr::new(&path)));
 
+    let arguments = argv(&["drmr-path-probe", "-c", "echo probed \"$PATH\""]);
     let completed = runner
-        .run_tool(&argv(&["drmr-path-probe"]), "probe", &RunOptions::default())
+        .run_tool(&arguments, "probe", &RunOptions::default())
         .unwrap();
 
     assert_eq!(completed.returncode, Some(0));
     assert_eq!(completed.stdout_text(), format!("probed {path}\n"));
     let records = collector.records();
-    assert_eq!(records[0]["argv"], json!(["drmr-path-probe"]));
+    assert_eq!(records[0]["argv"], json!(arguments));
 
     // This process's PATH does not have it: a runner without its own PATH cannot run it.
     let (plain, _, _) = runner_without_path();
     let error = plain
-        .run_tool(&argv(&["drmr-path-probe"]), "probe", &RunOptions::default())
+        .run_tool(&arguments, "probe", &RunOptions::default())
         .unwrap_err();
     assert_eq!((error.tool.as_str(), error.kind), ("probe", "unavailable"));
 }
