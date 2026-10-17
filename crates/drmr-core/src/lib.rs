@@ -12,6 +12,7 @@ pub mod checks;
 pub mod cli;
 pub mod concurrency;
 pub mod config;
+pub mod conversion;
 pub mod events;
 pub mod hls_cli;
 pub mod hls_pipeline;

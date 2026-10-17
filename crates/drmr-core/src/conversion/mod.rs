@@ -5,6 +5,7 @@
 //! Shaka's raw-key interface passes keys to its child process as arguments. Records and
 //! errors are redacted, but operating-system process inspection can observe those arguments.
 mod backend;
+pub mod key_file;
 mod keys;
 mod verify;
 use crate::{
