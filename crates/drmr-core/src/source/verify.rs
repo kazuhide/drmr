@@ -11,6 +11,7 @@ use super::pytext::{py_float, py_int};
 use super::{ByteRange, Escaped, Failure, SourceAnalysis, SourceSegment, SourceTrack};
 use crate::snapshot::{confined_file, sha256_file, snapshot_digest};
 use serde_json::{Map, Value};
+use std::collections::HashMap;
 use std::path::Path;
 
 fn invalid() -> Failure {
@@ -141,15 +142,7 @@ fn read_segment(segment: &Value, directory: &Path) -> Result<SourceSegment, Fail
     let path = local(directory, segment.get("path").ok_or_else(invalid)?)?;
     let duration = py_float_value(segment.get("duration").ok_or_else(invalid)?)?;
     let sha256 = string(segment.get("sha256").ok_or_else(invalid)?)?;
-    let byte_range = match segment.get("byte_range") {
-        Some(range) if truthy(range) => match range {
-            // A tuple of the recorded items: never equal to the recorded list, so the
-            // verification below reports `snapshot-changed` (preserved for compatibility).
-            Value::Array(_) | Value::String(_) | Value::Object(_) => Some(tuple_range(range)),
-            _ => return Err(invalid()), // tuple of a number: TypeError
-        },
-        _ => None,
-    };
+    let byte_range = read_byte_range(segment.get("byte_range"))?;
     Ok(SourceSegment {
         index,
         path,
@@ -159,14 +152,23 @@ fn read_segment(segment: &Value, directory: &Path) -> Result<SourceSegment, Fail
     })
 }
 
-/// The in-memory form of a recorded byte range. Only its presence matters (a tuple never
-/// equals the recorded list); the values are kept when they are two integers.
-fn tuple_range(range: &Value) -> ByteRange {
-    let item = |index: usize| range.get(index).and_then(Value::as_u64).unwrap_or(0);
-    ByteRange {
-        offset: item(0),
-        length: item(1),
-    }
+/// The snapshot stores byte ranges as `[offset, length]`, with a nonempty length.
+fn read_byte_range(range: Option<&Value>) -> Result<Option<ByteRange>, Failure> {
+    let Some(range) = range.filter(|value| !value.is_null()) else {
+        return Ok(None);
+    };
+    let Value::Array(items) = range else {
+        return Err(invalid());
+    };
+    let [offset, length] = items.as_slice() else {
+        return Err(invalid());
+    };
+    let offset = offset.as_u64().ok_or_else(invalid)?;
+    let length = length
+        .as_u64()
+        .filter(|length| *length > 0)
+        .ok_or_else(invalid)?;
+    Ok(Some(ByteRange { offset, length }))
 }
 
 /// A recorded flag (`is_default`, `autoselect`): a boolean, else `invalid-selection-flags`.
@@ -309,11 +311,14 @@ pub fn verify_source_snapshot(analysis: &SourceAnalysis) -> Result<(), Failure> 
         return Err(changed());
     }
     let directory = analysis.snapshot_path.parent().ok_or_else(invalid)?;
+    let mut resource_ranges = HashMap::new();
     for resource in iterate(data.get("resources").ok_or_else(invalid)?)? {
         let Value::Object(resource) = resource else {
             return Err(invalid());
         };
         let path = local(directory, resource.get("path").ok_or_else(invalid)?)?;
+        let range = read_byte_range(resource.get("byte_range"))?;
+        resource_ranges.insert(path.clone(), range);
         let hashed = sha256_file(&path).map_err(|_| invalid())?;
         let recorded = resource.get("sha256").ok_or_else(invalid)?;
         if recorded.as_str() != Some(hashed.as_str()) {
@@ -322,6 +327,12 @@ pub fn verify_source_snapshot(analysis: &SourceAnalysis) -> Result<(), Failure> 
     }
     let mut measured_tracks = Vec::with_capacity(analysis.tracks.len());
     for track in &analysis.tracks {
+        for segment in &track.segments {
+            let resource_range = resource_ranges.get(&segment.path).copied().flatten();
+            if resource_range != segment.byte_range {
+                return Err(changed());
+            }
+        }
         let durations = track.segments.iter().map(|segment| segment.duration);
         if fsum(durations).is_err_and(|error| error == super::fsum::FsumError::Overflow) {
             return Err(Failure::Escaped(Escaped::new("OverflowError")));
@@ -360,19 +371,13 @@ pub fn verify_source_snapshot(analysis: &SourceAnalysis) -> Result<(), Failure> 
             measured.get("duration").cloned().unwrap_or(Value::Null),
         );
     }
-    // A byte range is a tuple in memory: never equal to anything a record holds.
-    let has_tuple = analysis.tracks.iter().any(|track| {
-        track
-            .segments
-            .iter()
-            .any(|segment| segment.byte_range.is_some())
-    });
+    // Both recorded and reconstructed ranges use their serialized JSON array form.
     let equal = saved_tracks.len() == measured_tracks.len()
         && saved_tracks
             .iter()
             .zip(&measured_tracks)
             .all(|(saved, measured)| map_eq(saved, measured));
-    if has_tuple || !equal {
+    if !equal {
         return Err(changed());
     }
     Ok(())

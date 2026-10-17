@@ -9,7 +9,7 @@ use drmr_core::canonical::Dumps;
 use drmr_core::events::{Collector, Sink};
 use drmr_core::snapshot::{analysis_id, snapshot_digest};
 use drmr_core::source::{
-    Failure, FetchPolicy, FfprobeProber, Prober, SourceRequest, read_analysis,
+    ByteRange, Failure, FetchPolicy, FfprobeProber, Prober, SourceRequest, read_analysis,
     verify_source_snapshot,
 };
 use drmr_core::toolrun::{Secrets, ToolRunner};
@@ -39,6 +39,159 @@ fn analyzed() -> (Workspace, drmr_core::source::SourceAnalysis) {
     media(&ws.source, None);
     let result = ws.analyze().unwrap();
     (ws, result)
+}
+
+fn analyzed_byte_ranges() -> (Workspace, drmr_core::source::SourceAnalysis) {
+    let ws = Workspace::new();
+    std::fs::write(
+        ws.source.join("all.mp4"),
+        b"\x00\x00\x00\x08ftyp\x00\x00\x00\x08moof\x00\x00\x00\x08moof",
+    )
+    .unwrap();
+    std::fs::write(
+        ws.source.join("master.m3u8"),
+        "#EXTM3U\n#EXT-X-TARGETDURATION:6\n\
+         #EXT-X-MAP:URI=\"all.mp4\",BYTERANGE=\"8@0\"\n\
+         #EXT-X-BYTERANGE:8@8\n#EXTINF:1,\nall.mp4\n\
+         #EXT-X-BYTERANGE:8\n#EXTINF:1,\nall.mp4\n#EXT-X-ENDLIST\n",
+    )
+    .unwrap();
+    let result = ws.analyze().unwrap();
+    (ws, result)
+}
+
+#[test]
+fn byte_range_snapshots_round_trip_init_and_explicit_or_implicit_media_ranges() {
+    let (_ws, result) = analyzed_byte_ranges();
+    verify_source_snapshot(&result).unwrap();
+    let restored = read_analysis(&result.snapshot_path).unwrap();
+    verify_source_snapshot(&restored).unwrap();
+    assert_eq!(restored.tracks, result.tracks);
+    let track = &restored.tracks[0];
+    assert_eq!(
+        track
+            .segments
+            .iter()
+            .map(|s| s.byte_range)
+            .collect::<Vec<_>>(),
+        [
+            Some(ByteRange {
+                offset: 8,
+                length: 8
+            }),
+            Some(ByteRange {
+                offset: 16,
+                length: 8
+            }),
+        ]
+    );
+    assert_eq!(
+        std::fs::read(track.init_path.as_ref().unwrap()).unwrap(),
+        b"\x00\x00\x00\x08ftyp"
+    );
+    for segment in &track.segments {
+        assert_eq!(
+            std::fs::read(&segment.path).unwrap(),
+            b"\x00\x00\x00\x08moof"
+        );
+    }
+    let data = record(&result.snapshot_path);
+    assert_eq!(data["resources"][1]["kind"], "init");
+    assert_eq!(data["resources"][1]["byte_range"], json!([0, 8]));
+    assert_eq!(data["resources"][2]["byte_range"], json!([8, 8]));
+    assert_eq!(data["resources"][3]["byte_range"], json!([16, 8]));
+}
+
+#[test]
+fn byte_range_record_tampering_still_changes_the_snapshot() {
+    for target in ["segment", "init-resource"] {
+        let (_ws, result) = analyzed_byte_ranges();
+        let mut data = record(&result.snapshot_path);
+        if target == "segment" {
+            data["tracks"][0]["segments"][0]["byte_range"] = json!([9, 8]);
+        } else {
+            data["resources"][1]["byte_range"] = json!([1, 8]);
+        }
+        std::fs::write(&result.snapshot_path, Dumps::SORTED.dumps(&data)).unwrap();
+        assert_eq!(
+            token(read_analysis(&result.snapshot_path)),
+            "snapshot-changed",
+            "{target}"
+        );
+    }
+}
+
+#[test]
+fn malformed_byte_ranges_remain_invalid_even_with_a_recomputed_digest() {
+    for range in [
+        json!([]),
+        json!([8]),
+        json!([8, 8, 8]),
+        json!([-1, 8]),
+        json!([8, 0]),
+        json!([8, -1]),
+        json!(["8", 8]),
+        json!([8.5, 8]),
+        json!([true, 8]),
+        json!("8,8"),
+        json!({"offset": 8, "length": 8}),
+    ] {
+        for target in ["segment", "resource"] {
+            let (_ws, result) = analyzed_byte_ranges();
+            let mut data = record(&result.snapshot_path);
+            if target == "segment" {
+                data["tracks"][0]["segments"][0]["byte_range"] = range.clone();
+            } else {
+                data["resources"][1]["byte_range"] = range.clone();
+            }
+            rewrite(&result.snapshot_path, data);
+            assert_eq!(
+                token(read_analysis(&result.snapshot_path)),
+                "snapshot-invalid",
+                "{target}: {range}"
+            );
+        }
+    }
+}
+
+#[test]
+fn segment_ranges_must_match_the_frozen_resource_after_recomputing_the_digest() {
+    for range in [json!([9, 8]), Value::Null] {
+        let (_ws, result) = analyzed_byte_ranges();
+        let mut data = record(&result.snapshot_path);
+        data["tracks"][0]["segments"][0]["byte_range"] = range.clone();
+        rewrite(&result.snapshot_path, data);
+        assert_eq!(
+            token(read_analysis(&result.snapshot_path)),
+            "snapshot-changed",
+            "{range}"
+        );
+    }
+}
+
+#[test]
+fn byte_range_snapshot_verification_still_detects_changed_init_and_media_files() {
+    for target in ["init", "segment"] {
+        let (_ws, result) = analyzed_byte_ranges();
+        let restored = read_analysis(&result.snapshot_path).unwrap();
+        let track = &restored.tracks[0];
+        let path = if target == "init" {
+            track.init_path.as_ref().unwrap()
+        } else {
+            &track.segments[0].path
+        };
+        std::fs::write(path, b"changed").unwrap();
+        assert_eq!(
+            token(verify_source_snapshot(&restored)),
+            "snapshot-changed",
+            "{target}"
+        );
+        assert_eq!(
+            token(read_analysis(&restored.snapshot_path)),
+            "snapshot-changed",
+            "{target}"
+        );
+    }
 }
 
 #[test]

@@ -247,14 +247,8 @@ fn every_synthetic_case_freezes_the_analysis_python_freezes_byte_for_byte() {
             python[python.len() - terminal..],
             "{case}: the terminal records in order"
         );
-        // The byte-range case never verifies (a tuple in memory, a list in the record), in
-        // Python as here; every other case reads back.
-        let restored = read_analysis(&result.snapshot_path);
-        if case == "byterange" {
-            assert_eq!(support::token(restored), "snapshot-changed");
-        } else {
-            assert_eq!(restored.unwrap().analysis_id, result.analysis_id, "{case}");
-        }
+        let restored = read_analysis(&result.snapshot_path).unwrap();
+        assert_eq!(restored.analysis_id, result.analysis_id, "{case}");
     }
 }
 
