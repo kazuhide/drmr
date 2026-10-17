@@ -214,8 +214,11 @@ fn held_directories(path: &Path) -> Result<Vec<File>, ConversionError> {
         if matches!(part, Component::Prefix(_)) {
             continue;
         }
+        // FILE_LIST_DIRECTORY participates in sharing checks. Attribute-only
+        // access is exempt and would permit a concurrent rename despite the
+        // absence of FILE_SHARE_DELETE.
         let directory = OpenOptions::new()
-            .access_mode(0x80)
+            .access_mode(0x81)
             .share_mode(1)
             .custom_flags(0x0220_0000)
             .security_qos_flags(0x0001_0000)
