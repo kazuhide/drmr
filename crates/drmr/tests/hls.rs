@@ -77,8 +77,15 @@ fn set_mode(path: &Path, mode: u32) {
     }
     #[cfg(windows)]
     {
-        // The deliberately ordinary file keeps its inherited, non-secret ACL.
+        // Set the deliberately unsafe fixture explicitly: a user's default
+        // Windows DACL may already be private, unlike Unix mode 0644.
         assert_eq!(mode, 0o644);
+        let output = Command::new("icacls.exe")
+            .arg(path)
+            .args(["/grant", "*S-1-1-0:(R)"])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "unsafe ACL fixture setup failed");
         assert!(private_fs::verify(&std::fs::File::open(path).unwrap()).is_err());
     }
 }
