@@ -14,6 +14,8 @@ pub struct ManagedChild {
     own_tree: bool,
     #[cfg(windows)]
     child: Box<dyn process_wrap::std::ChildWrapper>,
+    #[cfg(windows)]
+    job: std::sync::Arc<win32job::Job>,
     /// The child's piped standard input, if requested.
     pub stdin: Option<ChildStdin>,
     /// The child's piped standard output, if requested.
@@ -47,16 +49,20 @@ impl ManagedChild {
             use process_wrap::std::{CommandWrap, JobObject};
             let _ = own_tree;
             windows::ensure_process_job()?;
+            let job = windows::child_job()?;
             let mut command = CommandWrap::from(command);
             // CrashJob is applied first: its assignment must precede JobObject's
             // assignment and resume. Neither job permits child breakaway.
-            command.wrap(windows::CrashJob).wrap(JobObject);
+            command
+                .wrap(windows::CrashJob(std::sync::Arc::clone(&job)))
+                .wrap(JobObject);
             let mut child = command.spawn()?;
             Ok(Self {
                 stdin: child.stdin().take(),
                 stdout: child.stdout().take(),
                 stderr: child.stderr().take(),
                 child,
+                job,
             })
         }
     }
@@ -78,7 +84,8 @@ impl ManagedChild {
         }
     }
 
-    /// Wait for the direct child. Descendants remain owned until cleanup.
+    /// Wait for the direct child. Windows also terminates and drains its nested
+    /// job before returning; Unix descendants remain owned until cleanup.
     pub fn wait(&mut self) -> io::Result<ExitStatus> {
         #[cfg(unix)]
         {
@@ -86,14 +93,15 @@ impl ManagedChild {
         }
         #[cfg(windows)]
         {
-            // The outer layer is always JobObject. Bypass its job-wide wait:
-            // the direct child may exit while descendants retain its pipes.
-            // Our caller's deadline and Drop still own those descendants.
-            self.child.inner_mut().wait()
+            let status = self.child.inner_mut().wait()?;
+            self.kill()?;
+            Ok(status)
         }
     }
 
     /// Terminate the owned process tree (or the direct child in an inherited Unix group).
+    /// Windows waits for every process in this child's nested job to leave before
+    /// returning, including when `own_tree` was false inside a worker.
     pub fn kill(&mut self) -> io::Result<()> {
         #[cfg(unix)]
         {
@@ -109,7 +117,9 @@ impl ManagedChild {
         }
         #[cfg(windows)]
         {
-            self.child.start_kill()
+            self.child.start_kill()?;
+            windows::drain(&self.job)?;
+            self.child.inner_mut().wait().map(|_| ())
         }
     }
 }
@@ -117,6 +127,7 @@ impl ManagedChild {
 impl Drop for ManagedChild {
     fn drop(&mut self) {
         let _ = self.kill();
+        #[cfg(unix)]
         let _ = self.wait();
     }
 }
@@ -126,7 +137,7 @@ mod windows {
     use process_wrap::std::{ChildWrapper, CommandWrap, CommandWrapper};
     use std::io;
     use std::os::windows::io::{AsRawHandle, BorrowedHandle};
-    use std::sync::OnceLock;
+    use std::sync::{Arc, OnceLock};
     use win32job::{ExtendedLimitInfo, Job};
 
     // Static values are retained until process exit. Windows then closes this
@@ -148,8 +159,24 @@ mod windows {
             .map_err(|error| io::Error::new(error.kind(), "process isolation unavailable"))
     }
 
+    pub(super) fn child_job() -> io::Result<Arc<Job>> {
+        let mut limits = ExtendedLimitInfo::new();
+        limits.limit_kill_on_job_close();
+        Job::create_with_limit_info(&limits)
+            .map(Arc::new)
+            .map_err(io::Error::other)
+    }
+
+    pub(super) fn drain(job: &Job) -> io::Result<()> {
+        super::wait_for_job_empty(|| {
+            job.query_process_id_list()
+                .map(|processes| processes.is_empty())
+                .map_err(io::Error::from)
+        })
+    }
+
     #[derive(Debug)]
-    pub(super) struct CrashJob;
+    pub(super) struct CrashJob(pub(super) Arc<Job>);
 
     impl CommandWrapper for CrashJob {
         fn wrap_child(
@@ -157,19 +184,19 @@ mod windows {
             mut child: Box<dyn ChildWrapper>,
             _core: &CommandWrap,
         ) -> io::Result<Box<dyn ChildWrapper>> {
-            let attach = || -> io::Result<Job> {
-                let mut limits = ExtendedLimitInfo::new();
-                limits.limit_kill_on_job_close();
-                let job = Job::create_with_limit_info(&limits).map_err(io::Error::other)?;
+            let attach = || -> io::Result<()> {
                 let handle = child
                     .process_handle()
                     .ok_or_else(|| io::Error::other("missing process handle"))?;
-                job.assign_process(handle.as_raw_handle() as isize)
-                    .map_err(io::Error::other)?;
-                Ok(job)
+                self.0
+                    .assign_process(handle.as_raw_handle() as isize)
+                    .map_err(io::Error::other)
             };
             match attach() {
-                Ok(job) => Ok(Box::new(CrashChild { child, _job: job })),
+                Ok(()) => Ok(Box::new(CrashChild {
+                    child,
+                    _job: Arc::clone(&self.0),
+                })),
                 Err(error) => {
                     // Assignment failure must never resume or strand a suspended child.
                     let _ = child.start_kill();
@@ -183,7 +210,7 @@ mod windows {
     #[derive(Debug)]
     struct CrashChild {
         child: Box<dyn ChildWrapper>,
-        _job: Job,
+        _job: Arc<Job>,
     }
 
     impl ChildWrapper for CrashChild {
@@ -213,4 +240,44 @@ pub fn in_asset_worker() -> bool {
 
 pub(crate) fn mark_asset_worker() {
     IN_ASSET_WORKER.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+#[cfg(any(windows, test))]
+fn wait_for_job_empty(mut query: impl FnMut() -> io::Result<bool>) -> io::Result<()> {
+    loop {
+        match query() {
+            Ok(true) => return Ok(()),
+            Ok(false) => {}
+            // The pinned job wrapper has a fixed process-list buffer. A larger
+            // terminating tree is still active, never proof of completion.
+            Err(error) if error.raw_os_error() == Some(234) => {}
+            Err(error) => return Err(error),
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
+#[cfg(test)]
+mod drain_tests {
+    use super::*;
+    #[test]
+    fn an_oversized_or_nonempty_job_is_never_admitted_as_drained() {
+        let mut calls = 0;
+        wait_for_job_empty(|| {
+            calls += 1;
+            match calls {
+                1 => Err(io::Error::from_raw_os_error(234)),
+                2 => Ok(false),
+                3 => Ok(true),
+                _ => panic!("queried after completion"),
+            }
+        })
+        .unwrap();
+        assert_eq!(calls, 3);
+    }
+    #[test]
+    fn a_job_query_failure_propagates_without_claiming_completion() {
+        let error = wait_for_job_empty(|| Err(io::Error::from_raw_os_error(5))).unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(5));
+    }
 }
