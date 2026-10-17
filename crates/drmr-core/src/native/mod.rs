@@ -17,3 +17,6 @@ pub use paths::resolve_path;
 
 #[cfg(windows)]
 pub(crate) use paths::validate_windows_relative_path;
+
+mod workspace;
+pub use workspace::{create_media_dir_all, seal_media_tree};

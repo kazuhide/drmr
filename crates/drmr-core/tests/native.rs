@@ -200,6 +200,173 @@ fn private_creation_rejects_hard_links_and_stream_names() {
     assert_eq!(std::fs::read(path).unwrap(), b"unchanged");
 }
 
+#[test]
+fn media_sealing_preserves_a_strict_secret_child_directory() {
+    let temp = tempfile::tempdir().unwrap();
+    let workspace = temp.path().join("media");
+    native::create_media_dir_all(&workspace).unwrap();
+    let keys = workspace.join("keys");
+    native::create_private_dir_all(&keys).unwrap();
+    native::create_private_new(&keys.join("key.bin"))
+        .unwrap()
+        .write_all(b"synthetic")
+        .unwrap();
+    std::fs::write(workspace.join("output.bin"), b"output").unwrap();
+    native::seal_media_tree(&workspace).unwrap();
+    native::open_private_read(&workspace.join("output.bin")).unwrap();
+    native::create_private_new(&keys.join("next.bin")).unwrap();
+    assert_eq!(std::fs::read(keys.join("key.bin")).unwrap(), b"synthetic");
+}
+
+#[cfg(windows)]
+#[test]
+fn unsafe_media_acls_are_refused_without_repairing_or_rewriting_any_entry() {
+    use windows_permissions::constants::{SeObjectType, SecurityInformation};
+    use windows_permissions::wrappers::{GetSecurityInfo, SetSecurityInfo};
+    use windows_permissions::{LocalBox, SecurityDescriptor};
+    for (directory, null_acl) in [(true, true), (true, false), (false, false)] {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().join("media");
+        native::create_media_dir_all(&workspace).unwrap();
+        let payload = workspace.join("output.bin");
+        std::fs::write(&payload, b"unchanged").unwrap();
+        let path = if directory { &workspace } else { &payload };
+        let mut control = acl_control(path);
+        let original = GetSecurityInfo(
+            &control,
+            SeObjectType::SE_FILE_OBJECT,
+            SecurityInformation::Owner | SecurityInformation::Dacl,
+        )
+        .unwrap();
+        let replacement: Option<LocalBox<SecurityDescriptor>> = (!null_acl).then(|| {
+            format!("D:P(A;;FA;;;{})(A;;FR;;;WD)", original.owner().unwrap())
+                .parse()
+                .unwrap()
+        });
+        SetSecurityInfo(
+            &mut control,
+            SeObjectType::SE_FILE_OBJECT,
+            SecurityInformation::Dacl | SecurityInformation::ProtectedDacl,
+            None,
+            None,
+            replacement.as_ref().and_then(|sd| sd.dacl()),
+            None,
+        )
+        .unwrap();
+        let before = descriptor_text(&control);
+        assert!(native::create_media_dir_all(&workspace).is_err());
+        assert!(native::seal_media_tree(&workspace).is_err());
+        assert_eq!(descriptor_text(&control), before);
+        assert_eq!(std::fs::read(&payload).unwrap(), b"unchanged");
+        SetSecurityInfo(
+            &mut control,
+            SeObjectType::SE_FILE_OBJECT,
+            SecurityInformation::Dacl | SecurityInformation::ProtectedDacl,
+            None,
+            None,
+            original.dacl(),
+            None,
+        )
+        .unwrap();
+    }
+}
+
+#[cfg(windows)]
+fn acl_control(path: &Path) -> std::fs::File {
+    use std::os::windows::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .access_mode(0x0006_0080)
+        .custom_flags(0x0220_0000)
+        .open(path)
+        .unwrap()
+}
+
+#[cfg(windows)]
+fn descriptor_text(file: &std::fs::File) -> std::ffi::OsString {
+    use windows_permissions::constants::{SeObjectType, SecurityInformation};
+    let descriptor = windows_permissions::wrappers::GetSecurityInfo(
+        file,
+        SeObjectType::SE_FILE_OBJECT,
+        SecurityInformation::Owner | SecurityInformation::Dacl,
+    )
+    .unwrap();
+    windows_permissions::wrappers::ConvertSecurityDescriptorToStringSecurityDescriptor(
+        &descriptor,
+        SecurityInformation::Owner | SecurityInformation::Dacl,
+    )
+    .unwrap()
+}
+
+#[cfg(windows)]
+#[test]
+fn media_workspaces_refuse_junctions_and_hard_links_before_sealing() {
+    let temp = tempfile::tempdir().unwrap();
+    let workspace = temp.path().join("media");
+    native::create_media_dir_all(&workspace).unwrap();
+    let outside = temp.path().join("outside");
+    std::fs::create_dir(&outside).unwrap();
+    std::fs::write(outside.join("marker"), b"unchanged").unwrap();
+    let junction = workspace.join("junction");
+    let result = Command::new("cmd.exe")
+        .args(["/d", "/c", "mklink", "/J"])
+        .arg(&junction)
+        .arg(&outside)
+        .output()
+        .unwrap();
+    assert!(result.status.success());
+    assert!(native::create_media_dir_all(&junction).is_err());
+    assert!(native::seal_media_tree(&workspace).is_err());
+    assert_eq!(std::fs::read(outside.join("marker")).unwrap(), b"unchanged");
+    std::fs::remove_dir(&junction).unwrap();
+    let target = workspace.join("original");
+    std::fs::write(&target, b"unchanged").unwrap();
+    std::fs::hard_link(&target, workspace.join("alias")).unwrap();
+    assert!(native::seal_media_tree(&workspace).is_err());
+    assert_eq!(std::fs::read(target).unwrap(), b"unchanged");
+}
+
+#[cfg(windows)]
+#[test]
+fn external_media_files_are_owner_only_from_creation_and_seal_to_strict_acls() {
+    use windows_permissions::constants::{AccessRights, SeObjectType, SecurityInformation};
+    let temp = tempfile::tempdir().unwrap();
+    let workspace = temp.path().join("media");
+    native::create_media_dir_all(&workspace).unwrap();
+    let mut child =
+        native::ManagedChild::spawn(probe_command("media-files", &workspace), true).unwrap();
+    assert!(child.wait().unwrap().success());
+    drop(child);
+    for path in [
+        workspace.join("output.bin"),
+        workspace.join("nested/output.bin"),
+    ] {
+        let file = std::fs::File::open(&path).unwrap();
+        let sd = windows_permissions::wrappers::GetSecurityInfo(
+            &file,
+            SeObjectType::SE_FILE_OBJECT,
+            SecurityInformation::Owner | SecurityInformation::Dacl,
+        )
+        .unwrap();
+        let acl = sd.dacl().unwrap();
+        assert_eq!(acl.len(), 1);
+        assert_eq!(acl.get_ace(0).unwrap().sid(), sd.owner());
+        assert_eq!(acl.get_ace(0).unwrap().mask(), AccessRights::FileAllAccess);
+        assert!(
+            native::open_private_read(&path).is_err(),
+            "inherited ACL is not a strict secret ACL"
+        );
+    }
+    native::seal_media_tree(&workspace).unwrap();
+    for path in [
+        workspace.join("output.bin"),
+        workspace.join("nested/output.bin"),
+    ] {
+        private_fs::verify(&native::open_private_read(&path).unwrap()).unwrap();
+        assert_eq!(std::fs::read(path).unwrap(), b"media fixture");
+    }
+    native::create_media_dir_all(&workspace).unwrap();
+}
+
 #[cfg(windows)]
 #[test]
 fn private_directory_acquisition_rejects_junction_ancestors() {
@@ -392,6 +559,15 @@ fn child_probe() {
     if mode == "echo" {
         println!("drmr-native-probe: quotes ' \" and 日本語");
     } else {
+        #[cfg(windows)]
+        if mode == "media-files" {
+            let directory = std::env::var_os("DRMR_TEST_NATIVE_DIRECTORY").unwrap();
+            let directory = Path::new(&directory);
+            std::fs::write(directory.join("output.bin"), b"media fixture").unwrap();
+            std::fs::create_dir(directory.join("nested")).unwrap();
+            std::fs::write(directory.join("nested/output.bin"), b"media fixture").unwrap();
+            return;
+        }
         #[cfg(unix)]
         if mode == "private-fifo" {
             let directory = std::env::var_os("DRMR_TEST_NATIVE_DIRECTORY").unwrap();
