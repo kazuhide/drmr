@@ -1,12 +1,14 @@
 //! The Python semantics of the media helpers (`media::python`) against what `CPython` 3.11
-//! printed for the same inputs (`fixtures/media/`literals`thon311.json`,
-//! `fixtures/media/`pure`thon311.json`; synthetic inputs only).
+//! printed for the same inputs (`fixtures/media/literals.python311.json`,
+//! `fixtures/media/pure.python311.json`; synthetic inputs only).
 
 use drmr_core::canonical::python_float_repr;
 use drmr_core::media::MediaError;
+#[cfg(unix)]
+use drmr_core::media::python::resolve;
 use drmr_core::media::python::{
     self, eq_int, fraction, fraction_to_f64, fromhex, path_name, path_str, py_eq, py_str, repr_str,
-    resolve, splitlines, true_divide, truthy,
+    splitlines, true_divide, truthy,
 };
 use num_bigint::BigInt;
 use num_rational::BigRational;

@@ -4,8 +4,9 @@ $ErrorActionPreference = 'Stop'
 # an ordinary user. Elevated tokens can assign Administrators as a new file's
 # owner, which is deliberately outside the media workspace security profile.
 $builds = @(
-    @('-p', 'drmr-core', '--lib', '--test', 'native', '--test', 'windows_cli'),
-    @('-p', 'drmr', '--test', 'native_batch')
+    @('-p', 'drmr-core', '--lib', '--tests'),
+    @('-p', 'drmr', '--tests'),
+    @('-p', 'drmr-test-support', '--tests')
 )
 $executables = @()
 foreach ($build in $builds) {
@@ -18,7 +19,8 @@ foreach ($build in $builds) {
         }
     }
 }
-if ($executables.Count -ne 4) { throw 'Expected four native test binaries' }
+if ($executables.Count -lt 4) { throw 'Native test binaries are missing' }
+$executables = @($executables | Sort-Object -Unique)
 
 $username = 'drmr_native_test'
 $password = [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(36)) + '!aA1'
@@ -49,10 +51,13 @@ $env:TEMP = Join-Path $PSScriptRoot 'temp'
 $env:TMP = $env:TEMP
 New-Item -ItemType Directory -Path $env:TEMP | Out-Null
 $executables = Get-Content (Join-Path $PSScriptRoot 'executables.json') | ConvertFrom-Json
+$failed = $false
 foreach ($executable in $executables) {
+    Write-Output "Running $executable"
     & $executable --nocapture
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    if ($LASTEXITCODE -ne 0) { $failed = $true }
 }
+if ($failed) { exit 1 }
 exit 0
 '@ | Set-Content $script
 $stdout = Join-Path $directory 'stdout.log'

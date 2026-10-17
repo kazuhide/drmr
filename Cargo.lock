@@ -479,6 +479,7 @@ dependencies = [
  "clap",
  "drmr-core",
  "drmr-server",
+ "private-fs",
  "serde_json",
  "tempfile",
 ]

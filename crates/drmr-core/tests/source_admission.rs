@@ -1403,6 +1403,7 @@ fn resolve_follows_3_11s_path_resolve() {
 }
 
 /// 3.11's `RuntimeError` of a symlink loop, escaping as itself.
+#[cfg(unix)]
 fn runtime_error<T: std::fmt::Debug>(result: Result<T, Failure>) {
     match result {
         Err(Failure::Escaped(escaped)) => assert_eq!(escaped.class, "RuntimeError"),

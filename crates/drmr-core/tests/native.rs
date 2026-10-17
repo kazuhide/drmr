@@ -277,6 +277,10 @@ fn unsafe_media_acls_are_refused_without_repairing_or_rewriting_any_entry() {
         native::create_media_dir_all(&workspace).unwrap();
         let payload = workspace.join("output.bin");
         std::fs::write(&payload, b"unchanged").unwrap();
+        // A parent ACL mutation can itself remove the child's inherited ACE.
+        // Retain access before constructing that fixture, so unchanged bytes
+        // remain independently testable even when a later reopen is denied.
+        let mut payload_reader = std::fs::File::open(&payload).unwrap();
         let path = if directory { &workspace } else { &payload };
         let mut control = acl_control(path);
         let original = GetSecurityInfo(
@@ -304,10 +308,19 @@ fn unsafe_media_acls_are_refused_without_repairing_or_rewriting_any_entry() {
         )
         .unwrap();
         let before = descriptor_text(&control);
+        let payload_before = descriptor_text(&payload_reader);
         assert!(native::create_media_dir_all(&workspace).is_err());
         assert!(native::seal_media_tree(&workspace).is_err());
+        if directory {
+            let rejected = workspace.join("must-not-exist");
+            assert!(native::create_media_new(&rejected).is_err());
+            assert!(!rejected.exists());
+        }
         assert_eq!(descriptor_text(&control), before);
-        assert_eq!(std::fs::read(&payload).unwrap(), b"unchanged");
+        assert_eq!(descriptor_text(&payload_reader), payload_before);
+        let mut contents = Vec::new();
+        payload_reader.read_to_end(&mut contents).unwrap();
+        assert_eq!(contents, b"unchanged");
         SetSecurityInfo(
             &mut control,
             SeObjectType::SE_FILE_OBJECT,

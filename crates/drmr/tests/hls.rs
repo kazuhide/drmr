@@ -52,16 +52,35 @@ fn assert_ends(output: &Output, stage: &str, message: &str, code: i32) {
     );
 }
 
-/// A private configuration file (mode 0600, as `private_json` requires).
+/// A private configuration file, protected before its synthetic payload is written.
 fn private(path: &Path, value: &Value) -> PathBuf {
-    std::fs::write(path, value.to_string()).unwrap();
-    set_mode(path, 0o600);
+    #[cfg(unix)]
+    {
+        std::fs::write(path, value.to_string()).unwrap();
+        set_mode(path, 0o600);
+    }
+    #[cfg(windows)]
+    {
+        use std::io::Write;
+        let mut file = std::fs::File::create(path).unwrap();
+        private_fs::harden(&file).unwrap();
+        file.write_all(value.to_string().as_bytes()).unwrap();
+    }
     path.to_path_buf()
 }
 
 fn set_mode(path: &Path, mode: u32) {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+    #[cfg(windows)]
+    {
+        // The deliberately ordinary file keeps its inherited, non-secret ACL.
+        assert_eq!(mode, 0o644);
+        assert!(private_fs::verify(&std::fs::File::open(path).unwrap()).is_err());
+    }
 }
 
 /// An admitted snapshot without tracks: `read_analysis` accepts it (its digest is the
