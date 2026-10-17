@@ -219,7 +219,9 @@ fn held_directories(path: &Path) -> Result<Vec<File>, ConversionError> {
         // absence of FILE_SHARE_DELETE.
         let directory = OpenOptions::new()
             .access_mode(0x81)
-            .share_mode(1)
+            // Renaming a child can require opening its parent for write access.
+            // Preserve that access while still refusing FILE_SHARE_DELETE.
+            .share_mode(3)
             .custom_flags(0x0220_0000)
             .security_qos_flags(0x0001_0000)
             .open(&prefix)
@@ -370,6 +372,61 @@ mod tests {
         #[cfg(windows)]
         private_fs::verify(&std::fs::File::open(target).unwrap()).unwrap();
     }
+    #[cfg(windows)]
+    #[test]
+    fn child_publication_requires_write_sharing_without_allowing_parent_replacement() {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        let root = tempfile::tempdir().unwrap();
+        // Pin only this unique parent: the deliberately restrictive control must
+        // not interfere with unrelated tests' directory operations on the drive.
+        let directory = root.path().join("private-publication");
+        native::create_private_dir_all(&directory).unwrap();
+        for sharing in [1, 3] {
+            let source = directory.join(format!("source-{sharing}"));
+            let target = directory.join(format!("target-{sharing}"));
+            native::create_private_new(&source)
+                .unwrap()
+                .write_all(b"verified")
+                .unwrap();
+            let held = OpenOptions::new()
+                .access_mode(0x81)
+                .share_mode(sharing)
+                .security_qos_flags(0x0001_0000)
+                .custom_flags(0x0220_0000)
+                .open(&directory)
+                .unwrap();
+            assert!(
+                std::fs::rename(&directory, root.path().join("redirected")).is_err(),
+                "both sharing modes must refuse deletion/rename of the pinned parent"
+            );
+            let moved = winsafe::MoveFileEx(
+                source.to_str().unwrap(),
+                Some(target.to_str().unwrap()),
+                winsafe::co::MOVEFILE::default(),
+            );
+            if sharing == 1 {
+                let error =
+                    moved.expect_err("the read-only-sharing control must refuse child publication");
+                eprintln!("publication read-only-sharing control WIN32=0x{error:08x}");
+                assert_eq!(
+                    error,
+                    winsafe::co::ERROR::SHARING_VIOLATION,
+                    "unexpected native control error: 0x{error:08x}"
+                );
+                assert_eq!(std::fs::read(&source).unwrap(), b"verified");
+                assert!(!target.exists());
+            } else {
+                moved.unwrap_or_else(|error| {
+                    panic!("write-sharing publication failed WIN32=0x{error:08x}")
+                });
+                assert_eq!(std::fs::read(&target).unwrap(), b"verified");
+                assert!(!source.exists());
+            }
+            drop(held);
+        }
+        std::fs::rename(&directory, root.path().join("released")).unwrap();
+    }
+
     #[cfg(windows)]
     #[test]
     fn stage_container_is_strict_and_pinned_even_when_parent_grants_delete_child() {
