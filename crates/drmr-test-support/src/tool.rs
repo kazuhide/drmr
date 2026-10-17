@@ -267,7 +267,7 @@ fn media(args: &[String], spec: &ToolSpec) -> io::Result<i32> {
             let last = args
                 .last()
                 .ok_or_else(|| io::Error::other("missing output argument"))?;
-            if joined.contains("-f framemd5 -") {
+            if last == "-" && args.windows(2).any(|pair| pair == ["-f", "framemd5"]) {
                 emit_file(root, "framemd5.txt")?;
             } else if joined.contains("-f s32le") {
                 emit_file(root, "pcm.bin")?;
