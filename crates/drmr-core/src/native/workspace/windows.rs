@@ -143,6 +143,7 @@ pub(super) fn create(path: &Path) -> io::Result<()> {
     if !path.exists() {
         crate::native::create_private_dir_all(path)?;
     }
+    let _ancestors = crate::native::files::pin_directory_path(path)?;
     // Acquisition proves local ACL-capable storage and rejects every ancestor
     // reparse point. An existing media ACL differs only at the final directory.
     match private_fs::PrivateDir::open(path) {
@@ -182,6 +183,7 @@ pub(super) fn create(path: &Path) -> io::Result<()> {
 pub(super) fn seal(path: &Path) -> io::Result<()> {
     let absolute = std::path::absolute(path)?;
     let path = absolute.as_path();
+    let _ancestors = crate::native::files::pin_directory_path(path)?;
     match private_fs::PrivateDir::open(path) {
         Ok(_) | Err(private_fs::Error::InsecureAcl) => {}
         Err(_) => return Err(invalid()),
@@ -221,6 +223,14 @@ pub(super) fn create_new(path: &Path) -> io::Result<File> {
 pub(super) fn create_or_truncate(path: &Path) -> io::Result<File> {
     let absolute = std::path::absolute(path)?;
     let parent = absolute.parent().ok_or_else(invalid)?;
+    let _ancestors = match crate::native::files::pin_directory_path(parent) {
+        Ok(held) => held,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            crate::native::create_private_dir_all(parent)?;
+            crate::native::files::pin_directory_path(parent)?
+        }
+        Err(error) => return Err(error),
+    };
     match private_fs::PrivateDir::open(parent) {
         Ok(_) => return crate::native::create_private_or_truncate(path),
         Err(private_fs::Error::InsecureAcl) => {
@@ -256,11 +266,23 @@ pub(super) fn create_or_truncate(path: &Path) -> io::Result<File> {
 }
 
 fn open_file(path: &Path, create: bool) -> io::Result<File> {
+    open_file_after_validation(path, create, || {})
+}
+
+fn open_file_after_validation(
+    path: &Path,
+    create: bool,
+    after_validation: impl FnOnce(),
+) -> io::Result<File> {
     let absolute = std::path::absolute(path)?;
     let path = absolute.as_path();
     let parent = path.parent().ok_or_else(invalid)?;
     let name = path.file_name().ok_or_else(invalid)?;
     crate::native::validate_windows_relative_path(name.to_str().ok_or_else(invalid)?)?;
+    // A held immediate parent does not establish the identity of its higher
+    // ancestors. Pin the entire local path before checking ACLs or opening a
+    // writable leaf; keep those pins until the verified file handle is acquired.
+    let _ancestors = crate::native::files::pin_directory_path(parent)?;
     match private_fs::PrivateDir::open(parent) {
         Ok(_) | Err(private_fs::Error::InsecureAcl) => {}
         Err(_) => return Err(invalid()),
@@ -276,6 +298,7 @@ fn open_file(path: &Path, create: bool) -> io::Result<File> {
     if ace_text(&descriptor)?.1 != policy.media_ace {
         return Err(invalid());
     }
+    after_validation();
     let mut file = OpenOptions::new()
         .read(true)
         .write(true)
@@ -293,6 +316,43 @@ fn open_file(path: &Path, create: bool) -> io::Result<File> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_higher_media_ancestor_stays_pinned_through_writable_leaf_acquisition() {
+        use std::io::Write;
+        let temp = tempfile::tempdir().unwrap();
+        let ancestor = temp.path().join("ancestor");
+        let media = ancestor.join("nested").join("media");
+        crate::native::create_private_dir_all(&media).unwrap();
+        create(&media).unwrap();
+        let target = media.join("output.mp4");
+        create_new(&target).unwrap().write_all(b"original").unwrap();
+        let moved = temp.path().join("moved");
+        let mut attempted = false;
+        let file = open_file_after_validation(&target, false, || {
+            attempted = true;
+            let renamed = std::fs::rename(&ancestor, &moved);
+            // Restore an unexpectedly moved tree before asserting, so a failing
+            // regression still leaves the original fixture available to inspect.
+            if renamed.is_ok() {
+                std::fs::rename(&moved, &ancestor).unwrap();
+            }
+            assert!(
+                renamed.is_err(),
+                "higher ancestor moved before writable leaf open"
+            );
+        })
+        .unwrap();
+        assert!(attempted);
+        assert_eq!(std::fs::read(&target).unwrap(), b"original");
+        file.set_len(0).unwrap();
+        drop(file);
+        std::fs::rename(&ancestor, &moved).unwrap();
+        assert_eq!(
+            std::fs::read(moved.join("nested/media/output.mp4")).unwrap(),
+            b""
+        );
+    }
 
     #[test]
     fn a_held_media_parent_cannot_be_renamed_before_file_creation() {
