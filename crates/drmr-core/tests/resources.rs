@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const MIB: u64 = 1024 * 1024;
+const PYTHON: &str = if cfg!(windows) { "python" } else { "python3" };
 
 fn small_video() -> Workload {
     Workload {
@@ -180,7 +181,7 @@ fn real_ports_register_verified_content_and_preserve_the_worker_upper_bound() {
     assert_eq!(
         runner
             .run_tool(
-                &["python3".into(), "-c".into(), "print('complete')".into()],
+                &[PYTHON.into(), "-c".into(), "print('complete')".into()],
                 "registered-content",
                 &RunOptions::default()
             )
@@ -195,7 +196,7 @@ fn real_ports_register_verified_content_and_preserve_the_worker_upper_bound() {
     assert_eq!(
         runner
             .run_tool(
-                &["python3".into(), "-c".into(), "print('complete')".into()],
+                &[PYTHON.into(), "-c".into(), "print('complete')".into()],
                 "larger-content",
                 &RunOptions {
                     workload: Some(workload),
@@ -276,7 +277,7 @@ fn captured_media_reports_the_output_limit_instead_of_tool_unavailability() {
     let error = Subprocess::new(runner)
         .run_media(
             &[
-                "python3".into(),
+                PYTHON.into(),
                 "-c".into(),
                 "print('x'*(20*1024*1024))".into(),
             ],
