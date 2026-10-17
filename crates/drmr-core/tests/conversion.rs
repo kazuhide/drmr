@@ -508,3 +508,41 @@ fn middle_packet_timestamp_changes_fail_even_when_payloads_and_duration_match() 
     assert!(!report.checks.packet_timing_equal);
     assert!(!report.passed);
 }
+
+#[cfg(unix)]
+#[test]
+fn fragmented_b_frame_input_keeps_its_original_presentation_timeline() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("source.mp4");
+    let status = std::process::Command::new("ffmpeg")
+        .args([
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=s=64x64:r=24:d=1",
+            "-an",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-movflags",
+            "+frag_keyframe+empty_moov",
+        ])
+        .arg(&source)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let output = directory.path().join("output.mp4");
+    let report = converter()
+        .convert_mp4(
+            &source,
+            &output,
+            TargetProtection::Cbcs,
+            &InputKeys::default(),
+            Some(&OutputKey::from_hex(KID_OUT, KEY_OUT).unwrap()),
+        )
+        .unwrap();
+    assert!(report.verification.passed);
+}

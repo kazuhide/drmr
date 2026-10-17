@@ -10,6 +10,7 @@ pub mod key_file;
 pub use aes128::{
     Aes128Key, HlsInputKeys, HlsOutputKey, SegmentIv, decrypt_segment, encrypt_segment,
 };
+mod hls;
 mod keys;
 mod verify;
 use crate::{
@@ -38,6 +39,22 @@ pub struct ConversionReport {
     pub input: Inspection,
     pub output: Inspection,
     pub verification: VerificationReport,
+}
+/// A local source and a zero-based stream selector. Execution revalidates the actual media.
+/// No inspection report or declared media role authorizes a conversion.
+pub struct LocalTrack {
+    pub source: PathBuf,
+    pub kind: TrackKind,
+    pub index: usize,
+}
+impl std::fmt::Debug for LocalTrack {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("LocalTrack")
+            .field("kind", &self.kind)
+            .field("index", &self.index)
+            .finish_non_exhaustive()
+    }
 }
 /// Explicit backend configuration; no executable is selected from source metadata.
 pub struct Converter {
@@ -68,6 +85,48 @@ impl Converter {
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.backend.timeout = timeout;
         self
+    }
+    pub fn convert_hls_aes128(
+        &self,
+        input: &Path,
+        output: &Path,
+        input_keys: &InputKeys,
+        output_key: &HlsOutputKey,
+    ) -> Result<ConversionReport, ConversionError> {
+        self.hls_output(input, output, input_keys, output_key)
+    }
+    pub fn convert_hls_to_hls_aes128(
+        &self,
+        input: &Path,
+        output: &Path,
+        input_keys: &InputKeys,
+        hls_keys: &HlsInputKeys,
+        output_key: &HlsOutputKey,
+    ) -> Result<ConversionReport, ConversionError> {
+        let workspace = workspace()?;
+        let localized = hls::localize(input, workspace.path(), hls_keys)?;
+        let actual = validate(&localized.combined, input_keys)?;
+        let key = source_key(&actual, input_keys);
+        let check =
+            self.backend
+                .verify_media(&localized.reference, &localized.combined, key, key)?;
+        if !check.passed {
+            return Err(ConversionError("source-decryption-verification-failed"));
+        }
+        let mut report = self.hls_output(&localized.combined, output, input_keys, output_key)?;
+        report.input = localized.report;
+        Ok(report)
+    }
+    pub fn convert_from_hls(
+        &self,
+        input: &Path,
+        output: &Path,
+        target: TargetProtection,
+        input_keys: &InputKeys,
+        hls_keys: &HlsInputKeys,
+        output_key: Option<&OutputKey>,
+    ) -> Result<ConversionReport, ConversionError> {
+        self.hls_input(input, output, target, input_keys, hls_keys, output_key)
     }
     pub fn convert_mp4(
         &self,

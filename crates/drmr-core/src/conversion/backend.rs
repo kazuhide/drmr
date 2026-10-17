@@ -21,6 +21,21 @@ impl Backend {
         tool: &str,
         secrets: &[&str],
     ) -> Result<Vec<u8>, ConversionError> {
+        let mut effective = Zeroizing::new(argv.to_vec());
+        if matches!(tool, "ffmpeg" | "ffprobe") {
+            let input = effective
+                .iter()
+                .position(|value| value == "-i")
+                .map_or_else(|| effective.len() - 1, |index| index + 1);
+            if effective.get(input).is_some_and(|value| {
+                Path::new(value)
+                    .extension()
+                    .is_some_and(|extension| extension == "m3u8")
+            }) {
+                let at = if tool == "ffmpeg" { input - 1 } else { input };
+                effective.splice(at..at, ["-allowed_extensions".into(), "ALL".into()]);
+            }
+        }
         let shown = vec![tool.to_string(), "[arguments redacted]".into()];
         let options = RunOptions {
             argv_redacted: Some(&shown),
@@ -32,7 +47,7 @@ impl Backend {
         };
         let completed = self
             .runner
-            .run_tool(argv, tool, &options)
+            .run_tool(&effective, tool, &options)
             .map_err(|_| ConversionError("media-tool-unavailable-or-timeout"))?;
         if completed.returncode != Some(0) {
             return Err(ConversionError("media-tool-failed"));
@@ -53,6 +68,7 @@ impl Backend {
         }
         let mut argv = Zeroizing::new(vec![
             self.packager.clone(),
+            "--mp4_reset_initial_composition_offset_to_zero=false".into(),
             format!("input={input},stream=0,output={output}"),
             "--clear_lead".into(),
             "0".into(),
@@ -98,13 +114,35 @@ impl Backend {
         super::private_file_mode(Path::new(output))?;
         Ok(())
     }
+    pub fn package_hls(&self, input: &Path, output: &Path) -> Result<(), ConversionError> {
+        let input = input.to_str().ok_or(ConversionError("unsupported-path"))?;
+        let output = output.to_str().ok_or(ConversionError("unsupported-path"))?;
+        if input.contains(',') || output.contains(',') {
+            return Err(ConversionError("unsupported-path"));
+        }
+        let argv = vec![
+            self.packager.clone(),
+            "--mp4_reset_initial_composition_offset_to_zero=false".into(),
+            format!(
+                "input={input},stream=0,init_segment={output}/init.mp4,segment_template={output}/seg_$Number$.m4s,playlist_name=media.m3u8"
+            ),
+            "--segment_duration".into(),
+            "2".into(),
+            "--hls_playlist_type".into(),
+            "VOD".into(),
+            "--hls_master_playlist_output".into(),
+            format!("{output}/master.m3u8"),
+        ];
+        self.run(&argv, "packager", &[])?;
+        Ok(())
+    }
     pub fn profile(&self, path: &Path) -> Result<serde_json::Value, ConversionError> {
         let argv = vec![
             self.ffprobe.clone(),
             "-v".into(),
             "error".into(),
             "-protocol_whitelist".into(),
-            "file".into(),
+            "file,crypto".into(),
             "-count_packets".into(),
             "-show_entries".into(),
             "stream=index,codec_name,codec_type,time_base,start_pts,duration_ts,nb_read_packets"
@@ -142,8 +180,6 @@ impl Backend {
             "codec_name",
             "codec_type",
             "time_base",
-            "start_pts",
-            "duration_ts",
             "nb_read_packets",
         ] {
             profile.insert(
@@ -164,7 +200,7 @@ impl Backend {
             "-v".into(),
             "error".into(),
             "-protocol_whitelist".into(),
-            "file".into(),
+            "file,crypto".into(),
             "-read_intervals".into(),
             format!("%+#{}", MAX_PACKETS + 1),
             "-show_packets".into(),
@@ -223,7 +259,7 @@ impl Backend {
             "-threads".into(),
             "1".into(),
             "-protocol_whitelist".into(),
-            "file".into(),
+            "file,crypto".into(),
             "-i".into(),
             path.to_str()
                 .ok_or(ConversionError("unsupported-path"))?
