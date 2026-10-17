@@ -84,7 +84,9 @@ pub fn create_private_new(path: &Path) -> io::Result<File> {
 /// Open a private file for updates, or exclusively create it if it is absent.
 pub fn create_private_update(path: &Path) -> io::Result<File> {
     match create_private_new(path) {
-        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => open_private(path, true),
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            open_private(path, true, false)
+        }
         result => result,
     }
 }
@@ -93,7 +95,7 @@ pub fn create_private_update(path: &Path) -> io::Result<File> {
 pub fn create_private_or_truncate(path: &Path) -> io::Result<File> {
     match create_private_new(path) {
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-            let file = open_private(path, true)?;
+            let file = open_private(path, true, false)?;
             file.set_len(0)?;
             Ok(file)
         }
@@ -103,10 +105,18 @@ pub fn create_private_or_truncate(path: &Path) -> io::Result<File> {
 
 /// Open a private regular file without changing its ownership, ACL or contents.
 pub fn open_private_read(path: &Path) -> io::Result<File> {
-    open_private(path, false)
+    open_private(path, false, false)
 }
 
-fn open_private(path: &Path, write: bool) -> io::Result<File> {
+/// Read a mutable private log while its writer remains open.
+/// Ownership, access control, link count, and reparse checks remain mandatory.
+pub fn open_private_shared_read(path: &Path) -> io::Result<File> {
+    open_private(path, false, true)
+}
+
+fn open_private(path: &Path, write: bool, shared_writer: bool) -> io::Result<File> {
+    #[cfg(unix)]
+    let _ = shared_writer;
     #[cfg(unix)]
     {
         use rustix::fs::{Mode, OFlags};
@@ -140,6 +150,7 @@ fn open_private(path: &Path, write: bool) -> io::Result<File> {
         const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
         const SECURITY_IDENTIFICATION: u32 = 0x0001_0000;
         const FILE_SHARE_READ: u32 = 1;
+        const FILE_SHARE_WRITE: u32 = 2;
         let absolute = std::path::absolute(path)?;
         if !matches!(absolute.components().next(), Some(Component::Prefix(prefix)) if matches!(prefix.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_)))
         {
@@ -149,11 +160,12 @@ fn open_private(path: &Path, write: bool) -> io::Result<File> {
             ));
         }
         // Open the link entity, then reject every reparse point through the held
-        // handle. Deny write/delete sharing while the admitted file is being read.
+        // handle. Immutable secret reads deny write/delete sharing; mutable logs
+        // permit an existing writer but still deny deletion while being read.
         let file = OpenOptions::new()
             .read(true)
             .write(write)
-            .share_mode(FILE_SHARE_READ)
+            .share_mode(FILE_SHARE_READ | if shared_writer { FILE_SHARE_WRITE } else { 0 })
             .security_qos_flags(SECURITY_IDENTIFICATION)
             .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
             .open(absolute)?;

@@ -17,6 +17,7 @@ const IV: &str = "20202020202020202020202020202020";
 /// conversion job ends quickly whatever `drmr run` is wired to.
 fn stage_entry(catalog: &Path, asset_id: &str) {
     let entry = catalog.join(asset_id);
+    drmr_core::native::create_private_dir_all(&entry).unwrap();
     let dash = entry.join("download/manifest.example.test").join(asset_id);
     std::fs::create_dir_all(dash.join("dash")).unwrap();
     std::fs::create_dir_all(dash.join("hls")).unwrap();
@@ -26,11 +27,10 @@ fn stage_entry(catalog: &Path, asset_id: &str) {
     )
     .unwrap();
     std::fs::write(dash.join("hls/manifest.m3u8"), "#EXTM3U\n").unwrap();
-    std::fs::write(
-        entry.join("keys.env"),
-        format!("DRM_KID={KID}\nDRM_KEY={KEY}\nDRM_IV={IV}\n"),
-    )
-    .unwrap();
+    drmr_core::native::create_private_new(&entry.join("keys.env"))
+        .unwrap()
+        .write_all(format!("DRM_KID={KID}\nDRM_KEY={KEY}\nDRM_IV={IV}\n").as_bytes())
+        .unwrap();
     let descriptor = serde_json::json!({
         "asset_id": asset_id,
         "label": "Synthetic",
@@ -108,10 +108,10 @@ fn serve_answers_the_api_and_its_jobs_run_this_executable() {
         "loopback by default"
     );
 
-    // The jobs' CLI is this executable, which carries `batch` on POSIX.
+    // The jobs' CLI is this executable, which carries native batch workers.
     let (status, platform) = request(&server, "GET", "/api/platform", "", "");
     assert_eq!(status, 200);
-    assert_eq!(platform["batch_available"], Value::Bool(cfg!(unix)));
+    assert_eq!(platform["batch_available"], Value::Bool(true));
     assert_eq!(platform["concurrency"], 1);
 
     // A mutating route keeps the same-origin guard.

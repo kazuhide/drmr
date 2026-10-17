@@ -276,9 +276,13 @@ pub enum ResolveError {
     /// `RuntimeError: Symlink loop from …` (`Path.resolve` re-checks with `stat`).
     #[error("symlink loop")]
     Loop,
+    /// A native path lookup failed without exposing its input.
+    #[error("path lookup failed")]
+    Lookup,
 }
 
 /// `os.path.abspath(path)`: joined to the working directory when relative, then normalised.
+#[cfg(unix)]
 pub fn abspath(path: &Path) -> PathBuf {
     let joined = if path.is_absolute() {
         path.to_path_buf()
@@ -286,6 +290,11 @@ pub fn abspath(path: &Path) -> PathBuf {
         std::env::current_dir().unwrap_or_default().join(path)
     };
     normpath(&joined)
+}
+
+#[cfg(windows)]
+pub fn abspath(path: &Path) -> PathBuf {
+    std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 /// `os.path.normpath(path)` on POSIX: `.` and empty components dropped, `..` applied
@@ -327,6 +336,7 @@ pub fn normpath(path: &Path) -> PathBuf {
 /// `pathlib.Path(path).resolve()` (`CPython` 3.11, non-strict): every symlink resolved, a missing
 /// component kept as written, `..` applied to the resolved prefix; a symlink loop is
 /// [`ResolveError::Loop`] (Python's `RuntimeError`), a NUL byte [`ResolveError::Nul`].
+#[cfg(unix)]
 pub fn resolve(path: &Path) -> Result<PathBuf, ResolveError> {
     let text = path.to_string_lossy();
     if text.contains('\0') {
@@ -344,12 +354,28 @@ pub fn resolve(path: &Path) -> Result<PathBuf, ResolveError> {
     Ok(result)
 }
 
+#[cfg(windows)]
+pub fn resolve(path: &Path) -> Result<PathBuf, ResolveError> {
+    use std::os::windows::ffi::OsStrExt;
+    if path.as_os_str().encode_wide().any(|unit| unit == 0) {
+        return Err(ResolveError::Nul);
+    }
+    drmr_core::native::resolve_path(path).map_err(|error| {
+        if matches!(error.raw_os_error(), Some(1142 | 1921)) {
+            ResolveError::Loop
+        } else {
+            ResolveError::Lookup
+        }
+    })
+}
+
 #[cfg(target_os = "linux")]
 const ELOOP: i32 = 40;
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(unix, not(target_os = "linux")))]
 const ELOOP: i32 = 62;
 
 /// `posixpath._joinrealpath(path, rest, strict=False, seen)`.
+#[cfg(unix)]
 fn join_realpath(
     mut path: PathBuf,
     rest: &str,
@@ -402,6 +428,7 @@ fn join_realpath(
 }
 
 /// The `..` step of `_joinrealpath`: `split(path)`, keeping a `..` that is already there.
+#[cfg(unix)]
 fn parent_join(path: &Path) -> PathBuf {
     let text = path.to_string_lossy().to_string();
     if text.is_empty() {
@@ -423,6 +450,7 @@ fn parent_join(path: &Path) -> PathBuf {
 }
 
 /// `posixpath.join(a, b)`: `b` replaces `a` when absolute, otherwise one slash between them.
+#[cfg(unix)]
 fn posix_join(base: &Path, name: &str) -> PathBuf {
     if name.starts_with('/') {
         return PathBuf::from(name);
@@ -1138,6 +1166,21 @@ mod tests {
         );
     }
 
+    fn test_directory_link(target: &Path, link: &Path) {
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(target, link).unwrap();
+        #[cfg(windows)]
+        {
+            let result = std::process::Command::new("cmd.exe")
+                .args(["/d", "/c", "mklink", "/J"])
+                .arg(link)
+                .arg(target)
+                .output()
+                .unwrap();
+            assert!(result.status.success(), "junction fixture failed");
+        }
+    }
+
     #[test]
     fn normpath_and_resolve_follow_posixpath() {
         assert_eq!(
@@ -1150,12 +1193,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = std::fs::canonicalize(dir.path()).unwrap();
         std::fs::create_dir(root.join("real")).unwrap();
-        std::os::unix::fs::symlink(root.join("real"), root.join("link")).unwrap();
+        test_directory_link(&root.join("real"), &root.join("link"));
         assert_eq!(
             resolve(&root.join("link/missing/../x")).unwrap(),
             root.join("real/x")
         );
-        std::os::unix::fs::symlink(root.join("loop"), root.join("loop")).unwrap();
+        test_directory_link(&root.join("loop"), &root.join("loop"));
         assert_eq!(
             resolve(&root.join("loop/x")).unwrap_err(),
             ResolveError::Loop

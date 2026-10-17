@@ -44,7 +44,7 @@ pub fn resolve_path(path: &Path) -> io::Result<PathBuf> {
 
 /// Refuse Windows device names, alternate streams and normalized filename aliases.
 #[cfg(any(windows, test))]
-pub(crate) fn validate_windows_relative_path(key: &str) -> io::Result<()> {
+pub fn validate_windows_relative_path(key: &str) -> io::Result<()> {
     for component in key.split('/') {
         let stem = component
             .split('.')

@@ -2,13 +2,14 @@
 
 use crate::catalog::CatalogEntry;
 use crate::pyutil;
+use drmr_core::native::{self, ManagedChild};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
@@ -66,7 +67,7 @@ pub fn safe_job_id(job_id: &str) -> bool {
 
 struct State {
     current_job_id: Option<String>,
-    process: Option<Child>,
+    process: Option<ManagedChild>,
     log_file: Option<File>,
     exit_code: Option<i32>,
     /// Exit codes of jobs that finished and were replaced as the current job.
@@ -79,12 +80,10 @@ impl State {
         if self.exit_code.is_none()
             && let Some(child) = self.process.as_mut()
         {
-            let code = match child.try_wait() {
-                Ok(Some(status)) => Some(exit_code(status)),
-                Ok(None) => None,
-                Err(_) => Some(0),
-            };
+            let code = observed_exit(&child.try_wait());
             if code.is_some() {
+                // Finish ownership of descendants before publishing a terminal state.
+                self.process = None;
                 self.exit_code = code;
                 self.log_file = None;
             }
@@ -93,6 +92,14 @@ impl State {
 
     fn busy(&self) -> bool {
         self.process.is_some() && self.exit_code.is_none()
+    }
+}
+
+fn observed_exit(result: &std::io::Result<Option<std::process::ExitStatus>>) -> Option<i32> {
+    match result {
+        Ok(Some(status)) => Some(exit_code(*status)),
+        Ok(None) => None,
+        Err(_) => Some(1),
     }
 }
 
@@ -144,7 +151,7 @@ impl ConversionJobManager {
         cli_argv: Vec<OsString>,
         base_env: EnvSource,
     ) -> std::io::Result<Self> {
-        std::fs::create_dir_all(jobs_dir)?;
+        native::create_private_dir_all(jobs_dir)?;
         Ok(ConversionJobManager {
             jobs_dir: jobs_dir.to_path_buf(),
             cli_argv,
@@ -239,18 +246,18 @@ impl ConversionJobManager {
     ) -> Result<JobHandle, JobError> {
         let job_id = pyutil::uuid4_hex();
         let log_path = self.jobs_dir.join(format!("{job_id}.jsonl"));
-        let log_file = File::create(&log_path).map_err(JobError::Launch)?;
+        let log_file = native::create_private_new(&log_path).map_err(JobError::Launch)?;
         let stdout = log_file.try_clone().map_err(JobError::Launch)?;
         let stderr = log_file.try_clone().map_err(JobError::Launch)?;
         let program = argv.first().cloned().unwrap_or_default();
-        let child = Command::new(&program)
+        let mut command = Command::new(&program);
+        command
             .args(&argv[1..])
             .env_clear()
             .envs(env.iter().map(|(name, value)| (name, value)))
             .stdout(Stdio::from(stdout))
-            .stderr(Stdio::from(stderr))
-            .spawn()
-            .map_err(JobError::Launch)?;
+            .stderr(Stdio::from(stderr));
+        let child = ManagedChild::spawn(command, true).map_err(JobError::Launch)?;
         if let (Some(current), Some(code)) = (state.current_job_id.take(), state.exit_code) {
             state.finished.insert(current, code);
         }
@@ -347,22 +354,19 @@ impl ConversionJobManager {
 }
 
 fn is_drm_var(name: &OsStr) -> bool {
-    matches!(name.to_str(), Some("DRM_KID" | "DRM_KEY" | "DRM_IV"))
+    name.to_str().is_some_and(|name| {
+        ["DRM_KID", "DRM_KEY", "DRM_IV"].iter().any(|secret| {
+            if cfg!(windows) {
+                name.eq_ignore_ascii_case(secret)
+            } else {
+                name == *secret
+            }
+        })
+    })
 }
 
 fn open_nofollow(path: &Path) -> std::io::Result<File> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        std::fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(path)
-    }
-    #[cfg(not(unix))]
-    {
-        File::open(path)
-    }
+    native::open_private_shared_read(path)
 }
 
 /// The lines of a persisted log ([`ConversionJobManager::read_log`]): `\r\n`, `\r` and `\n` end a
@@ -463,7 +467,7 @@ impl TailLog<'_> {
     fn read_chunk(&mut self) -> Result<bool, TailError> {
         let file = match self.file.as_mut() {
             Some(file) => file,
-            None => self.file.insert(File::open(&self.log_path)?),
+            None => self.file.insert(open_nofollow(&self.log_path)?),
         };
         let mut bytes = std::mem::take(&mut self.pending);
         let before = bytes.len();
@@ -540,6 +544,16 @@ impl Iterator for TailLog<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write as _;
+
+    #[test]
+    fn an_unobservable_child_exit_is_failed_instead_of_successful() {
+        assert_eq!(
+            observed_exit(&Err(std::io::Error::other("lost child status"))),
+            Some(1)
+        );
+        assert_eq!(observed_exit(&Ok(None)), None);
+    }
 
     #[test]
     fn non_json_lines_are_wrapped_as_raw_records() {
@@ -553,14 +567,14 @@ mod tests {
     #[test]
     fn persisted_lines_use_universal_newlines_and_replacement() {
         let dir = tempfile::tempdir().unwrap();
+        let private = dir.path().join("private");
         let manager =
-            ConversionJobManager::new(dir.path(), vec![OsString::from("true")], process_env())
+            ConversionJobManager::new(&private, vec![OsString::from("true")], process_env())
                 .unwrap();
-        std::fs::write(
-            dir.path().join("j1.jsonl"),
-            b"{\"a\": 1}\r\n\"x\"\r\n\nnot \xff json",
-        )
-        .unwrap();
+        native::create_private_new(&private.join("j1.jsonl"))
+            .unwrap()
+            .write_all(b"{\"a\": 1}\r\n\"x\"\r\n\nnot \xff json")
+            .unwrap();
         let lines: Vec<String> = manager.read_log("j1").collect();
         assert_eq!(
             lines,
@@ -578,14 +592,18 @@ mod tests {
     #[test]
     fn the_tail_drains_what_was_written_just_before_the_exit_was_observed() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("job.jsonl");
-        std::fs::write(&path, "{\"stage\": \"fake\", \"message\": \"first\"}\n").unwrap();
+        let private = dir.path().join("private");
+        native::create_private_dir_all(&private).unwrap();
+        let path = private.join("job.jsonl");
+        native::create_private_new(&path)
+            .unwrap()
+            .write_all(b"{\"stage\": \"fake\", \"message\": \"first\"}\n")
+            .unwrap();
         let writer = path.clone();
         let tail = TailLog::new(
             path,
             Duration::from_millis(1),
             Box::new(move || {
-                use std::io::Write as _;
                 let mut file = std::fs::OpenOptions::new()
                     .append(true)
                     .open(&writer)

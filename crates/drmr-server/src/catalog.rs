@@ -90,11 +90,21 @@ fn resolve(path: &Path) -> Result<PathBuf, EntryError> {
         // `os.lstat` raises `ValueError("embedded null byte")`: a skip whose reason is that text.
         ResolveError::Nul => EntryError::Skip("embedded null byte".to_string()),
         ResolveError::Loop => EntryError::Escape(CatalogScanError::SymlinkLoop),
+        ResolveError::Lookup => EntryError::Skip("path lookup failed".into()),
     })
 }
 
 fn parse_env_file(path: &Path) -> Result<HashMap<String, String>, EntryError> {
-    let text = std::fs::read(path)
+    use std::io::Read as _;
+    let text = drmr_core::native::open_private_read(path)
+        .and_then(|file| {
+            let mut bytes = Vec::new();
+            file.take(1024 * 1024 + 1).read_to_end(&mut bytes)?;
+            if bytes.len() > 1024 * 1024 {
+                return Err(std::io::Error::other("keys file too large"));
+            }
+            Ok(bytes)
+        })
         .ok()
         .and_then(|bytes| String::from_utf8(bytes).ok())
         .ok_or_else(|| {
@@ -165,6 +175,9 @@ fn resolve_within(entry_dir: &Path, rel: &Value, field: &str) -> Result<PathBuf,
             )));
         }
     };
+    #[cfg(windows)]
+    drmr_core::native::validate_windows_relative_path(text)
+        .map_err(|_| EntryError::Skip(format!("{field}: invalid relative path")))?;
     let entry_resolved = resolve(entry_dir)?;
     let candidate = resolve(&entry_resolved.join(text))?;
     if !pyutil::is_relative_to(&candidate, &entry_resolved) {

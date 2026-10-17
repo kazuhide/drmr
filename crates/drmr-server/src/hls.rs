@@ -276,7 +276,7 @@ impl HlsService {
         manager: Arc<ConversionJobManager>,
     ) -> Result<Arc<HlsService>, StartError> {
         let output = pyutil::resolve(&config.output_root).map_err(|_| StartError::Loop)?;
-        std::fs::create_dir_all(&output).map_err(StartError::Output)?;
+        drmr_core::native::create_private_dir_all(&output).map_err(StartError::Output)?;
         let clock = config
             .hooks
             .hls_clock
@@ -372,7 +372,7 @@ impl HlsService {
             ));
         }
         let parent = path.parent().unwrap_or(&self.output);
-        std::fs::create_dir_all(parent).map_err(|_| PersistError::Io)?;
+        drmr_core::native::create_private_dir_all(parent).map_err(|_| PersistError::Io)?;
         let file_name = path
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
@@ -1786,16 +1786,9 @@ impl PersistError {
 pub fn write_private(path: &Path, body: &Value) -> std::io::Result<()> {
     use std::io::Write as _;
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+        drmr_core::native::create_private_dir_all(parent)?;
     }
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(path)?;
+    let mut file = drmr_core::native::create_private_new(path)?;
     file.write_all(pyutil::dumps(body).as_bytes())
 }
 

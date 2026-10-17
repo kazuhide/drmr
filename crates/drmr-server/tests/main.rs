@@ -1,3 +1,5 @@
+mod support;
+
 use drmr_server::config::configure;
 use drmr_server::{JobCli, ServeArgs, config_from_env};
 use std::collections::HashMap;
@@ -128,8 +130,18 @@ fn the_jobs_run_the_hosting_executables_cli_unless_another_is_named() {
     assert_eq!(config.static_dir, named.static_dir);
 
     // Naming the default CLI's own file, here through a symlink, keeps what it carries.
-    let link = dir.path().join("link");
-    std::os::unix::fs::symlink(&other, &link).unwrap();
+    #[cfg(unix)]
+    let link = {
+        let link = dir.path().join("link");
+        support::file_link(&other, &link);
+        link
+    };
+    #[cfg(windows)]
+    let link = {
+        let junction = dir.path().join("link-directory");
+        support::directory_link(dir.path(), &junction);
+        junction.join("other-cli")
+    };
     let own = JobCli {
         argv: vec![other.into_os_string()],
         has_batch: true,

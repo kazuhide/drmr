@@ -532,6 +532,7 @@ dependencies = [
  "base64 0.22.1",
  "clap",
  "drmr-core",
+ "drmr-test-support",
  "getrandom 0.4.3",
  "hex",
  "http-body",
@@ -546,6 +547,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "ureq 3.4.2",
+ "windows-permissions",
  "zeroize",
 ]
 

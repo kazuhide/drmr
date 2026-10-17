@@ -35,6 +35,9 @@ pub(super) fn run(args: &[OsString], spec: &ToolSpec) -> io::Result<i32> {
     // Readiness is published last, after the complete argument and DRM captures exist.
     write_environment(&call.join("inherited.tmp"), &["PATH", "AMBIENT_MARKER"])?;
     fs::rename(call.join("inherited.tmp"), call.join("inherited"))?;
+    if root.join("tree").is_file() {
+        super::control::spawn_descendant(&root.join("descendant.pid"), Some(&root.join("descendant.lock")))?;
+    }
     let lines = root.join("lines");
     if lines.is_file() {
         io::copy(&mut fs::File::open(lines)?, &mut io::stdout())?;

@@ -32,11 +32,11 @@ fn catalog_detail_report_requires_saved_checks_and_scrubs_private_fields() {
         let h = Harness::new();
         stage(&h.catalog, "report-one");
         let asset = h.output.join("report-one");
-        std::fs::create_dir_all(asset.join("manifests/local")).unwrap();
+        support::private_dir(asset.join("manifests/local")).unwrap();
         std::fs::write(asset.join("manifests/local/manifest.mpd"), "<MPD/>").unwrap();
         // An output manifest alone is not evidence that validation passed.
         assert_eq!(h.client.get("/api/reports/catalog/report-one").status, 410);
-        std::fs::create_dir_all(asset.join("reports")).unwrap();
+        support::private_dir(asset.join("reports")).unwrap();
         let report = json!({"schema_version": "1", "asset_id": "report-one", "all_pass": false,
             "full_enumeration": true, "round_trip_verified": false,
             "renditions": [{"rendition_id": rendition_id, "content_type": "video",
@@ -82,10 +82,10 @@ fn catalog_detail_report_cannot_follow_report_symlink() {
     let h = Harness::new();
     stage(&h.catalog, "report-link");
     let reports = h.output.join("report-link/reports");
-    std::fs::create_dir_all(&reports).unwrap();
+    support::private_dir(&reports).unwrap();
     let private = h.root.path().join("private-report.json");
     std::fs::write(&private, KEY).unwrap();
-    std::os::unix::fs::symlink(&private, reports.join("phase1-summary.json")).unwrap();
+    support::file_link(&private, &reports.join("phase1-summary.json"));
     let answer = h.client.get("/api/reports/catalog/report-link");
     assert_eq!(answer.status, 410);
     assert!(!answer.text().contains(KEY));
@@ -99,7 +99,7 @@ fn catalog_detail_report_rejects_malformed_shapes() {
         let h = Harness::new();
         stage(&h.catalog, "malformed");
         let reports = h.output.join("malformed/reports");
-        std::fs::create_dir_all(&reports).unwrap();
+        support::private_dir(&reports).unwrap();
         std::fs::write(reports.join("phase1-summary.json"), report.to_string()).unwrap();
         let answer = h.client.get("/api/reports/catalog/malformed");
         assert_eq!(answer.status, 410, "{report}");
@@ -196,7 +196,7 @@ fn stage_skippable_entries(catalog: &std::path::Path) -> [&'static str; 3] {
         format!("DRM_KID=0badc0de\nDRM_KEY={KEY}\nDRM_IV={IV}\n"),
     )
     .unwrap();
-    std::fs::create_dir(catalog.join("broken-json")).unwrap();
+    support::private_dir(catalog.join("broken-json")).unwrap();
     std::fs::write(catalog.join("broken-json/asset.json"), "{not valid json").unwrap();
     ["0badc0de", KEY, IV]
 }
@@ -264,7 +264,7 @@ fn skipped_entries_are_logged_by_the_listing_only_not_every_lookup() {
 fn catalog_with_an_unreadable_descriptor_still_lists_the_valid_entries() {
     let h = Harness::new();
     stage(&h.catalog, "good-one");
-    std::fs::create_dir(h.catalog.join("binary-json")).unwrap();
+    support::private_dir(h.catalog.join("binary-json")).unwrap();
     std::fs::write(
         h.catalog.join("binary-json/asset.json"),
         b"\xff\xfe\x00 not utf-8",
@@ -543,7 +543,7 @@ fn source_rejects_catalog_with_keys_under_download() {
         let mut descriptor: Value =
             serde_json::from_slice(&std::fs::read(entry.join("asset.json")).unwrap()).unwrap();
         if through_symlink {
-            std::os::unix::fs::symlink(&keys, entry.join("keys.env")).unwrap();
+            support::file_link(&keys, &entry.join("keys.env"));
         } else {
             descriptor["keys_file"] = json!("download/secret.env");
         }
@@ -646,7 +646,7 @@ fn write_output_tree(output: &std::path::Path, asset_id: &str) {
         ("reports/report.json", b"{}"),
     ] {
         let target = output.join(asset_id).join(rel);
-        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        support::private_dir(target.parent().unwrap()).unwrap();
         std::fs::write(target, data).unwrap();
     }
 }
@@ -665,6 +665,23 @@ fn output_rejects_traversal_and_unsafe_ids() {
             "{bad}"
         );
     }
+}
+
+#[cfg(windows)]
+#[test]
+fn output_does_not_serve_alternate_data_streams() {
+    let h = Harness::new();
+    write_output_tree(&h.output, "streams");
+    std::fs::write(
+        h.output.join("streams/cbcs/video/v0/init.mp4:secret"),
+        b"PRIVATE-STREAM",
+    )
+    .unwrap();
+    let answer = h
+        .client
+        .get("/output/streams/cbcs/video/v0/init.mp4:secret");
+    assert_eq!(answer.status, 404);
+    assert!(!answer.text().contains("PRIVATE-STREAM"));
 }
 
 #[test]
@@ -715,12 +732,23 @@ fn output_subtree_check_cannot_be_bypassed_by_a_traversal_spelling() {
 fn output_never_follows_a_symlink_from_cbcs_into_the_clear_copy() {
     let h = Harness::new();
     write_output_tree(&h.output, "out4");
-    std::os::unix::fs::symlink(
-        h.output.join("out4/clear/video/v0/clear.mp4"),
-        h.output.join("out4/cbcs/video/v0/leak.mp4"),
-    )
-    .unwrap();
-    let answer = h.client.get("/output/out4/cbcs/video/v0/leak.mp4");
+    #[cfg(unix)]
+    let request = {
+        support::file_link(
+            &h.output.join("out4/clear/video/v0/clear.mp4"),
+            &h.output.join("out4/cbcs/video/v0/leak.mp4"),
+        );
+        "/output/out4/cbcs/video/v0/leak.mp4"
+    };
+    #[cfg(windows)]
+    let request = {
+        support::directory_link(
+            &h.output.join("out4/clear/video/v0"),
+            &h.output.join("out4/cbcs/video/v0/leak"),
+        );
+        "/output/out4/cbcs/video/v0/leak/clear.mp4"
+    };
+    let answer = h.client.get(request);
     assert_eq!(answer.status, 404);
     assert!(!answer.text().contains("DECRYPTED"));
 }
@@ -735,7 +763,7 @@ fn output_never_serves_job_logs_through_a_jobs_asset_id() {
 #[test]
 fn output_serves_a_file_that_exists() {
     let h = Harness::new();
-    std::fs::create_dir_all(h.output.join("out1/manifests/local")).unwrap();
+    support::private_dir(h.output.join("out1/manifests/local")).unwrap();
     std::fs::write(h.output.join("out1/manifests/local/manifest.mpd"), "<MPD/>").unwrap();
     let answer = h.client.get("/output/out1/manifests/local/manifest.mpd");
     assert_eq!(answer.status, 200);

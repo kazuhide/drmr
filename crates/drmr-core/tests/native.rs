@@ -763,3 +763,31 @@ fn assert_crash_cleanup(mode: &str) {
         tree_is_gone(temp.path())
     });
 }
+
+#[test]
+fn mutable_private_logs_can_be_read_while_the_writer_is_open() {
+    let temp = tempfile::tempdir().unwrap();
+    let directory = temp.path().join("private");
+    native::create_private_dir_all(&directory).unwrap();
+    let path = directory.join("active.jsonl");
+    let mut writer = native::create_private_new(&path).unwrap();
+    writer.write_all(b"first\n").unwrap();
+    let mut reader = native::open_private_shared_read(&path).unwrap();
+    let mut text = String::new();
+    reader.read_to_string(&mut text).unwrap();
+    assert_eq!(text, "first\n");
+    writer.write_all(b"second\n").unwrap();
+    text.clear();
+    reader.read_to_string(&mut text).unwrap();
+    assert_eq!(text, "second\n");
+}
+
+#[cfg(windows)]
+#[test]
+fn mutable_log_reads_still_reject_inherited_access() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("ordinary.jsonl");
+    std::fs::write(&path, b"unchanged").unwrap();
+    assert!(native::open_private_shared_read(&path).is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), b"unchanged");
+}
