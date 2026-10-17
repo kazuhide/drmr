@@ -88,6 +88,9 @@ jobs:
           Copy-Item .\target\release\drmr.exe, .\LICENSE, .\README.md $archive
           New-Item -ItemType Directory -Path "$archive\docs" | Out-Null
           Copy-Item .\docs\*.md "$archive\docs"
+          $licenses = Join-Path $archive 'licenses\process-wrap'
+          New-Item -ItemType Directory -Path $licenses | Out-Null
+          Copy-Item .\vendor\process-wrap\COPYRIGHT, .\vendor\process-wrap\LICENSE-MIT, .\vendor\process-wrap\LICENSE-APACHE $licenses
           Compress-Archive -Path "$archive\*" -DestinationPath "$archive.zip"
 
       - name: Upload native CLI archive

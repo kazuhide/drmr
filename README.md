@@ -78,7 +78,7 @@ drmr packages supplied media and signaling. It does not provide a DRM license se
 | `analyze-hls` | Download and analyze a clear HLS presentation into a saved snapshot |
 | `package-hls` | Package a verified HLS snapshot with DRM signaling |
 | `verify-snapshot` | Detect changes to a saved snapshot; `--files` also hashes its files |
-| `batch` | Process an asset work list with restart support on macOS/Linux |
+| `batch` | Process an asset work list with restart support; see the [Windows conditions](docs/windows.md) |
 | `serve` | Start the experimental local web console |
 | `canonical` | Print JSON with stable formatting and key order |
 | `version` | Print the version |

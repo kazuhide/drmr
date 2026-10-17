@@ -191,7 +191,7 @@ drmr verify-snapshot --files output/sample/clear/source
 
 ## Batch processing
 
-On macOS/Linux, `drmr batch --help` lists work-list, storage, restart-log, and retry options. A work list contains one JSON object per line: first `{"schema_version":"1"}`, then rows with exactly `asset_id`, `kind`, `dash_manifest`, and `hls_master`. `kind` is `dash-cenc` or `hls-clear`; manifest references are relative storage object keys, with unused references set to `null`.
+`drmr batch --help` lists work-list, storage, restart-log, and retry options. On Windows, use the [regular-user and private-directory conditions](windows.md). A work list contains one JSON object per line: first `{"schema_version":"1"}`, then rows with exactly `asset_id`, `kind`, `dash_manifest`, and `hls_master`. `kind` is `dash-cenc` or `hls-clear`; manifest references are relative storage object keys, with unused references set to `null`.
 
 Use `--plan` to inspect planned work before processing. The default key provider reads the three environment variables. To use per-asset keys, pass `--key-provider file --key-file /protected/keys.jsonl`. Each line in that file has exactly `asset_id`, `kid`, `key`, and `iv`; there is no schema header. All three key fields use the hexadecimal formats above. The file must have mode `0600`, must not be a symbolic link, and must be outside the output directory.
 
