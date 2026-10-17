@@ -446,7 +446,30 @@ fn stand_in(directory: &Path, name: &str) -> std::path::PathBuf {
     script
 }
 
-#[cfg(unix)]
+#[cfg(windows)]
+fn stand_in(directory: &Path, name: &str) -> std::path::PathBuf {
+    use drmr_test_support::{Mode, ToolSpec};
+    let mut spec = ToolSpec::default();
+    spec.stdout = match name {
+        "ffprobe" => br#"{"streams":[{"index":0,"codec_type":"video","codec_name":"h264"}],"packets":[{"flags":"K_"}]}"#.to_vec(),
+        "exit-error" => { spec.exit_code = 1; Vec::new() }
+        "invalid-json" => b"not json".to_vec(),
+        "empty-streams" => br#"{"streams":[]}"#.to_vec(),
+        "he-aac" => br#"{"streams":[{"codec_type":"audio","codec_name":"aac","profile":"HE-AAC"}]}"#.to_vec(),
+        "missing-keyframe" => br#"{"streams":[{"codec_type":"video","codec_name":"h264"}],"packets":[{"flags":"__"}]}"#.to_vec(),
+        "packet-error" => {
+            // This typed probe supports the streams pass and rejects the packets
+            // request with a nonzero status, preserving the actual failure route.
+            std::fs::write(directory.join("probe.json"), br#"{"streams":[{"codec_type":"video","codec_name":"h264"}]}"#).unwrap();
+            spec = ToolSpec { mode: Mode::Ffprobe, ..ToolSpec::default() }
+                .with("root", directory.to_str().unwrap());
+            Vec::new()
+        }
+        _ => panic!("unknown source-probe fixture"),
+    };
+    drmr_test_support::install(&directory.join(name), &spec).unwrap()
+}
+
 #[test]
 fn probe_limits_both_ffprobe_decoders_before_input() {
     // ffprobe runs through the tool runner; a stand-in prints what ffprobe prints.
@@ -542,7 +565,6 @@ fn the_ffprobe_argv_is_the_python_one() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn a_probe_that_fails_or_finds_no_key_frame_is_classified() {
     let tmp = tempfile::tempdir().unwrap();
