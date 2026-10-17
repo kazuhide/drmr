@@ -617,6 +617,7 @@ fn a_queue_head_that_cannot_be_examined_is_skipped_with_a_reason_instead_of_bloc
         return;
     }
     let h = queued(|_| {});
+    h.cli.hold();
     let queue = h.app().queue.clone();
     enqueue(&h, &["q1", "q2"]);
     set_mode(&h.catalog, 0o000);
@@ -641,6 +642,7 @@ fn a_queue_head_that_cannot_be_examined_is_skipped_with_a_reason_instead_of_bloc
     );
     let launched = queue.tick().unwrap();
     assert_eq!(queue_snapshot(&h)["running"]["asset_id"], "q2");
+    h.cli.release(0);
     drain(&h, &launched);
 }
 
@@ -1002,6 +1004,7 @@ fn the_queue_runner_survives_a_closed_stderr() {
 #[test]
 fn a_queue_launch_that_raises_unexpectedly_is_skipped() {
     let h = queued(|_| {});
+    h.cli.hold();
     let queue = h.app().queue.clone();
     enqueue(&h, &["q1", "q2"]);
     std::fs::rename(&h.cli.script, h.cli.script.with_extension("disabled")).unwrap();
@@ -1019,6 +1022,7 @@ fn a_queue_launch_that_raises_unexpectedly_is_skipped() {
     );
     let launched = queue.tick().unwrap();
     assert_eq!(queue_snapshot(&h)["running"]["asset_id"], "q2");
+    h.cli.release(0);
     drain(&h, &launched);
 }
 
