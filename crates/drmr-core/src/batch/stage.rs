@@ -647,7 +647,7 @@ fn preflight_clear(
         .hls_config_dir
         .as_deref()
         .ok_or_else(|| BatchError::new("hls-config-invalid"))?;
-    let profiles = resolve(profiles).map_err(|_| AttemptError::Other)?;
+    let profiles = super::commands::config_path(profiles).map_err(|_| AttemptError::Other)?;
     let settings = private_config(
         &profiles.join(format!("{}.json", work.asset_id)),
         &config.output_root,
@@ -657,7 +657,8 @@ fn preflight_clear(
         .and_then(Value::as_str)
         .ok_or(AttemptError::Other)?;
     let source_config = private_config(
-        &resolve(&profiles.join(source_name)).map_err(|_| AttemptError::Other)?,
+        &super::commands::config_path(&profiles.join(source_name))
+            .map_err(|_| AttemptError::Other)?,
         &config.output_root,
     )?;
     let mut location = source_config

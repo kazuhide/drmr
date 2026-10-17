@@ -7,7 +7,9 @@ use super::{
     AssetRunner, AssetWorkItem, AttemptError, BatchConfig, BatchError, HlsSource, TRANSIENT_SOURCE,
     read_head, read_tail,
 };
-use crate::batch_support::{is_relative_to, py_bytes_splitlines, resolve};
+#[cfg(unix)]
+use crate::batch_support::is_relative_to;
+use crate::batch_support::{py_bytes_splitlines, resolve};
 use crate::config::KeyMaterial;
 use crate::hls_cli::private_json;
 use serde_json::{Map, Value};
@@ -46,18 +48,36 @@ pub fn private_config(path: &Path, output_root: &Path) -> Result<Map<String, Val
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     let invalid = || AttemptError::Batch(BatchError::new("hls-config-invalid"));
-    let path = resolve(path).map_err(|_| invalid())?;
-    if is_relative_to(&path, &resolve(output_root).map_err(|_| invalid())?) {
+    let resolved = resolve(path).map_err(|_| invalid())?;
+    #[cfg(unix)]
+    let overlaps = is_relative_to(&resolved, &resolve(output_root).map_err(|_| invalid())?);
+    #[cfg(windows)]
+    let overlaps = super::local_path_is_within(&resolved, output_root).map_err(|_| invalid())?;
+    if overlaps {
         return Err(invalid());
     }
     #[cfg(unix)]
+    let path = resolved.as_path();
+    #[cfg(unix)]
     {
-        let metadata = std::fs::metadata(&path).map_err(|_| invalid())?;
+        let metadata = std::fs::metadata(path).map_err(|_| invalid())?;
         if metadata.permissions().mode() & 0o777 != 0o600 {
             return Err(invalid());
         }
     }
-    private_json(&path).map_err(|_| invalid())
+    private_json(path).map_err(|_| invalid())
+}
+
+/// Retain the native spelling for private acquisition so aliases remain visible.
+pub(super) fn config_path(path: &Path) -> std::io::Result<std::path::PathBuf> {
+    #[cfg(unix)]
+    {
+        resolve(path)
+    }
+    #[cfg(windows)]
+    {
+        std::path::absolute(path)
+    }
 }
 
 /// Locate the current executable for per-asset commands.
@@ -117,8 +137,8 @@ fn clear_commands(
     source: &dyn HlsSource,
 ) -> Result<Vec<CliCommand>, AttemptError> {
     let invalid = || AttemptError::Batch(BatchError::new("hls-config-invalid"));
-    let directory =
-        resolve(config.hls_config_dir.as_deref().ok_or_else(invalid)?).map_err(|_| invalid())?;
+    let directory = config_path(config.hls_config_dir.as_deref().ok_or_else(invalid)?)
+        .map_err(|_| invalid())?;
     let settings = private_config(
         &directory.join(format!("{}.json", work.asset_id)),
         &config.output_root,
@@ -135,7 +155,7 @@ fn clear_commands(
     let mut files: Vec<(String, OsString)> = Vec::new();
     for (name, value) in &settings {
         let value = value.as_str().ok_or_else(invalid)?;
-        let file = resolve(&directory.join(value)).map_err(|_| invalid())?;
+        let file = config_path(&directory.join(value)).map_err(|_| invalid())?;
         private_config(&file, &config.output_root)?;
         files.push((name.clone(), file.into_os_string()));
     }

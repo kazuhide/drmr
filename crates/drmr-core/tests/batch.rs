@@ -2970,3 +2970,87 @@ fn local_hls_file_url_aliases_are_rejected_before_any_source_is_deleted() {
         assert!(!config.resume_log.exists());
     }
 }
+
+#[cfg(windows)]
+#[test]
+fn private_batch_profiles_reject_junction_aliases_before_reading_or_cleanup() {
+    for field in [
+        "profile-directory",
+        "source_config",
+        "drm_config",
+        "selection",
+    ] {
+        let fixture = fixture();
+        let directory = fixture.temp.path().join("profiles");
+        let target = fixture.temp.path().join("private-target");
+        profiles(
+            &target,
+            &[(
+                "config.json",
+                json!({"url": "https://unused.invalid/master.m3u8", "sentinel": "synthetic-private-value"}),
+            )],
+        );
+        let alias = directory.join("alias");
+        std::fs::create_dir_all(&directory).unwrap();
+        common::windows::junction(&alias, &target);
+        // Canonicalizing first erases the junction, reproducing the old read route.
+        let alias_file = alias.join("config.json");
+        let canonical = std::fs::canonicalize(&alias_file).unwrap();
+        let original = std::fs::read(&canonical).unwrap();
+        assert!(drmr_core::batch::private_config(&canonical, &fixture.config.output_root).is_ok());
+        assert_eq!(
+            drmr_core::batch::private_config(&alias_file, &fixture.config.output_root).unwrap_err(),
+            AttemptError::Batch(BatchError::new("hls-config-invalid"))
+        );
+        let mut settings = json!({"source_config": "source.json", "drm_config": "drm.json"});
+        if field != "profile-directory" {
+            settings[field] = json!("alias/config.json");
+        }
+        profiles(
+            &directory,
+            &[
+                ("a.json", settings),
+                ("source.json", json!({"url": "unused"})),
+                ("drm.json", json!({})),
+            ],
+        );
+        let profile_alias = fixture.temp.path().join("profile-alias");
+        common::windows::junction(&profile_alias, &directory);
+        let config = BatchConfig {
+            hls_config_dir: Some(if field == "profile-directory" {
+                profile_alias
+            } else {
+                directory
+            }),
+            ..fixture.config.clone()
+        };
+        let source_dir = config.output_root.join("a/clear/source");
+        drmr_core::native::create_private_dir_all(&source_dir).unwrap();
+        let orphan = source_dir.join("orphan");
+        write(&orphan, b"keep-until-config-is-admitted");
+        let error = commands(
+            &clear_item()[0],
+            &config,
+            fixture.temp.path(),
+            &DefaultHlsSource,
+        )
+        .unwrap_err();
+        assert_eq!(
+            error,
+            AttemptError::Batch(BatchError::new("hls-config-invalid")),
+            "{field}"
+        );
+        assert_eq!(
+            std::fs::read(&orphan).unwrap(),
+            b"keep-until-config-is-admitted"
+        );
+        assert_eq!(std::fs::read(&canonical).unwrap(), original);
+        if matches!(field, "profile-directory" | "source_config") {
+            assert_eq!(
+                preflight_source_graphs(&clear_item(), &config, &NoFetch).unwrap_err(),
+                RunError::Batch(BatchError::new("source-preflight-unproven"))
+            );
+        }
+        assert!(!config.resume_log.exists());
+    }
+}
