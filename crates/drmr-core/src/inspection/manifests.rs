@@ -5,7 +5,7 @@ use super::{
     Track, TrackKind, read_manifest,
 };
 use crate::m3u8::{Attributes, parse_attributes};
-use roxmltree::{Document, Node};
+use roxmltree::{Document, Node, NodeId};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 
@@ -18,6 +18,8 @@ const MAX_PLAYLISTS: usize = 32;
 const MAX_REFERENCES: usize = 128;
 const MAX_TOTAL_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_LINES: usize = 65_536;
+const MAX_KEYS_PER_TRACK: usize = 64;
+const MAX_PROTECTION_DECLARATIONS: usize = 64;
 
 fn finding(findings: &mut Vec<Finding>, code: &'static str) {
     if !findings.iter().any(|item| item.code == code) {
@@ -54,6 +56,9 @@ fn safe_codec(value: &str) -> Option<String> {
 }
 
 fn key_id(value: &str) -> Option<String> {
+    if !matches!(value.len(), 32 | 36) {
+        return None;
+    }
     let compact: String = value.chars().filter(|c| *c != '-').collect();
     (compact.len() == 32 && compact.bytes().all(|c| c.is_ascii_hexdigit()))
         .then(|| compact.to_ascii_lowercase())
@@ -100,10 +105,13 @@ fn dash_protection(
     systems: &mut Vec<String>,
     findings: &mut Vec<Finding>,
 ) {
-    let scheme = cp
-        .attribute("schemeIdUri")
-        .unwrap_or("")
-        .to_ascii_lowercase();
+    let scheme = cp.attribute("schemeIdUri").unwrap_or("");
+    if scheme.len() > 256 || scheme.chars().any(char::is_control) {
+        schemes.push(Protection::Unknown);
+        finding(findings, "dash-unrecognized-content-protection");
+        return;
+    }
+    let scheme = scheme.to_ascii_lowercase();
     if scheme == MP4_PROTECTION {
         let protection = match cp.attribute("value") {
             Some("cenc") => Protection::Cenc,
@@ -117,7 +125,9 @@ fn dash_protection(
         };
         schemes.push(protection);
     } else if let Some(system) = drm_name(&scheme) {
-        systems.push(system.into());
+        if !systems.iter().any(|known| known == system) {
+            systems.push(system.into());
+        }
     } else {
         finding(findings, "dash-unrecognized-content-protection");
         if scheme.is_empty() {
@@ -129,9 +139,10 @@ fn dash_protection(
 fn inspect_representation(
     node: Node<'_, '_>,
     namespace: Option<&str>,
+    invalid_scopes: &HashSet<NodeId>,
     systems: &mut Vec<String>,
     findings: &mut Vec<Finding>,
-) -> Track {
+) -> Result<Track, InspectionError> {
     let mut result = track(Protection::Clear);
     result.kind = inherited(node, "contentType")
         .or_else(|| inherited(node, "mimeType"))
@@ -144,11 +155,22 @@ fn inspect_representation(
     }
     let mut schemes = Vec::new();
     let mut protected = false;
+    let mut declarations = 0;
+    let mut key_values = 0;
     for ancestor in node.ancestors().filter(Node::is_element) {
+        if invalid_scopes.contains(&ancestor.id()) {
+            protected = true;
+            schemes.push(Protection::Unknown);
+            finding(findings, "dash-unsupported-protection-location");
+        }
         for cp in ancestor
             .children()
             .filter(|child| child.is_element() && child.tag_name().name() == "ContentProtection")
         {
+            declarations += 1;
+            if declarations > MAX_PROTECTION_DECLARATIONS {
+                return Err(InspectionError("manifest-protection-limit"));
+            }
             protected = true;
             if cp.tag_name().namespace() != namespace {
                 schemes.push(Protection::Unknown);
@@ -159,7 +181,14 @@ fn inspect_representation(
             for attribute in cp.attributes().filter(|a| {
                 a.name() == "default_KID" && matches!(a.namespace(), None | Some(CENC_NS))
             }) {
+                if attribute.value().len() > MAX_KEYS_PER_TRACK * 37 {
+                    return Err(InspectionError("manifest-key-limit"));
+                }
                 for value in attribute.value().split_ascii_whitespace() {
+                    key_values += 1;
+                    if key_values > MAX_KEYS_PER_TRACK {
+                        return Err(InspectionError("manifest-key-limit"));
+                    }
                     if let Some(kid) = key_id(value) {
                         result.key_ids.push(kid);
                     } else {
@@ -169,21 +198,12 @@ fn inspect_representation(
             }
         }
     }
-    if node.descendants().any(|child| {
-        child.is_element()
-            && child.tag_name().name() == "ContentProtection"
-            && child.parent() != Some(node)
-    }) {
-        protected = true;
-        schemes.push(Protection::Unknown);
-        finding(findings, "dash-unsupported-protection-location");
-    }
     if protected {
         result.protection = Protection::aggregate(schemes);
     }
     result.key_ids.sort();
     result.key_ids.dedup();
-    result
+    Ok(result)
 }
 
 pub(super) fn inspect_dash(bytes: &[u8]) -> Result<Inspection, InspectionError> {
@@ -204,11 +224,34 @@ pub(super) fn inspect_dash(bytes: &[u8]) -> Result<Inspection, InspectionError> 
         return Err(InspectionError("dash-unsupported-root"));
     }
     let namespace = root.tag_name().namespace();
+    // Associate unsupported placements with their nearest presentation scope once,
+    // rather than walking every representation's inherited subtree repeatedly.
+    let mut invalid_scopes = HashSet::new();
+    for cp in root
+        .descendants()
+        .filter(|node| node.is_element() && node.tag_name().name() == "ContentProtection")
+    {
+        if cp.ancestors().take(65).count() > 64 {
+            return Err(InspectionError("manifest-depth-limit"));
+        }
+        if let Some(scope) = cp.ancestors().skip(1).find(|node| {
+            node.is_element()
+                && node.tag_name().namespace() == namespace
+                && matches!(
+                    node.tag_name().name(),
+                    "MPD" | "Period" | "AdaptationSet" | "Representation"
+                )
+        }) && (cp.parent() != Some(scope)
+            || !matches!(scope.tag_name().name(), "AdaptationSet" | "Representation"))
+        {
+            invalid_scopes.insert(scope.id());
+        }
+    }
     let mut tracks = Vec::new();
     let mut systems = Vec::new();
     let mut findings = Vec::new();
     for node in root.descendants().filter(Node::is_element) {
-        if node.ancestors().count() > 64 {
+        if node.ancestors().take(65).count() > 64 {
             return Err(InspectionError("manifest-depth-limit"));
         }
         if node.tag_name().name() != "Representation" {
@@ -227,9 +270,10 @@ pub(super) fn inspect_dash(bytes: &[u8]) -> Result<Inspection, InspectionError> 
             tracks.push(inspect_representation(
                 node,
                 namespace,
+                &invalid_scopes,
                 &mut systems,
                 &mut findings,
-            ));
+            )?);
         } else {
             finding(&mut findings, "dash-unsupported-namespace");
             tracks.push(track(Protection::Unknown));
@@ -293,7 +337,12 @@ impl HlsDocument {
         let attrs = attributes(value)?;
         let method = attrs.get("METHOD").unwrap_or("");
         let format = attrs.get("KEYFORMAT").unwrap_or("identity");
-        if let Some(system) = drm_name(format) {
+        if format.is_empty() || format.len() > 256 || format.chars().any(char::is_control) {
+            return Err(InspectionError("hls-invalid-key-format"));
+        }
+        if let Some(system) = drm_name(format)
+            && !self.systems.iter().any(|known| known == system)
+        {
             self.systems.push(system.into());
         }
         if session {
@@ -323,6 +372,9 @@ impl HlsDocument {
         }
         if attrs.get("KEYID").is_some() && kid.is_none() {
             finding(&mut self.findings, "invalid-key-id");
+        }
+        if self.keys.len() >= MAX_KEYS_PER_TRACK && !self.keys.contains_key(format) {
+            return Err(InspectionError("manifest-key-limit"));
         }
         self.keys.insert(
             format.to_string(),
@@ -373,11 +425,22 @@ impl HlsDocument {
         });
         Ok(())
     }
-    fn segment(&mut self, uri: &str) {
+    fn remember_keys(&mut self) -> Result<(), InspectionError> {
+        for kid in self.keys.values().filter_map(|key| key.kid.as_ref()) {
+            if !self.key_ids.contains(kid) {
+                if self.key_ids.len() >= MAX_KEYS_PER_TRACK {
+                    return Err(InspectionError("manifest-key-limit"));
+                }
+                self.key_ids.insert(kid.clone());
+            }
+        }
+        Ok(())
+    }
+    fn segment(&mut self, uri: &str) -> Result<(), InspectionError> {
         if let Some(mut reference) = self.pending_variant.take() {
             reference.uri = uri.into();
             self.references.push(reference);
-            return;
+            return Ok(());
         }
         self.has_media = true;
         let protection = if self.pending_duration {
@@ -387,9 +450,9 @@ impl HlsDocument {
             Protection::Unknown
         };
         self.protections.push(protection);
-        self.key_ids
-            .extend(self.keys.values().filter_map(|key| key.kid.clone()));
+        self.remember_keys()?;
         self.pending_duration = false;
+        Ok(())
     }
     fn map(&mut self, value: &str) -> Result<(), InspectionError> {
         let attrs = attributes(value)?;
@@ -399,8 +462,7 @@ impl HlsDocument {
         if !self.keys.is_empty() {
             let protection = self.current_protection();
             self.protections.push(protection);
-            self.key_ids
-                .extend(self.keys.values().filter_map(|key| key.kid.clone()));
+            self.remember_keys()?;
         }
         if self
             .keys
@@ -468,7 +530,7 @@ impl HlsDocument {
                 }
                 self.pending_duration = true;
             }
-            _ if !line.starts_with('#') => self.segment(line),
+            _ if !line.starts_with('#') => self.segment(line)?,
             _ => {}
         }
         Ok(())

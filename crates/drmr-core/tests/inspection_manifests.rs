@@ -1,4 +1,5 @@
 use drmr_core::inspection::{Evidence, InputFormat, Protection, TrackKind, inspect};
+use std::fmt::Write as _;
 use std::fs;
 use std::path::Path;
 
@@ -79,6 +80,96 @@ fn dash_xml_node_budget_is_mandatory() {
     let path = tmp.path().join("large.mpd");
     write(&path, &mpd(&"<Representation/>".repeat(25_000)));
     assert!(inspect(&path).is_err());
+}
+
+#[test]
+fn inherited_key_lists_and_repeated_protection_declarations_have_work_budgets() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("source.mpd");
+    let keys = (0..65)
+        .map(|index| format!("{index:032x}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    write(
+        &path,
+        &mpd(&format!(
+            r#"<AdaptationSet><ContentProtection schemeIdUri="urn:mpeg:dash:mp4protection:2011" value="cenc" cenc:default_KID="{keys}"/>{}</AdaptationSet>"#,
+            "<Representation/>".repeat(32)
+        )),
+    );
+    assert_eq!(
+        inspect(&path).unwrap_err().to_string(),
+        "manifest-key-limit"
+    );
+    write(
+        &path,
+        &mpd(&format!(
+            "<AdaptationSet>{}<Representation/></AdaptationSet>",
+            r#"<ContentProtection schemeIdUri="urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed"/>"#
+                .repeat(65)
+        )),
+    );
+    assert_eq!(
+        inspect(&path).unwrap_err().to_string(),
+        "manifest-protection-limit"
+    );
+}
+
+#[test]
+fn hls_active_key_formats_and_rotated_key_ids_have_work_budgets() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("source.m3u8");
+    let mut formats = String::new();
+    for index in 0..65 {
+        writeln!(
+            formats,
+            "#EXT-X-KEY:METHOD=AES-128,KEYFORMAT=\"format-{index}\",URI=\"key\""
+        )
+        .unwrap();
+    }
+    write(
+        &path,
+        &format!("#EXTM3U\n{formats}#EXTINF:2,\nsegment\n#EXT-X-ENDLIST\n"),
+    );
+    assert_eq!(
+        inspect(&path).unwrap_err().to_string(),
+        "manifest-key-limit"
+    );
+    let mut rotations = String::new();
+    for index in 0..65 {
+        writeln!(rotations, "#EXT-X-KEY:METHOD=AES-128,URI=\"key\",KEYID=0x{index:032x}\n#EXTINF:2,\nsegment-{index}").unwrap();
+    }
+    write(&path, &format!("#EXTM3U\n{rotations}#EXT-X-ENDLIST\n"));
+    assert_eq!(
+        inspect(&path).unwrap_err().to_string(),
+        "manifest-key-limit"
+    );
+}
+
+#[test]
+fn misplaced_protection_under_a_scope_is_unknown_for_its_representations() {
+    for scope in ["AdaptationSet", "Period", "MPD"] {
+        let cp = r#"<SegmentTemplate><ContentProtection schemeIdUri="urn:mpeg:dash:mp4protection:2011" value="cenc"/></SegmentTemplate>"#;
+        let text = match scope {
+            "AdaptationSet" => format!(
+                "<MPD><Period><AdaptationSet>{cp}<Representation/></AdaptationSet></Period></MPD>"
+            ),
+            "Period" => format!(
+                "<MPD><Period>{cp}<AdaptationSet><Representation/></AdaptationSet></Period></MPD>"
+            ),
+            _ => format!(
+                "<MPD>{cp}<Period><AdaptationSet><Representation/></AdaptationSet></Period></MPD>"
+            ),
+        };
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("source.mpd");
+        write(&path, &text);
+        assert_eq!(
+            inspect(&path).unwrap().protection,
+            Protection::Unknown,
+            "{scope}"
+        );
+    }
 }
 #[test]
 fn hls_observes_key_transitions_without_reading_segments_or_keys() {

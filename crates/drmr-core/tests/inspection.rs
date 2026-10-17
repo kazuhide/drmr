@@ -106,6 +106,29 @@ fn malformed_protection_does_not_turn_into_clear() {
 }
 
 #[test]
+fn invalid_iv_configuration_is_unknown_and_cannot_produce_a_compatible_plan() {
+    use drmr_core::inspection::{TargetProtection, plan};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("invalid-iv.mp4");
+    for invalid_per_sample in [true, false] {
+        let mut description = entry(Some(b"cbcs"), false);
+        let offset = description
+            .windows(4)
+            .position(|bytes| bytes == b"tenc")
+            .unwrap();
+        if invalid_per_sample {
+            description[offset + 11] = 3;
+        } else {
+            description[offset + 28] = 0;
+        }
+        std::fs::write(&path, movie(&[description])).unwrap();
+        let report = inspect(&path).unwrap();
+        assert_eq!(report.protection, Protection::Unknown);
+        assert!(!plan(report, TargetProtection::Clear, Vec::new()).compatible);
+    }
+}
+
+#[test]
 fn large_sparse_media_payload_is_skipped_and_metadata_is_found_after_it() {
     use std::io::{Seek, SeekFrom, Write};
     let dir = tempfile::tempdir().unwrap();

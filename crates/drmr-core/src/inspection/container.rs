@@ -101,6 +101,17 @@ fn protection(entry: &SampleEntry, has_sinf: bool) -> Protection {
     if tenc.version > 1 || tenc.default_is_protected != 1 {
         return Protection::Unknown;
     }
+    let valid_iv = match tenc.default_per_sample_iv_size {
+        0 => tenc
+            .default_constant_iv
+            .as_ref()
+            .is_some_and(|iv| matches!(iv.len(), 8 | 16)),
+        8 | 16 => true,
+        _ => false,
+    };
+    if !valid_iv {
+        return Protection::Unknown;
+    }
     match &scheme.scheme_type {
         b"cenc" => Protection::Cenc,
         b"cbcs" => Protection::Cbcs,

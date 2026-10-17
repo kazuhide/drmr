@@ -26,6 +26,8 @@ This arithmetic explains a boundary difference; it does not justify missing or d
 
 Audio can also carry encoder priming: samples decoded at the beginning that should not be presented. MP4 edit-list metadata can describe this trimming. Identical compressed audio packets alone do not establish identical presented audio if that metadata changes during repackaging.
 
+The clear-HLS path preserves a single open-ended audio trim at normal playback rate and compensates decode timestamps to retain presentation timing. Complex or finite edits and inexact timescale conversions are rejected. The [ten-second Big Buck Bunny regression](https://github.com/kazuhide/drmr/blob/main/crates/drmr/tests/fixtures/bbb/README.md) verifies both individual segments and the continuous presentation, including 240 video frames and the source's audio sample count. Its JSON results include tool versions, elapsed time, and sampled memory; CI uploads them with each platform's test artifacts.
+
 ## How the existing processing paths handle segments
 
 The prepared-DASH `run` path concatenates a rendition's initialization segment and media segments, then decrypts a complete clear reference. Normally, Shaka Packager encrypts and segments that reference again. For supported AAC audio whose source segment duration does not divide into 1,024-sample frames, drmr instead decrypts and encrypts each original segment with its initialization data, preserving the original boundary and checking decode timestamps. The complete clear reference is still produced for validation; this path does not eliminate whole-rendition temporary files.
