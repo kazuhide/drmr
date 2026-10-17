@@ -1479,8 +1479,7 @@ fn media_outputs_refuse_a_symlinked_work_directory_before_creating_outputs() {
 }
 
 #[cfg(windows)]
-#[path = "common/windows.rs"]
-mod windows;
+use private_fixture::windows;
 #[cfg(windows)]
 #[test]
 fn text_outputs_refuse_windows_directory_junctions() {
