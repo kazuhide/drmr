@@ -225,8 +225,7 @@ fn completed_and_cancelled_jobs_clean_up_native_descendants() {
             .unwrap();
         support::wait_until(|| {
             std::fs::read_to_string(s.cli.dir.join("descendant.pid"))
-                .ok()
-                .is_some_and(|text| text.trim().parse::<u32>().is_ok())
+                .is_ok_and(|text| text.ends_with('\n') && text.trim().parse::<u32>().is_ok())
         });
         assert!(descendant_running(&s.cli.dir));
         if cancel {

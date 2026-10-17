@@ -1,11 +1,15 @@
 //! Native subprocess fixtures, available only through development dependencies.
 mod protocol;
 pub use protocol::{Mode, ToolSpec};
+#[cfg(windows)]
+mod windows;
 use std::{
     io::{self, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
 };
+#[cfg(windows)]
+pub use windows::command_path;
 /// Install through an immutable child. No writable executable descriptor enters the test parent.
 pub fn install(path: &Path, spec: &ToolSpec) -> io::Result<PathBuf> {
     let executable = Path::new(env!("DRMR_NATIVE_FIXTURE"));

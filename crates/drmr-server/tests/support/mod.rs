@@ -889,8 +889,8 @@ pub fn directory_link(target: &Path, link: &Path) {
 pub fn directory_link(target: &Path, link: &Path) {
     let output = std::process::Command::new("cmd.exe")
         .args(["/d", "/c", "mklink", "/J"])
-        .arg(link)
-        .arg(target)
+        .arg(drmr_test_support::command_path(link).unwrap())
+        .arg(drmr_test_support::command_path(target).unwrap())
         .output()
         .unwrap();
     assert!(

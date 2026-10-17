@@ -1173,8 +1173,8 @@ mod tests {
         {
             let result = std::process::Command::new("cmd.exe")
                 .args(["/d", "/c", "mklink", "/J"])
-                .arg(link)
-                .arg(target)
+                .arg(drmr_test_support::command_path(link).unwrap())
+                .arg(drmr_test_support::command_path(target).unwrap())
                 .output()
                 .unwrap();
             assert!(result.status.success(), "junction fixture failed");
