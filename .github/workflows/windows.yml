@@ -1,0 +1,48 @@
+name: Windows native contracts
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-native-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native:
+    name: Windows / private files and process trees
+    runs-on: windows-2022
+    timeout-minutes: 20
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install --no-self-update
+          cargo --version
+          rustc --version
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Check native platform warnings
+        run: cargo clippy -p drmr-core --lib --test native --locked -- -D warnings
+
+      - name: Test Windows access controls and descendant cleanup
+        run: cargo test -p drmr-core --test native --locked -- --nocapture
+
+      - name: Build native CLI
+        run: cargo build --release --locked -p drmr
+
+      - name: Check native CLI help
+        run: .\target\release\drmr.exe --help

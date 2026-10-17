@@ -38,3 +38,4 @@ pub mod toolrun;
 
 /// The crate version (the workspace version).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+pub mod native;
