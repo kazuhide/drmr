@@ -1465,3 +1465,66 @@ fn media_outputs_refuse_a_symlinked_work_directory_before_creating_outputs() {
     assert!(fs::read_dir(victim).unwrap().next().is_none());
     assert_eq!(fake.events(), []);
 }
+
+#[cfg(windows)]
+#[path = "common/windows.rs"]
+mod windows;
+#[cfg(windows)]
+#[test]
+fn text_outputs_refuse_windows_directory_junctions() {
+    let tmp = tempfile::tempdir().unwrap();
+    let source = tmp.path().join("source.vtt");
+    fs::write(&source, "WEBVTT\n\n00:00.000 --> 00:01.000\nHello\n").unwrap();
+    let victim = tmp.path().join("victim");
+    fs::create_dir(&victim).unwrap();
+    let marker = victim.join("seg_0.vtt");
+    fs::write(&marker, "unchanged").unwrap();
+    let folder = tmp.path().join("asset/cbcs/t0");
+    fs::create_dir_all(folder.parent().unwrap()).unwrap();
+    windows::junction(&folder, &victim);
+    let text = track(
+        "t0",
+        "text",
+        "webvtt",
+        "wvtt",
+        vec![segment(0, &source, 1.0)],
+    );
+    assert_eq!(
+        copy_text(&text, &tmp.path().join("asset"), &Fake::default()).unwrap_err(),
+        TrackError::Media("unsafe-output-path".into())
+    );
+    assert_eq!(fs::read_to_string(marker).unwrap(), "unchanged");
+    fs::remove_dir(folder).unwrap();
+}
+#[cfg(windows)]
+#[test]
+fn media_outputs_refuse_windows_work_directory_junctions_before_outputs() {
+    let tmp = tempfile::tempdir().unwrap();
+    let asset = tmp.path().join("asset");
+    let victim = tmp.path().join("victim");
+    fs::create_dir(&victim).unwrap();
+    fs::create_dir_all(asset.join("clear/package-hls")).unwrap();
+    let link = asset.join("clear/package-hls/v0");
+    windows::junction(&link, &victim);
+    let video = track("v0", "video", "fmp4", "avc1", vec![]);
+    let key = keys();
+    let signaling = signaling();
+    let pr = validate_signaling(&signaling, &key).unwrap();
+    let fake = Fake::default();
+    let job = TrackJob {
+        track: &video,
+        keys: &key,
+        signaling: &signaling,
+        pr: &pr,
+        packager_bin: "packager",
+        deps: &fake,
+    };
+    assert_eq!(
+        package_track(job, &asset, None).unwrap_err(),
+        TrackError::Media("unsafe-output-path".into())
+    );
+    assert!(!asset.join("cbcs").exists());
+    assert!(fs::read_dir(victim).unwrap().next().is_none());
+    assert_eq!(fake.events(), []);
+    fs::remove_dir(link).unwrap();
+}

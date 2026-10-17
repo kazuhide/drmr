@@ -1,6 +1,5 @@
 //! Catalog command parsing, exit codes, readable summaries, and scrubbed JSON Lines.
 //! The pipeline dependencies are fakes and all keys are synthetic.
-#![cfg(unix)]
 
 mod pipeline_fakes;
 
@@ -957,18 +956,17 @@ fn run_log_format_jsonl_scrubs_tool_output_in_every_encoding() {
         format!("[{}]", pairs.join(" "))
     };
     let key_b64 = base64::engine::general_purpose::STANDARD.encode(hex::decode(KEY).unwrap());
-    let stub = write_executable(
-        &cli.root().join("mp4dump"),
-        &format!(
-            "#!/bin/sh\nprintf '%s\\n' '[{{\"name\": \"moov\", \"children\": [{{\"name\": \"tenc\", \
-             \"version\": 1, \"default_isProtected\": 1, \"default_Per_Sample_IV_Size\": 0, \
-             \"default_KID\": \"{}\", \"default_constant_IV_size\": 16, \"default_constant_IV\": \
-             \"{}\"}}]}}]'\nprintf '%s\\n' 'key {key_b64} {}' >&2\n",
-            bracketed(KID),
-            bracketed(IV),
-            KEY.to_uppercase()
-        ),
+    let stdout = format!(
+        "[{{\"name\":\"moov\",\"children\":[{{\"name\":\"tenc\",\"version\":1,\"default_isProtected\":1,\"default_Per_Sample_IV_Size\":0,\"default_KID\":\"{}\",\"default_constant_IV_size\":16,\"default_constant_IV\":\"{}\"}}]}}]\n",
+        bracketed(KID),
+        bracketed(IV)
     );
+    let spec = drmr_test_support::ToolSpec {
+        stdout: stdout.into_bytes(),
+        stderr: format!("key {key_b64} {}\n", KEY.to_uppercase()).into_bytes(),
+        ..Default::default()
+    };
+    let stub = drmr_test_support::install(&cli.root().join("mp4dump"), &spec).unwrap();
     cli.fakes.media.tenc_iv = Box::new(move |runner, path| mp4dump_tenc_iv(runner, &stub, path));
     let mpd = cli.asset_mpd();
 

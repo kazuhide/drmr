@@ -4,9 +4,6 @@
     reason = "shared by the pipeline and the cli test binaries; each uses a subset"
 )]
 
-#[path = "../common/executable.rs"]
-mod executable;
-
 use drmr_core::checks::CheckId;
 use drmr_core::config::{Asset, KeyMaterial, Rendition};
 use drmr_core::events::{Collector, NoSink};
@@ -279,9 +276,7 @@ pub fn tree_state(root: &Path) -> BTreeMap<PathBuf, (Vec<u8>, SystemTime)> {
     state
 }
 
-/// The stub packager on `PATH`: an `sh` script exiting with `exit_code`, printing `stderr`
-/// (when given) or sleeping `hang` seconds first. The outputs the Python stub fabricates are
-/// written by [`FakePackager`].
+/// A native packager-status fixture on the runner's private `PATH`.
 pub fn write_stub_packager(
     dir: &Path,
     exit_code: i32,
@@ -289,20 +284,21 @@ pub fn write_stub_packager(
     hang: Option<u32>,
 ) -> PathBuf {
     fs::create_dir_all(dir).unwrap();
-    let mut lines = vec!["#!/bin/sh".to_string()];
-    if let Some(text) = stderr {
-        lines.push(format!("printf '%s\\n' '{text}' >&2"));
+    let spec = drmr_test_support::ToolSpec {
+        exit_code,
+        stderr: stderr.map_or_else(Vec::new, |value| format!("{value}\n").into_bytes()),
+        sleep_ms: u64::from(hang.unwrap_or(0)) * 1000,
+        ..Default::default()
+    };
+    let status = dir.join("packager.status");
+    spec.encode(fs::File::create(&status).unwrap()).unwrap();
+    let executable = drmr_test_support::program_path(&dir.join("packager"));
+    if executable.is_file() {
+        return executable;
     }
-    if let Some(seconds) = hang {
-        lines.push(format!("sleep {seconds}"));
-    }
-    lines.push(format!("exit {exit_code}\n"));
-    write_executable(&dir.join("packager"), &lines.join("\n"))
-}
-
-pub fn write_executable(path: &Path, script: &str) -> PathBuf {
-    executable::write_executable(path, script);
-    path.to_path_buf()
+    let immutable =
+        drmr_test_support::ToolSpec::default().with("status_file", status.to_str().unwrap());
+    drmr_test_support::install(&dir.join("packager"), &immutable).unwrap()
 }
 
 /// One packager call as the fake saw it.
@@ -377,7 +373,7 @@ impl FakePackager {
     fn resolve(&self, runner: &ToolRunner) -> Option<PathBuf> {
         let on_runner_path = runner.path().and_then(|path| {
             std::env::split_paths(path)
-                .map(|dir| dir.join("packager"))
+                .map(|dir| drmr_test_support::program_path(&dir.join("packager")))
                 .find(|candidate| candidate.is_file())
         });
         on_runner_path.or_else(|| self.on_path.clone())
@@ -397,15 +393,9 @@ impl FakePackager {
             Some(PathBuf::from(packager_bin))
         };
         self.resolved.lock().unwrap().push(program.clone());
-        // An existing stub runs as `/bin/sh <stub> …` (exec'ing a script written moments ago
-        // can fail with ETXTBSY while another test thread forks; the shell by its absolute path,
-        // since `--packager-bin` changes the PATH the runner's tools are looked up on); a
-        // missing one is exec'd as is, so the runner reports the spawn failure.
+        // Native fixtures receive the original arguments directly, including spaces and secrets.
         let head = match program {
-            Some(stub) if stub.is_file() => {
-                vec!["/bin/sh".to_string(), stub.display().to_string()]
-            }
-            Some(missing) => vec![missing.display().to_string()],
+            Some(path) => vec![path.display().to_string()],
             None => vec!["/nonexistent-drmr-test/packager".to_string()],
         };
         let real: Vec<String> = head.into_iter().chain(argv).collect();
@@ -822,9 +812,7 @@ pub fn mp4dump_tenc_iv(
     mp4dump: &Path,
     init_segment_path: &Path,
 ) -> Result<Option<String>, PyError> {
-    // `sh <stub>`: see `FakePackager::run` on ETXTBSY.
     let argv = vec![
-        "sh".into(),
         mp4dump.display().to_string(),
         "--format".into(),
         "json".into(),

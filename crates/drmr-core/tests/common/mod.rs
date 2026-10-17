@@ -4,6 +4,7 @@
 pub mod dash;
 pub mod fake_s3;
 
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
@@ -19,8 +20,20 @@ pub fn write_mode(path: &Path, content: &[u8], mode: u32) {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).unwrap();
     }
-    std::fs::write(path, content).unwrap();
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    #[cfg(unix)]
+    {
+        std::fs::write(path, content).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+    #[cfg(windows)]
+    {
+        use std::io::Write as _;
+        let mut file = std::fs::File::create(path).unwrap();
+        if mode & 0o077 == 0 {
+            private_fs::harden(&file).unwrap();
+        }
+        file.write_all(content).unwrap();
+    }
 }
 
 /// Write `content` to `path`, parents created.

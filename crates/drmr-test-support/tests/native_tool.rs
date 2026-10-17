@@ -76,3 +76,35 @@ fn packager_mode_records_original_arguments_and_creates_exact_declared_outputs()
         format!("shaka packager error; args were: {descriptor} --segment_duration 1000000\n")
     );
 }
+
+#[test]
+fn response_state_changes_status_without_rewriting_executable_or_mode_config() {
+    let directory = tempfile::tempdir().unwrap();
+    let status = directory.path().join("status");
+    ToolSpec::default()
+        .encode(std::fs::File::create(&status).unwrap())
+        .unwrap();
+    let tool = install(
+        &directory.path().join("stateful"),
+        &ToolSpec::default().with("status_file", status.to_str().unwrap()),
+    )
+    .unwrap();
+    let bytes = std::fs::read(&tool).unwrap();
+    assert!(
+        std::process::Command::new(&tool)
+            .status()
+            .unwrap()
+            .success()
+    );
+    ToolSpec {
+        exit_code: 7,
+        stderr: b"changed\n".to_vec(),
+        ..Default::default()
+    }
+    .encode(std::fs::File::create(status).unwrap())
+    .unwrap();
+    let output = std::process::Command::new(&tool).output().unwrap();
+    assert_eq!(output.status.code(), Some(7));
+    assert_eq!(output.stderr, b"changed\n");
+    assert_eq!(std::fs::read(tool).unwrap(), bytes);
+}

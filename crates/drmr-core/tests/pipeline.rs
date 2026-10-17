@@ -1,5 +1,4 @@
 //! Catalog repackaging, ordered checks, failure handling, and report serialization.
-#![cfg(unix)]
 
 mod pipeline_fakes;
 

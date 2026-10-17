@@ -65,7 +65,16 @@ fn main() {
     }
 }
 fn run(args: &[String]) -> io::Result<i32> {
-    let spec = ToolSpec::decode(File::open(config_path(&env::current_exe()?))?)?;
+    let mut spec = ToolSpec::decode(File::open(config_path(&env::current_exe()?))?)?;
+    if spec.mode == Mode::Response
+        && let Some(path) = spec.values.get("status_file")
+    {
+        let state = ToolSpec::decode(File::open(path)?)?;
+        if state.mode != Mode::Response || state.values.contains_key("status_file") {
+            return Err(io::Error::other("invalid response state"));
+        }
+        spec = state;
+    }
     if let Some(path) = spec.values.get("argv_file") {
         fs::write(path, args.join("\n"))?;
     }
