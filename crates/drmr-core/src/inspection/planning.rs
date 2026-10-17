@@ -1,0 +1,183 @@
+//! Transformation intent, key roles, and compatibility without executing a backend.
+
+use super::{Finding, InputFormat, Inspection, Protection};
+use serde::{Deserialize, Serialize};
+use std::str::FromStr;
+
+/// Requested output packaging, independent of the protection scheme.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum OutputFormat {
+    Mp4,
+    Dash,
+    Hls,
+}
+
+impl OutputFormat {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Mp4 => "mp4",
+            Self::Dash => "dash",
+            Self::Hls => "hls",
+        }
+    }
+}
+
+impl From<InputFormat> for OutputFormat {
+    fn from(value: InputFormat) -> Self {
+        match value {
+            InputFormat::Mp4 => Self::Mp4,
+            InputFormat::Dash => Self::Dash,
+            InputFormat::Hls => Self::Hls,
+        }
+    }
+}
+
+impl FromStr for OutputFormat {
+    type Err = &'static str;
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "mp4" => Ok(Self::Mp4),
+            "dash" => Ok(Self::Dash),
+            "hls" => Ok(Self::Hls),
+            _ => Err("expected mp4, dash, or hls"),
+        }
+    }
+}
+
+/// Initial conversion target profiles. An HLS segment cipher is not an MP4 scheme.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TargetProtection {
+    Clear,
+    Cenc,
+    Cbcs,
+    HlsAes128,
+}
+
+impl TargetProtection {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Clear => "clear",
+            Self::Cenc => "cenc",
+            Self::Cbcs => "cbcs",
+            Self::HlsAes128 => "hls-aes128",
+        }
+    }
+}
+
+impl FromStr for TargetProtection {
+    type Err = &'static str;
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "clear" => Ok(Self::Clear),
+            "cenc" => Ok(Self::Cenc),
+            "cbcs" => Ok(Self::Cbcs),
+            "hls-aes128" => Ok(Self::HlsAes128),
+            _ => Err("expected clear, cenc, cbcs, or hls-aes128"),
+        }
+    }
+}
+
+/// A key's purpose; actual key and IV values never enter an inspection or plan.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeyRequirement {
+    pub role: String,
+    pub known_key_ids: Vec<String>,
+}
+
+/// A plan is intent, never an authorization or a trusted saved execution artifact.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConversionPlan {
+    pub schema_version: u32,
+    pub input: Inspection,
+    pub target: TargetProtection,
+    pub formats: Vec<OutputFormat>,
+    pub operations: Vec<String>,
+    pub keys: Vec<KeyRequirement>,
+    pub compatible: bool,
+    pub execution_available: bool,
+    pub findings: Vec<Finding>,
+}
+
+/// Describe a requested transformation. Source media must be revalidated at execution.
+pub fn plan(
+    input: Inspection,
+    target: TargetProtection,
+    mut formats: Vec<OutputFormat>,
+) -> ConversionPlan {
+    if formats.is_empty() {
+        formats.push(input.format.into());
+    }
+    formats.sort();
+    formats.dedup();
+    let mut findings = vec![
+        Finding::new("media-validation-required"),
+        Finding::new("generic-conversion-not-yet-available"),
+    ];
+    if target == TargetProtection::HlsAes128 && formats != [OutputFormat::Hls] {
+        findings.push(Finding::new("hls-aes128-requires-hls-output"));
+    }
+    if target == TargetProtection::Cenc && formats.contains(&OutputFormat::Hls) {
+        findings.push(Finding::new("cenc-hls-output-not-supported"));
+    }
+    if input.tracks.is_empty()
+        || input
+            .tracks
+            .iter()
+            .any(|track| matches!(track.protection, Protection::Unknown | Protection::Mixed))
+    {
+        findings.push(Finding::new("source-protection-unresolved"));
+    }
+    if input
+        .tracks
+        .iter()
+        .any(|track| matches!(track.protection, Protection::Cens | Protection::Cbc1))
+    {
+        findings.push(Finding::new("source-protection-not-supported"));
+    }
+    let compatible = findings.len() == 2;
+    let mut operations = vec!["validate-source".into()];
+    let mut keys = Vec::new();
+    if input
+        .tracks
+        .iter()
+        .any(|track| track.protection != Protection::Clear)
+    {
+        operations.push("decrypt-input".into());
+        let mut ids: Vec<_> = input
+            .tracks
+            .iter()
+            .flat_map(|track| track.key_ids.clone())
+            .collect();
+        ids.sort();
+        ids.dedup();
+        keys.push(KeyRequirement {
+            role: "input".into(),
+            known_key_ids: ids,
+        });
+    }
+    operations.push("repackage-media".into());
+    if target != TargetProtection::Clear {
+        operations.push("encrypt-output".into());
+        keys.push(KeyRequirement {
+            role: "output".into(),
+            known_key_ids: Vec::new(),
+        });
+    }
+    if formats.iter().any(|format| *format != OutputFormat::Mp4) {
+        operations.push("write-manifests".into());
+    }
+    operations.push("verify-output".into());
+    ConversionPlan {
+        schema_version: 1,
+        input,
+        target,
+        formats,
+        operations,
+        keys,
+        compatible,
+        execution_available: false,
+        findings,
+    }
+}

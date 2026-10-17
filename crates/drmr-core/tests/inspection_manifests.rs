@@ -30,7 +30,7 @@ fn dash_observes_namespaces_inheritance_and_per_representation_mixed_schemes() {
     assert_eq!(result.tracks[0].protection, Protection::Cenc);
     assert_eq!(result.tracks[1].protection, Protection::Mixed);
     assert_eq!(result.protection, Protection::Mixed);
-    assert_eq!(result.drm_systems, ["Widevine"]);
+    assert_eq!(result.drm_systems, ["widevine"]);
     assert_eq!(result.tracks[0].key_ids.len(), 1);
     assert!(
         !serde_json::to_string(&result)
@@ -49,7 +49,7 @@ fn dash_inspection_keeps_conversion_unsupported_codecs_and_structures_observable
         r#"<AdaptationSet><ContentProtection schemeIdUri="urn:uuid:9a04f079-9840-4286-ab92-e65be0885f95"><x:pro xmlns:x="urn:microsoft:playready">RAW-SECRET</x:pro></ContentProtection><Representation/></AdaptationSet>"#,
     );
     assert_eq!(result.protection, Protection::Unknown);
-    assert_eq!(result.drm_systems, ["PlayReady"]);
+    assert_eq!(result.drm_systems, ["playready"]);
     assert!(
         !serde_json::to_string(&result)
             .unwrap()
@@ -139,7 +139,7 @@ segment
         );
         let result = inspect(&path).unwrap();
         assert_eq!(result.protection, expected);
-        assert_eq!(result.drm_systems, ["FairPlay"]);
+        assert_eq!(result.drm_systems, ["fairplay"]);
     }
 }
 #[test]

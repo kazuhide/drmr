@@ -61,14 +61,14 @@ fn key_id(value: &str) -> Option<String> {
 
 fn drm_name(value: &str) -> Option<&'static str> {
     match value.to_ascii_lowercase().as_str() {
-        "urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed" => Some("Widevine"),
+        "urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed" => Some("widevine"),
         "urn:uuid:9a04f079-9840-4286-ab92-e65be0885f95" | "com.microsoft.playready" => {
-            Some("PlayReady")
+            Some("playready")
         }
         "urn:uuid:94ce86fb-07ff-4f43-adb8-93d2fa968ca2" | "com.apple.streamingkeydelivery" => {
-            Some("FairPlay")
+            Some("fairplay")
         }
-        "urn:uuid:e2719d58-a985-b3c9-781a-b030af78d30e" => Some("ClearKey"),
+        "urn:uuid:e2719d58-a985-b3c9-781a-b030af78d30e" => Some("clearkey"),
         _ => None,
     }
 }
