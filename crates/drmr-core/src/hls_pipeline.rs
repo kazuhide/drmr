@@ -1438,6 +1438,20 @@ pub fn resolve_workers(max_workers: Option<i64>) -> Result<usize, PipelineError>
     }
 }
 
+fn budgeted_workers(
+    analysis: &SourceAnalysis,
+    maximum: usize,
+    deps: &dyn PipelineDeps,
+) -> Result<usize, PipelineError> {
+    let recommended = deps
+        .resource_workers(analysis, maximum)
+        .map_err(|error| escaped_media(&error))?;
+    if recommended == 0 {
+        return Err(PipelineError::Value("resource-budget".to_string()));
+    }
+    Ok(recommended.min(maximum))
+}
+
 /// `on_log` serialised: each call whole, never interleaved, in completion order. The tool
 /// runner's own records are emitted by the CLI's sink, not through this callback.
 pub struct SyncLog<'a> {
@@ -1703,6 +1717,7 @@ pub fn package_hls(
     #[cfg(windows)]
     let _output_guard =
         crate::native::pin_private_directory(&asset_dir).map_err(|error| os_value(&error))?;
+    let workers = budgeted_workers(analysis, workers, deps)?;
     // A retry cannot leave previously successful manifests visible after failure.
     if manifest_dir.exists() {
         fs::remove_dir_all(&manifest_dir).map_err(|error| os_value(&error))?;

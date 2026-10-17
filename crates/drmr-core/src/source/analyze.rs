@@ -96,6 +96,15 @@ pub fn analyze_hls(
     on_log: Option<&dyn Sink>,
     runner: &ToolRunner,
 ) -> Result<SourceAnalysis, Failure> {
+    policy.validate()?;
+    let budget = crate::resources::Budget::choose(
+        crate::resources::Hardware::detect(),
+        crate::resources::Workload::default(),
+        policy.probe_workers,
+    )
+    .map_err(|_| Failure::source("resource-budget"))?;
+    let mut bounded_policy = policy.clone();
+    bounded_policy.probe_workers = Some(budget.workers);
     let prober = FfprobeProber::new(runner);
     let options = AnalyzeOptions {
         on_log,
@@ -103,7 +112,9 @@ pub fn analyze_hls(
         platform: Arc::new(SystemPlatform),
         hooks: &Direct,
     };
-    analyze_hls_with(source, asset_id, output_root, policy, &options)
+    let analysis = analyze_hls_with(source, asset_id, output_root, &bounded_policy, &options)?;
+    runner.note_resource_budget(&budget);
+    Ok(analysis)
 }
 
 /// `[A-Za-z0-9][A-Za-z0-9_.-]{0,127}`.
@@ -1029,12 +1040,12 @@ fn inspect(
         return Err(Failure::Cancelled);
     }
     let Some((init_path, init_size)) = init else {
-        return prober.probe(path, None);
+        return prober.probe_with_stop(path, None, fetch.stop());
     };
     let count = u128::from(init_size) + u128::from(size);
     fetch.claim_disk_or_escape(count)?;
     let _claim = Claim { fetch, count };
-    prober.probe(path, Some(&init_path))
+    prober.probe_with_stop(path, Some(&init_path), fetch.stop())
 }
 
 /// One stream's topology (`index` defaulting to 0, `codec_type`, `codec_name`, `profile`,

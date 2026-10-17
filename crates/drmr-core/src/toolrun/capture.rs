@@ -13,7 +13,7 @@ const OUT_DONE: u8 = 1;
 const ERR_DONE: u8 = 2;
 const EXCEEDED: u8 = 4;
 const READ_ERROR: u8 = 8;
-const POLL: Duration = Duration::from_millis(5);
+const POLL: Duration = Duration::from_millis(1);
 const PIPE_GRACE: Duration = Duration::from_secs(2);
 
 #[derive(Default)]
@@ -146,6 +146,8 @@ fn execute_with_cleanup(
     if let Some(path) = path {
         command.env("PATH", path);
     }
+    // Asset workers inherit one supervisor-owned Unix group. Creating a subgroup here
+    // would let media tools survive a hard worker kill; Windows retains nested jobs.
     let mut child = ManagedChild::spawn(command, !crate::native::in_asset_worker())
         .map_err(|error| failure("unavailable", format!("could not run: {error}")))?;
     let stdout = child.stdout.take().expect("stdout is piped");

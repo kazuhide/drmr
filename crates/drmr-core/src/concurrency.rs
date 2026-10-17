@@ -104,13 +104,11 @@ impl UnitError for Cancelled {
     }
 }
 
-/// The default size of a CPU-bound pool: the CPUs this process may run on (the affinity mask
-/// where the platform has one, else the CPU count), at most 32. A CFS quota (`docker --cpus`)
-/// is not visible here; the CLI's `--max-workers` and the console's
-/// `DRMR_MAX_WORKERS` bound the pools explicitly. (A value given explicitly is
-/// bounded separately, at 64.)
+/// Default CPU-bound pool size, respecting the process affinity and readable Linux CPU
+/// quotas through `available_parallelism`, at most 32. Media backends further account for
+/// available memory and content. Explicit maximums are bounded separately at 64.
 pub fn default_workers() -> usize {
-    workers_for(affinity_cpus(), cpu_count)
+    workers_for(None, cpu_count)
 }
 
 /// `default_workers` over its inputs: `affinity` is the size of the affinity mask when the
@@ -125,23 +123,7 @@ pub fn workers_for(affinity: Option<usize>, cpu_count: impl FnOnce() -> Option<u
     cpus.clamp(1, DEFAULT_WORKERS_CAP)
 }
 
-/// `len(os.sched_getaffinity(0))` where the platform has it (Linux), else `None` (Python's
-/// `AttributeError`); a failing call is `None` too (its `OSError`).
-#[cfg(any(target_os = "linux", target_os = "android"))]
-fn affinity_cpus() -> Option<usize> {
-    rustix::thread::sched_getaffinity(None)
-        .ok()
-        .map(|set| usize::try_from(set.count()).unwrap_or(usize::MAX))
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "android")))]
-fn affinity_cpus() -> Option<usize> {
-    None
-}
-
-/// `os.cpu_count`: the online CPUs (`sysconf(_SC_NPROCESSORS_ONLN)`, which is what Rust's
-/// `available_parallelism` reads on every platform without an affinity mask; on Linux it is
-/// asked only when `sched_getaffinity` failed).
+/// Process parallelism, including readable affinity and control-group quotas.
 fn cpu_count() -> Option<usize> {
     std::thread::available_parallelism()
         .ok()

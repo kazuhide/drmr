@@ -26,6 +26,7 @@ pub mod pipeline;
 pub mod pipeline_deps;
 pub mod playready;
 pub mod pycompat;
+pub mod resources;
 pub mod snapshot;
 pub mod source;
 pub mod storage;
