@@ -1502,7 +1502,7 @@ fn check_work_list(work_list: &[AssetWorkItem], config: &BatchConfig) -> Result<
             .into_iter()
             .flatten()
         {
-            if is_output_key(object.key(), &config.output_prefix) {
+            if is_output_key(object.key(), config)? {
                 return Err(BatchError::new("source-output-overlap").into());
             }
         }
@@ -1510,12 +1510,44 @@ fn check_work_list(work_list: &[AssetWorkItem], config: &BatchConfig) -> Result<
     Ok(())
 }
 
-/// `key == prefix or key.startswith(prefix + "/")`.
-pub(crate) fn is_output_key(key: &str, prefix: &str) -> bool {
-    key == prefix
+/// Whether a source object is inside the output prefix for this backend.
+pub(crate) fn is_output_key(key: &str, config: &BatchConfig) -> Result<bool, StorageError> {
+    ObjectRef::new(key)?;
+    ObjectRef::new(config.output_prefix.as_str())?;
+    let prefix = &config.output_prefix;
+    if key == prefix
         || key
             .strip_prefix(prefix)
             .is_some_and(|rest| rest.starts_with('/'))
+    {
+        return Ok(true);
+    }
+    #[cfg(windows)]
+    if let Some(root) = config.storage.root() {
+        // NTFS aliases are filesystem identities, not Unicode string folds.
+        // Keep remote object keys case-sensitive and fail closed on lookup errors.
+        let invalid = || StorageError::new("storage-path-invalid");
+        crate::native::validate_windows_relative_path(key).map_err(|_| invalid())?;
+        crate::native::validate_windows_relative_path(prefix).map_err(|_| invalid())?;
+        let output = match same_file::Handle::from_path(root.join(prefix)) {
+            Ok(handle) => handle,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(_) => return Err(invalid()),
+        };
+        let source = root.join(key);
+        for ancestor in source.ancestors() {
+            match same_file::Handle::from_path(ancestor) {
+                Ok(handle) if handle == output => return Ok(true),
+                Ok(_) => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(_) => return Err(invalid()),
+            }
+            if ancestor == root {
+                break;
+            }
+        }
+    }
+    Ok(false)
 }
 
 /// One asset's attempts: the terminal reason and the attempts used. `Interrupted` (and an

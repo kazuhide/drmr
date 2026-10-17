@@ -2819,3 +2819,106 @@ fn absurd_but_finite_timeouts_are_accepted_like_python() {
     let answer = supervise_attempt(&item("a"), &config, &|| {}, &worker).unwrap();
     assert_eq!(answer, ("ok".to_string(), false));
 }
+
+#[test]
+fn s3_source_ownership_preserves_case_distinct_keys() {
+    let fixture = fixture();
+    let config = BatchConfig {
+        storage: Arc::new(BucketOnly("my-bucket")),
+        ..fixture.config.clone()
+    };
+    assert!(
+        !source_overlaps_output(
+            "https://my-bucket.s3.ap-northeast-1.amazonaws.com/OUTPUT/a/segment.ts",
+            &config,
+        )
+        .unwrap()
+    );
+    assert!(
+        source_overlaps_output(
+            "https://my-bucket.s3.ap-northeast-1.amazonaws.com/output/a/segment.ts",
+            &config,
+        )
+        .unwrap()
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn local_source_ownership_rejects_case_aliases_using_directory_identity() {
+    let fixture = fixture();
+    for (prefix, alias) in [("output", "OUTPUT"), ("out\u{fc}", "OUT\u{dc}")] {
+        let config = BatchConfig {
+            output_prefix: prefix.into(),
+            ..fixture.config.clone()
+        };
+        let source = fixture.root().join(prefix).join("a/media/segment.m4s");
+        write(&source, b"original-source");
+        assert!(
+            same_file::is_same_file(fixture.root().join(prefix), fixture.root().join(alias))
+                .unwrap()
+        );
+        assert!(
+            source_overlaps_output(&format!("https://{alias}/a/media/segment.m4s"), &config)
+                .unwrap()
+        );
+        assert_eq!(std::fs::read(&source).unwrap(), b"original-source");
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn local_batch_rejects_case_aliased_declared_sources_before_output_deletion() {
+    let fixture = fixture();
+    let source = fixture.root().join("output/a/source.mpd");
+    write(&source, b"original-source");
+    let work = AssetWorkItem::new(
+        "a",
+        "dash-cenc",
+        Some(ObjectRef::new("OUTPUT/a/source.mpd").unwrap()),
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        run(&[work], &fixture.config, &fail, &Seams::default()).unwrap_err(),
+        RunError::Batch(BatchError::new("source-output-overlap"))
+    );
+    assert_eq!(std::fs::read(&source).unwrap(), b"original-source");
+    assert!(!fixture.config.resume_log.exists());
+}
+
+#[cfg(windows)]
+#[test]
+fn local_batch_rejects_case_aliased_media_graphs_before_output_deletion() {
+    let fixture = fixture();
+    let built = build_synthetic_dash_asset(&fixture.root(), &[h264_rep("v")], "title-abc123");
+    let download = fixture.root().join("download");
+    let source = download.join("output/a/media/segment.m4s");
+    write(&source, b"original-source");
+    let manifest = std::fs::read_to_string(&built.mpd_path).unwrap();
+    std::fs::write(
+        &built.mpd_path,
+        manifest.replace(
+            "https://cdn.example.test/title-abc123/",
+            "https://OUTPUT/a/media/",
+        ),
+    )
+    .unwrap();
+    let config = BatchConfig {
+        storage: Arc::new(LocalStorageBackend::new(&download).unwrap()),
+        ..fixture.config.clone()
+    };
+    let work = AssetWorkItem::new(
+        "a",
+        "dash-cenc",
+        Some(relative_key(&built.mpd_path, &download)),
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        run(&[work], &config, &fail, &Seams::default()).unwrap_err(),
+        RunError::Batch(BatchError::unsafe_source_graph("source-output-overlap"))
+    );
+    assert_eq!(std::fs::read(&source).unwrap(), b"original-source");
+    assert!(!config.resume_log.exists());
+}

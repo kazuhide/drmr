@@ -67,7 +67,6 @@ fn manifest_bytes(path: &Path) -> Result<Vec<u8>, AttemptError> {
 /// point or object-lambda host cannot be attributed (`hls-source-ownership-unqualified`).
 pub fn source_overlaps_output(url: &str, config: &BatchConfig) -> Result<bool, AttemptError> {
     let parsed = urlsplit(url, "").map_err(value_error)?;
-    let prefix = config.output_prefix.as_str();
     if parsed.scheme == "file" {
         #[cfg(unix)]
         let local = PathBuf::from(unquote(&parsed.path));
@@ -83,7 +82,7 @@ pub fn source_overlaps_output(url: &str, config: &BatchConfig) -> Result<bool, A
         return Ok(config
             .storage
             .root()
-            .is_some_and(|root| is_relative_to(&local, &root.join(prefix))));
+            .is_some_and(|root| is_relative_to(&local, &root.join(&config.output_prefix))));
     }
     if !matches!(parsed.scheme.as_str(), "https" | "http") {
         return Ok(false);
@@ -107,9 +106,9 @@ pub fn source_overlaps_output(url: &str, config: &BatchConfig) -> Result<bool, A
         }
     }
     if let Some(key) = object_key {
-        return Ok(is_output_key(&key, prefix));
+        return Ok(is_output_key(&key, config)?);
     }
-    Ok(is_output_key(source_ref(url)?.key(), prefix))
+    Ok(is_output_key(source_ref(url)?.key(), config)?)
 }
 
 /// The MPD facts `_stage_inputs` and the preflight read with `ElementTree`.
@@ -207,12 +206,10 @@ impl Stager<'_> {
             })
             .cloned()
             .collect();
-        let prefix = &self.config.output_prefix;
-        if unique
-            .iter()
-            .any(|object| is_output_key(object.key(), prefix))
-        {
-            return Err(malformed());
+        for object in &unique {
+            if is_output_key(object.key(), self.config)? {
+                return Err(malformed());
+            }
         }
         let budget = usize::try_from(self.config.transfer.max_objects).unwrap_or(usize::MAX);
         if self.downloaded.len() + unique.len() > budget {
@@ -276,11 +273,10 @@ pub fn stage_inputs(
     };
     let mut refs = vec![manifest.clone()];
     refs.extend(work.hls_master.clone());
-    if refs
-        .iter()
-        .any(|object| is_output_key(object.key(), &config.output_prefix))
-    {
-        return Err(malformed());
+    for object in &refs {
+        if is_output_key(object.key(), config)? {
+            return Err(malformed());
+        }
     }
     stager.get(&refs)?;
     let raw = manifest_bytes(&stage.join(manifest.key()))?;
@@ -323,7 +319,7 @@ fn stage_media(mpd: &Mpd, stager: &mut Stager<'_>) -> Result<(), AttemptError> {
     let base = py_strip(base);
     let placeholder = joined_ref(base, "placeholder")?;
     let prefix = parent_key(placeholder.key());
-    if is_output_key(prefix, &stager.config.output_prefix) {
+    if is_output_key(prefix, stager.config)? {
         return Err(malformed());
     }
     let media = stager
@@ -337,7 +333,7 @@ fn stage_media(mpd: &Mpd, stager: &mut Stager<'_>) -> Result<(), AttemptError> {
                 continue;
             };
             let object = joined_ref(base, value)?;
-            if is_output_key(object.key(), &stager.config.output_prefix) {
+            if is_output_key(object.key(), stager.config)? {
                 return Err(malformed());
             }
             if attribute == "initialization" {
@@ -390,7 +386,7 @@ fn stage_playlists(master: &ObjectRef, stager: &mut Stager<'_>) -> Result<(), At
                 continue;
             }
             let child = joined_ref(&format!("https://{}", object.key()), &uri)?;
-            if is_output_key(child.key(), &stager.config.output_prefix) {
+            if is_output_key(child.key(), stager.config)? {
                 return Err(malformed());
             }
             let excluded = ["#EXT-X-KEY:", "#EXT-X-SESSION-KEY:", "#EXT-X-SESSION-DATA:"];
@@ -545,9 +541,8 @@ fn preflight_dash(
     config: &BatchConfig,
     directory: &Path,
 ) -> Result<(), AttemptError> {
-    let prefix = config.output_prefix.as_str();
     let check = |object: &ObjectRef| {
-        if is_output_key(object.key(), prefix) {
+        if is_output_key(object.key(), config)? {
             Err(unsafe_overlap())
         } else {
             Ok(())
