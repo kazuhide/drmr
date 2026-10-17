@@ -111,7 +111,7 @@ fn real_convert_and_verify_keep_json_machine_readable_and_keys_private() {
 #[test]
 fn invalid_key_configuration_fails_without_echoing_secrets_or_publishing_output() {
     let dir = tempfile::tempdir().unwrap();
-    let keys = dir.path().join("credential-sentinel.json");
+    let keys = dir.path().join("private/credential-sentinel.json");
     let output = dir.path().join("output.mp4");
     private_config(
         &keys,

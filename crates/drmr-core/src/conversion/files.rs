@@ -13,37 +13,89 @@ const PUBLISH_ERROR: ConversionError = ConversionError("output-exists-or-publish
 
 pub(super) struct Stage {
     path: PathBuf,
+    #[cfg(unix)]
     _outer: tempfile::TempDir,
+    // Fields drop in declaration order: remove only the exclusive child while
+    // the strict container and all of its ancestors remain pinned.
     #[cfg(windows)]
-    _parents: Vec<File>,
+    _owned_child: native::PrivateTempDir,
+    #[cfg(windows)]
+    _container: Container,
 }
 impl Stage {
     pub(super) fn new(parent: Option<&Path>) -> Result<Self, ConversionError> {
         #[cfg(windows)]
-        let parents = parent
-            .map(held_directories)
-            .transpose()?
-            .unwrap_or_default();
-        let mut builder = tempfile::Builder::new();
-        builder.prefix(".drmr-convert-");
-        let outer = match parent {
-            Some(parent) => builder.tempdir_in(parent),
-            None => builder.tempdir(),
+        {
+            let parent = parent.map_or_else(std::env::temp_dir, Path::to_path_buf);
+            let mut random = [0; 16];
+            getrandom::fill(&mut random)
+                .map_err(|_| ConversionError("secure-random-unavailable"))?;
+            let name = format!(".drmr-convert-{:032x}", u128::from_be_bytes(random));
+            Self::from_container(&parent.join(name))
         }
-        .map_err(|_| ConversionError("temporary-workspace-unavailable"))?;
-        // The exclusive outer directory contains no payload. The inner directory
-        // receives an owner-only ACL at creation, before inheritance is enabled.
-        let path = outer.path().join("media");
+        #[cfg(unix)]
+        {
+            let mut builder = tempfile::Builder::new();
+            builder.prefix(".drmr-convert-");
+            let outer = match parent {
+                Some(parent) => builder.tempdir_in(parent),
+                None => builder.tempdir(),
+            }
+            .map_err(|_| ConversionError("temporary-workspace-unavailable"))?;
+            let path = outer.path().join("media");
+            create_dir(&path)?;
+            Ok(Self {
+                path,
+                _outer: outer,
+            })
+        }
+    }
+    #[cfg(windows)]
+    fn from_container(path: &Path) -> Result<Self, ConversionError> {
+        let container = Container::acquire(path)?;
+        let owned_child =
+            native::private_tempdir_in(&container.path, "stage-").map_err(|_| IO_ERROR)?;
+        let path = owned_child.path().join("media");
         create_dir(&path)?;
         Ok(Self {
             path,
-            _outer: outer,
-            #[cfg(windows)]
-            _parents: parents,
+            _owned_child: owned_child,
+            _container: container,
         })
     }
     pub(super) fn path(&self) -> &Path {
         &self.path
+    }
+}
+
+#[cfg(windows)]
+struct Container {
+    path: PathBuf,
+    held: Vec<File>,
+}
+#[cfg(windows)]
+impl Container {
+    fn acquire(path: &Path) -> Result<Self, ConversionError> {
+        let path = checked_absolute(path)?;
+        let parent = path.parent().ok_or(IO_ERROR)?;
+        let _parents = held_directories(parent)?;
+        // Creation installs the strict owner-only ACL in the creation syscall.
+        // An existing container is verified without adopting any of its entries.
+        drop(private_fs::PrivateDir::ensure(&path).map_err(|_| IO_ERROR)?);
+        // PrivateDir permits deletion sharing. Retain separate no-delete handles
+        // and revalidate the current pathname before creating any payload.
+        let held = held_directories(&path)?;
+        drop(private_fs::PrivateDir::open(&path).map_err(|_| IO_ERROR)?);
+        Ok(Self { path, held })
+    }
+}
+#[cfg(windows)]
+impl Drop for Container {
+    fn drop(&mut self) {
+        self.held.clear();
+        // Never recursively remove this ensured container: it may have existed
+        // before acquisition. Only an empty directory may be removed here.
+        let _ = std::fs::remove_dir(&self.path);
     }
 }
 
@@ -233,7 +285,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn staged_payload_is_private_before_publication_and_cleanup_owns_only_the_outer_directory() {
+    fn staged_payload_is_private_before_publication_and_owned_stage_is_cleaned() {
         let parent = tempfile::tempdir().unwrap();
         let stage = Stage::new(Some(parent.path())).unwrap();
         let directory = stage.path().to_path_buf();
@@ -315,6 +367,94 @@ mod tests {
         #[cfg(windows)]
         private_fs::verify(&std::fs::File::open(target).unwrap()).unwrap();
     }
+    #[cfg(windows)]
+    #[test]
+    fn stage_container_is_strict_and_pinned_even_when_parent_grants_delete_child() {
+        let parent = tempfile::tempdir().unwrap();
+        let user = windows_permissions::utilities::current_process_sid().unwrap();
+        set_directory_dacl(
+            parent.path(),
+            &format!("D:P(A;OICI;FA;;;{user})(A;;0x00000040;;;WD)"),
+        );
+        let stage = Stage::new(Some(parent.path())).unwrap();
+        let container = stage.path().parent().unwrap().parent().unwrap();
+        private_fs::PrivateDir::open(container).unwrap();
+        create_new(&stage.path().join("payload"))
+            .unwrap()
+            .write_all(b"private")
+            .unwrap();
+        assert!(std::fs::rename(container, parent.path().join("redirected")).is_err());
+        assert_eq!(
+            std::fs::read(stage.path().join("payload")).unwrap(),
+            b"private"
+        );
+        let container = container.to_path_buf();
+        drop(stage);
+        assert!(!container.exists());
+    }
+
+    #[cfg(windows)]
+    fn set_directory_dacl(path: &Path, policy: &str) {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        use windows_permissions::constants::{SeObjectType, SecurityInformation};
+        use windows_permissions::wrappers::SetSecurityInfo;
+        let policy: windows_permissions::LocalBox<windows_permissions::SecurityDescriptor> =
+            policy.parse().unwrap();
+        let mut directory = OpenOptions::new()
+            .access_mode(0x0004_0080)
+            .share_mode(7)
+            .custom_flags(0x0200_0000)
+            .open(path)
+            .unwrap();
+        SetSecurityInfo(
+            &mut directory,
+            SeObjectType::SE_FILE_OBJECT,
+            SecurityInformation::Dacl | SecurityInformation::ProtectedDacl,
+            None,
+            None,
+            Some(policy.dacl().unwrap()),
+            None,
+        )
+        .unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn unsafe_existing_container_is_refused_without_repair_or_cleanup() {
+        let parent = tempfile::tempdir().unwrap();
+        let container = parent.path().join("unsafe-container");
+        std::fs::create_dir(&container).unwrap();
+        set_directory_dacl(&container, "D:P(A;OICI;FA;;;WD)");
+        std::fs::write(container.join("sentinel"), b"keep").unwrap();
+        assert!(private_fs::PrivateDir::open(&container).is_err());
+        assert!(Stage::from_container(&container).is_err());
+        assert!(private_fs::PrivateDir::open(&container).is_err());
+        assert_eq!(std::fs::read(container.join("sentinel")).unwrap(), b"keep");
+        assert_eq!(std::fs::read_dir(&container).unwrap().count(), 1);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn stage_cleanup_never_adopts_or_deletes_existing_container_contents() {
+        let parent = tempfile::tempdir().unwrap();
+        let container = parent.path().join("existing-private-container");
+        native::create_private_dir_all(&container).unwrap();
+        native::create_private_new(&container.join("sentinel"))
+            .unwrap()
+            .write_all(b"keep")
+            .unwrap();
+        let stage = Stage::from_container(&container).unwrap();
+        let owned_child = stage.path().parent().unwrap().to_path_buf();
+        create_new(&stage.path().join("payload"))
+            .unwrap()
+            .write_all(b"temporary")
+            .unwrap();
+        drop(stage);
+        assert!(!owned_child.exists());
+        assert_eq!(std::fs::read(container.join("sentinel")).unwrap(), b"keep");
+        assert_eq!(std::fs::read_dir(&container).unwrap().count(), 1);
+    }
+
     #[cfg(windows)]
     #[test]
     fn public_media_refuses_alternate_streams_and_junction_ancestors() {
