@@ -86,3 +86,5 @@ drmr packages supplied media and signaling. It does not provide a DRM license se
 Use `drmr help <COMMAND>` for command options. See [usage](docs/usage.md) for examples and exit codes.
 
 See [media processing](docs/media-processing.md) for encryption terminology, segment boundaries, and the checks behind the reported results.
+
+See [resource limits and measurements](docs/resources.md) for automatic worker selection, memory estimates, and reproducible comparisons.

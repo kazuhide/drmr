@@ -19,7 +19,7 @@ plus an estimated 8 MiB of retained state per track. It reserves a quarter of CP
 parallelism, rounded up, while always allowing at least one CPU token. Default worker
 recommendations stop at 32; explicit maximums must be between 1 and 64.
 
-Each child is estimated to need 64 MiB, 24 bytes per video pixel, twice the largest
+Each child is estimated to need 64 MiB, 24 bytes per video pixel, twice its
 estimated input working set, and four times its configured output capture caps. Unknown video
 dimensions assume 3840 × 2160 pixels; an unknown resource size assumes 32 MiB. Audio-only
 sources omit the video term. If memory cannot be queried, the allowance is 512 MiB,
@@ -107,7 +107,6 @@ Every run preserved the full decoded video, audio, and packet timeline. These sh
 show some admission/capture overhead; they do not demonstrate a throughput improvement.
 First analysis launches took about 0.57 s in both measurements.
 
-
 ## Generic conversion
 
 `convert` and `verify` accept `--max-workers 1` through `64` as an upper bound.
@@ -125,3 +124,34 @@ FFmpeg and ffprobe use one decoder thread; FFmpeg output encoders and filters al
 one thread. Shaka Packager uses `--single_threaded` and `--io_cache_size=0`, disabling its
 otherwise separate per-file threaded I/O caches. Parallel work is coordinated outside
 these tools. The tradeoff is measured with the same complete verification in both modes.
+
+For a paired worker comparison, build the CLI first, then run:
+
+```sh
+cargo build --release -p drmr
+python3 tools/measure_conversion.py --drmr target/release/drmr \
+  --input input/manifest.mpd --keys-file keys.json --to cbcs --format dash \
+  --report worker-comparison.json
+```
+
+Use `drmr.exe` on Windows. The tool alternates automatic and one-worker runs, creates
+fresh outputs, and independently verifies every result. Reports omit operator paths,
+arguments, and raw diagnostics. The input-entry hash covers that file only, including
+just the manifest when one is supplied. Referenced media is not fingerprinted by this
+measurement tool. Windows process-memory sampling is reported as unmeasured.
+
+One macOS ARM64 debug build with FFmpeg 9.0.2 and Shaka Packager 3.8.0 measured three
+paired runs of ten-second BBB clear DASH to CBCS DASH, with five two-second video segments:
+
+| Worker setting | Median conversion | Median separate verification | Largest observed descendant count |
+| --- | ---: | ---: | ---: |
+| Automatic | 0.761 s | 0.403 s | 2 |
+| Maximum 1 | 1.253 s | 0.633 s | 1 |
+
+All six conversions and independent checks passed stream metadata, encoded payload,
+complete decoded content, and every packet timestamp. During separate verification,
+median sampled CLI resident memory was 19.0 MB with automatic workers and 17.8 MB with
+one worker; descendant totals were 31.1 MB and 20.5 MB respectively. Memory samples were
+100 ms apart, and parent/descendant maxima are separate. Short-lived processes can be
+missed. These observations apply to this small asset and host; they do not establish
+long-media throughput, an exact memory peak, or a result on another operating system.
