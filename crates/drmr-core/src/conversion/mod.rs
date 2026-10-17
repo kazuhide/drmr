@@ -6,6 +6,7 @@
 //! errors are redacted, but operating-system process inspection can observe those arguments.
 mod aes128;
 mod backend;
+pub(crate) mod dash;
 pub mod key_file;
 pub use aes128::{
     Aes128Key, HlsInputKeys, HlsOutputKey, SegmentIv, decrypt_segment, encrypt_segment,
