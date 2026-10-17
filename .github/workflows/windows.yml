@@ -36,10 +36,10 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Check native platform warnings
-        run: cargo clippy -p drmr-core --lib --test native --locked -- -D warnings
+        run: cargo clippy -p drmr-core --lib --test native --test windows_cli --locked -- -D warnings
 
       - name: Test Windows access controls and descendant cleanup
-        run: cargo test -p drmr-core --test native --locked -- --nocapture
+        run: cargo test -p drmr-core --test native --test windows_cli --locked -- --nocapture
 
       - name: Build native CLI
         run: cargo build --release --locked -p drmr

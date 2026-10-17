@@ -4,6 +4,10 @@
 //! access controls are interpreted by the operating system at this boundary.
 
 mod files;
-pub use files::{create_private_dir_all, create_private_new, open_private_read};
+pub use files::{
+    create_private_dir_all, create_private_dir_new, create_private_new, open_private_read,
+};
 mod process;
 pub use process::ManagedChild;
+mod paths;
+pub use paths::resolve_path;

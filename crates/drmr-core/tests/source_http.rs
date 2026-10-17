@@ -533,7 +533,7 @@ fn remote_playlist_cannot_use_operator_local_roots() {
     let local = tmp.path().join("staging");
     std::fs::create_dir(&local).unwrap();
     support::media(&local, None);
-    let uri = drmr_core::source::pypath::as_uri(&local.join("segment.ts"));
+    let uri = drmr_core::source::pypath::as_uri(&local.join("segment.ts")).unwrap();
     let playlist = format!("#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXTINF:6,\n{uri}\n#EXT-X-ENDLIST\n");
     let server = TestServer::routes(vec![("/master", 200, vec![], playlist.into_bytes())]);
     let policy = FetchPolicy {

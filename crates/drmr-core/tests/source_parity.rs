@@ -196,7 +196,7 @@ fn every_synthetic_case_freezes_the_analysis_python_freezes_byte_for_byte() {
             .unwrap_or_else(|error| panic!("{case}: {error:?}"));
         // The reference fixture's record with this run's root in place of @ROOT@, and its digest and id
         // recomputed: the canonical bytes are Python's when the two records are equal.
-        let prefix = as_uri(&resolve(&root).unwrap());
+        let prefix = as_uri(&resolve(&root).unwrap()).unwrap();
         let text = std::fs::read_to_string(fixture(&format!("analysis/{case}.json"))).unwrap();
         let mut expected: Value = serde_json::from_str(&text.replace("@ROOT@", &prefix)).unwrap();
         let map = expected.as_object_mut().unwrap();
@@ -431,7 +431,7 @@ fn as_uri_and_quote_match_python() {
     for case in load("as_uri.json").as_array().unwrap() {
         let path = case["path"].as_str().unwrap();
         assert_eq!(
-            as_uri(Path::new(path)),
+            as_uri(Path::new(path)).unwrap(),
             case["as_uri"].as_str().unwrap(),
             "{path}"
         );

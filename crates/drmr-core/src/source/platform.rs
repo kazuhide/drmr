@@ -254,12 +254,8 @@ pub fn disk_free(path: &Path) -> io::Result<u64> {
     Ok(stats.f_bavail.saturating_mul(stats.f_frsize))
 }
 
-/// Where the platform has no `statvfs`, nothing is known about the free space: the floor
-/// check cannot pass a non-zero floor.
-#[cfg(not(unix))]
-pub fn disk_free(_path: &Path) -> io::Result<u64> {
-    Err(io::Error::new(
-        io::ErrorKind::Unsupported,
-        "disk usage is not available on this platform",
-    ))
+/// Free bytes available to the current Windows user on the containing volume.
+#[cfg(windows)]
+pub fn disk_free(path: &Path) -> io::Result<u64> {
+    fs4::available_space(path)
 }

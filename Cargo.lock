@@ -514,6 +514,7 @@ dependencies = [
  "thiserror 2.0.21",
  "unicode-normalization",
  "ureq 2.12.1",
+ "url",
  "webpki-roots 1.0.9",
  "win32job",
  "windows-permissions",

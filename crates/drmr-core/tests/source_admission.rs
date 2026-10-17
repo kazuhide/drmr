@@ -1422,7 +1422,7 @@ fn the_other_resolve_sites_escape_a_symlink_loop_the_same_way() {
     std::os::unix::fs::symlink("loop", ws.source.join("loop")).unwrap();
     let analysis = Analysis::new(&default_probe);
     // 443: the master `file:` URL resolves through the loop
-    let through_loop = as_uri(&ws.source.join("loop/master.m3u8"));
+    let through_loop = as_uri(&ws.source.join("loop/master.m3u8")).unwrap();
     runtime_error(analysis.run(
         &SourceRequest::new(through_loop.as_str()),
         "test-asset",

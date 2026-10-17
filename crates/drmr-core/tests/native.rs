@@ -4,6 +4,46 @@ use drmr_core::native;
 use std::io::{Read, Write};
 
 #[test]
+fn native_resolution_keeps_missing_children_below_the_canonical_existing_parent() {
+    let temp = tempfile::tempdir().unwrap();
+    let parent = temp.path().join("spaces and 日本語");
+    std::fs::create_dir(&parent).unwrap();
+    let resolved = native::resolve_path(&parent.join("missing/../future.mp4")).unwrap();
+    assert_eq!(resolved, parent.canonicalize().unwrap().join("future.mp4"));
+}
+
+#[cfg(unix)]
+#[test]
+fn native_resolution_applies_parent_components_after_resolving_a_link() {
+    let temp = tempfile::tempdir().unwrap();
+    let target = temp.path().join("real/nested");
+    std::fs::create_dir_all(&target).unwrap();
+    std::os::unix::fs::symlink(&target, temp.path().join("link")).unwrap();
+    assert_eq!(
+        native::resolve_path(&temp.path().join("link/../future")).unwrap(),
+        target
+            .parent()
+            .unwrap()
+            .canonicalize()
+            .unwrap()
+            .join("future")
+    );
+}
+
+#[test]
+fn private_directory_creation_is_exclusive() {
+    let temp = tempfile::tempdir().unwrap();
+    let parent = temp.path().join("private");
+    native::create_private_dir_all(&parent).unwrap();
+    let child = parent.join("snapshot");
+    native::create_private_dir_new(&child).unwrap();
+    assert_eq!(
+        native::create_private_dir_new(&child).unwrap_err().kind(),
+        std::io::ErrorKind::AlreadyExists
+    );
+}
+
+#[test]
 fn private_creation_is_exclusive_and_preserves_existing_contents() {
     let temp = tempfile::tempdir().unwrap();
     let directory = temp.path().join("private");

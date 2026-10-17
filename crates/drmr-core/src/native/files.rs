@@ -29,6 +29,28 @@ pub fn create_private_dir_all(path: &Path) -> io::Result<()> {
     }
 }
 
+/// Exclusively create one private directory below an existing private parent.
+pub fn create_private_dir_new(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new().mode(0o700).create(path)
+    }
+    #[cfg(windows)]
+    {
+        let parent = path.parent().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "missing parent directory")
+        })?;
+        let name = path
+            .file_name()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing directory name"))?;
+        private_fs::PrivateDir::open(parent)
+            .and_then(|directory| directory.create_dir(name))
+            .map_err(private_error)?;
+        Ok(())
+    }
+}
+
 /// Exclusively create a private regular file. Existing entries are never changed.
 pub fn create_private_new(path: &Path) -> io::Result<File> {
     #[cfg(unix)]

@@ -5,6 +5,7 @@
 //! prefix is resolved), `as_uri`, `with_suffix`, `stem`, `relative_to.as_posix`.
 
 use super::Escaped;
+#[cfg(unix)]
 use super::pyurl::quote_from_bytes;
 #[cfg(unix)]
 use std::collections::HashMap;
@@ -113,34 +114,54 @@ pub fn resolve(path: &Path) -> Result<PathBuf, Escaped> {
     Ok(as_path(&resolved))
 }
 
-/// `Path(path).resolve` where the platform has no POSIX paths: the canonical path when it
-/// exists, else the absolute path.
-#[cfg(not(unix))]
+/// Resolve native Windows paths, retaining missing suffixes and lookup errors.
+#[cfg(windows)]
 pub fn resolve(path: &Path) -> Result<PathBuf, Escaped> {
     if path.as_os_str().as_encoded_bytes().contains(&0) {
         return Err(Escaped::new("ValueError"));
     }
-    match std::fs::canonicalize(path) {
-        Ok(real) => Ok(real),
-        Err(_) => std::path::absolute(path).map_err(|_| Escaped::new("OSError")),
+    crate::native::resolve_path(path).map_err(|_| Escaped::new("OSError"))
+}
+
+/// Convert an absolute native path to a file URI without lossy path conversion.
+/// Relative or unsupported Windows paths produce a fixed error token.
+pub fn as_uri(path: &Path) -> Result<String, Escaped> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        if !path.is_absolute() {
+            return Err(Escaped::new("ValueError"));
+        }
+        Ok(format!(
+            "file://{}",
+            quote_from_bytes(path.as_os_str().as_bytes())
+        ))
+    }
+    #[cfg(windows)]
+    {
+        url::Url::from_file_path(path)
+            .map(String::from)
+            .map_err(|()| Escaped::new("ValueError"))
     }
 }
 
-/// `path.as_uri` of an absolute path: `file://` and the path's bytes percent-encoded
-/// (`quote_from_bytes(os.fsencode(path))`).
-pub fn as_uri(path: &Path) -> String {
-    format!("file://{}", quote_from_bytes(&os_bytes(path)))
+/// Decode a local file URI using native Windows drive and separator rules.
+#[cfg(windows)]
+pub(crate) fn from_file_uri(uri: &str) -> Result<PathBuf, Escaped> {
+    url::Url::parse(uri)
+        .map_err(|_| Escaped::new("ValueError"))?
+        .to_file_path()
+        .map_err(|()| Escaped::new("ValueError"))
 }
 
-#[cfg(unix)]
-fn os_bytes(path: &Path) -> Vec<u8> {
-    use std::os::unix::ffi::OsStrExt;
-    path.as_os_str().as_bytes().to_vec()
-}
-
-#[cfg(not(unix))]
-fn os_bytes(path: &Path) -> Vec<u8> {
-    path.to_string_lossy().replace('\\', "/").into_bytes()
+/// Whether text starts with a native Windows drive, root or UNC prefix.
+#[cfg(windows)]
+pub(crate) fn is_native_path(text: &str) -> bool {
+    use std::path::Component;
+    matches!(
+        Path::new(text).components().next(),
+        Some(Component::Prefix(_) | Component::RootDir)
+    )
 }
 
 /// `path.stem` as text.

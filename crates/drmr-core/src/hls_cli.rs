@@ -17,7 +17,7 @@ use crate::toolrun::{Secrets, ToolRunner};
 use clap::Args;
 use serde_json::{Map, Value};
 use std::collections::HashMap;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
@@ -50,29 +50,23 @@ const PRIVATE_CONFIG_LIMIT: u64 = 2 * 1024 * 1024;
 /// (no group or other permission bit), holding one JSON object.
 pub fn private_json(path: &Path) -> Result<Map<String, Value>, HlsCliError> {
     let invalid = HlsCliError(PRIVATE_CONFIG_INVALID);
-    // `path.stat` follows a symlink.
-    let metadata = std::fs::metadata(path).map_err(|_| invalid)?;
-    if metadata.len() > PRIVATE_CONFIG_LIMIT || group_or_other_bits(&metadata) {
+    // Validate and read the same held object. The bounded read also covers growth
+    // after metadata inspection without allocating an unbounded config body.
+    let file = crate::native::open_private_read(path).map_err(|_| invalid)?;
+    if file.metadata().map_err(|_| invalid)?.len() > PRIVATE_CONFIG_LIMIT {
         return Err(invalid);
     }
-    let text = std::fs::read_to_string(path).map_err(|_| invalid)?;
+    let mut text = String::new();
+    file.take(PRIVATE_CONFIG_LIMIT + 1)
+        .read_to_string(&mut text)
+        .map_err(|_| invalid)?;
+    if text.len() as u64 > PRIVATE_CONFIG_LIMIT {
+        return Err(invalid);
+    }
     match serde_json::from_str::<Value>(&text) {
         Ok(Value::Object(map)) => Ok(map),
         _ => Err(invalid),
     }
-}
-
-#[cfg(unix)]
-fn group_or_other_bits(metadata: &std::fs::Metadata) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    metadata.permissions().mode() & 0o077 != 0
-}
-
-/// Windows reports `0o666` / `0o444` as `st_mode`, so Python's `st_mode & 0o077` is never zero
-/// there and every private config is refused; the implementation keeps that behaviour.
-#[cfg(not(unix))]
-fn group_or_other_bits(_metadata: &std::fs::Metadata) -> bool {
-    true
 }
 
 // ------------------------------------------------------------------------------------------
@@ -1093,6 +1087,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn private_json_requires_a_private_object() {
         use std::os::unix::fs::PermissionsExt;
