@@ -46,6 +46,8 @@ notepad $keyFile
 
 Save the [key configuration structure](usage.md#separate-input-and-output-keys) in that file using your editor or secret-management process. Keep the directory outside the output tree and version control. Never put key values in command arguments or shell history. If an editor replaces the file and changes its ACL, apply the owner-only file ACL again while it remains inside the private directory. See Microsoft's [Set-Acl documentation](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.security/set-acl) for ACL commands.
 
+While external tools run, drmr keeps handles to the working directories and their ancestors. These handles allow child files to be created and updated while refusing rename or deletion of the held directories. Private configuration is checked using the path you supplied, so resolving a path cannot hide a junction or alternate data stream. A completed conversion is published in one filesystem operation that refuses an existing destination.
+
 ## Run commands
 
 PowerShell accepts quoted native paths. This example uses a supported single-track MP4 input and a new output file in an existing directory:
