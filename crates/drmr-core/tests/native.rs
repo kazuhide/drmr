@@ -695,6 +695,19 @@ fn managed_child_preserves_pipes_and_exit_status() {
     assert!(output.contains("drmr-native-probe: quotes ' \" and 日本語"));
 }
 
+#[test]
+fn explicit_finish_is_idempotent_after_direct_child_exit() {
+    for own_tree in [false, true] {
+        let mut child =
+            native::ManagedChild::spawn(probe_command("echo", Path::new("unused")), own_tree)
+                .unwrap();
+        assert!(child.wait().unwrap().success());
+        child.finish().unwrap();
+        child.finish().unwrap();
+        assert!(child.try_wait().unwrap().unwrap().success());
+    }
+}
+
 use std::path::Path;
 use std::process::{Command, Stdio};
 #[cfg(windows)]

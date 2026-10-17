@@ -136,6 +136,13 @@ fn assert_drained(mode: &str) {
             child.wait().unwrap();
             drop(child);
         }
+        "finish" => {
+            child.finish().unwrap();
+            assert_released();
+            child.finish().unwrap();
+            assert_released();
+            drop(child);
+        }
         "wait" => {
             std::fs::write(directory.join("release-parent"), b"exit").unwrap();
             assert!(child.wait().unwrap().success());
@@ -181,6 +188,11 @@ fn wait_drains_descendant_handles_and_pending_io_after_parent_exit() {
 #[test]
 fn drop_drains_descendant_handles_and_pending_io_before_workspace_cleanup() {
     assert_drained("drop");
+}
+
+#[test]
+fn explicit_finish_drains_descendants_and_is_idempotent() {
+    assert_drained("finish");
 }
 
 #[test]

@@ -16,12 +16,20 @@ pub struct ManagedChild {
     child: Box<dyn process_wrap::std::ChildWrapper>,
     #[cfg(windows)]
     _job: std::sync::Arc<win32job::Job>,
+    cleanup: CleanupState,
     /// The child's piped standard input, if requested.
     pub stdin: Option<ChildStdin>,
     /// The child's piped standard output, if requested.
     pub stdout: Option<ChildStdout>,
     /// The child's piped standard error, if requested.
     pub stderr: Option<ChildStderr>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum CleanupState {
+    Pending,
+    Confirmed,
+    Unconfirmed,
 }
 
 impl ManagedChild {
@@ -37,6 +45,7 @@ impl ManagedChild {
             }
             let mut child = command.spawn()?;
             Ok(Self {
+                cleanup: CleanupState::Pending,
                 stdin: child.stdin.take(),
                 stdout: child.stdout.take(),
                 stderr: child.stderr.take(),
@@ -58,6 +67,7 @@ impl ManagedChild {
                 .wrap(JobObject);
             let mut child = command.spawn()?;
             Ok(Self {
+                cleanup: CleanupState::Pending,
                 stdin: child.stdin().take(),
                 stdout: child.stdout().take(),
                 stderr: child.stderr().take(),
@@ -94,7 +104,7 @@ impl ManagedChild {
         #[cfg(windows)]
         {
             let status = self.child.inner_mut().wait()?;
-            self.kill()?;
+            self.finish()?;
             Ok(status)
         }
     }
@@ -117,6 +127,49 @@ impl ManagedChild {
         }
         #[cfg(windows)]
         {
+            self.finish()
+        }
+    }
+
+    /// Terminate owned descendants and reap the direct child before releasing
+    /// resources used by them. Successful confirmation is idempotent. Errors
+    /// mean cleanup is unconfirmed; callers must not report successful work.
+    /// Windows waits at most 30 seconds for the terminal job notification.
+    pub fn finish(&mut self) -> io::Result<()> {
+        if self.cleanup == CleanupState::Confirmed {
+            return Ok(());
+        }
+        let result = self.finish_inner();
+        self.cleanup = if result.is_ok() {
+            CleanupState::Confirmed
+        } else {
+            CleanupState::Unconfirmed
+        };
+        result
+    }
+
+    fn finish_inner(&mut self) -> io::Result<()> {
+        #[cfg(unix)]
+        {
+            // Inherited worker groups remain owned by the worker supervisor.
+            // A reaped direct child needs no further direct-child kill.
+            if !self.own_tree && self.child.try_wait()?.is_some() {
+                return Ok(());
+            }
+            let killed = self.kill();
+            let reaped = self.child.wait();
+            reaped?;
+            match killed {
+                Err(error)
+                    if error.raw_os_error() == Some(rustix::io::Errno::SRCH.raw_os_error()) =>
+                {
+                    Ok(())
+                }
+                result => result,
+            }
+        }
+        #[cfg(windows)]
+        {
             self.child.start_kill()?;
             let wrapper = (&mut *self.child as &mut dyn std::any::Any)
                 .downcast_mut::<process_wrap::std::JobObjectChild>()
@@ -134,9 +187,11 @@ impl ManagedChild {
 
 impl Drop for ManagedChild {
     fn drop(&mut self) {
-        let _ = self.kill();
-        #[cfg(unix)]
-        let _ = self.wait();
+        // An explicit failed attempt has already spent its bounded cleanup
+        // deadline. Do not hide another attempt in resource destruction.
+        if self.cleanup == CleanupState::Pending {
+            let _ = self.finish();
+        }
     }
 }
 
