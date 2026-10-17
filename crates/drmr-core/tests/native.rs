@@ -479,6 +479,60 @@ fn private_directory_acquisition_rejects_junction_ancestors() {
 
 #[cfg(windows)]
 #[test]
+fn private_reads_reject_alternate_data_streams_without_changing_the_base_file() {
+    let temp = tempfile::tempdir().unwrap();
+    let private = temp.path().join("private");
+    native::create_private_dir_all(&private).unwrap();
+    let base = private.join("keys.json");
+    native::create_private_new(&base)
+        .unwrap()
+        .write_all(b"unchanged")
+        .unwrap();
+    let stream = private.join("keys.json:hidden");
+    std::fs::write(&stream, b"synthetic stream").unwrap();
+    let rejected = [
+        native::open_private_read(&stream).is_err(),
+        native::open_private_shared_read(&stream).is_err(),
+        native::create_private_update(&stream).is_err(),
+        native::create_private_or_truncate(&stream).is_err(),
+    ];
+    assert_eq!(std::fs::read(&base).unwrap(), b"unchanged");
+    assert_eq!(std::fs::read(&stream).unwrap(), b"synthetic stream");
+    assert!(rejected.into_iter().all(|rejected| rejected));
+}
+
+#[cfg(windows)]
+#[test]
+fn private_reads_reject_junction_ancestors_without_changing_the_target() {
+    let temp = tempfile::tempdir().unwrap();
+    let private = temp.path().join("private");
+    native::create_private_dir_all(&private).unwrap();
+    let base = private.join("keys.json");
+    native::create_private_new(&base)
+        .unwrap()
+        .write_all(b"unchanged")
+        .unwrap();
+    let junction = temp.path().join("redirected");
+    let output = Command::new("cmd.exe")
+        .args(["/d", "/c", "mklink", "/J"])
+        .arg(drmr_test_support::command_path(&junction).unwrap())
+        .arg(drmr_test_support::command_path(&private).unwrap())
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "junction fixture did not start");
+    let alias = junction.join("keys.json");
+    let rejected = [
+        native::open_private_read(&alias).is_err(),
+        native::open_private_shared_read(&alias).is_err(),
+        native::create_private_update(&alias).is_err(),
+        native::create_private_or_truncate(&alias).is_err(),
+    ];
+    assert_eq!(std::fs::read(&base).unwrap(), b"unchanged");
+    assert!(rejected.into_iter().all(|rejected| rejected));
+}
+
+#[cfg(windows)]
+#[test]
 fn inherited_access_is_rejected_without_hardening_or_truncation() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("ordinary.json");
