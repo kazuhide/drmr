@@ -373,26 +373,61 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn stage_container_is_strict_and_pinned_even_when_parent_grants_delete_child() {
+        use std::os::windows::fs::OpenOptionsExt as _;
         let parent = tempfile::tempdir().unwrap();
         let user = windows_permissions::utilities::current_process_sid().unwrap();
         set_directory_dacl(
             parent.path(),
             &format!("D:P(A;OICI;FA;;;{user})(A;;0x00000040;;;WD)"),
         );
+        // Execute the previous metadata-only sharing mechanism as a control.
+        // Its missing LIST_DIRECTORY bit must permit the same rename attack.
+        let control_path = parent.path().join("metadata-only-control");
+        let control_moved = parent.path().join("metadata-only-moved");
+        native::create_private_dir_all(&control_path).unwrap();
+        let metadata_only = OpenOptions::new()
+            .access_mode(0x80)
+            .share_mode(1)
+            .security_qos_flags(0x0001_0000)
+            .custom_flags(0x0220_0000)
+            .open(&control_path)
+            .unwrap();
+        std::fs::rename(&control_path, &control_moved)
+            .expect("metadata-only access must demonstrate the unpinned control");
+        std::fs::rename(&control_moved, &control_path).unwrap();
+        drop(metadata_only);
+        std::fs::remove_dir(&control_path).unwrap();
+
         let stage = Stage::new(Some(parent.path())).unwrap();
-        let container = stage.path().parent().unwrap().parent().unwrap();
-        private_fs::PrivateDir::open(container).unwrap();
+        let container = stage
+            .path()
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        private_fs::PrivateDir::open(&container).unwrap();
         create_new(&stage.path().join("payload"))
             .unwrap()
             .write_all(b"private")
             .unwrap();
-        assert!(std::fs::rename(container, parent.path().join("redirected")).is_err());
+        // Ensured-container entries are never owned by the stage's cleanup.
+        native::create_private_new(&container.join("sentinel"))
+            .unwrap()
+            .write_all(b"keep")
+            .unwrap();
+        assert!(std::fs::rename(&container, parent.path().join("redirected")).is_err());
         assert_eq!(
             std::fs::read(stage.path().join("payload")).unwrap(),
             b"private"
         );
-        let container = container.to_path_buf();
+        let owned_child = stage.path().parent().unwrap().to_path_buf();
         drop(stage);
+        assert!(!owned_child.exists());
+        let after_drop = parent.path().join("after-drop");
+        std::fs::rename(&container, &after_drop)
+            .expect("releasing the stage must release its pathname pins");
+        assert_eq!(std::fs::read(after_drop.join("sentinel")).unwrap(), b"keep");
         assert!(!container.exists());
     }
 
@@ -400,11 +435,15 @@ mod tests {
     fn set_directory_dacl(path: &Path, policy: &str) {
         use std::os::windows::fs::OpenOptionsExt as _;
         use windows_permissions::constants::{SeObjectType, SecurityInformation};
-        use windows_permissions::wrappers::SetSecurityInfo;
+        use windows_permissions::wrappers::{
+            ConvertSecurityDescriptorToStringSecurityDescriptor, GetSecurityInfo, SetSecurityInfo,
+        };
         let policy: windows_permissions::LocalBox<windows_permissions::SecurityDescriptor> =
             policy.parse().unwrap();
         let mut directory = OpenOptions::new()
-            .access_mode(0x0004_0080)
+            // Read back the descriptor independently; inheritance updates and
+            // directory enumeration also require the corresponding read rights.
+            .access_mode(0x0006_0081)
             .share_mode(7)
             .custom_flags(0x0200_0000)
             .open(path)
@@ -419,6 +458,33 @@ mod tests {
             None,
         )
         .unwrap();
+        let installed = GetSecurityInfo(
+            &directory,
+            SeObjectType::SE_FILE_OBJECT,
+            SecurityInformation::Dacl,
+        )
+        .unwrap();
+        let dacl_text = |descriptor: &windows_permissions::SecurityDescriptor| {
+            ConvertSecurityDescriptorToStringSecurityDescriptor(
+                descriptor,
+                SecurityInformation::Dacl,
+            )
+            .unwrap()
+            .into_string()
+            .unwrap()
+        };
+        let actual = dacl_text(&installed);
+        let expected = dacl_text(&policy);
+        let (header, actual_aces) = actual.split_at(actual.find('(').unwrap());
+        let expected_aces = &expected[expected.find('(').unwrap()..];
+        assert!(
+            matches!(header, "D:P" | "D:PAI"),
+            "fixture ACL must be protected"
+        );
+        assert_eq!(
+            actual_aces, expected_aces,
+            "fixture ACL must retain the exact threat policy"
+        );
     }
 
     #[cfg(windows)]
