@@ -5,8 +5,6 @@
 //! environment and `HOME` in a temporary directory, so no real profile file is ever read
 //! (`harness = false`: the environment of this process is never mutated). Synthetic
 //! credentials only.
-// unix only (open decision #23): a `harness = false` binary needs its own `main`, so it cannot be
-// gated with `#![cfg(unix)]` like the harness tests; it does not compile elsewhere today.
 
 mod common;
 
@@ -78,6 +76,12 @@ fn run_probe(home: &Path, variables: &[(&str, String)]) -> String {
     command.arg(PROBE).env_clear().env("HOME", home);
     if let Some(path) = std::env::var_os("PATH") {
         command.env("PATH", path);
+    }
+    #[cfg(windows)]
+    for name in ["SystemRoot", "TEMP", "TMP"] {
+        if let Some(value) = std::env::var_os(name) {
+            command.env(name, value);
+        }
     }
     for (name, value) in variables {
         command.env(name, value);

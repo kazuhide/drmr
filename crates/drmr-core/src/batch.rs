@@ -1283,7 +1283,11 @@ fn collect_files(
             let relative = path
                 .strip_prefix(asset_dir)
                 .map_err(|_| AttemptError::Other)?;
-            let relative = relative.to_str().ok_or(AttemptError::Other)?;
+            let relative = relative
+                .components()
+                .map(|component| component.as_os_str().to_str().ok_or(AttemptError::Other))
+                .collect::<Result<Vec<_>, _>>()?
+                .join("/");
             let key = ObjectRef::new(format!("{}/{relative}", prefix.key()))?;
             items.push((path, key));
         } else if path.is_dir() {

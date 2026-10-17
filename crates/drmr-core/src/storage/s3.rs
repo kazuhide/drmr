@@ -220,7 +220,11 @@ impl S3StorageBackend {
 
     fn download(&self, object: &ObjectRef, target: &Path) -> Result<(), StorageError> {
         let parent = target.parent().unwrap_or_else(|| Path::new("."));
+        #[cfg(unix)]
         std::fs::create_dir_all(parent).map_err(|_| StorageError::new("storage-failed"))?;
+        #[cfg(windows)]
+        crate::native::create_private_dir_all(parent)
+            .map_err(|_| StorageError::new("storage-failed"))?;
         self.call(|| {
             let response = self.client.get(object.key())?;
             let declared = content_length(&response);

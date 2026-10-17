@@ -569,7 +569,7 @@ fn a_nul_in_a_local_path_escapes_as_the_value_error_python_s_resolve_raises() {
     );
     let result = Analysis::new(&default_probe).run(
         &SourceRequest::new(ws.source.join("a\0b.m3u8").to_string_lossy()),
-        "nul",
+        "nul-path",
         &ws.path().join("out"),
         &ws.policy(),
     );
@@ -577,7 +577,7 @@ fn a_nul_in_a_local_path_escapes_as_the_value_error_python_s_resolve_raises() {
         result.unwrap_err(),
         Failure::Escaped(Escaped::new("ValueError"))
     );
-    assert!(!ws.path().join("out/nul/clear/source").exists());
+    assert!(!ws.path().join("out/nul-path/clear/source").exists());
 }
 
 #[test]

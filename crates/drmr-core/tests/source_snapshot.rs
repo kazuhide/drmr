@@ -626,6 +626,7 @@ fn real_avc_source_probe_and_frozen_roundtrip() {
     for (container, expected) in [("mpegts", "ts"), ("fmp4", "fmp4")] {
         let ws = Workspace::new();
         let status = std::process::Command::new("ffmpeg")
+            .current_dir(&ws.source)
             .args([
                 "-v",
                 "error",
@@ -649,7 +650,7 @@ fn real_avc_source_probe_and_frozen_roundtrip() {
                 "-hls_segment_type",
                 container,
             ])
-            .arg(ws.source.join("master.m3u8"))
+            .arg("master.m3u8")
             .status()
             .unwrap();
         assert!(status.success());

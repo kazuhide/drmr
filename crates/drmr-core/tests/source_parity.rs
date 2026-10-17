@@ -430,6 +430,7 @@ fn is_global_matches_python() {
 fn as_uri_and_quote_match_python() {
     for case in load("as_uri.json").as_array().unwrap() {
         let path = case["path"].as_str().unwrap();
+        #[cfg(unix)]
         assert_eq!(
             as_uri(Path::new(path)).unwrap(),
             case["as_uri"].as_str().unwrap(),
@@ -441,6 +442,19 @@ fn as_uri_and_quote_match_python() {
             "{path}"
         );
     }
+}
+
+#[cfg(windows)]
+#[test]
+fn native_file_uris_preserve_drive_names_and_encode_path_characters() {
+    assert_eq!(
+        as_uri(Path::new(r"C:\media\日本語 clip#1.ts")).unwrap(),
+        "file:///C:/media/%E6%97%A5%E6%9C%AC%E8%AA%9E%20clip%231.ts"
+    );
+    assert_eq!(
+        as_uri(Path::new("relative.ts")),
+        Err(Escaped::new("ValueError"))
+    );
 }
 
 #[test]

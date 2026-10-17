@@ -270,10 +270,16 @@ pub(crate) fn confined(root: &Path, object: &ObjectRef) -> Result<PathBuf, Stora
         .map_err(|_| StorageError::new("storage-path-invalid"))?;
     let root = resolve(root).map_err(|_| StorageError::new("storage-path-invalid"))?;
     let path = root.join(object.key());
-    if !is_relative_to(
-        &resolve(&path).map_err(|_| StorageError::new("storage-path-invalid"))?,
-        &root,
-    ) {
+    let resolved = match resolve(&path) {
+        Ok(resolved) => resolved,
+        // A regular-file ancestor is a failed transfer, not a path escape. The
+        // lexical object key is already confined; the redirect census below
+        // still rejects a link that led to that file before copying begins.
+        #[cfg(windows)]
+        Err(error) if error.kind() == io::ErrorKind::NotADirectory => path.clone(),
+        Err(_) => return Err(StorageError::new("storage-path-invalid")),
+    };
+    if !is_relative_to(&resolved, &root) {
         return Err(StorageError::new("storage-path-invalid"));
     }
     let mut current = path.as_path();
