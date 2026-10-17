@@ -485,6 +485,8 @@ impl Packager {
         make_dirs(&output_mp4.parent().to_path_buf())?;
         #[cfg(windows)]
         drop(crate::media::create_output_file(&output_mp4.to_path_buf())?);
+        #[cfg(windows)]
+        let _output_guard = crate::native::pin_media_directory(&output_mp4.parent().to_path_buf())?;
         let head = [
             self.binary.clone(),
             format!("input={input_mp4},stream=0,output={output_mp4}"),
@@ -539,6 +541,14 @@ impl Packager {
         let init_output = utf8_path(init_output)?;
         make_dirs(&init_output.parent().to_path_buf())?;
         make_dirs(
+            &PurePosixPath::from_path(Path::new(segment_template))
+                .parent()
+                .to_path_buf(),
+        )?;
+        #[cfg(windows)]
+        let _init_guard = crate::native::pin_media_directory(&init_output.parent().to_path_buf())?;
+        #[cfg(windows)]
+        let _segment_guard = crate::native::pin_media_directory(
             &PurePosixPath::from_path(Path::new(segment_template))
                 .parent()
                 .to_path_buf(),
@@ -651,6 +661,16 @@ impl Packager {
             None => init_output.parent().join("_persegment_work"),
         };
         make_dirs(&work.to_path_buf())?;
+        #[cfg(windows)]
+        let _init_guard = crate::native::pin_media_directory(&init_output.parent().to_path_buf())?;
+        #[cfg(windows)]
+        let _segment_guard = crate::native::pin_media_directory(
+            &PurePosixPath::from_path(Path::new(segment_template))
+                .parent()
+                .to_path_buf(),
+        )?;
+        #[cfg(windows)]
+        let _work_guard = crate::native::pin_media_directory(&work.to_path_buf())?;
         let mut total_duration = 0.0;
         let mut last_redacted = Vec::new();
         for (index, source_segment) in segment_paths.iter().enumerate() {

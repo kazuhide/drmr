@@ -99,6 +99,20 @@ fn temporary_capture_files_are_private_and_support_cloned_handles() {
 }
 
 #[test]
+fn private_temporary_workspaces_protect_payloads_and_remove_only_owned_contents() {
+    let workspace = native::private_tempdir().unwrap();
+    let path = workspace.path().to_path_buf();
+    native::create_private_new(&path.join("payload"))
+        .unwrap()
+        .write_all(b"synthetic")
+        .unwrap();
+    assert_eq!(std::fs::read(path.join("payload")).unwrap(), b"synthetic");
+    native::open_private_read(&path.join("payload")).unwrap();
+    drop(workspace);
+    assert!(!path.exists());
+}
+
+#[test]
 fn private_replacement_validates_before_truncating() {
     let temp = tempfile::tempdir().unwrap();
     let directory = temp.path().join("private");
@@ -499,6 +513,23 @@ fn private_reads_reject_alternate_data_streams_without_changing_the_base_file() 
     assert_eq!(std::fs::read(&base).unwrap(), b"unchanged");
     assert_eq!(std::fs::read(&stream).unwrap(), b"synthetic stream");
     assert!(rejected.into_iter().all(|rejected| rejected));
+}
+
+#[cfg(windows)]
+#[test]
+fn a_strict_leaf_remains_readable_below_an_ordinary_non_reparse_parent() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("keys.json");
+    let mut file = std::fs::File::create(&path).unwrap();
+    private_fs::harden(&file).unwrap();
+    file.write_all(b"synthetic configuration").unwrap();
+    drop(file);
+    let mut text = String::new();
+    native::open_private_read(&path)
+        .unwrap()
+        .read_to_string(&mut text)
+        .unwrap();
+    assert_eq!(text, "synthetic configuration");
 }
 
 #[cfg(windows)]

@@ -925,6 +925,8 @@ pub fn package_track<'scope>(
 ) -> Result<OutputTrack, TrackError> {
     let track = job.track;
     let (folder, work) = track_directories(track, asset_dir)?;
+    #[cfg(windows)]
+    let _output_guard = crate::native::pin_private_directory(asset_dir)?;
     media::create_output_dir(&folder)?;
     media::create_output_dir(&work)?;
     let prepare_units: Vec<Unit<'scope, Prepared, TrackError>> = track
@@ -1323,6 +1325,8 @@ pub fn copy_text(
     deps: &dyn PipelineDeps,
 ) -> Result<OutputTrack, TrackError> {
     let (folder, _) = track_directories(track, asset_dir)?;
+    #[cfg(windows)]
+    let _output_guard = crate::native::pin_private_directory(asset_dir)?;
     if track.container != "webvtt" {
         return copy_imsc(track, asset_dir, deps);
     }
@@ -1702,6 +1706,9 @@ pub fn package_hls(
     {
         return Err(PipelineError::Value("source-no-av-tracks".to_string()));
     }
+    #[cfg(windows)]
+    let _output_guard =
+        crate::native::pin_private_directory(&asset_dir).map_err(|error| os_value(&error))?;
     // A retry cannot leave previously successful manifests visible after failure.
     if manifest_dir.exists() {
         fs::remove_dir_all(&manifest_dir).map_err(|error| os_value(&error))?;

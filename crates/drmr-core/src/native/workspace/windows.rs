@@ -119,14 +119,22 @@ fn ace_text(descriptor: &SecurityDescriptor) -> io::Result<(String, String)> {
 }
 
 fn open(path: &Path) -> io::Result<File> {
-    const READ_CONTROL_WRITE_DAC_READ_ATTRIBUTES: u32 = 0x0006_0080;
+    // LIST_DIRECTORY (READ_DATA on a file) makes the handle participate in
+    // Windows sharing checks. Metadata-only access cannot pin a directory.
+    const READ_CONTROL_WRITE_DAC_READ_DATA_ATTRIBUTES: u32 = 0x0006_0081;
     const BACKUP_SEMANTICS_OPEN_REPARSE_POINT: u32 = 0x0220_0000;
     OpenOptions::new()
-        .access_mode(READ_CONTROL_WRITE_DAC_READ_ATTRIBUTES)
+        .access_mode(READ_CONTROL_WRITE_DAC_READ_DATA_ATTRIBUTES)
         .share_mode(1)
         .security_qos_flags(0x0001_0000)
         .custom_flags(BACKUP_SEMANTICS_OPEN_REPARSE_POINT)
         .open(path)
+}
+
+pub(super) fn pin(path: &Path) -> io::Result<crate::native::PrivateDirectoryGuard> {
+    let guard = crate::native::files::pin_directory_path(path)?;
+    Policy::new()?.verify(&open(path)?, true, true)?;
+    Ok(guard)
 }
 
 pub(super) fn create(path: &Path) -> io::Result<()> {
@@ -280,4 +288,28 @@ fn open_file(path: &Path, create: bool) -> io::Result<File> {
     policy.verify(&file, false, false)?;
     policy.set(&mut file, false)?;
     Ok(file)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_held_media_parent_cannot_be_renamed_before_file_creation() {
+        let temp = tempfile::tempdir().unwrap();
+        let private = temp.path().join("private");
+        crate::native::create_private_dir_all(&private).unwrap();
+        let moved = temp.path().join("moved");
+        let held = open(&private).unwrap();
+        let rename = std::fs::rename(&private, &moved);
+        drop(held);
+        if rename.is_ok() {
+            std::fs::rename(&moved, &private).unwrap();
+        }
+        assert!(
+            rename.is_err(),
+            "media parent moved while its guard was held"
+        );
+        std::fs::rename(&private, &moved).unwrap();
+    }
 }

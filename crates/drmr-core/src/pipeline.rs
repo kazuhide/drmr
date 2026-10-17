@@ -653,6 +653,9 @@ pub fn repackage_rendition(
 ) -> Result<RenditionResult, PyError> {
     let paths = RenditionPaths::new(rendition, &py_path(output_dir))?;
     let duration_s = segment_duration_seconds(rendition)?;
+    #[cfg(windows)]
+    let _output_guard = crate::native::pin_private_directory(output_dir)
+        .map_err(|error| PyError::os(&error, output_dir))?;
     let source_segment_count = rendition.segment_paths.len();
     let log = Log(options.on_log);
     let rep_id = Some(rendition.rep_id.as_str());
@@ -1212,6 +1215,9 @@ pub fn rewrite_asset_manifests(
         &py_resolve(&asset.input_base_dir)?,
     )?;
     let dash_output_mpd = py_path(&manifests_root.join(relative));
+    #[cfg(windows)]
+    let _output_guard = crate::native::pin_private_directory(&asset.output_dir)
+        .map_err(|error| PyError::os(&error, &asset.output_dir))?;
 
     log.info("manifest", "patching DASH manifest", None);
     let dash_result = deps.manifests.rewrite_dash_manifest(
@@ -1222,18 +1228,15 @@ pub fn rewrite_asset_manifests(
     )?;
     let mut checks = dash_result.checks.clone();
 
+    #[cfg(unix)]
     let scratch = tempfile::Builder::new()
         .prefix("drmr-manifest-gates-")
         .tempdir()
         .map_err(|error| PyError::os(&error, &std::env::temp_dir()))?;
-    #[cfg(unix)]
-    let scratch_path = scratch.path().to_path_buf();
     #[cfg(windows)]
-    let scratch_path = {
-        let path = scratch.path().join("private");
-        crate::native::create_private_dir_all(&path).map_err(|error| PyError::os(&error, &path))?;
-        path
-    };
+    let scratch = crate::native::private_tempdir()
+        .map_err(|error| PyError::os(&error, &std::env::temp_dir()))?;
+    let scratch_path = scratch.path().to_path_buf();
     let run = ManifestRun {
         asset,
         playready_objects,
@@ -1573,6 +1576,15 @@ pub fn repackage_asset(
     options: &AssetOptions<'_>,
     deps: &PipelineDeps<'_>,
 ) -> Result<AssetResult, PyError> {
+    #[cfg(windows)]
+    let _output_guard = {
+        let workers = resolve_max_workers(options.max_workers, asset.renditions.len())?;
+        if workers > 1 && asset.renditions.len() > 1 {
+            assert_disjoint_output_targets(&asset.renditions)?;
+        }
+        crate::native::pin_private_directory(&asset.output_dir)
+            .map_err(|error| PyError::os(&error, &asset.output_dir))?
+    };
     let step = |rendition: &Rendition,
                 key: &KeyMaterial,
                 output_dir: &Path,

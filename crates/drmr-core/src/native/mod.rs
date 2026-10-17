@@ -4,10 +4,12 @@
 //! access controls are interpreted by the operating system at this boundary.
 
 mod files;
+#[cfg(windows)]
+pub use files::{PrivateDirectoryGuard, pin_private_directory};
 pub use files::{
     PrivateTempDir, PrivateTempFile, create_private_dir_all, create_private_dir_new,
     create_private_new, create_private_or_truncate, create_private_update, open_private_read,
-    open_private_shared_read, private_tempdir_in, private_tempfile,
+    open_private_shared_read, private_tempdir, private_tempdir_in, private_tempfile,
 };
 mod process;
 pub(crate) use process::mark_asset_worker;
@@ -19,6 +21,8 @@ pub use paths::resolve_path;
 pub use paths::validate_windows_relative_path;
 
 mod workspace;
+#[cfg(windows)]
+pub use workspace::pin_media_directory;
 pub use workspace::{
     create_media_dir_all, create_media_new, create_media_or_truncate, seal_media_tree,
 };

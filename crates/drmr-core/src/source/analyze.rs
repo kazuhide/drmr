@@ -159,6 +159,9 @@ pub fn analyze_hls_with(
         return Err(Failure::source("unsafe-output-path"));
     }
     crate::native::create_private_dir_all(&parent).map_err(|_| escaped("OSError"))?;
+    #[cfg(windows)]
+    let _output_guard =
+        crate::native::pin_private_directory(&asset_dir).map_err(|_| escaped("OSError"))?;
     let directory = parent.join("source");
     make_private_dir(&directory)?;
     let fetch = Fetcher::new(policy, &directory, Arc::clone(&options.platform));

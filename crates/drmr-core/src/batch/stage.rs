@@ -254,6 +254,9 @@ pub fn stage_inputs(
         .join(&work.asset_id)
         .join("clear/_batch-stage/download");
     crate::native::create_private_dir_all(&stage).map_err(|_| AttemptError::Other)?;
+    #[cfg(windows)]
+    let _stage_guard =
+        crate::native::pin_private_directory(&stage).map_err(|_| AttemptError::Other)?;
     if work.kind == "hls-clear" {
         stage_clear(work, config, &stage, source)?;
         return Ok(stage);

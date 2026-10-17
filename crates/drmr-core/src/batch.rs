@@ -1389,6 +1389,8 @@ pub fn run_batch_with(
         Some(preflight) => preflight(work_list, config)?,
         None => preflight_source_graphs(work_list, config, seams.source)?,
     }
+    #[cfg(windows)]
+    let _output_guard = crate::native::pin_private_directory(&config.output_root)?;
     let progress = Progress {
         start: Instant::now(),
         total: work_list.len(),

@@ -128,15 +128,11 @@ pub(super) fn measure_segment_durations_s<E: MediaEngine + ?Sized>(
     for pair in tfdts.windows(2) {
         durations.push(python::true_divide(&(&pair[1] - &pair[0]), &scale)?);
     }
-    let directory = tempfile::Builder::new().prefix("tmp").tempdir()?;
     #[cfg(unix)]
-    let work = directory.path().to_path_buf();
+    let directory = tempfile::Builder::new().prefix("tmp").tempdir()?;
     #[cfg(windows)]
-    let work = {
-        let path = directory.path().join("private");
-        crate::native::create_private_dir_all(&path)?;
-        path
-    };
+    let directory = crate::native::private_tempdir()?;
+    let work = directory.path().to_path_buf();
     let merged = work.join("tail.mp4");
     concat_bytes(&[init_path, last.as_path()], &merged)?;
     let end_s = engine.probe_segment_timing(&merged)?.duration_s;

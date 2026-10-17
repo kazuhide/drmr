@@ -292,6 +292,9 @@ impl MediaEngine for Subprocess {
         argv.push(path_str(destination)?);
         #[cfg(windows)]
         drop(super::create_output_file(destination)?);
+        #[cfg(windows)]
+        let _output_guard =
+            crate::native::pin_media_directory(destination.parent().unwrap_or(Path::new(".")))?;
         self.run_media(&argv, true)?;
         Ok(destination.to_path_buf())
     }
@@ -436,6 +439,9 @@ impl MediaEngine for Subprocess {
         }
         #[cfg(windows)]
         drop(super::create_output_file(output_path)?);
+        #[cfg(windows)]
+        let _output_guard =
+            crate::native::pin_media_directory(output_path.parent().unwrap_or(Path::new(".")))?;
         let mut argv = strings(&[
             &self.ffmpeg_bin,
             "-v",
@@ -487,6 +493,9 @@ impl MediaEngine for Subprocess {
         }
         #[cfg(windows)]
         drop(super::create_output_file(output_path)?);
+        #[cfg(windows)]
+        let _output_guard =
+            crate::native::pin_media_directory(output_path.parent().unwrap_or(Path::new(".")))?;
         argv.push(path_str(output_path)?);
         if self.run_ffmpeg_decode(&argv)? != Some(0) {
             // stderr may name the localized playlist or the key file's path, never the key.

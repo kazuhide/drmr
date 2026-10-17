@@ -7,6 +7,13 @@ use std::path::Path;
 #[cfg(windows)]
 mod windows;
 
+/// Retain a prepared private/media directory while external tools use its paths.
+/// Access controls are verified without mutating unrelated, concurrent outputs.
+#[cfg(windows)]
+pub fn pin_media_directory(path: &Path) -> io::Result<super::PrivateDirectoryGuard> {
+    windows::pin(path)
+}
+
 /// Prepare an owner-only media directory with inheritance for external outputs.
 /// Existing entries must already satisfy the workspace policy; unsafe entries are
 /// refused before any permission changes. Secret configuration files use the

@@ -292,16 +292,13 @@ impl Prober for FfprobeProber<'_> {
         #[cfg(unix)]
         let temporary = with_suffix(path, ".probe.mp4");
         #[cfg(windows)]
-        let workspace =
-            tempfile::tempdir().map_err(|_| Failure::source("snapshot-write-failed"))?;
+        let workspace = crate::native::private_tempdir()
+            .map_err(|_| Failure::source("snapshot-write-failed"))?;
         #[cfg(windows)]
         let temporary = {
             // Inputs may live in an ordinary operator directory. Keep the
             // concatenated clear sample in an independently private workspace.
-            let private = workspace.path().join("private");
-            crate::native::create_private_dir_all(&private)
-                .map_err(|_| Failure::source("snapshot-write-failed"))?;
-            private.join("segment.probe.mp4")
+            workspace.path().join("segment.probe.mp4")
         };
         copy_with_init(&temporary, &init, path).map_err(Failure::Source)?;
         let result = self.inspect(&temporary);
