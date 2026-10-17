@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+mod control;
 mod protocol;
 mod server;
 use protocol::{Mode, ToolSpec};
@@ -53,6 +54,11 @@ fn install(path: &Path) -> io::Result<()> {
 }
 fn main() {
     let args: Vec<std::ffi::OsString> = env::args_os().skip(1).collect();
+    match control::child_entry(&args) {
+        Ok(true) => return,
+        Ok(false) => {}
+        Err(_) => std::process::exit(125),
+    }
     if args.first().is_some_and(|a| a == "--install") {
         if args.len() != 2 || install(Path::new(&args[1])).is_err() {
             std::process::exit(1);
@@ -91,17 +97,22 @@ fn run(raw_args: &[std::ffi::OsString]) -> io::Result<i32> {
         fs::write(path, args.join("\n"))?;
     }
     match spec.mode {
-        Mode::Response => {}
+        Mode::Response => control::before_response(&spec)?,
         Mode::Packager => return packager(&args, &spec),
         Mode::Ffprobe | Mode::Ffmpeg | Mode::Mp4dump => return media(&args, &spec),
         Mode::ServerCli => return Err(io::Error::other("invalid fixture dispatch")),
     };
     if let Some(name) = spec.values.get("stdout_env") {
-        let value = env::var(name).map_err(|_| io::Error::other("fixture environment unavailable"))?;
+        let value =
+            env::var(name).map_err(|_| io::Error::other("fixture environment unavailable"))?;
         for text in [
-            spec.values.get("stdout_env_prefix").map_or("", String::as_str),
+            spec.values
+                .get("stdout_env_prefix")
+                .map_or("", String::as_str),
             &value,
-            spec.values.get("stdout_env_suffix").map_or("", String::as_str),
+            spec.values
+                .get("stdout_env_suffix")
+                .map_or("", String::as_str),
         ] {
             io::stdout().write_all(text.as_bytes())?;
         }
