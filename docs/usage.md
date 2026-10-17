@@ -144,6 +144,8 @@ drmr serve
 
 Open `http://127.0.0.1:8080`. Both root directories are required. `DRMR_BIND_PORT` changes the port; `DRMR_MAX_WORKERS` limits HLS packaging workers. The console requires catalog entries prepared for it; it is not a general file browser. See `drmr serve --help` for options. A standalone desktop application is not shipped.
 
+Requests must address `localhost`, `127.0.0.1`, `::1`, or an explicitly configured bind hostname/address. Binding to a wildcard address does not permit arbitrary hostnames. Reverse proxies and remote access are outside this local console's default setup.
+
 ## Exit codes
 
 Most commands return `0` for success, `1` for a failed operation or validation, and `2` for invalid usage or configuration. `verify-snapshot` returns `1` for changed content and `2` for an invalid snapshot. Batch processing can return `130` when interrupted.

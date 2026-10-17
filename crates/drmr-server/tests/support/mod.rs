@@ -175,7 +175,7 @@ pub fn wait_until(mut condition: impl FnMut() -> bool) {
 }
 
 // ------------------------------------------------------------------------------------------
-// Catalog staging (tests/dash_fixture.py, _stage_entry)
+// Synthetic catalog staging
 // ------------------------------------------------------------------------------------------
 
 /// One Representation of the synthetic DASH asset (`RepSpec`).

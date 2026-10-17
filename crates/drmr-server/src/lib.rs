@@ -87,6 +87,35 @@ pub fn build_router(app: Arc<App>) -> axum::Router {
     axum::Router::new().fallback(handle).with_state(app)
 }
 
+/// Reject browser requests addressed to an unrelated hostname before any route can read data.
+fn host_guard(req: &Req, config: &ServerConfig) -> Option<Reply> {
+    let mut hosts = req.headers.iter().filter(|(name, _)| name == "host");
+    let Some((_, value)) = hosts.next() else {
+        return Some(Reply::json_error(400, "invalid-host"));
+    };
+    if hosts.next().is_some() || value.contains('@') || value.ends_with(':') {
+        return Some(Reply::json_error(400, "invalid-host"));
+    }
+    let Ok(authority) = value.parse::<axum::http::uri::Authority>() else {
+        return Some(Reply::json_error(400, "invalid-host"));
+    };
+    if authority.as_str().len() != authority.host().len()
+        && authority.port_u16().is_none_or(|port| port == 0)
+    {
+        return Some(Reply::json_error(400, "invalid-host"));
+    }
+    let host = authority.host().trim_matches(['[', ']']);
+    let configured = config.bind_host.trim_matches(['[', ']']);
+    let loopback = host.eq_ignore_ascii_case("localhost") || matches!(host, "127.0.0.1" | "::1");
+    let explicit_bind =
+        !matches!(configured, "0.0.0.0" | "::") && host.eq_ignore_ascii_case(configured);
+    if loopback || explicit_bind {
+        None
+    } else {
+        Some(Reply::json_error(403, "untrusted-host"))
+    }
+}
+
 /// `hls_request_guard`: for `/api/hls/`, `/api/queue` and `/api/convert`, a declared body over
 /// 256 KiB is `413`; a `POST` / `DELETE` from another origin (`Origin` not this host, or
 /// `Sec-Fetch-Site` other than `same-origin` / `none`) is `403`; a `POST` without JSON (but the
@@ -272,12 +301,13 @@ async fn handle(
             .collect(),
         body: Vec::new(),
     };
-    let (mut reply, timed) = if let Some(reply) = hls_guard(&req) {
-        // The guard runs before the request timer starts (`before_request` order).
-        (reply, false)
-    } else {
-        (respond(&app, &mut req, body).await, true)
-    };
+    let (mut reply, timed) =
+        if let Some(reply) = host_guard(&req, &app.config).or_else(|| hls_guard(&req)) {
+            // The guard runs before the request timer starts (`before_request` order).
+            (reply, false)
+        } else {
+            (respond(&app, &mut req, body).await, true)
+        };
     no_store(&req.path, &mut reply);
     let mut record = Map::new();
     record.insert("path".into(), Value::from(req.path.clone()));
@@ -555,4 +585,39 @@ pub fn spawn(config: ServerConfig) -> Result<RunningServer, ServeError> {
         shutdown: Some(sender),
         thread: Some(thread),
     })
+}
+
+#[cfg(test)]
+mod host_tests {
+    use super::*;
+
+    fn request(host: &str) -> Req {
+        Req {
+            headers: vec![("host".into(), host.into())],
+            ..Req::default()
+        }
+    }
+
+    #[test]
+    fn explicit_bind_names_are_trusted_but_wildcards_are_not_host_allowlists() {
+        let mut config = ServerConfig::new("catalog", "output");
+        config.bind_host = "console.example".into();
+        assert!(host_guard(&request("CONSOLE.EXAMPLE:8080"), &config).is_none());
+        assert_eq!(
+            host_guard(&request("other.example"), &config)
+                .unwrap()
+                .status,
+            403
+        );
+        for wildcard in ["0.0.0.0", "::"] {
+            config.bind_host = wildcard.into();
+            assert_eq!(
+                host_guard(&request("console.example:8080"), &config)
+                    .unwrap()
+                    .status,
+                403
+            );
+            assert!(host_guard(&request("localhost:8080"), &config).is_none());
+        }
+    }
 }
