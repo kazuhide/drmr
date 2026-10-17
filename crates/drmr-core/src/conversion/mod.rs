@@ -4,8 +4,12 @@
 //! manifest inputs, and unsupported output profiles fail before running a backend.
 //! Shaka's raw-key interface passes keys to its child process as arguments. Records and
 //! errors are redacted, but operating-system process inspection can observe those arguments.
+mod aes128;
 mod backend;
 pub mod key_file;
+pub use aes128::{
+    Aes128Key, HlsInputKeys, HlsOutputKey, SegmentIv, decrypt_segment, encrypt_segment,
+};
 mod keys;
 mod verify;
 use crate::{

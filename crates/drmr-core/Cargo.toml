@@ -9,6 +9,9 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+aes.workspace = true
+cbc.workspace = true
+getrandom.workspace = true
 base64.workspace = true
 clap.workspace = true
 hex.workspace = true
