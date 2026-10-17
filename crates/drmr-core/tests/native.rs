@@ -126,8 +126,7 @@ fn device_and_network_namespaces_are_not_private_file_inputs() {
 #[cfg(windows)]
 #[test]
 fn private_files_have_a_protected_current_user_only_acl() {
-    use windows_permissions::WindowsSecure;
-    use windows_permissions::constants::{AccessRights, SecurityInformation};
+    use windows_permissions::constants::{AccessRights, SeObjectType, SecurityInformation};
     let temp = tempfile::tempdir().unwrap();
     let directory = temp.path().join("private");
     native::create_private_dir_all(&directory).unwrap();
@@ -136,9 +135,12 @@ fn private_files_have_a_protected_current_user_only_acl() {
     private_fs::verify(&file).unwrap();
     // Inspect the real descriptor using an independent API, rather than checking
     // only the same library that created the file.
-    let descriptor = file
-        .security_descriptor(SecurityInformation::Owner | SecurityInformation::Dacl)
-        .unwrap();
+    let descriptor = windows_permissions::wrappers::GetSecurityInfo(
+        &file,
+        SeObjectType::SE_FILE_OBJECT,
+        SecurityInformation::Owner | SecurityInformation::Dacl,
+    )
+    .unwrap();
     let acl = descriptor.dacl().unwrap();
     assert_eq!(acl.len(), 1);
     let entry = acl.get_ace(0).unwrap();
@@ -153,7 +155,7 @@ fn private_files_have_a_protected_current_user_only_acl() {
 fn null_acl_and_an_extra_reader_are_rejected_without_repair() {
     use std::os::windows::fs::OpenOptionsExt;
     use windows_permissions::constants::{SeObjectType, SecurityInformation};
-    use windows_permissions::{LocalBox, SecurityDescriptor, WindowsSecure};
+    use windows_permissions::{LocalBox, SecurityDescriptor};
     let temp = tempfile::tempdir().unwrap();
     let directory = temp.path().join("private");
     native::create_private_dir_all(&directory).unwrap();
@@ -171,9 +173,12 @@ fn null_acl_and_an_extra_reader_are_rejected_without_repair() {
             .access_mode(0x0006_0000)
             .open(&path)
             .unwrap();
-        let original = control
-            .security_descriptor(SecurityInformation::Owner | SecurityInformation::Dacl)
-            .unwrap();
+        let original = windows_permissions::wrappers::GetSecurityInfo(
+            &control,
+            SeObjectType::SE_FILE_OBJECT,
+            SecurityInformation::Owner | SecurityInformation::Dacl,
+        )
+        .unwrap();
         let replacement: Option<LocalBox<SecurityDescriptor>> = extra_reader.then(|| {
             format!("D:P(A;;FA;;;{})(A;;FR;;;WD)", original.owner().unwrap())
                 .parse()
@@ -192,7 +197,16 @@ fn null_acl_and_an_extra_reader_are_rejected_without_repair() {
         assert!(native::open_private_read(&path).is_err());
         assert_eq!(std::fs::read(&path).unwrap(), b"unchanged");
         // Restore through the same handle so the temporary directory can clean up.
-        control.set_dacl(original.dacl().unwrap()).unwrap();
+        windows_permissions::wrappers::SetSecurityInfo(
+            &mut control,
+            SeObjectType::SE_FILE_OBJECT,
+            SecurityInformation::Dacl | SecurityInformation::ProtectedDacl,
+            None,
+            None,
+            original.dacl(),
+            None,
+        )
+        .unwrap();
     }
 }
 
