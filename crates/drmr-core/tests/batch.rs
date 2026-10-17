@@ -15,7 +15,7 @@ use drmr_core::batch::{
 use drmr_core::batch_support::DefaultHlsSource;
 use drmr_core::canonical::Dumps;
 use drmr_core::config::KeyMaterial;
-use drmr_core::events::Collector;
+use drmr_core::events::{Collector, Record, Sink};
 use drmr_core::source::platform::SystemPlatform;
 use drmr_core::source::{
     AnalyzeOptions, Direct, Failure, FetchPolicy, ProbeStream, SourceAnalysis, SourceRequest,
@@ -703,7 +703,64 @@ fn test_actual_stage_uses_download_mirror_and_preserves_source() {
 }
 
 #[test]
-fn test_timeout_kills_descendants_and_emits_heartbeat() {
+fn supervisor_heartbeat_handshake_releases_the_worker_after_two_events() {
+    let fixture = fixture();
+    let heartbeat = HeartbeatRelease {
+        release: fixture.temp.path().join("release"),
+        beats: AtomicUsize::new(0),
+    };
+    let seams = Seams {
+        preflight: Some(&no_preflight),
+        worker_command: Some(vec![
+            "/bin/sh".into(),
+            "-c".into(),
+            "cat > /dev/null; while [ ! -f \"$1\" ]; do sleep 0.01; done; printf '[\"ok\", false]\\n'".into(),
+            "heartbeat-worker".into(),
+            heartbeat.release.clone().into(),
+        ]),
+        ..Seams::default()
+    };
+    let config = BatchConfig {
+        retry: RetryPolicy {
+            max_attempts: 1,
+            per_asset_timeout_s: 5.0,
+            heartbeat_s: 0.03,
+            ..RetryPolicy::default()
+        },
+        ..fixture.config.clone()
+    };
+    let report = run_batch_with(&[item("a")], &config, Some(&heartbeat), None, &seams).unwrap();
+    assert_eq!(report.outcomes[0].reason, "ok");
+    assert!(heartbeat.beats.load(Ordering::SeqCst) >= 2);
+    assert!(heartbeat.release.is_file());
+}
+
+// Deadline checks take priority over missed heartbeat intervals. A scheduler pause can
+// consume a short timeout, so heartbeat delivery needs a child-release handshake rather
+// than a callback-count assumption within the descendant-kill tests' 0.3-second deadline.
+struct HeartbeatRelease {
+    release: PathBuf,
+    beats: AtomicUsize,
+}
+
+impl HeartbeatRelease {
+    fn beat(&self) {
+        if self.beats.fetch_add(1, Ordering::SeqCst) + 1 == 2 {
+            std::fs::write(&self.release, b"release").unwrap();
+        }
+    }
+}
+
+impl Sink for HeartbeatRelease {
+    fn emit(&self, record: &Record) {
+        if record.get("message").and_then(Value::as_str) == Some("heartbeat") {
+            self.beat();
+        }
+    }
+}
+
+#[test]
+fn test_timeout_kills_descendants() {
     let fixture = fixture();
     let pidfile = fixture.temp.path().join("child.pid");
     let script = "sleep 60 & echo $! > \"$1\"; sleep 60";
@@ -727,14 +784,10 @@ fn test_timeout_kills_descendants_and_emits_heartbeat() {
         },
         ..fixture.config.clone()
     };
-    let logs = Collector::default();
-    let report = run_batch_with(&[item("a")], &config, Some(&logs), None, &seams).unwrap();
+    let start = Instant::now();
+    let report = run_batch_with(&[item("a")], &config, None, None, &seams).unwrap();
     assert_eq!(report.outcomes[0].reason, "retries-exhausted:asset-timeout");
-    assert!(
-        logs.records()
-            .iter()
-            .any(|record| record["message"] == "heartbeat")
-    );
+    assert!(start.elapsed() < Duration::from_secs(5));
     let pid = std::fs::read_to_string(&pidfile).unwrap();
     let state = std::process::Command::new("ps")
         .args(["-o", "stat=", "-p", pid.trim()])
@@ -2343,18 +2396,10 @@ fn run_commands_classifies_timeouts_codes_and_the_deadline() {
     };
     let pidfile = fixture.temp.path().join("grandchild.pid");
     let script = format!("sleep 60 & echo $! > '{}'; sleep 60", pidfile.display());
-    let beats = AtomicUsize::new(0);
     let start = Instant::now();
-    let error = run_commands(&[sh(&script, "run")], &deadline, None, &|| {
-        beats.fetch_add(1, Ordering::SeqCst);
-    })
-    .unwrap_err();
+    let error = run_commands(&[sh(&script, "run")], &deadline, None, &|| {}).unwrap_err();
     assert_eq!(error, AttemptError::Retry("asset-timeout".to_string()));
     assert!(start.elapsed() < Duration::from_secs(5));
-    assert!(
-        beats.load(Ordering::SeqCst) >= 2,
-        "heartbeats while the child runs"
-    );
     let pid = std::fs::read_to_string(&pidfile).unwrap();
     let state = std::process::Command::new("ps")
         .args(["-o", "stat=", "-p", pid.trim()])
@@ -2365,6 +2410,39 @@ fn run_commands_classifies_timeouts_codes_and_the_deadline() {
         state.is_empty() || state.starts_with('Z'),
         "the grandchild survived: {state}"
     );
+}
+
+#[test]
+fn command_heartbeat_handshake_releases_the_child_after_two_callbacks() {
+    let fixture = fixture();
+    let heartbeat = HeartbeatRelease {
+        release: fixture.temp.path().join("release"),
+        beats: AtomicUsize::new(0),
+    };
+    let config = BatchConfig {
+        retry: RetryPolicy {
+            per_asset_timeout_s: 5.0,
+            heartbeat_s: 0.05,
+            ..RetryPolicy::default()
+        },
+        ..fixture.config.clone()
+    };
+    let command = CliCommand::new(
+        [
+            OsString::from("/bin/sh"),
+            "-c".into(),
+            "while [ ! -f \"$1\" ]; do sleep 0.01; done".into(),
+            "heartbeat-child".into(),
+            heartbeat.release.clone().into(),
+        ],
+        "run",
+    );
+    assert_eq!(
+        run_commands(&[command], &config, None, &|| heartbeat.beat()).unwrap(),
+        0
+    );
+    assert!(heartbeat.beats.load(Ordering::SeqCst) >= 2);
+    assert!(heartbeat.release.is_file());
 }
 
 fn answer_worker(answer: &str) -> Vec<OsString> {
