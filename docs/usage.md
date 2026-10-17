@@ -148,6 +148,12 @@ Allow every origin used by playlists, segments, and redirects. An origin is the 
 
 Optional policy fields include `headers_by_origin` (an object mapping allowed origins to request-header objects), `connections` and `probe_workers` (1–64), `attempts` (1–5), `timeout` in seconds, `max_playlist_bytes`, `max_playlists`, `max_segments_per_track`, `max_resource_bytes`, `max_total_bytes`, `max_total_resources`, and `min_free_disk_bytes`. Limits must be positive except the minimum free-space value, which may be zero. `allow_http` and `allow_private_network` can explicitly enable those destinations. Keep any configuration containing request credentials owner-only.
 
+A server may close an idle connection between segment downloads. If a reused connection
+fails before response headers arrive, drmr replaces it once without spending a configured
+attempt. Fresh-connection failures, response-body errors, and request timeouts still use
+the normal attempt limit. Windows can report the closed idle socket as an aborted connection;
+drmr recognizes this platform difference. See [Windows socket errors](https://learn.microsoft.com/en-us/windows/win32/winsock/windows-sockets-error-codes-2).
+
 Analysis supports only clear, completed on-demand presentations. Encrypted playlists, live input, discontinuities, unsupported tracks, and unsupported subtitle profiles are rejected.
 
 ## Package the HLS snapshot
