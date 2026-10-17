@@ -26,6 +26,21 @@ fn key_file_has_strict_versioned_roles_and_redacted_debug() {
 }
 
 #[test]
+fn segment_keys_need_no_mp4_identifier_and_keep_uris_private() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("keys.json");
+    config(
+        &file,
+        r#"{"schema_version":1,"input":{"hls_keys":[{"uri":"https://keys.example.test/credential-sentinel","key":"11111111111111111111111111111111"}]},"output":{"key":"22222222222222222222222222222222","hls_key_uri":"keys/output-sentinel"}}"#,
+    );
+    let keys = read(&file).unwrap();
+    assert!(keys.output.is_none());
+    assert!(keys.hls_output.is_some());
+    let shown = format!("{keys:?}");
+    assert!(!shown.contains("sentinel") && !shown.contains("111111") && !shown.contains("222222"));
+}
+
+#[test]
 fn malformed_unknown_and_duplicate_fields_fail_without_exposing_contents() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("credential-sentinel.json");

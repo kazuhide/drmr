@@ -2,6 +2,7 @@
 //! Exit codes: 0 success, 1 the check failed, 2 usage or an input that is not what the
 //! command expects.
 
+mod convert_cli;
 mod doctor;
 mod inspect_cli;
 
@@ -75,6 +76,10 @@ enum Command {
     Run(cli::RunArgs),
     /// Inspect local MP4, DASH, or HLS metadata without keys or output files.
     Inspect(inspect_cli::InspectArgs),
+    /// Convert media with independent input/output keys and round-trip checks.
+    Convert(convert_cli::ConvertArgs),
+    /// Compare result media with its original source, including every packet timestamp.
+    Verify(convert_cli::VerifyArgs),
     /// Describe conversion intent, or list catalog renditions with --mpd.
     #[command(
         args_override_self = true,
@@ -120,6 +125,8 @@ fn main() -> ExitCode {
         Command::Canonical { path } => canonical(&path),
         Command::Run(args) => repackage(&cli::Commands::Run(args)),
         Command::Inspect(args) => inspect_cli::inspect(&args),
+        Command::Convert(args) => convert_cli::convert(&args),
+        Command::Verify(args) => convert_cli::verify(&args),
         Command::Plan(args) => match &args.mpd {
             Some(mpd) => repackage(&cli::Commands::Plan(cli::PlanArgs {
                 mpd: mpd.clone(),

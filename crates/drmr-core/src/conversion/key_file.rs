@@ -1,6 +1,8 @@
 //! Strict operator configuration; secret strings and input bytes are wiped on drop.
 
-use super::{ContentKey, ConversionError, InputKeys, OutputKey};
+use super::{
+    Aes128Key, ContentKey, ConversionError, HlsInputKeys, HlsOutputKey, InputKeys, OutputKey,
+};
 use serde::Deserialize;
 use std::io::Read;
 use std::path::Path;
@@ -10,10 +12,27 @@ const LIMIT: u64 = 65_536;
 const INVALID: ConversionError = ConversionError("key-file-invalid");
 
 /// Separate decryption and encryption domains; no environment fallback is applied.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct OperatorKeys {
     pub input: InputKeys,
     pub output: Option<OutputKey>,
+    pub hls_input: HlsInputKeys,
+    pub hls_output: Option<HlsOutputKey>,
+}
+
+impl OperatorKeys {
+    /// Decrypt a result for comparison using its output domain, independently of source keys.
+    pub fn output_verification_keys(&self) -> Result<InputKeys, ConversionError> {
+        self.output.as_ref().map_or_else(
+            || Ok(InputKeys::default()),
+            |key| {
+                InputKeys::new(vec![ContentKey::from_hex(
+                    &key.0.id_hex(),
+                    &key.0.key_hex(),
+                )?])
+            },
+        )
+    }
 }
 
 #[derive(Deserialize)]
@@ -22,7 +41,7 @@ struct RawFile {
     schema_version: u32,
     #[serde(default)]
     input: RawInput,
-    output: Option<RawKey>,
+    output: Option<RawOutput>,
 }
 
 #[derive(Default, Deserialize)]
@@ -30,6 +49,39 @@ struct RawFile {
 struct RawInput {
     #[serde(default)]
     keys: Vec<RawKey>,
+    #[serde(default)]
+    hls_keys: Vec<RawHlsKey>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawHlsKey {
+    uri: String,
+    key: String,
+}
+
+impl Drop for RawHlsKey {
+    fn drop(&mut self) {
+        self.uri.zeroize();
+        self.key.zeroize();
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawOutput {
+    kid: Option<String>,
+    key: String,
+    hls_key_uri: Option<String>,
+}
+
+impl Drop for RawOutput {
+    fn drop(&mut self) {
+        self.key.zeroize();
+        if let Some(uri) = &mut self.hls_key_uri {
+            uri.zeroize();
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -67,13 +119,44 @@ pub fn read(path: &Path) -> Result<OperatorKeys, ConversionError> {
         .collect::<Result<Vec<_>, _>>()
         .map_err(|_| INVALID)?;
     let input = InputKeys::new(input).map_err(|_| INVALID)?;
-    let output = raw
-        .output
-        .as_ref()
-        .map(|key| OutputKey::from_hex(&key.kid, &key.key))
-        .transpose()
-        .map_err(|_| INVALID)?;
-    Ok(OperatorKeys { input, output })
+    let hls_input = raw
+        .input
+        .hls_keys
+        .iter()
+        .map(|key| {
+            Ok((
+                key.uri.clone(),
+                Aes128Key::from_hex(&key.key).map_err(|_| INVALID)?,
+            ))
+        })
+        .collect::<Result<Vec<_>, ConversionError>>()?;
+    let hls_input = HlsInputKeys::new(hls_input).map_err(|_| INVALID)?;
+    let (output, hls_output) = match &raw.output {
+        None => (None, None),
+        Some(key) => match (&key.kid, &key.hls_key_uri) {
+            (Some(kid), None) => (
+                Some(OutputKey::from_hex(kid, &key.key).map_err(|_| INVALID)?),
+                None,
+            ),
+            (None, Some(uri)) => (
+                None,
+                Some(
+                    HlsOutputKey::new(
+                        uri.clone(),
+                        Aes128Key::from_hex(&key.key).map_err(|_| INVALID)?,
+                    )
+                    .map_err(|_| INVALID)?,
+                ),
+            ),
+            _ => return Err(INVALID),
+        },
+    };
+    Ok(OperatorKeys {
+        input,
+        output,
+        hls_input,
+        hls_output,
+    })
 }
 
 #[cfg(unix)]
