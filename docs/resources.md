@@ -160,13 +160,13 @@ paired runs of ten-second Big Buck Bunny clear DASH to CBCS DASH, with five two-
 
 | Worker setting | Median conversion | Median separate verification | Largest observed descendant count |
 | --- | ---: | ---: | ---: |
-| Automatic | 0.715 s | 0.385 s | 2 |
-| Maximum 1 | 1.182 s | 0.594 s | 1 |
+| Automatic | 0.747 s | 0.385 s | 2 |
+| Maximum 1 | 1.271 s | 0.637 s | 1 |
 
 All six conversions and independent checks passed stream metadata, encoded payload,
 complete decoded content, and every packet timestamp. During separate verification,
-median sampled CLI resident memory was 12.8 MB with automatic workers and 12.2 MB with
-one worker; descendant totals were 21.5 MB and 20.3 MB respectively. Memory samples were
+median sampled CLI resident memory was 13.0 MB with automatic workers and 12.5 MB with
+one worker; descendant totals were 20.6 MB and 18.3 MB respectively. Memory samples were
 100 ms apart, and parent/descendant maxima are separate. Short-lived processes can be
 missed. These observations apply to this small asset and host; they do not establish
 long-media throughput, an exact memory peak, or a result on another operating system.
