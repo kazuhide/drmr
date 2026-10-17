@@ -48,6 +48,10 @@ set `RunOptions.max_stdout_bytes` and `max_stderr_bytes`; each has a hard maximu
 64 MiB. The actual caps are included in the memory charge. Log character limits are
 separate: disabling output logging does not disable capture limits.
 
+Streaming video checksums also bound each frame record to 64 KiB, including comment
+lines and a final line without a newline. An oversized record fails verification; it
+is never truncated and accepted as evidence. Audio digests consume fixed-size chunks.
+
 Overflow fails with `output-limit`; no partial output is returned as successful data.
 The media adapter reports `media-output-limit`, and source probing reports
 `media-probe-output-limit`. Captured pipe readers are joined before a reservation is

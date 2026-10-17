@@ -593,11 +593,24 @@ fn strip_bytes(line: &[u8]) -> &[u8] {
 
 /// The digest input of one framemd5 line: its last two fields (`size, hash`) joined by `,`.
 fn hash_frame_lines(stdout: impl Read, digest: &mut Sha256) -> std::io::Result<()> {
+    const MAX_LINE_BYTES: u64 = 64 * 1024;
     let mut reader = BufReader::new(stdout);
     let mut line = Vec::new();
     loop {
         line.clear();
-        if reader.read_until(b'\n', &mut line)? == 0 {
+        // Normal framemd5 records are short. Bound even an unterminated or malformed
+        // record before retaining its bytes; truncating one would change the proof.
+        let count = reader
+            .by_ref()
+            .take(MAX_LINE_BYTES + 1)
+            .read_until(b'\n', &mut line)?;
+        if count as u64 > MAX_LINE_BYTES {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "frame record size limit exceeded",
+            ));
+        }
+        if count == 0 {
             return Ok(());
         }
         let stripped = strip_bytes(&line);
@@ -831,5 +844,28 @@ mod lifecycle_tests {
         let error = stream_digest(&argv, false).unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
         assert!(started.elapsed() < Duration::from_secs(5));
+    }
+}
+
+#[cfg(test)]
+mod digest_tests {
+    use super::*;
+    use std::io::{self, Cursor};
+
+    #[test]
+    fn an_unterminated_frame_record_is_rejected_before_it_can_grow_without_bound() {
+        let mut input = Cursor::new(vec![b'x'; 1024 * 1024]);
+        let error = hash_frame_lines(&mut input, &mut Sha256::new()).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(input.position() <= 64 * 1024 + 8192);
+    }
+
+    #[test]
+    fn framing_keeps_the_existing_digest_for_comments_crlf_and_a_final_partial_line() {
+        let input = b"#format: frame checksums\r\n\n0, 1, 2, 3, 12, abc\r\n0, 2, 3, 4, 16, def";
+        let mut actual = Sha256::new();
+        hash_frame_lines(&input[..], &mut actual).unwrap();
+        let expected = Sha256::digest(b"12, abc\n16, def\n");
+        assert_eq!(actual.finalize(), expected);
     }
 }
