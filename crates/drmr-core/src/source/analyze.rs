@@ -122,7 +122,10 @@ fn is_symlink(path: &Path) -> bool {
 }
 
 fn make_private_dir(directory: &Path) -> Result<(), Failure> {
+    #[cfg(unix)]
     let mut builder = std::fs::DirBuilder::new();
+    #[cfg(not(unix))]
+    let builder = std::fs::DirBuilder::new();
     #[cfg(unix)]
     {
         use std::os::unix::fs::DirBuilderExt;

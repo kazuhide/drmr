@@ -6,6 +6,7 @@
 
 use super::Escaped;
 use super::pyurl::quote_from_bytes;
+#[cfg(unix)]
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
