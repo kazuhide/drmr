@@ -643,19 +643,35 @@ fn hls_media_paths(path: &Path) -> Result<Vec<PathBuf>, ConversionError> {
         .map_err(|_| ConversionError("input-unreadable"))?;
     let mut paths = Vec::new();
     let mut pending = false;
+    let mut audio_count = 0;
     for line in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
         if let Some(value) = line.strip_prefix("#EXT-X-MEDIA:") {
             let attrs = hls::attributes(value)?;
-            if attrs.get("TYPE") != Some("AUDIO")
-                || attrs.get("LANGUAGE").is_some_and(|v| v != "und")
-            {
+            audio_count += 1;
+            if audio_count > 1 || !supported_audio_rendition(&attrs) {
                 return Err(ConversionError("hls-rendition-metadata-not-supported"));
             }
             let uri = attrs
                 .get("URI")
                 .ok_or(ConversionError("hls-media-uri-required"))?;
             paths.push(hls::local_resource(&root, uri)?);
-        } else if line.starts_with("#EXT-X-STREAM-INF:") {
+        } else if let Some(value) = line.strip_prefix("#EXT-X-STREAM-INF:") {
+            let attrs = hls::attributes(value)?;
+            if attrs.iter().any(|(name, _)| {
+                !matches!(
+                    name,
+                    "BANDWIDTH"
+                        | "AVERAGE-BANDWIDTH"
+                        | "CODECS"
+                        | "RESOLUTION"
+                        | "FRAME-RATE"
+                        | "AUDIO"
+                        | "CLOSED-CAPTIONS"
+                )
+            }) || attrs.get("CLOSED-CAPTIONS").is_some_and(|v| v != "NONE")
+            {
+                return Err(ConversionError("hls-variant-metadata-not-supported"));
+            }
             if pending {
                 return Err(ConversionError("hls-variant-uri-required"));
             }
@@ -745,4 +761,28 @@ impl Converter {
         report.input = input_report;
         Ok(report)
     }
+}
+
+fn supported_audio_rendition(attrs: &crate::m3u8::Attributes) -> bool {
+    attrs.get("TYPE") == Some("AUDIO")
+        && attrs.get("LANGUAGE").is_none_or(|v| v == "und")
+        && attrs.get("NAME").is_none_or(|v| {
+            v.strip_prefix("stream_")
+                .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+        })
+        && attrs.get("DEFAULT").is_none_or(|v| v == "NO")
+        && attrs.get("AUTOSELECT").is_none_or(|v| v == "YES")
+        && attrs.iter().all(|(name, _)| {
+            matches!(
+                name,
+                "TYPE"
+                    | "URI"
+                    | "GROUP-ID"
+                    | "NAME"
+                    | "DEFAULT"
+                    | "AUTOSELECT"
+                    | "LANGUAGE"
+                    | "CHANNELS"
+            )
+        })
 }

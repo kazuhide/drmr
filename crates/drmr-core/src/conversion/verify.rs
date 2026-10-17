@@ -38,14 +38,14 @@ impl Backend {
         source_key: Option<&ContentKey>,
         result_key: Option<&ContentKey>,
     ) -> Result<VerificationReport, ConversionError> {
-        let packet_payloads_equal = self.hash_stream(source, source_index, true, source_key)?
-            == self.hash_stream(result, result_index, true, result_key)?;
-        let decoded_content_equal = self.hash_stream(source, source_index, false, source_key)?
-            == self.hash_stream(result, result_index, false, result_key)?;
         let packet_timing_equal = self.profile_stream(source, source_index)?
             == self.profile_stream(result, result_index)?
             && self.packets_stream(source, source_index)?
                 == self.packets_stream(result, result_index)?;
+        let packet_payloads_equal = self.hash_stream(source, source_index, true, source_key)?
+            == self.hash_stream(result, result_index, true, result_key)?;
+        let decoded_content_equal = self.hash_stream(source, source_index, false, source_key)?
+            == self.hash_stream(result, result_index, false, result_key)?;
         let passed = packet_payloads_equal && decoded_content_equal && packet_timing_equal;
         Ok(VerificationReport {
             schema_version: 1,

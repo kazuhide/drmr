@@ -218,6 +218,7 @@ fn unified_dash_to_aes_hls_verifies_actual_joint_media_and_refuses_false_timelin
         .unwrap();
     assert!(verification.passed);
     let text = std::fs::read_to_string(&manifest).unwrap();
+    reject_false_windows(&converter, request, &text);
     let doc = roxmltree::Document::parse(&text).unwrap();
     let duration = doc
         .descendants()
@@ -267,6 +268,7 @@ fn check_hls(converter: &Converter, output: &Path, target: TargetProtection) {
         .unwrap();
     assert!(checked.passed);
     if target == TargetProtection::Clear {
+        reject_custom_rendition(converter, output);
         let media = output.join("track-0000/media.m3u8");
         let text = std::fs::read_to_string(&media).unwrap();
         let line = text.lines().find(|l| l.starts_with("#EXTINF:")).unwrap();
@@ -287,4 +289,63 @@ fn check_hls(converter: &Converter, output: &Path, target: TargetProtection) {
             .unwrap_err();
         assert_eq!(error.0, "manifest-segment-duration-mismatch");
     }
+}
+
+fn reject_custom_rendition(converter: &Converter, output: &Path) {
+    let manifest = output.join("master.m3u8");
+    let text = std::fs::read_to_string(&manifest).unwrap();
+    let name = text
+        .split("NAME=\"")
+        .nth(1)
+        .and_then(|v| v.split('"').next())
+        .unwrap();
+    let altered = text.replace(&format!("NAME=\"{name}\""), "NAME=\"Commentary\"");
+    assert_ne!(altered, text);
+    std::fs::write(&manifest, altered).unwrap();
+    let denied = output.parent().unwrap().join("denied-label");
+    let keys = InputKeys::default();
+    let hls_keys = HlsInputKeys::default();
+    let error = converter
+        .convert(ConversionRequest {
+            input: &manifest,
+            output: &denied,
+            format: OutputFormat::Dash,
+            target: TargetProtection::Clear,
+            input_keys: &keys,
+            hls_input_keys: &hls_keys,
+            output_key: None,
+            hls_key_uri: None,
+            hls_output_key: None,
+        })
+        .unwrap_err();
+    assert_eq!(error.0, "hls-rendition-metadata-not-supported");
+    assert!(!denied.exists());
+    std::fs::write(manifest, text).unwrap();
+}
+
+fn reject_false_windows(converter: &Converter, request: ConversionRequest<'_>, text: &str) {
+    let shortened = text.replacen(
+        "mediaPresentationDuration=\"PT10S\"",
+        "mediaPresentationDuration=\"PT5S\"",
+        1,
+    );
+    let period = text.replacen(
+        "<Period id=\"0\">",
+        "<Period id=\"0\" duration=\"PT5S\">",
+        1,
+    );
+    for (name, altered) in [("mpd-window", shortened), ("period-window", period)] {
+        assert_ne!(text, altered);
+        std::fs::write(request.input, altered).unwrap();
+        let denied = request.output.parent().unwrap().join(name);
+        let error = converter
+            .convert(ConversionRequest {
+                output: &denied,
+                ..request
+            })
+            .unwrap_err();
+        assert_eq!(error.0, "dash-presentation-duration-mismatch");
+        assert!(!denied.exists());
+    }
+    std::fs::write(request.input, text).unwrap();
 }

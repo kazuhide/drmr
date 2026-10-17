@@ -238,20 +238,9 @@ fn append(
     Ok(())
 }
 
-fn snapshot_representation(
-    representation: Node<'_, '_>,
-    declared: Protection,
-    directory: &Path,
-    stage: &Path,
-    index: usize,
-    remaining: usize,
-) -> Result<(LocalTrack, usize), ConversionError> {
-    if !matches!(
-        declared,
-        Protection::Clear | Protection::Cenc | Protection::Cbcs
-    ) {
-        return Err(error("dash-protection-unresolved-or-not-supported"));
-    }
+fn representation_scopes<'a>(
+    representation: Node<'a, 'a>,
+) -> Result<(PathBuf, Vec<Node<'a, 'a>>), ConversionError> {
     let mut scopes: Vec<_> = representation
         .ancestors()
         .filter(Node::is_element)
@@ -290,8 +279,32 @@ fn snapshot_representation(
             templates.push(template);
         }
     }
+    Ok((base, templates))
+}
+
+fn snapshot_representation(
+    representation: Node<'_, '_>,
+    declared: Protection,
+    directory: &Path,
+    stage: &Path,
+    index: usize,
+    remaining: usize,
+) -> Result<(LocalTrack, usize, (u64, u64)), ConversionError> {
+    if !matches!(
+        declared,
+        Protection::Clear | Protection::Cenc | Protection::Cbcs
+    ) {
+        return Err(error("dash-protection-unresolved-or-not-supported"));
+    }
+    let (base, templates) = representation_scopes(representation)?;
     let values = sequence(&templates, remaining)?;
     let used = values.len();
+    let (_, last, duration) = *values.last().ok_or(error("dash-empty-segment-timeline"))?;
+    let window = (
+        last.checked_add(duration)
+            .ok_or(error("dash-template-number-overflow"))?,
+        integer(attribute(&templates, "timescale"), 1)?,
+    );
     let initialization =
         attribute(&templates, "initialization").ok_or(error("dash-initialization-required"))?;
     let media = attribute(&templates, "media").ok_or(error("dash-media-template-required"))?;
@@ -345,6 +358,7 @@ fn snapshot_representation(
             index: 0,
         },
         used,
+        window,
     ))
 }
 
@@ -402,10 +416,11 @@ pub(crate) fn snapshot_dash(path: &Path, stage: &Path) -> Result<Vec<LocalTrack>
         .map_err(|_| error("input-unreadable"))?;
     let mut tracks = Vec::new();
     let mut segments = 0;
+    let mut window = (0u64, 1u64);
     for (index, (representation, declared)) in
         representations.into_iter().zip(declared.tracks).enumerate()
     {
-        let (track, used) = snapshot_representation(
+        let (track, used, track_window) = snapshot_representation(
             representation,
             declared.protection,
             &directory,
@@ -415,6 +430,25 @@ pub(crate) fn snapshot_dash(path: &Path, stage: &Path) -> Result<Vec<LocalTrack>
         )?;
         tracks.push(track);
         segments += used;
+        if u128::from(track_window.0) * u128::from(window.1)
+            > u128::from(window.0) * u128::from(track_window.1)
+        {
+            window = track_window;
+        }
+    }
+    for value in [
+        root.attribute("mediaPresentationDuration"),
+        period.attribute("duration"),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        let duration = decimal_duration(value)?;
+        if u128::from(duration.0) * u128::from(window.1)
+            != u128::from(window.0) * u128::from(duration.1)
+        {
+            return Err(error("dash-presentation-duration-mismatch"));
+        }
     }
     Ok(tracks)
 }
@@ -537,4 +571,43 @@ mod tests {
         assert!(reference(root.path(), Path::new(""), "alias/secret.mp4").is_err());
         assert!(reference(root.path(), Path::new(""), "%2e%2e/secret.mp4").is_err());
     }
+}
+
+// The qualified static profile uses finite seconds, with at most nanosecond precision.
+fn decimal_duration(value: &str) -> Result<(u64, u64), ConversionError> {
+    let text = value
+        .strip_prefix("PT")
+        .and_then(|v| v.strip_suffix('S'))
+        .ok_or(error("dash-duration-syntax-not-supported"))?;
+    if text.is_empty() || text.len() > 32 {
+        return Err(error("dash-duration-syntax-not-supported"));
+    }
+    let (whole, fraction) = text.split_once('.').unwrap_or((text, ""));
+    if whole.is_empty()
+        || !whole.bytes().all(|b| b.is_ascii_digit())
+        || fraction.len() > 9
+        || !fraction.bytes().all(|b| b.is_ascii_digit())
+        || (text.contains('.') && fraction.is_empty())
+    {
+        return Err(error("dash-duration-syntax-not-supported"));
+    }
+    let whole = whole
+        .parse::<u64>()
+        .map_err(|_| error("dash-duration-syntax-not-supported"))?;
+    let scale = 10u64.pow(
+        u32::try_from(fraction.len()).map_err(|_| error("dash-duration-syntax-not-supported"))?,
+    );
+    let fraction = if fraction.is_empty() {
+        0
+    } else {
+        fraction
+            .parse::<u64>()
+            .map_err(|_| error("dash-duration-syntax-not-supported"))?
+    };
+    let numerator = whole
+        .checked_mul(scale)
+        .and_then(|n| n.checked_add(fraction))
+        .filter(|n| *n > 0)
+        .ok_or(error("dash-duration-syntax-not-supported"))?;
+    Ok((numerator, scale))
 }
