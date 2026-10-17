@@ -47,7 +47,7 @@ pub fn seal_media_tree(path: &Path) -> io::Result<()> {
             use rustix::fs::{Mode, OFlags};
             let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
             let file = fs::File::from(rustix::fs::open(entry, flags, Mode::empty())?);
-            verify_unix(entry, directory)?;
+            verify_unix_metadata(&file.metadata()?, directory)?;
             file.set_permissions(fs::Permissions::from_mode(if directory {
                 0o700
             } else {
@@ -59,8 +59,13 @@ pub fn seal_media_tree(path: &Path) -> io::Result<()> {
 
 #[cfg(unix)]
 fn verify_unix(path: &Path, directory: bool) -> io::Result<()> {
-    use std::os::unix::fs::MetadataExt;
     let metadata = fs::symlink_metadata(path)?;
+    verify_unix_metadata(&metadata, directory)
+}
+
+#[cfg(unix)]
+fn verify_unix_metadata(metadata: &fs::Metadata, directory: bool) -> io::Result<()> {
+    use std::os::unix::fs::MetadataExt;
     if metadata.uid() != rustix::process::geteuid().as_raw()
         || (directory && !metadata.is_dir())
         || (!directory && (!metadata.is_file() || metadata.nlink() != 1))

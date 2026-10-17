@@ -200,6 +200,32 @@ fn private_creation_rejects_hard_links_and_stream_names() {
     assert_eq!(std::fs::read(path).unwrap(), b"unchanged");
 }
 
+#[cfg(windows)]
+#[test]
+fn media_workspace_checks_default_ownership_before_generating_payloads() {
+    use windows_permissions::constants::{SeObjectType, SecurityInformation};
+    let temp = tempfile::tempdir().unwrap();
+    let empty = temp.path().join("empty-probe");
+    let file = std::fs::File::create(&empty).unwrap();
+    let descriptor = windows_permissions::wrappers::GetSecurityInfo(
+        &file,
+        SeObjectType::SE_FILE_OBJECT,
+        SecurityInformation::Owner,
+    )
+    .unwrap();
+    let user = windows_permissions::utilities::current_process_sid().unwrap();
+    let workspace = temp.path().join("media");
+    let result = native::create_media_dir_all(&workspace);
+    if descriptor.owner() == Some(&*user) {
+        result.unwrap();
+    } else {
+        let error = result.unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        assert!(error.to_string().contains("regular Windows terminal"));
+    }
+    assert_eq!(std::fs::read_dir(&workspace).unwrap().count(), 0);
+}
+
 #[test]
 fn media_sealing_preserves_a_strict_secret_child_directory() {
     let temp = tempfile::tempdir().unwrap();
@@ -239,9 +265,12 @@ fn unsafe_media_acls_are_refused_without_repairing_or_rewriting_any_entry() {
         )
         .unwrap();
         let replacement: Option<LocalBox<SecurityDescriptor>> = (!null_acl).then(|| {
-            format!("D:P(A;;FA;;;{})(A;;FR;;;WD)", original.owner().unwrap())
-                .parse()
-                .unwrap()
+            format!(
+                "D:P(A;;FA;;;{})(A;;FR;;;WD)",
+                windows_permissions::utilities::current_process_sid().unwrap()
+            )
+            .parse()
+            .unwrap()
         });
         SetSecurityInfo(
             &mut control,
@@ -473,9 +502,12 @@ fn null_acl_and_an_extra_reader_are_rejected_without_repair() {
         )
         .unwrap();
         let replacement: Option<LocalBox<SecurityDescriptor>> = extra_reader.then(|| {
-            format!("D:P(A;;FA;;;{})(A;;FR;;;WD)", original.owner().unwrap())
-                .parse()
-                .unwrap()
+            format!(
+                "D:P(A;;FA;;;{})(A;;FR;;;WD)",
+                windows_permissions::utilities::current_process_sid().unwrap()
+            )
+            .parse()
+            .unwrap()
         });
         windows_permissions::wrappers::SetSecurityInfo(
             &mut control,

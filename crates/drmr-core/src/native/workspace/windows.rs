@@ -150,7 +150,25 @@ pub(super) fn create(path: &Path) -> io::Result<()> {
     // Both the original and replacement ACL grant only this process user access.
     // Existing unsafe trees have already been rejected; no contents are written
     // during this transition from a strict to an inheritable private directory.
-    policy.set(&mut root, true)
+    policy.set(&mut root, true)?;
+    // Elevated tokens can default new objects to a group owner even when the
+    // inherited DACL contains only this user. Refuse that profile before a tool
+    // creates media: group owners have implicit permission to change the DACL.
+    let probe = tempfile::Builder::new()
+        .prefix(".drmr-owner-probe-")
+        .tempfile_in(path)?;
+    let descriptor = GetSecurityInfo(
+        probe.as_file(),
+        SeObjectType::SE_FILE_OBJECT,
+        SecurityInformation::Owner,
+    )?;
+    if GetSecurityDescriptorOwner(&descriptor)? != Some(&*policy.user) {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "media conversion requires a regular Windows terminal; close the administrator terminal and try again",
+        ));
+    }
+    Ok(())
 }
 
 pub(super) fn seal(path: &Path) -> io::Result<()> {
