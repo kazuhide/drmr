@@ -349,3 +349,31 @@ fn reject_false_windows(converter: &Converter, request: ConversionRequest<'_>, t
     }
     std::fs::write(request.input, text).unwrap();
 }
+
+#[test]
+fn invalid_mp4_stream_selector_fails_before_creating_output() {
+    let directory = tempfile::tempdir().unwrap();
+    let input = directory.path().join("input.mp4");
+    source(&input, false);
+    let output = directory.path().join("output.mp4");
+    let keys = InputKeys::default();
+    let tracks = [LocalTrack {
+        source: input,
+        kind: TrackKind::Video,
+        index: 42,
+    }];
+    let error = converter()
+        .convert_tracks(TrackConversionRequest {
+            tracks: &tracks,
+            output: &output,
+            format: OutputFormat::Mp4,
+            target: TargetProtection::Clear,
+            input_keys: &keys,
+            output_key: None,
+            hls_key_uri: None,
+            hls_output_key: None,
+        })
+        .unwrap_err();
+    assert_eq!(error.0, "multi-track-mp4-output-not-supported");
+    assert!(!output.exists());
+}
