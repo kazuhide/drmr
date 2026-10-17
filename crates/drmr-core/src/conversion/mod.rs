@@ -117,23 +117,12 @@ impl Converter {
         {
             return Err(ConversionError("output-key-id-mismatch"));
         }
-        let verified = workspace.path().join("verified.mp4");
-        let output_keys = output_key
-            .map(|key| {
-                InputKeys::new(vec![ContentKey::from_hex(
-                    &key.0.id_hex(),
-                    &key.0.key_hex(),
-                )?])
-            })
-            .transpose()?
-            .unwrap_or_default();
-        self.backend.package(
+        let verification = self.backend.verify_media(
+            &snapshot,
             &candidate,
-            &verified,
-            output_key.map(|_| &output_keys),
-            None,
+            source_key(&input_report, input_keys),
+            output_key.map(|key| &key.0),
         )?;
-        let verification = self.backend.verify_clear(&clear, &verified)?;
         if !verification.passed {
             return Err(ConversionError("round-trip-verification-failed"));
         }
@@ -161,22 +150,20 @@ impl Converter {
         let result_report = validate(&result, output_keys)?;
         self.backend.profile(&source)?;
         self.backend.profile(&result)?;
-        let clear_source = workspace.path().join("source-clear.mp4");
-        let clear_result = workspace.path().join("result-clear.mp4");
-        self.backend.package(
+        self.backend.verify_media(
             &source,
-            &clear_source,
-            (source_report.protection != Protection::Clear).then_some(input_keys),
-            None,
-        )?;
-        self.backend.package(
             &result,
-            &clear_result,
-            (result_report.protection != Protection::Clear).then_some(output_keys),
-            None,
-        )?;
-        self.backend.verify_clear(&clear_source, &clear_result)
+            source_key(&source_report, input_keys),
+            source_key(&result_report, output_keys),
+        )
     }
+}
+fn source_key<'a>(report: &Inspection, keys: &'a InputKeys) -> Option<&'a ContentKey> {
+    if report.protection == Protection::Clear {
+        return None;
+    }
+    let id = report.tracks[0].key_ids.first()?;
+    keys.keys.iter().find(|key| key.id_hex() == *id)
 }
 fn validate(path: &Path, keys: &InputKeys) -> Result<Inspection, ConversionError> {
     let report = inspection::inspect(path).map_err(|_| ConversionError("invalid-input-media"))?;

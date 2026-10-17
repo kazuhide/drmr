@@ -136,9 +136,84 @@ impl Backend {
         {
             return Err(ConversionError("media-packets-missing"));
         }
-        Ok(stream.clone())
+        let mut profile = serde_json::Map::new();
+        for name in [
+            "index",
+            "codec_name",
+            "codec_type",
+            "time_base",
+            "start_pts",
+            "duration_ts",
+            "nb_read_packets",
+        ] {
+            profile.insert(
+                name.into(),
+                stream
+                    .get(name)
+                    .cloned()
+                    .ok_or(ConversionError("stream-metadata-unavailable"))?,
+            );
+        }
+        Ok(serde_json::Value::Object(profile))
     }
-    pub fn hash(&self, path: &Path, copy: bool) -> Result<String, ConversionError> {
+    pub fn packets(&self, path: &Path) -> Result<Vec<(i64, i64, i64)>, ConversionError> {
+        // The demuxer itself bounds the emitted packet count; an incomplete presentation fails.
+        const MAX_PACKETS: usize = 100_000;
+        let argv = vec![
+            self.ffprobe.clone(),
+            "-v".into(),
+            "error".into(),
+            "-protocol_whitelist".into(),
+            "file".into(),
+            "-read_intervals".into(),
+            format!("%+#{}", MAX_PACKETS + 1),
+            "-show_packets".into(),
+            "-show_entries".into(),
+            "packet=stream_index,pts,dts,duration".into(),
+            "-of".into(),
+            "json".into(),
+            path.to_str()
+                .ok_or(ConversionError("unsupported-path"))?
+                .into(),
+        ];
+        let bytes = self.run(&argv, "ffprobe", &[])?;
+        if bytes.len() > 32 * 1024 * 1024 {
+            return Err(ConversionError("packet-evidence-size-limit"));
+        }
+        let value: serde_json::Value = serde_json::from_slice(&bytes)
+            .map_err(|_| ConversionError("invalid-packet-evidence"))?;
+        let packets = value["packets"]
+            .as_array()
+            .ok_or(ConversionError("invalid-packet-evidence"))?;
+        if packets.is_empty() || packets.len() > MAX_PACKETS {
+            return Err(ConversionError("packet-evidence-count-limit"));
+        }
+        packets
+            .iter()
+            .map(|packet| {
+                if packet["stream_index"].as_u64() != Some(0) {
+                    return Err(ConversionError("single-track-mp4-required"));
+                }
+                let pts = packet["pts"]
+                    .as_i64()
+                    .ok_or(ConversionError("packet-timing-unavailable"))?;
+                let dts = packet["dts"]
+                    .as_i64()
+                    .ok_or(ConversionError("packet-timing-unavailable"))?;
+                let duration = packet["duration"]
+                    .as_i64()
+                    .filter(|value| *value > 0)
+                    .ok_or(ConversionError("packet-timing-unavailable"))?;
+                Ok((pts, dts, duration))
+            })
+            .collect()
+    }
+    pub fn hash(
+        &self,
+        path: &Path,
+        copy: bool,
+        key: Option<&ContentKey>,
+    ) -> Result<String, ConversionError> {
         let mut argv = vec![
             self.ffmpeg.clone(),
             "-v".into(),
@@ -156,6 +231,19 @@ impl Backend {
             "-map".into(),
             "0:0".into(),
         ];
+        let secret = key.map(ContentKey::key_hex);
+        if let Some(secret) = &secret {
+            let input_position = argv
+                .iter()
+                .position(|value| value == "-i")
+                .expect("input option exists");
+            argv.splice(
+                input_position..input_position,
+                ["-decryption_key".into(), secret.to_string()],
+            );
+        }
+        let argv = Zeroizing::new(argv);
+        let mut argv = argv;
         if copy {
             argv.extend(["-c".into(), "copy".into()]);
         } else {
@@ -173,7 +261,8 @@ impl Backend {
             "sha256".into(),
             "-".into(),
         ]);
-        let bytes = self.run(&argv, "ffmpeg", &[])?;
+        let secrets: Vec<_> = secret.iter().map(|value| value.as_str()).collect();
+        let bytes = self.run(&argv, "ffmpeg", &secrets)?;
         let value = std::str::from_utf8(&bytes)
             .map_err(|_| ConversionError("invalid-verification-result"))?
             .trim();

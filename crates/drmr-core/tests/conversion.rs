@@ -324,3 +324,187 @@ fn cbcs_output_uses_fresh_random_initialization_vectors_and_private_permissions(
     }
     assert_ne!(vectors[0], vectors[1]);
 }
+
+#[cfg(unix)]
+#[test]
+fn generic_conversion_preserves_original_aac_priming_and_presentation() {
+    let directory = tempfile::tempdir().unwrap();
+    let input = directory.path().join("input.mp4");
+    let status = std::process::Command::new("ffmpeg")
+        .args([
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:sample_rate=48000",
+            "-t",
+            "1",
+            "-c:a",
+            "aac",
+            "-movflags",
+            "+frag_keyframe+empty_moov+default_base_moof",
+            "-output_ts_offset",
+            "2",
+        ])
+        .arg(&input)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    add_open_ended_audio_trim(&input, 1024);
+    let output = directory.path().join("output.mp4");
+    let report = converter()
+        .convert_mp4(
+            &input,
+            &output,
+            TargetProtection::Cbcs,
+            &InputKeys::default(),
+            Some(&OutputKey::from_hex(KID_OUT, KEY_OUT).unwrap()),
+        )
+        .unwrap();
+    assert!(report.verification.passed);
+    let source = std::process::Command::new("ffmpeg")
+        .args(["-v", "error", "-i"])
+        .arg(&input)
+        .args(["-f", "hash", "-hash", "sha256", "-"])
+        .output()
+        .unwrap();
+    assert!(source.status.success());
+    let result = std::process::Command::new("ffmpeg")
+        .args(["-v", "error", "-decryption_key", KEY_OUT, "-i"])
+        .arg(&output)
+        .args(["-f", "hash", "-hash", "sha256", "-"])
+        .output()
+        .unwrap();
+    assert!(result.status.success());
+    assert_eq!(source.stdout, result.stdout);
+    let timing = |path: &Path| {
+        let bytes = std::process::Command::new("ffprobe")
+            .args([
+                "-v",
+                "error",
+                "-show_entries",
+                "packet=pts,dts,duration",
+                "-of",
+                "json",
+            ])
+            .arg(path)
+            .output()
+            .unwrap()
+            .stdout;
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        value["packets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|packet| {
+                (
+                    packet["pts"].as_i64(),
+                    packet["dts"].as_i64(),
+                    packet["duration"].as_u64(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(timing(&input), timing(&output));
+}
+
+#[cfg(unix)]
+fn add_open_ended_audio_trim(path: &Path, ticks: u64) {
+    fn boxed(kind: [u8; 4], payload: &[u8]) -> Vec<u8> {
+        let mut bytes = u32::try_from(payload.len() + 8)
+            .unwrap()
+            .to_be_bytes()
+            .to_vec();
+        bytes.extend(kind);
+        bytes.extend(payload);
+        bytes
+    }
+    fn rewrite(data: &[u8], nodes: &[drmr_core::mp4::Mp4Box], edit: &[u8]) -> Vec<u8> {
+        let mut output = Vec::new();
+        for node in nodes {
+            if node.kind() == *b"edts" {
+                continue;
+            }
+            if matches!(&node.kind(), b"moov" | b"trak") {
+                let mut children = rewrite(data, &node.children, edit);
+                if node.kind() == *b"trak" {
+                    children.extend(edit);
+                }
+                output.extend(boxed(node.kind(), &children));
+            } else {
+                output.extend(node.header.bytes(data));
+            }
+        }
+        output
+    }
+    let mut payload = vec![1, 0, 0, 0];
+    payload.extend(1u32.to_be_bytes());
+    payload.extend(0u64.to_be_bytes());
+    payload.extend(ticks.to_be_bytes());
+    payload.extend([0, 1, 0, 0]);
+    let edit = boxed(*b"edts", &boxed(*b"elst", &payload));
+    let bytes = std::fs::read(path).unwrap();
+    let boxes = drmr_core::mp4::parse_boxes(&bytes).unwrap();
+    std::fs::write(path, rewrite(&bytes, &boxes, &edit)).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn middle_packet_timestamp_changes_fail_even_when_payloads_and_duration_match() {
+    fn boxed(kind: [u8; 4], payload: &[u8]) -> Vec<u8> {
+        let mut out = u32::try_from(payload.len() + 8)
+            .unwrap()
+            .to_be_bytes()
+            .to_vec();
+        out.extend(kind);
+        out.extend(payload);
+        out
+    }
+    fn rewrite(data: &[u8], nodes: &[drmr_core::mp4::Mp4Box]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for node in nodes {
+            if node.kind() == *b"stts" {
+                let payload = node.header.payload(data);
+                assert_eq!(u32::from_be_bytes(payload[4..8].try_into().unwrap()), 1);
+                let count = u32::from_be_bytes(payload[8..12].try_into().unwrap());
+                let delta = u32::from_be_bytes(payload[12..16].try_into().unwrap());
+                assert!(count >= 3);
+                let mut changed = vec![0, 0, 0, 0];
+                changed.extend(3u32.to_be_bytes());
+                for (count, delta) in [(1, delta + 1), (1, delta - 1), (count - 2, delta)] {
+                    changed.extend(count.to_be_bytes());
+                    changed.extend(delta.to_be_bytes());
+                }
+                out.extend(boxed(*b"stts", &changed));
+            } else if matches!(
+                &node.kind(),
+                b"moov" | b"trak" | b"mdia" | b"minf" | b"stbl"
+            ) {
+                out.extend(boxed(node.kind(), &rewrite(data, &node.children)));
+            } else {
+                out.extend(node.header.bytes(data));
+            }
+        }
+        out
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("source.mp4");
+    video(&source, "testsrc2=size=64x64:rate=5");
+    let result = directory.path().join("changed.mp4");
+    let bytes = std::fs::read(&source).unwrap();
+    let boxes = drmr_core::mp4::parse_boxes(&bytes).unwrap();
+    std::fs::write(&result, rewrite(&bytes, &boxes)).unwrap();
+    let report = converter()
+        .verify_mp4(
+            &source,
+            &InputKeys::default(),
+            &result,
+            &InputKeys::default(),
+        )
+        .unwrap();
+    assert!(report.checks.packet_payloads_equal);
+    assert!(report.checks.decoded_content_equal);
+    assert!(!report.checks.packet_timing_equal);
+    assert!(!report.passed);
+}
