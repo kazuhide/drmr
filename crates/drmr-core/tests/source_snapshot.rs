@@ -438,15 +438,11 @@ fn on_path(tool: &str) -> bool {
 }
 
 #[cfg(unix)]
-fn stand_in(directory: &Path) -> std::path::PathBuf {
-    use std::os::unix::fs::PermissionsExt;
-    let script = directory.join("ffprobe");
-    std::fs::write(
-        &script,
-        "#!/bin/sh\ncase \"$*\" in\n  *-show_streams*) printf '%s' '{\"streams\": [{\"index\": 0, \"codec_type\": \"video\", \"codec_name\": \"h264\"}]}' ;;\n  *) printf '%s' '{\"packets\": [{\"flags\": \"K_\"}]}' ;;\nesac\n",
-    )
-    .unwrap();
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+fn stand_in(directory: &Path, name: &str) -> std::path::PathBuf {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ffprobe-stand-in.sh");
+    let script = directory.join(name);
+    // No executable is opened for writing while concurrent tests spawn children.
+    std::os::unix::fs::symlink(fixture, &script).unwrap();
     script
 }
 
@@ -459,7 +455,7 @@ fn probe_limits_both_ffprobe_decoders_before_input() {
     std::fs::write(&segment, support::ts_packet("", b'x')).unwrap();
     let collector = Arc::new(Collector::default());
     let runner = ToolRunner::new(Arc::new(Secrets::new()), collector.clone() as Arc<dyn Sink>);
-    let script = stand_in(tmp.path());
+    let script = stand_in(tmp.path(), "ffprobe");
     let prober = FfprobeProber::with_program(&runner, &script.to_string_lossy());
     assert_eq!(
         prober.probe(&segment, None).unwrap()[0]["codec_name"],
@@ -549,38 +545,26 @@ fn the_ffprobe_argv_is_the_python_one() {
 #[cfg(unix)]
 #[test]
 fn a_probe_that_fails_or_finds_no_key_frame_is_classified() {
-    use std::os::unix::fs::PermissionsExt;
     let tmp = tempfile::tempdir().unwrap();
     let segment = tmp.path().join("segment.ts");
     std::fs::write(&segment, support::ts_packet("", b'x')).unwrap();
     let diagnostics = Arc::new(Collector::default());
     let runner = ToolRunner::new(Arc::new(Secrets::new()), diagnostics.clone());
     let cases = [
-        ("exit 1", "media-probe-failed"),
-        ("printf 'not json'", "media-probe-failed"),
-        ("printf '{\"streams\": []}'", "media-probe-failed"),
-        (
-            "printf '{\"streams\": [{\"codec_type\": \"audio\", \"codec_name\": \"aac\", \"profile\": \"HE-AAC\"}]}'",
-            "unsupported-aac-profile",
-        ),
-        (
-            "case \"$*\" in *-show_streams*) printf '{\"streams\": [{\"codec_type\": \"video\", \"codec_name\": \"h264\"}]}' ;; *) printf '{\"packets\": [{\"flags\": \"__\"}]}' ;; esac",
-            "non-independent-video",
-        ),
-        (
-            "case \"$*\" in *-show_streams*) printf '{\"streams\": [{\"codec_type\": \"video\", \"codec_name\": \"h264\"}]}' ;; *) exit 1 ;; esac",
-            "non-independent-video",
-        ),
+        ("exit-error", "media-probe-failed"),
+        ("invalid-json", "media-probe-failed"),
+        ("empty-streams", "media-probe-failed"),
+        ("he-aac", "unsupported-aac-profile"),
+        ("missing-keyframe", "non-independent-video"),
+        ("packet-error", "non-independent-video"),
     ];
-    for (index, (body, expected)) in cases.iter().enumerate() {
-        let script = tmp.path().join(format!("probe{index}"));
-        std::fs::write(&script, format!("#!/bin/sh\n{body}\n")).unwrap();
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    for (name, expected) in cases {
+        let script = stand_in(tmp.path(), name);
         let prober = FfprobeProber::with_program(&runner, &script.to_string_lossy());
         assert_eq!(
             token(prober.probe(&segment, None)),
-            *expected,
-            "case {index}: {body}; tool diagnostics: {:?}",
+            expected,
+            "case {name}; tool diagnostics: {:?}",
             diagnostics.records()
         );
     }
