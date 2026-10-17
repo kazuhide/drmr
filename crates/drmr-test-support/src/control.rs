@@ -22,6 +22,8 @@ pub fn child_entry(args: &[std::ffi::OsString]) -> io::Result<bool> {
             options.share_mode(0);
         }
         let held = options.open(&args[1])?;
+        #[cfg(unix)]
+        held.lock()?;
         fs::write(&args[2], b"ready")?;
         thread::sleep(Duration::from_secs(60));
         drop(held);

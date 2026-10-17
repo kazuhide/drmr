@@ -56,7 +56,22 @@ Overflow fails with `output-limit`; no partial output is returned as successful 
 The media adapter reports `media-output-limit`, and source probing reports
 `media-probe-output-limit`. Captured pipe readers are joined before a reservation is
 returned. A command deadline includes resource waiting. Cooperative cancellation stops
-a waiting reservation; work already running keeps its normal drain behavior.
+waiting reservations and active captured tools. The supervisor terminates its owned
+process group or Windows job, reaps the direct child, and joins the pipe readers before
+returning the reservation.
+
+Generic `convert` and `verify` register Unix SIGINT and SIGTERM before starting tools.
+The same cancellation flag reaches track scheduling, resource admission, and active
+media commands; cancellation observed before final publication prevents that publication.
+Synchronous file operations finish their current operation before the next check.
+The CLI returns `130` after cooperative cancellation. Windows console-event handling
+is compiled but has no runtime qualification claim here.
+
+The conversion measurement tool first requests cooperative termination and allows five
+seconds for the CLI to return. Its `cooperative-exit` label records the CLI's cancellation
+exit code. A forced fallback is marked `cleanup: unconfirmed`: killing only the CLI's
+process group cannot cover media children that own separate groups. The label is not
+independent operating-system proof of every descendant's exit.
 
 Pipes left open after the direct child exits get a two-second close deadline, including
 calls without an explicit command timeout. Windows jobs retain ordinary descendants;

@@ -76,11 +76,15 @@ fn control(
     child: &mut ManagedChild,
     state: &State,
     timeout: Option<Duration>,
+    stop: Option<&crate::concurrency::Stop>,
 ) -> Result<ExitStatus, Failure> {
     let deadline = timeout.map(|limit| Instant::now() + limit);
     let mut pipe_deadline = None;
     let mut status = None;
     loop {
+        if stop.is_some_and(crate::concurrency::Stop::is_set) {
+            return Err(failure("cancelled", "tool execution cancelled"));
+        }
         let flags = state.flags.load(Ordering::Acquire);
         if flags & EXCEEDED != 0 {
             return Err(failure(
@@ -134,6 +138,9 @@ fn execute_with_cleanup(
     path: Option<&OsStr>,
     mut cleanup: impl FnMut(&mut ManagedChild) -> io::Result<()>,
 ) -> Result<Completed, Failure> {
+    if options.stop.is_some_and(crate::concurrency::Stop::is_set) {
+        return Err(failure("cancelled", "tool execution cancelled"));
+    }
     let Some((program, arguments)) = argv.split_first() else {
         return Err(failure("unavailable", "could not run: empty command"));
     };
@@ -200,7 +207,7 @@ fn execute_with_cleanup(
                 ));
             }
         };
-        let result = control(&mut child, &state, options.timeout);
+        let result = control(&mut child, &state, options.timeout, options.stop);
         let confirmed = confirm_cleanup(&mut child, &mut cleanup);
         state.stop.store(true, Ordering::Release);
         let stdout = output

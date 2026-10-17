@@ -8,6 +8,7 @@ use std::{fmt::Write as _, path::Path, sync::Arc, time::Duration};
 use zeroize::Zeroizing;
 
 pub(super) struct Backend {
+    pub stop: crate::concurrency::Stop,
     pub runner: Arc<ToolRunner>,
     pub packager: String,
     pub ffmpeg: String,
@@ -15,12 +16,20 @@ pub(super) struct Backend {
     pub timeout: Duration,
 }
 impl Backend {
+    pub fn check_cancelled(&self) -> Result<(), ConversionError> {
+        if self.stop.is_set() {
+            Err(ConversionError("cancelled"))
+        } else {
+            Ok(())
+        }
+    }
     pub fn run(
         &self,
         argv: &[String],
         tool: &str,
         secrets: &[&str],
     ) -> Result<Vec<u8>, ConversionError> {
+        self.check_cancelled()?;
         let mut effective = Zeroizing::new(argv.to_vec());
         if tool == "ffprobe" {
             effective.splice(1..1, ["-threads".into(), "1".into()]);
@@ -44,6 +53,7 @@ impl Backend {
         }
         let shown = vec![tool.to_string(), "[arguments redacted]".into()];
         let options = RunOptions {
+            stop: Some(&self.stop),
             argv_redacted: Some(&shown),
             secrets,
             timeout: Some(self.timeout),
@@ -71,6 +81,7 @@ impl Backend {
                     _ => "media-tool-unavailable-or-timeout",
                 })
             })?;
+        self.check_cancelled()?;
         if completed.returncode != Some(0) {
             return Err(ConversionError("media-tool-failed"));
         }

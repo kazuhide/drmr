@@ -479,9 +479,12 @@ dependencies = [
  "clap",
  "drmr-core",
  "drmr-server",
+ "drmr-test-support",
  "private-fs",
+ "rustix",
  "serde_json",
  "tempfile",
+ "tokio",
 ]
 
 [[package]]

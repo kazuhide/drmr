@@ -26,6 +26,7 @@ impl Converter {
         tracks: usize,
         unit: impl Fn(usize) -> Result<T, ConversionError> + Sync,
     ) -> Result<Vec<T>, ConversionError> {
+        self.backend.check_cancelled()?;
         if tracks == 0 {
             return Ok(Vec::new());
         }
@@ -40,14 +41,24 @@ impl Converter {
         budget.workers = budget.workers.min(tracks);
         self.backend.runner.note_resource_budget(&budget);
         if budget.workers == 1 {
-            return (0..tracks).map(unit).collect();
+            return (0..tracks)
+                .map(|ordinal| {
+                    self.backend.check_cancelled()?;
+                    unit(ordinal)
+                })
+                .collect();
         }
         std::thread::scope(|scope| {
             let pool = Pool::new(scope, budget.workers);
             let units = (0..tracks).map(|ordinal| {
                 let unit = &unit;
-                Box::new(move || unit(ordinal)) as Unit<'_, T, ConversionError>
+                Box::new(move || {
+                    self.backend.check_cancelled()?;
+                    unit(ordinal)
+                }) as Unit<'_, T, ConversionError>
             });
+            // Keep ordinary failure propagation local to this invocation. An
+            // external cancellation flag must not poison a later conversion.
             run_ordered(|unit| pool.submit(unit), units, None)
         })
     }
@@ -86,6 +97,74 @@ fn profile_workload(profile: &serde_json::Value, size: u64) -> Workload {
 mod tests {
     use super::*;
     use crate::resources::MemorySource;
+    fn converter(stop: crate::concurrency::Stop) -> Converter {
+        Converter::new(
+            std::sync::Arc::new(crate::toolrun::ToolRunner::new(
+                std::sync::Arc::new(crate::toolrun::Secrets::new()),
+                std::sync::Arc::new(crate::events::NoSink),
+            )),
+            "packager",
+            "ffmpeg",
+        )
+        .with_stop(stop)
+        .with_max_workers(Some(1))
+        .unwrap()
+    }
+    #[test]
+    fn cancellation_prevents_new_work_and_both_publication_forms() {
+        let stop = crate::concurrency::Stop::new();
+        let converter = converter(stop.clone());
+        stop.set();
+        assert_eq!(
+            converter.run_tracks(1, |_| Ok(())).unwrap_err(),
+            ConversionError("cancelled")
+        );
+        assert_eq!(
+            converter
+                .backend
+                .run(&["missing".into()], "ffprobe", &[])
+                .unwrap_err(),
+            ConversionError("cancelled")
+        );
+        assert_eq!(
+            converter
+                .publish(Path::new("missing"), Path::new("unused"))
+                .unwrap_err(),
+            ConversionError("cancelled")
+        );
+        assert_eq!(
+            converter
+                .publish_directory(Path::new("missing"), Path::new("unused"))
+                .unwrap_err(),
+            ConversionError("cancelled")
+        );
+    }
+    #[test]
+    fn inline_scheduling_observes_cancellation_before_the_next_track() {
+        let stop = crate::concurrency::Stop::new();
+        let converter = converter(stop.clone());
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let result = converter.run_tracks(3, |_| {
+            calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            stop.set();
+            Ok(())
+        });
+        assert_eq!(result.unwrap_err(), ConversionError("cancelled"));
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+    #[test]
+    fn a_failed_track_does_not_set_the_callers_cancellation_flag() {
+        let stop = crate::concurrency::Stop::new();
+        let converter = converter(stop.clone()).with_max_workers(Some(2)).unwrap();
+        assert_eq!(
+            converter
+                .run_tracks(2, |_| Err::<(), _>(ConversionError("synthetic-failure")))
+                .unwrap_err(),
+            ConversionError("synthetic-failure")
+        );
+        assert!(!stop.is_set());
+        assert_eq!(converter.run_tracks(1, |_| Ok(7)).unwrap(), [7]);
+    }
     #[test]
     fn a_long_streaming_track_does_not_require_its_whole_file_to_fit_in_memory() {
         let profile = serde_json::json!({"codec_type":"video", "width":1920, "height":1080});

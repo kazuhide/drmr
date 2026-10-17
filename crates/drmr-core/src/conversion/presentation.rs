@@ -103,7 +103,7 @@ impl Converter {
             Vec::new(),
             Vec::new(),
         );
-        hls::publish_directory(stage.path(), &destination)?;
+        self.publish_directory(stage.path(), &destination)?;
         Ok(ConversionReport {
             schema_version: 1,
             input,

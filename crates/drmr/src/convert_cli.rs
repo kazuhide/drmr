@@ -97,19 +97,28 @@ impl Sink for Progress {
         }
     }
 }
-fn converter(packager: &str, maximum: Option<u8>, progress: bool) -> Converter {
+fn converter(
+    packager: &str,
+    maximum: Option<u8>,
+    progress: bool,
+    stop: drmr_core::concurrency::Stop,
+) -> Converter {
     let sink = Arc::new(Progress {
         enabled: progress,
         workers: Mutex::new(None),
     });
     let runner = Arc::new(ToolRunner::new(Arc::new(Secrets::new()), sink));
     Converter::new(runner, packager, "ffmpeg")
+        .with_stop(stop)
         .with_max_workers(maximum.map(usize::from))
         .expect("clap validates the worker upper bound")
 }
 
 fn error(command: &str, error: ConversionError) -> ExitCode {
     eprintln!("{command}: {error}");
+    if error.0 == "cancelled" {
+        return ExitCode::from(130);
+    }
     if let Some(hint) = match error.0 {
         "resource-budget" => Some(
             "Free memory or run fewer jobs; the worker maximum does not override memory admission.",
@@ -177,6 +186,9 @@ fn json(value: &serde_json::Value) -> std::io::Result<()> {
 }
 
 pub fn convert(args: &ConvertArgs) -> ExitCode {
+    let Ok(cancellation) = crate::cancellation::Cancellation::install() else {
+        return error("convert", ConversionError("signal-monitor-unavailable"));
+    };
     let keys = match load(args.keys_file.as_ref()) {
         Ok(keys) => keys,
         Err(code) => return code,
@@ -191,22 +203,29 @@ pub fn convert(args: &ConvertArgs) -> ExitCode {
     if !args.json {
         eprintln!("Converting and checking media...");
     }
-    let report = match converter(&args.packager_bin, args.max_workers, !args.json).convert(
-        ConversionRequest {
-            input: &args.input,
-            output: &args.output,
-            format,
-            target: args.to,
-            input_keys: &keys.input,
-            hls_input_keys: &keys.hls_input,
-            output_key: keys.output.as_ref(),
-            hls_key_uri: keys.hls_output_uri(),
-            hls_output_key: keys.hls_output.as_ref(),
-        },
-    ) {
+    let report = match converter(
+        &args.packager_bin,
+        args.max_workers,
+        !args.json,
+        cancellation.stop.clone(),
+    )
+    .convert(ConversionRequest {
+        input: &args.input,
+        output: &args.output,
+        format,
+        target: args.to,
+        input_keys: &keys.input,
+        hls_input_keys: &keys.hls_input,
+        output_key: keys.output.as_ref(),
+        hls_key_uri: keys.hls_output_uri(),
+        hls_output_key: keys.hls_output.as_ref(),
+    }) {
         Ok(report) => report,
         Err(cause) => return error("convert", cause),
     };
+    if cancellation.stop.is_set() {
+        return error("convert", ConversionError("cancelled"));
+    }
     let result = if args.json {
         json(&serde_json::to_value(&report).expect("conversion report serializes"))
     } else {
@@ -228,6 +247,9 @@ pub fn convert(args: &ConvertArgs) -> ExitCode {
 }
 
 pub fn verify(args: &VerifyArgs) -> ExitCode {
+    let Ok(cancellation) = crate::cancellation::Cancellation::install() else {
+        return error("verify", ConversionError("signal-monitor-unavailable"));
+    };
     let keys = match load(args.keys_file.as_ref()) {
         Ok(keys) => keys,
         Err(code) => return code,
@@ -243,23 +265,30 @@ pub fn verify(args: &VerifyArgs) -> ExitCode {
     if !args.json {
         eprintln!("Comparing the source and result...");
     }
-    let report = match converter(&args.packager_bin, args.max_workers, !args.json).verify(
-        VerificationRequest {
-            source: VerificationSource {
-                input: &args.source,
-                input_keys: &keys.input,
-                hls_keys: &keys.hls_input,
-            },
-            output: VerificationSource {
-                input: &args.output,
-                input_keys: &output_keys,
-                hls_keys: &output_hls_keys,
-            },
+    let report = match converter(
+        &args.packager_bin,
+        args.max_workers,
+        !args.json,
+        cancellation.stop.clone(),
+    )
+    .verify(VerificationRequest {
+        source: VerificationSource {
+            input: &args.source,
+            input_keys: &keys.input,
+            hls_keys: &keys.hls_input,
         },
-    ) {
+        output: VerificationSource {
+            input: &args.output,
+            input_keys: &output_keys,
+            hls_keys: &output_hls_keys,
+        },
+    }) {
         Ok(report) => report,
         Err(cause) => return error("verify", cause),
     };
+    if cancellation.stop.is_set() {
+        return error("verify", ConversionError("cancelled"));
+    }
     let result = if args.json {
         json(&serde_json::to_value(&report).expect("verification report serializes"))
     } else {

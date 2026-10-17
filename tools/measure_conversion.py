@@ -112,7 +112,23 @@ def sample_processes(pid):
     return (by_pid[pid][1], sum(by_pid[child][1] for child in children), len(children))
 
 
-def terminate(process):
+def terminate(process, grace=5):
+    """Request drmr's cooperative cleanup before an explicitly unconfirmed fallback."""
+    if process.poll() is not None:
+        return {"method": "already-exited", "cleanup": "unconfirmed"}
+    if os.name == "posix":
+        try:
+            # Managed media children own separate groups. Signalling the CLI
+            # lets its Stop flag unwind each ManagedChild before it exits.
+            process.send_signal(signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        try:
+            code = process.wait(timeout=grace)
+            return {"method": "cooperative-signal",
+                    "cleanup": "cooperative-exit" if code == 130 else "unconfirmed"}
+        except subprocess.TimeoutExpired:
+            pass
     try:
         if os.name == "posix":
             os.killpg(process.pid, signal.SIGKILL)
@@ -120,10 +136,14 @@ def terminate(process):
             process.kill()
     except ProcessLookupError:
         pass
+    except PermissionError:
+        if process.poll() is None:
+            process.kill()
     try:
         process.wait(timeout=5)
     except subprocess.TimeoutExpired:
         raise Failure("child-termination-failed") from None
+    return {"method": "force", "cleanup": "unconfirmed"}
 
 
 def measured_run(argv, environment, timeout, interval):
@@ -159,14 +179,17 @@ def measured_run(argv, environment, timeout, interval):
         if sampler:
             sampler.start()
         error = None
+        termination = None
         try:
             try:
                 process.wait(timeout=timeout)
             except subprocess.TimeoutExpired:
                 error = "child-timeout"
-                terminate(process)
+                termination = terminate(process)
             except BaseException:
-                terminate(process)
+                termination = terminate(process)
+                if termination["cleanup"] != "cooperative-exit":
+                    raise Failure("child-cleanup-unconfirmed") from None
                 raise
             elapsed = time.perf_counter() - started
         finally:
@@ -183,6 +206,8 @@ def measured_run(argv, environment, timeout, interval):
             memory["reason"] = "no-process-samples" if supported else "unsupported-platform"
         measurement = {"status": "failed" if error or process.returncode else "completed",
                        "elapsed_seconds": elapsed, "exit_code": process.returncode, "memory": memory}
+        if termination:
+            measurement["termination"] = termination
         if error or process.returncode:
             measurement["error"] = error or "child-failed"
             return measurement, None

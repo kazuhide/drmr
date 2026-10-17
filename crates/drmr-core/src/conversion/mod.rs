@@ -80,6 +80,7 @@ impl Converter {
         Self {
             maximum_workers: None,
             backend: Backend {
+                stop: crate::concurrency::Stop::new(),
                 runner,
                 packager: packager.into(),
                 ffmpeg: ffmpeg.into(),
@@ -87,6 +88,20 @@ impl Converter {
                 timeout: Duration::from_secs(3600),
             },
         }
+    }
+    /// Share a cooperative cancellation flag with scheduling and media subprocesses.
+    #[must_use]
+    pub fn with_stop(mut self, stop: crate::concurrency::Stop) -> Self {
+        self.backend.stop = stop;
+        self
+    }
+    fn publish(&self, source: &Path, destination: &Path) -> Result<(), ConversionError> {
+        self.backend.check_cancelled()?;
+        files::publish_file(source, destination)
+    }
+    fn publish_directory(&self, source: &Path, destination: &Path) -> Result<(), ConversionError> {
+        self.backend.check_cancelled()?;
+        files::publish_directory(source, destination)
     }
     #[must_use]
     pub fn with_ffprobe(mut self, binary: impl Into<String>) -> Self {
@@ -204,7 +219,7 @@ impl Converter {
         if !verification.passed {
             return Err(ConversionError("round-trip-verification-failed"));
         }
-        publish(&candidate, &destination)?;
+        self.publish(&candidate, &destination)?;
         Ok(ConversionReport {
             schema_version: 1,
             input: input_report,
