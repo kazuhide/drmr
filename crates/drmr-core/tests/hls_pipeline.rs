@@ -333,7 +333,7 @@ impl PipelineDeps for Fake {
 
 fn analysis(tmp: &Path, tracks: Vec<SourceTrack>) -> SourceAnalysis {
     let snapshot = tmp.join("asset/clear/source/analysis.json");
-    fs::create_dir_all(snapshot.parent().unwrap()).unwrap();
+    drmr_core::native::create_private_dir_all(snapshot.parent().unwrap()).unwrap();
     SourceAnalysis {
         schema_version: "1".to_string(),
         source_kind: "hls-clear".to_string(),
