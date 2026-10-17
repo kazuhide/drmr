@@ -1,6 +1,9 @@
 //! Catalog command parsing, exit codes, readable summaries, and scrubbed JSON Lines.
 //! The pipeline dependencies are fakes and all keys are synthetic.
 
+#[path = "common/mod.rs"]
+mod private_fixture;
+
 #[path = "support/paths.rs"]
 mod paths;
 use paths::portable_path;
@@ -20,7 +23,7 @@ use std::time::{Duration, Instant};
 
 /// One CLI process: the fakes, a scratch directory, and `main(argv)`.
 struct Cli {
-    dir: tempfile::TempDir,
+    dir: private_fixture::PrivateTempDir,
     config: FakeConfig,
     playready: FakePlayReady,
     fakes: Fakes,
@@ -35,7 +38,7 @@ struct Ran {
 impl Cli {
     fn new() -> Cli {
         Cli {
-            dir: tempfile::tempdir().unwrap(),
+            dir: private_fixture::private_tempdir().unwrap(),
             config: FakeConfig::default(),
             playready: FakePlayReady::default(),
             fakes: Fakes::new(),

@@ -1,5 +1,8 @@
 //! Shaka Packager arguments, secret scrubbing, segment numbering, and failure handling.
 
+#[path = "common/mod.rs"]
+mod private_fixture;
+
 #[path = "support/paths.rs"]
 mod paths;
 use paths::portable_path;
@@ -40,8 +43,8 @@ fn assert_no_key_material(text: &str) {
     }
 }
 
-fn tempdir() -> (tempfile::TempDir, PathBuf) {
-    let dir = tempfile::tempdir().unwrap();
+fn tempdir() -> (private_fixture::PrivateTempDir, PathBuf) {
+    let dir = private_fixture::private_tempdir().unwrap();
     let root = std::fs::canonicalize(dir.path()).unwrap();
     (dir, root)
 }

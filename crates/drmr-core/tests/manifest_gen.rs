@@ -1,5 +1,8 @@
 //! Generated DASH and HLS manifests for synthetic packaged tracks.
 
+#[path = "common/mod.rs"]
+mod private_fixture;
+
 #[path = "support/paths.rs"]
 mod paths;
 use paths::portable_path;
@@ -113,7 +116,7 @@ const CAPTIONS: &str =
 
 #[test]
 fn test_three_drm_hls_and_common_urls_with_clear_text() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let p = presentation(tmp.path());
     let paths = write_hls(&p, &tmp.path().join("manifests/master.m3u8"), &fairplay()).unwrap();
     let master = read(&paths[0]);
@@ -143,7 +146,7 @@ fn test_three_drm_hls_and_common_urls_with_clear_text() {
 
 #[test]
 fn test_dash_static_timing_drm_and_same_media_urls() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let p = presentation(tmp.path());
     let path = write_dash(&p, &tmp.path().join("manifests/manifest.mpd")).unwrap();
     let root = xml::fromstring(&read(&path)).unwrap();
@@ -205,7 +208,7 @@ fn with_roles(p: &mut PackagedPresentation) {
 
 #[test]
 fn test_accessibility_utis_preserved_in_hls_and_mapped_in_dash() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let mut p = presentation(tmp.path());
     with_roles(&mut p);
     let paths = write_hls(&p, &tmp.path().join("manifests/master.m3u8"), &fairplay()).unwrap();
@@ -230,7 +233,7 @@ fn test_accessibility_utis_preserved_in_hls_and_mapped_in_dash() {
 
 #[test]
 fn test_unknown_role_fails_instead_of_losing_semantics() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let mut p = presentation(tmp.path());
     map_tracks(&mut p, |t| {
         if t.id == "a000" {
@@ -251,7 +254,7 @@ fn with_vtt_offset(p: &mut PackagedPresentation) {
 
 #[test]
 fn test_dash_vtt_keeps_raw_cue_clock_independent_of_transport_origin() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let mut p = presentation(tmp.path());
     with_vtt_offset(&mut p);
     let path = write_dash(&p, &tmp.path().join("manifest.mpd")).unwrap();
@@ -298,7 +301,7 @@ fn with_languages(p: &mut PackagedPresentation) {
 
 #[test]
 fn test_hls_preserves_second_language_default_and_autoselect_flags() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let mut p = presentation(tmp.path());
     with_languages(&mut p);
     let master = read(&write_hls(&p, &tmp.path().join("master.m3u8"), &fairplay()).unwrap()[0]);
@@ -313,7 +316,7 @@ fn test_hls_preserves_second_language_default_and_autoselect_flags() {
 
 #[test]
 fn test_hls_rejects_conflicting_default_autoselect_flags() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let mut p = presentation(tmp.path());
     map_tracks(&mut p, |t| {
         if t.content_type == "audio" {
@@ -343,7 +346,7 @@ fn outcome_of<T: Into<Value>>(result: Result<T, PyErr>) -> Value {
 /// presentation and compare results and files with Python's.
 fn emit(name: &str, change: impl Fn(&mut PackagedPresentation), hls: bool, dash: bool) {
     let expected = &fixture("manifest_gen.json")[name];
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let root = tmp.path();
     let mut p = presentation(root);
     change(&mut p);
@@ -558,7 +561,7 @@ fn generated_manifest_errors_and_edge_shapes_match_python() {
 fn fairplay_signaling_never_debug_prints_its_secrets() {
     let printed = format!("{:?}", fairplay());
     assert!(!printed.contains(FAIRPLAY_URI) && !printed.contains(IV_HEX));
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let printed = format!("{:?}", presentation(tmp.path()));
     assert!(!printed.contains(IV_HEX));
 }

@@ -5,6 +5,9 @@
 //! fixture carries their text. Native fixtures execute the same canned cases on every platform.
 //! Record bounds remain checked against outputs larger than each limit.
 
+#[path = "common/mod.rs"]
+mod private_fixture;
+
 #[path = "support/paths.rs"]
 mod paths;
 use paths::portable_path;
@@ -66,7 +69,7 @@ fn materialize(dir: &Path, oracle: &Value) {
 }
 
 struct Harness {
-    _temp: tempfile::TempDir,
+    _temp: private_fixture::PrivateTempDir,
     dir: PathBuf,
     collector: Arc<Collector>,
     secrets: Arc<Secrets>,
@@ -74,7 +77,7 @@ struct Harness {
 }
 
 fn harness(oracle: &Value) -> Harness {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = private_fixture::private_tempdir().unwrap();
     let dir = std::fs::canonicalize(temp.path()).unwrap();
     materialize(&dir, oracle);
     let secrets = Arc::new(Secrets::new());

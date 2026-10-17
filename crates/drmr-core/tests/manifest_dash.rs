@@ -1,5 +1,8 @@
 //! DASH protection rewrites and byte preservation using synthetic manifests.
 
+#[path = "common/mod.rs"]
+mod private_fixture;
+
 #[path = "support/paths.rs"]
 mod paths;
 use paths::portable_path;
@@ -227,7 +230,7 @@ fn sha256(path: &Path) -> String {
 
 #[test]
 fn test_scheme_flips_cenc_to_cbcs_on_every_in_scope_set() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let run = rewrite(tmp.path(), &mixed(), &DashOptions::default());
     let (source, output) = (root_of(&run.source), root_of(&run.out));
     for (src, out) in adaptation_sets(&source)
@@ -252,7 +255,7 @@ fn test_scheme_flips_cenc_to_cbcs_on_every_in_scope_set() {
 
 #[test]
 fn test_playready_pssh_and_pro_replaced_in_sync() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let run = rewrite(tmp.path(), &mixed(), &DashOptions::default());
     let output = root_of(&run.out);
     let mut swapped = 0;
@@ -274,7 +277,7 @@ fn test_playready_pssh_and_pro_replaced_in_sync() {
 
 #[test]
 fn test_playready_pssh_and_pro_differ_from_each_other_and_widevine() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let run = rewrite(tmp.path(), &[h264_rep("v0")], &DashOptions::default());
     let output = root_of(&run.out);
     let out = adaptation_sets(&output)[0];
@@ -290,7 +293,7 @@ fn test_playready_pssh_and_pro_differ_from_each_other_and_widevine() {
 
 #[test]
 fn test_widevine_pssh_byte_identical() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let run = rewrite(tmp.path(), &mixed(), &DashOptions::default());
     let (source, output) = (root_of(&run.source), root_of(&run.out));
     let fake = fake_blobs().widevine;
@@ -307,7 +310,7 @@ fn test_widevine_pssh_byte_identical() {
 
 #[test]
 fn test_segment_template_attrs_byte_unchanged() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let run = rewrite(tmp.path(), &mixed(), &DashOptions::default());
     let (source, output) = (root_of(&run.source), root_of(&run.out));
     for (src, out) in adaptation_sets(&source)
@@ -324,7 +327,7 @@ fn test_segment_template_attrs_byte_unchanged() {
 
 #[test]
 fn test_vp9_adaptationset_is_string_identical() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let run = rewrite(tmp.path(), &mixed(), &DashOptions::default());
     let (source, output) = (read(&run.source), read(&run.out));
     assert_eq!(
@@ -335,7 +338,7 @@ fn test_vp9_adaptationset_is_string_identical() {
 
 #[test]
 fn test_deploy_form_changes_only_drm_descriptors() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let run = rewrite(tmp.path(), &mixed(), &DashOptions::default());
     let (source, output) = (read(&run.source), read(&run.out));
     let blobs = fake_blobs();
@@ -349,14 +352,14 @@ fn test_deploy_form_changes_only_drm_descriptors() {
 
 #[test]
 fn test_out_of_scope_untouched_check_passes() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let run = rewrite(tmp.path(), &mixed(), &DashOptions::default());
     assert_eq!(check(&run.result, CheckId::DashOutOfScopeUntouched), "PASS");
 }
 
 #[test]
 fn test_av1_in_mp4_is_out_of_scope_and_untouched() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let av1 = RepSpec::new("av1-0", "av01.0.04M.08", "video", "video/mp4");
     let run = rewrite(
         tmp.path(),
@@ -411,7 +414,7 @@ fn test_dynamic_enumeration_no_hardcoded_counts() {
     ];
     let expected = fixture("manifest_dash.json");
     for (reps, in_scope) in cases {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = private_fixture::private_tempdir().unwrap();
         let title = format!("dyn-{in_scope}-{}", reps.len());
         let run = rewrite(tmp.path(), &reps, &DashOptions::titled(&title));
         assert_eq!(run.result.adaptation_sets_patched, in_scope);
@@ -432,7 +435,7 @@ fn test_dynamic_enumeration_no_hardcoded_counts() {
 
 #[test]
 fn test_rerun_on_own_output_is_byte_stable() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let source = build_synthetic_dash_asset(tmp.path(), &mixed(), &DashOptions::titled("idem"));
     let pr = playready();
     let (out1, out2) = (tmp.path().join("out1.mpd"), tmp.path().join("out2.mpd"));
@@ -446,7 +449,7 @@ fn test_rerun_on_own_output_is_byte_stable() {
 
 #[test]
 fn test_rerun_with_local_form_is_stable() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let source =
         build_synthetic_dash_asset(tmp.path(), &mixed(), &DashOptions::titled("idem-local"));
     let pr = playready();
@@ -462,7 +465,7 @@ fn test_rerun_with_local_form_is_stable() {
 
 #[test]
 fn test_url_base_none_leaves_baseurl_untouched() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let source = build_synthetic_dash_asset(tmp.path(), &[h264_rep("v0")], &DashOptions::default());
     let out = tmp.path().join("deploy.mpd");
     rewrite_dash_manifest(&source, &out, &playready(), None).unwrap();
@@ -476,7 +479,7 @@ fn test_url_base_none_leaves_baseurl_untouched() {
 
 #[test]
 fn test_url_base_set_rewrites_baseurl_only() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let source = build_synthetic_dash_asset(tmp.path(), &mixed(), &DashOptions::titled("local"));
     let out = tmp.path().join("local.mpd");
     rewrite_dash_manifest(&source, &out, &playready(), Some("../../cbcs/")).unwrap();
@@ -499,7 +502,7 @@ fn test_url_base_set_rewrites_baseurl_only() {
 
 #[test]
 fn test_url_base_injected_when_source_has_no_baseurl() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let source = build_synthetic_dash_asset(
         tmp.path(),
         &[h264_rep("v0")],
@@ -526,7 +529,7 @@ fn test_url_base_injected_when_source_has_no_baseurl() {
 
 #[test]
 fn test_localize_dash_http_rewrites_baseurl_only() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let source =
         build_synthetic_dash_asset(tmp.path(), &mixed(), &DashOptions::titled("localize-http"));
     let out_text = localize_dash_manifest_http(&read(&source), |old| {
@@ -542,7 +545,7 @@ fn test_localize_dash_http_rewrites_baseurl_only() {
 
 #[test]
 fn test_localize_dash_http_passes_current_baseurl_to_resolver() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let options = DashOptions {
         cdn_host: "cdn.example.test".to_string(),
         ..DashOptions::titled("t1")
@@ -559,7 +562,7 @@ fn test_localize_dash_http_passes_current_baseurl_to_resolver() {
 
 #[test]
 fn test_localize_dash_http_never_touches_drm_descriptors() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let source = build_synthetic_dash_asset(
         tmp.path(),
         &mixed(),
@@ -586,7 +589,7 @@ fn test_localize_dash_http_never_touches_drm_descriptors() {
 
 #[test]
 fn test_localize_dash_http_writes_nothing_to_disk() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let source = build_synthetic_dash_asset(
         tmp.path(),
         &[h264_rep("v0")],
@@ -599,7 +602,7 @@ fn test_localize_dash_http_writes_nothing_to_disk() {
 
 #[test]
 fn test_localize_dash_http_raises_on_missing_baseurl() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let source = build_synthetic_dash_asset(
         tmp.path(),
         &[h264_rep("v0")],
@@ -626,7 +629,7 @@ fn test_localize_dash_http_rejects_doctype() {
 
 #[test]
 fn test_parse_source_playready_reads_mspr_pro() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let pr = playready();
     let options = DashOptions {
         playready_pssh_b64: Some(pr.pssh_b64.clone()),
@@ -660,7 +663,7 @@ fn test_parse_source_playready_reads_mspr_pro() {
 
 #[test]
 fn test_parse_source_playready_raises_when_absent() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let source =
         build_synthetic_dash_asset(tmp.path(), &[vp9_rep("w0")], &DashOptions::titled("no-pr"));
     let err = parse_source_playready(&source).unwrap_err();
@@ -676,7 +679,7 @@ fn custom_playready_metadata_is_rejected_before_rewriting() {
         "<CUSTOMATTRIBUTES><VALUE>synthetic-private-value</VALUE></CUSTOMATTRIBUTES>",
         "<DS_ID>synthetic-private-value</DS_ID>",
     ] {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = private_fixture::private_tempdir().unwrap();
         let pr = playready();
         let header = pr
             .wrmheader_xml
@@ -712,7 +715,7 @@ fn custom_playready_metadata_is_rejected_before_rewriting() {
 #[test]
 fn mixed_codec_adaptation_sets_are_rejected_before_rewriting_or_qualifying() {
     for codec in ["av01.0.04M.08", "hev1.1.6.L60.90"] {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = private_fixture::private_tempdir().unwrap();
         let pr = playready();
         let source =
             build_synthetic_dash_asset(tmp.path(), &[h264_rep("v0")], &DashOptions::default());
@@ -744,7 +747,7 @@ fn poisoned_doctype(text: &str) -> String {
 
 #[test]
 fn test_rewrite_rejects_doctype() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let source = build_synthetic_dash_asset(
         tmp.path(),
         &[h264_rep("v0")],
@@ -759,7 +762,7 @@ fn test_rewrite_rejects_doctype() {
 
 #[test]
 fn test_input_file_is_not_modified() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let source = build_synthetic_dash_asset(tmp.path(), &mixed(), &DashOptions::titled("ro"));
     let before = sha256(&source);
     rewrite_dash_manifest(
@@ -774,7 +777,7 @@ fn test_input_file_is_not_modified() {
 
 #[test]
 fn test_fails_loud_on_unexpected_mp4protection_value() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let source = build_synthetic_dash_asset(
         tmp.path(),
         &[h264_rep("v0")],
@@ -793,7 +796,7 @@ fn test_fails_loud_on_unexpected_mp4protection_value() {
 
 #[test]
 fn test_fails_loud_on_playready_missing_pro() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let source = build_synthetic_dash_asset(
         tmp.path(),
         &[h264_rep("v0")],
@@ -834,7 +837,7 @@ fn prefix_dash_namespace(mpd_text: &str) -> String {
 
 #[test]
 fn test_namespace_prefixed_mpd_fails_loud_not_silent_noop() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let source = build_synthetic_dash_asset(tmp.path(), &mixed(), &DashOptions::titled("prefixed"));
     let prefixed = prefix_dash_namespace(&read(&source));
     let src = tmp.path().join("prefixed.mpd");
@@ -854,7 +857,7 @@ fn test_namespace_prefixed_mpd_fails_loud_not_silent_noop() {
 
 #[test]
 fn test_no_key_or_iv_in_result_or_manifest() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let run = rewrite(tmp.path(), &[h264_rep("v0")], &DashOptions::default());
     // The field set is pinned by this exhaustive pattern: a new field fails to compile here,
     // and none of these names is key- or IV-like.
@@ -876,7 +879,7 @@ fn test_no_key_or_iv_in_result_or_manifest() {
 
 #[test]
 fn test_analyze_dash_manifest_reports_in_scope_fields() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let pr = playready();
     let options = DashOptions {
         playready_pssh_b64: Some(pr.pssh_b64.clone()),
@@ -927,7 +930,7 @@ fn test_analyze_dash_manifest_reports_in_scope_fields() {
 
 #[test]
 fn test_analyze_dash_manifest_includes_out_of_scope_vp9() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let source = build_synthetic_dash_asset(
         tmp.path(),
         &[h264_rep("v0"), vp9_rep("w0")],
@@ -958,7 +961,7 @@ fn test_analyze_dash_manifest_includes_out_of_scope_vp9() {
 
 #[test]
 fn test_analyze_dash_manifest_playready_parse_failure_degrades_to_none() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let source = build_synthetic_dash_asset(tmp.path(), &[h264_rep("v0")], &DashOptions::default());
     let summary = analyze_dash_manifest(&source).unwrap();
     assert_eq!(summary.representations.len(), 1);
@@ -973,7 +976,7 @@ fn test_analyze_dash_manifest_playready_parse_failure_degrades_to_none() {
 fn test_analyze_dash_manifest_does_not_touch_filesystem_beyond_the_manifest() {
     // Invalid rendition enumeration for this input
     // is covered by configuration tests.
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let built = build_synthetic_dash_asset(
         &tmp.path().join("source"),
         &[h264_rep("v0"), audio_rep("a0")],
@@ -995,7 +998,7 @@ fn test_analyze_dash_manifest_does_not_touch_filesystem_beyond_the_manifest() {
 
 #[test]
 fn test_analyze_dash_manifest_rejects_doctype() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let source = build_synthetic_dash_asset(
         tmp.path(),
         &[h264_rep("v0")],
@@ -1043,7 +1046,7 @@ fn test_analyze_dash_manifest_result_has_no_key_or_iv_fields() {
 #[test]
 fn mixed_asset_bytes_results_and_summary_match_python() {
     let expected = &fixture("manifest_dash.json")["mixed"];
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let source =
         build_synthetic_dash_asset(&tmp.path().join("mixed"), &mixed(), &DashOptions::default());
     assert_eq!(read(&source), text(&expected["source"]), "the builder");
@@ -1075,7 +1078,7 @@ fn mixed_asset_bytes_results_and_summary_match_python() {
 #[test]
 fn injected_and_lenient_cases_match_python() {
     let cases = fixture("manifest_dash.json");
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let source = tmp.path().join("nobase.mpd");
     std::fs::write(&source, text(&cases["injected"]["source"])).unwrap();
     let out = tmp.path().join("injected.mpd");
@@ -1111,7 +1114,7 @@ fn without_base_url(text: &str) -> String {
 fn rewrite_errors_match_python() {
     let cases = fixture("manifest_dash.json");
     let errors = &cases["errors"];
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let single_text = single_text(tmp.path());
     let pro_re = regex::Regex::new(r"<mspr:pro[^>]*>.*?</mspr:pro>").unwrap();
     let root_cenc = single_text
@@ -1169,7 +1172,7 @@ fn rewrite_errors_match_python() {
 fn analyze_and_parse_errors_match_python() {
     let cases = fixture("manifest_dash.json");
     let errors = &cases["errors"];
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let single_text = single_text(tmp.path());
     let pro_text_re = regex::Regex::new(r"(<mspr:pro[^>]*>).*?(</mspr:pro>)").unwrap();
     let analyze_cases: Vec<(&str, String)> = vec![
@@ -1221,7 +1224,7 @@ fn analyze_and_parse_errors_match_python() {
 fn localize_and_url_base_errors_match_python() {
     let cases = fixture("manifest_dash.json");
     let errors = &cases["errors"];
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let nobase = without_base_url(&single_text(tmp.path()));
     let err = localize_dash_manifest_http(&nobase, str::to_string).unwrap_err();
     assert_eq!(
@@ -1252,7 +1255,7 @@ fn localize_and_url_base_errors_match_python() {
 
 #[test]
 fn a_missing_source_is_an_os_error_and_a_non_utf8_source_a_unicode_error() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let missing = tmp.path().join("missing.mpd");
     let err =
         rewrite_dash_manifest(&missing, &tmp.path().join("o.mpd"), &playready(), None).unwrap_err();
@@ -1296,7 +1299,7 @@ fn a_missing_source_is_an_os_error_and_a_non_utf8_source_a_unicode_error() {
 #[test]
 fn regex_edges_match_python() {
     let edges = &fixture("manifest_dash.json")["regex_edges"];
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     for name in [
         "pretty_lf",
         "pretty_crlf",
