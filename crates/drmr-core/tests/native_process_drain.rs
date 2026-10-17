@@ -101,10 +101,16 @@ fn assert_drained(mode: &str) {
         })
         .collect();
     let assert_released = || {
-        for process in &processes {
-            let state = process.WaitForSingleObject(Some(0));
-            eprintln!("descendant termination state after {mode}: {state:?}");
-        }
+        let states: Vec<_> = processes
+            .iter()
+            .map(|process| process.WaitForSingleObject(Some(0)))
+            .collect();
+        assert!(
+            states
+                .iter()
+                .all(|state| *state == Ok(winsafe::co::WAIT::OBJECT_0)),
+            "cleanup returned before all descendant processes terminated after {mode}: {states:?}"
+        );
         assert_handles_released(directory);
     };
     for _ in 0..COUNT {
