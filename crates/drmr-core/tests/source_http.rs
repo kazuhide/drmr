@@ -1209,6 +1209,8 @@ fn a_truncated_response_refunds_its_bytes_before_the_retry() {
 #[test]
 fn close_all_drops_every_kept_connection() {
     let tmp = tempfile::tempdir().unwrap();
+    let private = tmp.path().join("private");
+    drmr_core::native::create_private_dir_all(&private).unwrap();
     let server = TestServer::routes11(vec![
         ("/a.ts".to_string(), 200, ts_packet("a", b'x')),
         ("/b.ts".to_string(), 200, ts_packet("b", b'x')),
@@ -1219,20 +1221,20 @@ fn close_all_drops_every_kept_connection() {
     };
     let fetcher = Fetcher::new(
         &policy,
-        tmp.path(),
+        &private,
         Arc::new(drmr_core::source::platform::SystemPlatform),
     );
     fetcher
         .fetch(
             &format!("{}/a.ts", server.origin),
-            &tmp.path().join("a.part"),
+            &private.join("a.part"),
             None,
         )
         .unwrap();
     fetcher
         .fetch(
             &format!("{}/b.ts", server.origin),
-            &tmp.path().join("b.part"),
+            &private.join("b.part"),
             None,
         )
         .unwrap();
@@ -1242,7 +1244,7 @@ fn close_all_drops_every_kept_connection() {
     fetcher
         .fetch(
             &format!("{}/a.ts", server.origin),
-            &tmp.path().join("a2.part"),
+            &private.join("a2.part"),
             None,
         )
         .unwrap();
