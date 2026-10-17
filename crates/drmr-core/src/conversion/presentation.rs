@@ -2,7 +2,7 @@
 use super::{
     ContentKey, ConversionError, ConversionReport, Converter, HlsOutputKey, InputKeys, LocalTrack,
     OutputKey, VerificationChecks, VerificationReport, audio, copy_private, destination, hls,
-    workspace,
+    verify::StreamView, workspace,
 };
 use crate::inspection::{
     self, Evidence, InputFormat, Inspection, OutputFormat, Protection, TargetProtection, TrackKind,
@@ -133,6 +133,7 @@ impl Converter {
         ConversionError,
     > {
         let mut checks = VerificationChecks {
+            stream_metadata: super::CheckOutcome::Pass,
             packet_payloads_equal: true,
             packet_timing_equal: true,
             decoded_content_equal: true,
@@ -182,14 +183,19 @@ impl Converter {
             {
                 return Err(ConversionError("output-key-id-mismatch"));
             }
-            let verified = self.backend.verify_streams(
-                &source.source,
-                source.index,
-                &reference,
-                0,
-                key_for(source, request.input_keys),
-                request.output_key.map(|k| &k.0),
+            let verified = self.backend.verify_views(
+                StreamView::new(
+                    &source.source,
+                    source.index,
+                    key_for(source, request.input_keys),
+                )
+                .with_metadata(&source.media),
+                StreamView::new(&reference, 0, request.output_key.map(|k| &k.0))
+                    .with_metadata(&combined),
             )?;
+            checks
+                .stream_metadata
+                .include(verified.checks.stream_metadata);
             checks.packet_payloads_equal &= verified.checks.packet_payloads_equal;
             checks.packet_timing_equal &= verified.checks.packet_timing_equal;
             checks.decoded_content_equal &= verified.checks.decoded_content_equal;
@@ -203,7 +209,8 @@ impl Converter {
             input.id = format!("track-{ordinal:04}");
             input_tracks.push(input);
         }
-        let passed = checks.packet_payloads_equal
+        let passed = checks.stream_metadata.is_pass()
+            && checks.packet_payloads_equal
             && checks.packet_timing_equal
             && checks.decoded_content_equal;
         if !passed {
@@ -526,6 +533,7 @@ impl Converter {
             return Err(ConversionError("presentation-track-count-mismatch"));
         }
         let mut checks = VerificationChecks {
+            stream_metadata: super::CheckOutcome::Pass,
             packet_payloads_equal: true,
             packet_timing_equal: true,
             decoded_content_equal: true,
@@ -534,19 +542,19 @@ impl Converter {
             if a.report.tracks[0].kind != b.report.tracks[0].kind {
                 return Err(ConversionError("presentation-track-role-mismatch"));
             }
-            let check = self.backend.verify_streams(
-                &a.source,
-                a.index,
-                &b.source,
-                b.index,
-                key_for(a, request.source.input_keys),
-                key_for(b, request.output.input_keys),
+            let check = self.backend.verify_views(
+                StreamView::new(&a.source, a.index, key_for(a, request.source.input_keys))
+                    .with_metadata(&a.media),
+                StreamView::new(&b.source, b.index, key_for(b, request.output.input_keys))
+                    .with_metadata(&b.media),
             )?;
+            checks.stream_metadata.include(check.checks.stream_metadata);
             checks.packet_payloads_equal &= check.checks.packet_payloads_equal;
             checks.packet_timing_equal &= check.checks.packet_timing_equal;
             checks.decoded_content_equal &= check.checks.decoded_content_equal;
         }
-        let passed = checks.packet_payloads_equal
+        let passed = checks.stream_metadata.is_pass()
+            && checks.packet_payloads_equal
             && checks.packet_timing_equal
             && checks.decoded_content_equal;
         Ok(VerificationReport {
@@ -644,6 +652,8 @@ fn hls_media_paths(path: &Path) -> Result<Vec<PathBuf>, ConversionError> {
     let mut paths = Vec::new();
     let mut pending = false;
     let mut audio_count = 0;
+    let mut audio_group = None;
+    let mut variant_groups = Vec::new();
     for line in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
         if let Some(value) = line.strip_prefix("#EXT-X-MEDIA:") {
             let attrs = hls::attributes(value)?;
@@ -651,6 +661,13 @@ fn hls_media_paths(path: &Path) -> Result<Vec<PathBuf>, ConversionError> {
             if audio_count > 1 || !supported_audio_rendition(&attrs) {
                 return Err(ConversionError("hls-rendition-metadata-not-supported"));
             }
+            audio_group = Some(
+                attrs
+                    .get("GROUP-ID")
+                    .filter(|group| !group.is_empty() && group.len() <= 256)
+                    .ok_or(ConversionError("hls-audio-association-not-supported"))?
+                    .to_string(),
+            );
             let uri = attrs
                 .get("URI")
                 .ok_or(ConversionError("hls-media-uri-required"))?;
@@ -675,6 +692,10 @@ fn hls_media_paths(path: &Path) -> Result<Vec<PathBuf>, ConversionError> {
             if pending {
                 return Err(ConversionError("hls-variant-uri-required"));
             }
+            if variant_groups.len() == 64 {
+                return Err(ConversionError("track-count-limit"));
+            }
+            variant_groups.push(attrs.get("AUDIO").map(str::to_owned));
             pending = true;
         } else if !line.starts_with('#') {
             if !pending {
@@ -692,8 +713,11 @@ fn hls_media_paths(path: &Path) -> Result<Vec<PathBuf>, ConversionError> {
             return Err(ConversionError("track-count-limit"));
         }
     }
-    if pending || paths.is_empty() {
+    if pending || paths.is_empty() || variant_groups.is_empty() {
         return Err(ConversionError("hls-variant-uri-required"));
+    }
+    if variant_groups.iter().any(|group| *group != audio_group) {
+        return Err(ConversionError("hls-audio-association-not-supported"));
     }
     let mut seen = std::collections::BTreeSet::new();
     paths.retain(|p| seen.insert(p.clone()));
@@ -730,13 +754,18 @@ impl Converter {
         let mut tracks = Vec::new();
         for source in &prepared {
             if source.source != source.media {
-                let verified = self.backend.verify_streams(
-                    &source.source,
-                    source.index,
-                    &source.media,
-                    source.index,
-                    key_for(source, request.input_keys),
-                    key_for(source, request.input_keys),
+                let verified = self.backend.verify_views(
+                    StreamView::new(
+                        &source.source,
+                        source.index,
+                        key_for(source, request.input_keys),
+                    )
+                    .with_metadata(&source.media),
+                    StreamView::new(
+                        &source.media,
+                        source.index,
+                        key_for(source, request.input_keys),
+                    ),
                 )?;
                 if !verified.passed {
                     return Err(ConversionError("source-decryption-verification-failed"));
@@ -785,4 +814,39 @@ fn supported_audio_rendition(attrs: &crate::m3u8::Attributes) -> bool {
                     | "CHANNELS"
             )
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn audio_associations_cannot_be_added_to_unrelated_variants() {
+        let directory = tempfile::tempdir().unwrap();
+        for name in ["audio.m3u8", "first.m3u8", "second.m3u8"] {
+            fs::write(directory.path().join(name), "#EXTM3U\n").unwrap();
+        }
+        let manifest = directory.path().join("master.m3u8");
+        let audio = "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"a\",NAME=\"stream_0\",DEFAULT=NO,AUTOSELECT=YES,URI=\"audio.m3u8\"\n";
+        let first = "#EXT-X-STREAM-INF:BANDWIDTH=100,AUDIO=\"a\"\nfirst.m3u8\n";
+        let valid = format!(
+            "#EXTM3U\n{audio}{first}#EXT-X-STREAM-INF:BANDWIDTH=200,AUDIO=\"a\"\nsecond.m3u8\n"
+        );
+        fs::write(&manifest, &valid).unwrap();
+        assert_eq!(hls_media_paths(&manifest).unwrap().len(), 3);
+        for invalid in [
+            valid.replace("BANDWIDTH=200,AUDIO=\"a\"", "BANDWIDTH=200"),
+            valid.replace(
+                "BANDWIDTH=200,AUDIO=\"a\"",
+                "BANDWIDTH=200,AUDIO=\"missing\"",
+            ),
+            format!("#EXTM3U\n{first}"),
+        ] {
+            fs::write(&manifest, invalid).unwrap();
+            assert_eq!(
+                hls_media_paths(&manifest).unwrap_err().0,
+                "hls-audio-association-not-supported"
+            );
+        }
+    }
 }

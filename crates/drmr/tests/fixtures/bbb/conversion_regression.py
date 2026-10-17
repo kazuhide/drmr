@@ -88,6 +88,7 @@ def regression(binary, destination):
             assert verification["passed"] is True and verification["media_verified"] is True
             assert all(verification["checks"][check] is True for check in
                        ("packet_payloads_equal", "packet_timing_equal", "decoded_content_equal"))
+            assert verification["checks"]["stream_metadata"] == "pass"
             assert verification["license_playback_verified"] is False
             rows.append({"input": source_protection, "output": target, "passed": True,
                          "conversion_seconds": elapsed, "verification_seconds": verification_seconds,

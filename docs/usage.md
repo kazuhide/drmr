@@ -32,7 +32,7 @@ drmr verify protected-dash/manifest.mpd --source source.mpd --keys-file keys.jso
 
 `clear`, `cenc`, and `cbcs` can be written to DASH; `clear` and `cbcs` can be written to fragmented MP4 HLS. HLS `AES-128` encrypts complete HLS resources and requires `--format hls`. A single-track MP4 can also be written as `clear`, `cenc`, or `cbcs`. Multiplexed MP4 output, live input, MPEG transport stream input, and unrestricted DASH/HLS profiles are not supported by this command. See [conversion support](conversion-support.md) for the tested routes and [processing and verification](media-processing.md) for timing limits.
 
-`verify OUTPUT --source INPUT` independently compares the original source and result. It requires their respective keys when encrypted. Success means the encoded packets, decoded picture/sound, and packet timestamps match; it does not establish license acquisition or device playback. Use the generated `manifest.mpd` or `master.m3u8` as the output argument for a presentation. Both commands support `--json` for one versioned result object; progress and failures go to standard error.
+`verify OUTPUT --source INPUT` independently compares the original source and result. It requires their respective keys when encrypted. Success means the stream metadata, encoded packets, decoded picture/sound, and packet timestamps match; it does not establish license acquisition or device playback. Use the generated `manifest.mpd` or `master.m3u8` as the output argument for a presentation. Both commands support `--json` for one versioned result object; progress and failures go to standard error.
 
 ### Separate input and output keys
 

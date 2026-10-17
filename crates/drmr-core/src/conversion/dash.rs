@@ -263,6 +263,10 @@ fn representation_scopes<'a>(
                 "Label",
                 "EssentialProperty",
                 "SupplementalProperty",
+                "EventStream",
+                "InbandEventStream",
+                "ContentComponent",
+                "ProducerReferenceTime",
             ]
             .iter()
             .any(|name| !children(scope, name).is_empty())
@@ -576,6 +580,28 @@ mod tests {
             3,
             "snapshot never writes beside source media"
         );
+        let original = fs::read_to_string(&manifest).unwrap();
+        for (close, declaration) in [
+            (
+                "</Period>",
+                "<EventStream schemeIdUri=\"urn:example:event\" timescale=\"1\"><Event presentationTime=\"1\" duration=\"1\" id=\"1\"/></EventStream>",
+            ),
+            (
+                "</Representation>",
+                "<InbandEventStream schemeIdUri=\"urn:example:event\"/>",
+            ),
+        ] {
+            fs::write(
+                &manifest,
+                original.replacen(close, &format!("{declaration}{close}"), 1),
+            )
+            .unwrap();
+            let denied = tempfile::tempdir().unwrap();
+            assert_eq!(
+                snapshot_dash(&manifest, denied.path()).unwrap_err().0,
+                "dash-presentation-metadata-not-supported"
+            );
+        }
     }
 
     #[test]

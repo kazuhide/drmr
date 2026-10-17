@@ -582,3 +582,95 @@ fn progressive_aac_with_finite_tail_padding_fails_before_publication() {
     assert_eq!(failure, ConversionError("finite-audio-tail-not-supported"));
     assert!(!output.exists());
 }
+
+#[cfg(unix)]
+#[test]
+fn a_changed_audio_sample_clock_cannot_pass_with_identical_silent_samples() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("source.mp4");
+    let result = directory.path().join("result.mp4");
+    let status = std::process::Command::new("ffmpeg")
+        .args([
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "anullsrc=channel_layout=stereo:sample_rate=48000",
+            "-t",
+            "0.2",
+            "-c:a",
+            "aac",
+            "-use_editlist",
+            "0",
+            "-movflags",
+            "+frag_keyframe+empty_moov+default_base_moof",
+        ])
+        .arg(&source)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let mut data = std::fs::read(&source).unwrap();
+    let esds = data.windows(4).position(|bytes| bytes == b"esds").unwrap();
+    let asc = data[esds..esds + 100]
+        .windows(2)
+        .position(|bytes| bytes == [0x11, 0x90])
+        .unwrap()
+        + esds;
+    // Only the AAC decoder configuration changes, from 48 kHz to 44.1 kHz.
+    // The encoded packets, silent sample bytes, and MP4 clock remain identical.
+    data[asc..asc + 2].copy_from_slice(&[0x12, 0x10]);
+    std::fs::write(&result, data).unwrap();
+    let report = converter()
+        .verify_mp4(
+            &source,
+            &InputKeys::default(),
+            &result,
+            &InputKeys::default(),
+        )
+        .unwrap();
+    assert!(
+        !report.passed,
+        "a different decoded sample clock changes presentation semantics"
+    );
+    assert!(!report.checks.stream_metadata.is_pass());
+    assert!(
+        report.checks.packet_payloads_equal
+            && report.checks.packet_timing_equal
+            && report.checks.decoded_content_equal
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn in_band_events_after_media_are_refused_before_publication() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("source.mp4");
+    let output = directory.path().join("output.mp4");
+    video(&source, "testsrc2=size=64x64:rate=5");
+    let mut event = vec![0, 0, 0, 0];
+    event.extend(b"urn:example:event\0\0");
+    for value in [1000_u32, 100, 100, 1] {
+        event.extend(value.to_be_bytes());
+    }
+    event.extend(b"public fixture event");
+    let mut bytes = std::fs::read(&source).unwrap();
+    bytes.extend(u32::try_from(event.len() + 8).unwrap().to_be_bytes());
+    bytes.extend(b"emsg");
+    bytes.extend(event);
+    std::fs::write(&source, bytes).unwrap();
+    assert_eq!(
+        converter()
+            .convert_mp4(
+                &source,
+                &output,
+                TargetProtection::Clear,
+                &InputKeys::default(),
+                None
+            )
+            .unwrap_err()
+            .0,
+        "inband-events-not-supported"
+    );
+    assert!(!output.exists());
+}

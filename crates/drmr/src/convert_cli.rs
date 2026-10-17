@@ -176,7 +176,7 @@ pub fn convert(args: &ConvertArgs) -> ExitCode {
         .and_then(|()| {
             writeln!(
                 out,
-                "Verified packet payloads, decoded content, and packet timing."
+                "Verified stream metadata, packet payloads, decoded content, and packet timing."
             )
         })
     };

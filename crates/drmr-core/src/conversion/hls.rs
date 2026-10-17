@@ -10,7 +10,7 @@ use crate::{
 use std::{
     fmt::Write as _,
     fs::{self, File, OpenOptions},
-    io::Write,
+    io::{Read, Write},
     path::{Component, Path, PathBuf},
 };
 const MAX_RESOURCES: usize = 4096;
@@ -56,14 +56,29 @@ fn private_new(path: &Path) -> Result<File, ConversionError> {
 }
 pub(super) fn local_resource(root: &Path, uri: &str) -> Result<PathBuf, ConversionError> {
     if uri.is_empty()
-        || uri.contains([':', '\\', '?', '#', '\0'])
-        || Path::new(uri)
+        || uri.len() > 4096
+        || uri.chars().any(char::is_control)
+        || uri.contains([':', '\\', '?', '#'])
+        || uri.bytes().enumerate().any(|(at, byte)| {
+            byte == b'%'
+                && !uri
+                    .as_bytes()
+                    .get(at + 1..at + 3)
+                    .is_some_and(|digits| digits.iter().all(u8::is_ascii_hexdigit))
+        })
+    {
+        return Err(ConversionError("hls-resource-not-confined-local"));
+    }
+    let decoded = crate::source::pyurl::unquote(uri);
+    if decoded.chars().any(char::is_control)
+        || decoded.contains([':', '\\', '\u{fffd}'])
+        || Path::new(&decoded)
             .components()
             .any(|part| !matches!(part, Component::Normal(_) | Component::CurDir))
     {
         return Err(ConversionError("hls-resource-not-confined-local"));
     }
-    let path = root.join(uri);
+    let path = root.join(decoded);
     if fs::symlink_metadata(&path)
         .map_err(|_| ConversionError("hls-resource-unreadable"))?
         .file_type()
@@ -93,15 +108,6 @@ impl Playlist {
             return Err(ConversionError("hls-resource-count-limit"));
         }
         let original = local_resource(root, uri)?;
-        let metadata =
-            fs::metadata(&original).map_err(|_| ConversionError("hls-resource-unreadable"))?;
-        self.bytes = self
-            .bytes
-            .checked_add(metadata.len())
-            .ok_or(ConversionError("media-size-limit"))?;
-        if self.bytes > super::MAX_MEDIA_BYTES {
-            return Err(ConversionError("media-size-limit"));
-        }
         let name = format!(
             "resource-{:04}.{}",
             self.resources,
@@ -109,6 +115,9 @@ impl Playlist {
         );
         let copied = stage.join(&name);
         super::copy_private(&original, &copied)?;
+        let snapshot =
+            File::open(&copied).map_err(|_| ConversionError("hls-resource-unreadable"))?;
+        charge_snapshot(&snapshot, &mut self.bytes, super::MAX_MEDIA_BYTES)?;
         let plaintext = if let Some(key) = cipher.key {
             let derived;
             let iv = if let Some(iv) = &cipher.iv {
@@ -151,8 +160,15 @@ impl Playlist {
         }
         let mut input =
             File::open(plaintext).map_err(|_| ConversionError("hls-resource-unreadable"))?;
-        std::io::copy(&mut input, &mut self.combined)
-            .map_err(|_| ConversionError("media-copy-failed"))?;
+        let combined_size = self
+            .combined
+            .metadata()
+            .map_err(|_| ConversionError("media-copy-failed"))?
+            .len();
+        let remaining = super::MAX_MEDIA_BYTES
+            .checked_sub(combined_size)
+            .ok_or(ConversionError("media-size-limit"))?;
+        append_bounded(&mut input, &mut self.combined, remaining)?;
         Ok(name)
     }
 }
@@ -481,11 +497,14 @@ impl Converter {
             &verify_stage,
             &verification_keys,
         )?;
-        let verification = self.backend.verify_media(
-            &source,
-            &localized.reference,
-            super::source_key(&input_report, input_keys),
-            None,
+        let verification = self.backend.verify_views(
+            super::verify::StreamView::new(
+                &source,
+                0,
+                super::source_key(&input_report, input_keys),
+            ),
+            super::verify::StreamView::new(&localized.reference, 0, None)
+                .with_metadata(&localized.combined),
         )?;
         if !verification.passed {
             return Err(ConversionError("round-trip-verification-failed"));
@@ -532,11 +551,14 @@ impl Converter {
             .transpose()?
             .unwrap_or_default();
         let result = super::validate(&candidate, &output_keys)?;
-        report.verification = self.backend.verify_media(
-            &localized.reference,
-            &candidate,
-            super::source_key(&actual, input_keys),
-            super::source_key(&result, &output_keys),
+        report.verification = self.backend.verify_views(
+            super::verify::StreamView::new(
+                &localized.reference,
+                0,
+                super::source_key(&actual, input_keys),
+            )
+            .with_metadata(&localized.combined),
+            super::verify::StreamView::new(&candidate, 0, super::source_key(&result, &output_keys)),
         )?;
         if !report.verification.passed {
             return Err(ConversionError("round-trip-verification-failed"));
@@ -637,5 +659,92 @@ pub(super) fn publish_directory(source: &Path, destination: &Path) -> Result<(),
     {
         let _ = (source, destination);
         Err(ConversionError("private-files-not-supported-on-platform"))
+    }
+}
+
+fn charge_snapshot(file: &File, total: &mut u64, limit: u64) -> Result<(), ConversionError> {
+    let metadata = file
+        .metadata()
+        .map_err(|_| ConversionError("hls-resource-unreadable"))?;
+    let next = total
+        .checked_add(metadata.len())
+        .filter(|next| *next <= limit && metadata.is_file())
+        .ok_or(ConversionError("media-size-limit"))?;
+    *total = next;
+    Ok(())
+}
+
+fn append_bounded(
+    input: &mut impl Read,
+    output: &mut impl Write,
+    remaining: u64,
+) -> Result<(), ConversionError> {
+    std::io::copy(&mut input.take(remaining), output)
+        .map_err(|_| ConversionError("media-copy-failed"))?;
+    let mut extra = [0];
+    if input
+        .read(&mut extra)
+        .map_err(|_| ConversionError("media-copy-failed"))?
+        != 0
+    {
+        return Err(ConversionError("media-size-limit"));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod resource_tests {
+    use super::*;
+
+    #[test]
+    fn encoded_resource_paths_are_decoded_once_before_confinement() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        fs::write(root.join("seg one.m4s"), b"the URI target").unwrap();
+        fs::write(root.join("seg%20one.m4s"), b"a different resource").unwrap();
+        assert_eq!(
+            local_resource(&root, "seg%20one.m4s").unwrap(),
+            root.join("seg one.m4s")
+        );
+        assert_eq!(
+            local_resource(&root, "seg%2520one.m4s").unwrap(),
+            root.join("seg%20one.m4s")
+        );
+        for uri in ["%2e%2e/escape", "a%2f..%2f..%2fescape", "%00", "%ff", "%GG"] {
+            assert!(local_resource(&root, uri).is_err());
+        }
+    }
+
+    #[test]
+    fn actual_snapshot_size_is_charged_after_the_original_grows() {
+        let directory = tempfile::tempdir().unwrap();
+        let original = directory.path().join("original");
+        let snapshot = directory.path().join("snapshot");
+        fs::write(&original, b"a").unwrap();
+        let stale_size = fs::metadata(&original).unwrap().len();
+        fs::write(&original, b"a grown resource").unwrap();
+        super::super::copy_private(&original, &snapshot).unwrap();
+        let held = File::open(&snapshot).unwrap();
+        let mut total = 4;
+        assert!(stale_size + total < 8);
+        assert_eq!(
+            charge_snapshot(&held, &mut total, 8).unwrap_err().0,
+            "media-size-limit"
+        );
+        assert_eq!(total, 4);
+        charge_snapshot(&held, &mut total, 64).unwrap();
+        assert_eq!(total, 4 + held.metadata().unwrap().len());
+    }
+
+    #[test]
+    fn an_oversized_append_never_writes_past_the_remaining_budget() {
+        let mut input = std::io::Cursor::new(b"0123456789");
+        let mut output = Vec::new();
+        assert_eq!(
+            append_bounded(&mut input, &mut output, 4).unwrap_err().0,
+            "media-size-limit"
+        );
+        assert_eq!(output, b"0123");
+        append_bounded(&mut std::io::Cursor::new(b"safe"), &mut Vec::new(), 4).unwrap();
     }
 }

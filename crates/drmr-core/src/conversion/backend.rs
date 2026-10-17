@@ -166,8 +166,15 @@ impl Backend {
             index.to_string(),
             "-count_packets".into(),
             "-show_entries".into(),
-            "stream=index,codec_name,codec_type,time_base,start_pts,duration_ts,nb_read_packets"
-                .into(),
+            concat!(
+                "stream=index,codec_name,codec_type,time_base,nb_read_packets,",
+                "sample_rate,channels,channel_layout,width,height,pix_fmt,sample_aspect_ratio,",
+                "color_range,color_space,color_transfer,color_primaries,chroma_location,field_order,",
+                "bits_per_raw_sample,extradata_hash:stream_tags=language:",
+                "stream_side_data=side_data_type,displaymatrix,rotation"
+            ).into(),
+            "-show_data_hash".into(),
+            "sha256".into(),
             "-of".into(),
             "json".into(),
             path.to_str()
@@ -208,6 +215,37 @@ impl Backend {
                     .ok_or(ConversionError("stream-metadata-unavailable"))?,
             );
         }
+        for name in [
+            "sample_rate",
+            "channels",
+            "channel_layout",
+            "width",
+            "height",
+            "pix_fmt",
+            "sample_aspect_ratio",
+            "color_range",
+            "color_space",
+            "color_transfer",
+            "color_primaries",
+            "chroma_location",
+            "field_order",
+            "bits_per_raw_sample",
+            "extradata_hash",
+        ] {
+            profile.insert(name.into(), stream.get(name).cloned().unwrap_or_default());
+        }
+        let display_matrices: Vec<_> = stream["side_data_list"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|data| data.get("displaymatrix").is_some() || data.get("rotation").is_some())
+            .cloned()
+            .collect();
+        profile.insert("display_matrices".into(), display_matrices.into());
+        profile.insert(
+            "language".into(),
+            stream["tags"]["language"].as_str().unwrap_or("und").into(),
+        );
         Ok(serde_json::Value::Object(profile))
     }
     pub fn packets_stream(

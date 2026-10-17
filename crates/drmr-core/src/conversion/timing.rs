@@ -41,6 +41,9 @@ fn metadata(path: &Path) -> Result<Vec<u8>, ConversionError> {
         if size < bytes.len() as u64 || size > length - at {
             return Err(BAD);
         }
+        if &head[4..] == b"emsg" {
+            return Err(ConversionError("inband-events-not-supported"));
+        }
         if matches!(&head[4..], b"moov" | b"moof") {
             let size = usize::try_from(size).map_err(|_| BAD)?;
             if size > 16 * 1024 * 1024 || out.len() + size > 16 * 1024 * 1024 {

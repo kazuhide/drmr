@@ -19,9 +19,10 @@ fn movie(path: &Path) -> Result<Movie, ConversionError> {
         .map_err(|_| ConversionError("media-metadata-unreadable"))?
         .len();
     let mut position = 0;
+    let mut movie = None;
     for _ in 0..100_000 {
         if position == length {
-            break;
+            return movie.ok_or(ConversionError("mp4-initialization-missing"));
         }
         let mut header = [0; 8];
         file.read_exact(&mut header)
@@ -42,7 +43,13 @@ fn movie(path: &Path) -> Result<Movie, ConversionError> {
         if size < bytes.len() as u64 || size > length - position {
             return Err(ConversionError("invalid-mp4-box"));
         }
+        if &header[4..] == b"emsg" {
+            return Err(ConversionError("inband-events-not-supported"));
+        }
         if &header[4..] == b"moov" {
+            if movie.is_some() {
+                return Err(ConversionError("invalid-mp4-metadata"));
+            }
             if size > METADATA_LIMIT {
                 return Err(ConversionError("mp4-metadata-size-limit"));
             }
@@ -60,7 +67,7 @@ fn movie(path: &Path) -> Result<Movie, ConversionError> {
                         .to_be_bytes(),
                 );
             }
-            return Ok(Movie { bytes });
+            movie = Some(Movie { bytes });
         }
         position += size;
         file.seek(SeekFrom::Start(position))

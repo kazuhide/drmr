@@ -35,7 +35,7 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-pub use verify::{VerificationChecks, VerificationReport};
+pub use verify::{CheckOutcome, VerificationChecks, VerificationReport};
 const MAX_MEDIA_BYTES: u64 = 16 * 1024 * 1024 * 1024;
 /// Fixed failure codes contain no paths, key material, or backend output.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
@@ -115,9 +115,11 @@ impl Converter {
         let localized = hls::localize(input, workspace.path(), hls_keys)?;
         let actual = validate(&localized.combined, input_keys)?;
         let key = source_key(&actual, input_keys);
-        let check =
-            self.backend
-                .verify_media(&localized.reference, &localized.combined, key, key)?;
+        let check = self.backend.verify_views(
+            verify::StreamView::new(&localized.reference, 0, key)
+                .with_metadata(&localized.combined),
+            verify::StreamView::new(&localized.combined, 0, key),
+        )?;
         if !check.passed {
             return Err(ConversionError("source-decryption-verification-failed"));
         }
