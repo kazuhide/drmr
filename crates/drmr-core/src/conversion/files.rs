@@ -52,7 +52,10 @@ impl Stage {
     }
     #[cfg(windows)]
     fn from_container(path: &Path) -> Result<Self, ConversionError> {
-        let container = Container::acquire(path)?;
+        Self::inside_container(Container::acquire(path)?)
+    }
+    #[cfg(windows)]
+    fn inside_container(container: Container) -> Result<Self, ConversionError> {
         let owned_child =
             native::private_tempdir_in(&container.path, "stage-").map_err(|_| IO_ERROR)?;
         let path = owned_child.path().join("media");
@@ -425,6 +428,73 @@ mod tests {
             drop(held);
         }
         std::fs::rename(&directory, root.path().join("released")).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn empty_pinned_target_replacement_is_observed_and_cannot_admit_a_public_workspace() {
+        let parent = tempfile::tempdir().unwrap();
+        let user = windows_permissions::utilities::current_process_sid().unwrap();
+        set_directory_dacl(
+            parent.path(),
+            &format!("D:P(A;OICI;FA;;;{user})(A;;0x00000040;;;WD)"),
+        );
+        let target = parent.path().join("empty-private-container");
+        let replacement = parent.path().join("public-replacement");
+        std::fs::create_dir(&replacement).unwrap();
+        set_directory_dacl(&replacement, "D:P(A;OICI;FA;;;WD)");
+        let replacement_identity = same_file::Handle::from_path(&replacement).unwrap();
+        let container = Container::acquire(&target).unwrap();
+        // Clone the retained target handle; pathname metadata alone cannot prove
+        // that a successful target replacement left the same directory in place.
+        let original_identity =
+            same_file::Handle::from_file(container.held.last().unwrap().try_clone().unwrap())
+                .unwrap();
+        assert_eq!(std::fs::read_dir(&target).unwrap().count(), 0);
+        match std::fs::rename(&replacement, &target) {
+            Ok(()) => {
+                eprintln!(
+                    "empty pinned target replacement permitted; workspace admission must fail closed"
+                );
+                let current = same_file::Handle::from_path(&target).unwrap();
+                assert_ne!(current, original_identity);
+                assert_eq!(current, replacement_identity);
+                std::fs::write(target.join("sentinel"), b"existing-public-content").unwrap();
+                assert!(Stage::inside_container(container).is_err());
+                assert_eq!(
+                    std::fs::read(target.join("sentinel")).unwrap(),
+                    b"existing-public-content"
+                );
+                assert_eq!(
+                    std::fs::read_dir(&target).unwrap().count(),
+                    1,
+                    "refused admission must not create payloads or recursively clean the replacement"
+                );
+            }
+            Err(error) => {
+                eprintln!(
+                    "empty pinned target replacement denied WIN32={:?}",
+                    error.raw_os_error()
+                );
+                assert_eq!(
+                    same_file::Handle::from_path(&target).unwrap(),
+                    original_identity
+                );
+                assert!(replacement.exists());
+                drop(original_identity);
+                drop(container);
+                // Confirm that the filesystem supports replacing an existing
+                // empty directory; a platform limitation is not a pin proof.
+                native::create_private_dir_all(&target).unwrap();
+                assert_eq!(std::fs::read_dir(&target).unwrap().count(), 0);
+                std::fs::rename(&replacement, &target)
+                    .expect("unpinned existing empty target replacement control must succeed");
+                assert_eq!(
+                    same_file::Handle::from_path(&target).unwrap(),
+                    replacement_identity
+                );
+            }
+        }
     }
 
     #[cfg(windows)]
