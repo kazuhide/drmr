@@ -1468,3 +1468,69 @@ fn a_looping_recorded_file_is_snapshot_invalid_where_3_11_escapes() {
     loop_in_place(&directory.join(data["resources"][0]["path"].as_str().unwrap()));
     assert_eq!(token(verify_source_snapshot(&restored)), "snapshot-invalid");
 }
+
+#[test]
+fn a_long_source_crosses_pending_windows_without_losing_segments() {
+    let ws = Workspace::new();
+    let count = 257;
+    let body = format!(
+        "#EXTM3U\n#EXT-X-TARGETDURATION:6\n{}#EXT-X-ENDLIST\n",
+        "#EXTINF:6,\nsegment.ts\n".repeat(count)
+    );
+    media(&ws.source, Some(&body));
+    let probes = AtomicUsize::new(0);
+    let probe = |path: &Path, init: Option<&Path>| {
+        probes.fetch_add(1, Ordering::SeqCst);
+        default_probe(path, init)
+    };
+    let result = ws
+        .analyze_with("master.m3u8", &ws.policy(), &probe)
+        .unwrap();
+    assert_eq!(probes.load(Ordering::SeqCst), count);
+    assert_eq!(result.tracks[0].segments.len(), count);
+    verify_source_snapshot(&result).unwrap();
+}
+
+#[test]
+fn late_initialization_drains_a_large_probe_backlog_through_the_window() {
+    let ws = Workspace::new();
+    let count = 257;
+    support::media_playlist(&ws.source, "master", "v", count, true);
+    let released = drmr_core::concurrency::Stop::new();
+    let downloads = Arc::new(AtomicUsize::new(0));
+    let hook_downloads = Arc::clone(&downloads);
+    let hooks = FnHooks {
+        read: None,
+        fetch: Some(Box::new(move |fetcher, url, destination, range| {
+            if url.ends_with("_init.mp4") {
+                assert!(released.wait(Some(std::time::Duration::from_secs(5))));
+            }
+            let result = fetcher.fetch(url, destination, range);
+            if Path::new(url)
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("m4s"))
+                && hook_downloads.fetch_add(1, Ordering::SeqCst) + 1 >= 200
+            {
+                released.set();
+            }
+            result
+        })),
+    };
+    let policy = FetchPolicy {
+        connections: 8,
+        probe_workers: Some(4),
+        ..ws.policy()
+    };
+    let result = Analysis::new(&default_probe)
+        .hooks(&hooks)
+        .run(
+            &SourceRequest::new(ws.source.join("master.m3u8").to_string_lossy()),
+            "late-init",
+            &ws.path().join("output"),
+            &policy,
+        )
+        .unwrap();
+    assert_eq!(downloads.load(Ordering::SeqCst), count);
+    assert_eq!(result.tracks[0].segments.len(), count);
+    verify_source_snapshot(&result).unwrap();
+}

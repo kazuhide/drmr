@@ -20,7 +20,7 @@ use regex::Regex;
 use serde_json::{Value, json};
 
 use crate::canonical::Dumps;
-use crate::concurrency::{Pool, Unit, UnitError, default_workers, run_ordered};
+use crate::concurrency::{Cancelled, Pool, Unit, UnitError, default_workers, run_ordered};
 use crate::config::KeyMaterial;
 use crate::events::Record;
 use crate::hls_cli;
@@ -685,7 +685,7 @@ fn first_box_named<'a>(value: &'a Value, name: &str) -> Option<&'a serde_json::M
 /// selection.
 fn run_units<'scope, T: Send + 'scope>(
     pool: Option<&Pool<'scope>>,
-    units: Vec<Unit<'scope, T, TrackError>>,
+    units: impl IntoIterator<Item = Unit<'scope, T, TrackError>>,
 ) -> Result<Vec<T>, TrackError> {
     match pool {
         None => units.into_iter().map(|unit| unit()).collect(),
@@ -929,31 +929,26 @@ pub fn package_track<'scope>(
     let _output_guard = crate::native::pin_private_directory(asset_dir)?;
     media::create_output_dir(&folder)?;
     media::create_output_dir(&work)?;
-    let prepare_units: Vec<Unit<'scope, Prepared, TrackError>> = track
-        .segments
-        .iter()
-        .enumerate()
-        .map(|(number, segment)| {
-            let (work, folder) = (work.clone(), folder.clone());
-            Box::new(move || prepare_segment(job, &work, &folder, number, segment))
-                as Unit<'scope, Prepared, TrackError>
-        })
-        .collect();
+    let prepare_units = track.segments.iter().enumerate().map(|(number, segment)| {
+        let (work, folder) = (work.clone(), folder.clone());
+        Box::new(move || prepare_segment(job, &work, &folder, number, segment))
+            as Unit<'scope, Prepared, TrackError>
+    });
     let prepared = run_units(pool, prepare_units)?;
     let final_init = folder.join("init.mp4");
     let first_init = &prepared.first().ok_or_else(index_error)?.2;
     copyfile(first_init, &final_init)?;
-    let finish_units: Vec<Unit<'scope, (OutputSegment, PacketInfo), TrackError>> = track
-        .segments
-        .iter()
-        .zip(prepared)
-        .enumerate()
-        .map(|(number, (segment, item))| {
-            let (work, final_init) = (work.clone(), final_init.clone());
-            Box::new(move || finish_segment(job, &work, number, segment, item, &final_init))
-                as Unit<'scope, (OutputSegment, PacketInfo), TrackError>
-        })
-        .collect();
+    let finish_units =
+        track
+            .segments
+            .iter()
+            .zip(prepared)
+            .enumerate()
+            .map(|(number, (segment, item))| {
+                let (work, final_init) = (work.clone(), final_init.clone());
+                Box::new(move || finish_segment(job, &work, number, segment, item, &final_init))
+                    as Unit<'scope, (OutputSegment, PacketInfo), TrackError>
+            });
     let finished = run_units(pool, finish_units)?;
     let after = finished
         .last()
@@ -1519,8 +1514,8 @@ fn convert<'scope>(
 
 type Outcome = Result<(Option<OutputTrack>, Option<String>), PipelineError>;
 
-/// Every selected track: on the caller's thread with one worker, else each on its own thread
-/// over one shared segment pool of `workers`; outcomes keep track order.
+/// Every selected track: on the caller's thread with one worker, else through bounded track
+/// coordinators over one shared segment pool. Outcomes and panic selection keep track order.
 fn convert_all<'env>(
     run: &Conversion<'env>,
     selected: &'env [SourceTrack],
@@ -1536,22 +1531,21 @@ fn convert_all<'env>(
     std::thread::scope(|scope| {
         // Shared by the track threads; the pool shuts down when the last holder drops it.
         let pool = Arc::new(Pool::new(scope, workers));
-        let handles: Vec<_> = selected
-            .iter()
-            .enumerate()
-            .map(|(index, track)| {
-                let pool = Arc::clone(&pool);
-                scope.spawn(move || convert(run, index, track, Some(&pool)))
-            })
-            .collect();
+        let coordinators = Pool::new(scope, workers.min(selected.len()));
+        let units = selected.iter().enumerate().map(|(index, track)| {
+            let pool = Arc::clone(&pool);
+            Box::new(move || {
+                Ok::<_, Cancelled>(panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                    convert(run, index, track, Some(&pool))
+                })))
+            }) as Unit<'_, std::thread::Result<Outcome>, Cancelled>
+        });
+        let outcomes = run_ordered(|unit| coordinators.submit(unit), units, None)
+            .expect("track coordinators return outcomes, not cancellation");
         drop(pool);
-        handles
+        outcomes
             .into_iter()
-            .map(|handle| {
-                handle
-                    .join()
-                    .unwrap_or_else(|payload| panic::resume_unwind(payload))
-            })
+            .map(|outcome| outcome.unwrap_or_else(|payload| panic::resume_unwind(payload)))
             .collect()
     })
 }

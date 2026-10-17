@@ -15,6 +15,8 @@ use std::time::{Duration, Instant};
 /// The cap of the default pool size (`concurrency.default_workers`); an explicit value is
 /// bounded separately, at 64.
 pub const DEFAULT_WORKERS_CAP: usize = 32;
+/// Maximum submitted but unconsumed units per ordered coordinator. Producers stay lazy.
+pub const MAX_PENDING_TASKS: usize = 128;
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     // A panicking unit never holds these locks (units run outside them), so a poisoned lock
@@ -496,44 +498,51 @@ where
     S: FnMut(Unit<'a, T, E>) -> Task<Result<T, E>>,
 {
     let gate = stop.cloned().unwrap_or_default();
-    let tasks: Vec<Task<Result<T, E>>> = units
-        .into_iter()
-        .map(|unit| {
+    let mut units = units.into_iter();
+    let mut tasks: Vec<Task<Result<T, E>>> = Vec::new();
+    let mut results = Vec::new();
+    loop {
+        while tasks.len() < MAX_PENDING_TASKS && (!gate.is_set() || tasks.is_empty()) {
+            let Some(unit) = units.next() else {
+                break;
+            };
             let gate = gate.clone();
             let gated: Unit<'a, T, E> = Box::new(move || run_gated(&gate, unit));
-            submit(gated)
-        })
-        .collect();
-    if tasks.is_empty() {
-        return Ok(Vec::new());
-    }
-    wait_first_exception(&tasks);
-    if tasks.iter().any(raised) {
-        gate.set();
-        for task in &tasks {
-            task.cancel(); // only units that have not started can be cancelled
+            tasks.push(submit(gated));
         }
-        for task in &tasks {
-            task.wait(); // the ones already running drain
+        if tasks.is_empty() {
+            return Ok(results);
         }
-        let chosen = tasks
-            .iter()
-            .find(|task| raised_for_real(task))
-            .or_else(|| tasks.iter().find(|task| raised(task)))
-            .expect("a task raised");
-        return match chosen.take() {
-            Some(Outcome::Returned(Err(error))) => Err(error),
-            Some(Outcome::Panicked(payload)) => panic::resume_unwind(payload),
-            _ => unreachable!("the chosen task raised"),
-        };
+        wait_window(&tasks);
+        // Finished states are immutable. Snapshot the prefix before checking failures so
+        // a concurrent failure outside that prefix cannot be consumed as a success.
+        let ready = tasks.iter().take_while(|task| task.done()).count();
+        if tasks.iter().any(raised) {
+            gate.set();
+            for task in &tasks {
+                task.cancel();
+            }
+            for task in &tasks {
+                task.wait();
+            }
+            let chosen = tasks
+                .iter()
+                .find(|task| raised_for_real(task))
+                .or_else(|| tasks.iter().find(|task| raised(task)))
+                .expect("a task raised");
+            return match chosen.take() {
+                Some(Outcome::Returned(Err(error))) => Err(error),
+                Some(Outcome::Panicked(payload)) => panic::resume_unwind(payload),
+                _ => unreachable!("the chosen task raised"),
+            };
+        }
+        for task in tasks.drain(..ready) {
+            match task.take().map(Outcome::into_value) {
+                Some(Ok(value)) => results.push(value),
+                _ => unreachable!("the completed prefix returned values"),
+            }
+        }
     }
-    Ok(tasks
-        .iter()
-        .map(|task| match task.take().map(Outcome::into_value) {
-            Some(Ok(value)) => value,
-            _ => unreachable!("every unit returned a value"),
-        })
-        .collect())
 }
 
 /// The start gate around one unit: nothing runs once the flag is set; a failure (not a
@@ -557,8 +566,8 @@ fn run_gated<T, E: UnitError>(gate: &Stop, unit: Unit<'_, T, E>) -> Result<T, E>
     }
 }
 
-/// `wait(futures, return_when=FIRST_EXCEPTION)`: until one task raised or every task is done.
-fn wait_first_exception<T, E>(tasks: &[Task<Result<T, E>>]) {
+/// Wait for a failure or a consumable ordered prefix, then refill the bounded window.
+fn wait_window<T, E>(tasks: &[Task<Result<T, E>>]) {
     let signal = Arc::new((Mutex::new(()), Condvar::new()));
     for task in tasks {
         let signal = Arc::clone(&signal);
@@ -569,7 +578,7 @@ fn wait_first_exception<T, E>(tasks: &[Task<Result<T, E>>]) {
     }
     let mut guard = lock(&signal.0);
     loop {
-        if tasks.iter().any(raised) || tasks.iter().all(Task::done) {
+        if tasks.iter().any(raised) || tasks.first().is_some_and(Task::done) {
             return;
         }
         // The callbacks notify under the same lock, so no completion is missed between the
