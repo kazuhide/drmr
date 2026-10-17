@@ -1,6 +1,6 @@
 # Windows CLI
 
-Use a regular, non-administrator PowerShell terminal on Windows x64 with a local NTFS volume. Media processing deliberately refuses an elevated account whose new files would be owned by the Administrators group. Network shares, directory junctions in private paths, alternate data streams, and insecure existing output directories are refused.
+Use a regular, non-administrator PowerShell terminal on Windows x64 with a local NTFS volume. Media processing deliberately refuses an elevated account whose new files would be owned by the Administrators group. Network shares, directory junctions in private paths, alternate data streams, and insecure existing working directories are refused.
 
 ## Install and check tools
 
@@ -48,13 +48,15 @@ Save the [key configuration structure](usage.md#separate-input-and-output-keys) 
 
 ## Run commands
 
-PowerShell accepts quoted native paths; use a new output destination:
+PowerShell accepts quoted native paths. This example uses a supported single-track MP4 input and a new output file in an existing directory:
 
 ```powershell
+$outputDirectory = Join-Path $HOME 'drmr-output'
+New-Item -ItemType Directory -Path $outputDirectory -Force | Out-Null
 .\drmr.exe inspect 'C:\media\source.mp4' --json
 .\drmr.exe plan 'C:\media\source.mp4' --to cbcs --format mp4
-.\drmr.exe convert 'C:\media\source.mp4' --to cbcs --format mp4 --output "$HOME\drmr-output\protected.mp4" --keys-file $keyFile
-.\drmr.exe verify "$HOME\drmr-output\protected.mp4" --source 'C:\media\source.mp4' --keys-file $keyFile --json
+.\drmr.exe convert 'C:\media\source.mp4' --to cbcs --format mp4 --output "$outputDirectory\protected.mp4" --keys-file $keyFile
+.\drmr.exe verify "$outputDirectory\protected.mp4" --source 'C:\media\source.mp4' --keys-file $keyFile --json
 .\drmr.exe batch --help
 ```
 
