@@ -12,6 +12,7 @@ use num_integer::Integer as _;
 use num_rational::BigRational;
 use num_traits::{FromPrimitive as _, One as _, ToPrimitive as _, Zero as _};
 use serde_json::Value;
+#[cfg(unix)]
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -641,6 +642,10 @@ pub fn path_str(path: &Path) -> Result<String, MediaError> {
             "path is not valid UTF-8 (the tool runner takes text arguments)",
         ))
     })?;
+    #[cfg(windows)]
+    let owned = crate::pycompat::PurePosixPath::from_path(Path::new(text)).to_string();
+    #[cfg(windows)]
+    let text = owned.as_str();
     let (root, parts) = path_parts(text);
     let joined = format!("{root}{}", parts.join("/"));
     Ok(if joined.is_empty() {
@@ -675,6 +680,7 @@ pub fn path_name(path: &Path) -> Result<String, MediaError> {
 }
 
 /// `posixpath.split`.
+#[cfg(unix)]
 fn split(path: &str) -> (String, String) {
     let index = path.rfind('/').map_or(0, |position| position + 1);
     let (head, tail) = path.split_at(index);
@@ -687,6 +693,7 @@ fn split(path: &str) -> (String, String) {
 }
 
 /// `posixpath.join(base, name)`.
+#[cfg(unix)]
 fn join(base: &str, name: &str) -> String {
     if name.starts_with('/') {
         name.to_string()
@@ -698,6 +705,7 @@ fn join(base: &str, name: &str) -> String {
 }
 
 /// `posixpath.normpath`.
+#[cfg(unix)]
 fn normpath(path: &str) -> String {
     if path.is_empty() {
         return ".".to_string();
@@ -728,6 +736,7 @@ fn normpath(path: &str) -> String {
 
 /// `posixpath._joinrealpath` (`CPython` 3.11, non-strict): every existing symlink resolved, the
 /// rest of the path taken as written; `false` when a symlink loop stopped the resolution.
+#[cfg(unix)]
 fn join_real_path(
     mut path: String,
     rest: &str,
@@ -792,6 +801,16 @@ fn join_real_path(
 /// `pathlib.Path.resolve` (`CPython` 3.11, non-strict): absolute, every existing symlink
 /// resolved, `..` applied; a symlink loop is the `RuntimeError` Python raises.
 pub fn resolve(path: &Path) -> Result<PathBuf, MediaError> {
+    #[cfg(windows)]
+    {
+        crate::native::resolve_path(path).map_err(MediaError::Os)
+    }
+    #[cfg(unix)]
+    resolve_unix(path)
+}
+
+#[cfg(unix)]
+fn resolve_unix(path: &Path) -> Result<PathBuf, MediaError> {
     let text = path_str(path)?;
     let (real, _) = join_real_path(String::new(), &text, &mut HashMap::new());
     let absolute = if real.starts_with('/') {
@@ -814,5 +833,8 @@ pub fn resolve(path: &Path) -> Result<PathBuf, MediaError> {
 
 #[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd"))]
 const ELOOP: i32 = 62;
-#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "freebsd")))]
+#[cfg(all(
+    unix,
+    not(any(target_os = "macos", target_os = "ios", target_os = "freebsd"))
+))]
 const ELOOP: i32 = 40;

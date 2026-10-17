@@ -297,12 +297,22 @@ pub fn py_path(path: &Path) -> PathBuf {
 
 /// `str(Path(path))`.
 pub fn py_str(path: &Path) -> String {
-    py_path(path).to_string_lossy().into_owned()
+    crate::pycompat::PurePosixPath::from_path(&py_path(path)).to_string()
 }
 
 /// `Path.resolve` (non-strict): absolute, with every existing symlink resolved and `..`
 /// applied after it, the missing remainder appended as written (`os.path.realpath`).
 pub fn py_resolve(path: &Path) -> Result<PathBuf, PyError> {
+    #[cfg(windows)]
+    {
+        crate::native::resolve_path(path).map_err(|error| PyError::os(&error, path))
+    }
+    #[cfg(unix)]
+    py_resolve_unix(path)
+}
+
+#[cfg(unix)]
+fn py_resolve_unix(path: &Path) -> Result<PathBuf, PyError> {
     let absolute = if path.has_root() {
         path.to_path_buf()
     } else {
@@ -317,6 +327,7 @@ pub fn py_resolve(path: &Path) -> Result<PathBuf, PyError> {
 
 /// `posixpath._joinrealpath`: resolve `rest` onto `base`; false on a symlink loop (the rest is
 /// then appended unresolved, as Python's non-strict mode does).
+#[cfg(unix)]
 fn join_real(
     base: &mut PathBuf,
     rest: &Path,

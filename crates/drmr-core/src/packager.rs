@@ -531,7 +531,11 @@ impl Packager {
         let input_mp4 = utf8_path(input_mp4)?;
         let init_output = utf8_path(init_output)?;
         make_dirs(&init_output.parent().to_path_buf())?;
-        make_dirs(&PurePosixPath::new(segment_template).parent().to_path_buf())?;
+        make_dirs(
+            &PurePosixPath::from_path(Path::new(segment_template))
+                .parent()
+                .to_path_buf(),
+        )?;
         // The real and the redacted argv share every token but the --iv value and the key.
         let prefix = [
             self.binary.clone(),
@@ -618,7 +622,11 @@ impl Packager {
         // the per-segment template on the argv is spelled as Python spells it.
         let init_output = utf8_path(init_output)?;
         make_dirs(&init_output.parent().to_path_buf())?;
-        make_dirs(&PurePosixPath::new(segment_template).parent().to_path_buf())?;
+        make_dirs(
+            &PurePosixPath::from_path(Path::new(segment_template))
+                .parent()
+                .to_path_buf(),
+        )?;
         let work = match work_dir {
             Some(work_dir) => utf8_path(work_dir)?,
             None => init_output.parent().join("_persegment_work"),
@@ -703,7 +711,7 @@ impl Packager {
 /// error here (Python would pass its surrogate-escaped bytes through; documented limit).
 fn utf8_path(path: &Path) -> Result<PurePosixPath, Error> {
     match path.to_str() {
-        Some(text) => Ok(PurePosixPath::new(text)),
+        Some(_) => Ok(PurePosixPath::from_path(path)),
         None => Err(Error::Value(format!(
             "path is not valid UTF-8: {}",
             path.display()
