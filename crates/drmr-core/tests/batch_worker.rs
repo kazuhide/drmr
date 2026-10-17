@@ -267,7 +267,7 @@ fn publishes_a_whole_attempt() {
     assert_eq!(log.get("a").unwrap().outcome, AssetOutcome::DonePass);
     let after: Vec<_> = common::snapshot_tree(&fixture.download)
         .into_iter()
-        .filter(|(path, _)| !path.starts_with("output/"))
+        .filter(|(path, _)| !Path::new(path).starts_with("output"))
         .collect();
     assert_eq!(after, before, "the sources are read-only");
     let resume = std::fs::read_to_string(&config.resume_log).unwrap();

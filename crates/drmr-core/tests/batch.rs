@@ -3054,3 +3054,23 @@ fn private_batch_profiles_reject_junction_aliases_before_reading_or_cleanup() {
         assert!(!config.resume_log.exists());
     }
 }
+
+#[cfg(windows)]
+#[test]
+fn local_network_origins_with_ports_do_not_become_windows_object_paths() {
+    let fixture = fixture();
+    let original = fixture.root().join("output/a/segment.ts");
+    write(&original, b"unchanged-source");
+    for url in [
+        "http://127.0.0.1:8080/master.m3u8",
+        "http://[::1]:8080/master.m3u8",
+    ] {
+        assert!(
+            !source_overlaps_output(url, &fixture.config).unwrap(),
+            "{url}"
+        );
+    }
+    assert!(source_overlaps_output("https://OUTPUT/a/segment.ts", &fixture.config).unwrap());
+    assert!(source_overlaps_output("https://output./a/segment.ts", &fixture.config).is_err());
+    assert_eq!(std::fs::read(original).unwrap(), b"unchanged-source");
+}

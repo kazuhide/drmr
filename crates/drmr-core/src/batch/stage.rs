@@ -124,7 +124,15 @@ pub fn source_overlaps_output(url: &str, config: &BatchConfig) -> Result<bool, A
     if let Some(key) = object_key {
         return Ok(is_output_key(&key, config)?);
     }
-    Ok(is_output_key(source_ref(url)?.key(), config)?)
+    let object = source_ref(url)?;
+    #[cfg(windows)]
+    if config.storage.root().is_some() && parsed.netloc.contains(':') {
+        // A port or IPv6 authority cannot name a Windows mirror directory.
+        // Clear HLS fetches this network origin directly; attributed remote
+        // object-store keys were checked separately above.
+        return Ok(false);
+    }
+    Ok(is_output_key(object.key(), config)?)
 }
 
 /// The MPD facts `_stage_inputs` and the preflight read with `ElementTree`.
