@@ -1,10 +1,13 @@
 //! The subprocess media engine against the Python media helpers run on the same stub tools
-//! (`fixtures/media/`subprocess`thon.json`, written by the Python package): the same argv, the
+//! (`fixtures/media/subprocess.python.json`): the same argv, the
 //! same `command` / `tool-output` records (ts, duration and call id aside), the same results,
 //! error classes and messages. The stubs are `sh` scripts printing canned, synthetic output; the
 //! fixture carries their text. Also the record bounds of each call site, proven against their
 //! mutation. Unix only (`sh`).
 #![cfg(unix)]
+
+#[path = "common/executable.rs"]
+mod executable;
 
 use drmr_core::canonical::Dumps;
 use drmr_core::events::{Collector, Record};
@@ -15,7 +18,6 @@ use drmr_core::media::{
 use drmr_core::toolrun::{DEFAULT_MAX_OUTPUT_CHARS, REDACTED, Secrets, ToolRunner};
 use num_rational::BigRational;
 use serde_json::{Value, json};
-use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -34,8 +36,7 @@ fn spaced(hex: &str) -> String {
 }
 
 fn write_script(path: &Path, text: &str) {
-    std::fs::write(path, text).unwrap();
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    executable::write_executable(path, text);
 }
 
 /// The fixture's canned files and stub tools in `dir`.

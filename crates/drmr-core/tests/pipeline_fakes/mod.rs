@@ -4,6 +4,9 @@
     reason = "shared by the pipeline and the cli test binaries; each uses a subset"
 )]
 
+#[path = "../common/executable.rs"]
+mod executable;
+
 use drmr_core::checks::CheckId;
 use drmr_core::config::{Asset, KeyMaterial, Rendition};
 use drmr_core::events::{Collector, NoSink};
@@ -298,12 +301,7 @@ pub fn write_stub_packager(
 }
 
 pub fn write_executable(path: &Path, script: &str) -> PathBuf {
-    fs::write(path, script).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    executable::write_executable(path, script);
     path.to_path_buf()
 }
 

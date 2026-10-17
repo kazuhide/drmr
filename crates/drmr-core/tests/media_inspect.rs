@@ -1,5 +1,9 @@
 //! Media probing and decoded-content inspection using synthetic media.
 
+#[cfg(unix)]
+#[path = "common/executable.rs"]
+mod executable;
+
 use drmr_core::events::{Collector, NoSink, Sink};
 use drmr_core::media::{
     HexSecret, InitProbe, MediaEngine, MediaError, Subprocess, extract_hls_iv_hex_values,
@@ -273,7 +277,6 @@ fn real_mp4dump_output_in_the_log_carries_the_redacted_constant_iv_and_the_publi
 #[cfg(unix)]
 #[test]
 fn stub_mp4dump_bracketed_iv_is_scrubbed_from_the_record() {
-    use std::os::unix::fs::PermissionsExt as _;
     let dir = tempfile::tempdir().unwrap();
     let tree = json!([{"name": "moov", "children": [cbcs_tenc_shape()]}]);
     std::fs::write(
@@ -282,15 +285,13 @@ fn stub_mp4dump_bracketed_iv_is_scrubbed_from_the_record() {
     )
     .unwrap();
     let stub = dir.path().join("mp4dump");
-    std::fs::write(
+    executable::write_executable(
         &stub,
         format!(
             "#!/bin/sh\ncat '{}'\n",
             dir.path().join("tree.json").display()
         ),
-    )
-    .unwrap();
-    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    );
     std::fs::write(dir.path().join("init.mp4"), [0u8; 16]).unwrap();
     let collected = Arc::new(Collector::default());
     let mut engine = engine_with(collected.clone(), Arc::new(Secrets::with([IV])));

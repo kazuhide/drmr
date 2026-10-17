@@ -1,6 +1,9 @@
 //! Shaka Packager arguments, secret scrubbing, segment numbering, and failure handling.
 #![cfg(unix)]
 
+#[path = "common/executable.rs"]
+mod executable;
+
 use drmr_core::config::KeyMaterial;
 use drmr_core::events::{Collector, NoSink, Record};
 use drmr_core::packager::{
@@ -94,9 +97,7 @@ fn stub_at(path: &Path, env: &[(&str, &str)]) -> String {
         quote(&stub_script().to_string_lossy())
     )
     .unwrap();
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, script).unwrap();
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    executable::write_executable(path, script);
     path.to_string_lossy().into_owned()
 }
 
