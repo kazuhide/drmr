@@ -65,3 +65,9 @@ New-Item -ItemType Directory -Path $outputDirectory -Force | Out-Null
 Use the [usage guide](usage.md) for prepared DASH, clear-HLS snapshots, batch work lists, and exit codes. Windows paths belong in command arguments and local configuration paths; manifest URLs and object keys continue to use `/`.
 
 The Windows qualification workflow runs the native CLI, batch supervision, access-control and descendant-process tests as a regular user with pinned media tools. Its artifacts retain real-media JSON reports and test logs. These checks establish only the tested media profiles; license acquisition and device playback require separate validation.
+
+## Unconfirmed process cleanup
+
+`cleanup-unconfirmed` or `media-cleanup-unconfirmed` means drmr could not confirm that its child processes finished. The operation must not be treated as successful or as a completed cancellation.
+
+The 30-second cleanup limit covers waiting for the Windows job termination notification. If Windows input or output remains blocked, joining the pipe readers can take longer; that limit does not bound the whole failure path. drmr retains ownership while joining those readers.

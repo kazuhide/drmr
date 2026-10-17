@@ -55,7 +55,13 @@ impl Backend {
         let completed = self
             .runner
             .run_tool(&effective, tool, &options)
-            .map_err(|_| ConversionError("media-tool-unavailable-or-timeout"))?;
+            .map_err(|error| {
+                ConversionError(if error.kind == "cleanup-unconfirmed" {
+                    "media-cleanup-unconfirmed"
+                } else {
+                    "media-tool-unavailable-or-timeout"
+                })
+            })?;
         if completed.returncode != Some(0) {
             return Err(ConversionError("media-tool-failed"));
         }

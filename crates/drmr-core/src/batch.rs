@@ -43,6 +43,7 @@ pub const FATAL: &[&str] = &[
     "content-fail",
     "unclassified",
     "hls-config-invalid",
+    "cleanup-unconfirmed",
 ];
 
 /// `_RETRYABLE`: transient classes retried up to `RetryPolicy.max_attempts`.
@@ -1681,4 +1682,61 @@ pub(crate) fn read_head(file: &mut std::fs::File, limit: u64) -> io::Result<Vec<
     let mut data = Vec::new();
     file.take(limit).read_to_end(&mut data)?;
     Ok(data)
+}
+
+#[cfg(test)]
+mod cleanup_tests {
+    use super::*;
+
+    #[test]
+    fn subprocess_cleanup_failure_overrides_batch_success_and_timeout() {
+        let root = tempfile::tempdir().unwrap();
+        let program = drmr_test_support::program_path(&root.path().join("response"));
+        drmr_test_support::install(
+            &program,
+            &drmr_test_support::ToolSpec::default().with("stdout", "[\"ok\",false]\n"),
+        )
+        .unwrap();
+        let mut config = BatchConfig::new(
+            Arc::new(crate::storage::LocalStorageBackend::new(root.path()).unwrap()),
+            Arc::new(EnvKeyProvider),
+            &root.path().join("output"),
+            &root.path().join("resume"),
+        );
+        let work = AssetWorkItem::new(
+            "asset",
+            "dash-cenc",
+            Some(ObjectRef::new("source.mpd").unwrap()),
+            None,
+        )
+        .unwrap();
+        let command = commands::CliCommand::new([program.as_os_str()], "run");
+        let worker = vec![program.as_os_str().to_os_string()];
+        for deadline in [60.0, 0.0] {
+            config.retry.per_asset_timeout_s = deadline;
+            let finish = |child: &mut crate::native::ManagedChild| {
+                child.finish()?;
+                Err(std::io::Error::other("private cleanup failure detail"))
+            };
+            let error = commands::run_commands_with_cleanup(
+                std::slice::from_ref(&command),
+                &config,
+                None,
+                &|| {},
+                finish,
+            )
+            .unwrap_err();
+            assert_eq!(classify(&error), ("cleanup-unconfirmed".to_string(), false));
+            let error = worker::supervise_with_cleanup(&work, &config, &|| {}, &worker, finish)
+                .unwrap_err();
+            assert_eq!(classify(&error), ("cleanup-unconfirmed".to_string(), false));
+        }
+    }
+
+    #[test]
+    fn unconfirmed_cleanup_is_terminal_and_never_retryable() {
+        let error = AttemptError::from(BatchError::new("cleanup-unconfirmed"));
+        assert_eq!(classify(&error), ("cleanup-unconfirmed".to_string(), false));
+        assert!(!RETRYABLE.contains(&"cleanup-unconfirmed"));
+    }
 }

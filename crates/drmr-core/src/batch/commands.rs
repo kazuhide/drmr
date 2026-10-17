@@ -228,6 +228,22 @@ pub fn run_commands(
     keys: Option<&KeyMaterial>,
     on_heartbeat: &dyn Fn(),
 ) -> Result<i32, AttemptError> {
+    run_commands_with_cleanup(
+        commands,
+        config,
+        keys,
+        on_heartbeat,
+        crate::native::ManagedChild::finish,
+    )
+}
+
+pub(super) fn run_commands_with_cleanup(
+    commands: &[CliCommand],
+    config: &BatchConfig,
+    keys: Option<&KeyMaterial>,
+    on_heartbeat: &dyn Fn(),
+    mut cleanup: impl FnMut(&mut crate::native::ManagedChild) -> std::io::Result<()>,
+) -> Result<i32, AttemptError> {
     let start = Instant::now();
     let deadline = after(start, config.retry.per_asset_timeout_s);
     let mut next_heartbeat = after(start, config.retry.heartbeat_s);
@@ -251,12 +267,17 @@ pub fn run_commands(
             crate::native::ManagedChild::spawn(child_command, !crate::native::in_asset_worker())
                 .map_err(|_| AttemptError::Other)?;
         let status = loop {
-            if let Some(status) = child.try_wait().map_err(|_| AttemptError::Other)? {
-                break status;
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) => {}
+                Err(_) => {
+                    cleanup(&mut child).map_err(|_| BatchError::new("cleanup-unconfirmed"))?;
+                    return Err(AttemptError::Other);
+                }
             }
             let now = Instant::now();
             if !crate::native::in_asset_worker() && now >= deadline {
-                let _ = child.kill();
+                cleanup(&mut child).map_err(|_| BatchError::new("cleanup-unconfirmed"))?;
                 return Err(AttemptError::Retry("asset-timeout".to_string()));
             }
             if now >= next_heartbeat {
@@ -268,6 +289,7 @@ pub fn run_commands(
                 remaining.clamp(Duration::from_millis(1), Duration::from_millis(50)),
             );
         };
+        cleanup(&mut child).map_err(|_| BatchError::new("cleanup-unconfirmed"))?;
         let code = exit_code(status);
         if code != 0 {
             if command.subcommand == "analyze-hls" && transient_analysis(&mut records) {

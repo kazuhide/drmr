@@ -126,7 +126,13 @@ impl Subprocess {
         let result = self
             .runner
             .run_tool(argv, tool, &options)
-            .map_err(|_| HlsMediaError::new("media-tool-unavailable"))?;
+            .map_err(|error| {
+                HlsMediaError::new(if error.kind == "cleanup-unconfirmed" {
+                    "media-cleanup-unconfirmed"
+                } else {
+                    "media-tool-unavailable"
+                })
+            })?;
         if result.returncode != Some(0) {
             return Err(HlsMediaError::new("media-tool-failed").into());
         }
@@ -333,7 +339,8 @@ impl MediaEngine for Subprocess {
         // Streamed: the output is the digest's input, not log text.
         let call_id = self.runner.note_command(&argv, FFMPEG, None);
         let started = Instant::now();
-        let Ok((code, digest)) = stream_digest(&argv, audio) else {
+        let result = stream_digest(&argv, audio);
+        let Ok((code, digest)) = result else {
             self.runner.note_result(
                 FFMPEG,
                 None,
@@ -342,7 +349,16 @@ impl MediaEngine for Subprocess {
                 "could not run",
                 Some(call_id),
             );
-            return Err(HlsMediaError::new("media-tool-unavailable").into());
+            let token = if result
+                .unwrap_err()
+                .get_ref()
+                .is_some_and(<dyn std::error::Error + Send + Sync>::is::<CleanupUnconfirmed>)
+            {
+                "media-cleanup-unconfirmed"
+            } else {
+                "media-tool-unavailable"
+            };
+            return Err(HlsMediaError::new(token).into());
         };
         self.runner.note_result(
             FFMPEG,
@@ -580,10 +596,22 @@ impl Read for DigestPipe<'_> {
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("cleanup-unconfirmed")]
+struct CleanupUnconfirmed;
+
 /// Hash stdout without retaining its payload. A decoder's exit gives inherited
 /// pipe writers two seconds to close; errors kill the managed tree before joining
 /// the reader or waiting for the child. Running decoders retain no per-call timeout.
 fn stream_digest(argv: &[String], audio: bool) -> std::io::Result<(Option<i32>, String)> {
+    stream_digest_with_cleanup(argv, audio, crate::native::ManagedChild::finish)
+}
+
+fn stream_digest_with_cleanup(
+    argv: &[String],
+    audio: bool,
+    mut cleanup: impl FnMut(&mut crate::native::ManagedChild) -> std::io::Result<()>,
+) -> std::io::Result<(Option<i32>, String)> {
     use crate::native::{ManagedChild, in_asset_worker};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc::{self, TryRecvError};
@@ -599,8 +627,13 @@ fn stream_digest(argv: &[String], audio: bool) -> std::io::Result<(Option<i32>, 
     let stdout = child.stdout.take().expect("stdout is piped");
     #[cfg(unix)]
     {
-        let flags = rustix::fs::fcntl_getfl(&stdout)?;
-        rustix::fs::fcntl_setfl(&stdout, flags | rustix::fs::OFlags::NONBLOCK)?;
+        let configured = rustix::fs::fcntl_getfl(&stdout).and_then(|flags| {
+            rustix::fs::fcntl_setfl(&stdout, flags | rustix::fs::OFlags::NONBLOCK)
+        });
+        if let Err(error) = configured {
+            cleanup(&mut child).map_err(|_| std::io::Error::other(CleanupUnconfirmed))?;
+            return Err(error.into());
+        }
     }
     let stop = AtomicBool::new(false);
     std::thread::scope(|scope| {
@@ -617,7 +650,14 @@ fn stream_digest(argv: &[String], audio: bool) -> std::io::Result<(Option<i32>, 
                     hash_frame_lines(stdout, &mut digest)
                 };
                 let _ = sender.send(read.map(|()| hex::encode(digest.finalize())));
-            })?;
+            });
+        let reader = match reader {
+            Ok(reader) => reader,
+            Err(error) => {
+                cleanup(&mut child).map_err(|_| std::io::Error::other(CleanupUnconfirmed))?;
+                return Err(error);
+            }
+        };
         let mut digest = None;
         let mut status = None;
         let mut pipe_deadline = None;
@@ -654,13 +694,12 @@ fn stream_digest(argv: &[String], audio: bool) -> std::io::Result<(Option<i32>, 
             }
             std::thread::park_timeout(Duration::from_millis(5));
         };
-        if result.is_err() {
-            let _ = child.kill();
-        }
+        let confirmed = cleanup(&mut child).map_err(|_| std::io::Error::other(CleanupUnconfirmed));
         stop.store(true, Ordering::Release);
         let joined = reader
             .join()
             .map_err(|_| std::io::Error::other("streamed-output reader panicked"));
+        confirmed?;
         joined?;
         result
     })
@@ -684,6 +723,25 @@ fn exit_code(status: ExitStatus) -> Option<i32> {
 mod lifecycle_tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn digest_cleanup_failure_prevents_success_and_preserves_no_raw_error() {
+        let root = tempfile::tempdir().unwrap();
+        let tool = drmr_test_support::program_path(&root.path().join("response"));
+        drmr_test_support::install(&tool, &drmr_test_support::ToolSpec::default()).unwrap();
+        let argv = vec![tool.to_str().unwrap().to_string()];
+        for audio in [true, false] {
+            let mut attempts = 0;
+            let error = stream_digest_with_cleanup(&argv, audio, |child| {
+                attempts += 1;
+                child.finish()?;
+                Err(std::io::Error::other("secret injected cleanup detail"))
+            })
+            .unwrap_err();
+            assert_eq!(error.to_string(), "cleanup-unconfirmed");
+            assert_eq!(attempts, 1);
+        }
+    }
 
     #[cfg(unix)]
     #[test]

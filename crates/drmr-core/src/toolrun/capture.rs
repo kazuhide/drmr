@@ -125,6 +125,15 @@ pub(super) fn execute(
     options: &RunOptions<'_>,
     path: Option<&OsStr>,
 ) -> Result<Completed, Failure> {
+    execute_with_cleanup(argv, options, path, ManagedChild::finish)
+}
+
+fn execute_with_cleanup(
+    argv: &[String],
+    options: &RunOptions<'_>,
+    path: Option<&OsStr>,
+    mut cleanup: impl FnMut(&mut ManagedChild) -> io::Result<()>,
+) -> Result<Completed, Failure> {
     let Some((program, arguments)) = argv.split_first() else {
         return Err(failure("unavailable", "could not run: empty command"));
     };
@@ -144,14 +153,13 @@ pub(super) fn execute(
     // Windows uses the managed job to close inherited writers. Unix pipes are
     // nonblocking so a descendant outside the process group cannot retain a reader.
     #[cfg(unix)]
-    prepare_pipe(&stdout)
-        .and_then(|()| prepare_pipe(&stderr))
-        .map_err(|error| {
-            failure(
-                "unavailable",
-                format!("could not configure captured output: {error}"),
-            )
-        })?;
+    if let Err(error) = prepare_pipe(&stdout).and_then(|()| prepare_pipe(&stderr)) {
+        confirm_cleanup(&mut child, &mut cleanup)?;
+        return Err(failure(
+            "unavailable",
+            format!("could not configure captured output: {error}"),
+        ));
+    }
     let state = Arc::new(State::default());
     std::thread::scope(|scope| {
         let out_state = Arc::clone(&state);
@@ -160,13 +168,17 @@ pub(super) fn execute(
             .name("tool-stdout".into())
             .spawn_scoped(scope, move || {
                 read_bounded(stdout, stdout_limit, &out_state, OUT_DONE)
-            })
-            .map_err(|error| {
-                failure(
+            });
+        let output = match output {
+            Ok(reader) => reader,
+            Err(error) => {
+                confirm_cleanup(&mut child, &mut cleanup)?;
+                return Err(failure(
                     "unavailable",
                     format!("could not start captured-output reader: {error}"),
-                )
-            })?;
+                ));
+            }
+        };
         let err_state = Arc::clone(&state);
         let stderr_limit = options.max_stderr_bytes.min(MAX_CAPTURE_BYTES);
         let error_output = match std::thread::Builder::new()
@@ -176,9 +188,10 @@ pub(super) fn execute(
             }) {
             Ok(reader) => reader,
             Err(error) => {
-                let _ = child.kill();
+                let confirmed = confirm_cleanup(&mut child, &mut cleanup);
                 state.stop.store(true, Ordering::Release);
                 let _ = output.join();
+                confirmed?;
                 return Err(failure(
                     "unavailable",
                     format!("could not start captured-output reader: {error}"),
@@ -186,9 +199,7 @@ pub(super) fn execute(
             }
         };
         let result = control(&mut child, &state, options.timeout);
-        if result.is_err() {
-            let _ = child.kill();
-        }
+        let confirmed = confirm_cleanup(&mut child, &mut cleanup);
         state.stop.store(true, Ordering::Release);
         let stdout = output
             .join()
@@ -196,6 +207,7 @@ pub(super) fn execute(
         let stderr = error_output
             .join()
             .map_err(|_| failure("unavailable", "captured-output reader panicked"));
+        confirmed?;
         let status = result?;
         Ok(Completed {
             returncode: exit_code(status),
@@ -203,4 +215,45 @@ pub(super) fn execute(
             stderr: stderr?,
         })
     })
+}
+
+fn confirm_cleanup(
+    child: &mut ManagedChild,
+    cleanup: &mut impl FnMut(&mut ManagedChild) -> io::Result<()>,
+) -> Result<(), Failure> {
+    cleanup(child).map_err(|_| {
+        failure(
+            "cleanup-unconfirmed",
+            "process tree cleanup could not be confirmed",
+        )
+    })
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+
+    #[test]
+    fn cleanup_failure_overrides_completed_and_timed_out_tools() {
+        let root = tempfile::tempdir().unwrap();
+        let tool = drmr_test_support::program_path(&root.path().join("response"));
+        drmr_test_support::install(&tool, &drmr_test_support::ToolSpec::default()).unwrap();
+        let argv = vec![tool.to_str().unwrap().to_string()];
+        for timeout in [None, Some(Duration::ZERO)] {
+            let options = RunOptions {
+                timeout,
+                ..RunOptions::default()
+            };
+            let mut attempts = 0;
+            let error = execute_with_cleanup(&argv, &options, None, |child| {
+                attempts += 1;
+                child.finish()?;
+                Err(io::Error::other("injected cleanup uncertainty"))
+            })
+            .expect_err("cleanup failure must prevent a completed result");
+            assert_eq!(error.kind, "cleanup-unconfirmed");
+            assert_eq!(error.text, "process tree cleanup could not be confirmed");
+            assert_eq!(attempts, 1);
+        }
+    }
 }

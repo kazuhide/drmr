@@ -328,6 +328,22 @@ pub fn supervise_attempt(
     heartbeat: &dyn Fn(),
     command: &[OsString],
 ) -> Result<(String, bool), AttemptError> {
+    supervise_with_cleanup(
+        work,
+        config,
+        heartbeat,
+        command,
+        crate::native::ManagedChild::finish,
+    )
+}
+
+pub(super) fn supervise_with_cleanup(
+    work: &AssetWorkItem,
+    config: &BatchConfig,
+    heartbeat: &dyn Fn(),
+    command: &[OsString],
+    mut cleanup: impl FnMut(&mut crate::native::ManagedChild) -> std::io::Result<()>,
+) -> Result<(String, bool), AttemptError> {
     let payload = worker_payload(work, config)?;
     let (program, arguments) = command.split_first().ok_or(AttemptError::Other)?;
     let mut child_command = Command::new(program);
@@ -342,18 +358,22 @@ pub fn supervise_attempt(
     let mut stdout = child.stdout.take().expect("stdout is piped");
     // The payload is written and the pipe closed on a thread: a worker that never reads its
     // input cannot block the supervisor past the deadline.
-    std::thread::spawn(move || {
+    let input_writer = std::thread::spawn(move || {
         let _ = stdin.write_all(&payload);
     });
     let (sender, receiver) = mpsc::channel();
-    std::thread::spawn(move || {
+    let output_reader = std::thread::spawn(move || {
         let mut raw = Vec::new();
         let _ = stdout.read_to_end(&mut raw);
         let _ = sender.send(raw);
     });
     let waited = wait(&mut child, &receiver, config, heartbeat);
-    let _ = child.kill();
-    let _ = child.wait();
+    let confirmed = cleanup(&mut child).map_err(|_| BatchError::new("cleanup-unconfirmed"));
+    let input_joined = input_writer.join();
+    let output_joined = output_reader.join();
+    confirmed?;
+    input_joined.map_err(|_| AttemptError::Other)?;
+    output_joined.map_err(|_| AttemptError::Other)?;
     let Some((status, raw)) = waited? else {
         return Ok(("asset-timeout".to_string(), true));
     };
