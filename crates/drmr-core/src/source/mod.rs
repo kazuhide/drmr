@@ -37,6 +37,16 @@ use serde_json::{Map, Value};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+/// Track identifiers become filenames and must be single components on every platform.
+pub(crate) fn valid_track_id(id: &str) -> bool {
+    !id.is_empty()
+        && !matches!(id, "." | "..")
+        && !id.ends_with(['.', ' '])
+        && !id
+            .chars()
+            .any(|c| c.is_control() || "/\\:<>\"|?*".contains(c))
+}
+
 /// An unclassified source error, preserved by class name: the CLI
 /// reports `source-config-invalid` (exit 2) for an `OSError`, `ValueError` or `TypeError` and
 /// `source-infrastructure-error` (exit 2) for any other class (`the analysis command`).

@@ -221,6 +221,10 @@ fn read_track(row: &Value, directory: &Path) -> Result<SourceTrack, Failure> {
     let Value::Object(row) = row else {
         return Err(invalid());
     };
+    let id = text_or(row, "id", "")?;
+    if !super::valid_track_id(&id) {
+        return Err(invalid());
+    }
     let mut segments = Vec::new();
     for segment in iterate(row.get("segments").ok_or_else(invalid)?)? {
         segments.push(read_segment(&segment, directory)?);
@@ -241,7 +245,7 @@ fn read_track(row: &Value, directory: &Path) -> Result<SourceTrack, Failure> {
     let is_default = flag(row, "is_default")?;
     let autoselect = flag(row, "autoselect")?;
     Ok(SourceTrack {
-        id: text_or(row, "id", "")?,
+        id,
         content_type: text_or(row, "content_type", "")?,
         container: text_or(row, "container", "")?,
         codec: text_or(row, "codec", "")?,
@@ -294,6 +298,13 @@ fn py_int_exact(value: &Value) -> Result<i64, Failure> {
 /// every recorded file re-hashed, and the private track graph compared with the analysis's
 /// tracks (the older-total tolerance applied to each track's `duration`).
 pub fn verify_source_snapshot(analysis: &SourceAnalysis) -> Result<(), Failure> {
+    if analysis
+        .tracks
+        .iter()
+        .any(|track| !super::valid_track_id(&track.id))
+    {
+        return Err(invalid());
+    }
     let bytes = std::fs::read(&analysis.snapshot_path).map_err(|_| invalid())?;
     let data: Value = serde_json::from_slice(&bytes).map_err(|_| invalid())?;
     let mut data = match data {

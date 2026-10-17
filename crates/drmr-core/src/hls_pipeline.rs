@@ -36,7 +36,7 @@ use crate::packager;
 use crate::pipeline_deps::EncryptCbcs;
 use crate::playready::{self, PlayReadyObjects, WIDEVINE_SYSTEM_ID};
 use crate::pycompat;
-use crate::source::{Failure, SourceAnalysis, SourceSegment, SourceTrack};
+use crate::source::{Failure, SourceAnalysis, SourceSegment, SourceTrack, valid_track_id};
 
 /// Python's `Fraction`: exact timeline arithmetic.
 pub type Frac = Ratio<i128>;
@@ -460,6 +460,7 @@ pub fn selected_tracks(
     selection: Option<&PackagingSelection>,
     deps: &dyn PipelineDeps,
 ) -> Result<(Vec<SourceTrack>, Vec<SourceTrack>), PipelineError> {
+    validate_track_ids(analysis)?;
     let value = |token: &str| PipelineError::Value(token.to_string());
     if selection.is_some_and(|choice| {
         !py_eq(
@@ -498,7 +499,8 @@ pub fn selected_tracks(
     if candidates.len() > 1 && selected.is_none() {
         // Equivalence is proved by complete decoded PCM, never playlist labels.
         let asset_dir = asset_dir_of(&analysis.snapshot_path)?;
-        let work = asset_dir.join("clear").join("audio-equivalence");
+        let work = output_directory(&asset_dir, Path::new("clear/audio-equivalence"))
+            .map_err(output_error)?;
         let mut digests = BTreeSet::new();
         for track in &candidates {
             let mut parts: Vec<PathBuf> = track.init_path.iter().cloned().collect();
@@ -542,6 +544,81 @@ fn asset_dir_of(snapshot_path: &Path) -> Result<PathBuf, PipelineError> {
         .nth(3)
         .map(Path::to_path_buf)
         .ok_or_else(|| PipelineError::Infrastructure("tuple index out of range".to_string()))
+}
+
+fn validate_track_ids(analysis: &SourceAnalysis) -> Result<(), PipelineError> {
+    if analysis
+        .tracks
+        .iter()
+        .any(|track| !valid_track_id(&track.id))
+    {
+        return Err(PipelineError::Value("invalid-track-id".to_string()));
+    }
+    Ok(())
+}
+
+fn output_error(error: TrackError) -> PipelineError {
+    match error {
+        TrackError::Media(token) => PipelineError::Value(token),
+        _ => PipelineError::Value("unsafe-output-path".to_string()),
+    }
+}
+
+/// Validate existing destinations before creating directories or opening output files.
+/// Symlinks are refused even when they point inside the asset, where source files live.
+fn output_directory(asset_dir: &Path, relative: &Path) -> Result<PathBuf, TrackError> {
+    let unsafe_path = || TrackError::Media("unsafe-output-path".to_string());
+    let destination = asset_dir.join(relative);
+    crate::pipeline::confine(&destination, asset_dir).map_err(|_| unsafe_path())?;
+    let mut prefix = asset_dir.to_path_buf();
+    for component in relative.components() {
+        prefix.push(component);
+        match fs::symlink_metadata(&prefix) {
+            Ok(metadata) if metadata.file_type().is_symlink() => return Err(unsafe_path()),
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return Err(unsafe_path()),
+        }
+    }
+    let mut pending = vec![destination.clone()];
+    while let Some(path) = pending.pop() {
+        match fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.file_type().is_symlink() => return Err(unsafe_path()),
+            Ok(metadata) if metadata.is_dir() => {
+                for entry in fs::read_dir(&path).map_err(|_| unsafe_path())? {
+                    pending.push(entry.map_err(|_| unsafe_path())?.path());
+                }
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return Err(unsafe_path()),
+        }
+    }
+    Ok(destination)
+}
+
+fn track_directories(
+    track: &SourceTrack,
+    asset_dir: &Path,
+) -> Result<(PathBuf, PathBuf), TrackError> {
+    if !valid_track_id(&track.id) {
+        return Err(TrackError::Media("invalid-track-id".to_string()));
+    }
+    let folder = output_directory(asset_dir, &Path::new("cbcs").join(&track.id))?;
+    let work = output_directory(asset_dir, &Path::new("clear/package-hls").join(&track.id))?;
+    Ok((folder, work))
+}
+
+fn packaging_directories(analysis: &SourceAnalysis) -> Result<(PathBuf, PathBuf), PipelineError> {
+    validate_track_ids(analysis)?;
+    let asset_dir = asset_dir_of(&analysis.snapshot_path)?;
+    for track in &analysis.tracks {
+        track_directories(track, &asset_dir).map_err(output_error)?;
+    }
+    let manifest_dir =
+        output_directory(&asset_dir, Path::new("manifests/clear-hls")).map_err(output_error)?;
+    output_directory(&asset_dir, Path::new("reports")).map_err(output_error)?;
+    Ok((asset_dir, manifest_dir))
 }
 
 /// The cbcs truth of one init segment: scheme, constant IV, KID, no per-sample IV, the
@@ -842,9 +919,8 @@ pub fn package_track<'scope>(
     pool: Option<&Pool<'scope>>,
 ) -> Result<OutputTrack, TrackError> {
     let track = job.track;
-    let folder = asset_dir.join("cbcs").join(&track.id);
+    let (folder, work) = track_directories(track, asset_dir)?;
     fs::create_dir_all(&folder)?;
-    let work = asset_dir.join("clear").join("package-hls").join(&track.id);
     fs::create_dir_all(&work)?;
     let prepare_units: Vec<Unit<'scope, Prepared, TrackError>> = track
         .segments
@@ -1028,9 +1104,8 @@ fn copy_imsc(
     deps: &dyn PipelineDeps,
 ) -> Result<OutputTrack, TrackError> {
     let unsupported = || TrackError::Media("unsupported-subtitle-profile".to_string());
-    let folder = asset_dir.join("cbcs").join(&track.id);
+    let (folder, work) = track_directories(track, asset_dir)?;
     fs::create_dir_all(&folder)?;
-    let work = asset_dir.join("clear").join("package-hls").join(&track.id);
     fs::create_dir_all(&work)?;
     let mut sources: Vec<(PathBuf, PacketInfo)> = Vec::new();
     for (number, segment) in track.segments.iter().enumerate() {
@@ -1242,11 +1317,11 @@ pub fn copy_text(
     asset_dir: &Path,
     deps: &dyn PipelineDeps,
 ) -> Result<OutputTrack, TrackError> {
+    let (folder, _) = track_directories(track, asset_dir)?;
     if track.container != "webvtt" {
         return copy_imsc(track, asset_dir, deps);
     }
     let unsupported = || TrackError::Media("unsupported-subtitle-profile".to_string());
-    let folder = asset_dir.join("cbcs").join(&track.id);
     fs::create_dir_all(&folder)?;
     let map_line = Regex::new(r"(?m)^X-TIMESTAMP-MAP=LOCAL:([0-9:.]+),MPEGTS:([0-9]+)[ \t]*\r?$")
         .expect("a valid pattern");
@@ -1606,6 +1681,7 @@ pub fn package_hls(
     max_workers: Option<i64>,
     deps: &dyn PipelineDeps,
 ) -> Result<PackageHlsReport, PipelineError> {
+    let (asset_dir, manifest_dir) = packaging_directories(analysis)?;
     let workers = resolve_workers(max_workers)?;
     let pr = validate_signaling(signaling, keys)?;
     if !analysis.admitted {
@@ -1621,8 +1697,6 @@ pub fn package_hls(
     {
         return Err(PipelineError::Value("source-no-av-tracks".to_string()));
     }
-    let asset_dir = asset_dir_of(&analysis.snapshot_path)?;
-    let manifest_dir = asset_dir.join("manifests").join("clear-hls");
     // A retry cannot leave previously successful manifests visible after failure.
     if manifest_dir.exists() {
         fs::remove_dir_all(&manifest_dir).map_err(|error| os_value(&error))?;

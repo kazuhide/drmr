@@ -1308,3 +1308,160 @@ fn a_failed_prepare_blocks_them_all_inline() {
 fn a_failed_prepare_blocks_them_all_pooled() {
     ordering_case(true, Some(1));
 }
+
+#[test]
+fn unsafe_track_ids_fail_before_packaging_writes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let escaped = tmp.path().join("escaped");
+    let source = tmp.path().join("source.vtt");
+    fs::write(&source, "WEBVTT\n\n00:00.000 --> 00:01.000\nHello\n").unwrap();
+    let ids = [
+        escaped.to_string_lossy().into_owned(),
+        "../escaped".into(),
+        "nested/track".into(),
+        "nested\\track".into(),
+        "C:escaped".into(),
+        ".".into(),
+        "..".into(),
+        String::new(),
+        "bad\0id".into(),
+    ];
+    for id in ids {
+        for container in ["webvtt", "fmp4"] {
+            let text = track(
+                &id,
+                "text",
+                container,
+                "wvtt",
+                vec![segment(0, &source, 1.0)],
+            );
+            let fake = Fake::default();
+            let asset = tmp.path().join("asset");
+            assert_eq!(
+                copy_text(&text, &asset, &fake).unwrap_err(),
+                TrackError::Media("invalid-track-id".into()),
+                "{id:?}"
+            );
+            assert!(!asset.exists());
+            assert!(!escaped.exists());
+            assert_eq!(fake.events(), []);
+        }
+        let video = track(&id, "video", "fmp4", "avc1", vec![segment(0, &source, 1.0)]);
+        let key = keys();
+        let signaling = signaling();
+        let pr = validate_signaling(&signaling, &key).unwrap();
+        let fake = Fake::default();
+        let job = TrackJob {
+            track: &video,
+            keys: &key,
+            signaling: &signaling,
+            pr: &pr,
+            packager_bin: "packager",
+            deps: &fake,
+        };
+        assert_eq!(
+            package_track(job, &tmp.path().join("asset"), None).unwrap_err(),
+            TrackError::Media("invalid-track-id".into())
+        );
+        assert!(!tmp.path().join("asset").exists());
+        assert!(!escaped.exists());
+        assert_eq!(fake.events(), []);
+    }
+}
+
+#[test]
+fn package_preflight_rejects_all_track_ids_before_clearing_manifests() {
+    let tmp = tempfile::tempdir().unwrap();
+    let bad = track("../escaped", "text", "webvtt", "wvtt", vec![]);
+    let analyzed = analysis(tmp.path(), vec![bad]);
+    let manifest = tmp.path().join("asset/manifests/clear-hls/keep.mpd");
+    fs::create_dir_all(manifest.parent().unwrap()).unwrap();
+    fs::write(&manifest, "keep").unwrap();
+    let fake = Fake {
+        snapshot_error: Some("must-not-run".into()),
+        ..Fake::default()
+    };
+    assert_eq!(
+        package_hls(
+            &analyzed,
+            &keys(),
+            &signaling(),
+            None,
+            None,
+            "packager",
+            Some(1),
+            &fake
+        )
+        .unwrap_err(),
+        PipelineError::Value("invalid-track-id".into())
+    );
+    assert_eq!(fs::read_to_string(manifest).unwrap(), "keep");
+    assert_eq!(fake.events(), []);
+}
+
+#[cfg(unix)]
+#[test]
+fn text_outputs_refuse_existing_directory_and_leaf_symlinks() {
+    use std::os::unix::fs::symlink;
+    for leaf in [false, true] {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("source.vtt");
+        fs::write(&source, "WEBVTT\n\n00:00.000 --> 00:01.000\nHello\n").unwrap();
+        let victim = tmp.path().join("victim");
+        fs::create_dir(&victim).unwrap();
+        let marker = victim.join("seg_0.vtt");
+        fs::write(&marker, "unchanged").unwrap();
+        let folder = tmp.path().join("asset/cbcs/t0");
+        fs::create_dir_all(folder.parent().unwrap()).unwrap();
+        if leaf {
+            fs::create_dir(&folder).unwrap();
+            symlink(&marker, folder.join("seg_0.vtt")).unwrap();
+        } else {
+            symlink(&victim, &folder).unwrap();
+        }
+        let text = track(
+            "t0",
+            "text",
+            "webvtt",
+            "wvtt",
+            vec![segment(0, &source, 1.0)],
+        );
+        assert_eq!(
+            copy_text(&text, &tmp.path().join("asset"), &Fake::default()).unwrap_err(),
+            TrackError::Media("unsafe-output-path".into())
+        );
+        assert_eq!(fs::read_to_string(marker).unwrap(), "unchanged");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn media_outputs_refuse_a_symlinked_work_directory_before_creating_outputs() {
+    use std::os::unix::fs::symlink;
+    let tmp = tempfile::tempdir().unwrap();
+    let asset = tmp.path().join("asset");
+    let victim = tmp.path().join("victim");
+    fs::create_dir(&victim).unwrap();
+    fs::create_dir_all(asset.join("clear/package-hls")).unwrap();
+    symlink(&victim, asset.join("clear/package-hls/v0")).unwrap();
+    let video = track("v0", "video", "fmp4", "avc1", vec![]);
+    let key = keys();
+    let signaling = signaling();
+    let pr = validate_signaling(&signaling, &key).unwrap();
+    let fake = Fake::default();
+    let job = TrackJob {
+        track: &video,
+        keys: &key,
+        signaling: &signaling,
+        pr: &pr,
+        packager_bin: "packager",
+        deps: &fake,
+    };
+    assert_eq!(
+        package_track(job, &asset, None).unwrap_err(),
+        TrackError::Media("unsafe-output-path".into())
+    );
+    assert!(!asset.join("cbcs").exists());
+    assert!(fs::read_dir(victim).unwrap().next().is_none());
+    assert_eq!(fake.events(), []);
+}
