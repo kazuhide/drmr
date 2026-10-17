@@ -227,6 +227,27 @@ fn media_workspace_checks_default_ownership_before_generating_payloads() {
 }
 
 #[test]
+fn media_file_creation_is_exclusive_and_strict_before_payload_writes() {
+    let temp = tempfile::tempdir().unwrap();
+    let workspace = temp.path().join("media");
+    native::create_media_dir_all(&workspace).unwrap();
+    let path = workspace.join("playlist.m3u8");
+    let mut file = native::create_media_new(&path).unwrap();
+    #[cfg(windows)]
+    private_fs::verify(&file).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(file.metadata().unwrap().permissions().mode() & 0o777, 0o600);
+    }
+    file.write_all(b"synthetic playlist").unwrap();
+    drop(file);
+    assert!(native::create_media_new(&path).is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), b"synthetic playlist");
+    native::open_private_read(&path).unwrap();
+}
+
+#[test]
 fn media_sealing_preserves_a_strict_secret_child_directory() {
     let temp = tempfile::tempdir().unwrap();
     let workspace = temp.path().join("media");

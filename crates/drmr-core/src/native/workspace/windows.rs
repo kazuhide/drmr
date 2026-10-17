@@ -201,3 +201,42 @@ pub(super) fn seal(path: &Path) -> io::Result<()> {
         policy.set(&mut file, directory)
     })
 }
+
+// The empty new file inherits this verified owner's ACE from birth. The retained
+// parent denies rename/delete sharing, and the file's ACL is protected before a
+// caller can write any payload. This policy is separate from strict secret-file
+// acquisition: inherited media directories never become valid secret parents.
+pub(super) fn create_new(path: &Path) -> io::Result<File> {
+    let absolute = std::path::absolute(path)?;
+    let path = absolute.as_path();
+    let parent = path.parent().ok_or_else(invalid)?;
+    let name = path.file_name().ok_or_else(invalid)?;
+    crate::native::validate_windows_relative_path(name.to_str().ok_or_else(invalid)?)?;
+    match private_fs::PrivateDir::open(parent) {
+        Ok(_) | Err(private_fs::Error::InsecureAcl) => {}
+        Err(_) => return Err(invalid()),
+    }
+    let policy = Policy::new()?;
+    let parent_handle = open(parent)?;
+    policy.verify(&parent_handle, true, true)?;
+    let descriptor = GetSecurityInfo(
+        &parent_handle,
+        SeObjectType::SE_FILE_OBJECT,
+        SecurityInformation::Dacl,
+    )?;
+    if ace_text(&descriptor)?.1 != policy.media_ace {
+        return Err(invalid());
+    }
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .access_mode(0xc006_0080)
+        .share_mode(1)
+        .security_qos_flags(0x0001_0000)
+        .custom_flags(0x0020_0000)
+        .create_new(true)
+        .open(path)?;
+    policy.verify(&file, false, false)?;
+    policy.set(&mut file, false)?;
+    Ok(file)
+}

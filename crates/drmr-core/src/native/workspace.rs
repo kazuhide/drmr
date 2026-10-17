@@ -31,6 +31,21 @@ pub fn create_media_dir_all(path: &Path) -> io::Result<()> {
     }
 }
 
+/// Exclusively create an empty strict file inside a prepared media directory.
+/// Windows creation inherits only the current user's access from the retained
+/// parent, then removes inheritance before returning a writable handle. Existing
+/// destinations are never opened or overwritten.
+pub fn create_media_new(path: &Path) -> io::Result<fs::File> {
+    #[cfg(windows)]
+    {
+        windows::create_new(path)
+    }
+    #[cfg(unix)]
+    {
+        super::create_private_new(path)
+    }
+}
+
 /// Verify generated media, then give every file the strict private-file policy.
 /// No unsafe ACL or filesystem entry is silently repaired. Files are private
 /// throughout generation; sealing protects them from later ACL inheritance.
