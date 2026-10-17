@@ -183,6 +183,9 @@ jobs:
       - name: Run browser unit tests
         run: node --test crates/drmr-server/tests/js/*.test.cjs
 
+      - name: Test measurement helpers
+        run: python3 -W error::ResourceWarning -m unittest discover -s tools/tests -v
+
       - name: Build release CLI
         run: cargo build --release --locked -p drmr
 
