@@ -124,6 +124,9 @@ pub struct ConversionJobManager {
     cli_argv: Vec<OsString>,
     base_env: EnvSource,
     state: Mutex<State>,
+    // Process cleanup and open log handles drop before the directory pin.
+    #[cfg(windows)]
+    _jobs_pin: native::PrivateDirectoryGuard,
 }
 
 /// The environment a child inherits (`os.environ`, read at each launch).
@@ -151,7 +154,10 @@ impl ConversionJobManager {
         cli_argv: Vec<OsString>,
         base_env: EnvSource,
     ) -> std::io::Result<Self> {
+        #[cfg(not(windows))]
         native::create_private_dir_all(jobs_dir)?;
+        #[cfg(windows)]
+        let jobs_pin = native::pin_private_directory(jobs_dir)?;
         Ok(ConversionJobManager {
             jobs_dir: jobs_dir.to_path_buf(),
             cli_argv,
@@ -163,6 +169,8 @@ impl ConversionJobManager {
                 exit_code: None,
                 finished: HashMap::new(),
             }),
+            #[cfg(windows)]
+            _jobs_pin: jobs_pin,
         })
     }
 
@@ -545,6 +553,21 @@ impl Iterator for TailLog<'_> {
 mod tests {
     use super::*;
     use std::io::Write as _;
+
+    #[cfg(windows)]
+    #[test]
+    fn a_standalone_manager_pins_its_log_directory_and_ancestors() {
+        let root = tempfile::tempdir().unwrap();
+        let parent = root.path().join("parent");
+        std::fs::create_dir(&parent).unwrap();
+        let jobs = parent.join("jobs");
+        let manager =
+            ConversionJobManager::new(&jobs, Vec::new(), std::sync::Arc::new(Vec::new)).unwrap();
+        assert!(std::fs::rename(&jobs, parent.join("redirected-jobs")).is_err());
+        assert!(std::fs::rename(&parent, root.path().join("redirected-parent")).is_err());
+        drop(manager);
+        std::fs::rename(&parent, root.path().join("released-parent")).unwrap();
+    }
 
     #[test]
     fn an_unobservable_child_exit_is_failed_instead_of_successful() {

@@ -242,6 +242,9 @@ pub struct HlsService {
     ttl: f64,
     monitor: AtomicBool,
     this: Weak<HlsService>,
+    // Keep external tool reopen paths stable for the entire service lifetime.
+    #[cfg(windows)]
+    _output_pin: drmr_core::native::PrivateDirectoryGuard,
 }
 
 impl fmt::Debug for HlsService {
@@ -276,7 +279,11 @@ impl HlsService {
         manager: Arc<ConversionJobManager>,
     ) -> Result<Arc<HlsService>, StartError> {
         let output = pyutil::resolve(&config.output_root).map_err(|_| StartError::Loop)?;
+        #[cfg(not(windows))]
         drmr_core::native::create_private_dir_all(&output).map_err(StartError::Output)?;
+        #[cfg(windows)]
+        let output_pin =
+            drmr_core::native::pin_private_directory(&output).map_err(StartError::Output)?;
         let clock = config
             .hooks
             .hls_clock
@@ -292,6 +299,8 @@ impl HlsService {
             ttl: 1800.0,
             monitor: AtomicBool::new(monitor),
             this: this.clone(),
+            #[cfg(windows)]
+            _output_pin: output_pin,
         });
         {
             let mut state = service.lock();
@@ -2277,6 +2286,31 @@ fn b64decode_lenient(text: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn the_service_pins_its_output_path_until_the_last_owner_drops() {
+        let root = tempfile::tempdir().unwrap();
+        let parent = root.path().join("output-parent");
+        std::fs::create_dir(&parent).unwrap();
+        let output = parent.join("output");
+        let manager = Arc::new(
+            ConversionJobManager::new(&root.path().join("jobs"), Vec::new(), Arc::new(Vec::new))
+                .unwrap(),
+        );
+        let service = HlsService::new(
+            Arc::new(ServerConfig::new(root.path().join("catalog"), &output)),
+            manager,
+        )
+        .unwrap();
+        let other_owner = service.clone();
+        assert!(std::fs::rename(&output, parent.join("redirected-output")).is_err());
+        assert!(std::fs::rename(&parent, root.path().join("redirected-parent")).is_err());
+        drop(service);
+        assert!(std::fs::rename(&output, parent.join("redirected-output")).is_err());
+        drop(other_owner);
+        std::fs::rename(&parent, root.path().join("released-parent")).unwrap();
+    }
 
     #[test]
     fn cursors_round_trip_and_are_decoded_leniently() {
