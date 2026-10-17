@@ -140,18 +140,18 @@ arguments, and raw diagnostics. The input-entry hash covers that file only, incl
 just the manifest when one is supplied. Referenced media is not fingerprinted by this
 measurement tool. Windows process-memory sampling is reported as unmeasured.
 
-One macOS ARM64 debug build with FFmpeg 9.0.2 and Shaka Packager 3.8.0 measured three
-paired runs of ten-second BBB clear DASH to CBCS DASH, with five two-second video segments:
+One macOS ARM64 release build with FFmpeg 9.0.2 and Shaka Packager 3.8.0 measured three
+paired runs of ten-second Big Buck Bunny clear DASH to CBCS DASH, with five two-second video segments:
 
 | Worker setting | Median conversion | Median separate verification | Largest observed descendant count |
 | --- | ---: | ---: | ---: |
-| Automatic | 0.761 s | 0.403 s | 2 |
-| Maximum 1 | 1.253 s | 0.633 s | 1 |
+| Automatic | 0.715 s | 0.385 s | 2 |
+| Maximum 1 | 1.182 s | 0.594 s | 1 |
 
 All six conversions and independent checks passed stream metadata, encoded payload,
 complete decoded content, and every packet timestamp. During separate verification,
-median sampled CLI resident memory was 19.0 MB with automatic workers and 17.8 MB with
-one worker; descendant totals were 31.1 MB and 20.5 MB respectively. Memory samples were
+median sampled CLI resident memory was 12.8 MB with automatic workers and 12.2 MB with
+one worker; descendant totals were 21.5 MB and 20.3 MB respectively. Memory samples were
 100 ms apart, and parent/descendant maxima are separate. Short-lived processes can be
 missed. These observations apply to this small asset and host; they do not establish
 long-media throughput, an exact memory peak, or a result on another operating system.
