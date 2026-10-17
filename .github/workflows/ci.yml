@@ -138,8 +138,8 @@ jobs:
           print("No unexpected test skips; both child-process helpers accounted for.")
           PYTHON
 
-      - name: Run browser player unit tests
-        run: node --test crates/drmr-server/tests/js/player.test.cjs
+      - name: Run browser unit tests
+        run: node --test crates/drmr-server/tests/js/*.test.cjs
 
       - name: Build release CLI
         run: cargo build --release --locked -p drmr

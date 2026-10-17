@@ -33,14 +33,14 @@
 
   // compose(catalogRows, jobRecords, queueSnapshot) -> [Content] sorted by asset id.
   function compose(catalog, jobs, queue) {
-    var byAsset = {};
+    var byAsset = Object.create(null);
     (jobs || []).forEach(function (job) {
       if (!job || typeof job.asset_id !== 'string') return;
       (byAsset[job.asset_id] = byAsset[job.asset_id] || []).push(job);
     });
     Object.keys(byAsset).forEach(function (id) { byAsset[id].sort(byNewest); });
     var contents = [];
-    var seen = {};
+    var seen = Object.create(null);
     (catalog || []).forEach(function (row) {
       if (!row || typeof row.asset_id !== 'string') return;
       seen[row.asset_id] = true;
@@ -90,7 +90,7 @@
   // ("<track>:<check>" for HLS results; per-rendition `checks` arrays for catalog reports) are
   // combined -- FAIL if any failed, else SKIP if all skipped, else PASS if any passed, else UNKNOWN.
   function checkStatuses(report, kind) {
-    var buckets = {};
+    var buckets = Object.create(null);
     function add(id, status) {
       id = String(id || '');
       var colon = kind === 'hls' ? id.indexOf(':') : -1;
@@ -103,7 +103,7 @@
       (report.tracks || []).forEach(function (track) { (track.checks || []).forEach(function (check) { add(typeof check === 'string' ? check : (check.id || check.check_id), typeof check === 'string' ? 'PASS' : check.status); }); });
       (report.track_reports || []).forEach(function (track) { (track.checks || []).forEach(function (check) { add(check.id, check.status); }); });
     }
-    var out = {};
+    var out = Object.create(null);
     Object.keys(buckets).forEach(function (id) {
       var list = buckets[id];
       out[id] = list.indexOf('FAIL') >= 0 ? 'FAIL' : list.every(function (x) { return x === 'SKIP'; }) ? 'SKIP' : list.indexOf('PASS') >= 0 ? 'PASS' : 'UNKNOWN';
