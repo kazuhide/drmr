@@ -345,7 +345,10 @@ pub fn py_path(text: &OsStr) -> PathBuf {
 /// Normalize native Windows separators and dot components without decoding path bytes.
 #[cfg(windows)]
 pub fn py_path(text: &OsStr) -> PathBuf {
-    let path: PathBuf = Path::new(text).components().collect();
+    let path: PathBuf = Path::new(text)
+        .components()
+        .filter(|component| *component != std::path::Component::CurDir)
+        .collect();
     if path.as_os_str().is_empty() {
         PathBuf::from(".")
     } else {

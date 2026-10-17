@@ -18,6 +18,18 @@ pub fn resolve_path(path: &Path) -> io::Result<PathBuf> {
                 resolved.pop();
             }
             Component::Normal(name) => {
+                // Windows can report a child of a regular file as PATH_NOT_FOUND.
+                // Check the existing parent before treating an absent suffix as valid.
+                match std::fs::metadata(&resolved) {
+                    Ok(metadata) if !metadata.is_dir() => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::NotADirectory,
+                            "path component is not a directory",
+                        ));
+                    }
+                    Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
+                    _ => {}
+                }
                 resolved.push(name);
                 match std::fs::symlink_metadata(&resolved) {
                     Ok(_) => resolved = std::fs::canonicalize(&resolved)?,
