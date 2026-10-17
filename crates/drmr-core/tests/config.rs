@@ -94,6 +94,31 @@ fn enumerate_renditions_excludes_vp9() {
     assert!(renditions.iter().all(|r| r.codec != "vp9"));
 }
 
+#[test]
+fn mixed_codec_adaptation_sets_are_rejected_before_loading_an_asset() {
+    for codec in ["av01.0.04M.08", "hev1.1.6.L60.90"] {
+        let (_dir, root) = tempdir();
+        let asset = build_synthetic_dash_asset(&root, &[h264_rep("v0")], TITLE);
+        let text = std::fs::read_to_string(&asset.mpd_path).unwrap();
+        std::fs::write(&asset.mpd_path, text.replace("</AdaptationSet>", &format!("<Representation id=\"unsupported\" codecs=\"{codec}\"><SegmentTemplate/></Representation></AdaptationSet>"))).unwrap();
+        for message in [
+            value_error(enumerate_renditions(&asset.mpd_path)),
+            value_error(load_asset(
+                &asset.mpd_path,
+                key(),
+                &root.join("output"),
+                None,
+            )),
+        ] {
+            assert_eq!(
+                message,
+                "mixed supported and unsupported codecs in one AdaptationSet"
+            );
+        }
+        assert!(!root.join("output").exists());
+    }
+}
+
 // ---- : other shapes, no hardcoded count --------------------------------------------
 
 #[test]

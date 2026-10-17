@@ -187,6 +187,91 @@ fn plan_writes_nothing() {
 }
 
 #[test]
+fn source_metadata_and_mixed_codecs_fail_before_packaging_or_output() {
+    use drmr_core::pipeline_deps::Ports;
+    use drmr_core::playready::{build_playready_v43, build_pro};
+
+    for case in ["custom", "ds-id", "mixed-av1", "mixed-hev1"] {
+        let cli = Cli::new();
+        let asset = cli.asset(&[h264_rep("v0")], "unsupported-source");
+        let master = write_minimal_hls_master(cli.root(), "unsupported-source", 3);
+        let mut text = fs::read_to_string(&asset.mpd_path).unwrap();
+        if case.starts_with("mixed") {
+            let codec = if case == "mixed-av1" {
+                "av01.0.04M.08"
+            } else {
+                "hev1.1.6.L60.90"
+            };
+            text = text.replace("</AdaptationSet>", &format!("<Representation id=\"unsupported\" codecs=\"{codec}\"><SegmentTemplate/></Representation></AdaptationSet>"));
+        } else {
+            let pr = build_playready_v43(KID, "https://license.example.test/").unwrap();
+            let metadata = if case == "custom" {
+                "<CUSTOMATTRIBUTES><VALUE>synthetic-private-value</VALUE></CUSTOMATTRIBUTES>"
+            } else {
+                "<DS_ID>synthetic-private-value</DS_ID>"
+            };
+            let header = pr
+                .wrmheader_xml
+                .replace("</DATA>", &format!("{metadata}</DATA>"));
+            let pro = base64::engine::general_purpose::STANDARD
+                .encode(build_pro(header.as_str()).unwrap());
+            let protection = format!(
+                "<ContentProtection schemeIdUri=\"urn:uuid:9a04f079-9840-4286-ab92-e65be0885f95\"><mspr:pro xmlns:mspr=\"urn:microsoft:playready\">{pro}</mspr:pro></ContentProtection><Representation"
+            );
+            text = text.replacen("<Representation", &protection, 1);
+        }
+        fs::write(&asset.mpd_path, text).unwrap();
+        let before = tree_state(cli.root());
+        let modules = Modules {
+            config: &Ports,
+            manifests: &Ports,
+            packager: &cli.fakes.packager,
+            media_inspect: &cli.fakes.media,
+            playready: &cli.playready,
+        };
+        let expected = if case.starts_with("mixed") {
+            "mixed supported and unsupported codecs in one AdaptationSet"
+        } else {
+            "unsupported PlayReady custom attributes or DS_ID"
+        };
+        let mpd = asset.mpd_path.to_str().unwrap();
+        let output = cli.path("output");
+        let mut commands = vec![vec![
+            "run",
+            "--mpd",
+            mpd,
+            "--hls-master",
+            master.to_str().unwrap(),
+            "--output",
+            &output,
+        ]];
+        if case.starts_with("mixed") {
+            commands.push(vec!["plan", "--mpd", mpd]);
+        }
+        for argv in commands {
+            let argv: Vec<String> = argv.into_iter().map(ToString::to_string).collect();
+            let stdout = SharedBuf::default();
+            let mut stderr = SharedBuf::default();
+            let code = cli::main(
+                &argv,
+                &real_key_env(),
+                &modules,
+                stdout.clone(),
+                &mut stderr,
+            );
+            assert_eq!(code, EXIT_USAGE_ERROR, "{case}: {}", stderr.text());
+            assert_eq!(stderr.text(), format!("error: {expected}\n"));
+            assert_eq!(stdout.text(), "");
+            assert_no_secrets(&stderr.text());
+            assert!(!stderr.text().contains("synthetic-private-value"));
+        }
+        assert_eq!(tree_state(cli.root()), before);
+        assert_eq!(cli.fakes.packager.calls(), [] as [PackagerCall; 0]);
+        assert!(cli.playready.calls.lock().unwrap().is_empty());
+    }
+}
+
+#[test]
 fn plan_missing_mpd_is_usage_error() {
     let cli = Cli::new();
     let missing = cli.path("nope.mpd");

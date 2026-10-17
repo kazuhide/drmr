@@ -344,6 +344,9 @@ pub fn cmd_run<O: Write + Send + 'static>(
     // --pssh set as well as the manifest patch.
     let playready_objects = if emit_manifests {
         let parsed_pro = modules.manifests.parse_source_playready(&args.mpd)?;
+        if parsed_pro.has_custom_attributes {
+            return Err(usage("unsupported PlayReady custom attributes or DS_ID"));
+        }
         Some(
             modules
                 .playready

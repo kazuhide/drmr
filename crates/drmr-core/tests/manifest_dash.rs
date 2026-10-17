@@ -663,6 +663,70 @@ fn test_parse_source_playready_raises_when_absent() {
     assert!(matches!(err, DashError::Rewrite(_)));
 }
 
+#[test]
+fn custom_playready_metadata_is_rejected_before_rewriting() {
+    use base64::Engine as _;
+    use drmr_core::playready::build_pro;
+
+    for metadata in [
+        "<CUSTOMATTRIBUTES><VALUE>synthetic-private-value</VALUE></CUSTOMATTRIBUTES>",
+        "<DS_ID>synthetic-private-value</DS_ID>",
+    ] {
+        let tmp = tempfile::tempdir().unwrap();
+        let pr = playready();
+        let header = pr
+            .wrmheader_xml
+            .replace("</DATA>", &format!("{metadata}</DATA>"));
+        let custom_pro =
+            base64::engine::general_purpose::STANDARD.encode(build_pro(header.as_str()).unwrap());
+        let source = build_synthetic_dash_asset(
+            tmp.path(),
+            &[h264_rep("v0"), audio_rep("a0")],
+            &DashOptions {
+                playready_pssh_b64: Some(pr.pssh_b64.clone()),
+                playready_pro_b64: Some(custom_pro.clone()),
+                ..DashOptions::default()
+            },
+        );
+        // A clean first header must not hide unsupported metadata on a later adaptation.
+        std::fs::write(&source, read(&source).replacen(&custom_pro, &pr.pro_b64, 1)).unwrap();
+        let output = tmp.path().join("new-output/manifest.mpd");
+        assert_eq!(
+            parse_source_playready(&source).unwrap_err().to_string(),
+            "unsupported PlayReady custom attributes or DS_ID"
+        );
+        let error = rewrite_dash_manifest(&source, &output, &pr, None).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "unsupported PlayReady custom attributes or DS_ID"
+        );
+        assert!(!error.to_string().contains("synthetic-private-value"));
+        assert!(!output.parent().unwrap().exists());
+    }
+}
+
+#[test]
+fn mixed_codec_adaptation_sets_are_rejected_before_rewriting_or_qualifying() {
+    for codec in ["av01.0.04M.08", "hev1.1.6.L60.90"] {
+        let tmp = tempfile::tempdir().unwrap();
+        let pr = playready();
+        let source =
+            build_synthetic_dash_asset(tmp.path(), &[h264_rep("v0")], &DashOptions::default());
+        let original = read(&source);
+        let mixed = original.replace("</AdaptationSet>", &format!("<Representation id=\"unsupported\" codecs=\"{codec}\"><SegmentTemplate/></Representation></AdaptationSet>"));
+        std::fs::write(&source, &mixed).unwrap();
+        let output = tmp.path().join("new-output/manifest.mpd");
+        let error = rewrite_dash_manifest(&source, &output, &pr, None).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "mixed supported and unsupported codecs in one AdaptationSet"
+        );
+        assert!(!output.parent().unwrap().exists());
+        assert!(analyze_dash_manifest(&source).is_err());
+        assert_eq!(read(&source), mixed);
+    }
+}
+
 // ------------------------------------------------------------------------------------------
 // security / read-only / hygiene
 // ------------------------------------------------------------------------------------------

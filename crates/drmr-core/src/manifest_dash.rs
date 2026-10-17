@@ -6,7 +6,7 @@
 //! edits, which are then applied to the original text.
 
 use crate::checks::CheckId;
-use crate::config::{IN_SCOPE_MIME_TYPES, in_scope_codec_prefixes};
+use crate::config::{IN_SCOPE_MIME_TYPES, adaptation_codec_scope};
 use crate::manifest_support::fraction::Fraction;
 use crate::manifest_support::path;
 use crate::manifest_support::py::{self, PyErr, repr_opt};
@@ -142,26 +142,37 @@ fn segment_template_attrs(adaptation_set: &Element) -> Vec<SegmentTemplateAttrs<
         .collect()
 }
 
-/// `_in_scope`: config's scoping — `mimeType` in the allow-list and at least one
-/// Representation whose codec starts with the content type's allowed prefixes.
-fn in_scope(adaptation_set: &Element) -> bool {
+/// Classify whole adaptations using the same codec boundary as asset discovery.
+fn in_scope(adaptation_set: &Element) -> Result<bool, DashError> {
     let Some(mime_type) = adaptation_set.get("mimeType") else {
-        return false;
+        return Ok(false);
     };
     if !IN_SCOPE_MIME_TYPES.contains(&mime_type) {
-        return false;
+        return Ok(false);
     }
-    let allowed = in_scope_codec_prefixes(adaptation_set.get("contentType").unwrap_or(""));
-    if allowed.is_empty() {
-        return false;
+    adaptation_codec_scope(
+        adaptation_set.get("contentType").unwrap_or(""),
+        adaptation_set
+            .iter_local("Representation")
+            .into_iter()
+            .map(|rep| rep.get("codecs").unwrap_or("")),
+    )
+    .map_err(|message| DashError::Rewrite(DashRewriteError(message.into())))
+}
+
+/// Refuse metadata the replacement header cannot preserve. Other opaque source blobs
+/// retain the rewrite API's existing replacement behavior; source parsing validates them.
+fn reject_custom_playready_metadata(adaptation_set: &Element) -> Result<(), DashError> {
+    for cp in adaptation_set.iter_local("ContentProtection") {
+        if py::lower(cp.get("schemeIdUri").unwrap_or("")) == PLAYREADY_SCHEME
+            && child_text(Some(cp), "pro")
+                .and_then(|pro| parse_pro(py::strip(pro)).ok())
+                .is_some_and(|pro| pro.has_custom_attributes)
+        {
+            return rewrite_error("unsupported PlayReady custom attributes or DS_ID");
+        }
     }
-    adaptation_set
-        .iter_local("Representation")
-        .into_iter()
-        .any(|rep| {
-            let codecs = rep.get("codecs").unwrap_or("");
-            allowed.iter().any(|prefix| codecs.starts_with(prefix))
-        })
+    Ok(())
 }
 
 fn reject_doctype(text: &str) -> Result<(), DashError> {
@@ -348,6 +359,11 @@ pub fn parse_source_playready(mpd_path: &Path) -> Result<ParsedPro, DashError> {
     let text = py::read_utf8(mpd_path)?;
     reject_doctype(&text)?;
     let root = parse_manifest(&text)?;
+    for adaptation_set in root.iter_local("AdaptationSet") {
+        if in_scope(adaptation_set)? {
+            reject_custom_playready_metadata(adaptation_set)?;
+        }
+    }
     let Some(cp) = find_content_protection(&root, PLAYREADY_SCHEME) else {
         return rewrite_error("no PlayReady ContentProtection found in the manifest");
     };
@@ -395,7 +411,8 @@ pub fn rewrite_dash_manifest(
     for index in (1..parts.len()).step_by(2) {
         let block = parts[index].clone();
         let adaptation_set = parse_fragment(&block)?;
-        if in_scope(&adaptation_set) {
+        if in_scope(&adaptation_set)? {
+            reject_custom_playready_metadata(&adaptation_set)?;
             let edited = patch_in_scope_block(&block, &adaptation_set, playready)?;
             parts[index].clone_from(&edited);
             block_pairs.push((block, edited, true));
@@ -633,7 +650,7 @@ pub fn analyze_dash_manifest(mpd_path: &Path) -> Result<DashManifestSummary, Das
     for adaptation_set in root.iter_local("AdaptationSet") {
         let content_type = required_attr(adaptation_set, "contentType", &display_path)?;
         let mime_type = required_attr(adaptation_set, "mimeType", &display_path)?;
-        let scoped = in_scope(adaptation_set);
+        let scoped = in_scope(adaptation_set)?;
         let protection_scheme = mp4protection_value(adaptation_set).map(str::to_string);
         let kid = default_kid(adaptation_set).map(str::to_string);
         let systems = drm_systems(adaptation_set);

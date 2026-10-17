@@ -37,6 +37,27 @@ pub fn in_scope_codec_prefixes(content_type: &str) -> &'static [&'static str] {
     }
 }
 
+/// An adaptation can be rewritten only when all of its representations share codec scope.
+pub(crate) fn adaptation_codec_scope<'a>(
+    content_type: &str,
+    codecs: impl IntoIterator<Item = &'a str>,
+) -> Result<bool, &'static str> {
+    let allowed = in_scope_codec_prefixes(content_type);
+    let (mut supported, mut unsupported) = (false, false);
+    for codec in codecs {
+        if allowed.iter().any(|prefix| codec.starts_with(prefix)) {
+            supported = true;
+        } else {
+            unsupported = true;
+        }
+    }
+    if supported && unsupported {
+        Err("mixed supported and unsupported codecs in one AdaptationSet")
+    } else {
+        Ok(supported)
+    }
+}
+
 /// The first run of digits in a segment file stem (Python's `\d` matches every Unicode decimal
 /// digit, as Rust's does).
 static SEGMENT_NUMBER: LazyLock<Regex> =
@@ -488,6 +509,14 @@ pub fn enumerate_renditions(mpd_path: &Path) -> Result<Vec<Rendition>, ConfigErr
             continue;
         }
         let content_type = required_attr(adaptation_set, "contentType", &mpd_path)?;
+        adaptation_codec_scope(
+            content_type,
+            adaptation_set
+                .children()
+                .filter(|node| is_mpd(node, "Representation"))
+                .map(|representation| etree_get(representation, "codecs").unwrap_or("")),
+        )
+        .map_err(|message| ConfigError::Value(message.into()))?;
         let widevine = widevine_pssh_hex(adaptation_set)?;
         for representation in adaptation_set
             .children()
