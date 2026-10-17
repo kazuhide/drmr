@@ -29,7 +29,7 @@ pub fn write_mode(path: &Path, content: &[u8], mode: u32) {
     {
         use std::io::Write as _;
         let mut file = std::fs::File::create(path).unwrap();
-        if mode & 0o077 == 0 {
+        if mode.trailing_zeros() >= 6 {
             private_fs::harden(&file).unwrap();
         }
         file.write_all(content).unwrap();
