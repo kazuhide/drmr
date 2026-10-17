@@ -70,3 +70,32 @@ fn the_real_cli_packages_the_bbb_hls_fixture_without_changing_decoded_media() {
     assert_eq!(report["evidence"]["real_license"], "not-verified");
     println!("{}", String::from_utf8_lossy(&output.stdout));
 }
+
+#[test]
+fn the_real_cli_verifies_all_sixteen_bbb_protection_routes() {
+    let root = tempfile::tempdir().unwrap();
+    let harness =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bbb/conversion_regression.py");
+    let output = Command::new("python3")
+        .arg(harness)
+        .arg("--drmr")
+        .arg(env!("CARGO_BIN_EXE_drmr"))
+        .arg("--output")
+        .arg(root.path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["success"], true);
+    assert_eq!(report["routes"].as_array().unwrap().len(), 16);
+    for route in report["routes"].as_array().unwrap() {
+        assert_eq!(route["passed"], true);
+        assert_eq!(route["verification"]["checks"]["packet_timing_equal"], true);
+    }
+    assert_eq!(report["source_video_segments"], 5);
+    println!("{}", String::from_utf8_lossy(&output.stdout));
+}

@@ -36,6 +36,8 @@ fn segment_keys_need_no_mp4_identifier_and_keep_uris_private() {
     let keys = read(&file).unwrap();
     assert!(keys.output.is_none());
     assert!(keys.hls_output.is_some());
+    assert!(keys.output_hls_verification_keys().is_ok());
+    assert!(keys.output_verification_keys().is_ok());
     let shown = format!("{keys:?}");
     assert!(!shown.contains("sentinel") && !shown.contains("111111") && !shown.contains("222222"));
 }

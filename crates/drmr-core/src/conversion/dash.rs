@@ -453,6 +453,44 @@ pub(crate) fn snapshot_dash(path: &Path, stage: &Path) -> Result<Vec<LocalTrack>
     Ok(tracks)
 }
 
+fn decimal_duration(value: &str) -> Result<(u64, u64), ConversionError> {
+    let text = value
+        .strip_prefix("PT")
+        .and_then(|v| v.strip_suffix('S'))
+        .ok_or(error("dash-duration-syntax-not-supported"))?;
+    if text.is_empty() || text.len() > 32 {
+        return Err(error("dash-duration-syntax-not-supported"));
+    }
+    let (whole, fraction) = text.split_once('.').unwrap_or((text, ""));
+    if whole.is_empty()
+        || !whole.bytes().all(|b| b.is_ascii_digit())
+        || fraction.len() > 9
+        || !fraction.bytes().all(|b| b.is_ascii_digit())
+        || (text.contains('.') && fraction.is_empty())
+    {
+        return Err(error("dash-duration-syntax-not-supported"));
+    }
+    let whole = whole
+        .parse::<u64>()
+        .map_err(|_| error("dash-duration-syntax-not-supported"))?;
+    let scale = 10u64.pow(
+        u32::try_from(fraction.len()).map_err(|_| error("dash-duration-syntax-not-supported"))?,
+    );
+    let fraction = if fraction.is_empty() {
+        0
+    } else {
+        fraction
+            .parse::<u64>()
+            .map_err(|_| error("dash-duration-syntax-not-supported"))?
+    };
+    let numerator = whole
+        .checked_mul(scale)
+        .and_then(|n| n.checked_add(fraction))
+        .filter(|n| *n > 0)
+        .ok_or(error("dash-duration-syntax-not-supported"))?;
+    Ok((numerator, scale))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -552,9 +590,8 @@ mod tests {
         ] {
             std::fs::write(&manifest, body).unwrap();
             let stage = tempfile::tempdir().unwrap();
-            let error = snapshot_dash(&manifest, stage.path())
-                .err()
-                .expect("unsupported DASH must fail");
+            let error =
+                snapshot_dash(&manifest, stage.path()).expect_err("unsupported DASH must fail");
             assert!(!format!("{error:?}").contains("sentinel"));
         }
     }
@@ -574,40 +611,3 @@ mod tests {
 }
 
 // The qualified static profile uses finite seconds, with at most nanosecond precision.
-fn decimal_duration(value: &str) -> Result<(u64, u64), ConversionError> {
-    let text = value
-        .strip_prefix("PT")
-        .and_then(|v| v.strip_suffix('S'))
-        .ok_or(error("dash-duration-syntax-not-supported"))?;
-    if text.is_empty() || text.len() > 32 {
-        return Err(error("dash-duration-syntax-not-supported"));
-    }
-    let (whole, fraction) = text.split_once('.').unwrap_or((text, ""));
-    if whole.is_empty()
-        || !whole.bytes().all(|b| b.is_ascii_digit())
-        || fraction.len() > 9
-        || !fraction.bytes().all(|b| b.is_ascii_digit())
-        || (text.contains('.') && fraction.is_empty())
-    {
-        return Err(error("dash-duration-syntax-not-supported"));
-    }
-    let whole = whole
-        .parse::<u64>()
-        .map_err(|_| error("dash-duration-syntax-not-supported"))?;
-    let scale = 10u64.pow(
-        u32::try_from(fraction.len()).map_err(|_| error("dash-duration-syntax-not-supported"))?,
-    );
-    let fraction = if fraction.is_empty() {
-        0
-    } else {
-        fraction
-            .parse::<u64>()
-            .map_err(|_| error("dash-duration-syntax-not-supported"))?
-    };
-    let numerator = whole
-        .checked_mul(scale)
-        .and_then(|n| n.checked_add(fraction))
-        .filter(|n| *n > 0)
-        .ok_or(error("dash-duration-syntax-not-supported"))?;
-    Ok((numerator, scale))
-}

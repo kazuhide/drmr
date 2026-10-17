@@ -41,6 +41,18 @@ impl OperatorKeys {
             .map(String::as_str)
             .or_else(|| self.hls_output.as_ref().map(HlsOutputKey::key_uri))
     }
+    /// Match output AES-128 playlist declarations without retrieving the advertised URI.
+    pub fn output_hls_verification_keys(&self) -> Result<HlsInputKeys, ConversionError> {
+        self.hls_output.as_ref().map_or_else(
+            || Ok(HlsInputKeys::default()),
+            |key| {
+                HlsInputKeys::new(vec![(
+                    key.uri.to_string(),
+                    Aes128Key(Zeroizing::new(*key.key.0)),
+                )])
+            },
+        )
+    }
     /// Decrypt a result for comparison using its output domain, independently of source keys.
     pub fn output_verification_keys(&self) -> Result<InputKeys, ConversionError> {
         self.output.as_ref().map_or_else(

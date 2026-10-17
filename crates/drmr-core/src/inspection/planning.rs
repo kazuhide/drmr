@@ -111,10 +111,7 @@ pub fn plan(
     }
     formats.sort();
     formats.dedup();
-    let mut findings = vec![
-        Finding::new("media-validation-required"),
-        Finding::new("generic-conversion-not-yet-available"),
-    ];
+    let mut findings = vec![Finding::new("media-validation-required")];
     if target == TargetProtection::HlsAes128 && formats != [OutputFormat::Hls] {
         findings.push(Finding::new("hls-aes128-requires-hls-output"));
     }
@@ -136,7 +133,16 @@ pub fn plan(
     {
         findings.push(Finding::new("source-protection-not-supported"));
     }
-    let compatible = findings.len() == 2;
+    let compatible = findings.len() == 1;
+    let mut execution_available = compatible && formats.len() == 1;
+    if formats.len() != 1 {
+        findings.push(Finding::new("convert-one-output-format-per-invocation"));
+    }
+    if formats == [OutputFormat::Mp4] && input.tracks.len() != 1 {
+        execution_available = false;
+        findings.push(Finding::new("mp4-output-requires-one-track"));
+    }
+    findings.push(Finding::new("source-profile-validation-required"));
     let mut operations = vec!["validate-source".into()];
     let mut keys = Vec::new();
     if input
@@ -177,7 +183,7 @@ pub fn plan(
         operations,
         keys,
         compatible,
-        execution_available: false,
+        execution_available,
         findings,
     }
 }
