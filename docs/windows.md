@@ -14,7 +14,7 @@ cargo build --release --locked -p drmr
 
 The Windows CI archive contains `drmr.exe`, the license, and user documentation. Extract it to a local directory and add that directory to your user `PATH`, or invoke the executable by its full path. External tools are installed separately: FFmpeg (`ffmpeg.exe` and `ffprobe.exe`), Bento4 (`mp4dump.exe`), and Shaka Packager (`packager.exe`). See the [installation links](../README.md#install). `doctor` discovers executables; it does not validate their versions.
 
-If Windows reports a missing `VCRUNTIME140` or `MSVCP140` library, install the [Microsoft Visual C++ x64 Redistributable](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist). CI prints the release executable's imported libraries before creating the archive.
+The CI-built executable imports `VCRUNTIME140.dll`. Install the [Microsoft Visual C++ x64 Redistributable](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist) if that runtime is not already available. CI prints the release executable's imported libraries before creating the archive.
 
 ## Protect configuration files
 
