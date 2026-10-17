@@ -553,10 +553,8 @@ fn a_probe_that_fails_or_finds_no_key_frame_is_classified() {
     let tmp = tempfile::tempdir().unwrap();
     let segment = tmp.path().join("segment.ts");
     std::fs::write(&segment, support::ts_packet("", b'x')).unwrap();
-    let runner = ToolRunner::new(
-        Arc::new(Secrets::new()),
-        Arc::new(drmr_core::events::NoSink),
-    );
+    let diagnostics = Arc::new(Collector::default());
+    let runner = ToolRunner::new(Arc::new(Secrets::new()), diagnostics.clone());
     let cases = [
         ("exit 1", "media-probe-failed"),
         ("printf 'not json'", "media-probe-failed"),
@@ -579,7 +577,12 @@ fn a_probe_that_fails_or_finds_no_key_frame_is_classified() {
         std::fs::write(&script, format!("#!/bin/sh\n{body}\n")).unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
         let prober = FfprobeProber::with_program(&runner, &script.to_string_lossy());
-        assert_eq!(token(prober.probe(&segment, None)), *expected, "{body}");
+        assert_eq!(
+            token(prober.probe(&segment, None)),
+            *expected,
+            "case {index}: {body}; tool diagnostics: {:?}",
+            diagnostics.records()
+        );
     }
     // an encrypted sample entry in the init is refused before ffprobe runs; the probe's
     // temporary copy (init + segment) is removed afterwards
