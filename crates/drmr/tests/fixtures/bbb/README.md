@@ -22,7 +22,7 @@ Install FFmpeg (including `ffprobe`), Shaka Packager, Bento4's `mp4dump`, and Py
 cargo test --locked -p drmr --test bbb_media -- --nocapture
 ```
 
-The first test checks the committed bytes, codecs, duration, packet count, and actual H.264 IDR slices. The second generates clear HTTP Live Streaming (HLS) and Dynamic Adaptive Streaming over HTTP (DASH) adapters in a temporary directory. It runs the real `drmr analyze-hls` and `drmr package-hls` commands against the HLS adapter. Packaging must pass the CLI's source correspondence, timing, decoded media identity, and CBCS encryption signaling checks for both tracks. The generated DASH adapter is checked for clear signaling; it is not a DASH packaging test.
+The fixture test checks the committed bytes, codecs, duration, packet count, and actual H.264 IDR slices. The existing HLS workflow test generates clear HTTP Live Streaming (HLS) and Dynamic Adaptive Streaming over HTTP (DASH) adapters in a temporary directory. It runs the real `drmr analyze-hls` and `drmr package-hls` commands against the HLS adapter. Packaging must pass the CLI's source correspondence, timing, decoded media identity, and CBCS encryption signaling checks for both tracks. The generated DASH adapter is checked for clear signaling; it is not a DASH packaging test.
 
 An independent check then concatenates each complete source presentation and its final encrypted output. FFmpeg decrypts the output directly: all decoded video frames and audio samples must match, and every packet timestamp must retain the intended two-second transport shift. This catches an audio trim being lost or incorrectly applied at every segment boundary.
 
@@ -40,6 +40,14 @@ One local run with FFmpeg 9.0.2 and Shaka Packager 3.8.0 produced the following 
 The video hash covers the frame-size/hash pairs emitted by FFmpeg; the audio hash covers signed 32-bit little-endian PCM samples. The JSON also records the actual assembled MP4 hashes, which may vary with generated metadata.
 
 The encryption key and identifiers in `regression.py` are intentionally public test values. Generated encrypted outputs can be decrypted with those values; do not use them to restrict access or for production. This test does not verify a real license service, playback device, Windows behavior, or independent format conformance.
+
+## Generic conversion matrix
+
+`conversion_regression.py` creates a separate local static DASH adapter without optional rendition labels, then creates `cenc`, `cbcs`, and HLS AES-128 sources with public fixture keys. The real `convert` and `verify` commands exercise all sixteen input/output protection pairs with separate source and result keys. MP4 sample encryption targets are written to DASH; HLS AES-128 is written to HLS. Each source and result retains both video and audio.
+
+The source baseline is the fragmented adapter. Its decoder presents the final audio padding already recorded above; this test does not assert that converting the original progressive clip preserves finite audio end trimming. The generic command refuses that unsupported finite-edit case instead of removing its verification check.
+
+Set `DRMR_CONVERSION_REPORT` to save this matrix's measured JSON outside the repository. CI uploads the report alongside the existing HLS workflow report. See [conversion support](../../../../../docs/conversion-support.md) for observations and the exact commands.
 
 ## Rebuild the clear clip
 

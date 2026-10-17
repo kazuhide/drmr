@@ -566,6 +566,15 @@ impl Client {
         for (name, value) in headers {
             builder = builder.header(*name, *value);
         }
+        // Admission can reject a request before reading its body. Wait for the
+        // server's decision instead of racing a large upload against its close.
+        if body.is_some_and(|body| !body.is_empty())
+            && !headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case("expect"))
+        {
+            builder = builder.header("Expect", "100-continue");
+        }
         let response = match body {
             Some(body) => self.agent.run(builder.body(body.to_vec()).unwrap()),
             None => self.agent.run(builder.body(()).unwrap()),

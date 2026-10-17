@@ -8,6 +8,7 @@ mod support;
 use drmr_core::source::platform::{Platform, Stream, SystemPlatform, TlsContext};
 use drmr_core::source::{Failure, FetchPolicy, Fetcher, SourceRequest};
 use serde_json::{Value, json};
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::io::{self, Read, Write};
@@ -803,59 +804,115 @@ fn playlist_budget_is_checked_before_any_media_download() {
     assert_eq!(server.paths(), ["/master.m3u8"]);
 }
 
+/// Observe timeout resets on the real TCP connection without depending on CI scheduling.
+struct TimeoutPlatform {
+    connections: AtomicUsize,
+    requests: Arc<Mutex<Vec<(usize, bool, bool)>>>,
+}
+
+struct TimeoutStream {
+    socket: TcpStream,
+    connection: usize,
+    timeout: Duration,
+    fresh_read: Cell<bool>,
+    fresh_write: Cell<bool>,
+    writing: bool,
+    requests: Arc<Mutex<Vec<(usize, bool, bool)>>>,
+}
+
+impl Platform for TimeoutPlatform {
+    fn connect(&self, address: SocketAddr, timeout: Duration) -> io::Result<Box<dyn Stream>> {
+        Ok(Box::new(TimeoutStream {
+            socket: TcpStream::connect_timeout(&address, timeout)?,
+            timeout,
+            connection: self.connections.fetch_add(1, Ordering::SeqCst),
+            fresh_read: Cell::new(false),
+            fresh_write: Cell::new(false),
+            writing: false,
+            requests: Arc::clone(&self.requests),
+        }))
+    }
+}
+
+impl Read for TimeoutStream {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let result = self.socket.read(buf);
+        // A following request must reset both bounds after the previous response's reads.
+        self.fresh_read.set(false);
+        self.fresh_write.set(false);
+        self.writing = false;
+        result
+    }
+}
+
+impl Write for TimeoutStream {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        if !self.writing {
+            self.requests.lock().unwrap().push((
+                self.connection,
+                self.fresh_read.get(),
+                self.fresh_write.get(),
+            ));
+            self.writing = true;
+        }
+        self.socket.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.socket.flush()
+    }
+}
+
+impl Stream for TimeoutStream {
+    fn set_read_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
+        self.fresh_read.set(timeout == Some(self.timeout));
+        self.socket.set_read_timeout(timeout)
+    }
+
+    fn set_write_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
+        self.fresh_write.set(timeout == Some(self.timeout));
+        self.socket.set_write_timeout(timeout)
+    }
+}
+
 #[test]
 fn a_kept_alive_connection_gives_the_next_request_the_whole_timeout() {
-    // seg0's body arrives in three parts, the last read starting 1.6 s into a 2 s timeout, so
-    // the socket is left with about 0.4 s; seg1's headers take 1.0 s. Without a fresh timeout
-    // per request the second request times out (an attempt, so with attempts=1 the analysis
-    // fails); with it, seg1 is admitted on the same connection.
-    let _timing = timing();
+    // The former delayed-body fixture left only 0.2 s of scheduling headroom for the next
+    // response. Observe both fresh timeout settings before each real request instead: a
+    // missing reset fails even when the network is fast, without a wall-clock race.
     let tmp = tempfile::tempdir().unwrap();
-    let mut body0 = Vec::new();
-    for _ in 0..3 {
-        body0.extend(ts_packet("0", b'x'));
-    }
-    let body1 = ts_packet("1", b'x');
-    let server = TestServer::start(Protocol::Http11, move |exchange| {
-        match exchange.path() {
-            "/seg1.ts" => {
-                std::thread::sleep(Duration::from_millis(1000)); // inside the timeout, outside what seg0 left
-                exchange.respond(&body1);
-            }
-            "/seg0.ts" => {
-                exchange.send_response(200);
-                exchange.send_header("Content-Length", &body0.len().to_string());
-                exchange.end_headers();
-                // The fixture's identity test always selects the first branch (a slice is a
-                // new object), so it sleeps after the last part too: the server takes seg1's
-                // request 0.8 s after the body ended, and seg1's headers arrive about 1.8 s
-                // after it was sent — beyond the 1.2 s the last chunk's bound left on the
-                // socket, within a fresh 2 s.
-                for part in body0.chunks(188) {
-                    let _ = exchange.write(part);
-                    std::thread::sleep(Duration::from_millis(800));
-                }
-            }
-            _ => exchange.respond(&ts_playlist(2, "seg")),
-        }
-    });
+    let server = TestServer::routes11(vec![
+        ("/m.m3u8".into(), 200, ts_playlist(2, "seg")),
+        ("/seg0.ts".into(), 200, ts_packet("0", b'x')),
+        ("/seg1.ts".into(), 200, ts_packet("1", b'x')),
+    ]);
+    let requests = Arc::new(Mutex::new(Vec::new()));
     let policy = FetchPolicy {
         connections: 1,
         timeout: 2.0,
         attempts: 1,
         ..remote_policy(&server.origin)
     };
-    let result = analyze_remote(
-        &fixed(video()),
-        &format!("{}/m.m3u8", server.origin),
-        "fresh-timeout",
-        tmp.path(),
-        &policy,
-    )
-    .unwrap();
+    let result = Analysis::new(&fixed(video()))
+        .platform(Arc::new(TimeoutPlatform {
+            requests: Arc::clone(&requests),
+            connections: AtomicUsize::new(0),
+        }))
+        .run(
+            &SourceRequest::new(format!("{}/m.m3u8", server.origin)),
+            "fresh-timeout",
+            tmp.path(),
+            &policy,
+        )
+        .unwrap();
     assert!(result.admitted);
     assert_eq!(server.paths(), ["/m.m3u8", "/seg0.ts", "/seg1.ts"]);
-    assert!(server.connection_count() <= 2);
+    assert_eq!(server.connection_count(), 2);
+    assert_eq!(
+        *requests.lock().unwrap(),
+        [(0, true, true), (1, true, true), (1, true, true)],
+        "both media requests reuse a socket and reset both timeout bounds"
+    );
 }
 
 #[test]

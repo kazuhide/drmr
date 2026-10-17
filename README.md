@@ -2,7 +2,7 @@
 
 Rust command-line tools for inspecting and repackaging streaming media with **digital rights management (DRM)**.
 
-drmr converts supported encrypted DASH content from `cenc` (counter-mode encryption) to `cbcs` (pattern encryption using cipher block chaining). It also analyzes clear, on-demand HLS content and packages it for Widevine, PlayReady, and FairPlay. It preserves the existing video and audio encoding; it does not transcode or change quality settings.
+drmr inspects local MP4, DASH, and HLS media and converts qualified on-demand presentations between clear, `cenc` (counter-mode encryption), `cbcs` (pattern encryption using cipher block chaining), and HLS AES-128 protection. Input decryption keys and output encryption keys are supplied separately. It preserves the existing video and audio encoding; it does not transcode or change quality settings.
 
 **DASH** (Dynamic Adaptive Streaming over HTTP) and **HLS** (HTTP Live Streaming) describe media segments using a manifest or playlists. A **rendition** is one available video quality or audio track.
 
@@ -43,16 +43,21 @@ drmr doctor
 drmr inspect /path/to/media.mp4
 drmr plan /path/to/manifest.mpd --to cbcs --format dash,hls
 drmr plan --mpd /path/to/asset/download/manifest.example.test/sample/dash/manifest.mpd
-drmr run --help
+drmr convert --help
+drmr verify --help
 ```
 
 `inspect` reads local MP4 metadata or DASH/HLS declarations without keys or external tools. `plan INPUT --to ...` describes conversion intent and separates input decryption keys from output encryption keys. Neither command verifies media samples or executes a conversion. `plan --mpd` keeps the original prepared-DASH rendition listing.
 
 `doctor` checks whether the four executable files can be found. It does not run them, validate their versions, or prove that a particular asset can be processed.
 
-For clear HLS, start with `analyze-hls`, then package the saved snapshot with `package-hls`. See the [usage guide](docs/usage.md) for configuration examples, the expected local layout, key handling, and output.
+Use `convert INPUT --to ... --format ... --output ...` with a protected key configuration, then `verify OUTPUT --source INPUT` for independent comparison. See [conversion support](docs/conversion-support.md) for the sixteen tested protection routes and the precise input profiles.
+
+The existing `run` path processes prepared DASH assets. For clear HLS with explicit downloading and DRM signaling, start with `analyze-hls`, then package the saved snapshot with `package-hls`. See the [usage guide](docs/usage.md) for configuration examples, the expected local layout, key handling, and output.
 
 ## Supported input
+
+The generic `convert` command accepts qualified local MP4 and fragmented MP4 DASH/HLS profiles, including encrypted input. See [conversion support](docs/conversion-support.md) for restrictions and tested routes. The older workflow commands have these separate input scopes:
 
 - **Local DASH:** MP4 video with `avc1` (H.264) or `hvc1` (H.265), and MP4 audio with `mp4a` codec identifiers. The asset must use the supported downloaded-directory layout and per-representation segment templates. Other codecs and subtitle adaptations are excluded from this path.
 - **Clear, on-demand HLS:** supported MPEG transport stream or fragmented MP4 media with H.264/H.265 video and AAC-LC audio, plus supported WebVTT or MP4-carried TTML subtitle profiles. Analysis rejects unsupported playlists and media rather than treating every HLS stream as compatible.
@@ -67,6 +72,8 @@ drmr packages supplied media and signaling. It does not provide a DRM license se
 | `doctor` | Check external tool availability; use `--json` for scripts |
 | `inspect` | Read local MP4, DASH, or HLS metadata; use `--json` for scripts |
 | `plan` | Describe a target conversion; `--mpd` lists prepared DASH renditions |
+| `convert` | Convert qualified local media with separate input/output keys and verification |
+| `verify` | Compare result media directly with its original source |
 | `run` | Repackage one local DASH asset and check its output |
 | `analyze-hls` | Download and analyze a clear HLS presentation into a saved snapshot |
 | `package-hls` | Package a verified HLS snapshot with DRM signaling |

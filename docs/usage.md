@@ -18,7 +18,46 @@ HLS inspection follows only local child playlists inside the input playlist's di
 
 `plan INPUT --to clear|cenc|cbcs|hls-aes128` describes the requested operations and independent input/output key roles. `--format mp4|dash|hls` selects output packaging; comma-separated values are accepted. Omitting it retains the input format. An HLS AES-128 target requires HLS output. CENC output to HLS is currently rejected. Unsupported source protection or unresolved encryption is reported as incompatible.
 
-A compatible plan is a description of intent. `execution_available: false` explicitly means the generic conversion is not implemented. Continue using `run` and `package-hls` for their supported processing paths. Plans contain no secret key values and cannot be submitted as trusted execution artifacts.
+A compatible plan describes a valid format/protection combination. `execution_available` indicates whether a backend route exists for that request; execution still checks the actual source profile, keys, and media. Multiple requested output formats are planned together but must be converted in separate invocations. Plans contain no secret key values and cannot be submitted as trusted execution artifacts.
+
+## Convert and verify local media
+
+```sh
+drmr convert source.mpd --to cbcs --format dash --output protected-dash --keys-file keys.json
+drmr convert source.mpd --to hls-aes128 --format hls --output protected-hls --keys-file segment-keys.json
+drmr verify protected-dash/manifest.mpd --source source.mpd --keys-file keys.json --json
+```
+
+`convert` detects local MP4, DASH, and HLS inputs. Choose one output format per invocation; omitting `--format` retains the input format. The output path is a new MP4 file or a new DASH/HLS directory. Existing destinations are refused. Input media is read into a private working area, and output is published only after content and timing checks pass. Nothing is re-encoded.
+
+`clear`, `cenc`, and `cbcs` can be written to DASH; `clear` and `cbcs` can be written to fragmented MP4 HLS. HLS `AES-128` encrypts complete HLS resources and requires `--format hls`. A single-track MP4 can also be written as `clear`, `cenc`, or `cbcs`. Multiplexed MP4 output, live input, MPEG transport stream input, and unrestricted DASH/HLS profiles are not supported by this command. See [conversion support](conversion-support.md) for the tested routes and [processing and verification](media-processing.md) for timing limits.
+
+`verify OUTPUT --source INPUT` independently compares the original source and result. It requires their respective keys when encrypted. Success means the stream metadata, encoded packets, decoded picture/sound, and packet timestamps match; it does not establish license acquisition or device playback. Use the generated `manifest.mpd` or `master.m3u8` as the output argument for a presentation. Both commands support `--json` for one versioned result object; progress and failures go to standard error.
+
+### Separate input and output keys
+
+New commands use an owner-only JSON configuration, with no environment fallback. Store this outside the output tree and version control. Here is its structure using placeholders; replace each placeholder with your own hexadecimal value before use:
+
+```json
+{
+  "schema_version": 1,
+  "input": {
+    "keys": [{"kid": "<32 hexadecimal characters>", "key": "<32 hexadecimal characters>"}],
+    "hls_keys": [{"uri": "<exact URI from the input playlist>", "key": "<32 hexadecimal characters>"}]
+  },
+  "output": {
+    "kid": "<32 hexadecimal characters>",
+    "key": "<32 hexadecimal characters>",
+    "hls_key_uri": "<key location to advertise in HLS>"
+  }
+}
+```
+
+`input.keys` maps MP4 key identifiers (KIDs) to decryption keys. `input.hls_keys` maps each exact HLS AES-128 key URI to a key supplied by you; drmr never retrieves those URIs. Omit unused input entries. For `cenc`/`cbcs`, provide `output.kid` and `output.key`. CBCS HLS also requires `output.hls_key_uri` for playlist signaling. For HLS AES-128, omit `output.kid` and provide `output.key` plus `output.hls_key_uri`; segment encryption does not use an MP4 key identifier. For clear output, omit `output` entirely.
+
+The advertised HLS URI is written to output playlists, so choose a location suitable for publication. drmr generates fresh output initialization vectors and never publishes a key file. Input key URI mappings, raw keys, and initialization vectors are excluded from reports and diagnostics. The external packager accepts raw keys in child-process arguments; an operating-system process inspector with sufficient access can observe them.
+
+On macOS/Linux, use `chmod 600 keys.json`. Unknown fields, duplicate fields, unsupported schema versions, oversized configurations, links, and permissions readable by other users are refused. Legacy commands below retain their existing configuration interfaces.
 
 ## List a prepared DASH asset
 

@@ -230,7 +230,7 @@ fn all_sixteen_protection_intents_have_explicit_key_roles_and_execution_limits()
             };
             let report = plan(input, target, vec![output]);
             assert!(report.compatible, "{source:?} -> {target:?}");
-            assert!(!report.execution_available);
+            assert!(report.execution_available);
             assert_eq!(
                 report.keys.iter().any(|key| key.role == "input"),
                 source != Protection::Clear

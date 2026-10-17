@@ -11,6 +11,8 @@ license = "MIT"
 repository = "https://github.com/kazuhide/drmr"
 
 [workspace.dependencies]
+aes = { version = "=0.8.4", features = ["zeroize"] }
+cbc = { version = "=0.1.2", features = ["alloc", "zeroize"] }
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
 base64 = "0.22"
 clap = { version = "4.5", features = ["derive"] }

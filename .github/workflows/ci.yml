@@ -126,6 +126,7 @@ jobs:
         id: rust-tests
         env:
           DRMR_MEDIA_REPORT: ${{ runner.temp }}/bbb-media-report.json
+          DRMR_CONVERSION_REPORT: ${{ runner.temp }}/bbb-conversion-report.json
         run: |
           set -euo pipefail
           cargo test --workspace --locked -- --nocapture 2>&1 | tee "$RUNNER_TEMP/rust-tests.log"
@@ -217,6 +218,8 @@ jobs:
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: bbb-media-${{ runner.os }}-${{ runner.arch }}
-          path: ${{ runner.temp }}/bbb-media-report.json
+          path: |
+            ${{ runner.temp }}/bbb-media-report.json
+            ${{ runner.temp }}/bbb-conversion-report.json
           if-no-files-found: error
           retention-days: 14
