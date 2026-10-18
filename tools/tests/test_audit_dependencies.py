@@ -57,3 +57,13 @@ class AdvisoryScope(unittest.TestCase):
         row = {"name": "glib", "version": "0.18.5", "advisory": "RUSTSEC-2024-0429", "classification": "unsound", "advisory_sha256": "c", "dependency_ancestry": {"sha256": "a", "direct_parents": []}}
         policy = {"dispositions": [dict({k: row[k] for k in ("name", "version", "advisory", "classification", "advisory_sha256")}, kind="desktop", target="linux", ancestry_sha256="a", direct_parents=[], disposition="source-mitigated")]}
         self.assertEqual(AUDIT.apply_policy([row], "desktop", "linux", policy, {"advisory": "RUSTSEC-2024-0429"})[0]["disposition"], "source-mitigated-pending-native-regression")
+
+    def test_resolved_feature_changes_invalidate_dependency_ancestry(self):
+        packages = [{"id": "parent", "name": "macro", "version": "1", "targets": [{"kind": ["proc-macro"]}]},
+                    {"id": "child", "name": "library", "version": "1", "targets": [{"kind": ["lib"]}]}]
+        meta = {"resolve": {"nodes": [{"id": "parent", "features": [], "deps": [{"pkg": "child", "dep_kinds": [{"kind": None}]}]},
+                                      {"id": "child", "features": [], "deps": []}]}}
+        first = AUDIT.ancestry(meta, packages, "library", "1")
+        self.assertTrue(first["build_time_only"])
+        meta["resolve"]["nodes"][1]["features"] = ["additional-feature"]
+        self.assertNotEqual(first["sha256"], AUDIT.ancestry(meta, packages, "library", "1")["sha256"])

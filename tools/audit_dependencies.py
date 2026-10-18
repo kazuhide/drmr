@@ -82,7 +82,7 @@ def ancestry(metadata_value, packages, name, version):
     rows = sorted([[labels[parent], labels[child], kinds] for parent, child, kinds in edges if parent in ancestors and child in ancestors])
     direct_ids = {parent for parent, child, _ in edges if child in affected}
     direct = sorted(labels[parent] for parent in direct_ids)
-    roles = sorted([[labels[key], sorted({kind for target in selected[key]["targets"] for kind in target["kind"]})] for key in ancestors])
+    roles = sorted([[labels[key], sorted({kind for target in selected[key]["targets"] for kind in target["kind"]}), sorted(nodes[key]["features"])] for key in ancestors])
     fingerprint = {"edges": rows, "target_kinds": roles}
     build_time_only = bool(direct_ids) and all(any("proc-macro" in target["kind"] for target in selected[key]["targets"]) for key in direct_ids)
     return {"edges": rows, "target_kinds": roles, "sha256": digest(json.dumps(fingerprint, separators=(",", ":")).encode()),
