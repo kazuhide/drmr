@@ -152,6 +152,9 @@ fn sample_entry(
         return Err(UNSUPPORTED);
     }
     let entry = &descriptions.children[0];
+    if entry.header.payload(data).get(6..8) != Some(&[0, 1]) {
+        return Err(UNSUPPORTED);
+    }
     if entry.kind() != if audio { *b"enca" } else { *b"encv" } {
         return Err(UNSUPPORTED);
     }
@@ -308,7 +311,16 @@ pub(super) fn validate(
         if actual.protection != Protection::Cenc || actual.key_ids.len() != 1 {
             return Err(UNSUPPORTED);
         }
-        let stbl = child(child(child(track, *b"mdia")?, *b"minf")?, *b"stbl")?;
+        let media_info = child(child(track, *b"mdia")?, *b"minf")?;
+        let reference = child(child(media_info, *b"dinf")?, *b"dref")?;
+        if reference.header.payload(data).get(..8) != Some(&[0, 0, 0, 0, 0, 0, 0, 1])
+            || reference.children.len() != 1
+            || reference.children[0].kind() != *b"url "
+            || reference.children[0].header.payload(data) != [0, 0, 0, 1]
+        {
+            return Err(UNSUPPORTED);
+        }
+        let stbl = child(media_info, *b"stbl")?;
         let audio = actual.kind == TrackKind::Audio;
         let iv = sample_entry(stbl, actual, data, &mut allowed)?;
         // GPAC places senc directly in trak; FFmpeg places it directly in stbl.
@@ -379,6 +391,18 @@ pub(super) fn validate(
     }
     Ok(())
 }
+pub(super) fn sample_counts(movie: &audio::Movie) -> Result<Vec<u32>, ConversionError> {
+    let boxes = mp4::parse_boxes(&movie.bytes).map_err(|_| UNSUPPORTED)?;
+    let moov = boxes.first().ok_or(UNSUPPORTED)?;
+    moov.children
+        .iter()
+        .filter(|n| n.kind() == *b"trak")
+        .map(|track| {
+            let table = child(child(child(track, *b"mdia")?, *b"minf")?, *b"stbl")?;
+            u32_at(child(table, *b"stsz")?.header.payload(&movie.bytes), 8)
+        })
+        .collect()
+}
 /// A clear output must not retain encryption or initialization information, even for unknown systems.
 pub(super) fn clear(movie: &audio::Movie) -> Result<(), ConversionError> {
     let boxes = mp4::parse_boxes(&movie.bytes).map_err(|_| UNSUPPORTED)?;
@@ -391,6 +415,9 @@ pub(super) fn clear(movie: &audio::Movie) -> Result<(), ConversionError> {
                     | b"encv"
                     | b"enca"
                     | b"sinf"
+                    | b"frma"
+                    | b"schm"
+                    | b"schi"
                     | b"tenc"
                     | b"senc"
                     | b"saiz"
@@ -478,6 +505,119 @@ mod tests {
                 .iter()
                 .any(|f| f.code == "progressive-mp4-profile-validation-required")
         );
+    }
+    fn append(movie: &mut audio::Movie, parent: &Mp4Box, bytes: &[u8]) {
+        let boxes = mp4::parse_boxes(&movie.bytes).unwrap();
+        let end = parent.header.offset + parent.header.size;
+        for node in mp4::walk(&boxes) {
+            if node.header.offset <= parent.header.offset
+                && node.header.offset + node.header.size >= end
+            {
+                let size = u32::try_from(node.header.size + bytes.len()).unwrap();
+                movie.bytes[node.header.offset..node.header.offset + 4]
+                    .copy_from_slice(&size.to_be_bytes());
+            }
+        }
+        movie.bytes.splice(end..end, bytes.iter().copied());
+    }
+    #[test]
+    fn unknown_malformed_duplicate_and_misplaced_protection_is_never_ignored() {
+        let path = fixture(8);
+        let report = inspection::inspect(&path).unwrap();
+        let original = audio::movie(&path).unwrap();
+        let boxes = mp4::parse_boxes(&original.bytes).unwrap();
+        for payload in [vec![], vec![0; 4], vec![0; 32]] {
+            let mut changed = audio::movie(&path).unwrap();
+            let pssh = [
+                u32::try_from(payload.len() + 8)
+                    .unwrap()
+                    .to_be_bytes()
+                    .as_slice(),
+                b"pssh",
+                &payload,
+            ]
+            .concat();
+            append(&mut changed, &boxes[0], &pssh);
+            assert_eq!(
+                validate(&changed, &report, &keys()).unwrap_err(),
+                UNSUPPORTED
+            );
+            assert_eq!(clear(&changed).unwrap_err(), UNSUPPORTED);
+        }
+        let track = boxes[0]
+            .children
+            .iter()
+            .find(|n| n.kind() == *b"trak")
+            .unwrap();
+        for kind in [*b"senc", *b"saiz", *b"saio", *b"tenc", *b"sgpd", *b"sbgp"] {
+            let node = mp4::walk(&boxes)
+                .into_iter()
+                .find(|n| n.kind() == kind)
+                .unwrap();
+            let mut changed = audio::movie(&path).unwrap();
+            append(&mut changed, track, node.header.bytes(&original.bytes));
+            assert_eq!(
+                validate(&changed, &report, &keys()).unwrap_err(),
+                UNSUPPORTED,
+                "{kind:?}"
+            );
+        }
+        for outside in [true, false] {
+            let mut changed = audio::movie(&path).unwrap();
+            if outside {
+                changed.outside_protection = true;
+            } else {
+                let node = mp4::walk(&boxes)
+                    .into_iter()
+                    .find(|n| n.kind() == *b"tenc")
+                    .unwrap();
+                changed.bytes[node.header.offset + 4..node.header.offset + 8]
+                    .copy_from_slice(b"free");
+            }
+            assert_eq!(
+                validate(&changed, &report, &keys()).unwrap_err(),
+                UNSUPPORTED
+            );
+        }
+    }
+    #[test]
+    fn every_subsample_extent_and_auxiliary_end_is_exact() {
+        let path = fixture(8);
+        let report = inspection::inspect(&path).unwrap();
+        let original = audio::movie(&path).unwrap();
+        let boxes = mp4::parse_boxes(&original.bytes).unwrap();
+        let node = mp4::walk(&boxes)
+            .into_iter()
+            .find(|n| n.kind() == *b"senc")
+            .unwrap();
+        for index in [0, 120, 239] {
+            let mut changed = audio::movie(&path).unwrap();
+            let at = node.header.offset + node.header.header_size + 8 + index * 16 + 15;
+            changed.bytes[at] ^= 1;
+            assert_eq!(
+                validate(&changed, &report, &keys()).unwrap_err(),
+                UNSUPPORTED
+            );
+        }
+        for width in [8, 16] {
+            let mut entry = vec![0; 8 + width];
+            entry[7] = 1;
+            entry.extend([0, 1, 0, 2, 0, 0, 0, 8]);
+            let size = u8::try_from(width + 8).unwrap();
+            let aux = [0, 0, 0, 0, size, 0, 0, 0, 1];
+            auxiliary_entries(&entry, &aux, &[10], false, width, 1).unwrap();
+            for length in 0..entry.len() {
+                assert_eq!(
+                    auxiliary_entries(&entry[..length], &aux, &[10], false, width, 1).unwrap_err(),
+                    UNSUPPORTED
+                );
+            }
+            entry.push(0);
+            assert_eq!(
+                auxiliary_entries(&entry, &aux, &[10], false, width, 1).unwrap_err(),
+                UNSUPPORTED
+            );
+        }
     }
     #[test]
     fn all_declared_key_ids_are_required() {

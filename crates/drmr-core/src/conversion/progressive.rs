@@ -425,16 +425,36 @@ impl Converter {
         if layout(&audio::movie(&candidate)?, &output)? != Some(source_layout) {
             return Err(ConversionError("invalid-output-media"));
         }
+        let verification = self.verify_progressive(source, &candidate, input, keys)?;
+        if !verification.passed {
+            return Err(ConversionError("round-trip-verification-failed"));
+        }
+        self.publish(&candidate, destination)?;
+        Ok(Some(ConversionReport {
+            schema_version: 1,
+            input: input.clone(),
+            output,
+            verification,
+        }))
+    }
+    pub(super) fn verify_progressive(
+        &self,
+        source: &Path,
+        candidate: &Path,
+        input: &Inspection,
+        keys: &super::InputKeys,
+    ) -> Result<VerificationReport, ConversionError> {
+        super::cenc::clear(&audio::movie(candidate)?)?;
         let checks = self.run_tracks(input.tracks.len(), |index| {
             let source_view = super::verify::StreamView::new(source, index, None);
-            let source_view = if source_keys.is_some() {
-                source_view.with_all_keys(keys)
-            } else {
+            let source_view = if input.protection == Protection::Clear {
                 source_view
+            } else {
+                source_view.with_all_keys(keys)
             };
             self.backend.verify_views(
                 source_view,
-                super::verify::StreamView::new(&candidate, index, None),
+                super::verify::StreamView::new(candidate, index, None),
             )
         })?;
         let mut combined = VerificationChecks {
@@ -444,9 +464,6 @@ impl Converter {
             decoded_content_equal: true,
         };
         for check in checks {
-            if !check.passed {
-                return Err(ConversionError("round-trip-verification-failed"));
-            }
             combined
                 .stream_metadata
                 .include(check.checks.stream_metadata);
@@ -454,19 +471,19 @@ impl Converter {
             combined.packet_timing_equal &= check.checks.packet_timing_equal;
             combined.decoded_content_equal &= check.checks.decoded_content_equal;
         }
-        self.publish(&candidate, destination)?;
-        Ok(Some(ConversionReport {
+        Ok(VerificationReport {
             schema_version: 1,
-            input: input.clone(),
-            output,
-            verification: VerificationReport {
-                schema_version: 1,
-                passed: true,
-                media_verified: true,
-                checks: combined,
-                license_playback_verified: false,
-            },
-        }))
+            passed: combined.stream_metadata.is_pass()
+                && combined.packet_payloads_equal
+                && combined.packet_timing_equal
+                && combined.decoded_content_equal,
+            media_verified: combined.stream_metadata.is_pass()
+                && combined.packet_payloads_equal
+                && combined.packet_timing_equal
+                && combined.decoded_content_equal,
+            checks: combined,
+            license_playback_verified: false,
+        })
     }
     fn progressive_codecs(
         &self,
@@ -474,8 +491,21 @@ impl Converter {
         input: &Inspection,
         keys: Option<super::keys::ProbeKeys<'_>>,
     ) -> Result<(), ConversionError> {
+        let sample_counts = if keys.is_some() {
+            Some(super::cenc::sample_counts(&audio::movie(source)?)?)
+        } else {
+            None
+        };
         for (index, track) in input.tracks.iter().enumerate() {
             let profile = self.backend.profile_stream_keys(source, index, keys)?;
+            if let Some(counts) = &sample_counts {
+                let count = profile["nb_read_packets"]
+                    .as_str()
+                    .and_then(|n| n.parse::<u32>().ok());
+                if count != counts.get(index).copied() {
+                    return Err(ConversionError("progressive-cenc-profile-not-supported"));
+                }
+            }
             let expected = if track.kind == TrackKind::Audio {
                 "aac"
             } else {

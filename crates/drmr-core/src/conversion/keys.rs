@@ -25,7 +25,12 @@ impl ContentKey {
         Ok(Self { id: kid, bytes })
     }
     pub(crate) fn key_hex(&self) -> Zeroizing<String> {
-        Zeroizing::new(hex::encode(self.bytes.as_ref()))
+        use std::fmt::Write as _;
+        let mut value = Zeroizing::new(String::with_capacity(32));
+        for byte in self.bytes.iter() {
+            write!(value, "{byte:02x}").expect("writing a String cannot fail");
+        }
+        value
     }
     pub(crate) fn id_hex(&self) -> String {
         hex::encode(self.id)

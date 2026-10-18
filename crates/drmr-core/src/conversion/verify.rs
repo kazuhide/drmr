@@ -109,6 +109,17 @@ impl Backend {
         } else {
             self.profile_stream_keys(result.metadata, result.index, result.key)?
         };
+        for (view, profile) in [(source, &source_profile), (result, &result_profile)] {
+            if matches!(view.key, Some(super::keys::ProbeKeys::All(_))) {
+                let counts = super::cenc::sample_counts(&super::audio::movie(view.input)?)?;
+                let actual = profile["nb_read_packets"]
+                    .as_str()
+                    .and_then(|n| n.parse::<u32>().ok());
+                if actual != counts.get(view.index).copied() {
+                    return Err(ConversionError("progressive-cenc-profile-not-supported"));
+                }
+            }
+        }
         let stream_metadata_equal = source_metadata == result_metadata;
         let packet_timing_equal = source_profile["time_base"] == result_profile["time_base"]
             && self.packets_stream_keys(source.input, source.index, source.key)?

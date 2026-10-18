@@ -256,6 +256,18 @@ impl Converter {
         let result = workspace.path().join("result.mp4");
         copy_private(input, &source)?;
         copy_private(output, &result)?;
+        let inspected =
+            inspection::inspect(&source).map_err(|_| ConversionError("invalid-input-media"))?;
+        if progressive::validate_input(&source, &inspected, input_keys)? {
+            let result_report = inspection::inspect(&result)
+                .map_err(|_| ConversionError("invalid-output-media"))?;
+            if result_report.protection == Protection::Clear {
+                if result_report.tracks.len() != inspected.tracks.len() {
+                    return Err(ConversionError("output-protection-mismatch"));
+                }
+                return self.verify_progressive(&source, &result, &inspected, input_keys);
+            }
+        }
         let source_report = validate(&source, input_keys)?;
         let result_report = validate(&result, output_keys)?;
         self.backend
