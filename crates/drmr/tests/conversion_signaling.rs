@@ -91,7 +91,8 @@ fn qualified_profile(audio: bool) {
     );
     assert_eq!(original_packets, source_packets);
     let source_before = std::fs::read(&input).unwrap();
-    let keys = root.join("keys.json");
+    // Operator secrets require the strict parent, not the inheritable media ACL.
+    let keys = owner.path().join("keys.json");
     let config = serde_json::json!({"schema_version":1,"input":{"keys":[{"kid":"ffeeddccbbaa99887766554433221100","key":SOURCE_KEY}]},"output":{"kid":KID,"key":KEY,
         "signaling":{"system":"playready","license_url":LICENSE}}})
     .to_string();
@@ -99,6 +100,7 @@ fn qualified_profile(audio: bool) {
         .unwrap()
         .write_all(config.as_bytes())
         .unwrap();
+    assert!(drmr_core::native::open_private_read(&keys).is_ok());
     let output = root.join("result");
     let result = cli(&[
         "convert",
@@ -204,13 +206,15 @@ fn unrepresentable_joint_dash_duration_is_refused_before_publication() {
     drmr_core::native::create_media_dir_all(&root).unwrap();
     let input = source(&root, true, true);
     let before = std::fs::read(&input).unwrap();
-    let keys = root.join("keys.json");
+    // Operator secrets require the strict parent, not the inheritable media ACL.
+    let keys = owner.path().join("keys.json");
     let body = serde_json::json!({"schema_version":1,"output":{"kid":KID,"key":KEY,
         "signaling":{"system":"playready","license_url":LICENSE}}});
     drmr_core::native::create_private_new(&keys)
         .unwrap()
         .write_all(body.to_string().as_bytes())
         .unwrap();
+    assert!(drmr_core::native::open_private_read(&keys).is_ok());
     let output = root.join("refused");
     let result = cli(&[
         "convert",
@@ -240,13 +244,15 @@ fn explicit_signaling_rejects_unknown_profiles_and_existing_metadata() {
     drmr_core::native::create_media_dir_all(&root).unwrap();
     let input = source(&root, false, false);
     let before = std::fs::read(&input).unwrap();
-    let keys = root.join("keys.json");
+    // Operator secrets require the strict parent, not the inheritable media ACL.
+    let keys = owner.path().join("keys.json");
     let mut config = serde_json::json!({"schema_version":1,"output":{"kid":KID,"key":KEY,
         "signaling":{"system":"playready","license_url":LICENSE}}});
     drmr_core::native::create_private_new(&keys)
         .unwrap()
         .write_all(config.to_string().as_bytes())
         .unwrap();
+    assert!(drmr_core::native::open_private_read(&keys).is_ok());
     let output = root.join("refused");
     for (target, format) in [
         ("cenc", "dash"),
