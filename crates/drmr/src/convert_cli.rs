@@ -6,13 +6,14 @@ use drmr_core::conversion::{
     VerificationSource,
     key_file::{self, OperatorKeys},
 };
-use drmr_core::events::{Record, Sink};
+mod feedback;
 use drmr_core::inspection::{self, OutputFormat, TargetProtection};
 use drmr_core::toolrun::{Secrets, ToolRunner};
+use feedback::Progress;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 #[derive(Args)]
 pub struct ConvertArgs {
@@ -74,54 +75,19 @@ pub struct VerifyArgs {
     pub measure: bool,
 }
 
-fn load(path: Option<&PathBuf>) -> Result<OperatorKeys, ExitCode> {
-    path.map_or_else(
-        || Ok(OperatorKeys::default()),
-        |path| {
-            key_file::read(path).map_err(|error| {
-                eprintln!("keys: {error}. Use a schema-version-1, owner-only regular JSON file with valid keys.");
-                ExitCode::from(2)
-            })
-        },
-    )
+fn load(path: Option<&PathBuf>) -> Result<OperatorKeys, ConversionError> {
+    path.map_or_else(|| Ok(OperatorKeys::default()), |path| key_file::read(path))
 }
 
-struct Progress {
-    enabled: bool,
-    workers: Mutex<Option<u64>>,
-}
-impl Sink for Progress {
-    fn emit(&self, record: &Record) {
-        if !self.enabled
-            || record.get("stage").and_then(serde_json::Value::as_str) != Some("resources")
-        {
-            return;
-        }
-        let Some(workers) = record.get("workers").and_then(serde_json::Value::as_u64) else {
-            return;
-        };
-        let mut previous = self
-            .workers
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if *previous != Some(workers) {
-            eprintln!("Using up to {workers} workers (CPU and memory limits).");
-            *previous = Some(workers);
-        }
-    }
-}
 fn converter(
     packager: &str,
     maximum: Option<u8>,
-    progress: bool,
+    progress: Arc<Progress>,
     stop: drmr_core::concurrency::Stop,
 ) -> Converter {
-    let sink = Arc::new(Progress {
-        enabled: progress,
-        workers: Mutex::new(None),
-    });
-    let runner = Arc::new(ToolRunner::new(Arc::new(Secrets::new()), sink));
+    let runner = Arc::new(ToolRunner::new(Arc::new(Secrets::new()), progress.clone()));
     Converter::new(runner, packager, "ffmpeg")
+        .with_activity_sink(progress)
         .with_stop(stop)
         .with_max_workers(maximum.map(usize::from))
         .expect("clap validates the worker upper bound")
@@ -129,6 +95,21 @@ fn converter(
 
 fn error_hint(code: &str) -> Option<&'static str> {
     match code {
+        "key-file-invalid" => {
+            Some("Use a schema-version-1, owner-only regular JSON file with valid keys.")
+        }
+        "cancelled" => Some(
+            "Check the destination and job status before retrying; cancellation is not a media verification result.",
+        ),
+        "verification-mismatch" => {
+            Some("Review every source/result check. Do not use the result as verified media.")
+        }
+        "media-tool-unavailable-or-timeout" | "media-tool-timeout" => Some(
+            "Check external tool discovery and source compatibility, and review the configured media timeout.",
+        ),
+        "media-cleanup-unconfirmed" => Some(
+            "Cleanup is unconfirmed. Resolve the owned process failure before retrying; no verified result is established.",
+        ),
         "download-directory-required" => Some(
             "URL input requires --download-dir pointing to a new directory under an existing parent.",
         ),
@@ -168,9 +149,9 @@ fn error_hint(code: &str) -> Option<&'static str> {
         "media-output-limit" => {
             Some("The tool output exceeded the capture limit. Partial evidence is never accepted.")
         }
-        "input-key-required" => {
-            Some("Provide every source key in input.keys; use input.hls_keys for HLS AES-128.")
-        }
+        "input-key-required" => Some(
+            "Provide every source key in input.keys; use input.hls_keys for HLS AES-128 or SAMPLE-AES.",
+        ),
         "output-key-required" => Some("Provide output.kid and output.key in --keys-file."),
         "output-key-role-mismatch" => Some(
             "For cenc/cbcs, provide output.kid and output.key; for HLS AES-128, omit the KID and provide output.key plus output.hls_key_uri. For clear output, omit output.",
@@ -182,7 +163,9 @@ fn error_hint(code: &str) -> Option<&'static str> {
         "output-key-not-used" => {
             Some("For clear output, omit the output section from --keys-file.")
         }
-        "target-requires-hls-output" => Some("Use --format hls for HLS AES-128."),
+        "target-requires-hls-output" => {
+            Some("Use --format hls or --format hls-ts for HLS AES-128.")
+        }
         "single-track-mp4-required" | "mp4-output-requires-one-track" => {
             Some("Use DASH or HLS output for separate video and audio tracks.")
         }
@@ -199,18 +182,38 @@ fn error_hint(code: &str) -> Option<&'static str> {
     }
 }
 
-fn error(command: &str, error: ConversionError) -> ExitCode {
+fn error_value(command: &str, error: ConversionError, progress: &Progress) -> serde_json::Value {
+    serde_json::json!({
+        "schema_version": 1, "command": command,
+        "status": if error.0 == "cancelled" { "cancelled" } else { "failed" },
+        "error": {"code": error.0, "hint": error_hint(error.0).unwrap_or("Review the error code and source profile before retrying with a new output destination."), "last_activity": progress.last_activity()}
+    })
+}
+fn error(
+    command: &str,
+    error: ConversionError,
+    as_json: bool,
+    progress: &Progress,
+    exit_override: Option<u8>,
+) -> ExitCode {
+    progress.finish();
     eprintln!("{command}: {error}");
+    if as_json {
+        if json(&error_value(command, error, progress)).is_err() {
+            eprintln!("{command}: result-output-unavailable");
+            return ExitCode::from(1);
+        }
+    } else if let Some(hint) = error_hint(error.0) {
+        eprintln!("{hint}");
+    }
     if error.0 == "cancelled" {
         return ExitCode::from(130);
     }
-    if let Some(hint) = error_hint(error.0) {
-        eprintln!("{hint}");
-    }
-    ExitCode::from(
+    ExitCode::from(exit_override.unwrap_or({
         if matches!(
             error.0,
-            "download-directory-required"
+            "key-file-invalid"
+                | "download-directory-required"
                 | "download-options-require-url"
                 | "download-output-overlap"
                 | "download-directory-exists"
@@ -233,8 +236,17 @@ fn error(command: &str, error: ConversionError) -> ExitCode {
             2
         } else {
             1
-        },
-    )
+        }
+    }))
+}
+struct ConfigurationError {
+    cause: ConversionError,
+    exit: Option<u8>,
+}
+impl From<ConversionError> for ConfigurationError {
+    fn from(cause: ConversionError) -> Self {
+        Self { cause, exit: None }
+    }
 }
 
 fn json(value: &serde_json::Value) -> std::io::Result<()> {
@@ -246,14 +258,11 @@ fn json(value: &serde_json::Value) -> std::io::Result<()> {
 fn configured_download(
     args: &ConvertArgs,
     input: &crate::download_cli::Input,
-) -> Result<Option<drmr_core::source::FetchPolicy>, ExitCode> {
+) -> Result<Option<drmr_core::source::FetchPolicy>, ConfigurationError> {
     match input {
         crate::download_cli::Input::Local(_) => {
             if args.download_dir.is_some() || args.fetch_policy.is_some() {
-                Err(error(
-                    "convert",
-                    ConversionError("download-options-require-url"),
-                ))
+                Err(ConversionError("download-options-require-url").into())
             } else {
                 Ok(None)
             }
@@ -262,14 +271,16 @@ fn configured_download(
             let directory = args
                 .download_dir
                 .as_ref()
-                .ok_or_else(|| error("convert", ConversionError("download-directory-required")))?;
+                .ok_or(ConversionError("download-directory-required"))?;
             crate::download_cli::preflight(directory, &args.output).map_err(|cause| {
-                error("convert", cause);
-                ExitCode::from(2)
+                ConfigurationError {
+                    cause,
+                    exit: Some(2),
+                }
             })?;
             drmr_core::conversion::download_policy::read(url, args.fetch_policy.as_deref())
                 .map(Some)
-                .map_err(|cause| error("convert", cause))
+                .map_err(Into::into)
         }
     }
 }
@@ -281,12 +292,11 @@ fn execute_conversion(
     fetch_policy: Option<&drmr_core::source::FetchPolicy>,
     local_format: Option<OutputFormat>,
     keys: &OperatorKeys,
+    progress: &Progress,
 ) -> Result<(ConversionReport, Option<serde_json::Value>), ConversionError> {
     let downloaded = match input {
         crate::download_cli::Input::Url(url) => {
-            if !args.json {
-                eprintln!("Downloading source media...");
-            }
+            progress.mark("acquisition");
             let source = command.download_hls(
                 url,
                 args.download_dir
@@ -295,10 +305,7 @@ fn execute_conversion(
                 &args.output,
                 fetch_policy.expect("URL fetch policy was checked"),
             )?;
-            eprintln!(
-                "Downloaded source retained at: {}",
-                source.entrypoint().display()
-            );
+            eprintln!("Downloaded source retained in the requested download directory.");
             Some(source)
         }
         crate::download_cli::Input::Local(_) => None,
@@ -306,16 +313,16 @@ fn execute_conversion(
     let source = downloaded
         .as_ref()
         .map_or(args.input.as_path(), |source| source.entrypoint());
-    let format = match local_format {
-        Some(format) => format,
-        None => inspection::inspect(source)
+    let format = if let Some(format) = local_format {
+        format
+    } else {
+        progress.mark("inspection");
+        inspection::inspect(source)
             .map_err(|_| ConversionError("invalid-input-media"))?
             .format
-            .into(),
+            .into()
     };
-    if !args.json {
-        eprintln!("Converting and checking media...");
-    }
+    progress.mark("input-preparation");
     let request = ConversionRequest {
         input: source,
         output: &args.output,
@@ -340,34 +347,87 @@ fn execute_conversion(
     Ok((report, download))
 }
 
+fn conversion_text(report: &ConversionReport) -> std::io::Result<()> {
+    let mut out = std::io::stdout().lock();
+    writeln!(
+        out,
+        "Converted: {} -> {}",
+        report.input.protection.as_str(),
+        report.output.protection.as_str()
+    )
+    .and_then(|()| {
+        if let Some(processing) = &report.processing {
+            writeln!(out, "Processing route: {}", processing.route.as_str())?;
+            writeln!(
+                out,
+                "Input preparation: {}",
+                processing.input_preparation.description()
+            )?;
+            writeln!(out, "Reason: {}", processing.explanation)?;
+            let tools = processing
+                .required_tools
+                .iter()
+                .map(|tool| tool.as_str())
+                .collect::<Vec<_>>();
+            writeln!(out, "Required tools: {}", tools.join(", "))?;
+        }
+        Ok(())
+    })
+    .and_then(|()| {
+        writeln!(
+            out,
+            "Verified stream metadata, packet payloads, decoded content, and packet timing."
+        )
+    })
+}
+
 pub fn convert(args: &ConvertArgs) -> ExitCode {
+    let progress = Arc::new(Progress::new(!args.json));
+    progress.mark("configuration");
     let input = match crate::download_cli::Input::parse(args.input.as_os_str()) {
         Ok(input) => input,
-        Err(cause) => return error("convert", cause),
+        Err(cause) => return error("convert", cause, args.json, &progress, None),
     };
     let fetch_policy = match configured_download(args, &input) {
         Ok(policy) => policy,
-        Err(code) => return code,
+        Err(cause) => return error("convert", cause.cause, args.json, &progress, cause.exit),
     };
     let Ok(cancellation) = crate::cancellation::Cancellation::install() else {
-        return error("convert", ConversionError("signal-monitor-unavailable"));
+        return error(
+            "convert",
+            ConversionError("signal-monitor-unavailable"),
+            args.json,
+            &progress,
+            None,
+        );
     };
     let keys = match load(args.keys_file.as_ref()) {
         Ok(keys) => keys,
-        Err(code) => return code,
+        Err(cause) => return error("convert", cause, args.json, &progress, None),
     };
     let local_format = match (&input, args.format) {
         (_, Some(format)) => Some(format),
-        (crate::download_cli::Input::Local(path), None) => match inspection::inspect(path) {
-            Ok(report) => Some(report.format.into()),
-            Err(_) => return error("convert", ConversionError("invalid-input-media")),
-        },
+        (crate::download_cli::Input::Local(path), None) => {
+            progress.mark("inspection");
+            match inspection::inspect(path) {
+                Ok(report) => Some(report.format.into()),
+                Err(_) => {
+                    return error(
+                        "convert",
+                        ConversionError("invalid-input-media"),
+                        args.json,
+                        &progress,
+                        None,
+                    );
+                }
+            }
+        }
         (crate::download_cli::Input::Url(_), None) => None,
     };
     let converter = converter(
         &args.packager_bin,
         args.max_workers,
-        !args.json,
+        progress.clone(),
         cancellation.stop.clone(),
     );
     let execute = |command: &Converter| {
@@ -378,6 +438,7 @@ pub fn convert(args: &ConvertArgs) -> ExitCode {
             fetch_policy.as_ref(),
             local_format,
             &keys,
+            &progress,
         )
     };
     let (result, measurement) = if args.measure {
@@ -388,11 +449,18 @@ pub fn convert(args: &ConvertArgs) -> ExitCode {
     };
     let (report, download) = match result {
         Ok(report) => report,
-        Err(cause) => return error("convert", cause),
+        Err(cause) => return error("convert", cause, args.json, &progress, None),
     };
     if cancellation.stop.is_set() {
-        return error("convert", ConversionError("cancelled"));
+        return error(
+            "convert",
+            ConversionError("cancelled"),
+            args.json,
+            &progress,
+            None,
+        );
     }
+    progress.finish();
     let result = if args.json {
         let mut value = serde_json::to_value(&report).expect("conversion report serializes");
         if let Some(download) = download {
@@ -404,64 +472,43 @@ pub fn convert(args: &ConvertArgs) -> ExitCode {
         }
         json(&value)
     } else {
-        let mut out = std::io::stdout().lock();
-        writeln!(
-            out,
-            "Converted: {} -> {}",
-            report.input.protection.as_str(),
-            report.output.protection.as_str()
-        )
-        .and_then(|()| {
-            if let Some(processing) = &report.processing {
-                writeln!(out, "Processing route: {}", processing.route.as_str())?;
-                writeln!(
-                    out,
-                    "Input preparation: {}",
-                    processing.input_preparation.description()
-                )?;
-                writeln!(out, "Reason: {}", processing.explanation)?;
-                let tools = processing
-                    .required_tools
-                    .iter()
-                    .map(|tool| tool.as_str())
-                    .collect::<Vec<_>>();
-                writeln!(out, "Required tools: {}", tools.join(", "))?;
-            }
-            Ok(())
-        })
-        .and_then(|()| {
-            writeln!(
-                out,
-                "Verified stream metadata, packet payloads, decoded content, and packet timing."
-            )
-        })
+        conversion_text(&report)
     };
+    if result.is_err() {
+        eprintln!("convert: result-output-unavailable");
+    }
     ExitCode::from(u8::from(result.is_err()))
 }
 
 pub fn verify(args: &VerifyArgs) -> ExitCode {
+    let progress = Arc::new(Progress::new(!args.json));
+    progress.mark("configuration");
     let Ok(cancellation) = crate::cancellation::Cancellation::install() else {
-        return error("verify", ConversionError("signal-monitor-unavailable"));
+        return error(
+            "verify",
+            ConversionError("signal-monitor-unavailable"),
+            args.json,
+            &progress,
+            None,
+        );
     };
     let keys = match load(args.keys_file.as_ref()) {
         Ok(keys) => keys,
-        Err(code) => return code,
+        Err(cause) => return error("verify", cause, args.json, &progress, None),
     };
     let output_keys = match keys.output_verification_keys() {
         Ok(keys) => keys,
-        Err(cause) => return error("verify", cause),
+        Err(cause) => return error("verify", cause, args.json, &progress, None),
     };
     let output_hls_keys = match keys.output_hls_verification_keys() {
         Ok(keys) => keys,
-        Err(cause) => return error("verify", cause),
+        Err(cause) => return error("verify", cause, args.json, &progress, None),
     };
-    if !args.json {
-        eprintln!("Comparing the source and result...");
-    }
+    progress.mark("input-preparation");
     let converter = converter(
         &args.packager_bin,
         args.max_workers,
-        !args.json,
+        progress.clone(),
         cancellation.stop.clone(),
     );
     let execute = |command: &Converter| {
@@ -486,13 +533,33 @@ pub fn verify(args: &VerifyArgs) -> ExitCode {
     };
     let report = match result {
         Ok(report) => report,
-        Err(cause) => return error("verify", cause),
+        Err(cause) => return error("verify", cause, args.json, &progress, None),
     };
     if cancellation.stop.is_set() {
-        return error("verify", ConversionError("cancelled"));
+        return error(
+            "verify",
+            ConversionError("cancelled"),
+            args.json,
+            &progress,
+            None,
+        );
+    }
+    progress.finish();
+    if !report.passed {
+        eprintln!("verify: verification-mismatch");
     }
     let result = if args.json {
         let mut value = serde_json::to_value(&report).expect("verification report serializes");
+        if !report.passed {
+            let failure = error_value(
+                "verify",
+                ConversionError("verification-mismatch"),
+                &progress,
+            );
+            for key in ["command", "status", "error"] {
+                value[key] = failure[key].clone();
+            }
+        }
         if let Some(measurement) = measurement {
             value["measurements"] =
                 serde_json::to_value(measurement).expect("measurement serializes");
@@ -505,5 +572,8 @@ pub fn verify(args: &VerifyArgs) -> ExitCode {
             if report.passed { "passed" } else { "failed" }
         )
     };
+    if result.is_err() {
+        eprintln!("verify: result-output-unavailable");
+    }
     ExitCode::from(u8::from(result.is_err() || !report.passed))
 }

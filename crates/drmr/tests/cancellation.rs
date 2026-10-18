@@ -60,7 +60,7 @@ fn cancelled_command(signal: rustix::process::Signal, command: &str) {
     invocation
         .args(["--json", "--max-workers", "1"])
         .env("PATH", &tools)
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let mut cleanup = Cleanup {
         child: invocation.spawn().unwrap(),
@@ -110,6 +110,15 @@ fn cancelled_command(signal: rustix::process::Signal, command: &str) {
     held.try_lock()
         .expect("CLI returned while its media descendant still held the lock");
     assert_eq!(status.code(), Some(130));
+    let mut json = String::new();
+    std::io::Read::read_to_string(&mut cleanup.child.stdout.take().unwrap(), &mut json).unwrap();
+    let report: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(report["schema_version"], 1);
+    assert_eq!(report["command"], command);
+    assert_eq!(report["status"], "cancelled");
+    assert_eq!(report["error"]["code"], "cancelled");
+    assert!(report["error"]["last_activity"].is_string());
+    assert!(!json.contains(&root.path().to_string_lossy().to_string()));
     assert!(
         !output.exists(),
         "cancelled conversion must not publish output"
