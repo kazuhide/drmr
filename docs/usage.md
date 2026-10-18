@@ -20,6 +20,8 @@ HLS inspection follows only local child playlists inside the input playlist's di
 
 A compatible plan describes a valid format/protection combination. `execution_available` indicates whether a backend route exists for that request; execution still checks the actual source profile, keys, and media. Multiple requested output formats are planned together but must be converted in separate invocations. Plans contain no secret key values and cannot be submitted as trusted execution artifacts.
 
+Optional `details` distinguish declared ciphers, encryption units, default patterns, and unknown sample coverage. Plans add conditional routes and required toolsets; successful conversion reports add the actual route and reason. See [processing routes](processing-routes.md) to compare the plan with the result. A tool requirement does not mean its availability was checked.
+
 ## Convert and verify local media
 
 ```sh

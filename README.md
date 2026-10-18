@@ -87,4 +87,6 @@ Use `drmr help <COMMAND>` for command options. See [usage](docs/usage.md) for ex
 
 See [media processing](docs/media-processing.md) for encryption terminology, segment boundaries, and the checks behind the reported results.
 
+See [processing routes](docs/processing-routes.md) to understand inspection evidence, conditional plans, and the route reported by a successful conversion.
+
 See [resource limits and measurements](docs/resources.md) for automatic worker selection, memory estimates, and reproducible comparisons.
