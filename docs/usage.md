@@ -364,6 +364,12 @@ Open `http://127.0.0.1:8080`. Both root directories are required. `DRMR_BIND_POR
 
 For clear HLS added through the console, the server saves source URLs, original playlists, and downloaded media in `DRMR_OUTPUT_ROOT/<asset-id>/clear/source/`. Keep this private folder protected: the saved information can contain signed URLs. Temporary request configuration files are separate; the server attempts to remove them after jobs finish, without deleting the saved source. Removing a job from history hides its record; saved sources, packaged media, and logs remain on disk.
 
+Use **Stop** beside a running job to terminate that job and its child processes. Queued jobs continue afterward. The console waits for cleanup before recording the job as interrupted, and keeps the process's actual exit code. Stopping is not an undo: partial output files can remain and previous output files may already have changed. Input media and job logs are retained.
+
+If cleanup cannot be confirmed, the job keeps its execution slot and temporary configuration files; check the server log. A stop response only acknowledges the request. The job status and final log event establish completion. The local API accepts `POST /api/jobs/<job-id>/stop` with an empty JSON object (`{}`): `202` while running, `200` after completion, `404` for an unknown job, and `503` when cleanup is unconfirmed. Repeating a request is safe; an old job ID cannot stop a newer job.
+
+On interruption or termination, the server closes submissions, stops the active job, and drains its queue runner, log streams and background workers before reporting successful shutdown. Queued items are not started during shutdown. Rust embedding hosts should call `RunningServer::shutdown(&mut self)` and retain the owner if it returns an error; dropping a host is best effort and does not prove successful cleanup.
+
 Requests must address `localhost`, `127.0.0.1`, `::1`, or an explicitly configured bind hostname/address. Binding to a wildcard address does not permit arbitrary hostnames. Reverse proxies and remote access are outside this local console's default setup.
 
 ## Exit codes

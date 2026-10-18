@@ -54,7 +54,7 @@
   }
   //   * every log record is an unnamed `data:` message -> onLine(rawJsonLine)
   //   * the stream ends with ONE terminal `event: done` whose data is
-  //     {"state": "succeeded"|"failed", "exit_code": <int>} -> onDone(payload)
+  //     {"state": "succeeded"|"failed"|"interrupted", "exit_code": <int>} -> onDone(payload)
   //     (payload is null if the data could not be parsed -- the caller should then ask
   //     GET /api/jobs/<id> instead of trusting it)
   //   * `error` therefore means a REAL connection problem -> onError(event) and nothing else.
@@ -123,6 +123,7 @@
     getAssetUrls: getAssetUrls,
     postConvert: postConvert,
     getJobStatus: getJobStatus,
+    stopJob: function (id) { return postJson('/api/jobs/' + encodeURIComponent(id) + '/stop', {}); },
     streamJobLog: streamJobLog,
   };
 })();

@@ -70,6 +70,7 @@ pub fn reads_body(endpoint: Endpoint, method: &str) -> bool {
     matches!(
         endpoint,
         Endpoint::Convert
+            | Endpoint::JobStop
             | Endpoint::HlsAnalyze
             | Endpoint::HlsPackage
             | Endpoint::PlaybackSessions
@@ -87,6 +88,7 @@ pub fn dispatch(app: &Arc<App>, endpoint: Endpoint, values: &[String], req: &Req
         Endpoint::Catalog => api_catalog(app),
         Endpoint::Convert => api_convert(app, req),
         Endpoint::JobStatus => api_job_status(app, value(0)),
+        Endpoint::JobStop => api_job_stop(app, value(0), req),
         Endpoint::JobLog => Ok(api_job_log(app, value(0))),
         Endpoint::JobLogDownload => Ok(api_job_log_download(app, value(0))),
         Endpoint::Assets => api_assets(app, value(0)),
@@ -359,6 +361,10 @@ fn api_convert(app: &Arc<App>, req: &Req) -> Answer {
         Err(error @ JobError::AlreadyRunning) => {
             return Ok(Reply::json_error(409, &error.to_string()));
         }
+        Err(JobError::ShuttingDown) => return Ok(Reply::json_error(503, "server-shutting-down")),
+        Err(JobError::CleanupUnconfirmed) => {
+            return Ok(Reply::json_error(503, "cleanup-unconfirmed"));
+        }
         Err(_) => return Err(RouteError::Internal),
     };
     // The job is running: a record that cannot be written is logged, never an error answer.
@@ -375,23 +381,77 @@ fn state_payload(state: &Value, exit_code: &Value) -> Value {
     Value::Object(payload)
 }
 
+fn api_job_stop(app: &Arc<App>, job_id: &str, req: &Req) -> Answer {
+    if !json_body(req)?.is_empty() {
+        return Err(HlsApiError::status("stop-parameters-invalid", 400).into());
+    }
+    if !crate::jobs::safe_job_id(job_id) {
+        return Ok(Reply::json_error(404, "job-not-found"));
+    }
+    let handle = match app.manager.request_stop(job_id) {
+        Ok(handle) => Some(handle),
+        Err(JobError::CleanupUnconfirmed) => {
+            return Ok(Reply::json_error(503, "cleanup-unconfirmed"));
+        }
+        Err(JobError::NotFound(_)) if app.service.owns(job_id) => None,
+        Err(_) => return Ok(Reply::json_error(404, "job-not-found")),
+    };
+    let mut payload = if app.service.owns(job_id) {
+        app.service.status(job_id)?
+    } else {
+        let handle = handle
+            .as_ref()
+            .expect("a live manager owns an unrecorded job");
+        let Value::Object(mut payload) = state_payload(
+            &Value::from(handle.state),
+            &handle.exit_code.map_or(Value::Null, Value::from),
+        ) else {
+            unreachable!()
+        };
+        payload.insert("job_id".into(), Value::from(job_id));
+        payload
+    };
+    let stopped = handle.as_ref().map_or_else(
+        || {
+            payload
+                .get("stop_requested")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        },
+        |handle| handle.stop_requested,
+    );
+    payload.insert("stop_requested".into(), Value::Bool(stopped));
+    let running = payload.get("state").and_then(Value::as_str) == Some("running");
+    Ok(Reply::json(
+        if running { 202 } else { 200 },
+        &Value::Object(payload),
+    ))
+}
+
 fn api_job_status(app: &Arc<App>, job_id: &str) -> Answer {
     if app.service.owns(job_id) {
         let status = app.service.status(job_id)?;
         if status.get("kind").and_then(Value::as_str) == Some("convert") {
-            let payload = state_payload(&status["state"], &status["exit_code"]);
+            let mut payload = state_payload(&status["state"], &status["exit_code"]);
+            if status.get("stop_requested").and_then(Value::as_bool) == Some(true) {
+                payload["stop_requested"] = Value::Bool(true);
+            }
             return Ok(Reply::json(200, &payload));
         }
         return Ok(Reply::json(200, &Value::Object(status)));
     }
     match app.manager.status(job_id) {
-        Ok(handle) => Ok(Reply::json(
-            200,
-            &state_payload(
+        Ok(handle) => {
+            let mut payload = state_payload(
                 &Value::from(handle.state),
                 &handle.exit_code.map_or(Value::Null, Value::from),
-            ),
-        )),
+            );
+            if handle.stop_requested {
+                payload["stop_requested"] = Value::Bool(true);
+            }
+            Ok(Reply::json(200, &payload))
+        }
+        Err(JobError::CleanupUnconfirmed) => Ok(Reply::json_error(503, "cleanup-unconfirmed")),
         Err(_) => Ok(Reply::json_error(404, "no such job")),
     }
 }
@@ -401,24 +461,54 @@ fn sanitizer(app: &Arc<App>, job_id: &str) -> bool {
     app.service.kind(job_id).as_deref() != Some("convert")
 }
 
-type Sender = tokio::sync::mpsc::Sender<Result<Vec<u8>, std::io::Error>>;
+struct Sender {
+    channel: tokio::sync::mpsc::Sender<Result<Vec<u8>, std::io::Error>>,
+    workers: Arc<crate::workers::Workers>,
+}
 
-/// Run `produce` on its own thread, its chunks streamed as the response body.
-fn stream(content_type: &str, produce: impl FnOnce(&Sender) + Send + 'static) -> Reply {
-    let (sender, receiver) = tokio::sync::mpsc::channel(16);
-    let spawned = std::thread::Builder::new()
-        .name("response-stream".into())
-        .spawn(move || produce(&sender));
-    drop(spawned);
+/// Run a producer on an owned thread. Closing wakes blocked backpressure waits.
+fn stream(
+    app: &Arc<App>,
+    content_type: &str,
+    produce: impl FnOnce(&Sender) + Send + 'static,
+) -> Reply {
+    let (channel, receiver) = tokio::sync::mpsc::channel(16);
+    let sender = Sender {
+        channel,
+        workers: app.streams.clone(),
+    };
+    if app
+        .streams
+        .spawn("response-stream", move || produce(&sender))
+        .is_err()
+    {
+        return Reply::json_error(503, "server-shutting-down");
+    }
     Reply::stream(content_type, receiver)
 }
 
+fn send_chunk(sender: &Sender, mut chunk: Result<Vec<u8>, std::io::Error>) -> bool {
+    while sender.workers.is_open() {
+        match sender.channel.try_send(chunk) {
+            Ok(()) => return true,
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => return false,
+            Err(tokio::sync::mpsc::error::TrySendError::Full(pending)) => {
+                chunk = pending;
+                if !sender.workers.wait(std::time::Duration::from_millis(5)) {
+                    return false;
+                }
+            }
+        }
+    }
+    false
+}
+
 fn send(sender: &Sender, chunk: String) -> bool {
-    sender.blocking_send(Ok(chunk.into_bytes())).is_ok()
+    send_chunk(sender, Ok(chunk.into_bytes()))
 }
 
 fn abort(sender: &Sender) {
-    let _ = sender.blocking_send(Err(std::io::Error::other("stream aborted")));
+    let _ = send_chunk(sender, Err(std::io::Error::other("stream aborted")));
 }
 
 fn api_job_log(app: &Arc<App>, job_id: &str) -> Reply {
@@ -430,7 +520,8 @@ fn api_job_log(app: &Arc<App>, job_id: &str) -> Reply {
     let app = app.clone();
     let job_id = job_id.to_string();
     let hls = owned && sanitizer(&app, &job_id);
-    stream("text/event-stream; charset=utf-8", move |sender| {
+    let host = app.clone();
+    stream(&host, "text/event-stream; charset=utf-8", move |sender| {
         let poll = app.config.hooks.tail_poll;
         let lines: Box<dyn Iterator<Item = Result<String, ()>>> = if running_here {
             match app.manager.tail_log(&job_id, poll) {
@@ -490,21 +581,25 @@ fn api_job_log_download(app: &Arc<App>, job_id: &str) -> Reply {
     };
     let shared = app.clone();
     let id = job_id.to_string();
-    let mut reply = stream("text/plain; charset=utf-8; charset=utf-8", move |sender| {
-        for line in shared.manager.read_log(&id) {
-            let line = if hls {
-                match safelog::safe_log(&line) {
-                    Ok(line) => line,
-                    Err(_) => return abort(sender),
+    let mut reply = stream(
+        app,
+        "text/plain; charset=utf-8; charset=utf-8",
+        move |sender| {
+            for line in shared.manager.read_log(&id) {
+                let line = if hls {
+                    match safelog::safe_log(&line) {
+                        Ok(line) => line,
+                        Err(_) => return abort(sender),
+                    }
+                } else {
+                    line
+                };
+                if !send(sender, format!("{line}\n")) {
+                    return;
                 }
-            } else {
-                line
-            };
-            if !send(sender, format!("{line}\n")) {
-                return;
             }
-        }
-    });
+        },
+    );
     reply.set_header(
         "Content-Disposition",
         &format!("attachment; filename=\"job-{job_id}.jsonl\""),
@@ -978,42 +1073,49 @@ fn clearkey_license(app: &Arc<App>, req: &Req) -> Answer {
 }
 
 /// Stream a slice of a file in chunks (the body of a `send_file` answer).
-pub fn file_body(path: PathBuf, start: u64, length: u64) -> Body {
+pub(crate) fn file_body(
+    workers: &Arc<crate::workers::Workers>,
+    path: PathBuf,
+    start: u64,
+    length: u64,
+) -> Body {
     use std::io::{Read, Seek, SeekFrom};
-    let (sender, receiver) = tokio::sync::mpsc::channel(8);
-    let spawned = std::thread::Builder::new()
-        .name("file-body".into())
-        .spawn(move || {
-            let mut file = match std::fs::File::open(&path) {
-                Ok(file) => file,
-                Err(error) => {
-                    let _ = sender.blocking_send(Err(error));
-                    return;
-                }
-            };
-            if let Err(error) = file.seek(SeekFrom::Start(start)) {
-                let _ = sender.blocking_send(Err(error));
+    let (channel, receiver) = tokio::sync::mpsc::channel(8);
+    let sender = Sender {
+        channel,
+        workers: workers.clone(),
+    };
+    let spawned = workers.spawn("file-body", move || {
+        let mut file = match std::fs::File::open(&path) {
+            Ok(file) => file,
+            Err(error) => {
+                let _ = send_chunk(&sender, Err(error));
                 return;
             }
-            let mut remaining = length;
-            let mut buffer = vec![0u8; 64 * 1024];
-            while remaining > 0 {
-                let want = usize::try_from(remaining.min(64 * 1024)).unwrap_or(64 * 1024);
-                match file.read(&mut buffer[..want]) {
-                    Ok(0) => break,
-                    Ok(read) => {
-                        remaining -= u64::try_from(read).unwrap_or(remaining);
-                        if sender.blocking_send(Ok(buffer[..read].to_vec())).is_err() {
-                            return;
-                        }
-                    }
-                    Err(error) => {
-                        let _ = sender.blocking_send(Err(error));
+        };
+        if let Err(error) = file.seek(SeekFrom::Start(start)) {
+            let _ = send_chunk(&sender, Err(error));
+            return;
+        }
+        let mut remaining = length;
+        let mut buffer = vec![0u8; 64 * 1024];
+        while remaining > 0 {
+            let want = usize::try_from(remaining.min(64 * 1024)).unwrap_or(64 * 1024);
+            match file.read(&mut buffer[..want]) {
+                Ok(0) => break,
+                Ok(read) => {
+                    remaining -= u64::try_from(read).unwrap_or(remaining);
+                    if !send_chunk(&sender, Ok(buffer[..read].to_vec())) {
                         return;
                     }
                 }
+                Err(error) => {
+                    let _ = send_chunk(&sender, Err(error));
+                    return;
+                }
             }
-        });
+        }
+    });
     drop(spawned);
     Body::Stream(receiver)
 }

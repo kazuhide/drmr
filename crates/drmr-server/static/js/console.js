@@ -17,7 +17,7 @@
     filter: '', checked: Object.create(null), listError: null, loaded: false, dismissedSkips: {}, seenSkips: {}, announcedSkips: {}, jobsTruncated: false, loadSeq: 0, loadAgain: false, loadAgainFull: false, finishedJobs: Object.create(null), logRaw: false, nameEdited: false, sampleRevealed: false,
     selectedId: null, selectToken: 0, openInfo: {}, // openInfo: the transformation's (i) panels open for this selection
     detail: { catalogInfo: null, analysis: null, analysisError: null, result: null, resultError: null, report: null, reportError: null },
-    run: null, lastRun: null, logView: null,
+    run: null, lastRun: null, logView: null, stopRequests: Object.create(null),
     sessionId: null, previewBusy: false, previewNeedsCredentials: false,
     addOpen: false, platform: null, pollTimer: null, loading: null,
   };
@@ -56,6 +56,7 @@
       var known = {};
       state.jobs.forEach(function (job) { known[job.job_id] = job.state; });
       state.jobs = parts[1].rows || [];
+      state.jobs.forEach(function (job) { if (Model.isTerminal(job.state)) delete state.stopRequests[job.job_id]; });
       // A conversion that started and finished between two light polls changes `converted`
       // without this page observing it: fetch the catalog again before settling.
       if (light && state.jobs.some(function (job) { return job.kind === 'convert' && Model.isTerminal(job.state) && known[job.job_id] !== job.state; })) { state.loadAgain = true; state.loadAgainFull = true; }
@@ -502,6 +503,12 @@
       var chipKind = job.state === 'succeeded' ? 'good' : job.state === 'running' ? 'run' : job.state === 'interrupted' ? 'warn' : 'fail';
       var current = state.logView && state.logView.jobId === job.job_id;
       var actions = [h('button', { type: 'button', className: 'btn btn-sm', text: t('openLog'), 'aria-pressed': current ? 'true' : 'false', dataset: { focusKey: 'log:' + job.job_id }, onclick: function () { openLog(job); } })];
+      if (job.state === 'running') {
+        var stopping = job.stop_requested || state.stopRequests[job.job_id];
+        actions.push(h('button', { type: 'button', className: 'btn btn-quiet btn-sm', text: t(stopping ? 'stopPending' : 'stopJob'),
+          'aria-label': t(stopping ? 'stopPendingLabel' : 'stopJobLabel', { asset: job.asset_id || job.job_id }), 'aria-disabled': stopping ? 'true' : null,
+          title: t('stopHelp'), dataset: { focusKey: 'stop:' + job.job_id }, onclick: function () { requestStop(job); } }));
+      }
       if (job.state !== 'running') actions.push(h('button', { type: 'button', className: 'btn btn-quiet btn-sm', text: t('removeHistory'), title: t('historyHelp'), 'aria-label': t('removeHistoryLabel', { asset: job.asset_id || job.job_id }), dataset: { focusKey: 'rm:' + job.job_id }, onclick: function (e) { deleteHistoryJob(job, e.target); } }));
       return h('li', { className: 'run-row', dataset: { jobId: job.job_id }, 'aria-current': current ? 'true' : null },
         h('span', { text: t('kind_' + job.kind) }),
@@ -510,6 +517,25 @@
         h('span', { className: 'run-actions' }, actions));
     }));
     restoreFocus(els.runsList, focused);
+  }
+  function requestStop(job) {
+    if (!job || job.state !== 'running' || job.stop_requested || state.stopRequests[job.job_id]) return Promise.resolve();
+    state.stopRequests[job.job_id] = 'sending';
+    var content = selected();
+    if (content) renderRuns(content);
+    return App.Api.stopJob(job.job_id).then(function (status) {
+      if (status && status.stop_requested) {
+        state.stopRequests[job.job_id] = 'requested';
+        if (!state.finishedJobs[job.job_id] && (!state.run || state.run.jobId === job.job_id)) notify(job.asset_id, 'info', t('stopRequested') + ' ' + t('stopHelp'));
+      } else delete state.stopRequests[job.job_id];
+      // Acceptance is not a terminal event: keep observing the same run and its log.
+      return loadAll(true);
+    }, function (error) {
+      delete state.stopRequests[job.job_id];
+      if (!state.finishedJobs[job.job_id] && (!state.run || state.run.jobId === job.job_id)) notify(job.asset_id, 'fail', t('stopFailed') + ' ' + App.I18n.error(error));
+      var current = selected();
+      if (current) renderRuns(current);
+    });
   }
   function deleteHistoryJob(job, button) {
     if (button) button.disabled = true;

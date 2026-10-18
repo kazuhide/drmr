@@ -10,7 +10,7 @@ use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
 use std::time::Duration;
 
 /// A job's public state.
@@ -18,10 +18,12 @@ use std::time::Duration;
 pub struct JobHandle {
     /// 32 hex digits (`uuid.uuid4().hex`).
     pub job_id: String,
-    /// `running`, `succeeded` or `failed`.
+    /// `running`, `succeeded`, `failed` or `interrupted`.
     pub state: &'static str,
     /// The CLI's exit code (`-N` when a signal ended it), `None` while running.
     pub exit_code: Option<i32>,
+    /// Whether stopping this job was requested before confirmed completion.
+    pub stop_requested: bool,
     /// `<jobs_dir>/<job_id>.jsonl`.
     pub log_path: PathBuf,
 }
@@ -41,6 +43,9 @@ pub enum JobError {
     /// Process-tree cleanup failed; the execution lease remains held.
     #[error("cleanup-unconfirmed")]
     CleanupUnconfirmed,
+    /// The server is closing and no longer accepts jobs.
+    #[error("server-shutting-down")]
+    ShuttingDown,
 }
 
 /// `_ensure_jsonl(line)`: a line that is valid JSON as it is, otherwise a synthetic
@@ -68,18 +73,27 @@ pub fn safe_job_id(job_id: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-'))
 }
 
+#[derive(Clone, Copy)]
+struct Finished {
+    code: i32,
+    stop_requested: bool,
+}
+
 struct State {
     current_job_id: Option<String>,
-    process: Option<ManagedChild>,
+    process: Option<Arc<Mutex<ManagedChild>>>,
+    cleanup_worker: Option<std::thread::JoinHandle<std::io::Result<i32>>>,
     log_file: Option<File>,
     exit_code: Option<i32>,
+    stop_requested: bool,
+    closing: bool,
     cleanup_unconfirmed: bool,
-    /// Exit codes of jobs that finished and were replaced as the current job.
-    finished: HashMap<String, i32>,
+    /// Outcomes of jobs that finished and were replaced as the current job.
+    finished: HashMap<String, Finished>,
 }
 
 impl State {
-    /// Observe an exit, retaining ownership until process-tree cleanup is confirmed.
+    /// Observe without waiting for another thread's process-tree cleanup.
     fn refresh(&mut self) -> Result<(), JobError> {
         self.refresh_with(
             |child| observed_exit(&child.try_wait()),
@@ -90,15 +104,25 @@ impl State {
     fn refresh_with(
         &mut self,
         observe: impl FnOnce(&mut ManagedChild) -> Option<i32>,
-        finish: impl FnOnce(&mut ManagedChild) -> std::io::Result<()>,
+        finish: impl FnOnce(&mut ManagedChild) -> std::io::Result<()> + Send + 'static,
     ) -> Result<(), JobError> {
-        self.check_cleanup()?;
-        if self.exit_code.is_none()
-            && let Some(child) = self.process.as_mut()
-            && let Some(code) = observe(child)
-        {
-            let cleanup = finish(child);
-            self.complete(code, &cleanup)?;
+        self.poll_cleanup()?;
+        if self.exit_code.is_some() || self.cleanup_worker.is_some() {
+            return Ok(());
+        }
+        let Some(process) = self.process.clone() else {
+            return Ok(());
+        };
+        let observed = match process.try_lock() {
+            Ok(mut child) => observe(&mut child),
+            Err(TryLockError::WouldBlock) => return Ok(()),
+            Err(TryLockError::Poisoned(_)) => {
+                self.cleanup_unconfirmed = true;
+                return Err(JobError::CleanupUnconfirmed);
+            }
+        };
+        if let Some(code) = observed {
+            self.start_cleanup(Some(code), finish)?;
         }
         Ok(())
     }
@@ -109,17 +133,57 @@ impl State {
 
     fn stop_with(
         &mut self,
-        finish: impl FnOnce(&mut ManagedChild) -> std::io::Result<()>,
+        finish: impl FnOnce(&mut ManagedChild) -> std::io::Result<()> + Send + 'static,
     ) -> Result<(), JobError> {
+        self.poll_cleanup()?;
+        if self.exit_code.is_none() && self.process.is_some() && self.cleanup_worker.is_none() {
+            self.stop_requested = true;
+            self.start_cleanup(None, finish)?;
+        }
+        Ok(())
+    }
+
+    fn start_cleanup(
+        &mut self,
+        observed: Option<i32>,
+        finish: impl FnOnce(&mut ManagedChild) -> std::io::Result<()> + Send + 'static,
+    ) -> Result<(), JobError> {
+        let process = self
+            .process
+            .clone()
+            .expect("cleanup retains its child owner");
+        let worker = std::thread::Builder::new()
+            .name("job-cleanup".into())
+            .spawn(move || {
+                let mut child = process
+                    .lock()
+                    .map_err(|_| std::io::Error::other("cleanup-unconfirmed"))?;
+                finish(&mut child)?;
+                Ok(observed.unwrap_or_else(|| observed_exit(&child.try_wait()).unwrap_or(1)))
+            });
+        let Ok(worker) = worker else {
+            self.cleanup_unconfirmed = true;
+            return Err(JobError::CleanupUnconfirmed);
+        };
+        self.cleanup_worker = Some(worker);
+        Ok(())
+    }
+
+    fn poll_cleanup(&mut self) -> Result<(), JobError> {
         self.check_cleanup()?;
-        if let Some(child) = self.process.as_mut() {
-            let cleanup = finish(child);
-            let code = if cleanup.is_ok() {
-                observed_exit(&child.try_wait()).unwrap_or(1)
-            } else {
-                1
+        if self
+            .cleanup_worker
+            .as_ref()
+            .is_some_and(std::thread::JoinHandle::is_finished)
+        {
+            let worker = self.cleanup_worker.take().expect("finished cleanup worker");
+            let Ok(Ok(code)) = worker.join() else {
+                self.cleanup_unconfirmed = true;
+                return Err(JobError::CleanupUnconfirmed);
             };
-            self.complete(code, &cleanup)?;
+            self.process = None;
+            self.exit_code = Some(code);
+            self.log_file = None;
         }
         Ok(())
     }
@@ -132,19 +196,31 @@ impl State {
         }
     }
 
-    fn complete(&mut self, code: i32, cleanup: &std::io::Result<()>) -> Result<(), JobError> {
-        if cleanup.is_err() {
-            self.cleanup_unconfirmed = true;
-            return Err(JobError::CleanupUnconfirmed);
-        }
-        self.process = None;
-        self.exit_code = Some(code);
-        self.log_file = None;
-        Ok(())
-    }
-
     fn busy(&self) -> bool {
         self.process.is_some() && self.exit_code.is_none()
+    }
+
+    fn handle(&self, job_id: &str, jobs_dir: &Path) -> Result<JobHandle, JobError> {
+        let (code, stopped) = if self.current_job_id.as_deref() == Some(job_id) {
+            self.check_cleanup()?;
+            (self.exit_code, self.stop_requested)
+        } else if let Some(finished) = self.finished.get(job_id) {
+            (Some(finished.code), finished.stop_requested)
+        } else {
+            return Err(JobError::NotFound(job_id.to_string()));
+        };
+        Ok(JobHandle {
+            job_id: job_id.to_string(),
+            state: match (code, stopped) {
+                (None, _) => "running",
+                (Some(_), true) => "interrupted",
+                (Some(0), false) => "succeeded",
+                (Some(_), false) => "failed",
+            },
+            exit_code: code,
+            stop_requested: stopped,
+            log_path: jobs_dir.join(format!("{job_id}.jsonl")),
+        })
     }
 }
 
@@ -218,6 +294,9 @@ impl ConversionJobManager {
             state: Mutex::new(State {
                 current_job_id: None,
                 process: None,
+                cleanup_worker: None,
+                stop_requested: false,
+                closing: false,
                 log_file: None,
                 exit_code: None,
                 cleanup_unconfirmed: false,
@@ -251,6 +330,9 @@ impl ConversionJobManager {
     pub fn submit(&self, entry: &CatalogEntry, output_root: &Path) -> Result<JobHandle, JobError> {
         let mut state = self.lock();
         state.refresh()?;
+        if state.closing {
+            return Err(JobError::ShuttingDown);
+        }
         if state.busy() {
             return Err(JobError::AlreadyRunning);
         }
@@ -292,6 +374,9 @@ impl ConversionJobManager {
     ) -> Result<JobHandle, JobError> {
         let mut state = self.lock();
         state.refresh()?;
+        if state.closing {
+            return Err(JobError::ShuttingDown);
+        }
         if state.busy() {
             return Err(JobError::AlreadyRunning);
         }
@@ -321,16 +406,24 @@ impl ConversionJobManager {
             .stderr(Stdio::from(stderr));
         let child = ManagedChild::spawn(command, true).map_err(JobError::Launch)?;
         if let (Some(current), Some(code)) = (state.current_job_id.take(), state.exit_code) {
-            state.finished.insert(current, code);
+            state.finished.insert(
+                current,
+                Finished {
+                    code,
+                    stop_requested: state.stop_requested,
+                },
+            );
         }
         state.current_job_id = Some(job_id.clone());
-        state.process = Some(child);
+        state.process = Some(Arc::new(Mutex::new(child)));
         state.log_file = Some(log_file);
         state.exit_code = None;
+        state.stop_requested = false;
         Ok(JobHandle {
             job_id,
             state: "running",
             exit_code: None,
+            stop_requested: false,
             log_path,
         })
     }
@@ -345,27 +438,51 @@ impl ConversionJobManager {
     /// `status(job_id)`: the current job (refreshed) or a finished one replaced by a newer
     /// job; `NotFound` only for an id never submitted in this server run.
     pub fn status(&self, job_id: &str) -> Result<JobHandle, JobError> {
-        let exit_code = {
+        let mut state = self.lock();
+        if state.current_job_id.as_deref() == Some(job_id) {
+            state.refresh()?;
+        }
+        state.handle(job_id, &self.jobs_dir)
+    }
+
+    /// Request one identified job's stop. Cleanup runs outside the manager lock;
+    /// repeated calls retain the same intent, and a replaced job cannot stop its successor.
+    pub fn request_stop(&self, job_id: &str) -> Result<JobHandle, JobError> {
+        let mut state = self.lock();
+        if state.current_job_id.as_deref() == Some(job_id) {
+            state.refresh()?;
+            state.stop()?;
+        }
+        state.handle(job_id, &self.jobs_dir)
+    }
+
+    /// Close the submission gate before an embedding host begins shutdown.
+    pub fn begin_shutdown(&self) {
+        self.lock().closing = true;
+    }
+
+    /// Stop and confirm the owned tree, retaining ownership on any error.
+    /// The caller may block, but status and repeated stop requests remain responsive.
+    pub fn shutdown(&self) -> Result<(), JobError> {
+        let job_id = {
             let mut state = self.lock();
-            if state.current_job_id.as_deref() == Some(job_id) {
-                state.refresh()?;
-                state.exit_code
-            } else if let Some(code) = state.finished.get(job_id) {
-                Some(*code)
-            } else {
-                return Err(JobError::NotFound(job_id.to_string()));
-            }
+            state.closing = true;
+            state.current_job_id.clone()
         };
-        Ok(JobHandle {
-            job_id: job_id.to_string(),
-            state: match exit_code {
-                None => "running",
-                Some(0) => "succeeded",
-                Some(_) => "failed",
-            },
-            exit_code,
-            log_path: self.jobs_dir.join(format!("{job_id}.jsonl")),
-        })
+        if let Some(job_id) = job_id {
+            self.request_stop(&job_id)?;
+            self.wait_for_cleanup(&job_id)?;
+        }
+        Ok(())
+    }
+
+    fn wait_for_cleanup(&self, job_id: &str) -> Result<(), JobError> {
+        loop {
+            if self.status(job_id)?.state != "running" {
+                return Ok(());
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
     }
 
     /// `_job_has_exited(job_id)`: a job replaced as the current one has necessarily exited.
@@ -380,9 +497,12 @@ impl ConversionJobManager {
 
     /// Stop the current child (used by the tests to clean up a job that never ends).
     pub fn kill_current(&self) {
-        let mut state = self.lock();
-        // A failed cleanup remains visible through status and keeps the lease occupied.
-        let _ = state.stop();
+        let job_id = self.lock().current_job_id.clone();
+        if let Some(job_id) = job_id {
+            let _ = self
+                .request_stop(&job_id)
+                .and_then(|_| self.wait_for_cleanup(&job_id));
+        }
     }
 
     /// `read_log(job_id)`: every record of a persisted log, without liveness, for a job this
@@ -634,7 +754,12 @@ mod tests {
         .unwrap();
         State {
             current_job_id: Some("job".into()),
-            process: Some(ManagedChild::spawn(Command::new(executable), true).unwrap()),
+            process: Some(Arc::new(Mutex::new(
+                ManagedChild::spawn(Command::new(executable), true).unwrap(),
+            ))),
+            cleanup_worker: None,
+            stop_requested: false,
+            closing: false,
             log_file: Some(File::create(root.join("job.jsonl")).unwrap()),
             exit_code: None,
             cleanup_unconfirmed: false,
@@ -642,15 +767,91 @@ mod tests {
         }
     }
 
+    fn settle(state: &mut State) -> Result<(), JobError> {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while state
+            .cleanup_worker
+            .as_ref()
+            .is_some_and(|worker| !worker.is_finished())
+        {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "cleanup worker failed to settle"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        state.poll_cleanup()
+    }
+
+    #[test]
+    fn stop_keeps_the_lease_and_status_responsive_until_cleanup_is_confirmed() {
+        let root = tempfile::tempdir().unwrap();
+        let state = state_with_child(root.path());
+        let manager =
+            ConversionJobManager::new(&root.path().join("jobs"), Vec::new(), Arc::new(Vec::new))
+                .unwrap();
+        *manager.lock() = state;
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        manager
+            .lock()
+            .stop_with(move |child| {
+                entered_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                child.finish()
+            })
+            .unwrap();
+        entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        // The worker holds its child lock while the manager continues answering calls.
+        assert!(manager.is_busy());
+        let running = manager.request_stop("job").unwrap();
+        assert_eq!(running.state, "running");
+        assert!(running.stop_requested);
+        assert_eq!(running.exit_code, None);
+        assert!(matches!(
+            manager.submit_command(&[], &[]),
+            Err(JobError::AlreadyRunning)
+        ));
+        assert!(matches!(
+            manager.request_stop("unknown"),
+            Err(JobError::NotFound(_))
+        ));
+        release_tx.send(()).unwrap();
+        manager.wait_for_cleanup("job").unwrap();
+        let ended = manager.status("job").unwrap();
+        assert_eq!(ended.state, "interrupted");
+        assert!(ended.stop_requested);
+        assert!(ended.exit_code.is_some());
+        assert!(!manager.is_busy());
+    }
+
+    #[test]
+    fn a_stop_intent_never_promotes_a_zero_exit_to_success() {
+        let root = tempfile::tempdir().unwrap();
+        let mut state = state_with_child(root.path());
+        state.stop_requested = true;
+        state
+            .refresh_with(|_| Some(0), ManagedChild::finish)
+            .unwrap();
+        settle(&mut state).unwrap();
+        let handle = state.handle("job", root.path()).unwrap();
+        assert_eq!(handle.state, "interrupted");
+        assert_eq!(handle.exit_code, Some(0));
+        assert!(handle.stop_requested);
+    }
+
     #[test]
     fn an_exit_requires_confirmed_cleanup_before_releasing_the_lease() {
         for code in [0, 7] {
             let root = tempfile::tempdir().unwrap();
             let mut state = state_with_child(root.path());
-            let result = state.refresh_with(
-                |_| Some(code),
-                |_| Err(std::io::Error::other("sensitive diagnostic")),
-            );
+            state
+                .refresh_with(
+                    |_| Some(code),
+                    |_| Err(std::io::Error::other("sensitive diagnostic")),
+                )
+                .unwrap();
+            let result = settle(&mut state);
             assert!(matches!(result, Err(JobError::CleanupUnconfirmed)));
             assert_eq!(result.unwrap_err().to_string(), "cleanup-unconfirmed");
             assert!(state.busy());
@@ -696,8 +897,11 @@ mod tests {
     fn a_requested_stop_retains_ownership_when_cleanup_fails() {
         let root = tempfile::tempdir().unwrap();
         let mut state = state_with_child(root.path());
+        state
+            .stop_with(|_| Err(std::io::Error::other("private failure")))
+            .unwrap();
         assert!(matches!(
-            state.stop_with(|_| Err(std::io::Error::other("private failure"))),
+            settle(&mut state),
             Err(JobError::CleanupUnconfirmed)
         ));
         assert!(state.busy());
@@ -714,6 +918,7 @@ mod tests {
             state
                 .refresh_with(|_| Some(code), ManagedChild::finish)
                 .unwrap();
+            settle(&mut state).unwrap();
             assert!(!state.busy());
             assert!(state.process.is_none());
             assert!(state.log_file.is_none());

@@ -19,6 +19,7 @@ struct State {
     recent: Vec<Map<String, Value>>,
     /// The runner slot (`_thread is not None`).
     runner_active: bool,
+    closing: bool,
     /// How many runners were started (the tests' thread factory count).
     runners_started: usize,
     mode: QueueRunner,
@@ -31,6 +32,7 @@ pub struct ConversionQueue {
     service: Arc<HlsService>,
     clock: Clock,
     state: Mutex<State>,
+    workers: Arc<crate::workers::Workers>,
     this: Weak<ConversionQueue>,
 }
 
@@ -62,9 +64,11 @@ impl ConversionQueue {
                 pending: Vec::new(),
                 recent: Vec::new(),
                 runner_active: false,
+                closing: false,
                 runners_started: 0,
                 mode,
             }),
+            workers: Arc::new(crate::workers::Workers::default()),
             this: this.clone(),
         })
     }
@@ -149,6 +153,9 @@ impl ConversionQueue {
             .collect();
         {
             let mut state = self.lock();
+            if state.closing {
+                return Err(HlsApiError::status("server-shutting-down", 503).into());
+            }
             // The running job is read under the queue lock: a launch happens inside tick()'s
             // locked section (record included), so it is never missed here.
             let running = self.service.running_job();
@@ -226,6 +233,9 @@ impl ConversionQueue {
     /// be examined or launched is removed and recorded as skipped with a fixed reason.
     pub fn tick(&self) -> Option<String> {
         let mut state = self.lock();
+        if state.closing {
+            return None;
+        }
         let (head, _) = state.pending.first()?.clone();
         if self.manager.is_busy() {
             return None; // the lease is taken: no catalog scan until it is free
@@ -291,16 +301,17 @@ impl ConversionQueue {
     /// `_ensure_runner()`: start a runner unless one holds the slot.
     fn ensure_runner(&self) {
         let mut state = self.lock();
-        if state.mode == QueueRunner::Disabled || state.runner_active {
+        if state.closing || state.mode == QueueRunner::Disabled || state.runner_active {
             return;
         }
         match state.mode {
             QueueRunner::Thread => {
                 let this = self.this.clone();
-                let started = std::thread::Builder::new()
-                    .name("conversion-queue".into())
-                    .spawn(move || run(&this));
-                if started.is_err() {
+                if self
+                    .workers
+                    .spawn("conversion-queue", move || run(&this))
+                    .is_err()
+                {
                     drop(state);
                     self.runner_failed();
                     return;
@@ -328,12 +339,20 @@ impl ConversionQueue {
         self.log(&Value::Object(event));
     }
 
+    /// Stop the runner and prevent queued work from spawning, even with external owners.
+    pub fn shutdown(&self) -> std::io::Result<()> {
+        self.lock().closing = true;
+        self.workers.shutdown()?;
+        self.lock().runner_active = false;
+        Ok(())
+    }
+
     /// `_run_once()`: `false` when the queue was empty and the slot was released (in the same
     /// critical section that saw it empty).
     pub fn run_once(&self) -> bool {
         {
             let mut state = self.lock();
-            if state.pending.is_empty() {
+            if state.closing || state.pending.is_empty() {
                 state.runner_active = false;
                 return false;
             }
@@ -360,7 +379,9 @@ fn run(queue: &Weak<ConversionQueue>) {
         if !queue.run_once() {
             return;
         }
+        if !queue.workers.wait(Duration::from_millis(500)) {
+            return;
+        }
         drop(queue);
-        std::thread::sleep(Duration::from_millis(500));
     }
 }

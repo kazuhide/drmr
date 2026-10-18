@@ -13,6 +13,8 @@ pub enum Endpoint {
     Convert,
     /// `GET /api/jobs/<job_id>`
     JobStatus,
+    /// `POST /api/jobs/<job_id>/stop`
+    JobStop,
     /// `GET /api/jobs/<job_id>/log`
     JobLog,
     /// `GET /api/jobs/<job_id>/log.jsonl`
@@ -103,6 +105,11 @@ const RULES: &[Rule] = &[
         parts: &[S("api"), S("jobs"), V],
         method: "GET",
         endpoint: Endpoint::JobStatus,
+    },
+    Rule {
+        parts: &[S("api"), S("jobs"), V, S("stop")],
+        method: "POST",
+        endpoint: Endpoint::JobStop,
     },
     Rule {
         parts: &[S("api"), S("jobs"), V, S("log")],

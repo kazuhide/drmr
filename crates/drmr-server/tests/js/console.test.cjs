@@ -33,7 +33,7 @@ function descendants(node) {
   return [node, ...node.children.flatMap(descendants)];
 }
 
-function harness() {
+function harness(options = {}) {
   const elements = new Map();
   const element = id => {
     if (!elements.has(id)) elements.set(id, new Element('div'));
@@ -43,11 +43,12 @@ function harness() {
   const queued = [];
   const sandbox = {
     window: { addEventListener() {}, App: {
-      I18n: { t: (key, values) => key + (values?.n == null ? '' : ':' + values.n), has: () => false },
+      I18n: { t: (key, values) => key + (values?.n == null ? '' : ':' + values.n), has: () => false, getLanguage: () => 'en', error: () => 'fixed-error' },
       Api: {
         postQueue: assetIds => { queued.push(Array.from(assetIds)); return Promise.resolve(); },
         getCatalog: () => Promise.resolve(catalog),
-        getHlsJobs: () => Promise.resolve({ jobs: [] }),
+        getHlsJobs: () => Promise.resolve({ jobs: options.jobs || [] }),
+        stopJob: options.stopJob || (() => Promise.resolve({ stop_requested: true })),
         getQueue: () => Promise.resolve({ running: null, pending: [], recent: [] }),
       },
     } },
@@ -64,7 +65,7 @@ function harness() {
       assert.ok(source.includes(boot));
       source = source.replace(boot, `window.controller = {
         state, cacheElements, bind, renderList, newLogView, applyRecord, settleProgress,
-        renderLogMeta, suggestedName, discoverRunning,
+        renderLogMeta, suggestedName, discoverRunning, renderRuns, requestStop,
         onRestore: function (callback) { restoreRun = callback; }
       };`);
     }
@@ -159,4 +160,42 @@ test('running persisted job IDs are adopted until explicitly marked finished', (
     h.controller.discoverRunning();
   }
   assert.deepEqual(adopted, ['constructor', 'toString', 'hasOwnProperty']);
+});
+
+
+test('a stop request targets one exact job, remains idempotent and does not invent completion', async () => {
+  let accept;
+  const calls = [];
+  const job = { job_id: '__proto__', asset_id: 'asset', kind: 'convert', state: 'running' };
+  const h = harness({ jobs: [job], stopJob: id => { calls.push(id); return new Promise(resolve => { accept = resolve; }); } });
+  const run = { jobId: job.job_id, assetId: job.asset_id, kind: job.kind, startedAt: Date.now(), view: h.controller.newLogView(job.job_id, job.asset_id, job.kind, true) };
+  h.controller.state.run = run;
+  const stopping = h.controller.requestStop(job);
+  await h.controller.requestStop(job);
+  assert.deepEqual(calls, [job.job_id]);
+  accept({ state: 'running', stop_requested: true });
+  await stopping;
+  assert.equal(h.controller.state.run, run);
+  assert.equal(run.view.live, true);
+  assert.equal(run.view.outcome, null);
+  assert.equal(h.controller.state.stopRequests[job.job_id], 'requested');
+  h.controller.renderRuns({ jobs: [job] });
+  const button = descendants(h.element('runs-list')).find(node => node.dataset?.focusKey === 'stop:' + job.job_id);
+  assert.equal(button.textContent, 'stopPending');
+  assert.equal(button.getAttribute('aria-disabled'), 'true');
+  await h.controller.requestStop({ ...job, state: 'interrupted' });
+  assert.deepEqual(calls, [job.job_id]);
+});
+
+test('a rejected stop keeps the live run and permits a deliberate retry', async () => {
+  const calls = [];
+  const job = { job_id: 'job', asset_id: 'asset', kind: 'analysis', state: 'running' };
+  const h = harness({ stopJob: id => { calls.push(id); return Promise.reject({ status: 503, body: { error: 'cleanup-unconfirmed', message: 'private' } }); } });
+  const run = { jobId: job.job_id };
+  h.controller.state.run = run;
+  await h.controller.requestStop(job);
+  assert.equal(h.controller.state.run, run);
+  assert.equal(h.controller.state.stopRequests[job.job_id], undefined);
+  await h.controller.requestStop(job);
+  assert.deepEqual(calls, ['job', 'job']);
 });

@@ -112,6 +112,7 @@ struct Row {
     analysis_id: Option<String>,
     result_id: Option<String>,
     exit_code: Option<i64>,
+    stop_requested: bool,
     hidden: bool,
     /// A terminal state whose write failed: retried on every later refresh.
     unsaved: bool,
@@ -127,6 +128,9 @@ impl Row {
         map.insert("job_id".into(), Value::from(self.job_id.clone()));
         map.insert("kind".into(), Value::from(self.kind.clone()));
         map.insert("state".into(), Value::from(self.state.clone()));
+        if self.stop_requested {
+            map.insert("stop_requested".into(), Value::Bool(true));
+        }
         map.insert("created_at".into(), Value::from(self.created_at.clone()));
         map.insert("asset_id".into(), Value::from(self.asset_id.clone()));
         map.insert("analysis_id".into(), text(&self.analysis_id));
@@ -242,6 +246,7 @@ pub struct HlsService {
     ttl: f64,
     monitor: AtomicBool,
     this: Weak<HlsService>,
+    workers: Arc<crate::workers::Workers>,
     // Keep external tool reopen paths stable for the entire service lifetime.
     #[cfg(windows)]
     _output_pin: drmr_core::native::PrivateDirectoryGuard,
@@ -299,6 +304,7 @@ impl HlsService {
             ttl: 1800.0,
             monitor: AtomicBool::new(monitor),
             this: this.clone(),
+            workers: Arc::new(crate::workers::Workers::default()),
             #[cfg(windows)]
             _output_pin: output_pin,
         });
@@ -495,7 +501,7 @@ impl HlsService {
         let exit_code = match record.get("exit_code") {
             None | Some(Value::Null) => None,
             Some(Value::Number(number)) => match number.as_i64() {
-                Some(code @ 0..=255) if !number.is_f64() => Some(code),
+                Some(code) if !number.is_f64() && i32::try_from(code).is_ok() => Some(code),
                 _ => return Ok(None),
             },
             Some(_) => return Ok(None),
@@ -523,6 +529,11 @@ impl HlsService {
             analysis_id: None,
             result_id: None,
             exit_code,
+            stop_requested: match record.get("stop_requested") {
+                None => false,
+                Some(Value::Bool(value)) => *value,
+                Some(_) => return Ok(None),
+            },
             hidden,
             unsaved: false,
             private_files: Vec::new(),
@@ -569,6 +580,7 @@ impl HlsService {
                 .then(|| analysis_id.unwrap_or(&handle.job_id).to_string()),
             result_id: (kind == "package").then(|| handle.job_id.clone()),
             exit_code: handle.exit_code.map(i64::from),
+            stop_requested: handle.stop_requested,
             hidden: false,
             unsaved: false,
             private_files: Vec::new(),
@@ -682,6 +694,10 @@ impl HlsService {
                 Ok(handle) => {
                     row.state = handle.state.to_string();
                     row.exit_code = handle.exit_code.map(i64::from);
+                    if handle.stop_requested && !row.stop_requested {
+                        row.stop_requested = true;
+                        row.unsaved = self.persist(&row, row.hidden).is_err();
+                    }
                 }
                 Err(JobError::CleanupUnconfirmed) => {
                     // The live supervisor still owns this job and its request files.
@@ -716,10 +732,19 @@ impl HlsService {
                     self.log(&Value::Object(event));
                 }
                 // Request configs can carry signed URLs or license metadata: retain neither.
-                for path in std::mem::take(&mut row.private_files) {
-                    let _ = std::fs::remove_file(path);
-                }
+                row.private_files
+                    .retain(|path| match std::fs::remove_file(path) {
+                        Ok(()) => false,
+                        Err(error) => error.kind() != std::io::ErrorKind::NotFound,
+                    });
             }
+        }
+        if row.state != "running" {
+            row.private_files
+                .retain(|path| match std::fs::remove_file(path) {
+                    Ok(()) => false,
+                    Err(error) => error.kind() != std::io::ErrorKind::NotFound,
+                });
         }
         let public = row.public();
         state.records.insert(job_id.to_string(), row);
@@ -741,23 +766,49 @@ impl HlsService {
         }
         let this = self.this.clone();
         let job_id = job_id.to_string();
-        let spawned = std::thread::Builder::new()
-            .name("hls-job-monitor".into())
-            .spawn(move || {
-                loop {
-                    let Some(service) = this.upgrade() else {
-                        return;
-                    };
-                    match service.status(&job_id) {
-                        Ok(public)
-                            if public.get("state").and_then(Value::as_str) == Some("running") => {}
-                        _ => return,
-                    }
-                    drop(service);
-                    std::thread::sleep(Duration::from_millis(250));
+        let spawned = self.workers.spawn("hls-job-monitor", move || {
+            loop {
+                let Some(service) = this.upgrade() else {
+                    return;
+                };
+                match service.status(&job_id) {
+                    Ok(public)
+                        if public.get("state").and_then(Value::as_str) == Some("running") => {}
+                    _ => return,
                 }
-            });
+                if !service.workers.wait(Duration::from_millis(250)) {
+                    return;
+                }
+                drop(service);
+            }
+        });
         drop(spawned);
+    }
+
+    /// Confirm terminal records and release private requests and playback credentials.
+    /// The caller must first close submissions and confirm the manager's child cleanup.
+    pub fn shutdown(&self) -> Result<(), ServiceError> {
+        self.monitor.store(false, Ordering::SeqCst);
+        let workers_ok = self.workers.shutdown().is_ok();
+        let mut state = self.lock();
+        let keys: Vec<String> = state.records.keys().cloned().collect();
+        let mut records_ok = true;
+        for key in keys {
+            records_ok &= self.refresh(&mut state, &key).is_ok();
+        }
+        records_ok &= state
+            .records
+            .values()
+            .all(|row| row.state != "running" && !row.unsaved && row.private_files.is_empty());
+        state.pending_keys.clear();
+        state.contexts.clear();
+        state.sessions.clear();
+        state.expiry_scheduled = false;
+        if workers_ok && records_ok {
+            Ok(())
+        } else {
+            Err(HlsApiError::status("service-cleanup-unconfirmed", 503).into())
+        }
     }
 
     // --------------------------------------------------------------------------------------
@@ -779,19 +830,19 @@ impl HlsService {
         }
         state.expiry_scheduled = true;
         let this = self.this.clone();
-        let spawned = std::thread::Builder::new()
-            .name("hls-expiry".into())
-            .spawn(move || {
-                std::thread::sleep(Duration::from_secs(30));
-                if let Some(service) = this.upgrade() {
-                    let mut state = service.lock();
-                    state.expiry_scheduled = false;
-                    service.expire(&mut state);
-                    if !state.contexts.is_empty() || !state.sessions.is_empty() {
-                        service.schedule_expiry(&mut state);
-                    }
+        let spawned = self.workers.spawn("hls-expiry", move || {
+            if let Some(service) = this.upgrade() {
+                if !service.workers.wait(Duration::from_secs(30)) {
+                    return;
                 }
-            });
+                let mut state = service.lock();
+                state.expiry_scheduled = false;
+                service.expire(&mut state);
+                if !state.contexts.is_empty() || !state.sessions.is_empty() {
+                    service.schedule_expiry(&mut state);
+                }
+            }
+        });
         if spawned.is_err() {
             state.expiry_scheduled = false;
         }
@@ -2329,6 +2380,7 @@ mod tests {
             analysis_id: Some("analysis".into()),
             result_id: Some("job".into()),
             exit_code: None,
+            stop_requested: false,
             hidden: false,
             unsaved: false,
             private_files: vec![request.clone()],

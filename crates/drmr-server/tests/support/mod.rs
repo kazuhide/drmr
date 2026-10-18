@@ -726,7 +726,7 @@ impl Harness {
     pub fn start(&mut self) {
         if let Some(server) = self.server.take() {
             server.app.manager.kill_current();
-            server.stop();
+            server.stop().unwrap();
         }
         let server = drmr_server::spawn(self.config()).unwrap();
         self.client = Client::new(&server.url());
@@ -775,7 +775,7 @@ impl Drop for Harness {
     fn drop(&mut self) {
         if let Some(server) = self.server.take() {
             server.app.manager.kill_current();
-            server.stop();
+            server.stop().unwrap();
         }
     }
 }

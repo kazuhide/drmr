@@ -120,6 +120,9 @@
     reenterDrm: 'DRM パラメーターを再入力してください（送信時に消去されています）。', resultLoading: '結果を読み込んでいます…', resultUnavailable: 'この結果は利用できなくなりました（出力が削除または変更された可能性があります）。', retryResult: '結果を再読み込み',
     // runs / log section
     runsEmpty: 'まだ実行はありません。',
+    stopJob: '停止', stopPending: '停止処理中…', stopJobLabel: '{asset} のジョブを停止', stopPendingLabel: '{asset} の停止完了を待っています',
+    stopRequested: '停止を要求しました。子プロセスの終了確認を待っています。', stopHelp: 'このジョブだけを停止します。待機中のジョブは続行します。途中の出力はディスクに残る場合があります。', stopFailed: '停止を要求できませんでした。',
+    cleanupUnconfirmed: '終了処理を確認できませんでした。ジョブのファイルは保持されています。サーバーのログを確認してください。', serverClosing: 'サーバーは終了処理中です。',
     openLog: 'ログ', logLive: 'ライブ', logReplay: '保存済みログ', logLoading: 'ログを読み込んでいます…', exitCode: '終了コード {code}', timeUnknown: '日時不明',
     logJson: 'JSON', logFormatted: '整形表示', logDownload: 'ダウンロード', logExit: '終了コード {code}', logTruncated: '一部省略', toolOutputEmpty: '出力なし',
     logInterrupted: 'ログの一部は受信できませんでした。件数と進捗は参考値です。',
@@ -282,6 +285,9 @@
     packaging: 'Packaging…', packageDone: 'Packaging finished ({elapsed}).', packageFailed: 'Packaging failed. Check the log.', packageInterrupted: 'Packaging was interrupted.',
     reenterDrm: 'Re-enter the DRM parameters (they were cleared on submission).', resultLoading: 'Loading the result…', resultUnavailable: 'This result is no longer available (its output may have been removed or changed).', retryResult: 'Reload result',
     runsEmpty: 'No runs yet.',
+    stopJob: 'Stop', stopPending: 'Stopping…', stopJobLabel: 'Stop the job for {asset}', stopPendingLabel: 'Waiting for the job for {asset} to stop',
+    stopRequested: 'Stop requested. Waiting for child-process cleanup.', stopHelp: 'Stops only this job. Queued jobs continue. Partial output files may remain on disk.', stopFailed: 'Could not request stop.',
+    cleanupUnconfirmed: 'Cleanup could not be confirmed. The job retains its files. Check the server log.', serverClosing: 'The server is shutting down.',
     openLog: 'Log', logLive: 'Live', logReplay: 'Saved log', logLoading: 'Loading the log…', exitCode: 'Exit code {code}', timeUnknown: 'Unknown time',
     logJson: 'JSON', logFormatted: 'Formatted', logDownload: 'Download', logExit: 'exit code {code}', logTruncated: 'partly omitted', toolOutputEmpty: 'no output',
     logInterrupted: 'Part of the log was not received; counts and progress are indicative.',
@@ -367,6 +373,8 @@
       if (code === 'asset-already-exists' && asset) return t('assetExistsErrorAsset', { asset: asset });
       return t(Object.prototype.hasOwnProperty.call(conflicts, code) ? conflicts[code] : 'conflictError');
     }
+    if (e.status === 503 && code === 'cleanup-unconfirmed') return t('cleanupUnconfirmed');
+    if (e.status === 503 && code === 'server-shutting-down') return t('serverClosing');
     if (e.status === 403) return t('forbiddenError');
     if (e.status === 422 || e.status === 400 || e.status === 415) {
       if (code === 'source-profile-invalid' || code === 'source-not-allowed') return t('sourceAccessError');
