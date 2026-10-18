@@ -252,8 +252,16 @@ fn execute_with_reader(
     }
     // Asset workers inherit one supervisor-owned Unix group. Creating a subgroup here
     // would let media tools survive a hard worker kill; Windows retains nested jobs.
-    let mut child = ManagedChild::spawn(command, !crate::native::in_asset_worker())
-        .map_err(|error| failure("unavailable", format!("could not run: {error}")))?;
+    let mut child = ManagedChild::spawn_with_io(
+        command,
+        !crate::native::in_asset_worker(),
+        crate::native::ManagedIo {
+            stdin: crate::native::ManagedStdio::Null,
+            stdout: crate::native::ManagedStdio::Piped,
+            stderr: crate::native::ManagedStdio::Piped,
+        },
+    )
+    .map_err(|error| failure("unavailable", format!("could not run: {error}")))?;
     let stdout = child.stdout.take().expect("stdout is piped");
     let stderr = child.stderr.take().expect("stderr is piped");
     // Windows uses the managed job to close inherited writers. Unix pipes are
