@@ -543,8 +543,9 @@ pub fn serve(config: ServerConfig) -> Result<(), ServeError> {
         let address = listener.local_addr()?;
         let _ = writeln!(std::io::stderr(), " * Running on http://{address}");
         let shutdown_app = app.clone();
-        axum::serve(listener, build_router(app.clone()))
-            .with_graceful_shutdown(async move {
+        tokio::select! {
+            result = axum::serve(listener, build_router(app.clone())) => result,
+            () = async move {
                 loop {
                     shutdown_signal().await;
                     let owner = shutdown_app.clone();
@@ -560,8 +561,8 @@ pub fn serve(config: ServerConfig) -> Result<(), ServeError> {
                         }
                     }
                 }
-            })
-            .await
+            } => Ok(()),
+        }
     });
     let cleanup = app.shutdown();
     drop(runtime);

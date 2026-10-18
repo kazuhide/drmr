@@ -94,6 +94,41 @@ fn start(catalog: &Path, output: &Path) -> Server {
 
 #[cfg(unix)]
 #[test]
+fn an_unfinished_request_body_cannot_prevent_confirmed_signal_shutdown() {
+    use rustix::process::{Pid, Signal, kill_process};
+    let dir = tempfile::tempdir().unwrap();
+    let catalog = dir.path().join("catalog");
+    std::fs::create_dir(&catalog).unwrap();
+    let mut server = start(&catalog, &dir.path().join("output"));
+    let mut stalled = TcpStream::connect(&server.address).unwrap();
+    stalled
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    write!(stalled, "POST /api/convert HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\nContent-Length: 2\r\nExpect: 100-continue\r\n\r\n", server.address).unwrap();
+    let mut interim = String::new();
+    BufReader::new(stalled.try_clone().unwrap())
+        .read_line(&mut interim)
+        .unwrap();
+    assert!(interim.starts_with("HTTP/1.1 100"), "{interim}");
+    let pid = Pid::from_raw(i32::try_from(server.child.id()).unwrap()).unwrap();
+    kill_process(pid, Signal::TERM).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(status) = server.child.try_wait().unwrap() {
+            assert!(status.success(), "{status}");
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "an unfinished body must not hold shutdown open"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    drop(stalled);
+}
+
+#[cfg(unix)]
+#[test]
 fn failed_signal_shutdown_retains_diagnostics_until_cleanup_can_be_retried() {
     use rustix::process::{Pid, Signal, kill_process};
     let dir = tempfile::tempdir().unwrap();

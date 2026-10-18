@@ -136,9 +136,11 @@ impl State {
         finish: impl FnOnce(&mut ManagedChild) -> std::io::Result<()> + Send + 'static,
     ) -> Result<(), JobError> {
         self.poll_cleanup()?;
-        if self.exit_code.is_none() && self.process.is_some() && self.cleanup_worker.is_none() {
+        if self.exit_code.is_none() && self.process.is_some() {
             self.stop_requested = true;
-            self.start_cleanup(None, finish)?;
+            if self.cleanup_worker.is_none() {
+                self.start_cleanup(None, finish)?;
+            }
         }
         Ok(())
     }
@@ -837,6 +839,41 @@ mod tests {
             std::thread::sleep(Duration::from_millis(1));
         }
         state.poll_cleanup()
+    }
+
+    #[test]
+    fn stop_during_natural_cleanup_records_intent_without_starting_another_worker() {
+        let root = tempfile::tempdir().unwrap();
+        let manager =
+            ConversionJobManager::new(&root.path().join("jobs"), Vec::new(), Arc::new(Vec::new))
+                .unwrap();
+        *manager.lock() = state_with_child(root.path());
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        manager
+            .lock()
+            .refresh_with(
+                |_| Some(0),
+                move |child| {
+                    entered_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                    child.finish()
+                },
+            )
+            .unwrap();
+        entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let pending = manager.request_stop("job").unwrap();
+        release_tx.send(()).unwrap();
+        manager.wait_for_cleanup("job").unwrap();
+        let completed = manager.status("job").unwrap();
+        assert!(
+            pending.stop_requested,
+            "a stop accepted before confirmed completion retains intent"
+        );
+        assert_eq!(pending.state, "running");
+        assert_eq!(completed.state, "interrupted");
+        assert_eq!(completed.exit_code, Some(0));
+        assert!(completed.stop_requested);
     }
 
     #[test]
