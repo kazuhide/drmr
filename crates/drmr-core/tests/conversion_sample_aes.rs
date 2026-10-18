@@ -490,6 +490,12 @@ fn simultaneously_active_key_formats_cannot_hide_an_unsupported_or_conflicting_d
             "KEYFORMAT=\"com.apple.streamingkeydelivery\"",
         )
         .replace(IV, "00000000000000000000000000000000");
+    let sample_fairplay = identity.replace(
+        "KEYFORMAT=\"identity\"",
+        "KEYFORMAT=\"com.apple.streamingkeydelivery\"",
+    );
+    let aes = identity.replace("METHOD=SAMPLE-AES", "METHOD=AES-128");
+    let implicit_aes = aes.replace(",KEYFORMAT=\"identity\"", "");
     let c = Converter::new(runner(), "packager", "ffmpeg");
     let keys = HlsInputKeys::new(vec![(URI.into(), Aes128Key::from_hex(KEY).unwrap())]).unwrap();
     let empty = InputKeys::default();
@@ -497,6 +503,15 @@ fn simultaneously_active_key_formats_cannot_hide_an_unsupported_or_conflicting_d
         ("unknown-first", format!("{unknown}\n{identity}")),
         ("unknown-last", format!("{identity}\n{unknown}")),
         ("conflicting-supported", format!("{fairplay}\n{identity}")),
+        ("aes-before-sample", format!("{aes}\n{sample_fairplay}")),
+        (
+            "sample-before-aes",
+            format!("{sample_fairplay}\n{aes}\n{sample_fairplay}"),
+        ),
+        (
+            "implicit-aes-before-sample",
+            format!("{implicit_aes}\n{sample_fairplay}"),
+        ),
     ] {
         std::fs::write(&source, original.replace(identity, &declarations)).unwrap();
         let before = common::snapshot_tree(&root.path().join("source"));
@@ -510,6 +525,38 @@ fn simultaneously_active_key_formats_cannot_hide_an_unsupported_or_conflicting_d
         assert!(!output.exists());
         assert_eq!(common::snapshot_tree(&root.path().join("source")), before);
     }
+    // Replacing a declaration of the same format before media is a valid
+    // replacement, even when its previous method was different.
+    std::fs::write(
+        &source,
+        original.replace(identity, &format!("{aes}\n{identity}")),
+    )
+    .unwrap();
+    let before = common::snapshot_tree(&root.path().join("source"));
+    let output = root.path().join("same-format-replacement");
+    assert!(
+        c.convert(request(&source, &output, &keys, &empty))
+            .unwrap()
+            .verification
+            .passed
+    );
+    assert!(
+        c.verify(VerificationRequest {
+            source: VerificationSource {
+                input: &source,
+                input_keys: &empty,
+                hls_keys: &keys
+            },
+            output: VerificationSource {
+                input: &output.join("master.m3u8"),
+                input_keys: &empty,
+                hls_keys: &HlsInputKeys::default()
+            },
+        })
+        .unwrap()
+        .passed
+    );
+    assert_eq!(common::snapshot_tree(&root.path().join("source")), before);
 }
 
 #[test]

@@ -280,15 +280,25 @@ struct Localizer<'a> {
     saw_sample: bool,
     saw_aes: bool,
     ts_wall_clock: bool,
-    sample_formats: std::collections::BTreeSet<String>,
+    key_formats: std::collections::BTreeSet<String>,
 }
 impl Localizer<'_> {
     fn set_key(&mut self, value: &str) -> Result<(), ConversionError> {
         let attrs = attributes(value)?;
+        // Every encryption method participates in the effective KEYFORMAT set.
+        // Repeated declarations of the same format replace that format's key.
+        if matches!(
+            attrs.get("METHOD"),
+            Some("AES-128" | "SAMPLE-AES" | "SAMPLE-AES-CTR")
+        ) && self.key_formats.len() < 2
+        {
+            self.key_formats
+                .insert(attrs.get("KEYFORMAT").unwrap_or("identity").to_owned());
+        }
         match attrs.get("METHOD") {
             Some("NONE") if attrs.len() == 1 => {
                 self.cipher = Cipher::default();
-                self.sample_formats.clear();
+                self.key_formats.clear();
             }
             Some("AES-128") => {
                 if attrs
@@ -319,10 +329,6 @@ impl Localizer<'_> {
                     return Err(ConversionError("hls-key-uri-missing"));
                 }
                 self.cipher = Cipher::default();
-                if self.sample_formats.len() < 2 {
-                    self.sample_formats
-                        .insert(attrs.get("KEYFORMAT").unwrap_or("identity").to_owned());
-                }
                 let supplied = self
                     .keys
                     .0
@@ -335,7 +341,7 @@ impl Localizer<'_> {
                         .map(|value| zeroize::Zeroizing::new(value.to_owned())),
                     configured_iv: supplied.and_then(|entry| entry.iv.as_ref()),
                     supported: attrs.get("METHOD") == Some("SAMPLE-AES")
-                        && self.sample_formats.len() == 1
+                        && self.key_formats.len() == 1
                         && attrs.get("KEYFORMAT").is_none_or(|format| {
                             matches!(format, "identity" | "com.apple.streamingkeydelivery")
                         })
@@ -470,6 +476,9 @@ impl Localizer<'_> {
                 return Err(ConversionError("hls-master-not-yet-supported"));
             }
             _ if !line.starts_with('#') => {
+                if !self.playlist.has_map && self.key_formats.len() > 1 {
+                    return Err(ConversionError("ts-sample-key-declaration-not-supported"));
+                }
                 if !self.playlist.pending_duration {
                     return Err(ConversionError("hls-segment-duration-missing"));
                 }
@@ -617,7 +626,7 @@ pub(super) fn localize(
         playlist,
         cipher: Cipher::default(),
         saw_sample: false,
-        sample_formats: std::collections::BTreeSet::new(),
+        key_formats: std::collections::BTreeSet::new(),
         saw_aes: false,
         ts_wall_clock: false,
     };
