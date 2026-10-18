@@ -51,7 +51,7 @@ impl Backend {
         }
         Ok(completed.stdout)
     }
-    fn effective_argv(argv: &[String], tool: &str) -> Zeroizing<Vec<String>> {
+    pub(super) fn effective_argv(argv: &[String], tool: &str) -> Zeroizing<Vec<String>> {
         let mut effective = Zeroizing::new(argv.to_vec());
         if tool == "ffprobe" {
             effective.splice(1..1, ["-threads".into(), "1".into()]);
@@ -423,7 +423,7 @@ impl Backend {
     }
 }
 
-fn tool_error(error: &crate::toolrun::ToolError) -> ConversionError {
+pub(super) fn tool_error(error: &crate::toolrun::ToolError) -> ConversionError {
     ConversionError(match error.kind {
         "cleanup-unconfirmed" => "media-cleanup-unconfirmed",
         "output-limit" => "media-output-limit",

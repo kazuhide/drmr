@@ -18,7 +18,10 @@ const MAX_RESOURCES: usize = 4096;
 pub(super) struct Localized {
     pub combined: PathBuf,
     pub reference: PathBuf,
+    pub playlist: PathBuf,
     pub report: Inspection,
+    pub transport: Option<super::ts::Admission>,
+    pub transport_segments: Vec<(PathBuf, String)>,
 }
 struct Playlist {
     combined: File,
@@ -28,9 +31,13 @@ struct Playlist {
     resources: usize,
     bytes: u64,
     has_map: bool,
+    transport: Option<super::ts::Admission>,
+    stop: crate::concurrency::Stop,
     ended: bool,
     pending_duration: bool,
     declared_duration: f64,
+    duration_text: String,
+    transport_segments: Vec<(PathBuf, String)>,
     clock: Option<super::timing::FragmentClock>,
     singleton_tags: std::collections::BTreeSet<String>,
 }
@@ -104,7 +111,13 @@ impl Playlist {
         let name = format!(
             "resource-{:04}.{}",
             self.resources,
-            if map { "mp4" } else { "m4s" }
+            if map {
+                "mp4"
+            } else if self.has_map {
+                "m4s"
+            } else {
+                "ts"
+            }
         );
         let copied = stage.join(&name);
         super::copy_private(&original, &copied)?;
@@ -145,11 +158,17 @@ impl Playlist {
         };
         if map {
             self.clock = Some(super::timing::FragmentClock::read(&plaintext)?);
-        } else {
+        } else if self.clock.is_some() {
             self.clock
                 .as_mut()
                 .ok_or(ConversionError("hls-map-required"))?
                 .check(&plaintext, self.declared_duration)?;
+        } else {
+            self.transport
+                .get_or_insert_with(Default::default)
+                .segment(&plaintext, &self.stop)?;
+            self.transport_segments
+                .push((plaintext.clone(), self.duration_text.clone()));
         }
         let mut input =
             File::open(plaintext).map_err(|_| ConversionError("hls-resource-unreadable"))?;
@@ -173,6 +192,7 @@ struct Localizer<'a> {
     cipher: Cipher<'a>,
     saw_sample: bool,
     saw_aes: bool,
+    ts_wall_clock: bool,
 }
 impl Localizer<'_> {
     fn set_key(&mut self, value: &str) -> Result<(), ConversionError> {
@@ -247,6 +267,7 @@ impl Localizer<'_> {
         }
         writeln!(self.playlist.reference, "#EXTINF:{duration},")
             .expect("writing a string cannot fail");
+        duration.clone_into(&mut self.playlist.duration_text);
         self.playlist.declared_duration = duration
             .parse()
             .map_err(|_| ConversionError("hls-invalid-duration"))?;
@@ -282,10 +303,10 @@ impl Localizer<'_> {
             "#EXT-X-PLAYLIST-TYPE" if value != "VOD" => {
                 return Err(ConversionError("hls-complete-vod-required"));
             }
+            "#EXT-X-PROGRAM-DATE-TIME" => self.ts_wall_clock = true,
             "#EXT-X-VERSION"
             | "#EXT-X-PLAYLIST-TYPE"
             | "#EXT-X-INDEPENDENT-SEGMENTS"
-            | "#EXT-X-PROGRAM-DATE-TIME"
             | "#EXT-X-BITRATE"
             | "#EXT-X-ALLOW-CACHE" => {}
             "#EXT-X-KEY" => self.set_key(value)?,
@@ -327,10 +348,8 @@ impl Localizer<'_> {
                 return Err(ConversionError("hls-master-not-yet-supported"));
             }
             _ if !line.starts_with('#') => {
-                if !self.playlist.has_map {
-                    return Err(ConversionError(
-                        "hls-transport-stream-input-not-yet-supported",
-                    ));
+                if !self.playlist.has_map && self.saw_sample {
+                    return Err(ConversionError("ts-sample-encryption-not-supported"));
                 }
                 if !self.playlist.pending_duration {
                     return Err(ConversionError("hls-segment-duration-missing"));
@@ -363,20 +382,41 @@ impl Localizer<'_> {
             .sync_all()
             .map_err(|_| ConversionError("media-copy-failed"))?;
         drop(playlist.combined);
-        let actual = inspection::inspect(&combined)
-            .map_err(|_| ConversionError("invalid-localized-hls-media"))?;
-        if self.saw_aes && actual.protection != Protection::Clear {
+        let actual = if let Some(transport) = &playlist.transport {
+            if self.saw_sample {
+                return Err(ConversionError("ts-sample-encryption-not-supported"));
+            }
+            if self.ts_wall_clock {
+                return Err(ConversionError("ts-wall-clock-metadata-not-supported"));
+            }
+            transport.finish()?;
+            None
+        } else {
+            Some(
+                inspection::inspect(&combined)
+                    .map_err(|_| ConversionError("invalid-localized-hls-media"))?,
+            )
+        };
+        if self.saw_aes
+            && actual
+                .as_ref()
+                .is_some_and(|a| a.protection != Protection::Clear)
+        {
             return Err(ConversionError("hls-nested-protection-not-supported"));
         }
-        if self.saw_sample && !matches!(actual.protection, Protection::Cenc | Protection::Cbcs) {
+        if self.saw_sample
+            && !actual
+                .as_ref()
+                .is_some_and(|a| matches!(a.protection, Protection::Cenc | Protection::Cbcs))
+        {
             return Err(ConversionError("hls-sample-protection-unresolved"));
         }
-        let reference = if self.saw_aes {
-            let reference = self.stage.join("reference.m3u8");
-            private_new(&reference)?
-                .write_all(playlist.reference.as_bytes())
-                .map_err(|_| ConversionError("temporary-file-unavailable"))?;
-            reference
+        let playlist_path = self.stage.join("reference.m3u8");
+        private_new(&playlist_path)?
+            .write_all(playlist.reference.as_bytes())
+            .map_err(|_| ConversionError("temporary-file-unavailable"))?;
+        let reference = if self.saw_aes || playlist.transport.is_some() {
+            playlist_path.clone()
         } else {
             combined.clone()
         };
@@ -385,7 +425,10 @@ impl Localizer<'_> {
         Ok(Localized {
             combined,
             reference,
+            playlist: playlist_path,
             report,
+            transport: playlist.transport,
+            transport_segments: playlist.transport_segments,
         })
     }
 }
@@ -393,6 +436,7 @@ pub(super) fn localize(
     path: &Path,
     stage: &Path,
     keys: &HlsInputKeys,
+    stop: &crate::concurrency::Stop,
 ) -> Result<Localized, ConversionError> {
     let metadata = fs::symlink_metadata(path).map_err(|_| ConversionError("input-unreadable"))?;
     if !metadata.is_file() || metadata.file_type().is_symlink() {
@@ -425,9 +469,13 @@ pub(super) fn localize(
         resources: 0,
         bytes: 0,
         has_map: false,
+        transport: None,
+        stop: stop.clone(),
         ended: false,
         pending_duration: false,
         declared_duration: 0.0,
+        duration_text: String::new(),
+        transport_segments: Vec::new(),
         clock: None,
         singleton_tags: std::collections::BTreeSet::new(),
     };
@@ -439,6 +487,7 @@ pub(super) fn localize(
         cipher: Cipher::default(),
         saw_sample: false,
         saw_aes: false,
+        ts_wall_clock: false,
     };
     for line in lines {
         localizer.line(line)?;
@@ -488,6 +537,7 @@ impl Converter {
             &staged.path().join("media.m3u8"),
             &verify_stage,
             &verification_keys,
+            &self.backend.stop,
         )?;
         let verification = self.backend.verify_views(
             super::verify::StreamView::new(
@@ -522,7 +572,10 @@ impl Converter {
     ) -> Result<ConversionReport, ConversionError> {
         let destination = super::destination(output)?;
         let workspace = super::workspace()?;
-        let localized = localize(input, workspace.path(), hls_keys)?;
+        let localized = localize(input, workspace.path(), hls_keys, &self.backend.stop)?;
+        if localized.transport.is_some() {
+            return Err(ConversionError("ts-input-requires-generic-hls-output"));
+        }
         let candidate = workspace.path().join("candidate.mp4");
         let mut report = self.convert_mp4(
             &localized.combined,
@@ -662,6 +715,30 @@ fn append_bounded(
         return Err(ConversionError("media-size-limit"));
     }
     Ok(())
+}
+
+/// A verifier-only local identity key replaces remote signaling; it never retrieves a key URI.
+pub(super) fn sample_reference(
+    playlist: &Path,
+    key: &super::ContentKey,
+) -> Result<PathBuf, ConversionError> {
+    let parent = playlist
+        .parent()
+        .ok_or(ConversionError("temporary-workspace-unavailable"))?;
+    private_new(&parent.join("sample-key.bin"))?
+        .write_all(key.bytes.as_ref())
+        .map_err(|_| ConversionError("temporary-key-write-failed"))?;
+    let text =
+        fs::read_to_string(playlist).map_err(|_| ConversionError("hls-reference-unreadable"))?;
+    let rewritten = text.replace(
+        "#EXT-X-KEY:METHOD=NONE",
+        "#EXT-X-KEY:METHOD=SAMPLE-AES,URI=\"sample-key.bin\",KEYFORMAT=\"identity\"",
+    );
+    let output = parent.join("sample-reference.m3u8");
+    private_new(&output)?
+        .write_all(rewritten.as_bytes())
+        .map_err(|_| ConversionError("temporary-file-unavailable"))?;
+    Ok(output)
 }
 
 #[cfg(test)]

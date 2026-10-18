@@ -44,7 +44,7 @@ The finite-edit regression uses the attributed BBB fixture and passed locally on
 
 The backend also tests joint video/audio HLS with clear, `cbcs`, and AES-128 output. `cenc` HLS output is refused. HLS AES-128 applies to HLS resources, so it cannot be selected as a standalone MP4 or DASH protection scheme. `cens` and `cbc1` can be identified but are not conversion targets.
 
-Local manifests must stay inside the source directory tree. Key URI mappings come from the protected operator configuration; no key URI or remote media is retrieved. Live input, discontinuities, byte ranges, MPEG transport streams, multiple DASH periods, unsupported addressing, and rendition metadata that cannot be retained are rejected. See [processing and verification](media-processing.md) for the exact source profile, resource limits, audio trimming, segmentation, and verification behavior.
+Local manifests must stay inside the source directory tree. Key URI mappings come from the protected operator configuration; no key URI or remote media is retrieved. Live input, discontinuities, byte ranges, multiple DASH periods, unsupported addressing, and rendition metadata that cannot be retained are rejected. Local MPEG transport stream input has a separate, narrower profile described below. See [processing and verification](media-processing.md) for the exact source profile, resource limits, audio trimming, segmentation, and verification behavior.
 
 For example, to remove CBCS protection from a qualified local DASH source using keys in the input section of `source-keys.json`:
 
@@ -54,3 +54,9 @@ drmr verify clear-dash/manifest.mpd --source protected/manifest.mpd --keys-file 
 ```
 
 Clear output needs no output-key section. Keep the original media and keys until verification succeeds. License acquisition, DRM system qualification, and real device playback remain separate checks.
+
+## MPEG transport stream input
+
+Completed local HLS playlists containing clear or operator-keyed AES-128 transport stream segments can produce fragmented MP4 HLS with clear, `cbcs`, or AES-128 protection. The initial profile accepts one H.264 video stream, optionally accompanied by one 48 kHz AAC-LC audio stream, in a single program. Video must be progressive. Audio-only input, 44.1 kHz audio, sample-encrypted transport streams, DASH/MP4 output from this input, and transport stream output are refused.
+
+The ten-second public fixture passed these three output routes and separate verification locally on macOS ARM64 with FFmpeg 9.0.2 and Shaka Packager 3.8.0. Additional cases cover reordered pictures, video-only input, AES-128 key rotation, explicit and sequence-derived initialization vectors, and transitions to clear segments. This is local qualification; it does not establish other operating systems, tools, codecs, or arbitrary broadcast streams. See [the exact input and verification limits](media-processing.md#mpeg-transport-stream-input).

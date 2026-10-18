@@ -22,6 +22,7 @@ mod keys;
 mod presentation;
 mod progressive;
 mod timing;
+mod ts;
 pub use presentation::{
     ConversionRequest, TrackConversionRequest, VerificationRequest, VerificationSource,
 };
@@ -134,7 +135,10 @@ impl Converter {
         output_key: &HlsOutputKey,
     ) -> Result<ConversionReport, ConversionError> {
         let workspace = workspace()?;
-        let localized = hls::localize(input, workspace.path(), hls_keys)?;
+        let localized = hls::localize(input, workspace.path(), hls_keys, &self.backend.stop)?;
+        if localized.transport.is_some() {
+            return Err(ConversionError("ts-input-requires-generic-hls-output"));
+        }
         let actual = validate(&localized.combined, input_keys)?;
         let key = source_key(&actual, input_keys);
         let check = self.backend.verify_views(
