@@ -597,38 +597,48 @@ mod tests {
     #[test]
     fn native_short_parent_aliases_are_reconciled_when_the_volume_provides_them() {
         use std::os::windows::ffi::OsStringExt as _;
+        use std::os::windows::process::CommandExt as _;
         let root = tempfile::tempdir().unwrap();
         let parent = root.path().join("Long Download Parent Name");
         std::fs::create_dir(&parent).unwrap();
-        let result = std::process::Command::new("cmd")
-            .args([
-                "/D",
-                "/Q",
-                "/U",
-                "/C",
-                "for %I in (\"%DRMR_TEST_PARENT%\") do @echo %~sI",
-            ])
-            .env(
-                "DRMR_TEST_PARENT",
-                drmr_test_support::command_path(&parent).unwrap(),
-            )
-            .output()
-            .unwrap();
+        let long = drmr_test_support::command_path(&parent).unwrap();
+        let command = || {
+            let mut command = std::process::Command::new("cmd");
+            command
+                .args(["/D", "/Q", "/U", "/C"])
+                .env("DRMR_TEST_PARENT", &long);
+            command
+        };
+        let body = "for %I in (\"%DRMR_TEST_PARENT%\") do @echo %~sI";
+        // cmd.exe parses its own command grammar, not C run-time argument escaping.
+        // Keep the former encoding as a diagnostic control, without requiring a
+        // future Rust toolchain to reproduce its invalid-directory result.
+        let previous = command().arg(body).output().unwrap();
+        let result = command().raw_arg(body).output().unwrap();
         assert!(result.status.success());
         assert!(result.stdout.len().is_multiple_of(2));
-        let mut units: Vec<_> = result
-            .stdout
-            .as_chunks::<2>()
-            .0
-            .iter()
-            .map(|v| u16::from_le_bytes([v[0], v[1]]))
-            .collect();
-        while units.last().is_some_and(|value| matches!(*value, 10 | 13)) {
-            units.pop();
-        }
-        let alias = PathBuf::from(std::ffi::OsString::from_wide(&units));
+        let decode = |bytes: &[u8]| {
+            let mut units: Vec<_> = bytes
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|v| u16::from_le_bytes([v[0], v[1]]))
+                .collect();
+            while units.last().is_some_and(|value| matches!(*value, 10 | 13)) {
+                units.pop();
+            }
+            PathBuf::from(std::ffi::OsString::from_wide(&units))
+        };
+        let alias = decode(&result.stdout);
+        eprintln!(
+            "download-short-parent-control: old_status_success={} old_utf16_even={} old_stderr_empty={} old_directory={} raw_directory={}",
+            previous.status.success(),
+            previous.stdout.len().is_multiple_of(2),
+            previous.stderr.is_empty(),
+            previous.stdout.len().is_multiple_of(2) && decode(&previous.stdout).is_dir(),
+            alias.is_dir(),
+        );
         assert!(alias.is_dir());
-        let long = drmr_test_support::command_path(&parent).unwrap();
         if alias == long {
             eprintln!("download fixture: volume did not provide a distinct short parent name");
         } else {
