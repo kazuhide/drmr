@@ -11,6 +11,7 @@ mod backend;
 pub(crate) mod dash;
 mod execution;
 pub mod key_file;
+mod packets;
 pub use aes128::{
     Aes128Key, HlsInputKeys, HlsOutputKey, SegmentIv, decrypt_segment, encrypt_segment,
 };

@@ -30,6 +30,28 @@ impl Backend {
         secrets: &[&str],
     ) -> Result<Vec<u8>, ConversionError> {
         self.check_cancelled()?;
+        let effective = Self::effective_argv(argv, tool);
+        let shown = vec![tool.to_string(), "[arguments redacted]".into()];
+        let options = RunOptions {
+            stop: Some(&self.stop),
+            argv_redacted: Some(&shown),
+            secrets,
+            timeout: Some(self.timeout),
+            max_output_chars: 0,
+            log_stdout: false,
+            ..RunOptions::default()
+        };
+        let completed = self
+            .runner
+            .run_tool(&effective, tool, &options)
+            .map_err(|error| tool_error(&error))?;
+        self.check_cancelled()?;
+        if completed.returncode != Some(0) {
+            return Err(ConversionError("media-tool-failed"));
+        }
+        Ok(completed.stdout)
+    }
+    fn effective_argv(argv: &[String], tool: &str) -> Zeroizing<Vec<String>> {
         let mut effective = Zeroizing::new(argv.to_vec());
         if tool == "ffprobe" {
             effective.splice(1..1, ["-threads".into(), "1".into()]);
@@ -51,41 +73,7 @@ impl Backend {
         if tool == "packager" {
             effective.extend(crate::packager::RESOURCE_FLAGS.map(String::from));
         }
-        let shown = vec![tool.to_string(), "[arguments redacted]".into()];
-        let options = RunOptions {
-            stop: Some(&self.stop),
-            argv_redacted: Some(&shown),
-            secrets,
-            timeout: Some(self.timeout),
-            max_output_chars: 0,
-            max_stdout_bytes: if tool == "ffprobe"
-                && effective.iter().any(|arg| arg == "-show_packets")
-            {
-                32 * 1024 * 1024
-            } else {
-                RunOptions::default().max_stdout_bytes
-            },
-            log_stdout: false,
-            ..RunOptions::default()
-        };
-        let completed = self
-            .runner
-            .run_tool(&effective, tool, &options)
-            .map_err(|error| {
-                ConversionError(match error.kind {
-                    "cleanup-unconfirmed" => "media-cleanup-unconfirmed",
-                    "output-limit" => "media-output-limit",
-                    "resource-budget" => "resource-budget",
-                    "timeout" | "pipe-timeout" => "media-tool-timeout",
-                    "cancelled" => "cancelled",
-                    _ => "media-tool-unavailable-or-timeout",
-                })
-            })?;
-        self.check_cancelled()?;
-        if completed.returncode != Some(0) {
-            return Err(ConversionError("media-tool-failed"));
-        }
-        Ok(completed.stdout)
+        effective
     }
     pub fn package(
         &self,
@@ -286,15 +274,13 @@ impl Backend {
         &self,
         path: &Path,
         index: usize,
-    ) -> Result<Vec<(i64, i64, i64)>, ConversionError> {
-        // The demuxer itself bounds the emitted packet count; an incomplete presentation fails.
-        const MAX_PACKETS: usize = 100_000;
+    ) -> Result<super::packets::Evidence, ConversionError> {
         let profile = self.profile_stream(path, index)?;
         let expected = profile["nb_read_packets"]
             .as_str()
-            .and_then(|s| s.parse::<usize>().ok())
-            .filter(|n| *n <= MAX_PACKETS)
-            .ok_or(ConversionError("packet-evidence-count-limit"))?;
+            .and_then(|count| count.parse::<u64>().ok())
+            .filter(|count| *count > 0)
+            .ok_or(ConversionError("media-packets-missing"))?;
         let argv = vec![
             self.ffprobe.clone(),
             "-v".into(),
@@ -303,46 +289,41 @@ impl Backend {
             "file,crypto".into(),
             "-select_streams".into(),
             index.to_string(),
-            "-read_intervals".into(),
-            format!("%+#{}", MAX_PACKETS + 1),
             "-show_packets".into(),
             "-show_entries".into(),
-            "packet=stream_index,pts,dts,duration".into(),
+            "packet=stream_index,pts,dts,duration:packet_side_data=".into(),
             "-of".into(),
-            "json".into(),
+            "compact=p=1:nk=0".into(),
             super::files::tool_path(path)?,
         ];
-        let bytes = self.run(&argv, "ffprobe", &[])?;
-        if bytes.len() > 32 * 1024 * 1024 {
-            return Err(ConversionError("packet-evidence-size-limit"));
+        let effective = Self::effective_argv(&argv, "ffprobe");
+        let shown = ["ffprobe".into(), "[arguments redacted]".into()];
+        let options = RunOptions {
+            stop: Some(&self.stop),
+            argv_redacted: Some(&shown),
+            timeout: Some(self.timeout),
+            max_output_chars: 0,
+            // Charge the fixed record, hashing state and 8 KiB pipe read buffer.
+            max_stdout_bytes: 16 * 1024,
+            log_stdout: false,
+            ..RunOptions::default()
+        };
+        self.check_cancelled()?;
+        let mut parser = super::packets::Parser::new(index, expected);
+        let completed = self
+            .runner
+            .run_tool_streamed(&effective, "ffprobe", &options, |chunk| parser.push(chunk));
+        let completed = completed.map_err(|error| match error.kind {
+            "stream-invalid" => parser
+                .error()
+                .unwrap_or(ConversionError("invalid-packet-evidence")),
+            _ => tool_error(&error),
+        })?;
+        self.check_cancelled()?;
+        if completed.returncode != Some(0) {
+            return Err(ConversionError("media-tool-failed"));
         }
-        let value: serde_json::Value = serde_json::from_slice(&bytes)
-            .map_err(|_| ConversionError("invalid-packet-evidence"))?;
-        let packets = value["packets"]
-            .as_array()
-            .ok_or(ConversionError("invalid-packet-evidence"))?;
-        if packets.is_empty() || packets.len() > MAX_PACKETS || packets.len() != expected {
-            return Err(ConversionError("packet-evidence-count-limit"));
-        }
-        packets
-            .iter()
-            .map(|packet| {
-                if packet["stream_index"].as_u64() != Some(index as u64) {
-                    return Err(ConversionError("single-track-mp4-required"));
-                }
-                let pts = packet["pts"]
-                    .as_i64()
-                    .ok_or(ConversionError("packet-timing-unavailable"))?;
-                let dts = packet["dts"]
-                    .as_i64()
-                    .ok_or(ConversionError("packet-timing-unavailable"))?;
-                let duration = packet["duration"]
-                    .as_i64()
-                    .filter(|value| *value > 0)
-                    .ok_or(ConversionError("packet-timing-unavailable"))?;
-                Ok((pts, dts, duration))
-            })
-            .collect()
+        parser.finish()
     }
     pub fn hash_stream(
         &self,
@@ -410,5 +391,115 @@ impl Backend {
             .filter(|value| value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit()))
             .ok_or(ConversionError("invalid-verification-result"))?;
         Ok(digest.to_ascii_lowercase())
+    }
+}
+
+fn tool_error(error: &crate::toolrun::ToolError) -> ConversionError {
+    ConversionError(match error.kind {
+        "cleanup-unconfirmed" => "media-cleanup-unconfirmed",
+        "output-limit" => "media-output-limit",
+        "resource-budget" => "resource-budget",
+        "timeout" | "pipe-timeout" => "media-tool-timeout",
+        "cancelled" => "cancelled",
+        _ => "media-tool-unavailable-or-timeout",
+    })
+}
+
+#[cfg(test)]
+mod packet_tests {
+    use super::*;
+    use crate::events::{Record, Sink};
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    struct AfterProfile {
+        state: std::path::PathBuf,
+        response: drmr_test_support::ToolSpec,
+        swapped: AtomicBool,
+    }
+    impl Sink for AfterProfile {
+        fn emit(&self, record: &Record) {
+            if record["event"] == "tool-output" && !self.swapped.swap(true, Ordering::SeqCst) {
+                self.response
+                    .encode(std::fs::File::create(&self.state).unwrap())
+                    .unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn packet_proof_rejects_early_exit_truncated_records_and_count_changes() {
+        for (payload, code, expected, token) in [
+            (
+                "packet|stream_index=0|pts=0|dts=0|duration=1\n",
+                7,
+                1,
+                "media-tool-failed",
+            ),
+            (
+                "packet|stream_index=0|pts=0|dts=0|duration=1",
+                0,
+                1,
+                "invalid-packet-evidence",
+            ),
+            (
+                "packet|stream_index=0|pts=0|dts=0|duration=1\n",
+                0,
+                2,
+                "packet-evidence-count-limit",
+            ),
+            (
+                "packet|stream_index=1|pts=0|dts=0|duration=1\n",
+                0,
+                1,
+                "single-track-mp4-required",
+            ),
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let state = root.path().join("state");
+            let input = root.path().join("input.mp4");
+            std::fs::write(&input, b"fixture").unwrap();
+            let profile = drmr_test_support::ToolSpec {
+                stdout: serde_json::json!({"streams":[{
+                    "index":0,"codec_type":"video","codec_name":"h264","time_base":"1/1",
+                    "nb_read_packets":expected.to_string(),"width":16,"height":16
+                }]})
+                .to_string()
+                .into_bytes(),
+                ..Default::default()
+            };
+            profile
+                .encode(std::fs::File::create(&state).unwrap())
+                .unwrap();
+            let tool = drmr_test_support::install(
+                &root.path().join("probe"),
+                &drmr_test_support::ToolSpec::default()
+                    .with("status_file", state.to_str().unwrap()),
+            )
+            .unwrap();
+            let runner = Arc::new(ToolRunner::new(
+                Arc::new(crate::toolrun::Secrets::new()),
+                Arc::new(AfterProfile {
+                    state,
+                    response: drmr_test_support::ToolSpec {
+                        stdout: payload.as_bytes().to_vec(),
+                        exit_code: code,
+                        ..Default::default()
+                    },
+                    swapped: AtomicBool::new(false),
+                }),
+            ));
+            let backend = Backend {
+                stop: crate::concurrency::Stop::new(),
+                runner,
+                packager: String::new(),
+                ffmpeg: String::new(),
+                ffprobe: tool.to_str().unwrap().into(),
+                timeout: Duration::from_secs(20),
+            };
+            assert_eq!(
+                backend.packets_stream(&input, 0).unwrap_err(),
+                ConversionError(token)
+            );
+        }
     }
 }

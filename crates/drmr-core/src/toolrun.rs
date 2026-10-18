@@ -545,6 +545,33 @@ impl ToolRunner {
         tool: &str,
         options: &RunOptions<'_>,
     ) -> Result<Completed, ToolError> {
+        self.run_tool_with(argv, tool, options, false, |bounded| {
+            capture::execute(argv, bounded, self.path.as_deref())
+        })
+    }
+
+    /// Stream stdout into a bounded parser without retaining or logging its payload.
+    /// The caller charges its parser and read buffer through `max_stdout_bytes`.
+    pub(crate) fn run_tool_streamed(
+        &self,
+        argv: &[String],
+        tool: &str,
+        options: &RunOptions<'_>,
+        consume: impl FnMut(&[u8]) -> Result<(), ()> + Send,
+    ) -> Result<Completed, ToolError> {
+        self.run_tool_with(argv, tool, options, true, |bounded| {
+            capture::execute_streamed(argv, bounded, self.path.as_deref(), consume)
+        })
+    }
+
+    fn run_tool_with(
+        &self,
+        argv: &[String],
+        tool: &str,
+        options: &RunOptions<'_>,
+        streamed: bool,
+        execute: impl FnOnce(&RunOptions<'_>) -> Result<Completed, Failure>,
+    ) -> Result<Completed, ToolError> {
         let base = CallBase {
             tool,
             call_id: next_call_id(),
@@ -569,7 +596,7 @@ impl ToolRunner {
                 bounded.timeout = options
                     .timeout
                     .map(|limit| limit.saturating_sub(start.elapsed()));
-                capture::execute(argv, &bounded, self.path.as_deref())
+                execute(&bounded)
             }
             Err(error) => Err(Failure {
                 kind: error.kind,
@@ -586,13 +613,20 @@ impl ToolRunner {
         });
         match result {
             Ok(completed) => {
-                let record = self.output_record(
+                let mut record = self.output_record(
                     &base,
                     options,
                     &extra,
                     &completed,
                     start.elapsed().as_secs_f64(),
                 );
+                if streamed {
+                    put(
+                        &mut record,
+                        "stdout",
+                        "stdout streamed without retaining payload",
+                    );
+                }
                 self.sink.emit(&record);
                 Ok(completed)
             }
