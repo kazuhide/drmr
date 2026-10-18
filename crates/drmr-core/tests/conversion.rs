@@ -108,7 +108,7 @@ fn real_mp4_clear_cenc_cbcs_nine_routes_use_independent_output_keys() {
                     TargetProtection::Clear => Protection::Clear,
                     TargetProtection::Cenc => Protection::Cenc,
                     TargetProtection::Cbcs => Protection::Cbcs,
-                    TargetProtection::HlsAes128 => unreachable!(),
+                    TargetProtection::HlsAes128 | TargetProtection::HlsSampleAes => unreachable!(),
                 }
             );
             if target != TargetProtection::Clear {

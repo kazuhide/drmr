@@ -1,4 +1,5 @@
 //! Joint, codec-preserving presentations with independent evidence for every source stream.
+mod ts_output;
 use super::{
     ContentKey, ConversionError, ConversionReport, Converter, HlsOutputKey, InputKeys, LocalTrack,
     OutputKey, VerificationChecks, VerificationReport, audio, copy_private, destination, hls,
@@ -35,6 +36,7 @@ struct Prepared {
     key_id: Option<String>,
     transport_index: Option<usize>,
     transport_native: Option<std::sync::Arc<super::ts::NativeEvidence>>,
+    transport_sample: bool,
     playlist_reference: Option<PathBuf>,
 }
 fn presentation_processing(format: OutputFormat) -> inspection::ActualProcessing {
@@ -52,6 +54,9 @@ impl Converter {
         &self,
         request: TrackConversionRequest<'_>,
     ) -> Result<ConversionReport, ConversionError> {
+        if request.format == OutputFormat::HlsTs {
+            return Err(ConversionError("ts-original-evidence-required"));
+        }
         validate_request(&request)?;
         if request.format == OutputFormat::Mp4 {
             let work = workspace()?;
@@ -207,6 +212,9 @@ impl Converter {
                 TargetProtection::Clear | TargetProtection::HlsAes128 => Protection::Clear,
                 TargetProtection::Cenc => Protection::Cenc,
                 TargetProtection::Cbcs => Protection::Cbcs,
+                TargetProtection::HlsSampleAes => {
+                    return Err(ConversionError("target-requires-ts-output"));
+                }
             };
             if actual.protection != expected
                 || actual.tracks.len() != 1
@@ -401,6 +409,16 @@ fn validate_request(request: &TrackConversionRequest<'_>) -> Result<(), Conversi
     {
         return Err(ConversionError("multi-track-mp4-output-not-supported"));
     }
+    if request.target == TargetProtection::HlsSampleAes {
+        return Err(ConversionError("target-requires-ts-output"));
+    }
+    if request
+        .hls_output_key
+        .and_then(HlsOutputKey::associated_iv)
+        .is_some()
+    {
+        return Err(ConversionError("output-iv-not-used"));
+    }
     if request.target == TargetProtection::HlsAes128 && request.format != OutputFormat::Hls {
         return Err(ConversionError("target-requires-hls-output"));
     }
@@ -496,6 +514,7 @@ fn prepare_for(
         key_id,
         transport_index: None,
         transport_native: None,
+        transport_sample: false,
         playlist_reference: None,
     })
 }
@@ -627,9 +646,7 @@ impl Converter {
             let a = &source[ordinal];
             let b = &result[ordinal];
             if b.transport_index.is_some() {
-                return Err(ConversionError(
-                    "ts-verification-output-profile-not-supported",
-                ));
+                return self.verify_transport_pair(a, b);
             }
             if let Some(index) = a.transport_index {
                 let playlist = b.playlist_reference.as_ref().ok_or(ConversionError(
@@ -721,7 +738,7 @@ fn prepare_transport(
     backend: &super::backend::Backend,
 ) -> Result<Vec<Prepared>, ConversionError> {
     let mut prepared = Vec::new();
-    let streams = backend.transport_streams(&localized.combined, admission)?;
+    let streams = backend.transport_streams(&localized.combined, admission, &localized.native)?;
     let clock_index = streams
         .iter()
         .find(|(_, kind)| *kind == TrackKind::Video)
@@ -738,8 +755,8 @@ fn prepare_transport(
         let native = localized.native.get(&pid).cloned();
         if let Some(anchor) = &native {
             backend.confirm_native_transport(super::ts::View {
-                input: &localized.reference,
-                metadata: &localized.reference,
+                input: &localized.combined,
+                metadata: &localized.combined,
                 index,
                 key: None,
                 transport: true,
@@ -751,9 +768,10 @@ fn prepare_transport(
         let media = root.join("track.mp4");
         backend.demux_transport(&localized.combined, kind, &media)?;
         let mut track = prepare(&media, 0, kind, keys)?;
-        track.source.clone_from(&localized.reference);
+        track.source.clone_from(&localized.combined);
         track.transport_index = Some(index);
         track.transport_native = native;
+        track.transport_sample = localized.sample_transport;
         prepared.push(track);
     }
     Ok(prepared)
@@ -794,54 +812,7 @@ fn prepare_presentation(
                 })
                 .collect()
         }
-        InputFormat::Hls => {
-            let paths = hls_media_paths(input.input)?;
-            let mut tracks = Vec::new();
-            for (ordinal, path) in paths.iter().enumerate() {
-                let directory = stage.join(format!("track-{ordinal:04}"));
-                super::files::create_dir(&directory)
-                    .map_err(|_| ConversionError("temporary-workspace-unavailable"))?;
-                let localized = hls::localize(path, &directory, input.hls_keys, backend)?;
-                if let Some(admission) = &localized.transport {
-                    if paths.len() != 1 {
-                        return Err(ConversionError("ts-single-media-playlist-required"));
-                    }
-                    tracks.extend(prepare_transport(
-                        &localized,
-                        admission,
-                        &directory,
-                        input.input_keys,
-                        backend,
-                    )?);
-                    continue;
-                }
-                let actual = inspection::inspect(&localized.combined)
-                    .map_err(|_| ConversionError("invalid-localized-hls-media"))?;
-                if actual.tracks.len() != 1 {
-                    return Err(ConversionError("hls-multiplexed-media-not-supported"));
-                }
-                let mut track = prepare(
-                    &localized.combined,
-                    0,
-                    actual.tracks[0].kind,
-                    input.input_keys,
-                )?;
-                track.playlist_reference = if track.key_id.is_none() {
-                    Some(localized.playlist.clone())
-                } else if actual.protection == Protection::Cbcs {
-                    Some(hls::sample_reference(
-                        &localized.playlist,
-                        key_for(&track, input.input_keys)
-                            .ok_or(ConversionError("input-key-required"))?,
-                    )?)
-                } else {
-                    None
-                };
-                track.source = localized.reference;
-                tracks.push(track);
-            }
-            Ok(tracks)
-        }
+        InputFormat::Hls => prepare_hls_presentation(input, stage, backend),
         InputFormat::Dash => {
             let tracks = super::dash::snapshot_dash(input.input, stage)?;
             tracks
@@ -851,7 +822,101 @@ fn prepare_presentation(
         }
     }
 }
-fn hls_media_paths(path: &Path) -> Result<Vec<PathBuf>, ConversionError> {
+fn prepare_hls_presentation(
+    input: &VerificationSource<'_>,
+    stage: &Path,
+    backend: &super::backend::Backend,
+) -> Result<Vec<Prepared>, ConversionError> {
+    let paths = hls_media_paths(input.input)?;
+    let mut tracks = Vec::new();
+    for (ordinal, media) in paths.iter().enumerate() {
+        let path = &media.path;
+        let directory = stage.join(format!("track-{ordinal:04}"));
+        super::files::create_dir(&directory)
+            .map_err(|_| ConversionError("temporary-workspace-unavailable"))?;
+        let localized = hls::localize(path, &directory, input.hls_keys, backend)?;
+        if let Some(admission) = &localized.transport {
+            if media.variants > 1
+                || media.role.is_some_and(|kind| {
+                    admission.tracks.len() != 1 || admission.tracks[0].kind != kind
+                })
+            {
+                return Err(ConversionError("ts-presentation-layout-not-supported"));
+            }
+            if paths.len() != 1 && admission.tracks.len() != 1 {
+                return Err(ConversionError("ts-presentation-layout-not-supported"));
+            }
+            tracks.extend(prepare_transport(
+                &localized,
+                admission,
+                &directory,
+                input.input_keys,
+                backend,
+            )?);
+            continue;
+        }
+        let actual = inspection::inspect(&localized.combined)
+            .map_err(|_| ConversionError("invalid-localized-hls-media"))?;
+        if actual.tracks.len() != 1 {
+            return Err(ConversionError("hls-multiplexed-media-not-supported"));
+        }
+        let mut track = prepare(
+            &localized.combined,
+            0,
+            actual.tracks[0].kind,
+            input.input_keys,
+        )?;
+        track.playlist_reference = if track.key_id.is_none() {
+            Some(localized.playlist.clone())
+        } else if actual.protection == Protection::Cbcs {
+            Some(hls::sample_reference(
+                &localized.playlist,
+                key_for(&track, input.input_keys).ok_or(ConversionError("input-key-required"))?,
+            )?)
+        } else {
+            None
+        };
+        track.source = localized.reference;
+        tracks.push(track);
+    }
+    if tracks.iter().any(|track| track.transport_index.is_some()) {
+        let mut roles = std::collections::BTreeSet::new();
+        if tracks.len() > 2
+            || tracks.iter().any(|track| {
+                track.transport_index.is_none()
+                    || !roles.insert(kind_order(track.report.tracks[0].kind))
+            })
+        {
+            return Err(ConversionError("ts-presentation-layout-not-supported"));
+        }
+    }
+    Ok(tracks)
+}
+#[derive(Debug)]
+struct MediaPath {
+    path: PathBuf,
+    role: Option<TrackKind>,
+    variants: usize,
+}
+fn validate_variant(attrs: &crate::m3u8::Attributes) -> Result<(), ConversionError> {
+    if attrs.iter().any(|(name, _)| {
+        !matches!(
+            name,
+            "BANDWIDTH"
+                | "AVERAGE-BANDWIDTH"
+                | "CODECS"
+                | "RESOLUTION"
+                | "FRAME-RATE"
+                | "AUDIO"
+                | "CLOSED-CAPTIONS"
+        )
+    }) || attrs.get("CLOSED-CAPTIONS").is_some_and(|v| v != "NONE")
+    {
+        return Err(ConversionError("hls-variant-metadata-not-supported"));
+    }
+    Ok(())
+}
+fn hls_media_paths(path: &Path) -> Result<Vec<MediaPath>, ConversionError> {
     let bytes = super::files::read_manifest(path)
         .map_err(|_| ConversionError("hls-manifest-unreadable-or-too-large"))?;
     let text = std::str::from_utf8(&bytes).map_err(|_| ConversionError("hls-invalid-utf8"))?;
@@ -859,7 +924,11 @@ fn hls_media_paths(path: &Path) -> Result<Vec<PathBuf>, ConversionError> {
         .lines()
         .any(|l| l.starts_with("#EXT-X-STREAM-INF:") || l.starts_with("#EXT-X-MEDIA:"))
     {
-        return Ok(vec![path.into()]);
+        return Ok(vec![MediaPath {
+            path: path.into(),
+            role: None,
+            variants: 0,
+        }]);
     }
     let root = path
         .parent()
@@ -888,24 +957,14 @@ fn hls_media_paths(path: &Path) -> Result<Vec<PathBuf>, ConversionError> {
             let uri = attrs
                 .get("URI")
                 .ok_or(ConversionError("hls-media-uri-required"))?;
-            paths.push(hls::local_resource(&root, uri)?);
+            paths.push(MediaPath {
+                path: hls::local_resource(&root, uri)?,
+                role: Some(TrackKind::Audio),
+                variants: 0,
+            });
         } else if let Some(value) = line.strip_prefix("#EXT-X-STREAM-INF:") {
             let attrs = hls::attributes(value)?;
-            if attrs.iter().any(|(name, _)| {
-                !matches!(
-                    name,
-                    "BANDWIDTH"
-                        | "AVERAGE-BANDWIDTH"
-                        | "CODECS"
-                        | "RESOLUTION"
-                        | "FRAME-RATE"
-                        | "AUDIO"
-                        | "CLOSED-CAPTIONS"
-                )
-            }) || attrs.get("CLOSED-CAPTIONS").is_some_and(|v| v != "NONE")
-            {
-                return Err(ConversionError("hls-variant-metadata-not-supported"));
-            }
+            validate_variant(&attrs)?;
             if pending {
                 return Err(ConversionError("hls-variant-uri-required"));
             }
@@ -918,7 +977,11 @@ fn hls_media_paths(path: &Path) -> Result<Vec<PathBuf>, ConversionError> {
             if !pending {
                 return Err(ConversionError("hls-unexpected-master-resource"));
             }
-            paths.push(hls::local_resource(&root, line)?);
+            paths.push(MediaPath {
+                path: hls::local_resource(&root, line)?,
+                role: audio_group.as_ref().map(|_| TrackKind::Video),
+                variants: 0,
+            });
             pending = false;
         } else if line.starts_with("#EXT-X-")
             && !line.starts_with("#EXT-X-VERSION:")
@@ -937,7 +1000,10 @@ fn hls_media_paths(path: &Path) -> Result<Vec<PathBuf>, ConversionError> {
         return Err(ConversionError("hls-audio-association-not-supported"));
     }
     let mut seen = std::collections::BTreeSet::new();
-    paths.retain(|p| seen.insert(p.clone()));
+    paths.retain(|p| seen.insert(p.path.clone()));
+    for media in &mut paths {
+        media.variants = variant_groups.len();
+    }
     Ok(paths)
 }
 
@@ -954,7 +1020,57 @@ pub struct ConversionRequest<'a> {
     pub hls_key_uri: Option<&'a str>,
     pub hls_output_key: Option<&'a HlsOutputKey>,
 }
+fn output_hls_keys(key: Option<&HlsOutputKey>) -> Result<super::HlsInputKeys, ConversionError> {
+    key.map(|key| {
+        super::HlsInputKeys::new_with_ivs(vec![(
+            key.key_uri().to_owned(),
+            super::Aes128Key(key.key.0.clone()),
+            key.iv.as_ref().map(|iv| super::SegmentIv(iv.0.clone())),
+        )])
+    })
+    .transpose()
+    .map(Option::unwrap_or_default)
+}
+fn validate_output(request: &ConversionRequest<'_>) -> Result<(), ConversionError> {
+    if request.format == OutputFormat::HlsTs {
+        if !matches!(
+            request.target,
+            TargetProtection::Clear | TargetProtection::HlsAes128 | TargetProtection::HlsSampleAes
+        ) {
+            return Err(ConversionError("ts-output-profile-not-supported"));
+        }
+        if request.output_key.is_some()
+            || request.hls_key_uri.is_some()
+            || (request.target != TargetProtection::Clear) != request.hls_output_key.is_some()
+        {
+            return Err(ConversionError("output-key-role-mismatch"));
+        }
+        if request.target == TargetProtection::HlsSampleAes
+            && request
+                .hls_output_key
+                .and_then(HlsOutputKey::associated_iv)
+                .is_none()
+        {
+            return Err(ConversionError("hls-sample-output-iv-required"));
+        }
+    } else if request.target == TargetProtection::HlsSampleAes {
+        return Err(ConversionError("target-requires-ts-output"));
+    }
+    if request.target != TargetProtection::HlsSampleAes
+        && request
+            .hls_output_key
+            .and_then(HlsOutputKey::associated_iv)
+            .is_some()
+    {
+        return Err(ConversionError("output-iv-not-used"));
+    }
+    Ok(())
+}
 impl Converter {
+    fn inspect_input(&self, input: &Path) -> Result<Inspection, ConversionError> {
+        let _scope = self.backend.scope(super::measurement::Phase::Inspection);
+        inspection::inspect(input).map_err(|_| ConversionError("input-inspection-failed"))
+    }
     fn verify_source_tracks(
         &self,
         prepared: &[Prepared],
@@ -1005,24 +1121,34 @@ impl Converter {
         &self,
         request: ConversionRequest<'_>,
     ) -> Result<ConversionReport, ConversionError> {
+        validate_output(&request)?;
         let work = workspace()?;
         let input = VerificationSource {
             input: request.input,
             input_keys: request.input_keys,
             hls_keys: request.hls_input_keys,
         };
-        let input_report = {
-            let _scope = self.backend.scope(super::measurement::Phase::Inspection);
-            inspection::inspect(request.input)
-                .map_err(|_| ConversionError("input-inspection-failed"))?
-        };
+        let input_report = self.inspect_input(request.input)?;
+        if request.format == OutputFormat::HlsTs && input_report.format != InputFormat::Hls {
+            return Err(ConversionError("ts-original-evidence-required"));
+        }
         let preparation = self
             .backend
             .scope(super::measurement::Phase::InputPreparation);
         let prepared = prepare_presentation(&input, work.path(), &self.backend)?;
         drop(preparation);
         let transport = prepared.iter().any(|p| p.transport_index.is_some());
-        let sample_transport = prepared.iter().any(|p| p.transport_native.is_some());
+        let sample_transport = prepared.iter().any(|p| p.transport_sample);
+        if request.format == OutputFormat::HlsTs {
+            return self.convert_transport_output(&request, prepared, input_report, &work);
+        }
+        if transport
+            && !prepared
+                .iter()
+                .any(|p| p.report.tracks[0].kind == TrackKind::Video)
+        {
+            return Err(ConversionError("ts-audio-only-timing-proof-not-supported"));
+        }
         if transport
             && (request.format != OutputFormat::Hls
                 || !matches!(
@@ -1058,16 +1184,7 @@ impl Converter {
                 .map(|k| InputKeys::new(vec![ContentKey::from_hex(&k.0.id_hex(), &k.0.key_hex())?]))
                 .transpose()?
                 .unwrap_or_default();
-            let hls_keys = request
-                .hls_output_key
-                .map(|k| {
-                    super::HlsInputKeys::new(vec![(
-                        k.key_uri().to_owned(),
-                        super::Aes128Key(k.key.0.clone()),
-                    )])
-                })
-                .transpose()?
-                .unwrap_or_default();
+            let hls_keys = output_hls_keys(request.hls_output_key)?;
             let verification_root = work.path().join("final-verification");
             super::files::create_dir(&verification_root)?;
             let result = prepare_presentation(

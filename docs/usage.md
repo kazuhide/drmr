@@ -2,6 +2,25 @@
 
 The examples below assume `drmr` is installed and the external tools are on `PATH`. Run `drmr doctor` first. Commands process existing media; they do not encode new video qualities. For PowerShell examples and Windows file permissions, see the [Windows guide](windows.md).
 
+## Choose a workflow
+
+For qualified local MP4, DASH, or HLS media, start with the common commands:
+`inspect` reads metadata, `plan` describes intent, `convert` writes new media,
+and `verify` compares a result with its original source. HLS input does not
+require `analyze-hls` first.
+
+The separate HLS snapshot workflow saves clear media from a local or HTTPS
+source under an explicit access policy. `analyze-hls` downloads or copies the
+resources, probes them, and writes a snapshot: saved media plus its analysis
+record. `verify-snapshot --files` checks that those saved bytes still match the
+record. `package-hls` packages that verified snapshot with DRM signaling and can
+produce **both DASH and HLS**, despite its name. This workflow also has supported
+subtitle profiles; it is not an alias for generic `convert`.
+
+A snapshot integrity check detects changed saved files. It does not replace
+`verify OUTPUT --source INPUT`, which compares complete media and timing.
+`run` and `batch` serve the separately prepared catalog layouts described below.
+
 ## Inspect media and plan a conversion
 
 ```sh
@@ -16,7 +35,7 @@ Manifest reports describe declarations. MP4 reports read initialization metadata
 
 HLS inspection follows only local child playlists inside the input playlist's directory tree. It never fetches remote playlists, media segments, or keys. Remote, missing, cyclic, and escaping child references remain unresolved. Limits are 4 MiB per manifest, 16 MiB total, 32 playlists, and 128 references. Each track permits at most 64 key identifiers; DASH also limits inherited protection declarations to 64, and HLS permits at most 64 active key formats. MP4 movie metadata is limited to 16 MiB. This command is separate from `analyze-hls`, which downloads and probes media under an explicit source policy.
 
-`plan INPUT --to clear|cenc|cbcs|hls-aes128` describes the requested operations and independent input/output key roles. `--format mp4|dash|hls` selects output packaging; comma-separated values are accepted. Omitting it retains the input format. An HLS AES-128 target requires HLS output. CENC output to HLS is currently rejected. Unsupported source protection or unresolved encryption is reported as incompatible, except that a consistent SAMPLE-AES declaration can produce conditional HLS routes. Those routes still require the appropriate keys, IVs, and actual media validation.
+`plan INPUT --to clear|cenc|cbcs|hls-aes128|hls-sample-aes` describes the requested operations and independent input/output key roles. `--format mp4|dash|hls|hls-ts` selects output packaging; comma-separated values are accepted. Omitting it retains the input format. An HLS AES-128 target requires `hls` or `hls-ts` output. SAMPLE-AES TS requires `hls-ts`. `cenc` and `cbcs` are refused with TS output. CENC output to HLS is currently rejected. Unsupported source protection or unresolved encryption is reported as incompatible, except that a consistent SAMPLE-AES declaration can produce conditional HLS routes. Those routes still require the appropriate keys, IVs, and actual media validation.
 
 A compatible plan describes a valid format/protection combination. `execution_available` is a coarse version-one packaging check, not proof of a qualified media profile or a selected handler. The additional candidate list can be empty when declared track roles are unsupported. Execution still checks the actual source profile, keys, and media. Multiple requested output formats are planned together but must be converted in separate invocations. Plans contain no secret key values and cannot be submitted as trusted execution artifacts.
 
@@ -32,11 +51,11 @@ drmr verify protected-dash/manifest.mpd --source source.mpd --keys-file keys.jso
 
 `convert` detects local MP4, DASH, and HLS inputs. Choose one output format per invocation; omitting `--format` retains the input format. The output path is a new MP4 file or a new DASH/HLS directory. Existing destinations are refused. Input media is read into a private working area, and output is published only after content and timing checks pass. Nothing is re-encoded.
 
-`clear`, `cenc`, and `cbcs` can be written to DASH; `clear` and `cbcs` can be written to fragmented MP4 HLS. HLS `AES-128` encrypts complete HLS resources and requires `--format hls`. A single-track MP4 can also be written as `clear`, `cenc`, or `cbcs`.
+`clear`, `cenc`, and `cbcs` can be written to DASH; `clear` and `cbcs` can be written to fragmented MP4 HLS. HLS `AES-128` encrypts complete HLS resources and requires `--format hls` or `hls-ts`. `hls-ts` also supports clear and SAMPLE-AES output from qualified local TS inputs. A single-track MP4 can also be written as `clear`, `cenc`, or `cbcs`.
 
 A qualified clear or counter-mode encrypted (`cenc`) MP4 containing one AAC-LC audio track and optional H.264 video can be copied into one clear progressive MP4 while preserving its finite audio end edit. Both tracks must come from the same original presentation. Encrypted input requires every track key in the input key section; this finite profile produces clear output and refuses DRM initialization headers (PSSH).
 
-A narrow local MPEG transport stream input profile can produce clear, `cbcs`, or AES-128 fragmented MP4 HLS. Other multiplexed MP4 output, live input, transport stream output, and unrestricted DASH/HLS profiles remain unsupported. See [conversion support](conversion-support.md) for the tested routes and [processing and verification](media-processing.md) for timing limits.
+A narrow local MPEG transport stream input profile can produce clear, `cbcs`, or AES-128 fragmented MP4 HLS. Use `--format hls-ts` to retain transport-stream packaging, including SAMPLE-AES encryption for FairPlay media. Other multiplexed MP4 output, live input, and unrestricted DASH/HLS profiles remain unsupported. See [conversion support](conversion-support.md) for the tested routes and [processing and verification](media-processing.md) for timing limits.
 
 `verify OUTPUT --source INPUT` independently compares the original source and result. It requires their respective keys when encrypted. Success means the stream metadata, encoded packets, decoded picture/sound, and packet timestamps match; it does not establish license acquisition or device playback. Use the generated `manifest.mpd` or `master.m3u8` as the output argument for a presentation. Both commands support `--json` for one versioned result object; progress and failures go to standard error.
 
@@ -85,7 +104,32 @@ drmr convert encrypted-ts/media.m3u8 --to clear --format hls --output clear-hls 
 drmr verify clear-hls/master.m3u8 --source encrypted-ts/media.m3u8 --keys-file keys.json --json
 ```
 
-The advertised HLS URI is written to output playlists, so choose a location suitable for publication. drmr generates fresh output initialization vectors and never publishes a key file. Input key URI mappings, raw keys, and initialization vectors are excluded from reports and diagnostics. The external packager accepts raw keys in child-process arguments; an operating-system process inspector with sufficient access can observe them.
+To create FairPlay SAMPLE-AES transport-stream media from a supported clear TS
+playlist, omit `output.kid` and supply the associated output IV:
+
+```json
+{
+  "schema_version": 1,
+  "output": {
+    "key": "<32 hexadecimal characters>",
+    "iv": "<32 hexadecimal characters>",
+    "hls_key_uri": "skd://<content-identifier>"
+  }
+}
+```
+
+```sh
+drmr convert clear-ts/media.m3u8 --to hls-sample-aes --format hls-ts --output protected-ts --keys-file keys.json
+drmr verify protected-ts/master.m3u8 --source clear-ts/media.m3u8 --keys-file keys.json --json
+```
+
+For encrypted input, add its own entries in `input.hls_keys`. Input and output
+keys and IVs remain separate, even when their advertised URI is identical.
+`output.iv` is required for SAMPLE-AES output and refused for AES-128, MP4
+sample encryption, or clear output. An associated IV from the protected
+configuration also lets verification read a playlist that omits an explicit IV.
+
+The advertised HLS URI is written to output playlists, so choose a location suitable for publication. AES-128 output uses fresh per-resource IVs; SAMPLE-AES output uses the explicit associated IV supplied by you. drmr never publishes a key file. Input key URI mappings, raw keys, and initialization vectors are excluded from reports and diagnostics. The external packager accepts raw keys in child-process arguments; an operating-system process inspector with sufficient access can observe them.
 
 On macOS/Linux, use `chmod 600 keys.json`. Unknown fields, duplicate fields, unsupported schema versions, oversized configurations, links, and permissions readable by other users are refused. Legacy commands below retain their existing configuration interfaces.
 

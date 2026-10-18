@@ -23,6 +23,7 @@ pub(super) struct Localized {
     pub transport: Option<super::ts::Admission>,
     pub transport_segments: Vec<(PathBuf, String)>,
     pub native: std::collections::BTreeMap<u16, std::sync::Arc<super::ts::NativeEvidence>>,
+    pub sample_transport: bool,
 }
 struct Playlist {
     combined: File,
@@ -134,6 +135,56 @@ pub(super) fn local_resource(root: &Path, uri: &str) -> Result<PathBuf, Conversi
     Ok(path)
 }
 impl Playlist {
+    fn native_evidence(
+        projection: Option<super::ts::Projector>,
+        segments: &[(PathBuf, String)],
+        runner: &crate::toolrun::ToolRunner,
+        stop: &crate::concurrency::Stop,
+        timeout: std::time::Duration,
+    ) -> Result<
+        std::collections::BTreeMap<u16, std::sync::Arc<super::ts::NativeEvidence>>,
+        ConversionError,
+    > {
+        let original = projection
+            .map(|projection| {
+                projection.finish()?;
+                Ok::<_, ConversionError>(projection.native)
+            })
+            .transpose()?;
+        if segments.is_empty() {
+            return Ok(std::collections::BTreeMap::new());
+        }
+        let _permit = runner
+            .native_permit(
+                crate::resources::Claim {
+                    cpu_threads: 1,
+                    memory_bytes: 128 * 1024 * 1024,
+                },
+                stop,
+                timeout,
+            )
+            .map_err(|error| match error {
+                crate::resources::ReservationError::Insufficient => {
+                    ConversionError("resource-budget")
+                }
+                crate::resources::ReservationError::Cancelled => ConversionError("cancelled"),
+                crate::resources::ReservationError::Timeout => {
+                    ConversionError("media-tool-timeout")
+                }
+            })?;
+        // Fresh structural and AAC-clock validation applies to every protection.
+        // Projector evidence remains the authority for the original ciphertext.
+        let mut scanner = super::ts::NativeScanner::new();
+        for (path, _) in segments {
+            scanner.segment(path, stop)?;
+        }
+        let (_, clear_native) = scanner.finish()?;
+        Ok(original
+            .unwrap_or(clear_native)
+            .into_iter()
+            .map(|(id, anchor)| (id, std::sync::Arc::new(anchor)))
+            .collect())
+    }
     fn decrypt_samples(
         &mut self,
         copied: &Path,
@@ -496,7 +547,7 @@ impl Localizer<'_> {
         }
         Ok(())
     }
-    fn finish(self, path: &Path, combined: PathBuf) -> Result<Localized, ConversionError> {
+    fn finish(self, path: &Path, mut combined: PathBuf) -> Result<Localized, ConversionError> {
         let playlist = self.playlist;
         if !playlist.ended
             || playlist.pending_duration
@@ -510,6 +561,12 @@ impl Localizer<'_> {
             .sync_all()
             .map_err(|_| ConversionError("media-copy-failed"))?;
         drop(playlist.combined);
+        if playlist.transport.is_some() {
+            let raw = self.stage.join("combined.ts");
+            fs::rename(&combined, &raw)
+                .map_err(|_| ConversionError("temporary-file-unavailable"))?;
+            combined = raw;
+        }
         let actual = if let Some(transport) = &playlist.transport {
             if self.ts_wall_clock {
                 return Err(ConversionError("ts-wall-clock-metadata-not-supported"));
@@ -548,16 +605,14 @@ impl Localizer<'_> {
         };
         let report =
             inspection::inspect(path).map_err(|_| ConversionError("hls-inspection-failed"))?;
-        let native = if let Some(projection) = playlist.sample_projection {
-            projection.finish()?;
-            projection
-                .native
-                .into_iter()
-                .map(|(id, anchor)| (id, std::sync::Arc::new(anchor)))
-                .collect()
-        } else {
-            std::collections::BTreeMap::default()
-        };
+        let sample_transport = playlist.sample_projection.is_some();
+        let native = Playlist::native_evidence(
+            playlist.sample_projection,
+            &playlist.transport_segments,
+            &playlist.runner,
+            &playlist.stop,
+            playlist.timeout,
+        )?;
         Ok(Localized {
             combined,
             reference,
@@ -566,6 +621,7 @@ impl Localizer<'_> {
             transport: playlist.transport,
             transport_segments: playlist.transport_segments,
             native,
+            sample_transport,
         })
     }
 }
@@ -643,6 +699,9 @@ impl Converter {
         input_keys: &InputKeys,
         output_key: &HlsOutputKey,
     ) -> Result<ConversionReport, ConversionError> {
+        if output_key.associated_iv().is_some() {
+            return Err(ConversionError("output-iv-not-used"));
+        }
         let destination = super::destination(output)?;
         let workspace = super::workspace()?;
         let source = workspace.path().join("source.mp4");
@@ -715,6 +774,9 @@ impl Converter {
         hls_keys: &HlsInputKeys,
         output_key: Option<&OutputKey>,
     ) -> Result<ConversionReport, ConversionError> {
+        if target == TargetProtection::HlsSampleAes {
+            return Err(ConversionError("target-requires-ts-output"));
+        }
         let destination = super::destination(output)?;
         let workspace = super::workspace()?;
         let localized = localize(input, workspace.path(), hls_keys, &self.backend)?;
@@ -767,10 +829,25 @@ pub(super) fn encrypt_presentation(
     super::copy_private(&clear_hls.join("master.m3u8"), &stage.join("master.m3u8"))?;
     Ok(())
 }
+pub(super) fn encrypt_transport_media(
+    clear_hls: &Path,
+    stage: &Path,
+    output_key: &HlsOutputKey,
+) -> Result<(), ConversionError> {
+    encrypt_media_resources(clear_hls, stage, output_key, "ts")
+}
 pub(super) fn encrypt_media(
     clear_hls: &Path,
     stage: &Path,
     output_key: &HlsOutputKey,
+) -> Result<(), ConversionError> {
+    encrypt_media_resources(clear_hls, stage, output_key, "m4s")
+}
+fn encrypt_media_resources(
+    clear_hls: &Path,
+    stage: &Path,
+    output_key: &HlsOutputKey,
+    extension: &str,
 ) -> Result<(), ConversionError> {
     let playlist = fs::read_to_string(clear_hls.join("media.m3u8"))
         .map_err(|_| ConversionError("packaged-hls-playlist-missing"))?;
@@ -779,6 +856,9 @@ pub(super) fn encrypt_media(
     for line in playlist.lines() {
         let (name, value) = line.split_once(':').unwrap_or((line, ""));
         if name == "#EXT-X-MAP" {
+            if extension == "ts" {
+                return Err(ConversionError("ts-output-map-not-supported"));
+            }
             let attrs = attributes(value)?;
             let uri = attrs
                 .get("URI")
@@ -809,7 +889,7 @@ pub(super) fn encrypt_media(
                     .map_err(|_| ConversionError("temporary-file-unavailable"))?,
                 line,
             )?;
-            let name = format!("segment-{count:06}.m4s");
+            let name = format!("segment-{count:06}.{extension}");
             let iv = SegmentIv::random()?;
             output_key.encrypt(&source, &stage.join(&name), &iv)?;
             write!(
@@ -890,6 +970,46 @@ pub(super) fn sample_reference(
 #[cfg(test)]
 mod resource_tests {
     use super::*;
+
+    #[test]
+    fn transport_aes_outputs_ts_resources_without_an_mp4_map() {
+        let root = super::super::files::Stage::new(None).unwrap();
+        let clear = root.path().join("clear");
+        let encrypted = root.path().join("encrypted");
+        super::super::files::create_dir(&clear).unwrap();
+        super::super::files::create_dir(&encrypted).unwrap();
+        let bytes = [0x47; 188];
+        private_new(&clear.join("seg-1.ts"))
+            .unwrap()
+            .write_all(&bytes)
+            .unwrap();
+        private_new(&clear.join("media.m3u8"))
+            .unwrap()
+            .write_all(
+                b"#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXTINF:2.000,\nseg-1.ts\n#EXT-X-ENDLIST\n",
+            )
+            .unwrap();
+        let key = HlsOutputKey::new(
+            "https://operator.invalid/fixture",
+            Aes128Key::from_hex("101112131415161718191a1b1c1d1e1f").unwrap(),
+        )
+        .unwrap();
+        encrypt_transport_media(&clear, &encrypted, &key).unwrap();
+        let playlist = fs::read_to_string(encrypted.join("media.m3u8")).unwrap();
+        assert!(playlist.contains("segment-000001.ts\n"));
+        assert!(!playlist.contains(".m4s"));
+        assert!(!playlist.contains("#EXT-X-MAP"));
+        let declaration = playlist
+            .lines()
+            .find_map(|line| line.strip_prefix("#EXT-X-KEY:"))
+            .unwrap();
+        let iv = SegmentIv::from_hex(attributes(declaration).unwrap().get("IV").unwrap()).unwrap();
+        let result = encrypted.join("recovered.ts");
+        super::super::decrypt_segment(&encrypted.join("segment-000001.ts"), &result, &key.key, &iv)
+            .unwrap();
+        assert_eq!(fs::read(result).unwrap(), bytes);
+        assert_eq!(fs::read(clear.join("seg-1.ts")).unwrap(), bytes);
+    }
 
     #[test]
     fn encoded_resource_paths_are_decoded_once_before_confinement() {

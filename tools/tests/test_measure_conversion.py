@@ -21,6 +21,22 @@ SPEC.loader.exec_module(measure)
 
 
 class Conditions(unittest.TestCase):
+    def test_ts_output_targets_have_explicit_container_rules(self):
+        base = ["--drmr", "drmr", "--input", "input.m3u8"]
+        allowed = {(target, "hls-ts") for target in ("clear", "hls-aes128", "hls-sample-aes")}
+        allowed.update({("hls-aes128", "hls"), ("cbcs", "hls"), ("cenc", "dash")})
+        for target, container in sorted(allowed):
+            with self.subTest(target=target, container=container):
+                parsed = measure.parse_args(base + ["--to", target, "--format", container])
+                self.assertEqual((parsed.to, parsed.format), (target, container))
+        for target, container in (("cbcs", "hls-ts"), ("cenc", "hls-ts"),
+                                  ("cenc", "hls"), ("hls-aes128", "mp4"),
+                                  ("hls-sample-aes", "mp4"), ("hls-sample-aes", "dash"),
+                                  ("hls-sample-aes", "hls")):
+            with self.subTest(target=target, container=container):
+                with self.assertRaisesRegex(measure.Failure, "target-format-not-supported"):
+                    measure.parse_args(base + ["--to", target, "--format", container])
+
     def test_warming_is_an_explicit_condition_and_never_a_cold_cache_claim(self):
         arguments = ["--drmr", "drmr", "--input", "input.mp4", "--to", "clear", "--format", "mp4"]
         self.assertEqual(measure.parse_args(arguments).condition, "uncontrolled")

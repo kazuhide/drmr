@@ -11,6 +11,7 @@ MP4 is a media container. DASH and HLS describe how a player obtains media segme
 | `cenc` | AES counter mode applied to MP4 media samples |
 | `cbcs` | AES cipher block chaining with an encryption/skip pattern inside MP4 media samples |
 | HLS `AES-128` | AES cipher block chaining over an entire HLS segment, with padding |
+| HLS `SAMPLE-AES` in TS | AES cipher block chaining over specified regions of H.264 pictures or AAC frames |
 
 Subsample encryption leaves selected regions of a sample clear, such as codec headers. This is a separate property from the cipher mode and encryption pattern. A `cenc` label does not mean every byte of the file is encrypted. A `cbcs` label does not describe an entire segment encrypted as HLS AES-128.
 
@@ -30,7 +31,7 @@ The clear-HLS path preserves a single open-ended audio trim at normal playback r
 
 ## Generic conversion and timing limits
 
-`convert` stages a private snapshot of each supported input track. For local DASH it appends the initialization data and referenced fragments in timeline order; for local HLS it first decrypts complete AES-128 resources when required, then assembles each fragmented MP4 track. Shaka Packager decrypts sample-encrypted input and packages the resulting tracks together into the selected output format. DASH and HLS output are segmented again at a two-second target. HLS AES-128 is applied separately to each resulting resource, with a fresh initialization vector and padding. This route uses whole-track temporary disk files; it does not re-encrypt each original segment in place.
+`convert` stages a private snapshot of each supported input track. For local DASH it appends the initialization data and referenced fragments in timeline order; for local HLS it first decrypts complete AES-128 resources when required, then assembles each fragmented MP4 track. Shaka Packager decrypts supported MP4 sample encryption and packages the resulting tracks into the selected output format. SAMPLE-AES TS is decrypted in Rust before packaging. DASH and HLS output are segmented again at a two-second target. HLS AES-128 is applied separately to each resulting resource, with a fresh initialization vector and padding. This route uses whole-track temporary disk files; it does not re-encrypt each original segment in place.
 
 The complete original and final tracks are independently read by FFmpeg. Conversion requires matching stream metadata, encoded packet content, decoded video/audio, and every packet's presentation time, decode time, and duration. Metadata checks include codec configuration, sample rate, channel count/layout, video dimensions and pixel format, aspect ratio, color characteristics, display rotation, and language. Encryption initialization data is expected to change and is checked separately.
 
@@ -60,7 +61,7 @@ Generic conversion is deliberately bounded: at most 16 GiB per staged track, 64 
 
 ## MPEG transport stream input
 
-The initial transport stream route accepts a completed local HLS media playlist, or one local variant pointing to it. Segments must use 188-byte packets, one fixed program, one progressive H.264 video stream, and optionally one AAC-LC audio stream at 48,000 samples per second. It supports a fixed single SPS/PPS video configuration (the sequence and picture parameter sets required by a decoder) and ordinary AAC channel configurations. Output is fragmented MP4 HLS with `clear`, `cbcs`, or whole-resource AES-128 protection. Input key URI mappings are supplied by the operator; drmr never retrieves a playlist key URI.
+The fragmented MP4 output route accepts a completed local HLS media playlist, or one local variant pointing to it. Segments must use 188-byte packets, one fixed program, one progressive H.264 video stream, and optionally one AAC-LC audio stream at 48,000 samples per second. It supports a fixed single SPS/PPS video configuration (the sequence and picture parameter sets required by a decoder) and ordinary AAC channel configurations. AAC uses seven-byte transport headers without a checksum and one raw data block per frame. Output is fragmented MP4 HLS with `clear`, `cbcs`, or whole-resource AES-128 protection. Input key URI mappings are supplied by the operator; drmr never retrieves a playlist key URI.
 
 `plan` describes compatibility from metadata and reports `source-profile-validation-required`; it does not qualify the underlying HLS media container. Conversion independently admits the actual source and can refuse a profile that metadata alone could not distinguish.
 
@@ -70,7 +71,9 @@ Moving media into MP4 changes codec framing: H.264 start codes become lengths, a
 
 The source for the final checks is the original complete HLS playlist, read from a confined, byte-preserving private snapshot with its supplied keys. The result is the actual generated HLS playlist, independently decrypted when required. Both must match complete decoded media and every absolute presentation time, decode time, and packet duration, including relative audio/video timing. No normalized MP4 is substituted as the source reference. Output remains private until these checks pass; no key file is published automatically.
 
-Audio-only input is currently refused with `ts-audio-only-timing-proof-not-supported`. In the qualified FFprobe 9.0.2 build, reading the original audio-only HLS playlist omits the first packet duration and repeats its presentation timestamp even though the corresponding transport packets have distinct clocks. drmr neither invents that duration nor changes the reference to conceal the missing evidence. Separately, 44.1 kHz AAC is refused because the tested remux changes individual packet clock values. These are distinct limits. DASH output from transport streams also remains unsupported because its presentation-window metadata has not been qualified.
+Reading an audio-only HLS playlist through FFprobe can omit the first packet duration and repeat its presentation timestamp even though the transport packets have distinct clocks. The TS output route therefore reads original packetized elementary stream (PES) clocks and Audio Data Transport Stream (ADTS) headers directly, before normalization. It requires 48 kHz AAC-LC, one 1,024-sample audio frame per ADTS unit, a stable configuration, and exactly 1,920 ticks per frame on the 90 kHz transport clock. Every payload, count, presentation time, and decode time must match an independent read of the complete ordered transport bytes before those bytes can serve as a reference. Full decoding must also produce every original sample per channel. Missing or inconsistent evidence is refused; a repeated timestamp is not repaired by guessing.
+
+Audio-only input is qualified for TS output with those native checks. The existing fragmented MP4 HLS conversion profile still requires video. Separately, 44.1 kHz AAC is refused because the tested remux changes individual packet clock values. DASH output from transport streams also remains unsupported because its presentation-window metadata has not been qualified.
 
 Creating a transport stream from a progressive MP4 can itself change audio trimming or padding. This route proves identity to the supplied transport-stream presentation, not to an earlier file from which it was created. All existing staged-size, resource-budget, timeout, cancellation, and confirmed-process-cleanup limits still apply. Access-unit evidence is streamed with an 8 MiB per-packet limit and a charged 64 MiB reader bound; a malformed, oversized, incomplete, or unsuccessful read fails rather than returning a partial proof.
 
@@ -107,6 +110,49 @@ descriptors or configuration changes are refused. PES payloads are limited to
 8 MiB each, with bounded simultaneous payloads and packet-position records.
 The native decryption phase shares the command's CPU/memory admission and
 cancellation; its permit is released before external tools run.
+
+## MPEG transport stream output
+
+`--format hls-ts` reads admitted original TS resources in playlist order and
+prepares complete tracks before creating new segments. It does not independently
+re-encrypt each old segment. For SAMPLE-AES input, the clear view remains bound
+to native evidence taken from the original encrypted frames. For clear or
+AES-128 input, native evidence is taken from the original clear transport bytes
+after whole-resource decryption where required. Joining resources creates a
+private byte-preserving reference; it is not permission to rewrite their clocks
+or lose frames at a boundary.
+
+Shaka Packager produces separate video and audio TS playlists when both roles
+are present. drmr writes a master playlist that preserves their association.
+Video segments target two seconds. Audio boundaries follow complete frames and
+can differ in both duration and number of segments. The full presentation and
+the original relative audio/video timing must still match exactly.
+
+For SAMPLE-AES output, sample encryption starts with the first media frame:
+there is no initial clear interval. Only the regions defined by the codec
+encryption rules are encrypted. drmr disables the packager's default 100 millisecond
+transport timestamp offset, because adding the offset would change the source
+timeline. See the [Shaka Packager 3.8.0 timestamp option](https://github.com/shaka-project/shaka-packager/blob/v3.8.0/packager/app/muxer_flags.cc#L56-L63). The output uses the FairPlay key-format declaration and the explicit
+key URI, key, and associated IV supplied by the operator. AAC and H.264 use
+different frame-encryption rules, so no common encryption/skip pattern is
+claimed for the presentation. AES-128 output instead encrypts each complete
+new `.ts` resource, with padding and its own fresh IV.
+
+The actual final playlists are read again, with output keys independent from
+source keys. Every native frame, codec configuration, count, absolute presentation/decode
+time, packet duration, and decoded picture or audio sample must match the original.
+No frame tolerance, clock realignment, missing-value substitution, or final
+padding removal is used to make a result pass. In particular, 470 AAC frames
+represent 481,280 samples per channel; the original TS presentation may include
+padding absent from a finite ten-second MP4 edit. Verification preserves the
+supplied TS presentation rather than trimming it to that earlier file.
+
+The current TS output profile excludes MP4/fMP4 input, live playlists,
+unsupported codecs or audio rates, nonzero audio priming, and a single output
+TS multiplex containing both audio and video. These are implementation limits;
+HLS and MPEG-TS are capable of additional profiles. Existing source confinement,
+shared CPU/memory admission, bounded parsing, cancellation, confirmed subprocess
+cleanup, and publication checks apply throughout.
 
 ## Packet verification for long presentations
 

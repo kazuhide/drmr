@@ -2,7 +2,7 @@
 
 Rust command-line tools for inspecting and repackaging streaming media with **digital rights management (DRM)**.
 
-drmr inspects local MP4, DASH, and HLS media and converts qualified on-demand presentations between clear, `cenc` (counter-mode encryption), `cbcs` (pattern encryption using cipher block chaining), and HLS AES-128 protection. Input decryption keys and output encryption keys are supplied separately. It preserves the existing video and audio encoding; it does not transcode or change quality settings.
+drmr inspects local MP4, DASH, and HLS media and converts qualified on-demand presentations between clear, `cenc` (counter-mode encryption), `cbcs` (pattern encryption using cipher block chaining), HLS AES-128 protection, and SAMPLE-AES transport-stream encryption. Input decryption keys and output encryption keys are supplied separately. It preserves the existing video and audio encoding; it does not transcode or change quality settings.
 
 **DASH** (Dynamic Adaptive Streaming over HTTP) and **HLS** (HTTP Live Streaming) describe media segments using a manifest or playlists. A **rendition** is one available video quality or audio track.
 
@@ -51,7 +51,7 @@ drmr verify --help
 
 `doctor` checks whether the four executable files can be found. It does not run them, validate their versions, or prove that a particular asset can be processed.
 
-Use `convert INPUT --to ... --format ... --output ...` with a protected key configuration, then `verify OUTPUT --source INPUT` for independent comparison. See [conversion support](docs/conversion-support.md) for the sixteen tested protection routes and the precise input profiles.
+Use `convert INPUT --to ... --format ... --output ...` with a protected key configuration, then `verify OUTPUT --source INPUT` for independent comparison. See [conversion support](docs/conversion-support.md) for the tested protection routes, TS output options, and precise input profiles.
 
 The existing `run` path processes prepared DASH assets. For clear HLS with explicit downloading and DRM signaling, start with `analyze-hls`, then package the saved snapshot with `package-hls`. See the [usage guide](docs/usage.md) for configuration examples, the expected local layout, key handling, and output.
 

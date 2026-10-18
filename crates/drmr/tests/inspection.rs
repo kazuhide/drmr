@@ -172,3 +172,101 @@ fn known_text_declarations_have_no_candidate_in_human_or_json_plan() {
     );
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
 }
+
+#[test]
+fn ts_output_plan_is_explicit_conditional_and_keeps_key_references_private() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = fixture(
+        dir.path(),
+        "input.m3u8",
+        "#EXTM3U\n#EXT-X-KEY:METHOD=SAMPLE-AES,URI=\"skd://private-sentinel\",IV=0x0123456789abcdef0123456789abcdef\n#EXTINF:2,\nnot-read.ts\n#EXT-X-ENDLIST\n",
+    );
+    let output = run(&[
+        "plan",
+        &input,
+        "--to",
+        "hls-sample-aes",
+        "--format",
+        "hls-ts",
+        "--json",
+    ]);
+    assert!(output.status.success());
+    let report = json(&output);
+    assert_eq!(report["target"], "hls-sample-aes");
+    assert_eq!(report["formats"], serde_json::json!(["hls-ts"]));
+    assert_eq!(report["input"]["protection"], "unknown");
+    assert_eq!(
+        report["processing"]["candidates"][0]["route"],
+        "mpeg-ts-hls-ts"
+    );
+    assert_eq!(
+        report["processing"]["candidates"][0]["revalidation_required"],
+        true
+    );
+    assert_eq!(report["keys"][0]["role"], "input");
+    assert_eq!(report["keys"][1]["role"], "output");
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(!text.contains("private-sentinel") && !text.contains("0123456789abcdef"));
+    let human = run(&[
+        "plan",
+        &input,
+        "--to",
+        "hls-sample-aes",
+        "--format",
+        "hls-ts",
+    ]);
+    assert!(human.status.success());
+    assert!(
+        String::from_utf8(human.stdout)
+            .unwrap()
+            .contains("Conditional route: mpeg-ts-hls-ts")
+    );
+    for target in ["cbcs", "cenc"] {
+        let output = run(&[
+            "plan", &input, "--to", target, "--format", "hls-ts", "--json",
+        ]);
+        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(json(&output)["compatible"], false);
+    }
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+}
+
+#[test]
+fn ts_conversion_passes_the_hls_key_uri_in_its_own_key_role() {
+    use std::io::Write as _;
+    let dir = drmr_core::native::private_tempdir().unwrap();
+    let config_path = dir.path().join("keys.json");
+    let output_path = dir.path().join("result");
+    for target in ["hls-aes128", "hls-sample-aes"] {
+        let mut config = serde_json::json!({"schema_version":1,"output":{
+            "key":"22222222222222222222222222222222", "hls_key_uri":"skd://private-sentinel"
+        }});
+        if target == "hls-sample-aes" {
+            config["output"]["iv"] = "33333333333333333333333333333333".into();
+        }
+        drmr_core::native::create_private_or_truncate(&config_path)
+            .unwrap()
+            .write_all(serde_json::to_string(&config).unwrap().as_bytes())
+            .unwrap();
+        let output = run(&[
+            "convert",
+            "missing-source.m3u8",
+            "--to",
+            target,
+            "--format",
+            "hls-ts",
+            "--output",
+            output_path.to_str().unwrap(),
+            "--keys-file",
+            config_path.to_str().unwrap(),
+            "--json",
+        ]);
+        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(
+            String::from_utf8_lossy(&output.stderr),
+            "convert: input-inspection-failed\n"
+        );
+        assert_eq!(output.stdout, [] as [u8; 0]);
+        assert!(!output_path.exists());
+    }
+}

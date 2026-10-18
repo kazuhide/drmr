@@ -396,3 +396,68 @@ fn known_text_roles_have_no_executable_candidates_but_keep_version_one_intent_fi
         "unknown HLS roles still require actual resource admission"
     );
 }
+
+#[test]
+fn ts_output_plans_separate_the_container_and_sample_encryption_intent() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("input.m3u8");
+    std::fs::write(&path, "#EXTM3U\n#EXTINF:2,\nmedia.ts\n#EXT-X-ENDLIST\n").unwrap();
+    let source = inspection::inspect(&path).unwrap();
+    assert_eq!(
+        "hls-ts".parse::<OutputFormat>().unwrap(),
+        OutputFormat::HlsTs
+    );
+    assert_eq!(
+        "hls-sample-aes".parse::<TargetProtection>().unwrap(),
+        TargetProtection::HlsSampleAes
+    );
+    for target in [
+        TargetProtection::Clear,
+        TargetProtection::HlsAes128,
+        TargetProtection::HlsSampleAes,
+    ] {
+        let report = inspection::plan(source.clone(), target, vec![OutputFormat::HlsTs]);
+        assert!(report.compatible && report.execution_available);
+        let processing = report.processing.unwrap();
+        assert_eq!(processing.candidates.len(), 1);
+        assert_eq!(processing.candidates[0].route.as_str(), "mpeg-ts-hls-ts");
+        assert!(processing.candidates[0].revalidation_required);
+        if target == TargetProtection::HlsSampleAes {
+            let description = serde_json::to_value(processing.target).unwrap();
+            assert_eq!(description["evidence"], "requested-target");
+            assert_eq!(description["cipher"], "aes-128-cbc");
+            assert_eq!(description["encryption_unit"], "media-sample");
+            assert_eq!(description["pattern"]["status"], "unknown");
+            assert_eq!(
+                description["sample_coverage_reason"],
+                "target-intent-not-sample-evidence"
+            );
+            assert_eq!(
+                description["hls_key_methods"],
+                serde_json::json!(["SAMPLE-AES"])
+            );
+        }
+    }
+    for (target, format) in [
+        (TargetProtection::HlsSampleAes, OutputFormat::Hls),
+        (TargetProtection::HlsSampleAes, OutputFormat::Dash),
+        (TargetProtection::HlsSampleAes, OutputFormat::Mp4),
+        (TargetProtection::Cbcs, OutputFormat::HlsTs),
+        (TargetProtection::Cenc, OutputFormat::HlsTs),
+    ] {
+        let report = inspection::plan(source.clone(), target, vec![format]);
+        assert!(!report.compatible && !report.execution_available);
+        assert_eq!(
+            report.processing.unwrap().candidates,
+            [] as [inspection::CandidateRoute; 0]
+        );
+    }
+    let default = inspection::plan(source, TargetProtection::Clear, vec![]);
+    assert_eq!(default.formats, [OutputFormat::Hls]);
+    let report = inspection::plan(
+        inspection::inspect(&fixture("cenc-iv8.mp4")).unwrap(),
+        TargetProtection::Clear,
+        vec![OutputFormat::HlsTs],
+    );
+    assert!(!report.compatible && report.processing.unwrap().candidates.is_empty());
+}

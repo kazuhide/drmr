@@ -165,6 +165,9 @@ impl Converter {
         hls_keys: &HlsInputKeys,
         output_key: &HlsOutputKey,
     ) -> Result<ConversionReport, ConversionError> {
+        if output_key.associated_iv().is_some() {
+            return Err(ConversionError("output-iv-not-used"));
+        }
         let workspace = workspace()?;
         let localized = hls::localize(input, workspace.path(), hls_keys, &self.backend)?;
         if localized.transport.is_some() {
@@ -204,6 +207,9 @@ impl Converter {
         input_keys: &InputKeys,
         output_key: Option<&OutputKey>,
     ) -> Result<ConversionReport, ConversionError> {
+        if target == TargetProtection::HlsSampleAes {
+            return Err(ConversionError("target-requires-ts-output"));
+        }
         if target == TargetProtection::HlsAes128 {
             return Err(ConversionError("target-requires-hls-output"));
         }
@@ -260,7 +266,9 @@ impl Converter {
             TargetProtection::Clear => Protection::Clear,
             TargetProtection::Cenc => Protection::Cenc,
             TargetProtection::Cbcs => Protection::Cbcs,
-            TargetProtection::HlsAes128 => unreachable!(),
+            TargetProtection::HlsAes128 | TargetProtection::HlsSampleAes => {
+                return Err(ConversionError("target-requires-hls-output"));
+            }
         };
         if output_report.protection != expected || output_report.tracks.len() != 1 {
             return Err(ConversionError("output-protection-mismatch"));

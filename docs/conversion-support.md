@@ -8,17 +8,20 @@ Clear HLS input is supported. HLS describes playlists; their media can use eithe
 fragmented MP4 (fMP4) or MPEG transport stream (MPEG-TS) segments. Clear means
 unencrypted media. The two containers have different conversion limits:
 
-| HLS input | Input container | DASH output protection | HLS output protection |
-| --- | --- | --- | --- |
-| Clear HLS | fMP4 | Clear, `cenc`, `cbcs` | Clear, `cbcs`, AES-128 |
-| `cbcs` HLS | fMP4 | Clear, `cenc`, `cbcs` | Clear, `cbcs`, AES-128 |
-| AES-128 HLS | fMP4 | Clear, `cenc`, `cbcs` | Clear, `cbcs`, AES-128 |
-| Clear HLS | MPEG-TS | Not supported | Clear, `cbcs`, AES-128 |
-| AES-128 HLS | MPEG-TS | Not supported | Clear, `cbcs`, AES-128 |
-| SAMPLE-AES HLS | MPEG-TS | Not supported | Clear, `cbcs`, AES-128 |
+| HLS input | Input container | DASH output protection | fMP4 HLS output protection | MPEG-TS HLS output protection |
+| --- | --- | --- | --- | --- |
+| Clear HLS | fMP4 | Clear, `cenc`, `cbcs` | Clear, `cbcs`, AES-128 | Not supported |
+| `cbcs` HLS | fMP4 | Clear, `cenc`, `cbcs` | Clear, `cbcs`, AES-128 | Not supported |
+| AES-128 HLS | fMP4 | Clear, `cenc`, `cbcs` | Clear, `cbcs`, AES-128 | Not supported |
+| Clear HLS | MPEG-TS | Not supported | Clear, `cbcs`, AES-128 | Clear, AES-128, SAMPLE-AES |
+| AES-128 HLS | MPEG-TS | Not supported | Clear, `cbcs`, AES-128 | Clear, AES-128, SAMPLE-AES |
+| SAMPLE-AES HLS | MPEG-TS | Not supported | Clear, `cbcs`, AES-128 | Clear, AES-128, SAMPLE-AES |
 
-**Every HLS output uses fMP4.** MPEG-TS is supported only as input; drmr does not
-produce MPEG-TS HLS.
+Choose `--format hls` for fMP4 HLS or `--format hls-ts` for MPEG-TS HLS.
+For FairPlay transport-stream encryption, use `--to hls-sample-aes`.
+SAMPLE-AES TS output is technically supported by HLS; the supported drmr profile
+is described below. Restrictions in this table describe drmr's current
+implementation, rather than an impossibility of the media formats.
 
 These are supported profiles for local, completed playlists, subject to the
 [media and verification restrictions](media-processing.md). Each fMP4 media
@@ -64,7 +67,8 @@ Set `DRMR_CONVERSION_REPORT` to a path outside the repository to save the JSON r
 | --- | --- | --- |
 | MP4 file | Clear, `cenc`, `cbcs` | One audio or video track; finite audio edits use the progressive profile below |
 | DASH directory | Clear, `cenc`, `cbcs` | Separate fragmented MP4 tracks in one static presentation |
-| HLS directory | Clear, `cbcs`, AES-128 | fMP4 resources and completed playlists; MPEG-TS output is not supported |
+| HLS directory (`hls`) | Clear, `cbcs`, AES-128 | fMP4 resources and completed playlists |
+| HLS directory (`hls-ts`) | Clear, AES-128, SAMPLE-AES | Supported local TS input; separate TS audio/video playlists when both are present |
 
 Clear or qualified `cenc` progressive MP4 input can also produce clear progressive MP4 with one AAC-LC audio track (`mp4a`) and optionally one H.264 video track (`avc1`) from the same original file. Encrypted input requires every source track key by identifier and refuses DRM initialization headers (PSSH), key rotation, and other encryption schemes. This profile preserves a simple finite audio edit, including initial priming and final padding, and verifies every original track before publishing. It selects the layout automatically; no layout option or output key is required:
 
@@ -99,7 +103,7 @@ Clear output needs no output-key section. Keep the original media and keys until
 
 ## MPEG transport stream input
 
-Completed local HLS playlists containing clear, AES-128, or SAMPLE-AES transport stream segments can produce fragmented MP4 HLS with clear, `cbcs`, or AES-128 protection. Encrypted input requires operator-supplied keys. The initial profile accepts one H.264 video stream, optionally accompanied by one 48 kHz AAC-LC audio stream, in a single program. Video must be progressive. Audio-only input, 44.1 kHz audio, SAMPLE-AES-CTR transport streams, DASH/MP4 output from this input, and transport stream output are refused.
+Completed local HLS playlists containing clear, AES-128, or SAMPLE-AES transport stream segments can produce fragmented MP4 HLS with clear, `cbcs`, or AES-128 protection. Encrypted input requires operator-supplied keys. The initial profile accepts one H.264 video stream, optionally accompanied by one 48 kHz AAC-LC audio stream, in a single program. Video must be progressive. The TS output profile additionally accepts audio-only input with the strict native audio timing checks described in [processing and verification](media-processing.md#mpeg-transport-stream-input). 44.1 kHz audio, SAMPLE-AES-CTR transport streams, and DASH/MP4 output from this input are refused.
 
 The ten-second public fixture passed all three output protections from clear MPEG-TS input, with separate verification on Linux x86_64 and Windows x64 with FFmpeg 9.0.2, and macOS ARM64 with FFmpeg 9.0.1; all used Shaka Packager 3.8.0. Separate AES-128 MPEG-TS input regressions verify clear HLS output with key rotation, explicit and sequence-derived initialization vectors, and transitions to clear segments. Additional cases cover reordered pictures and video-only input. These results qualify the tested profile, tools, and platforms. They do not establish other codecs or arbitrary broadcast streams. See [the exact input and verification limits](media-processing.md#mpeg-transport-stream-input).
 
@@ -131,3 +135,38 @@ Run it with:
 ```sh
 cargo test -p drmr-core --test conversion_sample_aes --locked
 ```
+
+## MPEG transport stream output
+
+Clear, AES-128, and SAMPLE-AES TS inputs can produce all three TS output
+protections. Use `--format hls-ts`, with `--to clear`, `--to hls-aes128`, or
+`--to hls-sample-aes`. `cenc` and `cbcs` apply to MP4 samples and are refused
+with this output container. MP4, fragmented MP4 HLS, and DASH inputs are outside
+the current TS output profile.
+
+The profile supports progressive H.264 video, 48 kHz AAC-LC audio, or both.
+When both are present, output uses separate video and audio TS playlists joined
+by an HLS master playlist. A single TS segment containing both tracks is not
+produced by the current packager integration; HLS itself allows that layout.
+The supported AAC transport headers contain seven bytes, no checksum, and one
+raw data block. Unsupported configurations and audio priming are refused.
+
+SAMPLE-AES output requires a key, its associated explicit IV, and the key URI
+to advertise to FairPlay clients. The same output key and IV are used for both
+roles in this profile. See the [configuration example](usage.md#separate-input-and-output-keys).
+These are known-key media checks; license acquisition and device playback remain
+separate.
+
+The reproducible regression covers three input protections, three output
+protections, and video-only, joint video/audio, and audio-only layouts: 27
+combinations. It uses the attributed ten-second Big Buck Bunny fixture, with a
+two-second video segment target and complete audio-frame boundaries. Each
+conversion is followed by fresh verification from the original input;
+encrypted inputs also have an independently clear reference. Run it with:
+
+```sh
+cargo test --locked -p drmr-core --test conversion_ts_output -- --nocapture
+```
+
+Refer to the CI results for the exact revision, platforms, and tool versions.
+A passing short fixture does not qualify arbitrary broadcast streams or codecs.

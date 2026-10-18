@@ -461,7 +461,7 @@ fn remove_json_field(value: &mut serde_json::Value, key: &str) -> usize {
 
 fn assert_profile_omission(audit: &Path, selected_role: &str) {
     let mut selected = 0;
-    let mut selected_playlist = 0;
+    let mut selected_reference = 0;
     let mut unselected = 0;
     for entry in std::fs::read_dir(audit).unwrap() {
         let call = entry.unwrap().path();
@@ -484,8 +484,14 @@ fn assert_profile_omission(audit: &Path, selected_role: &str) {
         assert!(remove_json_field(&mut before, "codec_tag_string") > 0);
         if is_selected {
             selected += 1;
-            if std::fs::read_to_string(call.join("input.extension")).unwrap() == "m3u8" {
-                selected_playlist += 1;
+            let expected_extension = if selected_role == "transport" {
+                "ts"
+            } else {
+                "m3u8"
+            };
+            if std::fs::read_to_string(call.join("input.extension")).unwrap() == expected_extension
+            {
+                selected_reference += 1;
             }
             assert_eq!(
                 forwarded,
@@ -510,8 +516,8 @@ fn assert_profile_omission(audit: &Path, selected_role: &str) {
     );
     assert!(unselected > 0, "independent unselected role was not probed");
     assert!(
-        selected_playlist > 0,
-        "the actual selected playlist profile must omit the field"
+        selected_reference > 0,
+        "the actual selected original TS or result playlist profile must omit the field"
     );
 }
 #[test]

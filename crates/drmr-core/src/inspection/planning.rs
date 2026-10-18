@@ -11,6 +11,7 @@ pub enum OutputFormat {
     Mp4,
     Dash,
     Hls,
+    HlsTs,
 }
 
 impl OutputFormat {
@@ -19,6 +20,7 @@ impl OutputFormat {
             Self::Mp4 => "mp4",
             Self::Dash => "dash",
             Self::Hls => "hls",
+            Self::HlsTs => "hls-ts",
         }
     }
 }
@@ -40,7 +42,8 @@ impl FromStr for OutputFormat {
             "mp4" => Ok(Self::Mp4),
             "dash" => Ok(Self::Dash),
             "hls" => Ok(Self::Hls),
-            _ => Err("expected mp4, dash, or hls"),
+            "hls-ts" => Ok(Self::HlsTs),
+            _ => Err("expected mp4, dash, hls, or hls-ts"),
         }
     }
 }
@@ -53,6 +56,7 @@ pub enum TargetProtection {
     Cenc,
     Cbcs,
     HlsAes128,
+    HlsSampleAes,
 }
 
 impl TargetProtection {
@@ -62,6 +66,7 @@ impl TargetProtection {
             Self::Cenc => "cenc",
             Self::Cbcs => "cbcs",
             Self::HlsAes128 => "hls-aes128",
+            Self::HlsSampleAes => "hls-sample-aes",
         }
     }
 }
@@ -74,7 +79,8 @@ impl FromStr for TargetProtection {
             "cenc" => Ok(Self::Cenc),
             "cbcs" => Ok(Self::Cbcs),
             "hls-aes128" => Ok(Self::HlsAes128),
-            _ => Err("expected clear, cenc, cbcs, or hls-aes128"),
+            "hls-sample-aes" => Ok(Self::HlsSampleAes),
+            _ => Err("expected clear, cenc, cbcs, hls-aes128, or hls-sample-aes"),
         }
     }
 }
@@ -154,20 +160,39 @@ fn sample_aes_candidate(input: &Inspection) -> bool {
             })
 }
 
-/// Describe a requested transformation. Source media must be revalidated at execution.
-pub fn plan(
-    input: Inspection,
+fn compatibility_findings(
+    input: &Inspection,
     target: TargetProtection,
-    mut formats: Vec<OutputFormat>,
-) -> ConversionPlan {
-    if formats.is_empty() {
-        formats.push(input.format.into());
-    }
-    formats.sort();
-    formats.dedup();
+    formats: &[OutputFormat],
+) -> Vec<Finding> {
     let mut findings = vec![Finding::new("media-validation-required")];
-    if target == TargetProtection::HlsAes128 && formats != [OutputFormat::Hls] {
+    if target == TargetProtection::HlsAes128
+        && formats
+            .iter()
+            .any(|format| !matches!(format, OutputFormat::Hls | OutputFormat::HlsTs))
+    {
         findings.push(Finding::new("hls-aes128-requires-hls-output"));
+    }
+    if target == TargetProtection::HlsSampleAes && formats != [OutputFormat::HlsTs] {
+        findings.push(Finding::new("hls-sample-aes-requires-hls-ts-output"));
+    }
+    if formats.contains(&OutputFormat::HlsTs) {
+        if matches!(target, TargetProtection::Cenc | TargetProtection::Cbcs) {
+            findings.push(Finding::new("mp4-protection-requires-mp4-container"));
+        }
+        if input.format != InputFormat::Hls {
+            findings.push(Finding::new(
+                "hls-ts-output-requires-transport-stream-input",
+            ));
+        } else if !sample_aes_candidate(input)
+            && !input.tracks.is_empty()
+            && input
+                .tracks
+                .iter()
+                .any(|track| !matches!(track.protection, Protection::Clear | Protection::HlsAes128))
+        {
+            findings.push(Finding::new("hls-ts-source-protection-not-supported"));
+        }
     }
     if target == TargetProtection::Cenc && formats.contains(&OutputFormat::Hls) {
         findings.push(Finding::new("cenc-hls-output-not-supported"));
@@ -187,6 +212,21 @@ pub fn plan(
     {
         findings.push(Finding::new("source-protection-not-supported"));
     }
+    findings
+}
+
+/// Describe a requested transformation. Source media must be revalidated at execution.
+pub fn plan(
+    input: Inspection,
+    target: TargetProtection,
+    mut formats: Vec<OutputFormat>,
+) -> ConversionPlan {
+    if formats.is_empty() {
+        formats.push(input.format.into());
+    }
+    formats.sort();
+    formats.dedup();
+    let mut findings = compatibility_findings(&input, target, &formats);
     // A SAMPLE-AES declaration can select a conditional handler without establishing
     // its container scheme. Every original track must carry its own declaration.
     let sample_aes = sample_aes_candidate(&input);
@@ -272,6 +312,7 @@ fn describe_processing(
         TargetProtection::Cenc => Protection::Cenc,
         TargetProtection::Cbcs => Protection::Cbcs,
         TargetProtection::HlsAes128 => Protection::HlsAes128,
+        TargetProtection::HlsSampleAes => Protection::Unknown,
     };
     let mut candidates = Vec::new();
     // Unknown manifest roles need resource admission; known text tracks are refused by every handler.
@@ -311,6 +352,15 @@ fn describe_processing(
                     format,
                     "local-mp4-or-fragmented-manifest-profile-must-pass",
                 )),
+                OutputFormat::HlsTs => {
+                    if input.format == InputFormat::Hls {
+                        candidates.push(CandidateRoute::new(
+                            Route::MpegTsHlsTs,
+                            format,
+                            "local-transport-stream-profile-must-pass",
+                        ));
+                    }
+                }
                 OutputFormat::Hls => {
                     candidates.push(CandidateRoute::new(
                         Route::Fmp4HlsPresentation,
@@ -332,9 +382,14 @@ fn describe_processing(
             }
         }
     }
+    let mut target_description =
+        super::ProtectionDescription::new(protection, DescriptionEvidence::RequestedTarget);
+    if target == TargetProtection::HlsSampleAes {
+        target_description.hls_methods(&std::collections::BTreeSet::from(["SAMPLE-AES".into()]));
+    }
     PlannedProcessing {
         status: PlanningStatus::MetadataOnly,
-        target: super::ProtectionDescription::new(protection, DescriptionEvidence::RequestedTarget),
+        target: target_description,
         candidates,
     }
 }

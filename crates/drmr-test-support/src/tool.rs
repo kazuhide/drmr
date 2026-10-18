@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 mod control;
+mod packager_proxy;
 mod probe_proxy;
 mod protocol;
 mod server;
@@ -88,6 +89,12 @@ fn run(raw_args: &[std::ffi::OsString]) -> io::Result<i32> {
     }
     if spec.mode == Mode::FfprobeProxy {
         return probe_proxy::run(raw_args, &spec);
+    }
+    if spec.mode == Mode::Response
+        && spec.values.contains_key("real_packager")
+        && let Some(code) = packager_proxy::run(raw_args, &spec)?
+    {
+        return Ok(code);
     }
     let args: Vec<String> = raw_args
         .iter()

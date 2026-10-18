@@ -10,6 +10,7 @@ pub enum ProcessingRouteId {
     Fmp4HlsPresentation,
     MpegTsHls,
     MpegTsSampleAesHls,
+    MpegTsHlsTs,
 }
 impl ProcessingRouteId {
     pub const fn as_str(self) -> &'static str {
@@ -20,6 +21,7 @@ impl ProcessingRouteId {
             Self::Fmp4HlsPresentation => "fmp4-hls-presentation",
             Self::MpegTsHls => "mpeg-ts-hls",
             Self::MpegTsSampleAesHls => "mpeg-ts-sample-aes-hls",
+            Self::MpegTsHlsTs => "mpeg-ts-hls-ts",
         }
     }
     pub const fn explanation(self) -> &'static str {
@@ -38,6 +40,9 @@ impl ProcessingRouteId {
             }
             Self::MpegTsHls => {
                 "Admit the original local transport-stream resources, demultiplex their tracks, package fragmented MP4 HLS, and verify the actual final playlists against the original transport streams."
+            }
+            Self::MpegTsHlsTs => {
+                "Admit the original local transport streams, decrypt when needed, bind complete tracks to their original encoded frames and timestamps, then package MPEG-TS HLS with the requested protection and verify the actual final playlists against the original media."
             }
             Self::MpegTsSampleAesHls => {
                 "Validate the original SAMPLE-AES transport streams, decrypt encoded frames with supplied keys and initialization vectors, verify every decrypted frame and original timestamp, then package fragmented MP4 HLS and compare its actual playlists with the original media."

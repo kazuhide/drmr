@@ -23,7 +23,7 @@ pub struct PlanArgs {
     /// Keep the original read-only catalog rendition listing.
     #[arg(long, required_unless_present = "input")]
     pub mpd: Option<PathBuf>,
-    /// Output protection: clear, cenc, cbcs, or hls-aes128. Required with INPUT.
+    /// Output protection: clear, cenc, cbcs, hls-aes128, or hls-sample-aes. Required with INPUT.
     #[arg(long, requires = "input")]
     pub to: Option<TargetProtection>,
     /// Output packaging: mp4, dash, hls, or a comma-separated list.
