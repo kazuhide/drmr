@@ -4,7 +4,9 @@ These do not replace the Windows tests that deliver actual console events.
 """
 import importlib.util
 from pathlib import Path
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 
 FIXTURE = Path(__file__).resolve().parents[2] / "crates/drmr/tests/fixtures/windows_console.py"
@@ -73,6 +75,68 @@ class ConsoleOracles(unittest.TestCase):
         states = CONTROLLER.confirm_immediate_cleanup(api, (21, 22, 23), "lock")
         self.assertEqual(states, [0, 0, 0])
         self.assertEqual(api.calls, [("wait", 21), ("wait", 22), ("wait", 23), ("lock", "lock")])
+
+
+class SetupApi(Api):
+    def __init__(self, fail=None, allocated_members=(11,)):
+        super().__init__(members=(11, 99))
+        self.fail = fail
+        self.allocated_members = set(allocated_members)
+
+    def free_console(self):
+        self.calls.append(("detach",))
+        if self.fail == "detach":
+            raise CONTROLLER.Failure("console-detach-failed")
+        self.members = set()
+
+    def alloc_console(self):
+        self.calls.append(("allocate",))
+        if self.fail == "allocate":
+            raise CONTROLLER.Failure("console-allocate-failed")
+        self.members = self.allocated_members
+
+    def console_members(self):
+        self.calls.append(("census",))
+        return self.members
+
+    def ignore_ctrl_c(self, ignore):
+        self.calls.append(("ignore-ctrl-c", ignore))
+
+
+class ConsoleSetup(unittest.TestCase):
+    def test_inherited_console_is_detached_before_allocating_and_checking_a_new_one(self):
+        api = SetupApi()
+        CONTROLLER.isolate_console(api, 11)
+        self.assertEqual(api.members, {11})
+        self.assertEqual(api.calls, [
+            ("detach",), ("allocate",), ("census",), ("ignore-ctrl-c", False)
+        ])
+
+    def test_detach_failure_does_not_allocate_or_dispatch_an_event(self):
+        api = SetupApi(fail="detach")
+        with self.assertRaisesRegex(CONTROLLER.Failure, "console-detach-failed"):
+            CONTROLLER.isolate_console(api, 11)
+        self.assertEqual(api.calls, [("detach",)])
+
+    def test_allocation_failure_does_not_inspect_or_signal_the_old_console(self):
+        api = SetupApi(fail="allocate")
+        with self.assertRaisesRegex(CONTROLLER.Failure, "console-allocate-failed"):
+            CONTROLLER.isolate_console(api, 11)
+        self.assertEqual(api.calls, [("detach",), ("allocate",)])
+
+    def test_unexpected_client_after_allocation_fails_before_enabling_events(self):
+        api = SetupApi(allocated_members=(11, 99))
+        with self.assertRaisesRegex(CONTROLLER.Failure, "controller-console-not-isolated"):
+            CONTROLLER.isolate_console(api, 11)
+        self.assertEqual(api.calls, [("detach",), ("allocate",), ("census",)])
+
+    def test_failed_console_allocation_prevents_cli_birth(self):
+        api = SetupApi(fail="allocate")
+        with patch.object(CONTROLLER, "Windows", return_value=api), \
+                patch.object(CONTROLLER.subprocess, "Popen") as launch:
+            with self.assertRaisesRegex(CONTROLLER.Failure, "console-allocate-failed"):
+                CONTROLLER.run(SimpleNamespace())
+        launch.assert_not_called()
 
 
 if __name__ == "__main__":

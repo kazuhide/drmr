@@ -1,9 +1,9 @@
 """Owned-console controller for real Windows CLI cancellation integration tests.
 
-The Rust parent owns this process and all descendants in a managed job. No event
-is sent until the console membership census excludes that parent and unrelated
-processes. Media descendants deliberately have no console, so a broadcast cannot
-substitute for the CLI's own process-tree cleanup.
+The Rust parent owns this process and all descendants in a managed job. This
+controller detaches itself and allocates its own console before starting the CLI.
+No event is sent until the console census excludes the parent and unrelated
+processes. Detached media descendants require the CLI's own process-tree cleanup.
 """
 from __future__ import annotations
 
@@ -42,6 +42,8 @@ class Windows:
     def __init__(self):
         self.kernel = ctypes.WinDLL("kernel32", use_last_error=True)
         definitions = {
+            "FreeConsole": ([], wintypes.BOOL),
+            "AllocConsole": ([], wintypes.BOOL),
             "SetConsoleCtrlHandler": ([ctypes.c_void_p, wintypes.BOOL], wintypes.BOOL),
             "GenerateConsoleCtrlEvent": ([wintypes.DWORD, wintypes.DWORD], wintypes.BOOL),
             "GetConsoleProcessList": ([ctypes.POINTER(wintypes.DWORD), wintypes.DWORD], wintypes.DWORD),
@@ -64,6 +66,12 @@ class Windows:
 
     def ignore_ctrl_c(self, ignore):
         self.checked(self.kernel.SetConsoleCtrlHandler(None, ignore), "console-handler-failed")
+
+    def free_console(self):
+        self.checked(self.kernel.FreeConsole(), "console-detach-failed")
+
+    def alloc_console(self):
+        self.checked(self.kernel.AllocConsole(), "console-allocate-failed")
 
     def console_members(self):
         # This test creates only three attached clients. Fail rather than guess
@@ -99,6 +107,15 @@ class Windows:
         self.checked(handle, "lock-open-failed")
         self.checked(self.kernel.CloseHandle(handle), "lock-close-failed")
         return False
+
+
+def isolate_console(api, controller):
+    # Console membership is independent of job membership. Detach only this
+    # controller, then allocate and verify its console before any child birth.
+    api.free_console()
+    api.alloc_console()
+    require(api.console_members() == {controller}, "controller-console-not-isolated")
+    api.ignore_ctrl_c(False)
 
 
 def signal_owned_console(api, event, controller, cli, media, descendant, runner):
@@ -147,6 +164,7 @@ def ready_pid(path, child, deadline):
 
 def run(args):
     api = Windows()
+    isolate_console(api, os.getpid())
     case = args.case
     control = case / "control"
     temporary = case / "temporary"
@@ -165,10 +183,8 @@ def run(args):
     else:
         invocation += [str(args.clip), "--source", str(args.clip)]
     invocation += ["--json", "--max-workers", "1"]
-    # This is deliberately set before child birth. The later controller-only
-    # ignore attribute cannot be inherited by the already-running CLI.
-    api.ignore_ctrl_c(False)
-    require(api.console_members() == {os.getpid()}, "controller-console-not-isolated")
+    # The console is already isolated and Ctrl+C processing enabled before child
+    # birth. The later ignore attribute cannot affect the already-running CLI.
     flags = 0 if args.event == "ctrl-c" else CREATE_NEW_PROCESS_GROUP
     child = None
     with ExitStack() as resources:

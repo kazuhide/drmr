@@ -4,7 +4,6 @@
 use drmr_core::native::ManagedChild;
 use drmr_test_support::{ToolSpec, install};
 use std::fs::File;
-use std::os::windows::process::CommandExt as _;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -50,8 +49,9 @@ fn console_cancellation(command: &str, event: &str) {
         .args(["--command", command, "--event", event])
         .stdin(Stdio::null())
         .stdout(File::create(&output).unwrap())
-        .stderr(File::create(&errors).unwrap())
-        .creation_flags(0x0000_0010); // CREATE_NEW_CONSOLE; the runner never joins it.
+        .stderr(File::create(&errors).unwrap());
+    // The controller allocates and verifies its console before starting the CLI.
+    // ManagedChild retains job ownership independently of console membership.
     let mut controller = ManagedChild::spawn(invocation, true).unwrap();
     let deadline = Instant::now() + Duration::from_secs(40);
     let observed = loop {
