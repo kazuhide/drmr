@@ -11,8 +11,7 @@ const UNSAFE: ConversionError = ConversionError("download-destination-unsafe");
 const CLEANUP: ConversionError = ConversionError("download-cleanup-unconfirmed");
 const OUTPUT_EXISTS: ConversionError = ConversionError("output-exists-or-unsafe");
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-struct Identity(u64, u64);
+use crate::native::FileIdentity as Identity;
 #[derive(Clone, Copy)]
 struct Entry {
     identity: Identity,
@@ -47,8 +46,7 @@ impl OwnedDownload {
         let parent = open_dir(parent_path)?;
         let parent_id = identity(&parent)?;
         let stage = files::Stage::new(Some(parent_path))?;
-        // The outer Unix TempDir may use ordinary directory permissions.
-        // Allocate this empty strict child before exposing the destination name.
+        // Allocate a separate exclusive strict child before exposing the destination name.
         let reservation = stage.private_root().join("reservation");
         crate::native::create_private_dir_new(&reservation).map_err(|_| UNSAFE)?;
         let root_id = identity(&open_dir(&reservation)?)?;
@@ -329,17 +327,7 @@ fn open_dir(path: &Path) -> Result<File, ConversionError> {
     Ok(file)
 }
 fn identity(file: &File) -> Result<Identity, ConversionError> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt as _;
-        let info = file.metadata().map_err(|_| UNSAFE)?;
-        Ok(Identity(info.dev(), info.ino()))
-    }
-    #[cfg(windows)]
-    {
-        let info = winapi_util::file::information(file).map_err(|_| UNSAFE)?;
-        Ok(Identity(info.volume_serial_number(), info.file_index()))
-    }
+    Identity::read(file).map_err(|_| UNSAFE)
 }
 #[cfg(windows)]
 fn ancestors(path: &Path) -> Result<Vec<File>, ConversionError> {

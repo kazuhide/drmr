@@ -133,6 +133,9 @@ impl Converter {
             .scope(super::measurement::Phase::InputPreparation);
         self.backend.check_cancelled()?;
         valid_url(url)?;
+        // Only this bounded command label is registered. Acquired URL graphs never
+        // reach subprocess arguments or diagnostics after canonical localization.
+        self.backend.runner.secrets().register([url]);
         let mut policy = policy.clone();
         if policy.allowed_origins.is_empty() {
             policy
@@ -249,7 +252,6 @@ impl Converter {
             owned,
             policy,
             fetcher: &fetcher,
-            runner: &self.backend.runner,
             playlists: BTreeMap::new(),
             media: BTreeMap::new(),
             weight: 0,
@@ -281,7 +283,9 @@ impl Converter {
         request: ConversionRequest<'_>,
     ) -> Result<ConversionReport, ConversionError> {
         source.seal.check(&self.backend.stop)?;
-        if request.input.canonicalize().map_err(|_| CHANGED)? != source.entrypoint {
+        if request.input.canonicalize().map_err(|_| CHANGED)?
+            != source.entrypoint.canonicalize().map_err(|_| CHANGED)?
+        {
             return Err(CHANGED);
         }
         source.seal.owned.check_output(request.output)?;
@@ -290,7 +294,10 @@ impl Converter {
             maximum_workers: self.maximum_workers,
             downloaded: Some(source.seal.clone()),
         };
-        converter.convert(request)
+        converter.convert(ConversionRequest {
+            input: source.entrypoint(),
+            ..request
+        })
     }
     pub(super) fn check_downloaded(&self) -> Result<(), ConversionError> {
         if let Some(seal) = &self.downloaded {
@@ -327,7 +334,6 @@ struct Graph<'a> {
     owned: &'a OwnedDownload,
     policy: &'a FetchPolicy,
     fetcher: &'a Fetcher,
-    runner: &'a crate::toolrun::ToolRunner,
     playlists: BTreeMap<String, Playlist>,
     media: BTreeMap<String, String>,
     weight: usize,
@@ -374,6 +380,23 @@ impl Graph<'_> {
             .ok_or(ConversionError("download-graph-limit"))?;
         Ok(())
     }
+    fn admit_expansion(&self, lines: &[String], effective: &str) -> Result<(), ConversionError> {
+        // Shared parsers retain fully resolved references. Bound that temporary
+        // expansion before invoking them, including duplicate references.
+        let expanded = expanded_references(lines, effective, self.fetcher.stop())?;
+        if self
+            .text_bytes
+            .checked_add(expanded)
+            .is_none_or(|total| total > 16 * 1024 * 1024)
+            || self
+                .weight
+                .checked_add(expanded.saturating_mul(8))
+                .is_none_or(|total| total > GRAPH_BYTES)
+        {
+            return Err(ConversionError("download-graph-limit"));
+        }
+        Ok(())
+    }
     fn save(&mut self, name: &str, bytes: &[u8]) -> Result<(), ConversionError> {
         write_private(&self.owned.path().join(name), bytes)?;
         self.owned.register_file(Path::new(name))?;
@@ -402,7 +425,6 @@ impl Graph<'_> {
         if self.playlist_count as u64 >= self.policy.max_playlists || self.playlist_count >= 65 {
             return Err(INVALID);
         }
-        self.runner.secrets().register([url]);
         let (body, effective) = self.fetcher.read(url, true, None).map_err(|error| {
             if self.fetcher.stop().is_set() {
                 ConversionError("cancelled")
@@ -410,7 +432,6 @@ impl Graph<'_> {
                 failure(&error)
             }
         })?;
-        self.runner.secrets().register([effective.as_str()]);
         valid_url(&effective)?;
         self.text_charge(
             body.len()
@@ -419,6 +440,7 @@ impl Graph<'_> {
         )?;
         self.charge(body.len().saturating_mul(8) + effective.len() * 8 + 1024)?;
         let lines = source::lines(&body).map_err(|_| INVALID)?;
+        self.admit_expansion(&lines, &effective)?;
         let master = lines
             .iter()
             .any(|line| line.starts_with("#EXT-X-STREAM-INF:"));
@@ -460,29 +482,7 @@ impl Graph<'_> {
                 self.playlist(&child, false)?;
             }
         } else {
-            if lines.iter().any(|line| {
-                line.starts_with("#EXT-X-BYTERANGE:")
-                    || line.starts_with("#EXT-X-MAP:") && line.contains("BYTERANGE=")
-            }) {
-                return Err(INVALID);
-            }
-            let mut count = 0;
-            let plan = playlist::media_plan(&lines, &effective, self.policy, &mut || {
-                count += 1;
-                if count > 100_000 {
-                    return Err(source::Failure::Source(source::SourceError::new(
-                        "resource-count-limit",
-                    )));
-                }
-                Ok(PathBuf::from(format!("r{count:06}")))
-            })
-            .map_err(|_| INVALID)?;
-            if let Some(init) = plan.init {
-                self.media(&init.url, "mp4")?;
-            }
-            for segment in plan.segments {
-                self.media(&segment.url, if segment.has_init { "m4s" } else { "ts" })?;
-            }
+            self.plan_media(&lines, &effective)?;
         }
         let projected = self.rewrite(&body, &effective, master)?;
         if root {
@@ -492,6 +492,41 @@ impl Graph<'_> {
         }
         Ok(local)
     }
+    fn plan_media(&mut self, lines: &[String], effective: &str) -> Result<(), ConversionError> {
+        if lines.iter().any(|line| {
+            line.starts_with("#EXT-X-BYTERANGE:")
+                || line.starts_with("#EXT-X-MAP:") && line.contains("BYTERANGE=")
+        }) {
+            return Err(INVALID);
+        }
+        let mut count = 0;
+        let plan = playlist::media_plan(lines, effective, self.policy, &mut || {
+            if self.fetcher.stop().is_set() {
+                return Err(source::Failure::Cancelled);
+            }
+            count += 1;
+            if count > 100_000 {
+                return Err(source::Failure::Source(source::SourceError::new(
+                    "resource-count-limit",
+                )));
+            }
+            Ok(PathBuf::from(format!("r{count:06}")))
+        })
+        .map_err(|error| {
+            if matches!(error, source::Failure::Cancelled) {
+                ConversionError("cancelled")
+            } else {
+                INVALID
+            }
+        })?;
+        if let Some(init) = plan.init {
+            self.media(&init.url, "mp4")?;
+        }
+        for segment in plan.segments {
+            self.media(&segment.url, if segment.has_init { "m4s" } else { "ts" })?;
+        }
+        Ok(())
+    }
     fn media(&mut self, url: &str, extension: &str) -> Result<(), ConversionError> {
         if self.media.contains_key(url) {
             return Ok(());
@@ -499,7 +534,6 @@ impl Graph<'_> {
         self.admit_node()?;
         self.text_charge(url.len())?;
         self.charge(url.len().saturating_mul(8) + 1024)?;
-        self.runner.secrets().register([url]);
         let local = format!("media/r{:06}.{extension}", self.media.len());
         valid_url(url)?;
         self.resources.push(Resource {
@@ -584,6 +618,42 @@ impl Graph<'_> {
         Ok(result)
     }
 }
+fn expanded_references(
+    lines: &[String],
+    effective: &str,
+    stop: &Stop,
+) -> Result<usize, ConversionError> {
+    let mut bytes = 0usize;
+    let mut count = 0usize;
+    let mut add = |uri: &str| {
+        let resolved = source::child_url(effective, uri).map_err(|_| INVALID)?;
+        valid_url(&resolved)?;
+        count += 1;
+        bytes = bytes
+            .checked_add(resolved.len())
+            .filter(|bytes| *bytes <= 16 * 1024 * 1024)
+            .ok_or(ConversionError("download-graph-limit"))?;
+        if count > 100_000 {
+            return Err(ConversionError("download-graph-limit"));
+        }
+        Ok(())
+    };
+    for line in lines {
+        if stop.is_set() {
+            return Err(ConversionError("cancelled"));
+        }
+        if !line.is_empty() && !line.starts_with('#') {
+            add(line)?;
+        } else if line.starts_with("#EXT-X-MAP:") || line.starts_with("#EXT-X-MEDIA:") {
+            let (_, attrs) = line.split_once(':').ok_or(INVALID)?;
+            let attrs = crate::m3u8::parse_attributes(attrs).map_err(|_| INVALID)?;
+            if let Some(uri) = attrs.get("URI") {
+                add(uri)?;
+            }
+        }
+    }
+    Ok(bytes)
+}
 fn uri_span(raw: &str) -> Result<(usize, usize, String), ConversionError> {
     let line = raw.trim();
     let colon = line.find(':').ok_or(INVALID)?;
@@ -619,6 +689,24 @@ mod tests {
         events::NoSink,
         toolrun::{Secrets, ToolRunner},
     };
+
+    #[test]
+    fn long_relative_base_expansion_is_bounded_before_shared_parser_allocation() {
+        let base = format!(
+            "https://media.example.test/{}/source.m3u8",
+            "a".repeat(3500)
+        );
+        let compact = vec!["segment.ts".to_owned(); 4000];
+        let bytes = expanded_references(&compact, &base, &Stop::new()).unwrap();
+        assert!(bytes > 14_000_000 && bytes < 16 * 1024 * 1024);
+        let oversized = vec!["segment.ts".to_owned(); 5000];
+        assert_eq!(
+            expanded_references(&oversized, &base, &Stop::new())
+                .unwrap_err()
+                .0,
+            "download-graph-limit"
+        );
+    }
 
     #[test]
     fn retained_source_seal_is_checked_after_output_copy_and_directory_preparation() {

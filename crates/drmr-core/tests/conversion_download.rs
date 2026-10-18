@@ -34,6 +34,18 @@ impl Server {
         resources: BTreeMap<&'static str, Vec<u8>>,
         redirects: BTreeMap<&'static str, &'static str>,
     ) -> Self {
+        Self::scripted(
+            resources
+                .into_iter()
+                .map(|(name, body)| (name, vec![body]))
+                .collect(),
+            redirects,
+        )
+    }
+    fn scripted(
+        mut resources: BTreeMap<&'static str, Vec<Vec<u8>>>,
+        redirects: BTreeMap<&'static str, &'static str>,
+    ) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let stop = Arc::new(AtomicBool::new(false));
@@ -70,11 +82,17 @@ impl Server {
                     write!(socket, "HTTP/1.1 302 Found\r\nContent-Length: 0\r\nLocation: {location}\r\nConnection: close\r\n\r\n").unwrap();
                     continue;
                 }
-                let (status, body) = resources
-                    .get(target.as_str())
-                    .map_or(("404 Not Found", &b""[..]), |body| {
-                        ("200 OK", body.as_slice())
-                    });
+                let (status, body) = resources.get_mut(target.as_str()).map_or(
+                    ("404 Not Found", Vec::new()),
+                    |bodies| {
+                        let body = if bodies.len() > 1 {
+                            bodies.remove(0)
+                        } else {
+                            bodies[0].clone()
+                        };
+                        ("200 OK", body)
+                    },
+                );
                 write!(
                     socket,
                     "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
@@ -89,7 +107,7 @@ impl Server {
                     }
                     break;
                 }
-                socket.write_all(body).unwrap();
+                socket.write_all(&body).unwrap();
             }
         });
         Self {
@@ -417,5 +435,131 @@ fn changed_or_same_bytes_replaced_originals_are_rejected_without_losing_the_save
             manifest
         );
         assert!(directory.is_dir());
+    }
+}
+
+#[test]
+fn effective_aliases_must_agree_on_original_bytes_before_the_graph_is_admitted() {
+    let master = b"#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1000\na.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=1001\nb.m3u8\n";
+    let child = b"#EXTM3U\n#EXT-X-TARGETDURATION:3\n#EXTINF:2,\nsegment.ts\n#EXT-X-ENDLIST\n";
+    for changed in [false, true] {
+        let second = if changed {
+            std::str::from_utf8(child)
+                .unwrap()
+                .replace("EXTINF:2,", "EXTINF:2.1,")
+                .into_bytes()
+        } else {
+            child.to_vec()
+        };
+        let server = Server::scripted(
+            BTreeMap::from([
+                ("/source.m3u8", vec![master.to_vec()]),
+                ("/effective.m3u8", vec![child.to_vec(), second]),
+                ("/segment.ts", vec![vec![0x47; 188]]),
+            ]),
+            BTreeMap::from([
+                ("/a.m3u8", "/effective.m3u8"),
+                ("/b.m3u8", "/effective.m3u8"),
+            ]),
+        );
+        let parent = tempfile::tempdir().unwrap();
+        let directory = parent.path().join("download");
+        let result = converter(Stop::new()).download_hls(
+            &server.url(),
+            &directory,
+            &parent.path().join("output"),
+            &policy(),
+        );
+        if changed {
+            assert_eq!(result.unwrap_err().0, "download-source-not-supported");
+            assert!(!directory.exists());
+            assert!(
+                !server
+                    .calls
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|uri| uri == "/segment.ts")
+            );
+        } else {
+            let source = result.unwrap();
+            assert_eq!(
+                std::fs::read_to_string(source.entrypoint()).unwrap(),
+                std::str::from_utf8(master)
+                    .unwrap()
+                    .replace("a.m3u8", "p000001.m3u8")
+                    .replace("b.m3u8", "p000001.m3u8")
+            );
+            assert_eq!(
+                std::fs::read(directory.join("raw/r000001.m3u8")).unwrap(),
+                child
+            );
+            assert_eq!(
+                server
+                    .calls
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|uri| uri.as_str() == "/segment.ts")
+                    .count(),
+                1
+            );
+        }
+    }
+}
+
+#[test]
+fn custom_resource_capacity_is_honored_before_any_network_or_directory_writes() {
+    let server = Server::new(BTreeMap::new());
+    let parent = tempfile::tempdir().unwrap();
+    let directory = parent.path().join("download");
+    let runner = ToolRunner::new(Arc::new(Secrets::default()), Arc::new(NoSink)).with_limiter(
+        Arc::new(drmr_core::resources::Limiter::new(1, 128 * 1024 * 1024)),
+    );
+    let c = Converter::new(Arc::new(runner), "unused", "unused")
+        .with_max_workers(Some(1))
+        .unwrap();
+    assert_eq!(
+        c.download_hls(
+            &server.url(),
+            &directory,
+            &parent.path().join("output"),
+            &policy()
+        )
+        .unwrap_err()
+        .0,
+        "resource-budget"
+    );
+    assert!(server.calls.lock().unwrap().is_empty());
+    assert!(!directory.exists());
+}
+
+#[test]
+fn live_and_byte_range_profiles_fail_before_any_referenced_resource_is_read() {
+    for manifest in [
+        "#EXTM3U\n#EXT-X-TARGETDURATION:3\n#EXTINF:2,\nsegment.ts\n",
+        "#EXTM3U\n#EXT-X-TARGETDURATION:3\n#EXTINF:2,\n#EXT-X-BYTERANGE:188@0\nsegment.ts\n#EXT-X-ENDLIST\n",
+        "#EXTM3U\n#EXT-X-TARGETDURATION:3\n#EXT-X-MAP:URI=\"init.mp4\",BYTERANGE=\"32@0\"\n#EXTINF:2,\nsegment.m4s\n#EXT-X-ENDLIST\n",
+    ] {
+        let server = Server::new(BTreeMap::from([(
+            "/source.m3u8",
+            manifest.as_bytes().to_vec(),
+        )]));
+        let parent = tempfile::tempdir().unwrap();
+        let directory = parent.path().join("download");
+        assert_eq!(
+            converter(Stop::new())
+                .download_hls(
+                    &server.url(),
+                    &directory,
+                    &parent.path().join("output"),
+                    &policy()
+                )
+                .unwrap_err()
+                .0,
+            "download-source-not-supported"
+        );
+        assert_eq!(*server.calls.lock().unwrap(), ["/source.m3u8"]);
+        assert!(!directory.exists());
     }
 }

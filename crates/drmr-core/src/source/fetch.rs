@@ -832,6 +832,7 @@ pub(crate) struct Sink<'f> {
     hash: Sha256,
     chunks: Vec<u8>,
     handle: Option<File>,
+    created: Option<crate::native::FileIdentity>,
     since_disk_check: u64,
     declared: bool,
     claim: u128,
@@ -849,6 +850,7 @@ impl<'f> Sink<'f> {
             hash: Sha256::new(),
             chunks: Vec::new(),
             handle: None,
+            created: None,
             since_disk_check: 0,
             declared: false,
             claim: 0,
@@ -861,6 +863,7 @@ impl<'f> Sink<'f> {
         self.hash = Sha256::new();
         self.chunks = Vec::new();
         self.handle = None;
+        self.created = None;
         self.since_disk_check = 0;
         self.declared = false;
         self.claim = 0;
@@ -904,7 +907,12 @@ impl<'f> Sink<'f> {
             return Ok(());
         };
         if self.handle.is_none() {
-            self.handle = Some(open_exclusive(path)?);
+            let file = open_exclusive(path)?;
+            self.created = Some(
+                crate::native::FileIdentity::read(&file)
+                    .map_err(|_| Fault::Source(token("snapshot-write-failed")))?,
+            );
+            self.handle = Some(file);
         }
         if self.declared {
             let landed = u128::from(length).min(self.claim);
@@ -936,8 +944,15 @@ impl<'f> Sink<'f> {
 
     fn discard(&mut self) {
         self.handle = None;
-        if let Some(path) = &self.path {
-            let _ = std::fs::remove_file(path);
+        if let (Some(path), Some(created)) = (&self.path, self.created.take()) {
+            // A failed exclusive open owns nothing. After creation, unlink only the
+            // same protected object; replaced names are left for explicit owner cleanup.
+            let same = crate::native::open_private_read(path)
+                .and_then(|file| crate::native::FileIdentity::read(&file))
+                .is_ok_and(|current| current == created);
+            if same {
+                let _ = std::fs::remove_file(path);
+            }
         }
     }
 
@@ -947,5 +962,80 @@ impl<'f> Sink<'f> {
 
     fn digest(&self) -> String {
         hex::encode(self.hash.clone().finalize())
+    }
+}
+
+#[cfg(test)]
+mod sink_ownership_tests {
+    use super::*;
+
+    #[test]
+    fn failed_exclusive_creation_never_removes_a_preexisting_file() {
+        let root = crate::native::private_tempdir().unwrap();
+        let path = root.path().join("resource");
+        crate::native::create_private_new(&path)
+            .unwrap()
+            .write_all(b"sentinel")
+            .unwrap();
+        let fetcher = Fetcher::new(
+            &FetchPolicy::default(),
+            root.path(),
+            Arc::new(super::super::platform::SystemPlatform),
+        );
+        let mut sink = Sink::new(&fetcher, Some(path.clone()), 1024, false);
+        assert!(sink.write(b"new bytes").is_err());
+        sink.discard();
+        assert_eq!(std::fs::read(path).unwrap(), b"sentinel");
+    }
+
+    #[test]
+    fn retries_clear_the_previous_ownership_and_closed_owned_files_are_removed() {
+        let root = crate::native::private_tempdir().unwrap();
+        let path = root.path().join("resource");
+        let fetcher = Fetcher::new(
+            &FetchPolicy::default(),
+            root.path(),
+            Arc::new(super::super::platform::SystemPlatform),
+        );
+        let mut sink = Sink::new(&fetcher, Some(path.clone()), 1024, false);
+        assert!(sink.write(b"failed attempt").is_ok());
+        sink.reset();
+        assert!(!path.exists());
+        assert!(sink.created.is_none());
+        assert!(sink.write(b"second attempt").is_ok());
+        sink.close();
+        sink.discard();
+        assert!(!path.exists());
+        assert!(sink.created.is_none());
+        crate::native::create_private_new(&path)
+            .unwrap()
+            .write_all(b"unowned")
+            .unwrap();
+        assert!(sink.write(b"third attempt").is_err());
+        sink.discard();
+        assert_eq!(std::fs::read(path).unwrap(), b"unowned");
+    }
+
+    #[test]
+    fn failed_attempt_cleanup_does_not_remove_a_replacement_object() {
+        let root = crate::native::private_tempdir().unwrap();
+        let path = root.path().join("resource");
+        let fetcher = Fetcher::new(
+            &FetchPolicy::default(),
+            root.path(),
+            Arc::new(super::super::platform::SystemPlatform),
+        );
+        let mut sink = Sink::new(&fetcher, Some(path.clone()), 1024, false);
+        assert!(sink.write(b"owned bytes").is_ok());
+        sink.close();
+        let moved = root.path().join("moved");
+        std::fs::rename(&path, &moved).unwrap();
+        crate::native::create_private_new(&path)
+            .unwrap()
+            .write_all(b"replacement")
+            .unwrap();
+        sink.discard();
+        assert_eq!(std::fs::read(path).unwrap(), b"replacement");
+        assert_eq!(std::fs::read(moved).unwrap(), b"owned bytes");
     }
 }
