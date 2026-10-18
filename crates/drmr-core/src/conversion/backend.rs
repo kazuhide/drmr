@@ -169,23 +169,6 @@ impl Backend {
         self.run(&argv, "packager", &[])?;
         Ok(())
     }
-    fn keyed_probe_argv(
-        argv: Vec<String>,
-        key: Option<&ContentKey>,
-    ) -> (Zeroizing<Vec<String>>, Option<Zeroizing<String>>) {
-        let mut argv = Zeroizing::new(argv);
-        let secret = key.map(ContentKey::key_hex);
-        if let (Some(key), Some(secret)) = (key, &secret) {
-            argv.splice(
-                1..1,
-                [
-                    "-decryption_keys".into(),
-                    format!("{}={}", key.id_hex(), secret.as_str()),
-                ],
-            );
-        }
-        (argv, secret)
-    }
     pub fn profile(
         &self,
         path: &Path,
@@ -198,6 +181,14 @@ impl Backend {
         path: &Path,
         index: usize,
         key: Option<&ContentKey>,
+    ) -> Result<serde_json::Value, ConversionError> {
+        self.profile_stream_keys(path, index, key.map(super::keys::ProbeKeys::One))
+    }
+    pub(super) fn profile_stream_keys(
+        &self,
+        path: &Path,
+        index: usize,
+        key: Option<super::keys::ProbeKeys<'_>>,
     ) -> Result<serde_json::Value, ConversionError> {
         let argv = vec![
             self.ffprobe.clone(),
@@ -223,9 +214,10 @@ impl Backend {
             super::files::tool_path(path)?,
         ];
         // Codec metadata can be inferred from packets, so encrypted inputs need their role key.
-        let (argv, secret) = Self::keyed_probe_argv(argv, key);
-        let secrets: Vec<_> = secret.iter().map(|value| value.as_str()).collect();
-        let bytes = self.run(&argv, "ffprobe", &secrets)?;
+        let keyed = super::keys::KeyedArguments::new(argv, key);
+        let argv = &keyed.argv;
+        let secrets = keyed.secrets();
+        let bytes = self.run(argv, "ffprobe", &secrets)?;
         if bytes.len() > 1024 * 1024 {
             return Err(ConversionError("probe-result-size-limit"));
         }
@@ -301,7 +293,15 @@ impl Backend {
         index: usize,
         key: Option<&ContentKey>,
     ) -> Result<super::packets::Evidence, ConversionError> {
-        let profile = self.profile_stream(path, index, key)?;
+        self.packets_stream_keys(path, index, key.map(super::keys::ProbeKeys::One))
+    }
+    pub(super) fn packets_stream_keys(
+        &self,
+        path: &Path,
+        index: usize,
+        key: Option<super::keys::ProbeKeys<'_>>,
+    ) -> Result<super::packets::Evidence, ConversionError> {
+        let profile = self.profile_stream_keys(path, index, key)?;
         let expected = profile["nb_read_packets"]
             .as_str()
             .and_then(|count| count.parse::<u64>().ok())
@@ -322,9 +322,10 @@ impl Backend {
             "compact=p=1:nk=0".into(),
             super::files::tool_path(path)?,
         ];
-        let (argv, secret) = Self::keyed_probe_argv(argv, key);
-        let secrets: Vec<_> = secret.iter().map(|value| value.as_str()).collect();
-        let effective = Self::effective_argv(&argv, "ffprobe");
+        let keyed = super::keys::KeyedArguments::new(argv, key);
+        let argv = &keyed.argv;
+        let secrets = keyed.secrets();
+        let effective = Self::effective_argv(argv, "ffprobe");
         let shown = ["ffprobe".into(), "[arguments redacted]".into()];
         let options = RunOptions {
             stop: Some(&self.stop),
@@ -361,7 +362,16 @@ impl Backend {
         copy: bool,
         key: Option<&ContentKey>,
     ) -> Result<String, ConversionError> {
-        let mut argv = vec![
+        self.hash_stream_keys(path, index, copy, key.map(super::keys::ProbeKeys::One))
+    }
+    pub(super) fn hash_stream_keys(
+        &self,
+        path: &Path,
+        index: usize,
+        copy: bool,
+        key: Option<super::keys::ProbeKeys<'_>>,
+    ) -> Result<String, ConversionError> {
+        let argv = vec![
             self.ffmpeg.clone(),
             "-v".into(),
             "error".into(),
@@ -380,19 +390,8 @@ impl Backend {
             "-map".into(),
             format!("0:{index}"),
         ];
-        let secret = key.map(ContentKey::key_hex);
-        if let Some(secret) = &secret {
-            let input_position = argv
-                .iter()
-                .position(|value| value == "-i")
-                .expect("input option exists");
-            argv.splice(
-                input_position..input_position,
-                ["-decryption_key".into(), secret.to_string()],
-            );
-        }
-        let argv = Zeroizing::new(argv);
-        let mut argv = argv;
+        let mut keyed = super::keys::KeyedArguments::new(argv, key);
+        let argv = &mut keyed.argv;
         if copy {
             argv.extend(["-c".into(), "copy".into()]);
         } else {
@@ -410,8 +409,8 @@ impl Backend {
             "sha256".into(),
             "-".into(),
         ]);
-        let secrets: Vec<_> = secret.iter().map(|value| value.as_str()).collect();
-        let bytes = self.run(&argv, "ffmpeg", &secrets)?;
+        let secrets = keyed.secrets();
+        let bytes = self.run(&keyed.argv, "ffmpeg", &secrets)?;
         let value = std::str::from_utf8(&bytes)
             .map_err(|_| ConversionError("invalid-verification-result"))?
             .trim();

@@ -16,6 +16,7 @@ mod packets;
 pub use aes128::{
     Aes128Key, HlsInputKeys, HlsOutputKey, SegmentIv, decrypt_segment, encrypt_segment,
 };
+mod cenc;
 mod files;
 mod hls;
 mod keys;
@@ -188,8 +189,8 @@ impl Converter {
         let inspected =
             inspection::inspect(&snapshot).map_err(|_| ConversionError("invalid-input-media"))?;
         if target == TargetProtection::Clear
-            && inspected.protection == Protection::Clear
-            && let Some(report) = self.progressive_mp4(&snapshot, &destination, &inspected)?
+            && let Some(report) =
+                self.progressive_mp4(&snapshot, &destination, &inspected, input_keys)?
         {
             return Ok(report);
         }

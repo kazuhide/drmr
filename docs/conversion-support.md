@@ -29,11 +29,11 @@ Set `DRMR_CONVERSION_REPORT` to a path outside the repository to save the JSON r
 
 | Output format | Available protection | Initial profile |
 | --- | --- | --- |
-| MP4 file | Clear, `cenc`, `cbcs` | One audio or video track; finite audio edits use the clear progressive profile below |
+| MP4 file | Clear, `cenc`, `cbcs` | One audio or video track; finite audio edits use the progressive profile below |
 | DASH directory | Clear, `cenc`, `cbcs` | Separate fragmented MP4 tracks in one static presentation |
 | HLS directory | Clear, `cbcs`, AES-128 | Local fragmented MP4 resources and completed playlists |
 
-Clear progressive MP4 input can also produce clear progressive MP4 with one AAC-LC audio track (`mp4a`) and optionally one H.264 video track (`avc1`) from the same original file. This profile preserves a simple finite audio edit, including initial priming and final padding, and verifies every original track before publishing. It selects the layout automatically; no layout option or output key is required:
+Clear or qualified `cenc` progressive MP4 input can also produce clear progressive MP4 with one AAC-LC audio track (`mp4a`) and optionally one H.264 video track (`avc1`) from the same original file. Encrypted input requires every source track key by identifier and refuses DRM initialization headers (PSSH), key rotation, and other encryption schemes. This profile preserves a simple finite audio edit, including initial priming and final padding, and verifies every original track before publishing. It selects the layout automatically; no layout option or output key is required:
 
 ```sh
 drmr convert original.mp4 --to clear --format mp4 --output clear.mp4

@@ -27,6 +27,7 @@ pub struct TrackConversionRequest<'a> {
     pub hls_output_key: Option<&'a HlsOutputKey>,
 }
 struct Prepared {
+    source_dictionary: bool,
     source: PathBuf,
     media: PathBuf,
     index: usize,
@@ -420,6 +421,8 @@ fn prepare(
     if report.format != InputFormat::Mp4 || report.tracks.len() > 64 {
         return Err(ConversionError("input-format-not-supported"));
     }
+    let source_dictionary = report.protection == Protection::Cenc
+        && super::progressive::validate_input(source, &report, keys)?;
     let track = report
         .tracks
         .get(index)
@@ -450,6 +453,7 @@ fn prepare(
         Vec::new(),
     );
     Ok(Prepared {
+        source_dictionary,
         source: source.into(),
         media: source.into(),
         index,
@@ -605,11 +609,24 @@ impl Converter {
                     },
                 );
             }
+            if a.source_dictionary && b.report.protection == Protection::Clear {
+                super::cenc::clear(&audio::movie(&b.media)?)?;
+            }
+            let a_view = StreamView::new(&a.source, a.index, key_for(a, source_keys))
+                .with_metadata(&a.media);
+            let b_view = StreamView::new(&b.source, b.index, key_for(b, result_keys))
+                .with_metadata(&b.media);
             self.backend.verify_views(
-                StreamView::new(&a.source, a.index, key_for(a, source_keys))
-                    .with_metadata(&a.media),
-                StreamView::new(&b.source, b.index, key_for(b, result_keys))
-                    .with_metadata(&b.media),
+                if a.source_dictionary {
+                    a_view.with_all_keys(source_keys)
+                } else {
+                    a_view
+                },
+                if b.source_dictionary {
+                    b_view.with_all_keys(result_keys)
+                } else {
+                    b_view
+                },
             )
         })?;
         for check in verified_tracks {

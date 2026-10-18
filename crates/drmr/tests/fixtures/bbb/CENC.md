@@ -1,13 +1,13 @@
 # Progressive CENC test fixtures
 
-`cenc-iv8.mp4` and `cenc-iv16.mp4` encrypt the complete `clip.mp4` presentation with Common Encryption in counter mode (CENC). They retain 240 H.264 video frames, 470 AAC packets, and the finite audio presentation of 480,000 samples per channel. These media adaptations have the same [Big Buck Bunny attribution and Creative Commons Attribution 3.0 license](README.md) as the clear clip.
+`cenc-iv8.mp4` and `cenc-iv16.mp4` encrypt the complete `clip.mp4` presentation with the counter-mode Common Encryption scheme (`cenc`). They retain 240 H.264 video frames, 470 AAC packets, and the finite audio presentation of 480,000 samples per channel. These media adaptations have the same [Big Buck Bunny attribution and Creative Commons Attribution 3.0 license](README.md) as the clear clip.
 
 | File | SHA-256 |
 | --- | --- |
 | `cenc-iv8.mp4` | `566f39a597b72df0cf7aeaec1fc3f71b1fe64c2ec20b2235996b784be9d8f945` |
 | `cenc-iv16.mp4` | `41165be29c041a61f7d95c7384e225d4f0ac491dfb729358332ef79478f5ba26` |
 
-The XML files contain intentionally public test keys, key identifiers, and fixed initialization vectors. Never use these values or fixed vectors to protect other media. The two tracks have different keys and identifiers; neither key equals either identifier. There is no protection-system initialization data (PSSH), license service, or device playback qualification.
+The XML files contain intentionally public test keys, key identifiers, and fixed initialization vectors. Never use these values or fixed vectors to protect other media. The two tracks have different keys and identifiers; neither key equals either identifier. There is no Protection System Specific Header (PSSH), which carries DRM initialization data. These fixtures do not qualify a license service or device playback.
 
 ## Offline generation
 
