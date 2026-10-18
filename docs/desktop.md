@@ -66,6 +66,22 @@ The host checks the bundled CLI's SHA-256 before starting the server. Keep the t
 
 The Tauri configuration also describes native installer packaging. The build script does not sign, notarize or create an installer, and its output does not establish qualification on another operating system.
 
+## Verify a distribution archive
+
+CI checks the completed archive before upload. The verifier compares its exact file set, target-specific dependency notices, original publisher bytes, binary headers and executable modes against the checkout. Each archive includes `build-manifest.json` with the source commit, tree, target, compiler and binary hashes. This manifest describes a build; it is not a signed attestation.
+
+To repeat the check, use the matching clean checkout and a Rust toolchain with its locked dependency sources already cached. For example, on Apple Silicon macOS:
+
+```sh
+python3 tools/verify_archive.py verify --kind desktop \
+  --target aarch64-apple-darwin --archive /path/to/drmr.app.tar.gz \
+  --report /path/to/new-verification.json --run-pair-check
+```
+
+`--run-pair-check` executes only the extracted native host's fixed `--verify-bundle` mode, then requires that the same host reject a deliberately changed CLI copy. It starts no window or server. Use this option only for a trusted build on its matching native operating system and architecture. Without it, Desktop verification reports that pair verification remains incomplete. For CLI archives, use `--kind cli` and omit this option.
+
+The checks establish archive contents and the compiled host/CLI pairing. They do not establish GUI behavior, media compatibility, signing, provenance of the build environment or legal certification.
+
 ## Linux dependency qualification
 
 The current Linux GUI dependency graph includes `glib 0.18.5`, affected by the `VariantStrIter` issue in [RUSTSEC-2024-0429](https://rustsec.org/advisories/RUSTSEC-2024-0429.html), and the unmaintained `proc-macro-error 1.0.4` build dependency ([RUSTSEC-2024-0370](https://rustsec.org/advisories/RUSTSEC-2024-0370.html)). No advisory is suppressed. Linux GUI runtime qualification remains open; a successful build does not resolve these warnings. These optional Linux GUI dependencies are not enabled by default CLI builds.

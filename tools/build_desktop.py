@@ -260,6 +260,8 @@ def main():
     if args.bundle:
         version = next(package["version"] for package in metadata["packages"] if package["name"] == "drmr-desktop")
         destination = bundle(profile, suffix, version, target_directory)
+        run([sys.executable, str(ROOT / "tools" / "verify_archive.py"), "manifest",
+             "--kind", "desktop", "--target", host, "--directory", str(destination)], env)
         print(archive_bundle(destination))
     else:
         print("Desktop host and matching CLI built.")

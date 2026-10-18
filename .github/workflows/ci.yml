@@ -210,14 +210,20 @@ jobs:
           cp target/release/drmr README.md LICENSE "$RUNNER_TEMP/$PACKAGE_NAME/"
           cp docs/*.md "$RUNNER_TEMP/$PACKAGE_NAME/docs/"
           python3 tools/collect_notices.py --output "$RUNNER_TEMP/$PACKAGE_NAME/licenses"
+          target="$(rustc -vV | sed -n 's/^host: //p')"
+          python3 tools/verify_archive.py manifest --kind cli --target "$target" --directory "$RUNNER_TEMP/$PACKAGE_NAME"
           tar -czf "$RUNNER_TEMP/$PACKAGE_NAME.tar.gz" -C "$RUNNER_TEMP" "$PACKAGE_NAME"
+          python3 tools/verify_archive.py verify --kind cli --target "$target" \
+            --archive "$RUNNER_TEMP/$PACKAGE_NAME.tar.gz" --report "$RUNNER_TEMP/cli-archive-verification.json"
 
       - name: Upload CLI archive
         if: matrix.rust == 'stable'
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: drmr-${{ runner.os }}-${{ runner.arch }}
-          path: ${{ runner.temp }}/drmr-${{ runner.os }}-${{ runner.arch }}.tar.gz
+          path: |
+            ${{ runner.temp }}/drmr-${{ runner.os }}-${{ runner.arch }}.tar.gz
+            ${{ runner.temp }}/cli-archive-verification.json
           if-no-files-found: error
           retention-days: 14
 

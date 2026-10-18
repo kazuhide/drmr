@@ -75,6 +75,8 @@ jobs:
         run: |
           cargo test --locked -p drmr-desktop
           python -m unittest discover -s tools/tests -p test_build_desktop.py -v
+          python -m unittest discover -s tools/tests -p test_verify_archive.py -v
+          python -m unittest discover -s tools/tests -p test_ci_inputs.py -v
           cargo fmt --all -- --check
 
       - name: Stage the matching CLI and publisher notices
@@ -89,6 +91,19 @@ jobs:
       - name: Build the native host and unsigned bundle
         run: python tools/build_desktop.py --release --bundle
 
+      - name: Verify the completed archive and its native CLI pair
+        run: |
+          target="$(rustc -vV | sed -n 's/^host: //p')"
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            archive="$CARGO_TARGET_DIR/desktop-bundles/drmr-desktop.zip"
+          elif [[ "$RUNNER_OS" == macOS ]]; then
+            archive="$CARGO_TARGET_DIR/desktop-bundles/drmr.app.tar.gz"
+          else
+            archive="$CARGO_TARGET_DIR/desktop-bundles/drmr-desktop.tar.gz"
+          fi
+          python tools/verify_archive.py verify --kind desktop --target "$target" \
+            --archive "$archive" --run-pair-check --report "$RUNNER_TEMP/desktop-archive-verification.json"
+
       - name: Upload native build artifacts
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
@@ -96,5 +111,6 @@ jobs:
           path: |
             target/desktop/desktop-bundles/*.tar.gz
             target/desktop/desktop-bundles/*.zip
+            ${{ runner.temp }}/desktop-archive-verification.json
           if-no-files-found: error
           retention-days: 14
