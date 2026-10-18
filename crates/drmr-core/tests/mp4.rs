@@ -427,8 +427,8 @@ fn typed_boxes_read_like_bento4() {
     assert_eq!(fourcc_text(b"c\xa9bs"), "c");
     assert_eq!(fourcc_text(b"c\"\\s"), "c\"\\s");
 
-    // tfdt / trun fields are read on past a short box (Bento4); a field cut by the end of the
-    // file reads as 0.
+    // Native compatibility reads can continue past a short box. At EOF the native
+    // reader returns zero; an external malformed-atom dump need not define that value.
     let data = cat(&[
         &full(*b"tfdt", 1, 0, &9u32.to_be_bytes()),
         &full(
@@ -564,11 +564,76 @@ fn tree_pattern(tree: &Value) -> Value {
 fn native_readers_match_what_python_reads_from_bento4s_tree() {
     let fixture = fixture();
     let cases = fixture["cases"].as_array().unwrap();
-    assert!(cases.len() >= 25);
-    for case in cases {
+    let native_only = fixture["native_only_cases"].as_array().unwrap();
+    assert_eq!(cases.len(), 26);
+    assert_eq!(native_only.len(), 1);
+    assert_eq!(native_only[0]["name"], "frag-trun-count-at-eof");
+    // This recorded malformed tree defines a native compatibility result, not a
+    // portable external-tool value: Bento4 leaves its optional offset uninitialized.
+    for case in cases.iter().chain(native_only) {
         let name = case["name"].as_str().unwrap();
         let data = hex::decode(case["hex"].as_str().unwrap()).unwrap();
         assert_reads(name, &data, &case["tree"], case);
+    }
+}
+
+#[test]
+fn native_trun_eof_prefixes_define_count_and_optional_field_values() {
+    for flags in [0_u32, 1, 4, 5] {
+        let mut payload = 3_u32.to_be_bytes().to_vec();
+        if flags & 1 != 0 {
+            payload.extend(0x1234_5678_i32.to_be_bytes());
+        }
+        if flags & 4 != 0 {
+            payload.extend(0x89ab_cdef_u32.to_be_bytes());
+        }
+        for end in 0..=payload.len() {
+            let data = full(*b"trun", 0, flags, &payload[..end]);
+            let boxes = parse_boxes(&data).unwrap();
+            let actual = Trun::read(&data, &boxes[0].header).unwrap();
+            let offset = (flags & 1 != 0).then_some(if end >= 8 { 0x1234_5678 } else { 0 });
+            let first_end = 8 + usize::from(flags & 1 != 0) * 4;
+            let first = (flags & 4 != 0).then_some(if end >= first_end { 0x89ab_cdef } else { 0 });
+            assert_eq!(
+                (
+                    actual.sample_count,
+                    actual.data_offset,
+                    actual.first_sample_flags
+                ),
+                (if end >= 4 { 3 } else { 0 }, offset, first),
+                "flags {flags:#x}, EOF after {end} payload bytes"
+            );
+        }
+    }
+}
+
+#[test]
+fn live_trun_fixtures_initialize_every_flag_selected_optional_field() {
+    let fixture = fixture();
+    let cases = fixture["cases"].as_array().unwrap();
+    assert_eq!(
+        cases.len(),
+        26,
+        "retain the complete live differential corpus"
+    );
+    for case in cases {
+        let name = case["name"].as_str().unwrap();
+        let data = hex::decode(case["hex"].as_str().unwrap()).unwrap();
+        let boxes = parse_boxes(&data).unwrap();
+        for found in walk(&boxes)
+            .into_iter()
+            .filter(|node| node.kind() == *b"trun")
+        {
+            let payload = found.header.payload(&data);
+            let flags = u32::from_be_bytes([0, payload[1], payload[2], payload[3]]);
+            if flags & 0xff != 0 {
+                let required = 8 + 4 * usize::try_from((flags & 0xff).count_ones()).unwrap();
+                assert!(
+                    payload.len() >= required,
+                    "{name}: truncated optional trun fields cannot be an external value oracle"
+                );
+            }
+        }
     }
 }
 

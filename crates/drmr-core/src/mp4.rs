@@ -464,8 +464,9 @@ pub struct Tfdt {
 
 /// The bytes from a box's payload to the end of the file: Bento4 reads a `tfdt` / `trun`
 /// field by field from its stream without bounding the reads by the box, so a short box's
-/// field continues into the bytes after it; a field cut by the end of the file fails and
-/// keeps its initial 0.
+/// field can continue into the bytes after it. The native reader deterministically returns
+/// zero for a field cut by EOF. This does not claim a defined value for external tools'
+/// uninitialized optional fields in malformed atoms.
 struct FieldReader<'a> {
     data: &'a [u8],
     at: usize,
@@ -517,8 +518,7 @@ pub struct Trun {
     pub version: u8,
     /// The box flags.
     pub flags: u32,
-    /// The sample count as Bento4 reports it: the declared count, or 0 when the sample records
-    /// it declares exceed the box (Bento4's check, in 32-bit unsigned arithmetic).
+    /// The declared count, or zero when the declared records exceed the native box budget.
     pub sample_count: u32,
     /// `data_offset`, when flag 0x1 is set.
     pub data_offset: Option<i32>,
@@ -527,7 +527,7 @@ pub struct Trun {
 }
 
 impl Trun {
-    /// Read a `trun` box's header fields of `data` as Bento4 does (see [`FieldReader`]);
+    /// Read header fields with deterministic native EOF handling (see [`FieldReader`]);
     /// `None` without version and flags.
     pub fn read(data: &[u8], header: &BoxHeader) -> Option<Trun> {
         let (version, flags, mut fields) = full_fields(data, header)?;
@@ -540,7 +540,7 @@ impl Trun {
             .iter()
             .map(|bit| u64::from(flags & bit != 0))
             .sum::<u64>();
-        // `size - AP4_FULL_ATOM_HEADER_SIZE - 4 - optional * 4` in AP4_UI32: a short box wraps.
+        // Retain the native reader's 32-bit budget arithmetic, including short-box wrapping.
         let size = u32::try_from(header.size).unwrap_or(u32::MAX);
         let available = size
             .wrapping_sub(12)
