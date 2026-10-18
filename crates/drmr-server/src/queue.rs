@@ -231,6 +231,7 @@ impl ConversionQueue {
 
     /// `tick()`: launch the head if the lease is free; the launched job id. A head that cannot
     /// be examined or launched is removed and recorded as skipped with a fixed reason.
+    /// A child that launched but failed supervision keeps its job id and history.
     pub fn tick(&self) -> Option<String> {
         let mut state = self.lock();
         if state.closing {
@@ -270,11 +271,12 @@ impl ConversionQueue {
                 return None;
             }
         };
-        let handle = match self.manager.submit(&entry, &self.config.output_root) {
-            Ok(handle) => handle,
+        let (handle, reason) = match self.manager.submit(&entry, &self.config.output_root) {
+            Ok(handle) => (handle, None),
+            Err(JobError::SupervisionFailed(handle)) => (handle, Some("job-supervision-failed")),
             Err(JobError::AlreadyRunning) => return None,
             Err(error) => {
-                // Any launch failure: the head is skipped, never retried forever.
+                // No child launched: the head is skipped, never retried forever.
                 state.pending.remove(0);
                 self.note(
                     &mut state,
@@ -292,7 +294,7 @@ impl ConversionQueue {
             }
         };
         state.pending.remove(0);
-        self.note(&mut state, &head, Some(&handle.job_id), "launched", None);
+        self.note(&mut state, &head, Some(&handle.job_id), "launched", reason);
         // Inside the lock: enqueue() sees the launch.
         self.service.record_conversion(&handle, &head);
         Some(handle.job_id)
