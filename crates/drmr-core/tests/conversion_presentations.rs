@@ -100,6 +100,18 @@ fn joint_audio_video_dash_and_hls_preserve_every_original_track() {
             check_hls(&converter, &output, target);
         }
         assert!(report.verification.passed);
+        assert_eq!(
+            serde_json::to_value(&report).unwrap()["processing"]["route"],
+            if format == OutputFormat::Dash {
+                "dash-presentation"
+            } else {
+                "fmp4-hls-presentation"
+            }
+        );
+        assert_eq!(
+            serde_json::to_value(&report).unwrap()["processing"]["input_preparation"],
+            "local-track-files"
+        );
         assert_eq!(report.output.tracks.len(), 2);
         assert!(
             output

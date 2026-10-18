@@ -54,6 +54,15 @@ pub struct ConversionReport {
     pub input: Inspection,
     pub output: Inspection,
     pub verification: VerificationReport,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub processing: Option<inspection::ActualProcessing>,
+}
+impl ConversionReport {
+    fn describe_preparation(&mut self, preparation: inspection::InputPreparation) {
+        if let Some(processing) = &mut self.processing {
+            processing.input_preparation = preparation;
+        }
+    }
 }
 /// A local source and a zero-based stream selector. Execution revalidates the actual media.
 /// No inspection report or declared media role authorizes a conversion.
@@ -152,6 +161,7 @@ impl Converter {
         }
         let mut report = self.hls_output(&localized.combined, output, input_keys, output_key)?;
         report.input = localized.report;
+        report.describe_preparation(inspection::InputPreparation::LocalHlsResources);
         Ok(report)
     }
     pub fn convert_from_hls(
@@ -245,6 +255,10 @@ impl Converter {
             input: input_report,
             output: output_report,
             verification,
+            processing: Some(inspection::ActualProcessing::new(
+                inspection::ProcessingRouteId::FragmentedMp4,
+                inspection::InputPreparation::CompleteFile,
+            )),
         })
     }
     pub fn verify_mp4(

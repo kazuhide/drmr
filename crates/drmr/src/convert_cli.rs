@@ -237,6 +237,24 @@ pub fn convert(args: &ConvertArgs) -> ExitCode {
             report.output.protection.as_str()
         )
         .and_then(|()| {
+            if let Some(processing) = &report.processing {
+                writeln!(out, "Processing route: {}", processing.route.as_str())?;
+                writeln!(
+                    out,
+                    "Input preparation: {}",
+                    processing.input_preparation.description()
+                )?;
+                writeln!(out, "Reason: {}", processing.explanation)?;
+                let tools = processing
+                    .required_tools
+                    .iter()
+                    .map(|tool| tool.as_str())
+                    .collect::<Vec<_>>();
+                writeln!(out, "Required tools: {}", tools.join(", "))?;
+            }
+            Ok(())
+        })
+        .and_then(|()| {
             writeln!(
                 out,
                 "Verified stream metadata, packet payloads, decoded content, and packet timing."

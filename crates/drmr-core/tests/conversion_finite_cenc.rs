@@ -304,6 +304,14 @@ fn both_iv_sizes_convert_and_independently_verify_every_original_track() {
         assert_whole_media(&source, true);
         let output = root.path().join(format!("clear-iv{iv}.mp4"));
         let report = convert(&c, &source, &output, &keys).unwrap();
+        assert_eq!(
+            serde_json::to_value(&report).unwrap()["processing"]["route"],
+            "progressive-mp4"
+        );
+        assert_eq!(
+            serde_json::to_value(&report).unwrap()["processing"]["required_tools"],
+            serde_json::json!(["ffmpeg", "ffprobe"])
+        );
         assert_eq!(report.output.protection, Protection::Clear);
         assert_eq!(report.output.tracks.len(), 2);
         assert_verified(&report.verification);

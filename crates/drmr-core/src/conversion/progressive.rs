@@ -461,6 +461,10 @@ impl Converter {
             input: input.clone(),
             output,
             verification,
+            processing: Some(crate::inspection::ActualProcessing::new(
+                crate::inspection::ProcessingRouteId::ProgressiveMp4,
+                crate::inspection::InputPreparation::CompleteFile,
+            )),
         }))
     }
     pub(super) fn verify_progressive(

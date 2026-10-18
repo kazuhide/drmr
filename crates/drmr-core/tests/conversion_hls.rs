@@ -73,6 +73,10 @@ fn mp4_to_aes128_hls_and_back_preserves_all_media_for_each_mp4_scheme() {
             .convert_hls_aes128(&source, &hls, &input_keys, &output_key)
             .unwrap();
         assert!(report.verification.passed);
+        assert_eq!(
+            serde_json::to_value(&report).unwrap()["processing"]["route"],
+            "fmp4-hls-presentation"
+        );
         assert_eq!(report.output.protection, Protection::HlsAes128);
         assert!(!serde_json::to_string(&report).unwrap().contains("SECRET"));
         assert!(
@@ -104,6 +108,10 @@ fn mp4_to_aes128_hls_and_back_preserves_all_media_for_each_mp4_scheme() {
                 )
                 .unwrap();
             assert!(report.verification.passed);
+            assert_eq!(
+                serde_json::to_value(&report).unwrap()["processing"]["input_preparation"],
+                "local-hls-resources"
+            );
         }
     }
 }

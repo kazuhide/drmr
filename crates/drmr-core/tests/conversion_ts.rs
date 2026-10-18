@@ -96,6 +96,14 @@ fn transport_stream_to_each_supported_hls_protection_preserves_all_original_trac
                 hls_output_key: (target == TargetProtection::HlsAes128).then_some(&aes),
             })
             .unwrap();
+        assert_eq!(
+            serde_json::to_value(&report).unwrap()["processing"]["route"],
+            "mpeg-ts-hls"
+        );
+        assert_eq!(
+            serde_json::to_value(&report).unwrap()["processing"]["input_preparation"],
+            "mpeg-ts-demux"
+        );
         assert!(report.verification.passed);
         assert!(!report.verification.license_playback_verified);
         let result_keys = InputKeys::new(vec![ContentKey::from_hex(KID, KEY).unwrap()]).unwrap();

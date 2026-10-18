@@ -36,6 +36,16 @@ struct Prepared {
     transport_index: Option<usize>,
     playlist_reference: Option<PathBuf>,
 }
+fn presentation_processing(format: OutputFormat) -> inspection::ActualProcessing {
+    inspection::ActualProcessing::new(
+        if format == OutputFormat::Dash {
+            inspection::ProcessingRouteId::DashPresentation
+        } else {
+            inspection::ProcessingRouteId::Fmp4HlsPresentation
+        },
+        inspection::InputPreparation::LocalTrackFiles,
+    )
+}
 impl Converter {
     pub fn convert_tracks(
         &self,
@@ -134,6 +144,7 @@ impl Converter {
                 checks,
                 license_playback_verified: false,
             },
+            processing: Some(presentation_processing(request.format)),
         })
     }
     fn verify_joint(
@@ -1001,6 +1012,18 @@ impl Converter {
             self.publish_directory(candidate, destination)?;
         }
         report.input = input_report;
+        if transport {
+            report.processing = Some(inspection::ActualProcessing::new(
+                inspection::ProcessingRouteId::MpegTsHls,
+                inspection::InputPreparation::MpegTsDemux,
+            ));
+        } else {
+            report.describe_preparation(match report.input.format {
+                InputFormat::Mp4 => inspection::InputPreparation::CompleteFile,
+                InputFormat::Dash => inspection::InputPreparation::LocalDashResources,
+                InputFormat::Hls => inspection::InputPreparation::LocalHlsResources,
+            });
+        }
         Ok(report)
     }
 }
