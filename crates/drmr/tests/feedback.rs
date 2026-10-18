@@ -67,11 +67,56 @@ fn configuration_and_input_errors_are_json_without_echoing_untrusted_values() {
 #[test]
 fn an_unavailable_real_tool_has_structured_failure_and_safe_last_activity() {
     let root = tempfile::tempdir().unwrap();
+    let source = root.path().join("video.mp4");
+    let original = std::fs::read(clip()).unwrap();
+    let copied = Command::new("ffmpeg")
+        .args(["-v", "error", "-nostdin", "-copyts", "-i"])
+        .arg(clip())
+        .args(["-map", "0:v:0", "-an", "-c", "copy"])
+        .arg(&source)
+        .output()
+        .unwrap();
+    assert!(
+        copied.status.success(),
+        "{}",
+        String::from_utf8_lossy(&copied.stderr)
+    );
+    // Keep the whole original video; finite AAC admission is a separate contract.
+    let evidence = |path: &Path| {
+        let probe = Command::new("ffprobe")
+            .args([
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_packets",
+                "-show_streams",
+                "-show_data_hash",
+                "sha256",
+                "-show_entries",
+                "stream=codec_name,time_base:packet=pts,dts,duration,data_hash",
+                "-of",
+                "json",
+            ])
+            .arg(path)
+            .output()
+            .unwrap();
+        assert!(
+            probe.status.success(),
+            "{}",
+            String::from_utf8_lossy(&probe.stderr)
+        );
+        serde_json::from_slice::<Value>(&probe.stdout).unwrap()
+    };
+    let expected = evidence(&clip());
+    assert_eq!(expected["packets"].as_array().unwrap().len(), 240);
+    assert_eq!(evidence(&source), expected);
+    let source_before = std::fs::read(&source).unwrap();
     let output = root.path().join("output.mp4");
     let missing = root.path().join("tool-sentinel");
     let result = invoke(
         "convert",
-        &clip(),
+        &source,
         &output,
         &[
             "--json",
@@ -82,8 +127,14 @@ fn an_unavailable_real_tool_has_structured_failure_and_safe_last_activity() {
         ],
     );
     let report = failure(&result, "convert", "media-tool-unavailable-or-timeout", 1);
-    assert!(report["error"]["last_activity"].is_string());
-    assert!(!String::from_utf8_lossy(&result.stdout).contains("sentinel"));
+    assert_eq!(report["error"]["last_activity"], "normalization");
+    for bytes in [&result.stdout, &result.stderr] {
+        let text = String::from_utf8_lossy(bytes);
+        assert!(!text.contains("sentinel"));
+        assert!(!text.contains(&root.path().display().to_string()));
+    }
+    assert_eq!(std::fs::read(clip()).unwrap(), original);
+    assert_eq!(std::fs::read(&source).unwrap(), source_before);
     assert!(!output.exists());
 }
 #[test]
