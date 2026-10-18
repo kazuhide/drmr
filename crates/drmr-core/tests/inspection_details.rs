@@ -108,7 +108,69 @@ fn hls_method_evidence_stays_with_each_child_and_unknown_methods_are_fixed_token
         assert_eq!(description["evidence"], "manifest-declaration");
     }
     assert!(!report.to_string().contains("private-"));
+    let plan = inspection::plan(
+        serde_json::from_value(report).unwrap(),
+        TargetProtection::Clear,
+        vec![OutputFormat::Hls],
+    );
+    assert!(!plan.compatible && !plan.execution_available);
+    assert!(plan.processing.unwrap().candidates.is_empty());
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 3);
+}
+
+#[test]
+fn only_correlated_sample_aes_declarations_enable_the_conditional_ts_route() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("input.m3u8");
+    for method in ["SAMPLE-AES", "SAMPLE-AES-CTR", "private-method-sentinel"] {
+        std::fs::write(&path, format!("#EXTM3U\n#EXT-X-KEY:METHOD={method},URI=\"not-read-key\"\n#EXTINF:2,\nnot-read.ts\n#EXT-X-ENDLIST\n")).unwrap();
+        let input = inspection::inspect(&path).unwrap();
+        let plan = inspection::plan(
+            input.clone(),
+            TargetProtection::Clear,
+            vec![OutputFormat::Hls],
+        );
+        if method == "SAMPLE-AES" {
+            assert!(plan.compatible && plan.execution_available);
+            assert_eq!(plan.input.protection, inspection::Protection::Unknown);
+            assert!(!plan.input.media_verified);
+            assert!(
+                plan.findings
+                    .iter()
+                    .any(|f| f.code == "source-protection-unresolved")
+            );
+            let routes = plan.processing.unwrap().candidates;
+            assert_eq!(routes.len(), 2);
+            let ts = routes
+                .iter()
+                .find(|r| r.route.as_str() == "mpeg-ts-sample-aes-hls")
+                .unwrap();
+            assert!(ts.revalidation_required);
+            assert!(
+                ts.condition_codes
+                    .iter()
+                    .any(|c| c == "sample-aes-transport-profile-must-pass")
+            );
+            assert!(!routes.iter().any(|r| r.route.as_str() == "mpeg-ts-hls"));
+            for missing_correlation in [false, true] {
+                let mut input = input.clone();
+                if missing_correlation {
+                    input.details.as_mut().unwrap().track_protection[0].track_id =
+                        Some("unrelated".into());
+                } else {
+                    input.details = None;
+                }
+                let untrusted =
+                    inspection::plan(input, TargetProtection::Clear, vec![OutputFormat::Hls]);
+                assert!(!untrusted.compatible && !untrusted.execution_available);
+                assert!(untrusted.processing.unwrap().candidates.is_empty());
+            }
+        } else {
+            assert!(!plan.compatible && !plan.execution_available);
+            assert!(plan.processing.unwrap().candidates.is_empty());
+        }
+    }
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
 }
 
 #[test]
