@@ -408,21 +408,23 @@ pub(super) fn clear(movie: &audio::Movie) -> Result<(), ConversionError> {
     let boxes = mp4::parse_boxes(&movie.bytes).map_err(|_| UNSUPPORTED)?;
     if movie.outside_protection
         || mp4::walk(&boxes).into_iter().any(|n| {
-            matches!(
-                &n.kind(),
-                b"pssh"
-                    | b"uuid"
-                    | b"encv"
-                    | b"enca"
-                    | b"sinf"
-                    | b"frma"
-                    | b"schm"
-                    | b"schi"
-                    | b"tenc"
-                    | b"senc"
-                    | b"saiz"
-                    | b"saio"
-            )
+            (matches!(&n.kind(), b"sgpd" | b"sbgp")
+                && n.header.payload(&movie.bytes).get(4..8) != Some(b"roll"))
+                || matches!(
+                    &n.kind(),
+                    b"pssh"
+                        | b"uuid"
+                        | b"encv"
+                        | b"enca"
+                        | b"sinf"
+                        | b"frma"
+                        | b"schm"
+                        | b"schi"
+                        | b"tenc"
+                        | b"senc"
+                        | b"saiz"
+                        | b"saio"
+                )
         })
     {
         return Err(UNSUPPORTED);
@@ -617,6 +619,26 @@ mod tests {
                 auxiliary_entries(&entry, &aux, &[10], false, width, 1).unwrap_err(),
                 UNSUPPORTED
             );
+        }
+    }
+    #[test]
+    fn clear_candidates_cannot_retain_standalone_protection_or_encryption_groups() {
+        let path =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../drmr/tests/fixtures/bbb/clip.mp4");
+        let original = audio::movie(&path).unwrap();
+        clear(&original).unwrap();
+        let boxes = mp4::parse_boxes(&original.bytes).unwrap();
+        for kind in [*b"frma", *b"schm", *b"schi", *b"sgpd", *b"sbgp"] {
+            let mut changed = audio::movie(&path).unwrap();
+            let bytes = [
+                16u32.to_be_bytes().as_slice(),
+                &kind,
+                &[0, 0, 0, 0],
+                b"seig",
+            ]
+            .concat();
+            append(&mut changed, &boxes[0], &bytes);
+            assert_eq!(clear(&changed).unwrap_err(), UNSUPPORTED, "{kind:?}");
         }
     }
     #[test]

@@ -188,6 +188,9 @@ impl Converter {
         copy_private(input, &snapshot)?;
         let inspected =
             inspection::inspect(&snapshot).map_err(|_| ConversionError("invalid-input-media"))?;
+        if inspected.format != InputFormat::Mp4 {
+            return Err(ConversionError("input-format-not-supported"));
+        }
         if target == TargetProtection::Clear
             && let Some(report) =
                 self.progressive_mp4(&snapshot, &destination, &inspected, input_keys)?
@@ -258,9 +261,15 @@ impl Converter {
         copy_private(output, &result)?;
         let inspected =
             inspection::inspect(&source).map_err(|_| ConversionError("invalid-input-media"))?;
+        if inspected.format != InputFormat::Mp4 {
+            return Err(ConversionError("input-format-not-supported"));
+        }
+        let result_report =
+            inspection::inspect(&result).map_err(|_| ConversionError("invalid-input-media"))?;
+        if result_report.format != InputFormat::Mp4 {
+            return Err(ConversionError("input-format-not-supported"));
+        }
         if progressive::validate_input(&source, &inspected, input_keys)? {
-            let result_report = inspection::inspect(&result)
-                .map_err(|_| ConversionError("invalid-output-media"))?;
             if result_report.protection == Protection::Clear {
                 if result_report.tracks.len() != inspected.tracks.len() {
                     return Err(ConversionError("output-protection-mismatch"));

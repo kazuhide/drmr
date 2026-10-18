@@ -55,7 +55,20 @@ pub(super) fn movie(path: &Path) -> Result<Movie, ConversionError> {
         fragmented |= &header[4..] == b"moof";
         outside_protection |= matches!(
             &header[4..],
-            b"pssh" | b"uuid" | b"senc" | b"saiz" | b"saio" | b"sinf" | b"tenc"
+            b"pssh"
+                | b"uuid"
+                | b"senc"
+                | b"saiz"
+                | b"saio"
+                | b"sinf"
+                | b"frma"
+                | b"schm"
+                | b"schi"
+                | b"tenc"
+                | b"encv"
+                | b"enca"
+                | b"sgpd"
+                | b"sbgp"
         );
         if &header[4..] == b"emsg" {
             return Err(ConversionError("inband-events-not-supported"));
