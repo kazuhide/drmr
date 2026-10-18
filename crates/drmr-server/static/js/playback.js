@@ -34,7 +34,8 @@
     function renderSideState(side, s) {
       s = s || side.player.getState();
       var status = side.busy && s.status !== 'error' ? 'loading' : s.status;
-      var parts = [t(STATUS_KEYS[status] || 'playerIdle')];
+      var label = status === 'loading' && s.phase === 'ready' ? 'playerAwaitingPlayback' : status === 'loading' && s.phase === 'media' ? 'playerLoadingMedia' : (STATUS_KEYS[status] || 'playerIdle');
+      var parts = [t(label)];
       if (status === 'loading' && s.phase === 'teardown') parts.push(t('playbackCleanup'));
       if (s.keyStatus && s.keyStatus !== 'n/a') parts.push(t(KEY_STATUS_KEYS[s.keyStatus] || 'keyRequesting'));
       if (s.lastError) {

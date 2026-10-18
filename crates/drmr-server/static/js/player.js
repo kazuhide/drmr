@@ -76,15 +76,20 @@
     // repeated loads never stack listeners on the same <video>.
     var onPlayingHandler = null;
 
+    function notify(kind, value) {
+      listeners[kind].forEach(function (cb) {
+        try { cb(value); } catch (_e) { console.error('[player] observer notification failed'); }
+      });
+    }
     function emitEvent(level, message) {
       var rec = { ts: new Date().toISOString(), level: level, message: message };
-      listeners.event.forEach(function (cb) { cb(rec); });
+      notify('event', rec);
       if (level === 'error') console.error('[player]', message);
       else console.log('[player]', message);
     }
     function emitState() {
       var snapshot = getState();
-      listeners.state.forEach(function (cb) { cb(snapshot); });
+      notify('state', snapshot);
     }
     function getState() {
       return {
@@ -299,7 +304,7 @@
       var loadGeneration = generation;
       var controller = new AbortController();
       var timer, resolveSetup, rejectSetup;
-      var attempt = { settled: false, cancel: cancel };
+      var attempt = { settled: false, ready: false, playing: false, cancel: cancel };
       var result = new Promise(function (resolve, reject) { resolveSetup = resolve; rejectSetup = reject; });
       activeSetup = attempt;
       state.url = url;
@@ -346,12 +351,13 @@
         state.keyStatus = isKeyError ? 'error' : (state.keyStatus === 'configured' ? 'configured' : 'n/a');
         state.status = 'error';
         state.lastError = { message: message, code: e.code, url: url };
-        emitEvent('error', 'load failed: ' + (e.code || '') + ' ' + message + ' (url: ' + url + ')');
-        emitState();
         var wrapped = e instanceof Error ? e : new Error(message);
         wrapped.code = e.code;
         wrapped.url = url;
+        // Settle the caller even if a presentation observer fails while rendering the error.
         rejectSetup(wrapped);
+        emitEvent('error', 'load failed: ' + (e.code || '') + ' ' + message + ' (url: ' + url + ')');
+        emitState();
       }
       timer = setTimeout(function () { fail(setupError()); }, Math.max(0, deadline - performance.now()));
       stopped.then(function () {
@@ -402,26 +408,30 @@
             emitState();
             // Explicit local test keys override the source manifest's DRM-system signaling.
             if (clearKeys) player.configure({ drm: { clearKeys: clearKeys }, manifest: { dash: { ignoreDrmInfo: true } } });
-            return player.load(url);
-          })
-          .then(function () {
-            if (!isCurrent()) return;
-            checkDeadline();
-            state.phase = 'ready';
-            emitEvent('info', 'loaded ' + url);
-            populateRenditions();
             detachPlayingHandler();
             onPlayingHandler = function () {
               if (!isCurrent()) return;
+              attempt.playing = true;
               detachPlayingHandler();
+              if (attempt.ready) finish();
               state.status = 'playing';
               state.keyStatus = options.clear ? 'n/a' : 'usable';
               emitEvent('info', 'playing');
               emitState();
             };
             videoEl.addEventListener('playing', onPlayingHandler);
+            return player.load(url);
+          })
+          .then(function () {
+            if (!isCurrent()) return;
+            checkDeadline();
+            attempt.ready = true;
+            state.phase = 'ready';
+            emitEvent('info', 'loaded ' + url);
+            populateRenditions();
             startBufferPoll();
-            finish();
+            // The caller can now request play, but setup is not complete until actual playing.
+            if (attempt.playing) finish();
             resolveSetup();
           });
       }).catch(fail);

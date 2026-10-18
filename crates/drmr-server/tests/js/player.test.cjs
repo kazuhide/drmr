@@ -466,11 +466,12 @@ test('a configured local test key becomes usable only after the video actually p
   h.license('a');
   await loading;
   assert.equal(h.player.getState().phase, 'ready');
-  assert.equal(h.deadlines.size, 0);
+  assert.equal(h.deadlines.size, 1, 'the setup deadline remains until actual playing');
   assert.equal(h.player.getState().keyStatus, 'configured');
   for (const callback of h.videoListeners.get('playing')) callback();
   assert.equal(h.player.getState().status, 'playing');
   assert.equal(h.player.getState().keyStatus, 'usable');
+  assert.equal(h.deadlines.size, 0);
   await h.player.stop();
 });
 
@@ -511,4 +512,130 @@ test('a Shaka DRM error event settles a still-pending setup and retains its safe
   assert.equal(h.player.getState().keyStatus, 'error');
   assert.match(h.player.getState().lastError.message, /6001/);
   assert.equal(h.deadlines.size, 0);
+});
+
+
+test('a resolved Shaka load without actual playing remains inside the original setup deadline', async () => {
+  const h = harness();
+  const loading = h.player.load('a', '/a');
+  await flush();
+  h.license('a');
+  await loading;
+  assert.equal(h.player.getState().phase, 'ready');
+  const latePlaying = Array.from(h.videoListeners.get('playing'))[0];
+  h.advance(19999);
+  await flush();
+  assert.equal(h.player.getState().status, 'loading');
+  h.advance(1);
+  await flush();
+  assert.equal(h.player.getState().status, 'error');
+  assert.equal(h.player.getState().lastError.code, 'playback-setup-timeout');
+  assert.equal(h.deadlines.size, 0);
+  assert.equal(h.timers.size, 0);
+  assert.equal(h.videoListeners.get('playing').size, 0);
+  latePlaying();
+  assert.equal(h.player.getState().status, 'error');
+});
+
+test('confirmed playing clears the deadline and remains valid past the setup budget', async () => {
+  const h = harness();
+  await h.player.load('clear', '/clear', [], { clear: true });
+  h.advance(19000);
+  for (const callback of h.videoListeners.get('playing')) callback();
+  h.advance(2000);
+  await flush();
+  assert.equal(h.player.getState().status, 'playing');
+  assert.equal(h.deadlines.size, 0);
+  await h.player.stop();
+});
+
+test('an event observer exception cannot strand a deadline failure or suppress other state observers', async () => {
+  const h = harness();
+  let outcome, errorStates = 0;
+  h.player.onEvent(() => { throw new Error('untrusted-event-sentinel'); });
+  h.player.onState(state => { if (state.status === 'error') throw new Error('untrusted-state-sentinel'); });
+  h.player.onState(state => { if (state.status === 'error') errorStates += 1; });
+  h.player.load('a', '/a').catch(error => { outcome = error; });
+  await flush();
+  assert.doesNotThrow(() => h.advance(20000));
+  await flush();
+  assert.equal(outcome?.code, 'playback-setup-timeout');
+  assert.equal(errorStates, 1);
+  assert.equal(h.player.getState().status, 'error');
+  assert.ok(!JSON.stringify(h.events).includes('untrusted-'));
+});
+
+test('a ready-state observer exception cannot strand a successful media load', async () => {
+  const h = harness();
+  let outcome;
+  h.player.onState(state => { if (state.phase === 'ready') throw new Error('ready-observer-sentinel'); });
+  h.player.load('clear', '/clear', [], { clear: true }).then(() => { outcome = 'ready'; }, () => { outcome = 'failed'; });
+  await flush();
+  assert.equal(outcome, 'ready');
+  assert.equal(h.player.getState().phase, 'ready');
+  await h.player.stop();
+});
+
+for (const language of ['en', 'ja']) {
+  test(language + ': ready media with a pending video play reports its phase and expires without blocking retry', async () => {
+    const h = playbackHarness(language);
+    const play = h.element('play-old-btn');
+    h.element('video-old').play = () => new Promise(() => {});
+    play.dispatch('click');
+    await flush();
+    h.license('a');
+    await flush();
+    assert.equal(play.disabled, false, 'load-ready permits user retry even before playing');
+    assert.notEqual(h.i18n.t('playerAwaitingPlayback'), 'playerAwaitingPlayback');
+    assert.ok(h.element('old-state').textContent.includes(h.i18n.t('playerAwaitingPlayback')));
+    h.advance(20000);
+    await flush();
+    assert.equal(play.disabled, false);
+    assert.ok(h.element('old-state').textContent.includes(h.i18n.t('playbackSetupTimeout')));
+    play.dispatch('click');
+    await flush();
+    assert.equal(play.disabled, true);
+    h.license('a');
+    await flush();
+    assert.equal(play.disabled, false);
+    h.playback.hide();
+    await flush();
+  });
+}
+
+
+test('an initial state observer cannot throw out of load before its deadline is armed', async () => {
+  const h = harness();
+  let ready, notifications = 0;
+  h.player.onState(() => { throw new Error('initial-observer-sentinel'); });
+  h.player.onState(() => { notifications += 1; });
+  assert.doesNotThrow(() => { ready = h.player.load('a', '/a'); });
+  await flush();
+  assert.ok(notifications > 0);
+  h.license('a');
+  await ready;
+  assert.equal(h.player.getState().phase, 'ready');
+  await h.player.stop();
+});
+
+
+test('playing observed during Shaka load is not lost before load-ready settlement', async () => {
+  const h = harness();
+  const loading = h.player.load('a', '/a');
+  await flush();
+  const media = h.instances[0].pendingLoad = deferred();
+  h.license('a');
+  await flush();
+  const playing = Array.from(h.videoListeners.get('playing') || []);
+  assert.equal(playing.length, 1);
+  playing[0]();
+  assert.equal(h.player.getState().status, 'playing');
+  assert.equal(h.deadlines.size, 1, 'both media load and playing must be confirmed');
+  media.resolve();
+  await loading;
+  assert.equal(h.deadlines.size, 0);
+  h.advance(20000);
+  await flush();
+  assert.equal(h.player.getState().status, 'playing');
+  await h.player.stop();
 });
