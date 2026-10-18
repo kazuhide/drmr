@@ -176,6 +176,12 @@
     convLimits: '制限', convLimit1: '同時に実行できるジョブは 1 件です。', convLimit2: '待機列と実行中ジョブの状態はメモリ上です。再起動すると待機中の項目は消え、実行中だったジョブは「中断」として記録されます。出力・レポート・ジョブ記録・ログはディスクに残ります。', convLimit3: 'Clear HLS のコンテンツ ID は再利用できません。再変換は別の ID で解析し直します。',
     convLoadFailed: '設定を読み込めませんでした。',
     // errors
+    checkJobStatus: '状態を確認',
+    requestTimeout: 'サーバー応答を15秒以内に確認できませんでした。状態を再確認してください。',
+    launchOutcomeUnknown: '起動要求の結果は未確認です。再送せず、ジョブの状態を確認してください。',
+    jobOutcomeUnknown: 'ジョブの状態を確認できません。処理が停止したとは限りません。状態を確認してください。',
+    stopOutcomeUnknown: '停止要求の結果は未確認です。ジョブの状態を確認してください。停止完了とは扱いません。',
+    mutationOutcomeUnknown: '要求の結果は未確認です。操作を繰り返す前に、状態を確認してください。',
     networkError: 'サーバーに接続できません。接続を確認してください。', requestError: 'リクエストを完了できませんでした。入力とログを確認してください。',
     busyError: '別のジョブが実行中です。完了を待ってください。', assetExistsError: 'この出力名は使用済みです。一覧から開くか、別の出力名を指定してください。',
     resultExistsError: 'このコンテンツの出力は作成済みです。再変換する場合は別の出力名で解析してください。', conflictError: '現在の状態と競合するため実行できませんでした。一覧を更新してください。',
@@ -342,6 +348,12 @@
     batchAvailable: 'batch command: available', batchUnavailable: 'batch command: not included in this installation',
     convLimits: 'Limits', convLimit1: 'One job runs at a time.', convLimit2: 'The queue and the running job\'s liveness are in memory: a restart drops queued items and records a job that was running as interrupted; outputs, reports, job records and logs stay on disk.', convLimit3: 'A clear-HLS content ID is never reused; to repackage, analyze again under another ID.',
     convLoadFailed: 'Could not load the settings.',
+    checkJobStatus: 'Check job status',
+    requestTimeout: 'The server response was not confirmed within 15 seconds. Check its status again.',
+    launchOutcomeUnknown: 'The launch outcome is unknown. Check job status without resending the request.',
+    jobOutcomeUnknown: 'Job status is unknown. Processing may still be running. Check job status.',
+    stopOutcomeUnknown: 'The Stop outcome is unknown. Check job status; cleanup is not yet confirmed.',
+    mutationOutcomeUnknown: 'The request outcome is unknown. Check the current state before repeating the action.',
     networkError: 'Cannot reach the server. Check the connection.', requestError: 'The request could not be completed. Check the input and the log.',
     busyError: 'Another job is running. Wait for it to finish.', assetExistsError: 'This output name is already in use. Open it from the list, or choose another output name.',
     resultExistsError: 'Output already exists for this content. To repackage, analyze with another output name.', conflictError: 'This action conflicts with the current state. Refresh the list.',
@@ -374,6 +386,8 @@
   }
   // Server error classes and allowlisted codes map to fixed sentences.
   function error(e) {
+    if (e && e.uncertain === true) return t('mutationOutcomeUnknown');
+    if (e && e.code === 'request-timeout') return t('requestTimeout');
     if (!e || !e.status) return t('networkError');
     var code = e.body && e.body.error;
     var asset = e.body && typeof e.body.asset_id === 'string' && /^[A-Za-z0-9_-][A-Za-z0-9._-]{0,200}$/.test(e.body.asset_id) ? e.body.asset_id : null;
