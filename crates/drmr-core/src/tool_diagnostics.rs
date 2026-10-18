@@ -61,13 +61,13 @@ impl Profile {
 }
 
 /// One fixed, advertised command-line option. Presence is not a media execution test.
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct FeatureCheck {
     pub name: &'static str,
     pub available: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct ToolDiagnostic {
     pub name: &'static str,
     pub purpose: &'static str,
@@ -83,7 +83,7 @@ pub struct ToolDiagnostic {
     pub failure_code: Option<&'static str>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct DiagnosticReport {
     pub schema_version: u8,
     pub mode: &'static str,
@@ -171,6 +171,13 @@ impl DiagnosticSession {
         }
     }
 
+    /// Use the caller's termination signal before the diagnostic worker starts.
+    #[must_use]
+    pub fn with_stop(mut self, stop: crate::concurrency::Stop) -> Self {
+        self.stop = stop;
+        self
+    }
+
     /// Run once, or return the same completed report. Concurrent runs are refused.
     pub fn run(&self) -> std::io::Result<Arc<DiagnosticReport>> {
         let path = std::env::var_os("PATH");
@@ -216,6 +223,44 @@ impl DiagnosticSession {
             .unwrap_or_else(PoisonError::into_inner)
             .running
             && !self.cleanup.has_pending()
+    }
+
+    /// Retain foreground ownership until cleanup is confirmed after the worker returns.
+    ///
+    /// Each native retry has its existing cleanup deadline. Repeated failures keep
+    /// this call waiting, with one fixed notification and a one-second pause between
+    /// attempts; Stop does not authorize abandoning the retained child. The original
+    /// cached report remains a record of the probe attempt, not a current cleanup view.
+    pub fn wait_for_cleanup(&self, waiting: impl FnMut()) {
+        self.wait_for_cleanup_with(
+            || self.retry_cleanup(),
+            waiting,
+            || std::thread::sleep(Duration::from_secs(1)),
+        );
+    }
+
+    fn wait_for_cleanup_with(
+        &self,
+        mut retry: impl FnMut() -> std::io::Result<()>,
+        mut waiting: impl FnMut(),
+        mut pause: impl FnMut(),
+    ) {
+        if self.cleanup_confirmed() {
+            return;
+        }
+        self.request_stop();
+        let mut notified = false;
+        loop {
+            let _ = retry();
+            if self.cleanup_confirmed() {
+                return;
+            }
+            if !notified {
+                waiting();
+                notified = true;
+            }
+            pause();
+        }
     }
 
     /// Retry previously unconfirmed cleanup once, after the worker has returned.
@@ -548,18 +593,16 @@ mod tests {
         path.is_file()
     }
 
-    #[test]
-    fn unconfirmed_probe_keeps_the_actual_child_and_stops_later_probes_until_explicit_retry() {
-        let root = tempfile::tempdir().unwrap();
-        let program = fixtures(root.path());
-        let lock = root.path().join("held-lock");
-        let ready = root.path().join("ready");
+    fn retained_probe(root: &Path) -> (DiagnosticSession, Arc<DiagnosticReport>, PathBuf) {
+        let program = fixtures(root);
+        let lock = root.join("held-lock");
+        let ready = root.join("ready");
         let argv = held_arguments(&program, &lock, &ready);
         let session = isolated_session(Profile::parse("progressive-mp4").unwrap());
         let mut calls = 0;
         let mut ready_observed = false;
         let report = session
-            .run_with(Some(root.path().as_os_str()), |runner, _, stop| {
+            .run_with(Some(root.as_os_str()), |runner, _, stop| {
                 calls += 1;
                 runner
                     .run_tool_injected_cleanup(
@@ -583,6 +626,13 @@ mod tests {
             .unwrap();
         assert_eq!(calls, 1);
         assert!(ready_observed, "diagnostic fixture did not become ready");
+        (session, report, lock)
+    }
+
+    #[test]
+    fn unconfirmed_probe_keeps_the_actual_child_and_stops_later_probes_until_explicit_retry() {
+        let root = tempfile::tempdir().unwrap();
+        let (session, report, lock) = retained_probe(root.path());
         assert!(!report.ready);
         assert_eq!(report.cleanup_status, "unconfirmed");
         assert_eq!(
@@ -607,19 +657,72 @@ mod tests {
     }
 
     #[test]
+    fn foreground_cleanup_driver_cannot_return_or_drop_a_still_live_probe() {
+        let root = tempfile::tempdir().unwrap();
+        let (session, report, lock) = retained_probe(root.path());
+        let held = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&lock)
+            .unwrap();
+        let mut attempts = 0;
+        let mut notices = 0;
+        let mut pauses = 0;
+        session.wait_for_cleanup_with(
+            || {
+                attempts += 1;
+                if attempts <= 2 {
+                    assert!(matches!(
+                        held.try_lock(),
+                        Err(std::fs::TryLockError::WouldBlock)
+                    ));
+                    Err(std::io::Error::other("injected retry uncertainty"))
+                } else {
+                    session.retry_cleanup()
+                }
+            },
+            || notices += 1,
+            || {
+                pauses += 1;
+                assert!(session.stop.is_set());
+                assert!(!session.cleanup_confirmed());
+                assert!(matches!(
+                    held.try_lock(),
+                    Err(std::fs::TryLockError::WouldBlock)
+                ));
+            },
+        );
+        assert!(
+            session.cleanup_confirmed(),
+            "foreground driver returned with a live owner"
+        );
+        assert_eq!(attempts, 3);
+        assert_eq!(notices, 1);
+        assert_eq!(pauses, 2);
+        held.try_lock().unwrap();
+        assert!(!report.ready);
+        assert_eq!(
+            report.tools[0].failure_code,
+            Some("probe-cleanup-unconfirmed")
+        );
+        assert_eq!(report.cleanup_status, "unconfirmed");
+    }
+
+    #[test]
     fn stop_during_an_actual_probe_drains_it_and_prevents_the_next_probe() {
         let root = tempfile::tempdir().unwrap();
         let program = fixtures(root.path());
         let lock = root.path().join("held-lock");
         let ready = root.path().join("ready");
         let argv = held_arguments(&program, &lock, &ready);
-        let session = isolated_session(Profile::ALL);
+        let stop = crate::concurrency::Stop::new();
+        let session = isolated_session(Profile::ALL).with_stop(stop.clone());
         let mut calls = 0;
         let report = std::thread::scope(|scope| {
             scope.spawn(|| {
                 let ready_observed = wait_ready(&ready);
                 let worker_active = !session.cleanup_confirmed();
-                session.request_stop();
+                stop.set();
                 assert!(
                     ready_observed && worker_active,
                     "diagnostic did not reach its active fixture"

@@ -412,6 +412,13 @@ drmr doctor --probe --route progressive-mp4 --json
 
 The single JSON object retains `ready` and `tools`, with each tool's `name`, `purpose`, `available`, and `required`. Added version-one fields include `mode` (`discovery` or `probe`), `profile`, resolved `path`, `path_status`, `version`, `version_status`, `feature_status`, individual `features`, fixed `failure_code`, `cancelled`, and `cleanup_status` (`not-required`, `confirmed`, or `unconfirmed`). `ready` covers the selected checks only; `media_compatibility_checked` remains false. Bento4 reports `build-unverified` because its banner omits the build number: confirm build 641 or newer separately. Non-UTF-8 executable paths are reported without an ambiguous replacement path and are refused for probing. A successful diagnostic does not validate media, keys, licensing, or device playback.
 
+If a diagnostic cannot confirm tool cleanup, the CLI retains the process owner
+and retries cleanup in the foreground, pausing between failures. Ctrl+C or
+termination requests Stop; it does not discard an unconfirmed owner. The final
+report is printed after cleanup is confirmed, while the original probe failure
+and `ready: false` remain. `cleanup_status` describes that final cleanup state.
+An operating-system hard kill or power loss cannot preserve this ownership.
+
 ### Automatic worker limits
 
 `convert` and `verify` choose concurrency from processor capacity, available memory,

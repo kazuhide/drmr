@@ -1,15 +1,42 @@
 //! Explain discovery separately from bounded version and advertised-feature checks.
 
 use drmr_core::tool_diagnostics::{DiagnosticSession, Profile};
-use std::process::ExitCode;
+use std::{io::Write as _, process::ExitCode};
 
 pub fn run(as_json: bool, probe: bool, route: &str) -> ExitCode {
-    let session = DiagnosticSession::new(Profile::parse(route).expect("validated route"), probe);
-    let report = session.run().expect("single diagnostic caller");
+    let cancellation = if probe {
+        let Ok(cancellation) = crate::cancellation::Cancellation::install() else {
+            eprintln!("doctor: signal-monitor-unavailable");
+            return ExitCode::from(1);
+        };
+        Some(cancellation)
+    } else {
+        None
+    };
+    let mut session =
+        DiagnosticSession::new(Profile::parse(route).expect("validated route"), probe);
+    if let Some(cancellation) = &cancellation {
+        session = session.with_stop(cancellation.stop.clone());
+    }
+    let mut report = session
+        .run()
+        .expect("single diagnostic caller")
+        .as_ref()
+        .clone();
+    // Do not print before ownership recovery: even a closed stdout can panic.
+    session.wait_for_cleanup(|| {
+        // A closed diagnostic stream must not panic and discard the owner.
+        let _ = writeln!(std::io::stderr().lock(), "doctor: cleanup is unconfirmed; retaining the tool owner and retrying. Ctrl+C requests Stop but does not abandon cleanup.");
+    });
+    if probe {
+        // Preserve the original failed probe and ready=false, but describe the
+        // actual cleanup state at publication rather than its historical state.
+        report.cleanup_status = "confirmed";
+    }
     if as_json {
         println!(
             "{}",
-            serde_json::to_string(report.as_ref()).expect("diagnostic report")
+            serde_json::to_string(&report).expect("diagnostic report")
         );
     } else {
         println!(
