@@ -68,3 +68,5 @@ To check the committed clip without packaging:
 ```sh
 python3 crates/drmr/tests/fixtures/bbb/regression.py --verify-fixture
 ```
+
+The finite progressive two-key CENC fixtures and their offline generation instructions are documented in [CENC.md](CENC.md). Their public keys are test data only.

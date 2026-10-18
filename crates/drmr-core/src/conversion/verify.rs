@@ -48,7 +48,7 @@ pub(super) struct StreamView<'a> {
     input: &'a Path,
     metadata: &'a Path,
     index: usize,
-    key: Option<&'a ContentKey>,
+    key: Option<super::keys::ProbeKeys<'a>>,
 }
 impl<'a> StreamView<'a> {
     pub fn new(input: &'a Path, index: usize, key: Option<&'a ContentKey>) -> Self {
@@ -56,8 +56,12 @@ impl<'a> StreamView<'a> {
             input,
             metadata: input,
             index,
-            key,
+            key: key.map(super::keys::ProbeKeys::One),
         }
+    }
+    pub fn with_all_keys(mut self, keys: &'a super::InputKeys) -> Self {
+        self.key = Some(super::keys::ProbeKeys::All(keys));
+        self
     }
     pub fn with_metadata(mut self, metadata: &'a Path) -> Self {
         self.metadata = metadata;
@@ -93,29 +97,40 @@ impl Backend {
         source: StreamView<'_>,
         result: StreamView<'_>,
     ) -> Result<VerificationReport, ConversionError> {
-        let source_profile = self.profile_stream(source.input, source.index, source.key)?;
-        let result_profile = self.profile_stream(result.input, result.index, result.key)?;
+        let source_profile = self.profile_stream_keys(source.input, source.index, source.key)?;
+        let result_profile = self.profile_stream_keys(result.input, result.index, result.key)?;
         let source_metadata = if source.metadata == source.input {
             source_profile.clone()
         } else {
-            self.profile_stream(source.metadata, source.index, source.key)?
+            self.profile_stream_keys(source.metadata, source.index, source.key)?
         };
         let result_metadata = if result.metadata == result.input {
             result_profile.clone()
         } else {
-            self.profile_stream(result.metadata, result.index, result.key)?
+            self.profile_stream_keys(result.metadata, result.index, result.key)?
         };
+        for (view, profile) in [(source, &source_profile), (result, &result_profile)] {
+            if matches!(view.key, Some(super::keys::ProbeKeys::All(_))) {
+                let counts = super::cenc::sample_counts(&super::audio::movie(view.input)?)?;
+                let actual = profile["nb_read_packets"]
+                    .as_str()
+                    .and_then(|n| n.parse::<u32>().ok());
+                if actual != counts.get(view.index).copied() {
+                    return Err(ConversionError("progressive-cenc-profile-not-supported"));
+                }
+            }
+        }
         let stream_metadata_equal = source_metadata == result_metadata;
         let packet_timing_equal = source_profile["time_base"] == result_profile["time_base"]
-            && self.packets_stream(source.input, source.index, source.key)?
-                == self.packets_stream(result.input, result.index, result.key)?
+            && self.packets_stream_keys(source.input, source.index, source.key)?
+                == self.packets_stream_keys(result.input, result.index, result.key)?
             && super::progressive::presentation_windows_equal(source.input, result.input)?;
         let packet_payloads_equal =
-            self.hash_stream(source.input, source.index, true, source.key)?
-                == self.hash_stream(result.input, result.index, true, result.key)?;
+            self.hash_stream_keys(source.input, source.index, true, source.key)?
+                == self.hash_stream_keys(result.input, result.index, true, result.key)?;
         let decoded_content_equal =
-            self.hash_stream(source.input, source.index, false, source.key)?
-                == self.hash_stream(result.input, result.index, false, result.key)?;
+            self.hash_stream_keys(source.input, source.index, false, source.key)?
+                == self.hash_stream_keys(result.input, result.index, false, result.key)?;
         let passed = stream_metadata_equal
             && packet_payloads_equal
             && decoded_content_equal

@@ -12,6 +12,8 @@ const UNSUPPORTED: ConversionError = ConversionError("audio-presentation-edit-no
 pub(super) struct Movie {
     pub bytes: Vec<u8>,
     pub fragmented: bool,
+    pub offset: u64,
+    pub outside_protection: bool,
 }
 pub(super) fn movie(path: &Path) -> Result<Movie, ConversionError> {
     let mut file = File::open(path).map_err(|_| ConversionError("media-metadata-unreadable"))?;
@@ -22,10 +24,12 @@ pub(super) fn movie(path: &Path) -> Result<Movie, ConversionError> {
     let mut position = 0;
     let mut movie: Option<Movie> = None;
     let mut fragmented = false;
+    let mut outside_protection = false;
     for _ in 0..100_000 {
         if position == length {
             if let Some(movie) = &mut movie {
                 movie.fragmented = fragmented;
+                movie.outside_protection = outside_protection;
             }
             return movie.ok_or(ConversionError("mp4-initialization-missing"));
         }
@@ -49,6 +53,23 @@ pub(super) fn movie(path: &Path) -> Result<Movie, ConversionError> {
             return Err(ConversionError("invalid-mp4-box"));
         }
         fragmented |= &header[4..] == b"moof";
+        outside_protection |= matches!(
+            &header[4..],
+            b"pssh"
+                | b"uuid"
+                | b"senc"
+                | b"saiz"
+                | b"saio"
+                | b"sinf"
+                | b"frma"
+                | b"schm"
+                | b"schi"
+                | b"tenc"
+                | b"encv"
+                | b"enca"
+                | b"sgpd"
+                | b"sbgp"
+        );
         if &header[4..] == b"emsg" {
             return Err(ConversionError("inband-events-not-supported"));
         }
@@ -73,7 +94,12 @@ pub(super) fn movie(path: &Path) -> Result<Movie, ConversionError> {
                         .to_be_bytes(),
                 );
             }
-            movie = Some(Movie { bytes, fragmented });
+            movie = Some(Movie {
+                bytes,
+                fragmented,
+                offset: position,
+                outside_protection,
+            });
         }
         position += size;
         file.seek(SeekFrom::Start(position))

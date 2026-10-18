@@ -16,6 +16,7 @@ mod packets;
 pub use aes128::{
     Aes128Key, HlsInputKeys, HlsOutputKey, SegmentIv, decrypt_segment, encrypt_segment,
 };
+mod cenc;
 mod files;
 mod hls;
 mod keys;
@@ -187,9 +188,12 @@ impl Converter {
         copy_private(input, &snapshot)?;
         let inspected =
             inspection::inspect(&snapshot).map_err(|_| ConversionError("invalid-input-media"))?;
+        if inspected.format != InputFormat::Mp4 {
+            return Err(ConversionError("input-format-not-supported"));
+        }
         if target == TargetProtection::Clear
-            && inspected.protection == Protection::Clear
-            && let Some(report) = self.progressive_mp4(&snapshot, &destination, &inspected)?
+            && let Some(report) =
+                self.progressive_mp4(&snapshot, &destination, &inspected, input_keys)?
         {
             return Ok(report);
         }
@@ -255,6 +259,25 @@ impl Converter {
         let result = workspace.path().join("result.mp4");
         copy_private(input, &source)?;
         copy_private(output, &result)?;
+        let inspected =
+            inspection::inspect(&source).map_err(|_| ConversionError("invalid-input-media"))?;
+        if inspected.format != InputFormat::Mp4 {
+            return Err(ConversionError("input-format-not-supported"));
+        }
+        let result_report =
+            inspection::inspect(&result).map_err(|_| ConversionError("invalid-input-media"))?;
+        if result_report.format != InputFormat::Mp4 {
+            return Err(ConversionError("input-format-not-supported"));
+        }
+        if result_report.protection == Protection::Clear
+            && inspected.tracks.len() > 1
+            && progressive::verification_input(&source, &inspected, input_keys)?
+        {
+            if result_report.tracks.len() != inspected.tracks.len() {
+                return Err(ConversionError("output-protection-mismatch"));
+            }
+            return self.verify_progressive(&source, &result, &inspected, input_keys);
+        }
         let source_report = validate(&source, input_keys)?;
         let result_report = validate(&result, output_keys)?;
         self.backend

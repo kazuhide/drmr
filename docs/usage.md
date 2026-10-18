@@ -32,7 +32,7 @@ drmr verify protected-dash/manifest.mpd --source source.mpd --keys-file keys.jso
 
 `clear`, `cenc`, and `cbcs` can be written to DASH; `clear` and `cbcs` can be written to fragmented MP4 HLS. HLS `AES-128` encrypts complete HLS resources and requires `--format hls`. A single-track MP4 can also be written as `clear`, `cenc`, or `cbcs`.
 
-A qualified clear MP4 containing one AAC-LC audio track and optional H.264 video can be copied into one clear progressive MP4 while preserving its finite audio end edit. Both tracks must come from the same original presentation.
+A qualified clear or counter-mode encrypted (`cenc`) MP4 containing one AAC-LC audio track and optional H.264 video can be copied into one clear progressive MP4 while preserving its finite audio end edit. Both tracks must come from the same original presentation. Encrypted input requires every track key in the input key section; this finite profile produces clear output and refuses DRM initialization headers (PSSH).
 
 A narrow local MPEG transport stream input profile can produce clear, `cbcs`, or AES-128 fragmented MP4 HLS. Other multiplexed MP4 output, live input, transport stream output, and unrestricted DASH/HLS profiles remain unsupported. See [conversion support](conversion-support.md) for the tested routes and [processing and verification](media-processing.md) for timing limits.
 

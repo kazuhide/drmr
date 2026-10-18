@@ -339,16 +339,76 @@ pub(super) fn presentation_windows_equal(
         .ok_or(WINDOW_UNSUPPORTED)?;
     Ok(source.windows == result.windows)
 }
+/// Return whether this is a qualified finite whole-file input; never normalize unsupported encryption.
+pub(super) fn validate_input(
+    source: &Path,
+    input: &Inspection,
+    keys: &super::InputKeys,
+) -> Result<bool, ConversionError> {
+    if !input.tracks.iter().any(|t| t.kind == TrackKind::Audio) {
+        return Ok(false);
+    }
+    let movie = audio::movie(source)?;
+    let protected = input
+        .tracks
+        .iter()
+        .any(|t| t.protection != Protection::Clear);
+    let finite = layout(&movie, input)
+        .map_err(|error| {
+            if protected {
+                ConversionError("progressive-cenc-profile-not-supported")
+            } else {
+                error
+            }
+        })?
+        .is_some();
+    if finite && protected {
+        super::cenc::validate(&movie, input, keys)?;
+    }
+    Ok(finite)
+}
+/// Verification compares existing media without imposing conversion's DRM/auxiliary policy.
+/// A finite whole-file input still needs all declared role keys and exact presentation metadata.
+pub(super) fn verification_input(
+    source: &Path,
+    input: &Inspection,
+    keys: &super::InputKeys,
+) -> Result<bool, ConversionError> {
+    if !matches!(input.protection, Protection::Clear | Protection::Cenc) || !profile_shape(input) {
+        return Ok(false);
+    }
+    if layout(&audio::movie(source)?, input)
+        .map_err(|_| WINDOW_UNSUPPORTED)?
+        .is_none()
+    {
+        return Ok(false);
+    }
+    if input.protection == Protection::Cenc
+        && input
+            .tracks
+            .iter()
+            .any(|t| t.key_ids.len() != 1 || !keys.contains(&t.key_ids[0]))
+    {
+        return Err(ConversionError("input-key-required"));
+    }
+    Ok(true)
+}
 impl Converter {
     pub(super) fn progressive_mp4(
         &self,
         source: &Path,
         destination: &Path,
         input: &Inspection,
+        keys: &super::InputKeys,
     ) -> Result<Option<ConversionReport>, ConversionError> {
         if !input.tracks.iter().any(|t| t.kind == TrackKind::Audio) {
             return Ok(None);
         }
+        if !validate_input(source, input, keys)? {
+            return Ok(None);
+        }
+        let source_keys =
+            (input.protection != Protection::Clear).then_some(super::keys::ProbeKeys::All(keys));
         let source_layout = {
             let movie = audio::movie(source)?;
             let Some(layout) = layout(&movie, input)? else {
@@ -357,7 +417,7 @@ impl Converter {
             layout
         };
         audio::validate_sample_groups(source)?;
-        self.progressive_codecs(source, input)?;
+        self.progressive_codecs(source, input, source_keys)?;
         let mut workload = self
             .backend
             .runner
@@ -367,7 +427,13 @@ impl Converter {
         self.backend.runner.register_workload(workload);
         let stage = super::workspace()?;
         let candidate = stage.path().join("progressive.mp4");
-        self.mux_progressive(source, &candidate, input.tracks.len(), &source_layout)?;
+        self.mux_progressive(
+            source,
+            &candidate,
+            input.tracks.len(),
+            &source_layout,
+            source_keys,
+        )?;
         super::private_file_mode(&candidate)?;
         let output = crate::inspection::inspect(&candidate)
             .map_err(|_| ConversionError("invalid-output-media"))?;
@@ -381,12 +447,40 @@ impl Converter {
         {
             return Err(ConversionError("output-protection-mismatch"));
         }
+        super::cenc::clear(&audio::movie(&candidate)?)?;
         if layout(&audio::movie(&candidate)?, &output)? != Some(source_layout) {
             return Err(ConversionError("invalid-output-media"));
         }
+        let verification = self.verify_progressive(source, &candidate, input, keys)?;
+        if !verification.passed {
+            return Err(ConversionError("round-trip-verification-failed"));
+        }
+        self.publish(&candidate, destination)?;
+        Ok(Some(ConversionReport {
+            schema_version: 1,
+            input: input.clone(),
+            output,
+            verification,
+        }))
+    }
+    pub(super) fn verify_progressive(
+        &self,
+        source: &Path,
+        candidate: &Path,
+        input: &Inspection,
+        keys: &super::InputKeys,
+    ) -> Result<VerificationReport, ConversionError> {
         let checks = self.run_tracks(input.tracks.len(), |index| {
-            self.backend
-                .verify_streams(source, index, &candidate, index, None, None)
+            let source_view = super::verify::StreamView::new(source, index, None);
+            let source_view = if input.protection == Protection::Clear {
+                source_view
+            } else {
+                source_view.with_all_keys(keys)
+            };
+            self.backend.verify_views(
+                source_view,
+                super::verify::StreamView::new(candidate, index, None),
+            )
         })?;
         let mut combined = VerificationChecks {
             stream_metadata: super::CheckOutcome::Pass,
@@ -395,9 +489,6 @@ impl Converter {
             decoded_content_equal: true,
         };
         for check in checks {
-            if !check.passed {
-                return Err(ConversionError("round-trip-verification-failed"));
-            }
             combined
                 .stream_metadata
                 .include(check.checks.stream_metadata);
@@ -405,23 +496,41 @@ impl Converter {
             combined.packet_timing_equal &= check.checks.packet_timing_equal;
             combined.decoded_content_equal &= check.checks.decoded_content_equal;
         }
-        self.publish(&candidate, destination)?;
-        Ok(Some(ConversionReport {
+        Ok(VerificationReport {
             schema_version: 1,
-            input: input.clone(),
-            output,
-            verification: VerificationReport {
-                schema_version: 1,
-                passed: true,
-                media_verified: true,
-                checks: combined,
-                license_playback_verified: false,
-            },
-        }))
+            passed: combined.stream_metadata.is_pass()
+                && combined.packet_payloads_equal
+                && combined.packet_timing_equal
+                && combined.decoded_content_equal,
+            media_verified: combined.stream_metadata.is_pass()
+                && combined.packet_payloads_equal
+                && combined.packet_timing_equal
+                && combined.decoded_content_equal,
+            checks: combined,
+            license_playback_verified: false,
+        })
     }
-    fn progressive_codecs(&self, source: &Path, input: &Inspection) -> Result<(), ConversionError> {
+    fn progressive_codecs(
+        &self,
+        source: &Path,
+        input: &Inspection,
+        keys: Option<super::keys::ProbeKeys<'_>>,
+    ) -> Result<(), ConversionError> {
+        let sample_counts = if keys.is_some() {
+            Some(super::cenc::sample_counts(&audio::movie(source)?)?)
+        } else {
+            None
+        };
         for (index, track) in input.tracks.iter().enumerate() {
-            let profile = self.backend.profile_stream(source, index, None)?;
+            let profile = self.backend.profile_stream_keys(source, index, keys)?;
+            if let Some(counts) = &sample_counts {
+                let count = profile["nb_read_packets"]
+                    .as_str()
+                    .and_then(|n| n.parse::<u32>().ok());
+                if count != counts.get(index).copied() {
+                    return Err(ConversionError("progressive-cenc-profile-not-supported"));
+                }
+            }
             let expected = if track.kind == TrackKind::Audio {
                 "aac"
             } else {
@@ -432,8 +541,8 @@ impl Converter {
             }
         }
         // The AAC profile is queried separately so the established metadata comparison stays unchanged.
-        let bytes = self.backend.run(
-            &[
+        let keyed = super::keys::KeyedArguments::new(
+            vec![
                 self.backend.ffprobe.clone(),
                 "-v".into(),
                 "error".into(),
@@ -443,9 +552,9 @@ impl Converter {
                 "json".into(),
                 super::files::tool_path(source)?,
             ],
-            "ffprobe",
-            &[],
-        )?;
+            keys,
+        );
+        let bytes = self.backend.run(&keyed.argv, "ffprobe", &keyed.secrets())?;
         if bytes.len() > 64 * 1024 {
             return Err(UNSUPPORTED);
         }
@@ -473,6 +582,7 @@ impl Converter {
         candidate: &Path,
         tracks: usize,
         source_layout: &Layout,
+        keys: Option<super::keys::ProbeKeys<'_>>,
     ) -> Result<(), ConversionError> {
         let mut argv = vec![
             self.backend.ffmpeg.clone(),
@@ -509,7 +619,8 @@ impl Converter {
             argv.extend(["-video_track_timescale".into(), scale.to_string()]);
         }
         argv.push(super::files::tool_path(candidate)?);
-        self.backend.run(&argv, "ffmpeg", &[])?;
+        let keyed = super::keys::KeyedArguments::new(argv, keys);
+        self.backend.run(&keyed.argv, "ffmpeg", &keyed.secrets())?;
         Ok(())
     }
 }

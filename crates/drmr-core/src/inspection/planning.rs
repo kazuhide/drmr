@@ -107,7 +107,8 @@ fn progressive_candidate(input: &Inspection, target: TargetProtection) -> bool {
         && input
             .tracks
             .iter()
-            .all(|track| track.protection == Protection::Clear)
+            .all(|track| track.protection == input.protection)
+        && matches!(input.protection, Protection::Clear | Protection::Cenc)
         && input
             .tracks
             .iter()

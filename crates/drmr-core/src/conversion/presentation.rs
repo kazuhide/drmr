@@ -27,6 +27,7 @@ pub struct TrackConversionRequest<'a> {
     pub hls_output_key: Option<&'a HlsOutputKey>,
 }
 struct Prepared {
+    source_dictionary: bool,
     source: PathBuf,
     media: PathBuf,
     index: usize,
@@ -410,16 +411,37 @@ fn validate_request(request: &TrackConversionRequest<'_>) -> Result<(), Conversi
     }
     Ok(())
 }
+#[derive(Clone, Copy)]
+enum Preparation {
+    Conversion,
+    Verification,
+}
 fn prepare(
     source: &Path,
     index: usize,
     kind: TrackKind,
     keys: &InputKeys,
 ) -> Result<Prepared, ConversionError> {
+    prepare_for(source, index, kind, keys, Preparation::Conversion)
+}
+fn prepare_for(
+    source: &Path,
+    index: usize,
+    kind: TrackKind,
+    keys: &InputKeys,
+    purpose: Preparation,
+) -> Result<Prepared, ConversionError> {
     let report = inspection::inspect(source).map_err(|_| ConversionError("invalid-input-media"))?;
     if report.format != InputFormat::Mp4 || report.tracks.len() > 64 {
         return Err(ConversionError("input-format-not-supported"));
     }
+    let source_dictionary = report.protection == Protection::Cenc
+        && match purpose {
+            Preparation::Conversion => super::progressive::validate_input(source, &report, keys)?,
+            Preparation::Verification => {
+                super::progressive::verification_input(source, &report, keys)?
+            }
+        };
     let track = report
         .tracks
         .get(index)
@@ -450,6 +472,7 @@ fn prepare(
         Vec::new(),
     );
     Ok(Prepared {
+        source_dictionary,
         source: source.into(),
         media: source.into(),
         index,
@@ -605,11 +628,21 @@ impl Converter {
                     },
                 );
             }
+            let a_view = StreamView::new(&a.source, a.index, key_for(a, source_keys))
+                .with_metadata(&a.media);
+            let b_view = StreamView::new(&b.source, b.index, key_for(b, result_keys))
+                .with_metadata(&b.media);
             self.backend.verify_views(
-                StreamView::new(&a.source, a.index, key_for(a, source_keys))
-                    .with_metadata(&a.media),
-                StreamView::new(&b.source, b.index, key_for(b, result_keys))
-                    .with_metadata(&b.media),
+                if a.source_dictionary {
+                    a_view.with_all_keys(source_keys)
+                } else {
+                    a_view
+                },
+                if b.source_dictionary {
+                    b_view.with_all_keys(result_keys)
+                } else {
+                    b_view
+                },
             )
         })?;
         for check in verified_tracks {
@@ -664,7 +697,15 @@ fn prepare_presentation(
                 .tracks
                 .iter()
                 .enumerate()
-                .map(|(index, track)| prepare(&path, index, track.kind, input.input_keys))
+                .map(|(index, track)| {
+                    prepare_for(
+                        &path,
+                        index,
+                        track.kind,
+                        input.input_keys,
+                        Preparation::Verification,
+                    )
+                })
                 .collect()
         }
         InputFormat::Hls => {
