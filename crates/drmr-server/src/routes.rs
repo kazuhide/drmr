@@ -726,39 +726,12 @@ fn api_assets(app: &Arc<App>, asset_id: &str) -> Answer {
     let Some(entry) = catalog::get_catalog_entry(&app.config.catalog_root, asset_id)? else {
         return Ok(Reply::json_error(404, "unknown asset_id"));
     };
-    let new_rel = local_manifest_rel(&app.config.output_root, asset_id)?;
-    let new_mpd = match &new_rel {
-        Some(rel) => Some(
-            pyutil::resolve(&app.config.output_root)
-                .map_err(|_| RouteError::Internal)?
-                .join(rel),
-        ),
-        None => None,
-    };
     let old = analyze_manifest(&entry.mpd_path)?;
-    let new = match &new_mpd {
-        Some(path) => analyze_manifest(path)?,
-        None => None,
-    };
     let shapes = rendition_shapes(&entry);
+    let new = asset_output_metadata(app, asset_id, &shapes)?;
     let mut renditions = Map::new();
     renditions.insert("old".into(), renditions_value(old.as_deref(), &shapes));
-    renditions.insert(
-        "new".into(),
-        if new_mpd.is_some() {
-            renditions_value(new.as_deref(), &shapes)
-        } else {
-            Value::Null
-        },
-    );
-    let (playable, readiness) = app
-        .manager
-        .catalog_output(asset_id, &app.config.output_root)
-        .and_then(|generation| generation.manifest_and_description().ok())
-        .map_or_else(
-            || (None, app.manager.unverified_readiness(asset_id)),
-            |(manifest, readiness)| (Some(format!("{asset_id}/{manifest}")), readiness),
-        );
+    renditions.insert("new".into(), new.renditions);
     let mut answer = Map::new();
     answer.insert(
         "old_url".into(),
@@ -766,13 +739,61 @@ fn api_assets(app: &Arc<App>, asset_id: &str) -> Answer {
     );
     answer.insert(
         "new_url".into(),
-        playable.map_or(Value::Null, |rel| Value::from(format!("/output/{rel}"))),
+        new.url
+            .map_or(Value::Null, |rel| Value::from(format!("/output/{rel}"))),
     );
-    answer.insert("output_readiness".into(), readiness);
+    answer.insert("output_readiness".into(), new.readiness);
     answer.insert("old_summary".into(), summary_value(old.as_deref()));
-    answer.insert("new_summary".into(), summary_value(new.as_deref()));
+    answer.insert("new_summary".into(), new.summary);
     answer.insert("renditions".into(), Value::Object(renditions));
     Ok(Reply::json(200, &Value::Object(answer)))
+}
+
+struct AssetOutputMetadata {
+    url: Option<String>,
+    readiness: Value,
+    summary: Value,
+    renditions: Value,
+}
+
+fn asset_output_metadata(
+    app: &Arc<App>,
+    asset_id: &str,
+    shapes: &HashMap<String, Rendition>,
+) -> Result<AssetOutputMetadata, RouteError> {
+    if let Some(generation) = app
+        .manager
+        .catalog_output(asset_id, &app.config.output_root)
+        && let Ok((analyzed, readiness)) = generation.metadata(|manifest| {
+            let path = app.config.output_root.join(asset_id).join(manifest);
+            analyze_manifest(&path).map(|rows| (rows, format!("{asset_id}/{manifest}")))
+        })
+    {
+        let (rows, url) = analyzed?;
+        return Ok(AssetOutputMetadata {
+            url: Some(url),
+            readiness,
+            summary: summary_value(rows.as_deref()),
+            renditions: renditions_value(rows.as_deref(), shapes),
+        });
+    }
+    // Unqualified files remain diagnostic only. Never promote this separately
+    // read metadata by looking up a newer authority after the read.
+    let relative = local_manifest_rel(&app.config.output_root, asset_id)?;
+    let rows = match &relative {
+        Some(relative) => analyze_manifest(&app.config.output_root.join(relative))?,
+        None => None,
+    };
+    Ok(AssetOutputMetadata {
+        url: None,
+        readiness: app.manager.unverified_readiness(asset_id),
+        summary: summary_value(rows.as_deref()),
+        renditions: if relative.is_some() {
+            renditions_value(rows.as_deref(), shapes)
+        } else {
+            Value::Null
+        },
+    })
 }
 
 fn rendition_shapes(entry: &CatalogEntry) -> HashMap<String, Rendition> {
@@ -1428,6 +1449,11 @@ mod generation_tests {
         assert!(owner.description().is_err());
         assert!(
             owner
+                .metadata(|_| panic!("an invalidated owner must not inspect newer metadata"))
+                .is_err()
+        );
+        assert!(
+            owner
                 .report(f.media.parent().unwrap().parent().unwrap())
                 .is_err()
         );
@@ -1438,5 +1464,49 @@ mod generation_tests {
         assert_eq!(current["state"], "unverified");
         assert_eq!(current["job_id"], next);
         assert!(catalog_report_body(&f.app, "asset").is_err());
+    }
+
+    #[test]
+    fn asset_metadata_uses_the_receipted_manifest_and_keeps_fallback_unverified() {
+        let f = fixture();
+        let entry = f.app.config.catalog_root.join("asset");
+        native::create_private_dir_all(&entry).unwrap();
+        for (name, bytes) in [
+            ("source.mpd", &b"<MPD/>"[..]),
+            ("source.m3u8", &b"#EXTM3U\n"[..]),
+            ("keys.env", &b"DRM_KID=000102030405060708090a0b0c0d0e0f\nDRM_KEY=101112131415161718191a1b1c1d1e1f\nDRM_IV=202122232425262728292a2b2c2d2e2f\n"[..]),
+            ("asset.json", &br#"{"asset_id":"asset","label":"Test","mpd_path":"source.mpd","hls_master_path":"source.m3u8","keys_file":"keys.env"}"#[..]),
+        ] {
+            native::create_private_new(&entry.join(name)).unwrap().write_all(bytes).unwrap();
+        }
+        let stale = f
+            .app
+            .config
+            .output_root
+            .join("asset/manifests/local/000-old.mpd");
+        native::create_media_new(&stale).unwrap().write_all(br#"<MPD><Period><AdaptationSet mimeType="video/mp4" contentType="video"><ContentProtection schemeIdUri="urn:mpeg:dash:mp4protection:2011" value="cenc"/><Representation id="old" codecs="avc1.64001f" bandwidth="777"/></AdaptationSet></Period></MPD>"#).unwrap();
+        let details = |reply: Reply| {
+            let Body::Bytes(bytes) = reply.body else {
+                panic!("asset metadata must be JSON bytes")
+            };
+            serde_json::from_slice::<Value>(&bytes).unwrap()
+        };
+        let qualified = details(api_assets(&f.app, "asset").unwrap());
+        assert_eq!(qualified["output_readiness"]["state"], "verified");
+        assert_eq!(
+            qualified["new_url"],
+            "/output/asset/manifests/local/source.mpd"
+        );
+        assert!(
+            qualified["new_summary"].is_null(),
+            "an unrelated older MPD must not supply a verified generation's summary"
+        );
+        assert_eq!(qualified["renditions"]["new"], serde_json::json!([]));
+        next_attempt(&f.app);
+        let diagnostic = details(api_assets(&f.app, "asset").unwrap());
+        assert_eq!(diagnostic["output_readiness"]["state"], "unverified");
+        assert!(diagnostic["new_url"].is_null());
+        assert_eq!(diagnostic["new_summary"]["protection_scheme"], "cenc");
+        assert_eq!(diagnostic["renditions"]["new"][0]["rep_id"], "old");
     }
 }

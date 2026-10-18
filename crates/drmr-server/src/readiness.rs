@@ -56,8 +56,8 @@ impl OutputGeneration {
         json!({"state":"verified", "reason":"qualified-generation", "job_id":self.job_id})
     }
 
-    pub(crate) fn manifest_and_description(&self) -> io::Result<(String, Value)> {
-        self.read(|| Ok((self.manifest.clone(), self.public_value())))
+    pub(crate) fn metadata<T>(&self, inspect: impl FnOnce(&str) -> T) -> io::Result<(T, Value)> {
+        self.read(|| Ok((inspect(&self.manifest), self.public_value())))
     }
 
     pub(crate) fn report(&self, root: &Path) -> io::Result<(Value, Value)> {
