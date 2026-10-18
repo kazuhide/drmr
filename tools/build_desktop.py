@@ -2,15 +2,17 @@
 """Build the native host and its matching CLI without a frontend build tool."""
 
 import argparse
+import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import plistlib
 import shutil
 import subprocess
 import sys
 import tarfile
 import zipfile
+from urllib.parse import urlsplit
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -23,12 +25,64 @@ def run(arguments, env, capture=False):
                           text=capture)
 
 
-def collect_notices(metadata, destination):
+def is_notice(path):
+    """Recognize notice documents without mistaking source modules for licenses."""
+    return (path.is_file() and
+            path.name.upper().startswith(("LICENSE", "LICENCE", "COPYING", "COPYRIGHT", "NOTICE", "UNLICENSE")) and
+            path.suffix.lower() not in (".rs", ".c", ".h", ".py", ".js", ".ts", ".toml", ".yml", ".yaml"))
+
+
+def pinned_notices(package):
+    """Resolve an exact publisher-version fallback, never a metadata-only grant."""
+    missing = "dependency-license-missing: " + package["name"]
+    notice_root = ROOT / "tools" / "desktop-licenses"
+    manifest = notice_root / "manifest.json"
+    if not manifest.is_file():
+        raise ValueError(missing)
+    data = json.loads(manifest.read_text(encoding="utf-8"))
+    if data.get("schema_version") != 1:
+        raise ValueError("dependency-license-manifest-invalid")
+    matches = [entry for entry in data["packages"]
+               if (entry["name"], entry["version"]) == (package["name"], package["version"])]
+    if len(matches) != 1:
+        raise ValueError(missing)
+    entry = matches[0]
+    home = Path(package["manifest_path"]).parent
+    vcs = home / ".cargo_vcs_info.json"
+    revision = json.loads(vcs.read_text(encoding="utf-8"))["git"]["sha1"] if vcs.is_file() else None
+    if (entry["license"] != package.get("license") or
+            entry["repository"] != package.get("repository") or
+            entry["revision"] != revision or entry["selected_license"] not in entry["license"].split(" OR ") or not entry["notices"]):
+        raise ValueError("dependency-license-provenance-mismatch: " + package["name"])
+    files = []
+    for notice in entry["notices"]:
+        relative = PurePosixPath(notice["file"])
+        if (not relative.parts or relative.is_absolute() or ".." in relative.parts or
+                "\\" in notice["file"] or ":" in notice["file"]):
+            raise ValueError("dependency-license-path-invalid")
+        path = notice_root.joinpath(*relative.parts)
+        if path.is_symlink() or not path.resolve().is_relative_to(notice_root.resolve()):
+            raise ValueError("dependency-license-path-invalid")
+        contents = path.read_bytes()
+        url = urlsplit(notice["source_url"])
+        if not contents or url.scheme != "https" or not url.hostname or url.username or url.password:
+            raise ValueError("dependency-license-provenance-invalid")
+        if hashlib.sha256(contents).hexdigest() != notice["sha256"]:
+            raise ValueError("dependency-license-checksum-mismatch: " + package["name"])
+        files.append(path)
+    if len({path.name for path in files}) != len(files):
+        raise ValueError("dependency-license-filename-collision")
+    return files, {key: entry[key] for key in ("selected_license", "repository", "revision", "notices")}
+
+
+def collect_notices(metadata, destination, roots=("drmr", "drmr-desktop"), replace=False):
     """Retain package notices for the host, bundled CLI and their dependencies."""
     packages = {package["id"]: package for package in metadata["packages"]}
     nodes = {node["id"]: node for node in metadata["resolve"]["nodes"]}
     pending = [key for key, package in packages.items()
-               if package["name"] in ("drmr", "drmr-desktop")]
+               if package["name"] in roots]
+    if {packages[key]["name"] for key in pending} != set(roots):
+        raise ValueError("dependency-license-root-missing")
     reached = set()
     while pending:
         key = pending.pop()
@@ -39,6 +93,8 @@ def collect_notices(metadata, destination):
             if any(kind["kind"] != "dev" for kind in dependency["dep_kinds"]):
                 pending.append(dependency["pkg"])
     if destination.exists():
+        if not replace:
+            raise ValueError("dependency-notice-destination-exists")
         shutil.rmtree(destination)
     destination.mkdir(parents=True)
     inventory = []
@@ -46,32 +102,54 @@ def collect_notices(metadata, destination):
         package = packages[key]
         home = Path(package["manifest_path"]).parent
         files = set()
-        for pattern in ("LICENSE*", "LICENCE*", "COPYING*", "COPYRIGHT*", "NOTICE*", "UNLICENSE*"):
-            files.update(path for path in home.glob(pattern) if path.is_file())
-        if package.get("license_file"):
-            files.add(home / package["license_file"])
+        license_texts = set()
+        extra_notices = set()
         if package["name"].startswith("drmr"):
             files.add(ROOT / "LICENSE")
-        if not files and not package.get("license"):
-            raise ValueError("dependency-license-missing: " + package["name"])
+            license_texts.update(files)
+        else:
+            files.update(path for path in home.iterdir() if is_notice(path))
+            license_texts.update(path for path in files if path.name.upper().startswith(("LICENSE", "LICENCE", "COPYING", "UNLICENSE")))
+            extra_notices.update(path for path in home.rglob("*") if is_notice(path))
+            if package.get("license_file"):
+                files.add(home / package["license_file"])
+                license_texts.add(home / package["license_file"])
+        provenance = None
+        fallback = []
+        if not license_texts:
+            fallback, provenance = pinned_notices(package)
+            files.update(fallback)
+        files.update(extra_notices)
         name = package["name"] + "-" + package["version"]
         output = destination / name
         output.mkdir()
+        retained = []
         for source in sorted(files):
-            shutil.copyfile(source, output / source.name)
+            relative = source.name if source in fallback or not source.is_relative_to(home) else source.relative_to(home)
+            target = output / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, target)
+            retained.append(str(Path(relative).as_posix()))
         declaration = {"name": package["name"], "version": package["version"],
                        "license": package.get("license"), "authors": package["authors"],
                        "repository": package.get("repository"),
-                       "notices": sorted(path.name for path in files)}
+                       "notices": sorted(retained)}
         if (package.get("source") or "").startswith("registry+"):
             declaration["source_archive"] = ("https://static.crates.io/crates/" + package["name"]
                                               + "/" + name + ".crate")
-        if not files:
-            # Some publishers provide SPDX metadata without a separate license file.
-            declaration["notice_status"] = "publisher-metadata-only"
-            (output / "declaration.json").write_text(json.dumps(declaration, indent=2) + "\n", encoding="utf-8")
-        else:
-            declaration["notice_status"] = "publisher-notices-retained"
+        if "MPL-2.0" in (package.get("license") or ""):
+            if "source_archive" not in declaration:
+                raise ValueError("dependency-source-offer-missing: " + package["name"])
+            source_notice = ("The complete, unmodified source for " + name + " is available at:\n" +
+                             declaration["source_archive"] + "\n\nLicense declaration: " + package["license"] +
+                             "\nMozilla Public License 2.0: https://mozilla.org/MPL/2.0/\n")
+            if provenance:
+                source_notice += "Publisher revision: " + provenance["revision"] + "\n"
+            (output / "SOURCE.txt").write_text(source_notice, encoding="utf-8")
+            declaration["source_availability_notice"] = "SOURCE.txt"
+        declaration["notice_status"] = "publisher-pinned-notices" if provenance else "publisher-notices-retained"
+        if provenance:
+            declaration["pinned_provenance"] = provenance
         inventory.append(declaration)
     web_assets = ROOT / "crates" / "drmr-server" / "static"
     for source in web_assets.rglob("*"):
@@ -79,6 +157,13 @@ def collect_notices(metadata, destination):
             target = destination / "web-assets" / source.relative_to(web_assets)
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source, target)
+    # Retain the vendored notices in every CLI archive, including targets that do not link it.
+    vendored = ROOT / "vendor" / "process-wrap"
+    if vendored.is_dir():
+        target = destination / "process-wrap"
+        target.mkdir()
+        for name in ("COPYRIGHT", "LICENSE-MIT", "LICENSE-APACHE"):
+            shutil.copyfile(vendored / name, target / name)
     (destination / "inventory.json").write_text(json.dumps(inventory, indent=2) + "\n", encoding="utf-8")
 
 
@@ -160,7 +245,7 @@ def main():
     stage = DESKTOP / "binaries"
     stage.mkdir(exist_ok=True)
     shutil.copy2(profile / ("drmr" + suffix), stage / ("drmr-" + host + suffix))
-    collect_notices(metadata, DESKTOP / "bundle-resources")
+    collect_notices(metadata, DESKTOP / "bundle-resources", replace=True)
     if args.prepare_only:
         print("Desktop CLI and dependency notices prepared.")
         return

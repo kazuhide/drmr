@@ -209,9 +209,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/$PACKAGE_NAME/docs"
           cp target/release/drmr README.md LICENSE "$RUNNER_TEMP/$PACKAGE_NAME/"
           cp docs/*.md "$RUNNER_TEMP/$PACKAGE_NAME/docs/"
-          mkdir -p "$RUNNER_TEMP/$PACKAGE_NAME/licenses/process-wrap"
-          cp vendor/process-wrap/COPYRIGHT vendor/process-wrap/LICENSE-MIT vendor/process-wrap/LICENSE-APACHE \
-            "$RUNNER_TEMP/$PACKAGE_NAME/licenses/process-wrap/"
+          python3 tools/collect_notices.py --output "$RUNNER_TEMP/$PACKAGE_NAME/licenses"
           tar -czf "$RUNNER_TEMP/$PACKAGE_NAME.tar.gz" -C "$RUNNER_TEMP" "$PACKAGE_NAME"
 
       - name: Upload CLI archive

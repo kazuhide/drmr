@@ -39,7 +39,9 @@ RUSTUP_TOOLCHAIN=1.95.0 python3 tools/build_desktop.py --bundle
 
 Add `--release` for optimized binaries. `CARGO_TARGET_DIR` chooses a dedicated build directory; the default is `target/desktop`.
 
-The script builds the CLI from the same checkout, stages dependency license declarations and available publisher notices, then builds the optional `desktop` feature. It creates an unsigned macOS `.app`, or a portable Windows/Linux directory, under `desktop-bundles` in the target directory, together with a `.tar.gz` or `.zip` archive that retains executable permissions. Move a previous bundle before rebuilding; it is never overwritten.
+The script builds the CLI from the same checkout, stages dependency license texts and publisher notices, then builds the optional `desktop` feature. It creates an unsigned macOS `.app`, or a portable Windows/Linux directory, under `desktop-bundles` in the target directory, together with a `.tar.gz` or `.zip` archive that retains executable permissions. Move a previous bundle before rebuilding; it is never overwritten.
+
+Published packages that omit a license text require a version-pinned publisher fallback with a verified checksum. Unresolved or changed fallbacks stop packaging. CLI archives use the same notice collector and retain embedded Web asset licenses.
 
 The host checks the bundled CLI's SHA-256 before starting the server. Keep the two binaries together. FFmpeg, Shaka Packager and Bento4 are not bundled. Keys, downloaded media and operator configuration are not included in the application bundle.
 

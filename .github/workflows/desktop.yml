@@ -10,6 +10,8 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'tools/build_desktop.py'
+      - 'tools/collect_notices.py'
+      - 'tools/desktop-licenses/**'
       - 'tools/tests/test_build_desktop.py'
       - 'docs/desktop.md'
       - '.github/workflows/desktop.yml'
@@ -76,8 +78,8 @@ jobs:
       - name: Check the native feature with Clippy
         run: cargo clippy --locked -p drmr-desktop --features desktop --all-targets -- -D warnings
 
-      - name: Check headless arguments in the native binary
-        run: cargo test --locked -p drmr-desktop --features desktop --test arguments
+      - name: Check all headless native host contracts
+        run: cargo test --locked -p drmr-desktop --features desktop
 
       - name: Build the native host and unsigned bundle
         run: python tools/build_desktop.py --release --bundle
