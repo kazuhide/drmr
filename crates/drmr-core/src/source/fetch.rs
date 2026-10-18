@@ -103,6 +103,7 @@ pub struct Fetcher {
     platform: Arc<dyn Platform>,
     stop: Stop,
     shared: Mutex<Shared>,
+    url_limit: Option<usize>,
 }
 
 impl fmt::Debug for Fetcher {
@@ -123,7 +124,20 @@ impl Fetcher {
             platform,
             stop: Stop::new(),
             shared: Mutex::new(Shared::default()),
+            url_limit: None,
         }
+    }
+
+    /// Use an enclosing command's cancellation flag; ordinary analyzers retain their own.
+    #[must_use]
+    pub fn with_stop(mut self, stop: Stop) -> Self {
+        self.stop = stop;
+        self
+    }
+
+    pub(crate) fn with_url_limit(mut self, limit: usize) -> Self {
+        self.url_limit = Some(limit);
+        self
     }
 
     /// The analysis-wide stop flag: once set, nothing new starts and a download in flight
@@ -394,6 +408,9 @@ impl Fetcher {
     ) -> Result<String, Failure> {
         let mut url = url.to_string();
         for _ in 0..HOPS {
+            if self.url_limit.is_some_and(|limit| url.len() > limit) {
+                return Err(Failure::Source(token("source-url-limit")));
+            }
             let origin = origin(&url).map_err(Failure::Source)?;
             let parts =
                 urlsplit(&url, "").map_err(|_| Failure::Source(token("source-not-allowed")))?;

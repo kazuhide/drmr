@@ -7,7 +7,7 @@ use std::{
     sync::Mutex,
 };
 
-const UNSAFE: ConversionError = ConversionError("download-directory-unsafe");
+const UNSAFE: ConversionError = ConversionError("download-destination-unsafe");
 const CLEANUP: ConversionError = ConversionError("download-cleanup-unconfirmed");
 const OUTPUT_EXISTS: ConversionError = ConversionError("output-exists-or-unsafe");
 

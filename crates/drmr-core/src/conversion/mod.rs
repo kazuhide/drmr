@@ -7,6 +7,9 @@
 //! Shaka's raw-key interface passes keys to its child process as arguments. Records and
 //! errors are redacted, but operating-system process inspection can observe those arguments.
 mod aes128;
+mod download;
+pub mod download_policy;
+pub use download::DownloadedSource;
 mod audio;
 mod backend;
 pub(crate) mod dash;
@@ -85,6 +88,7 @@ impl std::fmt::Debug for LocalTrack {
 pub struct Converter {
     backend: Backend,
     maximum_workers: Option<usize>,
+    downloaded: Option<Arc<download::Seal>>,
 }
 impl Converter {
     pub fn new(
@@ -94,6 +98,7 @@ impl Converter {
     ) -> Self {
         Self {
             maximum_workers: None,
+            downloaded: None,
             backend: Backend {
                 stop: crate::concurrency::Stop::new(),
                 runner,
@@ -118,6 +123,7 @@ impl Converter {
         let command = Self {
             backend,
             maximum_workers: self.maximum_workers,
+            downloaded: self.downloaded.clone(),
         };
         let result = execute(&command);
         (result, measurement.report())
@@ -131,12 +137,16 @@ impl Converter {
     fn publish(&self, source: &Path, destination: &Path) -> Result<(), ConversionError> {
         let _scope = self.backend.scope(measurement::Phase::Publication);
         self.backend.check_cancelled()?;
-        files::publish_file(source, destination, Some(&self.backend.stop))
+        files::publish_file_checked(source, destination, Some(&self.backend.stop), || {
+            self.check_downloaded()
+        })
     }
     fn publish_directory(&self, source: &Path, destination: &Path) -> Result<(), ConversionError> {
         let _scope = self.backend.scope(measurement::Phase::Publication);
         self.backend.check_cancelled()?;
-        files::publish_directory(source, destination, Some(&self.backend.stop))
+        files::publish_directory_checked(source, destination, Some(&self.backend.stop), || {
+            self.check_downloaded()
+        })
     }
     #[must_use]
     pub fn with_ffprobe(mut self, binary: impl Into<String>) -> Self {

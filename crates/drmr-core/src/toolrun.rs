@@ -515,6 +515,11 @@ impl ToolRunner {
         self.limiter = limiter;
         self
     }
+    /// The enclosing allocation's ceiling for bounded in-process scheduling.
+    pub(crate) fn native_capacity(&self) -> (usize, u64) {
+        self.limiter.capacity()
+    }
+
     /// Account for bounded in-process media work in this runner's admission pool.
     /// Callers release this permit before invoking a tool that acquires its own.
     pub(crate) fn native_permit(

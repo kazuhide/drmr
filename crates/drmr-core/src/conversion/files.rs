@@ -14,11 +14,11 @@ const PUBLISH_ERROR: ConversionError = ConversionError("output-exists-or-publish
 pub(super) struct Stage {
     path: PathBuf,
     #[cfg(unix)]
-    _outer: tempfile::TempDir,
+    outer: tempfile::TempDir,
     // Fields drop in declaration order: remove only the exclusive child while
     // the strict container and all of its ancestors remain pinned.
     #[cfg(windows)]
-    _owned_child: native::PrivateTempDir,
+    owned_child: native::PrivateTempDir,
     #[cfg(windows)]
     _container: Container,
 }
@@ -35,8 +35,11 @@ impl Stage {
         }
         #[cfg(unix)]
         {
+            use std::os::unix::fs::PermissionsExt as _;
             let mut builder = tempfile::Builder::new();
-            builder.prefix(".drmr-convert-");
+            builder
+                .prefix(".drmr-convert-")
+                .permissions(std::fs::Permissions::from_mode(0o700));
             let outer = match parent {
                 Some(parent) => builder.tempdir_in(parent),
                 None => builder.tempdir(),
@@ -44,10 +47,7 @@ impl Stage {
             .map_err(|_| ConversionError("temporary-workspace-unavailable"))?;
             let path = outer.path().join("media");
             create_dir(&path)?;
-            Ok(Self {
-                path,
-                _outer: outer,
-            })
+            Ok(Self { path, outer })
         }
     }
     #[cfg(windows)]
@@ -62,9 +62,20 @@ impl Stage {
         create_dir(&path)?;
         Ok(Self {
             path,
-            _owned_child: owned_child,
+            owned_child,
             _container: container,
         })
+    }
+    /// The exclusively owned strict root; callers may move it before writing payloads.
+    pub(super) fn private_root(&self) -> &Path {
+        #[cfg(unix)]
+        {
+            self.outer.path()
+        }
+        #[cfg(windows)]
+        {
+            self.owned_child.path()
+        }
     }
     pub(super) fn path(&self) -> &Path {
         &self.path
@@ -245,14 +256,24 @@ pub(super) fn publish_file(
     destination: &Path,
     stop: Option<&crate::concurrency::Stop>,
 ) -> Result<(), ConversionError> {
-    publish_file_observed(source, destination, stop, |_| {})
+    publish_file_checked(source, destination, stop, || Ok(()))
 }
 
-fn publish_file_observed(
+pub(super) fn publish_file_checked(
+    source: &Path,
+    destination: &Path,
+    stop: Option<&crate::concurrency::Stop>,
+    check: impl FnOnce() -> Result<(), ConversionError>,
+) -> Result<(), ConversionError> {
+    publish_file_observed(source, destination, stop, |_| {}, check)
+}
+
+pub(super) fn publish_file_observed(
     source: &Path,
     destination: &Path,
     stop: Option<&crate::concurrency::Stop>,
     after_copy: impl FnOnce(&Path),
+    check: impl FnOnce() -> Result<(), ConversionError>,
 ) -> Result<(), ConversionError> {
     check_cancelled(stop)?;
     let parent = destination.parent().ok_or(PUBLISH_ERROR)?;
@@ -267,6 +288,7 @@ fn publish_file_observed(
     after_copy(&path);
     seal(stage.path())?;
     check_cancelled(stop)?;
+    check()?;
     atomic_move(&path, destination)
 }
 
@@ -275,19 +297,30 @@ pub(super) fn publish_directory(
     destination: &Path,
     stop: Option<&crate::concurrency::Stop>,
 ) -> Result<(), ConversionError> {
-    publish_directory_observed(source, destination, stop, |_| {})
+    publish_directory_checked(source, destination, stop, || Ok(()))
 }
 
-fn publish_directory_observed(
+pub(super) fn publish_directory_checked(
+    source: &Path,
+    destination: &Path,
+    stop: Option<&crate::concurrency::Stop>,
+    check: impl FnOnce() -> Result<(), ConversionError>,
+) -> Result<(), ConversionError> {
+    publish_directory_observed(source, destination, stop, |_| {}, check)
+}
+
+pub(super) fn publish_directory_observed(
     source: &Path,
     destination: &Path,
     stop: Option<&crate::concurrency::Stop>,
     before_seal: impl FnOnce(&Path),
+    check: impl FnOnce() -> Result<(), ConversionError>,
 ) -> Result<(), ConversionError> {
     check_cancelled(stop)?;
     before_seal(source);
     seal(source)?;
     check_cancelled(stop)?;
+    check()?;
     atomic_move(source, destination)
 }
 fn check_cancelled(stop: Option<&crate::concurrency::Stop>) -> Result<(), ConversionError> {
@@ -298,7 +331,7 @@ fn check_cancelled(stop: Option<&crate::concurrency::Stop>) -> Result<(), Conver
     }
 }
 
-fn atomic_move(source: &Path, destination: &Path) -> Result<(), ConversionError> {
+pub(super) fn atomic_move(source: &Path, destination: &Path) -> Result<(), ConversionError> {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         rustix::fs::renameat_with(
@@ -332,6 +365,59 @@ fn atomic_move(source: &Path, destination: &Path) -> Result<(), ConversionError>
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    #[test]
+    fn strict_stage_birth_does_not_depend_on_the_callers_umask() {
+        use std::os::unix::fs::PermissionsExt as _;
+        const CHILD: &str = "DRMR_STAGE_UMASK_CHILD";
+        if std::env::var_os(CHILD).as_deref() == Some(std::ffi::OsStr::new("1")) {
+            rustix::process::umask(rustix::fs::Mode::empty());
+            let parent = tempfile::tempdir().unwrap();
+            for location in [Some(parent.path()), None] {
+                let stage = Stage::new(location).unwrap();
+                assert_eq!(
+                    std::fs::metadata(stage.private_root())
+                        .unwrap()
+                        .permissions()
+                        .mode()
+                        & 0o777,
+                    0o700
+                );
+                assert_eq!(
+                    std::fs::metadata(stage.path())
+                        .unwrap()
+                        .permissions()
+                        .mode()
+                        & 0o777,
+                    0o700
+                );
+            }
+            return;
+        }
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command
+            .args([
+                "--exact",
+                "conversion::files::tests::strict_stage_birth_does_not_depend_on_the_callers_umask",
+            ])
+            .env(CHILD, "1")
+            .stdout(std::process::Stdio::null());
+        let mut child = native::ManagedChild::spawn(command, true).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break status;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "isolated umask child did not complete"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        child.finish().unwrap();
+        assert!(status.success());
+    }
+
     #[test]
     fn cancellation_after_file_copy_prevents_publication_and_preserves_source() {
         let parent = tempfile::tempdir().unwrap();
@@ -341,10 +427,16 @@ mod tests {
         create_new(&input).unwrap().write_all(bytes).unwrap();
         let destination = parent.path().join("cancelled-result");
         let stop = crate::concurrency::Stop::new();
-        let result = publish_file_observed(&input, &destination, Some(&stop), |copied| {
-            assert_eq!(std::fs::read(copied).unwrap(), bytes);
-            stop.set();
-        });
+        let result = publish_file_observed(
+            &input,
+            &destination,
+            Some(&stop),
+            |copied| {
+                assert_eq!(std::fs::read(copied).unwrap(), bytes);
+                stop.set();
+            },
+            || Ok(()),
+        );
         assert_eq!(result.unwrap_err(), ConversionError("cancelled"));
         assert!(!destination.exists());
         assert_eq!(std::fs::read(&input).unwrap(), bytes);
@@ -360,14 +452,86 @@ mod tests {
         create_new(&input).unwrap().write_all(bytes).unwrap();
         let destination = parent.path().join("cancelled-result");
         let stop = crate::concurrency::Stop::new();
-        let result =
-            publish_directory_observed(source.path(), &destination, Some(&stop), |directory| {
+        let result = publish_directory_observed(
+            source.path(),
+            &destination,
+            Some(&stop),
+            |directory| {
                 assert_eq!(std::fs::read(directory.join("input")).unwrap(), bytes);
                 stop.set();
-            });
+            },
+            || Ok(()),
+        );
         assert_eq!(result.unwrap_err(), ConversionError("cancelled"));
         assert!(!destination.exists());
         assert_eq!(std::fs::read(&input).unwrap(), bytes);
+        assert_eq!(std::fs::read_dir(parent.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn downloaded_source_mutation_during_file_copy_prevents_atomic_publication() {
+        let parent = tempfile::tempdir().unwrap();
+        let source = Stage::new(None).unwrap();
+        let saved = source.path().join("saved");
+        let candidate = source.path().join("candidate");
+        create_new(&saved).unwrap().write_all(b"original").unwrap();
+        create_new(&candidate)
+            .unwrap()
+            .write_all(b"verified output")
+            .unwrap();
+        let output = parent.path().join("result");
+        let result = publish_file_observed(
+            &candidate,
+            &output,
+            None,
+            |_| {
+                std::fs::write(&saved, b"changed").unwrap();
+            },
+            || {
+                if std::fs::read(&saved).unwrap() == b"original" {
+                    Ok(())
+                } else {
+                    Err(ConversionError("download-source-changed"))
+                }
+            },
+        );
+        assert_eq!(
+            result.unwrap_err(),
+            ConversionError("download-source-changed")
+        );
+        assert!(!output.exists());
+        assert_eq!(std::fs::read_dir(parent.path()).unwrap().count(), 0);
+        assert_eq!(std::fs::read(candidate).unwrap(), b"verified output");
+    }
+
+    #[test]
+    fn downloaded_source_mutation_during_directory_seal_prevents_atomic_publication() {
+        let parent = tempfile::tempdir().unwrap();
+        let source = Stage::new(None).unwrap();
+        let saved = source.path().join("saved");
+        create_new(&saved).unwrap().write_all(b"original").unwrap();
+        let output = parent.path().join("result");
+        let result = publish_directory_observed(
+            source.path(),
+            &output,
+            None,
+            |_| {
+                std::fs::write(&saved, b"changed").unwrap();
+            },
+            || {
+                if std::fs::read(&saved).unwrap() == b"original" {
+                    Ok(())
+                } else {
+                    Err(ConversionError("download-source-changed"))
+                }
+            },
+        );
+        assert_eq!(
+            result.unwrap_err(),
+            ConversionError("download-source-changed")
+        );
+        assert!(!output.exists());
+        assert_eq!(std::fs::read(saved).unwrap(), b"changed");
         assert_eq!(std::fs::read_dir(parent.path()).unwrap().count(), 0);
     }
 

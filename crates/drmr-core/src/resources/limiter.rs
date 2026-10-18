@@ -58,6 +58,11 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 impl Limiter {
+    /// Configured admission ceiling, without observing other commands' transient usage.
+    pub(crate) fn capacity(&self) -> (usize, u64) {
+        (self.cpu_threads, self.memory_bytes)
+    }
+
     /// A fixed capacity, useful for an enclosing application's own resource allocation.
     pub fn new(cpu_threads: usize, memory_bytes: u64) -> Self {
         Self {

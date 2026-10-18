@@ -15,7 +15,7 @@ pub mod fsum;
 pub mod http;
 pub mod netaddr;
 pub mod platform;
-mod playlist;
+pub(crate) mod playlist;
 mod policy;
 mod probe;
 pub mod pypath;
