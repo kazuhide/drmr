@@ -243,31 +243,130 @@ fn complete_frame_evidence_rejects_an_interlaced_source_or_actual_hls_result() {
     ]
     .map(|path| (path, common::snapshot_tree(path)));
     let clear_result = output.join("master.m3u8");
-    for (source, result) in [
-        (input.as_path(), interlaced_result.as_path()),
-        (interlaced_source.as_path(), clear_result.as_path()),
+    let real_probe = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+        .map(|directory| drmr_test_support::program_path(&directory.join("ffprobe")))
+        .find(|path| path.is_file())
+        .map(|path| std::path::absolute(path).unwrap())
+        .expect("actual FFprobe must be installed");
+    for (role, source, result) in [
+        ("mp4", input.as_path(), interlaced_result.as_path()),
+        (
+            "transport",
+            interlaced_source.as_path(),
+            clear_result.as_path(),
+        ),
     ] {
+        let proxy_root = common::private_tempdir().unwrap();
+        let audit = proxy_root.path().join("audit");
+        std::fs::create_dir(&audit).unwrap();
+        let proxy = drmr_test_support::install(
+            &proxy_root.path().join("probe"),
+            &drmr_test_support::ToolSpec {
+                mode: drmr_test_support::Mode::FfprobeProxy,
+                ..Default::default()
+            }
+            .with("real_probe", real_probe.to_str().unwrap())
+            .with("omit_role", role)
+            .with("audit_dir", audit.to_str().unwrap()),
+        )
+        .unwrap();
         assert_eq!(
-            c.verify(VerificationRequest {
-                source: VerificationSource {
-                    input: source,
-                    input_keys: &keys,
-                    hls_keys: &hls
-                },
-                output: VerificationSource {
-                    input: result,
-                    input_keys: &keys,
-                    hls_keys: &hls
-                },
-            })
-            .unwrap_err()
-            .0,
+            converter()
+                .with_ffprobe(proxy.to_str().unwrap())
+                .verify(VerificationRequest {
+                    source: VerificationSource {
+                        input: source,
+                        input_keys: &keys,
+                        hls_keys: &hls
+                    },
+                    output: VerificationSource {
+                        input: result,
+                        input_keys: &keys,
+                        hls_keys: &hls
+                    },
+                })
+                .unwrap_err()
+                .0,
             "ts-progressive-frame-evidence-required"
         );
+        assert_profile_omission(&audit, role);
     }
     for (path, before) in originals {
         assert_eq!(common::snapshot_tree(path), before);
     }
+}
+
+fn remove_json_field(value: &mut serde_json::Value, key: &str) -> usize {
+    match value {
+        serde_json::Value::Object(object) => {
+            usize::from(object.remove(key).is_some())
+                + object
+                    .values_mut()
+                    .map(|child| remove_json_field(child, key))
+                    .sum::<usize>()
+        }
+        serde_json::Value::Array(array) => array
+            .iter_mut()
+            .map(|child| remove_json_field(child, key))
+            .sum(),
+        _ => 0,
+    }
+}
+
+fn assert_profile_omission(audit: &Path, selected_role: &str) {
+    let mut selected = 0;
+    let mut selected_playlist = 0;
+    let mut unselected = 0;
+    for entry in std::fs::read_dir(audit).unwrap() {
+        let call = entry.unwrap().path();
+        let role = std::fs::read_to_string(call.join("role")).unwrap();
+        let is_selected = std::fs::read_to_string(call.join("selected")).unwrap() == "yes";
+        assert_eq!(is_selected, role == selected_role);
+        let mut before: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(call.join("before.json")).unwrap()).unwrap();
+        let after: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(call.join("after.json")).unwrap()).unwrap();
+        assert_eq!(before["streams"].as_array().unwrap().len(), 1);
+        assert_eq!(after["streams"].as_array().unwrap().len(), 1);
+        let entries = std::fs::read_to_string(call.join("before.entries")).unwrap();
+        let forwarded = std::fs::read_to_string(call.join("after.entries")).unwrap();
+        assert!(
+            entries
+                .split([',', ':', '='])
+                .any(|field| field == "field_order")
+        );
+        assert!(remove_json_field(&mut before, "codec_tag_string") > 0);
+        if is_selected {
+            selected += 1;
+            if std::fs::read_to_string(call.join("input.extension")).unwrap() == "m3u8" {
+                selected_playlist += 1;
+            }
+            assert_eq!(
+                forwarded,
+                entries
+                    .split(',')
+                    .filter(|field| *field != "field_order")
+                    .collect::<Vec<_>>()
+                    .join(",")
+            );
+            remove_json_field(&mut before, "field_order");
+            let mut omitted = after.clone();
+            assert_eq!(remove_json_field(&mut omitted, "field_order"), 0);
+        } else {
+            unselected += 1;
+            assert_eq!(entries, forwarded);
+        }
+        assert_eq!(before, after, "only the selected profile field may change");
+    }
+    assert!(
+        selected > 0,
+        "selected role was not probed with omitted metadata"
+    );
+    assert!(unselected > 0, "independent unselected role was not probed");
+    assert!(
+        selected_playlist > 0,
+        "the actual selected playlist profile must omit the field"
+    );
 }
 #[test]
 fn unsupported_audio_and_interlaced_video_fail_before_publication() {
