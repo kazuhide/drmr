@@ -49,6 +49,24 @@ fn inspect_is_read_only_and_never_fetches_or_displays_hls_key_material() {
 }
 
 #[test]
+fn human_inspect_names_the_sample_method_without_claiming_a_container_scheme() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = fixture(
+        dir.path(),
+        "input.m3u8",
+        "#EXTM3U\n#EXT-X-KEY:METHOD=SAMPLE-AES,URI=\"skd://private-sentinel\",KEYFORMAT=\"com.apple.streamingkeydelivery\",IV=0x0123456789abcdef0123456789abcdef\n#EXTINF:2,\nnot-read.ts\n#EXT-X-ENDLIST\n",
+    );
+    let output = run(&["inspect", &input]);
+    assert!(output.status.success());
+    let shown = String::from_utf8(output.stdout).unwrap();
+    assert!(shown.contains("HLS method: SAMPLE-AES"));
+    assert!(shown.contains("Protection: unknown"));
+    assert!(shown.contains("AES-128 in cipher block chaining mode"));
+    assert!(!shown.contains("private-sentinel") && !shown.contains("0123456789abcdef"));
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+}
+
+#[test]
 fn plan_separates_input_and_output_key_roles_and_explains_incompatible_formats() {
     let dir = tempfile::tempdir().unwrap();
     let input = fixture(

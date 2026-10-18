@@ -21,6 +21,7 @@ The finite progressive route copies the original encoded tracks directly, retain
 | `dash-presentation` | Supported complete local tracks to static DASH. Source manifest resources are localized and assembled into tracks before new segmentation. | FFmpeg, FFprobe, Shaka Packager |
 | `fmp4-hls-presentation` | Supported complete tracks to fragmented MP4 HLS. Sample encryption applies within media samples; HLS AES-128 separately encrypts each complete output resource. | FFmpeg, FFprobe, Shaka Packager |
 | `mpeg-ts-hls` | The narrow local MPEG transport stream profile to fragmented MP4 HLS. Tracks are demultiplexed, and the actual final playlists are checked against the original transport streams. | FFmpeg, FFprobe, Shaka Packager |
+| `mpeg-ts-sample-aes-hls` | Known-key SAMPLE-AES transport streams to fragmented MP4 HLS. Decrypted encoded frames and original clocks are checked before packaging; final playlists are verified against the original encrypted source. | FFmpeg, FFprobe, Shaka Packager |
 
 These are dependency requirements, not a report that tools are installed or were version-checked. See [supported input profiles](conversion-support.md) for restrictions and [tool requirements](requirements.md#media-tools) for supported versions.
 
@@ -44,6 +45,15 @@ Complete local tracks → Shaka segmentation and HLS playlists → optional whol
 
 Original local HLS transport-stream resources → native structure admission and FFmpeg demultiplexing → fragmented MP4 HLS packaging → actual final playlist checks against the original streams. The intermediate MP4 is not used as the final reference.
 
+### mpeg-ts-sample-aes-hls
+
+Original encrypted HLS transport-stream resources → program and packet checks →
+SAMPLE-AES frame decryption with supplied keys and IVs → a private clear TS view
+checked against every original encoded frame and clock → track demultiplexing and
+fragmented MP4 HLS packaging → actual final playlist checks. A separate `verify`
+reads and decrypts the original source again. It does not trust a saved conversion
+report or use only the intermediate MP4 as its reference.
+
 Metadata alone may not qualify a finite MP4 profile or distinguish supported fragmented MP4 HLS from transport-stream HLS. A plan can therefore contain several conditional candidates. Each has `revalidation_required: true` and fixed condition codes. Actual source validation selects a handler or refuses the input; a rejected progressive profile does not imply permission to fall back to another route. Multiple output formats still require separate conversion commands.
 
 The existing `compatible` and `execution_available` fields are coarse intent checks. Declared text tracks have no conversion candidate even when those fields are true: the media handlers support audio and video. Unknown HLS roles retain conditional candidates until actual resource inspection establishes their roles.
@@ -51,6 +61,14 @@ The existing `compatible` and `execution_available` fields are coarse intent che
 ## Encryption facts and their limits
 
 `details.track_protection` uses the same cipher and encryption-unit terms for MP4, DASH, and HLS. `container-default` evidence describes sample-description defaults; `manifest-declaration` describes signaling. Neither proves that all media samples follow those defaults. In MP4, the reported entries retain the existing sample-description granularity, which is not necessarily one entry per actual track.
+
+For HLS, each track description also records effective `hls_key_methods`, using
+fixed values such as `SAMPLE-AES` or `AES-128`. An unknown method is reported as
+`UNKNOWN`, without copying input text. A SAMPLE-AES declaration leaves the
+container protection `unknown`: metadata inspection has not established whether
+the media is TS or MP4. A plan can offer conditional TS and MP4 routes only when
+the method evidence belongs to each corresponding track. Conversion still
+validates the actual container, keys, IVs, and complete media.
 
 `sample_coverage: unknown` means that inspection did not establish whether whole samples or only parts of samples are encrypted. A scheme label, a `tenc` default, or a pattern such as one encrypted block followed by nine clear blocks cannot establish that distinction. Pattern counts describe 16-byte blocks. `not-applicable` means the question does not apply to the declared unit, such as complete-resource HLS AES-128 encryption; it is different from unknown.
 

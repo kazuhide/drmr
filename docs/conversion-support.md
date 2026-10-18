@@ -15,6 +15,7 @@ unencrypted media. The two containers have different conversion limits:
 | AES-128 HLS | fMP4 | Clear, `cenc`, `cbcs` | Clear, `cbcs`, AES-128 |
 | Clear HLS | MPEG-TS | Not supported | Clear, `cbcs`, AES-128 |
 | AES-128 HLS | MPEG-TS | Not supported | Clear, `cbcs`, AES-128 |
+| SAMPLE-AES HLS | MPEG-TS | Not supported | Clear, `cbcs`, AES-128 |
 
 **Every HLS output uses fMP4.** MPEG-TS is supported only as input; drmr does not
 produce MPEG-TS HLS.
@@ -98,6 +99,35 @@ Clear output needs no output-key section. Keep the original media and keys until
 
 ## MPEG transport stream input
 
-Completed local HLS playlists containing clear or operator-keyed AES-128 transport stream segments can produce fragmented MP4 HLS with clear, `cbcs`, or AES-128 protection. The initial profile accepts one H.264 video stream, optionally accompanied by one 48 kHz AAC-LC audio stream, in a single program. Video must be progressive. Audio-only input, 44.1 kHz audio, sample-encrypted transport streams, DASH/MP4 output from this input, and transport stream output are refused.
+Completed local HLS playlists containing clear, AES-128, or SAMPLE-AES transport stream segments can produce fragmented MP4 HLS with clear, `cbcs`, or AES-128 protection. Encrypted input requires operator-supplied keys. The initial profile accepts one H.264 video stream, optionally accompanied by one 48 kHz AAC-LC audio stream, in a single program. Video must be progressive. Audio-only input, 44.1 kHz audio, SAMPLE-AES-CTR transport streams, DASH/MP4 output from this input, and transport stream output are refused.
 
 The ten-second public fixture passed all three output protections from clear MPEG-TS input, with separate verification on Linux x86_64 and Windows x64 with FFmpeg 9.0.2, and macOS ARM64 with FFmpeg 9.0.1; all used Shaka Packager 3.8.0. Separate AES-128 MPEG-TS input regressions verify clear HLS output with key rotation, explicit and sequence-derived initialization vectors, and transitions to clear segments. Additional cases cover reordered pictures and video-only input. These results qualify the tested profile, tools, and platforms. They do not establish other codecs or arbitrary broadcast streams. See [the exact input and verification limits](media-processing.md#mpeg-transport-stream-input).
+
+SAMPLE-AES TS is the sample encryption used for FairPlay transport-stream media.
+Its AES-CBC protection applies to specified parts of encoded frames; it differs
+from encrypting a complete segment with HLS AES-128 and from storing `cbcs` in MP4.
+Supply each key and its associated initialization vector (IV) through the
+[protected key configuration](usage.md#separate-input-and-output-keys).
+An explicit playlist IV can supply that value; when both are present, they must
+match. drmr does not infer a SAMPLE-AES IV from the segment number.
+
+The SAMPLE-AES profile keeps one encryption method and a fixed program and codec
+configuration throughout the presentation. Use one key format: `identity` (the
+default) or `com.apple.streamingkeydelivery`, with format version 1 when supplied.
+Simultaneous declarations in different key formats are refused. AAC uses seven-byte transport headers
+without a checksum and declares no initial audio priming (decoder warm-up
+samples). Changes to other
+encryption methods, unsupported audio setup, and malformed or oversized encoded
+frames are refused. See [how the original encrypted streams are verified](media-processing.md#sample-aes-transport-streams).
+Known-key media conversion does not acquire a FairPlay license or qualify device playback.
+
+The generated SAMPLE-AES regression uses the attributed ten-second fixture with
+two-second video segments. It checks video-only and joint video/audio input
+against clear, `cbcs`, and AES-128 fMP4 HLS output. Conversion and separate
+verification compare the original encrypted source and an independently clear
+reference, including the final video picture and all decoded audio samples.
+Run it with:
+
+```sh
+cargo test -p drmr-core --test conversion_sample_aes --locked
+```

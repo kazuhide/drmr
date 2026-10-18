@@ -34,6 +34,7 @@ struct Prepared {
     report: Inspection,
     key_id: Option<String>,
     transport_index: Option<usize>,
+    transport_native: Option<std::sync::Arc<super::ts::NativeEvidence>>,
     playlist_reference: Option<PathBuf>,
 }
 fn presentation_processing(format: OutputFormat) -> inspection::ActualProcessing {
@@ -186,7 +187,7 @@ impl Converter {
                     &track_dir.join("media.m3u8"),
                     &localized_dir,
                     &keys,
-                    &self.backend.stop,
+                    &self.backend,
                 )?;
                 copy_private(&localized.combined, &combined)?;
                 (
@@ -494,6 +495,7 @@ fn prepare_for(
         report: selected,
         key_id,
         transport_index: None,
+        transport_native: None,
         playlist_reference: None,
     })
 }
@@ -640,6 +642,7 @@ impl Converter {
                         index,
                         key: None,
                         transport: true,
+                        native: a.transport_native.as_deref(),
                     },
                     super::ts::View {
                         input: playlist,
@@ -648,6 +651,7 @@ impl Converter {
                         index: b.index,
                         key: None,
                         transport: false,
+                        native: None,
                     },
                 );
             }
@@ -687,6 +691,20 @@ impl Converter {
         })
     }
 }
+fn describe_transport(report: &mut ConversionReport, sample_transport: bool) {
+    report.processing = Some(inspection::ActualProcessing::new(
+        if sample_transport {
+            inspection::ProcessingRouteId::MpegTsSampleAesHls
+        } else {
+            inspection::ProcessingRouteId::MpegTsHls
+        },
+        if sample_transport {
+            inspection::InputPreparation::MpegTsSampleAesDecrypt
+        } else {
+            inspection::InputPreparation::MpegTsDemux
+        },
+    ));
+}
 fn kind_order(kind: TrackKind) -> u8 {
     match kind {
         TrackKind::Video => 0,
@@ -694,6 +712,51 @@ fn kind_order(kind: TrackKind) -> u8 {
         TrackKind::Text => 2,
         TrackKind::Unknown => 3,
     }
+}
+fn prepare_transport(
+    localized: &hls::Localized,
+    admission: &super::ts::Admission,
+    directory: &Path,
+    keys: &InputKeys,
+    backend: &super::backend::Backend,
+) -> Result<Vec<Prepared>, ConversionError> {
+    let mut prepared = Vec::new();
+    let streams = backend.transport_streams(&localized.combined, admission)?;
+    let clock_index = streams
+        .iter()
+        .find(|(_, kind)| *kind == TrackKind::Video)
+        .unwrap_or(&streams[0])
+        .0;
+    backend.transport_durations(&localized.transport_segments, clock_index)?;
+    for (index, kind) in streams {
+        let pid = admission
+            .tracks
+            .iter()
+            .find(|track| track.kind == kind)
+            .ok_or(ConversionError("ts-stream-count-mismatch"))?
+            .pid;
+        let native = localized.native.get(&pid).cloned();
+        if let Some(anchor) = &native {
+            backend.confirm_native_transport(super::ts::View {
+                input: &localized.reference,
+                metadata: &localized.reference,
+                index,
+                key: None,
+                transport: true,
+                native: Some(anchor),
+            })?;
+        }
+        let root = directory.join(format!("demux-{index}"));
+        super::files::create_dir(&root)?;
+        let media = root.join("track.mp4");
+        backend.demux_transport(&localized.combined, kind, &media)?;
+        let mut track = prepare(&media, 0, kind, keys)?;
+        track.source.clone_from(&localized.reference);
+        track.transport_index = Some(index);
+        track.transport_native = native;
+        prepared.push(track);
+    }
+    Ok(prepared)
 }
 fn prepare_presentation(
     input: &VerificationSource<'_>,
@@ -738,28 +801,18 @@ fn prepare_presentation(
                 let directory = stage.join(format!("track-{ordinal:04}"));
                 super::files::create_dir(&directory)
                     .map_err(|_| ConversionError("temporary-workspace-unavailable"))?;
-                let localized = hls::localize(path, &directory, input.hls_keys, &backend.stop)?;
+                let localized = hls::localize(path, &directory, input.hls_keys, backend)?;
                 if let Some(admission) = &localized.transport {
                     if paths.len() != 1 {
                         return Err(ConversionError("ts-single-media-playlist-required"));
                     }
-                    let streams = backend.transport_streams(&localized.combined, admission)?;
-                    let clock_index = streams
-                        .iter()
-                        .find(|(_, kind)| *kind == TrackKind::Video)
-                        .unwrap_or(&streams[0])
-                        .0;
-                    backend.transport_durations(&localized.transport_segments, clock_index)?;
-                    for (index, kind) in streams {
-                        let root = directory.join(format!("demux-{index}"));
-                        super::files::create_dir(&root)?;
-                        let media = root.join("track.mp4");
-                        backend.demux_transport(&localized.combined, kind, &media)?;
-                        let mut track = prepare(&media, 0, kind, input.input_keys)?;
-                        track.source.clone_from(&localized.reference);
-                        track.transport_index = Some(index);
-                        tracks.push(track);
-                    }
+                    tracks.extend(prepare_transport(
+                        &localized,
+                        admission,
+                        &directory,
+                        input.input_keys,
+                        backend,
+                    )?);
                     continue;
                 }
                 let actual = inspection::inspect(&localized.combined)
@@ -918,6 +971,7 @@ impl Converter {
                             index,
                             key: None,
                             transport: true,
+                            native: source.transport_native.as_deref(),
                         },
                         super::ts::View {
                             input: &source.media,
@@ -925,6 +979,7 @@ impl Converter {
                             index: 0,
                             key: None,
                             transport: false,
+                            native: None,
                         },
                     )?
                 } else {
@@ -967,6 +1022,7 @@ impl Converter {
         let prepared = prepare_presentation(&input, work.path(), &self.backend)?;
         drop(preparation);
         let transport = prepared.iter().any(|p| p.transport_index.is_some());
+        let sample_transport = prepared.iter().any(|p| p.transport_native.is_some());
         if transport
             && (request.format != OutputFormat::Hls
                 || !matches!(
@@ -1036,10 +1092,7 @@ impl Converter {
         self.backend.checkpoint(&[&work]);
         report.input = input_report;
         if transport {
-            report.processing = Some(inspection::ActualProcessing::new(
-                inspection::ProcessingRouteId::MpegTsHls,
-                inspection::InputPreparation::MpegTsDemux,
-            ));
+            describe_transport(&mut report, sample_transport);
         } else {
             report.describe_preparation(match report.input.format {
                 InputFormat::Mp4 => inspection::InputPreparation::CompleteFile,

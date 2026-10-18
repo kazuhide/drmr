@@ -129,6 +129,31 @@ fn progressive_candidate(input: &Inspection, target: TargetProtection) -> bool {
             == 1
 }
 
+fn sample_aes_candidate(input: &Inspection) -> bool {
+    use super::{DescriptionEvidence, Evidence, HlsKeyMethod};
+    if input.format != InputFormat::Hls
+        || input.evidence != Evidence::Manifest
+        || input.tracks.is_empty()
+    {
+        return false;
+    }
+    let Some(details) = &input.details else {
+        return false;
+    };
+    details.track_protection.len() == input.tracks.len()
+        && input
+            .tracks
+            .iter()
+            .zip(&details.track_protection)
+            .all(|(track, detail)| {
+                track.protection == Protection::Unknown
+                    && track.kind != TrackKind::Text
+                    && detail.track_id.as_deref() == Some(track.id.as_str())
+                    && detail.evidence == DescriptionEvidence::ManifestDeclaration
+                    && detail.hls_key_methods == [HlsKeyMethod::SampleAes]
+            })
+}
+
 /// Describe a requested transformation. Source media must be revalidated at execution.
 pub fn plan(
     input: Inspection,
@@ -162,7 +187,16 @@ pub fn plan(
     {
         findings.push(Finding::new("source-protection-not-supported"));
     }
-    let compatible = findings.len() == 1;
+    // A SAMPLE-AES declaration can select a conditional handler without establishing
+    // its container scheme. Every original track must carry its own declaration.
+    let sample_aes = sample_aes_candidate(&input);
+    let compatible = findings.iter().all(|finding| {
+        finding.code == "media-validation-required"
+            || (sample_aes && finding.code == "source-protection-unresolved")
+    });
+    if sample_aes {
+        findings.push(Finding::new("hls-sample-aes-input-key-and-iv-required"));
+    }
     let mut execution_available = compatible && formats.len() == 1;
     if formats.len() != 1 {
         findings.push(Finding::new("convert-one-output-format-per-invocation"));
@@ -284,11 +318,15 @@ fn describe_processing(
                         "local-mp4-or-fragmented-manifest-profile-must-pass",
                     ));
                     if input.format == InputFormat::Hls {
-                        candidates.push(CandidateRoute::new(
-                            Route::MpegTsHls,
-                            format,
-                            "local-transport-stream-profile-must-pass",
-                        ));
+                        let (route, condition) = if sample_aes_candidate(input) {
+                            (
+                                Route::MpegTsSampleAesHls,
+                                "sample-aes-transport-profile-must-pass",
+                            )
+                        } else {
+                            (Route::MpegTsHls, "local-transport-stream-profile-must-pass")
+                        };
+                        candidates.push(CandidateRoute::new(route, format, condition));
                     }
                 }
             }

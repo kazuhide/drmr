@@ -64,12 +64,133 @@ fn hls_resource_and_sample_declarations_have_different_units() {
         assert_eq!(item["cipher"], cipher);
         assert_eq!(item["encryption_unit"], unit);
         assert_eq!(item["sample_coverage"], coverage);
+        assert_eq!(item["hls_key_methods"], serde_json::json!([method]));
         assert_eq!(report["details"]["periods"]["status"], "not-applicable");
         assert!(!report.to_string().contains("private-sentinel"));
         if method != "AES-128" {
             assert_eq!(report["protection"], "unknown");
         }
     }
+}
+#[test]
+fn hls_method_evidence_stays_with_each_child_and_unknown_methods_are_fixed_tokens() {
+    let dir = tempfile::tempdir().unwrap();
+    for (name, method) in [
+        ("sample", "SAMPLE-AES"),
+        ("unknown", "private-method-sentinel"),
+    ] {
+        std::fs::write(
+            dir.path().join(format!("{name}.m3u8")),
+            format!("#EXTM3U\n#EXT-X-KEY:METHOD={method},URI=\"private-key-sentinel\"\n#EXTINF:2,\nnot-read.ts\n#EXT-X-ENDLIST\n"),
+        ).unwrap();
+    }
+    let master = dir.path().join("master.m3u8");
+    std::fs::write(&master, "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=100\nsample.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=200\nunknown.m3u8\n").unwrap();
+    let report = json(&master);
+    let descriptions = report["details"]["track_protection"].as_array().unwrap();
+    assert_eq!(descriptions.len(), 2);
+    assert_eq!(
+        descriptions[0]["hls_key_methods"],
+        serde_json::json!(["SAMPLE-AES"])
+    );
+    assert_eq!(
+        descriptions[1]["hls_key_methods"],
+        serde_json::json!(["UNKNOWN"])
+    );
+    for (track, description) in report["tracks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(descriptions)
+    {
+        assert_eq!(track["id"], description["track_id"]);
+        assert_eq!(track["protection"], "unknown");
+        assert_eq!(description["evidence"], "manifest-declaration");
+    }
+    assert!(!report.to_string().contains("private-"));
+    let plan = inspection::plan(
+        serde_json::from_value(report).unwrap(),
+        TargetProtection::Clear,
+        vec![OutputFormat::Hls],
+    );
+    assert!(!plan.compatible && !plan.execution_available);
+    assert_eq!(plan.processing.unwrap().candidates, []);
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 3);
+}
+
+#[test]
+fn only_correlated_sample_aes_declarations_enable_the_conditional_ts_route() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("input.m3u8");
+    for method in ["SAMPLE-AES", "SAMPLE-AES-CTR", "private-method-sentinel"] {
+        std::fs::write(&path, format!("#EXTM3U\n#EXT-X-KEY:METHOD={method},URI=\"not-read-key\"\n#EXTINF:2,\nnot-read.ts\n#EXT-X-ENDLIST\n")).unwrap();
+        let input = inspection::inspect(&path).unwrap();
+        let plan = inspection::plan(
+            input.clone(),
+            TargetProtection::Clear,
+            vec![OutputFormat::Hls],
+        );
+        if method == "SAMPLE-AES" {
+            assert!(plan.compatible && plan.execution_available);
+            assert_eq!(plan.input.protection, inspection::Protection::Unknown);
+            assert!(!plan.input.media_verified);
+            assert!(
+                plan.findings
+                    .iter()
+                    .any(|f| f.code == "source-protection-unresolved")
+            );
+            let routes = plan.processing.unwrap().candidates;
+            assert_eq!(routes.len(), 2);
+            let ts = routes
+                .iter()
+                .find(|r| r.route.as_str() == "mpeg-ts-sample-aes-hls")
+                .unwrap();
+            assert!(ts.revalidation_required);
+            assert!(
+                ts.condition_codes
+                    .iter()
+                    .any(|c| c == "sample-aes-transport-profile-must-pass")
+            );
+            assert!(!routes.iter().any(|r| r.route.as_str() == "mpeg-ts-hls"));
+            for missing_correlation in [false, true] {
+                let mut input = input.clone();
+                if missing_correlation {
+                    input.details.as_mut().unwrap().track_protection[0].track_id =
+                        Some("unrelated".into());
+                } else {
+                    input.details = None;
+                }
+                let untrusted =
+                    inspection::plan(input, TargetProtection::Clear, vec![OutputFormat::Hls]);
+                assert!(!untrusted.compatible && !untrusted.execution_available);
+                assert_eq!(untrusted.processing.unwrap().candidates, []);
+            }
+        } else {
+            assert!(!plan.compatible && !plan.execution_available);
+            assert_eq!(plan.processing.unwrap().candidates, []);
+        }
+    }
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+}
+
+#[test]
+fn older_track_details_without_hls_methods_read_without_inventing_declarations() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("input.m3u8");
+    std::fs::write(&path, "#EXTM3U\n#EXT-X-KEY:METHOD=SAMPLE-AES,URI=\"not-read\"\n#EXTINF:2,\nnot-read.ts\n#EXT-X-ENDLIST\n").unwrap();
+    let mut report = json(&path);
+    report["details"]["track_protection"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("hls_key_methods");
+    let older: Inspection = serde_json::from_value(report.clone()).unwrap();
+    assert_eq!(serde_json::to_value(older).unwrap(), report);
+    let mp4 = json(&fixture("clip.mp4"));
+    assert!(
+        mp4["details"]["track_protection"][0]
+            .get("hls_key_methods")
+            .is_none()
+    );
 }
 #[test]
 fn older_reports_without_details_still_read_and_do_not_invent_observations() {

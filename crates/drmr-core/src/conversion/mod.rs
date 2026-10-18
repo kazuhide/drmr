@@ -166,7 +166,7 @@ impl Converter {
         output_key: &HlsOutputKey,
     ) -> Result<ConversionReport, ConversionError> {
         let workspace = workspace()?;
-        let localized = hls::localize(input, workspace.path(), hls_keys, &self.backend.stop)?;
+        let localized = hls::localize(input, workspace.path(), hls_keys, &self.backend)?;
         if localized.transport.is_some() {
             return Err(ConversionError("ts-input-requires-generic-hls-output"));
         }

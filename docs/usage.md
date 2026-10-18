@@ -16,7 +16,7 @@ Manifest reports describe declarations. MP4 reports read initialization metadata
 
 HLS inspection follows only local child playlists inside the input playlist's directory tree. It never fetches remote playlists, media segments, or keys. Remote, missing, cyclic, and escaping child references remain unresolved. Limits are 4 MiB per manifest, 16 MiB total, 32 playlists, and 128 references. Each track permits at most 64 key identifiers; DASH also limits inherited protection declarations to 64, and HLS permits at most 64 active key formats. MP4 movie metadata is limited to 16 MiB. This command is separate from `analyze-hls`, which downloads and probes media under an explicit source policy.
 
-`plan INPUT --to clear|cenc|cbcs|hls-aes128` describes the requested operations and independent input/output key roles. `--format mp4|dash|hls` selects output packaging; comma-separated values are accepted. Omitting it retains the input format. An HLS AES-128 target requires HLS output. CENC output to HLS is currently rejected. Unsupported source protection or unresolved encryption is reported as incompatible.
+`plan INPUT --to clear|cenc|cbcs|hls-aes128` describes the requested operations and independent input/output key roles. `--format mp4|dash|hls` selects output packaging; comma-separated values are accepted. Omitting it retains the input format. An HLS AES-128 target requires HLS output. CENC output to HLS is currently rejected. Unsupported source protection or unresolved encryption is reported as incompatible, except that a consistent SAMPLE-AES declaration can produce conditional HLS routes. Those routes still require the appropriate keys, IVs, and actual media validation.
 
 A compatible plan describes a valid format/protection combination. `execution_available` is a coarse version-one packaging check, not proof of a qualified media profile or a selected handler. The additional candidate list can be empty when declared track roles are unsupported. Execution still checks the actual source profile, keys, and media. Multiple requested output formats are planned together but must be converted in separate invocations. Plans contain no secret key values and cannot be submitted as trusted execution artifacts.
 
@@ -59,7 +59,31 @@ New commands use an owner-only JSON configuration, with no environment fallback.
 }
 ```
 
-`input.keys` maps MP4 key identifiers (KIDs) to decryption keys. `input.hls_keys` maps each exact HLS AES-128 key URI to a key supplied by you; drmr never retrieves those URIs. Omit unused input entries. For `cenc`/`cbcs`, provide `output.kid` and `output.key`. CBCS HLS also requires `output.hls_key_uri` for playlist signaling. For HLS AES-128, omit `output.kid` and provide `output.key` plus `output.hls_key_uri`; segment encryption does not use an MP4 key identifier. For clear output, omit `output` entirely.
+`input.keys` maps MP4 key identifiers (KIDs) to decryption keys. `input.hls_keys` maps each exact HLS AES-128 or SAMPLE-AES TS key URI to a key supplied by you; drmr never retrieves those URIs. Omit unused input entries. For `cenc`/`cbcs`, provide `output.kid` and `output.key`. CBCS HLS also requires `output.hls_key_uri` for playlist signaling. For HLS AES-128, omit `output.kid` and provide `output.key` plus `output.hls_key_uri`; segment encryption does not use an MP4 key identifier. For clear output, omit `output` entirely.
+
+For SAMPLE-AES TS, the content key also needs its associated initialization
+vector (IV). Supply `input.hls_keys[].iv` when the playlist does not provide an
+explicit IV. If both are supplied, they must match. Use the IV associated with
+that key; the segment number is not a substitute. A clear-output configuration
+can contain only:
+
+```json
+{
+  "schema_version": 1,
+  "input": {
+    "hls_keys": [{
+      "uri": "<exact URI from the input playlist>",
+      "key": "<32 hexadecimal characters>",
+      "iv": "<32 hexadecimal characters>"
+    }]
+  }
+}
+```
+
+```sh
+drmr convert encrypted-ts/media.m3u8 --to clear --format hls --output clear-hls --keys-file keys.json
+drmr verify clear-hls/master.m3u8 --source encrypted-ts/media.m3u8 --keys-file keys.json --json
+```
 
 The advertised HLS URI is written to output playlists, so choose a location suitable for publication. drmr generates fresh output initialization vectors and never publishes a key file. Input key URI mappings, raw keys, and initialization vectors are excluded from reports and diagnostics. The external packager accepts raw keys in child-process arguments; an operating-system process inspector with sufficient access can observe them.
 

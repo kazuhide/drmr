@@ -57,7 +57,7 @@ The existing `run` path processes prepared DASH assets. For clear HLS with expli
 
 ## Supported input
 
-The generic `convert` command accepts qualified local MP4 and fragmented MP4 DASH/HLS profiles, including encrypted input. See [conversion support](docs/conversion-support.md) for restrictions and tested routes. The older workflow commands have these separate input scopes:
+The generic `convert` command accepts qualified local MP4, fragmented MP4 DASH/HLS, and MPEG transport stream HLS profiles, including encrypted input. Transport stream input can be clear, AES-128, or SAMPLE-AES with supplied keys and initialization vectors. See [conversion support](docs/conversion-support.md) for restrictions and tested routes. The older workflow commands have these separate input scopes:
 
 - **Local DASH:** MP4 video with `avc1` (H.264) or `hvc1` (H.265), and MP4 audio with `mp4a` codec identifiers. The asset must use the supported downloaded-directory layout and per-representation segment templates. Other codecs and subtitle adaptations are excluded from this path.
 - **Clear, on-demand HLS:** supported MPEG transport stream or fragmented MP4 media with H.264/H.265 video and AAC-LC audio, plus supported WebVTT or MP4-carried TTML subtitle profiles. Analysis rejects unsupported playlists and media rather than treating every HLS stream as compatible.

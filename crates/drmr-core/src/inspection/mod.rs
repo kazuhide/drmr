@@ -10,8 +10,8 @@ mod planning;
 mod processing;
 
 pub use details::{
-    Cipher, DescriptionEvidence, EncryptionUnit, FactStatus, InspectionDetails, PatternDescription,
-    PeriodCount, ProtectionDescription, SampleCoverage,
+    Cipher, DescriptionEvidence, EncryptionUnit, FactStatus, HlsKeyMethod, InspectionDetails,
+    PatternDescription, PeriodCount, ProtectionDescription, SampleCoverage,
 };
 pub use planning::{ConversionPlan, OutputFormat, TargetProtection, plan};
 pub use processing::{

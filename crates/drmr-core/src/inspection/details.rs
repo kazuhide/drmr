@@ -2,6 +2,41 @@
 use super::{Evidence, Pattern, Protection, Track};
 use serde::{Deserialize, Serialize};
 
+/// Effective HLS methods observed in a media playlist, without key material or references.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HlsKeyMethod {
+    #[serde(rename = "NONE")]
+    None,
+    #[serde(rename = "AES-128")]
+    Aes128,
+    #[serde(rename = "SAMPLE-AES")]
+    SampleAes,
+    #[serde(rename = "SAMPLE-AES-CTR")]
+    SampleAesCtr,
+    #[serde(rename = "UNKNOWN")]
+    Unknown,
+}
+impl HlsKeyMethod {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "NONE",
+            Self::Aes128 => "AES-128",
+            Self::SampleAes => "SAMPLE-AES",
+            Self::SampleAesCtr => "SAMPLE-AES-CTR",
+            Self::Unknown => "UNKNOWN",
+        }
+    }
+    fn declaration(method: &str) -> Self {
+        match method {
+            "NONE" => Self::None,
+            "AES-128" => Self::Aes128,
+            "SAMPLE-AES" => Self::SampleAes,
+            "SAMPLE-AES-CTR" => Self::SampleAesCtr,
+            _ => Self::Unknown,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum DescriptionEvidence {
@@ -100,6 +135,8 @@ pub struct ProtectionDescription {
     pub sample_coverage: SampleCoverage,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sample_coverage_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hls_key_methods: Vec<HlsKeyMethod>,
 }
 impl ProtectionDescription {
     pub(super) fn new(protection: Protection, evidence: DescriptionEvidence) -> Self {
@@ -131,6 +168,7 @@ impl ProtectionDescription {
                 SampleCoverage::NotApplicable
             },
             sample_coverage_reason: sample.then(|| Self::coverage_reason(evidence).into()),
+            hls_key_methods: Vec::new(),
         }
     }
     fn coverage_reason(evidence: DescriptionEvidence) -> &'static str {
@@ -157,6 +195,10 @@ impl ProtectionDescription {
         result
     }
     pub(super) fn hls_methods(&mut self, methods: &std::collections::BTreeSet<String>) {
+        self.hls_key_methods = methods
+            .iter()
+            .map(|method| HlsKeyMethod::declaration(method))
+            .collect();
         let descriptions: Vec<_> = methods
             .iter()
             .map(|method| match method.as_str() {

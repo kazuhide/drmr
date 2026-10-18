@@ -9,6 +9,7 @@ pub enum ProcessingRouteId {
     DashPresentation,
     Fmp4HlsPresentation,
     MpegTsHls,
+    MpegTsSampleAesHls,
 }
 impl ProcessingRouteId {
     pub const fn as_str(self) -> &'static str {
@@ -18,6 +19,7 @@ impl ProcessingRouteId {
             Self::DashPresentation => "dash-presentation",
             Self::Fmp4HlsPresentation => "fmp4-hls-presentation",
             Self::MpegTsHls => "mpeg-ts-hls",
+            Self::MpegTsSampleAesHls => "mpeg-ts-sample-aes-hls",
         }
     }
     pub const fn explanation(self) -> &'static str {
@@ -36,6 +38,9 @@ impl ProcessingRouteId {
             }
             Self::MpegTsHls => {
                 "Admit the original local transport-stream resources, demultiplex their tracks, package fragmented MP4 HLS, and verify the actual final playlists against the original transport streams."
+            }
+            Self::MpegTsSampleAesHls => {
+                "Validate the original SAMPLE-AES transport streams, decrypt encoded frames with supplied keys and initialization vectors, verify every decrypted frame and original timestamp, then package fragmented MP4 HLS and compare its actual playlists with the original media."
             }
         }
     }
@@ -70,6 +75,7 @@ pub enum InputPreparation {
     LocalDashResources,
     LocalHlsResources,
     MpegTsDemux,
+    MpegTsSampleAesDecrypt,
     LocalTrackFiles,
 }
 impl InputPreparation {
@@ -79,6 +85,9 @@ impl InputPreparation {
             Self::LocalDashResources => "local DASH resources assembled into complete tracks",
             Self::LocalHlsResources => "local HLS resources assembled into complete tracks",
             Self::MpegTsDemux => "local transport-stream resources demultiplexed into tracks",
+            Self::MpegTsSampleAesDecrypt => {
+                "local SAMPLE-AES transport streams decrypted and checked against original packet evidence before track demultiplexing"
+            }
             Self::LocalTrackFiles => "the supplied complete local track files",
         }
     }

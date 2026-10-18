@@ -2,6 +2,7 @@
 
 use super::{
     Aes128Key, ContentKey, ConversionError, HlsInputKeys, HlsOutputKey, InputKeys, OutputKey,
+    SegmentIv,
 };
 use serde::Deserialize;
 use std::io::Read;
@@ -90,12 +91,16 @@ struct RawInput {
 struct RawHlsKey {
     uri: String,
     key: String,
+    iv: Option<String>,
 }
 
 impl Drop for RawHlsKey {
     fn drop(&mut self) {
         self.uri.zeroize();
         self.key.zeroize();
+        if let Some(iv) = &mut self.iv {
+            iv.zeroize();
+        }
     }
 }
 
@@ -159,10 +164,15 @@ pub fn read(path: &Path) -> Result<OperatorKeys, ConversionError> {
             Ok((
                 key.uri.clone(),
                 Aes128Key::from_hex(&key.key).map_err(|_| INVALID)?,
+                key.iv
+                    .as_deref()
+                    .map(SegmentIv::from_hex)
+                    .transpose()
+                    .map_err(|_| INVALID)?,
             ))
         })
         .collect::<Result<Vec<_>, ConversionError>>()?;
-    let hls_input = HlsInputKeys::new(hls_input).map_err(|_| INVALID)?;
+    let hls_input = HlsInputKeys::new_with_ivs(hls_input).map_err(|_| INVALID)?;
     let (output, hls_output) = match &raw.output {
         None => (None, None),
         Some(key) => match (&key.kid, &key.hls_key_uri) {
