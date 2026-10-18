@@ -290,7 +290,7 @@ impl Admission {
                     return Err(ConversionError("ts-adaptation-metadata-not-supported"));
                 }
                 if flags & 0x10 != 0 {
-                    if size < 7 || self.pcr_pid.is_some_and(|p| p != id) {
+                    if size < 7 || self.pcr_pid != Some(id) {
                         return Err(BAD);
                     }
                     let p = &bytes[6..12];
@@ -571,5 +571,56 @@ mod tests {
         state.packet(&packet).unwrap();
         packet[11] = 1;
         assert_eq!(state.packet(&packet).unwrap_err(), CLOCK);
+    }
+
+    #[test]
+    fn pcr_on_the_first_pat_cannot_replace_evidence_from_the_declared_pid() {
+        let mut clocked_pat = [0xff; 188];
+        clocked_pat[..6].copy_from_slice(&[0x47, 0x40, 0, 0x30, 7, 0x10]);
+        clocked_pat[6..12].copy_from_slice(&[0, 0, 0, 0, 0x7e, 0]);
+        clocked_pat[12] = 0;
+        let pat = pat();
+        clocked_pat[13..13 + pat.len()].copy_from_slice(&pat);
+        let mut program_map = [0xff; 188];
+        program_map[..5].copy_from_slice(&[0x47, 0x50, 0, 0x10, 0]);
+        let pmt = pmt();
+        program_map[5..5 + pmt.len()].copy_from_slice(&pmt);
+        let mut video_packet = [0xff; 188];
+        video_packet[..4].copy_from_slice(&[0x47, 0x41, 0, 0x10]);
+        let pes = [
+            0, 0, 1, 0xe0, 0, 0, 0x80, 0x80, 5, 0x21, 0, 1, 0, 1, 0x65, 0x80,
+        ];
+        video_packet[4..4 + pes.len()].copy_from_slice(&pes);
+        let root = crate::native::private_tempdir().unwrap();
+        let path = root.path().join("source.ts");
+        let admit = |packets: &[[u8; 188]]| {
+            std::fs::write(&path, packets.concat()).unwrap();
+            let mut state = Admission::default();
+            state
+                .segment(&path, &Stop::new())
+                .and_then(|()| state.finish())
+        };
+        assert_eq!(
+            admit(&[clocked_pat, program_map, video_packet]).unwrap_err(),
+            BAD
+        );
+        let mut plain_pat = [0xff; 188];
+        plain_pat[..5].copy_from_slice(&[0x47, 0x40, 0, 0x10, 0]);
+        plain_pat[5..5 + pat.len()].copy_from_slice(&pat);
+        assert_eq!(
+            admit(&[plain_pat, program_map, video_packet]).unwrap_err(),
+            BAD
+        );
+        // Even after a valid declaration, a system-table PID is not the PCR PID.
+        clocked_pat[3] |= 1;
+        assert_eq!(
+            admit(&[plain_pat, program_map, clocked_pat, video_packet]).unwrap_err(),
+            BAD
+        );
+        let mut clocked_video = [0xff; 188];
+        clocked_video[..6].copy_from_slice(&[0x47, 0x41, 0, 0x30, 7, 0x10]);
+        clocked_video[6..12].copy_from_slice(&[0, 0, 0, 0, 0x7e, 0]);
+        clocked_video[12..12 + pes.len()].copy_from_slice(&pes);
+        admit(&[plain_pat, program_map, clocked_video]).unwrap();
     }
 }
