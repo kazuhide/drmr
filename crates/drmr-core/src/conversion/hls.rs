@@ -559,6 +559,10 @@ impl Converter {
             input: input_report,
             output: output_report,
             verification,
+            processing: Some(inspection::ActualProcessing::new(
+                inspection::ProcessingRouteId::Fmp4HlsPresentation,
+                inspection::InputPreparation::CompleteFile,
+            )),
         })
     }
     pub(super) fn hls_input(
@@ -608,6 +612,7 @@ impl Converter {
             return Err(ConversionError("round-trip-verification-failed"));
         }
         report.input = localized.report;
+        report.describe_preparation(inspection::InputPreparation::LocalHlsResources);
         self.publish(&candidate, &destination)?;
         Ok(report)
     }

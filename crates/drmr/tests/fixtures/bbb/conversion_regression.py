@@ -46,12 +46,21 @@ def output_options(protection, kid, key, uri):
 
 def convert(binary, source, protection, destination, keys, environment):
     format_name = "hls" if protection == "hls-aes128" else "dash"
+    processing = {}
+
+    def inspect_result(stdout):
+        actual = json.loads(stdout)["processing"]
+        assert actual["route"] == ("fmp4-hls-presentation" if format_name == "hls" else "dash-presentation")
+        assert actual["input_preparation"] == ("local-hls-resources" if source.suffix == ".m3u8" else "local-dash-resources")
+        assert actual["required_tools"] == ["ffmpeg", "ffprobe", "shaka-packager"]
+        processing.update({name: actual[name] for name in ("route", "input_preparation", "required_tools")})
+
     seconds, memory = measured_run(
         [binary, "convert", source, "--to", protection, "--format", format_name,
-         "--output", destination, "--keys-file", keys, "--json"], environment)
+         "--output", destination, "--keys-file", keys, "--json"], environment, inspect_result)
     manifest = destination / ("master.m3u8" if format_name == "hls" else "manifest.mpd")
     assert manifest.is_file(), "conversion must publish a usable entry manifest"
-    return manifest, seconds, memory
+    return manifest, seconds, memory, processing
 
 
 def regression(binary, destination):
@@ -64,7 +73,7 @@ def regression(binary, destination):
         config = {"schema_version": 1,
                   "output": output_options(protection, SOURCE_KID, SOURCE_KEY, SOURCE_URI)}
         keys = private_json(destination / f"prepare-{protection}.json", config)
-        sources[protection], _, _ = convert(binary, clear, protection,
+        sources[protection], _, _, _ = convert(binary, clear, protection,
                                            destination / f"source-{protection}", keys, environment)
     rows = []
     for source_protection, source in sources.items():
@@ -79,7 +88,7 @@ def regression(binary, destination):
                 config["output"] = output
             name = f"{source_protection}-to-{target}"
             keys = private_json(destination / f"{name}.json", config)
-            result, elapsed, memory = convert(binary, source, target,
+            result, elapsed, memory, processing = convert(binary, source, target,
                                                destination / name, keys, environment)
             started = time.perf_counter()
             verification = json.loads(run([binary, "verify", result, "--source", source,
@@ -92,7 +101,7 @@ def regression(binary, destination):
             assert verification["license_playback_verified"] is False
             rows.append({"input": source_protection, "output": target, "passed": True,
                          "conversion_seconds": elapsed, "verification_seconds": verification_seconds,
-                         "memory": memory, "verification": verification})
+                         "memory": memory, "verification": verification, "processing": processing})
     return {"schema_version": 1, "success": True, "routes": rows,
             "fixture_sha256": metadata["clip"]["sha256"], "video_duration_seconds": 10,
             "source_video_segments": 5, "source_video_segment_seconds": 2,

@@ -95,6 +95,10 @@ fn real_mp4_clear_cenc_cbcs_nine_routes_use_independent_output_keys() {
                 )
                 .unwrap();
             assert!(report.verification.passed);
+            assert_eq!(
+                serde_json::to_value(&report).unwrap()["processing"]["route"],
+                "fragmented-mp4"
+            );
             assert!(report.verification.checks.decoded_content_equal);
             assert!(report.verification.checks.packet_payloads_equal);
             assert!(!report.verification.license_playback_verified);

@@ -206,6 +206,26 @@ fn inspect_representation(
     Ok(result)
 }
 
+fn dash_period_count(root: Node<'_, '_>, namespace: Option<&str>) -> super::PeriodCount {
+    let mut count = 0;
+    for period in root
+        .descendants()
+        .filter(|node| node.is_element() && node.tag_name().name() == "Period")
+    {
+        if period.parent() != Some(root) || period.tag_name().namespace() != namespace {
+            return super::PeriodCount {
+                status: super::FactStatus::Unknown,
+                count: None,
+            };
+        }
+        count += 1;
+    }
+    super::PeriodCount {
+        status: super::FactStatus::Known,
+        count: Some(count),
+    }
+}
+
 pub(super) fn inspect_dash(bytes: &[u8]) -> Result<Inspection, InspectionError> {
     let text = text(bytes)?;
     if text.contains("<!DOCTYPE") {
@@ -294,7 +314,8 @@ pub(super) fn inspect_dash(bytes: &[u8]) -> Result<Inspection, InspectionError> 
         tracks,
         systems,
         findings,
-    ))
+    )
+    .with_details(dash_period_count(root, namespace)))
 }
 
 #[derive(Clone)]
@@ -323,6 +344,7 @@ struct HlsDocument {
     has_media: bool,
     pending_duration: bool,
     pending_variant: Option<Reference>,
+    methods: BTreeSet<String>,
 }
 
 fn attributes(value: &str) -> Result<Attributes, InspectionError> {
@@ -389,7 +411,15 @@ impl HlsDocument {
     }
     fn current_protection(&mut self) -> Protection {
         if self.keys.is_empty() {
+            self.methods.insert("NONE".into());
             return Protection::Clear;
+        }
+        for key in self.keys.values() {
+            self.methods.insert(if key.valid {
+                key.method.clone()
+            } else {
+                "UNKNOWN".into()
+            });
         }
         if self
             .keys
@@ -447,6 +477,7 @@ impl HlsDocument {
             self.current_protection()
         } else {
             finding(&mut self.findings, "hls-segment-missing-duration");
+            self.methods.insert("UNKNOWN".into());
             Protection::Unknown
         };
         self.protections.push(protection);
@@ -484,6 +515,7 @@ impl HlsDocument {
                 attributes(value)?;
                 self.has_media = true;
                 self.protections.push(Protection::Unknown);
+                self.methods.insert("UNKNOWN".into());
                 finding(&mut self.findings, "hls-partial-segments-unverified");
             }
             "#EXT-X-STREAM-INF" => {
@@ -640,6 +672,7 @@ impl Traversal {
     fn inspect(&mut self, path: &Path, bytes: &[u8]) -> Result<Inspection, InspectionError> {
         let document = hls_document(bytes)?;
         let mut tracks = Vec::new();
+        let mut descriptions = Vec::new();
         let mut systems = document.systems;
         let mut findings = document.findings;
         if document.references.is_empty() {
@@ -649,16 +682,29 @@ impl Traversal {
                 finding(&mut findings, "hls-no-media-declarations");
             }
             tracks.push(item);
+            let mut detail = super::ProtectionDescription::track(&tracks[0], Evidence::Manifest);
+            detail.hls_methods(&document.methods);
+            descriptions.push(detail);
         } else {
             for reference in document.references {
                 let child = self.child(path, &reference)?;
-                for mut item in child.tracks {
+                let child_details = child.details.map(|details| details.track_protection);
+                for (index, mut item) in child.tracks.into_iter().enumerate() {
                     if item.kind == TrackKind::Unknown {
                         item.kind = reference.kind;
                     }
                     if item.codec.is_none() {
                         item.codec.clone_from(&reference.codec);
                     }
+                    descriptions.push(
+                        child_details
+                            .as_ref()
+                            .and_then(|details| details.get(index))
+                            .cloned()
+                            .unwrap_or_else(|| {
+                                super::ProtectionDescription::track(&item, Evidence::Manifest)
+                            }),
+                    );
                     tracks.push(item);
                 }
                 systems.extend(child.drm_systems);
@@ -672,13 +718,20 @@ impl Traversal {
                 }
             }
         }
-        Ok(Inspection::new(
+        let mut result = Inspection::new(
             InputFormat::Hls,
             Evidence::Manifest,
             tracks,
             systems,
             findings,
-        ))
+        )
+        .with_details(super::PeriodCount::not_applicable());
+        result
+            .details
+            .as_mut()
+            .expect("details were added")
+            .track_protection = descriptions;
+        Ok(result)
     }
 }
 
@@ -702,6 +755,9 @@ pub(super) fn inspect_hls(path: &Path, bytes: &[u8]) -> Result<Inspection, Inspe
     let mut result = traversal.inspect(&path, bytes)?;
     for (index, item) in result.tracks.iter_mut().enumerate() {
         item.id = format!("hls-{index:04}");
+        if let Some(details) = &mut result.details {
+            details.track_protection[index].track_id = Some(item.id.clone());
+        }
     }
     Ok(result)
 }

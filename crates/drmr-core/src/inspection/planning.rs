@@ -98,6 +98,8 @@ pub struct ConversionPlan {
     pub compatible: bool,
     pub execution_available: bool,
     pub findings: Vec<Finding>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub processing: Option<super::PlannedProcessing>,
 }
 
 fn progressive_candidate(input: &Inspection, target: TargetProtection) -> bool {
@@ -206,6 +208,7 @@ pub fn plan(
         operations.push("write-manifests".into());
     }
     operations.push("verify-output".into());
+    let processing = describe_processing(&input, target, &formats, compatible);
     ConversionPlan {
         schema_version: 1,
         input,
@@ -216,5 +219,84 @@ pub fn plan(
         compatible,
         execution_available,
         findings,
+        processing: Some(processing),
+    }
+}
+
+fn describe_processing(
+    input: &Inspection,
+    target: TargetProtection,
+    formats: &[OutputFormat],
+    compatible: bool,
+) -> super::PlannedProcessing {
+    use super::{
+        CandidateRoute, DescriptionEvidence, PlannedProcessing, PlanningStatus,
+        ProcessingRouteId as Route,
+    };
+    let protection = match target {
+        TargetProtection::Clear => Protection::Clear,
+        TargetProtection::Cenc => Protection::Cenc,
+        TargetProtection::Cbcs => Protection::Cbcs,
+        TargetProtection::HlsAes128 => Protection::HlsAes128,
+    };
+    let mut candidates = Vec::new();
+    // Unknown manifest roles need resource admission; known text tracks are refused by every handler.
+    if compatible
+        && !input
+            .tracks
+            .iter()
+            .any(|track| track.kind == TrackKind::Text)
+    {
+        for &format in formats {
+            match format {
+                OutputFormat::Mp4 => {
+                    let finite = input.format == InputFormat::Mp4
+                        && target == TargetProtection::Clear
+                        && matches!(input.protection, Protection::Clear | Protection::Cenc)
+                        && (progressive_candidate(input, target)
+                            || (input.tracks.len() == 1
+                                && input.tracks[0].kind == TrackKind::Audio
+                                && input.tracks[0].codec.as_deref() == Some("mp4a")));
+                    if finite {
+                        candidates.push(CandidateRoute::new(
+                            Route::ProgressiveMp4,
+                            format,
+                            "finite-progressive-profile-must-pass",
+                        ));
+                    }
+                    if input.tracks.len() == 1 {
+                        candidates.push(CandidateRoute::new(
+                            Route::FragmentedMp4,
+                            format,
+                            "single-track-fragmented-profile-without-finite-audio-tail-must-pass",
+                        ));
+                    }
+                }
+                OutputFormat::Dash => candidates.push(CandidateRoute::new(
+                    Route::DashPresentation,
+                    format,
+                    "local-mp4-or-fragmented-manifest-profile-must-pass",
+                )),
+                OutputFormat::Hls => {
+                    candidates.push(CandidateRoute::new(
+                        Route::Fmp4HlsPresentation,
+                        format,
+                        "local-mp4-or-fragmented-manifest-profile-must-pass",
+                    ));
+                    if input.format == InputFormat::Hls {
+                        candidates.push(CandidateRoute::new(
+                            Route::MpegTsHls,
+                            format,
+                            "local-transport-stream-profile-must-pass",
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    PlannedProcessing {
+        status: PlanningStatus::MetadataOnly,
+        target: super::ProtectionDescription::new(protection, DescriptionEvidence::RequestedTarget),
+        candidates,
     }
 }

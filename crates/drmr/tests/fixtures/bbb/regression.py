@@ -57,7 +57,7 @@ def rebuild_clip(archive_path, output):
                       "matches_committed_clip": output.read_bytes() == (FIXTURE / "clip.mp4").read_bytes()}))
 
 
-def measured_run(argv, env):
+def measured_run(argv, env, observe_stdout=None):
     """Sample resident memory separately for the CLI and its living descendants."""
     started = time.perf_counter()
     process = subprocess.Popen([str(arg) for arg in argv], stdout=subprocess.PIPE,
@@ -92,6 +92,8 @@ def measured_run(argv, env):
     sampler.join()
     if process.returncode:
         raise RuntimeError(f"{Path(argv[0]).name} exited {process.returncode}: {failure_detail(stderr, stdout)}")
+    if observe_stdout is not None:
+        observe_stdout(stdout)
     memory = {"status": "sampled" if samples else "unmeasured", "sample_interval_seconds": 0.1,
               "samples": len(samples),
               "cli_parent_sampled_peak_rss_bytes": max((row[0] for row in samples), default=None),
