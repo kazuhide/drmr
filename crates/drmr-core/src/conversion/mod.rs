@@ -269,13 +269,13 @@ impl Converter {
         if result_report.format != InputFormat::Mp4 {
             return Err(ConversionError("input-format-not-supported"));
         }
-        if progressive::validate_input(&source, &inspected, input_keys)? {
-            if result_report.protection == Protection::Clear {
-                if result_report.tracks.len() != inspected.tracks.len() {
-                    return Err(ConversionError("output-protection-mismatch"));
-                }
-                return self.verify_progressive(&source, &result, &inspected, input_keys);
+        if progressive::validate_input(&source, &inspected, input_keys)?
+            && result_report.protection == Protection::Clear
+        {
+            if result_report.tracks.len() != inspected.tracks.len() {
+                return Err(ConversionError("output-protection-mismatch"));
             }
+            return self.verify_progressive(&source, &result, &inspected, input_keys);
         }
         let source_report = validate(&source, input_keys)?;
         let result_report = validate(&result, output_keys)?;

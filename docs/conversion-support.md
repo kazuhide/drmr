@@ -40,7 +40,14 @@ drmr convert original.mp4 --to clear --format mp4 --output clear.mp4
 drmr verify clear.mp4 --source original.mp4 --json
 ```
 
-The finite-edit regressions use the attributed BBB fixture and pass automated tests on Linux x86_64 and Windows x64 with FFmpeg 9.0.2, and macOS ARM64 with FFmpeg 9.0.1. Cases cover audio alone, joint video/audio, reordered pictures, exact presentation windows, and rejected changes to timing and display properties. Encrypted output, complex edits, additional tracks, and combining different MP4 files are outside this progressive profile. See [processing and verification](media-processing.md) for the exact restrictions and why this route keeps progressive sample tables.
+For qualified `cenc` input, supply every track's identifier and key in the protected configuration's `input.keys` array. Clear output needs no output key:
+
+```sh
+drmr convert encrypted.mp4 --to clear --format mp4 --output clear.mp4 --keys-file source-keys.json
+drmr verify clear.mp4 --source encrypted.mp4 --keys-file source-keys.json --json
+```
+
+The existing clear-input finite-edit regressions use the attributed BBB fixture and pass automated tests on Linux x86_64 and Windows x64 with FFmpeg 9.0.2, and macOS ARM64 with FFmpeg 9.0.1. Cases cover audio alone, joint video/audio, reordered pictures, exact presentation windows, and rejected changes to timing and display properties. Encrypted output, complex edits, additional tracks, and combining different MP4 files are outside this progressive profile. See [processing and verification](media-processing.md) for the exact restrictions and why this route keeps progressive sample tables.
 
 The backend also tests joint video/audio HLS with clear, `cbcs`, and AES-128 output. `cenc` HLS output is refused. HLS AES-128 applies to HLS resources, so it cannot be selected as a standalone MP4 or DASH protection scheme. `cens` and `cbc1` can be identified but are not conversion targets.
 
