@@ -996,7 +996,9 @@ fn cancellation_after_transport_admission_reclaims_the_actual_locked_media_child
             Ok(winsafe::co::WAIT::OBJECT_0),
             "return preceded kernel process completion"
         );
-        exclusive_lock(&lock).expect("return preceded actual descendant lock release");
+        exclusive_lock(&lock).unwrap_or_else(|error| {
+            panic!("return preceded actual descendant lock release: {error:?}; result={result:?}")
+        });
         failure_cleanup.0 = None;
         assert_eq!(result.unwrap_err().0, "cancelled");
         assert!(!output.exists());

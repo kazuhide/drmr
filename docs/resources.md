@@ -60,6 +60,17 @@ waiting reservations and active captured tools. The supervisor terminates its ow
 process group or Windows job, reaps the direct child, and joins the pipe readers before
 returning the reservation.
 
+Sending a termination signal does not wait for descendants to finish closing files.
+For an owned Unix process group, drmr therefore waits until the kernel reports that
+the group no longer exists before confirming cleanup. An existing group or a permission
+response remains unconfirmed, including while exited processes await collection by
+their parent. After the direct child's exit status is collected, this group-completion
+wait has a 30-second deadline; it does not bound unrelated blocking I/O or pipe-reader
+joins. If absence cannot be confirmed, cleanup fails rather than reporting success or
+a completed cancellation. Tools inside a batch asset worker retain
+the worker supervisor's group ownership; they do not wait for their own inherited
+group to disappear.
+
 Generic `convert` and `verify` register Unix SIGINT and SIGTERM before starting tools.
 The same cancellation flag reaches track scheduling, resource admission, and active
 media commands; cancellation observed before final publication prevents that publication.
