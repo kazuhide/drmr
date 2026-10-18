@@ -427,6 +427,7 @@ impl Converter {
         self.backend.runner.register_workload(workload);
         let stage = super::workspace()?;
         let candidate = stage.path().join("progressive.mp4");
+        let packaging = self.backend.scope(super::measurement::Phase::Packaging);
         self.mux_progressive(
             source,
             &candidate,
@@ -434,6 +435,7 @@ impl Converter {
             &source_layout,
             source_keys,
         )?;
+        drop(packaging);
         super::private_file_mode(&candidate)?;
         let output = crate::inspection::inspect(&candidate)
             .map_err(|_| ConversionError("invalid-output-media"))?;
@@ -455,6 +457,7 @@ impl Converter {
         if !verification.passed {
             return Err(ConversionError("round-trip-verification-failed"));
         }
+        self.backend.checkpoint(&[&stage]);
         self.publish(&candidate, destination)?;
         Ok(Some(ConversionReport {
             schema_version: 1,

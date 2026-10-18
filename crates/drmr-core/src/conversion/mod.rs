@@ -43,6 +43,7 @@ use std::{
     time::Duration,
 };
 pub use verify::{CheckOutcome, VerificationChecks, VerificationReport};
+pub mod measurement;
 const MAX_MEDIA_BYTES: u64 = 16 * 1024 * 1024 * 1024;
 /// Fixed failure codes contain no paths, key material, or backend output.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
@@ -100,8 +101,26 @@ impl Converter {
                 ffmpeg: ffmpeg.into(),
                 ffprobe: "ffprobe".into(),
                 timeout: Duration::from_hours(1),
+                measurement: None,
             },
         }
+    }
+    /// Observe one operation in a fresh context, also when this converter is reused concurrently.
+    /// The ordinary media result and errors are returned unchanged.
+    pub fn measure<T>(
+        &self,
+        execute: impl FnOnce(&Self) -> Result<T, ConversionError>,
+    ) -> (Result<T, ConversionError>, measurement::MeasurementReport) {
+        let measurement = Arc::new(measurement::Measurements::default());
+        let mut backend = self.backend.clone();
+        backend.runner = Arc::new(self.backend.runner.observed(measurement.clone()));
+        backend.measurement = Some(Arc::clone(&measurement));
+        let command = Self {
+            backend,
+            maximum_workers: self.maximum_workers,
+        };
+        let result = execute(&command);
+        (result, measurement.report())
     }
     /// Share a cooperative cancellation flag with scheduling and media subprocesses.
     #[must_use]
@@ -110,10 +129,12 @@ impl Converter {
         self
     }
     fn publish(&self, source: &Path, destination: &Path) -> Result<(), ConversionError> {
+        let _scope = self.backend.scope(measurement::Phase::Publication);
         self.backend.check_cancelled()?;
         files::publish_file(source, destination, Some(&self.backend.stop))
     }
     fn publish_directory(&self, source: &Path, destination: &Path) -> Result<(), ConversionError> {
+        let _scope = self.backend.scope(measurement::Phase::Publication);
         self.backend.check_cancelled()?;
         files::publish_directory(source, destination, Some(&self.backend.stop))
     }
@@ -195,9 +216,14 @@ impl Converter {
         let destination = destination(output)?;
         let workspace = workspace()?;
         let snapshot = workspace.path().join("source.mp4");
-        copy_private(input, &snapshot)?;
-        let inspected =
-            inspection::inspect(&snapshot).map_err(|_| ConversionError("invalid-input-media"))?;
+        {
+            let _scope = self.backend.scope(measurement::Phase::InputPreparation);
+            copy_private(input, &snapshot)?;
+        }
+        let inspected = {
+            let _scope = self.backend.scope(measurement::Phase::Inspection);
+            inspection::inspect(&snapshot).map_err(|_| ConversionError("invalid-input-media"))?
+        };
         if inspected.format != InputFormat::Mp4 {
             return Err(ConversionError("input-format-not-supported"));
         }
@@ -211,19 +237,23 @@ impl Converter {
         self.backend
             .profile(&snapshot, source_key(&input_report, input_keys))?;
         let clear = workspace.path().join("clear.mp4");
+        let normalization = self.backend.scope(measurement::Phase::Normalization);
         self.backend.package(
             &snapshot,
             &clear,
             (input_report.protection != Protection::Clear).then_some(input_keys),
             None,
         )?;
+        drop(normalization);
         let candidate = workspace.path().join("candidate.mp4");
+        let packaging = self.backend.scope(measurement::Phase::Packaging);
         self.backend.package(
             &clear,
             &candidate,
             None,
             output_key.map(|key| (key, target)),
         )?;
+        drop(packaging);
         let output_report =
             inspection::inspect(&candidate).map_err(|_| ConversionError("invalid-output-media"))?;
         let expected = match target {
@@ -249,6 +279,7 @@ impl Converter {
         if !verification.passed {
             return Err(ConversionError("round-trip-verification-failed"));
         }
+        self.backend.checkpoint(&[&workspace]);
         self.publish(&candidate, &destination)?;
         Ok(ConversionReport {
             schema_version: 1,

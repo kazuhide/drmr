@@ -151,6 +151,26 @@ This synthetic pipe observation does not establish media conversion speed.
 
 ## Generic conversion
 
+Use `convert ... --measure --json` or `verify ... --measure --json` to add an
+optional `measurements` object to the normal result. The media checks and exit
+codes are unchanged. Without `--measure`, the JSON result has no measurement
+fields. A failed command retains its normal error rather than manufacturing a
+successful measurement report.
+
+Phase values are sums of explicitly timed scopes, including combined operations
+such as decryption and container changes in one Packager call. Parallel scopes
+can overlap: their sum is neither command wall time nor CPU time. Tool durations
+also sum overlapping calls and include admission waiting, captured or streamed
+output handling, and child cleanup. Do not add tool and phase sums together.
+Zero-count phases are unmeasured; coverage excludes uninstrumented Rust work.
+
+Workspace measurements inspect only owned private staging directories at explicit
+checkpoints after their tools have finished. They report regular-file logical
+lengths, with bounded traversal and no symlink or reparse-point following. These
+checkpoints can miss files created and deleted between observations. They are not
+an exact temporary-disk peak, allocated blocks, or total I/O bytes. Unavailable
+or incomplete observations are labelled; total process I/O remains unmeasured.
+
 `convert` and `verify` accept `--max-workers 1` through `64` as an upper bound.
 With no option, independent tracks share the CPU and memory admission described above.
 Snapshots and stream metadata are checked before parallel normalization. Results retain

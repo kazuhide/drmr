@@ -38,6 +38,9 @@ pub struct ConvertArgs {
     /// Print the versioned result as one JSON object.
     #[arg(long)]
     pub json: bool,
+    /// Include numeric measurements in JSON; does not change media verification.
+    #[arg(long, requires = "json")]
+    pub measure: bool,
 }
 
 #[derive(Args)]
@@ -59,6 +62,9 @@ pub struct VerifyArgs {
     /// Print the versioned verification result as one JSON object.
     #[arg(long)]
     pub json: bool,
+    /// Include numeric measurements in JSON; does not change media verification.
+    #[arg(long, requires = "json")]
+    pub measure: bool,
 }
 
 fn load(path: Option<&PathBuf>) -> Result<OperatorKeys, ExitCode> {
@@ -203,23 +209,32 @@ pub fn convert(args: &ConvertArgs) -> ExitCode {
     if !args.json {
         eprintln!("Converting and checking media...");
     }
-    let report = match converter(
+    let converter = converter(
         &args.packager_bin,
         args.max_workers,
         !args.json,
         cancellation.stop.clone(),
-    )
-    .convert(ConversionRequest {
-        input: &args.input,
-        output: &args.output,
-        format,
-        target: args.to,
-        input_keys: &keys.input,
-        hls_input_keys: &keys.hls_input,
-        output_key: keys.output.as_ref(),
-        hls_key_uri: keys.hls_output_uri(),
-        hls_output_key: keys.hls_output.as_ref(),
-    }) {
+    );
+    let execute = |command: &Converter| {
+        command.convert(ConversionRequest {
+            input: &args.input,
+            output: &args.output,
+            format,
+            target: args.to,
+            input_keys: &keys.input,
+            hls_input_keys: &keys.hls_input,
+            output_key: keys.output.as_ref(),
+            hls_key_uri: keys.hls_output_uri(),
+            hls_output_key: keys.hls_output.as_ref(),
+        })
+    };
+    let (result, measurement) = if args.measure {
+        let (result, measurement) = converter.measure(execute);
+        (result, Some(measurement))
+    } else {
+        (execute(&converter), None)
+    };
+    let report = match result {
         Ok(report) => report,
         Err(cause) => return error("convert", cause),
     };
@@ -227,7 +242,12 @@ pub fn convert(args: &ConvertArgs) -> ExitCode {
         return error("convert", ConversionError("cancelled"));
     }
     let result = if args.json {
-        json(&serde_json::to_value(&report).expect("conversion report serializes"))
+        let mut value = serde_json::to_value(&report).expect("conversion report serializes");
+        if let Some(measurement) = measurement {
+            value["measurements"] =
+                serde_json::to_value(measurement).expect("measurement serializes");
+        }
+        json(&value)
     } else {
         let mut out = std::io::stdout().lock();
         writeln!(
@@ -283,24 +303,33 @@ pub fn verify(args: &VerifyArgs) -> ExitCode {
     if !args.json {
         eprintln!("Comparing the source and result...");
     }
-    let report = match converter(
+    let converter = converter(
         &args.packager_bin,
         args.max_workers,
         !args.json,
         cancellation.stop.clone(),
-    )
-    .verify(VerificationRequest {
-        source: VerificationSource {
-            input: &args.source,
-            input_keys: &keys.input,
-            hls_keys: &keys.hls_input,
-        },
-        output: VerificationSource {
-            input: &args.output,
-            input_keys: &output_keys,
-            hls_keys: &output_hls_keys,
-        },
-    }) {
+    );
+    let execute = |command: &Converter| {
+        command.verify(VerificationRequest {
+            source: VerificationSource {
+                input: &args.source,
+                input_keys: &keys.input,
+                hls_keys: &keys.hls_input,
+            },
+            output: VerificationSource {
+                input: &args.output,
+                input_keys: &output_keys,
+                hls_keys: &output_hls_keys,
+            },
+        })
+    };
+    let (result, measurement) = if args.measure {
+        let (result, measurement) = converter.measure(execute);
+        (result, Some(measurement))
+    } else {
+        (execute(&converter), None)
+    };
+    let report = match result {
         Ok(report) => report,
         Err(cause) => return error("verify", cause),
     };
@@ -308,7 +337,12 @@ pub fn verify(args: &VerifyArgs) -> ExitCode {
         return error("verify", ConversionError("cancelled"));
     }
     let result = if args.json {
-        json(&serde_json::to_value(&report).expect("verification report serializes"))
+        let mut value = serde_json::to_value(&report).expect("verification report serializes");
+        if let Some(measurement) = measurement {
+            value["measurements"] =
+                serde_json::to_value(measurement).expect("measurement serializes");
+        }
+        json(&value)
     } else {
         writeln!(
             std::io::stdout().lock(),

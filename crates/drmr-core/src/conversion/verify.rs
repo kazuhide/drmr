@@ -97,6 +97,7 @@ impl Backend {
         source: StreamView<'_>,
         result: StreamView<'_>,
     ) -> Result<VerificationReport, ConversionError> {
+        let _scope = self.scope(super::measurement::Phase::Verification);
         let source_profile = self.profile_stream_keys(source.input, source.index, source.key)?;
         let result_profile = self.profile_stream_keys(result.input, result.index, result.key)?;
         let source_metadata = if source.metadata == source.input {

@@ -7,6 +7,7 @@ use crate::{
 use std::{fmt::Write as _, path::Path, sync::Arc, time::Duration};
 use zeroize::Zeroizing;
 
+#[derive(Clone)]
 pub(super) struct Backend {
     pub stop: crate::concurrency::Stop,
     pub runner: Arc<ToolRunner>,
@@ -14,8 +15,21 @@ pub(super) struct Backend {
     pub ffmpeg: String,
     pub ffprobe: String,
     pub timeout: Duration,
+    pub measurement: Option<Arc<super::measurement::Measurements>>,
 }
 impl Backend {
+    pub fn scope(&self, phase: super::measurement::Phase) -> super::measurement::Scope {
+        self.measurement
+            .as_ref()
+            .map_or_else(super::measurement::Scope::default, |meter| {
+                meter.scope(phase)
+            })
+    }
+    pub fn checkpoint(&self, roots: &[&super::files::Stage]) {
+        if let Some(meter) = &self.measurement {
+            meter.checkpoint(roots);
+        }
+    }
     pub fn check_cancelled(&self) -> Result<(), ConversionError> {
         if self.stop.is_set() {
             Err(ConversionError("cancelled"))
@@ -523,6 +537,7 @@ mod packet_tests {
                 ffmpeg: String::new(),
                 ffprobe: tool.to_str().unwrap().into(),
                 timeout: Duration::from_secs(20),
+                measurement: None,
             };
             assert_eq!(
                 backend.packets_stream(&input, 0, None).unwrap_err(),
