@@ -563,3 +563,67 @@ fn live_and_byte_range_profiles_fail_before_any_referenced_resource_is_read() {
         assert!(!directory.exists());
     }
 }
+
+fn bom_graph(root_bom: bool, child_bom: bool) {
+    let prefix = |bytes: &[u8], bom: bool| {
+        if bom {
+            [b"\xef\xbb\xbf".as_slice(), bytes].concat()
+        } else {
+            bytes.to_vec()
+        }
+    };
+    let master = prefix(
+        b"#EXTM3U\r\n#EXT-X-STREAM-INF:BANDWIDTH=1000\r\nchild.m3u8\r\n",
+        root_bom,
+    );
+    let child = prefix(b"#EXTM3U\r\n#EXT-X-TARGETDURATION:3\r\n#EXT-X-MEDIA-SEQUENCE:37\r\n#EXTINF:2.000000000,\r\nsegment.ts\r\n#EXT-X-ENDLIST\r\n", child_bom);
+    let server = Server::new(BTreeMap::from([
+        ("/source.m3u8", master.clone()),
+        ("/child.m3u8", child.clone()),
+        ("/segment.ts", vec![0x47; 188]),
+    ]));
+    let parent = tempfile::tempdir().unwrap();
+    let directory = parent.path().join("download");
+    let source = converter(Stop::new())
+        .download_hls(
+            &server.url(),
+            &directory,
+            &parent.path().join("output"),
+            &policy(),
+        )
+        .unwrap();
+    assert_eq!(
+        std::fs::read(directory.join("raw/r000000.m3u8")).unwrap(),
+        master
+    );
+    assert_eq!(
+        std::fs::read(directory.join("raw/r000001.m3u8")).unwrap(),
+        child
+    );
+    assert_eq!(
+        std::fs::read_to_string(source.entrypoint()).unwrap(),
+        std::str::from_utf8(&master)
+            .unwrap()
+            .replace("child.m3u8", "p000001.m3u8")
+    );
+    assert_eq!(
+        std::fs::read_to_string(directory.join("p000001.m3u8")).unwrap(),
+        std::str::from_utf8(&child)
+            .unwrap()
+            .replace("segment.ts", "media/r000000.ts")
+    );
+    assert_eq!(
+        std::fs::read(directory.join("media/r000000.ts")).unwrap(),
+        [0x47; 188]
+    );
+}
+
+#[test]
+fn bom_prefixed_master_preserves_original_and_projected_header_bytes() {
+    bom_graph(true, false);
+}
+
+#[test]
+fn bom_prefixed_child_preserves_original_and_projected_header_bytes() {
+    bom_graph(false, true);
+}

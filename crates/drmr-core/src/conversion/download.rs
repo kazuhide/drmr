@@ -591,8 +591,15 @@ impl Graph<'_> {
     ) -> Result<Vec<u8>, ConversionError> {
         let text = std::str::from_utf8(body).map_err(|_| INVALID)?;
         let mut result = Vec::new();
-        for raw in text.split_inclusive('\n') {
-            let line = raw.trim();
+        for (position, raw) in text.split_inclusive('\n').enumerate() {
+            // Match the shared parser's optional first-line BOM without altering
+            // the preserved header or any byte offsets used for URI replacement.
+            let content = if position == 0 {
+                raw.strip_prefix('\u{feff}').unwrap_or(raw)
+            } else {
+                raw
+            };
+            let line = content.trim();
             let uri = if !line.is_empty() && !line.starts_with('#') {
                 Some((raw.find(line).ok_or(INVALID)?, line.len(), line.to_owned()))
             } else if line.starts_with("#EXT-X-MAP:") || line.starts_with("#EXT-X-MEDIA:") {
