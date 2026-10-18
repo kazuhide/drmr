@@ -312,13 +312,22 @@ fn menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
 
 fn main() -> std::process::ExitCode {
     let arguments: Vec<_> = std::env::args_os().skip(1).collect();
+    if arguments.len() == 1 && arguments[0] == "--verify-bundle" {
+        return if checked_cli().is_ok() {
+            println!("bundle-cli-verified");
+            std::process::ExitCode::SUCCESS
+        } else {
+            eprintln!("drmr-desktop: bundled-cli-mismatch");
+            std::process::ExitCode::from(1)
+        };
+    }
     if arguments.len() == 1 && arguments[0] == "--version" {
         println!("drmr-desktop {}", env!("CARGO_PKG_VERSION"));
         return std::process::ExitCode::SUCCESS;
     }
     if arguments.len() == 1 && arguments[0] == "--help" {
         println!(
-            "drmr-desktop [--help | --version]\n\nOpen the native drmr console. Use the File menu to choose catalog and output folders."
+            "drmr-desktop [--help | --version | --verify-bundle]\n\nOpen the native drmr console. Use the File menu to choose catalog and output folders."
         );
         return std::process::ExitCode::SUCCESS;
     }

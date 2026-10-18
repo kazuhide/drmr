@@ -4,6 +4,7 @@ fn main() {
     use std::io::Read;
 
     let target = std::env::var("TARGET").expect("Cargo must provide TARGET");
+    println!("cargo:rustc-env=DRMR_BUILD_TARGET={target}");
     let suffix = if target.contains("windows") {
         ".exe"
     } else {

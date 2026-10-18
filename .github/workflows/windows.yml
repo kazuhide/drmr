@@ -104,12 +104,18 @@ jobs:
           Copy-Item .\docs\*.md "$archive\docs"
           python tools/collect_notices.py --output (Join-Path $archive 'licenses')
           if ($LASTEXITCODE -ne 0) { throw 'Dependency notice collection failed' }
+          python tools/verify_archive.py manifest --kind cli --target x86_64-pc-windows-msvc --directory $archive
+          if ($LASTEXITCODE -ne 0) { throw 'Build manifest creation failed' }
           Compress-Archive -Path "$archive\*" -DestinationPath "$archive.zip"
+          python tools/verify_archive.py verify --kind cli --target x86_64-pc-windows-msvc --archive "$archive.zip" --report (Join-Path $env:RUNNER_TEMP 'cli-archive-verification.json')
+          if ($LASTEXITCODE -ne 0) { throw 'Completed archive verification failed' }
 
       - name: Upload native CLI archive
         if: matrix.rust == 'stable'
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v4
         with:
           name: drmr-windows-x86_64
-          path: ${{ runner.temp }}/drmr-windows-x86_64.zip
+          path: |
+            ${{ runner.temp }}/drmr-windows-x86_64.zip
+            ${{ runner.temp }}/cli-archive-verification.json
           if-no-files-found: error
