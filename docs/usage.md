@@ -382,6 +382,9 @@ changed them. Unfenced legacy output remains unverified. Failed or incomplete
 reports remain readable as sanitized diagnostics without a playback URL; stale
 successful reports do not become a new verified result. This qualification is
 media verification, not a DRM license-service or device-playback guarantee.
+An already opened output response stops reading when a newer attempt invalidates
+its generation. It can finish sending bytes already buffered from the older
+verified output, but does not read the newer attempt's files under that authority.
 
 Requests must address `localhost`, `127.0.0.1`, `::1`, or an explicitly configured bind hostname/address. Binding to a wildcard address does not permit arbitrary hostnames. Reverse proxies and remote access are outside this local console's default setup.
 

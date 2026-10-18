@@ -533,12 +533,17 @@ impl ConversionJobManager {
             .public(&self.jobs_dir, asset_id, &output_root.join(asset_id))
     }
 
+    /// Unverified diagnostic metadata, without promoting a separately read report.
+    pub(crate) fn unverified_readiness(&self, asset_id: &str) -> Value {
+        crate::readiness::CatalogReadiness::unverified(&self.jobs_dir, asset_id)
+    }
+
     /// A completed generation whose current bytes and filesystem bindings still match.
     pub fn catalog_output(
         &self,
         asset_id: &str,
         output_root: &Path,
-    ) -> Option<std::sync::Arc<drmr_core::catalog_receipt::Verified>> {
+    ) -> Option<std::sync::Arc<crate::readiness::OutputGeneration>> {
         self.readiness
             .output(&self.jobs_dir, asset_id, &output_root.join(asset_id))
     }

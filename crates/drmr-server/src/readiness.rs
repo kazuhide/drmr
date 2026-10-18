@@ -16,6 +16,55 @@ pub(crate) struct Attempt {
     cancelled: Arc<AtomicBool>,
 }
 
+/// A completed generation owns every read authorized by its receipt.
+/// The lock covers file access only, never HTTP backpressure or a whole stream.
+pub struct OutputGeneration {
+    job_id: String,
+    verified: catalog_receipt::Verified,
+    live: Mutex<bool>,
+}
+
+impl std::ops::Deref for OutputGeneration {
+    type Target = catalog_receipt::Verified;
+    fn deref(&self) -> &Self::Target {
+        &self.verified
+    }
+}
+
+impl OutputGeneration {
+    fn new(job_id: String, verified: catalog_receipt::Verified) -> Self {
+        Self {
+            job_id,
+            verified,
+            live: Mutex::new(true),
+        }
+    }
+
+    pub(crate) fn read<T>(&self, action: impl FnOnce() -> io::Result<T>) -> io::Result<T> {
+        let live = self.live.lock().map_err(|_| unavailable())?;
+        if !*live {
+            return Err(unavailable());
+        }
+        action()
+    }
+
+    pub(crate) fn description(&self) -> io::Result<Value> {
+        self.read(|| Ok(self.public_value()))
+    }
+
+    fn public_value(&self) -> Value {
+        json!({"state":"verified", "reason":"qualified-generation", "job_id":self.job_id})
+    }
+
+    pub(crate) fn manifest_and_description(&self) -> io::Result<(String, Value)> {
+        self.read(|| Ok((self.manifest.clone(), self.public_value())))
+    }
+
+    pub(crate) fn report(&self, root: &Path) -> io::Result<(Value, Value)> {
+        self.read(|| Ok((catalog_receipt::read_report(root)?, self.public_value())))
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct CatalogReadiness {
     inner: Mutex<Inner>,
@@ -24,7 +73,7 @@ pub(crate) struct CatalogReadiness {
 #[derive(Default)]
 struct Inner {
     pending: HashMap<String, Attempt>,
-    cached: HashMap<String, (String, Arc<catalog_receipt::Verified>)>,
+    cached: HashMap<String, Arc<OutputGeneration>>,
     loading: HashSet<String>,
     active: HashMap<String, Arc<AtomicBool>>,
     rejected: HashSet<(String, String)>,
@@ -81,12 +130,21 @@ impl CatalogReadiness {
         if self.closing() {
             return Err(unavailable());
         }
-        // This fence is durable before the producer can modify old outputs.
+        // Exclude a bounded active read before fencing the next producer. The
+        // old authority cannot open or read after this lock is released.
+        let old = inner.cached.get(asset).cloned();
+        let mut live = old
+            .as_ref()
+            .map(|v| v.live.lock().map_err(|_| unavailable()))
+            .transpose()?;
         write(
             jobs,
             asset,
             &json!({"version":1,"asset_id":asset,"job_id":job,"state":"pending"}),
         )?;
+        if let Some(live) = live.as_mut() {
+            **live = false;
+        }
         inner.cached.remove(asset);
         inner.pending.retain(|_, attempt| attempt.asset_id != asset);
         inner.rejected.retain(|(id, _)| id != asset);
@@ -160,19 +218,15 @@ impl CatalogReadiness {
             return;
         }
         if let Some(verified) = verified {
-            inner
-                .cached
-                .insert(attempt.asset_id.clone(), (job.clone(), Arc::new(verified)));
+            inner.cached.insert(
+                attempt.asset_id.clone(),
+                Arc::new(OutputGeneration::new(job.clone(), verified)),
+            );
         }
     }
 
     /// Read current authority; generation hashing happens once, never under a global lock.
-    pub fn output(
-        &self,
-        jobs: &Path,
-        asset: &str,
-        root: &Path,
-    ) -> Option<Arc<catalog_receipt::Verified>> {
+    pub fn output(&self, jobs: &Path, asset: &str, root: &Path) -> Option<Arc<OutputGeneration>> {
         if self.closing() {
             return None;
         }
@@ -186,11 +240,7 @@ impl CatalogReadiness {
             if inner.rejected.contains(&(asset.to_string(), job.clone())) {
                 return None;
             }
-            let cached = inner
-                .cached
-                .get(asset)
-                .filter(|(id, _)| id == &job)
-                .map(|(_, v)| v.clone());
+            let cached = inner.cached.get(asset).filter(|v| v.job_id == job).cloned();
             if cached.is_none() && !inner.loading.insert(asset.to_string()) {
                 return None;
             }
@@ -215,13 +265,14 @@ impl CatalogReadiness {
                 Self::reject(&mut inner, jobs, asset, &job);
                 return None;
             };
-            let v = Arc::new(v);
-            inner
-                .cached
-                .insert(asset.to_string(), (job.clone(), v.clone()));
+            let v = Arc::new(OutputGeneration::new(job.clone(), v));
+            inner.cached.insert(asset.to_string(), v.clone());
             v
         };
-        if !verified.current_with(root, &|| self.closing()) {
+        if !verified
+            .read(|| Ok(verified.current_with(root, &|| self.closing())))
+            .unwrap_or(false)
+        {
             if self.closing() {
                 return None;
             }
@@ -241,7 +292,11 @@ impl CatalogReadiness {
     }
 
     fn reject(inner: &mut Inner, jobs: &Path, asset: &str, job: &str) {
-        inner.cached.remove(asset);
+        if let Some(generation) = inner.cached.remove(asset)
+            && let Ok(mut live) = generation.live.lock()
+        {
+            *live = false;
+        }
         inner.rejected.insert((asset.to_string(), job.to_string()));
         let _ = write(
             jobs,
@@ -251,10 +306,18 @@ impl CatalogReadiness {
     }
 
     pub fn public(&self, jobs: &Path, asset: &str, root: &Path) -> Value {
+        if let Some(generation) = self.output(jobs, asset, root)
+            && let Ok(value) = generation.description()
+        {
+            return value;
+        }
+        Self::unverified(jobs, asset)
+    }
+
+    pub(crate) fn unverified(jobs: &Path, asset: &str) -> Value {
         let record = read(jobs, asset).ok();
-        let verified = self.output(jobs, asset, root).is_some();
-        json!({"state":if verified {"verified"} else {"unverified"},
-            "reason":if verified {"qualified-generation"} else if record.is_none() && !Self::fenced(jobs,asset) {"legacy-unfenced"} else {"generation-unconfirmed"},
+        json!({"state":"unverified",
+            "reason":if record.is_none() && !Self::fenced(jobs,asset) {"legacy-unfenced"} else {"generation-unconfirmed"},
             "job_id":record.and_then(|r| r["job_id"].as_str().map(str::to_string))})
     }
 }
