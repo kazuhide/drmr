@@ -1,8 +1,9 @@
 //! Local, no-transcode conversion with explicit key roles and independent round-trip checks.
 //!
 //! Qualified local MP4, static DASH, and fragmented-MP4 HLS inputs use fresh source bytes.
-//! Joint DASH/HLS output preserves audio and video without transcoding. MP4 output is
-//! limited to one track. Unknown protection and unsupported presentation features fail closed.
+//! Joint DASH/HLS output preserves audio and video without transcoding. Clear progressive
+//! MP4 output supports finite-edit AAC with optional H.264 video from the same original file.
+//! Other MP4 output supports one track. Unknown protection and unsupported features fail closed.
 //! Shaka's raw-key interface passes keys to its child process as arguments. Records and
 //! errors are redacted, but operating-system process inspection can observe those arguments.
 mod aes128;
@@ -19,6 +20,7 @@ mod files;
 mod hls;
 mod keys;
 mod presentation;
+mod progressive;
 mod timing;
 pub use presentation::{
     ConversionRequest, TrackConversionRequest, VerificationRequest, VerificationSource,
@@ -179,6 +181,14 @@ impl Converter {
         let workspace = workspace()?;
         let snapshot = workspace.path().join("source.mp4");
         copy_private(input, &snapshot)?;
+        let inspected =
+            inspection::inspect(&snapshot).map_err(|_| ConversionError("invalid-input-media"))?;
+        if target == TargetProtection::Clear
+            && inspected.protection == Protection::Clear
+            && let Some(report) = self.progressive_mp4(&snapshot, &destination, &inspected)?
+        {
+            return Ok(report);
+        }
         let input_report = validate(&snapshot, input_keys)?;
         self.backend.profile(&snapshot)?;
         let clear = workspace.path().join("clear.mp4");

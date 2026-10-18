@@ -33,6 +33,7 @@ impl CheckOutcome {
     }
 }
 /// Packet timing compares every presentation timestamp, decode timestamp, and duration.
+/// The qualified progressive profile also compares exact presentation windows.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct VerificationChecks {
     pub stream_metadata: CheckOutcome,
@@ -107,7 +108,8 @@ impl Backend {
         let stream_metadata_equal = source_metadata == result_metadata;
         let packet_timing_equal = source_profile["time_base"] == result_profile["time_base"]
             && self.packets_stream(source.input, source.index)?
-                == self.packets_stream(result.input, result.index)?;
+                == self.packets_stream(result.input, result.index)?
+            && super::progressive::presentation_windows_equal(source.input, result.input)?;
         let packet_payloads_equal =
             self.hash_stream(source.input, source.index, true, source.key)?
                 == self.hash_stream(result.input, result.index, true, result.key)?;

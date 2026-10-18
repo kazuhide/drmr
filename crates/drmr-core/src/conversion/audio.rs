@@ -9,19 +9,24 @@ use std::{
 };
 const METADATA_LIMIT: u64 = 16 * 1024 * 1024;
 const UNSUPPORTED: ConversionError = ConversionError("audio-presentation-edit-not-supported");
-struct Movie {
-    bytes: Vec<u8>,
+pub(super) struct Movie {
+    pub bytes: Vec<u8>,
+    pub fragmented: bool,
 }
-fn movie(path: &Path) -> Result<Movie, ConversionError> {
+pub(super) fn movie(path: &Path) -> Result<Movie, ConversionError> {
     let mut file = File::open(path).map_err(|_| ConversionError("media-metadata-unreadable"))?;
     let length = file
         .metadata()
         .map_err(|_| ConversionError("media-metadata-unreadable"))?
         .len();
     let mut position = 0;
-    let mut movie = None;
+    let mut movie: Option<Movie> = None;
+    let mut fragmented = false;
     for _ in 0..100_000 {
         if position == length {
+            if let Some(movie) = &mut movie {
+                movie.fragmented = fragmented;
+            }
             return movie.ok_or(ConversionError("mp4-initialization-missing"));
         }
         let mut header = [0; 8];
@@ -43,6 +48,7 @@ fn movie(path: &Path) -> Result<Movie, ConversionError> {
         if size < bytes.len() as u64 || size > length - position {
             return Err(ConversionError("invalid-mp4-box"));
         }
+        fragmented |= &header[4..] == b"moof";
         if &header[4..] == b"emsg" {
             return Err(ConversionError("inband-events-not-supported"));
         }
@@ -67,7 +73,7 @@ fn movie(path: &Path) -> Result<Movie, ConversionError> {
                         .to_be_bytes(),
                 );
             }
-            movie = Some(Movie { bytes });
+            movie = Some(Movie { bytes, fragmented });
         }
         position += size;
         file.seek(SeekFrom::Start(position))

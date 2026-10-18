@@ -218,7 +218,7 @@ fn output_symlinks_are_rejected_without_modifying_their_target() {
 }
 
 #[test]
-fn missing_keys_unsupported_profiles_and_multi_track_inputs_fail_closed() {
+fn missing_keys_and_encrypted_multi_track_inputs_fail_closed() {
     let directory = tempfile::tempdir().unwrap();
     let source = directory.path().join("input.mp4");
     video(&source, "testsrc2=size=64x64:rate=5");
@@ -278,9 +278,9 @@ fn missing_keys_unsupported_profiles_and_multi_track_inputs_fail_closed() {
             .convert_mp4(
                 &av,
                 &output,
-                TargetProtection::Clear,
+                TargetProtection::Cenc,
                 &InputKeys::default(),
-                None
+                Some(&OutputKey::from_hex(KID_OUT, KEY_OUT).unwrap())
             )
             .unwrap_err(),
         ConversionError("single-track-mp4-required")

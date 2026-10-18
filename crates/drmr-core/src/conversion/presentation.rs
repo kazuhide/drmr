@@ -42,8 +42,24 @@ impl Converter {
         if request.format == OutputFormat::Mp4 {
             let work = workspace()?;
             let snapshot = work.path().join("source.mp4");
-            copy_private(&request.tracks[0].source, &snapshot)?;
-            prepare(&snapshot, 0, request.tracks[0].kind, request.input_keys)?;
+            let first = &request.tracks[0];
+            if request
+                .tracks
+                .iter()
+                .enumerate()
+                .any(|(index, track)| track.source != first.source || track.index != index)
+            {
+                return Err(ConversionError("mp4-requires-one-complete-presentation"));
+            }
+            copy_private(&first.source, &snapshot)?;
+            let actual = inspection::inspect(&snapshot)
+                .map_err(|_| ConversionError("invalid-input-media"))?;
+            if actual.tracks.len() != request.tracks.len() {
+                return Err(ConversionError("mp4-requires-one-complete-presentation"));
+            }
+            for track in request.tracks {
+                prepare(&snapshot, track.index, track.kind, request.input_keys)?;
+            }
             return self.convert_mp4(
                 &snapshot,
                 request.output,
@@ -354,6 +370,7 @@ fn validate_request(request: &TrackConversionRequest<'_>) -> Result<(), Conversi
     }
     if request.format == OutputFormat::Mp4
         && (request.tracks.len() != 1 || request.tracks[0].index != 0)
+        && !(request.target == TargetProtection::Clear && request.tracks.len() == 2)
     {
         return Err(ConversionError("multi-track-mp4-output-not-supported"));
     }
