@@ -360,7 +360,7 @@ DRMR_OUTPUT_ROOT=/absolute/path/output \
 drmr serve
 ```
 
-Open `http://127.0.0.1:8080`. Both root directories are required. `DRMR_BIND_PORT` changes the port; `DRMR_MAX_WORKERS` limits HLS packaging workers. The console requires catalog entries prepared for it; it is not a general file browser. See `drmr serve --help` for options. A standalone desktop application is not shipped.
+Open `http://127.0.0.1:8080`. Both root directories are required. `DRMR_BIND_PORT` changes the port; `DRMR_MAX_WORKERS` limits HLS packaging workers. The console requires catalog entries prepared for it; it is not a general file browser. See `drmr serve --help` for options. The optional [Desktop host](desktop.md) opens this same console in a native window.
 
 For clear HLS added through the console, the server saves source URLs, original playlists, and downloaded media in `DRMR_OUTPUT_ROOT/<asset-id>/clear/source/`. Keep this private folder protected: the saved information can contain signed URLs. Temporary request configuration files are separate; the server attempts to remove them after jobs finish, without deleting the saved source. Removing a job from history hides its record; saved sources, packaged media, and logs remain on disk.
 
@@ -368,7 +368,7 @@ Use **Stop** beside a running job to terminate that job and its child processes.
 
 On macOS and Linux, media tools use separate process groups: operating-system groups that can be stopped together. This lets a timed-out tool and its descendants be cleaned up independently. The console server owns these tool processes directly, as well as the job CLI, so cleanup still includes the tools if the CLI exits first. Windows uses nested job objects for this ownership. Completion requires confirmation of both the CLI and its managed tools. A pause or resume notification is not an exit: a paused tool remains owned and can still be terminated with Stop. Cleanup waits for an actual exit and confirmation that the owned process group is gone.
 
-Use the same version of `drmr` for the server's job CLI. If you set `--cli`, point it to that executable. Console jobs establish supervision before media work starts; an incompatible executable or a wrapper that launches another CLI process is refused. Use the standalone CLI for batch processing and other commands; the console's supervised job profile covers catalog conversion, HLS analysis and HLS packaging.
+Use the same version of `drmr` for the server's job CLI. If you set `--cli`, point it to that executable. On macOS and Linux, console jobs establish supervision before media work starts; an incompatible executable or a wrapper that launches another CLI process is refused. Use the standalone CLI for batch processing and other commands; the console's supervised job profile covers catalog conversion, HLS analysis and HLS packaging.
 
 If cleanup cannot be confirmed, the job keeps its execution slot and temporary configuration files; check the server log. Job status, stop and log endpoints remain available while shutdown waits or reports an error; new work is refused. A stop response only acknowledges the request. The job status and final log event establish completion. The local API accepts `POST /api/jobs/<job-id>/stop` with an empty JSON object (`{}`): `202` while running, `200` after completion, `404` for an unknown job, and `503` when cleanup is unconfirmed. Repeating a request is safe; an old job ID cannot stop a newer job.
 
@@ -391,6 +391,8 @@ its generation. It can finish sending bytes already buffered from the older
 verified output, but does not read the newer attempt's files under that authority.
 
 Requests must address `localhost`, `127.0.0.1`, `::1`, or an explicitly configured bind hostname/address. Binding to a wildcard address does not permit arbitrary hostnames. Reverse proxies and remote access are outside this local console's default setup.
+
+The console's before/after player uses local ClearKey test keys. Playback setup waits at most 20 seconds while the page's event loop runs, including previous-player cleanup, the local key response, media loading and the video actually starting to play. A loaded-media phase remains inside that same deadline until the video emits a playing event. A setup timeout restores the controls without changing conversion or verification results. Retry, or use a browser where this ClearKey test works. If cleanup of the previous player is unconfirmed, reload the page before retrying; the console keeps that owner instead of overlapping players. A key being configured is separate from usable playback, and a successful browser test does not qualify another browser or native WebView.
 
 ## Exit codes
 

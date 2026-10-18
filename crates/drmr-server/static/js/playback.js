@@ -9,7 +9,7 @@
   function t(key, values) { return App.I18n.t(key, values); }
   var AUTO_VALUE = '';
   var STATUS_KEYS = { idle: 'playerIdle', loading: 'playerLoading', playing: 'playerPlaying', error: 'playerError' };
-  var KEY_STATUS_KEYS = { requesting: 'keyRequesting', usable: 'keyUsable', error: 'keyError' };
+  var KEY_STATUS_KEYS = { requesting: 'keyRequesting', configured: 'keyConfigured', usable: 'keyUsable', error: 'keyError' };
 
   function create(byId) {
     var section = byId('play-section');
@@ -34,9 +34,15 @@
     function renderSideState(side, s) {
       s = s || side.player.getState();
       var status = side.busy && s.status !== 'error' ? 'loading' : s.status;
-      var parts = [t(STATUS_KEYS[status] || 'playerIdle')];
+      var label = status === 'loading' && s.phase === 'ready' ? 'playerAwaitingPlayback' : status === 'loading' && s.phase === 'media' ? 'playerLoadingMedia' : (STATUS_KEYS[status] || 'playerIdle');
+      var parts = [t(label)];
+      if (status === 'loading' && s.phase === 'teardown') parts.push(t('playbackCleanup'));
       if (s.keyStatus && s.keyStatus !== 'n/a') parts.push(t(KEY_STATUS_KEYS[s.keyStatus] || 'keyRequesting'));
-      if (s.lastError) { var code = String(s.lastError.message || '').match(/\b\d{4}\b/); parts.push(t('errorDetail') + ' ' + (code ? code[0] : t('requestError'))); }
+      if (s.lastError) {
+        if (s.lastError.code === 'playback-setup-timeout') parts.push(t('playbackSetupTimeout'));
+        else if (s.lastError.code === 'playback-cleanup-unconfirmed') parts.push(t('playbackCleanupUnconfirmed'));
+        else { var code = String(s.lastError.message || '').match(/\b\d{4}\b/); parts.push(t('errorDetail') + ' ' + (code ? code[0] : t('requestError'))); }
+      }
       if (side.note) parts.push(side.note);
       if (side.hint) parts.push(side.hint);
       UI.setText(side.stateEl, parts.join(' · '));

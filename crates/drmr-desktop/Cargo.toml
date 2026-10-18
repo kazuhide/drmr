@@ -1,0 +1,37 @@
+[package]
+name = "drmr-desktop"
+description = "Native window for the drmr local console"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = []
+desktop = ["dep:tauri", "dep:tauri-build", "dep:tauri-plugin-dialog", "dep:drmr-server", "dep:drmr-core", "dep:sha2", "tauri/custom-protocol"]
+
+[[bin]]
+name = "drmr-desktop"
+path = "src/main.rs"
+required-features = ["desktop"]
+
+[[test]]
+name = "arguments"
+required-features = ["desktop"]
+
+[dependencies]
+sha2 = { workspace = true, optional = true }
+url = "2.5.8"
+drmr-core = { path = "../drmr-core", optional = true }
+drmr-server = { path = "../drmr-server", optional = true }
+tauri = { version = "2.12.4", optional = true, default-features = false, features = ["wry", "compression", "common-controls-v6", "x11", "dbus"] }
+tauri-plugin-dialog = { version = "2.8.3", optional = true }
+
+[build-dependencies]
+sha2 = { workspace = true, optional = true }
+tauri-build = { version = "2.7.3", optional = true }
+
+[lints]
+workspace = true

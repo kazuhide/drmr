@@ -62,6 +62,10 @@ function harness(options = {}) {
       addEventListener() {}, activeElement: null },
     URL, location: { origin: 'http://127.0.0.1' }, console, setTimeout: () => 0, clearTimeout() {}, setInterval: () => 0, clearInterval() {},
   };
+  if (options.language) {
+    sandbox.localStorage = { getItem: () => options.language };
+    vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../../static/js/i18n.js'), 'utf8'), sandbox);
+  }
   for (const file of ['ui.js', 'model.js', 'console.js']) {
     let source = fs.readFileSync(path.join(__dirname, '../../static/js', file), 'utf8');
     if (file === 'console.js') {
@@ -69,7 +73,7 @@ function harness(options = {}) {
       const boot = "  document.addEventListener('DOMContentLoaded', boot);";
       assert.ok(source.includes(boot));
       source = source.replace(boot, `window.controller = {
-        state, cacheElements, bind, renderList, newLogView, applyRecord, settleProgress,
+        state, cacheElements, bind, renderList, newLogView, applyRecord, settleProgress, finishRun,
         renderLogMeta, suggestedName, discoverRunning, renderRuns, requestStop,
         renderPlaybackControls, preparePreview, recompose, renderReport, loadCatalogReport, startConvert, renderInput, renderHead,
         onPlayback: function (value) { playback = value; },
@@ -91,7 +95,7 @@ function harness(options = {}) {
     for (const id of ids) assert.equal(checkbox(id).checked, false, id + ' starts unchecked');
     assert.equal(element('bulk-bar').hidden, true);
   };
-  return { controller, element, checkbox, toggle, unchecked, queued };
+  return { controller, element, checkbox, toggle, unchecked, queued, i18n: sandbox.window.App.I18n };
 }
 
 test('special catalog IDs render unchecked and toggle independently', () => {
@@ -376,3 +380,73 @@ test('a newly running analysis replaces the previous asset failure notice', () =
   assert.equal(descendants(h.element('input-state')).some(node => node.textContent === 'analysisJobFailed'), false);
   assert.equal(descendants(h.element('input-state')).some(node => node.textContent === 'finding_analysis-interrupted'), false);
 });
+
+
+for (const language of ['en', 'ja']) {
+  test(language + ': interrupted catalog conversion warns without rewriting its exit or completed work', async () => {
+    const h = harness({ language, catalog: [{ asset_id: 'asset', label: 'Asset' }] });
+    h.controller.state.selectedId = 'asset';
+    const view = h.controller.newLogView('job', 'asset', 'convert', true);
+    h.controller.applyRecord(view, { stage: 'merge', rendition_id: 'pending' });
+    h.controller.applyRecord(view, { stage: 'report', rendition_id: 'complete' });
+    h.controller.applyRecord(view, { stage: 'encrypt', rendition_id: 'failed', level: 'error' });
+    h.controller.applyRecord(view, { stage: 'hls-source', track_id: 'audio', index: 1, total: 5 });
+    const run = { jobId: 'job', assetId: 'asset', kind: 'convert', startedAt: Date.now(), view };
+    h.controller.state.run = run;
+    h.controller.finishRun(run, { state: 'interrupted', exit_code: -9 });
+    await flush();
+    const notice = h.element('content-notice').children[0];
+    assert.match(notice.className, /notice-warn/);
+    assert.equal(descendants(notice).map(node => node.textContent).join(''), h.i18n.t('convertInterrupted', { elapsed: h.i18n.t('unitSec', { s: Math.round(run.elapsedMs / 1000) }) }));
+    assert.equal(run.exitCode, -9);
+    assert.equal(view.outcome, 'interrupted');
+    assert.equal(view.progress.renditions.pending, 'interrupted');
+    assert.equal(view.progress.renditions.complete, 'done');
+    assert.equal(view.progress.renditions.failed, 'failed');
+    assert.equal(view.progress.tracks.audio.status, 'interrupted');
+    h.controller.renderLogMeta(view);
+    const rows = descendants(h.element('log-strips')).filter(node => node.className === 'strip');
+    for (const id of ['pending', 'audio']) {
+      const row = rows.find(node => node.dataset.trackId === id);
+      assert.equal(row.dataset.status, 'interrupted');
+      assert.ok(descendants(row).some(node => node.textContent.includes(h.i18n.t('strip_interrupted'))));
+    }
+  });
+}
+
+test('terminal failures remain failures and lost logs remain unknown', async () => {
+  const h = harness({ catalog: [{ asset_id: 'asset' }] });
+  h.controller.state.selectedId = 'asset';
+  const view = h.controller.newLogView('job', 'asset', 'convert', true);
+  h.controller.applyRecord(view, { stage: 'merge', rendition_id: 'pending' });
+  const run = { jobId: 'job', assetId: 'asset', kind: 'convert', startedAt: Date.now(), view };
+  h.controller.state.run = run;
+  h.controller.finishRun(run, { state: 'failed', exit_code: 7 });
+  await flush();
+  assert.match(h.element('content-notice').children[0].className, /notice-fail/);
+  assert.equal(descendants(h.element('content-notice')).map(node => node.textContent).join(''), 'convertFailed');
+  assert.equal(run.exitCode, 7);
+  assert.equal(view.progress.renditions.pending, 'failed');
+  const lost = h.controller.newLogView('lost', 'asset', 'convert', false);
+  lost.interrupted = true;
+  lost.outcome = 'failed';
+  h.controller.applyRecord(lost, { stage: 'merge', rendition_id: 'pending' });
+  h.controller.settleProgress(lost, false);
+  assert.equal(lost.progress.renditions.pending, 'unknown');
+});
+
+for (const kind of ['analysis', 'package']) {
+  test('interrupted ' + kind + ' uses a warning rather than a failure notice', async () => {
+    const h = harness({ catalog: [{ asset_id: 'asset' }] });
+    h.controller.state.selectedId = 'asset';
+    const view = h.controller.newLogView('job', 'asset', kind, true);
+    const run = { jobId: 'job', assetId: 'asset', kind, startedAt: Date.now(), view };
+    h.controller.state.run = run;
+    h.controller.finishRun(run, { state: 'interrupted', exit_code: -9 });
+    await flush();
+    const notice = h.element('content-notice').children[0];
+    assert.match(notice.className, /notice-warn/);
+    assert.match(descendants(notice).map(node => node.textContent).join(''), kind === 'analysis' ? /finding_analysis-interrupted/ : /packageInterrupted/);
+    assert.equal(run.exitCode, -9);
+  });
+}

@@ -1,0 +1,95 @@
+name: Desktop native builds
+
+on:
+  pull_request:
+    paths:
+      - 'crates/drmr-desktop/**'
+      - 'crates/drmr-server/**'
+      - 'crates/drmr-core/**'
+      - 'crates/drmr/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'tools/build_desktop.py'
+      - 'tools/collect_notices.py'
+      - 'tools/desktop-licenses/**'
+      - 'tools/tests/test_build_desktop.py'
+      - 'docs/desktop.md'
+      - '.github/workflows/desktop.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-build:
+    name: Build / ${{ matrix.os }} / ${{ matrix.rust }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14, windows-latest]
+        rust: [minimum, stable]
+    env:
+      CARGO_BUILD_JOBS: 2
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target/desktop
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install the packaging Python runtime
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13.12'
+
+      - name: Install Linux WebView build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libwebkit2gtk-4.1-dev libgtk-3-dev libdbus-1-dev librsvg2-dev pkg-config
+
+      - name: Install the supported Rust toolchain
+        run: |
+          rust_channel="${{ matrix.rust }}"
+          if [[ "$rust_channel" == minimum ]]; then
+            rust_channel="$(python .github/scripts/minimum-rust.py)"
+          fi
+          rustup toolchain install "$rust_channel" --profile minimal --component clippy,rustfmt --no-self-update
+          printf 'RUSTUP_TOOLCHAIN=%s\n' "$rust_channel" >> "$GITHUB_ENV"
+          rustup run "$rust_channel" cargo --version
+          rustup run "$rust_channel" rustc --version
+
+      - name: Check headless host policy and packaging
+        run: |
+          cargo test --locked -p drmr-desktop
+          python -m unittest discover -s tools/tests -p test_build_desktop.py -v
+          cargo fmt --all -- --check
+
+      - name: Stage the matching CLI and publisher notices
+        run: python tools/build_desktop.py --prepare-only
+
+      - name: Check the native feature with Clippy
+        run: cargo clippy --locked -p drmr-desktop --features desktop --all-targets -- -D warnings
+
+      - name: Check all headless native host contracts
+        run: cargo test --locked -p drmr-desktop --features desktop
+
+      - name: Build the native host and unsigned bundle
+        run: python tools/build_desktop.py --release --bundle
+
+      - name: Upload native build artifacts
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: desktop-build-${{ runner.os }}-${{ runner.arch }}-${{ matrix.rust }}
+          path: |
+            target/desktop/desktop-bundles/*.tar.gz
+            target/desktop/desktop-bundles/*.zip
+          if-no-files-found: error
+          retention-days: 14
