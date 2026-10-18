@@ -50,19 +50,26 @@ def regression(binary, directory, condition="uncontrolled"):
         for phase in ("convert", "verify"):
             value = row[phase]
             work = value["work_measurements"]
-            assert any(tool["calls"] > 0 for tool in work["tools"])
-            assert work["workspace"]["checkpoints"] > 0
-            assert work["workspace"]["checkpoint_regular_file_bytes_max"] > 0
-            assert any(scope["phase"] == "verification" and scope["scopes"] > 0 for scope in work["phases"])
             memory = value["memory"]
-            assert memory["status"] in ("sampled", "partial"), "required process observations are missing"
-            assert memory["samples"] > 0
-            assert memory["parent_sampled_peak_bytes"] > 0
-            assert memory["descendant_sampled_peak_bytes"] > 0
-            assert memory["observed_peak_descendant_count"] > 0
-            assert memory["metric_kind"] == ("windows-working-set" if os.name == "nt" else "unix-rss")
+
+            def observation_failure():
+                return "measurement-observation-failed: " + json.dumps({
+                    "condition": condition, "mode": row["mode"], "phase": phase,
+                    "elapsed_seconds": value["elapsed_seconds"], "memory": memory,
+                    "work_measurements": work}, allow_nan=False)
+
+            assert any(tool["calls"] > 0 for tool in work["tools"]), observation_failure()
+            assert work["workspace"]["checkpoints"] > 0, observation_failure()
+            assert work["workspace"]["checkpoint_regular_file_bytes_max"] > 0, observation_failure()
+            assert any(scope["phase"] == "verification" and scope["scopes"] > 0 for scope in work["phases"]), observation_failure()
+            assert memory["status"] in ("sampled", "partial"), observation_failure()
+            assert memory["samples"] > 0, observation_failure()
+            assert memory["parent_sampled_peak_bytes"] > 0, observation_failure()
+            assert memory["descendant_sampled_peak_bytes"] > 0, observation_failure()
+            assert memory["observed_peak_descendant_count"] > 0, observation_failure()
+            assert memory["metric_kind"] == ("windows-working-set" if os.name == "nt" else "unix-rss"), observation_failure()
             if os.name == "nt":
-                assert memory["observer_cleanup"] == "confirmed-exit"
+                assert memory["observer_cleanup"] == "confirmed-exit", observation_failure()
     encoded = json.dumps(report, allow_nan=False)
     assert str(directory) not in encoded and str(binary) not in encoded
     assert "40404040404040404040404040404040" not in encoded
