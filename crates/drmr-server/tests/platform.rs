@@ -973,6 +973,8 @@ fn the_queue_runner_survives_a_closed_stderr() {
         setup.options.queue_runner = QueueRunner::Inert;
         setup.options.log_fails = true;
     });
+    // Harness cleanup also terminates the held child if an assertion unwinds.
+    h.cli.hold();
     for asset in ["q1", "q2"] {
         stage(&h.catalog, asset);
     }
@@ -982,6 +984,7 @@ fn the_queue_runner_survives_a_closed_stderr() {
     std::fs::rename(&h.cli.script, h.cli.script.with_extension("disabled")).unwrap(); // q1 cannot be launched: a skip, logged
     assert!(queue.run_once(), "the iteration survives the failed write");
     std::fs::rename(h.cli.script.with_extension("disabled"), &h.cli.script).unwrap();
+    assert_eq!(h.cli.calls(), 0, "q1 never entered the fake CLI");
     assert!(
         h.logs()
             .iter()
@@ -989,8 +992,13 @@ fn the_queue_runner_survives_a_closed_stderr() {
         "the skip record was written and failed"
     );
     assert!(queue.run_once());
+    h.cli.wait_calls(1);
+    assert_eq!(h.cli.calls(), 1, "only q2 reached the fake CLI");
     let snapshot = queue.snapshot();
     assert_eq!(snapshot["running"]["asset_id"], "q2", "{snapshot}");
+    let job_id = snapshot["running"]["job_id"].as_str().unwrap();
+    assert_eq!(snapshot["recent"][1]["asset_id"], "q1");
+    assert_eq!(snapshot["recent"][1]["outcome"], "skipped");
     assert_eq!(snapshot["recent"][1]["reason"], "job-launch-failed");
     assert!(queue.runner_active(), "the slot is still the live runner's");
     assert_eq!(
@@ -998,7 +1006,13 @@ fn the_queue_runner_survives_a_closed_stderr() {
         500,
         "the queue diagnostic failure becomes an HTTP error"
     );
+    assert!(h.app().manager.is_busy(), "q2 remains held after the error");
+    h.cli.release(0);
     support::wait_until(|| !h.app().manager.is_busy());
+    let finished = h.app().manager.status(job_id).unwrap();
+    assert_eq!(finished.state, "succeeded");
+    assert_eq!(finished.exit_code, Some(0));
+    assert!(!h.app().manager.is_busy());
 }
 
 #[test]
