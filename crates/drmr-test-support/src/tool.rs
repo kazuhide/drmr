@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+mod broker_bootstrap;
 mod control;
 mod packager_proxy;
 mod probe_proxy;
@@ -55,12 +56,16 @@ fn install(path: &Path) -> io::Result<()> {
     Ok(())
 }
 fn main() {
-    let args: Vec<std::ffi::OsString> = env::args_os().skip(1).collect();
+    let mut args: Vec<std::ffi::OsString> = env::args_os().skip(1).collect();
     match control::child_entry(&args) {
         Ok(true) => return,
         Ok(false) => {}
         Err(_) => std::process::exit(125),
     }
+    let _broker = match broker_bootstrap::connect(&mut args) {
+        Ok(broker) => broker,
+        Err(_) => std::process::exit(125),
+    };
     if args.first().is_some_and(|a| a == "--install") {
         if args.len() != 2 || install(Path::new(&args[1])).is_err() {
             std::process::exit(1);
