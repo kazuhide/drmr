@@ -191,6 +191,9 @@ one thread. Shaka Packager uses `--single_threaded` and `--io_cache_size=0`, dis
 otherwise separate per-file threaded I/O caches. Parallel work is coordinated outside
 these tools. The tradeoff is measured with the same complete verification in both modes.
 
+The optional benchmark scripts are in the source checkout; run them from the repository
+root with Python 3.9 or later. Python is not required for the CLI itself.
+
 For a paired worker comparison, build the CLI first, then run:
 
 ```sh
@@ -208,13 +211,30 @@ measurement tool. Helper report schema 2 keeps optional work measurements under
 each conversion and verification, alongside command elapsed time and memory samples.
 The media-proof fields remain separate.
 
-Linux and macOS use process-table RSS samples. Windows uses read-only process
+Linux and macOS use process-table resident set size (RSS) samples. Windows uses read-only process
 handles and working-set samples, checking creation identities and parent lifetimes
 before attributing descendants. A pass queries processes sequentially; its sum is
 not an atomic simultaneous snapshot. Short-lived processes, query failures, and
 sampling limits can leave incomplete observations. These are labelled partial or
 unmeasured, with null values when no usable sample exists. They are not complete
 zero-byte observations or proof that every child was seen.
+
+A short command can finish between samples. Parent and descendant peaks are
+positive observations or `null`, never an assumed zero when memory was not observed.
+Fixed counters distinguish a missing root, a failed query, no observed child rows,
+and child rows whose resident bytes were zero. A positive observed child count with
+a null memory peak means child rows were seen, without a positive memory observation.
+It does not establish that the child's lifetime peak was zero. Status and reason
+labels describe these gaps separately from media verification.
+
+Summary medians use a separate observed-run count for parent and descendant memory.
+Missing values are excluded with their own counts; an entirely missing metric stays
+null. Command elapsed-time medians still include all successfully verified measured
+runs. The helper's success field means media conversion and independent verification
+passed, not that every memory metric was measured. Each operating system also has a
+mandatory held-child test through the real measurement helper, requiring positive
+memory observations and confirmed owned cleanup. This checks the observation path
+without extending a real media command artificially or replacing its media checks.
 
 The Windows observer is a separate owned helper, with no child processes or threads.
 It emits one bounded numeric summary through a private pipe. The controller reads

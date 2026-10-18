@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import signal
 import subprocess
+import subprocess
 import sys
 import tempfile
 import time
@@ -48,6 +49,17 @@ def metrics():
 
 
 class MeasurementBoundary(unittest.TestCase):
+    def test_malformed_ps_rows_are_query_failures_and_not_zero_memory(self):
+        for raw in (b"1 0 -1\n", b"-1 0 1\n", b"1 -1 1\n", b"1 0 1\n1 0 2\n",
+                    b"1 0 9999999999999999999999999\n", b"1 0\n", b"1 0 true\n"):
+            with self.subTest(raw=raw), mock.patch.object(
+                    measure.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, raw)):
+                with self.assertRaises(ValueError):
+                    measure.sample_processes(1)
+        with mock.patch.object(measure.subprocess, "run", return_value=subprocess.CompletedProcess(
+                [], 0, b"0 0 0\n10 1 100\n20 10 200\n")):
+            self.assertEqual(measure.sample_processes(10), (102400, 204800, 1))
+
     def test_raw_duplicate_members_are_refused_before_values_can_be_collapsed(self):
         value = {"schema_version": 1, "measurements": metrics(), "verification": {
             "media_verified": True}}
@@ -108,7 +120,8 @@ class MeasurementBoundary(unittest.TestCase):
                     payload["verification"]["media_verified"] = False
             else:
                 payload = {**proof, "measurements": metrics()}
-            return {"status": "completed", "elapsed_seconds": 0.1, "memory": {"status": "unmeasured"}}, payload
+            return {"status": "completed", "elapsed_seconds": 0.1,
+                    "memory": measure.OBSERVER.missing("no-process-samples", metric_kind="unix-rss")}, payload
         report = {"runs": []}
         with mock.patch.object(measure, "measured_run", side_effect=run), mock.patch.object(
                 measure, "query", side_effect=lambda _binary, arguments, _env:
@@ -138,6 +151,30 @@ class MeasurementBoundary(unittest.TestCase):
         self.assertEqual(calls, ["convert"])
         self.assertEqual(report["runs"], [])
         self.assertEqual(report["warmups"][0]["status"], "failed")
+
+    def test_summary_keeps_missing_memory_out_of_medians_and_counts_each_denominator(self):
+        missing = measure.OBSERVER.missing("no-process-samples", metric_kind="unix-rss")
+        parent = dict(missing)
+        measure.OBSERVER.record(parent, 100, 0, 0)
+        parent = measure.OBSERVER.summarize(parent)
+        joint = dict(missing)
+        measure.OBSERVER.record(joint, 300, 900, 1)
+        joint = measure.OBSERVER.summarize(joint)
+        rows = [{"mode": "auto", "status": "verified",
+                 **{phase: {"elapsed_seconds": i + 1, "memory": value} for phase in ("convert", "verify")}}
+                for i, value in enumerate((missing, parent, joint))]
+        result = measure.summarize(rows)["auto"]["convert"]
+        self.assertEqual(result["median_parent_sampled_peak_bytes"], 200)
+        self.assertEqual(result["parent_observed_runs"], 2)
+        self.assertEqual(result["parent_unmeasured_runs"], 1)
+        self.assertEqual(result["median_descendant_sampled_peak_bytes"], 900)
+        self.assertEqual(result["descendant_observed_runs"], 1)
+        self.assertEqual(result["descendant_unmeasured_runs"], 2)
+        self.assertEqual([result[name] for name in ("sampled_runs", "partial_runs", "unmeasured_runs")], [1, 1, 1])
+        only_missing = measure.summarize(rows[:1])["auto"]["verify"]
+        self.assertIsNone(only_missing["median_parent_sampled_peak_bytes"])
+        self.assertIsNone(only_missing["median_descendant_sampled_peak_bytes"])
+        self.assertIsNone(only_missing["maximum_observed_descendant_count"])
 
 
 @unittest.skipUnless(os.name == "posix", "POSIX termination-event contract")

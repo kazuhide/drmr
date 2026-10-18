@@ -10,6 +10,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 SPEC = importlib.util.spec_from_file_location(
     "measurement_observer", Path(__file__).resolve().parents[1] / "measurement_observer.py"
@@ -56,6 +57,116 @@ class Api:
 
 
 class AttributionTests(unittest.TestCase):
+    def test_a_provider_snapshot_cap_is_a_sticky_limit_not_an_ordinary_query_failure(self):
+        api = Api()
+        api.rows = [(10, 1), (20, 10)]
+        sampler = observer.Sampler(api, 10, 100, 0.1)
+        try:
+            sampler.sample()
+            class Entry(ctypes.Structure):
+                _fields_ = [("size", ctypes.c_uint32), ("pid", ctypes.c_uint32), ("parent", ctypes.c_uint32)]
+            class Kernel:
+                closed = False
+                def CreateToolhelp32Snapshot(self, *_):
+                    return 99
+                def Process32FirstW(self, _handle, entry):
+                    entry._obj.pid, entry._obj.parent = 10, 1
+                    return True
+                def Process32NextW(self, _handle, entry):
+                    entry._obj.pid += 1
+                    return True
+                def CloseHandle(self, _handle):
+                    self.closed = True
+                    return True
+            provider = object.__new__(observer.WindowsApi)
+            provider.Entry, provider.kernel = Entry, Kernel()
+            api.snapshot = provider.snapshot
+            with mock.patch.object(observer, "MAX_SNAPSHOT_ROWS", 2):
+                sampler.sample()
+            self.assertTrue(provider.kernel.closed)
+            value = sampler.summary("observer-deadline")
+            self.assertEqual(value["status"], "partial")
+            self.assertEqual(value["reason"], "observation-limit")
+            self.assertEqual(value["failed_samples"], 1)
+            self.assertEqual(value["descendant_sampled_peak_bytes"], 2000)
+        finally:
+            sampler.close()
+
+    def test_counter_nullable_and_status_inconsistencies_are_invalid(self):
+        value = observer.missing("no-process-samples")
+        observer.record(value, 100, 200, 1)
+        value = observer.summarize(value)
+        mutations = (("samples", 2), ("parent_zero_samples", 2), ("incomplete_samples", 2),
+                     ("positive_descendant_memory_samples", 0), ("failed_samples", True),
+                     ("failed_samples", 2**63), ("parent_sampled_peak_bytes", None),
+                     ("parent_sampled_peak_bytes", 0), ("descendant_sampled_peak_bytes", None),
+                     ("observed_peak_descendant_count", None), ("metric_kind", []),
+                     ("reason", "provider-query-failed"), ("reason", "observation-limit"))
+        for name, changed in mutations:
+            with self.subTest(name=name, changed=changed), self.assertRaises(observer.Unavailable):
+                observer.validate(dict(value, **{name: changed}))
+        for numbers in ((-1, 0, 0), (True, 1, 1), (100, -1, 1), (100, 1, 0),
+                        (100, 1, -1), (2**63, 1, 1), (100, 1, True)):
+            fresh = observer.missing("no-process-samples")
+            with self.subTest(numbers=numbers), self.assertRaises(observer.Unavailable):
+                observer.record(fresh, *numbers)
+            self.assertEqual(fresh["samples"], 0)
+        value["failed_samples"] = 1
+        failed = observer.summarize(value)
+        self.assertEqual(failed["status"], "partial")
+        self.assertEqual(failed["reason"], "provider-query-failed")
+        self.assertEqual(failed["descendant_sampled_peak_bytes"], 200)
+        for bad in (dict(observer.missing("provider-query-failed"), failed_samples=2**63 - 1, root_missing_samples=1),
+                    dict(observer.missing("no-process-samples"), identity_rejections=1)):
+            with self.assertRaises(observer.Unavailable):
+                observer.validate(bad)
+
+    def test_missing_zero_and_failed_memory_observations_are_distinct_and_never_peak_zeroes(self):
+        for kind in ("no-child", "zero-child", "root-missing", "query-failed", "all-zero"):
+            api = Api()
+            api.rows = [(10, 1), (20, 10)]
+            if kind == "no-child":
+                api.rows = [(10, 1)]
+            elif kind == "zero-child":
+                api.states[20]["bytes"] = 0
+            elif kind == "root-missing":
+                api.rows = []
+            elif kind == "query-failed":
+                def unavailable():
+                    raise observer.Unavailable("observer-query-unavailable")
+                api.snapshot = unavailable
+            else:
+                api.states[10]["bytes"] = api.states[20]["bytes"] = 0
+            sampler = observer.Sampler(api, 10, 100, 0.1)
+            try:
+                sampler.sample()
+                value = sampler.summary()
+                with self.subTest(kind=kind):
+                    self.assertIsNone(value["descendant_sampled_peak_bytes"])
+                    self.assertEqual(value["positive_descendant_memory_samples"], 0)
+                    if kind in ("no-child", "zero-child"):
+                        self.assertEqual(value["status"], "partial")
+                    else:
+                        self.assertEqual(value["status"], "unmeasured")
+                    if kind == "no-child":
+                        self.assertIsNone(value["observed_peak_descendant_count"])
+                        self.assertEqual(value["no_descendant_observation_samples"], 1)
+                        self.assertEqual(value["reason"], "descendant-memory-not-observed")
+                    elif kind in ("zero-child", "all-zero"):
+                        self.assertEqual(value["observed_peak_descendant_count"], 1)
+                        self.assertEqual(value["zero_descendant_memory_samples"], 1)
+                        self.assertEqual(value["reason"], "descendant-rss-zero-only" if kind == "zero-child" else "no-positive-memory-samples")
+                    elif kind == "root-missing":
+                        self.assertEqual(value["root_missing_samples"], 1)
+                        self.assertEqual(value["failed_samples"], 0)
+                        self.assertEqual(value["reason"], "root-not-observed")
+                    else:
+                        self.assertEqual(value["failed_samples"], 1)
+                        self.assertEqual(value["root_missing_samples"], 0)
+                        self.assertEqual(value["reason"], "provider-query-failed")
+            finally:
+                sampler.close()
+
     def test_exhausted_ancestry_budget_reports_the_known_missing_descendants(self):
         api = Api()
         api.states = {pid: {"birth": pid + 100, "bytes": 1} for pid in range(10, 81)}
@@ -158,6 +269,22 @@ class AttributionTests(unittest.TestCase):
 
 
 class CompletionTests(unittest.TestCase):
+    def test_windows_finish_refuses_a_valid_unix_memory_payload(self):
+        value = observer.missing("no-process-samples", metric_kind="unix-rss")
+        observer.record(value, 100, 200, 1)
+        value = observer.summarize(value)
+        class Finished:
+            returncode = 0
+            stdout = io.BytesIO((json.dumps(value) + "\n").encode("ascii"))
+            def wait(self, timeout):
+                return 0
+            def poll(self):
+                return 0
+        result = observer.finish(Finished())
+        self.assertEqual(result["status"], "unmeasured")
+        self.assertEqual(result["reason"], "observer-output-invalid")
+        self.assertEqual(result["metric_kind"], "windows-working-set")
+
     def test_bounded_large_integer_and_deep_json_are_fixed_invalid_reports(self):
         value = observer.missing("no-process-samples")
         value["sample_interval_seconds"] = 10**400

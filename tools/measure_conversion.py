@@ -107,6 +107,10 @@ def sample_processes(pid):
     result = subprocess.run(["ps", "-axo", "pid=,ppid=,rss="], stdout=subprocess.PIPE,
                             stderr=subprocess.DEVNULL, timeout=2, check=True)
     rows = [tuple(map(int, line.split())) for line in result.stdout.splitlines()]
+    if (any(len(row) != 3 or not 0 <= row[0] <= 2**63 - 1 or not 0 <= row[1] <= 2**63 - 1
+            or not 0 <= row[2] <= (2**63 - 1) // 1024 for row in rows)
+            or len({row[0] for row in rows}) != len(rows)):
+        raise ValueError("provider-query-failed")
     by_pid = {child: (parent, rss * 1024) for child, parent, rss in rows}
     if pid not in by_pid:
         return None
@@ -164,9 +168,7 @@ def _unique_members(pairs):
 def measured_run(argv, environment, timeout, interval):
     """Spool stdout privately, discard stderr, and retain only bounded parsed JSON."""
     supported = platform.system() in ("Darwin", "Linux")
-    sample_count = 0
-    failed_sample_count = 0
-    peaks = [0, 0, 0]
+    unix_memory = OBSERVER.missing("no-process-samples", interval, "unix-rss")
     finished = threading.Event()
     started = time.perf_counter()
     with tempfile.TemporaryFile() as output:
@@ -179,16 +181,15 @@ def measured_run(argv, environment, timeout, interval):
         observer = OBSERVER.start(process, interval, timeout + 5, environment) if os.name == "nt" else None
 
         def sample():
-            nonlocal sample_count, failed_sample_count
             while not finished.is_set():
                 try:
                     row = sample_processes(process.pid)
-                    if row is not None:
-                        sample_count += 1
-                        for index, value in enumerate(row):
-                            peaks[index] = max(peaks[index], value)
-                except (OSError, ValueError, subprocess.SubprocessError):
-                    failed_sample_count += 1
+                    if row is None:
+                        unix_memory["root_missing_samples"] += 1
+                    else:
+                        OBSERVER.record(unix_memory, *row)
+                except (OSError, ValueError, subprocess.SubprocessError, OBSERVER.Unavailable):
+                    unix_memory["failed_samples"] += 1
                 finished.wait(interval)
 
         sampler = threading.Thread(target=sample, daemon=True) if supported else None
@@ -213,16 +214,7 @@ def measured_run(argv, environment, timeout, interval):
             if sampler:
                 sampler.join()
             windows_memory = OBSERVER.finish(observer, interval=interval) if os.name == "nt" else None
-        memory = windows_memory if windows_memory is not None else {
-                  "status": ("partial" if failed_sample_count else "sampled") if sample_count else "unmeasured",
-                  "metric_kind": "unix-rss", "scope": "ppid-process-table-samples-no-generation-proof",
-                  "sample_interval_seconds": interval, "samples": sample_count,
-                  "failed_samples": failed_sample_count,
-                  "parent_sampled_peak_bytes": peaks[0] if sample_count else None,
-                  "descendant_sampled_peak_bytes": peaks[1] if sample_count else None,
-                  "observed_peak_descendant_count": peaks[2] if sample_count else None}
-        if windows_memory is None and not sample_count:
-            memory["reason"] = "no-process-samples" if supported else "unsupported-platform"
+        memory = windows_memory if windows_memory is not None else OBSERVER.summarize(unix_memory)
         measurement = {"status": "failed" if error or process.returncode else "completed",
                        "elapsed_seconds": elapsed, "exit_code": process.returncode, "memory": memory}
         if termination:
@@ -364,13 +356,22 @@ def summarize(rows):
         complete = [row for row in rows if row["mode"] == mode and row["status"] == "verified"]
         phases = {}
         for phase in ("convert", "verify"):
-            measured = [row[phase]["memory"] for row in complete if row[phase]["memory"]["status"] in ("sampled", "partial")]
+            memory = [row[phase]["memory"] for row in complete]
+            fields = {}
+            for role in ("parent", "descendant"):
+                name = role + "_sampled_peak_bytes"
+                observed = [value[name] for value in memory if value[name] is not None]
+                fields["median_" + name] = statistics.median(observed) if observed else None
+                fields[role + "_observed_runs"] = len(observed)
+                fields[role + "_unmeasured_runs"] = len(memory) - len(observed)
+            counts = [value["observed_peak_descendant_count"] for value in memory
+                      if value["observed_peak_descendant_count"] is not None]
             phases[phase] = {
                 "median_elapsed_seconds": statistics.median(row[phase]["elapsed_seconds"] for row in complete) if complete else None,
-                "sampled_runs": len(measured),
-                "median_parent_sampled_peak_bytes": statistics.median(row["parent_sampled_peak_bytes"] for row in measured) if measured else None,
-                "median_descendant_sampled_peak_bytes": statistics.median(row["descendant_sampled_peak_bytes"] for row in measured) if measured else None,
-                "maximum_observed_descendant_count": max((row["observed_peak_descendant_count"] for row in measured), default=None),
+                "sampled_runs": sum(value["status"] == "sampled" for value in memory),
+                "partial_runs": sum(value["status"] == "partial" for value in memory),
+                "unmeasured_runs": sum(value["status"] == "unmeasured" for value in memory),
+                "maximum_observed_descendant_count": max(counts) if counts else None, **fields,
             }
         summary[mode] = {"verified_runs": len(complete), **phases}
     return summary
