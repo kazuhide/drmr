@@ -177,3 +177,41 @@ one worker; descendant totals were 20.6 MB and 18.3 MB respectively. Memory samp
 100 ms apart, and parent/descendant maxima are separate. Short-lived processes can be
 missed. These observations apply to this small asset and host; they do not establish
 long-media throughput, an exact memory peak, or a result on another operating system.
+## A larger synthetic input
+
+Generate a nine-track input from the attributed, ten-second Big Buck Bunny clip:
+
+```sh
+python3 tools/prepare_bbb_benchmark.py --output /path/to/new-benchmark
+```
+
+Then use `new-benchmark/source/manifest.mpd` with the measurement command above.
+Python 3.9+, FFmpeg and Shaka Packager are required. The destination must be new
+and its parent must exist. Paths containing commas, dollar signs or line breaks are
+refused because Packager parses commas and expands dollar expressions in paths.
+A failed generation leaves
+its diagnostic log and partial directory; choose a new directory after correcting it.
+
+This creates eight identical 1280×720 video renditions and one audio track, with five
+two-second video segments. It measures independent track work; it is not a realistic
+adaptive-bitrate ladder or a video quality comparison. `ATTRIBUTION.md` accompanies
+the generated media. `input-report.json` records the pinned excerpt hash and every
+generated resource's size and SHA-256. Generated metadata and tool versions can
+change these hashes, so retain the report with a measurement.
+
+On one ten-logical-CPU macOS ARM64 host, Rust 1.99.0 release, FFmpeg 9.0.2 and
+Shaka Packager 3.8.0, three alternating pairs with this input produced:
+
+| Worker setting | Median conversion | Median separate verification | Conversion CLI sampled RSS | Conversion descendants sampled RSS |
+| --- | ---: | ---: | ---: | ---: |
+| Automatic | 10.671 s | 4.839 s | 13.2 MB | 445.3 MB |
+| Maximum 1 | 25.477 s | 13.295 s | 11.7 MB | 66.0 MB |
+
+All six clear DASH to CBCS DASH conversions and separate verifications passed all
+four content and timing checks. Every input resource retained its recorded hash.
+The measurements include complete verification and startup. Other development work
+continued on the host; these are observations under load, not isolated throughput
+results. The automatic setting used more descendant memory while completing this
+work sooner. RSS was sampled every 100 ms; the parent and descendant maxima are
+separate, can miss spikes, and are not a hard memory limit. These results do not
+establish long-media, disk usage, device playback, or other operating-system behavior.
