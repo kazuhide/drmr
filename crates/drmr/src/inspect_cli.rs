@@ -82,6 +82,9 @@ fn summary(report: &Inspection, out: &mut impl Write) -> std::io::Result<()> {
                 detail.encryption_unit.description(),
                 detail.evidence.description()
             )?;
+            for method in &detail.hls_key_methods {
+                writeln!(out, "    HLS method: {}", method.as_str())?;
+            }
             match &detail.pattern.value {
                 Some(value) => writeln!(
                     out,
