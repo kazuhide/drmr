@@ -234,3 +234,62 @@ fn local_inputs_do_not_silently_accept_download_options() {
         .unwrap();
     refused(&result, "download-options-require-url");
 }
+
+#[test]
+fn output_parent_components_are_refused_before_any_network_request() {
+    let root = drmr_core::native::private_tempdir().unwrap();
+    let server = Server::new();
+    std::fs::create_dir(root.path().join("subdir")).unwrap();
+    let output = root.path().join("subdir/../result");
+    let download = root.path().join("source");
+    let config = root.path().join("policy.json");
+    policy(
+        &config,
+        r#"{"allow_http":true,"allow_private_network":true,"attempts":1}"#,
+    );
+    let result = run(
+        &server,
+        &output,
+        &[
+            "--download-dir".as_ref(),
+            download.as_os_str(),
+            "--fetch-policy".as_ref(),
+            config.as_os_str(),
+        ],
+    );
+    server.assert_unused();
+    refused(&result, "output");
+    assert!(!download.exists());
+    assert!(!root.path().join("result").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn output_final_parent_symlink_is_refused_before_any_network_request() {
+    let root = drmr_core::native::private_tempdir().unwrap();
+    let server = Server::new();
+    let actual = root.path().join("actual");
+    std::fs::create_dir(&actual).unwrap();
+    std::os::unix::fs::symlink(&actual, root.path().join("alias")).unwrap();
+    let output = root.path().join("alias/result");
+    let download = root.path().join("source");
+    let config = root.path().join("policy.json");
+    policy(
+        &config,
+        r#"{"allow_http":true,"allow_private_network":true,"attempts":1}"#,
+    );
+    let result = run(
+        &server,
+        &output,
+        &[
+            "--download-dir".as_ref(),
+            download.as_os_str(),
+            "--fetch-policy".as_ref(),
+            config.as_os_str(),
+        ],
+    );
+    server.assert_unused();
+    refused(&result, "output-parent-unsafe");
+    assert!(!download.exists());
+    assert!(!actual.join("result").exists());
+}

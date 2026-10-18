@@ -627,3 +627,74 @@ fn bom_prefixed_master_preserves_original_and_projected_header_bytes() {
 fn bom_prefixed_child_preserves_original_and_projected_header_bytes() {
     bom_graph(false, true);
 }
+
+#[test]
+fn core_rejects_output_parent_components_before_reservation_or_network() {
+    let manifest = b"#EXTM3U\n#EXT-X-TARGETDURATION:3\n#EXTINF:2,\nsegment.ts\n#EXT-X-ENDLIST\n";
+    let server = Server::new(BTreeMap::from([
+        ("/source.m3u8", manifest.to_vec()),
+        ("/segment.ts", vec![0x47; 188]),
+    ]));
+    let parent = tempfile::tempdir().unwrap();
+    std::fs::create_dir(parent.path().join("subdir")).unwrap();
+    let directory = parent.path().join("download");
+    let result = converter(Stop::new()).download_hls(
+        &server.url(),
+        &directory,
+        &parent.path().join("subdir/../output"),
+        &policy(),
+    );
+    assert!(server.calls.lock().unwrap().is_empty());
+    assert!(result.is_err());
+    assert!(!directory.exists());
+    assert!(!parent.path().join("output").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn core_rejects_output_final_parent_symlink_but_preserves_download_native_semantics() {
+    let manifest = b"#EXTM3U\n#EXT-X-TARGETDURATION:3\n#EXTINF:2,\nsegment.ts\n#EXT-X-ENDLIST\n";
+    let server = Server::new(BTreeMap::from([
+        ("/source.m3u8", manifest.to_vec()),
+        ("/segment.ts", vec![0x47; 188]),
+    ]));
+    let parent = tempfile::tempdir().unwrap();
+    let actual = parent.path().join("actual");
+    std::fs::create_dir(&actual).unwrap();
+    std::os::unix::fs::symlink(&actual, parent.path().join("output-alias")).unwrap();
+    let directory = parent.path().join("download");
+    let c = converter(Stop::new());
+    let result = c.download_hls(
+        &server.url(),
+        &directory,
+        &parent.path().join("output-alias/result"),
+        &policy(),
+    );
+    assert!(server.calls.lock().unwrap().is_empty());
+    assert!(result.is_err());
+    assert!(!directory.exists());
+    assert!(!actual.join("result").exists());
+    std::fs::create_dir(actual.join("child")).unwrap();
+    std::os::unix::fs::symlink(actual.join("child"), parent.path().join("download-alias")).unwrap();
+    let requested = parent.path().join("download-alias/../source");
+    let source = c
+        .download_hls(
+            &server.url(),
+            &requested,
+            &parent.path().join("safe-output"),
+            &policy(),
+        )
+        .unwrap();
+    assert_eq!(
+        source.entrypoint(),
+        actual.canonicalize().unwrap().join("source/input.m3u8")
+    );
+    assert_eq!(
+        std::fs::read(source.entrypoint()).unwrap(),
+        std::str::from_utf8(manifest)
+            .unwrap()
+            .replace("segment.ts", "media/r000000.ts")
+            .as_bytes()
+    );
+    assert!(!parent.path().join("source").exists());
+}

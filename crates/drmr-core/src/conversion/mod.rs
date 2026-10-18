@@ -9,7 +9,7 @@
 mod aes128;
 mod download;
 pub mod download_policy;
-pub use download::DownloadedSource;
+pub use download::{DownloadedSource, preflight_download_output};
 mod audio;
 mod backend;
 pub(crate) mod dash;

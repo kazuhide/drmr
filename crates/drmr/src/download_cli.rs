@@ -59,6 +59,8 @@ pub fn preflight(download: &Path, output: &Path) -> Result<(), ConversionError> 
     if exists(output)? {
         return Err(ConversionError("output-exists-or-unsafe"));
     }
+    // Check the original output spelling, not the canonical path used for overlap.
+    drmr_core::conversion::preflight_download_output(output)?;
     // Acquisition reserves the source directory and rechecks native aliases before I/O.
     Ok(())
 }

@@ -119,6 +119,13 @@ fn digest(
     }
 }
 
+/// Validate an original output spelling under the ordinary local conversion rules.
+/// This reads filesystem metadata without reserving paths, writing files, or using the network.
+/// Acquisition still reserves its own directory and rechecks native aliases separately.
+pub fn preflight_download_output(output: &Path) -> Result<(), ConversionError> {
+    super::destination(output).map(|_| ())
+}
+
 impl Converter {
     /// Fetch a complete clear local HLS graph into a new directory, retaining original bytes.
     pub fn download_hls(
@@ -133,6 +140,7 @@ impl Converter {
             .scope(super::measurement::Phase::InputPreparation);
         self.backend.check_cancelled()?;
         valid_url(url)?;
+        preflight_download_output(output)?;
         // Only this bounded command label is registered. Acquired URL graphs never
         // reach subprocess arguments or diagnostics after canonical localization.
         self.backend.runner.secrets().register([url]);
