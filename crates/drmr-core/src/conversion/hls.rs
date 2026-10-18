@@ -272,20 +272,19 @@ impl Localizer<'_> {
             return Err(ConversionError("hls-duplicate-header"));
         }
         match name {
-            "#EXT-X-VERSION" => {
+            "#EXT-X-VERSION"
                 if !value
                     .parse::<u64>()
-                    .is_ok_and(|version| (1..=10).contains(&version))
-                {
-                    return Err(ConversionError("hls-version-not-supported"));
-                }
+                    .is_ok_and(|version| (1..=10).contains(&version)) =>
+            {
+                return Err(ConversionError("hls-version-not-supported"));
             }
-            "#EXT-X-PLAYLIST-TYPE" => {
-                if value != "VOD" {
-                    return Err(ConversionError("hls-complete-vod-required"));
-                }
+            "#EXT-X-PLAYLIST-TYPE" if value != "VOD" => {
+                return Err(ConversionError("hls-complete-vod-required"));
             }
-            "#EXT-X-INDEPENDENT-SEGMENTS"
+            "#EXT-X-VERSION"
+            | "#EXT-X-PLAYLIST-TYPE"
+            | "#EXT-X-INDEPENDENT-SEGMENTS"
             | "#EXT-X-PROGRAM-DATE-TIME"
             | "#EXT-X-BITRATE"
             | "#EXT-X-ALLOW-CACHE" => {}

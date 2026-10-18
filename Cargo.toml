@@ -6,46 +6,46 @@ members = ["crates/drmr-core", "crates/drmr", "crates/drmr-server", "crates/drmr
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.99"
+rust-version = "1.95"
 publish = false
 license = "MIT"
 repository = "https://github.com/kazuhide/drmr"
 
 [workspace.dependencies]
-aes = { version = "=0.8.4", features = ["zeroize"] }
-cbc = { version = "=0.1.2", features = ["alloc", "zeroize"] }
-axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
-base64 = "0.22"
-clap = { version = "4.5", features = ["derive"] }
-getrandom = "0.4"
-hex = "0.4"
-memchr = "2.7"
-num-bigint = "0.4"
-num-integer = "0.1"
-num-rational = "0.4"
-num-traits = "0.2"
-regex = "1.11"
-roxmltree = "0.21"
-rustix = { version = "1.1", features = ["fs", "process", "thread"] }
-rusty-s3 = "0.10"
-http-body = "1"
-include_dir = { version = "0.7", features = ["metadata"] }
-indexmap = "2"
-libc = "0.2"
-rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring"] }
-rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = { version = "1.0", features = ["preserve_order", "float_roundtrip"] }
-sha2 = "0.10"
-sysinfo = { version = "=0.39.6", default-features = false, features = ["system"] }
-tempfile = "3"
-thiserror = "2"
-zeroize = "1.8"
-unicode-normalization = "0.1"
-ureq = { version = "2.12", default-features = false, features = ["tls"] }
-tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "time", "signal"] }
-webpki-roots = "1.0"
-zmij = "1.0"
+aes = { version = "0.8.4", features = ["zeroize"] }
+cbc = { version = "0.1.2", features = ["alloc", "zeroize"] }
+axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio"] }
+base64 = "0.22.1"
+clap = { version = "4.6.7", features = ["derive"] }
+getrandom = "0.4.3"
+hex = "0.4.3"
+memchr = "2.8.3"
+num-bigint = "0.4.8"
+num-integer = "0.1.47"
+num-rational = "0.4.2"
+num-traits = "0.2.19"
+regex = "1.13.1"
+roxmltree = "0.21.1"
+rustix = { version = "1.1.5", features = ["fs", "process", "thread"] }
+rusty-s3 = "0.10.2"
+http-body = "1.1.0"
+include_dir = { version = "0.7.4", features = ["metadata"] }
+indexmap = "2.14.2"
+libc = "0.2.191"
+rcgen = { version = "0.14.10", default-features = false, features = ["crypto", "ring"] }
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.154", features = ["preserve_order", "float_roundtrip"] }
+sha2 = "0.10.9"
+sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
+tempfile = "3.27.0"
+thiserror = "2.0.21"
+zeroize = "1.9.1"
+unicode-normalization = "0.1.26"
+ureq = { version = "2.12.1", default-features = false, features = ["tls"] }
+tokio = { version = "1.53.3", features = ["rt-multi-thread", "net", "sync", "time", "signal"] }
+webpki-roots = "1.0.9"
+zmij = "1.0.23"
 
 [profile.dev.package.sha2]
 opt-level = 3

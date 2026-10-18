@@ -85,7 +85,7 @@ impl Converter {
                 packager: packager.into(),
                 ffmpeg: ffmpeg.into(),
                 ffprobe: "ffprobe".into(),
-                timeout: Duration::from_secs(3600),
+                timeout: Duration::from_hours(1),
             },
         }
     }

@@ -22,13 +22,14 @@ env:
 
 jobs:
   verify:
-    name: Rust / ${{ matrix.os }}
+    name: Rust / ${{ matrix.os }} / ${{ matrix.rust }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-24.04, macos-14]
+        rust: [minimum, stable]
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -110,11 +111,21 @@ jobs:
           "$RUNNER_TEMP/media-tools/packager" --version
           printf '%s\n' "$RUNNER_TEMP/media-tools" >> "$GITHUB_PATH"
 
-      - name: Install pinned Rust toolchain
+      - name: Install the qualification Python runtime
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13.12'
+
+      - name: Install the supported Rust toolchain
         run: |
-          rustup toolchain install --no-self-update
-          cargo --version
-          rustc --version
+          rust_channel="${{ matrix.rust }}"
+          if [[ "$rust_channel" == minimum ]]; then
+            rust_channel="$(python3 .github/scripts/minimum-rust.py)"
+          fi
+          rustup toolchain install "$rust_channel" --profile minimal --component clippy,rustfmt --no-self-update
+          printf 'RUSTUP_TOOLCHAIN=%s\n' "$rust_channel" >> "$GITHUB_ENV"
+          rustup run "$rust_channel" cargo --version
+          rustup run "$rust_channel" rustc --version
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -190,6 +201,7 @@ jobs:
         run: cargo build --release --locked -p drmr
 
       - name: Package CLI and user documentation
+        if: matrix.rust == 'stable'
         env:
           PACKAGE_NAME: drmr-${{ runner.os }}-${{ runner.arch }}
         run: |
@@ -203,6 +215,7 @@ jobs:
           tar -czf "$RUNNER_TEMP/$PACKAGE_NAME.tar.gz" -C "$RUNNER_TEMP" "$PACKAGE_NAME"
 
       - name: Upload CLI archive
+        if: matrix.rust == 'stable'
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: drmr-${{ runner.os }}-${{ runner.arch }}
@@ -214,7 +227,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
-          name: rust-tests-${{ runner.os }}-${{ runner.arch }}
+          name: rust-tests-${{ runner.os }}-${{ runner.arch }}-${{ matrix.rust }}
           path: ${{ runner.temp }}/rust-tests.log
           if-no-files-found: warn
           retention-days: 14
@@ -223,7 +236,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
-          name: bbb-media-${{ runner.os }}-${{ runner.arch }}
+          name: bbb-media-${{ runner.os }}-${{ runner.arch }}-${{ matrix.rust }}
           path: |
             ${{ runner.temp }}/bbb-media-report.json
             ${{ runner.temp }}/bbb-conversion-report.json

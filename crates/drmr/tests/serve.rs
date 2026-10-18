@@ -129,7 +129,7 @@ fn serve_answers_the_api_and_its_jobs_run_this_executable() {
     let (status, accepted) = request(&server, "POST", "/api/convert", json, body);
     assert_eq!(status, 202, "{accepted}");
     let job_id = accepted["job_id"].as_str().unwrap().to_string();
-    let deadline = Instant::now() + Duration::from_secs(60);
+    let deadline = Instant::now() + Duration::from_mins(1);
     let finished = loop {
         let (_, job) = request(&server, "GET", &format!("/api/jobs/{job_id}"), "", "");
         if job["state"] != "running" {

@@ -160,8 +160,18 @@ fn segment_duration_seconds_derived_from_source() {
         .into_iter()
         .map(|r| (r.rep_id.clone(), r))
         .collect();
-    assert_eq!(segment_duration_seconds(&renditions["v0"]).unwrap(), 6.0);
-    assert_eq!(segment_duration_seconds(&renditions["a0"]).unwrap(), 6.0);
+    assert_eq!(
+        segment_duration_seconds(&renditions["v0"])
+            .unwrap()
+            .to_bits(),
+        6.0_f64.to_bits()
+    );
+    assert_eq!(
+        segment_duration_seconds(&renditions["a0"])
+            .unwrap()
+            .to_bits(),
+        6.0_f64.to_bits()
+    );
 }
 
 #[test]
@@ -170,7 +180,10 @@ fn segment_duration_seconds_is_not_hardcoded() {
     let (_dir, root) = tempdir();
     let asset = build_synthetic_dash_asset(&root, &[h264_rep("v0").timing(12_000, 48_000)], TITLE);
     let rendition = &enumerate_renditions(&asset.mpd_path).unwrap()[0];
-    assert_eq!(segment_duration_seconds(rendition).unwrap(), 4.0);
+    assert_eq!(
+        segment_duration_seconds(rendition).unwrap().to_bits(),
+        4.0_f64.to_bits()
+    );
 }
 
 #[test]

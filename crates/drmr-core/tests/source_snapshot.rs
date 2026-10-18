@@ -204,7 +204,10 @@ fn snapshot_total_duration_roundoff_is_portable_but_segments_stay_exact() {
         rewrite(&result.snapshot_path, data);
         if accepted {
             let restored = read_analysis(&result.snapshot_path).unwrap();
-            assert_eq!(restored.tracks[0].segments[0].duration, 6.0);
+            assert_eq!(
+                restored.tracks[0].segments[0].duration.to_bits(),
+                6.0_f64.to_bits()
+            );
             verify_source_snapshot(&restored).unwrap();
             std::fs::write(&restored.tracks[0].segments[0].path, b"changed").unwrap();
             assert_eq!(token(verify_source_snapshot(&restored)), "snapshot-changed");

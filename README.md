@@ -10,7 +10,7 @@ The CLI is the primary interface. A local web console is experimental. A desktop
 
 ## Install
 
-Use Rust 1.99.0. The repository pins this version in `rust-toolchain.toml`. The commands below use a macOS/Linux shell; see the [Windows guide](docs/windows.md) for PowerShell, native paths, and protected configuration.
+Building from source requires **Rust 1.95 or newer**. Use your selected Rust toolchain; CI checks the minimum version and the latest stable release. See [requirements and tested versions](docs/requirements.md). The commands below use a macOS/Linux shell; see the [Windows guide](docs/windows.md) for PowerShell, native paths, and protected configuration.
 
 From the repository root:
 
@@ -28,13 +28,13 @@ cargo build --release --locked -p drmr
 
 Media processing uses these external tools. Follow their installation instructions and add their executable directories to `PATH`, the list of directories your shell searches for programs.
 
-| Executable | Install | Purpose |
-| --- | --- | --- |
-| `ffmpeg`, `ffprobe` | [FFmpeg](https://ffmpeg.org/download.html) | Process and inspect media |
-| `mp4dump` | [Bento4](https://www.bento4.com/downloads/) | Inspect MP4 structure |
-| `packager` | [Shaka Packager](https://github.com/shaka-project/shaka-packager#readme) | Encrypt and package media |
+| Executable | Supported from | Install | Purpose |
+| --- | --- | --- | --- |
+| `ffmpeg`, `ffprobe` | 9.0.1 | [FFmpeg](https://ffmpeg.org/download.html) | Process and inspect media |
+| `mp4dump` | 1.6.0, build 641 | [Bento4](https://www.bento4.com/downloads/) | Inspect MP4 structure |
+| `packager` | 3.8.0 | [Shaka Packager](https://github.com/shaka-project/shaka-packager#readme) | Encrypt and package media |
 
-The real-media regression is qualified with FFmpeg 9.0.2 and Shaka Packager 3.8.0. Some older FFmpeg builds omit packet durations needed for encrypted audio verification; drmr refuses incomplete timing evidence. See [media processing](docs/media-processing.md) for details.
+These are supported lower bounds. The [requirements table](docs/requirements.md#media-tools) records the builds used for qualification and explains which CI tools are pinned. Some older FFmpeg builds omit packet durations needed for encrypted audio verification; drmr refuses incomplete timing evidence. See [media processing](docs/media-processing.md) for details.
 
 ## Start here
 

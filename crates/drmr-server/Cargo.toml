@@ -39,12 +39,12 @@ zeroize.workspace = true
 [dev-dependencies]
 drmr-test-support = { path = "../drmr-test-support" }
 tempfile.workspace = true
-# The tests' HTTP client is ureq 3; drmr-core's S3 storage pins ureq 2 under the workspace key, so
+# The tests' HTTP client is ureq 3; drmr-core's S3 storage uses ureq 2 under the workspace key, so
 # this one is declared here.
-ureq = { version = "3", default-features = false }
+ureq = { version = "3.4.2", default-features = false }
 
 [lints]
 workspace = true
 
 [target.'cfg(windows)'.dev-dependencies]
-windows-permissions = "=0.2.4"
+windows-permissions = "0.2.4"

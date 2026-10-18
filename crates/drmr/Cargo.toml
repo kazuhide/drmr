@@ -29,7 +29,7 @@ drmr-test-support = { path = "../drmr-test-support" }
 rustix.workspace = true
 
 [target.'cfg(windows)'.dev-dependencies]
-private-fs = "=0.2.1"
+private-fs = "0.2.1"
 
 [lints]
 workspace = true
