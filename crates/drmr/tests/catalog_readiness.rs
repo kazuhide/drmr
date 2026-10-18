@@ -402,7 +402,10 @@ mod nested_tool_ownership {
     }
     impl Drop for HeldTool {
         fn drop(&mut self) {
-            if self.armed {
+            // A still-held fixture lock pins the original group. Once released,
+            // its numeric identifier may have been reused and must not be signaled.
+            if self.armed && matches!(self.lock.try_lock(), Err(std::fs::TryLockError::WouldBlock))
+            {
                 let _ = rustix::process::kill_process_group(self.group, Signal::KILL);
                 let deadline = Instant::now() + Duration::from_secs(5);
                 while self.lock.try_lock().is_err() && Instant::now() < deadline {

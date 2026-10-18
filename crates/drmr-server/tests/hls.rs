@@ -377,7 +377,7 @@ fn an_incompatible_packaging_cli_keeps_its_private_configs_owned_until_confirmed
     let package = package.unwrap();
     assert_eq!(package["state"], "failed");
     assert_eq!(package["exit_code"], 0);
-    assert!(json_files(&requests).is_empty());
+    assert_eq!(json_files(&requests), [] as [std::path::PathBuf; 0]);
     assert_eq!(std::fs::read(&snapshot.path).unwrap(), source_before);
 }
 

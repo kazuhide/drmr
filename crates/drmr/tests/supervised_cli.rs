@@ -22,7 +22,7 @@ fn incomplete_or_invalid_context_is_refused_before_help_or_media_work() {
         }
         let result = command.output().unwrap();
         assert_eq!(result.status.code(), Some(2));
-        assert!(result.stdout.is_empty());
+        assert_eq!(result.stdout, [] as [u8; 0]);
         assert_eq!(
             result.stderr,
             b"drmr: the supervised job context could not be initialized\n"
@@ -58,7 +58,7 @@ fn the_supervised_profile_refuses_other_commands_before_clap_help() {
             .read_to_string(&mut stderr)
             .unwrap();
         assert_eq!(status.code(), Some(2));
-        assert!(stdout.is_empty());
+        assert_eq!(stdout, "");
         assert_eq!(
             stderr,
             "drmr: this command is unavailable in a supervised console job\n"
