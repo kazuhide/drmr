@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 mod control;
+mod probe_proxy;
 mod protocol;
 mod server;
 use protocol::{Mode, ToolSpec};
@@ -85,6 +86,9 @@ fn run(raw_args: &[std::ffi::OsString]) -> io::Result<i32> {
     if spec.mode == Mode::ServerCli {
         return server::run(raw_args, &spec);
     }
+    if spec.mode == Mode::FfprobeProxy {
+        return probe_proxy::run(raw_args, &spec);
+    }
     let args: Vec<String> = raw_args
         .iter()
         .map(|a| {
@@ -100,7 +104,9 @@ fn run(raw_args: &[std::ffi::OsString]) -> io::Result<i32> {
         Mode::Response => control::before_response(&spec)?,
         Mode::Packager => return packager(&args, &spec),
         Mode::Ffprobe | Mode::Ffmpeg | Mode::Mp4dump => return media(&args, &spec),
-        Mode::ServerCli => return Err(io::Error::other("invalid fixture dispatch")),
+        Mode::ServerCli | Mode::FfprobeProxy => {
+            return Err(io::Error::other("invalid fixture dispatch"));
+        }
     };
     if let Some(name) = spec.values.get("stdout_env") {
         let value =

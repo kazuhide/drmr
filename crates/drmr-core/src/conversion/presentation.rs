@@ -32,6 +32,8 @@ struct Prepared {
     index: usize,
     report: Inspection,
     key_id: Option<String>,
+    transport_index: Option<usize>,
+    playlist_reference: Option<PathBuf>,
 }
 impl Converter {
     pub fn convert_tracks(
@@ -167,8 +169,12 @@ impl Converter {
                 let localized_dir = work.join(format!("localized-{ordinal}"));
                 super::files::create_dir(&localized_dir)
                     .map_err(|_| ConversionError("output-staging-failed"))?;
-                let localized =
-                    hls::localize(&track_dir.join("media.m3u8"), &localized_dir, &keys)?;
+                let localized = hls::localize(
+                    &track_dir.join("media.m3u8"),
+                    &localized_dir,
+                    &keys,
+                    &self.backend.stop,
+                )?;
                 copy_private(&localized.combined, &combined)?;
                 (
                     localized.reference,
@@ -449,6 +455,8 @@ fn prepare(
         index,
         report: selected,
         key_id,
+        transport_index: None,
+        playlist_reference: None,
     })
 }
 fn key_for<'a>(source: &Prepared, keys: &'a InputKeys) -> Option<&'a ContentKey> {
@@ -533,8 +541,22 @@ impl Converter {
             .map_err(|_| ConversionError("temporary-workspace-unavailable"))?;
         super::files::create_dir(&result_dir)
             .map_err(|_| ConversionError("temporary-workspace-unavailable"))?;
-        let mut source = prepare_presentation(&request.source, &source_dir)?;
-        let mut result = prepare_presentation(&request.output, &result_dir)?;
+        let source = prepare_presentation(&request.source, &source_dir, &self.backend)?;
+        let result = prepare_presentation(&request.output, &result_dir, &self.backend)?;
+        self.compare_presentations(
+            source,
+            result,
+            request.source.input_keys,
+            request.output.input_keys,
+        )
+    }
+    fn compare_presentations(
+        &self,
+        mut source: Vec<Prepared>,
+        mut result: Vec<Prepared>,
+        source_keys: &InputKeys,
+        result_keys: &InputKeys,
+    ) -> Result<VerificationReport, ConversionError> {
         source.sort_by_key(|p| kind_order(p.report.tracks[0].kind));
         result.sort_by_key(|p| kind_order(p.report.tracks[0].kind));
         if source.len() != result.len() {
@@ -556,10 +578,37 @@ impl Converter {
         let verified_tracks = self.run_tracks(source.len(), |ordinal| {
             let a = &source[ordinal];
             let b = &result[ordinal];
+            if b.transport_index.is_some() {
+                return Err(ConversionError(
+                    "ts-verification-output-profile-not-supported",
+                ));
+            }
+            if let Some(index) = a.transport_index {
+                let playlist = b.playlist_reference.as_ref().ok_or(ConversionError(
+                    "ts-verification-output-profile-not-supported",
+                ))?;
+                return self.backend.verify_transport(
+                    super::ts::View {
+                        input: &a.source,
+                        metadata: &a.source,
+                        index,
+                        key: None,
+                        transport: true,
+                    },
+                    super::ts::View {
+                        input: playlist,
+                        // The owned playlist applies its private key URI to every probe.
+                        metadata: playlist,
+                        index: b.index,
+                        key: None,
+                        transport: false,
+                    },
+                );
+            }
             self.backend.verify_views(
-                StreamView::new(&a.source, a.index, key_for(a, request.source.input_keys))
+                StreamView::new(&a.source, a.index, key_for(a, source_keys))
                     .with_metadata(&a.media),
-                StreamView::new(&b.source, b.index, key_for(b, request.output.input_keys))
+                StreamView::new(&b.source, b.index, key_for(b, result_keys))
                     .with_metadata(&b.media),
             )
         })?;
@@ -593,6 +642,7 @@ fn kind_order(kind: TrackKind) -> u8 {
 fn prepare_presentation(
     input: &VerificationSource<'_>,
     stage: &Path,
+    backend: &super::backend::Backend,
 ) -> Result<Vec<Prepared>, ConversionError> {
     let metadata =
         fs::symlink_metadata(input.input).map_err(|_| ConversionError("input-unreadable"))?;
@@ -624,7 +674,30 @@ fn prepare_presentation(
                 let directory = stage.join(format!("track-{ordinal:04}"));
                 super::files::create_dir(&directory)
                     .map_err(|_| ConversionError("temporary-workspace-unavailable"))?;
-                let localized = hls::localize(path, &directory, input.hls_keys)?;
+                let localized = hls::localize(path, &directory, input.hls_keys, &backend.stop)?;
+                if let Some(admission) = &localized.transport {
+                    if paths.len() != 1 {
+                        return Err(ConversionError("ts-single-media-playlist-required"));
+                    }
+                    let streams = backend.transport_streams(&localized.combined, admission)?;
+                    let clock_index = streams
+                        .iter()
+                        .find(|(_, kind)| *kind == TrackKind::Video)
+                        .unwrap_or(&streams[0])
+                        .0;
+                    backend.transport_durations(&localized.transport_segments, clock_index)?;
+                    for (index, kind) in streams {
+                        let root = directory.join(format!("demux-{index}"));
+                        super::files::create_dir(&root)?;
+                        let media = root.join("track.mp4");
+                        backend.demux_transport(&localized.combined, kind, &media)?;
+                        let mut track = prepare(&media, 0, kind, input.input_keys)?;
+                        track.source.clone_from(&localized.reference);
+                        track.transport_index = Some(index);
+                        tracks.push(track);
+                    }
+                    continue;
+                }
                 let actual = inspection::inspect(&localized.combined)
                     .map_err(|_| ConversionError("invalid-localized-hls-media"))?;
                 if actual.tracks.len() != 1 {
@@ -636,6 +709,17 @@ fn prepare_presentation(
                     actual.tracks[0].kind,
                     input.input_keys,
                 )?;
+                track.playlist_reference = if track.key_id.is_none() {
+                    Some(localized.playlist.clone())
+                } else if actual.protection == Protection::Cbcs {
+                    Some(hls::sample_reference(
+                        &localized.playlist,
+                        key_for(&track, input.input_keys)
+                            .ok_or(ConversionError("input-key-required"))?,
+                    )?)
+                } else {
+                    None
+                };
                 track.source = localized.reference;
                 tracks.push(track);
             }
@@ -754,6 +838,50 @@ pub struct ConversionRequest<'a> {
     pub hls_output_key: Option<&'a HlsOutputKey>,
 }
 impl Converter {
+    fn verify_source_tracks(
+        &self,
+        prepared: &[Prepared],
+        tracks: &mut Vec<LocalTrack>,
+        input_keys: &InputKeys,
+    ) -> Result<(), ConversionError> {
+        for source in prepared {
+            if source.source != source.media {
+                let verified = if let Some(index) = source.transport_index {
+                    self.backend.verify_transport(
+                        super::ts::View {
+                            input: &source.source,
+                            metadata: &source.source,
+                            index,
+                            key: None,
+                            transport: true,
+                        },
+                        super::ts::View {
+                            input: &source.media,
+                            metadata: &source.media,
+                            index: 0,
+                            key: None,
+                            transport: false,
+                        },
+                    )?
+                } else {
+                    self.backend.verify_views(
+                        StreamView::new(&source.source, source.index, key_for(source, input_keys))
+                            .with_metadata(&source.media),
+                        StreamView::new(&source.media, source.index, key_for(source, input_keys)),
+                    )?
+                };
+                if !verified.passed {
+                    return Err(ConversionError("source-decryption-verification-failed"));
+                }
+            }
+            tracks.push(LocalTrack {
+                source: source.media.clone(),
+                kind: source.report.tracks[0].kind,
+                index: source.index,
+            });
+        }
+        Ok(())
+    }
     pub fn convert(
         &self,
         request: ConversionRequest<'_>,
@@ -766,36 +894,30 @@ impl Converter {
         };
         let input_report = inspection::inspect(request.input)
             .map_err(|_| ConversionError("input-inspection-failed"))?;
-        let prepared = prepare_presentation(&input, work.path())?;
-        let mut tracks = Vec::new();
-        for source in &prepared {
-            if source.source != source.media {
-                let verified = self.backend.verify_views(
-                    StreamView::new(
-                        &source.source,
-                        source.index,
-                        key_for(source, request.input_keys),
-                    )
-                    .with_metadata(&source.media),
-                    StreamView::new(
-                        &source.media,
-                        source.index,
-                        key_for(source, request.input_keys),
-                    ),
-                )?;
-                if !verified.passed {
-                    return Err(ConversionError("source-decryption-verification-failed"));
-                }
-            }
-            tracks.push(LocalTrack {
-                source: source.media.clone(),
-                kind: source.report.tracks[0].kind,
-                index: source.index,
-            });
+        let prepared = prepare_presentation(&input, work.path(), &self.backend)?;
+        let transport = prepared.iter().any(|p| p.transport_index.is_some());
+        if transport
+            && (request.format != OutputFormat::Hls
+                || !matches!(
+                    request.target,
+                    TargetProtection::Clear | TargetProtection::Cbcs | TargetProtection::HlsAes128
+                ))
+        {
+            return Err(ConversionError("ts-output-profile-not-supported"));
         }
+        let mut tracks = Vec::new();
+        self.verify_source_tracks(&prepared, &mut tracks, request.input_keys)?;
+        let destination = transport.then(|| destination(request.output)).transpose()?;
+        let stage = destination
+            .as_ref()
+            .map(|path| super::files::Stage::new(path.parent()))
+            .transpose()?;
+        let candidate = stage
+            .as_ref()
+            .map(|stage| stage.path().join("presentation"));
         let mut report = self.convert_tracks(TrackConversionRequest {
             tracks: &tracks,
-            output: request.output,
+            output: candidate.as_deref().unwrap_or(request.output),
             format: request.format,
             target: request.target,
             input_keys: request.input_keys,
@@ -803,6 +925,40 @@ impl Converter {
             hls_key_uri: request.hls_key_uri,
             hls_output_key: request.hls_output_key,
         })?;
+        if let (Some(candidate), Some(destination)) = (&candidate, &destination) {
+            let output_keys = request
+                .output_key
+                .map(|k| InputKeys::new(vec![ContentKey::from_hex(&k.0.id_hex(), &k.0.key_hex())?]))
+                .transpose()?
+                .unwrap_or_default();
+            let hls_keys = request
+                .hls_output_key
+                .map(|k| {
+                    super::HlsInputKeys::new(vec![(
+                        k.key_uri().to_owned(),
+                        super::Aes128Key(k.key.0.clone()),
+                    )])
+                })
+                .transpose()?
+                .unwrap_or_default();
+            let verification_root = work.path().join("final-verification");
+            super::files::create_dir(&verification_root)?;
+            let result = prepare_presentation(
+                &VerificationSource {
+                    input: &candidate.join("master.m3u8"),
+                    input_keys: &output_keys,
+                    hls_keys: &hls_keys,
+                },
+                &verification_root,
+                &self.backend,
+            )?;
+            report.verification =
+                self.compare_presentations(prepared, result, request.input_keys, &output_keys)?;
+            if !report.verification.passed {
+                return Err(ConversionError("round-trip-verification-failed"));
+            }
+            self.publish_directory(candidate, destination)?;
+        }
         report.input = input_report;
         Ok(report)
     }

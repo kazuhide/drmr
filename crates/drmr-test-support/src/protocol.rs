@@ -11,6 +11,7 @@ pub enum Mode {
     Ffmpeg,
     Mp4dump,
     ServerCli,
+    FfprobeProxy,
 }
 #[derive(Clone, Debug, Default)]
 pub struct ToolSpec {
@@ -31,6 +32,7 @@ impl ToolSpec {
             Mode::Ffmpeg => 3,
             Mode::Mp4dump => 4,
             Mode::ServerCli => 5,
+            Mode::FfprobeProxy => 6,
         }])?;
         writer.write_all(&self.exit_code.to_le_bytes())?;
         writer.write_all(&self.sleep_ms.to_le_bytes())?;
@@ -62,6 +64,7 @@ impl ToolSpec {
             3 => Mode::Ffmpeg,
             4 => Mode::Mp4dump,
             5 => Mode::ServerCli,
+            6 => Mode::FfprobeProxy,
             _ => return Err(bad()),
         };
         let mut exit = [0; 4];

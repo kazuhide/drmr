@@ -1,5 +1,41 @@
 use drmr_test_support::{Mode, ToolSpec, install};
 #[test]
+fn real_probe_proxy_preserves_nonprofile_bytes_arguments_and_failure_status() {
+    let root = tempfile::tempdir().unwrap();
+    let capture = root.path().join("argv");
+    let actual = install(
+        &root.path().join("actual"),
+        &ToolSpec {
+            stdout: b"actual\0packet\r\n".to_vec(),
+            stderr: b"actual failure\r\n".to_vec(),
+            exit_code: 7,
+            ..Default::default()
+        }
+        .with("argv_file", capture.to_str().unwrap()),
+    )
+    .unwrap();
+    let proxy = install(
+        &root.path().join("proxy"),
+        &ToolSpec {
+            mode: Mode::FfprobeProxy,
+            ..Default::default()
+        }
+        .with("real_probe", actual.to_str().unwrap()),
+    )
+    .unwrap();
+    let output = std::process::Command::new(proxy)
+        .args(["-show_entries", "packet=pts,dts", "native spaced input"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(7));
+    assert_eq!(output.stdout, b"actual\0packet\r\n");
+    assert_eq!(output.stderr, b"actual failure\r\n");
+    assert_eq!(
+        std::fs::read_to_string(capture).unwrap(),
+        "-show_entries\npacket=pts,dts\nnative spaced input"
+    );
+}
+#[test]
 fn native_response_preserves_exact_bytes_exit_status_and_arguments() {
     let directory = tempfile::tempdir().unwrap();
     let capture = directory.path().join("argv");
