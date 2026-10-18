@@ -148,6 +148,15 @@ pub fn plan(args: &PlanArgs) -> ExitCode {
 
 fn text_plan(plan: &inspection::ConversionPlan) -> std::io::Result<()> {
     let mut out = std::io::stdout().lock();
+    writeln!(
+        out,
+        "Plan status: {}",
+        if plan.compatible {
+            "conditional; source media, keys, and tools require validation"
+        } else {
+            "unsupported from the inspected declarations"
+        }
+    )?;
     summary(&plan.input, &mut out)?;
     let formats: Vec<_> = plan.formats.iter().map(|value| value.as_str()).collect();
     writeln!(

@@ -68,7 +68,7 @@ format continues to produce fragmented MP4.
 
 Metadata alone may not qualify a finite MP4 profile or distinguish supported fragmented MP4 HLS from transport-stream HLS. A plan can therefore contain several conditional candidates. Each has `revalidation_required: true` and fixed condition codes. Actual source validation selects a handler or refuses the input; a rejected progressive profile does not imply permission to fall back to another route. Multiple output formats still require separate conversion commands.
 
-The existing `compatible` and `execution_available` fields are coarse intent checks. Declared text tracks have no conversion candidate even when those fields are true: the media handlers support audio and video. Unknown HLS roles retain conditional candidates until actual resource inspection establishes their roles.
+`compatible` requires a valid target intent and a candidate for every requested output format. A known text track has no conversion candidate and makes the plan unsupported: the media handlers support audio and video. A plan with a supported DASH candidate but no candidate for its requested MP4 output is also unsupported. `execution_available` additionally requires one output format; neither field establishes that the source, keys, or tools have passed execution checks. Unknown HLS roles retain conditional candidates until actual resource inspection establishes their roles.
 
 ## Encryption facts and their limits
 
