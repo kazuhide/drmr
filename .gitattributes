@@ -3,3 +3,6 @@ crates/drmr-core/tests/fixtures/pipeline_report*.expected.md whitespace=-blank-a
 
 # Retain exact publisher bytes for SHA256-verified dependency notices.
 tools/desktop-licenses/** -text
+
+# Preserve the exact reviewed publisher source and backport on all checkouts.
+vendor/glib/** -text
