@@ -967,3 +967,181 @@ fn encrypted_references_keep_finite_windows_display_sizes_and_metadata_strict() 
         }
     }
 }
+
+fn packet_positions(path: &Path, index: usize) -> Vec<(usize, usize)> {
+    let result = Command::new("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            &index.to_string(),
+            "-show_entries",
+            "packet=pos,size",
+            "-of",
+            "json",
+        ])
+        .arg(path)
+        .output()
+        .unwrap();
+    assert!(result.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    report["packets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|packet| {
+            (
+                packet["pos"].as_str().unwrap().parse().unwrap(),
+                packet["size"].as_str().unwrap().parse().unwrap(),
+            )
+        })
+        .collect()
+}
+
+fn restore_clear_track(original: &Path, encrypted: &Path, mixed: &Path, index: usize) {
+    let clear_bytes = std::fs::read(original).unwrap();
+    let mut mixed_bytes = std::fs::read(encrypted).unwrap();
+    let original_packets = packet_positions(original, index);
+    let encrypted_packets = packet_positions(encrypted, index);
+    assert_eq!(original_packets.len(), if index == 0 { 240 } else { 470 });
+    assert_eq!(encrypted_packets.len(), original_packets.len());
+    // Native CENC preserves packet sizes. Restore only the selected track's exact encoded bytes.
+    for ((source, size), (target, encrypted_size)) in
+        original_packets.into_iter().zip(encrypted_packets)
+    {
+        assert_eq!(size, encrypted_size);
+        mixed_bytes[target..target + size].copy_from_slice(&clear_bytes[source..source + size]);
+    }
+    let boxes = drmr_core::mp4::parse_boxes(&mixed_bytes).unwrap();
+    let movie = boxes.iter().find(|node| node.kind() == *b"moov").unwrap();
+    let track = movie
+        .children
+        .iter()
+        .filter(|node| node.kind() == *b"trak")
+        .nth(index)
+        .unwrap();
+    for node in drmr_core::mp4::walk(std::slice::from_ref(track)) {
+        let kind = match &node.kind() {
+            b"encv" => *b"avc1",
+            b"enca" => *b"mp4a",
+            b"sinf" | b"senc" | b"saiz" | b"saio" => *b"free",
+            _ => continue,
+        };
+        let at = node.header.offset + 4;
+        mixed_bytes[at..at + 4].copy_from_slice(&kind);
+    }
+    // Same-size neutral boxes preserve all sample and auxiliary offsets in the other track.
+    std::fs::write(mixed, mixed_bytes).unwrap();
+}
+
+fn exact_clock_fields(path: &Path) -> Vec<(u64, i64, i64, i64)> {
+    packet_clocks(path)["packets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|packet| {
+            (
+                packet["stream_index"].as_u64().unwrap(),
+                packet["pts"].as_i64().unwrap(),
+                packet["dts"].as_i64().unwrap(),
+                packet["duration"].as_i64().unwrap(),
+            )
+        })
+        .collect()
+}
+
+fn mixed_reference_checks(clear_index: usize) {
+    use drmr_core::inspection::{Protection, inspect};
+    use std::io::Write as _;
+    let root = tempfile::tempdir().unwrap();
+    let original = root.path().join("original.mp4");
+    source(&original, true);
+    let original_before = std::fs::read(&original).unwrap();
+    let encrypted = root.path().join("encrypted.mp4");
+    let kid = "00000000000000000000000000000001";
+    let key = "02020202020202020202020202020202";
+    native_cenc(&original, &encrypted, kid, key);
+    let mixed = root.path().join("mixed.mp4");
+    restore_clear_track(&original, &encrypted, &mixed, clear_index);
+    let inspection = inspect(&mixed).unwrap();
+    assert_eq!(inspection.protection, Protection::Mixed);
+    assert_eq!(inspection.tracks[clear_index].protection, Protection::Clear);
+    assert_eq!(inspection.tracks[clear_index].key_ids, Vec::<String>::new());
+    assert_eq!(
+        inspection.tracks[1 - clear_index].protection,
+        Protection::Cenc
+    );
+    assert_eq!(inspection.tracks[1 - clear_index].key_ids, [kid]);
+    assert_eq!(exact_clock_fields(&mixed), exact_clock_fields(&original));
+    let before = std::fs::read(&mixed).unwrap();
+    let private = root.path().join("private");
+    drmr_core::native::create_private_dir_all(&private).unwrap();
+    let keys = private.join("keys.json");
+    let config = serde_json::json!({"schema_version":1,"input":{"keys":[{"kid":kid,"key":key}]}});
+    drmr_core::native::create_private_new(&keys)
+        .unwrap()
+        .write_all(config.to_string().as_bytes())
+        .unwrap();
+    let verify = |candidate: &Path| {
+        command(&[
+            "verify",
+            candidate.to_str().unwrap(),
+            "--source",
+            mixed.to_str().unwrap(),
+            "--keys-file",
+            keys.to_str().unwrap(),
+            "--json",
+        ])
+    };
+    // The actual verifier decodes and hashes the clear role unkeyed and the CENC role with its key.
+    let positive = verify(&original);
+    assert!(
+        positive.status.success(),
+        "{} {}",
+        String::from_utf8_lossy(&positive.stdout),
+        String::from_utf8_lossy(&positive.stderr)
+    );
+    assert_checks(&serde_json::from_slice::<serde_json::Value>(&positive.stdout).unwrap());
+    let mut negatives = Vec::new();
+    for change in ["window", "width"] {
+        let mutant = root.path().join(format!("{change}.mp4"));
+        if change == "window" {
+            shorten_video_window(&original, &mutant);
+        } else {
+            patch_box(
+                &original,
+                &mutant,
+                *b"tkhd",
+                76,
+                &(640_u32 << 16).to_be_bytes(),
+            );
+        }
+        assert_eq!(exact_clock_fields(&mutant), exact_clock_fields(&original));
+        let negative = verify(&mutant);
+        let report: serde_json::Value = serde_json::from_slice(&negative.stdout).unwrap();
+        negatives.push((change, negative.status.success(), report));
+    }
+    assert_eq!(std::fs::read(&original).unwrap(), original_before);
+    assert_eq!(std::fs::read(&mixed).unwrap(), before);
+    assert!(
+        negatives.iter().all(|(_, accepted, _)| !accepted),
+        "clear_index={clear_index}: {negatives:?}"
+    );
+    for (_, _, report) in negatives {
+        assert_eq!(report["media_verified"], false);
+        assert_eq!(report["checks"]["stream_metadata"], "pass");
+        assert_eq!(report["checks"]["packet_payloads_equal"], true);
+        assert_eq!(report["checks"]["decoded_content_equal"], true);
+        assert_eq!(report["checks"]["packet_timing_equal"], false);
+    }
+}
+
+#[test]
+fn mixed_clear_video_reference_keeps_finite_windows_and_display_sizes() {
+    mixed_reference_checks(0);
+}
+
+#[test]
+fn mixed_clear_audio_reference_keeps_finite_windows_and_display_sizes() {
+    mixed_reference_checks(1);
+}

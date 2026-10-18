@@ -319,10 +319,12 @@ pub(super) fn presentation_windows_equal(
         return Ok(true);
     };
     if input.format != crate::inspection::InputFormat::Mp4
-        || !matches!(
-            input.protection,
-            Protection::Clear | Protection::Cenc | Protection::Cbcs
-        )
+        || input.tracks.iter().any(|track| {
+            !matches!(
+                track.protection,
+                Protection::Clear | Protection::Cenc | Protection::Cbcs
+            )
+        })
         || !profile_shape(&input)
     {
         return Ok(true);
