@@ -597,7 +597,8 @@ impl Converter {
                     },
                     super::ts::View {
                         input: playlist,
-                        metadata: &b.media,
+                        // The owned playlist applies its private key URI to every probe.
+                        metadata: playlist,
                         index: b.index,
                         key: None,
                         transport: false,

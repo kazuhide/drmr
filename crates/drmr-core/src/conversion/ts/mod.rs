@@ -97,7 +97,7 @@ impl Backend {
                 key: None,
                 transport: true,
             };
-            let profile = self.profile_stream(path, index)?;
+            let profile = self.profile_stream(path, index, None)?;
             let config = self.transport_config(view, &profile)?;
             let units = self.access_units(view, &profile, config)?;
             check_duration(
@@ -265,7 +265,7 @@ impl Backend {
         &self,
         view: View<'_>,
         profile: &serde_json::Value,
-    ) -> Result<(), ConversionError> {
+    ) -> Result<frames::Evidence, ConversionError> {
         let expected = profile["nb_read_packets"]
             .as_str()
             .and_then(|s| s.parse().ok())
@@ -324,8 +324,8 @@ impl Backend {
         source: View<'_>,
         result: View<'_>,
     ) -> Result<VerificationReport, ConversionError> {
-        let mut a = self.profile_stream(source.input, source.index)?;
-        let mut b = self.profile_stream(result.metadata, result.index)?;
+        let mut a = self.profile_stream(source.input, source.index, source.key)?;
+        let mut b = self.profile_stream(result.metadata, result.index, result.key)?;
         let config_a = self.transport_config(source, &a)?;
         let config_b = self.transport_config(result, &b)?;
         let units_a = self.access_units(source, &a, config_a.clone())?;
@@ -338,15 +338,14 @@ impl Backend {
             .ok_or(ConversionError("invalid-media-probe"))?
             .remove("extradata_hash");
         if matches!(config_a, canonical::Config::Video { .. }) {
-            self.progressive_transport_frames(source, &a)?;
-            self.progressive_transport_frames(result, &b)?;
-            if a["field_order"].is_null() {
-                a["field_order"] = "progressive".into();
-            }
+            let source_frames = self.progressive_transport_frames(source, &a)?;
+            let result_frames = self.progressive_transport_frames(result, &b)?;
+            source_frames.resolve_field_order(&mut a);
+            result_frames.resolve_field_order(&mut b);
         }
         let metadata = a == b && config_a == config_b;
-        let timing = self.packets_stream(source.input, source.index)?
-            == self.packets_stream(result.input, result.index)?;
+        let timing = self.packets_stream(source.input, source.index, source.key)?
+            == self.packets_stream(result.input, result.index, result.key)?;
         let payload = units_a.payload_equal(&units_b);
         let decoded = self.hash_stream(source.input, source.index, false, source.key)?
             == self.hash_stream(result.input, result.index, false, result.key)?;

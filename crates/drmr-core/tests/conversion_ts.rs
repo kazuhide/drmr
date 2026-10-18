@@ -32,14 +32,14 @@ fn source_profile(root: &Path, profile: &str) -> std::path::PathBuf {
     if profile != "audio" {
         command.args(["-map", "0:v:0"]);
     }
-    if profile != "video" {
+    if !matches!(profile, "video" | "interlaced-video") {
         command.args(["-map", "0:a:0"]);
     }
     command.args(["-c", "copy"]);
-    if profile == "bframes" || profile == "interlaced" {
+    if matches!(profile, "bframes" | "interlaced" | "interlaced-video") {
         command.args(["-c:v", "libx264", "-threads", "1", "-bf", "3", "-g", "48"]);
     }
-    if profile == "interlaced" {
+    if matches!(profile, "interlaced" | "interlaced-video") {
         command.args(["-flags", "+ilme+ildct", "-x264-params", "tff=1"]);
     }
     if profile == "44100" {
@@ -174,6 +174,99 @@ fn single_track_and_b_frame_sources_preserve_their_absolute_clocks() {
             .unwrap()
             .passed
         );
+    }
+}
+
+fn interlaced_hls(root: &Path) -> std::path::PathBuf {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../drmr/tests/fixtures/bbb/clip.mp4");
+    let playlist = root.join("media.m3u8");
+    let result = std::process::Command::new("ffmpeg")
+        .args(["-v", "error", "-threads", "1", "-i"])
+        .arg(fixture)
+        .args([
+            "-map",
+            "0:v:0",
+            "-an",
+            "-c:v",
+            "libx264",
+            "-threads",
+            "1",
+            "-flags",
+            "+ilme+ildct",
+            "-x264-params",
+            "tff=1",
+            "-output_ts_offset",
+            "2",
+            "-hls_segment_type",
+            "fmp4",
+            "-hls_segment_options",
+            "video_track_timescale=90000",
+            "-hls_time",
+            "2",
+            "-hls_playlist_type",
+            "vod",
+            "-hls_segment_filename",
+        ])
+        .arg(root.join("segment-%d.m4s"))
+        .arg(&playlist)
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "interlaced HLS fixture generation failed"
+    );
+    playlist
+}
+
+#[test]
+fn complete_frame_evidence_rejects_an_interlaced_source_or_actual_hls_result() {
+    let source_root = common::private_tempdir().unwrap();
+    let input = source_profile(source_root.path(), "video");
+    let output = source_root.path().join("result");
+    let keys = InputKeys::default();
+    let hls = HlsInputKeys::default();
+    let c = converter();
+    assert!(
+        c.convert(clear_request(&input, &output, &keys, &hls))
+            .unwrap()
+            .verification
+            .passed
+    );
+    let result_root = common::private_tempdir().unwrap();
+    let interlaced_result = interlaced_hls(result_root.path());
+    let interlaced_root = common::private_tempdir().unwrap();
+    let interlaced_source = source_profile(interlaced_root.path(), "interlaced-video");
+    let originals = [
+        source_root.path(),
+        result_root.path(),
+        interlaced_root.path(),
+    ]
+    .map(|path| (path, common::snapshot_tree(path)));
+    let clear_result = output.join("master.m3u8");
+    for (source, result) in [
+        (input.as_path(), interlaced_result.as_path()),
+        (interlaced_source.as_path(), clear_result.as_path()),
+    ] {
+        assert_eq!(
+            c.verify(VerificationRequest {
+                source: VerificationSource {
+                    input: source,
+                    input_keys: &keys,
+                    hls_keys: &hls
+                },
+                output: VerificationSource {
+                    input: result,
+                    input_keys: &keys,
+                    hls_keys: &hls
+                },
+            })
+            .unwrap_err()
+            .0,
+            "ts-progressive-frame-evidence-required"
+        );
+    }
+    for (path, before) in originals {
+        assert_eq!(common::snapshot_tree(path), before);
     }
 }
 #[test]
