@@ -154,6 +154,13 @@ def terminate(process, grace=5):
     return {"method": "force", "cleanup": "unconfirmed"}
 
 
+def _unique_members(pairs):
+    value = dict(pairs)
+    if len(value) != len(pairs):
+        raise Failure("measurement-invalid")
+    return value
+
+
 def measured_run(argv, environment, timeout, interval):
     """Spool stdout privately, discard stderr, and retain only bounded parsed JSON."""
     supported = platform.system() in ("Darwin", "Linux")
@@ -228,7 +235,7 @@ def measured_run(argv, environment, timeout, interval):
         try:
             if len(raw) > MAX_JSON_BYTES:
                 raise Failure("output-size-limit")
-            payload = json.loads(raw)
+            payload = json.loads(raw, object_pairs_hook=_unique_members)
         except (ValueError, UnicodeError, RecursionError, Failure) as problem:
             measurement["status"] = "failed"
             measurement["error"] = str(problem) if isinstance(problem, Failure) else "invalid-json"

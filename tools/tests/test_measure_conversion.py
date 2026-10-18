@@ -48,6 +48,24 @@ def metrics():
 
 
 class MeasurementBoundary(unittest.TestCase):
+    def test_raw_duplicate_members_are_refused_before_values_can_be_collapsed(self):
+        value = {"schema_version": 1, "measurements": metrics(), "verification": {
+            "media_verified": True}}
+        encoded = json.dumps(value)
+        cases = (
+            encoded.replace('"calls": 1', '"calls": 0, "calls": 1', 1),
+            encoded.replace('"status": "observed"', '"status": "partial", "status": "observed"', 1),
+            encoded.replace('"media_verified": true', '"media_verified": false, "media_verified": true', 1),
+        )
+        for raw in cases:
+            with self.subTest(raw=raw), mock.patch.object(measure, "sample_processes", return_value=None):
+                result, payload = measure.measured_run(
+                    [sys.executable, "-c", "import sys; sys.stdout.write(" + repr(raw) + ")"],
+                    dict(os.environ), 2, 0.1)
+                self.assertEqual(result["status"], "failed")
+                self.assertEqual(result["error"], "measurement-invalid")
+                self.assertIsNone(payload)
+
     def test_only_exact_labels_finite_numbers_and_known_shapes_are_retained(self):
         value = metrics()
         self.assertEqual(measure.validate_measurements(value), value)
