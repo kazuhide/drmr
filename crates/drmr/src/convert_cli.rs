@@ -2,7 +2,8 @@
 
 use clap::Args;
 use drmr_core::conversion::{
-    ConversionError, ConversionRequest, Converter, VerificationRequest, VerificationSource,
+    ConversionError, ConversionReport, ConversionRequest, Converter, VerificationRequest,
+    VerificationSource,
     key_file::{self, OperatorKeys},
 };
 use drmr_core::events::{Record, Sink};
@@ -15,8 +16,14 @@ use std::sync::{Arc, Mutex};
 
 #[derive(Args)]
 pub struct ConvertArgs {
-    /// Local source media. The source is never overwritten.
+    /// Local source media or a completed clear HLS URL. The source is never overwritten.
     pub input: PathBuf,
+    /// New directory retaining the original input; required for URL input.
+    #[arg(long)]
+    pub download_dir: Option<PathBuf>,
+    /// Private JSON settings for additional origins, authentication and fetch limits.
+    #[arg(long)]
+    pub fetch_policy: Option<PathBuf>,
     /// Target protection: clear, cenc, cbcs, hls-aes128, or hls-sample-aes.
     #[arg(long)]
     pub to: TargetProtection,
@@ -98,7 +105,7 @@ impl Sink for Progress {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if *previous != Some(workers) {
-            eprintln!("Processing up to {workers} tracks at a time (CPU and memory limits).");
+            eprintln!("Using up to {workers} workers (CPU and memory limits).");
             *previous = Some(workers);
         }
     }
@@ -126,6 +133,24 @@ fn error(command: &str, error: ConversionError) -> ExitCode {
         return ExitCode::from(130);
     }
     if let Some(hint) = match error.0 {
+        "download-directory-required" => Some(
+            "URL input requires --download-dir pointing to a new directory under an existing parent.",
+        ),
+        "download-options-require-url" => {
+            Some("Use --download-dir and --fetch-policy only with URL input.")
+        }
+        "download-output-overlap" => {
+            Some("Choose separate download and output paths; neither may contain the other.")
+        }
+        "download-directory-exists" => {
+            Some("Choose a new --download-dir, or convert its saved input.m3u8 as local input.")
+        }
+        "download-destination-unsafe" => Some(
+            "Choose new download and output paths whose immediate parent directories already exist.",
+        ),
+        "fetch-policy-invalid" => {
+            Some("Use an owner-only JSON object with supported, correctly typed fetch settings.")
+        }
         "resource-budget" => Some(
             "Free memory or run fewer jobs; the worker maximum does not override memory admission.",
         ),
@@ -166,7 +191,15 @@ fn error(command: &str, error: ConversionError) -> ExitCode {
     ExitCode::from(
         if matches!(
             error.0,
-            "input-key-required"
+            "download-directory-required"
+                | "download-options-require-url"
+                | "download-output-overlap"
+                | "download-directory-exists"
+                | "download-destination-unsafe"
+                | "download-url-invalid"
+                | "download-url-scheme-not-supported"
+                | "fetch-policy-invalid"
+                | "input-key-required"
                 | "output-key-required"
                 | "output-key-not-used"
                 | "output-key-role-mismatch"
@@ -191,7 +224,112 @@ fn json(value: &serde_json::Value) -> std::io::Result<()> {
     writeln!(out)
 }
 
+fn configured_download(
+    args: &ConvertArgs,
+    input: &crate::download_cli::Input,
+) -> Result<Option<drmr_core::source::FetchPolicy>, ExitCode> {
+    match input {
+        crate::download_cli::Input::Local(_) => {
+            if args.download_dir.is_some() || args.fetch_policy.is_some() {
+                Err(error(
+                    "convert",
+                    ConversionError("download-options-require-url"),
+                ))
+            } else {
+                Ok(None)
+            }
+        }
+        crate::download_cli::Input::Url(url) => {
+            let directory = args
+                .download_dir
+                .as_ref()
+                .ok_or_else(|| error("convert", ConversionError("download-directory-required")))?;
+            crate::download_cli::preflight(directory, &args.output).map_err(|cause| {
+                error("convert", cause);
+                ExitCode::from(2)
+            })?;
+            drmr_core::conversion::download_policy::read(url, args.fetch_policy.as_deref())
+                .map(Some)
+                .map_err(|cause| error("convert", cause))
+        }
+    }
+}
+
+fn execute_conversion(
+    command: &Converter,
+    args: &ConvertArgs,
+    input: &crate::download_cli::Input,
+    fetch_policy: Option<&drmr_core::source::FetchPolicy>,
+    local_format: Option<OutputFormat>,
+    keys: &OperatorKeys,
+) -> Result<(ConversionReport, Option<serde_json::Value>), ConversionError> {
+    let downloaded = match input {
+        crate::download_cli::Input::Url(url) => {
+            if !args.json {
+                eprintln!("Downloading source media...");
+            }
+            let source = command.download_hls(
+                url,
+                args.download_dir
+                    .as_deref()
+                    .expect("URL download directory was checked"),
+                &args.output,
+                fetch_policy.expect("URL fetch policy was checked"),
+            )?;
+            eprintln!(
+                "Downloaded source retained at: {}",
+                source.entrypoint().display()
+            );
+            Some(source)
+        }
+        crate::download_cli::Input::Local(_) => None,
+    };
+    let source = downloaded
+        .as_ref()
+        .map_or(args.input.as_path(), |source| source.entrypoint());
+    let format = match local_format {
+        Some(format) => format,
+        None => inspection::inspect(source)
+            .map_err(|_| ConversionError("invalid-input-media"))?
+            .format
+            .into(),
+    };
+    if !args.json {
+        eprintln!("Converting and checking media...");
+    }
+    let request = ConversionRequest {
+        input: source,
+        output: &args.output,
+        format,
+        target: args.to,
+        input_keys: &keys.input,
+        hls_input_keys: &keys.hls_input,
+        output_key: keys.output.as_ref(),
+        hls_key_uri: keys.output.as_ref().and_then(|_| keys.hls_output_uri()),
+        hls_output_key: keys.hls_output.as_ref(),
+    };
+    let report = match &downloaded {
+        Some(source) => command.convert_downloaded(source, request),
+        None => command.convert(request),
+    }?;
+    let download = downloaded.as_ref().map(|source| serde_json::json!({
+        "directory": source.entrypoint().parent().expect("downloaded entrypoint has a parent").to_string_lossy(),
+        "entrypoint": source.entrypoint().to_string_lossy(),
+        "entrypoint_relative": "input.m3u8",
+        "retained": true
+    }));
+    Ok((report, download))
+}
+
 pub fn convert(args: &ConvertArgs) -> ExitCode {
+    let input = match crate::download_cli::Input::parse(args.input.as_os_str()) {
+        Ok(input) => input,
+        Err(cause) => return error("convert", cause),
+    };
+    let fetch_policy = match configured_download(args, &input) {
+        Ok(policy) => policy,
+        Err(code) => return code,
+    };
     let Ok(cancellation) = crate::cancellation::Cancellation::install() else {
         return error("convert", ConversionError("signal-monitor-unavailable"));
     };
@@ -199,16 +337,14 @@ pub fn convert(args: &ConvertArgs) -> ExitCode {
         Ok(keys) => keys,
         Err(code) => return code,
     };
-    let format = match args.format {
-        Some(format) => format,
-        None => match inspection::inspect(&args.input) {
-            Ok(report) => report.format.into(),
+    let local_format = match (&input, args.format) {
+        (_, Some(format)) => Some(format),
+        (crate::download_cli::Input::Local(path), None) => match inspection::inspect(path) {
+            Ok(report) => Some(report.format.into()),
             Err(_) => return error("convert", ConversionError("invalid-input-media")),
         },
+        (crate::download_cli::Input::Url(_), None) => None,
     };
-    if !args.json {
-        eprintln!("Converting and checking media...");
-    }
     let converter = converter(
         &args.packager_bin,
         args.max_workers,
@@ -216,17 +352,14 @@ pub fn convert(args: &ConvertArgs) -> ExitCode {
         cancellation.stop.clone(),
     );
     let execute = |command: &Converter| {
-        command.convert(ConversionRequest {
-            input: &args.input,
-            output: &args.output,
-            format,
-            target: args.to,
-            input_keys: &keys.input,
-            hls_input_keys: &keys.hls_input,
-            output_key: keys.output.as_ref(),
-            hls_key_uri: keys.output.as_ref().and_then(|_| keys.hls_output_uri()),
-            hls_output_key: keys.hls_output.as_ref(),
-        })
+        execute_conversion(
+            command,
+            args,
+            &input,
+            fetch_policy.as_ref(),
+            local_format,
+            &keys,
+        )
     };
     let (result, measurement) = if args.measure {
         let (result, measurement) = converter.measure(execute);
@@ -234,7 +367,7 @@ pub fn convert(args: &ConvertArgs) -> ExitCode {
     } else {
         (execute(&converter), None)
     };
-    let report = match result {
+    let (report, download) = match result {
         Ok(report) => report,
         Err(cause) => return error("convert", cause),
     };
@@ -243,6 +376,9 @@ pub fn convert(args: &ConvertArgs) -> ExitCode {
     }
     let result = if args.json {
         let mut value = serde_json::to_value(&report).expect("conversion report serializes");
+        if let Some(download) = download {
+            value["download"] = download;
+        }
         if let Some(measurement) = measurement {
             value["measurements"] =
                 serde_json::to_value(measurement).expect("measurement serializes");

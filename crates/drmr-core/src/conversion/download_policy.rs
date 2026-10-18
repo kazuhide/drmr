@@ -227,6 +227,9 @@ mod tests {
             policy.headers_for("https://example.test"),
             [("Authorization".into(), "secret".into())]
         );
-        assert!(policy.headers_for("https://cdn.example.test").is_empty());
+        assert_eq!(
+            policy.headers_for("https://cdn.example.test"),
+            Vec::<(String, String)>::new()
+        );
     }
 }

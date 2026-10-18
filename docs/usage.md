@@ -49,7 +49,7 @@ drmr convert source.mpd --to hls-aes128 --format hls --output protected-hls --ke
 drmr verify protected-dash/manifest.mpd --source source.mpd --keys-file keys.json --json
 ```
 
-`convert` detects local MP4, DASH, and HLS inputs. Choose one output format per invocation; omitting `--format` retains the input format. The output path is a new MP4 file or a new DASH/HLS directory. Existing destinations are refused. Input media is read into a private working area, and output is published only after content and timing checks pass. Nothing is re-encoded.
+`convert` detects local MP4, DASH, and HLS inputs. It also accepts the completed clear HLS URLs described below. Choose one output format per invocation; omitting `--format` retains the input format. The output path is a new MP4 file or a new DASH/HLS directory. Existing destinations are refused. Input media is read into a private working area, and output is published only after content and timing checks pass. Nothing is re-encoded.
 
 `clear`, `cenc`, and `cbcs` can be written to DASH; `clear` and `cbcs` can be written to fragmented MP4 HLS. HLS `AES-128` encrypts complete HLS resources and requires `--format hls` or `hls-ts`. `hls-ts` also supports clear and SAMPLE-AES output from qualified local TS inputs. A single-track MP4 can also be written as `clear`, `cenc`, or `cbcs`.
 
@@ -58,6 +58,87 @@ A qualified clear or counter-mode encrypted (`cenc`) MP4 containing one AAC-LC a
 A narrow local MPEG transport stream input profile can produce clear, `cbcs`, or AES-128 fragmented MP4 HLS. Use `--format hls-ts` to retain transport-stream packaging, including SAMPLE-AES encryption for FairPlay media. Other multiplexed MP4 output, live input, and unrestricted DASH/HLS profiles remain unsupported. See [conversion support](conversion-support.md) for the tested routes and [processing and verification](media-processing.md) for timing limits.
 
 `verify OUTPUT --source INPUT` independently compares the original source and result. It requires their respective keys when encrypted. Success means the stream metadata, encoded packets, decoded picture/sound, and packet timestamps match; it does not establish license acquisition or device playback. Use the generated `manifest.mpd` or `master.m3u8` as the output argument for a presentation. Both commands support `--json` for one versioned result object; progress and failures go to standard error.
+
+### Convert a URL
+
+For a completed clear HLS source, pass its URL directly to `convert` and choose
+where to retain the downloaded source:
+
+```sh
+drmr convert "https://example.com/vod/master.m3u8" --download-dir ./source --to cbcs --format hls --output ./converted --keys-file keys.json
+```
+
+`--download-dir` is required for URL input. Both it and `--output` must be new,
+separate paths under existing parent directories. Existing downloads are never
+replaced or silently reused. Local input needs neither `--download-dir` nor
+`--fetch-policy`.
+
+The command downloads the original playlists and resources, creates
+`source/input.m3u8` with local references, then converts and verifies the media
+against that saved source. Original playlist bytes remain separate; the local
+playlists change only resource references. No separate analysis or snapshot
+command is required.
+
+A completed download remains available even if conversion fails. Once the source
+is saved, the server is no longer needed. Retry with its local entrypoint, or
+compare the result independently:
+
+```sh
+drmr convert source/input.m3u8 --to cbcs --format hls --output ./retry --keys-file keys.json
+drmr verify converted/master.m3u8 --source source/input.m3u8 --keys-file keys.json
+```
+
+An incomplete download is not admitted as input. Cancellation stops acquisition
+and media work before cleanup; a completed source is retained. Downloaded source
+files are private to their owner. Result media is published only after content,
+timing, and saved-source integrity checks pass.
+
+The initial URL profile covers clear, completed HLS with supported MPEG-TS or
+fragmented MP4 media. Existing local-media restrictions still apply. Remote DASH,
+standalone MP4, encrypted input, live playlists, and byte ranges are outside this
+URL profile; this is an implementation limit, not a limitation of those formats.
+No playlist key URI is retrieved.
+
+#### Optional fetch settings
+
+By default, retrieval uses HTTPS and the input URL's origin: its scheme, host,
+and port. A playlist that references another origin needs explicit permission.
+Use an owner-only JSON file with `--fetch-policy` for additional origins,
+authentication, or resource limits. The input URL stays on the command line;
+it does not need to be repeated in the file.
+
+```json
+{
+  "allowed_origins": ["https://media.example.com"],
+  "headers_by_origin": {
+    "https://example.com": {"Authorization": "Bearer <your token>"}
+  },
+  "max_total_bytes": 1073741824,
+  "connections": 4
+}
+```
+
+```sh
+drmr convert "https://example.com/vod/master.m3u8" --download-dir ./source --fetch-policy fetch.json --to clear --format hls --output ./clear-result
+```
+
+Headers are sent only to their configured origin; redirects and child references
+must also use allowed origins. HTTP and private-network access are disabled
+unless the file explicitly sets `allow_http` and `allow_private_network` to
+`true`, respectively. Credentials and source URLs are not printed in reports.
+The private original files can contain signed URLs, so keep that directory private.
+
+Optional limits also include `max_playlist_bytes`, `max_playlists`,
+`max_segments_per_track`, `max_resource_bytes`, `max_total_resources`,
+`min_free_disk_bytes`, `timeout` in seconds, and `attempts`. Counts are integers;
+unknown fields, duplicate fields, incorrect types, and invalid limits are refused.
+`connections` is a fetch upper bound; `--max-workers` and CPU/memory admission
+can reduce actual concurrency.
+
+URL conversions add a `download` object to the JSON result, containing local
+`directory` and `entrypoint` display paths, the relative `entrypoint_relative`,
+and `retained: true`. Source URLs and request headers are excluded. Local
+conversions retain their existing result shape.
 
 ### Separate input and output keys
 
