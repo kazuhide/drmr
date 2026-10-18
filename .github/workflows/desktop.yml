@@ -3,17 +3,22 @@ name: Desktop native builds
 on:
   pull_request:
     paths:
-      - 'crates/drmr-desktop/**'
-      - 'crates/drmr-server/**'
-      - 'crates/drmr-core/**'
-      - 'crates/drmr/**'
+      - 'crates/**'
+      - 'vendor/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - '.gitattributes'
+      - 'README.md'
+      - 'LICENSE'
+      - 'docs/**'
+      - '.github/scripts/minimum-rust.py'
       - 'tools/build_desktop.py'
       - 'tools/collect_notices.py'
       - 'tools/desktop-licenses/**'
+      - 'tools/verify_archive.py'
       - 'tools/tests/test_build_desktop.py'
-      - 'docs/desktop.md'
+      - 'tools/tests/test_verify_archive.py'
+      - 'tools/tests/test_ci_inputs.py'
       - '.github/workflows/desktop.yml'
   workflow_dispatch:
 
