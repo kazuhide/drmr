@@ -370,6 +370,8 @@ If cleanup cannot be confirmed, the job keeps its execution slot and temporary c
 
 On interruption or termination, the server closes submissions, stops the active job, and drains its queue runner, log streams and background workers before reporting successful shutdown. Queued items are not started during shutdown. Rust embedding hosts should call `RunningServer::shutdown(&mut self)` and retain the owner if it returns an error; dropping a host is best effort and does not prove successful cleanup.
 
+If `drmr serve` reports incomplete shutdown, it keeps diagnostic access available. Fix the reported cause, then send an interrupt or termination signal again to retry. Force-killing the server bypasses this confirmation.
+
 Catalog output existence and verified readiness are separate. The API keeps the
 legacy `converted` flag for a saved manifest and adds `output_readiness`. A new
 attempt makes earlier output unverified before it starts writing. Only a fully

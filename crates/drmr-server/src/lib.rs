@@ -542,10 +542,26 @@ pub fn serve(config: ServerConfig) -> Result<(), ServeError> {
         let listener = tokio::net::TcpListener::bind((host.as_str(), port)).await?;
         let address = listener.local_addr()?;
         let _ = writeln!(std::io::stderr(), " * Running on http://{address}");
-        tokio::select! {
-            result = axum::serve(listener, build_router(app.clone())) => result,
-            () = shutdown_signal() => Ok(()),
-        }
+        let shutdown_app = app.clone();
+        axum::serve(listener, build_router(app.clone()))
+            .with_graceful_shutdown(async move {
+                loop {
+                    shutdown_signal().await;
+                    let owner = shutdown_app.clone();
+                    match tokio::task::spawn_blocking(move || owner.shutdown()).await {
+                        Ok(Ok(())) => break,
+                        Ok(Err(error)) => {
+                            let _ = writeln!(std::io::stderr(),
+                                "drmr serve: shutdown incomplete ({error}); diagnostic access retained; fix the cause and signal again to retry");
+                        }
+                        Err(_) => {
+                            let _ = writeln!(std::io::stderr(),
+                                "drmr serve: shutdown incomplete (worker-cleanup-unconfirmed); diagnostic access retained; signal again to retry");
+                        }
+                    }
+                }
+            })
+            .await
     });
     let cleanup = app.shutdown();
     drop(runtime);

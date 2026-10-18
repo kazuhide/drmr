@@ -44,6 +44,8 @@ fn stage_entry(catalog: &Path, asset_id: &str) {
 struct Server {
     child: Child,
     address: String,
+    #[cfg(unix)]
+    events: std::sync::mpsc::Receiver<String>,
 }
 
 impl Drop for Server {
@@ -69,13 +71,92 @@ fn start(catalog: &Path, output: &Path) -> Server {
     stderr.read_line(&mut banner).unwrap();
     // The server writes a record per request to stderr: keep reading it, or a closed pipe
     // (or a full one) would stop the handlers.
-    std::thread::spawn(move || std::io::copy(&mut stderr, &mut std::io::sink()));
+    let (events_tx, events) = std::sync::mpsc::channel();
+    #[cfg(not(unix))]
+    drop(events);
+    std::thread::spawn(move || {
+        for line in stderr.lines().map_while(Result::ok) {
+            let _ = events_tx.send(line);
+        }
+    });
     let address = banner
         .trim()
         .strip_prefix("* Running on http://")
         .unwrap_or_else(|| panic!("no banner: {banner:?}"))
         .to_string();
-    Server { child, address }
+    Server {
+        child,
+        address,
+        #[cfg(unix)]
+        events,
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn failed_signal_shutdown_retains_diagnostics_until_cleanup_can_be_retried() {
+    use rustix::process::{Pid, Signal, kill_process};
+    let dir = tempfile::tempdir().unwrap();
+    let (catalog, output) = (dir.path().join("catalog"), dir.path().join("output"));
+    std::fs::create_dir(&catalog).unwrap();
+    stage_entry(&catalog, "synthetic-asset");
+    let asset = output.join("synthetic-asset");
+    drmr_core::native::create_private_dir_all(&asset).unwrap();
+    let reports = asset.join("reports");
+    std::fs::write(&reports, b"blocks durable history").unwrap();
+    let mut server = start(&catalog, &output);
+    let json = "Content-Type: application/json\r\n";
+    let (status, accepted) = request(
+        &server,
+        "POST",
+        "/api/convert",
+        json,
+        r#"{"asset_id":"synthetic-asset"}"#,
+    );
+    assert_eq!(status, 202, "{accepted}");
+    let id = accepted["job_id"].as_str().unwrap();
+    let pid = Pid::from_raw(i32::try_from(server.child.id()).unwrap()).unwrap();
+    kill_process(pid, Signal::TERM).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let line = server
+            .events
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .expect("failed shutdown must retain its owner and report recovery guidance");
+        if line.contains("shutdown incomplete") {
+            break;
+        }
+    }
+    assert!(server.child.try_wait().unwrap().is_none());
+    let (status, job) = request(&server, "GET", &format!("/api/jobs/{id}"), "", "");
+    assert_eq!(status, 200, "{job}");
+    assert_ne!(job["state"], "running");
+    assert_eq!(
+        request(
+            &server,
+            "POST",
+            "/api/convert",
+            json,
+            r#"{"asset_id":"synthetic-asset"}"#
+        )
+        .0,
+        503
+    );
+    std::fs::remove_file(&reports).unwrap();
+    drmr_core::native::create_private_dir_all(&reports).unwrap();
+    kill_process(pid, Signal::TERM).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(status) = server.child.try_wait().unwrap() {
+            assert!(status.success(), "{status}");
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "successful cleanup must finish the server"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
 }
 
 /// One request; the status and the body of a `Content-Length` answer.

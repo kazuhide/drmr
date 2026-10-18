@@ -289,7 +289,7 @@ fn actual_catalog_completion_poll_qualifies_only_its_current_generation() {
     reject_receiptless_success(&server, &entry, &output, &previous_report);
     reject_failed_promotion(&server, &output);
     assert_eq!(source_hashes(&entry.entry_dir), before);
-    server.stop();
+    server.stop().unwrap();
 }
 
 fn wait_native(manager: &ConversionJobManager, id: &str) {
