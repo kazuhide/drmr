@@ -86,8 +86,8 @@ h1[tabindex="-1"]:focus { outline: none; }
 .row-main .row-kind { grid-area: kind; font-size: 11px; color: var(--ink-3); text-align: right; white-space: nowrap; }
 .list-empty { color: var(--ink-3); font-size: 13px; padding: 8px 4px; }
 
-.add-kinds { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
-.add-kind { border: 1px solid var(--line-2); border-radius: var(--radius); padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; background: var(--surface-2); }
+.add-kinds { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 16px; }
+.add-kind { min-width: 0; border: 1px solid var(--line-2); border-radius: var(--radius); padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; background: var(--surface-2); }
 .add-kind h2 { font-size: 14px; }
 .add-kind .tree { white-space: pre-wrap; overflow-wrap: anywhere; }
 .list-group { font-size: 12px; color: var(--ink-3); padding: 10px 4px 2px; }
@@ -101,7 +101,7 @@ h1[tabindex="-1"]:focus { outline: none; }
 .content-title h1 { font-size: 20px; font-weight: 500; overflow-wrap: anywhere; }
 .content-chips { display: flex; gap: 6px; flex-wrap: wrap; }
 .content-head .actions { margin-left: auto; }
-.anchors { position: sticky; top: var(--top-h); z-index: 10; display: flex; gap: 2px; padding: 6px 0 10px; background: var(--canvas); }
+.anchors { position: sticky; top: var(--top-h); z-index: 10; display: flex; flex-wrap: wrap; gap: 2px; padding: 6px 0 10px; background: var(--canvas); }
 .anchors a { padding: 4px 10px; border-radius: 999px; font-size: 13px; color: var(--ink-2); }
 .anchors a:hover { background: var(--surface-3); text-decoration: none; }
 
@@ -126,7 +126,7 @@ h1[tabindex="-1"]:focus { outline: none; }
 /* Secret fields are text inputs masked by CSS, not type="password", so the browser never offers to
    save or autofill the content key (Chrome and Safari; Firefox 116+ honours the property too). */
 .field input[data-masked="true"] { -webkit-text-security: disc; }
-.form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px 18px; }
+.form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 14px 18px; }
 .drm-systems { display: flex; gap: 8px; flex-wrap: wrap; }
 .drm-systems .chip { background: var(--surface-2); color: var(--ink-2); border: 1px solid var(--line); }
 .drm-systems .chip b { font-weight: 600; color: var(--ink); }
@@ -278,6 +278,10 @@ details.disclosure > .disclosure-body { margin-top: 10px; }
   .brand-name { display: none; }
 }
 @media (max-width: 600px) {
+  .top { gap: 8px; }
+  .top-actions { gap: 4px; }
+  .anchors { position: static; }
+  .card { scroll-margin-top: calc(var(--top-h) + 16px); }
   .run-row { grid-template-columns: 1fr auto; }
   .log-line { grid-template-columns: 1fr; gap: 0; }
 }
