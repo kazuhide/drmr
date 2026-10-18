@@ -49,7 +49,7 @@ drmr verify --help
 
 `inspect` reads local MP4 metadata or DASH/HLS declarations without keys or external tools. `plan INPUT --to ...` describes conversion intent and separates input decryption keys from output encryption keys. Neither command verifies media samples or executes a conversion. `plan --mpd` keeps the original prepared-DASH rendition listing.
 
-`doctor` checks whether the four executable files can be found. It does not run them, validate their versions, or prove that a particular asset can be processed.
+`doctor` discovers executable files without running them. Use `drmr doctor --probe --route progressive-mp4` to check versions and advertised options for a selected processing route. The report shows the actual resolved paths and distinguishes required tools from optional tools. These checks do not prove that a particular asset can be processed.
 
 Use `convert INPUT --to ... --format ... --output ...` with a protected key configuration, then `verify OUTPUT --source INPUT` for independent comparison. See [conversion support](docs/conversion-support.md) for the tested protection routes, TS output options, and precise input profiles.
 
@@ -69,7 +69,7 @@ drmr packages supplied media and signaling. It does not provide a DRM license se
 
 | Command | Purpose |
 | --- | --- |
-| `doctor` | Check external tool availability; use `--json` for scripts |
+| `doctor` | Discover tools; add `--probe` for version and option checks, or `--json` for scripts |
 | `inspect` | Read local MP4, DASH, or HLS metadata; use `--json` for scripts |
 | `plan` | Describe a target conversion; `--mpd` lists prepared DASH renditions |
 | `convert` | Convert qualified local media or acquire clear HLS URLs with `--download-dir`, then verify |

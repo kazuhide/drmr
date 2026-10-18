@@ -48,6 +48,68 @@ fn title(app: &AppHandle, value: &'static str) {
     }
 }
 
+fn diagnose_tools(app: &AppHandle) {
+    let state = app.state::<Arc<Desktop>>().inner().clone();
+    if state
+        .phase
+        .compare_exchange(IDLE, STARTING, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        error(
+            app,
+            "Check tools before opening the console. Quit and reopen drmr to check a different launch environment.",
+        );
+        return;
+    }
+    title(app, "drmr — checking tools");
+    let handle = app.clone();
+    let worker_state = state.clone();
+    if std::thread::Builder::new()
+        .name("drmr-tool-diagnostics".into())
+        .spawn(move || {
+            let report = drmr_core::tool_diagnostics::diagnose(
+                drmr_core::tool_diagnostics::Profile::ALL,
+                true,
+            );
+            if worker_state
+                .phase
+                .compare_exchange(STARTING, IDLE, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                title(&handle, "drmr — tool check complete");
+                let kind = if report.ready {
+                    MessageDialogKind::Info
+                } else {
+                    MessageDialogKind::Warning
+                };
+                handle
+                    .dialog()
+                    .message(report.summary())
+                    .title("External media tools")
+                    .kind(kind)
+                    .show(|_| {});
+            } else {
+                // A close request waits for this worker's owned probes before exiting.
+                finish(&handle, &worker_state);
+            }
+        })
+        .is_err()
+    {
+        if state
+            .phase
+            .compare_exchange(STARTING, IDLE, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            error(
+                app,
+                "The diagnostic worker could not start. Try Check external tools again.",
+            );
+        } else {
+            finish(app, &state);
+        }
+    }
+}
+
 fn pick(app: &AppHandle, output: bool) {
     let state = app.state::<Arc<Desktop>>();
     if state.phase.load(Ordering::Acquire) != IDLE {
@@ -286,6 +348,7 @@ fn menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let catalog = MenuItem::with_id(app, "catalog", "Choose catalog folder…", true, None::<&str>)?;
     let output = MenuItem::with_id(app, "output", "Choose output location…", true, None::<&str>)?;
     let open = MenuItem::with_id(app, "open", "Open console", true, Some("CmdOrCtrl+O"))?;
+    let tools = MenuItem::with_id(app, "tools", "Check external tools…", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit drmr", true, Some("CmdOrCtrl+Q"))?;
     let application = Submenu::with_items(
         app,
@@ -293,7 +356,7 @@ fn menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         true,
         &[&PredefinedMenuItem::about(app, None, None)?, &quit],
     )?;
-    let file = Submenu::with_items(app, "File", true, &[&catalog, &output, &open])?;
+    let file = Submenu::with_items(app, "File", true, &[&catalog, &output, &open, &tools])?;
     let edit = Submenu::with_items(
         app,
         "Edit",
@@ -346,6 +409,7 @@ fn main() -> std::process::ExitCode {
             "output" => pick(app, true),
             "open" => open_console(app),
             "quit" => request_close(app),
+            "tools" => diagnose_tools(app),
             _ => {}
         })
         .setup(move |app| {

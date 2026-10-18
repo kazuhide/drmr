@@ -43,14 +43,20 @@ struct Cli {
 enum Command {
     /// Print the version.
     Version,
-    /// Check whether the external media tools are available.
+    /// Discover external tools or probe their versions and advertised options.
     #[command(
-        after_help = "Checks executable files on PATH without running them or reading configuration.\nThis checks availability only; it does not verify versions or media compatibility.\n\nExamples:\n  drmr doctor\n  drmr doctor --json\n\nExit codes: 0 all required tools found; 1 one or more tools missing."
+        after_help = "Discovery checks executable files on the current launch PATH without running them.\n--probe executes bounded version/help checks; it never proves media compatibility.\n\nExamples:\n  drmr doctor\n  drmr doctor --probe --route progressive-mp4 --json\n\nExit codes: 0 selected checks passed for required tools; 1 a required check failed; 2 invalid arguments."
     )]
     Doctor {
         /// Print a machine-readable JSON report instead of a readable checklist.
         #[arg(long)]
         json: bool,
+        /// Execute bounded version and advertised-option checks (three seconds per call).
+        #[arg(long)]
+        probe: bool,
+        /// Check the tools required by this processing route; other tools are optional.
+        #[arg(long, default_value = "all", value_parser = ["all", "prepared-dash", "progressive-mp4", "fragmented-mp4", "dash-presentation", "fmp4-hls-presentation", "mpeg-ts-hls", "mpeg-ts-sample-aes-hls", "mpeg-ts-hls-ts"])]
+        route: String,
     },
     /// Verify a saved HLS snapshot by comparing its recorded content digest.
     #[command(
@@ -142,7 +148,7 @@ fn main() -> ExitCode {
             println!("drmr {}", drmr_core::VERSION);
             ExitCode::SUCCESS
         }
-        Command::Doctor { json } => doctor::run(json),
+        Command::Doctor { json, probe, route } => doctor::run(json, probe, &route),
         Command::VerifySnapshot { path, files } => verify(&path, files),
         Command::Canonical { path } => canonical(&path),
         Command::Run(args) => repackage(&cli::Commands::Run(args)),

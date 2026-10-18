@@ -44,7 +44,9 @@ Before launching on macOS, use the bundled CLI in a terminal where your media to
 "/path/to/drmr.app/Contents/MacOS/drmr-desktop"
 ```
 
-`doctor` checks tool discovery, not tool versions or media compatibility. A missing media tool can make jobs fail even when the window opens successfully; check the job log. Windows and Linux portable builds likewise inherit the environment used to launch their native executable.
+Before opening the console, choose **File → Check external tools…**. This runs the same bounded version and advertised-option checks as `drmr doctor --probe`, using the native application's actual launch environment. The dialog shows resolved paths and fixed results. It does not run shell startup files or add guessed installation directories. If tools are missing, install them and reopen the application from an environment whose `PATH` contains their executable directories. A close request waits for owned diagnostic calls to finish before exiting.
+
+A successful check does not establish media compatibility; Bento4's build number must be confirmed separately because its banner omits it. A window opening successfully does not establish tool availability. Windows and Linux portable builds likewise inherit the environment used to launch their native executable.
 
 ## Build from source
 

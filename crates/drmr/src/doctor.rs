@@ -1,82 +1,78 @@
-//! Discover external dependencies without running programs or loading configuration.
+//! Explain discovery separately from bounded version and advertised-feature checks.
 
-use serde_json::json;
-use std::path::Path;
+use drmr_core::tool_diagnostics::{Profile, diagnose};
 use std::process::ExitCode;
 
-const TOOLS: [(&str, &str); 4] = [
-    ("ffmpeg", "media processing (FFmpeg)"),
-    ("ffprobe", "media inspection (FFmpeg)"),
-    ("mp4dump", "MP4 structure inspection (Bento4)"),
-    (
-        "packager",
-        "media encryption and packaging (Shaka Packager)",
-    ),
-];
-
-pub fn run(as_json: bool) -> ExitCode {
-    let search_path = std::env::var_os("PATH");
-    let directories: Vec<_> = search_path
-        .as_deref()
-        .map(std::env::split_paths)
-        .into_iter()
-        .flatten()
-        .collect();
-    let tools: Vec<_> = TOOLS
-        .iter()
-        .map(|(name, purpose)| {
-            let executable_name = if cfg!(windows) {
-                format!("{name}.exe")
-            } else {
-                (*name).to_string()
-            };
-            let available = directories
-                .iter()
-                .any(|directory| is_executable(&directory.join(&executable_name)));
-            (*name, *purpose, available)
-        })
-        .collect();
-    let ready = tools.iter().all(|(_, _, available)| *available);
+pub fn run(as_json: bool, probe: bool, route: &str) -> ExitCode {
+    let report = diagnose(Profile::parse(route).expect("validated route"), probe);
     if as_json {
-        let tools: Vec<_> = tools
-            .iter()
-            .map(|(name, purpose, available)| {
-                json!({"name": name, "purpose": purpose, "available": available, "required": true})
-            })
-            .collect();
-        println!("{}", json!({"ready": ready, "tools": tools}));
+        println!(
+            "{}",
+            serde_json::to_string(&report).expect("diagnostic report")
+        );
     } else {
-        println!("External media tools (searched on PATH):");
-        for (name, purpose, available) in &tools {
-            let status = if *available { "OK" } else { "MISSING" };
-            println!("  {status:7} {name:8} {purpose}");
-        }
-        if ready {
+        println!(
+            "External media tools (current launch PATH; route {}):",
+            report.profile
+        );
+        for tool in &report.tools {
+            let status = if !tool.available {
+                "MISSING"
+            } else if probe
+                && (tool.failure_code.is_some()
+                    || tool.version_status == "below-minimum"
+                    || tool.feature_status == "missing")
+            {
+                "CHECK"
+            } else {
+                "FOUND"
+            };
             println!(
-                "\nAll required tools are available. Versions and media compatibility were not checked."
+                "  {status:7} {:8} {} ({})",
+                tool.name,
+                tool.purpose,
+                if tool.required {
+                    "required"
+                } else {
+                    "optional for this route"
+                }
+            );
+            if let Some(path) = &tool.path {
+                println!("    path: {}", serde_json::to_string(path).expect("path"));
+            }
+            if probe && tool.available {
+                println!(
+                    "    version: {} [{}]; minimum: {}",
+                    tool.version.as_deref().unwrap_or("unknown"),
+                    tool.version_status,
+                    tool.minimum_version
+                );
+                println!("    advertised features: {}", tool.feature_status);
+                if let Some(code) = tool.failure_code {
+                    println!("    diagnostic: {code}");
+                }
+            }
+        }
+        if probe {
+            println!(
+                "\nProbes check version banners and advertised options. They do not process media."
+            );
+            println!(
+                "Bento4 does not expose its build number; confirm build 641 or newer with its distributor."
             );
         } else {
             println!(
-                "\nInstall the missing tools from FFmpeg, Bento4, or Shaka Packager and add their executable directories to PATH."
+                "\nDiscovery does not run tools or verify versions. Use 'drmr doctor --probe' to check versions and advertised options."
             );
-            println!("See the README installation instructions, then run 'drmr doctor' again.");
+        }
+        if !report.ready {
+            println!(
+                "Install compatible FFmpeg, Bento4 or Shaka Packager tools required for this route, and add their directories to the launcher's PATH."
+            );
+            println!(
+                "Run 'drmr doctor --probe' again; media compatibility still requires conversion checks."
+            );
         }
     }
-    ExitCode::from(u8::from(!ready))
-}
-
-fn is_executable(path: &Path) -> bool {
-    let Ok(metadata) = path.metadata() else {
-        return false;
-    };
-    if !metadata.is_file() {
-        return false;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        metadata.permissions().mode() & 0o111 != 0
-    }
-    #[cfg(not(unix))]
-    true
+    ExitCode::from(u8::from(!report.ready))
 }

@@ -32,6 +32,7 @@ pub mod resources;
 pub mod snapshot;
 pub mod source;
 pub mod storage;
+pub mod tool_diagnostics;
 pub mod toolrun;
 
 /// The crate version (the workspace version).
