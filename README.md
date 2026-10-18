@@ -34,7 +34,7 @@ Media processing uses these external tools. Follow their installation instructio
 | `mp4dump` | 1.6.0, build 641 | [Bento4](https://www.bento4.com/downloads/) | Inspect MP4 structure |
 | `packager` | 3.8.0 | [Shaka Packager](https://github.com/shaka-project/shaka-packager#readme) | Encrypt and package media |
 
-These are supported lower bounds. CI uses specific builds for reproducible results; the [requirements table](docs/requirements.md#media-tools) records those builds. Some older FFmpeg builds omit packet durations needed for encrypted audio verification; drmr refuses incomplete timing evidence. See [media processing](docs/media-processing.md) for details.
+These are supported lower bounds. The [requirements table](docs/requirements.md#media-tools) records the builds used for qualification and explains which CI tools are pinned. Some older FFmpeg builds omit packet durations needed for encrypted audio verification; drmr refuses incomplete timing evidence. See [media processing](docs/media-processing.md) for details.
 
 ## Start here
 

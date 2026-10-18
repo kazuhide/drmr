@@ -835,14 +835,16 @@ fn fetch_timeout_requires_finite_positive_number() {
     assert_eq!(
         FetchPolicy::from_json(&json!({"timeout": 0.5}))
             .unwrap()
-            .timeout,
-        0.5
+            .timeout
+            .to_bits(),
+        0.5_f64.to_bits()
     );
     assert_eq!(
         FetchPolicy::from_json(&json!({"timeout": 2}))
             .unwrap()
-            .timeout,
-        2.0
+            .timeout
+            .to_bits(),
+        2.0_f64.to_bits()
     );
 }
 

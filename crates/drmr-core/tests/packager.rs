@@ -286,8 +286,11 @@ fn encrypt_cbcs_emits_source_derived_segment_duration() {
     encrypt(&packager, &root, &[]).unwrap();
     let argv = recorded(&argv_file);
     assert_eq!(
-        after(&argv, "--segment_duration").parse::<f64>().unwrap(),
-        6.0
+        after(&argv, "--segment_duration")
+            .parse::<f64>()
+            .unwrap()
+            .to_bits(),
+        6.0_f64.to_bits()
     );
     assert!(!argv.contains(&"4".to_string()));
 }
@@ -865,8 +868,8 @@ fn transcrypt_encrypt_uses_isolating_duration_not_six_or_four() {
     for argv in &encrypts {
         let duration = after(argv, "--segment_duration");
         assert_eq!(
-            duration.parse::<f64>().unwrap(),
-            ISOLATING_SEGMENT_DURATION_S
+            duration.parse::<f64>().unwrap().to_bits(),
+            ISOLATING_SEGMENT_DURATION_S.to_bits()
         );
         assert!(!["6", "6.0", "4", "4.0"].contains(&duration));
         assert_eq!(after(argv, "--protection_scheme"), "cbcs");
