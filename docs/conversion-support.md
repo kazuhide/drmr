@@ -118,3 +118,14 @@ samples). Changes to other
 encryption methods, unsupported audio setup, and malformed or oversized encoded
 frames are refused. See [how the original encrypted streams are verified](media-processing.md#sample-aes-transport-streams).
 Known-key media conversion does not acquire a FairPlay license or qualify device playback.
+
+The generated SAMPLE-AES regression uses the attributed ten-second fixture with
+two-second video segments. It checks video-only and joint video/audio input
+against clear, `cbcs`, and AES-128 fMP4 HLS output. Conversion and separate
+verification compare the original encrypted source and an independently clear
+reference, including the final video picture and all decoded audio samples.
+Run it with:
+
+```sh
+cargo test -p drmr-core --test conversion_sample_aes --locked
+```
