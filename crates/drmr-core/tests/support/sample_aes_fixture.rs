@@ -108,6 +108,7 @@ pub fn source(root: &Path, key: &str, iv: &str) -> Fixture {
     let key_bytes: [u8; 16] = hex::decode(key).unwrap().try_into().unwrap();
     let iv_bytes: [u8; 16] = hex::decode(iv).unwrap().try_into().unwrap();
     let playlist = std::fs::read_to_string(clear.join("media.m3u8")).unwrap();
+    let mut resources = Vec::new();
     for line in playlist
         .lines()
         .filter(|line| !line.starts_with('#') && !line.is_empty())
@@ -125,7 +126,9 @@ pub fn source(root: &Path, key: &str, iv: &str) -> Fixture {
             &key_bytes,
             &iv_bytes,
         );
+        resources.push(encrypted.join(line));
     }
+    normalize_continuity(&resources);
     let header = format!("#EXT-X-KEY:METHOD=SAMPLE-AES,URI=\"{KEY_URI}\",IV=0x{iv}\n");
     let cipher_playlist = playlist
         .replacen("#EXTM3U\n", &format!("#EXTM3U\n{header}"), 1)
@@ -134,6 +137,31 @@ pub fn source(root: &Path, key: &str, iv: &str) -> Fixture {
     Fixture {
         clear: clear.join("media.m3u8"),
         encrypted: encrypted.join("media.m3u8"),
+    }
+}
+
+/// Repair fixture payload counters across an ordered cohort after insertion or rotation.
+/// Only header continuity bits change; PCR, PES clocks, and coded bytes stay exact.
+pub fn normalize_continuity(segments: &[PathBuf]) {
+    let mut counters = BTreeMap::<u16, u8>::new();
+    for segment in segments {
+        assert!(std::fs::metadata(segment).unwrap().len() <= MAX_BYTES as u64);
+        let mut bytes = std::fs::read(segment).unwrap();
+        assert_eq!(bytes.len() % 188, 0);
+        for packet in bytes.as_chunks_mut::<188>().0 {
+            let id = pid(packet);
+            let value = match counters.get(&id) {
+                Some(previous) if packet[3] & 0x10 != 0 => (previous + 1) & 15,
+                Some(previous) => *previous,
+                None => packet[3] & 15,
+            };
+            packet[3] = (packet[3] & 0xf0) | value;
+            counters.insert(id, value);
+        }
+        drmr_core::native::create_media_or_truncate(segment)
+            .unwrap()
+            .write_all(&bytes)
+            .unwrap();
     }
 }
 
@@ -470,6 +498,33 @@ mod tests {
         }
         out.extend(pending.into_values());
         out
+    }
+    #[test]
+    fn generated_presentation_keeps_continuity_across_every_resource() {
+        let root = drmr_core::native::private_tempdir().unwrap();
+        let fixture = source(root.path(), KEY, IV);
+        let playlist = std::fs::read_to_string(&fixture.encrypted).unwrap();
+        let mut counters = BTreeMap::<u16, u8>::new();
+        for name in playlist
+            .lines()
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        {
+            let bytes = std::fs::read(fixture.encrypted.parent().unwrap().join(name)).unwrap();
+            for packet in bytes.as_chunks::<188>().0 {
+                let id = pid(packet);
+                let current = packet[3] & 15;
+                if let Some(previous) = counters.get(&id) {
+                    let expected = if packet[3] & 0x10 != 0 {
+                        (previous + 1) & 15
+                    } else {
+                        *previous
+                    };
+                    assert_eq!(current, expected, "resource-spanning payload continuity");
+                }
+                counters.insert(id, current);
+            }
+        }
+        assert!(counters.len() >= 4);
     }
     #[test]
     fn fixture_aac_encryption_matches_nist_cbc_and_clear_tail() {
