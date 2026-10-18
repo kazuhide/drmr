@@ -1,0 +1,48 @@
+# Desktop console
+
+The experimental Desktop host opens the existing local Web console in a native window. It uses the same catalog, jobs and media tools as `drmr serve`. It does not expose every generic CLI command as a desktop form.
+
+## Choose folders
+
+1. Open **File → Choose catalog folder** and select your media catalog.
+2. Open **File → Choose output location**. drmr creates or opens a private `drmr-output` child folder there.
+3. Select **File → Open console**.
+
+The macOS bundle permits plain HTTP only for the loopback IP `127.0.0.1`; window navigation still requires the exact owned port. The native menus handle folder selection. The console receives no native shell or filesystem permissions. Links cannot navigate the window to another origin or open another window. An owned report link opens in the existing window; **File → Open console** returns to the console.
+
+To change folders after opening the console, quit and reopen the application. Source URLs and downloaded media can remain in private analysis folders; closing the window does not delete them. See [usage](usage.md) for saved-source and history retention.
+
+**Quit drmr** stops admission and waits for the local server to confirm cleanup. If cleanup cannot be confirmed, the application stays open and shows an error. An operating-system force quit is separate from this orderly shutdown.
+
+## Build from source
+
+Install the [Tauri platform prerequisites](https://v2.tauri.app/start/prerequisites/) and the external media tools listed in [requirements](requirements.md). Windows uses WebView2, macOS uses WKWebView, and Linux uses WebKitGTK. A successful cross-compile does not verify native dialogs or WebView behavior.
+
+Select a supported Rust toolchain explicitly, with its `cargo` and `rustc` on `PATH`. The examples use `python3`; use `python` on Windows:
+
+```sh
+RUSTUP_TOOLCHAIN=1.95.0 python3 tools/build_desktop.py --bundle
+```
+
+Add `--release` for optimized binaries. `CARGO_TARGET_DIR` chooses a dedicated build directory; the default is `target/desktop`.
+
+The script builds the CLI from the same checkout, stages dependency license declarations and available publisher notices, then builds the optional `desktop` feature. It creates an unsigned macOS `.app`, or a portable Windows/Linux directory, under `desktop-bundles` in the target directory, together with a `.tar.gz` or `.zip` archive that retains executable permissions. Move a previous bundle before rebuilding; it is never overwritten.
+
+The host checks the bundled CLI's SHA-256 before starting the server. Keep the two binaries together. FFmpeg, Shaka Packager and Bento4 are not bundled. Keys, downloaded media and operator configuration are not included in the application bundle.
+
+The Tauri configuration also describes native installer packaging. The build script does not sign, notarize or create an installer, and its output does not establish qualification on another operating system.
+
+## Linux dependency qualification
+
+The current Linux GUI dependency graph includes `glib 0.18.5`, affected by the `VariantStrIter` issue in [RUSTSEC-2024-0429](https://rustsec.org/advisories/RUSTSEC-2024-0429.html), and the unmaintained `proc-macro-error 1.0.4` build dependency ([RUSTSEC-2024-0370](https://rustsec.org/advisories/RUSTSEC-2024-0370.html)). No advisory is suppressed. Linux GUI runtime qualification remains open; a successful build does not resolve these warnings. These optional Linux GUI dependencies are not enabled by default CLI builds.
+
+## Development checks
+
+The Desktop dependencies are optional. Existing workspace checks without the `desktop` feature keep building the CLI and server without a WebView development environment. To check the native host, first stage its CLI and notices:
+
+```sh
+RUSTUP_TOOLCHAIN=1.95.0 python3 tools/build_desktop.py --prepare-only
+RUSTUP_TOOLCHAIN=1.95.0 cargo clippy --locked -p drmr-desktop --features desktop --all-targets -- -D warnings
+```
+
+Native qualification must additionally cover folder-picker cancellation, keyboard input, real jobs, shutdown during active work, and immediate child-process and listener cleanup. Headless policy and packaging tests do not establish those results.

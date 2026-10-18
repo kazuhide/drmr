@@ -6,7 +6,7 @@ drmr inspects local MP4, DASH, and HLS media and converts qualified on-demand pr
 
 **DASH** (Dynamic Adaptive Streaming over HTTP) and **HLS** (HTTP Live Streaming) describe media segments using a manifest or playlists. A **rendition** is one available video quality or audio track.
 
-The CLI is the primary interface. A local web console is experimental. A desktop application is not included in this release.
+The CLI is the primary interface. The local web console and optional [Desktop host](docs/desktop.md) are experimental.
 
 ## Install
 

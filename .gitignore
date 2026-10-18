@@ -5,3 +5,7 @@ keys*.env
 /output/
 *.log
 .DS_Store
+
+/crates/drmr-desktop/binaries/
+/crates/drmr-desktop/bundle-resources/
+/crates/drmr-desktop/gen/schemas/

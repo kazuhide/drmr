@@ -360,7 +360,7 @@ DRMR_OUTPUT_ROOT=/absolute/path/output \
 drmr serve
 ```
 
-Open `http://127.0.0.1:8080`. Both root directories are required. `DRMR_BIND_PORT` changes the port; `DRMR_MAX_WORKERS` limits HLS packaging workers. The console requires catalog entries prepared for it; it is not a general file browser. See `drmr serve --help` for options. A standalone desktop application is not shipped.
+Open `http://127.0.0.1:8080`. Both root directories are required. `DRMR_BIND_PORT` changes the port; `DRMR_MAX_WORKERS` limits HLS packaging workers. The console requires catalog entries prepared for it; it is not a general file browser. See `drmr serve --help` for options. The optional [Desktop host](desktop.md) opens this same console in a native window.
 
 For clear HLS added through the console, the server saves source URLs, original playlists, and downloaded media in `DRMR_OUTPUT_ROOT/<asset-id>/clear/source/`. Keep this private folder protected: the saved information can contain signed URLs. Temporary request configuration files are separate; the server attempts to remove them after jobs finish, without deleting the saved source. Removing a job from history hides its record; saved sources, packaged media, and logs remain on disk.
 
