@@ -36,6 +36,13 @@ class BenchmarkInput(unittest.TestCase):
             self.assertEqual(result.returncode, 1)
             self.assertEqual(report["error"], "output-path-not-supported")
             self.assertFalse(destination.exists())
+            for name in ("$Number$", "$$", "literal$dollar"):
+                destination = root / name
+                result, report = invoke(SCRIPT, destination)
+                self.assertEqual(result.returncode, 1)
+                self.assertEqual(report["error"], "output-path-not-supported")
+                self.assertFalse(destination.exists())
+            self.assertEqual(list(root.iterdir()), [sentinel])
 
     def test_modified_fixture_is_refused_before_output_creation(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -60,10 +67,10 @@ class BenchmarkInput(unittest.TestCase):
             self.assertEqual(result.stderr, b"")
             self.assertTrue(report["success"])
             self.assertIn("creativecommons.org/licenses/by/3.0/",
-                          (destination / "ATTRIBUTION.md").read_text())
+                          (destination / "ATTRIBUTION.md").read_text(encoding="utf-8"))
             self.assertEqual(hashlib.sha256((destination / "source-clip.mp4").read_bytes()).hexdigest(),
                              FIXTURE_SHA256)
-            details = json.loads((destination / "input-report.json").read_text())
+            details = json.loads((destination / "input-report.json").read_text(encoding="utf-8"))
             self.assertEqual(details["fixture_sha256"], FIXTURE_SHA256)
             self.assertEqual(details["video_renditions"], 8)
             self.assertEqual(details["audio_tracks"], 1)

@@ -37,8 +37,8 @@ class Failure(Exception):
 
 
 def prepare(output):
-    # Packager descriptors use commas as separators, even inside an argv item.
-    if any(character in str(output) for character in ",\r\n\x00"):
+    # Packager parses descriptor commas and expands '$' in the entire template.
+    if any(character in str(output) for character in ",$\r\n\x00"):
         raise Failure("output-path-not-supported")
     fixture = Path(__file__).resolve().parents[1] / "crates/drmr/tests/fixtures/bbb/clip.mp4"
     # Keep the accepted public clip bounded and snapshot the exact checked bytes.
