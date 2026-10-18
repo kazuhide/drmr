@@ -1,19 +1,19 @@
 //! Protected key configuration keeps input and output roles distinct.
+mod common;
 use drmr_core::conversion::key_file::read;
 use std::path::Path;
 
 fn config(path: &Path, text: &str) {
-    std::fs::write(path, text).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
-    }
+    use std::io::Write as _;
+    drmr_core::native::create_private_or_truncate(path)
+        .unwrap()
+        .write_all(text.as_bytes())
+        .unwrap();
 }
 
 #[test]
 fn key_file_has_strict_versioned_roles_and_redacted_debug() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::private_tempdir().unwrap();
     let file = dir.path().join("keys.json");
     config(
         &file,
@@ -27,7 +27,7 @@ fn key_file_has_strict_versioned_roles_and_redacted_debug() {
 
 #[test]
 fn segment_keys_need_no_mp4_identifier_and_keep_uris_private() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::private_tempdir().unwrap();
     let file = dir.path().join("keys.json");
     config(
         &file,
@@ -44,7 +44,7 @@ fn segment_keys_need_no_mp4_identifier_and_keep_uris_private() {
 
 #[test]
 fn sample_encryption_can_supply_an_explicit_hls_key_location_without_changing_key_type() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::private_tempdir().unwrap();
     let file = dir.path().join("keys.json");
     config(
         &file,
@@ -59,7 +59,7 @@ fn sample_encryption_can_supply_an_explicit_hls_key_location_without_changing_ke
 
 #[test]
 fn malformed_unknown_and_duplicate_fields_fail_without_exposing_contents() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::private_tempdir().unwrap();
     let file = dir.path().join("credential-sentinel.json");
     for text in [
         r#"{"schema_version":1,"unexpected":"secret-sentinel"}"#,
@@ -78,7 +78,7 @@ fn malformed_unknown_and_duplicate_fields_fail_without_exposing_contents() {
 #[test]
 fn shared_permissions_links_and_oversized_keys_are_rejected() {
     use std::os::unix::fs::{PermissionsExt, symlink};
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::private_tempdir().unwrap();
     let file = dir.path().join("keys.json");
     config(&file, r#"{"schema_version":1}"#);
     std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
@@ -93,4 +93,25 @@ fn shared_permissions_links_and_oversized_keys_are_rejected() {
     std::fs::remove_file(&alias).unwrap();
     config(&file, &" ".repeat(65_537));
     assert!(read(&file).is_err());
+}
+
+#[cfg(windows)]
+#[test]
+fn inherited_acl_hard_links_and_oversized_key_files_are_refused_without_exposure() {
+    let dir = common::private_tempdir().unwrap();
+    let ordinary = tempfile::tempdir().unwrap();
+    let file = dir.path().join("keys.json");
+    config(&file, r#"{"schema_version":1}"#);
+    assert!(read(&file).is_ok());
+    let alias = ordinary.path().join("alias.json");
+    std::fs::hard_link(&file, &alias).unwrap();
+    assert!(read(&file).is_err());
+    assert!(read(&alias).is_err());
+    std::fs::remove_file(alias).unwrap();
+    assert!(read(&file).is_ok());
+    config(&file, &" ".repeat(65_537));
+    assert!(read(&file).is_err());
+    let inherited = ordinary.path().join("keys.json");
+    std::fs::write(&inherited, r#"{"schema_version":1}"#).unwrap();
+    assert!(read(&inherited).is_err());
 }

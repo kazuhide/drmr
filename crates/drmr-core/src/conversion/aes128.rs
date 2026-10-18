@@ -123,7 +123,7 @@ impl HlsOutputKey {
 
 use aes::cipher::{Block, BlockDecryptMut, BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
 use std::{
-    fs::{File, OpenOptions},
+    fs::File,
     io::{BufReader, BufWriter, Read, Write},
 };
 const IO_BUFFER: usize = 64 * 1024;
@@ -158,16 +158,7 @@ fn file_transform(
     let snapshot = workspace.path().join("source");
     super::copy_private(source, &snapshot)?;
     let candidate = workspace.path().join("candidate");
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        options.mode(0o600);
-    }
-    let file = options
-        .open(&candidate)
-        .map_err(|_| ConversionError("temporary-file-unavailable"))?;
+    let file = super::files::create_new(&candidate)?;
     let mut output = BufWriter::with_capacity(IO_BUFFER, file);
     let mut input = BufReader::with_capacity(
         IO_BUFFER,
@@ -185,6 +176,7 @@ fn file_transform(
         .get_ref()
         .sync_all()
         .map_err(|_| ConversionError("segment-write-failed"))?;
+    drop(output);
     super::publish(&candidate, &destination)
 }
 fn read_block(input: &mut impl Read, block: &mut [u8; 16]) -> Result<usize, ConversionError> {

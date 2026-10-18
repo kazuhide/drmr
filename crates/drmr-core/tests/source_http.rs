@@ -533,7 +533,7 @@ fn remote_playlist_cannot_use_operator_local_roots() {
     let local = tmp.path().join("staging");
     std::fs::create_dir(&local).unwrap();
     support::media(&local, None);
-    let uri = drmr_core::source::pypath::as_uri(&local.join("segment.ts"));
+    let uri = drmr_core::source::pypath::as_uri(&local.join("segment.ts")).unwrap();
     let playlist = format!("#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXTINF:6,\n{uri}\n#EXT-X-ENDLIST\n");
     let server = TestServer::routes(vec![("/master", 200, vec![], playlist.into_bytes())]);
     let policy = FetchPolicy {
@@ -1040,6 +1040,81 @@ fn a_body_without_a_declared_length_earns_its_allowance_as_it_lands() {
     );
 }
 
+/// Retain only error classifications for a failed fixture, never network bytes or URLs.
+#[derive(Debug)]
+struct SocketFault {
+    operation: &'static str,
+    kind: io::ErrorKind,
+    code: Option<i32>,
+}
+struct FaultPlatform {
+    inner: Arc<dyn Platform>,
+    faults: Arc<Mutex<Vec<SocketFault>>>,
+}
+struct FaultStream {
+    inner: Box<dyn Stream>,
+    faults: Arc<Mutex<Vec<SocketFault>>>,
+}
+impl FaultStream {
+    fn observe<T>(&self, operation: &'static str, result: io::Result<T>) -> io::Result<T> {
+        if let Err(error) = &result {
+            self.faults.lock().unwrap().push(SocketFault {
+                operation,
+                kind: error.kind(),
+                code: error.raw_os_error(),
+            });
+        }
+        result
+    }
+}
+impl Read for FaultStream {
+    fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+        let result = self.inner.read(bytes);
+        self.observe("read", result)
+    }
+}
+impl Write for FaultStream {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let result = self.inner.write(bytes);
+        self.observe("write", result)
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        let result = self.inner.flush();
+        self.observe("flush", result)
+    }
+}
+impl Stream for FaultStream {
+    fn set_read_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
+        self.observe("read-timeout", self.inner.set_read_timeout(timeout))
+    }
+    fn set_write_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
+        self.observe("write-timeout", self.inner.set_write_timeout(timeout))
+    }
+}
+impl Platform for FaultPlatform {
+    fn resolve(&self, host: &str, port: u16) -> io::Result<Vec<SocketAddr>> {
+        self.inner.resolve(host, port)
+    }
+    fn connect(&self, address: SocketAddr, timeout: Duration) -> io::Result<Box<dyn Stream>> {
+        Ok(Box::new(FaultStream {
+            inner: self.inner.connect(address, timeout)?,
+            faults: Arc::clone(&self.faults),
+        }))
+    }
+    fn tls_context(&self) -> io::Result<TlsContext> {
+        self.inner.tls_context()
+    }
+}
+fn observed_failure(error: &Failure, faults: &Mutex<Vec<SocketFault>>) -> String {
+    let faults: Vec<_> = faults
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|fault| (fault.operation, fault.kind, fault.code))
+        .collect();
+    format!("{error:?}; socket classifications: {faults:?}")
+}
+
 #[test]
 fn a_server_that_drops_the_idle_connection_costs_no_attempt() {
     let tmp = tempfile::tempdir().unwrap();
@@ -1057,14 +1132,19 @@ fn a_server_that_drops_the_idle_connection_costs_no_attempt() {
         attempts: 1,
         ..remote_policy(&server.origin)
     };
-    let result = analyze_remote(
-        &fixed(video()),
-        &format!("{}/master.m3u8", server.origin),
-        "dropped",
-        tmp.path(),
-        &policy,
-    )
-    .unwrap();
+    let faults = Arc::new(Mutex::new(Vec::new()));
+    let result = Analysis::new(&fixed(video()))
+        .platform(Arc::new(FaultPlatform {
+            inner: Arc::new(SystemPlatform),
+            faults: Arc::clone(&faults),
+        }))
+        .run(
+            &SourceRequest::new(format!("{}/master.m3u8", server.origin)),
+            "dropped",
+            tmp.path(),
+            &policy,
+        )
+        .unwrap_or_else(|error| panic!("{}", observed_failure(&error, &faults)));
     assert!(result.admitted && server.paths().len() == count + 1);
     assert_eq!(
         server.connection_count(),
@@ -1129,6 +1209,8 @@ fn a_truncated_response_refunds_its_bytes_before_the_retry() {
 #[test]
 fn close_all_drops_every_kept_connection() {
     let tmp = tempfile::tempdir().unwrap();
+    let private = tmp.path().join("private");
+    drmr_core::native::create_private_dir_all(&private).unwrap();
     let server = TestServer::routes11(vec![
         ("/a.ts".to_string(), 200, ts_packet("a", b'x')),
         ("/b.ts".to_string(), 200, ts_packet("b", b'x')),
@@ -1139,20 +1221,20 @@ fn close_all_drops_every_kept_connection() {
     };
     let fetcher = Fetcher::new(
         &policy,
-        tmp.path(),
+        &private,
         Arc::new(drmr_core::source::platform::SystemPlatform),
     );
     fetcher
         .fetch(
             &format!("{}/a.ts", server.origin),
-            &tmp.path().join("a.part"),
+            &private.join("a.part"),
             None,
         )
         .unwrap();
     fetcher
         .fetch(
             &format!("{}/b.ts", server.origin),
-            &tmp.path().join("b.part"),
+            &private.join("b.part"),
             None,
         )
         .unwrap();
@@ -1162,7 +1244,7 @@ fn close_all_drops_every_kept_connection() {
     fetcher
         .fetch(
             &format!("{}/a.ts", server.origin),
-            &tmp.path().join("a2.part"),
+            &private.join("a2.part"),
             None,
         )
         .unwrap();
@@ -1626,10 +1708,14 @@ fn a_kept_alive_https_connection_dropped_without_close_notify_costs_no_attempt()
         attempts: 1,
         ..FetchPolicy::default()
     };
+    let faults = Arc::new(Mutex::new(Vec::new()));
     let fetcher = Fetcher::new(
         &policy,
         tmp.path(),
-        Arc::new(LoopbackTls { address, context }),
+        Arc::new(FaultPlatform {
+            inner: Arc::new(LoopbackTls { address, context }),
+            faults: Arc::clone(&faults),
+        }),
     );
     fetcher
         .read(&format!("{origin}/a.m3u8"), true, None)
@@ -1642,7 +1728,7 @@ fn a_kept_alive_https_connection_dropped_without_close_notify_costs_no_attempt()
     std::thread::sleep(Duration::from_millis(100)); // the server has closed it by now
     fetcher
         .read(&format!("{origin}/b.m3u8"), true, None)
-        .unwrap();
+        .unwrap_or_else(|error| panic!("{}", observed_failure(&error, &faults)));
     assert_eq!(
         accepted.load(Ordering::SeqCst),
         2,

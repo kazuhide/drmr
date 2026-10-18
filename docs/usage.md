@@ -1,6 +1,6 @@
 # Using drmr
 
-The examples below assume `drmr` is installed and the external tools are on `PATH`. Run `drmr doctor` first. Commands process existing media; they do not encode new video qualities.
+The examples below assume `drmr` is installed and the external tools are on `PATH`. Run `drmr doctor` first. Commands process existing media; they do not encode new video qualities. For PowerShell examples and Windows file permissions, see the [Windows guide](windows.md).
 
 ## Inspect media and plan a conversion
 
@@ -148,6 +148,12 @@ Allow every origin used by playlists, segments, and redirects. An origin is the 
 
 Optional policy fields include `headers_by_origin` (an object mapping allowed origins to request-header objects), `connections` and `probe_workers` (1–64), `attempts` (1–5), `timeout` in seconds, `max_playlist_bytes`, `max_playlists`, `max_segments_per_track`, `max_resource_bytes`, `max_total_bytes`, `max_total_resources`, and `min_free_disk_bytes`. Limits must be positive except the minimum free-space value, which may be zero. `allow_http` and `allow_private_network` can explicitly enable those destinations. Keep any configuration containing request credentials owner-only.
 
+A server may close an idle connection between segment downloads. If a reused connection
+fails before response headers arrive, drmr replaces it once without spending a configured
+attempt. Fresh-connection failures, response-body errors, and request timeouts still use
+the normal attempt limit. Windows can report the closed idle socket as an aborted connection;
+drmr recognizes this platform difference. See [Windows socket errors](https://learn.microsoft.com/en-us/windows/win32/winsock/windows-sockets-error-codes-2).
+
 Analysis supports only clear, completed on-demand presentations. Encrypted playlists, live input, discontinuities, unsupported tracks, and unsupported subtitle profiles are rejected.
 
 ## Package the HLS snapshot
@@ -185,9 +191,9 @@ drmr verify-snapshot --files output/sample/clear/source
 
 ## Batch processing
 
-On macOS/Linux, `drmr batch --help` lists work-list, storage, restart-log, and retry options. A work list contains one JSON object per line: first `{"schema_version":"1"}`, then rows with exactly `asset_id`, `kind`, `dash_manifest`, and `hls_master`. `kind` is `dash-cenc` or `hls-clear`; manifest references are relative storage object keys, with unused references set to `null`.
+`drmr batch --help` lists work-list, storage, restart-log, and retry options. On Windows, use the [regular-user and private-directory conditions](windows.md). A work list contains one JSON object per line: first `{"schema_version":"1"}`, then rows with exactly `asset_id`, `kind`, `dash_manifest`, and `hls_master`. `kind` is `dash-cenc` or `hls-clear`; manifest references are relative storage object keys, with unused references set to `null`.
 
-Use `--plan` to inspect planned work before processing. The default key provider reads the three environment variables. To use per-asset keys, pass `--key-provider file --key-file /protected/keys.jsonl`. Each line in that file has exactly `asset_id`, `kid`, `key`, and `iv`; there is no schema header. All three key fields use the hexadecimal formats above. The file must have mode `0600`, must not be a symbolic link, and must be outside the output directory.
+Use `--plan` to inspect planned work before processing. The default key provider reads the three environment variables. To use per-asset keys, pass `--key-provider file --key-file /protected/keys.jsonl`. Each line in that file has exactly `asset_id`, `kid`, `key`, and `iv`; there is no schema header. All three key fields use the hexadecimal formats above. The file must not be a symbolic link and must stay outside the output directory. Use mode `0600` on macOS/Linux; on Windows, apply the [protected current-user-only access control](windows.md#protect-configuration-files).
 
 ## Experimental web console
 

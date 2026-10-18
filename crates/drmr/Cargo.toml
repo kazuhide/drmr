@@ -23,5 +23,8 @@ serde_json.workspace = true
 [dev-dependencies]
 tempfile.workspace = true
 
+[target.'cfg(windows)'.dev-dependencies]
+private-fs = "=0.2.1"
+
 [lints]
 workspace = true

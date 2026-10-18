@@ -196,7 +196,7 @@ fn every_synthetic_case_freezes_the_analysis_python_freezes_byte_for_byte() {
             .unwrap_or_else(|error| panic!("{case}: {error:?}"));
         // The reference fixture's record with this run's root in place of @ROOT@, and its digest and id
         // recomputed: the canonical bytes are Python's when the two records are equal.
-        let prefix = as_uri(&resolve(&root).unwrap());
+        let prefix = as_uri(&resolve(&root).unwrap()).unwrap();
         let text = std::fs::read_to_string(fixture(&format!("analysis/{case}.json"))).unwrap();
         let mut expected: Value = serde_json::from_str(&text.replace("@ROOT@", &prefix)).unwrap();
         let map = expected.as_object_mut().unwrap();
@@ -430,8 +430,9 @@ fn is_global_matches_python() {
 fn as_uri_and_quote_match_python() {
     for case in load("as_uri.json").as_array().unwrap() {
         let path = case["path"].as_str().unwrap();
+        #[cfg(unix)]
         assert_eq!(
-            as_uri(Path::new(path)),
+            as_uri(Path::new(path)).unwrap(),
             case["as_uri"].as_str().unwrap(),
             "{path}"
         );
@@ -441,6 +442,19 @@ fn as_uri_and_quote_match_python() {
             "{path}"
         );
     }
+}
+
+#[cfg(windows)]
+#[test]
+fn native_file_uris_preserve_drive_names_and_encode_path_characters() {
+    assert_eq!(
+        as_uri(Path::new(r"C:\media\日本語 clip#1.ts")).unwrap(),
+        "file:///C:/media/%E6%97%A5%E6%9C%AC%E8%AA%9E%20clip%231.ts"
+    );
+    assert_eq!(
+        as_uri(Path::new("relative.ts")),
+        Err(Escaped::new("ValueError"))
+    );
 }
 
 #[test]

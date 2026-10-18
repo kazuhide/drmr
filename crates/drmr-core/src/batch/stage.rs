@@ -7,9 +7,9 @@ use super::{
     AssetWorkItem, AttemptError, BatchConfig, BatchError, HlsSource, RunError, TRANSIENT_SOURCE,
     classify, commands, is_output_key, private_config, run_commands,
 };
-use crate::batch_support::{
-    as_uri, is_relative_to, py_splitlines, py_strip, resolve, unquote, urljoin, urlsplit,
-};
+#[cfg(unix)]
+use crate::batch_support::is_relative_to;
+use crate::batch_support::{as_uri, py_splitlines, py_strip, resolve, unquote, urljoin, urlsplit};
 use crate::m3u8::parse_attributes;
 use crate::storage::{ObjectRef, StorageError};
 use serde_json::Value;
@@ -67,16 +67,38 @@ fn manifest_bytes(path: &Path) -> Result<Vec<u8>, AttemptError> {
 /// point or object-lambda host cannot be attributed (`hls-source-ownership-unqualified`).
 pub fn source_overlaps_output(url: &str, config: &BatchConfig) -> Result<bool, AttemptError> {
     let parsed = urlsplit(url, "").map_err(value_error)?;
-    let prefix = config.output_prefix.as_str();
     if parsed.scheme == "file" {
-        let local = resolve(Path::new(&unquote(&parsed.path)));
-        if is_relative_to(&local, &resolve(&config.output_root)) {
-            return Ok(true);
+        #[cfg(unix)]
+        let local = PathBuf::from(unquote(&parsed.path));
+        #[cfg(windows)]
+        let local = crate::source::pypath::from_file_uri(url).map_err(|_| AttemptError::Other)?;
+        let local = resolve(&local).map_err(|_| AttemptError::Other)?;
+        #[cfg(unix)]
+        {
+            if is_relative_to(
+                &local,
+                &resolve(&config.output_root).map_err(|_| AttemptError::Other)?,
+            ) {
+                return Ok(true);
+            }
+            return Ok(config
+                .storage
+                .root()
+                .is_some_and(|root| is_relative_to(&local, &root.join(&config.output_prefix))));
         }
-        return Ok(config
-            .storage
-            .root()
-            .is_some_and(|root| is_relative_to(&local, &root.join(prefix))));
+        #[cfg(windows)]
+        {
+            if super::local_path_is_within(&local, &config.output_root)? {
+                return Ok(true);
+            }
+            return match config.storage.root() {
+                Some(root) => Ok(super::local_path_is_within(
+                    &local,
+                    &root.join(&config.output_prefix),
+                )?),
+                None => Ok(false),
+            };
+        }
     }
     if !matches!(parsed.scheme.as_str(), "https" | "http") {
         return Ok(false);
@@ -100,9 +122,17 @@ pub fn source_overlaps_output(url: &str, config: &BatchConfig) -> Result<bool, A
         }
     }
     if let Some(key) = object_key {
-        return Ok(is_output_key(&key, prefix));
+        return Ok(is_output_key(&key, config)?);
     }
-    Ok(is_output_key(source_ref(url)?.key(), prefix))
+    let object = source_ref(url)?;
+    #[cfg(windows)]
+    if config.storage.root().is_some() && parsed.netloc.contains(':') {
+        // A port or IPv6 authority cannot name a Windows mirror directory.
+        // Clear HLS fetches this network origin directly; attributed remote
+        // object-store keys were checked separately above.
+        return Ok(false);
+    }
+    Ok(is_output_key(object.key(), config)?)
 }
 
 /// The MPD facts `_stage_inputs` and the preflight read with `ElementTree`.
@@ -200,12 +230,10 @@ impl Stager<'_> {
             })
             .cloned()
             .collect();
-        let prefix = &self.config.output_prefix;
-        if unique
-            .iter()
-            .any(|object| is_output_key(object.key(), prefix))
-        {
-            return Err(malformed());
+        for object in &unique {
+            if is_output_key(object.key(), self.config)? {
+                return Err(malformed());
+            }
         }
         let budget = usize::try_from(self.config.transfer.max_objects).unwrap_or(usize::MAX);
         if self.downloaded.len() + unique.len() > budget {
@@ -246,7 +274,10 @@ pub fn stage_inputs(
         .output_root
         .join(&work.asset_id)
         .join("clear/_batch-stage/download");
-    std::fs::create_dir_all(&stage).map_err(|_| AttemptError::Other)?;
+    crate::native::create_private_dir_all(&stage).map_err(|_| AttemptError::Other)?;
+    #[cfg(windows)]
+    let _stage_guard =
+        crate::native::pin_private_directory(&stage).map_err(|_| AttemptError::Other)?;
     if work.kind == "hls-clear" {
         stage_clear(work, config, &stage, source)?;
         return Ok(stage);
@@ -266,11 +297,10 @@ pub fn stage_inputs(
     };
     let mut refs = vec![manifest.clone()];
     refs.extend(work.hls_master.clone());
-    if refs
-        .iter()
-        .any(|object| is_output_key(object.key(), &config.output_prefix))
-    {
-        return Err(malformed());
+    for object in &refs {
+        if is_output_key(object.key(), config)? {
+            return Err(malformed());
+        }
     }
     stager.get(&refs)?;
     let raw = manifest_bytes(&stage.join(manifest.key()))?;
@@ -313,7 +343,7 @@ fn stage_media(mpd: &Mpd, stager: &mut Stager<'_>) -> Result<(), AttemptError> {
     let base = py_strip(base);
     let placeholder = joined_ref(base, "placeholder")?;
     let prefix = parent_key(placeholder.key());
-    if is_output_key(prefix, &stager.config.output_prefix) {
+    if is_output_key(prefix, stager.config)? {
         return Err(malformed());
     }
     let media = stager
@@ -327,7 +357,7 @@ fn stage_media(mpd: &Mpd, stager: &mut Stager<'_>) -> Result<(), AttemptError> {
                 continue;
             };
             let object = joined_ref(base, value)?;
-            if is_output_key(object.key(), &stager.config.output_prefix) {
+            if is_output_key(object.key(), stager.config)? {
                 return Err(malformed());
             }
             if attribute == "initialization" {
@@ -380,7 +410,7 @@ fn stage_playlists(master: &ObjectRef, stager: &mut Stager<'_>) -> Result<(), At
                 continue;
             }
             let child = joined_ref(&format!("https://{}", object.key()), &uri)?;
-            if is_output_key(child.key(), &stager.config.output_prefix) {
+            if is_output_key(child.key(), stager.config)? {
                 return Err(malformed());
             }
             let excluded = ["#EXT-X-KEY:", "#EXT-X-SESSION-KEY:", "#EXT-X-SESSION-DATA:"];
@@ -488,14 +518,12 @@ pub fn preflight_source_graphs(
     source: &dyn HlsSource,
 ) -> Result<(), RunError> {
     let temporary_root = config.output_root.join("_batch");
-    std::fs::create_dir_all(&temporary_root)?;
+    crate::native::create_private_dir_all(&temporary_root)?;
     for work in work_list {
         if work.kind != "dash-cenc" && work.kind != "hls-clear" {
             continue;
         }
-        let result = tempfile::Builder::new()
-            .prefix("preflight-")
-            .tempdir_in(&temporary_root)
+        let result = crate::native::private_tempdir_in(&temporary_root, "preflight-")
             .map_err(|_| AttemptError::Other)
             .and_then(|directory| {
                 if work.kind == "hls-clear" {
@@ -537,9 +565,8 @@ fn preflight_dash(
     config: &BatchConfig,
     directory: &Path,
 ) -> Result<(), AttemptError> {
-    let prefix = config.output_prefix.as_str();
     let check = |object: &ObjectRef| {
-        if is_output_key(object.key(), prefix) {
+        if is_output_key(object.key(), config)? {
             Err(unsafe_overlap())
         } else {
             Ok(())
@@ -628,7 +655,7 @@ fn preflight_clear(
         .hls_config_dir
         .as_deref()
         .ok_or_else(|| BatchError::new("hls-config-invalid"))?;
-    let profiles = resolve(profiles);
+    let profiles = super::commands::config_path(profiles).map_err(|_| AttemptError::Other)?;
     let settings = private_config(
         &profiles.join(format!("{}.json", work.asset_id)),
         &config.output_root,
@@ -637,18 +664,25 @@ fn preflight_clear(
         .get("source_config")
         .and_then(Value::as_str)
         .ok_or(AttemptError::Other)?;
-    let source_config = private_config(&resolve(&profiles.join(source_name)), &config.output_root)?;
+    let source_config = private_config(
+        &super::commands::config_path(&profiles.join(source_name))
+            .map_err(|_| AttemptError::Other)?,
+        &config.output_root,
+    )?;
     let mut location = source_config
         .get("url")
         .and_then(Value::as_str)
         .ok_or(AttemptError::Other)?
         .to_string();
-    if urlsplit(&location, "")
+    let local_path = urlsplit(&location, "")
         .map_err(value_error)?
         .scheme
-        .is_empty()
-    {
-        location = as_uri(&resolve(Path::new(&location)));
+        .is_empty();
+    #[cfg(windows)]
+    let local_path = local_path || crate::source::pypath::is_native_path(&location);
+    if local_path {
+        location = as_uri(&resolve(Path::new(&location)).map_err(|_| AttemptError::Other)?)
+            .map_err(|_| AttemptError::Other)?;
     }
     let empty = Value::Object(serde_json::Map::new());
     let policy = source_config.get("policy").unwrap_or(&empty);

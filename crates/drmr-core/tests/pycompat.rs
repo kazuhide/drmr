@@ -313,6 +313,7 @@ fn glob_is_path_glob_for_one_component() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn resolve_is_path_resolve_non_strict() {
     let dir = tempfile::tempdir().unwrap();
@@ -447,4 +448,39 @@ fn xml_line_ends_are_normalized_before_parsing() {
         xml_line_ends("a\nb"),
         std::borrow::Cow::Borrowed(_)
     ));
+}
+
+#[cfg(windows)]
+#[path = "common/windows.rs"]
+mod windows;
+#[cfg(windows)]
+#[test]
+fn resolve_uses_native_windows_junctions_drives_and_missing_suffixes() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let target = root.join("real/inner");
+    std::fs::create_dir_all(&target).unwrap();
+    let link = root.join("junction");
+    windows::junction(&link, &root.join("real"));
+    assert_eq!(
+        resolve(&link.join("inner")).unwrap(),
+        target.canonicalize().unwrap()
+    );
+    assert_eq!(
+        resolve(&link.join("missing/future")).unwrap(),
+        root.join("real/missing/future")
+    );
+    assert_eq!(
+        resolve(&root.join("real/inner/../future")).unwrap(),
+        root.join("real/future")
+    );
+    let cwd = std::env::current_dir().unwrap().canonicalize().unwrap();
+    assert_eq!(
+        resolve(Path::new("no-such-dir-0123/f")).unwrap(),
+        cwd.join("no-such-dir-0123/f")
+    );
+    assert!(resolve(&target.join("non-directory-child/file")).is_ok());
+    std::fs::write(target.join("regular-file"), b"x").unwrap();
+    assert!(resolve(&target.join("regular-file/child")).is_err());
+    std::fs::remove_dir(link).unwrap();
 }

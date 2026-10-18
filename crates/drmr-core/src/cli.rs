@@ -272,10 +272,25 @@ fn widevine_pssh_by_rendition(asset: &Asset) -> BTreeMap<String, Vec<String>> {
 /// is the job's tool runner's ([`ToolRunner::with_path`]), so the records show the bare name
 /// Python's show.
 fn resolve_packager_bin_on_path(packager_bin: &Path, env: &Env) -> Result<String, CliError> {
-    if packager_bin.is_file() && packager_bin.file_name() != Some("packager".as_ref()) {
+    #[cfg(unix)]
+    let expected_name = "packager";
+    #[cfg(windows)]
+    let expected_name = "packager.exe";
+    let correct_name = packager_bin.file_name().is_some_and(|name| {
+        #[cfg(unix)]
+        {
+            name == expected_name
+        }
+        #[cfg(windows)]
+        {
+            name.to_str()
+                .is_some_and(|name| name.eq_ignore_ascii_case(expected_name))
+        }
+    });
+    if packager_bin.is_file() && !correct_name {
         return Err(usage(format!(
-            "--packager-bin must be a directory containing 'packager', or a file named \
-             'packager' (got {})",
+            "--packager-bin must be a directory containing '{expected_name}', or a file named \
+             '{expected_name}' (got {})",
             py_str(packager_bin)
         )));
     }
@@ -284,11 +299,23 @@ fn resolve_packager_bin_on_path(packager_bin: &Path, env: &Env) -> Result<String
     } else {
         packager_bin.parent().unwrap_or(packager_bin)
     };
-    Ok(format!(
-        "{}:{}",
-        py_str(target_dir),
-        env.get("PATH").map_or("", String::as_str)
-    ))
+    #[cfg(unix)]
+    {
+        Ok(format!(
+            "{}:{}",
+            py_str(target_dir),
+            env.get("PATH").map_or("", String::as_str)
+        ))
+    }
+    #[cfg(windows)]
+    {
+        let entries = std::iter::once(target_dir.to_path_buf())
+            .chain(env.get("PATH").into_iter().flat_map(std::env::split_paths));
+        std::env::join_paths(entries)
+            .map_err(|_| usage("--packager-bin contains an invalid PATH entry"))?
+            .into_string()
+            .map_err(|_| usage("--packager-bin requires a Unicode path"))
+    }
 }
 
 /// `cmd_run`: validate the arguments (in Python's order), load the key and the asset, build the
@@ -503,4 +530,33 @@ pub fn print_summary(
         writeln!(stdout, "  manifests: {}", marker(&manifests.checks))?;
     }
     stdout.flush()
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::{Env, resolve_packager_bin_on_path};
+
+    #[test]
+    fn packager_override_keeps_native_path_entries_and_accepts_exe() {
+        let temp = tempfile::tempdir().unwrap();
+        let directory = temp.path().join("tools 日本語");
+        std::fs::create_dir(&directory).unwrap();
+        let executable = directory.join("packager.exe");
+        std::fs::write(&executable, b"fixture never executed").unwrap();
+        let env = Env::from([("PATH".into(), r"C:\first;D:\second path".into())]);
+        let actual = resolve_packager_bin_on_path(&executable, &env).unwrap();
+        let entries = std::env::split_paths(&actual).collect::<Vec<_>>();
+        assert_eq!(
+            entries,
+            [directory, r"C:\first".into(), r"D:\second path".into()]
+        );
+    }
+
+    #[test]
+    fn packager_override_refuses_a_different_executable_name() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("other.exe");
+        std::fs::write(&path, b"fixture never executed").unwrap();
+        assert!(resolve_packager_bin_on_path(&path, &Env::new()).is_err());
+    }
 }

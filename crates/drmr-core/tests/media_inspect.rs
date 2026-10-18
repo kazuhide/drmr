@@ -1,8 +1,6 @@
 //! Media probing and decoded-content inspection using synthetic media.
 
-#[cfg(unix)]
-#[path = "common/executable.rs"]
-mod executable;
+mod common;
 
 use drmr_core::events::{Collector, NoSink, Sink};
 use drmr_core::media::{
@@ -21,8 +19,10 @@ const KEY: &str = "10101010101010101010101010101010";
 const IV: &str = "20202020202020202020202020202020";
 
 fn on_path(tool: &str) -> bool {
-    let found = std::env::var_os("PATH")
-        .is_some_and(|paths| std::env::split_paths(&paths).any(|dir| dir.join(tool).is_file()));
+    let found = std::env::var_os("PATH").is_some_and(|paths| {
+        std::env::split_paths(&paths)
+            .any(|dir| drmr_test_support::program_path(&dir.join(tool)).is_file())
+    });
     if !found {
         eprintln!("skipped: {tool} not on PATH");
     }
@@ -274,7 +274,6 @@ fn real_mp4dump_output_in_the_log_carries_the_redacted_constant_iv_and_the_publi
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn stub_mp4dump_bracketed_iv_is_scrubbed_from_the_record() {
     let dir = tempfile::tempdir().unwrap();
@@ -284,14 +283,11 @@ fn stub_mp4dump_bracketed_iv_is_scrubbed_from_the_record() {
         drmr_core::canonical::Dumps::DEFAULT.dumps(&tree),
     )
     .unwrap();
-    let stub = dir.path().join("mp4dump");
-    executable::write_executable(
-        &stub,
-        format!(
-            "#!/bin/sh\ncat '{}'\n",
-            dir.path().join("tree.json").display()
-        ),
+    let spec = drmr_test_support::ToolSpec::default().with(
+        "stdout_file",
+        dir.path().join("tree.json").to_str().unwrap(),
     );
+    let stub = drmr_test_support::install(&dir.path().join("mp4dump"), &spec).unwrap();
     std::fs::write(dir.path().join("init.mp4"), [0u8; 16]).unwrap();
     let collected = Arc::new(Collector::default());
     let mut engine = engine_with(collected.clone(), Arc::new(Secrets::with([IV])));
@@ -534,6 +530,16 @@ fn localize_rewrites_key_to_identity_and_local_file() {
     );
 }
 
+fn localized_fixture_path(path: &str) -> String {
+    let absolute = std::path::absolute(path).unwrap();
+    let text = absolute.to_str().unwrap();
+    if cfg!(windows) {
+        text.replace('\\', "/")
+    } else {
+        text.to_string()
+    }
+}
+
 #[test]
 fn localize_rewrites_segments_to_local_paths() {
     let dir = tempfile::tempdir().unwrap();
@@ -546,8 +552,8 @@ fn localize_rewrites_segments_to_local_paths() {
     assert_eq!(
         segment_lines(&out),
         [
-            "/local/vod.test/t/s/audio/uuid/seg_0.ts",
-            "/local/vod.test/t/s/audio/uuid/seg_1.ts"
+            localized_fixture_path("/local/vod.test/t/s/audio/uuid/seg_0.ts"),
+            localized_fixture_path("/local/vod.test/t/s/audio/uuid/seg_1.ts")
         ]
     );
     assert!(out.contains("#EXT-X-TARGETDURATION:6") && out.contains("#EXT-X-ENDLIST"));
@@ -559,10 +565,15 @@ fn localize_rewrites_ext_x_map_uri() {
     let out =
         localize_hls_media_playlist(SYNTH_FMP4_PLAYLIST, &key_file(dir.path()), fake_resolver)
             .unwrap();
-    assert!(out.contains("#EXT-X-MAP:URI=\"/local/vod.test/t/s/video/uuid/init.mp4\""));
+    assert!(out.contains(&format!(
+        "#EXT-X-MAP:URI=\"{}\"",
+        localized_fixture_path("/local/vod.test/t/s/video/uuid/init.mp4"),
+    )));
     assert_eq!(
         segment_lines(&out),
-        ["/local/vod.test/t/s/video/uuid/seg_0.m4s"]
+        [localized_fixture_path(
+            "/local/vod.test/t/s/video/uuid/seg_0.m4s"
+        )]
     );
 }
 
@@ -804,7 +815,7 @@ fn segment_durations_are_tfdt_steps_and_the_last_ends_at_ffprobes_duration() {
     if !(on_path("ffmpeg") && on_path("ffprobe") && on_path("mp4dump")) {
         return;
     }
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::private_tempdir().unwrap();
     let (init, segments) = fragments(dir.path());
     let engine = engine();
     let durations = engine
@@ -940,4 +951,26 @@ fn an_identity_key_playlist_decodes_like_the_same_rendition_in_the_clear() {
         !log.contains(KEY) && !log.contains(IV),
         "no key material in any record"
     );
+}
+
+#[cfg(windows)]
+#[test]
+fn raw_key_file_has_private_acl_and_invalid_keys_never_write() {
+    let dir = tempfile::tempdir().unwrap();
+    let private = dir.path().join("private");
+    drmr_core::native::create_private_dir_all(&private).unwrap();
+    let path = write_raw_key_file(KEY, &private.join("content.key")).unwrap();
+    let file = drmr_core::native::open_private_read(&path).unwrap();
+    private_fs::verify(&file).unwrap();
+    drop(file);
+    assert_eq!(std::fs::read(&path).unwrap(), hex::decode(KEY).unwrap());
+    let bad = format!("{}zz", &KEY[..30]);
+    let error = write_raw_key_file(&bad, &private.join("bad.key")).unwrap_err();
+    assert_eq!(error.python_class(), "ValueError");
+    assert_eq!(
+        error.to_string(),
+        "non-hexadecimal number found in fromhex() arg at position 30"
+    );
+    assert!(!format!("{error:?}").contains(&KEY[..30]));
+    assert!(!private.join("bad.key").exists());
 }

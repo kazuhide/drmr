@@ -2,7 +2,6 @@ mod support;
 
 use drmr_server::config::QueueRunner;
 use serde_json::{Value, json};
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use support::{Harness, KID, audio_rep, error, h264_rep, sse_events, stage, stage_entry};
 
@@ -38,9 +37,7 @@ fn read_json(path: &Path) -> Value {
     serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
 }
 
-fn set_mode(path: &Path, mode: u32) {
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
-}
+use support::set_mode;
 
 /// A server whose fake CLI prints the two conversion lines and exits 0.
 fn two_lines(configure: impl FnOnce(&mut support::HarnessSetup)) -> Harness {
@@ -228,8 +225,7 @@ fn interrupted_conversion_is_reported_after_restart() {
 
 fn write_profiles(base: &Path, name: &str, profiles: &Value) -> PathBuf {
     let path = base.join(name);
-    std::fs::write(&path, profiles.to_string()).unwrap();
-    set_mode(&path, 0o600);
+    support::write_private(&path, profiles.to_string()).unwrap();
     path
 }
 
@@ -363,7 +359,7 @@ fn queue_snapshot(h: &Harness) -> Value {
 fn queue_skips_an_entry_that_disappeared_and_refuses_hls_reserved_assets() {
     let h = queued(|setup| {
         let reports = setup.output.join("q3").join("reports");
-        std::fs::create_dir_all(&reports).unwrap();
+        support::private_dir(&reports).unwrap();
         let id = "c".repeat(32);
         let record = json!({"schema_version": "1", "job_id": id, "kind": "analysis", "asset_id": "q3",
                             "analysis_id": id, "result_id": null, "state": "failed", "exit_code": 1,
@@ -564,7 +560,7 @@ fn a_launched_conversion_is_answered_202_even_when_its_record_cannot_be_written(
     let h = two_lines(|_| {});
     stage(&h.catalog, "norecord");
     let asset_dir = h.output.join("norecord");
-    std::fs::create_dir(&asset_dir).unwrap();
+    support::private_dir(&asset_dir).unwrap();
     set_mode(&asset_dir, 0o500);
     let job_id = convert(&h, "norecord");
     let text = drain(&h, &job_id);
@@ -621,6 +617,7 @@ fn a_queue_head_that_cannot_be_examined_is_skipped_with_a_reason_instead_of_bloc
         return;
     }
     let h = queued(|_| {});
+    h.cli.hold();
     let queue = h.app().queue.clone();
     enqueue(&h, &["q1", "q2"]);
     set_mode(&h.catalog, 0o000);
@@ -645,6 +642,7 @@ fn a_queue_head_that_cannot_be_examined_is_skipped_with_a_reason_instead_of_bloc
     );
     let launched = queue.tick().unwrap();
     assert_eq!(queue_snapshot(&h)["running"]["asset_id"], "q2");
+    h.cli.release(0);
     drain(&h, &launched);
 }
 
@@ -741,7 +739,7 @@ fn a_queue_launch_whose_record_fails_is_logged_and_still_runs() {
     }
     let h = queued(|_| {});
     let asset_dir = h.output.join("q1");
-    std::fs::create_dir(&asset_dir).unwrap();
+    support::private_dir(&asset_dir).unwrap();
     set_mode(&asset_dir, 0o500);
     enqueue(&h, &["q1"]);
     let launched = h.app().queue.tick();
@@ -792,7 +790,7 @@ fn convert_requires_same_origin_like_every_other_mutation() {
 fn duplicate_job_id_across_record_prefixes_resolves_to_the_hls_record() {
     let h = Harness::with(|setup| {
         let reports = setup.output.join("dup").join("reports");
-        std::fs::create_dir_all(&reports).unwrap();
+        support::private_dir(&reports).unwrap();
         let id = "a".repeat(32);
         let common = json!({"schema_version": "1", "job_id": id, "asset_id": "dup", "state": "succeeded", "exit_code": 0,
                             "created_at": "2026-10-16T00:00:00+00:00", "hidden": false});
@@ -837,12 +835,12 @@ fn read_log_refuses_symlinks_and_unsafe_ids() {
     .unwrap();
     let outside = h.root.path().join("outside.jsonl");
     std::fs::write(&outside, "{\"stage\": \"raw\", \"message\": \"leak\"}\n").unwrap();
-    std::os::unix::fs::symlink(&outside, jobs.join("link.jsonl")).unwrap();
+    support::file_link(&outside, &jobs.join("link.jsonl"));
     assert_eq!(manager.read_log("link").count(), 0);
     assert_eq!(manager.read_log("../outside").count(), 0);
     assert_eq!(manager.read_log("").count(), 0);
-    std::fs::write(
-        jobs.join("plain.jsonl"),
+    support::write_private(
+        &jobs.join("plain.jsonl"),
         "{\"stage\": \"merge\", \"message\": \"ok\"}\nnot json\n",
     )
     .unwrap();
@@ -926,7 +924,7 @@ fn failed_record_writes_leave_no_temp_files_and_a_startup_rewrite_failure_keeps_
     let reports = h.output.join("tmp1").join("reports");
     let record = reports.join(format!("job-{job_id}.json"));
     std::fs::remove_file(&record).unwrap();
-    std::fs::create_dir_all(record.join("blocker")).unwrap();
+    support::private_dir(record.join("blocker")).unwrap();
     drain(&h, &job_id);
     for _ in 0..5 {
         h.client.get(&format!("/api/jobs/{job_id}")); // every refresh retries the write
@@ -981,9 +979,9 @@ fn the_queue_runner_survives_a_closed_stderr() {
     let queue = h.app().queue.clone();
     queue.enqueue(Some(&json!(["q1", "q2"]))).unwrap();
     assert!(queue.runner_active());
-    set_mode(&h.cli.script, 0o644); // q1 cannot be launched: a skip, logged
+    std::fs::rename(&h.cli.script, h.cli.script.with_extension("disabled")).unwrap(); // q1 cannot be launched: a skip, logged
     assert!(queue.run_once(), "the iteration survives the failed write");
-    set_mode(&h.cli.script, 0o755);
+    std::fs::rename(h.cli.script.with_extension("disabled"), &h.cli.script).unwrap();
     assert!(
         h.logs()
             .iter()
@@ -1006,11 +1004,12 @@ fn the_queue_runner_survives_a_closed_stderr() {
 #[test]
 fn a_queue_launch_that_raises_unexpectedly_is_skipped() {
     let h = queued(|_| {});
+    h.cli.hold();
     let queue = h.app().queue.clone();
     enqueue(&h, &["q1", "q2"]);
-    set_mode(&h.cli.script, 0o644);
+    std::fs::rename(&h.cli.script, h.cli.script.with_extension("disabled")).unwrap();
     let ticked = queue.tick();
-    set_mode(&h.cli.script, 0o755);
+    std::fs::rename(h.cli.script.with_extension("disabled"), &h.cli.script).unwrap();
     assert_eq!(ticked, None);
     let recent = &queue_snapshot(&h)["recent"][0];
     assert_eq!(
@@ -1023,6 +1022,7 @@ fn a_queue_launch_that_raises_unexpectedly_is_skipped() {
     );
     let launched = queue.tick().unwrap();
     assert_eq!(queue_snapshot(&h)["running"]["asset_id"], "q2");
+    h.cli.release(0);
     drain(&h, &launched);
 }
 

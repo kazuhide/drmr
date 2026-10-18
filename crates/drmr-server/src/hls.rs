@@ -242,6 +242,9 @@ pub struct HlsService {
     ttl: f64,
     monitor: AtomicBool,
     this: Weak<HlsService>,
+    // Keep external tool reopen paths stable for the entire service lifetime.
+    #[cfg(windows)]
+    _output_pin: drmr_core::native::PrivateDirectoryGuard,
 }
 
 impl fmt::Debug for HlsService {
@@ -276,7 +279,11 @@ impl HlsService {
         manager: Arc<ConversionJobManager>,
     ) -> Result<Arc<HlsService>, StartError> {
         let output = pyutil::resolve(&config.output_root).map_err(|_| StartError::Loop)?;
-        std::fs::create_dir_all(&output).map_err(StartError::Output)?;
+        #[cfg(not(windows))]
+        drmr_core::native::create_private_dir_all(&output).map_err(StartError::Output)?;
+        #[cfg(windows)]
+        let output_pin =
+            drmr_core::native::pin_private_directory(&output).map_err(StartError::Output)?;
         let clock = config
             .hooks
             .hls_clock
@@ -292,6 +299,8 @@ impl HlsService {
             ttl: 1800.0,
             monitor: AtomicBool::new(monitor),
             this: this.clone(),
+            #[cfg(windows)]
+            _output_pin: output_pin,
         });
         {
             let mut state = service.lock();
@@ -372,7 +381,7 @@ impl HlsService {
             ));
         }
         let parent = path.parent().unwrap_or(&self.output);
-        std::fs::create_dir_all(parent).map_err(|_| PersistError::Io)?;
+        drmr_core::native::create_private_dir_all(parent).map_err(|_| PersistError::Io)?;
         let file_name = path
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
@@ -652,6 +661,15 @@ impl HlsService {
     /// is written (retried while it fails), the request configs deleted, a successful package's
     /// key kept as a playback context.
     fn refresh(&self, state: &mut State, job_id: &str) -> Result<Map<String, Value>, ServiceError> {
+        self.refresh_with_status(state, job_id, || self.manager.status(job_id))
+    }
+
+    fn refresh_with_status(
+        &self,
+        state: &mut State,
+        job_id: &str,
+        status: impl FnOnce() -> Result<JobHandle, JobError>,
+    ) -> Result<Map<String, Value>, ServiceError> {
         let Some(row) = state.records.get(job_id).cloned() else {
             return Err(HlsApiError::status("job-not-found", 404).into());
         };
@@ -660,13 +678,20 @@ impl HlsService {
             row.unsaved = false;
         }
         if row.state == "running" {
-            if let Ok(handle) = self.manager.status(job_id) {
-                row.state = handle.state.to_string();
-                row.exit_code = handle.exit_code.map(i64::from);
-            } else {
-                // `JobNotFoundError`: a prior server run's job.
-                row.state = "interrupted".to_string();
-                row.exit_code = None;
+            match status() {
+                Ok(handle) => {
+                    row.state = handle.state.to_string();
+                    row.exit_code = handle.exit_code.map(i64::from);
+                }
+                Err(JobError::CleanupUnconfirmed) => {
+                    // The live supervisor still owns this job and its request files.
+                    return Err(HlsApiError::status("cleanup-unconfirmed", 503).into());
+                }
+                Err(_) => {
+                    // A prior server run's job is no longer owned by this manager.
+                    row.state = "interrupted".to_string();
+                    row.exit_code = None;
+                }
             }
             if row.state != "running" {
                 let keys = state.pending_keys.remove(job_id);
@@ -1786,16 +1811,9 @@ impl PersistError {
 pub fn write_private(path: &Path, body: &Value) -> std::io::Result<()> {
     use std::io::Write as _;
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+        drmr_core::native::create_private_dir_all(parent)?;
     }
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(path)?;
+    let mut file = drmr_core::native::create_private_new(path)?;
     file.write_all(pyutil::dumps(body).as_bytes())
 }
 
@@ -2284,6 +2302,89 @@ fn b64decode_lenient(text: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unconfirmed_cleanup_keeps_history_keys_and_request_files_owned() {
+        use std::io::Write as _;
+
+        let root = tempfile::tempdir().unwrap();
+        let manager = Arc::new(
+            ConversionJobManager::new(&root.path().join("jobs"), Vec::new(), Arc::new(Vec::new))
+                .unwrap(),
+        );
+        let mut config = ServerConfig::new(root.path().join("catalog"), root.path().join("output"));
+        config.hooks.monitor = false;
+        let service = HlsService::new(Arc::new(config), manager).unwrap();
+        let request = service.output.join("request.json");
+        drmr_core::native::create_private_new(&request)
+            .unwrap()
+            .write_all(b"private request")
+            .unwrap();
+        let row = Row {
+            job_id: "job".into(),
+            kind: "package".into(),
+            state: "running".into(),
+            created_at: "2026-10-18T00:00:00+00:00".into(),
+            asset_id: "asset".into(),
+            analysis_id: Some("analysis".into()),
+            result_id: Some("job".into()),
+            exit_code: None,
+            hidden: false,
+            unsaved: false,
+            private_files: vec![request.clone()],
+        };
+        service.persist(&row, false).unwrap();
+        let metadata = service.metadata_path(&row).unwrap();
+        let before = std::fs::read(&metadata).unwrap();
+        let mut state = service.lock();
+        state.records.insert("job".into(), row);
+        state.pending_keys.insert(
+            "job".into(),
+            Credentials {
+                kid: "00".repeat(16),
+                key: Zeroizing::new("11".repeat(16)),
+            },
+        );
+        let result =
+            service.refresh_with_status(&mut state, "job", || Err(JobError::CleanupUnconfirmed));
+        assert!(matches!(result, Err(ServiceError::Api(ref error))
+            if error.code == "cleanup-unconfirmed" && error.status == 503));
+        assert_eq!(state.records["job"].state, "running");
+        assert_eq!(state.records["job"].exit_code, None);
+        assert_eq!(
+            state.records["job"].private_files,
+            std::slice::from_ref(&request)
+        );
+        assert!(state.pending_keys.contains_key("job"));
+        assert!(!state.contexts.contains_key("job"));
+        assert_eq!(std::fs::read(&request).unwrap(), b"private request");
+        assert_eq!(std::fs::read(&metadata).unwrap(), before);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_service_pins_its_output_path_until_the_last_owner_drops() {
+        let root = tempfile::tempdir().unwrap();
+        let parent = root.path().join("output-parent");
+        std::fs::create_dir(&parent).unwrap();
+        let output = parent.join("output");
+        let manager = Arc::new(
+            ConversionJobManager::new(&root.path().join("jobs"), Vec::new(), Arc::new(Vec::new))
+                .unwrap(),
+        );
+        let service = HlsService::new(
+            Arc::new(ServerConfig::new(root.path().join("catalog"), &output)),
+            manager,
+        )
+        .unwrap();
+        let other_owner = service.clone();
+        assert!(std::fs::rename(&output, parent.join("redirected-output")).is_err());
+        assert!(std::fs::rename(&parent, root.path().join("redirected-parent")).is_err());
+        drop(service);
+        assert!(std::fs::rename(&output, parent.join("redirected-output")).is_err());
+        drop(other_owner);
+        std::fs::rename(&parent, root.path().join("released-parent")).unwrap();
+    }
 
     #[test]
     fn cursors_round_trip_and_are_decoded_leniently() {

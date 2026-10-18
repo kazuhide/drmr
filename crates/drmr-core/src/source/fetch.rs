@@ -13,7 +13,7 @@ use crate::concurrency::Stop;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fmt;
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -299,7 +299,22 @@ impl Fetcher {
             return Err(Failure::Source(token("source-not-allowed")));
         }
         // Outside the `except OSError` of `_fetch`: what `resolve` raises escapes.
-        let path = resolve(Path::new(&unquote(&parts.path))).map_err(Failure::Escaped)?;
+        #[cfg(unix)]
+        let local = PathBuf::from(unquote(&parts.path));
+        #[cfg(windows)]
+        let local = if parts.scheme == "file" {
+            super::pypath::from_file_uri(&super::pyurl::urlunsplit(
+                &parts.scheme,
+                &parts.netloc,
+                &parts.path,
+                &parts.query,
+                &parts.fragment,
+            ))
+            .map_err(Failure::Escaped)?
+        } else {
+            PathBuf::from(unquote(&parts.path))
+        };
+        let path = resolve(&local).map_err(Failure::Escaped)?;
         let mut allowed = false;
         for root in &self.policy.allowed_local_roots {
             if is_relative_to(&path, &resolve(root).map_err(Failure::Escaped)?) {
@@ -311,7 +326,7 @@ impl Fetcher {
             return Err(Failure::Source(token("source-not-allowed")));
         }
         match read_local(&path, sink, byte_range) {
-            Ok(()) => Ok(as_uri(&path)),
+            Ok(()) => as_uri(&path).map_err(Failure::Escaped),
             Err(Fault::Source(error)) => Err(Failure::Source(error)),
             Err(Fault::Cancelled) => Err(Failure::Cancelled),
             Err(Fault::Os) => Err(Failure::Source(token("source-read-failed"))),
@@ -785,16 +800,7 @@ pub(crate) fn read_full(reader: &mut impl Read, n: usize) -> io::Result<Vec<u8>>
 
 /// `os.open(path, O_WRONLY | O_CREAT | O_EXCL, 0o600)`.
 pub(crate) fn open_exclusive(path: &Path) -> Result<File, SourceError> {
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    options
-        .open(path)
-        .map_err(|_| token("snapshot-write-failed"))
+    crate::native::create_private_new(path).map_err(|_| token("snapshot-write-failed"))
 }
 
 /// Receives one resource chunk by chunk: hashes it, charges the analysis-wide byte budget per

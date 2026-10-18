@@ -4,7 +4,7 @@
 //! process group. Configuration travels over stdin, heartbeats report progress, and
 //! the supervisor terminates the whole group at the asset deadline or attempt end.
 
-use super::commands::{IN_ASSET_WORKER, after, exit_code};
+use super::commands::{after, exit_code};
 use super::{
     AssetWorkItem, AttemptError, BatchConfig, BatchError, CliRunner, EnvKeyProvider, FATAL,
     FileKeyProvider, KeyNotAvailable, KeyProvider, KeyProviderKind, RETRYABLE, RetryPolicy, Seams,
@@ -23,7 +23,6 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -151,7 +150,7 @@ impl KeyProvider for ProvidedKeys {
 /// staging and per-asset commands, print `[reason, retryable]` and exit 0. A crash (a panic,
 /// an interruption) exits non-zero without an answer.
 pub fn worker_main() -> i32 {
-    IN_ASSET_WORKER.store(true, Ordering::SeqCst);
+    crate::native::mark_asset_worker();
     let mut input = Vec::new();
     let read = std::io::stdin()
         .lock()
@@ -329,6 +328,22 @@ pub fn supervise_attempt(
     heartbeat: &dyn Fn(),
     command: &[OsString],
 ) -> Result<(String, bool), AttemptError> {
+    supervise_with_cleanup(
+        work,
+        config,
+        heartbeat,
+        command,
+        crate::native::ManagedChild::finish,
+    )
+}
+
+pub(super) fn supervise_with_cleanup(
+    work: &AssetWorkItem,
+    config: &BatchConfig,
+    heartbeat: &dyn Fn(),
+    command: &[OsString],
+    mut cleanup: impl FnMut(&mut crate::native::ManagedChild) -> std::io::Result<()>,
+) -> Result<(String, bool), AttemptError> {
     let payload = worker_payload(work, config)?;
     let (program, arguments) = command.split_first().ok_or(AttemptError::Other)?;
     let mut child_command = Command::new(program);
@@ -337,25 +352,28 @@ pub fn supervise_attempt(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
-    std::os::unix::process::CommandExt::process_group(&mut child_command, 0);
-    let mut child = child_command.spawn().map_err(|_| AttemptError::Other)?;
-    let group = rustix::process::Pid::from_child(&child);
+    let mut child =
+        crate::native::ManagedChild::spawn(child_command, true).map_err(|_| AttemptError::Other)?;
     let mut stdin = child.stdin.take().expect("stdin is piped");
     let mut stdout = child.stdout.take().expect("stdout is piped");
     // The payload is written and the pipe closed on a thread: a worker that never reads its
     // input cannot block the supervisor past the deadline.
-    std::thread::spawn(move || {
+    let input_writer = std::thread::spawn(move || {
         let _ = stdin.write_all(&payload);
     });
     let (sender, receiver) = mpsc::channel();
-    std::thread::spawn(move || {
+    let output_reader = std::thread::spawn(move || {
         let mut raw = Vec::new();
         let _ = stdout.read_to_end(&mut raw);
         let _ = sender.send(raw);
     });
     let waited = wait(&mut child, &receiver, config, heartbeat);
-    let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
-    let _ = child.wait();
+    let confirmed = cleanup(&mut child).map_err(|_| BatchError::new("cleanup-unconfirmed"));
+    let input_joined = input_writer.join();
+    let output_joined = output_reader.join();
+    confirmed?;
+    input_joined.map_err(|_| AttemptError::Other)?;
+    output_joined.map_err(|_| AttemptError::Other)?;
     let Some((status, raw)) = waited? else {
         return Ok(("asset-timeout".to_string(), true));
     };
@@ -370,7 +388,7 @@ pub fn supervise_attempt(
 /// Wait for the worker to exit and close its stdout (`communicate`), with heartbeats; `None`
 /// at the deadline.
 fn wait(
-    child: &mut std::process::Child,
+    child: &mut crate::native::ManagedChild,
     receiver: &mpsc::Receiver<Vec<u8>>,
     config: &BatchConfig,
     heartbeat: &dyn Fn(),

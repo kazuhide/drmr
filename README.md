@@ -10,7 +10,7 @@ The CLI is the primary interface. A local web console is experimental. A desktop
 
 ## Install
 
-Use macOS or Linux with Rust 1.99.0. The repository pins this version in `rust-toolchain.toml`.
+Use Rust 1.99.0. The repository pins this version in `rust-toolchain.toml`. The commands below use a macOS/Linux shell; see the [Windows guide](docs/windows.md) for PowerShell, native paths, and protected configuration.
 
 From the repository root:
 
@@ -78,7 +78,7 @@ drmr packages supplied media and signaling. It does not provide a DRM license se
 | `analyze-hls` | Download and analyze a clear HLS presentation into a saved snapshot |
 | `package-hls` | Package a verified HLS snapshot with DRM signaling |
 | `verify-snapshot` | Detect changes to a saved snapshot; `--files` also hashes its files |
-| `batch` | Process an asset work list with restart support on macOS/Linux |
+| `batch` | Process an asset work list with restart support; see the [Windows conditions](docs/windows.md) |
 | `serve` | Start the experimental local web console |
 | `canonical` | Print JSON with stable formatting and key order |
 | `version` | Print the version |

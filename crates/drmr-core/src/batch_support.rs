@@ -8,8 +8,12 @@ use crate::hls_cli;
 use crate::source::platform::SystemPlatform;
 use crate::source::{self, Failure, FetchPolicy, Fetcher};
 use serde_json::Value;
+#[cfg(unix)]
 use std::collections::HashMap;
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsStr;
+#[cfg(unix)]
+use std::ffi::OsString;
+#[cfg(unix)]
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -316,6 +320,7 @@ fn python_digits(text: &str) -> Option<String> {
 
 /// A path as pathlib spells it (`Path(text)`): repeated separators collapsed (a leading `//`
 /// kept), `.` components and a trailing separator dropped, the empty path `.`.
+#[cfg(unix)]
 pub fn py_path(text: &OsStr) -> PathBuf {
     let bytes = text.as_bytes();
     let root: &[u8] = if bytes.starts_with(b"//") && !bytes.starts_with(b"///") {
@@ -337,16 +342,37 @@ pub fn py_path(text: &OsStr) -> PathBuf {
     PathBuf::from(OsString::from_vec(out))
 }
 
+/// Normalize native Windows separators and dot components without decoding path bytes.
+#[cfg(windows)]
+pub fn py_path(text: &OsStr) -> PathBuf {
+    let path: PathBuf = Path::new(text)
+        .components()
+        .filter(|component| *component != std::path::Component::CurDir)
+        .collect();
+    if path.as_os_str().is_empty() {
+        PathBuf::from(".")
+    } else {
+        path
+    }
+}
+
 // ------------------------------------------------------------------------------------------
 // os.path.realpath (3.11's `_joinrealpath`), pathlib's non-strict `resolve`.
 // ------------------------------------------------------------------------------------------
 
 /// `Path(path).resolve` (non-strict): symbolic links of the existing components resolved,
 /// the rest kept lexically, `..` applied to the resolved prefix, absolute.
-pub fn resolve(path: &Path) -> PathBuf {
-    let mut seen = HashMap::new();
-    let (resolved, _) = join_realpath(b"", path.as_os_str().as_bytes(), &mut seen, 0);
-    PathBuf::from(OsString::from_vec(abspath(&resolved)))
+pub fn resolve(path: &Path) -> std::io::Result<PathBuf> {
+    #[cfg(windows)]
+    {
+        crate::native::resolve_path(path)
+    }
+    #[cfg(unix)]
+    {
+        let mut seen = HashMap::new();
+        let (resolved, _) = join_realpath(b"", path.as_os_str().as_bytes(), &mut seen, 0);
+        Ok(PathBuf::from(OsString::from_vec(abspath(&resolved))))
+    }
 }
 
 /// `a.is_relative_to(b)` of two resolved paths (component-wise).
@@ -354,8 +380,10 @@ pub fn is_relative_to(path: &Path, base: &Path) -> bool {
     path.starts_with(base)
 }
 
+#[cfg(unix)]
 type Seen = HashMap<Vec<u8>, Option<Vec<u8>>>;
 
+#[cfg(unix)]
 fn join_realpath(path: &[u8], rest: &[u8], seen: &mut Seen, depth: usize) -> (Vec<u8>, bool) {
     let mut path = path.to_vec();
     let mut rest = rest;
@@ -417,6 +445,7 @@ fn join_realpath(path: &[u8], rest: &[u8], seen: &mut Seen, depth: usize) -> (Ve
 }
 
 /// `posixpath.split`.
+#[cfg(unix)]
 fn posix_split(path: &[u8]) -> (Vec<u8>, Vec<u8>) {
     let index = path
         .iter()
@@ -433,6 +462,7 @@ fn posix_split(path: &[u8]) -> (Vec<u8>, Vec<u8>) {
 }
 
 /// `posixpath.join(a, b)`.
+#[cfg(unix)]
 fn posix_join(base: &[u8], name: &[u8]) -> Vec<u8> {
     if name.starts_with(b"/") {
         return name.to_vec();
@@ -446,6 +476,7 @@ fn posix_join(base: &[u8], name: &[u8]) -> Vec<u8> {
 }
 
 /// `posixpath.abspath` (`normpath` of the path joined to the working directory).
+#[cfg(unix)]
 fn abspath(path: &[u8]) -> Vec<u8> {
     let joined = if path.starts_with(b"/") {
         path.to_vec()
@@ -457,6 +488,7 @@ fn abspath(path: &[u8]) -> Vec<u8> {
 }
 
 /// `posixpath.normpath`.
+#[cfg(unix)]
 fn normpath(path: &[u8]) -> Vec<u8> {
     if path.is_empty() {
         return b".".to_vec();
@@ -900,9 +932,6 @@ pub fn quote_from_bytes(data: &[u8], safe: &[u8]) -> String {
 }
 
 /// `PurePosixPath.as_uri` of an absolute path: `file://` and the path's bytes quoted.
-pub fn as_uri(path: &Path) -> String {
-    format!(
-        "file://{}",
-        quote_from_bytes(path.as_os_str().as_bytes(), b"/")
-    )
+pub fn as_uri(path: &Path) -> Result<String, source::Escaped> {
+    source::pypath::as_uri(path)
 }

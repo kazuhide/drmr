@@ -1,5 +1,11 @@
 //! Catalog repackaging, ordered checks, failure handling, and report serialization.
-#![cfg(unix)]
+
+#[path = "common/mod.rs"]
+mod private_fixture;
+
+#[path = "support/paths.rs"]
+mod paths;
+use paths::portable_path;
 
 mod pipeline_fakes;
 
@@ -80,7 +86,7 @@ fn line(record: &Record) -> String {
 
 #[test]
 fn repackage_rendition_produces_expected_output_layout() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let rendition = one_rendition(dir.path());
     let fakes = Fakes::new();
     let output_dir = dir.path().join("output");
@@ -109,7 +115,7 @@ fn repackage_rendition_produces_expected_output_layout() {
 
 #[test]
 fn repackage_rendition_renumbers_to_source_origin() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let rendition = one_rendition(dir.path());
     let fakes = Fakes::new();
 
@@ -146,7 +152,7 @@ fn repackage_rendition_renumbers_to_source_origin() {
 
 #[test]
 fn repackage_rendition_forwards_segment_duration() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let rendition = one_rendition(dir.path());
     let fakes = Fakes::new();
 
@@ -185,7 +191,7 @@ fn repackage_rendition_forwards_segment_duration() {
 
 #[test]
 fn repackage_rendition_pssh_agreement_is_skipped_in_phase_1() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let rendition = one_rendition(dir.path());
     let fakes = Fakes::new();
 
@@ -206,7 +212,7 @@ fn repackage_rendition_pssh_agreement_is_skipped_in_phase_1() {
 
 #[test]
 fn repackage_rendition_no_key_or_iv_in_any_check_value() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let rendition = one_rendition(dir.path());
     let fakes = Fakes::new();
 
@@ -227,7 +233,7 @@ fn repackage_rendition_no_key_or_iv_in_any_check_value() {
 
 #[test]
 fn repackage_rendition_checks_keep_python_insertion_order_and_statuses() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let rendition = one_rendition(dir.path());
     let fakes = Fakes::new();
 
@@ -274,7 +280,7 @@ fn repackage_rendition_checks_keep_python_insertion_order_and_statuses() {
 
 #[test]
 fn repackage_rendition_on_log_none_is_a_silent_default() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let rendition = one_rendition(dir.path());
     let fakes = Fakes::new();
 
@@ -291,7 +297,7 @@ fn repackage_rendition_on_log_none_is_a_silent_default() {
 
 #[test]
 fn repackage_rendition_on_log_emits_merge_decrypt_encrypt_report_stages() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let rendition = one_rendition(dir.path());
     let fakes = Fakes::new();
     let collector = Collector::default();
@@ -360,7 +366,7 @@ fn repackage_rendition_on_log_emits_merge_decrypt_encrypt_report_stages() {
 
 #[test]
 fn repackage_rendition_on_log_records_carry_rendition_id() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let rendition = one_rendition(dir.path());
     let fakes = Fakes::new();
     let collector = Collector::default();
@@ -389,7 +395,7 @@ fn repackage_rendition_on_log_records_carry_rendition_id() {
 
 #[test]
 fn repackage_rendition_on_log_never_leaks_key_or_iv() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let rendition = one_rendition(dir.path());
     let mut fakes = Fakes::new();
     let (runner, tools) = collecting_runner();
@@ -426,7 +432,7 @@ fn repackage_rendition_on_log_never_leaks_key_or_iv() {
 
 #[test]
 fn repackage_asset_on_log_threads_through_every_rendition() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let synthetic = build_synthetic_dash_asset(
         dir.path(),
         &[h264_rep("v0").segments(3), audio_rep("a0").segments(3)],
@@ -463,7 +469,7 @@ fn repackage_asset_on_log_threads_through_every_rendition() {
 
 #[test]
 fn repackage_rendition_skips_round_trip_when_disabled() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let rendition = one_rendition(dir.path());
     let fakes = Fakes::new();
 
@@ -484,7 +490,7 @@ fn repackage_rendition_skips_round_trip_when_disabled() {
 
 #[test]
 fn repackage_rendition_round_trip_gated_on_boundary_check() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let rendition = one_rendition(dir.path());
     let fakes = Fakes::new();
 
@@ -519,7 +525,7 @@ fn repackage_rendition_round_trip_runs_once_the_6_1_gate_passes() {
     // The other half of the gate (checklist 6-4 after 6-1): duration, number origin and
     // boundaries PASS, so the round trip runs — re-merge, re-decrypt, framemd5 of both clear
     // files — and the identical (empty) clear files PASS.
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let rendition = one_rendition(dir.path());
     let mut fakes = Fakes::new();
     fakes.media.boundary = matching_boundaries();
@@ -551,7 +557,7 @@ fn repackage_rendition_round_trip_runs_once_the_6_1_gate_passes() {
 
 #[test]
 fn repackage_rendition_round_trip_reports_mismatch_and_framemd5_errors() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let rendition = one_rendition(dir.path());
     let output_dir = dir.path().join("output");
 
@@ -594,7 +600,7 @@ fn repackage_rendition_round_trip_reports_mismatch_and_framemd5_errors() {
 fn repackage_rendition_round_trip_reports_a_failed_re_decrypt() {
     // The packager fails only on the second decrypt (the round trip's): rewrite the stub
     // between the steps via a boundary reader, which runs after the re-encryption.
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let rendition = one_rendition(dir.path());
     let mut fakes = Fakes::new();
     let stub_dir = fakes.bin.path().to_path_buf();
@@ -622,7 +628,7 @@ fn repackage_rendition_round_trip_reports_a_failed_re_decrypt() {
 
 #[test]
 fn check_boundary_agreement_passes_when_every_segment_matches() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let rendition = one_rendition(dir.path());
     let mut fakes = Fakes::new();
     let boundaries: HashMap<PathBuf, FragmentBoundary> = rendition
@@ -646,7 +652,7 @@ fn check_boundary_agreement_passes_when_every_segment_matches() {
 
 #[test]
 fn check_boundary_agreement_fails_on_segment_count_mismatch() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let rendition = one_rendition(dir.path());
     let fakes = Fakes::new();
     let shorter = &rendition.segment_paths[..rendition.segment_paths.len() - 1];
@@ -660,7 +666,7 @@ fn check_boundary_agreement_fails_on_segment_count_mismatch() {
 fn check_boundary_agreement_fails_on_same_total_different_distribution() {
     // Same total sample count (1125 either way), but segment 0 diverges: an aggregate check
     // cannot see this; the per-segment comparison must.
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let mut rendition = one_rendition(dir.path());
     let source_counts = [281u64, 281, 281, 282];
     let output_counts = [282u64, 281, 281, 281];
@@ -699,7 +705,7 @@ fn check_boundary_agreement_fails_on_same_total_different_distribution() {
 
 #[test]
 fn check_boundary_agreement_fails_when_fragment_metadata_missing() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let rendition = one_rendition(dir.path());
     let fakes = Fakes::new();
 
@@ -711,7 +717,7 @@ fn check_boundary_agreement_fails_when_fragment_metadata_missing() {
 
 #[test]
 fn check_boundary_agreement_records_a_probe_error_and_propagates_anything_else() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let rendition = one_rendition(dir.path());
     let mut fakes = Fakes::new();
     fakes.media.boundary = Box::new(|_, _| Err(PyError::Runtime("mp4dump: unavailable".into())));
@@ -731,7 +737,7 @@ fn check_boundary_agreement_records_a_probe_error_and_propagates_anything_else()
 
 #[test]
 fn needs_per_segment_routes_only_off_grid_audio() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let synthetic = build_synthetic_dash_asset(
         dir.path(),
         &[
@@ -761,7 +767,7 @@ fn needs_per_segment_routes_only_off_grid_audio() {
 
 #[test]
 fn repackage_rendition_audio_uses_boundary_preserving_per_segment_path() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let synthetic =
         build_synthetic_dash_asset(dir.path(), &[audio_rep("a0").segments(4)], "title-abc123");
     let rendition = &synthetic.renditions[0];
@@ -797,13 +803,10 @@ fn repackage_rendition_audio_uses_boundary_preserving_per_segment_path() {
     assert_eq!(
         transcrypts,
         [PackagerCall::Transcrypt {
-            template: output_dir
-                .join("cbcs/audio/a0/seg_$Number$.m4s")
-                .display()
-                .to_string(),
+            template: portable_path(&output_dir.join("cbcs/audio/a0/seg_$Number$.m4s")),
             segments: 4,
             pssh_hex: None,
-            work_dir: Some(output_dir.join("_work/a0/persegment")),
+            work_dir: Some(output_dir.join("_work").join("a0").join("persegment")),
         }]
     );
 }
@@ -812,7 +815,7 @@ fn repackage_rendition_audio_uses_boundary_preserving_per_segment_path() {
 
 #[test]
 fn repackage_rendition_decrypt_failure_short_circuits_gracefully() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let rendition = one_rendition(dir.path());
     let fakes = Fakes::with_exit(5);
     let collector = Collector::default();
@@ -891,7 +894,7 @@ impl Sink for FailFromEncrypt<'_> {
 
 #[test]
 fn repackage_rendition_encrypt_failure_is_a_segment_duration_fail_with_its_stderr() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let rendition = one_rendition(dir.path());
     let fakes = Fakes::new();
     let stub_dir = fakes.bin.path().to_path_buf();
@@ -945,7 +948,7 @@ fn repackage_rendition_encrypt_failure_is_a_segment_duration_fail_with_its_stder
 
 #[test]
 fn repackage_asset_full_run_leaves_source_tree_byte_identical() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let synthetic = build_synthetic_dash_asset(
         dir.path(),
         &[h264_rep("v0"), h264_rep("v1"), audio_rep("a0")],
@@ -965,7 +968,7 @@ fn repackage_asset_full_run_leaves_source_tree_byte_identical() {
 
 #[test]
 fn repackage_asset_loops_over_every_rendition_dynamically() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let synthetic = build_synthetic_dash_asset(
         dir.path(),
         &[h264_rep("v0"), h264_rep("v1"), audio_rep("a0")],
@@ -991,7 +994,7 @@ fn repackage_asset_loops_over_every_rendition_dynamically() {
 
 #[test]
 fn repackage_asset_all_pass_false_when_any_rendition_check_fails() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let synthetic = build_synthetic_dash_asset(dir.path(), &[h264_rep("v0")], "asset-fail");
     let asset = synthetic.asset(&dir.path().join("output"));
     let fakes = Fakes::new();
@@ -1003,7 +1006,7 @@ fn repackage_asset_all_pass_false_when_any_rendition_check_fails() {
 
 #[test]
 fn repackage_asset_writes_json_and_markdown_reports() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let synthetic = build_synthetic_dash_asset(dir.path(), &[h264_rep("v0")], "asset-report");
     let asset = synthetic.asset(&dir.path().join("output"));
     let fakes = Fakes::new();
@@ -1027,7 +1030,7 @@ fn repackage_asset_writes_json_and_markdown_reports() {
 
 #[test]
 fn repackage_asset_round_trip_verified_true_by_default() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let synthetic = build_synthetic_dash_asset(dir.path(), &[h264_rep("v0")], "rt-default");
     let asset = synthetic.asset(&dir.path().join("output"));
     let fakes = Fakes::new();
@@ -1039,7 +1042,7 @@ fn repackage_asset_round_trip_verified_true_by_default() {
 
 #[test]
 fn repackage_asset_round_trip_verified_false_with_no_round_trip() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let synthetic = build_synthetic_dash_asset(dir.path(), &[h264_rep("v0")], "rt-disabled");
     let asset = synthetic.asset(&dir.path().join("output"));
     let fakes = Fakes::new();
@@ -1062,7 +1065,7 @@ fn repackage_asset_round_trip_verified_false_with_no_round_trip() {
 
 #[test]
 fn repackage_rendition_is_idempotent_across_reruns() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let rendition = one_rendition(dir.path());
     let fakes = Fakes::new();
     let output_dir = dir.path().join("output");
@@ -1097,7 +1100,7 @@ fn repackage_rendition_is_idempotent_across_reruns() {
 
 #[test]
 fn repackage_rendition_refuses_to_write_outside_output_dir() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let output_dir = dir.path().join("output");
     fs::create_dir(&output_dir).unwrap();
     let root = fs::canonicalize(dir.path()).unwrap();
@@ -1108,8 +1111,8 @@ fn repackage_rendition_refuses_to_write_outside_output_dir() {
         refused,
         Err(PyError::Value(format!(
             "refusing to write outside {}: {}",
-            root.join("output").display(),
-            root.parent().unwrap().join("escaped").display()
+            portable_path(&root.join("output")),
+            portable_path(&root.parent().unwrap().join("escaped"))
         )))
     );
     let safe = output_dir.join("clear/video/v0/clear.mp4");
@@ -1118,7 +1121,7 @@ fn repackage_rendition_refuses_to_write_outside_output_dir() {
 
 #[test]
 fn repackage_rendition_refuses_a_rendition_that_escapes_through_its_rel_dir() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let mut rendition = one_rendition(dir.path());
     rendition.rel_dir = PathBuf::from("../../elsewhere");
     let fakes = Fakes::new();
@@ -1193,14 +1196,26 @@ fn manifest_rendition_result(
         .join("cbcs")
         .join(&rendition.rel_dir)
         .join("init.mp4");
-    fs::create_dir_all(init_path.parent().unwrap()).unwrap();
-    fs::write(&init_path, init_bytes).unwrap();
+    drmr_core::native::create_private_dir_all(init_path.parent().unwrap()).unwrap();
+    {
+        use std::io::Write as _;
+        drmr_core::native::create_private_or_truncate(&init_path)
+            .unwrap()
+            .write_all(init_bytes)
+            .unwrap();
+    }
     let clear_path = output_dir
         .join("clear")
         .join(&rendition.rel_dir)
         .join("clear.mp4");
-    fs::create_dir_all(clear_path.parent().unwrap()).unwrap();
-    fs::write(&clear_path, b"FAKE-CLEAR-CONTENT").unwrap();
+    drmr_core::native::create_private_dir_all(clear_path.parent().unwrap()).unwrap();
+    {
+        use std::io::Write as _;
+        drmr_core::native::create_private_or_truncate(&clear_path)
+            .unwrap()
+            .write_all(b"FAKE-CLEAR-CONTENT")
+            .unwrap();
+    }
     RenditionResult {
         rendition_id: rendition.rep_id.clone(),
         content_type: rendition.content_type.clone(),
@@ -1248,7 +1263,7 @@ fn manifests_for(
 
 #[test]
 fn rewrite_asset_manifests_pssh_agreement_and_structural_checks() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let fakes = Fakes::new();
 
     let (result, asset) = manifests_for(
@@ -1293,7 +1308,7 @@ fn rewrite_asset_manifests_checks_follow_python_dict_order_and_the_6_2_update() 
     // `checks = dict(dash.checks)`, the 6-2 gate's row, `checks.update(hls.checks)` (which
     // overwrites the 6-2 gate's status in place with the module's SKIP row — Python's own
     // behaviour, implemented as is), then the PSSH row, the in-place content/EXTINF rows, 6-6.
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let mut fakes = Fakes::new();
     fakes.manifests.pairs = vec![(dir.path().join("ts.m3u8"), dir.path().join("fmp4.m3u8"))];
     fakes.manifests.pcm_status =
@@ -1340,7 +1355,7 @@ fn rewrite_asset_manifests_checks_follow_python_dict_order_and_the_6_2_update() 
 
 #[test]
 fn audio_pcm_gate_runs_before_hls_repoint_is_emitted() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let mut fakes = Fakes::new();
     fakes.manifests.pairs = vec![(
         dir.path().join("ts_audio.m3u8"),
@@ -1361,7 +1376,7 @@ fn audio_pcm_gate_runs_before_hls_repoint_is_emitted() {
 
 #[test]
 fn rewrite_asset_manifests_pssh_agreement_fails_when_box_absent() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let fakes = Fakes::new();
 
     let (result, _) = manifests_for(
@@ -1380,7 +1395,7 @@ fn rewrite_asset_manifests_pssh_agreement_fails_when_box_absent() {
 
 #[test]
 fn rewrite_asset_manifests_records_extinf_probe_errors_and_emits_local_forms() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let mut fakes = Fakes::new();
     fakes.manifests.extinf = Box::new(|_| {
         Err(PyError::Runtime(
@@ -1415,7 +1430,11 @@ fn rewrite_asset_manifests_records_extinf_probe_errors_and_emits_local_forms() {
     assert!(calls.contains(&format!(
         "rewrite_dash_manifest {} Some(\"http://127.0.0.1:8080/output/local\")",
         manifests_root
-            .join("local/manifest.example.test/local/dash/manifest.mpd")
+            .join("local")
+            .join("manifest.example.test")
+            .join("local")
+            .join("dash")
+            .join("manifest.mpd")
             .display()
     )));
     assert!(calls.contains(&format!(
@@ -1440,7 +1459,7 @@ fn rewrite_asset_manifests_records_extinf_probe_errors_and_emits_local_forms() {
 
 #[test]
 fn repackage_asset_manifests_none_when_hls_master_path_omitted() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let synthetic =
         build_synthetic_dash_asset(dir.path(), &[h264_rep("v0").segments(3)], "title-abc123");
     let asset = synthetic.asset(&dir.path().join("out"));
@@ -1462,7 +1481,7 @@ fn repackage_asset_manifests_none_when_hls_master_path_omitted() {
 
 #[test]
 fn repackage_asset_manifests_populated_when_hls_master_path_given() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let synthetic =
         build_synthetic_dash_asset(dir.path(), &[h264_rep("v0").segments(3)], "wiring-test");
     let asset = synthetic.asset(&dir.path().join("out"));
@@ -1518,7 +1537,7 @@ fn repackage_asset_manifests_populated_when_hls_master_path_given() {
 
 #[test]
 fn repackage_asset_on_log_per_gate_manifest_records_carry_duration_s() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let synthetic =
         build_synthetic_dash_asset(dir.path(), &[h264_rep("v0").segments(3)], "gate-timing");
     let asset = synthetic.asset(&dir.path().join("out"));
@@ -1639,7 +1658,7 @@ fn resolve_max_workers_bounds_and_validates() {
 
 #[test]
 fn repackage_asset_parallel_matches_sequential_byte_for_byte() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let synthetic = build_synthetic_dash_asset(
         dir.path(),
         &[
@@ -1683,7 +1702,7 @@ fn repackage_asset_parallel_matches_sequential_byte_for_byte() {
 
 #[test]
 fn repackage_asset_preserves_order_regardless_of_completion_order() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let reps: Vec<RepSpec> = (0..5).map(|i| h264_rep(&format!("v{i}"))).collect();
     let synthetic = build_synthetic_dash_asset(dir.path(), &reps, "order");
     let asset = synthetic.asset(&dir.path().join("output"));
@@ -1722,7 +1741,7 @@ fn repackage_asset_preserves_order_regardless_of_completion_order() {
 
 #[test]
 fn repackage_asset_respects_the_concurrency_bound() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let reps: Vec<RepSpec> = (0..6).map(|i| h264_rep(&format!("v{i}"))).collect();
     let synthetic = build_synthetic_dash_asset(dir.path(), &reps, "bound");
     let asset = synthetic.asset(&dir.path().join("output"));
@@ -1762,7 +1781,7 @@ fn repackage_asset_respects_the_concurrency_bound() {
 
 #[test]
 fn repackage_asset_environmental_failure_propagates_and_writes_no_report() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let synthetic = build_synthetic_dash_asset(
         dir.path(),
         &[h264_rep("v0"), h264_rep("v1"), h264_rep("v2")],
@@ -1866,7 +1885,7 @@ fn repackage_asset_fail_fast_cancels_pending_renditions() {
     // 2 workers over 6 renditions; v0 raises at once, the others hold their slot 0.3 s. Once
     // the failure is seen nothing queued starts: at most v0 and the rendition already taken
     // by the other worker.
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let asset = six_renditions(dir.path(), "failfast-cancel");
     let recorder = StartRecorder::new(&[
         ("v0", 0, true),
@@ -1898,7 +1917,7 @@ fn repackage_asset_fail_fast_cancels_pending_renditions() {
 fn repackage_asset_fail_fast_does_not_wait_for_earlier_renditions_first() {
     // v0 is slow, v1 raises at once, v2..v5 are quick: true fail-fast sees v1's error at once
     // and starts nothing new while v0 drains.
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let asset = six_renditions(dir.path(), "failfast-late");
     let recorder = StartRecorder::new(&[
         ("v0", 600, false),
@@ -1929,7 +1948,7 @@ fn repackage_asset_fail_fast_does_not_wait_for_earlier_renditions_first() {
 fn repackage_asset_fail_fast_reraises_the_first_failure_in_rendition_order() {
     // v2 raises first in wall-clock time, v1 later, v0 succeeds slowly: v1's error comes out,
     // exactly what the sequential loop would raise.
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let reps: Vec<RepSpec> = (0..3).map(|i| h264_rep(&format!("v{i}"))).collect();
     let asset = build_synthetic_dash_asset(dir.path(), &reps, "failfast-order")
         .asset(&dir.path().join("output"));
@@ -1955,7 +1974,7 @@ fn repackage_asset_fail_fast_reraises_the_first_failure_in_rendition_order() {
 
 #[test]
 fn repackage_asset_sequential_path_stops_at_the_first_failure() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let asset = six_renditions(dir.path(), "sequential-stop");
     let recorder = StartRecorder::new(&[
         ("v0", 0, false),
@@ -1979,7 +1998,7 @@ fn repackage_asset_sequential_path_stops_at_the_first_failure() {
 fn repackage_asset_a_panicking_rendition_is_a_failure_of_its_own_index() {
     // Python's `except BaseException`: a panic closes the gate like an error and is re-raised
     // after the in-flight renditions drained.
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let asset = six_renditions(dir.path(), "panic");
     let fakes = Fakes::new();
     let started = Mutex::new(Vec::new());
@@ -2045,7 +2064,7 @@ fn fail_fast_gate_refuses_only_renditions_after_the_first_failure() {
 
 #[test]
 fn repackage_asset_content_failures_do_not_raise_and_all_renditions_reported() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let synthetic = build_synthetic_dash_asset(
         dir.path(),
         &[h264_rep("v0"), h264_rep("v1"), audio_rep("a0")],
@@ -2081,7 +2100,7 @@ fn repackage_asset_content_failures_do_not_raise_and_all_renditions_reported() {
 
 #[test]
 fn repackage_asset_parallel_leaves_source_tree_byte_identical() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let synthetic = build_synthetic_dash_asset(
         dir.path(),
         &[
@@ -2113,7 +2132,7 @@ fn repackage_asset_parallel_leaves_source_tree_byte_identical() {
 
 #[test]
 fn repackage_asset_rejects_colliding_output_targets_on_the_parallel_path() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let synthetic = build_synthetic_dash_asset(dir.path(), &[h264_rep("v0")], "collide");
     let mut asset = synthetic.asset(&dir.path().join("output"));
     asset.renditions.push(asset.renditions[0].clone());
@@ -2143,7 +2162,7 @@ fn repackage_asset_rejects_colliding_output_targets_on_the_parallel_path() {
 
 #[test]
 fn assert_disjoint_output_targets_rejects_nested_targets_in_either_order() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let synthetic =
         build_synthetic_dash_asset(dir.path(), &[h264_rep("v0"), h264_rep("v1")], "nested");
     let (outer, other) = (&synthetic.renditions[0], &synthetic.renditions[1]);
@@ -2174,7 +2193,7 @@ fn assert_disjoint_output_targets_rejects_nested_targets_in_either_order() {
 
 #[test]
 fn assert_disjoint_output_targets_judges_paths_the_way_pathlib_does() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let synthetic =
         build_synthetic_dash_asset(dir.path(), &[h264_rep("v0"), h264_rep("v1")], "pathlib");
     let prefix = "renditions must write to distinct output targets for safe concurrent processing";
@@ -2217,7 +2236,7 @@ fn assert_disjoint_output_targets_judges_paths_the_way_pathlib_does() {
 
 #[test]
 fn assert_disjoint_output_targets_accepts_siblings_sharing_a_name_prefix() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let synthetic =
         build_synthetic_dash_asset(dir.path(), &[h264_rep("v1"), h264_rep("v10")], "siblings");
     let rel_dirs: Vec<&Path> = synthetic
@@ -2235,7 +2254,7 @@ fn assert_disjoint_output_targets_accepts_siblings_sharing_a_name_prefix() {
 
 #[test]
 fn repackage_asset_rejects_nested_output_targets_before_any_rendition_starts() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let synthetic =
         build_synthetic_dash_asset(dir.path(), &[h264_rep("v0"), h264_rep("v1")], "nested-e2e");
     let mut asset = synthetic.asset(&dir.path().join("output"));
@@ -2270,7 +2289,7 @@ impl Sink for ProbingPrintSink {
 
 #[test]
 fn repackage_asset_parallel_on_log_lines_are_never_torn() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let reps: Vec<RepSpec> = (0..6).map(|i| h264_rep(&format!("v{i}"))).collect();
     let synthetic = build_synthetic_dash_asset(dir.path(), &reps, "logsafe");
     let asset = synthetic.asset(&dir.path().join("output"));
@@ -2503,7 +2522,7 @@ fn oracle_manifests(out: &Path) -> ManifestResult {
 
 #[test]
 fn report_writers_match_the_python_oracle_bytes() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let full = oracle_result();
     let minimal = AssetResult {
         schema_version: "1".into(),
@@ -2548,7 +2567,7 @@ fn paths_print_the_way_pathlib_prints_them() {
 #[test]
 fn a_report_under_a_relative_output_root_prints_normalized_paths() {
     // `--output./out/` in Python is Path("./out/") → "out": every report path is normalized.
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_fixture::private_tempdir().unwrap();
     let synthetic = build_synthetic_dash_asset(dir.path(), &[h264_rep("v0")], "norm");
     let asset = synthetic.asset(&dir.path().join("./out/"));
     let fakes = Fakes::new();
@@ -2567,10 +2586,7 @@ fn a_report_under_a_relative_output_root_prints_normalized_paths() {
     let clear = report["renditions"][0]["clear_path"].as_str().unwrap();
     assert_eq!(
         clear,
-        dir.path()
-            .join("out/norm/clear/video/v0/clear.mp4")
-            .display()
-            .to_string()
+        portable_path(&dir.path().join("out/norm/clear/video/v0/clear.mp4"))
     );
     assert!(!clear.contains("/./"));
     assert_eq!(

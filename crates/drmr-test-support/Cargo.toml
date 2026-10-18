@@ -1,0 +1,15 @@
+[package]
+name = "drmr-test-support"
+description = "Native subprocess fixtures for drmr tests"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

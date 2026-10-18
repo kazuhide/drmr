@@ -40,68 +40,17 @@ pub struct FakeCli {
     pub script: PathBuf,
 }
 
-const SCRIPT: &str = r#"#!/bin/sh
-CTL="__CTL__"
-i=0
-while ! mkdir "$CTL/calls/$i" 2>/dev/null; do i=$((i+1)); done
-for arg in "$@"; do printf '%s\n' "$arg"; done > "$CTL/calls/$i/argv"
-printf '%s\n' "${DRM_KID-}" "${DRM_KEY-}" "${DRM_IV-}" > "$CTL/calls/$i/drm"
-printf '%s\n' "${PATH-}" "${AMBIENT_MARKER-}" > "$CTL/calls/$i/inherited"
-if [ -f "$CTL/lines" ]; then cat "$CTL/lines"; fi
-if [ -f "$CTL/convert" ]; then
-  OUT=""; ASSET=""; BASE=""; MPD=""
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      --output) OUT="$2"; shift ;;
-      --asset-id) ASSET="$2"; shift ;;
-      --manifest-local-url-base) BASE="$2"; shift ;;
-      --mpd) MPD="$2"; shift ;;
-    esac
-    shift
-  done
-  DL=$(dirname "$(dirname "$(dirname "$(dirname "$MPD")")")")
-  mkdir -p "$OUT/$ASSET/manifests/local/host/$ASSET/dash" "$OUT/$ASSET/cbcs"
-  sed -e 's/value="cenc"/value="cbcs"/' -e "s#<BaseURL>[^<]*</BaseURL>#<BaseURL>$BASE</BaseURL>#" "$MPD" > "$OUT/$ASSET/manifests/local/host/$ASSET/dash/manifest.mpd"
-  cp -R "$DL/cdn.example.test/$ASSET/." "$OUT/$ASSET/cbcs/"
-  echo '{"stage": "report", "level": "info", "message": "converted"}'
-  exit 0
-fi
-if [ -f "$CTL/hold" ]; then
-  while [ ! -f "$CTL/release" ]; do sleep 0.02; done
-  code=$(cat "$CTL/release")
-  rm -f "$CTL/release"
-  exit "$code"
-fi
-if [ -f "$CTL/code" ]; then exit "$(cat "$CTL/code")"; fi
-exit 0
-"#;
-
-/// Let a child own the writable descriptor so sibling test spawns cannot inherit it.
-fn write_executable(path: &Path, contents: &str) {
-    let output = std::process::Command::new("/bin/sh")
-        .args([
-            "-c",
-            "printf '%s' \"$2\" > \"$1\" && chmod 755 \"$1\"",
-            "drmr-fixture-writer",
-        ])
-        .arg(path)
-        .arg(contents)
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "fixture writer failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
 impl FakeCli {
     /// A fake CLI under `root/cli`.
     pub fn new(root: &Path) -> FakeCli {
         let dir = root.join("cli");
-        std::fs::create_dir_all(dir.join("calls")).unwrap();
-        let script = dir.join("drmr");
-        write_executable(&script, &SCRIPT.replace("__CTL__", dir.to_str().unwrap()));
+        drmr_core::native::create_private_dir_all(&dir.join("calls")).unwrap();
+        let spec = drmr_test_support::ToolSpec {
+            mode: drmr_test_support::Mode::ServerCli,
+            ..Default::default()
+        }
+        .with("control_dir", dir.to_str().unwrap());
+        let script = drmr_test_support::install(&dir.join("drmr"), &spec).unwrap();
         FakeCli { dir, script }
     }
 
@@ -129,7 +78,9 @@ impl FakeCli {
 
     /// Let the held launch exit with this code.
     pub fn release(&self, code: i32) {
-        std::fs::write(self.dir.join("release"), code.to_string()).unwrap();
+        let temporary = self.dir.join("release.pending");
+        std::fs::write(&temporary, code.to_string()).unwrap();
+        std::fs::rename(temporary, self.dir.join("release")).unwrap();
     }
 
     /// Write a converted output tree (the stub packager's role).
@@ -144,7 +95,15 @@ impl FakeCli {
 
     /// Wait until `count` launches have recorded themselves.
     pub fn wait_calls(&self, count: usize) {
+        let deadline = Instant::now() + Duration::from_secs(15);
         wait_until(|| {
+            if Instant::now() >= deadline {
+                let calls: Vec<_> = std::fs::read_dir(self.dir.join("calls"))
+                    .unwrap()
+                    .map(|entry| entry.unwrap().path())
+                    .collect();
+                panic!("native CLI did not publish call readiness: {calls:?}");
+            }
             self.calls() >= count
                 && self
                     .dir
@@ -360,7 +319,7 @@ pub fn build_synthetic_dash_asset(root: &Path, reps: &[Rep], title_id: &str) -> 
         .join(title_id)
         .join("dash")
         .join("manifest.mpd");
-    std::fs::create_dir_all(mpd_path.parent().unwrap()).unwrap();
+    drmr_core::native::create_private_dir_all(mpd_path.parent().unwrap()).unwrap();
     std::fs::write(&mpd_path, mpd).unwrap();
     for rep in reps {
         let ext = if rep.mime_type == "video/webm" {
@@ -373,7 +332,7 @@ pub fn build_synthetic_dash_asset(root: &Path, reps: &[Rep], title_id: &str) -> 
             .join(title_id)
             .join(&rep.content_type)
             .join(&rep.id);
-        std::fs::create_dir_all(&dir).unwrap();
+        drmr_core::native::create_private_dir_all(&dir).unwrap();
         std::fs::write(dir.join(format!("init.{ext}")), format!("INIT:{}", rep.id)).unwrap();
         for i in 0..rep.segment_count {
             std::fs::write(
@@ -392,7 +351,7 @@ pub fn write_minimal_hls_master(root: &Path, title_id: &str, iv_hex: &str) -> Pa
         .join("download/vod.example.test")
         .join(title_id)
         .join("video/hv0");
-    std::fs::create_dir_all(&segments).unwrap();
+    drmr_core::native::create_private_dir_all(&segments).unwrap();
     for i in 0..3 {
         std::fs::write(segments.join(format!("seg_{i}.ts")), [0u8; 100]).unwrap();
     }
@@ -400,7 +359,7 @@ pub fn write_minimal_hls_master(root: &Path, title_id: &str, iv_hex: &str) -> Pa
         .join("download/variants.example.test")
         .join(title_id)
         .join("video/hv0");
-    std::fs::create_dir_all(&variants).unwrap();
+    drmr_core::native::create_private_dir_all(&variants).unwrap();
     let mut lines = vec![
         "#EXTM3U".to_string(),
         "#EXT-X-VERSION:7".into(),
@@ -424,7 +383,7 @@ pub fn write_minimal_hls_master(root: &Path, title_id: &str, iv_hex: &str) -> Pa
         .join("download/manifest.example.test")
         .join(title_id)
         .join("hls");
-    std::fs::create_dir_all(&master_dir).unwrap();
+    drmr_core::native::create_private_dir_all(&master_dir).unwrap();
     let master = master_dir.join("manifest.m3u8");
     std::fs::write(
         &master,
@@ -464,11 +423,11 @@ impl Default for Stage {
 /// returns the entry directory and the manifest path.
 pub fn stage_entry(catalog_root: &Path, asset_id: &str, stage: &Stage) -> (PathBuf, PathBuf) {
     let entry = catalog_root.join(stage.dir_name.as_deref().unwrap_or(asset_id));
-    std::fs::create_dir_all(&entry).unwrap();
+    drmr_core::native::create_private_dir_all(&entry).unwrap();
     let mpd = build_synthetic_dash_asset(&entry, &stage.reps, asset_id);
     let master = write_minimal_hls_master(&entry, asset_id, &stage.iv);
-    std::fs::write(
-        entry.join("keys.env"),
+    write_private(
+        &entry.join("keys.env"),
         format!(
             "DRM_KID={}\nDRM_KEY={}\nDRM_IV={}\n",
             stage.kid, stage.key, stage.iv
@@ -480,7 +439,7 @@ pub fn stage_entry(catalog_root: &Path, asset_id: &str, stage: &Stage) -> (PathB
             .unwrap()
             .to_str()
             .unwrap()
-            .to_string()
+            .replace(std::path::MAIN_SEPARATOR, "/")
     };
     std::fs::write(
         entry.join("asset.json"),
@@ -688,11 +647,12 @@ impl Harness {
     /// A harness whose roots and fake CLI exist before `configure` sets the options.
     pub fn with(configure: impl FnOnce(&mut HarnessSetup)) -> Harness {
         let root = tempfile::tempdir().unwrap();
-        let base = std::fs::canonicalize(root.path()).unwrap();
+        let base = std::fs::canonicalize(root.path()).unwrap().join("private");
+        drmr_core::native::create_private_dir_all(&base).unwrap();
         let catalog = base.join("catalog");
         let output = base.join("output");
-        std::fs::create_dir_all(&catalog).unwrap();
-        std::fs::create_dir_all(&output).unwrap();
+        drmr_core::native::create_private_dir_all(&catalog).unwrap();
+        drmr_core::native::create_private_dir_all(&output).unwrap();
         let cli = FakeCli::new(&base);
         let mut setup = HarnessSetup {
             base: base.clone(),
@@ -858,4 +818,92 @@ pub fn is_root() -> bool {
         .arg("-u")
         .output()
         .is_ok_and(|output| String::from_utf8_lossy(&output.stdout).trim() == "0")
+}
+
+/// Write a synthetic secret with the same private-file boundary as production.
+pub fn write_private(path: &Path, bytes: impl AsRef<[u8]>) -> std::io::Result<()> {
+    use std::io::Write as _;
+    if let Some(parent) = path.parent() {
+        drmr_core::native::create_private_dir_all(parent)?;
+    }
+    drmr_core::native::create_private_or_truncate(path)?.write_all(bytes.as_ref())
+}
+
+pub fn private_dir(path: impl AsRef<Path>) -> std::io::Result<()> {
+    drmr_core::native::create_private_dir_all(path.as_ref())
+}
+
+#[cfg(unix)]
+pub fn set_mode(path: &Path, mode: u32) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+}
+
+/// Apply actual Windows access denials while retaining access to restore the DACL.
+#[cfg(windows)]
+pub fn set_mode(path: &Path, mode: u32) {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_permissions::constants::{SeObjectType, SecurityInformation};
+    use windows_permissions::{LocalBox, SecurityDescriptor};
+    let mut control = std::fs::OpenOptions::new()
+        .access_mode(0x0006_0000)
+        .custom_flags(0x0200_0000)
+        .open(path)
+        .unwrap();
+    let original = windows_permissions::wrappers::GetSecurityInfo(
+        &control,
+        SeObjectType::SE_FILE_OBJECT,
+        SecurityInformation::Owner | SecurityInformation::Dacl,
+    )
+    .unwrap();
+    let denied = match mode {
+        0o000 => 0x0001_0067,
+        0o500 => 0x0001_0046,
+        _ => 0,
+    };
+    let sid = original.owner().unwrap();
+    let deny = if denied == 0 {
+        String::new()
+    } else {
+        format!("(D;;0x{denied:08x};;;{sid})")
+    };
+    let descriptor: LocalBox<SecurityDescriptor> =
+        format!("D:P{deny}(A;;FA;;;{sid})").parse().unwrap();
+    windows_permissions::wrappers::SetSecurityInfo(
+        &mut control,
+        SeObjectType::SE_FILE_OBJECT,
+        SecurityInformation::Dacl | SecurityInformation::ProtectedDacl,
+        None,
+        None,
+        descriptor.dacl(),
+        None,
+    )
+    .unwrap();
+}
+
+#[cfg(unix)]
+pub fn directory_link(target: &Path, link: &Path) {
+    std::os::unix::fs::symlink(target, link).unwrap();
+}
+#[cfg(windows)]
+pub fn directory_link(target: &Path, link: &Path) {
+    let output = std::process::Command::new("cmd.exe")
+        .args(["/d", "/c", "mklink", "/J"])
+        .arg(drmr_test_support::command_path(link).unwrap())
+        .arg(drmr_test_support::command_path(target).unwrap())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "junction: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+#[cfg(unix)]
+pub fn file_link(target: &Path, link: &Path) {
+    std::os::unix::fs::symlink(target, link).unwrap();
+}
+#[cfg(windows)]
+pub fn file_link(target: &Path, link: &Path) {
+    std::fs::hard_link(target, link).unwrap();
 }

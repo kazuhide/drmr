@@ -50,6 +50,18 @@ fn setup() -> Setup {
 
 impl Drop for Setup {
     fn drop(&mut self) {
+        if std::thread::panicking() {
+            for entry in std::fs::read_dir(self.root.join("jobs")).unwrap().flatten() {
+                let path = entry.path();
+                if let Some(id) = path.file_stem().and_then(|name| name.to_str()) {
+                    eprintln!(
+                        "native fixture status: {:?}; log: {:?}",
+                        self.manager.status(id),
+                        std::fs::read_to_string(path)
+                    );
+                }
+            }
+        }
         self.manager.kill_current();
     }
 }
@@ -135,9 +147,11 @@ fn manifest_local_url_base_ends_with_a_trailing_slash() {
 #[test]
 fn submit_never_passes_the_guarantee_weakening_flags() {
     let s = setup();
-    s.manager
+    let handle = s
+        .manager
         .submit(&entry("asset-1", KID, KEY, IV), &s.root.join("out"))
         .unwrap();
+    wait_capture(&s, &handle.job_id);
     let argv = s.cli.argv(0);
     for forbidden in ["--no-round-trip", "--limit-renditions", "--no-manifests"] {
         assert!(!argv.iter().any(|arg| arg == forbidden), "{forbidden}");
@@ -147,9 +161,11 @@ fn submit_never_passes_the_guarantee_weakening_flags() {
 #[test]
 fn submit_never_puts_key_or_iv_on_the_command_line() {
     let s = setup();
-    s.manager
+    let handle = s
+        .manager
         .submit(&entry("asset-1", KID, KEY, IV), &s.root.join("out"))
         .unwrap();
+    wait_capture(&s, &handle.job_id);
     let argv = s.cli.argv(0);
     for value in [KEY, IV, KID] {
         assert!(
@@ -157,6 +173,113 @@ fn submit_never_puts_key_or_iv_on_the_command_line() {
             "{value} on argv"
         );
     }
+}
+
+fn wait_capture(s: &Setup, job_id: &str) {
+    support::wait_until(|| {
+        let status = s.manager.status(job_id).unwrap();
+        assert_ne!(
+            status.state,
+            "failed",
+            "native fixture exited before readiness: {status:?}; log={:?}",
+            std::fs::read_to_string(&status.log_path)
+        );
+        s.cli.dir.join("calls/0/inherited").is_file()
+    });
+}
+
+#[test]
+fn native_cli_readiness_covers_complete_captures_under_parallel_launches() {
+    std::thread::scope(|scope| {
+        for _ in 0..8 {
+            scope.spawn(|| {
+                for _ in 0..4 {
+                    let s = setup();
+                    let handle = s
+                        .manager
+                        .submit(&entry("capture", KID, KEY, IV), &s.root.join("out"))
+                        .unwrap();
+                    wait_capture(&s, &handle.job_id);
+                    assert_eq!(s.cli.argv(0)[0], "run");
+                    assert_eq!(s.cli.drm(0), [KID, KEY, IV]);
+                    assert_eq!(s.cli.inherited(0).len(), 2);
+                    wait_idle(&s.manager);
+                    assert_eq!(s.manager.status(&handle.job_id).unwrap().exit_code, Some(0));
+                }
+            });
+        }
+    });
+}
+
+#[test]
+fn completed_and_cancelled_jobs_clean_up_native_descendants() {
+    for cancel in [false, true] {
+        let s = setup();
+        std::fs::write(s.cli.dir.join("tree"), b"").unwrap();
+        if cancel {
+            s.cli.hold();
+        }
+        let handle = s
+            .manager
+            .submit(&entry("tree", KID, KEY, IV), &s.root.join("out"))
+            .unwrap();
+        support::wait_until(|| {
+            std::fs::read_to_string(s.cli.dir.join("descendant.pid"))
+                .is_ok_and(|text| text.ends_with('\n') && text.trim().parse::<u32>().is_ok())
+        });
+        assert!(descendant_running(&s.cli.dir));
+        if cancel {
+            s.manager.kill_current();
+        } else {
+            wait_idle(&s.manager);
+        }
+        support::wait_until(|| !descendant_running(&s.cli.dir));
+        assert_ne!(s.manager.status(&handle.job_id).unwrap().state, "running");
+    }
+}
+
+#[cfg(windows)]
+fn descendant_running(directory: &Path) -> bool {
+    use std::os::windows::fs::OpenOptionsExt;
+    let result = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .share_mode(0)
+        .open(directory.join("descendant.lock"));
+    match result {
+        Ok(_) => false,
+        Err(error) if error.raw_os_error() == Some(32) => true,
+        Err(error) => panic!("descendant lock inspection failed: {error}"),
+    }
+}
+
+#[cfg(unix)]
+fn descendant_running(directory: &Path) -> bool {
+    let pid = std::fs::read_to_string(directory.join("descendant.pid")).unwrap();
+    let output = std::process::Command::new("ps")
+        .args(["-p", pid.trim(), "-o", "stat="])
+        .output()
+        .unwrap();
+    let state = String::from_utf8(output.stdout).unwrap();
+    let state = state.trim();
+    !state.is_empty() && !state.starts_with('Z')
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_environment_names_cannot_bypass_key_isolation() {
+    let s = setup_with(Arc::new(|| {
+        vec![
+            ("drm_key".into(), "ambient".into()),
+            ("Drm_Kid".into(), "ambient".into()),
+            ("dRm_Iv".into(), "ambient".into()),
+            ("AMBIENT_MARKER".into(), "retained".into()),
+        ]
+    }));
+    assert_eq!(
+        s.manager.fresh_env(),
+        [("AMBIENT_MARKER".into(), "retained".into())]
+    );
 }
 
 #[test]

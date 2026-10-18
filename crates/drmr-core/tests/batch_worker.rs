@@ -1,6 +1,4 @@
 //! Worker entry points and per-asset child processes with isolated environments.
-// unix only (open decision #23): a `harness = false` binary needs its own `main`, so it cannot be
-// gated with `#![cfg(unix)]` like the harness tests; it does not compile elsewhere today.
 
 mod common;
 
@@ -149,6 +147,13 @@ fn fake_run(args: &[String]) -> i32 {
         return 1;
     }
     let root = Path::new(&output).join(&asset);
+    #[cfg(windows)]
+    {
+        // Real conversions create private output directories before payloads.
+        // Preserve that boundary in this command double so marker writes can use it.
+        drmr_core::native::create_private_dir_all(&root.join("cbcs/v")).unwrap();
+        drmr_core::native::create_private_dir_all(&root.join("reports")).unwrap();
+    }
     write(&root.join("cbcs/v/seg_1.m4s"), format!("CBCS:{asset}"));
     write(
         &root.join("reports/phase1-summary.json"),
@@ -158,12 +163,12 @@ fn fake_run(args: &[String]) -> i32 {
 }
 
 struct Fixture {
-    temp: tempfile::TempDir,
+    temp: common::PrivateTempDir,
     download: std::path::PathBuf,
 }
 
 fn fixture(title: &str) -> (Fixture, ObjectRef) {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = common::private_tempdir().unwrap();
     let store = temp.path().join("store");
     let built = build_synthetic_dash_asset(&store, &[h264_rep("v")], title);
     let download = store.join("download");
@@ -171,9 +176,10 @@ fn fixture(title: &str) -> (Fixture, ObjectRef) {
         .mpd_path
         .strip_prefix(&download)
         .unwrap()
-        .to_str()
-        .unwrap()
-        .to_string();
+        .components()
+        .map(|part| part.as_os_str().to_str().unwrap())
+        .collect::<Vec<_>>()
+        .join("/");
     (
         Fixture { temp, download },
         ObjectRef::new(manifest).unwrap(),
@@ -261,7 +267,7 @@ fn publishes_a_whole_attempt() {
     assert_eq!(log.get("a").unwrap().outcome, AssetOutcome::DonePass);
     let after: Vec<_> = common::snapshot_tree(&fixture.download)
         .into_iter()
-        .filter(|(path, _)| !path.starts_with("output/"))
+        .filter(|(path, _)| !Path::new(path).starts_with("output"))
         .collect();
     assert_eq!(after, before, "the sources are read-only");
     let resume = std::fs::read_to_string(&config.resume_log).unwrap();

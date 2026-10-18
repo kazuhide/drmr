@@ -128,8 +128,12 @@ pub(super) fn measure_segment_durations_s<E: MediaEngine + ?Sized>(
     for pair in tfdts.windows(2) {
         durations.push(python::true_divide(&(&pair[1] - &pair[0]), &scale)?);
     }
+    #[cfg(unix)]
     let directory = tempfile::Builder::new().prefix("tmp").tempdir()?;
-    let merged = directory.path().join("tail.mp4");
+    #[cfg(windows)]
+    let directory = crate::native::private_tempdir()?;
+    let work = directory.path().to_path_buf();
+    let merged = work.join("tail.mp4");
     concat_bytes(&[init_path, last.as_path()], &merged)?;
     let end_s = engine.probe_segment_timing(&merged)?.duration_s;
     let last_start = python::true_divide(tfdts.last().expect("one tfdt per segment"), &scale)?;
@@ -139,7 +143,7 @@ pub(super) fn measure_segment_durations_s<E: MediaEngine + ?Sized>(
 
 /// `media::_concat_bytes`: the parts into `dest`, in order (no directory created).
 fn concat_bytes(parts: &[&Path], dest: &Path) -> Result<(), MediaError> {
-    let mut out = std::fs::File::create(dest)?;
+    let mut out = super::create_output_file(dest)?;
     for part in parts {
         let mut source = std::fs::File::open(part)?;
         std::io::copy(&mut source, &mut out)?;

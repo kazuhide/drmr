@@ -3,9 +3,42 @@
 
 pub mod dash;
 pub mod fake_s3;
+#[cfg(windows)]
+pub mod windows;
 
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
+
+/// Own the outer temporary directory while exposing an initially private fixture root.
+pub struct PrivateTempDir {
+    owner: tempfile::TempDir,
+    path: std::path::PathBuf,
+}
+
+impl PrivateTempDir {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn close(self) -> std::io::Result<()> {
+        self.owner.close()
+    }
+}
+
+/// Create the private boundary before test payloads or production writers use the directory.
+pub fn private_tempdir() -> std::io::Result<PrivateTempDir> {
+    let owner = tempfile::tempdir()?;
+    #[cfg(unix)]
+    let path = owner.path().to_path_buf();
+    #[cfg(windows)]
+    let path = {
+        let path = owner.path().join("private");
+        drmr_core::native::create_private_dir_all(&path)?;
+        path
+    };
+    Ok(PrivateTempDir { owner, path })
+}
 
 /// Synthetic key material only (never a real key).
 pub const KID: &str = "000102030405060708090a0b0c0d0e0f";
@@ -19,8 +52,20 @@ pub fn write_mode(path: &Path, content: &[u8], mode: u32) {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).unwrap();
     }
-    std::fs::write(path, content).unwrap();
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    #[cfg(unix)]
+    {
+        std::fs::write(path, content).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+    #[cfg(windows)]
+    {
+        use std::io::Write as _;
+        let mut file = std::fs::File::create(path).unwrap();
+        if mode.trailing_zeros() >= 6 {
+            private_fs::harden(&file).unwrap();
+        }
+        file.write_all(content).unwrap();
+    }
 }
 
 /// Write `content` to `path`, parents created.

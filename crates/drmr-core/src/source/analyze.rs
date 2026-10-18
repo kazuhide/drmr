@@ -108,6 +108,10 @@ pub fn analyze_hls(
 
 /// `[A-Za-z0-9][A-Za-z0-9_.-]{0,127}`.
 fn valid_asset_id(asset_id: &str) -> bool {
+    #[cfg(windows)]
+    if crate::native::validate_windows_relative_path(asset_id).is_err() {
+        return false;
+    }
     let bytes = asset_id.as_bytes();
     !bytes.is_empty()
         && bytes.len() <= 128
@@ -122,13 +126,7 @@ fn is_symlink(path: &Path) -> bool {
 }
 
 fn make_private_dir(directory: &Path) -> Result<(), Failure> {
-    let mut builder = std::fs::DirBuilder::new();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        builder.mode(0o700);
-    }
-    builder.create(directory).map_err(|error| {
+    crate::native::create_private_dir_new(directory).map_err(|error| {
         if error.kind() == std::io::ErrorKind::AlreadyExists {
             // Never replace an admitted snapshot implicitly: a source change needs a new id.
             Failure::source("source-snapshot-exists")
@@ -160,7 +158,10 @@ pub fn analyze_hls_with(
     if is_symlink(&asset_dir) || is_symlink(&parent) {
         return Err(Failure::source("unsafe-output-path"));
     }
-    std::fs::create_dir_all(&parent).map_err(|_| escaped("OSError"))?;
+    crate::native::create_private_dir_all(&parent).map_err(|_| escaped("OSError"))?;
+    #[cfg(windows)]
+    let _output_guard =
+        crate::native::pin_private_directory(&asset_dir).map_err(|_| escaped("OSError"))?;
     let directory = parent.join("source");
     make_private_dir(&directory)?;
     let fetch = Fetcher::new(policy, &directory, Arc::clone(&options.platform));
@@ -491,12 +492,15 @@ impl<'e: 's, 's> Run<'e, 's, '_> {
         };
         self.progress("analysis-started", &[]);
         let mut location = self.source.url.clone();
-        if urlsplit(&location, "")
+        let local_path = urlsplit(&location, "")
             .map_err(|_| escaped("ValueError"))?
             .scheme
-            .is_empty()
-        {
-            location = as_uri(&resolve(Path::new(&location)).map_err(Failure::Escaped)?);
+            .is_empty();
+        #[cfg(windows)]
+        let local_path = local_path || super::pypath::is_native_path(&location);
+        if local_path {
+            location = as_uri(&resolve(Path::new(&location)).map_err(Failure::Escaped)?)
+                .map_err(Failure::Escaped)?;
         }
         let (body, effective) = self.hooks.read(self.fetch, &location, true)?;
         let (root, lines, total) = self.start_playlist(&mut state, &body, &effective)?;

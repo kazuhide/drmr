@@ -6,7 +6,6 @@ use std::fs;
 
 const KEY: &str = "2b7e151628aed2a6abf7158809cf4f3c";
 const IV: &str = "000102030405060708090a0b0c0d0e0f";
-#[cfg(unix)]
 #[test]
 fn nist_cbc_vector_and_rustcrypto_pkcs7_vector_match_exactly() {
     let directory = tempfile::tempdir().unwrap();
@@ -61,7 +60,6 @@ fn nist_cbc_vector_and_rustcrypto_pkcs7_vector_match_exactly() {
         "c7fe247ef97b21f07cbdd26cb5d346bfd27867cb00d9486723e159978fb9a5f914cfb228a710de4171e396e7b6cf859e"
     );
 }
-#[cfg(unix)]
 #[test]
 fn streaming_chunk_boundaries_preserve_cbc_chaining() {
     use aes::cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
@@ -88,7 +86,6 @@ fn streaming_chunk_boundaries_preserve_cbc_chaining() {
         assert_eq!(fs::read(&encrypted).unwrap(), expected);
     }
 }
-#[cfg(unix)]
 #[test]
 fn invalid_padding_and_truncation_never_publish_plaintext() {
     let directory = tempfile::tempdir().unwrap();

@@ -1,5 +1,8 @@
 //! Clear-HLS packaging through injected dependencies, including failure handling.
 
+#[path = "common/mod.rs"]
+mod private_fixture;
+
 use std::collections::{BTreeSet, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -139,10 +142,11 @@ impl Fake {
     }
 
     fn write(path: &Path, payload: &[u8]) -> Result<PathBuf, MediaError> {
+        use std::io::Write as _;
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
+            drmr_core::native::create_private_dir_all(parent)?;
         }
-        fs::write(path, payload)?;
+        drmr_core::native::create_private_or_truncate(path)?.write_all(payload)?;
         Ok(path.to_path_buf())
     }
 
@@ -216,13 +220,18 @@ impl PipelineDeps for Fake {
     }
 
     fn decoded_digest(&self, path: &Path, _c: &str, _s: i64) -> Result<String, MediaError> {
-        let text = path.display().to_string();
         let Some(track) = self.mismatch.as_deref() else {
             return Ok("same".to_string());
         };
-        let of_track =
-            text.contains(&format!("/{track}/")) || text.contains(&format!("/{track}.mp4"));
-        let differing = text.contains("decrypted_") || text.contains("audio-equivalence");
+        let of_track = path.components().any(|part| part.as_os_str() == track)
+            || path.file_stem().is_some_and(|stem| stem == track);
+        let differing = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("decrypted_"))
+            || path
+                .components()
+                .any(|part| part.as_os_str() == "audio-equivalence");
         Ok(if of_track && differing {
             "other".to_string()
         } else {
@@ -239,7 +248,11 @@ impl PipelineDeps for Fake {
     }
 
     fn box_tree(&self, path: &Path) -> Result<Value, MediaError> {
-        let audio = path.display().to_string().contains("/a0");
+        let audio = path.components().any(|part| {
+            part.as_os_str()
+                .to_str()
+                .is_some_and(|name| name.starts_with("a0"))
+        });
         let (crypt, skip) = if audio { (0, 0) } else { (1, 9) };
         Ok(json!([{"name": "moov", "children": [
             {"name": "tenc", "default_crypt_byte_block": crypt, "default_skip_byte_block": skip}
@@ -320,7 +333,7 @@ impl PipelineDeps for Fake {
 
 fn analysis(tmp: &Path, tracks: Vec<SourceTrack>) -> SourceAnalysis {
     let snapshot = tmp.join("asset/clear/source/analysis.json");
-    fs::create_dir_all(snapshot.parent().unwrap()).unwrap();
+    drmr_core::native::create_private_dir_all(snapshot.parent().unwrap()).unwrap();
     SourceAnalysis {
         schema_version: "1".to_string(),
         source_kind: "hls-clear".to_string(),
@@ -498,7 +511,7 @@ fn protobuf_kids_reads_field_two_and_rejects_malformed_payloads() {
 
 #[test]
 fn webvtt_cues_preserved_and_timestamp_map_tracks_transport_offset() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let source = tmp.path().join("s.vtt");
     let cue = "\n\n00:00:00.000 --> 00:00:01.000\nHello\n";
     fs::write(
@@ -539,7 +552,7 @@ fn webvtt_cues_preserved_and_timestamp_map_tracks_transport_offset() {
 
 #[test]
 fn webvtt_without_a_map_gets_the_common_offset_and_a_bom_is_dropped() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let source = tmp.path().join("s.vtt");
     fs::write(
         &source,
@@ -565,7 +578,7 @@ fn webvtt_without_a_map_gets_the_common_offset_and_a_bom_is_dropped() {
 
 #[test]
 fn webvtt_inconsistent_segment_clocks_fail_loud() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let mut segments = Vec::new();
     for (index, transport) in [0, 90000].into_iter().enumerate() {
         let path = tmp.path().join(format!("s{index}.vtt"));
@@ -581,7 +594,7 @@ fn webvtt_inconsistent_segment_clocks_fail_loud() {
 
 #[test]
 fn webvtt_rejects_a_missing_header_two_maps_and_an_overflowing_clock() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     for (name, content) in [
         ("header", "WEBVT\n\n"),
         (
@@ -615,7 +628,7 @@ fn webvtt_rejects_a_missing_header_two_maps_and_an_overflowing_clock() {
 
 #[test]
 fn muxed_audio_selection_is_snapshot_bound_and_records_omissions() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let seg = segment(0, tmp.path().join("source.ts"), 2.0);
     let mut first = track("a000", "audio", "ts", "aac", vec![seg.clone()]);
     first.group_id = "muxed-audio".to_string();
@@ -652,7 +665,7 @@ fn muxed_audio_selection_is_snapshot_bound_and_records_omissions() {
 fn selection_values_compare_as_python_values() {
     // `--selection` is a JSON file: its members are whatever it holds (Python's dataclass
     // takes any object); only the analysis's own strings are current.
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let seg = segment(0, tmp.path().join("source.ts"), 2.0);
     let mut first = track("a000", "audio", "ts", "aac", vec![seg.clone()]);
     first.group_id = "muxed-audio".to_string();
@@ -699,7 +712,7 @@ fn selection_values_compare_as_python_values() {
 
 #[test]
 fn equivalent_muxed_audio_picks_the_first_without_a_selection() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let seg = segment(0, tmp.path().join("source.ts"), 2.0);
     let mut first = track("a000", "audio", "ts", "aac", vec![seg.clone()]);
     first.group_id = "muxed-audio".to_string();
@@ -717,7 +730,7 @@ fn equivalent_muxed_audio_picks_the_first_without_a_selection() {
 
 #[test]
 fn declared_audio_groups_are_never_removed_by_global_selection() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let seg = segment(0, tmp.path().join("s.ts"), 2.0);
     let mut ja = track("a000", "audio", "ts", "aac", vec![seg.clone()]);
     ja.group_id = "ja".to_string();
@@ -740,7 +753,7 @@ fn declared_audio_groups_are_never_removed_by_global_selection() {
 
 #[test]
 fn imsc_encoded_doctype_never_reaches_xml_parser() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let init = tmp.path().join("init.mp4");
     fs::write(&init, b"init").unwrap();
     let fragment = tmp.path().join("segment.m4s");
@@ -788,7 +801,7 @@ fn imsc_encoded_doctype_never_reaches_xml_parser() {
 
 #[test]
 fn tracks_are_packaged_concurrently_and_reported_in_track_order() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let seg = segment(0, tmp.path().join("s.ts"), 2.0);
     let vtt = tmp.path().join("s.vtt");
     fs::write(&vtt, "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nHi\n").unwrap();
@@ -936,7 +949,7 @@ fn assert_failed_report_on_disk(asset: &Path) {
 
 #[test]
 fn a_clean_run_writes_both_manifests_and_a_successful_report() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let seg = segment(0, tmp.path().join("s.ts"), 2.0);
     let video = track("v000", "video", "ts", "h264", vec![seg.clone()]);
     let mut audio = track("a000", "audio", "fmp4", "aac", vec![seg]);
@@ -978,7 +991,7 @@ fn a_clean_run_writes_both_manifests_and_a_successful_report() {
 
 #[test]
 fn manifest_value_and_os_errors_are_a_finding_and_others_propagate() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let seg = segment(0, tmp.path().join("s.ts"), 2.0);
     let analysis = analysis(
         tmp.path(),
@@ -1023,7 +1036,7 @@ fn manifest_value_and_os_errors_are_a_finding_and_others_propagate() {
 fn a_runtime_error_in_an_init_check_aborts_the_whole_run() {
     // `hls_pipeline`:473's except tuple misses RuntimeError / ToolError: an mp4dump failure
     // while validating an init segment is not a track failure but the run's (implemented as is).
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let seg = segment(0, tmp.path().join("s.ts"), 2.0);
     let analysis = analysis(
         tmp.path(),
@@ -1060,7 +1073,7 @@ fn a_runtime_error_in_an_init_check_aborts_the_whole_run() {
 
 #[test]
 fn one_worker_packages_on_the_callers_thread_without_a_pool() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let seg = segment(0, tmp.path().join("s.ts"), 2.0);
     let analysis = analysis(
         tmp.path(),
@@ -1112,7 +1125,7 @@ fn one_worker_packages_on_the_callers_thread_without_a_pool() {
 
 #[test]
 fn prologue_errors_keep_the_python_order_and_classes() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let seg = segment(0, tmp.path().join("s.ts"), 2.0);
     let mut analysis = analysis(
         tmp.path(),
@@ -1191,7 +1204,7 @@ fn prologue_errors_keep_the_python_order_and_classes() {
 }
 
 fn ordering_case(pooled: bool, failing: Option<usize>) {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let count = 6;
     let segments: Vec<SourceSegment> = (0..count)
         .map(|i| {
@@ -1311,7 +1324,7 @@ fn a_failed_prepare_blocks_them_all_pooled() {
 
 #[test]
 fn unsafe_track_ids_fail_before_packaging_writes() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let escaped = tmp.path().join("escaped");
     let source = tmp.path().join("source.vtt");
     fs::write(&source, "WEBVTT\n\n00:00.000 --> 00:01.000\nHello\n").unwrap();
@@ -1371,7 +1384,7 @@ fn unsafe_track_ids_fail_before_packaging_writes() {
 
 #[test]
 fn package_preflight_rejects_all_track_ids_before_clearing_manifests() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let bad = track("../escaped", "text", "webvtt", "wvtt", vec![]);
     let analyzed = analysis(tmp.path(), vec![bad]);
     let manifest = tmp.path().join("asset/manifests/clear-hls/keep.mpd");
@@ -1404,7 +1417,7 @@ fn package_preflight_rejects_all_track_ids_before_clearing_manifests() {
 fn text_outputs_refuse_existing_directory_and_leaf_symlinks() {
     use std::os::unix::fs::symlink;
     for leaf in [false, true] {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = private_fixture::private_tempdir().unwrap();
         let source = tmp.path().join("source.vtt");
         fs::write(&source, "WEBVTT\n\n00:00.000 --> 00:01.000\nHello\n").unwrap();
         let victim = tmp.path().join("victim");
@@ -1438,7 +1451,7 @@ fn text_outputs_refuse_existing_directory_and_leaf_symlinks() {
 #[test]
 fn media_outputs_refuse_a_symlinked_work_directory_before_creating_outputs() {
     use std::os::unix::fs::symlink;
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let asset = tmp.path().join("asset");
     let victim = tmp.path().join("victim");
     fs::create_dir(&victim).unwrap();
@@ -1464,4 +1477,66 @@ fn media_outputs_refuse_a_symlinked_work_directory_before_creating_outputs() {
     assert!(!asset.join("cbcs").exists());
     assert!(fs::read_dir(victim).unwrap().next().is_none());
     assert_eq!(fake.events(), []);
+}
+
+#[cfg(windows)]
+use private_fixture::windows;
+#[cfg(windows)]
+#[test]
+fn text_outputs_refuse_windows_directory_junctions() {
+    let tmp = private_fixture::private_tempdir().unwrap();
+    let source = tmp.path().join("source.vtt");
+    fs::write(&source, "WEBVTT\n\n00:00.000 --> 00:01.000\nHello\n").unwrap();
+    let victim = tmp.path().join("victim");
+    fs::create_dir(&victim).unwrap();
+    let marker = victim.join("seg_0.vtt");
+    fs::write(&marker, "unchanged").unwrap();
+    let folder = tmp.path().join("asset/cbcs/t0");
+    fs::create_dir_all(folder.parent().unwrap()).unwrap();
+    windows::junction(&folder, &victim);
+    let text = track(
+        "t0",
+        "text",
+        "webvtt",
+        "wvtt",
+        vec![segment(0, &source, 1.0)],
+    );
+    assert_eq!(
+        copy_text(&text, &tmp.path().join("asset"), &Fake::default()).unwrap_err(),
+        TrackError::Media("unsafe-output-path".into())
+    );
+    assert_eq!(fs::read_to_string(marker).unwrap(), "unchanged");
+    fs::remove_dir(folder).unwrap();
+}
+#[cfg(windows)]
+#[test]
+fn media_outputs_refuse_windows_work_directory_junctions_before_outputs() {
+    let tmp = private_fixture::private_tempdir().unwrap();
+    let asset = tmp.path().join("asset");
+    let victim = tmp.path().join("victim");
+    fs::create_dir(&victim).unwrap();
+    fs::create_dir_all(asset.join("clear/package-hls")).unwrap();
+    let link = asset.join("clear/package-hls/v0");
+    windows::junction(&link, &victim);
+    let video = track("v0", "video", "fmp4", "avc1", vec![]);
+    let key = keys();
+    let signaling = signaling();
+    let pr = validate_signaling(&signaling, &key).unwrap();
+    let fake = Fake::default();
+    let job = TrackJob {
+        track: &video,
+        keys: &key,
+        signaling: &signaling,
+        pr: &pr,
+        packager_bin: "packager",
+        deps: &fake,
+    };
+    assert_eq!(
+        package_track(job, &asset, None).unwrap_err(),
+        TrackError::Media("unsafe-output-path".into())
+    );
+    assert!(!asset.join("cbcs").exists());
+    assert!(fs::read_dir(victim).unwrap().next().is_none());
+    assert_eq!(fake.events(), []);
+    fs::remove_dir(link).unwrap();
 }

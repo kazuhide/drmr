@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
-members = ["crates/drmr-core", "crates/drmr", "crates/drmr-server"]
+exclude = ["vendor/process-wrap"]
+members = ["crates/drmr-core", "crates/drmr", "crates/drmr-server", "crates/drmr-test-support"]
 
 [workspace.package]
 version = "0.1.0"
@@ -58,3 +59,6 @@ missing_errors_doc = "allow"
 missing_panics_doc = "allow"
 module_name_repetitions = "allow"
 must_use_candidate = "allow"
+
+[patch.crates-io]
+process-wrap = { path = "vendor/process-wrap" }

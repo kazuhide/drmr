@@ -29,21 +29,22 @@ fn generic_commands_explain_safe_key_inputs_and_required_reference() {
     assert!(text(&result.stderr).contains("--source"));
 }
 
-#[cfg(unix)]
 fn private_config(path: &Path, body: &str) {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::write(path, body).unwrap();
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    use std::io::Write as _;
+    drmr_core::native::create_private_dir_all(path.parent().unwrap()).unwrap();
+    drmr_core::native::create_private_or_truncate(path)
+        .unwrap()
+        .write_all(body.as_bytes())
+        .unwrap();
 }
 
-#[cfg(unix)]
 #[test]
 fn real_convert_and_verify_keep_json_machine_readable_and_keys_private() {
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("source.mp4");
     let output = dir.path().join("output.mp4");
-    let keys = dir.path().join("keys.json");
-    let verify_keys = dir.path().join("verify-keys.json");
+    let keys = dir.path().join("private/keys.json");
+    let verify_keys = dir.path().join("private/verify-keys.json");
     assert!(
         Command::new("ffmpeg")
             .args([
@@ -107,11 +108,10 @@ fn real_convert_and_verify_keep_json_machine_readable_and_keys_private() {
     assert!(!text(&result.stdout).contains("222222"));
 }
 
-#[cfg(unix)]
 #[test]
 fn invalid_key_configuration_fails_without_echoing_secrets_or_publishing_output() {
     let dir = tempfile::tempdir().unwrap();
-    let keys = dir.path().join("credential-sentinel.json");
+    let keys = dir.path().join("private/credential-sentinel.json");
     let output = dir.path().join("output.mp4");
     private_config(
         &keys,

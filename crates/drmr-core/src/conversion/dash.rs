@@ -5,7 +5,7 @@ use crate::inspection::{self, Protection, TrackKind};
 use roxmltree::{Document, Node};
 use std::collections::HashSet;
 use std::fmt::Write as _;
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File};
 use std::path::{Component, Path, PathBuf};
 
 const DASH_NS: &str = "urn:mpeg:dash:schema:mpd:2011";
@@ -68,6 +68,8 @@ fn reference(root: &Path, base: &Path, value: &str) -> Result<PathBuf, Conversio
             return Err(error("dash-resource-symlink-not-supported"));
         }
     }
+    #[cfg(windows)]
+    super::files::regular_input(&path)?;
     let canonical = path
         .canonicalize()
         .map_err(|_| error("dash-resource-unreadable"))?;
@@ -194,16 +196,7 @@ fn sequence(
 }
 
 fn private_new(path: &Path) -> Result<File, ConversionError> {
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    options
-        .open(path)
-        .map_err(|_| error("temporary-file-unavailable"))
+    super::files::create_new(path)
 }
 
 fn append(
@@ -560,7 +553,7 @@ mod tests {
             "{}",
             String::from_utf8_lossy(&result.stderr)
         );
-        let stage = tempfile::tempdir().unwrap();
+        let stage = super::super::files::Stage::new(None).unwrap();
         let tracks = snapshot_dash(&manifest, stage.path()).unwrap();
         assert_eq!(tracks.len(), 2);
         assert_eq!(
@@ -596,7 +589,7 @@ mod tests {
                 original.replacen(close, &format!("{declaration}{close}"), 1),
             )
             .unwrap();
-            let denied = tempfile::tempdir().unwrap();
+            let denied = super::super::files::Stage::new(None).unwrap();
             assert_eq!(
                 snapshot_dash(&manifest, denied.path()).unwrap_err().0,
                 "dash-presentation-metadata-not-supported"
@@ -615,7 +608,7 @@ mod tests {
             "<MPD type='static'><Period><AdaptationSet><Representation id='v'><SegmentTemplate initialization='init.mp4' media='seg_$Number$.m4s'/></Representation></AdaptationSet></Period></MPD>",
         ] {
             std::fs::write(&manifest, body).unwrap();
-            let stage = tempfile::tempdir().unwrap();
+            let stage = super::super::files::Stage::new(None).unwrap();
             let error =
                 snapshot_dash(&manifest, stage.path()).expect_err("unsupported DASH must fail");
             assert!(!format!("{error:?}").contains("sentinel"));

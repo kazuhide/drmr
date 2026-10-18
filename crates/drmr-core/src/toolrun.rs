@@ -10,7 +10,7 @@
 //! percent-encoded, as UTF-8 and UTF-16LE hex and as base64 of both. The JSON-Lines writer
 //! applies the same scrub to each serialized line as the last guard.
 //!
-//! A tool that cannot be run (spawn failure, timeout) is a [`ToolError`] naming the tool and
+//! A tool that cannot complete (spawn failure, timeout, capture limit) is a [`ToolError`] naming the tool and
 //! the kind of failure only, never the argv.
 
 use crate::canonical::python_float_repr;
@@ -22,16 +22,23 @@ use serde_json::Value;
 use std::collections::BTreeSet;
 use std::ffi::{OsStr, OsString};
 use std::fmt::{self, Write as _};
-use std::io::Read;
-use std::process::{Child, Command, ExitStatus, Stdio};
+use std::process::ExitStatus;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, PoisonError, RwLock, mpsc};
+use std::sync::{Arc, PoisonError, RwLock};
 use std::time::{Duration, Instant};
 
 /// The placeholder every scrubbed secret becomes (the same one the implementations use).
 pub const REDACTED: &str = "***REDACTED***";
 /// Default bound on each of stdout and stderr in a record, in characters.
 pub const DEFAULT_MAX_OUTPUT_CHARS: usize = 256 * 1024;
+/// Hard default capture limits, independent of log truncation. Oversized data fails.
+pub const DEFAULT_STDOUT_BYTES: usize = 16 * 1024 * 1024;
+/// Diagnostic output is bounded independently from parsed stdout.
+pub const DEFAULT_STDERR_BYTES: usize = 1024 * 1024;
+/// Maximum configurable capture per stream.
+pub const MAX_CAPTURE_BYTES: usize = 64 * 1024 * 1024;
+
+mod capture;
 /// Shorter strings would redact unrelated text; keys and IVs are 32 hex characters.
 const MIN_SECRET_CHARS: usize = 8;
 /// Between two bytes of a hex secret, as tools print them. Python's `\s` also matches
@@ -345,6 +352,10 @@ pub struct RunOptions<'a> {
     pub rendition_id: Option<&'a str>,
     /// Bound on each of stdout and stderr in the record.
     pub max_output_chars: usize,
+    /// Maximum captured stdout bytes, capped at [`MAX_CAPTURE_BYTES`]. Overflow fails.
+    pub max_stdout_bytes: usize,
+    /// Maximum captured stderr bytes, capped at [`MAX_CAPTURE_BYTES`]. Overflow fails.
+    pub max_stderr_bytes: usize,
     /// `false` keeps stdout out of the record (output consumed as data): the record notes
     /// its size only.
     pub log_stdout: bool,
@@ -359,6 +370,8 @@ impl fmt::Debug for RunOptions<'_> {
             .field("text", &self.text)
             .field("rendition_id", &self.rendition_id)
             .field("max_output_chars", &self.max_output_chars)
+            .field("max_stdout_bytes", &self.max_stdout_bytes)
+            .field("max_stderr_bytes", &self.max_stderr_bytes)
             .field("log_stdout", &self.log_stdout)
             .finish()
     }
@@ -373,6 +386,8 @@ impl Default for RunOptions<'_> {
             text: true,
             rendition_id: None,
             max_output_chars: DEFAULT_MAX_OUTPUT_CHARS,
+            max_stdout_bytes: DEFAULT_STDOUT_BYTES,
+            max_stderr_bytes: DEFAULT_STDERR_BYTES,
             log_stdout: true,
         }
     }
@@ -452,7 +467,7 @@ impl ToolRunner {
         self.sink
             .emit(&self.command_record(&base, options.argv_redacted.unwrap_or(argv), &extra));
         let start = Instant::now();
-        match execute(argv, options.timeout, self.path.as_deref()) {
+        match capture::execute(argv, options, self.path.as_deref()) {
             Ok(completed) => {
                 let record = self.output_record(
                     &base,
@@ -693,121 +708,6 @@ fn seconds_text(limit: Duration) -> String {
     } else {
         python_float_repr(limit.as_secs_f64())
     }
-}
-
-fn execute(
-    argv: &[String],
-    timeout: Option<Duration>,
-    path: Option<&OsStr>,
-) -> Result<Completed, Failure> {
-    let Some((program, arguments)) = argv.split_first() else {
-        return Err(Failure {
-            kind: "unavailable",
-            text: "could not run: empty command".to_string(),
-        });
-    };
-    let mut command = Command::new(program);
-    if let Some(path) = path {
-        // A bare program name is then looked up on this PATH (execvp over the child's
-        // environment), as Python's subprocess looks it up on the modified os.environ.
-        command.env("PATH", path);
-    }
-    let mut child = command
-        .args(arguments)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| Failure {
-            kind: "unavailable",
-            text: format!("could not run: {error}"),
-        })?;
-    let stdout = child.stdout.take().expect("stdout is piped");
-    let stderr = child.stderr.take().expect("stderr is piped");
-    let deadline = timeout.map(|limit| Instant::now() + limit);
-    // The readers hand their bytes over channels: a pipe can stay open after the child exits
-    // (a grandchild inherited it), and like Python's `communicate(timeout)` the call gives up
-    // on it at the deadline. A reader that outlives the deadline ends when its pipe closes.
-    let (out_tx, out_rx) = mpsc::channel();
-    let (err_tx, err_rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let _ = out_tx.send(read_all(stdout));
-    });
-    std::thread::spawn(move || {
-        let _ = err_tx.send(read_all(stderr));
-    });
-    let status = match wait_until(&mut child, deadline) {
-        Ok(Some(status)) => status,
-        Ok(None) => return Err(gave_up(timeout)),
-        Err(error) => {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(Failure {
-                kind: "unavailable",
-                text: format!("could not run: {error}"),
-            });
-        }
-    };
-    let (Some(stdout), Some(stderr)) =
-        (recv_until(&out_rx, deadline), recv_until(&err_rx, deadline))
-    else {
-        return Err(gave_up(timeout));
-    };
-    Ok(Completed {
-        returncode: exit_code(status),
-        stdout,
-        stderr,
-    })
-}
-
-/// Giving up on the child: the timeout when one was set. With no deadline, a reader that
-/// ended without its bytes (its thread panicked) is not a timeout but an unavailable tool.
-fn gave_up(timeout: Option<Duration>) -> Failure {
-    match timeout {
-        Some(limit) => Failure {
-            kind: "timeout",
-            text: format!("timed out after {}s", seconds_text(limit)),
-        },
-        None => Failure {
-            kind: "unavailable",
-            text: "could not read the output".to_string(),
-        },
-    }
-}
-
-/// The child's exit status, or `None` once `deadline` passed first: the child is then killed
-/// and reaped. An error from the wait also kills and reaps it (the caller).
-fn wait_until(child: &mut Child, deadline: Option<Instant>) -> std::io::Result<Option<ExitStatus>> {
-    let Some(deadline) = deadline else {
-        return child.wait().map(Some);
-    };
-    loop {
-        if let Some(status) = child.try_wait()? {
-            return Ok(Some(status));
-        }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Ok(None);
-        }
-        std::thread::sleep(Duration::from_millis(5));
-    }
-}
-
-/// A reader's bytes, or `None` when `deadline` passed before its pipe closed.
-fn recv_until(rx: &mpsc::Receiver<Vec<u8>>, deadline: Option<Instant>) -> Option<Vec<u8>> {
-    match deadline {
-        None => rx.recv().ok(),
-        Some(deadline) => rx
-            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-            .ok(),
-    }
-}
-
-fn read_all(mut reader: impl Read) -> Vec<u8> {
-    let mut buffer = Vec::new();
-    let _ = reader.read_to_end(&mut buffer);
-    buffer
 }
 
 #[cfg(unix)]

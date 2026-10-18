@@ -45,15 +45,15 @@ impl Default for Entry<'_> {
 
 fn stage(catalog_root: &Path, dir_name: &str, entry: Entry<'_>) -> PathBuf {
     let dir = catalog_root.join(dir_name);
-    std::fs::create_dir_all(&dir).unwrap();
+    drmr_core::native::create_private_dir_all(&dir).unwrap();
     if entry.omit != Some("mpd") {
         let path = dir.join(entry.mpd_rel);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        drmr_core::native::create_private_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, "<MPD/>").unwrap();
     }
     if entry.omit != Some("hls") {
         let path = dir.join(entry.hls_rel);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        drmr_core::native::create_private_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, "#EXTM3U\n").unwrap();
     }
     if entry.omit != Some("keys") {
@@ -66,7 +66,7 @@ fn stage(catalog_root: &Path, dir_name: &str, entry: Entry<'_>) -> PathBuf {
             },
             str::to_string,
         );
-        std::fs::write(dir.join(entry.keys_file), text).unwrap();
+        support::write_private(&dir.join(entry.keys_file), text).unwrap();
     }
     if entry.omit != Some("asset.json") {
         let descriptor = entry.descriptor.unwrap_or_else(|| {
@@ -107,7 +107,7 @@ fn skips(root: &Path) -> Vec<(PathBuf, String)> {
 fn temp() -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     let root = std::fs::canonicalize(dir.path()).unwrap().join("catalog");
-    std::fs::create_dir_all(&root).unwrap();
+    drmr_core::native::create_private_dir_all(&root).unwrap();
     (dir, root)
 }
 
@@ -168,8 +168,16 @@ fn discover_rejects_keys_in_served_download_tree() {
         let mut descriptor: Value =
             serde_json::from_slice(&std::fs::read(entry.join("asset.json")).unwrap()).unwrap();
         if through_symlink {
-            std::os::unix::fs::symlink(&keys, entry.join("keys.env")).unwrap();
-            descriptor["keys_file"] = json!("keys.env");
+            #[cfg(unix)]
+            {
+                support::file_link(&keys, &entry.join("keys.env"));
+                descriptor["keys_file"] = json!("keys.env");
+            }
+            #[cfg(windows)]
+            {
+                support::directory_link(&entry.join("download"), &entry.join("linked-download"));
+                descriptor["keys_file"] = json!("linked-download/secret.env");
+            }
         } else {
             descriptor["keys_file"] = json!("download/secret.env");
         }
@@ -353,7 +361,7 @@ fn entry_dir_of_a_symlinked_entry_is_the_real_directory() {
     let (dir, root) = temp();
     let real = std::fs::canonicalize(dir.path()).unwrap().join("elsewhere");
     stage(&real, "real-dir", id("linked-asset"));
-    std::os::unix::fs::symlink(real.join("real-dir"), root.join("link")).unwrap();
+    support::directory_link(&real.join("real-dir"), &root.join("link"));
     let entries = discover(&root);
     assert_eq!(entries[0].entry_dir, real.join("real-dir"));
     assert!(entries[0].mpd_path.starts_with(&entries[0].entry_dir));
@@ -516,13 +524,12 @@ fn on_skip_reports_an_escaping_reference_by_field() {
         },
     );
     let skipped = skips(&root);
-    assert!(
-        skipped[0]
-            .1
-            .contains("keys_file: path escapes the entry directory"),
-        "{}",
-        skipped[0].1
-    );
+    let expected = if cfg!(windows) {
+        "keys_file: invalid relative path"
+    } else {
+        "keys_file: path escapes the entry directory"
+    };
+    assert!(skipped[0].1.contains(expected), "{}", skipped[0].1);
 }
 
 #[test]
@@ -639,7 +646,6 @@ fn keys_file_that_is_not_utf8_is_skipped_and_its_bytes_are_never_echoed() {
 
 #[test]
 fn unreadable_keys_file_is_skipped_never_raised() {
-    use std::os::unix::fs::PermissionsExt;
     if support::is_root() {
         return; // a permission denial is not enforced for root
     }
@@ -647,16 +653,28 @@ fn unreadable_keys_file_is_skipped_never_raised() {
     stage(&root, "good", id("good-asset"));
     let locked = stage(&root, "locked", id("locked-asset"));
     let keys = locked.join("keys.env");
-    std::fs::set_permissions(&keys, std::fs::Permissions::from_mode(0o000)).unwrap();
+    support::set_mode(&keys, 0o000);
     let skipped = skips(&root);
     let entries = discover(&root);
-    std::fs::set_permissions(&keys, std::fs::Permissions::from_mode(0o600)).unwrap();
+    support::set_mode(&keys, 0o600);
     assert_eq!(ids(&entries), ["good-asset"]);
     let [(dir, reason)] = skipped.as_slice() else {
         panic!("{skipped:?}")
     };
     assert_eq!(dir.file_name().unwrap(), "locked");
     assert!(reason.contains("keys.env") && !reason.contains(KEY));
+}
+
+#[test]
+fn a_keys_file_with_an_additional_link_is_not_admitted() {
+    let (_dir, root) = temp();
+    stage(&root, "good", id("good-asset"));
+    let rejected = stage(&root, "linked", id("linked-asset"));
+    let keys = rejected.join("keys.env");
+    let before = std::fs::read(&keys).unwrap();
+    std::fs::hard_link(&keys, root.parent().unwrap().join("key-alias")).unwrap();
+    assert_eq!(ids(&discover(&root)), ["good-asset"]);
+    assert_eq!(std::fs::read(keys).unwrap(), before);
 }
 
 fn sample_entry() -> CatalogEntry {

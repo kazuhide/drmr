@@ -1,6 +1,12 @@
 //! Catalog command parsing, exit codes, readable summaries, and scrubbed JSON Lines.
 //! The pipeline dependencies are fakes and all keys are synthetic.
-#![cfg(unix)]
+
+#[path = "common/mod.rs"]
+mod private_fixture;
+
+#[path = "support/paths.rs"]
+mod paths;
+use paths::portable_path;
 
 mod pipeline_fakes;
 
@@ -17,7 +23,7 @@ use std::time::{Duration, Instant};
 
 /// One CLI process: the fakes, a scratch directory, and `main(argv)`.
 struct Cli {
-    dir: tempfile::TempDir,
+    dir: private_fixture::PrivateTempDir,
     config: FakeConfig,
     playready: FakePlayReady,
     fakes: Fakes,
@@ -32,7 +38,7 @@ struct Ran {
 impl Cli {
     fn new() -> Cli {
         Cli {
-            dir: tempfile::tempdir().unwrap(),
+            dir: private_fixture::private_tempdir().unwrap(),
             config: FakeConfig::default(),
             playready: FakePlayReady::default(),
             fakes: Fakes::new(),
@@ -279,7 +285,13 @@ fn plan_missing_mpd_is_usage_error() {
     let ran = cli.main(&["plan", "--mpd", &missing], &Env::new());
 
     assert_eq!(ran.code, EXIT_USAGE_ERROR);
-    assert_eq!(ran.stderr, format!("error: --mpd not found: {missing}\n"));
+    assert_eq!(
+        ran.stderr,
+        format!(
+            "error: --mpd not found: {}\n",
+            portable_path(Path::new(&missing))
+        )
+    );
     assert_eq!(ran.stdout, "");
 }
 
@@ -373,7 +385,10 @@ fn run_missing_hls_master_file_is_usage_error() {
     assert_eq!(ran.code, EXIT_USAGE_ERROR);
     assert_eq!(
         ran.stderr,
-        format!("error: --hls-master not found: {missing}\n")
+        format!(
+            "error: --hls-master not found: {}\n",
+            portable_path(Path::new(&missing))
+        )
     );
 }
 
@@ -752,9 +767,11 @@ fn run_packager_bin_file_must_be_named_packager() {
     assert_eq!(
         ran.stderr,
         format!(
-            "error: --packager-bin must be a directory containing 'packager', or a file named \
-             'packager' (got {})\n",
-            wrong.display()
+            "error: --packager-bin must be a directory containing 'packager{}', or a file named \
+             'packager{}' (got {})\n",
+            std::env::consts::EXE_SUFFIX,
+            std::env::consts::EXE_SUFFIX,
+            portable_path(&wrong)
         )
     );
 }
@@ -957,18 +974,17 @@ fn run_log_format_jsonl_scrubs_tool_output_in_every_encoding() {
         format!("[{}]", pairs.join(" "))
     };
     let key_b64 = base64::engine::general_purpose::STANDARD.encode(hex::decode(KEY).unwrap());
-    let stub = write_executable(
-        &cli.root().join("mp4dump"),
-        &format!(
-            "#!/bin/sh\nprintf '%s\\n' '[{{\"name\": \"moov\", \"children\": [{{\"name\": \"tenc\", \
-             \"version\": 1, \"default_isProtected\": 1, \"default_Per_Sample_IV_Size\": 0, \
-             \"default_KID\": \"{}\", \"default_constant_IV_size\": 16, \"default_constant_IV\": \
-             \"{}\"}}]}}]'\nprintf '%s\\n' 'key {key_b64} {}' >&2\n",
-            bracketed(KID),
-            bracketed(IV),
-            KEY.to_uppercase()
-        ),
+    let stdout = format!(
+        "[{{\"name\":\"moov\",\"children\":[{{\"name\":\"tenc\",\"version\":1,\"default_isProtected\":1,\"default_Per_Sample_IV_Size\":0,\"default_KID\":\"{}\",\"default_constant_IV_size\":16,\"default_constant_IV\":\"{}\"}}]}}]\n",
+        bracketed(KID),
+        bracketed(IV)
     );
+    let spec = drmr_test_support::ToolSpec {
+        stdout: stdout.into_bytes(),
+        stderr: format!("key {key_b64} {}\n", KEY.to_uppercase()).into_bytes(),
+        ..Default::default()
+    };
+    let stub = drmr_test_support::install(&cli.root().join("mp4dump"), &spec).unwrap();
     cli.fakes.media.tenc_iv = Box::new(move |runner, path| mp4dump_tenc_iv(runner, &stub, path));
     let mpd = cli.asset_mpd();
 

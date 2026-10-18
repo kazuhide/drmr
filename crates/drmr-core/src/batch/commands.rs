@@ -7,7 +7,9 @@ use super::{
     AssetRunner, AssetWorkItem, AttemptError, BatchConfig, BatchError, HlsSource, TRANSIENT_SOURCE,
     read_head, read_tail,
 };
-use crate::batch_support::{is_relative_to, py_bytes_splitlines, resolve};
+#[cfg(unix)]
+use crate::batch_support::is_relative_to;
+use crate::batch_support::{py_bytes_splitlines, resolve};
 use crate::config::KeyMaterial;
 use crate::hls_cli::private_json;
 use serde_json::{Map, Value};
@@ -43,17 +45,39 @@ impl CliCommand {
 /// `_private_config`: an operator-owned mode-0600 JSON object outside the output root; every
 /// failure is `hls-config-invalid`.
 pub fn private_config(path: &Path, output_root: &Path) -> Result<Map<String, Value>, AttemptError> {
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     let invalid = || AttemptError::Batch(BatchError::new("hls-config-invalid"));
-    let path = resolve(path);
-    if is_relative_to(&path, &resolve(output_root)) {
+    let resolved = resolve(path).map_err(|_| invalid())?;
+    #[cfg(unix)]
+    let overlaps = is_relative_to(&resolved, &resolve(output_root).map_err(|_| invalid())?);
+    #[cfg(windows)]
+    let overlaps = super::local_path_is_within(&resolved, output_root).map_err(|_| invalid())?;
+    if overlaps {
         return Err(invalid());
     }
-    let metadata = std::fs::metadata(&path).map_err(|_| invalid())?;
-    if metadata.permissions().mode() & 0o777 != 0o600 {
-        return Err(invalid());
+    #[cfg(unix)]
+    let path = resolved.as_path();
+    #[cfg(unix)]
+    {
+        let metadata = std::fs::metadata(path).map_err(|_| invalid())?;
+        if metadata.permissions().mode() & 0o777 != 0o600 {
+            return Err(invalid());
+        }
     }
-    private_json(&path).map_err(|_| invalid())
+    private_json(path).map_err(|_| invalid())
+}
+
+/// Retain the native spelling for private acquisition so aliases remain visible.
+pub(super) fn config_path(path: &Path) -> std::io::Result<std::path::PathBuf> {
+    #[cfg(unix)]
+    {
+        resolve(path)
+    }
+    #[cfg(windows)]
+    {
+        std::path::absolute(path)
+    }
 }
 
 /// Locate the current executable for per-asset commands.
@@ -113,7 +137,8 @@ fn clear_commands(
     source: &dyn HlsSource,
 ) -> Result<Vec<CliCommand>, AttemptError> {
     let invalid = || AttemptError::Batch(BatchError::new("hls-config-invalid"));
-    let directory = resolve(config.hls_config_dir.as_deref().ok_or_else(invalid)?);
+    let directory = config_path(config.hls_config_dir.as_deref().ok_or_else(invalid)?)
+        .map_err(|_| invalid())?;
     let settings = private_config(
         &directory.join(format!("{}.json", work.asset_id)),
         &config.output_root,
@@ -130,7 +155,7 @@ fn clear_commands(
     let mut files: Vec<(String, OsString)> = Vec::new();
     for (name, value) in &settings {
         let value = value.as_str().ok_or_else(invalid)?;
-        let file = resolve(&directory.join(value));
+        let file = config_path(&directory.join(value)).map_err(|_| invalid())?;
         private_config(&file, &config.output_root)?;
         files.push((name.clone(), file.into_os_string()));
     }
@@ -191,15 +216,6 @@ fn clear_commands(
     Ok(vec![analyze, package])
 }
 
-/// Whether this process is an asset worker (`_IN_ASSET_WORKER`): its children stay in its
-/// process group, which the supervisor kills as a whole, and the supervisor owns the deadline.
-pub(crate) static IN_ASSET_WORKER: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-
-fn in_worker() -> bool {
-    IN_ASSET_WORKER.load(std::sync::atomic::Ordering::SeqCst)
-}
-
 /// `_run_commands`: run each command with the key material in its environment (`DRM_KID`,
 /// `DRM_KEY`, `DRM_IV`; never on its argv), stdout and stderr to private temporary files, and
 /// stop at the first non-zero exit. Outside a worker each child gets its own process group and
@@ -212,12 +228,28 @@ pub fn run_commands(
     keys: Option<&KeyMaterial>,
     on_heartbeat: &dyn Fn(),
 ) -> Result<i32, AttemptError> {
+    run_commands_with_cleanup(
+        commands,
+        config,
+        keys,
+        on_heartbeat,
+        crate::native::ManagedChild::finish,
+    )
+}
+
+pub(super) fn run_commands_with_cleanup(
+    commands: &[CliCommand],
+    config: &BatchConfig,
+    keys: Option<&KeyMaterial>,
+    on_heartbeat: &dyn Fn(),
+    mut cleanup: impl FnMut(&mut crate::native::ManagedChild) -> std::io::Result<()>,
+) -> Result<i32, AttemptError> {
     let start = Instant::now();
     let deadline = after(start, config.retry.per_asset_timeout_s);
     let mut next_heartbeat = after(start, config.retry.heartbeat_s);
     for command in commands {
-        let mut records = tempfile::tempfile().map_err(|_| AttemptError::Other)?;
-        let mut errors = tempfile::tempfile().map_err(|_| AttemptError::Other)?;
+        let mut records = crate::native::private_tempfile().map_err(|_| AttemptError::Other)?;
+        let mut errors = crate::native::private_tempfile().map_err(|_| AttemptError::Other)?;
         let (program, arguments) = command.argv.split_first().ok_or(AttemptError::Other)?;
         let mut child_command = Command::new(program);
         child_command
@@ -231,19 +263,21 @@ pub fn run_commands(
                 .env("DRM_KEY", keys.key_hex())
                 .env("DRM_IV", keys.iv_hex());
         }
-        if !in_worker() {
-            std::os::unix::process::CommandExt::process_group(&mut child_command, 0);
-        }
-        let mut child = ChildGuard(Some(
-            child_command.spawn().map_err(|_| AttemptError::Other)?,
-        ));
+        let mut child =
+            crate::native::ManagedChild::spawn(child_command, !crate::native::in_asset_worker())
+                .map_err(|_| AttemptError::Other)?;
         let status = loop {
-            if let Some(status) = child.try_wait()? {
-                break status;
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) => {}
+                Err(_) => {
+                    cleanup(&mut child).map_err(|_| BatchError::new("cleanup-unconfirmed"))?;
+                    return Err(AttemptError::Other);
+                }
             }
             let now = Instant::now();
-            if !in_worker() && now >= deadline {
-                child.kill();
+            if !crate::native::in_asset_worker() && now >= deadline {
+                cleanup(&mut child).map_err(|_| BatchError::new("cleanup-unconfirmed"))?;
                 return Err(AttemptError::Retry("asset-timeout".to_string()));
             }
             if now >= next_heartbeat {
@@ -255,6 +289,7 @@ pub fn run_commands(
                 remaining.clamp(Duration::from_millis(1), Duration::from_millis(50)),
             );
         };
+        cleanup(&mut child).map_err(|_| BatchError::new("cleanup-unconfirmed"))?;
         let code = exit_code(status);
         if code != 0 {
             if command.subcommand == "analyze-hls" && transient_analysis(&mut records) {
@@ -296,54 +331,20 @@ fn transient_analysis(records: &mut std::fs::File) -> bool {
     })
 }
 
-/// A running child that is killed (its whole process group outside a worker) and reaped if it
-/// is still running when dropped (Python's `finally` around the poll loop).
-struct ChildGuard(Option<std::process::Child>);
-
-impl ChildGuard {
-    fn try_wait(&mut self) -> Result<Option<ExitStatus>, AttemptError> {
-        let Some(child) = self.0.as_mut() else {
-            return Err(AttemptError::Other);
-        };
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                self.0 = None;
-                Ok(Some(status))
-            }
-            Ok(None) => Ok(None),
-            Err(_) => Err(AttemptError::Other),
-        }
-    }
-
-    fn kill(&mut self) {
-        let Some(mut child) = self.0.take() else {
-            return;
-        };
-        if in_worker() {
-            let _ = child.kill();
-        } else {
-            let _ = rustix::process::kill_process_group(
-                rustix::process::Pid::from_child(&child),
-                rustix::process::Signal::KILL,
-            );
-        }
-        let _ = child.wait();
-    }
-}
-
-impl Drop for ChildGuard {
-    fn drop(&mut self) {
-        self.kill();
-    }
-}
-
 /// The exit code as `Popen.returncode` reports it: the code, or minus the signal number.
 pub(crate) fn exit_code(status: ExitStatus) -> i32 {
-    use std::os::unix::process::ExitStatusExt;
-    status
-        .code()
-        .or_else(|| status.signal().map(|number| -number))
-        .unwrap_or(-1)
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        status
+            .code()
+            .or_else(|| status.signal().map(|number| -number))
+            .unwrap_or(-1)
+    }
+    #[cfg(windows)]
+    {
+        status.code().unwrap_or(-1)
+    }
 }
 
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {

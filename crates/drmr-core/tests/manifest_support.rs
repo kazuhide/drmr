@@ -215,6 +215,7 @@ fn os_errors_print_like_python() {
     };
     assert_eq!(*kind, std::io::ErrorKind::NotFound);
     assert_eq!(*errno, Some(2));
+    #[cfg(unix)]
     assert_eq!(
         message,
         &format!(
@@ -222,6 +223,20 @@ fn os_errors_print_like_python() {
             repr_str(missing.to_str().unwrap())
         )
     );
+    #[cfg(windows)]
+    {
+        let native = std::fs::read(&missing).unwrap_err();
+        assert_eq!(native.kind(), std::io::ErrorKind::NotFound);
+        let native = native.to_string();
+        let detail = native.strip_suffix(" (os error 2)").unwrap();
+        assert_eq!(
+            message,
+            &format!(
+                "[Errno 2] {detail}: {}",
+                repr_str(missing.to_str().unwrap())
+            )
+        );
+    }
 }
 
 #[test]
@@ -252,11 +267,43 @@ fn relpath_relative_to_and_resolve_follow_posixpath() {
     );
     // `resolve` follows a symbolic link, then applies `..` (realpath order), and keeps a
     // missing tail as written.
-    std::fs::create_dir_all(dir.path().join("real/inner")).unwrap();
-    std::os::unix::fs::symlink(dir.path().join("real/inner"), dir.path().join("link")).unwrap();
-    let through = path::resolve(&dir.path().join("link/../missing/x")).unwrap();
-    assert_eq!(through, root.join("real/missing/x"));
+    #[cfg(unix)]
+    {
+        std::fs::create_dir_all(dir.path().join("real/inner")).unwrap();
+        std::os::unix::fs::symlink(dir.path().join("real/inner"), dir.path().join("link")).unwrap();
+        let through = path::resolve(&dir.path().join("link/../missing/x")).unwrap();
+        assert_eq!(through, root.join("real/missing/x"));
+    }
     assert_eq!(path::normpath("//a//b/../c/."), "//a/c");
     assert_eq!(path::normpath("///a/../.."), "/");
     assert_eq!(path::normpath("a/../../b"), "../b");
+}
+
+#[cfg(windows)]
+#[path = "common/windows.rs"]
+mod windows;
+#[cfg(windows)]
+#[test]
+fn manifest_resolution_uses_native_windows_drives_and_junctions() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let actual = root.join("real/inner");
+    std::fs::create_dir_all(&actual).unwrap();
+    let link = root.join("junction");
+    windows::junction(&link, &root.join("real"));
+    assert_eq!(
+        path::resolve(&link.join("inner")).unwrap(),
+        actual.canonicalize().unwrap()
+    );
+    assert_eq!(
+        path::resolve(&link.join("missing/file.m4s")).unwrap(),
+        root.join("real/missing/file.m4s")
+    );
+    assert_eq!(
+        path::resolve(&root.join("real/inner/../future")).unwrap(),
+        root.join("real/future")
+    );
+    std::fs::write(actual.join("regular"), b"x").unwrap();
+    assert!(path::resolve(&actual.join("regular/child")).is_err());
+    std::fs::remove_dir(link).unwrap();
 }

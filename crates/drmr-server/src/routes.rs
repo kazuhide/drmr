@@ -259,6 +259,8 @@ fn resolve_within_root(rel: &str, root: &Path) -> Result<PathBuf, RouteError> {
     if rel.is_empty() || Path::new(rel).is_absolute() {
         return Err(RouteError::NotFound);
     }
+    #[cfg(windows)]
+    drmr_core::native::validate_windows_relative_path(rel).map_err(|_| RouteError::NotFound)?;
     let root = pyutil::resolve(root).map_err(|_| RouteError::Internal)?;
     let candidate = pyutil::resolve(&root.join(rel)).map_err(|_| RouteError::Internal)?;
     if !pyutil::strictly_under(&candidate, &root) || !pyutil::is_file(&candidate) {
@@ -295,7 +297,14 @@ fn local_manifest_rel(output_root: &Path, asset_id: &str) -> Result<Option<Strin
     matches.sort();
     Ok(matches
         .first()
-        .and_then(|first| first.strip_prefix(&root).ok().map(pyutil::path_text)))
+        .and_then(|first| first.strip_prefix(&root).ok())
+        .map(|relative| {
+            relative
+                .iter()
+                .map(|part| part.to_string_lossy())
+                .collect::<Vec<_>>()
+                .join("/")
+        }))
 }
 
 // ------------------------------------------------------------------------------------------

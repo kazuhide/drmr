@@ -320,7 +320,16 @@ fn require_safe_path_component<'a>(
     field_name: &str,
     mpd_path: &Path,
 ) -> Result<&'a str, ConfigError> {
-    if value.is_empty() || value == "." || value == ".." || value.contains(['/', '\\', '\0']) {
+    #[cfg(windows)]
+    let unsafe_native = crate::native::validate_windows_relative_path(value).is_err();
+    #[cfg(unix)]
+    let unsafe_native = false;
+    if unsafe_native
+        || value.is_empty()
+        || value == "."
+        || value == ".."
+        || value.contains(['/', '\\', '\0'])
+    {
         return Err(ConfigError::Value(format!(
             "{}: unsafe value for {field_name}: {}",
             path_str(mpd_path),
@@ -338,6 +347,9 @@ fn require_safe_relative_path(
     field_name: &str,
     mpd_path: &Path,
 ) -> Result<PathBuf, ConfigError> {
+    #[cfg(windows)]
+    crate::native::validate_windows_relative_path(&value.to_string())
+        .map_err(|_| ConfigError::Value("unsafe native media path".to_string()))?;
     if value.is_absolute() {
         return Err(ConfigError::Value(format!(
             "{}: {field_name} must not be absolute: {}",

@@ -9,7 +9,7 @@ use crate::{
 };
 use std::{
     fmt::Write as _,
-    fs::{self, File, OpenOptions},
+    fs::{self, File},
     io::{Read, Write},
     path::{Component, Path, PathBuf},
 };
@@ -43,16 +43,7 @@ pub(super) fn attributes(value: &str) -> Result<crate::m3u8::Attributes, Convers
     parse_attributes(value).map_err(|_| ConversionError("hls-invalid-attributes"))
 }
 fn private_new(path: &Path) -> Result<File, ConversionError> {
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        options.mode(0o600);
-    }
-    options
-        .open(path)
-        .map_err(|_| ConversionError("temporary-file-unavailable"))
+    super::files::create_new(path)
 }
 pub(super) fn local_resource(root: &Path, uri: &str) -> Result<PathBuf, ConversionError> {
     if uri.is_empty()
@@ -79,6 +70,8 @@ pub(super) fn local_resource(root: &Path, uri: &str) -> Result<PathBuf, Conversi
         return Err(ConversionError("hls-resource-not-confined-local"));
     }
     let path = root.join(decoded);
+    #[cfg(windows)]
+    super::files::regular_input(&path)?;
     if fs::symlink_metadata(&path)
         .map_err(|_| ConversionError("hls-resource-unreadable"))?
         .file_type()
@@ -413,7 +406,7 @@ pub(super) fn localize(
     let root = parent
         .canonicalize()
         .map_err(|_| ConversionError("input-unreadable"))?;
-    let bytes = inspection::read_manifest(path)
+    let bytes = super::files::read_manifest(path)
         .map_err(|_| ConversionError("hls-manifest-unreadable-or-too-large"))?;
     let text = std::str::from_utf8(&bytes).map_err(|_| ConversionError("hls-invalid-utf8"))?;
     let mut lines = text
@@ -475,19 +468,18 @@ impl Converter {
             None,
         )?;
         let clear_hls = workspace.path().join("clear-hls");
-        fs::create_dir(&clear_hls).map_err(|_| ConversionError("temporary-file-unavailable"))?;
+        super::files::create_dir(&clear_hls)
+            .map_err(|_| ConversionError("temporary-file-unavailable"))?;
         self.backend.package_hls(&clear, &clear_hls)?;
-        let staged = tempfile::Builder::new()
-            .prefix(".drmr-hls-")
-            .tempdir_in(
-                destination
-                    .parent()
-                    .ok_or(ConversionError("output-parent-unavailable"))?,
-            )
-            .map_err(|_| ConversionError("output-staging-failed"))?;
+        let staged = super::files::Stage::new(Some(
+            destination
+                .parent()
+                .ok_or(ConversionError("output-parent-unavailable"))?,
+        ))?;
         encrypt_presentation(&clear_hls, staged.path(), output_key)?;
         let verify_stage = workspace.path().join("verify");
-        fs::create_dir(&verify_stage).map_err(|_| ConversionError("temporary-file-unavailable"))?;
+        super::files::create_dir(&verify_stage)
+            .map_err(|_| ConversionError("temporary-file-unavailable"))?;
         let verification_keys = HlsInputKeys::new(vec![(
             output_key.key_uri().into(),
             Aes128Key::from_hex(&hex::encode(output_key.key.0.as_ref()))?,
@@ -512,7 +504,6 @@ impl Converter {
         let output_report = inspection::inspect(&staged.path().join("media.m3u8"))
             .map_err(|_| ConversionError("hls-inspection-failed"))?;
         publish_directory(staged.path(), &destination)?;
-        let _ = staged.keep();
         Ok(ConversionReport {
             schema_version: 1,
             input: input_report,
@@ -643,23 +634,7 @@ pub(super) fn encrypt_media(
     Ok(())
 }
 pub(super) fn publish_directory(source: &Path, destination: &Path) -> Result<(), ConversionError> {
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    {
-        rustix::fs::renameat_with(
-            rustix::fs::CWD,
-            source,
-            rustix::fs::CWD,
-            destination,
-            rustix::fs::RenameFlags::NOREPLACE,
-        )
-        .map_err(|_| ConversionError("output-exists-or-publish-failed"))?;
-        Ok(())
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    {
-        let _ = (source, destination);
-        Err(ConversionError("private-files-not-supported-on-platform"))
-    }
+    super::files::publish_directory(source, destination)
 }
 
 fn charge_snapshot(file: &File, total: &mut u64, limit: u64) -> Result<(), ConversionError> {
@@ -698,7 +673,7 @@ mod resource_tests {
 
     #[test]
     fn encoded_resource_paths_are_decoded_once_before_confinement() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = super::super::files::Stage::new(None).unwrap();
         let root = directory.path().canonicalize().unwrap();
         fs::write(root.join("seg one.m4s"), b"the URI target").unwrap();
         fs::write(root.join("seg%20one.m4s"), b"a different resource").unwrap();
@@ -717,7 +692,7 @@ mod resource_tests {
 
     #[test]
     fn actual_snapshot_size_is_charged_after_the_original_grows() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = super::super::files::Stage::new(None).unwrap();
         let original = directory.path().join("original");
         let snapshot = directory.path().join("snapshot");
         fs::write(&original, b"a").unwrap();

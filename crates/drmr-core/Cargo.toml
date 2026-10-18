@@ -47,8 +47,20 @@ name = "storage_env"
 harness = false
 
 [dev-dependencies]
+drmr-test-support = { path = "../drmr-test-support" }
 rcgen.workspace = true
 tempfile.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+fs4 = { version = "=1.1.0", default-features = false, features = ["sync"] }
+private-fs = "=0.2.1"
+same-file = "=1.0.6"
+process-wrap = { version = "=10.0.1", default-features = false, features = ["std", "job-object", "creation-flags"] }
+win32job = "=2.0.3"
+url = "=2.5.8"
+
+windows-permissions = "=0.2.4"
+winsafe = { version = "=0.0.29", default-features = false, features = ["kernel"] }
 
 [lints]
 workspace = true

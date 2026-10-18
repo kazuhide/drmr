@@ -1,5 +1,4 @@
 //! Batch configuration adapters and `CPython`-compatible string and URL semantics.
-#![cfg(unix)] // the modules under test exist on unix only (open decision #23)
 
 use drmr_core::batch::{AttemptError, HlsSource};
 use drmr_core::batch_support::{
@@ -12,6 +11,7 @@ use drmr_core::hls_cli::private_json;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::ffi::OsStr;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
@@ -101,7 +101,16 @@ fn unquote_and_quote_match_python() {
         assert_eq!(quote_from_bytes(&bytes, b"/"), text(&row[1]));
     }
     for row in rows(&oracle, "as_uri") {
-        assert_eq!(as_uri(Path::new(text(&row[0]))), text(&row[1]));
+        // POSIX URI encoding remains a text contract on every platform.
+        assert_eq!(
+            format!(
+                "file://{}",
+                quote_from_bytes(text(&row[0]).as_bytes(), b"/")
+            ),
+            text(&row[1])
+        );
+        #[cfg(unix)]
+        assert_eq!(as_uri(Path::new(text(&row[0]))).unwrap(), text(&row[1]));
     }
 }
 
@@ -164,6 +173,11 @@ fn fromhex_int_float_and_pathlib_match_python() {
     }
     for row in rows(&oracle, "pathlib") {
         assert_eq!(
+            drmr_core::pycompat::PurePosixPath::new(text(&row[0])).to_string(),
+            text(&row[1])
+        );
+        #[cfg(unix)]
+        assert_eq!(
             py_path(OsStr::new(text(&row[0]))),
             Path::new(text(&row[1])),
             "Path({:?})",
@@ -208,25 +222,35 @@ fn truthiness_is_python_s() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn resolve_follows_links_of_existing_components_and_keeps_the_rest() {
     let temp = tempfile::tempdir().unwrap();
     let root = std::fs::canonicalize(temp.path()).unwrap();
     std::fs::create_dir_all(root.join("real/inner")).unwrap();
     std::os::unix::fs::symlink(root.join("real"), root.join("alias")).unwrap();
-    assert_eq!(resolve(&root.join("alias/inner")), root.join("real/inner"));
     assert_eq!(
-        resolve(&root.join("alias/missing/x")),
+        resolve(&root.join("alias/inner")).unwrap(),
+        root.join("real/inner")
+    );
+    assert_eq!(
+        resolve(&root.join("alias/missing/x")).unwrap(),
         root.join("real/missing/x")
     );
-    assert_eq!(resolve(&root.join("alias/../real")), root.join("real"));
-    assert_eq!(resolve(&root.join("missing/../real")), root.join("real"));
+    assert_eq!(
+        resolve(&root.join("alias/../real")).unwrap(),
+        root.join("real")
+    );
+    assert_eq!(
+        resolve(&root.join("missing/../real")).unwrap(),
+        root.join("real")
+    );
     std::os::unix::fs::symlink("loop", root.join("loop")).unwrap();
     // A loop resolves to the link itself plus the rest (realpath, non-strict).
-    assert_eq!(resolve(&root.join("loop/x")), root.join("loop/x"));
+    assert_eq!(resolve(&root.join("loop/x")).unwrap(), root.join("loop/x"));
     assert!(is_relative_to(&root.join("real/inner"), &root.join("real")));
     assert!(!is_relative_to(&root.join("realm"), &root.join("real")));
-    assert!(resolve(Path::new("relative")).is_absolute());
+    assert!(resolve(Path::new("relative")).unwrap().is_absolute());
 }
 
 #[test]
@@ -258,6 +282,7 @@ fn key_material_validates_16_byte_hex_and_never_debug_prints_values() {
     assert!(load_key_material(Some(&env)).is_err());
 }
 
+#[cfg(unix)]
 #[test]
 fn private_json_requires_an_owner_only_json_object() {
     let temp = tempfile::tempdir().unwrap();
@@ -369,14 +394,14 @@ fn default_source_lines_child_urls_and_policies_are_the_source_port() {
 #[test]
 fn default_source_reads_admitted_local_playlists_and_verified_snapshots() {
     let temp = tempfile::tempdir().unwrap();
-    let master = resolve(temp.path()).join("master.m3u8");
+    let master = resolve(temp.path()).unwrap().join("master.m3u8");
     std::fs::write(
         &master,
         b"#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\nmedia.m3u8\n",
     )
     .unwrap();
-    let location = as_uri(&master);
-    let root = resolve(temp.path());
+    let location = as_uri(&master).unwrap();
+    let root = resolve(temp.path()).unwrap();
     let policy = json!({"allowed_local_roots": [root.to_str().unwrap()]});
     let mut fetcher = DefaultHlsSource
         .open_fetcher(&policy, temp.path())
@@ -411,5 +436,82 @@ fn default_source_reads_admitted_local_playlists_and_verified_snapshots() {
     assert_eq!(
         DefaultHlsSource.read_analysis(&analysis).unwrap_err(),
         AttemptError::Value("snapshot-invalid".to_string())
+    );
+}
+
+#[cfg(windows)]
+#[path = "common/windows.rs"]
+mod windows;
+#[cfg(windows)]
+#[test]
+fn native_windows_paths_encode_drives_and_unicode_without_changing_posix_text() {
+    for (input, expected) in [
+        (
+            r"C:\video file\日本語\part#1.mp4",
+            "file:///C:/video%20file/%E6%97%A5%E6%9C%AC%E8%AA%9E/part%231.mp4",
+        ),
+        (r"D:\media\clip.mp4", "file:///D:/media/clip.mp4"),
+    ] {
+        assert_eq!(as_uri(Path::new(input)).unwrap(), expected);
+    }
+    assert!(as_uri(Path::new(r"C:relative.mp4")).is_err());
+    assert!(as_uri(Path::new("relative.mp4")).is_err());
+    for (input, expected) in [
+        (r"C:\a\\b\.\c\", r"C:\a\b\c"),
+        (r"C:relative", r"C:relative"),
+        (
+            r"\\server\share\folder\.\clip.mp4",
+            r"\\server\share\folder\clip.mp4",
+        ),
+    ] {
+        assert_eq!(py_path(OsStr::new(input)).as_os_str(), OsStr::new(expected));
+    }
+}
+#[cfg(windows)]
+#[test]
+fn resolve_follows_windows_junctions_and_retains_native_missing_children() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    std::fs::create_dir_all(root.join("real/inner")).unwrap();
+    let alias = root.join("alias");
+    windows::junction(&alias, &root.join("real"));
+    assert_eq!(
+        resolve(&alias.join("inner")).unwrap(),
+        root.join("real/inner")
+    );
+    assert_eq!(
+        resolve(&alias.join("missing/x")).unwrap(),
+        root.join("real/missing/x")
+    );
+    assert!(is_relative_to(&root.join("real/inner"), &root.join("real")));
+    assert!(!is_relative_to(&root.join("realm"), &root.join("real")));
+    assert!(resolve(Path::new("relative")).unwrap().is_absolute());
+    std::fs::remove_dir(alias).unwrap();
+}
+#[cfg(windows)]
+#[test]
+fn private_json_requires_a_private_windows_acl_and_json_object() {
+    use std::io::Write as _;
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("private.json");
+    let mut file = std::fs::File::create(&path).unwrap();
+    private_fs::harden(&file).unwrap();
+    file.write_all(br#"{"url":"https://private.invalid/?token=NEVER_ECHO_THIS"}"#)
+        .unwrap();
+    drop(file);
+    assert_eq!(
+        private_json(&path).unwrap()["url"],
+        json!("https://private.invalid/?token=NEVER_ECHO_THIS")
+    );
+    let insecure = temp.path().join("inherited.json");
+    std::fs::write(&insecure, b"{}").unwrap();
+    assert_eq!(
+        private_json(&insecure).unwrap_err().token(),
+        "private-config-invalid"
+    );
+    std::fs::write(&path, b"[1, 2]").unwrap();
+    assert_eq!(
+        private_json(&path).unwrap_err().token(),
+        "private-config-invalid"
     );
 }

@@ -52,16 +52,42 @@ fn assert_ends(output: &Output, stage: &str, message: &str, code: i32) {
     );
 }
 
-/// A private configuration file (mode 0600, as `private_json` requires).
+/// A private configuration file, protected before its synthetic payload is written.
 fn private(path: &Path, value: &Value) -> PathBuf {
-    std::fs::write(path, value.to_string()).unwrap();
-    set_mode(path, 0o600);
+    #[cfg(unix)]
+    {
+        std::fs::write(path, value.to_string()).unwrap();
+        set_mode(path, 0o600);
+    }
+    #[cfg(windows)]
+    {
+        use std::io::Write;
+        let mut file = std::fs::File::create(path).unwrap();
+        private_fs::harden(&file).unwrap();
+        file.write_all(value.to_string().as_bytes()).unwrap();
+    }
     path.to_path_buf()
 }
 
 fn set_mode(path: &Path, mode: u32) {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+    #[cfg(windows)]
+    {
+        // Set the deliberately unsafe fixture explicitly: a user's default
+        // Windows DACL may already be private, unlike Unix mode 0644.
+        assert_eq!(mode, 0o644);
+        let output = Command::new("icacls.exe")
+            .arg(path)
+            .args(["/grant", "*S-1-1-0:(R)"])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "unsafe ACL fixture setup failed");
+        assert!(private_fs::verify(&std::fs::File::open(path).unwrap()).is_err());
+    }
 }
 
 /// An admitted snapshot without tracks: `read_analysis` accepts it (its digest is the
@@ -189,7 +215,10 @@ fn analyze_hls_reports_source_errors_with_their_token() {
         )
     };
     assert_ends(&run("../x"), "analysis", "invalid-asset-id", 1);
+    #[cfg(unix)]
     std::fs::create_dir_all(out.join("synth/clear/source")).unwrap();
+    #[cfg(windows)]
+    drmr_core::native::create_private_dir_all(&out.join("synth/clear/source")).unwrap();
     assert_ends(&run("synth"), "analysis", "source-snapshot-exists", 1);
 }
 

@@ -46,7 +46,6 @@ fn web() -> Web {
 }
 
 fn web_with(configure: impl FnOnce(&mut HarnessSetup)) -> Web {
-    use std::os::unix::fs::PermissionsExt;
     let clock = Arc::new(AtomicU64::new(10f64.to_bits()));
     let reader = clock.clone();
     let mut profiles = PathBuf::new();
@@ -54,7 +53,7 @@ fn web_with(configure: impl FnOnce(&mut HarnessSetup)) -> Web {
         profiles = setup.base.join("profiles.json");
         let policy = json!({"default": {"policy": {"allowed_origins": [ORIGIN], "allow_http": true, "allow_private_network": true}}});
         std::fs::write(&profiles, policy.to_string()).unwrap();
-        std::fs::set_permissions(&profiles, std::fs::Permissions::from_mode(0o600)).unwrap();
+        support::set_mode(&profiles, 0o600);
         setup.options.hls_profiles = Some(profiles.clone());
         setup.options.monitor = false;
         setup.options.hls_clock = Some(Arc::new(move || {
@@ -230,7 +229,7 @@ struct Snapshot {
 /// record with its digest and id.
 fn write_snapshot(output: &Path, asset: &str, tracks: &[Track]) -> Snapshot {
     let dir = output.join(asset).join("clear").join("source");
-    std::fs::create_dir_all(&dir).unwrap();
+    support::private_dir(&dir).unwrap();
     let mut resources = Vec::new();
     let mut seen = HashSet::new();
     let mut freeze = |name: &str, data: &[u8], kind: &str| {
@@ -298,7 +297,7 @@ fn write_package_outputs(
 ) {
     let root = output.join(asset);
     let manifests = root.join("manifests").join("clear-hls");
-    std::fs::create_dir_all(&manifests).unwrap();
+    support::private_dir(&manifests).unwrap();
     std::fs::write(
         manifests.join("manifest.mpd"),
         format!("<MPD xmlns:cenc=\"urn:mpeg:cenc:2013\"><ContentProtection cenc:default_KID=\"{KID}\"/></MPD>"),
@@ -316,7 +315,7 @@ fn write_package_outputs(
         rows.push(json!({"source_track_id": track.id, "disposition": disposition, "checks": ["timing-pass"]}));
         if packaged && (track.content_type == "video" || track.content_type == "audio") {
             let init = root.join("cbcs").join(&track.id).join("init.mp4");
-            std::fs::create_dir_all(init.parent().unwrap()).unwrap();
+            support::private_dir(init.parent().unwrap()).unwrap();
             let data: &[u8] = if track.content_type == "video" {
                 AVC_INIT
             } else {
@@ -688,7 +687,7 @@ fn unpublished_artifacts_and_untrusted_child_diagnostics_are_not_exposed() {
     let w = web();
     submit_analysis(&w, "asset");
     let leaked = w.h.output.join("asset/manifests/partial.mpd");
-    std::fs::create_dir_all(leaked.parent().unwrap()).unwrap();
+    support::private_dir(leaked.parent().unwrap()).unwrap();
     std::fs::write(&leaked, "unfinished").unwrap();
     assert_eq!(w.get("/output/asset/manifests/partial.mpd").status, 404);
     let line = json!({"stage": "analysis", "level": "error", "message": KEY, "url": "https://private/?token=PRIVATE", "key": KEY});
@@ -1090,7 +1089,7 @@ fn retry_busy_cleanup_preserves_old_history_and_unknown_outputs_block_retry() {
     assert_eq!(std::fs::read(&history).unwrap(), before);
     w.finish(&holder, 0);
     let unrelated = w.h.output.join("retry/cbcs");
-    std::fs::create_dir(&unrelated).unwrap();
+    support::private_dir(&unrelated).unwrap();
     let blocked = w.post("/api/hls/analyses", &body);
     assert_eq!(
         (blocked.status, blocked.json()),
@@ -1107,7 +1106,7 @@ fn admitted_snapshot_and_unowned_asset_tree_never_allow_analysis_retry() {
     let body = json!({"asset_id": "asset", "url": PLAIN_URL});
     assert_eq!(w.post("/api/hls/analyses", &body).status, 409);
     assert_eq!(std::fs::read(&snapshot.path).unwrap(), frozen);
-    std::fs::create_dir(w.h.output.join("unowned")).unwrap();
+    support::private_dir(w.h.output.join("unowned")).unwrap();
     assert_eq!(
         w.post(
             "/api/hls/analyses",
@@ -1446,7 +1445,7 @@ fn history_deletion_is_same_origin_and_does_not_follow_metadata_symlinks() {
     let reports = w.h.output.join("asset/reports");
     let outside = w.h.root.path().join("outside-reports");
     std::fs::rename(&reports, &outside).unwrap();
-    std::os::unix::fs::symlink(&outside, &reports).unwrap();
+    support::directory_link(&outside, &reports);
     let metadata = outside.join(format!("hls-job-{job}.json"));
     let before = std::fs::read(&metadata).unwrap();
     let response = client.delete(&path);
@@ -1494,7 +1493,6 @@ fn history_deletion_metadata_is_backward_compatible_and_explicitly_allowlisted()
 
 #[test]
 fn failed_history_delete_write_keeps_row_visible_and_retryable() {
-    use std::os::unix::fs::PermissionsExt;
     if support::is_root() {
         return; // permissions are not enforced for root
     }
@@ -1502,9 +1500,9 @@ fn failed_history_delete_write_keeps_row_visible_and_retryable() {
     let (submitted, _) = submit_analysis(&w, "asset");
     let job = submitted["job_id"].as_str().unwrap();
     let reports = w.h.output.join("asset/reports");
-    std::fs::set_permissions(&reports, std::fs::Permissions::from_mode(0o500)).unwrap();
+    support::set_mode(&reports, 0o500);
     let failed = w.h.client.delete(&format!("/api/hls/jobs/{job}"));
-    std::fs::set_permissions(&reports, std::fs::Permissions::from_mode(0o700)).unwrap();
+    support::set_mode(&reports, 0o700);
     assert_eq!(failed.status, 500);
     assert_eq!(w.job_ids(), [job.to_string()]);
     assert_eq!(

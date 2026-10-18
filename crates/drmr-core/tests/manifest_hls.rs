@@ -1,5 +1,12 @@
 //! HLS playlist mapping, structural rewrites, and media verification gates.
 
+#[path = "common/mod.rs"]
+mod private_fixture;
+
+#[path = "support/paths.rs"]
+mod paths;
+use paths::portable_path;
+
 #[path = "manifest_fixture/common.rs"]
 #[allow(
     dead_code,
@@ -93,7 +100,7 @@ fn resolved_root(asset: &SyntheticHlsAsset) -> PathBuf {
 
 fn mapping_json(mapping: &HlsVariantMapping, root: &Path) -> Value {
     json!({
-        "hls_playlist": mapping.hls_playlist.strip_prefix(root).unwrap().to_str().unwrap(),
+        "hls_playlist": portable_path(mapping.hls_playlist.strip_prefix(root).unwrap()),
         "dash_rep_id": mapping.dash_rendition.rep_id,
         "signals": mapping.signals.iter().map(|(k, v)| json!([k, v])).collect::<Vec<_>>(),
         "content_gate": mapping.content_gate,
@@ -116,13 +123,7 @@ fn summary_json(summary: &HlsManifestSummary) -> Value {
 }
 
 fn result_json(result: &HlsRewriteResult, out_root: &Path) -> Value {
-    let relative = |p: &Path| {
-        p.strip_prefix(out_root)
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .to_string()
-    };
+    let relative = |p: &Path| portable_path(p.strip_prefix(out_root).unwrap());
     json!({
         "output_master_path": relative(&result.output_master_path),
         "output_media_playlist_paths": result.output_media_playlist_paths.iter().map(|p| relative(p)).collect::<Vec<_>>(),
@@ -173,7 +174,7 @@ fn one_audio_group() -> Vec<hls_fixture::AudioSpec> {
 
 #[test]
 fn test_mapping_pairs_by_codec_family_and_size_rank() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let asset = build_bbb_like_asset(tmp.path());
     let by_uuid =
         mapping_by_uuid(&map_hls_variants_to_dash(&asset.master_path, &asset.renditions).unwrap());
@@ -187,7 +188,7 @@ fn test_mapping_pairs_by_codec_family_and_size_rank() {
 
 #[test]
 fn test_mapping_audio_uses_size_rank_not_group_index() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let asset = build_bbb_like_asset(tmp.path());
     let by_uuid =
         mapping_by_uuid(&map_hls_variants_to_dash(&asset.master_path, &asset.renditions).unwrap());
@@ -198,7 +199,7 @@ fn test_mapping_audio_uses_size_rank_not_group_index() {
 
 #[test]
 fn test_mapping_yields_one_entry_per_surviving_playlist() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let asset = build_bbb_like_asset(tmp.path());
     assert_eq!(
         map_hls_variants_to_dash(&asset.master_path, &asset.renditions)
@@ -210,7 +211,7 @@ fn test_mapping_yields_one_entry_per_surviving_playlist() {
 
 #[test]
 fn test_mapping_content_gate_labels() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let asset = build_bbb_like_asset(tmp.path());
     let mappings = map_hls_variants_to_dash(&asset.master_path, &asset.renditions).unwrap();
     let gate = |uuid: &str| {
@@ -228,7 +229,7 @@ fn test_mapping_content_gate_labels() {
 
 #[test]
 fn test_mapping_records_evidence_signals() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let asset = build_bbb_like_asset(tmp.path());
     let m = mapped(&asset, "hv-h265-a");
     assert_eq!(m.signal("codec_family"), Some("hvc1"));
@@ -243,7 +244,7 @@ fn test_mapping_records_evidence_signals() {
 
 #[test]
 fn test_mapping_disambiguates_with_uniform_resolution_and_framerate() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let asset = build_bbb_like_asset(tmp.path());
     let mappings = map_hls_variants_to_dash(&asset.master_path, &asset.renditions).unwrap();
     let resolutions: std::collections::BTreeSet<&str> = mappings
@@ -275,7 +276,7 @@ fn two_h264_asset(
 
 #[test]
 fn test_mapping_fails_loud_on_bandwidth_size_rank_disagreement() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let asset = two_h264_asset(
         tmp.path(),
         [1000, 2000],
@@ -294,7 +295,7 @@ fn test_mapping_fails_loud_on_bandwidth_size_rank_disagreement() {
 
 #[test]
 fn test_mapping_fails_loud_on_size_tie() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let asset = two_h264_asset(
         tmp.path(),
         [1000, 2000],
@@ -313,7 +314,7 @@ fn test_mapping_fails_loud_on_size_tie() {
 
 #[test]
 fn test_mapping_fails_loud_on_missing_bandwidth() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let asset = build_bbb_like_asset(tmp.path());
     let text = read(&asset.master_path);
     std::fs::write(
@@ -353,7 +354,7 @@ fn test_mapping_fails_loud_on_missing_bandwidth() {
 
 #[test]
 fn test_mapping_fails_loud_on_count_mismatch() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let renditions = vec![make_dash_rendition(tmp.path(), &h264("d0", "d0", 1000))];
     let variants = vec![
         variant("avc1.42C00C", 100_000, "fmp4_AUDIO-0", "v0", 1000, 1, "ts"),
@@ -376,7 +377,7 @@ fn test_mapping_fails_loud_on_count_mismatch() {
 
 #[test]
 fn test_mapping_fails_loud_on_segment_count_mismatch() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let video = DashRenditionSpec {
         seg_count: 5,
         ..h264("d0", "d0", 1000)
@@ -421,7 +422,7 @@ fn rewritten_master(tmp: &Path) -> (SyntheticHlsAsset, String) {
 
 #[test]
 fn test_master_consolidates_audio_index_wise() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let (_, text) = rewritten_master(tmp.path());
     assert!(!text.contains("GROUP-ID=\"ts_AUDIO-0\"") && !text.contains("GROUP-ID=\"ts_AUDIO-1\""));
     assert!(
@@ -434,7 +435,7 @@ fn test_master_consolidates_audio_index_wise() {
 
 #[test]
 fn test_master_no_dangling_audio_reference() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let (_, text) = rewritten_master(tmp.path());
     let present: Vec<&str> = text
         .lines()
@@ -465,7 +466,7 @@ fn test_master_no_dangling_audio_reference() {
 
 #[test]
 fn test_master_diff_is_exactly_audio_flip_and_ts_removal() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let (asset, dst) = rewritten_master(tmp.path());
     let src = read(&asset.master_path);
     let src_lines: Vec<&str> = src.split('\n').collect();
@@ -502,14 +503,14 @@ fn test_master_diff_is_exactly_audio_flip_and_ts_removal() {
 
 #[test]
 fn test_master_version_not_bumped() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let (_, text) = rewritten_master(tmp.path());
     assert!(text.contains("#EXT-X-VERSION:4"));
 }
 
 #[test]
 fn test_master_media_playlist_uris_and_tokens_untouched() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let (asset, dst) = rewritten_master(tmp.path());
     let src = read(&asset.master_path);
     assert_eq!(uri_lines(&src), uri_lines(&dst));
@@ -518,7 +519,7 @@ fn test_master_media_playlist_uris_and_tokens_untouched() {
 
 #[test]
 fn test_master_trailing_newline_preserved() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let (_, text) = rewritten_master(tmp.path());
     assert!(text.ends_with('\n') && !text.ends_with("\n\n"));
 }
@@ -537,7 +538,7 @@ fn test_master_fails_loud_on_unmodeled_construct() {
     ];
     let errors = &fixture("manifest_hls.json")["errors"];
     for (index, bad_line) in bad_lines.iter().enumerate() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = private_fixture::private_tempdir().unwrap();
         let renditions = vec![make_dash_rendition(tmp.path(), &h264("d0", "d0", 100))];
         let options = HlsOptions {
             extra_master_lines: vec![(*bad_line).to_string()],
@@ -570,7 +571,7 @@ fn test_master_fails_loud_on_unmodeled_construct() {
 
 #[test]
 fn test_master_closed_captions_none_attribute_is_benign() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let asset = build_bbb_like_asset(tmp.path());
     assert!(read(&asset.master_path).contains("CLOSED-CAPTIONS=NONE"));
     rewrite_hls_master(&asset.master_path, &tmp.path().join("o.m3u8"), None).unwrap();
@@ -578,7 +579,7 @@ fn test_master_closed_captions_none_attribute_is_benign() {
 
 #[test]
 fn test_master_rerun_on_own_output_is_byte_stable() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let asset = build_bbb_like_asset(tmp.path());
     let (out1, out2) = (tmp.path().join("out1.m3u8"), tmp.path().join("out2.m3u8"));
     rewrite_hls_master(&asset.master_path, &out1, None).unwrap();
@@ -604,7 +605,7 @@ fn rewrite_media(
 
 #[test]
 fn test_media_playlist_ts_gains_ext_x_map_and_repoints_segments() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let asset = build_bbb_like_asset(tmp.path());
     let text = rewrite_media(
         &asset,
@@ -631,7 +632,7 @@ fn test_media_playlist_ts_gains_ext_x_map_and_repoints_segments() {
 
 #[test]
 fn test_media_playlist_fmp4_repoints_existing_ext_x_map() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let asset = build_bbb_like_asset(tmp.path());
     let text = rewrite_media(
         &asset,
@@ -655,7 +656,7 @@ fn test_media_playlist_fmp4_repoints_existing_ext_x_map() {
 
 #[test]
 fn test_media_playlist_key_line_copied_verbatim_and_iv_verified() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let asset = build_bbb_like_asset(tmp.path());
     let m = mapped(&asset, "hv-h264-c");
     let key_line = |text: &str| {
@@ -678,7 +679,7 @@ fn test_media_playlist_key_line_copied_verbatim_and_iv_verified() {
 
 #[test]
 fn test_media_playlist_iv_accepts_0x_prefixed_expected() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let asset = build_bbb_like_asset(tmp.path());
     rewrite_media(
         &asset,
@@ -700,7 +701,7 @@ fn test_media_playlist_iv_accepts_0x_prefixed_expected() {
 
 #[test]
 fn test_media_playlist_iv_mismatch_raises() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let asset = build_bbb_like_asset(tmp.path());
     let err = rewrite_media(
         &asset,
@@ -723,7 +724,7 @@ fn test_media_playlist_iv_mismatch_raises() {
 
 #[test]
 fn test_media_playlist_version_not_bumped() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let asset = build_bbb_like_asset(tmp.path());
     let text = rewrite_media(
         &asset,
@@ -738,7 +739,7 @@ fn test_media_playlist_version_not_bumped() {
 
 #[test]
 fn test_media_playlist_extinf_and_other_lines_untouched() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let asset = build_bbb_like_asset(tmp.path());
     let m = mapped(&asset, "hv-h264-c");
     let text = rewrite_media(
@@ -768,7 +769,7 @@ fn test_media_playlist_extinf_and_other_lines_untouched() {
 
 #[test]
 fn test_media_playlist_trailing_newline_preserved() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let asset = build_bbb_like_asset(tmp.path());
     let text = rewrite_media(
         &asset,
@@ -783,7 +784,7 @@ fn test_media_playlist_trailing_newline_preserved() {
 
 #[test]
 fn test_media_playlist_deploy_form_matches_dash_segment_urls() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let asset = build_bbb_like_asset(tmp.path());
     let text = rewrite_media(
         &asset,
@@ -801,7 +802,7 @@ fn test_media_playlist_deploy_form_matches_dash_segment_urls() {
 
 #[test]
 fn test_media_playlist_local_form_points_at_cbcs_root() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let asset = build_bbb_like_asset(tmp.path());
     let text = rewrite_media(
         &asset,
@@ -822,7 +823,7 @@ fn test_media_playlist_local_form_points_at_cbcs_root() {
 
 #[test]
 fn test_media_playlist_local_form_relative_base() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let asset = build_bbb_like_asset(tmp.path());
     let text = rewrite_media(
         &asset,
@@ -837,7 +838,7 @@ fn test_media_playlist_local_form_relative_base() {
 
 #[test]
 fn test_media_playlist_idempotent() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let asset = build_bbb_like_asset(tmp.path());
     let m = mapped(&asset, "hv-h264-c");
     let (out1, out2) = (tmp.path().join("o1.m3u8"), tmp.path().join("o2.m3u8"));
@@ -848,7 +849,7 @@ fn test_media_playlist_idempotent() {
 
 #[test]
 fn test_inputs_not_modified() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let asset = build_bbb_like_asset(tmp.path());
     let before = sha_tree(&asset.download_root);
     let mappings = map_hls_variants_to_dash(&asset.master_path, &asset.renditions).unwrap();
@@ -868,7 +869,7 @@ fn test_inputs_not_modified() {
 
 #[test]
 fn test_analyze_master_returns_video_variant_and_audio_group_rows() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let asset = build_bbb_like_asset(tmp.path());
     let summary = analyze_hls_manifest(&asset.master_path).unwrap();
     assert!(summary.is_master);
@@ -908,7 +909,7 @@ fn test_analyze_master_returns_video_variant_and_audio_group_rows() {
 
 #[test]
 fn test_analyze_master_does_not_open_referenced_media_playlists() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let asset = build_bbb_like_asset(tmp.path());
     for relative in common::files_under(&asset.download_root) {
         let file = asset.download_root.join(&relative);
@@ -923,7 +924,7 @@ fn test_analyze_master_does_not_open_referenced_media_playlists() {
 
 #[test]
 fn test_analyze_master_bandwidth_degrades_to_none_on_malformed_manifest() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let asset = build_bbb_like_asset(tmp.path());
     let text = read(&asset.master_path);
     std::fs::write(
@@ -944,7 +945,7 @@ fn test_analyze_master_bandwidth_degrades_to_none_on_malformed_manifest() {
 
 #[test]
 fn test_analyze_media_playlist_ts_h264_reports_no_map() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let asset = build_bbb_like_asset(tmp.path());
     let summary = analyze_hls_manifest(&asset.media_playlist_path("hv-h264-a", "video")).unwrap();
     assert!(!summary.is_master);
@@ -970,7 +971,7 @@ fn test_analyze_media_playlist_ts_h264_reports_no_map() {
 
 #[test]
 fn test_analyze_media_playlist_fmp4_h265_reports_ext_x_map() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let asset = build_bbb_like_asset(tmp.path());
     let summary = analyze_hls_manifest(&asset.media_playlist_path("hv-h265-a", "video")).unwrap();
     assert!(!summary.is_master);
@@ -991,7 +992,7 @@ fn test_analyze_media_playlist_fmp4_h265_reports_ext_x_map() {
 
 #[test]
 fn test_analyze_audio_media_playlist_is_media_playlist_kind_not_audio_group() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let asset = build_bbb_like_asset(tmp.path());
     let summary = analyze_hls_manifest(&asset.media_playlist_path("ha-fmp4-0", "audio")).unwrap();
     assert!(!summary.is_master);
@@ -1003,7 +1004,7 @@ fn test_analyze_audio_media_playlist_is_media_playlist_kind_not_audio_group() {
 
 #[test]
 fn test_analyze_media_playlist_key_format_defaults_to_none_when_absent() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let playlist = tmp.path().join("media.m3u8");
     let lines = [
         "#EXTM3U",
@@ -1032,7 +1033,7 @@ fn test_analyze_media_playlist_key_format_defaults_to_none_when_absent() {
 
 #[test]
 fn test_analyze_hls_manifest_never_leaks_content_key() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let asset = build_bbb_like_asset(tmp.path());
     for target in [
         asset.media_playlist_path("hv-h264-a", "video"),
@@ -1052,7 +1053,7 @@ fn test_analyze_hls_manifest_never_leaks_content_key() {
 
 #[test]
 fn test_rewrite_hls_result_counts_and_checks() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let asset = build_bbb_like_asset(tmp.path());
     let result = rewrite_hls(
         &asset.master_path,
@@ -1088,7 +1089,7 @@ fn test_rewrite_hls_result_counts_and_checks() {
 
 #[test]
 fn test_rewrite_hls_output_layout_mirrors_source() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let asset = build_bbb_like_asset(tmp.path());
     let out_root = tmp.path().join("output/manifests");
     let result = rewrite_hls(
@@ -1116,7 +1117,7 @@ fn test_rewrite_hls_output_layout_mirrors_source() {
 
 #[test]
 fn test_rewrite_hls_deploy_vs_local_forms_from_one_code_path() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let asset = build_bbb_like_asset(tmp.path());
     let deploy = rewrite_hls(
         &asset.master_path,
@@ -1157,7 +1158,7 @@ fn test_rewrite_hls_deploy_vs_local_forms_from_one_code_path() {
 
 #[test]
 fn test_rewrite_hls_input_read_only() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let asset = build_bbb_like_asset(tmp.path());
     let before = sha_tree(&asset.download_root);
     rewrite_hls(
@@ -1190,7 +1191,7 @@ fn with_video<F: Fn(&mut Rendition)>(renditions: &[Rendition], change: F) -> Vec
 
 #[test]
 fn test_rank_agreement_does_not_hide_resolution_mismatch() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let asset = build_bbb_like_asset(tmp.path());
     let renditions = with_video(&asset.renditions, |r| {
         r.width = Some(1920);
@@ -1222,7 +1223,7 @@ fn test_rank_agreement_does_not_hide_resolution_mismatch() {
 
 #[test]
 fn test_audio_join_is_language_first_even_when_global_size_ranks_disagree() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let asset = build_bbb_like_asset(tmp.path());
     let lines: Vec<String> = read(&asset.master_path)
         .lines()
@@ -1291,7 +1292,7 @@ fn test_audio_join_is_language_first_even_when_global_size_ranks_disagree() {
 
 #[test]
 fn test_frame_rate_rounding_is_documented_and_disagreements_fail() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let asset = build_bbb_like_asset(tmp.path());
     std::fs::write(
         &asset.master_path,
@@ -1336,7 +1337,7 @@ fn test_frame_rate_rounding_is_documented_and_disagreements_fail() {
 #[test]
 fn bbb_like_asset_inputs_mappings_and_outputs_match_python() {
     let expected = &fixture("manifest_hls.json")["bbb"];
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let asset = build_bbb_like_asset(&tmp.path().join("bbb"));
     let root = asset.download_root.clone();
     assert_eq!(
@@ -1416,8 +1417,8 @@ fn bbb_like_asset_inputs_mappings_and_outputs_match_python() {
         .iter()
         .map(|(a, b)| {
             json!([
-                a.strip_prefix(&resolved).unwrap().to_str().unwrap(),
-                b.strip_prefix(&resolved).unwrap().to_str().unwrap()
+                portable_path(a.strip_prefix(&resolved).unwrap()),
+                portable_path(b.strip_prefix(&resolved).unwrap())
             ])
         })
         .collect();
@@ -1441,7 +1442,7 @@ fn bbb_like_asset_inputs_mappings_and_outputs_match_python() {
 fn malformed_masters_and_playlists_fail_like_python() {
     let cases = fixture("manifest_hls.json");
     let errors = &cases["errors"];
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let asset = build_bbb_like_asset(&tmp.path().join("bbb"));
     let text_of_master = read(&asset.master_path);
     let master_cases: Vec<(&str, String)> = vec![
@@ -1505,14 +1506,14 @@ fn malformed_masters_and_playlists_fail_like_python() {
     let (class, message) = error_of(&errors["no_download_root"]);
     assert_eq!(
         class_and_message(&err),
-        (class, message.replace("{path}", outside.to_str().unwrap()))
+        (class, message.replace("{path}", &portable_path(&outside)))
     );
 }
 
 #[test]
 fn odd_masters_analyze_like_python() {
     let cases = fixture("manifest_hls.json");
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let odd = tmp.path().join("odd-master.m3u8");
     std::fs::write(
         &odd,
@@ -1532,7 +1533,7 @@ fn odd_masters_analyze_like_python() {
 #[test]
 fn hls_regex_edges_match_python() {
     let edges = &fixture("manifest_hls.json")["regex_edges"];
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     for (index, case) in edges["attrs"].as_array().unwrap().iter().enumerate() {
         let line = text(&case[0]);
         let playlist = tmp.path().join(format!("attrs-{index}.m3u8"));
@@ -1682,7 +1683,7 @@ fn gate_outcome<T: serde::Serialize>(result: Result<T, HlsError>) -> Value {
 #[test]
 fn gates_match_python_through_the_same_doubles() {
     let expected = &fixture("manifest_hls.json")["gates"];
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = private_fixture::private_tempdir().unwrap();
     let asset = build_bbb_like_asset(&tmp.path().join("asset"));
     let by_uuid: BTreeMap<String, HlsVariantMapping> =
         map_hls_variants_to_dash(&asset.master_path, &asset.renditions)

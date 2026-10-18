@@ -2,22 +2,37 @@
 //! `str(PurePosixPath(p))`, `.name` / `.stem` / `.parent` / `.parents`, `Path.resolve`
 //! (`os.path.realpath(strict=False)`), `os.path.relpath`, `PurePath.relative_to`.
 //!
-//! Paths are handled as text with POSIX semantics, like `posixpath`; a path that is not valid
+//! Manifest paths retain POSIX text syntax. Filesystem resolution and absolute paths use
+//! native Windows semantics on Windows. A path that is not valid
 //! UTF-8 is a `ValueError` here, where Python would carry surrogate escapes until it encodes
 //! the text (a documented divergence that only non-UTF-8 file names reach).
 
 use super::py::{PyErr, PyOsError, repr_str};
+#[cfg(unix)]
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 /// `os.fspath(path)` as text.
 pub fn fspath(path: &Path) -> Result<String, PyErr> {
-    path.to_str().map(str::to_string).ok_or_else(|| {
+    let text = path.to_str().ok_or_else(|| {
         PyErr::Value(format!(
             "path is not valid UTF-8: {}",
             repr_str(&path.to_string_lossy())
         ))
-    })
+    })?;
+    #[cfg(unix)]
+    {
+        Ok(text.to_string())
+    }
+    #[cfg(windows)]
+    {
+        let text = text.replace('\\', "/");
+        Ok(if let Some(unc) = text.strip_prefix("//?/UNC/") {
+            format!("//{unc}")
+        } else {
+            text.strip_prefix("//?/").unwrap_or(&text).to_string()
+        })
+    }
 }
 
 /// `PurePosixPath` parts: the root (`""`, `"/"` or `"//"`) and the components (`.` and empty
@@ -122,6 +137,7 @@ pub fn normpath(text: &str) -> String {
     }
 }
 
+#[cfg(unix)]
 fn current_dir() -> Result<String, PyErr> {
     let cwd = std::env::current_dir()
         .map_err(|err| PyErr::Os(PyOsError::from_io(&err, Path::new("."))))?;
@@ -129,6 +145,7 @@ fn current_dir() -> Result<String, PyErr> {
 }
 
 /// `posixpath.join(a, b)`.
+#[cfg(unix)]
 fn join(head: &str, tail: &str) -> String {
     if tail.starts_with('/') {
         tail.to_string()
@@ -140,6 +157,7 @@ fn join(head: &str, tail: &str) -> String {
 }
 
 /// `posixpath.split(text)`.
+#[cfg(unix)]
 fn split(text: &str) -> (String, String) {
     let index = text.rfind('/').map_or(0, |index| index + 1);
     let (head, tail) = text.split_at(index);
@@ -153,6 +171,19 @@ fn split(text: &str) -> (String, String) {
 
 /// `posixpath.abspath(text)`.
 pub fn abspath(text: &str) -> Result<String, PyErr> {
+    #[cfg(windows)]
+    {
+        let path = Path::new(text);
+        let absolute = std::path::absolute(path)
+            .map_err(|error| PyErr::Os(PyOsError::from_io(&error, path)))?;
+        fspath(&absolute)
+    }
+    #[cfg(unix)]
+    abspath_unix(text)
+}
+
+#[cfg(unix)]
+fn abspath_unix(text: &str) -> Result<String, PyErr> {
     if text.starts_with('/') {
         Ok(normpath(text))
     } else {
@@ -165,12 +196,24 @@ pub fn abspath(text: &str) -> Result<String, PyErr> {
 /// symbolic-link loop leaves the rest of the path unresolved (Python 3.11's `realpath`; its
 /// `resolve` then raises `RuntimeError`, which no manifest path reaches).
 pub fn resolve(path: &Path) -> Result<PathBuf, PyErr> {
+    #[cfg(windows)]
+    {
+        crate::native::resolve_path(path)
+            .map_err(|error| PyErr::Os(PyOsError::from_io(&error, path)))
+    }
+    #[cfg(unix)]
+    resolve_unix(path)
+}
+
+#[cfg(unix)]
+fn resolve_unix(path: &Path) -> Result<PathBuf, PyErr> {
     let text = fspath(path)?;
     let mut seen = HashMap::new();
     let (resolved, _) = join_realpath(String::new(), &text, &mut seen)?;
     Ok(PathBuf::from(pure(&abspath(&resolved)?)))
 }
 
+#[cfg(unix)]
 fn join_realpath(
     mut path: String,
     rest: &str,
@@ -234,6 +277,20 @@ fn join_realpath(
 pub fn relpath(path: &str, start: &str) -> Result<String, PyErr> {
     let start_absolute = abspath(start)?;
     let path_absolute = abspath(path)?;
+    #[cfg(windows)]
+    {
+        let prefix = |text: &str| {
+            Path::new(text)
+                .components()
+                .next()
+                .map(|part| part.as_os_str().to_string_lossy().to_lowercase())
+        };
+        if prefix(&start_absolute) != prefix(&path_absolute) {
+            return Err(PyErr::Value(
+                "paths are on different Windows volumes".to_string(),
+            ));
+        }
+    }
     let start_list: Vec<&str> = start_absolute
         .split('/')
         .filter(|x| !x.is_empty())
@@ -242,7 +299,16 @@ pub fn relpath(path: &str, start: &str) -> Result<String, PyErr> {
     let common = start_list
         .iter()
         .zip(&path_list)
-        .take_while(|(left, right)| left == right)
+        .take_while(|(left, right)| {
+            #[cfg(unix)]
+            {
+                left == right
+            }
+            #[cfg(windows)]
+            {
+                left.to_lowercase() == right.to_lowercase()
+            }
+        })
         .count();
     let mut relative: Vec<&str> = vec![".."; start_list.len() - common];
     relative.extend(&path_list[common..]);

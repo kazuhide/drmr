@@ -163,7 +163,10 @@ fn py_path(path: &Path) -> PathBuf {
 
 /// `path.mkdir(parents=True, exist_ok=True)`.
 fn make_dirs(path: &Path) -> Result<(), Error> {
+    #[cfg(unix)]
     std::fs::create_dir_all(path)?;
+    #[cfg(windows)]
+    crate::native::create_media_dir_all(path)?;
     Ok(())
 }
 
@@ -190,13 +193,14 @@ pub fn merge_segments(
     output_path: &Path,
 ) -> Result<PathBuf, Error> {
     let output_path = py_path(output_path);
+    #[cfg(unix)]
     make_dirs(&parent_of(&output_path))?;
     let mut keyed = Vec::with_capacity(segment_paths.len());
     for segment in segment_paths {
         keyed.push((numeric_segment_key(segment)?, segment));
     }
     keyed.sort_by_key(|(key, _)| *key); // stable, as Python's sorted
-    let mut out = File::create(&output_path)?;
+    let mut out = crate::media::create_output_file(&output_path)?;
     // The inputs as `Path(...)` spells them: `init.mp4/` or `./init.mp4` name `init.mp4`.
     std::io::copy(&mut File::open(py_path(init_path))?, &mut out)?;
     for (_, segment) in keyed {
@@ -477,7 +481,12 @@ impl Packager {
     ) -> Result<PackagerResult, Error> {
         let input_mp4 = utf8_path(input_mp4)?;
         let output_mp4 = utf8_path(output_mp4)?;
+        #[cfg(unix)]
         make_dirs(&output_mp4.parent().to_path_buf())?;
+        #[cfg(windows)]
+        drop(crate::media::create_output_file(&output_mp4.to_path_buf())?);
+        #[cfg(windows)]
+        let _output_guard = crate::native::pin_media_directory(&output_mp4.parent().to_path_buf())?;
         let head = [
             self.binary.clone(),
             format!("input={input_mp4},stream=0,output={output_mp4}"),
@@ -531,7 +540,19 @@ impl Packager {
         let input_mp4 = utf8_path(input_mp4)?;
         let init_output = utf8_path(init_output)?;
         make_dirs(&init_output.parent().to_path_buf())?;
-        make_dirs(&PurePosixPath::new(segment_template).parent().to_path_buf())?;
+        make_dirs(
+            &PurePosixPath::from_path(Path::new(segment_template))
+                .parent()
+                .to_path_buf(),
+        )?;
+        #[cfg(windows)]
+        let _init_guard = crate::native::pin_media_directory(&init_output.parent().to_path_buf())?;
+        #[cfg(windows)]
+        let _segment_guard = crate::native::pin_media_directory(
+            &PurePosixPath::from_path(Path::new(segment_template))
+                .parent()
+                .to_path_buf(),
+        )?;
         // The real and the redacted argv share every token but the --iv value and the key.
         let prefix = [
             self.binary.clone(),
@@ -579,7 +600,19 @@ impl Packager {
             &["--keys".to_string(), keys_arg(key, true)],
         ]
         .concat();
-        self.run_packager(&argv_real, argv_redacted, &[key.key_hex(), key.iv_hex()])
+        let result =
+            self.run_packager(&argv_real, argv_redacted, &[key.key_hex(), key.iv_hex()])?;
+        #[cfg(windows)]
+        {
+            crate::native::seal_media_tree(&init_output.parent().to_path_buf())?;
+            let segment_parent = PurePosixPath::from_path(Path::new(segment_template))
+                .parent()
+                .to_path_buf();
+            if segment_parent != init_output.parent().to_path_buf() {
+                crate::native::seal_media_tree(&segment_parent)?;
+            }
+        }
+        Ok(result)
     }
 
     // --------------------------------------------------------------------------------------
@@ -618,12 +651,26 @@ impl Packager {
         // the per-segment template on the argv is spelled as Python spells it.
         let init_output = utf8_path(init_output)?;
         make_dirs(&init_output.parent().to_path_buf())?;
-        make_dirs(&PurePosixPath::new(segment_template).parent().to_path_buf())?;
+        make_dirs(
+            &PurePosixPath::from_path(Path::new(segment_template))
+                .parent()
+                .to_path_buf(),
+        )?;
         let work = match work_dir {
             Some(work_dir) => utf8_path(work_dir)?,
             None => init_output.parent().join("_persegment_work"),
         };
         make_dirs(&work.to_path_buf())?;
+        #[cfg(windows)]
+        let _init_guard = crate::native::pin_media_directory(&init_output.parent().to_path_buf())?;
+        #[cfg(windows)]
+        let _segment_guard = crate::native::pin_media_directory(
+            &PurePosixPath::from_path(Path::new(segment_template))
+                .parent()
+                .to_path_buf(),
+        )?;
+        #[cfg(windows)]
+        let _work_guard = crate::native::pin_media_directory(&work.to_path_buf())?;
         let mut total_duration = 0.0;
         let mut last_redacted = Vec::new();
         for (index, source_segment) in segment_paths.iter().enumerate() {
@@ -703,7 +750,7 @@ impl Packager {
 /// error here (Python would pass its surrogate-escaped bytes through; documented limit).
 fn utf8_path(path: &Path) -> Result<PurePosixPath, Error> {
     match path.to_str() {
-        Some(text) => Ok(PurePosixPath::new(text)),
+        Some(_) => Ok(PurePosixPath::from_path(path)),
         None => Err(Error::Value(format!(
             "path is not valid UTF-8: {}",
             path.display()
@@ -723,7 +770,7 @@ fn remove_file_if_present(path: &Path) -> Result<(), Error> {
 /// copy and an unlink across file systems.
 fn move_file(source: &Path, destination: &Path) -> Result<(), Error> {
     if std::fs::rename(source, destination).is_err() {
-        std::fs::copy(source, destination)?;
+        copy_file(source, destination)?;
         std::fs::remove_file(source)?;
     }
     Ok(())
@@ -733,7 +780,7 @@ fn move_file(source: &Path, destination: &Path) -> Result<(), Error> {
 /// truncated with the default mode, as Python opens it).
 fn copy_file(source: &Path, destination: &Path) -> Result<(), Error> {
     let mut input = File::open(source)?;
-    let mut output = File::create(destination)?;
+    let mut output = crate::media::create_output_file(destination)?;
     std::io::copy(&mut input, &mut output)?;
     Ok(())
 }

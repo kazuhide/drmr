@@ -2,6 +2,8 @@
 """Prepare clear adapters and run the attributed BBB clip through the real drmr CLI."""
 
 import argparse
+import csv
+import io
 import hashlib
 import json
 import os
@@ -157,8 +159,13 @@ def prepare_adapters(destination):
 
 
 def private_json(path, value):
-    path.write_text(json.dumps(value))
-    path.chmod(0o600)
+    # Fixtures contain synthetic signaling only. Protect the empty file before
+    # writing it so the CLI exercises the same private-config contract on Windows.
+    with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w", encoding="utf-8") as file:
+        if os.name == "nt":
+            row = next(csv.reader(io.StringIO(run(["whoami", "/user", "/fo", "csv", "/nh"]))))
+            run(["icacls", path, "/inheritance:r", "/grant:r", f"*{row[1]}:(F)"])
+        file.write(json.dumps(value))
     return path
 
 
@@ -269,7 +276,7 @@ def regression(binary, destination):
                                            ("packager", "packager", "--version"),
                                            ("drmr", binary, "--version"))},
         "evidence": {"packaging": "measured-local", "real_license": "not-verified",
-                     "conformance": "not-verified", "windows": "not-tested"},
+                     "conformance": "not-verified", "windows": "measured-native" if os.name == "nt" else "not-tested"},
     }
 
 

@@ -1,5 +1,4 @@
 //! Joint presentations verify each original track, including full audio decode and timing.
-#![cfg(unix)]
 use drmr_core::{
     conversion::{
         Aes128Key, ContentKey, ConversionRequest, Converter, HlsInputKeys, HlsOutputKey, InputKeys,
