@@ -33,6 +33,14 @@ pub fn child_entry(args: &[std::ffi::OsString]) -> io::Result<bool> {
 }
 
 pub fn spawn_descendant(pidfile: &Path, lock_file: Option<&Path>) -> io::Result<()> {
+    spawn_descendant_with_console(pidfile, lock_file, false)
+}
+
+fn spawn_descendant_with_console(
+    pidfile: &Path,
+    lock_file: Option<&Path>,
+    detached_console: bool,
+) -> io::Result<()> {
     let mut command = Command::new(env::current_exe()?);
     let ready = lock_file.map(|path| {
         let mut name = path.as_os_str().to_owned();
@@ -43,6 +51,19 @@ pub fn spawn_descendant(pidfile: &Path, lock_file: Option<&Path>) -> io::Result<
         command.arg("--fixture-lock").arg(lock).arg(ready);
     } else {
         command.arg("--fixture-sleep");
+    }
+    #[cfg(windows)]
+    if detached_console {
+        use std::os::windows::process::CommandExt as _;
+        // This changes console membership only. The child still inherits its job.
+        command.creation_flags(0x0000_0008); // DETACHED_PROCESS
+    }
+    #[cfg(not(windows))]
+    if detached_console {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "detached console fixture requires Windows",
+        ));
     }
     let mut child = command
         .stdin(Stdio::null())
@@ -67,6 +88,9 @@ pub fn spawn_descendant(pidfile: &Path, lock_file: Option<&Path>) -> io::Result<
 }
 
 pub fn before_response(spec: &ToolSpec) -> io::Result<()> {
+    if let Some(path) = spec.values.get("pid_file") {
+        fs::write(path, format!("{}\n", std::process::id()))?;
+    }
     if let Some(path) = spec.values.get("stdin_file") {
         io::copy(&mut io::stdin(), &mut super::create(Path::new(path))?)?;
     } else if spec.values.get("drain_stdin").is_some_and(|s| s == "1") {
@@ -80,9 +104,12 @@ pub fn before_response(spec: &ToolSpec) -> io::Result<()> {
         fs::write(path, values.join(" "))?;
     }
     if let Some(path) = spec.values.get("descendant_pid_file") {
-        spawn_descendant(
+        spawn_descendant_with_console(
             Path::new(path),
             spec.values.get("descendant_lock_file").map(Path::new),
+            spec.values
+                .get("descendant_detached_console")
+                .is_some_and(|value| value == "1"),
         )?;
     }
     if let Some(path) = spec.values.get("ready_file") {

@@ -243,3 +243,21 @@ fn server_cli_copies_synthetic_conversion_tree_and_rewrites_the_manifest() {
     );
     assert_eq!(std::fs::read_to_string(source).unwrap(), original);
 }
+
+#[test]
+fn native_response_records_its_process_identity_before_completing() {
+    let root = tempfile::tempdir().unwrap();
+    let pid_file = root.path().join("pid");
+    let tool = install(
+        &root.path().join("identity"),
+        &ToolSpec::default().with("pid_file", pid_file.to_str().unwrap()),
+    )
+    .unwrap();
+    let mut child = std::process::Command::new(tool).spawn().unwrap();
+    let pid = child.id();
+    assert!(child.wait().unwrap().success());
+    assert_eq!(
+        std::fs::read_to_string(pid_file).unwrap(),
+        format!("{pid}\n")
+    );
+}
