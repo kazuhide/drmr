@@ -25,6 +25,7 @@ class Element {
   replaceChildren() { this.children = []; }
   setAttribute(name, value) { this.attributes.set(name, value); }
   getAttribute(name) { return this.attributes.get(name) || null; }
+  removeAttribute(name) { this.attributes.delete(name); }
   addEventListener(name, handler) { this.listeners.set(name, handler); }
   dispatch(name) { this.listeners.get(name)?.({ target: this }); }
 }
@@ -39,15 +40,19 @@ function harness(options = {}) {
     if (!elements.has(id)) elements.set(id, new Element('div'));
     return elements.get(id);
   };
-  const catalog = ids.map(asset_id => ({ asset_id, label: asset_id }));
+  const catalog = options.catalog || ids.map(asset_id => ({ asset_id, label: asset_id }));
   const queued = [];
   const sandbox = {
     window: { addEventListener() {}, App: {
       I18n: { t: (key, values) => key + (values?.n == null ? '' : ':' + values.n), has: () => false, getLanguage: () => 'en', error: () => 'fixed-error' },
       Api: {
         postQueue: assetIds => { queued.push(Array.from(assetIds)); return Promise.resolve(); },
-        getCatalog: () => Promise.resolve(catalog),
+        getCatalog: options.getCatalog || (() => Promise.resolve(catalog)),
         getHlsJobs: () => Promise.resolve({ jobs: options.jobs || [] }),
+        postConvert: options.postConvert || (() => Promise.reject({ status: 409 })),
+        getAssetUrls: options.getAssetUrls || (() => Promise.resolve({})),
+        getCatalogReport: options.getCatalogReport || (() => Promise.reject({ status: 404 })),
+        revokePlaybackSession: () => Promise.resolve(),
         stopJob: options.stopJob || (() => Promise.resolve({ stop_requested: true })),
         getQueue: () => Promise.resolve({ running: null, pending: [], recent: [] }),
       },
@@ -55,7 +60,7 @@ function harness(options = {}) {
     document: { getElementById: element, createElement: tag => new Element(tag),
       createTextNode: text => ({ nodeType: 3, textContent: text, children: [] }),
       addEventListener() {}, activeElement: null },
-    URL, console, setTimeout: () => 0, clearTimeout() {},
+    URL, location: { origin: 'http://127.0.0.1' }, console, setTimeout: () => 0, clearTimeout() {}, setInterval: () => 0, clearInterval() {},
   };
   for (const file of ['ui.js', 'model.js', 'console.js']) {
     let source = fs.readFileSync(path.join(__dirname, '../../static/js', file), 'utf8');
@@ -66,6 +71,8 @@ function harness(options = {}) {
       source = source.replace(boot, `window.controller = {
         state, cacheElements, bind, renderList, newLogView, applyRecord, settleProgress,
         renderLogMeta, suggestedName, discoverRunning, renderRuns, requestStop,
+        renderPlaybackControls, preparePreview, recompose, renderReport, loadCatalogReport, startConvert,
+        onPlayback: function (value) { playback = value; },
         onRestore: function (callback) { restoreRun = callback; }
       };`);
     }
@@ -74,6 +81,7 @@ function harness(options = {}) {
   const controller = sandbox.window.controller;
   controller.cacheElements();
   controller.bind();
+  controller.state.catalog = catalog;
   controller.state.contents = sandbox.window.App.Model.compose(catalog, [], null);
   controller.renderList();
   const checkbox = id => descendants(element('content-list')).find(node =>
@@ -198,4 +206,90 @@ test('a rejected stop keeps the live run and permits a deliberate retry', async 
   assert.equal(h.controller.state.stopRequests[job.job_id], undefined);
   await h.controller.requestStop(job);
   assert.deepEqual(calls, ['job', 'job']);
+});
+
+
+test('unverified catalog output cannot prepare comparison playback', async () => {
+  let requested = 0;
+  const h = harness({ catalog: [{ asset_id: 'asset', converted: true }], getAssetUrls: () => { requested += 1; return Promise.resolve({}); } });
+  const c = h.controller.state.contents[0];
+  h.controller.state.selectedId = 'asset';
+  h.controller.renderPlaybackControls(c);
+  assert.equal(h.element('preview-btn').disabled, true);
+  h.controller.preparePreview(false);
+  await flush();
+  assert.equal(requested, 0);
+});
+
+test('fresh asset authority must still permit preview after an older verified listing', async () => {
+  let prepared = 0;
+  const h = harness({ catalog: [{ asset_id: 'asset', converted: true, output_readiness: { state: 'verified', job_id: 'old' } }],
+    getAssetUrls: () => Promise.resolve({ new_url: null, output_readiness: { state: 'unverified' } }) });
+  h.controller.state.selectedId = 'asset';
+  h.controller.onPlayback({ hide() {}, prepareCatalog() { prepared += 1; } });
+  h.controller.preparePreview(false);
+  await flush();
+  assert.equal(prepared, 0);
+  assert.equal(h.element('preview-btn').disabled, true);
+  assert.equal(h.controller.state.contents[0].state, 'unverified');
+});
+
+test('a new catalog generation clears previously displayed success and playback', () => {
+  let hidden = 0;
+  const h = harness({ catalog: [{ asset_id: 'asset', converted: true, output_readiness: { state: 'verified', job_id: 'old' } }] });
+  h.controller.state.selectedId = 'asset';
+  h.controller.state.detail.report = { all_pass: true };
+  h.controller.state.detail.catalogInfo = { new_url: '/output/asset/old.mpd' };
+  h.controller.onPlayback({ hide() { hidden += 1; } });
+  h.controller.state.catalog = [{ asset_id: 'asset', converted: true, output_readiness: { state: 'unverified', job_id: 'new' } }];
+  h.controller.recompose();
+  assert.equal(h.controller.state.detail.report, null);
+  assert.equal(h.controller.state.detail.catalogInfo, null);
+  assert.equal(hidden, 1);
+  assert.equal(h.element('preview-btn').disabled, true);
+});
+
+
+test('verified catalog comparison still requires and uses fresh qualified asset URLs', async () => {
+  let prepared = 0;
+  const info = { new_url: '/output/asset/new.mpd', output_readiness: { state: 'verified', job_id: 'current' } };
+  const h = harness({ catalog: [{ asset_id: 'asset', converted: true, output_readiness: info.output_readiness }], getAssetUrls: () => Promise.resolve(info) });
+  h.controller.state.selectedId = 'asset';
+  h.controller.onPlayback({ hide() {}, prepareCatalog(id, value) { assert.equal(id, 'asset'); assert.equal(value, info); prepared += 1; } });
+  h.controller.renderPlaybackControls(h.controller.state.contents[0]);
+  assert.equal(h.element('preview-btn').disabled, false);
+  h.controller.preparePreview(false);
+  await flush();
+  assert.equal(prepared, 1);
+  assert.equal(h.element('preview-btn').disabled, false);
+  assert.ok(descendants(h.element('preview-state')).some(node => node.textContent === 'previewReady'));
+});
+
+test('an old report response cannot restore success after a new generation is observed', async () => {
+  let deliver;
+  let requests = 0;
+  const h = harness({ catalog: [{ asset_id: 'asset', converted: true, output_readiness: { state: 'verified', job_id: 'old' } }],
+    getCatalogReport: () => ++requests === 1 ? new Promise(resolve => { deliver = resolve; }) : Promise.reject({ status: 410 }) });
+  h.controller.state.selectedId = 'asset';
+  h.controller.onPlayback({ hide() {} });
+  h.controller.loadCatalogReport(h.controller.state.contents[0], h.controller.state.selectToken);
+  h.controller.state.catalog = [{ asset_id: 'asset', converted: true, output_readiness: { state: 'unverified', job_id: 'new' } }];
+  h.controller.recompose();
+  deliver({ all_pass: true, output_readiness: { state: 'verified', job_id: 'old' } });
+  await flush();
+  assert.equal(h.controller.state.detail.report, null);
+  assert.equal(h.element('preview-btn').disabled, true);
+});
+
+
+test('a refused launch restores an untouched generation only from refreshed server authority', async () => {
+  const row = () => ({ asset_id: 'asset', converted: true, output_readiness: { state: 'verified', job_id: 'old' } });
+  const h = harness({ catalog: [row()], getCatalog: () => Promise.resolve([row()]) });
+  h.controller.state.selectedId = 'asset';
+  h.controller.onPlayback({ hide() {} });
+  h.controller.startConvert(h.controller.state.contents[0]);
+  assert.equal(h.element('preview-btn').disabled, true);
+  await flush();
+  assert.equal(h.controller.state.contents[0].state, 'packaged');
+  assert.equal(h.element('preview-btn').disabled, false);
 });
