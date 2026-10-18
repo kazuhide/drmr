@@ -458,7 +458,8 @@ impl Converter {
         let source = workspace.path().join("source.mp4");
         super::copy_private(input, &source)?;
         let input_report = super::validate(&source, input_keys)?;
-        self.backend.profile(&source)?;
+        self.backend
+            .profile(&source, super::source_key(&input_report, input_keys))?;
         let clear = workspace.path().join("clear.mp4");
         self.backend.package(
             &source,

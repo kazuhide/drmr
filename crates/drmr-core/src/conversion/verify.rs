@@ -93,22 +93,22 @@ impl Backend {
         source: StreamView<'_>,
         result: StreamView<'_>,
     ) -> Result<VerificationReport, ConversionError> {
-        let source_profile = self.profile_stream(source.input, source.index)?;
-        let result_profile = self.profile_stream(result.input, result.index)?;
+        let source_profile = self.profile_stream(source.input, source.index, source.key)?;
+        let result_profile = self.profile_stream(result.input, result.index, result.key)?;
         let source_metadata = if source.metadata == source.input {
             source_profile.clone()
         } else {
-            self.profile_stream(source.metadata, source.index)?
+            self.profile_stream(source.metadata, source.index, source.key)?
         };
         let result_metadata = if result.metadata == result.input {
             result_profile.clone()
         } else {
-            self.profile_stream(result.metadata, result.index)?
+            self.profile_stream(result.metadata, result.index, result.key)?
         };
         let stream_metadata_equal = source_metadata == result_metadata;
         let packet_timing_equal = source_profile["time_base"] == result_profile["time_base"]
-            && self.packets_stream(source.input, source.index)?
-                == self.packets_stream(result.input, result.index)?
+            && self.packets_stream(source.input, source.index, source.key)?
+                == self.packets_stream(result.input, result.index, result.key)?
             && super::progressive::presentation_windows_equal(source.input, result.input)?;
         let packet_payloads_equal =
             self.hash_stream(source.input, source.index, true, source.key)?

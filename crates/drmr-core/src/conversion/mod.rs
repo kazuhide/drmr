@@ -190,7 +190,8 @@ impl Converter {
             return Ok(report);
         }
         let input_report = validate(&snapshot, input_keys)?;
-        self.backend.profile(&snapshot)?;
+        self.backend
+            .profile(&snapshot, source_key(&input_report, input_keys))?;
         let clear = workspace.path().join("clear.mp4");
         self.backend.package(
             &snapshot,
@@ -252,8 +253,10 @@ impl Converter {
         copy_private(output, &result)?;
         let source_report = validate(&source, input_keys)?;
         let result_report = validate(&result, output_keys)?;
-        self.backend.profile(&source)?;
-        self.backend.profile(&result)?;
+        self.backend
+            .profile(&source, source_key(&source_report, input_keys))?;
+        self.backend
+            .profile(&result, source_key(&result_report, output_keys))?;
         self.backend.verify_media(
             &source,
             &result,

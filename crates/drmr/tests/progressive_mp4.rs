@@ -517,12 +517,8 @@ fn packet_clocks(path: &Path) -> serde_json::Value {
     assert!(output.status.success());
     serde_json::from_slice(&output.stdout).unwrap()
 }
-#[test]
-fn a_video_edit_ending_inside_the_final_frame_cannot_pass_independent_verification() {
-    let root = tempfile::tempdir().unwrap();
-    let original = root.path().join("original.mp4");
-    source(&original, true);
-    let mut data = std::fs::read(&original).unwrap();
+fn shorten_video_window(original: &Path, altered: &Path) {
+    let mut data = std::fs::read(original).unwrap();
     let boxes = drmr_core::mp4::parse_boxes(&data).unwrap();
     let all = drmr_core::mp4::walk(&boxes);
     let movie_header = all.iter().find(|b| b.kind() == *b"mvhd").unwrap();
@@ -548,8 +544,16 @@ fn a_video_edit_ending_inside_the_final_frame_cannot_pass_independent_verificati
         let old = u32::from_be_bytes(data[at..at + 4].try_into().unwrap());
         data[at..at + 4].copy_from_slice(&(old - step).to_be_bytes());
     }
+    std::fs::write(altered, data).unwrap();
+}
+
+#[test]
+fn a_video_edit_ending_inside_the_final_frame_cannot_pass_independent_verification() {
+    let root = tempfile::tempdir().unwrap();
+    let original = root.path().join("original.mp4");
+    source(&original, true);
     let altered = root.path().join("altered.mp4");
-    std::fs::write(&altered, data).unwrap();
+    shorten_video_window(&original, &altered);
     assert_eq!(packet_clocks(&original), packet_clocks(&altered));
     let result = command(&[
         "verify",
@@ -605,18 +609,10 @@ fn equivalent_integer_movie_clocks_preserve_the_same_presentation_windows() {
     assert_checks(&serde_json::from_slice::<serde_json::Value>(&result.stdout).unwrap());
 }
 
-#[test]
-fn independently_verified_progressive_cenc_retains_the_same_finite_windows() {
-    use std::io::Write as _;
-    let root = tempfile::tempdir().unwrap();
-    let original = root.path().join("original.mp4");
-    source(&original, true);
-    let encrypted = root.path().join("encrypted.mp4");
-    let key = "11111111111111111111111111111111";
-    let kid = "00000000000000000000000000000001";
+fn native_cenc(source: &Path, output: &Path, kid: &str, key: &str) {
     let result = Command::new("ffmpeg")
         .args(["-v", "error", "-nostdin", "-copyts", "-i"])
-        .arg(&original)
+        .arg(source)
         .args([
             "-map",
             "0",
@@ -626,6 +622,9 @@ fn independently_verified_progressive_cenc_retains_the_same_finite_windows() {
             "disabled",
             "-use_editlist",
             "1",
+            // A fixed public fixture IV makes unkeyed metadata inference fail deterministically.
+            "-fflags",
+            "+bitexact",
             "-encryption_scheme",
             "cenc-aes-ctr",
             "-encryption_key",
@@ -633,7 +632,7 @@ fn independently_verified_progressive_cenc_retains_the_same_finite_windows() {
             "-encryption_kid",
             kid,
         ])
-        .arg(&encrypted)
+        .arg(output)
         .output()
         .unwrap();
     assert!(
@@ -641,6 +640,18 @@ fn independently_verified_progressive_cenc_retains_the_same_finite_windows() {
         "{}",
         String::from_utf8_lossy(&result.stderr)
     );
+}
+
+#[test]
+fn independently_verified_progressive_cenc_retains_the_same_finite_windows() {
+    use std::io::Write as _;
+    let root = tempfile::tempdir().unwrap();
+    let original = root.path().join("original.mp4");
+    source(&original, true);
+    let encrypted = root.path().join("encrypted.mp4");
+    let key = "02020202020202020202020202020202";
+    let kid = "00000000000000000000000000000001";
+    native_cenc(&original, &encrypted, kid, key);
     let keys = root.path().join("private/keys.json");
     drmr_core::native::create_private_dir_all(keys.parent().unwrap()).unwrap();
     let body = serde_json::json!({"schema_version":1,"output":{"kid":kid,"key":key}});
@@ -657,9 +668,13 @@ fn independently_verified_progressive_cenc_retains_the_same_finite_windows() {
         keys.to_str().unwrap(),
         "--json",
     ]);
+    let checks = serde_json::from_slice::<serde_json::Value>(&result.stdout)
+        .ok()
+        .map(|report| report["checks"].clone());
     assert!(
         result.status.success(),
-        "{}",
+        "status={:?}; checks={checks:?}; stderr={}",
+        result.status.code(),
         String::from_utf8_lossy(&result.stderr)
     );
     assert_checks(&serde_json::from_slice::<serde_json::Value>(&result.stdout).unwrap());
@@ -862,4 +877,93 @@ fn preserved_track_transform_and_anamorphic_display_size_keep_complete_media_ide
         u32::from_be_bytes(payload[76..80].try_into().unwrap()),
         640 << 16
     );
+}
+
+#[test]
+fn encrypted_references_keep_finite_windows_display_sizes_and_metadata_strict() {
+    use std::io::Write as _;
+    let root = tempfile::tempdir().unwrap();
+    let original = root.path().join("original.mp4");
+    source(&original, true);
+    let encrypted = root.path().join("reference.mp4");
+    let input_kid = "00000000000000000000000000000001";
+    let input_key = "02020202020202020202020202020202";
+    let output_kid = "00000000000000000000000000000002";
+    let output_key = "22222222222222222222222222222222";
+    native_cenc(&original, &encrypted, input_kid, input_key);
+    let protected_output = root.path().join("result.mp4");
+    native_cenc(&original, &protected_output, output_kid, output_key);
+    let private = root.path().join("private");
+    drmr_core::native::create_private_dir_all(&private).unwrap();
+    for (name, baseline, protected) in [
+        ("clear", &original, false),
+        ("cenc", &protected_output, true),
+    ] {
+        let keys = private.join(format!("{name}.json"));
+        let mut config = serde_json::json!({"schema_version":1,
+            "input":{"keys":[{"kid":input_kid,"key":input_key}]}});
+        if protected {
+            config["output"] = serde_json::json!({"kid":output_kid,"key":output_key});
+        }
+        drmr_core::native::create_private_new(&keys)
+            .unwrap()
+            .write_all(config.to_string().as_bytes())
+            .unwrap();
+        let verify = |candidate: &Path| {
+            command(&[
+                "verify",
+                candidate.to_str().unwrap(),
+                "--source",
+                encrypted.to_str().unwrap(),
+                "--keys-file",
+                keys.to_str().unwrap(),
+                "--json",
+            ])
+        };
+        let positive = verify(baseline);
+        assert!(
+            positive.status.success(),
+            "{}",
+            String::from_utf8_lossy(&positive.stdout)
+        );
+        assert_checks(&serde_json::from_slice::<serde_json::Value>(&positive.stdout).unwrap());
+        for change in ["window", "width", "matrix"] {
+            let mutant = root.path().join(format!("{name}-{change}.mp4"));
+            match change {
+                "window" => shorten_video_window(baseline, &mutant),
+                "width" => patch_box(
+                    baseline,
+                    &mutant,
+                    *b"tkhd",
+                    76,
+                    &(640_u32 << 16).to_be_bytes(),
+                ),
+                _ => patch_box(
+                    baseline,
+                    &mutant,
+                    *b"tkhd",
+                    40,
+                    &(2_u32 << 16).to_be_bytes(),
+                ),
+            }
+            assert_eq!(packet_clocks(baseline), packet_clocks(&mutant));
+            let negative = verify(&mutant);
+            assert!(
+                !negative.status.success(),
+                "{name}-{change}: {}",
+                String::from_utf8_lossy(&negative.stdout)
+            );
+            let report: serde_json::Value = serde_json::from_slice(&negative.stdout).unwrap();
+            assert_eq!(report["media_verified"], false);
+            assert_eq!(report["checks"]["packet_payloads_equal"], true);
+            assert_eq!(report["checks"]["decoded_content_equal"], true);
+            if change == "matrix" {
+                assert_eq!(report["checks"]["stream_metadata"], "fail");
+                assert_eq!(report["checks"]["packet_timing_equal"], true);
+            } else {
+                assert_eq!(report["checks"]["stream_metadata"], "pass");
+                assert_eq!(report["checks"]["packet_timing_equal"], false);
+            }
+        }
+    }
 }

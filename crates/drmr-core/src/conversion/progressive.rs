@@ -310,7 +310,7 @@ fn layout(movie: &audio::Movie, report: &Inspection) -> Result<Option<Layout>, C
     }))
 }
 /// Add exact edit-window evidence only for the finite progressive source profile.
-/// Protection is independently validated; a known encrypted result can expose the same windows.
+/// Protection and keys are independently validated; clear and encrypted tracks expose the same windows.
 pub(super) fn presentation_windows_equal(
     source: &Path,
     result: &Path,
@@ -319,7 +319,10 @@ pub(super) fn presentation_windows_equal(
         return Ok(true);
     };
     if input.format != crate::inspection::InputFormat::Mp4
-        || input.protection != Protection::Clear
+        || !matches!(
+            input.protection,
+            Protection::Clear | Protection::Cenc | Protection::Cbcs
+        )
         || !profile_shape(&input)
     {
         return Ok(true);
@@ -416,7 +419,7 @@ impl Converter {
     }
     fn progressive_codecs(&self, source: &Path, input: &Inspection) -> Result<(), ConversionError> {
         for (index, track) in input.tracks.iter().enumerate() {
-            let profile = self.backend.profile_stream(source, index)?;
+            let profile = self.backend.profile_stream(source, index, None)?;
             let expected = if track.kind == TrackKind::Audio {
                 "aac"
             } else {

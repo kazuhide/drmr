@@ -250,7 +250,11 @@ impl Converter {
             let source = directory.join("source.mp4");
             copy_private(&track.source, &source)?;
             let prepared = prepare(&source, track.index, track.kind, request.input_keys)?;
-            let profile = self.backend.profile_stream(&source, track.index)?;
+            let profile = self.backend.profile_stream(
+                &source,
+                track.index,
+                key_for(&prepared, request.input_keys),
+            )?;
             if profile["codec_type"].as_str()
                 != Some(if track.kind == TrackKind::Audio {
                     "audio"
