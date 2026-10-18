@@ -696,3 +696,170 @@ fn nondefault_gain_never_becomes_a_verified_default_gain_presentation() {
     assert!(!output.exists());
     assert_eq!(std::fs::read(&half).unwrap(), before);
 }
+
+#[test]
+fn a_global_display_transform_can_be_preserved_in_the_composed_track_matrix() {
+    let root = tempfile::tempdir().unwrap();
+    let original = root.path().join("original.mp4");
+    source(&original, true);
+    let transformed = root.path().join("movie-transform.mp4");
+    patch_box(
+        &original,
+        &transformed,
+        *b"mvhd",
+        36,
+        &(2_u32 << 16).to_be_bytes(),
+    );
+    let before = std::fs::read(&transformed).unwrap();
+    let output = root.path().join("output.mp4");
+    let result = convert(&transformed, &output);
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_checks(&report["verification"]);
+    assert_eq!(std::fs::read(&transformed).unwrap(), before);
+    let result = command(&[
+        "verify",
+        output.to_str().unwrap(),
+        "--source",
+        transformed.to_str().unwrap(),
+        "--json",
+    ]);
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert_checks(&serde_json::from_slice::<serde_json::Value>(&result.stdout).unwrap());
+    for (path, movie_scale, track_scale) in [(&transformed, 2_u32, 1_u32), (&output, 1, 2)] {
+        let bytes = std::fs::read(path).unwrap();
+        let boxes = drmr_core::mp4::parse_boxes(&bytes).unwrap();
+        let all = drmr_core::mp4::walk(&boxes);
+        let movie = all
+            .iter()
+            .find(|b| b.kind() == *b"mvhd")
+            .unwrap()
+            .header
+            .payload(&bytes);
+        let track = all
+            .iter()
+            .find(|b| b.kind() == *b"tkhd")
+            .unwrap()
+            .header
+            .payload(&bytes);
+        assert_eq!(
+            u32::from_be_bytes(movie[36..40].try_into().unwrap()),
+            movie_scale << 16
+        );
+        assert_eq!(
+            u32::from_be_bytes(track[40..44].try_into().unwrap()),
+            track_scale << 16
+        );
+    }
+}
+#[test]
+fn video_display_extent_is_checked_even_when_all_packets_and_decoded_frames_match() {
+    let root = tempfile::tempdir().unwrap();
+    let original = root.path().join("original.mp4");
+    source(&original, true);
+    for (name, offset, expanded) in [("width", 76, 640_u32), ("height", 80, 360_u32)] {
+        let altered = root.path().join(format!("{name}.mp4"));
+        patch_box(
+            &original,
+            &altered,
+            *b"tkhd",
+            offset,
+            &(expanded << 16).to_be_bytes(),
+        );
+        let before = std::fs::read(&altered).unwrap();
+        let output = root.path().join(format!("{name}-output.mp4"));
+        let result = convert(&altered, &output);
+        assert!(!result.status.success());
+        assert!(!output.exists());
+        assert_eq!(std::fs::read(&altered).unwrap(), before);
+        assert_eq!(packet_clocks(&original), packet_clocks(&altered));
+        for (source, result) in [(&original, &altered), (&altered, &original)] {
+            let result = command(&[
+                "verify",
+                result.to_str().unwrap(),
+                "--source",
+                source.to_str().unwrap(),
+                "--json",
+            ]);
+            assert!(!result.status.success());
+            let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+            assert_eq!(report["checks"]["stream_metadata"], "pass");
+            assert_eq!(report["checks"]["packet_payloads_equal"], true);
+            assert_eq!(report["checks"]["decoded_content_equal"], true);
+            assert_eq!(report["checks"]["packet_timing_equal"], false);
+            assert_eq!(report["media_verified"], false);
+        }
+    }
+}
+#[test]
+fn preserved_track_transform_and_anamorphic_display_size_keep_complete_media_identity() {
+    let root = tempfile::tempdir().unwrap();
+    let original = root.path().join("anamorphic.mp4");
+    let result = Command::new("ffmpeg")
+        .args(["-v", "error", "-nostdin", "-i"])
+        .arg(fixture())
+        .args([
+            "-map", "0:v:0", "-map", "0:a:0", "-vf", "setsar=2", "-c:v", "libx264", "-threads",
+            "1", "-c:a", "copy",
+        ])
+        .arg(&original)
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    patch_box(
+        &original,
+        &original,
+        *b"tkhd",
+        40,
+        &(2_u32 << 16).to_be_bytes(),
+    );
+    let before = std::fs::read(&original).unwrap();
+    let output = root.path().join("output.mp4");
+    let result = convert(&original, &output);
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_checks(&report["verification"]);
+    assert_eq!(std::fs::read(&original).unwrap(), before);
+    let result = command(&[
+        "verify",
+        output.to_str().unwrap(),
+        "--source",
+        original.to_str().unwrap(),
+        "--json",
+    ]);
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert_checks(&serde_json::from_slice::<serde_json::Value>(&result.stdout).unwrap());
+    let bytes = std::fs::read(output).unwrap();
+    let boxes = drmr_core::mp4::parse_boxes(&bytes).unwrap();
+    let all = drmr_core::mp4::walk(&boxes);
+    let track = all.iter().find(|b| b.kind() == *b"tkhd").unwrap();
+    let payload = track.header.payload(&bytes);
+    assert_eq!(
+        u32::from_be_bytes(payload[40..44].try_into().unwrap()),
+        2 << 16
+    );
+    assert_eq!(
+        u32::from_be_bytes(payload[76..80].try_into().unwrap()),
+        640 << 16
+    );
+}

@@ -24,6 +24,7 @@ struct Window {
     timescale: u32,
     media_time: i64,
     duration: u64,
+    display_extent: Option<(u32, u32)>,
 }
 #[derive(Debug, PartialEq, Eq)]
 struct Edit {
@@ -212,6 +213,15 @@ fn track_playback(track: &Mp4Box, audio: bool, data: &[u8]) -> Result<(), Conver
     }
     Ok(())
 }
+fn display_extent(track: &Mp4Box, data: &[u8]) -> Result<(u32, u32), ConversionError> {
+    let payload = child(track, *b"tkhd")?.header.payload(data);
+    let offset = match payload.first() {
+        Some(0) => 76,
+        Some(1) => 88,
+        _ => return Err(UNSUPPORTED),
+    };
+    Ok((integer(payload, offset)?, integer(payload, offset + 4)?))
+}
 fn layout(movie: &audio::Movie, report: &Inspection) -> Result<Option<Layout>, ConversionError> {
     let data = &movie.bytes;
     let boxes = mp4::parse_boxes(data).map_err(|_| UNSUPPORTED)?;
@@ -267,6 +277,11 @@ fn layout(movie: &audio::Movie, report: &Inspection) -> Result<Option<Layout>, C
                 timescale: scale,
                 media_time: edited.as_ref().map_or(0, |e| e.media_time),
                 duration: media_ticks(edited_duration, movie_timescale, scale)?,
+                display_extent: if actual.kind == TrackKind::Video {
+                    Some(display_extent(track, data)?)
+                } else {
+                    None
+                },
             },
             track_duration,
             edited_duration,
@@ -561,6 +576,26 @@ mod tests {
                     edit(&boxes[0], &data, 48_000, 48_000).unwrap_err(),
                     UNSUPPORTED
                 );
+            }
+        }
+    }
+    #[test]
+    fn display_extents_are_exact_and_require_both_complete_fields() {
+        for (version, offset) in [(0, 76), (1, 88)] {
+            let mut payload = vec![0; offset + 8];
+            payload[0] = version;
+            payload[offset..offset + 4].copy_from_slice(&(320_u32 << 16).to_be_bytes());
+            payload[offset + 4..offset + 8].copy_from_slice(&(180_u32 << 16).to_be_bytes());
+            let bytes = box_bytes(*b"trak", &box_bytes(*b"tkhd", &payload));
+            let boxes = mp4::parse_boxes(&bytes).unwrap();
+            assert_eq!(
+                display_extent(&boxes[0], &bytes).unwrap(),
+                (320 << 16, 180 << 16)
+            );
+            for length in 0..payload.len() {
+                let bytes = box_bytes(*b"trak", &box_bytes(*b"tkhd", &payload[..length]));
+                let boxes = mp4::parse_boxes(&bytes).unwrap();
+                assert_eq!(display_extent(&boxes[0], &bytes).unwrap_err(), UNSUPPORTED);
             }
         }
     }
