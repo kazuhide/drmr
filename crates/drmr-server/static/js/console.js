@@ -1058,7 +1058,7 @@
     App.Api.analyzeHls({ url: url, asset_id: assetId, access_profile: 'default' }).then(function (res) {
       if (state.run !== run) return;
       run.jobId = res.job_id; run.analysisId = res.analysis_id; run.view.jobId = res.job_id; if (state.logView === run.view) renderLogPanel();
-      els.hlsUrl.value = ''; // the URL is not kept anywhere once the server has it
+      els.hlsUrl.value = ''; // Clear the submitted field; the server retains its private source analysis.
       watchRun(run, false);
       loadAll().then(function () { if (state.run === run || state.lastRun === run) { state.addOpen = false; selectContent(assetId); UI.replace(els.contentNotice, h('p', { className: 'state-line', text: t('analyzing') })); } });
     }, function (e) {

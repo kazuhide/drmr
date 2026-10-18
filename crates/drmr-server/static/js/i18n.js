@@ -22,7 +22,7 @@
     addTitle: 'コンテンツを追加',
     addCatalogTitle: '既存の DRM コンテンツ（DASH CENC・HLS FairPlay）', addCatalogHelp: 'DASH（CENC）マニフェスト、HLS（FairPlay）マスター、セグメント、keys.env をカタログルート直下の 1 ディレクトリに配置し、「一覧を更新」を押します。',
     addHlsTitle: 'Clear HLS（暗号化されていない HLS）', addHlsHelp: 'VOD のマスタープレイリスト URL を解析して登録します。DRM パラメーターはパッケージ時に入力します。',
-    sourceUrl: 'マスタープレイリスト URL', sourceUrlHelp: 'URL は保存されません。',
+    sourceUrl: 'マスタープレイリスト URL', sourceUrlHelp: 'サーバーは元の URL と取得したメディアを非公開の解析フォルダーに保存します。',
     outputName: '出力名（自動・編集可）', outputNameHelp: '出力フォルダー名になります（英数字・_ . -、後から変更できません）。', analyze: '解析を開始',
     analysisStarting: '解析を開始しています…', analyzing: '解析中…', analysisLoading: '解析結果を読み込んでいます…',
     analysisJobFailed: '解析ジョブが失敗しました。ログを確認してください。', analysisUnavailable: 'この解析結果は利用できなくなりました。別の出力名で解析し直してください。',
@@ -38,7 +38,7 @@
     'qreason_asset-not-found': 'カタログにエントリがありません', 'qreason_asset-already-exists': 'この ID は Clear HLS で使用済みです', 'qreason_job-launch-failed': 'ジョブを起動できませんでした', 'qreason_catalog-scan-failed': 'カタログを読み取れませんでした',
     // input section
     inputEntry: 'カタログのエントリ', inputMpd: 'DASH マニフェスト', inputHlsMaster: 'HLS マスター', inputKeys: '鍵情報', inputKeysCatalog: 'エントリの keys.env（画面には表示されません）',
-    inputHlsWhere: '解析スナップショット', inputHlsSnapshot: 'output/{id}/clear/source/（元の URL は保存されません）',
+    inputHlsWhere: '保存したソース', inputHlsSnapshot: 'output/{id}/clear/source/（元の URL と取得メディアを非公開で保存）',
     scheme: '保護方式', prVersion: 'PlayReady バージョン', prAlgid: 'PlayReady ALGID', drmState: 'DRM', drmStateExisting: 'あり — {scheme}（{systems}）、HLS は FairPlay', drmStateClear: 'なし（Clear）', muxing: 'muxing',
     loading: '読み込み中…', inspectLoadFailed: 'マニフェストを読み込めませんでした。',
     analysisPass: 'ソース検査が通りました。DRM パラメーターを入力するとパッケージできます。', analysisRejected: 'このソースはパッケージできません。指摘事項を確認してください。', analysisPending: '解析結果はまだありません。',
@@ -172,6 +172,7 @@
     busyError: '別のジョブが実行中です。完了を待ってください。', assetExistsError: 'この出力名は使用済みです。一覧から開くか、別の出力名を指定してください。',
     resultExistsError: 'このコンテンツの出力は作成済みです。再変換する場合は別の出力名で解析してください。', conflictError: '現在の状態と競合するため実行できませんでした。一覧を更新してください。',
     runningDeleteError: '実行中のジョブは履歴から削除できません。', queuedError: 'このコンテンツはすでに待機列にあるか実行中です。', queuedErrorAsset: '{asset} はすでに待機列にあるか実行中です。', assetExistsErrorAsset: '{asset} は Clear HLS で使用済みの ID です。', assetNotFoundErrorAsset: '{asset} はカタログにありません。一覧を更新してください。', queueItemError: '待機列にありません。',
+    sourceAccessError: 'このソースはサーバーの HLS アクセスプロファイルで許可されていません。許可された公開 HTTPS URL を使うか、サーバー管理者に取得設定の確認を依頼してください。',
     invalidError: '必須項目と値の形式を確認してください。', notFoundError: 'データが見つかりません。ページを更新してください。', expiredError: '再生セッションが期限切れです。再生確認を準備し直してください。', forbiddenError: 'この操作は許可されていません。',
   };
 
@@ -189,7 +190,7 @@
     addTitle: 'Add content',
     addCatalogTitle: 'Existing DRM content (DASH CENC + HLS FairPlay)', addCatalogHelp: 'Stage the DASH (CENC) manifest, the HLS (FairPlay) master, the segments and keys.env in one directory under the catalog root, then press "Refresh the list".',
     addHlsTitle: 'Clear HLS (unencrypted HLS)', addHlsHelp: 'Analyzes the URL of a VOD master playlist and registers it. DRM parameters are entered at packaging time.',
-    sourceUrl: 'Master playlist URL', sourceUrlHelp: 'The URL is not stored.',
+    sourceUrl: 'Master playlist URL', sourceUrlHelp: 'The server saves source URLs and downloaded media in a private analysis folder.',
     outputName: 'Output name (automatic, editable)', outputNameHelp: 'Becomes the output folder name (letters, digits, _ . -; cannot change later).', analyze: 'Start analysis',
     analysisStarting: 'Starting analysis…', analyzing: 'Analyzing…', analysisLoading: 'Loading the analysis…',
     analysisJobFailed: 'The analysis job failed. Check the log.', analysisUnavailable: 'This analysis is no longer available. Analyze again under another output name.',
@@ -202,7 +203,7 @@
     queuePending: 'Queue', queueRemove: 'Remove', queueRemoveLabel: 'Remove {asset} from the queue', queueSkipped: '{asset} was not run ({reason}).', queueAdded: 'Added {n} to the queue.', queueSkippedTitle: 'Not run', dismiss: 'Dismiss', dismissLabel: 'Dismiss the notice for {asset}',
     'qreason_asset-not-found': 'no catalog entry', 'qreason_asset-already-exists': 'this ID is used by a clear-HLS content', 'qreason_job-launch-failed': 'the job could not be launched', 'qreason_catalog-scan-failed': 'the catalog could not be read',
     inputEntry: 'Catalog entry', inputMpd: 'DASH manifest', inputHlsMaster: 'HLS master', inputKeys: 'Keys', inputKeysCatalog: 'The entry\'s keys.env (never shown here)',
-    inputHlsWhere: 'Analysis snapshot', inputHlsSnapshot: 'output/{id}/clear/source/ (the original URL is not stored)',
+    inputHlsWhere: 'Saved source', inputHlsSnapshot: 'output/{id}/clear/source/ (private source URLs and downloaded media)',
     scheme: 'Protection scheme', prVersion: 'PlayReady version', prAlgid: 'PlayReady ALGID', drmState: 'DRM', drmStateExisting: 'yes — {scheme} ({systems}), HLS FairPlay', drmStateClear: 'none (clear)', muxing: 'muxing',
     loading: 'Loading…', inspectLoadFailed: 'Could not load the manifest.',
     analysisPass: 'The source passed inspection. Enter the DRM parameters to package it.', analysisRejected: 'This source cannot be packaged. Review the findings.', analysisPending: 'No analysis yet.',
@@ -329,6 +330,7 @@
     busyError: 'Another job is running. Wait for it to finish.', assetExistsError: 'This output name is already in use. Open it from the list, or choose another output name.',
     resultExistsError: 'Output already exists for this content. To repackage, analyze with another output name.', conflictError: 'This action conflicts with the current state. Refresh the list.',
     runningDeleteError: 'A running job cannot be removed from history.', queuedError: 'This content is already queued or running.', queuedErrorAsset: '{asset} is already queued or running.', assetExistsErrorAsset: '{asset} is an ID used by a clear-HLS content.', assetNotFoundErrorAsset: '{asset} is not in the catalog. Refresh the list.', queueItemError: 'Not in the queue.',
+    sourceAccessError: 'The server\'s HLS access profile does not allow this source. Use an allowed public HTTPS URL, or ask the server operator to check its fetch settings.',
     invalidError: 'Check the required fields and their values.', notFoundError: 'Data not found. Refresh this page.', expiredError: 'The playback session expired. Prepare playback again.', forbiddenError: 'This action is not allowed.',
   };
 
@@ -354,7 +356,7 @@
     var select = document.getElementById('language-select');
     if (select) select.value = language;
   }
-  // Server error classes map to fixed sentences; allowlisted conflict codes are translated
+  // Server error classes and allowlisted codes map to fixed sentences.
   function error(e) {
     if (!e || !e.status) return t('networkError');
     var code = e.body && e.body.error;
@@ -366,7 +368,10 @@
       return t(Object.prototype.hasOwnProperty.call(conflicts, code) ? conflicts[code] : 'conflictError');
     }
     if (e.status === 403) return t('forbiddenError');
-    if (e.status === 422 || e.status === 400 || e.status === 415) return t('invalidError');
+    if (e.status === 422 || e.status === 400 || e.status === 415) {
+      if (code === 'source-profile-invalid' || code === 'source-not-allowed') return t('sourceAccessError');
+      return t('invalidError');
+    }
     if (e.status === 404) return code === 'queue-item-not-found' ? t('queueItemError') : code === 'asset-not-found' && asset ? t('assetNotFoundErrorAsset', { asset: asset }) : t('notFoundError');
     if (e.status === 410) return t('expiredError');
     return t('requestError');
