@@ -315,7 +315,7 @@ fn the_original_version_one_json_shape_keeps_its_values() {
 }
 
 #[test]
-fn known_text_roles_have_no_executable_candidates_but_keep_version_one_intent_fields() {
+fn known_text_roles_cannot_advertise_an_executable_plan() {
     use inspection::{Evidence, InputFormat, Protection, Track, TrackKind};
     for codec in ["wvtt", "stpp"] {
         for format in [OutputFormat::Mp4, OutputFormat::Dash, OutputFormat::Hls] {
@@ -338,8 +338,14 @@ fn known_text_roles_have_no_executable_candidates_but_keep_version_one_intent_fi
                 vec![format],
             );
             assert!(
-                report.compatible && report.execution_available,
-                "existing intent fields must remain unchanged"
+                !report.compatible && !report.execution_available,
+                "a known unsupported source must not advertise executable intent"
+            );
+            assert!(
+                report
+                    .findings
+                    .iter()
+                    .any(|finding| finding.code == "no-supported-processing-route")
             );
             assert!(
                 report.processing.unwrap().candidates.is_empty(),
@@ -372,7 +378,7 @@ fn known_text_roles_have_no_executable_candidates_but_keep_version_one_intent_fi
         vec![],
     );
     let report = inspection::plan(mixed, TargetProtection::Clear, vec![OutputFormat::Dash]);
-    assert!(report.compatible && report.execution_available);
+    assert!(!report.compatible && !report.execution_available);
     assert!(
         report.processing.unwrap().candidates.is_empty(),
         "the whole source includes a refused text track"

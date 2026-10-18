@@ -230,7 +230,7 @@ pub fn plan(
     // A SAMPLE-AES declaration can select a conditional handler without establishing
     // its container scheme. Every original track must carry its own declaration.
     let sample_aes = sample_aes_candidate(&input);
-    let compatible = findings.iter().all(|finding| {
+    let mut compatible = findings.iter().all(|finding| {
         finding.code == "media-validation-required"
             || (sample_aes && finding.code == "source-protection-unresolved")
     });
@@ -283,6 +283,22 @@ pub fn plan(
     }
     operations.push("verify-output".into());
     let processing = describe_processing(&input, target, &formats, compatible);
+    if compatible
+        && formats.iter().any(|format| {
+            !processing
+                .candidates
+                .iter()
+                .any(|candidate| candidate.output_format == *format)
+        })
+    {
+        compatible = false;
+        findings.push(Finding::new(if processing.candidates.is_empty() {
+            "no-supported-processing-route"
+        } else {
+            "output-format-has-no-processing-route"
+        }));
+    }
+    execution_available &= compatible;
     ConversionPlan {
         schema_version: 1,
         input,

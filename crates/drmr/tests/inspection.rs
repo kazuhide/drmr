@@ -156,21 +156,84 @@ fn known_text_declarations_have_no_candidate_in_human_or_json_plan() {
     let output = run(&[
         "plan", &input, "--to", "clear", "--format", "dash", "--json",
     ]);
-    assert!(
-        output.status.success(),
-        "legacy intent exit status is unchanged"
-    );
+    assert_eq!(output.status.code(), Some(1));
     let report = json(&output);
-    assert_eq!(report["compatible"], true);
-    assert_eq!(report["execution_available"], true);
+    assert_eq!(report["compatible"], false);
+    assert_eq!(report["execution_available"], false);
     assert_eq!(report["processing"]["candidates"], serde_json::json!([]));
+    assert!(
+        report["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|finding| { finding["code"] == "no-supported-processing-route" })
+    );
     let output = run(&["plan", &input, "--to", "clear", "--format", "dash"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("Plan status: unsupported"));
     assert!(
         String::from_utf8(output.stdout)
             .unwrap()
             .contains("No candidate route is available from the inspected declarations.")
     );
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+}
+
+#[test]
+fn several_supported_output_intents_remain_conditional_separate_commands() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = fixture(
+        dir.path(),
+        "video.mpd",
+        "<MPD><Period><AdaptationSet contentType=\"video\"><Representation codecs=\"avc1.64001f\"/></AdaptationSet></Period></MPD>",
+    );
+    let output = run(&[
+        "plan", &input, "--to", "clear", "--format", "dash,hls", "--json",
+    ]);
+    assert!(output.status.success());
+    let report = json(&output);
+    assert_eq!(report["compatible"], true);
+    assert_eq!(report["execution_available"], false);
+    assert_eq!(
+        report["processing"]["candidates"].as_array().unwrap().len(),
+        2
+    );
+    let output = run(&["plan", &input, "--to", "clear", "--format", "dash,hls"]);
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("Plan status: conditional"));
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+}
+
+#[test]
+fn each_requested_output_format_needs_its_own_candidate() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = fixture(
+        dir.path(),
+        "two-videos.mpd",
+        "<MPD><Period><AdaptationSet contentType=\"video\" codecs=\"avc1.64001f\"><Representation id=\"v1\"/><Representation id=\"v2\"/></AdaptationSet></Period></MPD>",
+    );
+    let output = run(&[
+        "plan", &input, "--to", "clear", "--format", "mp4,dash", "--json",
+    ]);
+    assert_eq!(output.status.code(), Some(1));
+    let report = json(&output);
+    assert_eq!(report["compatible"], false);
+    assert_eq!(report["execution_available"], false);
+    assert_eq!(
+        report["processing"]["candidates"].as_array().unwrap().len(),
+        1
+    );
+    assert_eq!(
+        report["processing"]["candidates"][0]["output_format"],
+        "dash"
+    );
+    assert!(
+        report["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|finding| { finding["code"] == "output-format-has-no-processing-route" })
+    );
 }
 
 #[test]
