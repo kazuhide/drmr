@@ -40,18 +40,25 @@ impl Converter {
             .map_err(|_| ConversionError("resource-budget"))?;
         budget.workers = budget.workers.min(tracks);
         self.backend.runner.note_resource_budget(&budget);
+        let execute = |ordinal| {
+            let result = unit(ordinal);
+            if result.is_ok() {
+                self.backend.completed_work_unit(ordinal, tracks);
+            }
+            result
+        };
         if budget.workers == 1 {
             return (0..tracks)
                 .map(|ordinal| {
                     self.backend.check_cancelled()?;
-                    unit(ordinal)
+                    execute(ordinal)
                 })
                 .collect();
         }
         std::thread::scope(|scope| {
             let pool = Pool::new(scope, budget.workers);
             let units = (0..tracks).map(|ordinal| {
-                let unit = &unit;
+                let unit = &execute;
                 Box::new(move || {
                     self.backend.check_cancelled()?;
                     unit(ordinal)

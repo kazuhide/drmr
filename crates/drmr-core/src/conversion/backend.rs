@@ -16,6 +16,7 @@ pub(super) struct Backend {
     pub ffprobe: String,
     pub timeout: Duration,
     pub measurement: Option<Arc<super::measurement::Measurements>>,
+    pub activity: Option<Arc<dyn crate::events::Sink>>,
 }
 impl Backend {
     pub fn scope(&self, phase: super::measurement::Phase) -> super::measurement::Scope {
@@ -24,6 +25,12 @@ impl Backend {
             .map_or_else(super::measurement::Scope::default, |meter| {
                 meter.scope(phase)
             })
+            .observed(self.activity.as_ref(), phase)
+    }
+    pub fn completed_work_unit(&self, ordinal: usize, total: usize) {
+        if let Some(sink) = &self.activity {
+            sink.emit(serde_json::json!({"stage":"conversion", "event":"work-unit-completed", "ordinal":ordinal, "total":total}).as_object().unwrap());
+        }
     }
     pub fn checkpoint(&self, roots: &[&super::files::Stage]) {
         if let Some(meter) = &self.measurement {
@@ -538,6 +545,7 @@ mod packet_tests {
                 ffprobe: tool.to_str().unwrap().into(),
                 timeout: Duration::from_secs(20),
                 measurement: None,
+                activity: None,
             };
             assert_eq!(
                 backend.packets_stream(&input, 0, None).unwrap_err(),
