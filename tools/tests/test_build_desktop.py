@@ -4,6 +4,8 @@ import importlib.util
 import hashlib
 import json
 import os
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 import tempfile
@@ -45,6 +47,54 @@ def missing_fixture(root):
 
 
 class DesktopPackages(unittest.TestCase):
+    def test_pinned_notices_keep_publisher_bytes_in_autocrlf_checkout(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repository = root / "checkout"
+            repository.mkdir()
+            empty_config = root / "empty-config"
+            empty_config.touch()
+            empty_template = root / "empty-template"
+            empty_template.mkdir()
+            env = {key: value for key, value in os.environ.items()
+                   if not key.startswith("GIT_")}
+            env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=str(empty_config),
+                       GIT_ATTR_NOSYSTEM="1")
+
+            def git(*arguments):
+                return subprocess.run(
+                    ["git", "-c", "core.autocrlf=false", "-c", "core.safecrlf=false",
+                     "-c", "core.attributesFile=" + str(empty_config),
+                     "-c", "core.hooksPath=" + str(empty_template),
+                     "-c", "commit.gpgsign=false", "-c", "user.name=Packaging Test",
+                     "-c", "user.email=packaging@example.invalid", *arguments],
+                    cwd=repository, env=env, check=True, stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE, encoding="utf-8", timeout=10)
+
+            notice_root = repository / "tools" / "desktop-licenses"
+            shutil.copytree(BUILD.ROOT / "tools" / "desktop-licenses", notice_root)
+            shutil.copyfile(BUILD.ROOT / ".gitattributes", repository / ".gitattributes")
+            manifest = json.loads((notice_root / "manifest.json").read_text(encoding="utf-8"))
+            git("init", "--quiet", "--template=" + str(empty_template))
+            git("add", ".gitattributes", "tools/desktop-licenses")
+            git("commit", "--quiet", "-m", "Record exact publisher notices")
+            shutil.rmtree(notice_root)
+            git("-c", "core.autocrlf=true", "checkout", "--", "tools/desktop-licenses")
+
+            for index, entry in enumerate(manifest["packages"]):
+                with self.subTest(package=entry["name"], version=entry["version"]):
+                    home = root / ("package-" + str(index))
+                    home.mkdir()
+                    (home / ".cargo_vcs_info.json").write_text(
+                        json.dumps({"git": {"sha1": entry["revision"]}}), encoding="utf-8")
+                    package = {key: entry[key] for key in ("name", "version", "license", "repository")}
+                    package["manifest_path"] = str(home / "Cargo.toml")
+                    with patch.object(BUILD, "ROOT", repository):
+                        files, _ = BUILD.pinned_notices(package)
+                    self.assertEqual(len(files), len(entry["notices"]))
+                    for path, notice in zip(files, entry["notices"]):
+                        self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), notice["sha256"])
+
     def test_notices_keep_runtime_dependencies_pinned_text_and_web_licenses(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
