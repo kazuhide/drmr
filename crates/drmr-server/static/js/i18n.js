@@ -15,7 +15,7 @@
     // kinds and states
     kind_catalog: 'DASH CENC + HLS FairPlay', kind_hls: 'HLS（Clear）', group_catalog: '既存の DRM コンテンツ（DASH CENC・HLS FairPlay → CBCS）', group_hls: 'Clear HLS（→ CBCS）', kind_convert: 'CBCS 変換', kind_analysis: 'ソース解析', kind_package: 'DRM パッケージ',
     state_running: '実行中', state_succeeded: '完了', state_failed: '失敗', state_interrupted: '中断',
-    cstate_ready: '未変換', cstate_running: '実行中', cstate_queued: '待機中', cstate_packaged: 'パッケージ済み', cstate_unverified: '出力未検証', cstate_failed: '失敗', cstate_analyzed: '解析済み', cstate_orphan: 'エントリなし',
+    cstate_ready: '未変換', cstate_running: '実行中', cstate_queued: '待機中', cstate_packaged: 'パッケージ済み', cstate_unverified: '出力未検証', cstate_failed: '失敗', cstate_interrupted: '中断', cstate_analyzed: '解析済み', cstate_orphan: 'エントリなし',
     orphanNotice: 'このコンテンツのカタログエントリは見つかりません。実行の記録とログだけを表示しています。', reportNoneOrphan: 'カタログエントリがないため、レポートは取得できません。',
     // empty / add
     emptyTitle: 'コンテンツを選択',
@@ -58,7 +58,7 @@
     'finding_source-http-failed': 'ソースの取得に失敗しました（HTTP エラー）。',
     'finding_source-fetch-failed': 'ソースの取得に失敗しました。',
     'finding_multiple-audio-group-selection-required': '複数の音声グループに多重化音声があるため、自動選択できません。',
-    'finding_analysis-failed': '解析ジョブが失敗しました。ログを確認してください。', 'finding_analysis-interrupted': '解析ジョブが中断されました。', 'finding_analysis-running': '解析中です。',
+    'finding_analysis-failed': '解析ジョブが失敗しました。ログを確認してください。', 'finding_analysis-interrupted': '解析が中断されました。ログを確認してから再実行してください。', 'finding_analysis-running': '解析中です。',
     // transformation section
     transformInput: '入力:', transformOutput: '出力:', inputExisting: '既存 DRM（DASH CENC・HLS FairPlay）', inputClear: 'Clear HLS（{muxing}）', outputsList: 'DASH CBCS（Widevine・PlayReady）、HLS CBCS（FairPlay）', transformDetails: '処理の内訳と検証項目',
     sampleValues: 'サンプル値を入力', sampleValuesNote: '書式確認用の合成値です（本物の鍵ではありません）。',
@@ -191,7 +191,7 @@
     leaseIdle: 'No job running', leaseRunning: 'Running: {asset} · {kind}', leaseQueued: '{n} waiting',
     kind_catalog: 'DASH CENC + HLS FairPlay', kind_hls: 'HLS (clear)', group_catalog: 'Existing DRM content (DASH CENC + HLS FairPlay → CBCS)', group_hls: 'Clear HLS (→ CBCS)', kind_convert: 'CBCS conversion', kind_analysis: 'Source analysis', kind_package: 'DRM packaging',
     state_running: 'Running', state_succeeded: 'Succeeded', state_failed: 'Failed', state_interrupted: 'Interrupted',
-    cstate_ready: 'Not converted', cstate_running: 'Running', cstate_queued: 'Queued', cstate_packaged: 'Packaged', cstate_unverified: 'Output unverified', cstate_failed: 'Failed', cstate_analyzed: 'Analyzed', cstate_orphan: 'Entry removed',
+    cstate_ready: 'Not converted', cstate_running: 'Running', cstate_queued: 'Queued', cstate_packaged: 'Packaged', cstate_unverified: 'Output unverified', cstate_failed: 'Failed', cstate_interrupted: 'Interrupted', cstate_analyzed: 'Analyzed', cstate_orphan: 'Entry removed',
     orphanNotice: 'The catalog entry of this content is gone. Only its run records and logs are shown.', reportNoneOrphan: 'No report can be fetched without the catalog entry.',
     emptyTitle: 'Select a content',
     addTitle: 'Add content',
@@ -230,7 +230,7 @@
     'finding_source-http-failed': 'Fetching the source failed (HTTP error).',
     'finding_source-fetch-failed': 'Fetching the source failed.',
     'finding_multiple-audio-group-selection-required': 'Muxed audio exists in several audio groups; it cannot be selected automatically.',
-    'finding_analysis-failed': 'The analysis job failed. Check the log.', 'finding_analysis-interrupted': 'The analysis job was interrupted.', 'finding_analysis-running': 'Analysis is still running.',
+    'finding_analysis-failed': 'The analysis job failed. Check the log.', 'finding_analysis-interrupted': 'The analysis was interrupted. Check the log before starting it again.', 'finding_analysis-running': 'Analysis is still running.',
     transformInput: 'Input:', transformOutput: 'Output:', inputExisting: 'existing DRM (DASH CENC + HLS FairPlay)', inputClear: 'clear HLS ({muxing})', outputsList: 'DASH CBCS (Widevine, PlayReady), HLS CBCS (FairPlay)', transformDetails: 'What is done, and the checks',
     sampleValues: 'Fill sample values', sampleValuesNote: 'Synthetic values that show the format only (not real keys).',
     transformCatalogPending: 'Converting performs the following and verifies each item on every rendition. Nothing is re-encoded.',

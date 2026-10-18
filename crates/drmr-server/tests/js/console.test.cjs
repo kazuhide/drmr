@@ -71,7 +71,7 @@ function harness(options = {}) {
       source = source.replace(boot, `window.controller = {
         state, cacheElements, bind, renderList, newLogView, applyRecord, settleProgress,
         renderLogMeta, suggestedName, discoverRunning, renderRuns, requestStop,
-        renderPlaybackControls, preparePreview, recompose, renderReport, loadCatalogReport, startConvert,
+        renderPlaybackControls, preparePreview, recompose, renderReport, loadCatalogReport, startConvert, renderInput, renderHead,
         onPlayback: function (value) { playback = value; },
         onRestore: function (callback) { restoreRun = callback; }
       };`);
@@ -341,4 +341,38 @@ test('an old preview completion cannot release a newer active preview request', 
   assert.equal(prepared, 1);
   assert.equal(h.controller.state.previewBusy, false);
   assert.equal(h.element('preview-btn').disabled, false);
+});
+
+
+test('stopped analysis uses interrupted list/detail chips and input recovery copy', () => {
+  const h = harness({ catalog: [] });
+  h.controller.state.jobs = [{ asset_id: 'asset', kind: 'analysis', job_id: 'stopped', state: 'interrupted' }];
+  h.controller.recompose();
+  const c = h.controller.state.contents[0];
+  h.controller.renderHead(c);
+  h.controller.renderInput(c);
+  for (const id of ['content-list', 'content-chips']) {
+    const chip = descendants(h.element(id)).find(node => node.textContent === 'cstate_interrupted');
+    assert.ok(chip, id);
+    assert.ok(chip.className.includes('chip-warn'));
+    assert.equal(descendants(h.element(id)).some(node => node.textContent === 'cstate_failed'), false);
+  }
+  assert.ok(descendants(h.element('input-state')).some(node => node.textContent === 'finding_analysis-interrupted'));
+  assert.equal(descendants(h.element('input-state')).some(node => node.textContent === 'analysisJobFailed'), false);
+});
+
+
+test('a newly running analysis replaces the previous asset failure notice', () => {
+  const h = harness({ catalog: [] });
+  h.controller.state.jobs = [{ asset_id: 'old', kind: 'analysis', job_id: 'failed', state: 'failed' }];
+  h.controller.recompose();
+  h.controller.renderInput(h.controller.state.contents[0]);
+  assert.ok(descendants(h.element('input-state')).some(node => node.textContent === 'analysisJobFailed'));
+  h.controller.state.jobs = [{ asset_id: 'new', kind: 'analysis', job_id: 'active', state: 'running' }];
+  h.controller.recompose();
+  h.controller.state.run = { kind: 'analysis', assetId: 'new' };
+  h.controller.renderInput(h.controller.state.contents[0]);
+  assert.ok(descendants(h.element('input-state')).some(node => node.textContent === 'analyzing'));
+  assert.equal(descendants(h.element('input-state')).some(node => node.textContent === 'analysisJobFailed'), false);
+  assert.equal(descendants(h.element('input-state')).some(node => node.textContent === 'finding_analysis-interrupted'), false);
 });

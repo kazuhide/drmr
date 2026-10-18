@@ -66,3 +66,14 @@ test('stop intent on a zero-exit generation never restores catalog authority', (
   assert.equal(m.hasVerifiedOutput(content), false);
   assert.notEqual(content.state, 'packaged');
 });
+
+
+test('an intentionally interrupted newest run is distinct from a failed run', () => {
+  const m = model();
+  for (const kind of ['analysis', 'convert']) {
+    const row = { asset_id: 'asset', kind, job_id: 'latest', state: 'interrupted' };
+    const catalog = kind === 'convert' ? [{ asset_id: 'asset', converted: true }] : [];
+    assert.equal(m.compose(catalog, [row], null)[0].state, 'interrupted');
+    assert.equal(m.compose(catalog, [{ ...row, state: 'failed' }], null)[0].state, 'failed');
+  }
+});

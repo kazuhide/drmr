@@ -367,7 +367,7 @@
     renderPlaybackControls(content);
     renderLogPanel();
   }
-  function stateChipKind(st) { return st === 'packaged' ? 'good' : st === 'running' ? 'run' : st === 'failed' ? 'fail' : st === 'queued' ? 'info' : (st === 'orphan' || st === 'unverified') ? 'warn' : null; }
+  function stateChipKind(st) { return st === 'packaged' ? 'good' : st === 'running' ? 'run' : st === 'failed' ? 'fail' : st === 'queued' ? 'info' : (st === 'orphan' || st === 'unverified' || st === 'interrupted') ? 'warn' : null; }
   function reportLink(kind, id, asset) {
     return h('a', { className: 'btn btn-sm', href: '/reports/' + kind + '/' + encodeURIComponent(id), text: t('viewReport'), 'aria-label': t('viewReportLabel', { asset: asset }) });
   }
@@ -437,8 +437,8 @@
     return pairs.filter(Boolean).map(function (pair) { return [h('dt', { text: pair[0] }), h('dd', { className: pair[2] || null, text: pair[1] == null || pair[1] === '' ? '—' : pair[1] })]; });
   }
   function renderInput(content) {
-    var runningHere = state.run && state.run.assetId === content.asset_id && state.run.kind === 'analysis';
-    if (!runningHere) UI.replace(els.inputState);
+    var runningHere = (state.run && state.run.assetId === content.asset_id && state.run.kind === 'analysis') || (content.jobs || []).some(function (job) { return job.kind === 'analysis' && job.state === 'running'; });
+    UI.replace(els.inputState);
     UI.replace(els.inputFindings); UI.replace(els.inputTable); UI.replace(els.inputKv);
     els.audioChoice.hidden = true;
     if (content.kind === 'catalog' && content.orphan) { UI.replace(els.inputState, UI.notice('warn', t('orphanNotice'))); return; }
@@ -459,8 +459,9 @@
     var a = state.detail.analysis;
     UI.replace(els.inputKv, kvPairs([[t('inputHlsWhere'), t('inputHlsSnapshot', { id: content.asset_id }), 'mono'], a ? [t('drmState'), t('drmStateClear')] : null, a ? [t('muxing'), muxingSummary(a.tracks)] : null]));
     if (!a) {
-      if (state.detail.analysisError) UI.replace(els.inputState, UI.notice('fail', state.detail.analysisError));
-      else if (!runningHere && !content.analysis_id) UI.replace(els.inputState, UI.notice(content.state === 'failed' ? 'fail' : 'info', t(content.state === 'failed' ? 'analysisJobFailed' : 'analysisPending')));
+      if (runningHere) UI.replace(els.inputState, UI.notice('info', t('analyzing')));
+      else if (state.detail.analysisError) UI.replace(els.inputState, UI.notice('fail', state.detail.analysisError));
+      else if (!content.analysis_id) UI.replace(els.inputState, UI.notice(content.state === 'failed' ? 'fail' : content.state === 'interrupted' ? 'warn' : 'info', t(content.state === 'failed' ? 'analysisJobFailed' : content.state === 'interrupted' ? 'finding_analysis-interrupted' : 'analysisPending')));
       return;
     }
     UI.replace(els.inputState, UI.notice(a.admitted ? 'good' : 'fail', t(a.admitted ? 'analysisPass' : 'analysisRejected')));

@@ -78,7 +78,7 @@
     if (queue && (queue.pending || []).some(function (item) { return item.asset_id === content.asset_id; })) return 'queued';
     // A failed recent run takes precedence over an earlier success.
     var newest = jobs[0];
-    if (newest && (newest.state === 'failed' || newest.state === 'interrupted')) return 'failed';
+    if (newest && (newest.state === 'failed' || newest.state === 'interrupted')) return newest.state;
     if (content.kind === 'catalog' ? hasVerifiedOutput(content) : !!content.result_id) return 'packaged';
     if (content.kind === 'catalog' && content.converted) return 'unverified';
     if (content.kind === 'hls' && content.analysis_id) return 'analyzed';
