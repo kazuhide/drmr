@@ -17,8 +17,8 @@
     filter: '', checked: Object.create(null), listError: null, loaded: false, dismissedSkips: {}, seenSkips: {}, announcedSkips: {}, jobsTruncated: false, loadSeq: 0, loadAgain: false, loadAgainFull: false, finishedJobs: Object.create(null), logRaw: false, nameEdited: false, sampleRevealed: false,
     selectedId: null, selectToken: 0, openInfo: {}, // openInfo: the transformation's (i) panels open for this selection
     detail: { catalogInfo: null, analysis: null, analysisError: null, result: null, resultError: null, report: null, reportError: null },
-    run: null, lastRun: null, logView: null,
-    sessionId: null, previewBusy: false, previewNeedsCredentials: false,
+    run: null, lastRun: null, logView: null, stopRequests: Object.create(null),
+    sessionId: null, previewBusy: false, previewOwner: null, previewNeedsCredentials: false,
     addOpen: false, platform: null, pollTimer: null, loading: null,
   };
   var els = {};
@@ -56,6 +56,7 @@
       var known = {};
       state.jobs.forEach(function (job) { known[job.job_id] = job.state; });
       state.jobs = parts[1].rows || [];
+      state.jobs.forEach(function (job) { if (Model.isTerminal(job.state)) delete state.stopRequests[job.job_id]; });
       // A conversion that started and finished between two light polls changes `converted`
       // without this page observing it: fetch the catalog again before settling.
       if (light && state.jobs.some(function (job) { return job.kind === 'convert' && Model.isTerminal(job.state) && known[job.job_id] !== job.state; })) { state.loadAgain = true; state.loadAgainFull = true; }
@@ -83,6 +84,7 @@
     return state.loading;
   }
   function recompose() {
+    var previous = selected();
     state.contents = Model.compose(state.catalog, state.jobs, state.queue);
     // a check survives only on a row that still offers its checkbox (catalog, not orphaned, not queued or running)
     Object.keys(state.checked).forEach(function (id) { if (!state.contents.some(function (c) { return c.asset_id === id && c.kind === 'catalog' && !c.orphan && c.state !== 'queued' && c.state !== 'running'; })) delete state.checked[id]; });
@@ -90,13 +92,32 @@
     renderQueue();
     renderLease();
     var content = selected();
-    if (content) { renderHead(content); renderRuns(content); renderTransform(content); renderPlaybackControls(content); }
+    if (content) {
+      var changed = previous && content.kind === 'catalog' && Model.catalogGeneration(previous) !== Model.catalogGeneration(content);
+      if (changed) {
+        discardCatalogDetails();
+      }
+      renderHead(content); renderRuns(content); renderTransform(content); renderPlaybackControls(content);
+      if (changed) {
+        renderReport(content); renderInput(content);
+        loadCatalogInfo(content, state.selectToken);
+        if (Model.hasCatalogReport(content)) loadCatalogReport(content, state.selectToken);
+      }
+    }
     else if (state.selectedId && state.loaded) deselect(); // the selection vanished: nothing of it may linger
     announceSkips();
+  }
+  function discardCatalogDetails() {
+    state.selectToken += 1;
+    resetPreviewRequest();
+    state.detail.report = null; state.detail.reportError = null; state.detail.catalogInfo = null;
+    revokeSession(); if (playback) playback.hide();
+    UI.replace(els.previewState);
   }
   // Everything derived from the selection is dropped, exactly as on a change of selection.
   function deselect() {
     state.selectToken += 1;
+    resetPreviewRequest();
     state.selectedId = null;
     state.detail = { catalogInfo: null, analysis: null, analysisError: null, result: null, resultError: null, report: null, reportError: null };
     state.openInfo = {};
@@ -257,6 +278,7 @@
   function selectContent(assetId) {
     if (assetId === state.selectedId && !state.addOpen) return;
     state.selectToken += 1;
+    resetPreviewRequest();
     state.selectedId = assetId;
     state.addOpen = false;
     state.detail = { catalogInfo: null, analysis: null, analysisError: null, result: null, resultError: null, report: null, reportError: null };
@@ -280,12 +302,8 @@
     if (content.kind === 'catalog' && content.orphan) {
       // nothing to fetch: the entry is gone; runs and logs are the content
     } else if (content.kind === 'catalog') {
-      App.Api.getAssetUrls(assetId).then(function (info) {
-        if (token !== state.selectToken) return;
-        state.detail.catalogInfo = info;
-        renderInput(content);
-      }, function (e) { if (token === state.selectToken) UI.replace(els.inputState, UI.notice('fail', t('inspectLoadFailed') + ' ' + App.I18n.error(e))); });
-      if (content.converted) loadCatalogReport(content, token);
+      loadCatalogInfo(content, token);
+      if (Model.hasCatalogReport(content)) loadCatalogReport(content, token);
     } else {
       if (content.analysis_id) loadAnalysis(content, token);
       if (content.result_id) loadResult(content, content.result_id, token);
@@ -293,6 +311,13 @@
     // the running job of this content: show its live log
     if (state.run && state.run.assetId === assetId) showLogView(state.run.view);
     else if (state.logView && state.logView.assetId !== assetId) renderLogPanel();
+  }
+  function loadCatalogInfo(content, token) {
+    App.Api.getAssetUrls(content.asset_id).then(function (info) {
+      if (token !== state.selectToken) return;
+      state.detail.catalogInfo = info;
+      renderInput(content);
+    }, function (e) { if (token === state.selectToken) UI.replace(els.inputState, UI.notice('fail', t('inspectLoadFailed') + ' ' + App.I18n.error(e))); });
   }
   function loadCatalogReport(content, token) {
     UI.replace(els.reportState, h('p', { className: 'state-line', text: t('reportLoading') }));
@@ -302,6 +327,7 @@
       renderReport(content); renderTransform(content);
     }, function (e) {
       if (token !== state.selectToken) return;
+      state.detail.report = null;
       state.detail.reportError = e && e.status === 404 ? t('reportNotFound') : e && e.status === 410 ? t('reportUnavailable') : App.I18n.error(e);
       renderReport(content);
     });
@@ -341,7 +367,7 @@
     renderPlaybackControls(content);
     renderLogPanel();
   }
-  function stateChipKind(st) { return st === 'packaged' ? 'good' : st === 'running' ? 'run' : st === 'failed' ? 'fail' : st === 'queued' ? 'info' : st === 'orphan' ? 'warn' : null; }
+  function stateChipKind(st) { return st === 'packaged' ? 'good' : st === 'running' ? 'run' : st === 'failed' ? 'fail' : st === 'queued' ? 'info' : (st === 'orphan' || st === 'unverified' || st === 'interrupted') ? 'warn' : null; }
   function reportLink(kind, id, asset) {
     return h('a', { className: 'btn btn-sm', href: '/reports/' + kind + '/' + encodeURIComponent(id), text: t('viewReport'), 'aria-label': t('viewReportLabel', { asset: asset }) });
   }
@@ -357,7 +383,7 @@
     } else if (content.kind === 'catalog') {
       actions.push(h('button', { type: 'button', className: 'btn btn-primary', id: 'convert-btn', disabled: busy, dataset: { focusKey: 'convert' }, text: t(content.converted ? 'convertAgain' : 'convert'), onclick: function () { startConvert(content); } }));
       if (content.state !== 'queued' && content.state !== 'running') actions.push(h('button', { type: 'button', className: 'btn', id: 'queue-btn', dataset: { focusKey: 'queue' }, text: t('addToQueue'), onclick: function () { enqueue([content.asset_id]); } }));
-      if (content.converted) actions.push(reportLink('catalog', content.asset_id, content.label || content.asset_id));
+      if (Model.hasCatalogReport(content)) actions.push(reportLink('catalog', content.asset_id, content.label || content.asset_id));
     } else if (content.result_id) {
       actions.push(reportLink('hls', content.result_id, content.asset_id));
     }
@@ -411,8 +437,8 @@
     return pairs.filter(Boolean).map(function (pair) { return [h('dt', { text: pair[0] }), h('dd', { className: pair[2] || null, text: pair[1] == null || pair[1] === '' ? '—' : pair[1] })]; });
   }
   function renderInput(content) {
-    var runningHere = state.run && state.run.assetId === content.asset_id && state.run.kind === 'analysis';
-    if (!runningHere) UI.replace(els.inputState);
+    var runningHere = (state.run && state.run.assetId === content.asset_id && state.run.kind === 'analysis') || (content.jobs || []).some(function (job) { return job.kind === 'analysis' && job.state === 'running'; });
+    UI.replace(els.inputState);
     UI.replace(els.inputFindings); UI.replace(els.inputTable); UI.replace(els.inputKv);
     els.audioChoice.hidden = true;
     if (content.kind === 'catalog' && content.orphan) { UI.replace(els.inputState, UI.notice('warn', t('orphanNotice'))); return; }
@@ -433,8 +459,9 @@
     var a = state.detail.analysis;
     UI.replace(els.inputKv, kvPairs([[t('inputHlsWhere'), t('inputHlsSnapshot', { id: content.asset_id }), 'mono'], a ? [t('drmState'), t('drmStateClear')] : null, a ? [t('muxing'), muxingSummary(a.tracks)] : null]));
     if (!a) {
-      if (state.detail.analysisError) UI.replace(els.inputState, UI.notice('fail', state.detail.analysisError));
-      else if (!runningHere && !content.analysis_id) UI.replace(els.inputState, UI.notice(content.state === 'failed' ? 'fail' : 'info', t(content.state === 'failed' ? 'analysisJobFailed' : 'analysisPending')));
+      if (runningHere) UI.replace(els.inputState, UI.notice('info', t('analyzing')));
+      else if (state.detail.analysisError) UI.replace(els.inputState, UI.notice('fail', state.detail.analysisError));
+      else if (!content.analysis_id) UI.replace(els.inputState, UI.notice(content.state === 'failed' ? 'fail' : content.state === 'interrupted' ? 'warn' : 'info', t(content.state === 'failed' ? 'analysisJobFailed' : content.state === 'interrupted' ? 'finding_analysis-interrupted' : 'analysisPending')));
       return;
     }
     UI.replace(els.inputState, UI.notice(a.admitted ? 'good' : 'fail', t(a.admitted ? 'analysisPass' : 'analysisRejected')));
@@ -462,9 +489,9 @@
     var isCatalog = content.kind === 'catalog';
     var report = isCatalog ? state.detail.report : state.detail.result;
     var statuses = Model.checkStatuses(report, isCatalog ? 'catalog' : 'hls');
-    var done = isCatalog ? content.converted : !!content.result_id;
+    var done = isCatalog ? Model.hasVerifiedOutput(content) : !!content.result_id;
     var a = state.detail.analysis;
-    var help = content.orphan ? 'orphanNotice' : isCatalog ? (done ? 'transformCatalogDone' : 'transformCatalogPending') : (done ? 'transformHlsDone' : (a && !a.admitted ? 'transformHlsBlocked' : 'transformHlsPending'));
+    var help = content.orphan ? 'orphanNotice' : isCatalog ? (done ? 'transformCatalogDone' : content.converted ? 'transformCatalogUnverified' : 'transformCatalogPending') : (done ? 'transformHlsDone' : (a && !a.admitted ? 'transformHlsBlocked' : 'transformHlsPending'));
     UI.setText(els.transformHelp, t(help));
     // The one line that matters: input kind -> the three outputs. Everything else is behind (i).
     var inputText = isCatalog ? t('inputExisting') : t('inputClear', { muxing: a ? muxingSummary(a.tracks) : 'HLS' });
@@ -502,6 +529,12 @@
       var chipKind = job.state === 'succeeded' ? 'good' : job.state === 'running' ? 'run' : job.state === 'interrupted' ? 'warn' : 'fail';
       var current = state.logView && state.logView.jobId === job.job_id;
       var actions = [h('button', { type: 'button', className: 'btn btn-sm', text: t('openLog'), 'aria-pressed': current ? 'true' : 'false', dataset: { focusKey: 'log:' + job.job_id }, onclick: function () { openLog(job); } })];
+      if (job.state === 'running') {
+        var stopping = job.stop_requested || state.stopRequests[job.job_id];
+        actions.push(h('button', { type: 'button', className: 'btn btn-quiet btn-sm', text: t(stopping ? 'stopPending' : 'stopJob'),
+          'aria-label': t(stopping ? 'stopPendingLabel' : 'stopJobLabel', { asset: job.asset_id || job.job_id }), 'aria-disabled': stopping ? 'true' : null,
+          title: t('stopHelp'), dataset: { focusKey: 'stop:' + job.job_id }, onclick: function () { requestStop(job); } }));
+      }
       if (job.state !== 'running') actions.push(h('button', { type: 'button', className: 'btn btn-quiet btn-sm', text: t('removeHistory'), title: t('historyHelp'), 'aria-label': t('removeHistoryLabel', { asset: job.asset_id || job.job_id }), dataset: { focusKey: 'rm:' + job.job_id }, onclick: function (e) { deleteHistoryJob(job, e.target); } }));
       return h('li', { className: 'run-row', dataset: { jobId: job.job_id }, 'aria-current': current ? 'true' : null },
         h('span', { text: t('kind_' + job.kind) }),
@@ -510,6 +543,25 @@
         h('span', { className: 'run-actions' }, actions));
     }));
     restoreFocus(els.runsList, focused);
+  }
+  function requestStop(job) {
+    if (!job || job.state !== 'running' || job.stop_requested || state.stopRequests[job.job_id]) return Promise.resolve();
+    state.stopRequests[job.job_id] = 'sending';
+    var content = selected();
+    if (content) renderRuns(content);
+    return App.Api.stopJob(job.job_id).then(function (status) {
+      if (status && status.stop_requested) {
+        state.stopRequests[job.job_id] = 'requested';
+        if (!state.finishedJobs[job.job_id] && (!state.run || state.run.jobId === job.job_id)) notify(job.asset_id, 'info', t('stopRequested') + ' ' + t('stopHelp'));
+      } else delete state.stopRequests[job.job_id];
+      // Acceptance is not a terminal event: keep observing the same run and its log.
+      return loadAll(true);
+    }, function (error) {
+      delete state.stopRequests[job.job_id];
+      if (!state.finishedJobs[job.job_id] && (!state.run || state.run.jobId === job.job_id)) notify(job.asset_id, 'fail', t('stopFailed') + ' ' + App.I18n.error(error));
+      var current = selected();
+      if (current) renderRuns(current);
+    });
   }
   function deleteHistoryJob(job, button) {
     if (button) button.disabled = true;
@@ -706,15 +758,25 @@
     if (content.kind === 'catalog') {
       if (state.detail.report) { UI.replace(els.reportState); App.ReportView.render(els.reportView, state.detail.report, { kind: 'catalog', id: content.asset_id }, { pageLink: true }); }
       else if (state.detail.reportError) UI.replace(els.reportState, UI.notice('fail', state.detail.reportError));
-      else if (!content.converted) UI.replace(els.reportState, h('p', { className: 'help', text: t('reportNoneCatalog') }));
+      else UI.replace(els.reportState, h('p', { className: 'help', text: t(Model.hasVerifiedOutput(content) ? 'reportLoading' : content.converted ? 'outputUnverified' : 'reportNoneCatalog') }));
       return;
     }
     if (state.detail.result) { UI.replace(els.reportState); App.ReportView.render(els.reportView, state.detail.result, { kind: 'hls', id: state.detail.result.result_id || content.result_id }, { pageLink: true }); }
     else if (state.detail.resultError) UI.replace(els.reportState, h('div', null, UI.notice('fail', state.detail.resultError), content.result_id ? h('div', { className: 'actions' }, h('button', { type: 'button', className: 'btn btn-sm', text: t('retryResult'), onclick: function () { loadResult(content, content.result_id, state.selectToken); } })) : null));
     else if (!content.result_id) UI.replace(els.reportState, h('p', { className: 'help', text: t('reportNoneHls') }));
   }
+  function resetPreviewRequest() {
+    state.previewOwner = null;
+    state.previewBusy = false;
+  }
+  function finishPreviewRequest(owner) {
+    if (state.previewOwner !== owner) return;
+    resetPreviewRequest();
+    var content = selected();
+    if (content) renderPlaybackControls(content);
+  }
   function renderPlaybackControls(content) {
-    var ready = content.orphan ? false : content.kind === 'catalog' ? content.converted : !!(state.detail.result && state.detail.result.all_pass);
+    var ready = content.orphan ? false : content.kind === 'catalog' ? Model.hasVerifiedOutput(content) : !!(state.detail.result && state.detail.result.all_pass);
     els.previewBtn.disabled = !ready || isJobRunning() || state.previewBusy;
     els.previewCredentials.hidden = !state.previewNeedsCredentials;
   }
@@ -725,8 +787,10 @@
   }
   function preparePreview(withCredentials) {
     var content = selected();
-    if (!content || isJobRunning() || state.previewBusy) return;
+    if (!content || isJobRunning() || state.previewBusy || (content.kind === 'catalog' && !Model.hasVerifiedOutput(content))) return;
     var token = state.selectToken;
+    var previewOwner = {};
+    state.previewOwner = previewOwner;
     state.previewBusy = true;
     UI.replace(els.previewState, h('span', { className: 'state-line', text: t('previewStarting') }));
     renderPlaybackControls(content);
@@ -735,10 +799,20 @@
         if (token !== state.selectToken) return;
         state.detail.catalogInfo = info;
         playback.hide();
+        if (!info.output_readiness || info.output_readiness.state !== 'verified' || !UI.safeOutputUrl(info.new_url)) {
+          content.output_readiness = { state: 'unverified', reason: 'generation-unconfirmed', job_id: null };
+          state.catalog.forEach(function (row) { if (row.asset_id === content.asset_id) row.output_readiness = content.output_readiness; });
+          discardCatalogDetails();
+          content.state = Model.contentState(content, state.queue);
+          state.detail.catalogInfo = info;
+          renderHead(content); renderTransform(content); renderReport(content);
+          UI.replace(els.previewState, UI.notice('warn', t('outputUnverified')));
+          return;
+        }
         playback.prepareCatalog(content.asset_id, info);
         UI.replace(els.previewState, h('span', { className: 'state-line', text: t('previewReady') }));
       }, function (e) { if (token === state.selectToken) UI.replace(els.previewState, UI.notice('fail', t('playbackInfoFailed') + ' ' + App.I18n.error(e))); })
-        .then(function () { state.previewBusy = false; if (token === state.selectToken) renderPlaybackControls(content); });
+        .then(function () { finishPreviewRequest(previewOwner); });
       return;
     }
     var result = state.detail.result;
@@ -775,7 +849,7 @@
       } else if (code === 'result-unavailable' || code === 'source-preview-unavailable' || code === 'result-not-found') {
         UI.replace(els.previewState, UI.notice('fail', t('resultUnavailable')));
       } else UI.replace(els.previewState, UI.notice('fail', App.I18n.error(e)));
-    }).then(function () { state.previewBusy = false; if (token === state.selectToken) renderPlaybackControls(content); });
+    }).then(function () { finishPreviewRequest(previewOwner); });
   }
 
   // ========================================================================================
@@ -846,6 +920,10 @@
     var run = { kind: kind, assetId: assetId, jobId: jobId || null, analysisId: null, startedAt: Date.now(), watcher: null, outcome: null, exitCode: null, elapsedMs: null, view: newLogView(jobId, assetId, kind, true) };
     state.run = run;
     state.lastRun = run;
+    if (kind === 'convert') {
+      state.catalog.forEach(function (row) { if (row.asset_id === assetId) row.output_readiness = { state: 'unverified', reason: 'generation-unconfirmed', job_id: jobId || null }; });
+      recompose();
+    }
     if (state.logView && !state.logView.live) closeLogView();
     if (state.selectedId === assetId) {
       state.logView = run.view;
@@ -930,8 +1008,13 @@
     var elapsed = UI.fmtElapsed(run.elapsedMs, t);
     var refresh = loadAll();
     if (run.kind === 'convert') {
-      notify(run.assetId, success ? 'good' : 'fail', success ? t('convertDone', { elapsed: elapsed }) : t('convertFailed', { code: status.exit_code != null ? String(status.exit_code) : '—', elapsed: elapsed }));
-      refresh.then(function () { var content = selected(); if (content && content.asset_id === run.assetId) { renderDetail(content); if (content.converted) loadCatalogReport(content, state.selectToken); } });
+      refresh.then(function () {
+        var completed = state.contents.filter(function (c) { return c.asset_id === run.assetId; })[0];
+        var ready = success && Model.hasVerifiedOutput(completed);
+        notify(run.assetId, !success ? 'fail' : ready ? 'good' : 'warn', !success ? t('convertFailed', { code: status.exit_code != null ? String(status.exit_code) : '—', elapsed: elapsed }) : t(ready ? 'convertDone' : 'convertUnverified', { elapsed: elapsed }));
+        var content = selected();
+        if (content && content.asset_id === run.assetId) { renderDetail(content); if (Model.hasCatalogReport(content)) loadCatalogReport(content, state.selectToken); }
+      });
       return;
     }
     if (run.kind === 'analysis') {
@@ -990,6 +1073,7 @@
       endRun(run);
       if (state.logView === run.view) closeLogView();
       notify(content.asset_id, 'fail', t('convertStartFailed') + ' ' + App.I18n.error(e));
+      loadAll(); // A rejected launch may have left the earlier generation untouched.
     });
   }
   // The output name is derived from the URL (the last directory, or the playlist's name) and
@@ -1042,6 +1126,7 @@
     UI.setText(els.addCatalogTree, catalogTree());
     UI.replace(els.addRescanState);
     state.selectedId = null; state.selectToken += 1;
+    resetPreviewRequest();
     revokeSession(); playback.hide(); clearSecrets();
     if (state.logView && !state.logView.live) closeLogView();
     UI.replace(els.addState);

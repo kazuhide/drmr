@@ -102,5 +102,5 @@ fn a_static_directory_override_is_served_instead_of_the_embedded_copy() {
         404,
         "only the directory is served"
     );
-    server.stop();
+    server.stop().unwrap();
 }

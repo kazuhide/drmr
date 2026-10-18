@@ -196,7 +196,8 @@ details.disclosure > .disclosure-body { margin-top: 10px; }
 .run-row { display: grid; grid-template-columns: auto auto 1fr auto; gap: 10px; align-items: center; padding: 8px 10px; border: 1px solid var(--line-2); border-radius: var(--radius); font-size: 13px; }
 .run-row[aria-current="true"] { border-color: var(--accent); background: var(--accent-soft); }
 .run-row .run-when { color: var(--ink-3); font-size: 12px; }
-.run-row .run-actions { display: flex; gap: 6px; }
+.run-row .run-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.run-actions button[aria-disabled="true"] { opacity: .65; cursor: progress; }
 .log-panel { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; }
 .log-head { display: flex; align-items: center; gap: 10px; font-size: 13px; }
 .log-tools { margin-left: auto; display: flex; gap: 6px; align-items: center; }

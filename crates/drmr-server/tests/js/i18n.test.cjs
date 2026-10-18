@@ -48,3 +48,14 @@ for (const language of ['en', 'ja']) {
     assert.equal(i18n.error({ status: 409, body: { error: 'job-busy' } }), i18n.t('busyError'));
   });
 }
+
+
+test('readiness and diagnostic states have fixed English and Japanese copy', () => {
+  for (const language of ['en', 'ja']) {
+    const i18n = translations(language);
+    for (const key of ['cstate_unverified', 'outputUnverified', 'reportDiagnostic', 'convertUnverified', 'transformCatalogUnverified']) {
+      assert.notEqual(i18n.t(key), key);
+      assert.ok(i18n.t(key).length > 0);
+    }
+  }
+});

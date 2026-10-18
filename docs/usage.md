@@ -364,6 +364,28 @@ Open `http://127.0.0.1:8080`. Both root directories are required. `DRMR_BIND_POR
 
 For clear HLS added through the console, the server saves source URLs, original playlists, and downloaded media in `DRMR_OUTPUT_ROOT/<asset-id>/clear/source/`. Keep this private folder protected: the saved information can contain signed URLs. Temporary request configuration files are separate; the server attempts to remove them after jobs finish, without deleting the saved source. Removing a job from history hides its record; saved sources, packaged media, and logs remain on disk.
 
+Use **Stop** beside a running job to terminate that job and its child processes. Queued jobs continue afterward. The console waits for cleanup before recording the job as interrupted, and keeps the process's actual exit code. Stopping is not an undo: partial output files can remain and previous output files may already have changed. Input media and job logs are retained.
+
+If cleanup cannot be confirmed, the job keeps its execution slot and temporary configuration files; check the server log. Job status, stop and log endpoints remain available while shutdown waits or reports an error; new work is refused. A stop response only acknowledges the request. The job status and final log event establish completion. The local API accepts `POST /api/jobs/<job-id>/stop` with an empty JSON object (`{}`): `202` while running, `200` after completion, `404` for an unknown job, and `503` when cleanup is unconfirmed. Repeating a request is safe; an old job ID cannot stop a newer job.
+
+On interruption or termination, the server closes submissions, stops the active job, and drains its queue runner, log streams and background workers before reporting successful shutdown. Queued items are not started during shutdown. Rust embedding hosts should call `RunningServer::shutdown(&mut self)` and retain the owner if it returns an error; dropping a host is best effort and does not prove successful cleanup.
+
+If `drmr serve` reports incomplete shutdown, it keeps diagnostic access available. Fix the reported cause, then send an interrupt or termination signal again to retry. Force-killing the server bypasses this confirmation.
+
+Catalog output existence and verified readiness are separate. The API keeps the
+legacy `converted` flag for a saved manifest and adds `output_readiness`. A new
+attempt makes earlier output unverified before it starts writing. Only a fully
+successful run, confirmed process cleanup, and a matching report and output
+inventory make that generation ready for playback. Exit code zero alone does
+not qualify old or partial files. Existing outputs are not deleted or rolled back; interrupted work may have
+changed them. Unfenced legacy output remains unverified. Failed or incomplete
+reports remain readable as sanitized diagnostics without a playback URL; stale
+successful reports do not become a new verified result. This qualification is
+media verification, not a DRM license-service or device-playback guarantee.
+An already opened output response stops reading when a newer attempt invalidates
+its generation. It can finish sending bytes already buffered from the older
+verified output, but does not read the newer attempt's files under that authority.
+
 Requests must address `localhost`, `127.0.0.1`, `::1`, or an explicitly configured bind hostname/address. Binding to a wildcard address does not permit arbitrary hostnames. Reverse proxies and remote access are outside this local console's default setup.
 
 ## Exit codes

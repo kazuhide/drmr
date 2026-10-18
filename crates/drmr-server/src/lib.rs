@@ -7,10 +7,12 @@ pub mod http;
 pub mod jobs;
 pub mod pyutil;
 pub mod queue;
+mod readiness;
 pub mod router;
 pub mod routes;
 pub mod safelog;
 pub mod static_files;
+mod workers;
 
 pub use config::{JobCli, ServeArgs, ServerConfig, config_from_env};
 
@@ -41,6 +43,10 @@ pub struct App {
     pub queue: Arc<queue::ConversionQueue>,
     /// Where the UI comes from.
     pub static_root: static_files::StaticRoot,
+    streams: Arc<workers::Workers>,
+    requests: Arc<workers::Requests>,
+    shutdown_lock: std::sync::Mutex<()>,
+    closing: std::sync::atomic::AtomicBool,
 }
 
 /// Why the application could not be built.
@@ -79,7 +85,45 @@ impl App {
             service,
             queue,
             static_root,
+            streams: Arc::new(workers::Workers::default()),
+            requests: Arc::new(workers::Requests::default()),
+            shutdown_lock: std::sync::Mutex::new(()),
+            closing: std::sync::atomic::AtomicBool::new(false),
         }))
+    }
+
+    /// Close submissions and drain owned jobs, queue, streams, records and credentials.
+    /// External `Arc<App>` owners cannot keep launching work after this gate closes.
+    pub fn shutdown(&self) -> Result<(), ShutdownError> {
+        let _shutdown = self
+            .shutdown_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.manager.begin_shutdown();
+        self.closing
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let queue_ok = self.queue.shutdown().is_ok();
+        self.manager
+            .shutdown()
+            .map_err(|_| ShutdownError::CleanupUnconfirmed)?;
+        // Observations remain available throughout native cleanup. The final drain
+        // closes their own gate before joining streams and blocking dispatches.
+        self.requests.close();
+        let streams_ok = self.streams.shutdown().is_ok();
+        self.requests.drain();
+        let service_ok = self.service.shutdown().is_ok();
+        if !queue_ok || !streams_ok || !service_ok {
+            // A failed embedding host still owns the server. Permit only its
+            // diagnostic routes, with fresh owned streams for logs.
+            self.streams.reopen_after_drain();
+            self.requests.reopen();
+            return Err(if !queue_ok || !streams_ok {
+                ShutdownError::WorkerUnconfirmed
+            } else {
+                ShutdownError::RecordsUnconfirmed
+            });
+        }
+        Ok(())
     }
 }
 
@@ -116,12 +160,12 @@ fn host_guard(req: &Req, config: &ServerConfig) -> Option<Reply> {
     }
 }
 
-/// `hls_request_guard`: for `/api/hls/`, `/api/queue` and `/api/convert`, a declared body over
+/// `hls_request_guard`: for `/api/hls/`, `/api/jobs/`, `/api/queue` and `/api/convert`, a declared body over
 /// 256 KiB is `413`; a `POST` / `DELETE` from another origin (`Origin` not this host, or
 /// `Sec-Fetch-Site` other than `same-origin` / `none`) is `403`; a `POST` without JSON (but the
 /// license route) is `415`.
 fn hls_guard(req: &Req) -> Option<Reply> {
-    if !["/api/hls/", "/api/queue", "/api/convert"]
+    if !["/api/hls/", "/api/jobs/", "/api/queue", "/api/convert"]
         .iter()
         .any(|prefix| req.path.starts_with(prefix))
     {
@@ -326,15 +370,29 @@ async fn handle(
         reply.content_length().map_or(Value::Null, Value::from),
     );
     if (app.config.hooks.log)(&pyutil::dumps(&Value::Object(record))).is_err() {
-        return into_response(http::html_error(500), &req.method);
+        return into_response(http::html_error(500), &req.method, &app.streams);
     }
-    into_response(reply, &req.method)
+    into_response(reply, &req.method, &app.streams)
 }
 
 /// Route and run the request (`dispatch_request` and the error handlers).
 async fn respond(app: &Arc<App>, req: &mut Req, body: axum::body::Body) -> Reply {
     match router::route(&req.method, &req.path) {
         Match::Found(endpoint, values) => {
+            let observation = matches!(
+                endpoint,
+                router::Endpoint::Index
+                    | router::Endpoint::Static
+                    | router::Endpoint::JobStatus
+                    | router::Endpoint::JobStop
+                    | router::Endpoint::JobLog
+                    | router::Endpoint::JobLogDownload
+                    | router::Endpoint::HlsJobs
+                    | router::Endpoint::QueueState
+            );
+            if app.closing.load(std::sync::atomic::Ordering::SeqCst) && !observation {
+                return Reply::json_error(503, "server-shutting-down");
+            }
             if routes::reads_body(endpoint, &req.method) {
                 if req
                     .content_length()
@@ -347,11 +405,17 @@ async fn respond(app: &Arc<App>, req: &mut Req, body: axum::body::Body) -> Reply
                     Err(status) => return http::html_error(status),
                 }
             }
+            let Some(permit) = app.requests.enter() else {
+                return Reply::json_error(503, "server-shutting-down");
+            };
             let app = app.clone();
             let request = req.clone();
-            tokio::task::spawn_blocking(move || routes::dispatch(&app, endpoint, &values, &request))
-                .await
-                .unwrap_or_else(|_| http::html_error(500))
+            tokio::task::spawn_blocking(move || {
+                let _permit = permit;
+                routes::dispatch(&app, endpoint, &values, &request)
+            })
+            .await
+            .unwrap_or_else(|_| http::html_error(500))
         }
         Match::Options(allowed) => http::options(&allowed),
         Match::MethodNotAllowed(allowed) => http::method_not_allowed(&allowed),
@@ -394,7 +458,11 @@ impl http_body::Body for ChannelBody {
     }
 }
 
-fn into_response(reply: Reply, method: &str) -> axum::response::Response {
+fn into_response(
+    reply: Reply,
+    method: &str,
+    workers: &Arc<workers::Workers>,
+) -> axum::response::Response {
     const ENTITY: [&str; 9] = [
         "allow",
         "content-encoding",
@@ -423,7 +491,7 @@ fn into_response(reply: Reply, method: &str) -> axum::response::Response {
                 path,
                 start,
                 length,
-            } => match routes::file_body(path, start, length) {
+            } => match routes::file_body(workers, path, start, length) {
                 Body::Stream(receiver) => axum::body::Body::new(ChannelBody(receiver)),
                 _ => axum::body::Body::empty(),
             },
@@ -435,6 +503,20 @@ fn into_response(reply: Reply, method: &str) -> axum::response::Response {
         .unwrap_or_else(|_| axum::http::Response::new(axum::body::Body::empty()))
 }
 
+/// A shutdown failure preserves the embedding host's application and process ownership.
+#[derive(Debug, thiserror::Error)]
+pub enum ShutdownError {
+    /// Native process-tree cleanup could not be confirmed.
+    #[error("cleanup-unconfirmed")]
+    CleanupUnconfirmed,
+    /// An owned background worker failed to join successfully.
+    #[error("worker-cleanup-unconfirmed")]
+    WorkerUnconfirmed,
+    /// Terminal history or private request cleanup could not be confirmed.
+    #[error("record-cleanup-unconfirmed")]
+    RecordsUnconfirmed,
+}
+
 /// Why `serve` stopped.
 #[derive(Debug, thiserror::Error)]
 pub enum ServeError {
@@ -444,6 +526,9 @@ pub enum ServeError {
     /// The address cannot be bound or the server failed.
     #[error("server: {0}")]
     Io(#[from] std::io::Error),
+    /// Owned work did not shut down cleanly.
+    #[error(transparent)]
+    Shutdown(#[from] ShutdownError),
 }
 
 pub fn serve(config: ServerConfig) -> Result<(), ServeError> {
@@ -453,16 +538,35 @@ pub fn serve(config: ServerConfig) -> Result<(), ServeError> {
     let host = config.bind_host.clone();
     let port = config.bind_port;
     let app = App::new(config)?;
-    let result = runtime.block_on(async move {
+    let result = runtime.block_on(async {
         let listener = tokio::net::TcpListener::bind((host.as_str(), port)).await?;
         let address = listener.local_addr()?;
         let _ = writeln!(std::io::stderr(), " * Running on http://{address}");
+        let shutdown_app = app.clone();
         tokio::select! {
-            result = axum::serve(listener, build_router(app)) => result,
-            () = shutdown_signal() => Ok(()),
+            result = axum::serve(listener, build_router(app.clone())) => result,
+            () = async move {
+                loop {
+                    shutdown_signal().await;
+                    let owner = shutdown_app.clone();
+                    match tokio::task::spawn_blocking(move || owner.shutdown()).await {
+                        Ok(Ok(())) => break,
+                        Ok(Err(error)) => {
+                            let _ = writeln!(std::io::stderr(),
+                                "drmr serve: shutdown incomplete ({error}); diagnostic access retained; fix the cause and signal again to retry");
+                        }
+                        Err(_) => {
+                            let _ = writeln!(std::io::stderr(),
+                                "drmr serve: shutdown incomplete (worker-cleanup-unconfirmed); diagnostic access retained; signal again to retry");
+                        }
+                    }
+                }
+            } => Ok(()),
         }
     });
-    runtime.shutdown_timeout(std::time::Duration::from_secs(1));
+    let cleanup = app.shutdown();
+    drop(runtime);
+    cleanup?;
     result.map_err(ServeError::Io)
 }
 
@@ -511,7 +615,8 @@ pub struct RunningServer {
     /// The application (its service, queue and job runner).
     pub app: Arc<App>,
     shutdown: Option<tokio::sync::oneshot::Sender<()>>,
-    thread: Option<std::thread::JoinHandle<()>>,
+    thread: Option<std::thread::JoinHandle<std::io::Result<()>>>,
+    shutdown_failed: bool,
 }
 
 impl std::fmt::Debug for RunningServer {
@@ -528,24 +633,36 @@ impl RunningServer {
         format!("http://{}", self.addr)
     }
 
-    /// Stop serving and wait for the runtime to end.
-    pub fn stop(mut self) {
-        self.shutdown_now();
+    /// Stop serving and confirm owned cleanup. Prefer `shutdown` when ownership
+    /// must remain available to display or recover from an error.
+    pub fn stop(mut self) -> Result<(), ShutdownError> {
+        self.shutdown()
     }
 
-    fn shutdown_now(&mut self) {
+    /// Shut down without consuming the owner. Failure keeps the listener/runtime
+    /// and application available to the host; no successful cleanup is implied.
+    pub fn shutdown(&mut self) -> Result<(), ShutdownError> {
+        if self.shutdown_failed {
+            return Err(ShutdownError::WorkerUnconfirmed);
+        }
+        self.app.shutdown()?;
         if let Some(sender) = self.shutdown.take() {
             let _ = sender.send(());
         }
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
+        if let Some(thread) = self.thread.take()
+            && !matches!(thread.join(), Ok(Ok(())))
+        {
+            self.shutdown_failed = true;
+            return Err(ShutdownError::WorkerUnconfirmed);
         }
+        Ok(())
     }
 }
 
 impl Drop for RunningServer {
     fn drop(&mut self) {
-        self.shutdown_now();
+        // Best effort only. Embedding hosts use explicit shutdown and retain self on error.
+        let _ = self.shutdown();
     }
 }
 
@@ -559,31 +676,55 @@ pub fn spawn(config: ServerConfig) -> Result<RunningServer, ServeError> {
     let addr = listener.local_addr()?;
     let (sender, receiver) = tokio::sync::oneshot::channel::<()>();
     let router = build_router(app.clone());
+    let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
     let thread = std::thread::Builder::new()
         .name("drmr-server".into())
         .spawn(move || {
-            let Ok(runtime) = tokio::runtime::Builder::new_multi_thread()
+            let runtime = match tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()
-            else {
-                return;
+            {
+                Ok(runtime) => runtime,
+                Err(error) => {
+                    let _ = ready_tx.send(Err(error.kind()));
+                    return Err(error);
+                }
             };
-            runtime.block_on(async move {
-                let Ok(listener) = tokio::net::TcpListener::from_std(listener) else {
-                    return;
+            let result = runtime.block_on(async move {
+                let listener = match tokio::net::TcpListener::from_std(listener) {
+                    Ok(listener) => listener,
+                    Err(error) => {
+                        let _ = ready_tx.send(Err(error.kind()));
+                        return Err(error);
+                    }
                 };
+                let _ = ready_tx.send(Ok(()));
                 tokio::select! {
-                    _ = axum::serve(listener, router) => {}
-                    _ = receiver => {}
+                    result = axum::serve(listener, router) => result,
+                    _ = receiver => Ok(()),
                 }
             });
-            runtime.shutdown_background();
+            drop(runtime);
+            result
         })?;
+    match ready_rx.recv() {
+        Ok(Ok(())) => {}
+        response => {
+            let _ = thread.join();
+            let kind = response
+                .ok()
+                .and_then(Result::err)
+                .unwrap_or(std::io::ErrorKind::Other);
+            return Err(std::io::Error::new(kind, "server startup failed").into());
+        }
+    }
+
     Ok(RunningServer {
         addr,
         app,
         shutdown: Some(sender),
         thread: Some(thread),
+        shutdown_failed: false,
     })
 }
 

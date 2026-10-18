@@ -61,6 +61,7 @@
   // render(container, report, identity: {kind: 'hls'|'catalog', id}, options: {comparisonLink: bool})
   function render(container, report, identity, options) {
     options = options || {};
+    var ready = identity.kind !== 'catalog' || !!(report.output_readiness && report.output_readiness.state === 'verified');
     var complete = identity.kind !== 'catalog' || (report.full_enumeration === true && report.round_trip_verified === true);
     var meta = [[t('reportIdentifier'), identity.id, 'mono']];
     if (report.created_at) meta.push([t('reportDate'), UI.fmtDate(report.created_at, App.I18n.getLanguage()) || '—']);
@@ -75,13 +76,14 @@
     var links = [];
     [['dash_url', 'dashManifest'], ['hls_url', 'hlsManifest']].forEach(function (pair) {
       var url = outputUrl(report[pair[0]]);
-      if (url && report.all_pass) links.push(h('a', { href: url, target: '_blank', rel: 'noopener', text: t(pair[1]) }));
+      if (ready && url && report.all_pass) links.push(h('a', { href: url, target: '_blank', rel: 'noopener', text: t(pair[1]) }));
     });
     if (options.comparisonLink && identity.kind === 'hls' && report.all_pass) links.push(h('a', { href: '/?result=' + encodeURIComponent(identity.id), text: t('reportComparison') }));
     if (options.pageLink) links.push(h('a', { href: '/reports/' + identity.kind + '/' + encodeURIComponent(identity.id), text: t('openReportPage') }));
     var rows = identity.kind === 'hls' ? (report.track_reports || []) : (report.tracks || []);
     UI.replace(container,
-      UI.notice(!report.all_pass ? 'fail' : complete ? 'good' : 'warn', t(!report.all_pass ? 'checksFail' : complete ? 'checksPass' : 'reportIncomplete')),
+      UI.notice(!report.all_pass ? 'fail' : ready && complete ? 'good' : 'warn', t(!report.all_pass ? 'checksFail' : !ready ? 'outputUnverified' : complete ? 'checksPass' : 'reportIncomplete')),
+      !ready ? UI.notice('warn', t('reportDiagnostic')) : null,
       kv(meta),
       h('div', { className: 'evidence' }, h('span', { className: 'muted', text: t('reportEvidence') }), ['packaging', 'real_license', 'conformance'].map(function (k) {
         var v = UI.safeCode(evidence[k]) || 'not-verified';

@@ -199,6 +199,7 @@
     return {
       // Catalog: both manifests come from /api/assets/<id>.
       prepareCatalog: function (assetId, info) {
+        if (!info.output_readiness || info.output_readiness.state !== 'verified' || !UI.safeOutputUrl(info.new_url)) { section.hidden = true; resetSide(sides.old); resetSide(sides.new); return; }
         var renditions = info.renditions || {};
         section.hidden = false;
         prepareSide(sides.old, { assetId: assetId, url: UI.safeOutputUrl(info.old_url), renditions: renditions.old || [] });

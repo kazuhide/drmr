@@ -53,6 +53,9 @@ impl Drop for Setup {
         if std::thread::panicking() {
             for entry in std::fs::read_dir(self.root.join("jobs")).unwrap().flatten() {
                 let path = entry.path();
+                if path.extension().is_none_or(|ext| ext != "jsonl") {
+                    continue;
+                }
                 if let Some(id) = path.file_stem().and_then(|name| name.to_str()) {
                     eprintln!(
                         "native fixture status: {:?}; log: {:?}",
@@ -626,4 +629,64 @@ fn a_conversion_runs_the_full_guarantee_and_leaves_the_input_tree_byte_identical
     for line in &lines {
         serde_json::from_str::<Value>(line).unwrap();
     }
+}
+
+#[test]
+fn stopping_a_replaced_job_never_stops_the_current_job() {
+    let s = setup();
+    let old = s
+        .manager
+        .submit_command(&[], &s.manager.fresh_env())
+        .unwrap();
+    wait_idle(&s.manager);
+    let completed = s.manager.status(&old.job_id).unwrap();
+    assert_eq!(completed.state, "succeeded");
+    assert!(!completed.stop_requested);
+    s.cli.hold();
+    let current = s
+        .manager
+        .submit_command(&[], &s.manager.fresh_env())
+        .unwrap();
+    s.cli.wait_calls(2);
+    assert_eq!(s.manager.request_stop(&old.job_id).unwrap(), completed);
+    assert!(s.manager.is_busy());
+    let still_running = s.manager.status(&current.job_id).unwrap();
+    assert_eq!(still_running.state, "running");
+    assert!(!still_running.stop_requested);
+    let request = s.manager.request_stop(&current.job_id).unwrap();
+    assert!(request.stop_requested);
+    wait_idle(&s.manager);
+    let stopped = s.manager.status(&current.job_id).unwrap();
+    assert_eq!(stopped.state, "interrupted");
+    assert!(stopped.exit_code.is_some());
+    assert_eq!(s.manager.request_stop(&current.job_id).unwrap(), stopped);
+    let next = s
+        .manager
+        .submit_command(&[], &s.manager.fresh_env())
+        .unwrap();
+    assert_eq!(s.manager.status(&current.job_id).unwrap(), stopped);
+    assert_ne!(next.job_id, current.job_id);
+}
+
+#[test]
+fn closing_the_manager_rejects_new_spawns_and_confirms_the_owned_job() {
+    let s = setup();
+    s.cli.hold();
+    let job = s
+        .manager
+        .submit_command(&[], &s.manager.fresh_env())
+        .unwrap();
+    s.cli.wait_calls(1);
+    s.manager.begin_shutdown();
+    assert!(matches!(
+        s.manager.submit_command(&[], &s.manager.fresh_env()),
+        Err(JobError::ShuttingDown)
+    ));
+    s.manager.shutdown().unwrap();
+    let stopped = s.manager.status(&job.job_id).unwrap();
+    assert_eq!(stopped.state, "interrupted");
+    assert!(stopped.stop_requested);
+    assert!(!s.manager.is_busy());
+    s.manager.shutdown().unwrap();
+    assert_eq!(s.cli.calls(), 1);
 }

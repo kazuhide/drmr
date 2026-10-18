@@ -2,6 +2,7 @@ mod support;
 
 use drmr_server::config::QueueRunner;
 use serde_json::{Value, json};
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use support::{Harness, KID, audio_rep, error, h264_rep, sse_events, stage, stage_entry};
 
@@ -570,6 +571,11 @@ fn a_launched_conversion_is_answered_202_even_when_its_record_cannot_be_written(
     // The job itself is unaffected: it runs, its status and log answer from the manager.
     assert_eq!(sse_events(&text).last().unwrap().0, "done");
     assert_eq!(status, succeeded());
+    assert_eq!(
+        h.client.get("/api/catalog").json()[0]["output_readiness"]["state"],
+        "unverified"
+    );
+    assert!(h.client.get("/api/assets/norecord").json()["new_url"].is_null());
     assert!(
         h.logs()
             .iter()
@@ -1210,4 +1216,33 @@ fn asset_renditions_carry_their_shape_for_the_input_table() {
         .replace("key_id", "")
         .replace("kid", "");
     assert!(!text.contains("key"));
+}
+
+#[test]
+fn an_old_successful_manifest_is_not_current_generation_readiness() {
+    let h = two_lines(|_| {});
+    stage(&h.catalog, "stale-output");
+    let manifest = h.output.join("stale-output/manifests/local/source.mpd");
+    drmr_core::native::create_media_dir_all(manifest.parent().unwrap()).unwrap();
+    drmr_core::native::create_media_new(&manifest)
+        .unwrap()
+        .write_all(b"<MPD/>")
+        .unwrap();
+    let before = std::fs::read(&manifest).unwrap();
+    let row = h.client.get("/api/catalog").json()[0].clone();
+    assert_eq!(row["converted"], true);
+    assert_eq!(row["output_readiness"]["state"], "unverified");
+    let id = convert(&h, "stale-output");
+    drain(&h, &id);
+    assert_eq!(h.client.get(&format!("/api/jobs/{id}")).json(), succeeded());
+    let row = h.client.get("/api/catalog").json()[0].clone();
+    assert_eq!(row["converted"], true);
+    assert_eq!(row["output_readiness"]["state"], "unverified");
+    assert!(h.client.get("/api/assets/stale-output").json()["new_url"].is_null());
+    assert_eq!(std::fs::read(&manifest).unwrap(), before);
+    let (_server, again) = h.second();
+    assert_eq!(
+        again.get("/api/catalog").json()[0]["output_readiness"]["state"],
+        "unverified"
+    );
 }

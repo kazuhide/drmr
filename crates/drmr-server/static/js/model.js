@@ -61,7 +61,7 @@
   }
 
   function makeContent(kind, assetId, row, jobs) {
-    var content = { kind: kind, asset_id: assetId, label: row ? (row.label || '') : '', entry: row ? row.entry : null, paths: row ? row.paths : null, converted: !!(row && row.converted), jobs: jobs, analysis_id: null, result_id: null, state: 'ready' };
+    var content = { kind: kind, asset_id: assetId, label: row ? (row.label || '') : '', entry: row ? row.entry : null, paths: row ? row.paths : null, converted: !!(row && row.converted), output_readiness: row ? row.output_readiness : null, jobs: jobs, analysis_id: null, result_id: null, state: 'ready' };
     jobs.forEach(function (job) {
       if (job.kind === 'package' && job.state === 'succeeded' && !content.result_id && job.result_id) content.result_id = job.result_id;
       if (job.kind === 'analysis' && job.state === 'succeeded' && !content.analysis_id && job.analysis_id) content.analysis_id = job.analysis_id;
@@ -78,10 +78,29 @@
     if (queue && (queue.pending || []).some(function (item) { return item.asset_id === content.asset_id; })) return 'queued';
     // A failed recent run takes precedence over an earlier success.
     var newest = jobs[0];
-    if (newest && (newest.state === 'failed' || newest.state === 'interrupted')) return 'failed';
-    if (content.kind === 'catalog' ? content.converted : !!content.result_id) return 'packaged';
+    if (newest && (newest.state === 'failed' || newest.state === 'interrupted')) return newest.state;
+    if (content.kind === 'catalog' ? hasVerifiedOutput(content) : !!content.result_id) return 'packaged';
+    if (content.kind === 'catalog' && content.converted) return 'unverified';
     if (content.kind === 'hls' && content.analysis_id) return 'analyzed';
     return 'ready';
+  }
+
+  // Output existence and an exit-zero record do not attest the current generation.
+  function hasVerifiedOutput(content) {
+    if (!content || content.kind !== 'catalog' || content.orphan || !content.output_readiness || content.output_readiness.state !== 'verified') return false;
+    var jobs = (content.jobs || []).filter(function (job) { return job.kind === 'convert'; });
+    if (jobs.some(function (job) { return job.state === 'running'; })) return false;
+    var newest = jobs[0];
+    return !newest || (newest.state === 'succeeded' && !newest.stop_requested && newest.job_id === content.output_readiness.job_id);
+  }
+  function hasCatalogReport(content) {
+    return content.kind === 'catalog' && !content.orphan && (content.converted || (content.jobs || []).some(function (job) { return job.kind === 'convert' && isTerminal(job.state); }));
+  }
+  function catalogGeneration(content) {
+    if (!content || content.kind !== 'catalog') return null;
+    var r = content.output_readiness || {};
+    var job = (content.jobs || []).filter(function (item) { return item.kind === 'convert'; })[0] || {};
+    return JSON.stringify([r.state, r.reason, r.job_id, job.job_id, job.state, job.stop_requested]);
   }
 
   function rules(kind) { return kind === 'catalog' ? CATALOG_RULES : HLS_RULES; }
@@ -129,5 +148,5 @@
 
   function isTerminal(state) { return !!TERMINAL[state]; }
 
-  App.Model = { compose: compose, contentState: contentState, rules: rules, checkStatuses: checkStatuses, ruleStatus: ruleStatus, isTerminal: isTerminal, byNewest: byNewest };
+  App.Model = { hasVerifiedOutput: hasVerifiedOutput, hasCatalogReport: hasCatalogReport, catalogGeneration: catalogGeneration, compose: compose, contentState: contentState, rules: rules, checkStatuses: checkStatuses, ruleStatus: ruleStatus, isTerminal: isTerminal, byNewest: byNewest };
 })();

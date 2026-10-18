@@ -70,6 +70,7 @@ pub fn reads_body(endpoint: Endpoint, method: &str) -> bool {
     matches!(
         endpoint,
         Endpoint::Convert
+            | Endpoint::JobStop
             | Endpoint::HlsAnalyze
             | Endpoint::HlsPackage
             | Endpoint::PlaybackSessions
@@ -87,6 +88,7 @@ pub fn dispatch(app: &Arc<App>, endpoint: Endpoint, values: &[String], req: &Req
         Endpoint::Catalog => api_catalog(app),
         Endpoint::Convert => api_convert(app, req),
         Endpoint::JobStatus => api_job_status(app, value(0)),
+        Endpoint::JobStop => api_job_stop(app, value(0), req),
         Endpoint::JobLog => Ok(api_job_log(app, value(0))),
         Endpoint::JobLogDownload => Ok(api_job_log_download(app, value(0))),
         Endpoint::Assets => api_assets(app, value(0)),
@@ -120,7 +122,15 @@ fn hls_dispatch(app: &Arc<App>, endpoint: Endpoint, values: &[String], req: &Req
             if cursor.is_some_and(|cursor| cursor.chars().count() > 1024) {
                 return Err(invalid());
             }
-            Ok(Reply::json(200, &service.jobs(cursor, limit)?))
+            let jobs = service.jobs(cursor, limit)?;
+            if let Some(rows) = jobs["jobs"].as_array() {
+                for row in rows {
+                    if let Some(id) = row["job_id"].as_str() {
+                        app.manager.qualify_catalog(id);
+                    }
+                }
+            }
+            Ok(Reply::json(200, &jobs))
         }
         Endpoint::HlsJobDelete => {
             service.delete_job(value(0))?;
@@ -327,7 +337,13 @@ fn api_catalog(app: &Arc<App>) -> Answer {
     let mut rows = Vec::with_capacity(entries.len());
     for entry in &entries {
         let converted = local_manifest_rel(&app.config.output_root, &entry.asset_id)?.is_some();
-        rows.push(catalog::catalog_entry_public_dict(entry, converted));
+        let mut row = catalog::catalog_entry_public_dict(entry, converted);
+        row.as_object_mut().ok_or(RouteError::Internal)?.insert(
+            "output_readiness".into(),
+            app.manager
+                .output_readiness(&entry.asset_id, &app.config.output_root),
+        );
+        rows.push(row);
     }
     Ok(Reply::json(200, &Value::Array(rows)))
 }
@@ -359,6 +375,10 @@ fn api_convert(app: &Arc<App>, req: &Req) -> Answer {
         Err(error @ JobError::AlreadyRunning) => {
             return Ok(Reply::json_error(409, &error.to_string()));
         }
+        Err(JobError::ShuttingDown) => return Ok(Reply::json_error(503, "server-shutting-down")),
+        Err(JobError::CleanupUnconfirmed) => {
+            return Ok(Reply::json_error(503, "cleanup-unconfirmed"));
+        }
         Err(_) => return Err(RouteError::Internal),
     };
     // The job is running: a record that cannot be written is logged, never an error answer.
@@ -375,23 +395,79 @@ fn state_payload(state: &Value, exit_code: &Value) -> Value {
     Value::Object(payload)
 }
 
+fn api_job_stop(app: &Arc<App>, job_id: &str, req: &Req) -> Answer {
+    if !json_body(req)?.is_empty() {
+        return Err(HlsApiError::status("stop-parameters-invalid", 400).into());
+    }
+    if !crate::jobs::safe_job_id(job_id) {
+        return Ok(Reply::json_error(404, "job-not-found"));
+    }
+    let handle = match app.manager.request_stop(job_id) {
+        Ok(handle) => Some(handle),
+        Err(JobError::CleanupUnconfirmed) => {
+            return Ok(Reply::json_error(503, "cleanup-unconfirmed"));
+        }
+        Err(JobError::NotFound(_)) if app.service.owns(job_id) => None,
+        Err(_) => return Ok(Reply::json_error(404, "job-not-found")),
+    };
+    let mut payload = if app.service.owns(job_id) {
+        app.service.status(job_id)?
+    } else {
+        let handle = handle
+            .as_ref()
+            .expect("a live manager owns an unrecorded job");
+        let Value::Object(mut payload) = state_payload(
+            &Value::from(handle.state),
+            &handle.exit_code.map_or(Value::Null, Value::from),
+        ) else {
+            unreachable!()
+        };
+        payload.insert("job_id".into(), Value::from(job_id));
+        payload
+    };
+    let stopped = handle.as_ref().map_or_else(
+        || {
+            payload
+                .get("stop_requested")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        },
+        |handle| handle.stop_requested,
+    );
+    payload.insert("stop_requested".into(), Value::Bool(stopped));
+    let running = payload.get("state").and_then(Value::as_str) == Some("running");
+    Ok(Reply::json(
+        if running { 202 } else { 200 },
+        &Value::Object(payload),
+    ))
+}
+
 fn api_job_status(app: &Arc<App>, job_id: &str) -> Answer {
     if app.service.owns(job_id) {
         let status = app.service.status(job_id)?;
         if status.get("kind").and_then(Value::as_str) == Some("convert") {
-            let payload = state_payload(&status["state"], &status["exit_code"]);
+            app.manager.qualify_catalog(job_id);
+            let mut payload = state_payload(&status["state"], &status["exit_code"]);
+            if status.get("stop_requested").and_then(Value::as_bool) == Some(true) {
+                payload["stop_requested"] = Value::Bool(true);
+            }
             return Ok(Reply::json(200, &payload));
         }
         return Ok(Reply::json(200, &Value::Object(status)));
     }
     match app.manager.status(job_id) {
-        Ok(handle) => Ok(Reply::json(
-            200,
-            &state_payload(
+        Ok(handle) => {
+            app.manager.qualify_catalog(job_id);
+            let mut payload = state_payload(
                 &Value::from(handle.state),
                 &handle.exit_code.map_or(Value::Null, Value::from),
-            ),
-        )),
+            );
+            if handle.stop_requested {
+                payload["stop_requested"] = Value::Bool(true);
+            }
+            Ok(Reply::json(200, &payload))
+        }
+        Err(JobError::CleanupUnconfirmed) => Ok(Reply::json_error(503, "cleanup-unconfirmed")),
         Err(_) => Ok(Reply::json_error(404, "no such job")),
     }
 }
@@ -401,24 +477,54 @@ fn sanitizer(app: &Arc<App>, job_id: &str) -> bool {
     app.service.kind(job_id).as_deref() != Some("convert")
 }
 
-type Sender = tokio::sync::mpsc::Sender<Result<Vec<u8>, std::io::Error>>;
+struct Sender {
+    channel: tokio::sync::mpsc::Sender<Result<Vec<u8>, std::io::Error>>,
+    workers: Arc<crate::workers::Workers>,
+}
 
-/// Run `produce` on its own thread, its chunks streamed as the response body.
-fn stream(content_type: &str, produce: impl FnOnce(&Sender) + Send + 'static) -> Reply {
-    let (sender, receiver) = tokio::sync::mpsc::channel(16);
-    let spawned = std::thread::Builder::new()
-        .name("response-stream".into())
-        .spawn(move || produce(&sender));
-    drop(spawned);
+/// Run a producer on an owned thread. Closing wakes blocked backpressure waits.
+fn stream(
+    app: &Arc<App>,
+    content_type: &str,
+    produce: impl FnOnce(&Sender) + Send + 'static,
+) -> Reply {
+    let (channel, receiver) = tokio::sync::mpsc::channel(16);
+    let sender = Sender {
+        channel,
+        workers: app.streams.clone(),
+    };
+    if app
+        .streams
+        .spawn("response-stream", move || produce(&sender))
+        .is_err()
+    {
+        return Reply::json_error(503, "server-shutting-down");
+    }
     Reply::stream(content_type, receiver)
 }
 
+fn send_chunk(sender: &Sender, mut chunk: Result<Vec<u8>, std::io::Error>) -> bool {
+    while sender.workers.is_open() {
+        match sender.channel.try_send(chunk) {
+            Ok(()) => return true,
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => return false,
+            Err(tokio::sync::mpsc::error::TrySendError::Full(pending)) => {
+                chunk = pending;
+                if !sender.workers.wait(std::time::Duration::from_millis(5)) {
+                    return false;
+                }
+            }
+        }
+    }
+    false
+}
+
 fn send(sender: &Sender, chunk: String) -> bool {
-    sender.blocking_send(Ok(chunk.into_bytes())).is_ok()
+    send_chunk(sender, Ok(chunk.into_bytes()))
 }
 
 fn abort(sender: &Sender) {
-    let _ = sender.blocking_send(Err(std::io::Error::other("stream aborted")));
+    let _ = send_chunk(sender, Err(std::io::Error::other("stream aborted")));
 }
 
 fn api_job_log(app: &Arc<App>, job_id: &str) -> Reply {
@@ -430,7 +536,8 @@ fn api_job_log(app: &Arc<App>, job_id: &str) -> Reply {
     let app = app.clone();
     let job_id = job_id.to_string();
     let hls = owned && sanitizer(&app, &job_id);
-    stream("text/event-stream; charset=utf-8", move |sender| {
+    let host = app.clone();
+    stream(&host, "text/event-stream; charset=utf-8", move |sender| {
         let poll = app.config.hooks.tail_poll;
         let lines: Box<dyn Iterator<Item = Result<String, ()>>> = if running_here {
             match app.manager.tail_log(&job_id, poll) {
@@ -456,6 +563,7 @@ fn api_job_log(app: &Arc<App>, job_id: &str) -> Reply {
                 return;
             }
         }
+        app.manager.qualify_catalog(&job_id);
         let payload = if owned {
             match app.service.status(&job_id) {
                 Ok(status) => Some(state_payload(&status["state"], &status["exit_code"])),
@@ -490,21 +598,25 @@ fn api_job_log_download(app: &Arc<App>, job_id: &str) -> Reply {
     };
     let shared = app.clone();
     let id = job_id.to_string();
-    let mut reply = stream("text/plain; charset=utf-8; charset=utf-8", move |sender| {
-        for line in shared.manager.read_log(&id) {
-            let line = if hls {
-                match safelog::safe_log(&line) {
-                    Ok(line) => line,
-                    Err(_) => return abort(sender),
+    let mut reply = stream(
+        app,
+        "text/plain; charset=utf-8; charset=utf-8",
+        move |sender| {
+            for line in shared.manager.read_log(&id) {
+                let line = if hls {
+                    match safelog::safe_log(&line) {
+                        Ok(line) => line,
+                        Err(_) => return abort(sender),
+                    }
+                } else {
+                    line
+                };
+                if !send(sender, format!("{line}\n")) {
+                    return;
                 }
-            } else {
-                line
-            };
-            if !send(sender, format!("{line}\n")) {
-                return;
             }
-        }
-    });
+        },
+    );
     reply.set_header(
         "Content-Disposition",
         &format!("attachment; filename=\"job-{job_id}.jsonl\""),
@@ -614,31 +726,12 @@ fn api_assets(app: &Arc<App>, asset_id: &str) -> Answer {
     let Some(entry) = catalog::get_catalog_entry(&app.config.catalog_root, asset_id)? else {
         return Ok(Reply::json_error(404, "unknown asset_id"));
     };
-    let new_rel = local_manifest_rel(&app.config.output_root, asset_id)?;
-    let new_mpd = match &new_rel {
-        Some(rel) => Some(
-            pyutil::resolve(&app.config.output_root)
-                .map_err(|_| RouteError::Internal)?
-                .join(rel),
-        ),
-        None => None,
-    };
     let old = analyze_manifest(&entry.mpd_path)?;
-    let new = match &new_mpd {
-        Some(path) => analyze_manifest(path)?,
-        None => None,
-    };
     let shapes = rendition_shapes(&entry);
+    let new = asset_output_metadata(app, asset_id, &shapes)?;
     let mut renditions = Map::new();
     renditions.insert("old".into(), renditions_value(old.as_deref(), &shapes));
-    renditions.insert(
-        "new".into(),
-        if new_mpd.is_some() {
-            renditions_value(new.as_deref(), &shapes)
-        } else {
-            Value::Null
-        },
-    );
+    renditions.insert("new".into(), new.renditions);
     let mut answer = Map::new();
     answer.insert(
         "old_url".into(),
@@ -646,12 +739,61 @@ fn api_assets(app: &Arc<App>, asset_id: &str) -> Answer {
     );
     answer.insert(
         "new_url".into(),
-        new_rel.map_or(Value::Null, |rel| Value::from(format!("/output/{rel}"))),
+        new.url
+            .map_or(Value::Null, |rel| Value::from(format!("/output/{rel}"))),
     );
+    answer.insert("output_readiness".into(), new.readiness);
     answer.insert("old_summary".into(), summary_value(old.as_deref()));
-    answer.insert("new_summary".into(), summary_value(new.as_deref()));
+    answer.insert("new_summary".into(), new.summary);
     answer.insert("renditions".into(), Value::Object(renditions));
     Ok(Reply::json(200, &Value::Object(answer)))
+}
+
+struct AssetOutputMetadata {
+    url: Option<String>,
+    readiness: Value,
+    summary: Value,
+    renditions: Value,
+}
+
+fn asset_output_metadata(
+    app: &Arc<App>,
+    asset_id: &str,
+    shapes: &HashMap<String, Rendition>,
+) -> Result<AssetOutputMetadata, RouteError> {
+    if let Some(generation) = app
+        .manager
+        .catalog_output(asset_id, &app.config.output_root)
+        && let Ok((analyzed, readiness)) = generation.metadata(|manifest| {
+            let path = app.config.output_root.join(asset_id).join(manifest);
+            analyze_manifest(&path).map(|rows| (rows, format!("{asset_id}/{manifest}")))
+        })
+    {
+        let (rows, url) = analyzed?;
+        return Ok(AssetOutputMetadata {
+            url: Some(url),
+            readiness,
+            summary: summary_value(rows.as_deref()),
+            renditions: renditions_value(rows.as_deref(), shapes),
+        });
+    }
+    // Unqualified files remain diagnostic only. Never promote this separately
+    // read metadata by looking up a newer authority after the read.
+    let relative = local_manifest_rel(&app.config.output_root, asset_id)?;
+    let rows = match &relative {
+        Some(relative) => analyze_manifest(&app.config.output_root.join(relative))?,
+        None => None,
+    };
+    Ok(AssetOutputMetadata {
+        url: None,
+        readiness: app.manager.unverified_readiness(asset_id),
+        summary: summary_value(rows.as_deref()),
+        renditions: if relative.is_some() {
+            renditions_value(rows.as_deref(), shapes)
+        } else {
+            Value::Null
+        },
+    })
 }
 
 fn rendition_shapes(entry: &CatalogEntry) -> HashMap<String, Rendition> {
@@ -755,12 +897,24 @@ fn catalog_report_body(app: &Arc<App>, asset_id: &str) -> Result<Value, RouteErr
     if asset.parent() != Some(root.as_path()) {
         return Err(invalid());
     }
-    let path = resolve_within_root("reports/phase1-summary.json", &asset)?;
-    let text = std::fs::read(&path)
-        .ok()
-        .and_then(|bytes| String::from_utf8(bytes).ok())
-        .ok_or_else(invalid)?;
-    let Ok(Value::Object(report)) = serde_json::from_str::<Value>(&text) else {
+    let generation = app
+        .manager
+        .catalog_output(asset_id, &app.config.output_root);
+    let (report, readiness, new_rel) = if let Some(generation) = generation {
+        let (report, readiness) = generation.report(&asset).map_err(|_| invalid())?;
+        (
+            report,
+            readiness,
+            Some(format!("{asset_id}/{}", generation.manifest)),
+        )
+    } else {
+        (
+            drmr_core::catalog_receipt::read_report(&asset).map_err(|_| invalid())?,
+            app.manager.unverified_readiness(asset_id),
+            None,
+        )
+    };
+    let Value::Object(report) = report else {
         return Err(invalid());
     };
     if report.get("schema_version").and_then(Value::as_str) != Some("1")
@@ -775,6 +929,9 @@ fn catalog_report_body(app: &Arc<App>, asset_id: &str) -> Result<Value, RouteErr
     {
         return Err(invalid());
     }
+    if report["all_pass"] == true && new_rel.is_none() {
+        return Err(invalid());
+    }
     let tracks = catalog_tracks(report.get("renditions")).ok_or_else(invalid)?;
     let manifest_checks = match report.get("manifests") {
         None | Some(Value::Null) => Vec::new(),
@@ -783,7 +940,6 @@ fn catalog_report_body(app: &Arc<App>, asset_id: &str) -> Result<Value, RouteErr
         }
         Some(_) => return Err(invalid()),
     };
-    let new_rel = local_manifest_rel(&app.config.output_root, asset_id)?;
     if let Some(rel) = &new_rel {
         resolve_within_root(rel, &root)?;
     }
@@ -794,6 +950,7 @@ fn catalog_report_body(app: &Arc<App>, asset_id: &str) -> Result<Value, RouteErr
         answer.insert(flag.into(), report[flag].clone());
     }
     answer.insert("production_verified".into(), Value::Bool(false));
+    answer.insert("output_readiness".into(), readiness);
     answer.insert("tracks".into(), Value::Array(tracks));
     answer.insert("checks".into(), Value::Array(manifest_checks));
     answer.insert(
@@ -866,6 +1023,8 @@ fn catalog_report_page(app: &Arc<App>, req: &Req, asset_id: &str) -> Answer {
     {
         return Err(HlsApiError::status("result-not-found", 404).into());
     }
+    catalog_report_body(app, asset_id)
+        .map_err(|_| HlsApiError::status("result-unavailable", 410))?;
     match resolve_within_root(
         &format!("{asset_id}/reports/phase1-summary.json"),
         &app.config.output_root,
@@ -945,6 +1104,38 @@ fn output(app: &Arc<App>, req: &Req, asset_id: &str, rel: &str) -> Answer {
     if !matches!(subtree.as_deref(), Some("cbcs" | "manifests")) {
         return Err(RouteError::NotFound);
     }
+    if !app.service.asset_reserved(asset_id)
+        && (app.manager.catalog_fenced(asset_id)
+            || catalog::get_catalog_entry(&app.config.catalog_root, asset_id)?.is_some())
+    {
+        let verified = app
+            .manager
+            .catalog_output(asset_id, &app.config.output_root)
+            .ok_or(RouteError::NotFound)?;
+        let name = full
+            .strip_prefix(&asset_root)
+            .map_err(|_| RouteError::NotFound)?
+            .iter()
+            .map(|s| s.to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/");
+        if !verified.contains(&name) {
+            return Err(RouteError::NotFound);
+        }
+        let facts = verified
+            .read(|| FileFacts::stat(&full))
+            .map_err(|_| RouteError::NotFound)?;
+        let mut reply = http::send_file(req, &facts, mime_for(&full));
+        reply.body = match reply.body {
+            Body::File {
+                path,
+                start,
+                length,
+            } => file_body_with_generation(&app.streams, path, start, length, Some(verified)),
+            other => other,
+        };
+        return Ok(reply);
+    }
     send_disk_file(req, &full, mime_for(&full))
 }
 
@@ -978,42 +1169,344 @@ fn clearkey_license(app: &Arc<App>, req: &Req) -> Answer {
 }
 
 /// Stream a slice of a file in chunks (the body of a `send_file` answer).
-pub fn file_body(path: PathBuf, start: u64, length: u64) -> Body {
+pub(crate) fn file_body(
+    workers: &Arc<crate::workers::Workers>,
+    path: PathBuf,
+    start: u64,
+    length: u64,
+) -> Body {
+    file_body_with_generation(workers, path, start, length, None)
+}
+
+fn generation_read<T>(
+    generation: Option<&crate::readiness::OutputGeneration>,
+    action: impl FnOnce() -> std::io::Result<T>,
+) -> std::io::Result<T> {
+    match generation {
+        Some(generation) => generation.read(action),
+        None => action(),
+    }
+}
+
+fn file_body_with_generation(
+    workers: &Arc<crate::workers::Workers>,
+    path: PathBuf,
+    start: u64,
+    length: u64,
+    generation: Option<Arc<crate::readiness::OutputGeneration>>,
+) -> Body {
     use std::io::{Read, Seek, SeekFrom};
-    let (sender, receiver) = tokio::sync::mpsc::channel(8);
-    let spawned = std::thread::Builder::new()
-        .name("file-body".into())
-        .spawn(move || {
-            let mut file = match std::fs::File::open(&path) {
-                Ok(file) => file,
-                Err(error) => {
-                    let _ = sender.blocking_send(Err(error));
-                    return;
-                }
-            };
-            if let Err(error) = file.seek(SeekFrom::Start(start)) {
-                let _ = sender.blocking_send(Err(error));
+    let (channel, receiver) = tokio::sync::mpsc::channel(8);
+    let sender = Sender {
+        channel,
+        workers: workers.clone(),
+    };
+    let spawned = workers.spawn("file-body", move || {
+        let mut file = match generation_read(generation.as_deref(), || {
+            let mut file = std::fs::File::open(&path)?;
+            file.seek(SeekFrom::Start(start))?;
+            Ok(file)
+        }) {
+            Ok(file) => file,
+            Err(error) => {
+                let _ = send_chunk(&sender, Err(error));
                 return;
             }
-            let mut remaining = length;
-            let mut buffer = vec![0u8; 64 * 1024];
-            while remaining > 0 {
-                let want = usize::try_from(remaining.min(64 * 1024)).unwrap_or(64 * 1024);
-                match file.read(&mut buffer[..want]) {
-                    Ok(0) => break,
-                    Ok(read) => {
-                        remaining -= u64::try_from(read).unwrap_or(remaining);
-                        if sender.blocking_send(Ok(buffer[..read].to_vec())).is_err() {
-                            return;
-                        }
-                    }
-                    Err(error) => {
-                        let _ = sender.blocking_send(Err(error));
+        };
+        let mut remaining = length;
+        let mut buffer = vec![0u8; 64 * 1024];
+        while remaining > 0 {
+            let want = usize::try_from(remaining.min(64 * 1024)).unwrap_or(64 * 1024);
+            let result = generation_read(generation.as_deref(), || file.read(&mut buffer[..want]));
+            match result {
+                Ok(0) => break,
+                Ok(read) => {
+                    remaining -= u64::try_from(read).unwrap_or(remaining);
+                    if !send_chunk(&sender, Ok(buffer[..read].to_vec())) {
                         return;
                     }
                 }
+                Err(error) => {
+                    let _ = send_chunk(&sender, Err(error));
+                    return;
+                }
             }
-        });
+        }
+    });
     drop(spawned);
     Body::Stream(receiver)
+}
+
+#[cfg(test)]
+mod generation_tests {
+    use super::*;
+    use drmr_core::native;
+    use sha2::{Digest as _, Sha256};
+    use std::io::Write as _;
+
+    struct Fixture {
+        _root: native::PrivateTempDir,
+        app: Arc<App>,
+        media: PathBuf,
+    }
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            self.app.manager.kill_current();
+        }
+    }
+    fn fixture() -> Fixture {
+        fixture_with_media(b"old qualified bytes")
+    }
+    fn fixture_with_media(media: &[u8]) -> Fixture {
+        let root = native::private_tempdir().unwrap();
+        let executable = drmr_test_support::install(
+            &root.path().join("tool"),
+            &drmr_test_support::ToolSpec {
+                sleep_ms: 60_000,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let mut config =
+            crate::ServerConfig::new(root.path().join("catalog"), root.path().join("output"));
+        config.cli_argv = vec![executable.into_os_string()];
+        config.hooks.monitor = false;
+        config.hooks.queue_runner = crate::config::QueueRunner::Disabled;
+        let app = App::new(config).unwrap();
+        let asset = app.config.output_root.join("asset");
+        let report = br#"{"schema_version":"1","asset_id":"asset","all_pass":true,"full_enumeration":true,"round_trip_verified":true,"renditions":[],"manifests":null}"#;
+        let mut files = Map::new();
+        for (name, bytes) in [
+            ("reports/phase1-summary.json", &report[..]),
+            ("manifests/local/source.mpd", &b"<MPD/>"[..]),
+            ("cbcs/segment.m4s", media),
+        ] {
+            let path = asset.join(name);
+            native::create_media_dir_all(path.parent().unwrap()).unwrap();
+            native::create_media_new(&path)
+                .unwrap()
+                .write_all(bytes)
+                .unwrap();
+            files.insert(
+                name.to_string(),
+                serde_json::json!({"size":bytes.len(),"sha256":hex::encode(Sha256::digest(bytes))}),
+            );
+        }
+        let nonce = "00112233445566778899aabbccddeeff";
+        let receipt = serde_json::json!({"version":1,"nonce":nonce,"asset_id":"asset","manifest":"manifests/local/source.mpd","files":files});
+        native::create_private_new(&app.manager.jobs_dir().join(format!("{nonce}.receipt.json")))
+            .unwrap()
+            .write_all(&serde_json::to_vec(&receipt).unwrap())
+            .unwrap();
+        let record_name = format!("catalog-{}.json", hex::encode(Sha256::digest(b"asset")));
+        native::create_private_new(&app.manager.jobs_dir().join(record_name)).unwrap().write_all(&serde_json::to_vec(&serde_json::json!({"version":1,"asset_id":"asset","job_id":nonce,"state":"verified"})).unwrap()).unwrap();
+        assert!(
+            app.manager
+                .catalog_output("asset", &app.config.output_root)
+                .is_some()
+        );
+        Fixture {
+            _root: root,
+            media: asset.join("cbcs/segment.m4s"),
+            app,
+        }
+    }
+    fn next_attempt(app: &Arc<App>) -> String {
+        let entry = CatalogEntry {
+            asset_id: "asset".into(),
+            label: "test".into(),
+            entry_dir: app.config.catalog_root.join("asset"),
+            mpd_path: app.config.catalog_root.join("source.mpd"),
+            hls_master_path: app.config.catalog_root.join("master.m3u8"),
+            key_material: KeyMaterial::new(
+                "000102030405060708090a0b0c0d0e0f",
+                "101112131415161718191a1b1c1d1e1f",
+                "202122232425262728292a2b2c2d2e2f",
+            )
+            .unwrap(),
+        };
+        app.manager
+            .submit(&entry, &app.config.output_root)
+            .unwrap()
+            .job_id
+    }
+
+    #[test]
+    fn an_authorized_response_cannot_open_a_later_attempts_unverified_bytes() {
+        let f = fixture();
+        let req = Req {
+            method: "GET".into(),
+            ..Default::default()
+        };
+        // Authorization completes, but the response has not reached its deferred open.
+        let reply = output(&f.app, &req, "asset", "cbcs/segment.m4s").unwrap();
+        assert_eq!(reply.status, 200);
+        next_attempt(&f.app);
+        native::create_media_or_truncate(&f.media)
+            .unwrap()
+            .write_all(b"new unverified bytes")
+            .unwrap();
+        let response = crate::into_response(reply, "GET", &f.app.streams);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        if let Ok(bytes) = runtime.block_on(axum::body::to_bytes(response.into_body(), 1024)) {
+            assert_eq!(
+                &bytes[..],
+                b"old qualified bytes",
+                "an old authority must never read a new attempt's bytes"
+            );
+        }
+    }
+
+    #[test]
+    fn each_stream_read_rejects_a_generation_invalidated_after_the_first_chunk() {
+        use http_body::Body as _;
+        use std::pin::Pin;
+        let f = fixture_with_media(&vec![0x11; 2 * 1024 * 1024]);
+        let req = Req {
+            method: "GET".into(),
+            ..Default::default()
+        };
+        let reply = output(&f.app, &req, "asset", "cbcs/segment.m4s").unwrap();
+        let mut body = crate::into_response(reply, "GET", &f.app.streams).into_body();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let first = runtime
+            .block_on(std::future::poll_fn(|cx| {
+                Pin::new(&mut body).poll_frame(cx)
+            }))
+            .unwrap()
+            .unwrap()
+            .into_data()
+            .unwrap();
+        assert!(!first.is_empty());
+        assert!(first.iter().all(|b| *b == 0x11));
+        // The bounded channel cannot hold this whole file. Beginning another
+        // attempt must not wait for the HTTP receiver to drain its old chunks.
+        let app = f.app.clone();
+        let (sent, received) = std::sync::mpsc::channel();
+        let attempt = std::thread::spawn(move || sent.send(next_attempt(&app)).unwrap());
+        if received
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .is_err()
+        {
+            // Drop the stalled receiver before joining the owned attempt worker,
+            // so even a broken backpressure lock cannot strand the fixture.
+            drop(body);
+            attempt.join().unwrap();
+            panic!("starting an attempt waited for the old HTTP receiver");
+        }
+        attempt.join().unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&f.media)
+            .unwrap()
+            .write_all(&vec![0x22; 2 * 1024 * 1024])
+            .unwrap();
+        let mut invalidated = false;
+        while let Some(frame) = runtime.block_on(std::future::poll_fn(|cx| {
+            Pin::new(&mut body).poll_frame(cx)
+        })) {
+            if let Ok(frame) = frame {
+                assert!(
+                    frame.into_data().unwrap().iter().all(|b| *b == 0x11),
+                    "an invalidated response read bytes written by the next attempt"
+                );
+            } else {
+                invalidated = true;
+                break;
+            }
+        }
+        assert!(
+            invalidated,
+            "the old response must stop at its next bounded file read"
+        );
+    }
+
+    #[test]
+    fn report_and_public_metadata_keep_the_authorizing_job_and_reject_invalidated_owners() {
+        let f = fixture();
+        let first = "00112233445566778899aabbccddeeff";
+        let owner = f
+            .app
+            .manager
+            .catalog_output("asset", &f.app.config.output_root)
+            .unwrap();
+        let (report, metadata) = owner
+            .report(f.media.parent().unwrap().parent().unwrap())
+            .unwrap();
+        assert_eq!(report["asset_id"], "asset");
+        assert_eq!(metadata["state"], "verified");
+        assert_eq!(metadata["job_id"], first);
+        let public_report = catalog_report_body(&f.app, "asset").unwrap();
+        assert_eq!(public_report["output_readiness"], metadata);
+        let next = next_attempt(&f.app);
+        assert_ne!(next, first);
+        assert!(owner.description().is_err());
+        assert!(
+            owner
+                .metadata(|_| panic!("an invalidated owner must not inspect newer metadata"))
+                .is_err()
+        );
+        assert!(
+            owner
+                .report(f.media.parent().unwrap().parent().unwrap())
+                .is_err()
+        );
+        let current = f
+            .app
+            .manager
+            .output_readiness("asset", &f.app.config.output_root);
+        assert_eq!(current["state"], "unverified");
+        assert_eq!(current["job_id"], next);
+        assert!(catalog_report_body(&f.app, "asset").is_err());
+    }
+
+    #[test]
+    fn asset_metadata_uses_the_receipted_manifest_and_keeps_fallback_unverified() {
+        let f = fixture();
+        let entry = f.app.config.catalog_root.join("asset");
+        native::create_private_dir_all(&entry).unwrap();
+        for (name, bytes) in [
+            ("source.mpd", &b"<MPD/>"[..]),
+            ("source.m3u8", &b"#EXTM3U\n"[..]),
+            ("keys.env", &b"DRM_KID=000102030405060708090a0b0c0d0e0f\nDRM_KEY=101112131415161718191a1b1c1d1e1f\nDRM_IV=202122232425262728292a2b2c2d2e2f\n"[..]),
+            ("asset.json", &br#"{"asset_id":"asset","label":"Test","mpd_path":"source.mpd","hls_master_path":"source.m3u8","keys_file":"keys.env"}"#[..]),
+        ] {
+            native::create_private_new(&entry.join(name)).unwrap().write_all(bytes).unwrap();
+        }
+        let stale = f
+            .app
+            .config
+            .output_root
+            .join("asset/manifests/local/000-old.mpd");
+        native::create_media_new(&stale).unwrap().write_all(br#"<MPD><Period><AdaptationSet mimeType="video/mp4" contentType="video"><ContentProtection schemeIdUri="urn:mpeg:dash:mp4protection:2011" value="cenc"/><Representation id="old" codecs="avc1.64001f" bandwidth="777"/></AdaptationSet></Period></MPD>"#).unwrap();
+        let details = |reply: Reply| {
+            let Body::Bytes(bytes) = reply.body else {
+                panic!("asset metadata must be JSON bytes")
+            };
+            serde_json::from_slice::<Value>(&bytes).unwrap()
+        };
+        let qualified = details(api_assets(&f.app, "asset").unwrap());
+        assert_eq!(qualified["output_readiness"]["state"], "verified");
+        assert_eq!(
+            qualified["new_url"],
+            "/output/asset/manifests/local/source.mpd"
+        );
+        assert!(
+            qualified["new_summary"].is_null(),
+            "an unrelated older MPD must not supply a verified generation's summary"
+        );
+        assert_eq!(qualified["renditions"]["new"], serde_json::json!([]));
+        next_attempt(&f.app);
+        let diagnostic = details(api_assets(&f.app, "asset").unwrap());
+        assert_eq!(diagnostic["output_readiness"]["state"], "unverified");
+        assert!(diagnostic["new_url"].is_null());
+        assert_eq!(diagnostic["new_summary"]["protection_scheme"], "cenc");
+        assert_eq!(diagnostic["renditions"]["new"][0]["rep_id"], "old");
+    }
 }

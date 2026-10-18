@@ -15,7 +15,7 @@
     // kinds and states
     kind_catalog: 'DASH CENC + HLS FairPlay', kind_hls: 'HLS（Clear）', group_catalog: '既存の DRM コンテンツ（DASH CENC・HLS FairPlay → CBCS）', group_hls: 'Clear HLS（→ CBCS）', kind_convert: 'CBCS 変換', kind_analysis: 'ソース解析', kind_package: 'DRM パッケージ',
     state_running: '実行中', state_succeeded: '完了', state_failed: '失敗', state_interrupted: '中断',
-    cstate_ready: '未変換', cstate_running: '実行中', cstate_queued: '待機中', cstate_packaged: 'パッケージ済み', cstate_failed: '失敗', cstate_analyzed: '解析済み', cstate_orphan: 'エントリなし',
+    cstate_ready: '未変換', cstate_running: '実行中', cstate_queued: '待機中', cstate_packaged: 'パッケージ済み', cstate_unverified: '出力未検証', cstate_failed: '失敗', cstate_interrupted: '中断', cstate_analyzed: '解析済み', cstate_orphan: 'エントリなし',
     orphanNotice: 'このコンテンツのカタログエントリは見つかりません。実行の記録とログだけを表示しています。', reportNoneOrphan: 'カタログエントリがないため、レポートは取得できません。',
     // empty / add
     emptyTitle: 'コンテンツを選択',
@@ -58,11 +58,15 @@
     'finding_source-http-failed': 'ソースの取得に失敗しました（HTTP エラー）。',
     'finding_source-fetch-failed': 'ソースの取得に失敗しました。',
     'finding_multiple-audio-group-selection-required': '複数の音声グループに多重化音声があるため、自動選択できません。',
-    'finding_analysis-failed': '解析ジョブが失敗しました。ログを確認してください。', 'finding_analysis-interrupted': '解析ジョブが中断されました。', 'finding_analysis-running': '解析中です。',
+    'finding_analysis-failed': '解析ジョブが失敗しました。ログを確認してください。', 'finding_analysis-interrupted': '解析が中断されました。ログを確認してから再実行してください。', 'finding_analysis-running': '解析中です。',
     // transformation section
     transformInput: '入力:', transformOutput: '出力:', inputExisting: '既存 DRM（DASH CENC・HLS FairPlay）', inputClear: 'Clear HLS（{muxing}）', outputsList: 'DASH CBCS（Widevine・PlayReady）、HLS CBCS（FairPlay）', transformDetails: '処理の内訳と検証項目',
     sampleValues: 'サンプル値を入力', sampleValuesNote: '書式確認用の合成値です（本物の鍵ではありません）。',
     transformCatalogPending: '変換すると次の処理を行い、各項目を全レンディションで検証します。再エンコードはしません。',
+    outputUnverified: '現在の出力世代は未検証です。保存済みファイルは保持され、比較再生は利用できません。',
+    reportDiagnostic: 'このレポートは診断用です。現在の出力を検証済みとは示しません。',
+    convertUnverified: 'ジョブは終了しました（{elapsed}）。現在の出力世代を確認できないため、比較再生は利用できません。',
+    transformCatalogUnverified: '保存済みの出力は未検証です。以下は変換時の処理と検証項目です。',
     transformCatalogDone: '次の処理を行いました。各項目の検証結果はレポートからの値です。',
     transformHlsPending: 'DRM パラメーターを入力してパッケージすると次の処理を行います。再エンコードはしません。',
     transformHlsDone: '次の処理を行いました。各項目の検証結果は結果レポートからの値です。',
@@ -120,6 +124,9 @@
     reenterDrm: 'DRM パラメーターを再入力してください（送信時に消去されています）。', resultLoading: '結果を読み込んでいます…', resultUnavailable: 'この結果は利用できなくなりました（出力が削除または変更された可能性があります）。', retryResult: '結果を再読み込み',
     // runs / log section
     runsEmpty: 'まだ実行はありません。',
+    stopJob: '停止', stopPending: '停止処理中…', stopJobLabel: '{asset} のジョブを停止', stopPendingLabel: '{asset} の停止完了を待っています',
+    stopRequested: '停止を要求しました。子プロセスの終了確認を待っています。', stopHelp: 'このジョブだけを停止します。待機中のジョブは続行します。途中の出力はディスクに残る場合があります。', stopFailed: '停止を要求できませんでした。',
+    cleanupUnconfirmed: '終了処理を確認できませんでした。ジョブのファイルは保持されています。サーバーのログを確認してください。', serverClosing: 'サーバーは終了処理中です。',
     openLog: 'ログ', logLive: 'ライブ', logReplay: '保存済みログ', logLoading: 'ログを読み込んでいます…', exitCode: '終了コード {code}', timeUnknown: '日時不明',
     logJson: 'JSON', logFormatted: '整形表示', logDownload: 'ダウンロード', logExit: '終了コード {code}', logTruncated: '一部省略', toolOutputEmpty: '出力なし',
     logInterrupted: 'ログの一部は受信できませんでした。件数と進捗は参考値です。',
@@ -184,7 +191,7 @@
     leaseIdle: 'No job running', leaseRunning: 'Running: {asset} · {kind}', leaseQueued: '{n} waiting',
     kind_catalog: 'DASH CENC + HLS FairPlay', kind_hls: 'HLS (clear)', group_catalog: 'Existing DRM content (DASH CENC + HLS FairPlay → CBCS)', group_hls: 'Clear HLS (→ CBCS)', kind_convert: 'CBCS conversion', kind_analysis: 'Source analysis', kind_package: 'DRM packaging',
     state_running: 'Running', state_succeeded: 'Succeeded', state_failed: 'Failed', state_interrupted: 'Interrupted',
-    cstate_ready: 'Not converted', cstate_running: 'Running', cstate_queued: 'Queued', cstate_packaged: 'Packaged', cstate_failed: 'Failed', cstate_analyzed: 'Analyzed', cstate_orphan: 'Entry removed',
+    cstate_ready: 'Not converted', cstate_running: 'Running', cstate_queued: 'Queued', cstate_packaged: 'Packaged', cstate_unverified: 'Output unverified', cstate_failed: 'Failed', cstate_interrupted: 'Interrupted', cstate_analyzed: 'Analyzed', cstate_orphan: 'Entry removed',
     orphanNotice: 'The catalog entry of this content is gone. Only its run records and logs are shown.', reportNoneOrphan: 'No report can be fetched without the catalog entry.',
     emptyTitle: 'Select a content',
     addTitle: 'Add content',
@@ -223,10 +230,14 @@
     'finding_source-http-failed': 'Fetching the source failed (HTTP error).',
     'finding_source-fetch-failed': 'Fetching the source failed.',
     'finding_multiple-audio-group-selection-required': 'Muxed audio exists in several audio groups; it cannot be selected automatically.',
-    'finding_analysis-failed': 'The analysis job failed. Check the log.', 'finding_analysis-interrupted': 'The analysis job was interrupted.', 'finding_analysis-running': 'Analysis is still running.',
+    'finding_analysis-failed': 'The analysis job failed. Check the log.', 'finding_analysis-interrupted': 'The analysis was interrupted. Check the log before starting it again.', 'finding_analysis-running': 'Analysis is still running.',
     transformInput: 'Input:', transformOutput: 'Output:', inputExisting: 'existing DRM (DASH CENC + HLS FairPlay)', inputClear: 'clear HLS ({muxing})', outputsList: 'DASH CBCS (Widevine, PlayReady), HLS CBCS (FairPlay)', transformDetails: 'What is done, and the checks',
     sampleValues: 'Fill sample values', sampleValuesNote: 'Synthetic values that show the format only (not real keys).',
     transformCatalogPending: 'Converting performs the following and verifies each item on every rendition. Nothing is re-encoded.',
+    outputUnverified: 'The current output generation is unverified. Saved files are retained; comparison playback is unavailable.',
+    reportDiagnostic: 'This report is diagnostic evidence. It does not qualify the current output generation.',
+    convertUnverified: 'The job finished ({elapsed}). The current output generation could not be confirmed; comparison playback is unavailable.',
+    transformCatalogUnverified: 'Saved output is unverified. The following lists the conversion steps and checks.',
     transformCatalogDone: 'The following was performed. Each item\'s verification comes from the report.',
     transformHlsPending: 'Packaging with the DRM parameters below performs the following. Nothing is re-encoded.',
     transformHlsDone: 'The following was performed. Each item\'s verification comes from the result report.',
@@ -282,6 +293,9 @@
     packaging: 'Packaging…', packageDone: 'Packaging finished ({elapsed}).', packageFailed: 'Packaging failed. Check the log.', packageInterrupted: 'Packaging was interrupted.',
     reenterDrm: 'Re-enter the DRM parameters (they were cleared on submission).', resultLoading: 'Loading the result…', resultUnavailable: 'This result is no longer available (its output may have been removed or changed).', retryResult: 'Reload result',
     runsEmpty: 'No runs yet.',
+    stopJob: 'Stop', stopPending: 'Stopping…', stopJobLabel: 'Stop the job for {asset}', stopPendingLabel: 'Waiting for the job for {asset} to stop',
+    stopRequested: 'Stop requested. Waiting for child-process cleanup.', stopHelp: 'Stops only this job. Queued jobs continue. Partial output files may remain on disk.', stopFailed: 'Could not request stop.',
+    cleanupUnconfirmed: 'Cleanup could not be confirmed. The job retains its files. Check the server log.', serverClosing: 'The server is shutting down.',
     openLog: 'Log', logLive: 'Live', logReplay: 'Saved log', logLoading: 'Loading the log…', exitCode: 'Exit code {code}', timeUnknown: 'Unknown time',
     logJson: 'JSON', logFormatted: 'Formatted', logDownload: 'Download', logExit: 'exit code {code}', logTruncated: 'partly omitted', toolOutputEmpty: 'no output',
     logInterrupted: 'Part of the log was not received; counts and progress are indicative.',
@@ -367,6 +381,8 @@
       if (code === 'asset-already-exists' && asset) return t('assetExistsErrorAsset', { asset: asset });
       return t(Object.prototype.hasOwnProperty.call(conflicts, code) ? conflicts[code] : 'conflictError');
     }
+    if (e.status === 503 && code === 'cleanup-unconfirmed') return t('cleanupUnconfirmed');
+    if (e.status === 503 && code === 'server-shutting-down') return t('serverClosing');
     if (e.status === 403) return t('forbiddenError');
     if (e.status === 422 || e.status === 400 || e.status === 415) {
       if (code === 'source-profile-invalid' || code === 'source-not-allowed') return t('sourceAccessError');

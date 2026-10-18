@@ -4,6 +4,8 @@ pub mod batch;
 pub mod batch_cli;
 pub mod batch_support;
 pub mod canonical;
+#[doc(hidden)]
+pub mod catalog_receipt;
 pub mod checks;
 pub mod cli;
 pub mod concurrency;

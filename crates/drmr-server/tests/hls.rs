@@ -1628,3 +1628,49 @@ fn a_request_body_over_the_limit_is_refused_before_any_work() {
     assert_eq!(w.h.cli.calls(), 0);
     assert!(!w.h.output.join("big").exists());
 }
+
+#[test]
+fn stopping_analysis_removes_request_secrets_only_after_confirmed_completion() {
+    let w = web();
+    let answer = w.post(
+        "/api/hls/analyses",
+        &json!({"asset_id": "stopped-source", "url": SOURCE_URL}),
+    );
+    assert_eq!(answer.status, 202);
+    let job_id = answer.json()["job_id"].as_str().unwrap().to_string();
+    w.h.cli.wait_calls(1);
+    let requests = w.h.output.join("stopped-source/clear/_requests");
+    assert_ne!(json_files(&requests), Vec::<PathBuf>::new());
+    let stop = w.post(&format!("/api/jobs/{job_id}/stop"), &json!({}));
+    assert!(matches!(stop.status, 200 | 202));
+    assert_eq!(stop.json()["stop_requested"], true);
+    let final_state = w.h.wait_job(&job_id);
+    assert_eq!(final_state["state"], "interrupted");
+    assert_eq!(json_files(&requests), Vec::<PathBuf>::new());
+    assert_eq!(
+        w.get("/api/hls/jobs").json()["jobs"][0]["state"],
+        "interrupted"
+    );
+    assert!(!w.h.app().manager.is_busy());
+}
+
+#[test]
+fn explicit_shutdown_confirms_analysis_cleanup_with_external_app_ownership() {
+    let mut w = web();
+    let response = w.post(
+        "/api/hls/analyses",
+        &json!({"asset_id": "close-active", "url": SOURCE_URL}),
+    );
+    assert_eq!(response.status, 202);
+    let job_id = response.json()["job_id"].as_str().unwrap().to_string();
+    w.h.cli.wait_calls(1);
+    let requests = w.h.output.join("close-active/clear/_requests");
+    assert_ne!(json_files(&requests), Vec::<PathBuf>::new());
+    let mut server = w.h.server.take().unwrap();
+    let app = server.app.clone();
+    server.shutdown().unwrap();
+    assert_eq!(app.service.status(&job_id).unwrap()["state"], "interrupted");
+    assert_eq!(json_files(&requests), Vec::<PathBuf>::new());
+    assert!(!app.manager.is_busy());
+    assert!(!app.queue.runner_active());
+}
