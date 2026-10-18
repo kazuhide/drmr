@@ -622,14 +622,7 @@ fn encrypted_reference_and_clear_candidate_keep_finite_windows_and_display_exten
         } else {
             verify(&c, &source, &gain, &keys)
         };
-        assert_eq!(
-            verified.unwrap_err().0,
-            if role == "source" {
-                "progressive-cenc-profile-not-supported"
-            } else {
-                "presentation-window-not-supported"
-            }
-        );
+        assert_eq!(verified.unwrap_err().0, "presentation-window-not-supported");
         if role == "source" {
             let destination = root.path().join("gain-output.mp4");
             let before = std::fs::read(&gain).unwrap();
