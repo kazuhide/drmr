@@ -163,7 +163,7 @@ def build_expectation(source, kind, target, metadata=None):
         if provenance: row["pinned_provenance"] = provenance
         inventory.append(row)
         for n, data in retained.items():
-            add("licenses/" + name + "/" + n, data, exact=provenance is not None or (p.get("source") or "").startswith("registry+"))
+            add("licenses/" + name + "/" + n, data, exact=not p["name"].startswith("drmr"))
     web = "crates/drmr-server/static/"
     for p in sorted(source.paths):
         if p.startswith(web) and PurePosixPath(p).name.upper().startswith(("LICENSE", "NOTICE", "COPYRIGHT", "OFL")):

@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "dispositions": [
+    {
+      "name": "glib",
+      "version": "0.18.5",
+      "advisory": "RUSTSEC-2024-0429",
+      "classification": "unsound",
+      "advisory_sha256": "6a1e96b3e3025d765ffb3a0a2566640e2d2bd2583394e52c9a9801bb35dd3153",
+      "kind": "desktop",
+      "target": "x86_64-unknown-linux-gnu",
+      "ancestry_sha256": "85bb58848ba8cd74e5cacc288080f9ddeb1a34224fd6147caaf9005abddd8df9",
+      "direct_parents": [
+        "atk@0.18.2",
+        "cairo-rs@0.18.5",
+        "gdk-pixbuf@0.18.5",
+        "gdk@0.18.2",
+        "gdkx11@0.18.2",
+        "gio@0.18.4",
+        "gtk@0.18.2",
+        "javascriptcore-rs@1.1.2",
+        "libappindicator@0.9.0",
+        "pango@0.18.3",
+        "soup3@0.5.0",
+        "webkit2gtk@2.0.2"
+      ],
+      "disposition": "source-mitigated"
+    },
+    {
+      "name": "proc-macro-error",
+      "version": "1.0.4",
+      "advisory": "RUSTSEC-2024-0370",
+      "classification": "unmaintained",
+      "advisory_sha256": "d0ec3427fd7dd9b333f4f95de6d9eda5becaca746cc9e12b325071d036d41b4c",
+      "kind": "desktop",
+      "target": "x86_64-unknown-linux-gnu",
+      "ancestry_sha256": "e45cf42811281d8acae92120963daa44e963b81f12e5d113238682a25d48900d",
+      "direct_parents": [
+        "glib-macros@0.18.5",
+        "gtk3-macros@0.18.2"
+      ],
+      "disposition": "acknowledged-maintenance"
+    }
+  ]
+}

@@ -1,0 +1,72 @@
+name: Dependency advisory policy
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '23 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: advisories-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  target-graphs:
+    name: CLI and Desktop target advisory graphs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      CARGO_BUILD_JOBS: 2
+      PYTHONDONTWRITEBYTECODE: 1
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Install the supported minimum Rust toolchain
+        run: |
+          channel="$(python3 .github/scripts/minimum-rust.py)"
+          rustup toolchain install "$channel" --profile minimal --no-self-update
+          printf 'RUSTUP_TOOLCHAIN=%s\n' "$channel" >> "$GITHUB_ENV"
+          rustup run "$channel" rustc --version
+      - name: Install the native GLib regression prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libglib2.0-dev pkg-config
+      - name: Fetch locked sources and install the pinned auditor
+        run: |
+          cargo fetch --locked
+          cargo fetch --manifest-path tools/regressions/glib-variant-iter/Cargo.toml --locked
+          cargo install cargo-audit --version 0.22.2 --locked
+      - name: Test policy refusals and the complete source backport
+        run: |
+          python3 -m unittest discover -s tools/tests -p test_audit_dependencies.py -v
+          python3 -m unittest discover -s tools/tests -p test_verify_backports.py -v
+          python3 tools/verify_backports.py
+      - name: Fetch the official RustSec advisory database
+        run: git clone --depth 1 https://github.com/RustSec/advisory-db.git "$RUNNER_TEMP/advisory-db"
+      - name: Audit exact target graphs and run the optimized native regression
+        run: |
+          set -o pipefail
+          python3 tools/audit_dependencies.py --database "$RUNNER_TEMP/advisory-db" \
+            --cargo-audit "$HOME/.cargo/bin/cargo-audit" --native-regression \
+            --output "$RUNNER_TEMP/advisory-results" | tee "$RUNNER_TEMP/advisory-summary.txt"
+      - name: Retain raw findings, source bindings and dispositions
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: dependency-advisory-results
+          path: |
+            ${{ runner.temp }}/advisory-results
+            ${{ runner.temp }}/advisory-summary.txt
+          if-no-files-found: error
+          retention-days: 30
+      - name: Show advisory dispositions
+        if: always()
+        run: |
+          if [[ -f "$RUNNER_TEMP/advisory-summary.txt" ]]; then
+            cat "$RUNNER_TEMP/advisory-summary.txt" >> "$GITHUB_STEP_SUMMARY"
+          fi
