@@ -3,6 +3,8 @@
 //! Manifest URLs and object keys retain their portable syntax. Native paths and
 //! access controls are interpreted by the operating system at this boundary.
 
+mod identity;
+pub(crate) use identity::FileIdentity;
 mod files;
 #[cfg(windows)]
 pub use files::{PrivateDirectoryGuard, pin_private_directory};

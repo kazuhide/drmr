@@ -5,6 +5,7 @@
 mod cancellation;
 mod convert_cli;
 mod doctor;
+mod download_cli;
 mod inspect_cli;
 
 use clap::{Parser, Subcommand};
@@ -31,7 +32,7 @@ const EXIT_INVALID: u8 = 2;
     name = "drmr",
     version,
     about = "Inspect and repackage streaming media with digital rights management (DRM)",
-    after_help = "Getting started:\n  drmr doctor                       Check external media tools\n  drmr inspect media.mp4             Read local media metadata without keys\n  drmr plan media.mp4 --to cbcs       Describe conversion intent\n  drmr plan --mpd manifest.mpd       List prepared DASH renditions\n  drmr run --help                    See existing DASH packaging options\n\nDASH and HLS are streaming formats that describe media using manifests or playlists.\nUse 'drmr help <COMMAND>' for detailed command help."
+    after_help = "Getting started:\n  drmr doctor                       Check external media tools\n  drmr inspect media.mp4             Read local media metadata without keys\n  drmr plan media.mp4 --to cbcs       Describe conversion intent\n  drmr convert input.mpd --to clear --output clear-media\n  drmr verify clear-media/manifest.mpd --source input.mpd\n\nURL input: use 'drmr convert URL --download-dir SOURCE_DIR' with target and output options.\nFor compatible prepared-asset workflows, see 'drmr run --help' and 'drmr analyze-hls --help'.\nUse 'drmr plan --mpd manifest.mpd' to list prepared DASH renditions.\nDASH and HLS describe streaming media using manifests or playlists.\nUse 'drmr help <COMMAND>' for detailed command help."
 )]
 struct Cli {
     #[command(subcommand)]

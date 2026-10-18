@@ -59,6 +59,7 @@ same-file = "1.0.6"
 # Keep the bundled lifecycle patch until a replacement passes its process-tree checks.
 process-wrap = { version = "=10.0.1", default-features = false, features = ["std", "job-object", "creation-flags"] }
 win32job = "2.0.3"
+winapi-util = "0.1.11"
 url = "2.5.8"
 
 windows-permissions = "0.2.4"

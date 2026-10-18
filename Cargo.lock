@@ -524,6 +524,7 @@ dependencies = [
  "url",
  "webpki-roots 1.0.9",
  "win32job",
+ "winapi-util",
  "windows-permissions",
  "winsafe",
  "zeroize",

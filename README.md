@@ -53,7 +53,7 @@ drmr verify --help
 
 Use `convert INPUT --to ... --format ... --output ...` with a protected key configuration, then `verify OUTPUT --source INPUT` for independent comparison. See [conversion support](docs/conversion-support.md) for the tested protection routes, TS output options, and precise input profiles.
 
-The existing `run` path processes prepared DASH assets. For clear HLS with explicit downloading and DRM signaling, start with `analyze-hls`, then package the saved snapshot with `package-hls`. See the [usage guide](docs/usage.md) for configuration examples, the expected local layout, key handling, and output.
+For a completed clear HLS URL, use `convert URL --download-dir ./source` with the target and output options below. The saved source can be reused offline. The existing `run` path processes prepared DASH assets; `analyze-hls` and `package-hls` retain the separate workflow for its supported DRM-signaling and subtitle profiles. See the [usage guide](docs/usage.md) for configuration examples, the expected local layout, key handling, and output.
 
 ## Supported input
 
@@ -72,7 +72,7 @@ drmr packages supplied media and signaling. It does not provide a DRM license se
 | `doctor` | Check external tool availability; use `--json` for scripts |
 | `inspect` | Read local MP4, DASH, or HLS metadata; use `--json` for scripts |
 | `plan` | Describe a target conversion; `--mpd` lists prepared DASH renditions |
-| `convert` | Convert qualified local media with separate input/output keys and verification |
+| `convert` | Convert qualified local media or acquire clear HLS URLs with `--download-dir`, then verify |
 | `verify` | Compare result media directly with its original source |
 | `run` | Repackage one local DASH asset and check its output |
 | `analyze-hls` | Download and analyze a clear HLS presentation into a saved snapshot |

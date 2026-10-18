@@ -32,6 +32,33 @@ produce clear, `cenc`, or `cbcs` MP4. Combining an HLS presentation's separate
 audio and video tracks into one MP4 is outside the current profile. MPEG-TS has
 the [narrower input profile below](#mpeg-transport-stream-input).
 
+## URL input
+
+`convert` can acquire a completed clear HLS URL before conversion. This URL
+profile supports the same qualified TS/fMP4 media profiles described above;
+it does not extend their codec, track, or output limits. URL input requires
+`--download-dir`, and the completed source is retained for offline conversion
+and independent verification. See [URL conversion and optional fetch settings](usage.md#convert-a-url).
+
+Remote DASH, standalone MP4, encrypted HLS, live playlists, and byte ranges are
+outside the initial acquisition profile. The local input rows above do not imply
+that every matching URL input is implemented. These restrictions describe drmr's
+current acquisition implementation.
+
+The URL regression uses ten seconds of Big Buck Bunny H.264 video: 240 encoded
+packets in five two-second segments. It checks both source containers:
+
+| Downloaded input | Output | Result |
+| --- | --- | --- |
+| Clear HLS with MPEG-TS segments | CBCS fragmented MP4 HLS | Content and timing verified; offline retry verified |
+| Clear HLS with fragmented MP4 segments | CBCS fragmented MP4 HLS | Content and timing verified; offline retry verified |
+
+The tests compare the original playlist and resource bytes, preserve sequence
+numbers and duration text, and independently verify the output. They stop the
+source server before converting the saved input again. A separate failure case
+checks that a completed download survives a missing packaging tool without
+publishing output. These results do not establish DRM license or device playback.
+
 ## Sixteen-route protection regression
 
 The following table records a specific regression fixture, rather than every
