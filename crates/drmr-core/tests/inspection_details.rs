@@ -114,7 +114,7 @@ fn hls_method_evidence_stays_with_each_child_and_unknown_methods_are_fixed_token
         vec![OutputFormat::Hls],
     );
     assert!(!plan.compatible && !plan.execution_available);
-    assert!(plan.processing.unwrap().candidates.is_empty());
+    assert_eq!(plan.processing.unwrap().candidates, []);
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 3);
 }
 
@@ -163,11 +163,11 @@ fn only_correlated_sample_aes_declarations_enable_the_conditional_ts_route() {
                 let untrusted =
                     inspection::plan(input, TargetProtection::Clear, vec![OutputFormat::Hls]);
                 assert!(!untrusted.compatible && !untrusted.execution_available);
-                assert!(untrusted.processing.unwrap().candidates.is_empty());
+                assert_eq!(untrusted.processing.unwrap().candidates, []);
             }
         } else {
             assert!(!plan.compatible && !plan.execution_available);
-            assert!(plan.processing.unwrap().candidates.is_empty());
+            assert_eq!(plan.processing.unwrap().candidates, []);
         }
     }
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
