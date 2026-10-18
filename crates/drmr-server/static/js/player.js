@@ -411,6 +411,8 @@
             detachPlayingHandler();
             onPlayingHandler = function () {
               if (!isCurrent()) return;
+              // A delayed timer task must not admit a first playing event past its budget.
+              if (performance.now() >= deadline) { fail(setupError()); return; }
               attempt.playing = true;
               detachPlayingHandler();
               if (attempt.ready) finish();

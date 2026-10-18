@@ -84,8 +84,9 @@ function harness() {
       json: () => Promise.resolve({ keys: [{ kid: 'AA', k: assetId === 'a' ? 'AA' : 'AQ' }] }),
     });
   }
-  function advance(milliseconds) {
+  function advance(milliseconds, dispatchTimers = true) {
     now += milliseconds;
+    if (!dispatchTimers) return;
     for (const [id, timer] of deadlines) {
       if (timer.at <= now) { deadlines.delete(id); timer.callback(); }
     }
@@ -638,4 +639,26 @@ test('playing observed during Shaka load is not lost before load-ready settlemen
   await flush();
   assert.equal(h.player.getState().status, 'playing');
   await h.player.stop();
+});
+
+
+test('an overdue first playing event cannot cancel a delayed setup timeout', async () => {
+  const h = harness();
+  const loading = h.player.load('a', '/a');
+  await flush();
+  h.license('a');
+  await loading;
+  const latePlaying = Array.from(h.videoListeners.get('playing'))[0];
+  h.advance(20000, false);
+  assert.equal(h.deadlines.size, 1, 'the timer task has not been delivered');
+  assert.doesNotThrow(() => latePlaying());
+  await flush();
+  assert.equal(h.player.getState().status, 'error');
+  assert.equal(h.player.getState().lastError.code, 'playback-setup-timeout');
+  assert.notEqual(h.player.getState().keyStatus, 'usable');
+  assert.equal(h.deadlines.size, 0);
+  assert.equal(h.timers.size, 0);
+  assert.equal(h.videoListeners.get('playing').size, 0);
+  latePlaying();
+  assert.equal(h.player.getState().status, 'error');
 });
