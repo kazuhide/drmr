@@ -115,3 +115,35 @@ fn inherited_acl_hard_links_and_oversized_key_files_are_refused_without_exposure
     std::fs::write(&inherited, r#"{"schema_version":1}"#).unwrap();
     assert!(read(&inherited).is_err());
 }
+
+#[test]
+fn sample_aes_output_accepts_associated_iv_without_an_mp4_identifier() {
+    let dir = common::private_tempdir().unwrap();
+    let file = dir.path().join("keys.json");
+    config(
+        &file,
+        r#"{"schema_version":1,"output":{"key":"22222222222222222222222222222222","hls_key_uri":"skd://output-sentinel","iv":"0x33333333333333333333333333333333"}}"#,
+    );
+    let keys = read(&file).expect("SAMPLE-AES output key and associated IV");
+    assert!(keys.output.is_none());
+    assert!(keys.hls_output.as_ref().unwrap().associated_iv().is_some());
+    assert!(keys.output_hls_verification_keys().is_ok());
+    let shown = format!("{keys:?}");
+    for secret in ["sentinel", "222222", "333333"] {
+        assert!(!shown.contains(secret));
+    }
+}
+
+#[test]
+fn output_iv_cannot_be_ignored_by_an_mp4_key_or_be_malformed() {
+    let dir = common::private_tempdir().unwrap();
+    let file = dir.path().join("keys.json");
+    for text in [
+        r#"{"schema_version":1,"output":{"kid":"00000000000000000000000000000002","key":"22222222222222222222222222222222","hls_key_uri":"skd://output-sentinel","iv":"0x1"}}"#,
+        r#"{"schema_version":1,"output":{"key":"22222222222222222222222222222222","hls_key_uri":"skd://output-sentinel","iv":"secret-sentinel"}}"#,
+        r#"{"schema_version":1,"output":{"key":"22222222222222222222222222222222","iv":"0x1"}}"#,
+    ] {
+        config(&file, text);
+        assert_eq!(read(&file).unwrap_err().to_string(), "key-file-invalid");
+    }
+}

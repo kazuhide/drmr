@@ -5,6 +5,7 @@ fn main() {
     println!("cargo:rerun-if-changed=src/server.rs");
     println!("cargo:rerun-if-changed=src/control.rs");
     println!("cargo:rerun-if-changed=src/probe_proxy.rs");
+    println!("cargo:rerun-if-changed=src/packager_proxy.rs");
     let target = env::var("TARGET").unwrap();
     let native = env::var("HOST").unwrap() == target;
     let suffix = if target.contains("windows") {

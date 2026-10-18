@@ -22,6 +22,7 @@ The finite progressive route copies the original encoded tracks directly, retain
 | `fmp4-hls-presentation` | Supported complete tracks to fragmented MP4 HLS. Sample encryption applies within media samples; HLS AES-128 separately encrypts each complete output resource. | FFmpeg, FFprobe, Shaka Packager |
 | `mpeg-ts-hls` | The narrow local MPEG transport stream profile to fragmented MP4 HLS. Tracks are demultiplexed, and the actual final playlists are checked against the original transport streams. | FFmpeg, FFprobe, Shaka Packager |
 | `mpeg-ts-sample-aes-hls` | Known-key SAMPLE-AES transport streams to fragmented MP4 HLS. Decrypted encoded frames and original clocks are checked before packaging; final playlists are verified against the original encrypted source. | FFmpeg, FFprobe, Shaka Packager |
+| `mpeg-ts-hls-ts` | Supported original TS input to TS HLS, with clear, whole-resource AES-128, or SAMPLE-AES protection. Original frame and clock evidence qualifies the private reference; final playlists are compared against it. | FFmpeg, FFprobe, Shaka Packager |
 
 These are dependency requirements, not a report that tools are installed or were version-checked. See [supported input profiles](conversion-support.md) for restrictions and [tool requirements](requirements.md#media-tools) for supported versions.
 
@@ -53,6 +54,17 @@ checked against every original encoded frame and clock → track demultiplexing 
 fragmented MP4 HLS packaging → actual final playlist checks. A separate `verify`
 reads and decrypts the original source again. It does not trust a saved conversion
 report or use only the intermediate MP4 as its reference.
+
+### mpeg-ts-hls-ts
+
+Original clear, AES-128, or SAMPLE-AES local TS resources → native program,
+frame, and clock checks, with decryption when needed → complete tracks → new
+TS segmentation and requested protection → independent final-playlist checks
+against the original media. Joint audio/video produces separate playlists and
+an HLS master; audio-only uses native AAC frame boundaries and original clocks.
+The packaging step disables an initial clear interval and timestamp shifting.
+This route is selected explicitly by `--format hls-ts`; the existing `hls`
+format continues to produce fragmented MP4.
 
 Metadata alone may not qualify a finite MP4 profile or distinguish supported fragmented MP4 HLS from transport-stream HLS. A plan can therefore contain several conditional candidates. Each has `revalidation_required: true` and fixed condition codes. Actual source validation selects a handler or refuses the input; a rejected progressive profile does not imply permission to fall back to another route. Multiple output formats still require separate conversion commands.
 

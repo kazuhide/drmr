@@ -42,14 +42,15 @@ impl OperatorKeys {
             .map(String::as_str)
             .or_else(|| self.hls_output.as_ref().map(HlsOutputKey::key_uri))
     }
-    /// Match output AES-128 playlist declarations without retrieving the advertised URI.
+    /// Match output HLS playlist declarations without retrieving the advertised URI.
     pub fn output_hls_verification_keys(&self) -> Result<HlsInputKeys, ConversionError> {
         self.hls_output.as_ref().map_or_else(
             || Ok(HlsInputKeys::default()),
             |key| {
-                HlsInputKeys::new(vec![(
+                HlsInputKeys::new_with_ivs(vec![(
                     key.uri.to_string(),
                     Aes128Key(Zeroizing::new(*key.key.0)),
+                    key.iv.as_ref().map(|iv| SegmentIv(Zeroizing::new(*iv.0))),
                 )])
             },
         )
@@ -110,11 +111,15 @@ struct RawOutput {
     kid: Option<String>,
     key: String,
     hls_key_uri: Option<String>,
+    iv: Option<String>,
 }
 
 impl Drop for RawOutput {
     fn drop(&mut self) {
         self.key.zeroize();
+        if let Some(iv) = &mut self.iv {
+            iv.zeroize();
+        }
         if let Some(uri) = &mut self.hls_key_uri {
             uri.zeroize();
         }
@@ -176,6 +181,7 @@ pub fn read(path: &Path) -> Result<OperatorKeys, ConversionError> {
     let (output, hls_output) = match &raw.output {
         None => (None, None),
         Some(key) => match (&key.kid, &key.hls_key_uri) {
+            (Some(_), _) if key.iv.is_some() => return Err(INVALID),
             (Some(kid), _) => (
                 Some(OutputKey::from_hex(kid, &key.key).map_err(|_| INVALID)?),
                 None,
@@ -183,10 +189,17 @@ pub fn read(path: &Path) -> Result<OperatorKeys, ConversionError> {
             (None, Some(uri)) => (
                 None,
                 Some(
-                    HlsOutputKey::new(
-                        uri.clone(),
-                        Aes128Key::from_hex(&key.key).map_err(|_| INVALID)?,
-                    )
+                    match key.iv.as_deref() {
+                        Some(iv) => HlsOutputKey::new_with_iv(
+                            uri.clone(),
+                            Aes128Key::from_hex(&key.key).map_err(|_| INVALID)?,
+                            SegmentIv::from_hex(iv).map_err(|_| INVALID)?,
+                        ),
+                        None => HlsOutputKey::new(
+                            uri.clone(),
+                            Aes128Key::from_hex(&key.key).map_err(|_| INVALID)?,
+                        ),
+                    }
                     .map_err(|_| INVALID)?,
                 ),
             ),
@@ -225,4 +238,54 @@ fn private_file(path: &Path) -> Result<std::fs::File, ConversionError> {
         return Err(INVALID);
     }
     Ok(file)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn output_verification_keeps_its_own_associated_iv_for_the_same_uri() {
+        let input = HlsInputKeys::new_with_ivs(vec![(
+            "skd://same-uri".into(),
+            Aes128Key::from_hex("11111111111111111111111111111111").unwrap(),
+            Some(SegmentIv::from_hex("22222222222222222222222222222222").unwrap()),
+        )])
+        .unwrap();
+        let keys = OperatorKeys {
+            hls_input: input,
+            hls_output: Some(
+                HlsOutputKey::new_with_iv(
+                    "skd://same-uri",
+                    Aes128Key::from_hex("33333333333333333333333333333333").unwrap(),
+                    SegmentIv::from_hex("44444444444444444444444444444444").unwrap(),
+                )
+                .unwrap(),
+            ),
+            ..OperatorKeys::default()
+        };
+        let result = keys.output_hls_verification_keys().unwrap();
+        assert_eq!(keys.hls_input.0.len(), 1);
+        assert_eq!(result.0.len(), 1);
+        assert_eq!(&*keys.hls_input.0[0].uri, &*result.0[0].uri);
+        assert_eq!(*keys.hls_input.0[0].key.0, [0x11; 16]);
+        assert_eq!(*keys.hls_input.0[0].iv.as_ref().unwrap().0, [0x22; 16]);
+        assert_eq!(*result.0[0].key.0, [0x33; 16]);
+        assert_eq!(*result.0[0].iv.as_ref().unwrap().0, [0x44; 16]);
+        let legacy = OperatorKeys {
+            hls_output: Some(
+                HlsOutputKey::new(
+                    "key.bin",
+                    Aes128Key::from_hex("55555555555555555555555555555555").unwrap(),
+                )
+                .unwrap(),
+            ),
+            ..OperatorKeys::default()
+        };
+        assert!(
+            legacy.output_hls_verification_keys().unwrap().0[0]
+                .iv
+                .is_none()
+        );
+    }
 }

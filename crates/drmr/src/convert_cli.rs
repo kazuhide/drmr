@@ -17,10 +17,10 @@ use std::sync::{Arc, Mutex};
 pub struct ConvertArgs {
     /// Local source media. The source is never overwritten.
     pub input: PathBuf,
-    /// Target protection: clear, cenc, cbcs, or hls-aes128.
+    /// Target protection: clear, cenc, cbcs, hls-aes128, or hls-sample-aes.
     #[arg(long)]
     pub to: TargetProtection,
-    /// Output container or delivery format.
+    /// Output format: mp4, dash, hls (fragmented MP4), or hls-ts.
     #[arg(long)]
     pub format: Option<OutputFormat>,
     /// A new output file or directory; existing destinations are refused.
@@ -224,7 +224,7 @@ pub fn convert(args: &ConvertArgs) -> ExitCode {
             input_keys: &keys.input,
             hls_input_keys: &keys.hls_input,
             output_key: keys.output.as_ref(),
-            hls_key_uri: keys.hls_output_uri(),
+            hls_key_uri: keys.output.as_ref().and_then(|_| keys.hls_output_uri()),
             hls_output_key: keys.hls_output.as_ref(),
         })
     };

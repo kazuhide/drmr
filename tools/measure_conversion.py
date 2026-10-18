@@ -48,8 +48,8 @@ def parse_args(argv=None):
     parser.add_argument("--drmr", type=Path, required=True, help="Explicit drmr executable.")
     parser.add_argument("--input", type=Path, required=True, help="Local media file or manifest.")
     parser.add_argument("--keys-file", type=Path, help="Protected configuration with input/output key roles.")
-    parser.add_argument("--to", choices=("clear", "cenc", "cbcs", "hls-aes128"), required=True)
-    parser.add_argument("--format", choices=("mp4", "dash", "hls"), required=True)
+    parser.add_argument("--to", choices=("clear", "cenc", "cbcs", "hls-aes128", "hls-sample-aes"), required=True)
+    parser.add_argument("--format", choices=("mp4", "dash", "hls", "hls-ts"), required=True)
     parser.add_argument("--repeats", type=int, default=3, help="Paired repetitions, from 1 to 20 (default: 3).")
     parser.add_argument("--condition", choices=("uncontrolled", "warmed-by-equivalent-verified-run"),
                         default="uncontrolled", help="Cache condition; neither setting proves a physically cold cache.")
@@ -65,7 +65,10 @@ def parse_args(argv=None):
         raise Failure("arguments-invalid")
     if not math.isfinite(args.timeout) or not 1 <= args.timeout <= 86400:
         raise Failure("arguments-invalid")
-    if (args.to == "hls-aes128" and args.format != "hls") or (args.to == "cenc" and args.format == "hls"):
+    if ((args.to == "hls-aes128" and args.format not in ("hls", "hls-ts"))
+            or (args.to == "hls-sample-aes" and args.format != "hls-ts")
+            or (args.to == "cenc" and args.format == "hls")
+            or (args.to in ("cenc", "cbcs") and args.format == "hls-ts")):
         raise Failure("target-format-not-supported")
     return args
 

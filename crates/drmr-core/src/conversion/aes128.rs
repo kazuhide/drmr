@@ -106,6 +106,7 @@ impl HlsInputKeys {
 pub struct HlsOutputKey {
     pub(super) uri: Zeroizing<String>,
     pub(super) key: Aes128Key,
+    pub(super) iv: Option<SegmentIv>,
 }
 impl fmt::Debug for HlsOutputKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -117,6 +118,10 @@ impl HlsOutputKey {
     pub fn key_uri(&self) -> &str {
         &self.uri
     }
+    /// The associated SAMPLE-AES IV. Never include it in diagnostics.
+    pub fn associated_iv(&self) -> Option<&SegmentIv> {
+        self.iv.as_ref()
+    }
     pub fn encrypt(
         &self,
         source: &Path,
@@ -126,7 +131,21 @@ impl HlsOutputKey {
         encrypt_segment(source, destination, &self.key, iv)
     }
     pub fn new(uri: impl Into<String>, key: Aes128Key) -> Result<Self, ConversionError> {
-        let uri = uri.into();
+        Self::with_optional_iv(uri.into(), key, None)
+    }
+    /// Supply an explicit IV for SAMPLE-AES output, independently of MP4 key identifiers.
+    pub fn new_with_iv(
+        uri: impl Into<String>,
+        key: Aes128Key,
+        iv: SegmentIv,
+    ) -> Result<Self, ConversionError> {
+        Self::with_optional_iv(uri.into(), key, Some(iv))
+    }
+    fn with_optional_iv(
+        uri: String,
+        key: Aes128Key,
+        iv: Option<SegmentIv>,
+    ) -> Result<Self, ConversionError> {
         if uri.is_empty()
             || uri.len() > 4096
             || uri.contains('"')
@@ -137,6 +156,7 @@ impl HlsOutputKey {
         Ok(Self {
             uri: Zeroizing::new(uri),
             key,
+            iv,
         })
     }
 }

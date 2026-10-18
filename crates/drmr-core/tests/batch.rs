@@ -2523,12 +2523,11 @@ fn run_commands_classifies_timeouts_and_exit_codes() {
 }
 
 #[test]
-fn run_commands_deadline_kills_descendants() {
+fn run_commands_deadline_includes_command_startup() {
     let fixture = fixture();
     let config = &fixture.config;
-    let command =
-        |spec: ToolSpec, subcommand| native_command(fixture.temp.path(), &spec, subcommand);
-    // The per-asset deadline kills the child's whole process tree.
+    // The public asset budget includes log preparation and executable startup.
+    // A descendant-readiness precondition belongs to the private-loop test.
     let deadline = BatchConfig {
         retry: RetryPolicy {
             per_asset_timeout_s: 0.3,
@@ -2537,22 +2536,18 @@ fn run_commands_deadline_kills_descendants() {
         },
         ..config.clone()
     };
-    let pidfile = fixture.temp.path().join("grandchild.pid");
-    let lockfile = fixture.temp.path().join("grandchild.lock");
-    let child = command(
-        ToolSpec {
+    let child = native_command(
+        fixture.temp.path(),
+        &ToolSpec {
             sleep_ms: 60_000,
             ..ToolSpec::default()
-        }
-        .with("descendant_pid_file", pidfile.to_str().unwrap())
-        .with("descendant_lock_file", lockfile.to_str().unwrap()),
+        },
         "run",
     );
     let start = Instant::now();
     let error = run_commands(&[child], &deadline, None, &|| {}).unwrap_err();
     assert_eq!(error, AttemptError::Retry("asset-timeout".to_string()));
     assert!(start.elapsed() < Duration::from_secs(5));
-    assert_descendant_stopped(&pidfile, &lockfile);
 }
 
 #[test]

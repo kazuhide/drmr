@@ -2,6 +2,7 @@
 mod admission;
 mod canonical;
 mod frames;
+mod native;
 mod projection;
 mod sample_aes;
 use super::{
@@ -11,8 +12,9 @@ use super::{
 use crate::{inspection::TrackKind, toolrun::RunOptions};
 pub(super) use admission::Admission;
 pub(super) use canonical::Native as NativeEvidence;
+pub(super) use native::NativeScanner;
 pub(super) use projection::Projector;
-use std::path::Path;
+use std::{collections::BTreeMap, path::Path, sync::Arc};
 use zeroize::Zeroizing;
 
 #[derive(Clone, Copy)]
@@ -23,6 +25,20 @@ pub(super) struct View<'a> {
     pub key: Option<&'a ContentKey>,
     pub transport: bool,
     pub native: Option<&'a NativeEvidence>,
+}
+fn require_audio_source_evidence(
+    admission: &Admission,
+    native: &BTreeMap<u16, Arc<NativeEvidence>>,
+) -> Result<(), ConversionError> {
+    if admission.tracks.len() == 1 && admission.tracks[0].kind == TrackKind::Audio {
+        let id = admission.tracks[0].pid;
+        if native.get(&id).is_none_or(|anchor| {
+            anchor.count == 0 || !matches!(anchor.config, canonical::Config::Audio { .. })
+        }) {
+            return Err(ConversionError("ts-audio-only-timing-proof-not-supported"));
+        }
+    }
+    Ok(())
 }
 impl Backend {
     pub fn confirm_native_transport(&self, view: View<'_>) -> Result<(), ConversionError> {
@@ -36,9 +52,7 @@ impl Backend {
         if !native.matches(&config, &units) {
             return Err(ConversionError("ts-original-evidence-mismatch"));
         }
-        if matches!(config, canonical::Config::Video { .. }) {
-            self.progressive_transport_frames(view, &profile)?;
-        } else if let canonical::Config::Audio { channels } = config {
+        if let canonical::Config::Audio { channels } = config {
             self.native_audio_samples(view, channels, native.count)?;
         }
         Ok(())
@@ -139,11 +153,12 @@ impl Backend {
         &self,
         path: &Path,
         admission: &Admission,
+        native: &BTreeMap<u16, Arc<NativeEvidence>>,
     ) -> Result<Vec<(usize, TrackKind)>, ConversionError> {
         admission.finish()?;
-        if admission.tracks.len() == 1 && admission.tracks[0].kind == TrackKind::Audio {
-            return Err(ConversionError("ts-audio-only-timing-proof-not-supported"));
-        }
+        // Discovery is evidence-gated; the caller still binds every actual source
+        // packet and decoded sample before demuxing or normalizing the track.
+        require_audio_source_evidence(admission, native)?;
         let argv = vec![
             self.ffprobe.clone(),
             "-v".into(),

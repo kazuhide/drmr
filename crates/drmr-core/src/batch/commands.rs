@@ -266,29 +266,14 @@ pub(super) fn run_commands_with_cleanup(
         let mut child =
             crate::native::ManagedChild::spawn(child_command, !crate::native::in_asset_worker())
                 .map_err(|_| AttemptError::Other)?;
-        let status = loop {
-            match child.try_wait() {
-                Ok(Some(status)) => break status,
-                Ok(None) => {}
-                Err(_) => {
-                    cleanup(&mut child).map_err(|_| BatchError::new("cleanup-unconfirmed"))?;
-                    return Err(AttemptError::Other);
-                }
-            }
-            let now = Instant::now();
-            if !crate::native::in_asset_worker() && now >= deadline {
-                cleanup(&mut child).map_err(|_| BatchError::new("cleanup-unconfirmed"))?;
-                return Err(AttemptError::Retry("asset-timeout".to_string()));
-            }
-            if now >= next_heartbeat {
-                on_heartbeat();
-                next_heartbeat = after(Instant::now(), config.retry.heartbeat_s);
-            }
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            std::thread::sleep(
-                remaining.clamp(Duration::from_millis(1), Duration::from_millis(50)),
-            );
-        };
+        let status = wait_command(
+            &mut child,
+            config,
+            deadline,
+            &mut next_heartbeat,
+            on_heartbeat,
+            &mut cleanup,
+        )?;
         cleanup(&mut child).map_err(|_| BatchError::new("cleanup-unconfirmed"))?;
         let code = exit_code(status);
         if code != 0 {
@@ -377,5 +362,185 @@ impl AssetRunner for CliRunner<'_> {
     ) -> Result<i32, AttemptError> {
         let planned = commands(work, config, stage, self.source)?;
         run_commands(&planned, config, Some(keys), on_heartbeat)
+    }
+}
+
+fn wait_command(
+    child: &mut crate::native::ManagedChild,
+    config: &BatchConfig,
+    deadline: Instant,
+    next_heartbeat: &mut Instant,
+    on_heartbeat: &dyn Fn(),
+    cleanup: &mut impl FnMut(&mut crate::native::ManagedChild) -> std::io::Result<()>,
+) -> Result<ExitStatus, AttemptError> {
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok(status),
+            Ok(None) => {}
+            Err(_) => {
+                cleanup(child).map_err(|_| BatchError::new("cleanup-unconfirmed"))?;
+                return Err(AttemptError::Other);
+            }
+        }
+        let now = Instant::now();
+        if !crate::native::in_asset_worker() && now >= deadline {
+            cleanup(child).map_err(|_| BatchError::new("cleanup-unconfirmed"))?;
+            return Err(AttemptError::Retry("asset-timeout".to_string()));
+        }
+        if now >= *next_heartbeat {
+            on_heartbeat();
+            *next_heartbeat = after(Instant::now(), config.retry.heartbeat_s);
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        std::thread::sleep(remaining.clamp(Duration::from_millis(1), Duration::from_millis(50)));
+    }
+}
+
+#[cfg(test)]
+mod timeout_tests {
+    use super::*;
+    use crate::{
+        batch::{EnvKeyProvider, RetryPolicy},
+        native::ManagedChild,
+        storage::LocalStorageBackend,
+    };
+    use std::{
+        fs::{File, OpenOptions},
+        io,
+        path::Path,
+        sync::Arc,
+    };
+
+    fn exclusive_lock(path: &Path) -> io::Result<File> {
+        let mut options = OpenOptions::new();
+        options.read(true).write(true);
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt as _;
+            options.share_mode(0);
+        }
+        let file = options.open(path)?;
+        #[cfg(unix)]
+        file.try_lock().map_err(io::Error::other)?;
+        Ok(file)
+    }
+    fn ready_descendant(root: &Path) -> (ManagedChild, u32, std::path::PathBuf) {
+        let pidfile = root.join("descendant.pid");
+        let lockfile = root.join("descendant.lock");
+        let program = drmr_test_support::install(
+            &root.join("response"),
+            &drmr_test_support::ToolSpec {
+                sleep_ms: 60_000,
+                ..Default::default()
+            }
+            .with("descendant_pid_file", pidfile.to_str().unwrap())
+            .with("descendant_lock_file", lockfile.to_str().unwrap()),
+        )
+        .unwrap();
+        let mut command = Command::new(program);
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let mut child = ManagedChild::spawn(command, true).unwrap();
+        let ready_end = Instant::now() + Duration::from_secs(5);
+        let pid = loop {
+            if let Ok(text) = std::fs::read_to_string(&pidfile)
+                && text.ends_with('\n')
+                && let Ok(pid) = text.trim().parse::<u32>()
+            {
+                break pid;
+            }
+            assert!(
+                child.try_wait().unwrap().is_none(),
+                "fixture exited before readiness"
+            );
+            assert!(
+                Instant::now() < ready_end,
+                "fixture did not reach descendant readiness"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        };
+        assert!(lockfile.with_extension("lock.ready").is_file());
+        assert!(
+            exclusive_lock(&lockfile).is_err(),
+            "the descendant must actually hold its lock"
+        );
+        (child, pid, lockfile)
+    }
+    #[test]
+    fn active_deadline_returns_only_after_the_ready_descendant_releases_its_lock() {
+        let root = crate::native::private_tempdir().unwrap();
+        let (mut child, pid, lockfile) = ready_descendant(root.path());
+        #[cfg(windows)]
+        let process =
+            winsafe::HPROCESS::OpenProcess(winsafe::co::PROCESS::SYNCHRONIZE, false, pid).unwrap();
+        #[cfg(windows)]
+        assert_eq!(
+            process.WaitForSingleObject(Some(0)),
+            Ok(winsafe::co::WAIT::TIMEOUT)
+        );
+        let config = BatchConfig {
+            retry: RetryPolicy {
+                per_asset_timeout_s: 0.3,
+                heartbeat_s: 0.05,
+                ..Default::default()
+            },
+            ..BatchConfig::new(
+                Arc::new(LocalStorageBackend::new(root.path()).unwrap()),
+                Arc::new(EnvKeyProvider),
+                &root.path().join("output"),
+                &root.path().join("resume"),
+            )
+        };
+        let start = Instant::now();
+        let mut next_heartbeat = after(start, config.retry.heartbeat_s);
+        let result = wait_command(
+            &mut child,
+            &config,
+            after(start, config.retry.per_asset_timeout_s),
+            &mut next_heartbeat,
+            &|| {},
+            &mut ManagedChild::finish,
+        );
+        // Capture immediate ownership oracles before diagnostics or further I/O.
+        #[cfg(windows)]
+        let state = process.WaitForSingleObject(Some(0));
+        let immediate = exclusive_lock(&lockfile);
+        assert_eq!(result, Err(AttemptError::Retry("asset-timeout".into())));
+        assert!(start.elapsed() < Duration::from_secs(5));
+        immediate.expect("the descendant released its held lock before timeout returned");
+        #[cfg(windows)]
+        assert_eq!(state, Ok(winsafe::co::WAIT::OBJECT_0));
+        #[cfg(unix)]
+        {
+            let state = Command::new("ps")
+                .args(["-o", "stat=", "-p", &pid.to_string()])
+                .output()
+                .unwrap();
+            let state = String::from_utf8_lossy(&state.stdout);
+            assert!(
+                state.trim().is_empty() || state.trim().starts_with('Z'),
+                "descendant survived: {state}"
+            );
+        }
+        #[cfg(windows)]
+        {
+            let output = Command::new("tasklist.exe")
+                .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
+                .output()
+                .unwrap();
+            assert!(output.status.success());
+            let text = String::from_utf8_lossy(&output.stdout);
+            assert!(
+                !text.lines().any(|line| line
+                    .split(',')
+                    .nth(1)
+                    .is_some_and(|col| col.trim_matches('"') == pid.to_string())),
+                "descendant survived: {text}"
+            );
+        }
+        child.finish().unwrap();
+        root.close().unwrap();
     }
 }
