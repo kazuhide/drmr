@@ -912,3 +912,31 @@ fn mutable_log_reads_still_reject_inherited_access() {
     assert!(native::open_private_shared_read(&path).is_err());
     assert_eq!(std::fs::read(&path).unwrap(), b"unchanged");
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_zombie_group_is_confirmed_absent_after_reaping_its_leader() {
+    use rustix::process::{Signal, WaitId, WaitIdOptions, kill_process_group, waitid};
+    let mut child =
+        native::ManagedChild::spawn(probe_command("echo", Path::new("unused")), true).unwrap();
+    let pid = rustix::process::Pid::from_raw(i32::try_from(child.id()).unwrap()).unwrap();
+    // Observe termination without reaping: Darwin still retains the zombie group.
+    waitid(
+        WaitId::Pid(pid),
+        WaitIdOptions::EXITED | WaitIdOptions::NOWAIT,
+    )
+    .unwrap();
+    assert_eq!(
+        kill_process_group(pid, Signal::KILL),
+        Err(rustix::io::Errno::PERM)
+    );
+    child
+        .finish()
+        .expect("a reaped, absent process group is fully cleaned up");
+    assert!(child.try_wait().unwrap().unwrap().success());
+    assert_eq!(
+        rustix::process::test_kill_process_group(pid),
+        Err(rustix::io::Errno::SRCH)
+    );
+    child.finish().unwrap();
+}

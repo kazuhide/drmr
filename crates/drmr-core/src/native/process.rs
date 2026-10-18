@@ -159,13 +159,21 @@ impl ManagedChild {
             let killed = self.kill();
             let reaped = self.child.wait();
             reaped?;
-            match killed {
-                Err(error)
-                    if error.raw_os_error() == Some(rustix::io::Errno::SRCH.raw_os_error()) =>
-                {
-                    Ok(())
+            if self.own_tree {
+                confirm_group_signal(killed, || {
+                    rustix::process::test_kill_process_group(rustix::process::Pid::from_child(
+                        &self.child,
+                    ))
+                })
+            } else {
+                match killed {
+                    Err(error)
+                        if error.raw_os_error() == Some(rustix::io::Errno::SRCH.raw_os_error()) =>
+                    {
+                        Ok(())
+                    }
+                    result => result,
                 }
-                result => result,
             }
         }
         #[cfg(windows)]
@@ -182,6 +190,28 @@ impl ManagedChild {
             }
             self.child.wait().map(|_| ())
         }
+    }
+}
+
+#[cfg(unix)]
+fn confirm_group_signal(
+    killed: io::Result<()>,
+    group_exists: impl FnOnce() -> rustix::io::Result<()>,
+) -> io::Result<()> {
+    match killed {
+        Err(error) if error.raw_os_error() == Some(rustix::io::Errno::SRCH.raw_os_error()) => {
+            Ok(())
+        }
+        // Darwin skips zombie members when signalling a group and can return
+        // EPERM before its leader is reaped. Only an absent group after the
+        // successful reap establishes that this was not a live permission failure.
+        Err(error)
+            if error.raw_os_error() == Some(rustix::io::Errno::PERM.raw_os_error())
+                && group_exists() == Err(rustix::io::Errno::SRCH) =>
+        {
+            Ok(())
+        }
+        result => result,
     }
 }
 
@@ -295,4 +325,23 @@ pub fn in_asset_worker() -> bool {
 
 pub(crate) fn mark_asset_worker() {
     IN_ASSET_WORKER.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+#[cfg(all(test, unix))]
+mod cleanup_tests {
+    use super::*;
+    use rustix::io::Errno;
+
+    #[test]
+    fn a_permission_failure_requires_observed_group_absence() {
+        for presence in [Ok(()), Err(Errno::PERM), Err(Errno::IO)] {
+            let error = confirm_group_signal(Err(Errno::PERM.into()), || presence).unwrap_err();
+            assert_eq!(error.raw_os_error(), Some(Errno::PERM.raw_os_error()));
+        }
+        assert!(confirm_group_signal(Err(Errno::PERM.into()), || Err(Errno::SRCH)).is_ok());
+        let error =
+            confirm_group_signal(Err(Errno::IO.into()), || panic!("must preserve I/O error"))
+                .unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(Errno::IO.raw_os_error()));
+    }
 }
