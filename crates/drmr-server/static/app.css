@@ -101,7 +101,7 @@ h1[tabindex="-1"]:focus { outline: none; }
 .content-title h1 { font-size: 20px; font-weight: 500; overflow-wrap: anywhere; }
 .content-chips { display: flex; gap: 6px; flex-wrap: wrap; }
 .content-head .actions { margin-left: auto; }
-.anchors { position: sticky; top: var(--top-h); z-index: 10; display: flex; gap: 2px; padding: 6px 0 10px; background: var(--canvas); }
+.anchors { position: sticky; top: var(--top-h); z-index: 10; display: flex; flex-wrap: wrap; gap: 2px; padding: 6px 0 10px; background: var(--canvas); }
 .anchors a { padding: 4px 10px; border-radius: 999px; font-size: 13px; color: var(--ink-2); }
 .anchors a:hover { background: var(--surface-3); text-decoration: none; }
 
