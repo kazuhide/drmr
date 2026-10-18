@@ -122,7 +122,15 @@ fn hls_dispatch(app: &Arc<App>, endpoint: Endpoint, values: &[String], req: &Req
             if cursor.is_some_and(|cursor| cursor.chars().count() > 1024) {
                 return Err(invalid());
             }
-            Ok(Reply::json(200, &service.jobs(cursor, limit)?))
+            let jobs = service.jobs(cursor, limit)?;
+            if let Some(rows) = jobs["jobs"].as_array() {
+                for row in rows {
+                    if let Some(id) = row["job_id"].as_str() {
+                        app.manager.qualify_catalog(id);
+                    }
+                }
+            }
+            Ok(Reply::json(200, &jobs))
         }
         Endpoint::HlsJobDelete => {
             service.delete_job(value(0))?;
@@ -329,7 +337,13 @@ fn api_catalog(app: &Arc<App>) -> Answer {
     let mut rows = Vec::with_capacity(entries.len());
     for entry in &entries {
         let converted = local_manifest_rel(&app.config.output_root, &entry.asset_id)?.is_some();
-        rows.push(catalog::catalog_entry_public_dict(entry, converted));
+        let mut row = catalog::catalog_entry_public_dict(entry, converted);
+        row.as_object_mut().ok_or(RouteError::Internal)?.insert(
+            "output_readiness".into(),
+            app.manager
+                .output_readiness(&entry.asset_id, &app.config.output_root),
+        );
+        rows.push(row);
     }
     Ok(Reply::json(200, &Value::Array(rows)))
 }
@@ -432,6 +446,7 @@ fn api_job_status(app: &Arc<App>, job_id: &str) -> Answer {
     if app.service.owns(job_id) {
         let status = app.service.status(job_id)?;
         if status.get("kind").and_then(Value::as_str) == Some("convert") {
+            app.manager.qualify_catalog(job_id);
             let mut payload = state_payload(&status["state"], &status["exit_code"]);
             if status.get("stop_requested").and_then(Value::as_bool) == Some(true) {
                 payload["stop_requested"] = Value::Bool(true);
@@ -442,6 +457,7 @@ fn api_job_status(app: &Arc<App>, job_id: &str) -> Answer {
     }
     match app.manager.status(job_id) {
         Ok(handle) => {
+            app.manager.qualify_catalog(job_id);
             let mut payload = state_payload(
                 &Value::from(handle.state),
                 &handle.exit_code.map_or(Value::Null, Value::from),
@@ -547,6 +563,7 @@ fn api_job_log(app: &Arc<App>, job_id: &str) -> Reply {
                 return;
             }
         }
+        app.manager.qualify_catalog(&job_id);
         let payload = if owned {
             match app.service.status(&job_id) {
                 Ok(status) => Some(state_payload(&status["state"], &status["exit_code"])),
@@ -710,6 +727,10 @@ fn api_assets(app: &Arc<App>, asset_id: &str) -> Answer {
         return Ok(Reply::json_error(404, "unknown asset_id"));
     };
     let new_rel = local_manifest_rel(&app.config.output_root, asset_id)?;
+    let playable = app
+        .manager
+        .catalog_output(asset_id, &app.config.output_root)
+        .map(|v| format!("{asset_id}/{}", v.manifest));
     let new_mpd = match &new_rel {
         Some(rel) => Some(
             pyutil::resolve(&app.config.output_root)
@@ -741,7 +762,12 @@ fn api_assets(app: &Arc<App>, asset_id: &str) -> Answer {
     );
     answer.insert(
         "new_url".into(),
-        new_rel.map_or(Value::Null, |rel| Value::from(format!("/output/{rel}"))),
+        playable.map_or(Value::Null, |rel| Value::from(format!("/output/{rel}"))),
+    );
+    answer.insert(
+        "output_readiness".into(),
+        app.manager
+            .output_readiness(asset_id, &app.config.output_root),
     );
     answer.insert("old_summary".into(), summary_value(old.as_deref()));
     answer.insert("new_summary".into(), summary_value(new.as_deref()));
@@ -850,12 +876,9 @@ fn catalog_report_body(app: &Arc<App>, asset_id: &str) -> Result<Value, RouteErr
     if asset.parent() != Some(root.as_path()) {
         return Err(invalid());
     }
-    let path = resolve_within_root("reports/phase1-summary.json", &asset)?;
-    let text = std::fs::read(&path)
-        .ok()
-        .and_then(|bytes| String::from_utf8(bytes).ok())
-        .ok_or_else(invalid)?;
-    let Ok(Value::Object(report)) = serde_json::from_str::<Value>(&text) else {
+    let Value::Object(report) =
+        drmr_core::catalog_receipt::read_report(&asset).map_err(|_| invalid())?
+    else {
         return Err(invalid());
     };
     if report.get("schema_version").and_then(Value::as_str) != Some("1")
@@ -870,6 +893,14 @@ fn catalog_report_body(app: &Arc<App>, asset_id: &str) -> Result<Value, RouteErr
     {
         return Err(invalid());
     }
+    if report["all_pass"] == true
+        && app
+            .manager
+            .catalog_output(asset_id, &app.config.output_root)
+            .is_none()
+    {
+        return Err(invalid());
+    }
     let tracks = catalog_tracks(report.get("renditions")).ok_or_else(invalid)?;
     let manifest_checks = match report.get("manifests") {
         None | Some(Value::Null) => Vec::new(),
@@ -878,7 +909,10 @@ fn catalog_report_body(app: &Arc<App>, asset_id: &str) -> Result<Value, RouteErr
         }
         Some(_) => return Err(invalid()),
     };
-    let new_rel = local_manifest_rel(&app.config.output_root, asset_id)?;
+    let new_rel = app
+        .manager
+        .catalog_output(asset_id, &app.config.output_root)
+        .map(|v| format!("{asset_id}/{}", v.manifest));
     if let Some(rel) = &new_rel {
         resolve_within_root(rel, &root)?;
     }
@@ -889,6 +923,11 @@ fn catalog_report_body(app: &Arc<App>, asset_id: &str) -> Result<Value, RouteErr
         answer.insert(flag.into(), report[flag].clone());
     }
     answer.insert("production_verified".into(), Value::Bool(false));
+    answer.insert(
+        "output_readiness".into(),
+        app.manager
+            .output_readiness(asset_id, &app.config.output_root),
+    );
     answer.insert("tracks".into(), Value::Array(tracks));
     answer.insert("checks".into(), Value::Array(manifest_checks));
     answer.insert(
@@ -961,6 +1000,8 @@ fn catalog_report_page(app: &Arc<App>, req: &Req, asset_id: &str) -> Answer {
     {
         return Err(HlsApiError::status("result-not-found", 404).into());
     }
+    catalog_report_body(app, asset_id)
+        .map_err(|_| HlsApiError::status("result-unavailable", 410))?;
     match resolve_within_root(
         &format!("{asset_id}/reports/phase1-summary.json"),
         &app.config.output_root,
@@ -1039,6 +1080,25 @@ fn output(app: &Arc<App>, req: &Req, asset_id: &str, rel: &str) -> Answer {
         .map(|component| component.as_os_str().to_string_lossy().into_owned());
     if !matches!(subtree.as_deref(), Some("cbcs" | "manifests")) {
         return Err(RouteError::NotFound);
+    }
+    if !app.service.asset_reserved(asset_id)
+        && (app.manager.catalog_fenced(asset_id)
+            || catalog::get_catalog_entry(&app.config.catalog_root, asset_id)?.is_some())
+    {
+        let verified = app
+            .manager
+            .catalog_output(asset_id, &app.config.output_root)
+            .ok_or(RouteError::NotFound)?;
+        let name = full
+            .strip_prefix(&asset_root)
+            .map_err(|_| RouteError::NotFound)?
+            .iter()
+            .map(|s| s.to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/");
+        if !verified.contains(&name) {
+            return Err(RouteError::NotFound);
+        }
     }
     send_disk_file(req, &full, mime_for(&full))
 }

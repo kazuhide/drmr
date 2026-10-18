@@ -53,6 +53,9 @@ impl Drop for Setup {
         if std::thread::panicking() {
             for entry in std::fs::read_dir(self.root.join("jobs")).unwrap().flatten() {
                 let path = entry.path();
+                if path.extension().is_none_or(|ext| ext != "jsonl") {
+                    continue;
+                }
                 if let Some(id) = path.file_stem().and_then(|name| name.to_str()) {
                     eprintln!(
                         "native fixture status: {:?}; log: {:?}",

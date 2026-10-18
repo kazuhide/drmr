@@ -7,6 +7,7 @@ pub mod http;
 pub mod jobs;
 pub mod pyutil;
 pub mod queue;
+mod readiness;
 pub mod router;
 pub mod routes;
 pub mod safelog;

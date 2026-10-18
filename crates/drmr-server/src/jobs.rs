@@ -253,6 +253,7 @@ pub struct ConversionJobManager {
     cli_argv: Vec<OsString>,
     base_env: EnvSource,
     state: Mutex<State>,
+    readiness: crate::readiness::CatalogReadiness,
     // Process cleanup and open log handles drop before the directory pin.
     #[cfg(windows)]
     _jobs_pin: native::PrivateDirectoryGuard,
@@ -289,6 +290,7 @@ impl ConversionJobManager {
         let jobs_pin = native::pin_private_directory(jobs_dir)?;
         Ok(ConversionJobManager {
             jobs_dir: jobs_dir.to_path_buf(),
+            readiness: crate::readiness::CatalogReadiness::default(),
             cli_argv,
             base_env,
             state: Mutex::new(State {
@@ -316,7 +318,9 @@ impl ConversionJobManager {
     pub fn fresh_env(&self) -> Vec<(OsString, OsString)> {
         (self.base_env)()
             .into_iter()
-            .filter(|(name, _)| !is_drm_var(name))
+            .filter(|(name, _)| {
+                !is_drm_var(name) && name != drmr_core::catalog_receipt::REQUEST_ENV
+            })
             .collect()
     }
 
@@ -362,7 +366,12 @@ impl ConversionJobManager {
         env.push(("DRM_KID".into(), entry.key_material.key_id_hex().into()));
         env.push(("DRM_KEY".into(), entry.key_material.key_hex().into()));
         env.push(("DRM_IV".into(), entry.key_material.iv_hex().into()));
-        self.launch(&mut state, &argv, &env)
+        self.launch(
+            &mut state,
+            &argv,
+            &env,
+            Some((&entry.asset_id, &output_root.join(&entry.asset_id))),
+        )
     }
 
     /// `submit_command(arguments, env=…)`: another CLI command under the same lease, with the
@@ -382,7 +391,7 @@ impl ConversionJobManager {
         }
         let mut argv = self.cli_argv.clone();
         argv.extend(arguments.iter().cloned());
-        self.launch(&mut state, &argv, env)
+        self.launch(&mut state, &argv, env, None)
     }
 
     fn launch(
@@ -390,6 +399,7 @@ impl ConversionJobManager {
         state: &mut State,
         argv: &[OsString],
         env: &[(OsString, OsString)],
+        catalog: Option<(&str, &Path)>,
     ) -> Result<JobHandle, JobError> {
         let job_id = pyutil::uuid4_hex();
         let log_path = self.jobs_dir.join(format!("{job_id}.jsonl"));
@@ -404,6 +414,14 @@ impl ConversionJobManager {
             .envs(env.iter().map(|(name, value)| (name, value)))
             .stdout(Stdio::from(stdout))
             .stderr(Stdio::from(stderr));
+        command.env_remove(drmr_core::catalog_receipt::REQUEST_ENV);
+        if let Some((asset, root)) = catalog {
+            let request = self
+                .readiness
+                .begin(&self.jobs_dir, &job_id, asset, root)
+                .map_err(JobError::Launch)?;
+            command.env(drmr_core::catalog_receipt::REQUEST_ENV, request);
+        }
         let child = ManagedChild::spawn(command, true).map_err(JobError::Launch)?;
         if let (Some(current), Some(code)) = (state.current_job_id.take(), state.exit_code) {
             state.finished.insert(
@@ -459,6 +477,7 @@ impl ConversionJobManager {
     /// Close the submission gate before an embedding host begins shutdown.
     pub fn begin_shutdown(&self) {
         self.lock().closing = true;
+        self.cancel_readiness();
     }
 
     /// Stop and confirm the owned tree, retaining ownership on any error.
@@ -483,6 +502,43 @@ impl ConversionJobManager {
             }
             std::thread::sleep(Duration::from_millis(1));
         }
+    }
+
+    /// Cancel bounded readiness IO before owned server shutdown drains requests.
+    pub fn cancel_readiness(&self) {
+        self.readiness.cancel();
+    }
+
+    /// Validate a completed catalog generation outside manager/service locks.
+    pub fn qualify_catalog(&self, job_id: &str) {
+        let code = self.status(job_id).ok().and_then(|h| {
+            h.exit_code
+                .map(|code| if h.state == "succeeded" { code } else { 1 })
+        });
+        if let Some(code) = code {
+            self.readiness.finish(&self.jobs_dir, job_id, code);
+        }
+    }
+
+    /// Whether a catalog attempt has fenced this asset, including an unreadable fence.
+    pub fn catalog_fenced(&self, asset_id: &str) -> bool {
+        crate::readiness::CatalogReadiness::fenced(&self.jobs_dir, asset_id)
+    }
+
+    /// Additive catalog output authority, independent of the legacy existence flag.
+    pub fn output_readiness(&self, asset_id: &str, output_root: &Path) -> Value {
+        self.readiness
+            .public(&self.jobs_dir, asset_id, &output_root.join(asset_id))
+    }
+
+    /// A completed generation whose current bytes and filesystem bindings still match.
+    pub fn catalog_output(
+        &self,
+        asset_id: &str,
+        output_root: &Path,
+    ) -> Option<std::sync::Arc<drmr_core::catalog_receipt::Verified>> {
+        self.readiness
+            .output(&self.jobs_dir, asset_id, &output_root.join(asset_id))
     }
 
     /// `_job_has_exited(job_id)`: a job replaced as the current one has necessarily exited.

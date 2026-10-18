@@ -370,6 +370,17 @@ If cleanup cannot be confirmed, the job keeps its execution slot and temporary c
 
 On interruption or termination, the server closes submissions, stops the active job, and drains its queue runner, log streams and background workers before reporting successful shutdown. Queued items are not started during shutdown. Rust embedding hosts should call `RunningServer::shutdown(&mut self)` and retain the owner if it returns an error; dropping a host is best effort and does not prove successful cleanup.
 
+Catalog output existence and verified readiness are separate. The API keeps the
+legacy `converted` flag for a saved manifest and adds `output_readiness`. A new
+attempt makes earlier output unverified before it starts writing. Only a fully
+successful run, confirmed process cleanup, and a matching report and output
+inventory make that generation ready for playback. Exit code zero alone does
+not qualify old or partial files. Existing outputs are not deleted or rolled back; interrupted work may have
+changed them. Unfenced legacy output remains unverified. Failed or incomplete
+reports remain readable as sanitized diagnostics without a playback URL; stale
+successful reports do not become a new verified result. This qualification is
+media verification, not a DRM license-service or device-playback guarantee.
+
 Requests must address `localhost`, `127.0.0.1`, `::1`, or an explicitly configured bind hostname/address. Binding to a wildcard address does not permit arbitrary hostnames. Reverse proxies and remote access are outside this local console's default setup.
 
 ## Exit codes

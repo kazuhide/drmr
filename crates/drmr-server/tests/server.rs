@@ -61,7 +61,7 @@ fn catalog_detail_report_requires_saved_checks_and_scrubs_private_fields() {
                                    {"id": "6-4.framemd5", "status": "SKIP"},
                                    {"id": "6-1.iv-agreement", "status": "FAIL"}]}],
             "checks": [{"id": "6-6.dash-conformance", "status": "SKIP"}],
-            "dash_url": "/output/report-one/manifests/local/manifest.mpd", "hls_url": null});
+            "dash_url": null, "hls_url": null, "output_readiness": {"state":"unverified","reason":"legacy-unfenced","job_id":null}});
         assert_eq!(answer.json(), expected);
         assert_eq!(answer.header("cache-control"), Some("no-store"));
         let text = answer.text();
@@ -162,7 +162,18 @@ fn catalog_lists_staged_entries_never_leaking_key_material() {
     for row in body.as_array().unwrap() {
         let mut keys: Vec<&String> = row.as_object().unwrap().keys().collect();
         keys.sort();
-        assert_eq!(keys, ["asset_id", "converted", "entry", "label", "paths"]);
+        assert_eq!(
+            keys,
+            [
+                "asset_id",
+                "converted",
+                "entry",
+                "label",
+                "output_readiness",
+                "paths"
+            ]
+        );
+        assert_eq!(row["output_readiness"]["state"], "unverified");
         assert!(support::has_extension(
             row["paths"]["mpd"].as_str().unwrap(),
             "mpd"
@@ -1049,7 +1060,7 @@ fn api_assets_writes_a_bandwidth_beyond_64_bits_as_its_digits() {
 // ---- a synthetic round trip ---------------------------------------------------------------
 
 #[test]
-fn full_round_trip_convert_then_serve_the_new_manifest() {
+fn synthetic_output_is_diagnostic_until_a_current_producer_receipt_qualifies_it() {
     let h = Harness::new();
     stage(&h.catalog, "rt1");
     h.cli.convert();
@@ -1067,21 +1078,31 @@ fn full_round_trip_convert_then_serve_the_new_manifest() {
     let catalog = h.client.get("/api/catalog").json();
     assert_eq!(catalog[0]["converted"], json!(true));
     let assets = h.client.get("/api/assets/rt1").json();
-    let new_url = assets["new_url"].as_str().unwrap().to_string();
-    assert!(
-        new_url.starts_with("/output/rt1/manifests/local/"),
-        "{new_url}"
-    );
-    let manifest = h.client.get(&new_url);
-    assert_eq!(manifest.status, 200);
-    let text = manifest.text();
+    assert!(assets["new_url"].is_null());
+    assert_eq!(assets["output_readiness"]["state"], "unverified");
+    // Preserve the generated file and its URL layout, but do not publish it as verified.
+    let local = h.output.join("rt1/manifests/local");
+    let mut paths = Vec::new();
+    find_generated_mpd(&local, &mut paths);
+    assert_eq!(paths.len(), 1);
+    let text = std::fs::read_to_string(&paths[0]).unwrap();
     assert!(text.contains("value=\"cbcs\""));
-    // The <BaseURL> must end in "/" (RFC 3986 §5.2.3), resolved the way a player resolves it.
     let base = base_url_of(&text);
     assert!(base.ends_with('/'), "{base}");
     let resolved = join(&base, &initialization_of(&text));
     assert!(resolved.starts_with("/output/rt1/cbcs/"), "{resolved}");
-    assert_eq!(h.client.get(&resolved).status, 200);
+    assert_eq!(h.client.get(&resolved).status, 404);
+}
+
+fn find_generated_mpd(root: &std::path::Path, paths: &mut Vec<std::path::PathBuf>) {
+    for entry in std::fs::read_dir(root).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            find_generated_mpd(&path, paths);
+        } else if path.extension().is_some_and(|s| s == "mpd") {
+            paths.push(path);
+        }
+    }
 }
 
 // ---- the static pages ---------------------------------------------------------------------

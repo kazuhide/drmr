@@ -417,16 +417,30 @@ pub fn cmd_run<O: Write + Send + 'static>(
             if writer.failed() {
                 return Err(CliError::Output);
             }
-            Ok(exit_code(&result?))
+            let result = result?;
+            complete_receipt(env, &asset, &result)?;
+            Ok(exit_code(&result))
         }
         LogFormat::Text => {
             let runner = job_runner(Arc::new(NoSink));
             let deps = pipeline_deps(modules, &runner);
             let result = pipeline::repackage_asset(&asset, &options, &deps)?;
             print_summary(&result, stdout, stderr)?;
+            complete_receipt(env, &asset, &result)?;
             Ok(exit_code(&result))
         }
     }
+}
+
+fn complete_receipt(env: &Env, asset: &Asset, result: &AssetResult) -> Result<(), CliError> {
+    crate::catalog_receipt::complete(
+        env.get(crate::catalog_receipt::REQUEST_ENV)
+            .map(String::as_str),
+        result,
+        &asset.output_dir,
+    )
+    .map_err(|_| PyError::Runtime("catalog-receipt-unavailable".into()))?;
+    Ok(())
 }
 
 /// The pipeline's modules and the job's runner. The pipeline runs the bare `packager`, as
