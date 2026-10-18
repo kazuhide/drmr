@@ -77,6 +77,9 @@ exit code. A forced fallback is marked `cleanup: unconfirmed`: killing only the 
 process group cannot cover media children that own separate groups. The label is not
 independent operating-system proof of every descendant's exit.
 
+Unix nonblocking pipe readers wait for data readiness between bursts. Each wait is
+bounded so cancellation can stop a reader even when a descendant keeps a writer open.
+
 If pipes remain open after the direct child exits, cleanup starts after two seconds,
 including calls without an explicit command timeout. Windows jobs retain ordinary descendants;
 Unix uses an owned process group, or the inherited supervisor group inside an asset
@@ -128,6 +131,12 @@ maximum produced these warm-run ranges (two warm runs after one first launch):
 Every run preserved the full decoded video, audio, and packet timeline. These short runs
 show some admission/capture overhead; they do not demonstrate a throughput improvement.
 First analysis launches took about 0.57 s in both measurements.
+
+On one macOS ARM64 host with a Rust 1.95 debug build, the existing 40,000,000-byte
+streaming regression timed out at its twenty-second deadline with the old reader.
+With readiness waiting, the same complete byte count passed in 0.40 seconds while
+retaining no stdout payload. The deadline and 8 KiB chunk bound were unchanged.
+This synthetic pipe observation does not establish media conversion speed.
 
 ## Generic conversion
 

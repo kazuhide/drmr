@@ -23,6 +23,35 @@ struct State {
     stop: AtomicBool,
 }
 
+trait PipeReader: Read {
+    fn wait_readable(&self) -> io::Result<()>;
+}
+
+#[cfg(unix)]
+impl<T: Read + std::os::fd::AsFd> PipeReader for T {
+    fn wait_readable(&self) -> io::Result<()> {
+        use rustix::event::{PollFd, PollFlags, Timespec, poll};
+        let mut descriptors = [PollFd::new(self, PollFlags::IN)];
+        let timeout = Timespec::try_from(POLL).map_err(io::Error::other)?;
+        match poll(&mut descriptors, Some(&timeout)) {
+            Ok(_) if descriptors[0].revents().contains(PollFlags::NVAL) => {
+                Err(io::Error::other("captured pipe became unavailable"))
+            }
+            // EOF and pipe errors are resolved by the next nonblocking read.
+            Ok(_) | Err(rustix::io::Errno::INTR) => Ok(()),
+            Err(error) => Err(error.into()),
+        }
+    }
+}
+
+#[cfg(not(unix))]
+impl<T: Read> PipeReader for T {
+    fn wait_readable(&self) -> io::Result<()> {
+        std::thread::sleep(POLL);
+        Ok(())
+    }
+}
+
 #[cfg(unix)]
 fn prepare_pipe(pipe: &impl std::os::fd::AsFd) -> io::Result<()> {
     let flags = rustix::fs::fcntl_getfl(pipe)?;
@@ -30,7 +59,7 @@ fn prepare_pipe(pipe: &impl std::os::fd::AsFd) -> io::Result<()> {
     Ok(())
 }
 
-fn read_bounded(mut pipe: impl Read, limit: usize, state: &State, done: u8) -> Vec<u8> {
+fn read_bounded(mut pipe: impl PipeReader, limit: usize, state: &State, done: u8) -> Vec<u8> {
     let mut bytes = Vec::new();
     let mut chunk = [0_u8; 8192];
     while !state.stop.load(Ordering::Acquire) {
@@ -55,7 +84,12 @@ fn read_bounded(mut pipe: impl Read, limit: usize, state: &State, done: u8) -> V
                 // Continue draining without retaining bytes until the controller kills the tree.
             }
             Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => std::thread::sleep(POLL),
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                if pipe.wait_readable().is_err() {
+                    state.flags.fetch_or(READ_ERROR, Ordering::Release);
+                    break;
+                }
+            }
             Err(_) => {
                 state.flags.fetch_or(READ_ERROR, Ordering::Release);
                 break;
@@ -67,7 +101,7 @@ fn read_bounded(mut pipe: impl Read, limit: usize, state: &State, done: u8) -> V
 }
 
 fn read_streamed(
-    mut pipe: impl Read,
+    mut pipe: impl PipeReader,
     state: &State,
     consume: &mut impl FnMut(&[u8]) -> Result<(), ()>,
 ) -> Vec<u8> {
@@ -82,7 +116,12 @@ fn read_streamed(
                 }
             }
             Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => std::thread::sleep(POLL),
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                if pipe.wait_readable().is_err() {
+                    state.flags.fetch_or(READ_ERROR, Ordering::Release);
+                    break;
+                }
+            }
             Err(_) => {
                 state.flags.fetch_or(READ_ERROR, Ordering::Release);
                 break;
@@ -321,7 +360,12 @@ mod lifecycle_tests {
             total += chunk.len();
             Ok(())
         })
-        .unwrap_or_else(|_| panic!("streamed response failed"));
+        .unwrap_or_else(|error| {
+            panic!(
+                "streamed response failed: kind={}, bytes={total}",
+                error.kind
+            )
+        });
         assert_eq!(total, 40_000_000);
         assert_eq!(completed.returncode, Some(0));
         assert_eq!(completed.stdout.len(), 0);

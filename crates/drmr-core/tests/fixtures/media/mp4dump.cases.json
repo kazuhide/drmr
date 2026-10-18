@@ -2703,18 +2703,18 @@
    }
   },
   {
-   "name": "frag-trun-count-at-eof",
-   "hex": "0000002c6d6f6f660000002474726166000000107466647400000000000000050000000c7472756e00000001",
+   "name": "frag-trun-empty-with-explicit-offset",
+   "hex": "000000346d6f6f660000002c7472616600000010746664740000000000000005000000147472756e000000010000000000000040",
    "tree": [
     {
      "name": "moof",
      "header_size": 8,
-     "size": 44,
+     "size": 52,
      "children": [
       {
        "name": "traf",
        "header_size": 8,
-       "size": 36,
+       "size": 44,
        "children": [
         {
          "name": "tfdt",
@@ -2725,10 +2725,10 @@
         {
          "name": "trun",
          "header_size": 12,
-         "size": 12,
+         "size": 20,
          "flags": 1,
          "sample count": 0,
-         "data offset": 0
+         "data offset": 64
         }
        ]
       }
@@ -2993,6 +2993,65 @@
     "ok": [
      1,
      9
+    ]
+   }
+  }
+ ],
+ "native_only_cases": [
+  {
+   "name": "frag-trun-count-at-eof",
+   "hex": "0000002c6d6f6f660000002474726166000000107466647400000000000000050000000c7472756e00000001",
+   "tree": [
+    {
+     "name": "moof",
+     "header_size": 8,
+     "size": 44,
+     "children": [
+      {
+       "name": "traf",
+       "header_size": 8,
+       "size": 36,
+       "children": [
+        {
+         "name": "tfdt",
+         "header_size": 12,
+         "size": 16,
+         "base media decode time": 5
+        },
+        {
+         "name": "trun",
+         "header_size": 12,
+         "size": 12,
+         "flags": 1,
+         "sample count": 0,
+         "data offset": 0
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "init_probe": {
+    "ok": [
+     null,
+     null,
+     null,
+     null
+    ]
+   },
+   "tenc_constant_iv_hex": {
+    "ok": null
+   },
+   "fragment_boundary": {
+    "ok": {
+     "base_media_decode_time": 5,
+     "sample_count": 0
+    }
+   },
+   "tenc_pattern": {
+    "ok": [
+     0,
+     0
     ]
    }
   }
