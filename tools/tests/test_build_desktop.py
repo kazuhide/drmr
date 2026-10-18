@@ -3,6 +3,8 @@
 import importlib.util
 import hashlib
 import json
+import os
+import sys
 from pathlib import Path
 import tempfile
 import unittest
@@ -241,3 +243,28 @@ class DesktopPackages(unittest.TestCase):
                     document = stream.getmember(bundle.name + "/NOTICE.txt")
                     self.assertEqual(document.mode & 0o777, 0o666)
                     self.assertEqual(stream.extractfile(document).read(), b"publisher notice")
+
+
+    def run_with_legacy_capture_default(self, payload):
+        original = BUILD.subprocess.Popen
+
+        def legacy_default(*arguments, **options):
+            # Model a legacy host default, while leaving explicit encodings authoritative.
+            if options.get("text") and options.get("encoding") is None:
+                options["encoding"] = "cp1252"
+            return original(*arguments, **options)
+
+        writer = "import os;os.write(1," + repr(payload) + ")"
+        with patch.object(BUILD.subprocess, "Popen", side_effect=legacy_default):
+            return BUILD.run([sys.executable, "-c", writer], os.environ.copy(), capture=True)
+
+    def test_captured_machine_json_is_utf8_even_with_a_legacy_host_default(self):
+        author = "作者 Ł"
+        payload = json.dumps({"authors": [author]}, ensure_ascii=False).encode("utf-8")
+        self.assertIn(b"\x81", payload)
+        captured = self.run_with_legacy_capture_default(payload)
+        self.assertEqual(json.loads(captured.stdout), {"authors": [author]})
+
+    def test_captured_machine_output_rejects_invalid_utf8_without_replacement(self):
+        with self.assertRaises(UnicodeDecodeError):
+            self.run_with_legacy_capture_default(b"\xff")

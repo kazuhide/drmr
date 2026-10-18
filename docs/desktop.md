@@ -20,6 +20,19 @@ The before/after player is a local ClearKey playback test, independent of the co
 
 Playback setup has a 20-second budget covering previous-player cleanup, the local test-key response, Shaka media loading and the video actually beginning to play. This bounds a stalled setup in the running page without changing media-processing timeouts. On expiry the controls return with recovery guidance; conversion results remain unchanged. “Loading media” means Shaka has not completed its load; “Media loaded; waiting for playback to start” means the media load returned but the video has not emitted a playing event. Neither phase establishes that a key is usable. Retry after a setup timeout. If previous-player cleanup cannot be confirmed, reload the console page before retrying: drmr retains that owner and does not create another player on the same video. JavaScript timers depend on the WebView event loop running and are not an operating-system termination deadline.
 
+## Tested results
+
+Development checks on macOS used the public Big Buck Bunny 10-second fixture with five 2-second segments. These observations do not qualify every source or platform.
+
+| Check | Observed result |
+| --- | --- |
+| Native folder menus, keyboard input and report navigation | Tested; owned reports open in the same window. |
+| Native catalog conversion | Completed with all media checks passing. |
+| Native Stop and orderly close during active processing | Owned CLI and media processes exited; closing the app also released its listener. |
+| Chrome local ClearKey playback | Before and after clips both reached the end. |
+| WKWebView local ClearKey playback | English/Japanese setup failure and retry recovery tested; completed playback remains unqualified. |
+| Windows and Linux native GUI | Runtime qualification remains open. The [Linux dependency warnings](#linux-dependency-qualification) also remain open. |
+
 ## External tools and launch environment
 
 The host and its jobs inherit `PATH` from the application launcher. Finder may provide a different environment from your terminal. The host does not search extra installation folders or run shell startup files.

@@ -22,7 +22,7 @@ DESKTOP = ROOT / "crates" / "drmr-desktop"
 def run(arguments, env, capture=False):
     return subprocess.run(arguments, cwd=ROOT, env=env, check=True,
                           stdout=subprocess.PIPE if capture else None,
-                          text=capture)
+                          text=capture, encoding="utf-8" if capture else None)
 
 
 def is_notice(path):
