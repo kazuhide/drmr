@@ -1,5 +1,9 @@
 #![allow(dead_code)] // reason: each test binary uses its own subset of these helpers
 
+mod client_transport;
+
+use ureq::unversioned::transport::Connector as _;
+
 use base64::Engine as _;
 use drmr_server::config::{Clock, Hooks, QueueRunner};
 use drmr_server::{RunningServer, ServerConfig};
@@ -499,12 +503,17 @@ pub struct Client {
 
 impl Client {
     pub fn new(base: &str) -> Client {
-        let agent = ureq::Agent::config_builder()
+        let config = ureq::Agent::config_builder()
             .http_status_as_error(false)
             .max_redirects(0)
             .timeout_global(Some(Duration::from_secs(30)))
-            .build()
-            .new_agent();
+            .build();
+        let agent = ureq::Agent::with_parts(
+            config,
+            ureq::unversioned::transport::DefaultConnector::default()
+                .chain(client_transport::ContinueReadConnector),
+            ureq::unversioned::resolver::DefaultResolver::default(),
+        );
         Client {
             agent,
             base: base.to_string(),
