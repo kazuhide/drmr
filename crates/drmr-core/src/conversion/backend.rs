@@ -169,13 +169,35 @@ impl Backend {
         self.run(&argv, "packager", &[])?;
         Ok(())
     }
-    pub fn profile(&self, path: &Path) -> Result<serde_json::Value, ConversionError> {
-        self.profile_stream(path, 0)
+    fn keyed_probe_argv(
+        argv: Vec<String>,
+        key: Option<&ContentKey>,
+    ) -> (Zeroizing<Vec<String>>, Option<Zeroizing<String>>) {
+        let mut argv = Zeroizing::new(argv);
+        let secret = key.map(ContentKey::key_hex);
+        if let (Some(key), Some(secret)) = (key, &secret) {
+            argv.splice(
+                1..1,
+                [
+                    "-decryption_keys".into(),
+                    format!("{}={}", key.id_hex(), secret.as_str()),
+                ],
+            );
+        }
+        (argv, secret)
+    }
+    pub fn profile(
+        &self,
+        path: &Path,
+        key: Option<&ContentKey>,
+    ) -> Result<serde_json::Value, ConversionError> {
+        self.profile_stream(path, 0, key)
     }
     pub fn profile_stream(
         &self,
         path: &Path,
         index: usize,
+        key: Option<&ContentKey>,
     ) -> Result<serde_json::Value, ConversionError> {
         let argv = vec![
             self.ffprobe.clone(),
@@ -200,7 +222,10 @@ impl Backend {
             "json".into(),
             super::files::tool_path(path)?,
         ];
-        let bytes = self.run(&argv, "ffprobe", &[])?;
+        // Codec metadata can be inferred from packets, so encrypted inputs need their role key.
+        let (argv, secret) = Self::keyed_probe_argv(argv, key);
+        let secrets: Vec<_> = secret.iter().map(|value| value.as_str()).collect();
+        let bytes = self.run(&argv, "ffprobe", &secrets)?;
         if bytes.len() > 1024 * 1024 {
             return Err(ConversionError("probe-result-size-limit"));
         }
@@ -274,8 +299,9 @@ impl Backend {
         &self,
         path: &Path,
         index: usize,
+        key: Option<&ContentKey>,
     ) -> Result<super::packets::Evidence, ConversionError> {
-        let profile = self.profile_stream(path, index)?;
+        let profile = self.profile_stream(path, index, key)?;
         let expected = profile["nb_read_packets"]
             .as_str()
             .and_then(|count| count.parse::<u64>().ok())
@@ -296,10 +322,13 @@ impl Backend {
             "compact=p=1:nk=0".into(),
             super::files::tool_path(path)?,
         ];
+        let (argv, secret) = Self::keyed_probe_argv(argv, key);
+        let secrets: Vec<_> = secret.iter().map(|value| value.as_str()).collect();
         let effective = Self::effective_argv(&argv, "ffprobe");
         let shown = ["ffprobe".into(), "[arguments redacted]".into()];
         let options = RunOptions {
             stop: Some(&self.stop),
+            secrets: &secrets,
             argv_redacted: Some(&shown),
             timeout: Some(self.timeout),
             max_output_chars: 0,
@@ -497,7 +526,7 @@ mod packet_tests {
                 timeout: Duration::from_secs(20),
             };
             assert_eq!(
-                backend.packets_stream(&input, 0).unwrap_err(),
+                backend.packets_stream(&input, 0, None).unwrap_err(),
                 ConversionError(token)
             );
         }

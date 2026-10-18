@@ -177,15 +177,51 @@ fn keys_never_reach_retained_tool_records_or_reports() {
     let sink = Arc::new(Collector::default());
     let runner = Arc::new(ToolRunner::new(Arc::new(Secrets::new()), sink.clone()));
     let converter = Converter::new(runner, "packager", "ffmpeg");
+    let output = directory.path().join("output.mp4");
     let report = converter
         .convert_mp4(
             &input,
-            &directory.path().join("output.mp4"),
+            &output,
             TargetProtection::Cbcs,
             &InputKeys::default(),
             Some(&OutputKey::from_hex(KID_OUT, KEY_OUT).unwrap()),
         )
         .unwrap();
+    let supplied = input_keys(KID_OUT, KEY_OUT);
+    assert!(
+        converter
+            .verify_mp4(&output, &supplied, &output, &supplied)
+            .unwrap()
+            .passed
+    );
+    for (source_keys, result_keys) in [
+        (InputKeys::default(), input_keys(KID_OUT, KEY_OUT)),
+        (input_keys(KID_OUT, KEY_OUT), InputKeys::default()),
+        (input_keys(KID_IN, KEY_OUT), input_keys(KID_OUT, KEY_OUT)),
+        (input_keys(KID_OUT, KEY_OUT), input_keys(KID_IN, KEY_OUT)),
+    ] {
+        assert_eq!(
+            converter
+                .verify_mp4(&output, &source_keys, &output, &result_keys)
+                .unwrap_err(),
+            ConversionError("input-key-required")
+        );
+    }
+    for (source_keys, result_keys) in [
+        (input_keys(KID_OUT, KEY_IN), input_keys(KID_OUT, KEY_OUT)),
+        (input_keys(KID_OUT, KEY_OUT), input_keys(KID_OUT, KEY_IN)),
+    ] {
+        assert!(
+            !converter
+                .verify_mp4(&output, &source_keys, &output, &result_keys)
+                .is_ok_and(|report| report.passed)
+        );
+    }
+    assert!(
+        !serde_json::to_string(&sink.records())
+            .unwrap()
+            .contains(KEY_IN)
+    );
     assert!(
         !serde_json::to_string(&sink.records())
             .unwrap()
@@ -218,7 +254,7 @@ fn output_symlinks_are_rejected_without_modifying_their_target() {
 }
 
 #[test]
-fn missing_keys_unsupported_profiles_and_multi_track_inputs_fail_closed() {
+fn missing_keys_and_encrypted_multi_track_inputs_fail_closed() {
     let directory = tempfile::tempdir().unwrap();
     let source = directory.path().join("input.mp4");
     video(&source, "testsrc2=size=64x64:rate=5");
@@ -278,9 +314,9 @@ fn missing_keys_unsupported_profiles_and_multi_track_inputs_fail_closed() {
             .convert_mp4(
                 &av,
                 &output,
-                TargetProtection::Clear,
+                TargetProtection::Cenc,
                 &InputKeys::default(),
-                None
+                Some(&OutputKey::from_hex(KID_OUT, KEY_OUT).unwrap())
             )
             .unwrap_err(),
         ConversionError("single-track-mp4-required")

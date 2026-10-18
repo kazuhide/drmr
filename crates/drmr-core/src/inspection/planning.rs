@@ -1,6 +1,6 @@
 //! Transformation intent, key roles, and compatibility without executing a backend.
 
-use super::{Finding, InputFormat, Inspection, Protection};
+use super::{Finding, InputFormat, Inspection, Protection, TrackKind};
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
@@ -100,6 +100,32 @@ pub struct ConversionPlan {
     pub findings: Vec<Finding>,
 }
 
+fn progressive_candidate(input: &Inspection, target: TargetProtection) -> bool {
+    input.format == InputFormat::Mp4
+        && target == TargetProtection::Clear
+        && input.tracks.len() == 2
+        && input
+            .tracks
+            .iter()
+            .all(|track| track.protection == Protection::Clear)
+        && input
+            .tracks
+            .iter()
+            .filter(|track| {
+                track.kind == TrackKind::Audio && track.codec.as_deref() == Some("mp4a")
+            })
+            .count()
+            == 1
+        && input
+            .tracks
+            .iter()
+            .filter(|track| {
+                track.kind == TrackKind::Video && track.codec.as_deref() == Some("avc1")
+            })
+            .count()
+            == 1
+}
+
 /// Describe a requested transformation. Source media must be revalidated at execution.
 pub fn plan(
     input: Inspection,
@@ -138,7 +164,11 @@ pub fn plan(
     if formats.len() != 1 {
         findings.push(Finding::new("convert-one-output-format-per-invocation"));
     }
-    if formats == [OutputFormat::Mp4] && input.tracks.len() != 1 {
+    let progressive_candidate = progressive_candidate(&input, target);
+    if progressive_candidate && formats == [OutputFormat::Mp4] {
+        findings.push(Finding::new("progressive-mp4-profile-validation-required"));
+    }
+    if formats == [OutputFormat::Mp4] && input.tracks.len() != 1 && !progressive_candidate {
         execution_available = false;
         findings.push(Finding::new("mp4-output-requires-one-track"));
     }
