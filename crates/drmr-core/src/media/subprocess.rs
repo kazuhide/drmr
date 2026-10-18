@@ -689,7 +689,15 @@ fn stream_digest_with_cleanup(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
-    let mut child = ManagedChild::spawn(command, !in_asset_worker())?;
+    let mut child = ManagedChild::spawn_with_io(
+        command,
+        !in_asset_worker(),
+        crate::native::ManagedIo {
+            stdin: crate::native::ManagedStdio::Null,
+            stdout: crate::native::ManagedStdio::Piped,
+            stderr: crate::native::ManagedStdio::Null,
+        },
+    )?;
     let stdout = child.stdout.take().expect("stdout is piped");
     #[cfg(unix)]
     {

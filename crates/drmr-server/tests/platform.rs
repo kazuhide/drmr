@@ -352,6 +352,51 @@ fn queue_runs_catalog_conversions_one_at_a_time() {
     assert_eq!(listed_assets(&h), ["q3", "q2", "q1"]);
 }
 
+#[cfg(unix)]
+#[test]
+fn a_queue_handshake_failure_keeps_the_launched_job_discoverable_and_allows_recovery() {
+    let h = queued(|_| {});
+    let original = h.cli.script.with_extension("compatible");
+    std::fs::rename(&h.cli.script, &original).unwrap();
+    std::fs::copy("/usr/bin/true", &h.cli.script).unwrap();
+    assert_eq!(enqueue(&h, &["q1", "q2"]).status, 202);
+
+    let first = h
+        .app()
+        .queue
+        .tick()
+        .expect("the actual launched job keeps its id");
+    let snapshot = queue(&h);
+    assert_eq!(snapshot["recent"][0]["job_id"], first);
+    assert_eq!(snapshot["recent"][0]["outcome"], "launched");
+    assert_eq!(snapshot["recent"][0]["reason"], "job-supervision-failed");
+    assert_eq!(pending(&h), ["q2"]);
+    let terminal = h.wait_job(&first);
+    assert_eq!(terminal["state"], "failed");
+    assert_eq!(terminal["exit_code"], 0);
+    assert!(!h.app().manager.is_busy());
+    assert!(drain(&h, &first).contains("job-supervision-failed"));
+    let history = h.client.get("/api/hls/jobs").json();
+    assert!(history["jobs"].as_array().unwrap().iter().any(|row| {
+        row["job_id"] == first && row["asset_id"] == "q1" && row["state"] == "failed"
+    }));
+    let saved = records(&h.output, "q1");
+    assert_eq!(saved.len(), 1);
+    assert_eq!(read_json(&saved[0])["job_id"], first);
+
+    std::fs::remove_file(&h.cli.script).unwrap();
+    std::fs::rename(original, &h.cli.script).unwrap();
+    let second = h.app().queue.tick().unwrap();
+    assert_ne!(second, first);
+    drain(&h, &second);
+    assert_eq!(h.wait_job(&second)["state"], "succeeded");
+    assert_eq!(pending(&h), Vec::<String>::new());
+    assert_eq!(
+        h.client.get(&format!("/api/jobs/{first}")).json()["state"],
+        "failed"
+    );
+}
+
 fn queue_snapshot(h: &Harness) -> Value {
     queue(h)
 }

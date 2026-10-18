@@ -342,6 +342,45 @@ fn submit_package(w: &Web) -> (String, Snapshot) {
     submit_package_with(w, "asset", &[video()], &Value::Null, &[])
 }
 
+#[cfg(unix)]
+#[test]
+fn an_incompatible_packaging_cli_keeps_its_private_configs_owned_until_confirmed_cleanup() {
+    let w = web();
+    let (submitted, snapshot) = submit_analysis(&w, "incompatible-package");
+    let analysis_id = submitted["analysis_id"].as_str().unwrap();
+    let source_before = std::fs::read(&snapshot.path).unwrap();
+    // Replace only this test's stopped CLI with an executable that exits zero
+    // without the supervision protocol.
+    let replacement = w.h.cli.script.with_extension("incompatible");
+    std::fs::copy("/usr/bin/true", &replacement).unwrap();
+    std::fs::rename(replacement, &w.h.cli.script).unwrap();
+    let answer = w.post(
+        "/api/hls/packages",
+        &package_body(analysis_id, &snapshot, &Value::Null),
+    );
+    assert_eq!(answer.status, 503, "{}", answer.text());
+    assert_eq!(answer.json(), error("job-supervision-failed"));
+    let requests = w.h.output.join("incompatible-package/clear/_requests");
+    assert_eq!(json_files(&requests).len(), 2);
+    let mut package = None;
+    support::wait_until(|| {
+        package = w.get("/api/hls/jobs").json()["jobs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["kind"] == "package")
+            .cloned();
+        package
+            .as_ref()
+            .is_some_and(|row| row["state"] != "running")
+    });
+    let package = package.unwrap();
+    assert_eq!(package["state"], "failed");
+    assert_eq!(package["exit_code"], 0);
+    assert_eq!(json_files(&requests), [] as [std::path::PathBuf; 0]);
+    assert_eq!(std::fs::read(&snapshot.path).unwrap(), source_before);
+}
+
 fn submit_package_with(
     w: &Web,
     asset: &str,

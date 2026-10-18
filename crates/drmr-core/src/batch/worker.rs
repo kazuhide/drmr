@@ -352,8 +352,16 @@ pub(super) fn supervise_with_cleanup(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
-    let mut child =
-        crate::native::ManagedChild::spawn(child_command, true).map_err(|_| AttemptError::Other)?;
+    let mut child = crate::native::ManagedChild::spawn_with_io(
+        child_command,
+        true,
+        crate::native::ManagedIo {
+            stdin: crate::native::ManagedStdio::Piped,
+            stdout: crate::native::ManagedStdio::Piped,
+            stderr: crate::native::ManagedStdio::Null,
+        },
+    )
+    .map_err(|_| AttemptError::Other)?;
     let mut stdin = child.stdin.take().expect("stdin is piped");
     let mut stdout = child.stdout.take().expect("stdout is piped");
     // The payload is written and the pipe closed on a thread: a worker that never reads its

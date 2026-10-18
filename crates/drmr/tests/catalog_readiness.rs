@@ -380,3 +380,288 @@ fn reject_failed_promotion(server: &RunningServer, output: &Path) {
         "persistence failure does not delete completed outputs or promote readiness"
     );
 }
+
+#[cfg(unix)]
+mod nested_tool_ownership {
+    use super::*;
+    use rustix::process::{Pid, Signal};
+    use std::{
+        ffi::OsString,
+        fs::File,
+        path::PathBuf,
+        sync::atomic::{AtomicBool, Ordering},
+    };
+
+    // An old-code failure must reclaim only this test's proven, independently led tool group.
+    struct HeldTool {
+        group: Pid,
+        descendant: Pid,
+        lock: File,
+        parent: u32,
+        armed: bool,
+    }
+    impl Drop for HeldTool {
+        fn drop(&mut self) {
+            // A still-held fixture lock pins the original group. Once released,
+            // its numeric identifier may have been reused and must not be signaled.
+            if self.armed && matches!(self.lock.try_lock(), Err(std::fs::TryLockError::WouldBlock))
+            {
+                let _ = rustix::process::kill_process_group(self.group, Signal::KILL);
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while self.lock.try_lock().is_err() && Instant::now() < deadline {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+            }
+        }
+    }
+    impl HeldTool {
+        fn ready(server: &RunningServer, id: &str, control: &Path) -> Self {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            let read_pid = |name: &str| {
+                std::fs::read_to_string(control.join(name))
+                    .ok()
+                    .filter(|text| text.ends_with('\n'))
+                    .and_then(|text| text.trim().parse::<i32>().ok())
+                    .and_then(Pid::from_raw)
+            };
+            let (pid, descendant) = loop {
+                if let (Some(pid), Some(descendant)) =
+                    (read_pid("tool.pid"), read_pid("descendant.pid"))
+                {
+                    break (pid, descendant);
+                }
+                assert_eq!(server.app.manager.status(id).unwrap().state, "running");
+                assert!(
+                    Instant::now() < deadline,
+                    "actual CLI tool did not reach its held-descendant barrier"
+                );
+                std::thread::sleep(Duration::from_millis(5));
+            };
+            let group = rustix::process::getpgid(Some(pid)).unwrap();
+            assert_eq!(
+                group, pid,
+                "ToolRunner must retain an independent process group"
+            );
+            assert_ne!(group, rustix::process::getpgrp());
+            let lock = File::options()
+                .read(true)
+                .write(true)
+                .open(control.join("descendant.lock"))
+                .unwrap();
+            let mut held = Self {
+                group,
+                descendant,
+                lock,
+                parent: 0,
+                armed: true,
+            };
+            assert_eq!(rustix::process::getpgid(Some(descendant)).unwrap(), group);
+            assert!(
+                held.lock.try_lock().is_err(),
+                "the native descendant must actually own the lock"
+            );
+            // Query only this already-owned live process; do not discover or signal arbitrary PIDs.
+            let output = std::process::Command::new("ps")
+                .args(["-p", &pid.as_raw_nonzero().get().to_string(), "-o", "ppid="])
+                .output()
+                .unwrap();
+            assert!(output.status.success());
+            held.parent = std::str::from_utf8(&output.stdout)
+                .unwrap()
+                .trim()
+                .parse()
+                .unwrap();
+            eprintln!(
+                "held catalog tool: independent_group=true parent_is_server={}",
+                held.parent == std::process::id()
+            );
+            held
+        }
+        fn assert_finished(&mut self, status: &impl std::fmt::Debug) {
+            // Capture both immediate oracles before file/log reads or any post-return polling.
+            let lock = self.lock.try_lock();
+            let group = rustix::process::test_kill_process_group(self.group);
+            let descendant = rustix::process::test_kill_process(self.descendant);
+            if lock.is_ok() {
+                self.lock.unlock().unwrap();
+            }
+            assert!(
+                lock.is_ok(),
+                "terminal boundary preceded descendant lock release: {lock:?}; status={status:?}"
+            );
+            assert_eq!(
+                group,
+                Err(rustix::io::Errno::SRCH),
+                "terminal boundary left the owned tool group present; status={status:?}"
+            );
+            assert_eq!(
+                descendant,
+                Err(rustix::io::Errno::SRCH),
+                "terminal boundary left the descendant present; status={status:?}"
+            );
+            self.armed = false;
+            assert_eq!(
+                self.parent,
+                std::process::id(),
+                "the server must directly own the tool while the actual CLI remains a separate process"
+            );
+        }
+    }
+
+    fn catalog(root: &Path) -> (CatalogEntry, PathBuf) {
+        let catalog = root.join("catalog");
+        let entry = prepare_source(&catalog.join("entry"));
+        native::create_private_new(&entry.entry_dir.join("keys.env"))
+            .unwrap()
+            .write_all(format!("DRM_KID={KID}\nDRM_KEY={KEY}\nDRM_IV={IV}\n").as_bytes())
+            .unwrap();
+        native::create_private_new(&entry.entry_dir.join("asset.json")).unwrap()
+            .write_all(json!({"asset_id":"receipt-bbb","label":"Public BBB","mpd_path":"download/source.mpd","hls_master_path":"download/master.m3u8","keys_file":"keys.env"}).to_string().as_bytes()).unwrap();
+        (entry, catalog)
+    }
+    fn config(catalog: &Path, output: &Path) -> ServerConfig {
+        let mut config = ServerConfig::new(catalog, output);
+        config.bind_port = 0;
+        config.cli_argv = vec![env!("CARGO_BIN_EXE_drmr").into()];
+        config.hooks.monitor = false;
+        config.hooks.log = Arc::new(|_| Ok(()));
+        config
+    }
+    fn controlled_config(
+        catalog: &Path,
+        output: &Path,
+        control: &Path,
+    ) -> (ServerConfig, Arc<AtomicBool>) {
+        native::create_private_dir_all(control).unwrap();
+        drmr_test_support::install(
+            &control.join("packager"),
+            &drmr_test_support::ToolSpec::default()
+                .with("pid_file", control.join("tool.pid").to_str().unwrap())
+                .with(
+                    "descendant_pid_file",
+                    control.join("descendant.pid").to_str().unwrap(),
+                )
+                .with(
+                    "descendant_lock_file",
+                    control.join("descendant.lock").to_str().unwrap(),
+                )
+                .with(
+                    "release_file",
+                    control.join("never-release").to_str().unwrap(),
+                ),
+        )
+        .unwrap();
+        let real_env = process_env()();
+        let paths = real_env
+            .iter()
+            .find(|(key, _)| key == "PATH")
+            .unwrap()
+            .1
+            .clone();
+        let path = std::env::join_paths(
+            std::iter::once(control.to_path_buf()).chain(std::env::split_paths(&paths)),
+        )
+        .unwrap();
+        let controlled = Arc::new(AtomicBool::new(true));
+        let flag = controlled.clone();
+        let mut config = config(catalog, output);
+        config.hooks.base_env = Arc::new(move || {
+            let mut env = real_env.clone();
+            if flag.load(Ordering::SeqCst) {
+                env.retain(|(key, _)| key != "PATH");
+                env.push((OsString::from("PATH"), path.clone()));
+            }
+            env
+        });
+        (config, controlled)
+    }
+    fn queued_success(server: &RunningServer) {
+        let (status, body) = request(
+            server,
+            "POST",
+            "/api/queue",
+            r#"{"asset_ids":["receipt-bbb"]}"#,
+        );
+        assert_eq!(status, 202, "{}", String::from_utf8_lossy(&body));
+        let deadline = Instant::now() + Duration::from_mins(1);
+        loop {
+            let queue = get(server, "/api/queue");
+            if let Some(row) = queue["recent"].as_array().unwrap().first() {
+                assert_eq!(row["outcome"], "launched", "{row}");
+                let id = row["job_id"].as_str().unwrap();
+                wait(server, id);
+                assert_eq!(get(server, &format!("/api/jobs/{id}"))["exit_code"], 0);
+                assert_eq!(
+                    get(server, "/api/catalog")[0]["output_readiness"]["state"],
+                    "verified"
+                );
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "queued real catalog job did not complete after cleanup"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn actual_catalog_stop_reclaims_independent_tool_and_descendant_before_terminal_or_lease_release()
+     {
+        let temp = native::private_tempdir().unwrap();
+        let (entry, catalog) = catalog(temp.path());
+        let original = source_hashes(&entry.entry_dir);
+        let output = temp.path().join("output");
+        let control = temp.path().join("control");
+        let (config, controlled) = controlled_config(&catalog, &output, &control);
+        let server = drmr_server::spawn(config).unwrap();
+        let id = submit(&server);
+        let mut held = HeldTool::ready(&server, &id, &control);
+        let (status, _) = request(&server, "POST", &format!("/api/jobs/{id}/stop"), "{}");
+        assert_eq!(status, 202);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let status = server.app.manager.status(&id).unwrap();
+            if !server.app.manager.is_busy() {
+                held.assert_finished(&status);
+            }
+            if status.state != "running" {
+                held.assert_finished(&status);
+                assert_eq!(status.state, "interrupted");
+                assert!(status.stop_requested);
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "Stop did not confirm owned cleanup"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(!server.app.manager.is_busy());
+        controlled.store(false, Ordering::SeqCst);
+        queued_success(&server);
+        assert_eq!(source_hashes(&entry.entry_dir), original);
+        server.stop().unwrap();
+    }
+
+    #[test]
+    fn actual_server_shutdown_reclaims_independent_tool_before_return_and_preserves_workspace() {
+        let temp = native::private_tempdir().unwrap();
+        let (entry, catalog) = catalog(temp.path());
+        let original = source_hashes(&entry.entry_dir);
+        let output = temp.path().join("output");
+        let control = temp.path().join("control");
+        let (config, _) = controlled_config(&catalog, &output, &control);
+        let mut server = drmr_server::spawn(config).unwrap();
+        let id = submit(&server);
+        let mut held = HeldTool::ready(&server, &id, &control);
+        let result = server.shutdown();
+        held.assert_finished(&result);
+        result.unwrap();
+        assert!(!server.app.manager.is_busy());
+        let next = drmr_server::spawn(self::config(&catalog, &output)).unwrap();
+        queued_success(&next);
+        assert_eq!(source_hashes(&entry.entry_dir), original);
+        next.stop().unwrap();
+    }
+}

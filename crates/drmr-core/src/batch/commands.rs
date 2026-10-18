@@ -15,7 +15,9 @@ use crate::hls_cli::private_json;
 use serde_json::{Map, Value};
 use std::ffi::OsString;
 use std::path::Path;
-use std::process::{Command, ExitStatus, Stdio};
+#[cfg(test)]
+use std::process::Stdio;
+use std::process::{Command, ExitStatus};
 use std::time::{Duration, Instant};
 
 /// One command `_commands` builds: its argv and the subcommand it runs (Python reads it at
@@ -252,20 +254,27 @@ pub(super) fn run_commands_with_cleanup(
         let mut errors = crate::native::private_tempfile().map_err(|_| AttemptError::Other)?;
         let (program, arguments) = command.argv.split_first().ok_or(AttemptError::Other)?;
         let mut child_command = Command::new(program);
-        child_command
-            .args(arguments)
-            .stdin(Stdio::null())
-            .stdout(records.try_clone().map_err(|_| AttemptError::Other)?)
-            .stderr(errors.try_clone().map_err(|_| AttemptError::Other)?);
+        child_command.args(arguments);
         if let Some(keys) = keys {
             child_command
                 .env("DRM_KID", keys.key_id_hex())
                 .env("DRM_KEY", keys.key_hex())
                 .env("DRM_IV", keys.iv_hex());
         }
-        let mut child =
-            crate::native::ManagedChild::spawn(child_command, !crate::native::in_asset_worker())
-                .map_err(|_| AttemptError::Other)?;
+        let mut child = crate::native::ManagedChild::spawn_with_io(
+            child_command,
+            !crate::native::in_asset_worker(),
+            crate::native::ManagedIo {
+                stdin: crate::native::ManagedStdio::Null,
+                stdout: crate::native::ManagedStdio::File(
+                    records.try_clone().map_err(|_| AttemptError::Other)?,
+                ),
+                stderr: crate::native::ManagedStdio::File(
+                    errors.try_clone().map_err(|_| AttemptError::Other)?,
+                ),
+            },
+        )
+        .map_err(|_| AttemptError::Other)?;
         let status = wait_command(
             &mut child,
             config,

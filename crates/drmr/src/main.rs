@@ -106,12 +106,38 @@ enum Command {
 }
 
 fn main() -> ExitCode {
+    if drmr_core::native::initialize_supervised_cli().is_err() {
+        eprintln!("drmr: the supervised job context could not be initialized");
+        return ExitCode::from(EXIT_INVALID);
+    }
+    let supervised = drmr_core::native::is_supervised_cli();
+    if supervised
+        && !std::env::args_os().nth(2).is_some_and(|command| {
+            matches!(
+                command.to_str(),
+                Some("run" | "analyze-hls" | "package-hls")
+            )
+        })
+    {
+        eprintln!("drmr: this command is unavailable in a supervised console job");
+        return ExitCode::from(EXIT_INVALID);
+    }
     // The asset worker of `batch`: this executable, invoked with exactly the worker
     // argument, reads its private configuration from stdin and never parses a command line.
     if invoked_as_worker() {
         return process_exit(drmr_core::batch::worker_main());
     }
-    match Cli::parse().command {
+    let command = if supervised {
+        Cli::parse_from(
+            std::env::args_os()
+                .enumerate()
+                .filter_map(|(index, value)| (index != 1).then_some(value)),
+        )
+        .command
+    } else {
+        Cli::parse().command
+    };
+    match command {
         Command::Version => {
             println!("drmr {}", drmr_core::VERSION);
             ExitCode::SUCCESS

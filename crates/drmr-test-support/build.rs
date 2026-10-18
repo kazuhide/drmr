@@ -1,6 +1,7 @@
 use std::{env, path::PathBuf, process::Command};
 fn main() {
     println!("cargo:rerun-if-changed=src/tool.rs");
+    println!("cargo:rerun-if-changed=src/broker_bootstrap.rs");
     println!("cargo:rerun-if-changed=src/protocol.rs");
     println!("cargo:rerun-if-changed=src/server.rs");
     println!("cargo:rerun-if-changed=src/control.rs");

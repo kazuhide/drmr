@@ -7,7 +7,7 @@ use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
@@ -40,6 +40,9 @@ pub enum JobError {
     /// The log file or the child could not be created (`OSError`).
     #[error("job launch failed")]
     Launch(#[source] std::io::Error),
+    /// A launched CLI did not establish supervision; its cleanup owner is retained.
+    #[error("job-supervision-failed")]
+    SupervisionFailed(JobHandle),
     /// Process-tree cleanup failed; the execution lease remains held.
     #[error("cleanup-unconfirmed")]
     CleanupUnconfirmed,
@@ -73,10 +76,18 @@ pub fn safe_job_id(job_id: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-'))
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SupervisionState {
+    Pending,
+    Established,
+    Failed,
+}
+
 #[derive(Clone, Copy)]
 struct Finished {
     code: i32,
     stop_requested: bool,
+    supervision: SupervisionState,
 }
 
 struct State {
@@ -86,6 +97,7 @@ struct State {
     log_file: Option<File>,
     exit_code: Option<i32>,
     stop_requested: bool,
+    supervision: SupervisionState,
     closing: bool,
     cleanup_unconfirmed: bool,
     /// Outcomes of jobs that finished and were replaced as the current job.
@@ -203,11 +215,15 @@ impl State {
     }
 
     fn handle(&self, job_id: &str, jobs_dir: &Path) -> Result<JobHandle, JobError> {
-        let (code, stopped) = if self.current_job_id.as_deref() == Some(job_id) {
+        let (code, stopped, supervision) = if self.current_job_id.as_deref() == Some(job_id) {
             self.check_cleanup()?;
-            (self.exit_code, self.stop_requested)
+            (self.exit_code, self.stop_requested, self.supervision)
         } else if let Some(finished) = self.finished.get(job_id) {
-            (Some(finished.code), finished.stop_requested)
+            (
+                Some(finished.code),
+                finished.stop_requested,
+                finished.supervision,
+            )
         } else {
             return Err(JobError::NotFound(job_id.to_string()));
         };
@@ -216,7 +232,7 @@ impl State {
             state: match (code, stopped) {
                 (None, _) => "running",
                 (Some(_), true) => "interrupted",
-                (Some(0), false) => "succeeded",
+                (Some(0), false) if supervision == SupervisionState::Established => "succeeded",
                 (Some(_), false) => "failed",
             },
             exit_code: code,
@@ -300,6 +316,7 @@ impl ConversionJobManager {
                 process: None,
                 cleanup_worker: None,
                 stop_requested: false,
+                supervision: SupervisionState::Pending,
                 closing: false,
                 log_file: None,
                 exit_code: None,
@@ -410,6 +427,8 @@ impl ConversionJobManager {
         let stderr = log_file.try_clone().map_err(JobError::Launch)?;
         let program = argv.first().cloned().unwrap_or_default();
         let mut command = Command::new(&program);
+        #[cfg(unix)]
+        command.arg("--internal-tool-broker-v1");
         command
             .args(&argv[1..])
             .env_clear()
@@ -424,13 +443,14 @@ impl ConversionJobManager {
                 .map_err(JobError::Launch)?;
             command.env(drmr_core::catalog_receipt::REQUEST_ENV, request);
         }
-        let child = ManagedChild::spawn(command, true).map_err(JobError::Launch)?;
+        let child = ManagedChild::spawn_supervised_cli(command, env).map_err(JobError::Launch)?;
         if let (Some(current), Some(code)) = (state.current_job_id.take(), state.exit_code) {
             state.finished.insert(
                 current,
                 Finished {
                     code,
                     stop_requested: state.stop_requested,
+                    supervision: state.supervision,
                 },
             );
         }
@@ -439,13 +459,33 @@ impl ConversionJobManager {
         state.log_file = Some(log_file);
         state.exit_code = None;
         state.stop_requested = false;
-        Ok(JobHandle {
+        state.supervision = SupervisionState::Pending;
+        let handle = JobHandle {
             job_id,
             state: "running",
             exit_code: None,
             stop_requested: false,
             log_path,
-        })
+        };
+        let confirmed = state
+            .process
+            .as_ref()
+            .expect("the launched child has an owner")
+            .lock()
+            .map_err(|_| std::io::Error::other("job-supervision-failed"))
+            .and_then(|mut child| child.confirm_supervision());
+        if confirmed.is_err() {
+            state.supervision = SupervisionState::Failed;
+            if let Some(log) = &mut state.log_file {
+                let _ = writeln!(log, "{{\"event\":\"job-supervision-failed\"}}");
+            }
+            // Callers must retain the launched job's private request files even
+            // when the cleanup worker cannot start or later cannot confirm exit.
+            let _ = state.start_cleanup(None, ManagedChild::finish);
+            return Err(JobError::SupervisionFailed(handle));
+        }
+        state.supervision = SupervisionState::Established;
+        Ok(handle)
     }
 
     /// `is_busy()`: the lease is taken.
@@ -804,7 +844,47 @@ impl Iterator for TailLog<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write as _;
+
+    #[cfg(unix)]
+    #[test]
+    fn a_cli_without_the_handshake_fails_even_if_its_actual_exit_code_is_zero() {
+        let root = tempfile::tempdir().unwrap();
+        let manager = ConversionJobManager::new(
+            &root.path().join("jobs"),
+            vec!["/usr/bin/true".into()],
+            Arc::new(Vec::new),
+        )
+        .unwrap();
+        let Err(JobError::SupervisionFailed(job)) = manager.submit_command(&[], &[]) else {
+            panic!("an executable without the protocol must not become an accepted job");
+        };
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let terminal = loop {
+            let status = manager.status(&job.job_id).unwrap();
+            if status.state != "running" {
+                break status;
+            }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(1));
+        };
+        assert_eq!(terminal.state, "failed");
+        assert_eq!(terminal.exit_code, Some(0));
+        assert!(!terminal.stop_requested);
+        assert!(!manager.is_busy());
+        assert!(
+            std::fs::read_to_string(&job.log_path)
+                .unwrap()
+                .contains("job-supervision-failed")
+        );
+        let Err(JobError::SupervisionFailed(next)) = manager.submit_command(&[], &[]) else {
+            panic!("a replacement without supervision must also be refused");
+        };
+        assert_ne!(next.job_id, job.job_id);
+        let previous = manager.status(&job.job_id).unwrap();
+        assert_eq!(previous.state, "failed");
+        assert_eq!(previous.exit_code, Some(0));
+        manager.shutdown().unwrap();
+    }
 
     fn state_with_child(root: &Path) -> State {
         let executable = drmr_test_support::install(
@@ -822,6 +902,7 @@ mod tests {
             ))),
             cleanup_worker: None,
             stop_requested: false,
+            supervision: SupervisionState::Established,
             closing: false,
             log_file: Some(File::create(root.join("job.jsonl")).unwrap()),
             exit_code: None,

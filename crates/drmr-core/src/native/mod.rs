@@ -13,9 +13,35 @@ pub use files::{
     create_private_new, create_private_or_truncate, create_private_update, open_private_read,
     open_private_shared_read, private_tempdir, private_tempdir_in, private_tempfile,
 };
+#[cfg(unix)]
+mod broker;
 mod process;
 pub(crate) use process::mark_asset_worker;
-pub use process::{ManagedChild, in_asset_worker};
+pub use process::{ManagedChild, ManagedIo, ManagedStdio, in_asset_worker};
+
+/// Initialize the private, versioned server-to-CLI ownership protocol.
+pub fn initialize_supervised_cli() -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        broker::initialize()
+    }
+    #[cfg(windows)]
+    {
+        Ok(())
+    }
+}
+
+/// Whether this CLI has completed the private server ownership handshake.
+pub fn is_supervised_cli() -> bool {
+    #[cfg(unix)]
+    {
+        broker::active()
+    }
+    #[cfg(windows)]
+    {
+        false
+    }
+}
 mod paths;
 pub use paths::resolve_path;
 
