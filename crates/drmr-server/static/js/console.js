@@ -547,13 +547,20 @@
     }));
     restoreFocus(els.runsList, focused);
   }
+  function ownsStopObservation(job) {
+    return !!job && !state.finishedJobs[job.job_id] &&
+      (!state.run || state.run.jobId === job.job_id) &&
+      !state.jobs.some(function (row) { return row.job_id === job.job_id && Model.isTerminal(row.state); });
+  }
   function requestStop(job) {
+    if (!ownsStopObservation(job)) return Promise.resolve();
     if (job && state.stopRequests[job.job_id] === 'unknown') return reconcileStop(job);
     if (!job || job.state !== 'running' || job.stop_requested || state.stopRequests[job.job_id]) return Promise.resolve();
     state.stopRequests[job.job_id] = 'sending';
     var content = selected();
     if (content) renderRuns(content);
     return App.Api.stopJob(job.job_id).then(function (status) {
+      if (!ownsStopObservation(job)) return;
       if (status && status.stop_requested) {
         state.stopRequests[job.job_id] = 'requested';
         if (!state.finishedJobs[job.job_id] && (!state.run || state.run.jobId === job.job_id)) notify(job.asset_id, 'info', t('stopRequested') + ' ' + t('stopHelp'));
@@ -561,6 +568,7 @@
       // Acceptance is not a terminal event: keep observing the same run and its log.
       return loadAll(true);
     }, function (error) {
+      if (!ownsStopObservation(job)) return;
       if (error && error.uncertain) {
         state.stopRequests[job.job_id] = 'unknown';
         notify(job.asset_id, 'warn', t('stopOutcomeUnknown'));
@@ -573,18 +581,20 @@
     });
   }
   function reconcileStop(job) {
+    if (!ownsStopObservation(job)) return Promise.resolve();
     state.stopRequests[job.job_id] = 'checking';
-    function refresh() { var content = selected(); if (content) renderRuns(content); }
+    function refresh() { if (!ownsStopObservation(job)) return; var content = selected(); if (content) renderRuns(content); }
     refresh();
     return App.Api.getJobStatus(job.job_id).then(function (status) {
-      if (state.finishedJobs[job.job_id]) return;
+      if (!ownsStopObservation(job)) return;
       if (!status || !/^(running|succeeded|failed|interrupted)$/.test(status.state)) throw new Error('request-response-invalid');
       if (status.state === 'running' && status.stop_requested === true) state.stopRequests[job.job_id] = 'requested';
       else delete state.stopRequests[job.job_id];
       // Only the job observer may publish a terminal outcome, after the server reports it.
       return loadAll(true);
     }).catch(function () {
-      if (!state.finishedJobs[job.job_id]) state.stopRequests[job.job_id] = 'unknown';
+      if (!ownsStopObservation(job)) return;
+      state.stopRequests[job.job_id] = 'unknown';
       notify(job.asset_id, 'warn', t('stopOutcomeUnknown'));
     }).then(refresh);
   }

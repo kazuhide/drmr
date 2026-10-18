@@ -562,3 +562,30 @@ test('a failed listing response releases the loading slot for a deliberate GET r
   await h.controller.loadAll(); assert.equal(h.controller.state.loading, null); assert.ok(h.controller.state.listError);
   fail = false; await h.controller.loadAll(); assert.equal(reads, 2); assert.equal(h.controller.state.loading, null); assert.equal(h.controller.state.listError, null);
 });
+
+for (const phase of ['post-timeout', 'status-timeout', 'post-accepted', 'status-accepted']) {
+  test('a retired Stop ' + phase + ' cannot mutate or notify the next same-asset run', async () => {
+    const delayed = deferred(); let generation = 'old', statusGets = 0;
+    let rows = [{ job_id: 'old', asset_id: 'asset', kind: 'convert', state: 'running' }];
+    const h = harness({ catalog: [{ asset_id: 'asset' }], getHlsJobs: () => Promise.resolve({ jobs: rows }),
+      postConvert: () => Promise.resolve({ job_id: generation }),
+      stopJob: () => phase.startsWith('post') ? delayed.promise : Promise.reject(unknownRequest()),
+      getJobStatus: () => { statusGets++; return delayed.promise; } });
+    h.controller.onPlayback({ hide() {} }); h.controller.state.selectedId = 'asset';
+    h.controller.startConvert(h.controller.state.contents[0]); await flush();
+    const old = h.controller.state.run; const stopping = h.controller.requestStop(rows[0]); await flush();
+    rows = [{ ...rows[0], state: 'interrupted', exit_code: -9 }];
+    h.controller.finishRun(old, { state: 'interrupted', exit_code: -9 }); await flush();
+    generation = 'new'; rows = [...rows, { job_id: 'new', asset_id: 'asset', kind: 'convert', state: 'running' }];
+    h.controller.startConvert(h.controller.state.contents[0]); await flush();
+    const current = h.controller.state.run;
+    const notice = () => descendants(h.element('content-notice')).map(node => node.textContent).join('|');
+    const before = notice(); assert.match(before, /converting/);
+    if (phase.endsWith('timeout')) delayed.reject(unknownRequest());
+    else delayed.resolve({ state: 'running', stop_requested: true });
+    await stopping; await flush();
+    assert.equal(notice(), before); assert.equal(h.controller.state.run, current);
+    assert.equal(h.controller.state.stopRequests.old, undefined);
+    assert.equal(statusGets, phase.startsWith('post') ? 0 : 1);
+  });
+}
