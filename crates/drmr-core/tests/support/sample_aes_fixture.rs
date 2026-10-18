@@ -599,39 +599,42 @@ mod tests {
         // BBB's CC BY 3.0 attribution is recorded with the existing clip.mp4 fixture.
         // Shaka independently generates both reference sides; no product decryption
         // participates in this fixture generator's oracle.
-        let root = drmr_core::native::private_tempdir().unwrap();
+        let owner = drmr_core::native::private_tempdir().unwrap();
+        let root = owner.path().join("media");
+        // External outputs need the inheritable owner-only media policy from birth.
+        // The strict outer temporary directory retains its original policy.
+        drmr_core::native::create_media_dir_all(&root).unwrap();
         let original =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../drmr/tests/fixtures/bbb/clip.mp4");
         let original_bytes = std::fs::read(&original).unwrap();
-        let fixture = source(root.path(), KEY, IV);
+        let fixture = source(&root, KEY, IV);
         assert!(fixture.clear.is_file() && fixture.encrypted.is_file());
         assert!(
             std::fs::read_to_string(&fixture.encrypted)
                 .unwrap()
                 .contains("#EXT-X-VERSION:5\n")
         );
-        let input = root.path().join("clear/seg-07.ts");
+        let input = root.join("clear/seg-07.ts");
         let mut transport = Vec::new();
         for number in 7..12 {
-            transport.extend(
-                std::fs::read(root.path().join(format!("clear/seg-{number:02}.ts"))).unwrap(),
-            );
+            transport
+                .extend(std::fs::read(root.join(format!("clear/seg-{number:02}.ts"))).unwrap());
         }
-        let baseline = root.path().join("source.ts");
+        let baseline = root.join("source.ts");
         write(&baseline, &transport);
         assert!(input.is_file());
         let key = hex::decode(KEY).unwrap().try_into().unwrap();
         let iv = hex::decode(IV).unwrap().try_into().unwrap();
         for (role, is_video, segments, total) in [("video", true, 5, 240), ("audio", false, 6, 470)]
         {
-            let clear = root.path().join(format!("shaka-{role}-clear"));
-            let cipher = root.path().join(format!("shaka-{role}-cipher"));
+            let clear = root.join(format!("shaka-{role}-clear"));
+            let cipher = root.join(format!("shaka-{role}-cipher"));
             shaka(&clear, &baseline, role, false);
             shaka(&cipher, &baseline, role, true);
             let mut count = 0;
             for number in 1..=segments {
                 let source = clear.join(format!("seg_{number}.ts"));
-                let ours = root.path().join(format!("ours-{role}-{number}.ts"));
+                let ours = root.join(format!("ours-{role}-{number}.ts"));
                 encrypt_segment(&source, &ours, &key, &iv);
                 let expected = pes(&cipher.join(format!("seg_{number}.ts")), is_video);
                 let actual = pes(&ours, is_video);
