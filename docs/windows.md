@@ -48,6 +48,8 @@ Save the [key configuration structure](usage.md#separate-input-and-output-keys) 
 
 While external tools run, drmr keeps handles to the working directories and their ancestors. These handles allow child files to be created and updated while refusing rename or deletion of the held directories. Private configuration is checked using the path you supplied, so resolving a path cannot hide a junction or alternate data stream. A completed conversion is published in one filesystem operation that refuses an existing destination. Tools can exit while descendants still have files open. drmr confirms termination of the supervised tree before reporting success or a completed cancellation; unconfirmed cleanup is an error.
 
+A new private directory can become visible while drmr is still validating it through its creation handle. drmr completes that short setup phase before another transfer uses the directory, avoiding sharing violations during publication. Copying the media bytes and publishing completed transfers remain parallel.
+
 ## Run commands
 
 PowerShell accepts quoted native paths. This example uses a supported single-track MP4 input and a new output file in an existing directory:

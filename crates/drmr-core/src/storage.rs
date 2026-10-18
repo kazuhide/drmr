@@ -651,6 +651,44 @@ mod native_copy_tests {
     use std::sync::Mutex;
 
     #[test]
+    fn a_live_directory_creator_conflicts_with_publication_but_a_reader_does_not() {
+        let temporary = crate::native::private_tempdir().unwrap();
+        let source = temporary.path().join("source");
+        std::fs::write(&source, b"unchanged synthetic source").unwrap();
+        let parent = temporary.path().join("destination");
+        // Hold the same DELETE-capable handle that ensure retains while it
+        // validates a newly visible directory. This control forces the former
+        // setup/publication overlap without relying on thread scheduling.
+        let creator = private_fs::PrivateDir::ensure(&parent).unwrap();
+        let target = parent.join("target");
+        let diagnostics = Mutex::new(Vec::new());
+        let result = atomic_copy_observed(&source, &target, 1024, &|phase, error| {
+            diagnostics
+                .lock()
+                .unwrap()
+                .push((phase, error.raw_os_error()));
+        });
+        assert!(result.is_err());
+        assert_eq!(diagnostics.into_inner().unwrap(), [("persist", Some(32))]);
+        assert!(!target.exists());
+        assert_eq!(
+            std::fs::read(&source).unwrap(),
+            b"unchanged synthetic source"
+        );
+        drop(creator);
+
+        // Once setup is complete, ordinary parent verification carries no
+        // DELETE access and can coexist with the same atomic publication.
+        let reader = private_fs::PrivateDir::open(&parent).unwrap();
+        assert!(atomic_copy(&source, &target, 1024).is_ok());
+        assert_eq!(
+            std::fs::read(&target).unwrap(),
+            b"unchanged synthetic source"
+        );
+        drop(reader);
+    }
+
+    #[test]
     fn parallel_nested_private_copies_preserve_every_source_and_target() {
         let temporary = crate::native::private_tempdir().unwrap();
         let input = temporary.path().join("input");

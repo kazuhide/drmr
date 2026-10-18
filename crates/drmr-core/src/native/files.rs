@@ -4,6 +4,9 @@ use std::fs::{File, OpenOptions};
 use std::io;
 use std::path::Path;
 
+#[cfg(windows)]
+static PRIVATE_DIRECTORY_SETUP: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Create private directories, refusing insecure existing directories on Windows.
 pub fn create_private_dir_all(path: &Path) -> io::Result<()> {
     #[cfg(unix)]
@@ -16,23 +19,41 @@ pub fn create_private_dir_all(path: &Path) -> io::Result<()> {
     }
     #[cfg(windows)]
     {
-        let absolute = std::path::absolute(path)?;
-        if let Some(parent) = absolute.parent()
-            && !parent.exists()
-        {
-            create_private_dir_all(parent)?;
-        }
-        // Acquisition rejects ancestor reparse points. New directories receive a
-        // protected user-only DACL in the creation syscall, before they are visible.
-        match private_fs::PrivateDir::open(&absolute) {
-            Ok(_) => {}
-            Err(private_fs::Error::Io(error)) if error.kind() == io::ErrorKind::NotFound => {
-                drop(private_fs::PrivateDir::ensure(&absolute).map_err(private_error)?);
-            }
-            Err(error) => return Err(private_error(error)),
-        }
-        Ok(())
+        with_private_directory_setup(|| create_private_dir_all_inner(path))
     }
+}
+
+#[cfg(windows)]
+fn with_private_directory_setup(operation: impl FnOnce() -> io::Result<()>) -> io::Result<()> {
+    // A new directory becomes visible before private-fs finishes validating its
+    // creation handle, which carries DELETE access. Another transfer must not
+    // use that directory until the creator closes: MoveFileEx's parent open can
+    // otherwise fail with a sharing violation. Only setup is serialized; byte
+    // copying, flushing and publication stay parallel.
+    let _setup = PRIVATE_DIRECTORY_SETUP
+        .lock()
+        .map_err(|_| io::Error::other("private directory setup interrupted"))?;
+    operation()
+}
+
+#[cfg(windows)]
+fn create_private_dir_all_inner(path: &Path) -> io::Result<()> {
+    let absolute = std::path::absolute(path)?;
+    if let Some(parent) = absolute.parent()
+        && !parent.exists()
+    {
+        create_private_dir_all_inner(parent)?;
+    }
+    // Recheck under the setup guard. An existing private directory needs only
+    // read access; ensure would request DELETE even when another caller won.
+    match private_fs::PrivateDir::open(&absolute) {
+        Ok(_) => {}
+        Err(private_fs::Error::Io(error)) if error.kind() == io::ErrorKind::NotFound => {
+            drop(private_fs::PrivateDir::ensure(&absolute).map_err(private_error)?);
+        }
+        Err(error) => return Err(private_error(error)),
+    }
+    Ok(())
 }
 
 /// Exclusively create one private directory below an existing private parent.
@@ -44,16 +65,20 @@ pub fn create_private_dir_new(path: &Path) -> io::Result<()> {
     }
     #[cfg(windows)]
     {
-        let parent = path.parent().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidInput, "missing parent directory")
-        })?;
-        let name = path
-            .file_name()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing directory name"))?;
-        private_fs::PrivateDir::open(parent)
-            .and_then(|directory| directory.create_dir(name))
-            .map_err(private_error)?;
-        Ok(())
+        with_private_directory_setup(|| {
+            let parent = path.parent().ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, "missing parent directory")
+            })?;
+            let name = path.file_name().ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, "missing directory name")
+            })?;
+            drop(
+                private_fs::PrivateDir::open(parent)
+                    .and_then(|directory| directory.create_dir(name))
+                    .map_err(private_error)?,
+            );
+            Ok(())
+        })
     }
 }
 

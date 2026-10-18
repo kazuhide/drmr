@@ -84,7 +84,7 @@ impl Container {
         let _parents = held_directories(parent)?;
         // Creation installs the strict owner-only ACL in the creation syscall.
         // An existing container is verified without adopting any of its entries.
-        drop(private_fs::PrivateDir::ensure(&path).map_err(|_| IO_ERROR)?);
+        native::create_private_dir_all(&path).map_err(|_| IO_ERROR)?;
         // PrivateDir permits deletion sharing. Retain separate no-delete handles
         // and revalidate the current pathname before creating any payload.
         let held = held_directories(&path)?;
