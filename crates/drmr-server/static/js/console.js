@@ -18,7 +18,7 @@
     selectedId: null, selectToken: 0, openInfo: {}, // openInfo: the transformation's (i) panels open for this selection
     detail: { catalogInfo: null, analysis: null, analysisError: null, result: null, resultError: null, report: null, reportError: null },
     run: null, lastRun: null, logView: null, stopRequests: Object.create(null),
-    sessionId: null, previewBusy: false, previewNeedsCredentials: false,
+    sessionId: null, previewBusy: false, previewOwner: null, previewNeedsCredentials: false,
     addOpen: false, platform: null, pollTimer: null, loading: null,
   };
   var els = {};
@@ -109,6 +109,7 @@
   }
   function discardCatalogDetails() {
     state.selectToken += 1;
+    resetPreviewRequest();
     state.detail.report = null; state.detail.reportError = null; state.detail.catalogInfo = null;
     revokeSession(); if (playback) playback.hide();
     UI.replace(els.previewState);
@@ -116,6 +117,7 @@
   // Everything derived from the selection is dropped, exactly as on a change of selection.
   function deselect() {
     state.selectToken += 1;
+    resetPreviewRequest();
     state.selectedId = null;
     state.detail = { catalogInfo: null, analysis: null, analysisError: null, result: null, resultError: null, report: null, reportError: null };
     state.openInfo = {};
@@ -276,6 +278,7 @@
   function selectContent(assetId) {
     if (assetId === state.selectedId && !state.addOpen) return;
     state.selectToken += 1;
+    resetPreviewRequest();
     state.selectedId = assetId;
     state.addOpen = false;
     state.detail = { catalogInfo: null, analysis: null, analysisError: null, result: null, resultError: null, report: null, reportError: null };
@@ -761,6 +764,16 @@
     else if (state.detail.resultError) UI.replace(els.reportState, h('div', null, UI.notice('fail', state.detail.resultError), content.result_id ? h('div', { className: 'actions' }, h('button', { type: 'button', className: 'btn btn-sm', text: t('retryResult'), onclick: function () { loadResult(content, content.result_id, state.selectToken); } })) : null));
     else if (!content.result_id) UI.replace(els.reportState, h('p', { className: 'help', text: t('reportNoneHls') }));
   }
+  function resetPreviewRequest() {
+    state.previewOwner = null;
+    state.previewBusy = false;
+  }
+  function finishPreviewRequest(owner) {
+    if (state.previewOwner !== owner) return;
+    resetPreviewRequest();
+    var content = selected();
+    if (content) renderPlaybackControls(content);
+  }
   function renderPlaybackControls(content) {
     var ready = content.orphan ? false : content.kind === 'catalog' ? Model.hasVerifiedOutput(content) : !!(state.detail.result && state.detail.result.all_pass);
     els.previewBtn.disabled = !ready || isJobRunning() || state.previewBusy;
@@ -775,6 +788,8 @@
     var content = selected();
     if (!content || isJobRunning() || state.previewBusy || (content.kind === 'catalog' && !Model.hasVerifiedOutput(content))) return;
     var token = state.selectToken;
+    var previewOwner = {};
+    state.previewOwner = previewOwner;
     state.previewBusy = true;
     UI.replace(els.previewState, h('span', { className: 'state-line', text: t('previewStarting') }));
     renderPlaybackControls(content);
@@ -796,7 +811,7 @@
         playback.prepareCatalog(content.asset_id, info);
         UI.replace(els.previewState, h('span', { className: 'state-line', text: t('previewReady') }));
       }, function (e) { if (token === state.selectToken) UI.replace(els.previewState, UI.notice('fail', t('playbackInfoFailed') + ' ' + App.I18n.error(e))); })
-        .then(function () { state.previewBusy = false; if (token === state.selectToken) renderPlaybackControls(content); });
+        .then(function () { finishPreviewRequest(previewOwner); });
       return;
     }
     var result = state.detail.result;
@@ -833,7 +848,7 @@
       } else if (code === 'result-unavailable' || code === 'source-preview-unavailable' || code === 'result-not-found') {
         UI.replace(els.previewState, UI.notice('fail', t('resultUnavailable')));
       } else UI.replace(els.previewState, UI.notice('fail', App.I18n.error(e)));
-    }).then(function () { state.previewBusy = false; if (token === state.selectToken) renderPlaybackControls(content); });
+    }).then(function () { finishPreviewRequest(previewOwner); });
   }
 
   // ========================================================================================
@@ -1110,6 +1125,7 @@
     UI.setText(els.addCatalogTree, catalogTree());
     UI.replace(els.addRescanState);
     state.selectedId = null; state.selectToken += 1;
+    resetPreviewRequest();
     revokeSession(); playback.hide(); clearSecrets();
     if (state.logView && !state.logView.live) closeLogView();
     UI.replace(els.addState);

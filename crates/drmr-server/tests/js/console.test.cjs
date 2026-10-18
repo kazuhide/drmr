@@ -293,3 +293,52 @@ test('a refused launch restores an untouched generation only from refreshed serv
   assert.equal(h.controller.state.contents[0].state, 'packaged');
   assert.equal(h.element('preview-btn').disabled, false);
 });
+
+
+test('a retired preview cannot leave the final new generation disabled without another poll', async () => {
+  let deliverOld;
+  let requests = 0;
+  const info = id => ({ new_url: '/output/asset/output.mpd', output_readiness: { state: 'verified', job_id: id } });
+  const h = harness({ catalog: [{ asset_id: 'asset', converted: true, output_readiness: info('old').output_readiness }],
+    getAssetUrls: () => ++requests === 1 ? new Promise(resolve => { deliverOld = resolve; }) : Promise.resolve(info('new')) });
+  h.controller.state.selectedId = 'asset';
+  h.controller.onPlayback({ hide() {}, prepareCatalog() { assert.fail('the retired preview cannot install its old URLs'); } });
+  h.controller.preparePreview(false);
+  h.controller.state.catalog = [{ asset_id: 'asset', converted: true, output_readiness: info('new').output_readiness }];
+  h.controller.recompose();
+  assert.equal(h.element('preview-btn').disabled, false, 'the final generation does not wait on a retired request');
+  deliverOld(info('old'));
+  await flush();
+  assert.equal(h.controller.state.previewBusy, false);
+  assert.equal(h.element('preview-btn').disabled, false);
+});
+
+test('an old preview completion cannot release a newer active preview request', async () => {
+  let deliverOld, deliverNew;
+  let requests = 0, prepared = 0;
+  const info = id => ({ new_url: '/output/asset/output.mpd', output_readiness: { state: 'verified', job_id: id } });
+  const h = harness({ catalog: [{ asset_id: 'asset', converted: true, output_readiness: info('old').output_readiness }],
+    getAssetUrls: () => {
+      requests += 1;
+      if (requests === 1) return new Promise(resolve => { deliverOld = resolve; });
+      if (requests === 3) return new Promise(resolve => { deliverNew = resolve; });
+      return Promise.resolve(info('new'));
+    } });
+  h.controller.state.selectedId = 'asset';
+  h.controller.onPlayback({ hide() {}, prepareCatalog(id, value) { assert.equal(value.output_readiness.job_id, 'new'); prepared += 1; } });
+  h.controller.preparePreview(false);
+  h.controller.state.catalog = [{ asset_id: 'asset', converted: true, output_readiness: info('new').output_readiness }];
+  h.controller.recompose();
+  await flush();
+  h.controller.preparePreview(false);
+  deliverOld(info('old'));
+  await flush();
+  assert.equal(h.controller.state.previewBusy, true);
+  assert.equal(h.element('preview-btn').disabled, true);
+  assert.equal(prepared, 0);
+  deliverNew(info('new'));
+  await flush();
+  assert.equal(prepared, 1);
+  assert.equal(h.controller.state.previewBusy, false);
+  assert.equal(h.element('preview-btn').disabled, false);
+});
