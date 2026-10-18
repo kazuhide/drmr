@@ -177,3 +177,23 @@ one worker; descendant totals were 20.6 MB and 18.3 MB respectively. Memory samp
 100 ms apart, and parent/descendant maxima are separate. Short-lived processes can be
 missed. These observations apply to this small asset and host; they do not establish
 long-media throughput, an exact memory peak, or a result on another operating system.
+## A larger synthetic input
+
+Generate a nine-track input from the attributed, ten-second Big Buck Bunny clip:
+
+```sh
+python3 tools/prepare_bbb_benchmark.py --output /path/to/new-benchmark
+```
+
+Then use `new-benchmark/source/manifest.mpd` with the measurement command above.
+Python 3.9+, FFmpeg and Shaka Packager are required. The destination must be new
+and its parent must exist. Paths containing commas or line breaks are refused
+because Packager uses commas inside stream descriptors. A failed generation leaves
+its diagnostic log and partial directory; choose a new directory after correcting it.
+
+This creates eight identical 1280×720 video renditions and one audio track, with five
+two-second video segments. It measures independent track work; it is not a realistic
+adaptive-bitrate ladder or a video quality comparison. `ATTRIBUTION.md` accompanies
+the generated media. `input-report.json` records the pinned excerpt hash and every
+generated resource's size and SHA-256. Generated metadata and tool versions can
+change these hashes, so retain the report with a measurement.
