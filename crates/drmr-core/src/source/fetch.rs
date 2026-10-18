@@ -242,6 +242,18 @@ impl Fetcher {
         destination: &Path,
         byte_range: Option<ByteRange>,
     ) -> Result<Fetched, Failure> {
+        self.fetch_created(url, destination, byte_range)
+            .map(|(fetched, _)| fetched)
+    }
+
+    /// Preserve the exclusive writer's identity across the caller's ownership handoff.
+    /// This is never obtained by reopening the completed destination name.
+    pub(crate) fn fetch_created(
+        &self,
+        url: &str,
+        destination: &Path,
+        byte_range: Option<ByteRange>,
+    ) -> Result<(Fetched, crate::native::FileIdentity), Failure> {
         let mut sink = Sink::new(
             self,
             Some(destination.to_path_buf()),
@@ -256,11 +268,19 @@ impl Fetcher {
                 Ok(effective)
             });
         match result {
-            Ok(effective) => Ok(Fetched {
-                effective,
-                sha256: sink.digest(),
-                size: sink.size,
-            }),
+            Ok(effective) => {
+                let created = sink
+                    .created
+                    .ok_or_else(|| Failure::Source(token("snapshot-write-failed")))?;
+                Ok((
+                    Fetched {
+                        effective,
+                        sha256: sink.digest(),
+                        size: sink.size,
+                    },
+                    created,
+                ))
+            }
             Err(failure) => {
                 sink.discard();
                 Err(failure)

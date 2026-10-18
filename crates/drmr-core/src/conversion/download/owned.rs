@@ -79,13 +79,29 @@ impl OwnedDownload {
     pub(super) fn path(&self) -> &Path {
         &self.path
     }
-    pub(super) fn register_file(&self, path: &Path) -> Result<(), ConversionError> {
-        self.register(path, false)
+    pub(super) fn register_file(
+        &self,
+        path: &Path,
+        created: Identity,
+    ) -> Result<(), ConversionError> {
+        self.register(path, false, created)
     }
-    pub(super) fn register_dir(&self, path: &Path) -> Result<(), ConversionError> {
-        self.register(path, true)
+    pub(super) fn create_dir(&self, path: &Path) -> Result<(), ConversionError> {
+        relative(path)?;
+        self.check_identity()?;
+        let stage = files::Stage::new(Some(&self.path))?;
+        let pending = stage.private_root().join("directory");
+        crate::native::create_private_dir_new(&pending).map_err(|_| UNSAFE)?;
+        let created = identity(&open_dir(&pending)?)?;
+        files::publish_directory(&pending, &self.path.join(path), None)?;
+        self.register(path, true, created)
     }
-    fn register(&self, path: &Path, directory: bool) -> Result<(), ConversionError> {
+    fn register(
+        &self,
+        path: &Path,
+        directory: bool,
+        created: Identity,
+    ) -> Result<(), ConversionError> {
         relative(path)?;
         self.check_identity()?;
         let mut entries = self.entries.lock().map_err(|_| UNSAFE)?;
@@ -98,10 +114,14 @@ impl OwnedDownload {
         } else {
             crate::native::open_private_read(&self.path.join(path)).map_err(|_| UNSAFE)?
         };
+        let current = identity(&file)?;
+        if created != current {
+            return Err(UNSAFE);
+        }
         entries.insert(
             path.to_path_buf(),
             Entry {
-                identity: identity(&file)?,
+                identity: current,
                 directory,
             },
         );
@@ -351,11 +371,62 @@ mod tests {
     use std::io::Write as _;
 
     fn file(owned: &OwnedDownload, relative: &str, bytes: &[u8]) {
-        crate::native::create_private_new(&owned.path().join(relative))
+        let mut writer = crate::native::create_private_new(&owned.path().join(relative)).unwrap();
+        let created = identity(&writer).unwrap();
+        writer.write_all(bytes).unwrap();
+        drop(writer);
+        owned.register_file(Path::new(relative), created).unwrap();
+    }
+
+    #[test]
+    fn directory_replacement_before_registration_is_not_adopted() {
+        let root = tempfile::tempdir().unwrap();
+        let mut owned =
+            OwnedDownload::reserve(&root.path().join("download"), &root.path().join("output"))
+                .unwrap();
+        let directory = owned.path().join("raw");
+        crate::native::create_private_dir_new(&directory).unwrap();
+        let created = identity(&open_dir(&directory).unwrap()).unwrap();
+        std::fs::rename(&directory, root.path().join("original")).unwrap();
+        crate::native::create_private_dir_new(&directory).unwrap();
+        crate::native::create_private_new(&directory.join("sentinel"))
             .unwrap()
-            .write_all(bytes)
+            .write_all(b"foreign directory")
             .unwrap();
-        owned.register_file(Path::new(relative)).unwrap();
+        assert!(owned.register(Path::new("raw"), true, created).is_err());
+        assert_eq!(owned.cleanup().unwrap_err(), CLEANUP);
+        assert_eq!(
+            std::fs::read(directory.join("sentinel")).unwrap(),
+            b"foreign directory"
+        );
+    }
+
+    #[test]
+    fn replacement_before_registration_is_never_adopted_or_deleted() {
+        for name in ["media-resource", "raw-playlist", "projection", "input.m3u8"] {
+            let root = tempfile::tempdir().unwrap();
+            let destination = root.path().join("download");
+            let mut owned =
+                OwnedDownload::reserve(&destination, &root.path().join("output")).unwrap();
+            let path = destination.join(name);
+            let mut writer = crate::native::create_private_new(&path).unwrap();
+            writer.write_all(b"downloaded original").unwrap();
+            let created = identity(&writer).unwrap();
+            drop(writer);
+            std::fs::rename(&path, root.path().join("original")).unwrap();
+            let mut replacement = crate::native::create_private_new(&path).unwrap();
+            replacement.write_all(b"foreign sentinel").unwrap();
+            assert!(identity(&replacement).unwrap() != created);
+            drop(replacement);
+            let registered = owned.register_file(Path::new(name), created);
+            let cleanup = owned.cleanup();
+            assert_eq!(
+                std::fs::read(&path).ok().as_deref(),
+                Some(b"foreign sentinel".as_slice())
+            );
+            assert!(registered.is_err());
+            assert_eq!(cleanup.unwrap_err(), CLEANUP);
+        }
     }
 
     #[test]
@@ -363,8 +434,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let destination = root.path().join("download");
         let mut owned = OwnedDownload::reserve(&destination, &root.path().join("output")).unwrap();
-        crate::native::create_private_dir_new(&owned.path().join("raw")).unwrap();
-        owned.register_dir(Path::new("raw")).unwrap();
+        owned.create_dir(Path::new("raw")).unwrap();
         file(&owned, "raw/original", b"source");
         file(&owned, "input.m3u8", b"#EXTM3U\n");
         owned.check_identity().unwrap();
@@ -481,10 +551,18 @@ mod tests {
             std::fs::read(destination.join("old-entry")).unwrap(),
             b"owned"
         );
-        assert!(owned.register_file(Path::new("../outside")).is_err());
+        assert!(
+            owned
+                .register_file(Path::new("../outside"), owned.root_id)
+                .is_err()
+        );
         crate::native::create_private_dir_new(&destination.join("unowned")).unwrap();
         crate::native::create_private_new(&destination.join("unowned/file")).unwrap();
-        assert!(owned.register_file(Path::new("unowned/file")).is_err());
+        assert!(
+            owned
+                .register_file(Path::new("unowned/file"), owned.root_id)
+                .is_err()
+        );
     }
 
     #[test]
@@ -550,13 +628,16 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let destination = root.path().join("download");
         let mut owned = OwnedDownload::reserve(&destination, &root.path().join("output")).unwrap();
-        crate::native::create_private_dir_new(&destination.join("raw")).unwrap();
-        owned.register_dir(Path::new("raw")).unwrap();
+        owned.create_dir(Path::new("raw")).unwrap();
         file(&owned, "raw/original", b"original");
         std::fs::rename(destination.join("raw"), destination.join("old-raw")).unwrap();
         crate::native::create_private_dir_new(&destination.join("raw")).unwrap();
         crate::native::create_private_new(&destination.join("raw/replacement")).unwrap();
-        assert!(owned.register_file(Path::new("raw/replacement")).is_err());
+        assert!(
+            owned
+                .register_file(Path::new("raw/replacement"), owned.root_id)
+                .is_err()
+        );
         assert_eq!(
             owned.cleanup().unwrap_err().0,
             "download-cleanup-unconfirmed"

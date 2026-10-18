@@ -194,10 +194,11 @@ impl Converter {
                 let pending = (|| {
                     let stage = files::Stage::new(owned.path().parent())?;
                     let pending = stage.private_root().join("entrypoint");
-                    write_private(&pending, projected)?;
-                    Ok((stage, pending))
+                    let writer = write_private(&pending, projected)?;
+                    let created = crate::native::FileIdentity::read(&writer).map_err(|_| IO)?;
+                    Ok((stage, pending, writer, created))
                 })();
-                let (stage, pending) = match pending {
+                let (stage, pending, writer, created) = match pending {
                     Ok(pending) => pending,
                     Err(error) => {
                         owned.cleanup()?;
@@ -211,8 +212,10 @@ impl Converter {
                 };
                 let commit = (|| {
                     seal.check(&self.backend.stop)?;
-                    files::atomic_move(&pending, &seal.owned.path().join("input.m3u8"))?;
-                    seal.owned.register_file(Path::new("input.m3u8"))?;
+                    // Immutable validation denies WRITE/DELETE sharing on Windows.
+                    // Keep the writer's identity, then close it before reopening the name.
+                    drop(writer);
+                    publish_entrypoint(&seal.owned, &pending, created, |_| {})?;
                     seal.files
                         .insert(PathBuf::from("input.m3u8"), bytes_digest(projected));
                     seal.check(&self.backend.stop)?;
@@ -242,8 +245,7 @@ impl Converter {
         owned: &OwnedDownload,
     ) -> Result<Acquired, ConversionError> {
         for name in ["raw", "media"] {
-            crate::native::create_private_dir_new(&owned.path().join(name)).map_err(|_| IO)?;
-            owned.register_dir(Path::new(name))?;
+            owned.create_dir(Path::new(name))?;
         }
         let abort = Stop::new();
         let fetcher = Fetcher::new(
@@ -314,10 +316,36 @@ impl Converter {
         Ok(())
     }
 }
-fn write_private(path: &Path, bytes: &[u8]) -> Result<(), ConversionError> {
+fn write_private(path: &Path, bytes: &[u8]) -> Result<std::fs::File, ConversionError> {
     let mut file = crate::native::create_private_new(path).map_err(|_| IO)?;
     file.write_all(bytes).map_err(|_| IO)?;
-    file.sync_all().map_err(|_| IO)
+    file.sync_all().map_err(|_| IO)?;
+    Ok(file)
+}
+
+fn write_registered(
+    owned: &OwnedDownload,
+    name: &Path,
+    bytes: &[u8],
+    before_register: impl FnOnce(&Path),
+) -> Result<(), ConversionError> {
+    let path = owned.path().join(name);
+    let writer = write_private(&path, bytes)?;
+    let created = crate::native::FileIdentity::read(&writer).map_err(|_| IO)?;
+    drop(writer);
+    before_register(&path);
+    owned.register_file(name, created)
+}
+fn publish_entrypoint(
+    owned: &OwnedDownload,
+    pending: &Path,
+    created: crate::native::FileIdentity,
+    before_register: impl FnOnce(&Path),
+) -> Result<(), ConversionError> {
+    let destination = owned.path().join("input.m3u8");
+    files::atomic_move(pending, &destination)?;
+    before_register(&destination);
+    owned.register_file(Path::new("input.m3u8"), created)
 }
 
 fn failure(error: &source::Failure) -> ConversionError {
@@ -406,8 +434,7 @@ impl Graph<'_> {
         Ok(())
     }
     fn save(&mut self, name: &str, bytes: &[u8]) -> Result<(), ConversionError> {
-        write_private(&self.owned.path().join(name), bytes)?;
-        self.owned.register_file(Path::new(name))?;
+        write_registered(self.owned, Path::new(name), bytes, |_| {})?;
         self.expected
             .insert(PathBuf::from(name), bytes_digest(bytes));
         Ok(())
@@ -561,14 +588,16 @@ impl Graph<'_> {
                 let owned = self.owned;
                 let text_bytes = &text_bytes;
                 Box::new(move || {
-                    let received = fetcher.fetch(&resource.url, &path, None).map_err(|error| {
-                        if fetcher.stop().is_set() || abort.is_set() {
-                            ConversionError("cancelled")
-                        } else {
-                            failure(&error)
-                        }
-                    })?;
-                    owned.register_file(Path::new(&resource.path))?;
+                    let (received, created) = fetcher
+                        .fetch_created(&resource.url, &path, None)
+                        .map_err(|error| {
+                            if fetcher.stop().is_set() || abort.is_set() {
+                                ConversionError("cancelled")
+                            } else {
+                                failure(&error)
+                            }
+                        })?;
+                    owned.register_file(Path::new(&resource.path), created)?;
                     valid_url(&received.effective)?;
                     let mut total = text_bytes.lock().map_err(|_| IO)?;
                     *total = total
@@ -705,6 +734,87 @@ mod tests {
         toolrun::{Secrets, ToolRunner},
     };
 
+    fn replace_before_registration(path: &Path, original: &Path) {
+        std::fs::rename(path, original).unwrap();
+        write_private(path, b"foreign sentinel").unwrap();
+    }
+
+    #[test]
+    fn saved_and_published_files_keep_their_writer_identity_until_registration() {
+        for name in ["raw/playlist.m3u8", "projection.m3u8", "input.m3u8"] {
+            let parent = crate::native::private_tempdir().unwrap();
+            let mut owned = OwnedDownload::reserve(
+                &parent.path().join("download"),
+                &parent.path().join("output"),
+            )
+            .unwrap();
+            owned.create_dir(Path::new("raw")).unwrap();
+            let original = parent.path().join("original");
+            let result = if name == "input.m3u8" {
+                let pending = parent.path().join("pending");
+                let writer = write_private(&pending, b"original").unwrap();
+                let created = crate::native::FileIdentity::read(&writer).unwrap();
+                drop(writer);
+                publish_entrypoint(&owned, &pending, created, |path| {
+                    replace_before_registration(path, &original);
+                })
+            } else {
+                write_registered(&owned, Path::new(name), b"original", |path| {
+                    replace_before_registration(path, &original);
+                })
+            };
+            assert!(result.is_err());
+            assert_eq!(
+                owned.cleanup().unwrap_err().0,
+                "download-cleanup-unconfirmed"
+            );
+            assert_eq!(
+                std::fs::read(owned.path().join(name)).unwrap(),
+                b"foreign sentinel"
+            );
+            assert_eq!(std::fs::read(original).unwrap(), b"original");
+        }
+    }
+
+    #[test]
+    fn fetched_media_handoff_keeps_creation_identity_after_the_writer_closes() {
+        let parent = crate::native::private_tempdir().unwrap();
+        let source = parent.path().join("source");
+        write_private(&source, b"original media").unwrap();
+        let policy = FetchPolicy {
+            allowed_local_roots: vec![parent.path().to_path_buf()],
+            ..FetchPolicy::default()
+        };
+        let mut owned = OwnedDownload::reserve(
+            &parent.path().join("download"),
+            &parent.path().join("output"),
+        )
+        .unwrap();
+        let fetcher = Fetcher::new(
+            &policy,
+            owned.path(),
+            Arc::new(source::platform::SystemPlatform),
+        );
+        let path = owned.path().join("media");
+        let (received, created) = fetcher
+            .fetch_created(&source::pypath::as_uri(&source).unwrap(), &path, None)
+            .unwrap();
+        assert_eq!(received.size, b"original media".len() as u64);
+        assert_eq!(
+            received.sha256,
+            hex::encode(Sha256::digest(b"original media"))
+        );
+        let original = parent.path().join("original");
+        replace_before_registration(&path, &original);
+        assert!(owned.register_file(Path::new("media"), created).is_err());
+        assert_eq!(
+            owned.cleanup().unwrap_err().0,
+            "download-cleanup-unconfirmed"
+        );
+        assert_eq!(std::fs::read(path).unwrap(), b"foreign sentinel");
+        assert_eq!(std::fs::read(original).unwrap(), b"original media");
+    }
+
     #[test]
     fn long_relative_base_expansion_is_bounded_before_shared_parser_allocation() {
         let base = format!(
@@ -731,8 +841,10 @@ mod tests {
             let mut owned =
                 OwnedDownload::reserve(&parent.path().join("download"), &output).unwrap();
             let original = owned.path().join("original");
-            write_private(&original, b"immutable source").unwrap();
-            owned.register_file(Path::new("original")).unwrap();
+            let writer = write_private(&original, b"immutable source").unwrap();
+            let created = crate::native::FileIdentity::read(&writer).unwrap();
+            drop(writer);
+            owned.register_file(Path::new("original"), created).unwrap();
             owned.retain();
             let seal = Arc::new(Seal {
                 owned,
