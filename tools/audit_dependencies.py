@@ -56,8 +56,22 @@ def scoped_findings(report, packages):
             seen.add(key)
             found.append({"name": identity[0], "version": identity[1], "advisory": advisory["id"],
                           "classification": classification, "title": advisory.get("title", ""),
-                          "advisory_sha256": digest(json.dumps(advisory, sort_keys=True, separators=(",", ":")).encode())})
+                          "finding_sha256": digest(json.dumps({key: value for key, value in row.items() if key != "package"}, sort_keys=True, separators=(",", ":")).encode())})
     return sorted(found, key=lambda row: (row["name"], row["advisory"], row["classification"]))
+
+
+def source_identity(metadata_value, package):
+    source = package.get("source")
+    if source is not None:
+        require(type(source) is str and bool(source), "audit-package-source")
+        return {"source": source}
+    root, manifest = metadata_value.get("workspace_root"), package.get("manifest_path")
+    require(type(root) is str and type(manifest) is str, "audit-path-source")
+    try:
+        relative = Path(manifest).resolve().relative_to(Path(root).resolve()).as_posix()
+    except ValueError:
+        raise Failure("audit-path-source-outside-workspace") from None
+    return {"workspace_manifest": relative}
 
 
 def ancestry(metadata_value, packages, name, version):
@@ -82,7 +96,7 @@ def ancestry(metadata_value, packages, name, version):
     rows = sorted([[labels[parent], labels[child], kinds] for parent, child, kinds in edges if parent in ancestors and child in ancestors])
     direct_ids = {parent for parent, child, _ in edges if child in affected}
     direct = sorted(labels[parent] for parent in direct_ids)
-    roles = sorted([[labels[key], sorted({kind for target in selected[key]["targets"] for kind in target["kind"]}), sorted(nodes[key]["features"])] for key in ancestors])
+    roles = sorted([[labels[key], sorted({kind for target in selected[key]["targets"] for kind in target["kind"]}), sorted(nodes[key]["features"]), source_identity(metadata_value, selected[key])] for key in ancestors])
     fingerprint = {"edges": rows, "target_kinds": roles}
     build_time_only = bool(direct_ids) and all(any("proc-macro" in target["kind"] for target in selected[key]["targets"]) for key in direct_ids)
     return {"edges": rows, "target_kinds": roles, "sha256": digest(json.dumps(fingerprint, separators=(",", ":")).encode()),
@@ -113,7 +127,7 @@ def apply_policy(rows, kind, target, policy, backport):
         disposition = "unresolved"
         if len(entries) == 1:
             entry = entries[0]
-            if entry["advisory_sha256"] == row["advisory_sha256"] and entry["ancestry_sha256"] == row["dependency_ancestry"]["sha256"] and entry["direct_parents"] == row["dependency_ancestry"]["direct_parents"]:
+            if entry["finding_sha256"] == row["finding_sha256"] and entry["ancestry_sha256"] == row["dependency_ancestry"]["sha256"] and entry["direct_parents"] == row["dependency_ancestry"]["direct_parents"]:
                 if entry["disposition"] == "source-mitigated" and row["advisory"] == backport["advisory"]:
                     disposition = "source-mitigated-pending-native-regression"
                 elif entry["disposition"] == "acknowledged-maintenance" and row["classification"] == "unmaintained" and row["dependency_ancestry"]["build_time_only"]:

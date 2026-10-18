@@ -6,10 +6,9 @@
       "version": "0.18.5",
       "advisory": "RUSTSEC-2024-0429",
       "classification": "unsound",
-      "advisory_sha256": "6a1e96b3e3025d765ffb3a0a2566640e2d2bd2583394e52c9a9801bb35dd3153",
       "kind": "desktop",
       "target": "x86_64-unknown-linux-gnu",
-      "ancestry_sha256": "b5eae64946e57ecc11d321df244a503ee89b37b17b19f1d33ad425b820e4d366",
+      "ancestry_sha256": "dda6ce2cda452a9d2b39a8ff75d131ed0f24c3508bb0c65e374525706dca25a7",
       "direct_parents": [
         "atk@0.18.2",
         "cairo-rs@0.18.5",
@@ -24,22 +23,23 @@
         "soup3@0.5.0",
         "webkit2gtk@2.0.2"
       ],
-      "disposition": "source-mitigated"
+      "disposition": "source-mitigated",
+      "finding_sha256": "61d3f91d4190031796a148209ae5742a9ccc77bf25ad5635faf84a4f8f0f037d"
     },
     {
       "name": "proc-macro-error",
       "version": "1.0.4",
       "advisory": "RUSTSEC-2024-0370",
       "classification": "unmaintained",
-      "advisory_sha256": "d0ec3427fd7dd9b333f4f95de6d9eda5becaca746cc9e12b325071d036d41b4c",
       "kind": "desktop",
       "target": "x86_64-unknown-linux-gnu",
-      "ancestry_sha256": "7999b71da527e112592b2d3b9da7e0356eb342972d4decd3175c4fd7c1983d18",
+      "ancestry_sha256": "5f13dbb96e115cd26aac84fdcab147ec02a6c88f84e5996a7269021eb59e070f",
       "direct_parents": [
         "glib-macros@0.18.5",
         "gtk3-macros@0.18.2"
       ],
-      "disposition": "acknowledged-maintenance"
+      "disposition": "acknowledged-maintenance",
+      "finding_sha256": "59c9288b4879e058cdf9964502e1466c071d457e2aeef685fdefe9d516870be2"
     }
   ]
 }
