@@ -660,11 +660,21 @@ mod tests {
     fn foreground_cleanup_driver_cannot_return_or_drop_a_still_live_probe() {
         let root = tempfile::tempdir().unwrap();
         let (session, report, lock) = retained_probe(root.path());
-        let held = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(&lock)
-            .unwrap();
+        let assert_held = || {
+            let held = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&lock);
+            #[cfg(unix)]
+            assert!(matches!(
+                held.unwrap().try_lock(),
+                Err(std::fs::TryLockError::WouldBlock)
+            ));
+            #[cfg(windows)]
+            // The native fixture opens with share_mode(0): ERROR_SHARING_VIOLATION.
+            assert_eq!(held.unwrap_err().raw_os_error(), Some(32));
+        };
+        assert_held();
         let mut attempts = 0;
         let mut notices = 0;
         let mut pauses = 0;
@@ -672,10 +682,7 @@ mod tests {
             || {
                 attempts += 1;
                 if attempts <= 2 {
-                    assert!(matches!(
-                        held.try_lock(),
-                        Err(std::fs::TryLockError::WouldBlock)
-                    ));
+                    assert_held();
                     Err(std::io::Error::other("injected retry uncertainty"))
                 } else {
                     session.retry_cleanup()
@@ -686,10 +693,7 @@ mod tests {
                 pauses += 1;
                 assert!(session.stop.is_set());
                 assert!(!session.cleanup_confirmed());
-                assert!(matches!(
-                    held.try_lock(),
-                    Err(std::fs::TryLockError::WouldBlock)
-                ));
+                assert_held();
             },
         );
         assert!(
@@ -699,7 +703,12 @@ mod tests {
         assert_eq!(attempts, 3);
         assert_eq!(notices, 1);
         assert_eq!(pauses, 2);
-        held.try_lock().unwrap();
+        let released = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&lock)
+            .unwrap();
+        released.try_lock().unwrap();
         assert!(!report.ready);
         assert_eq!(
             report.tools[0].failure_code,
