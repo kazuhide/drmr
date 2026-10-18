@@ -329,7 +329,34 @@ fn ts_conversion_passes_the_hls_key_uri_in_its_own_key_role() {
             String::from_utf8_lossy(&output.stderr),
             "convert: input-inspection-failed\n"
         );
-        assert_eq!(output.stdout, [] as [u8; 0]);
+        assert_eq!(
+            json(&output),
+            serde_json::json!({
+                "schema_version": 1,
+                "command": "convert",
+                "status": "failed",
+                "error": {
+                    "code": "input-inspection-failed",
+                    "hint": "Review the error code and source profile before retrying with a new output destination.",
+                    "last_activity": "inspection"
+                }
+            })
+        );
+        for stream in [&output.stdout, &output.stderr] {
+            let shown = String::from_utf8_lossy(stream);
+            for secret in [
+                "private-sentinel",
+                "22222222222222222222222222222222",
+                "33333333333333333333333333333333",
+            ] {
+                assert!(!shown.contains(secret));
+            }
+        }
         assert!(!output_path.exists());
+        assert_eq!(
+            std::fs::read(&config_path).unwrap(),
+            serde_json::to_vec(&config).unwrap()
+        );
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
     }
 }

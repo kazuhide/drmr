@@ -690,6 +690,8 @@ fn nondefault_gain_never_becomes_a_verified_default_gain_presentation() {
     let half = root.path().join("half.mp4");
     patch_box(&original, &half, *b"tkhd", 36, &128_u16.to_be_bytes());
     assert_eq!(packet_clocks(&original), packet_clocks(&half));
+    let original_bytes = std::fs::read(&original).unwrap();
+    let half_bytes = std::fs::read(&half).unwrap();
     for (source, candidate) in [(&half, &original), (&original, &half)] {
         let result = command(&[
             "verify",
@@ -702,7 +704,22 @@ fn nondefault_gain_never_becomes_a_verified_default_gain_presentation() {
         assert!(
             String::from_utf8_lossy(&result.stderr).contains("presentation-window-not-supported")
         );
-        assert_eq!(result.stdout, [] as [u8; 0]);
+        assert_eq!(result.status.code(), Some(1));
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&result.stdout).unwrap(),
+            serde_json::json!({
+                "schema_version": 1,
+                "command": "verify",
+                "status": "failed",
+                "error": {
+                    "code": "presentation-window-not-supported",
+                    "hint": "Review the error code and source profile before retrying with a new output destination.",
+                    "last_activity": "verification"
+                }
+            })
+        );
+        assert_eq!(std::fs::read(&original).unwrap(), original_bytes);
+        assert_eq!(std::fs::read(&half).unwrap(), half_bytes);
     }
     let output = root.path().join("output.mp4");
     let before = std::fs::read(&half).unwrap();
