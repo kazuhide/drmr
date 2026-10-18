@@ -13,6 +13,7 @@ const OUT_DONE: u8 = 1;
 const ERR_DONE: u8 = 2;
 const EXCEEDED: u8 = 4;
 const READ_ERROR: u8 = 8;
+const STREAM_ERROR: u8 = 16;
 const POLL: Duration = Duration::from_millis(1);
 const PIPE_GRACE: Duration = Duration::from_secs(2);
 
@@ -65,6 +66,33 @@ fn read_bounded(mut pipe: impl Read, limit: usize, state: &State, done: u8) -> V
     bytes
 }
 
+fn read_streamed(
+    mut pipe: impl Read,
+    state: &State,
+    consume: &mut impl FnMut(&[u8]) -> Result<(), ()>,
+) -> Vec<u8> {
+    let mut chunk = [0_u8; 8192];
+    while !state.stop.load(Ordering::Acquire) {
+        match pipe.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(amount) => {
+                if consume(&chunk[..amount]).is_err() {
+                    state.flags.fetch_or(STREAM_ERROR, Ordering::Release);
+                    break;
+                }
+            }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => std::thread::sleep(POLL),
+            Err(_) => {
+                state.flags.fetch_or(READ_ERROR, Ordering::Release);
+                break;
+            }
+        }
+    }
+    state.flags.fetch_or(OUT_DONE, Ordering::Release);
+    Vec::new()
+}
+
 fn failure(kind: &'static str, text: impl Into<String>) -> Failure {
     Failure {
         kind,
@@ -91,6 +119,9 @@ fn control(
                 "output-limit",
                 "captured output exceeded its byte limit",
             ));
+        }
+        if flags & STREAM_ERROR != 0 {
+            return Err(failure("stream-invalid", "streamed output is invalid"));
         }
         if flags & READ_ERROR != 0 {
             return Err(failure("unavailable", "could not read captured output"));
@@ -132,11 +163,38 @@ pub(super) fn execute(
     execute_with_cleanup(argv, options, path, ManagedChild::finish)
 }
 
+pub(super) fn execute_streamed(
+    argv: &[String],
+    options: &RunOptions<'_>,
+    path: Option<&OsStr>,
+    mut consume: impl FnMut(&[u8]) -> Result<(), ()> + Send,
+) -> Result<Completed, Failure> {
+    execute_with_reader(
+        argv,
+        options,
+        path,
+        ManagedChild::finish,
+        move |stdout, _, state| read_streamed(stdout, state, &mut consume),
+    )
+}
+
 fn execute_with_cleanup(
     argv: &[String],
     options: &RunOptions<'_>,
     path: Option<&OsStr>,
+    cleanup: impl FnMut(&mut ManagedChild) -> io::Result<()>,
+) -> Result<Completed, Failure> {
+    execute_with_reader(argv, options, path, cleanup, |stdout, limit, state| {
+        read_bounded(stdout, limit, state, OUT_DONE)
+    })
+}
+
+fn execute_with_reader(
+    argv: &[String],
+    options: &RunOptions<'_>,
+    path: Option<&OsStr>,
     mut cleanup: impl FnMut(&mut ManagedChild) -> io::Result<()>,
+    read_stdout: impl FnOnce(std::process::ChildStdout, usize, &State) -> Vec<u8> + Send,
 ) -> Result<Completed, Failure> {
     if options.stop.is_some_and(crate::concurrency::Stop::is_set) {
         return Err(failure("cancelled", "tool execution cancelled"));
@@ -175,9 +233,7 @@ fn execute_with_cleanup(
         let stdout_limit = options.max_stdout_bytes.min(MAX_CAPTURE_BYTES);
         let output = std::thread::Builder::new()
             .name("tool-stdout".into())
-            .spawn_scoped(scope, move || {
-                read_bounded(stdout, stdout_limit, &out_state, OUT_DONE)
-            });
+            .spawn_scoped(scope, move || read_stdout(stdout, stdout_limit, &out_state));
         let output = match output {
             Ok(reader) => reader,
             Err(error) => {
@@ -241,6 +297,114 @@ fn confirm_cleanup(
 #[cfg(test)]
 mod lifecycle_tests {
     use super::*;
+
+    fn response(root: &std::path::Path, spec: &drmr_test_support::ToolSpec) -> Vec<String> {
+        let tool = drmr_test_support::install(&root.join("response"), spec).unwrap();
+        vec![tool.to_str().unwrap().into()]
+    }
+
+    #[test]
+    fn streamed_stdout_exceeds_capture_limits_without_retaining_the_payload() {
+        let root = tempfile::tempdir().unwrap();
+        let argv = response(
+            root.path(),
+            &drmr_test_support::ToolSpec::default().with("stdout_repeat", "40000000"),
+        );
+        let options = RunOptions {
+            max_stdout_bytes: 16 * 1024,
+            timeout: Some(Duration::from_secs(20)),
+            ..RunOptions::default()
+        };
+        let mut total = 0;
+        let completed = execute_streamed(&argv, &options, None, |chunk| {
+            assert!(chunk.len() <= 8192);
+            total += chunk.len();
+            Ok(())
+        })
+        .unwrap_or_else(|_| panic!("streamed response failed"));
+        assert_eq!(total, 40_000_000);
+        assert_eq!(completed.returncode, Some(0));
+        assert_eq!(completed.stdout.len(), 0);
+    }
+
+    #[test]
+    fn streamed_parser_failure_stderr_overflow_and_timeout_do_not_complete() {
+        for (case, spec, timeout, expected) in [
+            (
+                "invalid",
+                drmr_test_support::ToolSpec {
+                    stdout: b"private raw packet".to_vec(),
+                    ..Default::default()
+                },
+                None,
+                "stream-invalid",
+            ),
+            (
+                "stderr",
+                drmr_test_support::ToolSpec::default().with("stderr_repeat", "5000"),
+                None,
+                "output-limit",
+            ),
+            (
+                "timeout",
+                drmr_test_support::ToolSpec {
+                    sleep_ms: 60_000,
+                    ..Default::default()
+                },
+                Some(Duration::ZERO),
+                "timeout",
+            ),
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let argv = response(root.path(), &spec);
+            let options = RunOptions {
+                max_stderr_bytes: 10,
+                timeout,
+                ..RunOptions::default()
+            };
+            let error = execute_streamed(&argv, &options, None, |_| {
+                if case == "invalid" { Err(()) } else { Ok(()) }
+            })
+            .unwrap_err();
+            assert_eq!(error.kind, expected);
+            assert!(!error.text.contains("private raw packet"));
+        }
+    }
+
+    #[test]
+    fn streamed_active_cancellation_and_cleanup_error_preserve_failure_precedence() {
+        let root = tempfile::tempdir().unwrap();
+        let argv = response(
+            root.path(),
+            &drmr_test_support::ToolSpec::default().with("stdout_repeat", "40000000"),
+        );
+        let stop = crate::concurrency::Stop::new();
+        let options = RunOptions {
+            stop: Some(&stop),
+            ..RunOptions::default()
+        };
+        let error = execute_streamed(&argv, &options, None, |_| {
+            stop.set();
+            Ok(())
+        })
+        .unwrap_err();
+        assert_eq!(error.kind, "cancelled");
+        let mut attempts = 0;
+        let error = execute_with_reader(
+            &argv,
+            &RunOptions::default(),
+            None,
+            |child| {
+                attempts += 1;
+                child.finish()?;
+                Err(io::Error::other("private cleanup error"))
+            },
+            |stdout, _, state| read_streamed(stdout, state, &mut |_| Err(())),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind, "cleanup-unconfirmed");
+        assert_eq!(attempts, 1);
+    }
 
     #[test]
     fn cleanup_failure_overrides_active_cancellation() {
