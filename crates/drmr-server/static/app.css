@@ -199,8 +199,9 @@ details.disclosure > .disclosure-body { margin-top: 10px; }
 .run-row .run-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .run-actions button[aria-disabled="true"] { opacity: .65; cursor: progress; }
 .log-panel { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; }
-.log-head { display: flex; align-items: center; gap: 10px; font-size: 13px; }
-.log-tools { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+.log-head { display: flex; flex-wrap: wrap; min-width: 0; align-items: center; gap: 10px; font-size: 13px; }
+.log-head > span { min-width: 0; overflow-wrap: anywhere; }
+.log-tools { margin-left: auto; display: flex; flex-wrap: wrap; max-width: 100%; gap: 6px; align-items: center; }
 .log { max-height: 320px; overflow: auto; margin: 0; padding: 8px 10px; font-family: var(--font-mono); font-size: 12px; line-height: 1.5; background: var(--surface); border: 1px solid var(--line-2); border-radius: var(--radius-sm); }
 .log-line { display: grid; grid-template-columns: 76px 120px 1fr; gap: 10px; padding: 1px 0; color: var(--ink-2); } /* the stage column fits `packager #1234` */
 .log-line .ts { color: var(--ink-3); }
