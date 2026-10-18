@@ -112,7 +112,9 @@ An explicit playlist IV can supply that value; when both are present, they must
 match. drmr does not infer a SAMPLE-AES IV from the segment number.
 
 The SAMPLE-AES profile keeps one encryption method and a fixed program and codec
-configuration throughout the presentation. AAC uses seven-byte transport headers
+configuration throughout the presentation. Use one key format: `identity` (the
+default) or `com.apple.streamingkeydelivery`, with format version 1 when supplied.
+Simultaneous declarations in different key formats are refused. AAC uses seven-byte transport headers
 without a checksum and declares no initial audio priming (decoder warm-up
 samples). Changes to other
 encryption methods, unsupported audio setup, and malformed or oversized encoded
