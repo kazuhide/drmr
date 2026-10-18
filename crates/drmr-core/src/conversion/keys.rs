@@ -86,7 +86,14 @@ impl KeyedArguments {
         };
         let mut material: Vec<_> = keys.iter().map(ContentKey::key_hex).collect();
         if !keys.is_empty() {
-            let mut dictionary = Zeroizing::new(String::new());
+            // Each entry is 32 hex ID bytes, '=', 32 hex key bytes, plus separators.
+            // InputKeys admits at most 64 entries; reserve before writing any secret.
+            let capacity = keys
+                .len()
+                .checked_mul(66)
+                .and_then(|n| n.checked_sub(1))
+                .expect("bounded key dictionary fits usize");
+            let mut dictionary = Zeroizing::new(String::with_capacity(capacity));
             for (index, (key, secret)) in keys.iter().zip(&material).enumerate() {
                 if index != 0 {
                     dictionary.push(':');
@@ -94,6 +101,7 @@ impl KeyedArguments {
                 write!(dictionary, "{}=", key.id_hex()).expect("writing a String cannot fail");
                 dictionary.push_str(secret);
             }
+            debug_assert_eq!(dictionary.len(), capacity);
             let at = argv.iter().position(|value| value == "-i").unwrap_or(1);
             // The owned compound value and each retained argument are wiped on drop.
             argv.insert(at, "-decryption_keys".into());
