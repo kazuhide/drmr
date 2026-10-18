@@ -54,7 +54,12 @@ impl SegmentIv {
 }
 #[derive(Default)]
 /// Exact playlist-key-URI mappings. Referenced URIs are never fetched.
-pub struct HlsInputKeys(pub(super) Vec<(Zeroizing<String>, Aes128Key)>);
+pub struct HlsInputKeys(pub(super) Vec<HlsInputKey>);
+pub(super) struct HlsInputKey {
+    pub uri: Zeroizing<String>,
+    pub key: Aes128Key,
+    pub iv: Option<SegmentIv>,
+}
 impl fmt::Debug for HlsInputKeys {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("HlsInputKeys")
@@ -64,12 +69,23 @@ impl fmt::Debug for HlsInputKeys {
 }
 impl HlsInputKeys {
     pub fn new(keys: Vec<(String, Aes128Key)>) -> Result<Self, ConversionError> {
+        Self::new_with_ivs(
+            keys.into_iter()
+                .map(|(uri, key)| (uri, key, None))
+                .collect(),
+        )
+    }
+    /// Match a sample-encryption key and its optional associated IV by exact URI.
+    /// SAMPLE-AES never derives a missing IV from the media sequence number.
+    pub fn new_with_ivs(
+        keys: Vec<(String, Aes128Key, Option<SegmentIv>)>,
+    ) -> Result<Self, ConversionError> {
         if keys.len() > 64 {
             return Err(ConversionError("key-count-limit"));
         }
         let mut seen = std::collections::BTreeSet::new();
         let mut values = Vec::new();
-        for (uri, key) in keys {
+        for (uri, key, iv) in keys {
             if uri.is_empty()
                 || uri.len() > 4096
                 || uri.chars().any(char::is_control)
@@ -77,7 +93,11 @@ impl HlsInputKeys {
             {
                 return Err(ConversionError("invalid-or-duplicate-key-uri"));
             }
-            values.push((Zeroizing::new(uri), key));
+            values.push(HlsInputKey {
+                uri: Zeroizing::new(uri),
+                key,
+                iv,
+            });
         }
         Ok(Self(values))
     }

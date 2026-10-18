@@ -31,6 +31,41 @@ use std::time::{Duration, Instant};
 
 /// The placeholder every scrubbed secret becomes (the same one the implementations use).
 pub const REDACTED: &str = "***REDACTED***";
+
+#[cfg(test)]
+mod native_admission_tests {
+    use super::*;
+    #[test]
+    fn native_waiter_cancels_while_the_custom_pool_remains_saturated() {
+        let runner = Arc::new(
+            ToolRunner::new(Arc::new(Secrets::new()), Arc::new(crate::events::NoSink))
+                .with_limiter(Arc::new(Limiter::new(1, 256))),
+        );
+        let claim = Claim {
+            cpu_threads: 1,
+            memory_bytes: 128,
+        };
+        let held = runner
+            .native_permit(claim, &Stop::new(), Duration::from_secs(1))
+            .unwrap();
+        let stop = Stop::new();
+        let stopped = stop.clone();
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let waiter = std::thread::spawn(move || {
+            ready_tx.send(()).unwrap();
+            runner.native_permit(claim, &stopped, Duration::from_secs(1))
+        });
+        ready_rx.recv().unwrap();
+        stop.set();
+        assert_eq!(
+            waiter.join().unwrap().unwrap_err(),
+            crate::resources::ReservationError::Cancelled
+        );
+        // The waiter's capacity never became available, so cancellation must be
+        // observed by the shared admission wait rather than by a later tool.
+        drop(held);
+    }
+}
 /// Default bound on each of stdout and stderr in a record, in characters.
 pub const DEFAULT_MAX_OUTPUT_CHARS: usize = 256 * 1024;
 /// Hard default capture limits, independent of log truncation. Oversized data fails.
@@ -479,6 +514,16 @@ impl ToolRunner {
     pub fn with_limiter(mut self, limiter: Arc<Limiter>) -> Self {
         self.limiter = limiter;
         self
+    }
+    /// Account for bounded in-process media work in this runner's admission pool.
+    /// Callers release this permit before invoking a tool that acquires its own.
+    pub(crate) fn native_permit(
+        &self,
+        claim: Claim,
+        stop: &Stop,
+        timeout: Duration,
+    ) -> Result<Permit, crate::resources::ReservationError> {
+        self.limiter.acquire(claim, Some(stop), Some(timeout))
     }
 
     /// The conservative observation currently registered for this runner.

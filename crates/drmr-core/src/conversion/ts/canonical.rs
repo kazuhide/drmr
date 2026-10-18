@@ -13,6 +13,22 @@ pub(super) enum Config {
     Audio { channels: u8 },
 }
 impl Config {
+    pub(super) fn video_access_unit(data: &[u8]) -> Result<Self, ConversionError> {
+        let units = annex(data)?;
+        let parameters: Vec<_> = units
+            .iter()
+            .filter(|n| matches!(n[0] & 31, 7 | 8))
+            .collect();
+        if parameters.len() != 2 {
+            return Err(CONFIG);
+        }
+        let mut bytes = Vec::new();
+        for parameter in parameters {
+            bytes.extend_from_slice(&[0, 0, 0, 1]);
+            bytes.extend_from_slice(parameter);
+        }
+        Self::video(&bytes, true)
+    }
     pub fn video(data: &[u8], transport: bool) -> Result<Self, ConversionError> {
         let parameters = if transport {
             annex(data)?
@@ -263,12 +279,53 @@ fn hex_line(line: &[u8], output: &mut Vec<u8>) -> Result<(), ConversionError> {
 pub(super) struct Evidence {
     count: u64,
     digest: [u8; 32],
+    clocks: [u8; 32],
     pub first_pts: i64,
     pub end_pts: i64,
 }
 impl Evidence {
     pub fn payload_equal(&self, other: &Self) -> bool {
         self.count == other.count && self.digest == other.digest
+    }
+}
+/// Derived directly from decrypted original PES bytes, before transport repacking.
+pub(in crate::conversion) struct Native {
+    pub(super) config: Config,
+    pub(super) count: u64,
+    hash: Sha256,
+    clocks: Sha256,
+}
+impl Native {
+    pub(super) fn new(config: Config) -> Self {
+        Self {
+            config,
+            count: 0,
+            hash: Sha256::new(),
+            clocks: Sha256::new(),
+        }
+    }
+    pub(super) fn record(
+        &mut self,
+        bytes: &[u8],
+        pts: i64,
+        dts: i64,
+    ) -> Result<(), ConversionError> {
+        if dts < 0 || pts < dts {
+            return Err(BAD);
+        }
+        self.hash.update(b"access-unit");
+        self.config.units(bytes, true, &mut self.hash)?;
+        self.clocks.update(pts.to_be_bytes());
+        self.clocks.update(dts.to_be_bytes());
+        self.count = self.count.checked_add(1).ok_or(BAD)?;
+        Ok(())
+    }
+    pub(super) fn matches(&self, config: &Config, evidence: &Evidence) -> bool {
+        self.count != 0
+            && self.config == *config
+            && self.count == evidence.count
+            && self.hash.clone().finalize().as_slice() == evidence.digest
+            && self.clocks.clone().finalize().as_slice() == evidence.clocks
     }
 }
 pub(super) struct Parser {
@@ -278,6 +335,7 @@ pub(super) struct Parser {
     config: Config,
     buffer: Vec<u8>,
     hash: Sha256,
+    clocks: Sha256,
     count: u64,
     next_dts: Option<i64>,
     first_pts: Option<i64>,
@@ -294,6 +352,7 @@ impl Parser {
             config,
             buffer: Vec::new(),
             hash: Sha256::new(),
+            clocks: Sha256::new(),
             count: 0,
             next_dts: None,
             first_pts: None,
@@ -367,6 +426,8 @@ impl Parser {
         let bytes = dump(data.strip_suffix('|').unwrap_or(data).as_bytes(), true)?;
         self.hash.update(b"access-unit");
         self.config.units(&bytes, self.transport, &mut self.hash)?;
+        self.clocks.update(pts.to_be_bytes());
+        self.clocks.update(dts.to_be_bytes());
         self.count = self.count.checked_add(1).ok_or(BAD)?;
         if self.count > self.expected {
             return Err(ConversionError("ts-access-unit-count-mismatch"));
@@ -383,6 +444,7 @@ impl Parser {
         Ok(Evidence {
             count: self.count,
             digest: self.hash.finalize().into(),
+            clocks: self.clocks.finalize().into(),
             first_pts: self.first_pts.ok_or(BAD)?,
             end_pts: self.end_pts,
         })
@@ -481,6 +543,26 @@ mod tests {
         format!(
             "packet|stream_index={index}|pts={pts}|dts={dts}|duration={duration}|data=\\n00000000: 0000 0002 6580                           ....e.\\n|\n"
         )
+    }
+    #[test]
+    fn original_access_unit_anchor_checks_every_byte_group_and_raw_clock() {
+        let bytes = [0, 0, 1, 0x65, 0x80];
+        let mut native = Native::new(video());
+        native.record(&bytes, 90000, 90000).unwrap();
+        let observed = |line: String| {
+            let mut parser = Parser::new(0, 1, false, video());
+            parser.push(line.as_bytes()).unwrap();
+            parser.finish().unwrap()
+        };
+        assert!(native.matches(&video(), &observed(record(0, "90000", 90000, 3750))));
+        assert!(!native.matches(&video(), &observed(record(0, "90001", 90000, 3750))));
+        assert!(!native.matches(&video(), &observed(record(0, "90001", 90001, 3750))));
+        assert!(!native.matches(
+            &video(),
+            &observed(record(0, "90000", 90000, 3750).replace("6580", "6581"))
+        ));
+        native.record(&bytes, 93750, 93750).unwrap();
+        assert!(!native.matches(&video(), &observed(record(0, "90000", 90000, 3750))));
     }
     #[test]
     fn streamed_access_units_require_complete_counts_and_continuous_absolute_clocks() {

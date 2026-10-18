@@ -22,6 +22,7 @@ pub(super) struct Localized {
     pub report: Inspection,
     pub transport: Option<super::ts::Admission>,
     pub transport_segments: Vec<(PathBuf, String)>,
+    pub native: std::collections::BTreeMap<u16, std::sync::Arc<super::ts::NativeEvidence>>,
 }
 struct Playlist {
     combined: File,
@@ -38,6 +39,9 @@ struct Playlist {
     declared_duration: f64,
     duration_text: String,
     transport_segments: Vec<(PathBuf, String)>,
+    sample_projection: Option<super::ts::Projector>,
+    runner: std::sync::Arc<crate::toolrun::ToolRunner>,
+    timeout: std::time::Duration,
     clock: Option<super::timing::FragmentClock>,
     singleton_tags: std::collections::BTreeSet<String>,
 }
@@ -45,6 +49,41 @@ struct Playlist {
 struct Cipher<'a> {
     key: Option<&'a Aes128Key>,
     iv: Option<SegmentIv>,
+    sample: Option<SampleCipher<'a>>,
+}
+struct SampleCipher<'a> {
+    key: Option<&'a Aes128Key>,
+    iv: Option<zeroize::Zeroizing<String>>,
+    configured_iv: Option<&'a SegmentIv>,
+    supported: bool,
+}
+impl SampleCipher<'_> {
+    fn material(&self) -> Result<(&Aes128Key, SegmentIv), ConversionError> {
+        if !self.supported {
+            return Err(ConversionError("ts-sample-key-declaration-not-supported"));
+        }
+        // MP4 sample encryption uses its container IV metadata. Parse playlist
+        // SAMPLE-AES IVs only when this declaration actually selects TS media.
+        let explicit = self
+            .iv
+            .as_ref()
+            .map(|value| SegmentIv::from_hex(value))
+            .transpose()?;
+        if let (Some(a), Some(b)) = (&explicit, self.configured_iv)
+            && a.0.as_ref() != b.0.as_ref()
+        {
+            return Err(ConversionError("hls-key-iv-conflict"));
+        }
+        Ok((
+            self.key.ok_or(ConversionError("hls-input-key-required"))?,
+            explicit
+                .or_else(|| {
+                    self.configured_iv
+                        .map(|iv| SegmentIv(zeroize::Zeroizing::new(*iv.0)))
+                })
+                .ok_or(ConversionError("hls-sample-explicit-iv-required"))?,
+        ))
+    }
 }
 pub(super) fn attributes(value: &str) -> Result<crate::m3u8::Attributes, ConversionError> {
     parse_attributes(value).map_err(|_| ConversionError("hls-invalid-attributes"))
@@ -95,6 +134,43 @@ pub(super) fn local_resource(root: &Path, uri: &str) -> Result<PathBuf, Conversi
     Ok(path)
 }
 impl Playlist {
+    fn decrypt_samples(
+        &mut self,
+        copied: &Path,
+        clear: &Path,
+        sample: &SampleCipher<'_>,
+    ) -> Result<PathBuf, ConversionError> {
+        if self.count > 0 && self.sample_projection.is_none() {
+            return Err(ConversionError("ts-mixed-protection-not-supported"));
+        }
+        let (key, iv) = sample.material()?;
+        // The estimate includes two bounded PES buffers and their capacities,
+        // slot offsets, plaintext, rewritten PES and temporary codec configuration.
+        let _permit = self
+            .runner
+            .native_permit(
+                crate::resources::Claim {
+                    cpu_threads: 1,
+                    memory_bytes: 128 * 1024 * 1024,
+                },
+                &self.stop,
+                self.timeout,
+            )
+            .map_err(|error| match error {
+                crate::resources::ReservationError::Insufficient => {
+                    ConversionError("resource-budget")
+                }
+                crate::resources::ReservationError::Cancelled => ConversionError("cancelled"),
+                crate::resources::ReservationError::Timeout => {
+                    ConversionError("media-tool-timeout")
+                }
+            })?;
+        self.sample_projection
+            .get_or_insert_with(super::ts::Projector::new)
+            .encrypted_segment(copied, clear, key, &iv, &self.stop)?;
+        self.reference.push_str("#EXT-X-KEY:METHOD=NONE\n");
+        Ok(clear.to_path_buf())
+    }
     fn resource(
         &mut self,
         root: &Path,
@@ -106,6 +182,9 @@ impl Playlist {
         self.resources += 1;
         if self.resources > MAX_RESOURCES {
             return Err(ConversionError("hls-resource-count-limit"));
+        }
+        if self.sample_projection.is_some() && cipher.sample.is_none() {
+            return Err(ConversionError("ts-mixed-protection-not-supported"));
         }
         let original = local_resource(root, uri)?;
         let name = format!(
@@ -124,38 +203,46 @@ impl Playlist {
         let snapshot =
             File::open(&copied).map_err(|_| ConversionError("hls-resource-unreadable"))?;
         charge_snapshot(&snapshot, &mut self.bytes, super::MAX_MEDIA_BYTES)?;
-        let plaintext = if let Some(key) = cipher.key {
-            let derived;
-            let iv = if let Some(iv) = &cipher.iv {
-                iv
+        let mut reference_name = name;
+        let plaintext =
+            if let Some(sample) = cipher.sample.as_ref().filter(|_| !map && !self.has_map) {
+                reference_name = format!("clear-{:04}.ts", self.resources);
+                self.decrypt_samples(&copied, &stage.join(&reference_name), sample)?
+            } else if let Some(key) = cipher.key {
+                let derived;
+                let iv = if let Some(iv) = &cipher.iv {
+                    iv
+                } else {
+                    if map {
+                        return Err(ConversionError("hls-encrypted-map-explicit-iv-required"));
+                    }
+                    derived = SegmentIv::for_sequence(
+                        self.sequence
+                            .checked_add(self.count)
+                            .ok_or(ConversionError("hls-media-sequence-overflow"))?,
+                    );
+                    &derived
+                };
+                let key_name = format!("key-{:04}.bin", self.resources);
+                private_new(&stage.join(&key_name))?
+                    .write_all(key.0.as_ref())
+                    .map_err(|_| ConversionError("temporary-key-write-failed"))?;
+                writeln!(
+                    self.reference,
+                    "#EXT-X-KEY:METHOD=AES-128,URI=\"{key_name}\",IV=0x{}",
+                    hex::encode(iv.0.as_ref())
+                )
+                .expect("writing a string cannot fail");
+                let clear = stage.join(format!("clear-{:04}", self.resources));
+                super::decrypt_segment(&copied, &clear, key, iv)?;
+                clear
             } else {
-                if map {
-                    return Err(ConversionError("hls-encrypted-map-explicit-iv-required"));
+                if self.sample_projection.is_some() {
+                    return Err(ConversionError("ts-mixed-protection-not-supported"));
                 }
-                derived = SegmentIv::for_sequence(
-                    self.sequence
-                        .checked_add(self.count)
-                        .ok_or(ConversionError("hls-media-sequence-overflow"))?,
-                );
-                &derived
+                self.reference.push_str("#EXT-X-KEY:METHOD=NONE\n");
+                copied
             };
-            let key_name = format!("key-{:04}.bin", self.resources);
-            private_new(&stage.join(&key_name))?
-                .write_all(key.0.as_ref())
-                .map_err(|_| ConversionError("temporary-key-write-failed"))?;
-            writeln!(
-                self.reference,
-                "#EXT-X-KEY:METHOD=AES-128,URI=\"{key_name}\",IV=0x{}",
-                hex::encode(iv.0.as_ref())
-            )
-            .expect("writing a string cannot fail");
-            let clear = stage.join(format!("clear-{:04}", self.resources));
-            super::decrypt_segment(&copied, &clear, key, iv)?;
-            clear
-        } else {
-            self.reference.push_str("#EXT-X-KEY:METHOD=NONE\n");
-            copied
-        };
         if map {
             self.clock = Some(super::timing::FragmentClock::read(&plaintext)?);
         } else if self.clock.is_some() {
@@ -181,7 +268,7 @@ impl Playlist {
             .checked_sub(combined_size)
             .ok_or(ConversionError("media-size-limit"))?;
         append_bounded(&mut input, &mut self.combined, remaining)?;
-        Ok(name)
+        Ok(reference_name)
     }
 }
 struct Localizer<'a> {
@@ -193,12 +280,16 @@ struct Localizer<'a> {
     saw_sample: bool,
     saw_aes: bool,
     ts_wall_clock: bool,
+    sample_formats: std::collections::BTreeSet<String>,
 }
 impl Localizer<'_> {
     fn set_key(&mut self, value: &str) -> Result<(), ConversionError> {
         let attrs = attributes(value)?;
         match attrs.get("METHOD") {
-            Some("NONE") if attrs.len() == 1 => self.cipher = Cipher::default(),
+            Some("NONE") if attrs.len() == 1 => {
+                self.cipher = Cipher::default();
+                self.sample_formats.clear();
+            }
             Some("AES-128") => {
                 if attrs
                     .get("KEYFORMAT")
@@ -213,12 +304,13 @@ impl Localizer<'_> {
                     .keys
                     .0
                     .iter()
-                    .find(|(candidate, _)| candidate.as_str() == uri)
-                    .map(|(_, key)| key)
+                    .find(|candidate| candidate.uri.as_str() == uri)
+                    .map(|candidate| &candidate.key)
                     .ok_or(ConversionError("hls-input-key-required"))?;
                 self.cipher = Cipher {
                     key: Some(key),
                     iv: attrs.get("IV").map(SegmentIv::from_hex).transpose()?,
+                    sample: None,
                 };
                 self.saw_aes = true;
             }
@@ -227,6 +319,36 @@ impl Localizer<'_> {
                     return Err(ConversionError("hls-key-uri-missing"));
                 }
                 self.cipher = Cipher::default();
+                if self.sample_formats.len() < 2 {
+                    self.sample_formats
+                        .insert(attrs.get("KEYFORMAT").unwrap_or("identity").to_owned());
+                }
+                let supplied = self
+                    .keys
+                    .0
+                    .iter()
+                    .find(|candidate| Some(candidate.uri.as_str()) == attrs.get("URI"));
+                self.cipher.sample = Some(SampleCipher {
+                    key: supplied.map(|entry| &entry.key),
+                    iv: attrs
+                        .get("IV")
+                        .map(|value| zeroize::Zeroizing::new(value.to_owned())),
+                    configured_iv: supplied.and_then(|entry| entry.iv.as_ref()),
+                    supported: attrs.get("METHOD") == Some("SAMPLE-AES")
+                        && self.sample_formats.len() == 1
+                        && attrs.get("KEYFORMAT").is_none_or(|format| {
+                            matches!(format, "identity" | "com.apple.streamingkeydelivery")
+                        })
+                        && attrs
+                            .get("KEYFORMATVERSIONS")
+                            .is_none_or(|version| version == "1")
+                        && attrs.iter().all(|(name, _)| {
+                            matches!(
+                                name,
+                                "METHOD" | "URI" | "IV" | "KEYFORMAT" | "KEYFORMATVERSIONS"
+                            )
+                        }),
+                });
                 self.saw_sample = true;
             }
             _ => return Err(ConversionError("hls-key-method-not-supported")),
@@ -348,9 +470,6 @@ impl Localizer<'_> {
                 return Err(ConversionError("hls-master-not-yet-supported"));
             }
             _ if !line.starts_with('#') => {
-                if !self.playlist.has_map && self.saw_sample {
-                    return Err(ConversionError("ts-sample-encryption-not-supported"));
-                }
                 if !self.playlist.pending_duration {
                     return Err(ConversionError("hls-segment-duration-missing"));
                 }
@@ -383,9 +502,6 @@ impl Localizer<'_> {
             .map_err(|_| ConversionError("media-copy-failed"))?;
         drop(playlist.combined);
         let actual = if let Some(transport) = &playlist.transport {
-            if self.saw_sample {
-                return Err(ConversionError("ts-sample-encryption-not-supported"));
-            }
             if self.ts_wall_clock {
                 return Err(ConversionError("ts-wall-clock-metadata-not-supported"));
             }
@@ -405,6 +521,7 @@ impl Localizer<'_> {
             return Err(ConversionError("hls-nested-protection-not-supported"));
         }
         if self.saw_sample
+            && playlist.sample_projection.is_none()
             && !actual
                 .as_ref()
                 .is_some_and(|a| matches!(a.protection, Protection::Cenc | Protection::Cbcs))
@@ -422,6 +539,16 @@ impl Localizer<'_> {
         };
         let report =
             inspection::inspect(path).map_err(|_| ConversionError("hls-inspection-failed"))?;
+        let native = if let Some(projection) = playlist.sample_projection {
+            projection.finish()?;
+            projection
+                .native
+                .into_iter()
+                .map(|(id, anchor)| (id, std::sync::Arc::new(anchor)))
+                .collect()
+        } else {
+            std::collections::BTreeMap::default()
+        };
         Ok(Localized {
             combined,
             reference,
@@ -429,6 +556,7 @@ impl Localizer<'_> {
             report,
             transport: playlist.transport,
             transport_segments: playlist.transport_segments,
+            native,
         })
     }
 }
@@ -436,7 +564,7 @@ pub(super) fn localize(
     path: &Path,
     stage: &Path,
     keys: &HlsInputKeys,
-    stop: &crate::concurrency::Stop,
+    backend: &super::backend::Backend,
 ) -> Result<Localized, ConversionError> {
     let metadata = fs::symlink_metadata(path).map_err(|_| ConversionError("input-unreadable"))?;
     if !metadata.is_file() || metadata.file_type().is_symlink() {
@@ -470,12 +598,15 @@ pub(super) fn localize(
         bytes: 0,
         has_map: false,
         transport: None,
-        stop: stop.clone(),
+        stop: backend.stop.clone(),
         ended: false,
         pending_duration: false,
         declared_duration: 0.0,
         duration_text: String::new(),
         transport_segments: Vec::new(),
+        sample_projection: None,
+        runner: std::sync::Arc::clone(&backend.runner),
+        timeout: backend.timeout,
         clock: None,
         singleton_tags: std::collections::BTreeSet::new(),
     };
@@ -486,6 +617,7 @@ pub(super) fn localize(
         playlist,
         cipher: Cipher::default(),
         saw_sample: false,
+        sample_formats: std::collections::BTreeSet::new(),
         saw_aes: false,
         ts_wall_clock: false,
     };
@@ -537,7 +669,7 @@ impl Converter {
             &staged.path().join("media.m3u8"),
             &verify_stage,
             &verification_keys,
-            &self.backend.stop,
+            &self.backend,
         )?;
         let verification = self.backend.verify_views(
             super::verify::StreamView::new(
@@ -576,7 +708,7 @@ impl Converter {
     ) -> Result<ConversionReport, ConversionError> {
         let destination = super::destination(output)?;
         let workspace = super::workspace()?;
-        let localized = localize(input, workspace.path(), hls_keys, &self.backend.stop)?;
+        let localized = localize(input, workspace.path(), hls_keys, &self.backend)?;
         if localized.transport.is_some() {
             return Err(ConversionError("ts-input-requires-generic-hls-output"));
         }

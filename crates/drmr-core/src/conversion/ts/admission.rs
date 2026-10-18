@@ -6,6 +6,7 @@ use std::{collections::BTreeMap, fs::File, io::Read, path::Path};
 const BAD: ConversionError = ConversionError("ts-transport-not-supported");
 const CONFIG: ConversionError = ConversionError("ts-program-or-configuration-changed");
 const CLOCK: ConversionError = ConversionError("ts-clock-wrap-or-discontinuity-not-supported");
+const MAX_PES_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::conversion) struct Track {
@@ -83,7 +84,7 @@ impl Section {
     }
 }
 
-fn crc(bytes: &[u8]) -> u32 {
+pub(super) fn crc(bytes: &[u8]) -> u32 {
     let mut value = u32::MAX;
     for &byte in bytes {
         value ^= u32::from(byte) << 24;
@@ -123,6 +124,8 @@ struct Pes {
     consumed: usize,
     declared: Option<usize>,
     seen: bool,
+    content_at: usize,
+    clock: Option<(i64, i64)>,
 }
 impl Pes {
     fn push(&mut self, data: &[u8], start: bool, kind: TrackKind) -> Result<(), ConversionError> {
@@ -140,6 +143,9 @@ impl Pes {
             return Err(BAD);
         }
         self.consumed = self.consumed.checked_add(data.len()).ok_or(BAD)?;
+        if self.consumed > MAX_PES_BYTES {
+            return Err(ConversionError("ts-pes-size-limit"));
+        }
         if self.declared.is_some_and(|n| self.consumed > n) {
             return Err(BAD);
         }
@@ -199,11 +205,29 @@ impl Pes {
             return Err(CLOCK);
         }
         self.previous_dts = Some(dts);
+        self.clock = Some((
+            i64::try_from(pts).map_err(|_| BAD)?,
+            i64::try_from(dts).map_err(|_| BAD)?,
+        ));
+        self.content_at = 9 + length;
         self.seen = true;
         self.waiting = false;
         self.header.clear();
         Ok(())
     }
+}
+pub(super) fn pes_content(
+    data: &[u8],
+    kind: TrackKind,
+) -> Result<(usize, i64, i64), ConversionError> {
+    let mut pes = Pes::default();
+    pes.push(data, true, kind)?;
+    if pes.waiting || pes.declared.is_some_and(|n| n != data.len()) || pes.content_at >= data.len()
+    {
+        return Err(BAD);
+    }
+    let (pts, dts) = pes.clock.ok_or(BAD)?;
+    Ok((pes.content_at, pts, dts))
 }
 fn timestamp(data: &[u8], prefix: u8) -> Result<u64, ConversionError> {
     if data[0] >> 4 != prefix || data[0] & 1 != 1 || data[2] & 1 != 1 || data[4] & 1 != 1 {
@@ -216,9 +240,52 @@ fn timestamp(data: &[u8], prefix: u8) -> Result<u64, ConversionError> {
         | u64::from(data[4] >> 1))
 }
 
+fn sample_descriptors(kind: TrackKind, data: &[u8]) -> Result<Option<[u8; 2]>, ConversionError> {
+    const INVALID: ConversionError = ConversionError("ts-sample-description-not-supported");
+    let mut at = 0;
+    let mut indicator = false;
+    let mut language = false;
+    let mut audio = None;
+    while at < data.len() {
+        let header = data.get(at..at + 2).ok_or(INVALID)?;
+        at += 2;
+        let value = data.get(at..at + usize::from(header[1])).ok_or(INVALID)?;
+        at += value.len();
+        match header[0] {
+            0x0f if !indicator => {
+                let expected = match kind {
+                    TrackKind::Video => b"zavc",
+                    TrackKind::Audio => b"aacd",
+                    _ => return Err(INVALID),
+                };
+                if value != expected {
+                    return Err(INVALID);
+                }
+                indicator = true;
+            }
+            0x05 if kind == TrackKind::Audio && audio.is_none() => {
+                // Only zero-priming AAC-LC setup is representable by this profile.
+                if value.len() != 14 || value[..12] != *b"apadzaac\0\0\x01\x02" {
+                    return Err(INVALID);
+                }
+                let asc = [value[12], value[13]];
+                super::canonical::Config::audio(&asc).map_err(|_| INVALID)?;
+                audio = Some(asc);
+            }
+            0x0a if !language && value == b"und\0" => language = true,
+            _ => return Err(INVALID),
+        }
+    }
+    if !indicator || (kind == TrackKind::Audio && audio.is_none()) {
+        return Err(INVALID);
+    }
+    Ok(audio)
+}
+
 /// State spans all resources: segment boundaries cannot reset counters or the program.
 #[derive(Default)]
 pub(in crate::conversion) struct Admission {
+    sample_aes: bool,
     counters: BTreeMap<u16, u8>,
     sections: BTreeMap<u16, Section>,
     pat: Option<Vec<u8>>,
@@ -228,11 +295,63 @@ pub(in crate::conversion) struct Admission {
     pcr_pid: Option<u16>,
     pcr: Option<u64>,
     pub tracks: Vec<Track>,
+    pub audio_specific_config: Option<[u8; 2]>,
     pes: BTreeMap<u16, Pes>,
     segment_pat: bool,
     segment_pmt: bool,
 }
 impl Admission {
+    pub(super) fn encrypted_samples() -> Self {
+        Self {
+            sample_aes: true,
+            ..Self::default()
+        }
+    }
+    pub(super) fn pmt_pid(&self) -> Option<u16> {
+        self.pmt_pid
+    }
+    pub(super) fn clear_pmt(&self) -> Result<Vec<u8>, ConversionError> {
+        if !self.sample_aes {
+            return Err(BAD);
+        }
+        let data = self.pmt.as_ref().ok_or(BAD)?;
+        let mut clear = data[..12].to_vec();
+        let mut at = 12;
+        while at < data.len() - 4 {
+            let head = data.get(at..at + 5).ok_or(BAD)?;
+            at += 5;
+            let n = (usize::from(head[3] & 15) << 8) | usize::from(head[4]);
+            let descriptors = data.get(at..at + n).ok_or(BAD)?;
+            at += n;
+            let mut language = Vec::new();
+            let mut offset = 0;
+            while offset < descriptors.len() {
+                let length = usize::from(*descriptors.get(offset + 1).ok_or(BAD)?) + 2;
+                let descriptor = descriptors.get(offset..offset + length).ok_or(BAD)?;
+                if descriptor[0] == 0x0a {
+                    language.extend_from_slice(descriptor);
+                }
+                offset += length;
+            }
+            clear.extend_from_slice(&[
+                match head[0] {
+                    0xdb => 0x1b,
+                    0xcf => 0x0f,
+                    _ => return Err(BAD),
+                },
+                head[1],
+                head[2],
+                0xf0,
+                u8::try_from(language.len()).map_err(|_| BAD)?,
+            ]);
+            clear.extend(language);
+        }
+        let size = clear.len() + 1;
+        clear[1] = (clear[1] & 0xf0) | u8::try_from(size >> 8).map_err(|_| BAD)?;
+        clear[2] = u8::try_from(size & 255).map_err(|_| BAD)?;
+        clear.extend(crc(&clear).to_be_bytes());
+        Ok(clear)
+    }
     pub fn segment(&mut self, path: &Path, stop: &Stop) -> Result<(), ConversionError> {
         self.segment_pat = false;
         self.segment_pmt = false;
@@ -344,14 +463,7 @@ impl Admission {
         }
         let start = bytes[1] & 0x40 != 0;
         if id == 0 || id == 0x11 || self.pmt_pid == Some(id) {
-            for section in self
-                .sections
-                .entry(id)
-                .or_default()
-                .push(&bytes[at..], start)?
-            {
-                self.section(id, section)?;
-            }
+            self.psi_packet(id, &bytes[at..], start)?;
         } else if let Some(track) = self.tracks.iter().find(|t| t.pid == id) {
             self.pes
                 .entry(id)
@@ -359,6 +471,20 @@ impl Admission {
                 .push(&bytes[at..], start, track.kind)?;
         } else {
             return Err(ConversionError("ts-undeclared-stream-not-supported"));
+        }
+        Ok(())
+    }
+    fn psi_packet(&mut self, id: u16, payload: &[u8], start: bool) -> Result<(), ConversionError> {
+        let encrypted_pmt = self.sample_aes && self.pmt_pid == Some(id);
+        if encrypted_pmt && (!start || payload[0] != 0) {
+            return Err(ConversionError("ts-encrypted-pmt-must-fit-one-packet"));
+        }
+        let completed = self.sections.entry(id).or_default().push(payload, start)?;
+        if encrypted_pmt && (completed.len() != 1 || !self.sections[&id].bytes.is_empty()) {
+            return Err(ConversionError("ts-encrypted-pmt-must-fit-one-packet"));
+        }
+        for section in completed {
+            self.section(id, section)?;
         }
         Ok(())
     }
@@ -404,9 +530,9 @@ impl Admission {
             while at < data.len() - 4 {
                 let head = data.get(at..at + 5).ok_or(BAD)?;
                 at += 5;
-                let kind = match head[0] {
-                    0x1b => TrackKind::Video,
-                    0x0f => TrackKind::Audio,
+                let kind = match (self.sample_aes, head[0]) {
+                    (false, 0x1b) | (true, 0xdb) => TrackKind::Video,
+                    (false, 0x0f) | (true, 0xcf) => TrackKind::Audio,
                     _ => return Err(ConversionError("ts-stream-type-not-supported")),
                 };
                 let id = pid(&head[1..3]);
@@ -422,7 +548,11 @@ impl Admission {
                 let n = (usize::from(head[3] & 15) << 8) | usize::from(head[4]);
                 let descriptors = data.get(at..at + n).ok_or(BAD)?;
                 at += n;
-                if !descriptors.is_empty() && descriptors != b"\x0a\x04und\x00" {
+                if self.sample_aes {
+                    if let Some(asc) = sample_descriptors(kind, descriptors)? {
+                        self.audio_specific_config = Some(asc);
+                    }
+                } else if !descriptors.is_empty() && descriptors != b"\x0a\x04und\x00" {
                     return Err(ConversionError("ts-stream-descriptors-not-supported"));
                 }
                 tracks.push(Track { pid: id, kind });
@@ -458,6 +588,28 @@ impl Admission {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn an_unbounded_video_pes_is_refused_before_a_foreign_demuxer_reads_it() {
+        let header = [0, 0, 1, 0xe0, 0, 0, 0x80, 0x80, 5, 0x21, 0, 1, 0, 1];
+        let mut pes = Pes::default();
+        pes.push(&header, true, TrackKind::Video).unwrap();
+        let chunk = vec![0_u8; 64 * 1024];
+        let limit = 8 * 1024 * 1024;
+        for _ in 0..127 {
+            pes.push(&chunk, false, TrackKind::Video).unwrap();
+        }
+        pes.push(
+            &chunk[..chunk.len() - header.len()],
+            false,
+            TrackKind::Video,
+        )
+        .unwrap();
+        assert_eq!(pes.consumed, limit);
+        assert_eq!(
+            pes.push(&[0], false, TrackKind::Video).unwrap_err(),
+            ConversionError("ts-pes-size-limit")
+        );
+    }
     fn section(mut bytes: Vec<u8>) -> Vec<u8> {
         let n = bytes.len() + 1;
         bytes[1] = (bytes[1] & 0xf0) | u8::try_from(n >> 8).unwrap();
@@ -472,6 +624,108 @@ mod tests {
         section(vec![
             2, 0xb0, 0, 0, 1, 0xc1, 0, 0, 0xe1, 0, 0xf0, 0, 0x1b, 0xe1, 0, 0xf0, 0,
         ])
+    }
+    fn encrypted_pmt(audio: bool) -> Vec<u8> {
+        let mut bytes = vec![
+            2, 0xb0, 0, 0, 1, 0xc1, 0, 0, 0xe1, 0, 0xf0, 0, 0xdb, 0xe1, 0, 0xf0, 6, 0x0f, 4, b'z',
+            b'a', b'v', b'c',
+        ];
+        if audio {
+            bytes.extend([
+                0xcf, 0xe1, 1, 0xf0, 22, 0x0f, 4, b'a', b'a', b'c', b'd', 5, 14, b'a', b'p', b'a',
+                b'd', b'z', b'a', b'a', b'c', 0, 0, 1, 2, 0x11, 0x90,
+            ]);
+        }
+        section(bytes)
+    }
+    #[test]
+    fn sample_encryption_requires_an_explicit_mode_and_exact_apple_configuration() {
+        let encrypted = encrypted_pmt(true);
+        let mut clear = Admission::default();
+        clear.section(0, pat()).unwrap();
+        assert_eq!(
+            clear.section(4096, encrypted.clone()).unwrap_err(),
+            ConversionError("ts-stream-type-not-supported")
+        );
+        let mut state = Admission {
+            sample_aes: true,
+            ..Default::default()
+        };
+        state.section(0, pat()).unwrap();
+        state.section(4096, encrypted).unwrap();
+        assert_eq!(
+            state.tracks,
+            vec![
+                Track {
+                    pid: 256,
+                    kind: TrackKind::Video
+                },
+                Track {
+                    pid: 257,
+                    kind: TrackKind::Audio
+                },
+            ]
+        );
+        assert_eq!(state.audio_specific_config, Some([0x11, 0x90]));
+        for change in [
+            "video-indicator",
+            "audio-indicator",
+            "priming",
+            "version",
+            "sample-rate",
+        ] {
+            let mut pmt = encrypted_pmt(true);
+            match change {
+                "video-indicator" => pmt[22] ^= 1,
+                "audio-indicator" => pmt[33] ^= 1,
+                "priming" => pmt[44] = 1,
+                "version" => pmt[46] = 2,
+                "sample-rate" => pmt[48] = 0x12,
+                _ => unreachable!(),
+            }
+            let mut state = Admission {
+                sample_aes: true,
+                ..Default::default()
+            };
+            state.section(0, pat()).unwrap();
+            assert!(state.section(4096, pmt).is_err(), "accepted {change}");
+        }
+    }
+    #[test]
+    fn encrypted_pmt_is_atomic_and_clear_projection_keeps_program_and_track_ids() {
+        let mut state = Admission::encrypted_samples();
+        state.section(0, pat()).unwrap();
+        let encrypted = encrypted_pmt(true);
+        let mut packet = [0xff; 188];
+        packet[..5].copy_from_slice(&[0x47, 0x50, 0, 0x10, 0]);
+        packet[5..5 + encrypted.len()].copy_from_slice(&encrypted);
+        state.packet(&packet).unwrap();
+        let clear = state.clear_pmt().unwrap();
+        assert_eq!(crc(&clear), 0);
+        let mut plain = Admission::default();
+        plain.section(0, pat()).unwrap();
+        plain.section(4096, clear).unwrap();
+        assert_eq!(plain.tracks, state.tracks);
+        assert_eq!(plain.pcr_pid, state.pcr_pid);
+        for cut in [1, 2, encrypted.len() - 1] {
+            let mut split = [0xff; 188];
+            let start = 188 - cut - 1;
+            split[..6].copy_from_slice(&[0x47, 0x50, 0, 0x30, u8::try_from(start - 5).unwrap(), 0]);
+            split[start] = 0;
+            split[start + 1..].copy_from_slice(&encrypted[..cut]);
+            let mut state = Admission::encrypted_samples();
+            state.section(0, pat()).unwrap();
+            assert_eq!(
+                state.packet(&split).unwrap_err(),
+                ConversionError("ts-encrypted-pmt-must-fit-one-packet")
+            );
+        }
+        let mut state = Admission::encrypted_samples();
+        state.section(0, pat()).unwrap();
+        assert_eq!(
+            state.section(4096, pmt()).unwrap_err(),
+            ConversionError("ts-stream-type-not-supported")
+        );
     }
     #[test]
     fn psi_sections_require_crc_and_complete_bounded_reassembly() {
