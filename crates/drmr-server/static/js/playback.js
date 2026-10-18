@@ -21,7 +21,7 @@
         key: key, videoEl: videoEl, player: App.createShakaPlayer(videoEl),
         playBtn: byId('play-' + key + '-btn'), selectEl: byId(key + '-rendition-select'),
         textSelect: byId(key + '-text-select'), textField: byId(key + '-text-field'), stateEl: byId(key + '-state'),
-        textSelection: '', ctx: null, busy: false, note: null, hint: null, pendingValue: null,
+        textSelection: '', ctx: null, playOwner: null, busy: false, note: null, hint: null, pendingValue: null,
       };
       side.player.onState(function (s) { renderSideState(side, s); });
       videoEl.addEventListener('playing', function () { if (side.hint) { side.hint = null; renderSideState(side); } });
@@ -64,7 +64,7 @@
       refreshTextControls(side);
     }
     function populateRenditionSelect(side) {
-      var seen = {}, videos = [], audios = [];
+      var seen = Object.create(null), videos = [], audios = [];
       ((side.ctx && side.ctx.renditions) || []).forEach(function (r) {
         if (!r || r.rep_id == null || r.content_type === 'text' || r.content_type === 'subtitle') return;
         var id = String(r.rep_id);
@@ -105,7 +105,7 @@
       return (renditions || []).filter(function (r) { return r && String(r.rep_id) === String(repId); })[0] || null;
     }
     function resetSide(side) {
-      side.ctx = null; side.busy = false; side.note = null; side.hint = null; side.pendingValue = null; side.textSelection = '';
+      side.ctx = null; side.playOwner = null; side.busy = false; side.note = null; side.hint = null; side.pendingValue = null; side.textSelection = '';
       populateTextOptions(side);
       UI.replace(side.selectEl);
       refreshSideControls(side);
@@ -113,7 +113,7 @@
       UI.setText(side.stateEl, '');
     }
     function prepareSide(side, ctx) {
-      side.ctx = ctx; side.busy = false; side.note = ctx.url ? null : t('noManifest'); side.hint = null; side.pendingValue = null;
+      side.ctx = ctx; side.playOwner = null; side.busy = false; side.note = ctx.url ? null : t('noManifest'); side.hint = null; side.pendingValue = null;
       populateRenditionSelect(side);
       refreshSideControls(side);
       renderSideState(side);
@@ -122,23 +122,24 @@
       if (!side.ctx || !side.ctx.url || side.busy) return;
       loadAndPlay(side, [], null);
     }
-    function playVideo(side) {
-      var p;
-      try { p = side.videoEl.play(); } catch (_e) { p = null; }
-      if (p && typeof p.catch === 'function') {
-        p.catch(function (e) {
-          if (e && e.name === 'AbortError') return;
-          side.hint = e && e.name === 'NotAllowedError' ? t('autoplayBlocked') : t('playFailed') + (e && e.name ? ' (' + e.name + ')' : '');
-          renderSideState(side);
-        });
+    function playVideo(side, owner) {
+      function failed(error) {
+        if (side.playOwner !== owner || (error && error.name === 'AbortError')) return;
+        side.hint = error && error.name === 'NotAllowedError' ? t('autoplayBlocked') : t('playFailed');
+        renderSideState(side);
       }
+      try {
+        var result = side.videoEl.play();
+        if (result && typeof result.catch === 'function') result.catch(failed);
+      } catch (error) { failed(error); }
     }
     function loadAndPlay(side, preferredCodecs, pick) {
-      var ctx = side.ctx;
+      var ctx = side.ctx, owner = {};
+      side.playOwner = owner;
       side.busy = true; side.note = null; side.hint = null; side.pendingValue = pick ? pick.repId : AUTO_VALUE;
       refreshSideControls(side);
       renderSideState(side);
-      function stillCurrent() { return side.ctx === ctx; }
+      function stillCurrent() { return side.ctx === ctx && side.playOwner === owner; }
       return side.player.load(ctx.assetId, ctx.url, preferredCodecs, { licenseUrl: ctx.licenseUrl, clear: ctx.clear, sourceRenditions: ctx.renditions }).then(function () {
         if (!stillCurrent()) return;
         if (pick) {
@@ -149,7 +150,7 @@
           var restored = side.player.selectTextRendition(side.textSelection || null);
           if (side.textSelection && !restored) { side.textSelection = ''; side.textSelect.value = ''; side.player.selectTextRendition(null); side.note = t('subtitleUnavailable'); }
         }
-        playVideo(side);
+        playVideo(side, owner);
       }).catch(function (e) {
         if (!stillCurrent()) return;
         if (side.player.getState().status !== 'error') side.note = t('errorPrefix') + ' ' + App.I18n.error(e);
