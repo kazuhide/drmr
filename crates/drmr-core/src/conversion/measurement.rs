@@ -52,6 +52,7 @@ pub struct ToolMeasurement {
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct WorkspaceMeasurement {
     status: &'static str,
+    scope: &'static str,
     checkpoints: u64,
     incomplete_checkpoints: u64,
     checkpoint_regular_file_bytes_max: Option<u64>,
@@ -122,6 +123,7 @@ impl Measurements {
         let state = state.as_deref().unwrap_or(&empty);
         let failed = self.failed.load(Ordering::Relaxed) || self.state.is_poisoned();
         let mut workspace = state.workspace.clone();
+        workspace.scope = "selected-quiescent-stage-sets-not-all-live-command-stages";
         if workspace.status.is_empty() {
             workspace.status = "unmeasured";
             workspace.reason = Some("no-owned-workspace-checkpoints");
@@ -130,7 +132,10 @@ impl Measurements {
             schema_version: 1,
             status: if failed {
                 "unmeasured"
-            } else if state.invalid > 0 || state.unclassified > 0 {
+            } else if state.invalid > 0
+                || state.unclassified > 0
+                || workspace.incomplete_checkpoints > 0
+            {
                 "partial"
             } else {
                 "observed"
@@ -263,6 +268,8 @@ fn walk(
     depth_limit: usize,
     budget: Duration,
 ) -> Result<u64, &'static str> {
+    // Callers retain private Stage owners and finish/join every writer first.
+    // Metadata followed by read_dir is not atomic protection against replacement.
     if roots.is_empty() {
         return Err("no-owned-workspace-checkpoints");
     }
@@ -364,6 +371,32 @@ mod tests {
         assert_eq!(
             walk(&[root.path()], 100, 5, Duration::ZERO),
             Err("checkpoint-time-budget")
+        );
+    }
+    #[test]
+    fn nested_stage_roots_are_refused_instead_of_double_counted() {
+        let root = tempfile::tempdir().unwrap();
+        let nested = root.path().join("nested");
+        fs::create_dir(&nested).unwrap();
+        fs::write(nested.join("data"), [0; 17]).unwrap();
+        assert_eq!(
+            walk(&[root.path(), &nested], 100, 5, Duration::from_secs(1)),
+            Err("overlapping-owned-roots")
+        );
+    }
+    #[test]
+    fn an_incomplete_checkpoint_marks_the_parent_partial_and_keeps_missing_bytes_null() {
+        let stage = super::super::files::Stage::new(None).unwrap();
+        let measurement = Measurements::default();
+        measurement.checkpoint(&[&stage, &stage]);
+        let report = measurement.report();
+        assert_eq!(report.status, "partial");
+        assert_eq!(report.workspace.status, "partial");
+        assert_eq!(report.workspace.checkpoint_regular_file_bytes_max, None);
+        assert_eq!(report.workspace.reason, Some("overlapping-owned-roots"));
+        assert_eq!(
+            report.workspace.scope,
+            "selected-quiescent-stage-sets-not-all-live-command-stages"
         );
     }
     #[cfg(unix)]

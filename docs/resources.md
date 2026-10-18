@@ -170,6 +170,10 @@ lengths, with bounded traversal and no symlink or reparse-point following. These
 checkpoints can miss files created and deleted between observations. They are not
 an exact temporary-disk peak, allocated blocks, or total I/O bytes. Unavailable
 or incomplete observations are labelled; total process I/O remains unmeasured.
+Each checkpoint covers its selected staging directories, which can omit other
+live command workspaces. The scan assumes the private stage owners remain held
+and all writers have finished; metadata checks and directory traversal do not
+atomically prevent path replacement or impose a hard filesystem I/O deadline.
 
 `convert` and `verify` accept `--max-workers 1` through `64` as an upper bound.
 With no option, independent tracks share the CPU and memory admission described above.
