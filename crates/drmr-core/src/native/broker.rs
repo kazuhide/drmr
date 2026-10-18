@@ -718,6 +718,9 @@ fn session(mut stream: UnixStream, entry: &Session, state: &State, base: &[u8]) 
     if let Ok(mut result) = entry.result.lock() {
         *result = Some(confirmed);
     }
+    // The registry retains a connection clone with the native owner. Once this
+    // handler ends, that clone must not hide EOF from its waiting client.
+    let _ = stream.shutdown(std::net::Shutdown::Both);
 }
 
 fn final_confirmation(attempted: Option<bool>, cleanup: impl FnOnce() -> bool) -> bool {
@@ -797,6 +800,75 @@ mod tests {
         let immediate = immediate_lock(root.path());
         immediate.unwrap();
         child.finish().unwrap();
+        broker.finish().unwrap();
+    }
+    #[test]
+    fn a_stopped_remote_tool_remains_running_until_explicit_cleanup() {
+        use rustix::process::{Pid, Signal, WaitId, WaitIdOptions, kill_process, waitid};
+        let root = tempfile::tempdir().unwrap();
+        let tool = fixture(root.path());
+        let (mut broker, connection) = connected();
+        let mut child = Remote::spawn_on(&connection, &Command::new(tool), &captured()).unwrap();
+        ready(root.path(), &mut child);
+        let pid = Pid::from_raw(i32::try_from(child.id()).unwrap()).unwrap();
+        kill_process(pid, Signal::STOP).unwrap();
+        let stopped = waitid(
+            WaitId::Pid(pid),
+            WaitIdOptions::STOPPED | WaitIdOptions::NOWAIT,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(stopped.stopping_signal(), Some(Signal::STOP.as_raw()));
+        for _ in 0..16 {
+            assert!(child.try_wait().unwrap().is_none());
+        }
+        assert!(immediate_lock(root.path()).is_err());
+        child.finish().unwrap();
+        assert_eq!(child.wait().unwrap().signal(), Some(Signal::KILL.as_raw()));
+        immediate_lock(root.path()).unwrap();
+        broker.finish().unwrap();
+    }
+    #[test]
+    fn a_failed_session_closes_its_peer_without_discarding_the_retained_owner() {
+        let root = tempfile::tempdir().unwrap();
+        let tool = fixture(root.path());
+        let (mut broker, connection) = connected();
+        let mut main = lock(&connection).unwrap();
+        main.write_all(&[1]).unwrap();
+        let (_, mut endpoints) = receive_rights_guarded(&main).unwrap();
+        let mut stream = UnixStream::from(endpoints.pop().unwrap());
+        main.write_all(&[2]).unwrap();
+        drop(main);
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let payload = encode_command(&Command::new(tool), &captured()).unwrap();
+        stream
+            .write_all(&u32::try_from(payload.len()).unwrap().to_be_bytes())
+            .unwrap();
+        stream.write_all(&payload).unwrap();
+        let (kind, files) = receive_rights_guarded(&stream).unwrap();
+        let (_, data, files) = wire::receive_body(&mut stream, kind, files).unwrap();
+        let pid = u32::from_be_bytes(data[..4].try_into().unwrap());
+        stream.write_all(&[4]).unwrap();
+        drop(files);
+        let entry = Arc::clone(&lock(&broker.state.entries).unwrap()[0]);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !root.path().join("descendant.pid").is_file() {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(immediate_lock(root.path()).is_err());
+        stream.write_all(&[9]).unwrap();
+        while lock(&entry.result).unwrap().is_none() {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(*lock(&entry.result).unwrap(), Some(true));
+        assert_eq!(lock(&entry.child).unwrap().as_ref().unwrap().id(), pid);
+        immediate_lock(root.path()).unwrap();
+        let mut byte = [0];
+        assert_eq!(stream.read(&mut byte).unwrap(), 0);
         broker.finish().unwrap();
     }
     #[test]

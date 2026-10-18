@@ -452,23 +452,35 @@ fn observe(child: &mut std::process::Child, blocking: bool) -> io::Result<Option
     if !blocking {
         options |= WaitIdOptions::NOHANG;
     }
-    let result = waitid(
-        WaitId::Pid(rustix::process::Pid::from_child(child)),
-        options,
-    )?;
-    result
-        .map(|status| {
-            if let Some(code) = status.exit_status() {
-                Ok(ExitStatus::from_raw(code << 8))
-            } else if let Some(signal) = status.terminating_signal() {
-                Ok(ExitStatus::from_raw(
-                    signal | if status.dumped() { 0x80 } else { 0 },
-                ))
-            } else {
-                Err(io::Error::other("child status unavailable"))
-            }
-        })
-        .transpose()
+    loop {
+        let result = match waitid(
+            WaitId::Pid(rustix::process::Pid::from_child(child)),
+            options,
+        ) {
+            Err(rustix::io::Errno::INTR) => continue,
+            result => result?,
+        };
+        let Some(status) = result else {
+            return Ok(None);
+        };
+        if let Some(code) = status.exit_status() {
+            return Ok(Some(ExitStatus::from_raw(code << 8)));
+        }
+        if let Some(signal) = status.terminating_signal() {
+            return Ok(Some(ExitStatus::from_raw(
+                signal | if status.dumped() { 0x80 } else { 0 },
+            )));
+        }
+        if !(status.stopped() || status.trapped() || status.continued()) {
+            return Err(io::Error::other("child status unavailable"));
+        }
+        // Darwin can report a pending job-control event even with EXITED only.
+        // NOWAIT keeps that event visible; it is not a terminal child status.
+        if !blocking {
+            return Ok(None);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
 }
 
 #[cfg(unix)]
@@ -618,6 +630,72 @@ pub(crate) fn mark_asset_worker() {
 mod cleanup_tests {
     use super::*;
     use rustix::io::Errno;
+
+    #[test]
+    fn a_blocking_wait_ignores_stopped_events_until_the_actual_terminal_signal() {
+        use rustix::process::{Pid, Signal, WaitId, WaitIdOptions, kill_process, waitid};
+        use std::os::unix::process::ExitStatusExt;
+        let root = tempfile::tempdir().unwrap();
+        let tool = drmr_test_support::install(
+            &root.path().join("stopped"),
+            &drmr_test_support::ToolSpec {
+                sleep_ms: 60_000,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let mut child = ManagedChild::spawn_with_io_local(
+            Command::new(tool),
+            true,
+            ManagedIo {
+                stdin: ManagedStdio::Null,
+                stdout: ManagedStdio::Null,
+                stderr: ManagedStdio::Null,
+            },
+        )
+        .unwrap();
+        let pid = Pid::from_raw(i32::try_from(child.id()).unwrap()).unwrap();
+        kill_process(pid, Signal::STOP).unwrap();
+        assert!(
+            waitid(
+                WaitId::Pid(pid),
+                WaitIdOptions::STOPPED | WaitIdOptions::NOWAIT
+            )
+            .unwrap()
+            .unwrap()
+            .stopped()
+        );
+        let (started, ready) = std::sync::mpsc::channel();
+        let (finished, completion) = std::sync::mpsc::channel();
+        let (allow_cleanup, cleanup_allowed) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            started.send(()).unwrap();
+            let status = child.wait();
+            finished.send(()).unwrap();
+            // Keep the direct child unreaped until the controller's one signal.
+            cleanup_allowed.recv().unwrap();
+            let cleanup = child.finish();
+            (status, cleanup)
+        });
+        ready.recv().unwrap();
+        let early = completion.recv_timeout(std::time::Duration::from_millis(20));
+        // Always release and join the owned fixture before evaluating failure.
+        let killed = kill_process(pid, Signal::KILL);
+        allow_cleanup.send(()).unwrap();
+        let (status, cleanup) = worker.join().unwrap();
+        assert_eq!(early, Err(std::sync::mpsc::RecvTimeoutError::Timeout));
+        killed.unwrap();
+        assert_eq!(status.unwrap().signal(), Some(Signal::KILL.as_raw()));
+        cleanup.unwrap();
+        assert_eq!(
+            waitid(
+                WaitId::Pid(pid),
+                WaitIdOptions::EXITED | WaitIdOptions::NOHANG
+            )
+            .unwrap_err(),
+            Errno::CHILD
+        );
+    }
 
     #[test]
     fn observed_direct_exit_stays_unreaped_until_owned_group_termination() {
