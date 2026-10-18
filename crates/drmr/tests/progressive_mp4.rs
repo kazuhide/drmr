@@ -687,7 +687,7 @@ fn nondefault_gain_never_becomes_a_verified_default_gain_presentation() {
         assert!(
             String::from_utf8_lossy(&result.stderr).contains("presentation-window-not-supported")
         );
-        assert!(result.stdout.is_empty());
+        assert_eq!(result.stdout, [] as [u8; 0]);
     }
     let output = root.path().join("output.mp4");
     let before = std::fs::read(&half).unwrap();
