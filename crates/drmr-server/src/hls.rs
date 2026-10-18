@@ -560,8 +560,7 @@ impl HlsService {
         Ok(Some(row))
     }
 
-    /// `_record(handle, kind, asset_id, analysis_id)`: a new record, written; for a conversion
-    /// a failed write keeps the in-memory row (marked unsaved), for clear HLS it is dropped.
+    /// Keep a launched job owned in memory even if its initial history write fails.
     fn record(
         &self,
         state: &mut State,
@@ -589,16 +588,31 @@ impl HlsService {
         match self.persist(&row, false) {
             Ok(()) => Ok(()),
             Err(error) => {
-                if kind == "convert" {
-                    if let Some(row) = state.records.get_mut(&handle.job_id) {
-                        row.unsaved = true;
-                    }
-                } else {
-                    state.records.shift_remove(&handle.job_id);
+                if let Some(row) = state.records.get_mut(&handle.job_id) {
+                    row.unsaved = true;
                 }
                 Err(error.into_service())
             }
         }
+    }
+
+    /// Register private cleanup ownership before propagating any history error.
+    fn record_private(
+        &self,
+        state: &mut State,
+        handle: &JobHandle,
+        kind: &str,
+        asset_id: &str,
+        analysis_id: Option<&str>,
+        private_files: Vec<PathBuf>,
+    ) -> Result<(), ServiceError> {
+        let recorded = self.record(state, handle, kind, asset_id, analysis_id);
+        if let Some(row) = state.records.get_mut(&handle.job_id) {
+            row.private_files = private_files;
+        }
+        // The monitor may wait for the caller's state lock; it never joins here.
+        self.watch(&handle.job_id);
+        recorded
     }
 
     /// `asset_reserved(asset_id)`: clear-HLS work owns this id (a conversion never reserves).
@@ -1040,16 +1054,12 @@ impl HlsService {
                 .into());
             }
         };
-        self.record(&mut state, &handle, "analysis", &asset_id, None)?;
-        if let Some(row) = state.records.get_mut(&handle.job_id) {
-            row.private_files = vec![path];
-        }
+        self.record_private(&mut state, &handle, "analysis", &asset_id, None, vec![path])?;
         let analysis_id = state
             .records
             .get(&handle.job_id)
             .and_then(|row| row.analysis_id.clone());
         drop(state);
-        self.watch(&handle.job_id);
         let mut answer = Map::new();
         answer.insert("job_id".into(), Value::from(handle.job_id));
         answer.insert(
@@ -1219,16 +1229,6 @@ impl HlsService {
         let (drm_path, selection_path) =
             write_package_configs(&request_dir, &signaling, &analysis, choice)?;
         let handle = self.launch_package(&keys, &analysis, &drm_path, &selection_path)?;
-        self.record(
-            &mut state,
-            &handle,
-            "package",
-            &row.asset_id,
-            row.analysis_id.as_deref(),
-        )?;
-        if let Some(new) = state.records.get_mut(&handle.job_id) {
-            new.private_files = vec![drm_path, selection_path];
-        }
         state.pending_keys.insert(
             handle.job_id.clone(),
             Credentials {
@@ -1236,8 +1236,15 @@ impl HlsService {
                 key: Zeroizing::new(keys.key_hex().to_string()),
             },
         );
+        self.record_private(
+            &mut state,
+            &handle,
+            "package",
+            &row.asset_id,
+            row.analysis_id.as_deref(),
+            vec![drm_path, selection_path],
+        )?;
         drop(state);
-        self.watch(&handle.job_id);
         let mut answer = Map::new();
         answer.insert("job_id".into(), Value::from(handle.job_id));
         Ok(Value::Object(answer))
@@ -2411,6 +2418,74 @@ mod tests {
         assert!(!state.contexts.contains_key("job"));
         assert_eq!(std::fs::read(&request).unwrap(), b"private request");
         assert_eq!(std::fs::read(&metadata).unwrap(), before);
+    }
+
+    #[test]
+    fn initial_history_failure_cannot_discard_live_private_request_ownership() {
+        use std::io::Write as _;
+        let root = tempfile::tempdir().unwrap();
+        let executable = drmr_test_support::install(
+            &root.path().join("child"),
+            &drmr_test_support::ToolSpec {
+                sleep_ms: 60_000,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let manager = Arc::new(
+            ConversionJobManager::new(
+                &root.path().join("jobs"),
+                vec![executable.into_os_string()],
+                Arc::new(Vec::new),
+            )
+            .unwrap(),
+        );
+        let config = Arc::new(ServerConfig::new(
+            root.path().join("catalog"),
+            root.path().join("output"),
+        ));
+        let service = HlsService::new(config, manager.clone()).unwrap();
+        drmr_core::native::create_private_dir_all(&service.output.join("asset")).unwrap();
+        let reports = service.output.join("asset/reports");
+        std::fs::write(&reports, b"blocks the initial record write").unwrap();
+        let request = service.output.join("private-request.json");
+        drmr_core::native::create_private_new(&request)
+            .unwrap()
+            .write_all(b"private request")
+            .unwrap();
+        let job = manager.submit_command(&[], &[]).unwrap();
+        {
+            let mut state = service.lock();
+            assert!(
+                service
+                    .record_private(
+                        &mut state,
+                        &job,
+                        "analysis",
+                        "asset",
+                        None,
+                        vec![request.clone()]
+                    )
+                    .is_err()
+            );
+        }
+        assert!(
+            service.owns(&job.job_id),
+            "disk history failure must retain the launched job and its cleanup owner"
+        );
+        assert!(request.is_file());
+        manager.shutdown().unwrap();
+        assert!(
+            service.shutdown().is_err(),
+            "unsaved terminal history is not successful shutdown"
+        );
+        assert!(
+            !request.exists(),
+            "a finished child no longer needs its private request"
+        );
+        std::fs::remove_file(&reports).unwrap();
+        drmr_core::native::create_private_dir_all(&reports).unwrap();
+        service.shutdown().unwrap();
     }
 
     #[cfg(windows)]

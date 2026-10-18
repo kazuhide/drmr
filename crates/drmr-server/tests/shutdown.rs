@@ -75,6 +75,27 @@ fn failed_history_cleanup_keeps_the_server_owner_available_for_recovery() {
     assert!(!app.manager.is_busy());
     assert_eq!(app.service.status(&job_id).unwrap()["state"], "interrupted");
     assert_eq!(h.client.get("/api/catalog").status, 503);
+    let observed = h.client.get(&format!("/api/jobs/{job_id}"));
+    assert_eq!(observed.status, 200);
+    assert_eq!(observed.json()["state"], "interrupted");
+    assert_eq!(
+        h.client
+            .post_json(&format!("/api/jobs/{job_id}/stop"), &json!({}))
+            .status,
+        200
+    );
+    assert!(
+        h.client
+            .get(&format!("/api/jobs/{job_id}/log"))
+            .text()
+            .contains("event: done")
+    );
+    assert_eq!(
+        h.client
+            .post_json("/api/convert", &json!({"asset_id": "retained"}))
+            .status,
+        503
+    );
     std::fs::remove_file(&reports).unwrap();
     std::fs::rename(&held, &reports).unwrap();
     server.shutdown().unwrap();

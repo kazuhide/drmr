@@ -826,6 +826,90 @@ mod tests {
     }
 
     #[test]
+    fn shutdown_keeps_http_observation_available_while_native_cleanup_is_pending() {
+        let root = tempfile::tempdir().unwrap();
+        let config =
+            crate::ServerConfig::new(root.path().join("catalog"), root.path().join("output"));
+        let mut server = crate::spawn(crate::ServerConfig {
+            bind_port: 0,
+            ..config
+        })
+        .unwrap();
+        let app = server.app.clone();
+        let url = server.url();
+        let mut state = state_with_child(root.path());
+        let log = app.manager.jobs_dir().join("job.jsonl");
+        let mut file = native::create_private_new(&log).unwrap();
+        file.write_all(b"{\"stage\":\"test\",\"message\":\"before cleanup\"}\n")
+            .unwrap();
+        state.log_file = Some(file);
+        *app.manager.lock() = state;
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        app.manager
+            .lock()
+            .stop_with(move |child| {
+                entered_tx.send(()).unwrap();
+                let _ = release_rx.recv();
+                child.finish()
+            })
+            .unwrap();
+        entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let shutdown = std::thread::spawn(move || {
+            let result = server.shutdown();
+            (server, result)
+        });
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !app.manager.lock().closing {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let agent: ureq::Agent = ureq::Agent::config_builder()
+            .http_status_as_error(false)
+            .timeout_global(Some(Duration::from_secs(5)))
+            .build()
+            .into();
+        let mut status = agent.get(&format!("{url}/api/jobs/job")).call().unwrap();
+        assert_eq!(status.status().as_u16(), 200);
+        let payload: Value =
+            serde_json::from_str(&status.body_mut().read_to_string().unwrap()).unwrap();
+        assert_eq!(payload["state"], "running");
+        assert_eq!(payload["stop_requested"], true);
+        assert_eq!(
+            agent
+                .post(&format!("{url}/api/jobs/job/stop"))
+                .header("Content-Type", "application/json")
+                .send("{}")
+                .unwrap()
+                .status()
+                .as_u16(),
+            202
+        );
+        assert_eq!(
+            agent
+                .get(&format!("{url}/api/jobs/job/log"))
+                .call()
+                .unwrap()
+                .status()
+                .as_u16(),
+            200
+        );
+        assert_eq!(
+            agent
+                .post(&format!("{url}/api/convert"))
+                .header("Content-Type", "application/json")
+                .send("{}")
+                .unwrap()
+                .status()
+                .as_u16(),
+            503
+        );
+        release_tx.send(()).unwrap();
+        let (_owner, result) = shutdown.join().unwrap();
+        result.unwrap();
+    }
+
+    #[test]
     fn a_stop_intent_never_promotes_a_zero_exit_to_success() {
         let root = tempfile::tempdir().unwrap();
         let mut state = state_with_child(root.path());

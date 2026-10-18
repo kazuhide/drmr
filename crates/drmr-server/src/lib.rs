@@ -45,6 +45,7 @@ pub struct App {
     streams: Arc<workers::Workers>,
     requests: Arc<workers::Requests>,
     shutdown_lock: std::sync::Mutex<()>,
+    closing: std::sync::atomic::AtomicBool,
 }
 
 /// Why the application could not be built.
@@ -86,6 +87,7 @@ impl App {
             streams: Arc::new(workers::Workers::default()),
             requests: Arc::new(workers::Requests::default()),
             shutdown_lock: std::sync::Mutex::new(()),
+            closing: std::sync::atomic::AtomicBool::new(false),
         }))
     }
 
@@ -97,19 +99,28 @@ impl App {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         self.manager.begin_shutdown();
-        self.requests.close();
+        self.closing
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         let queue_ok = self.queue.shutdown().is_ok();
         self.manager
             .shutdown()
             .map_err(|_| ShutdownError::CleanupUnconfirmed)?;
+        // Observations remain available throughout native cleanup. The final drain
+        // closes their own gate before joining streams and blocking dispatches.
+        self.requests.close();
         let streams_ok = self.streams.shutdown().is_ok();
         self.requests.drain();
         let service_ok = self.service.shutdown().is_ok();
-        if !queue_ok || !streams_ok {
-            return Err(ShutdownError::WorkerUnconfirmed);
-        }
-        if !service_ok {
-            return Err(ShutdownError::RecordsUnconfirmed);
+        if !queue_ok || !streams_ok || !service_ok {
+            // A failed embedding host still owns the server. Permit only its
+            // diagnostic routes, with fresh owned streams for logs.
+            self.streams.reopen_after_drain();
+            self.requests.reopen();
+            return Err(if !queue_ok || !streams_ok {
+                ShutdownError::WorkerUnconfirmed
+            } else {
+                ShutdownError::RecordsUnconfirmed
+            });
         }
         Ok(())
     }
@@ -367,6 +378,20 @@ async fn handle(
 async fn respond(app: &Arc<App>, req: &mut Req, body: axum::body::Body) -> Reply {
     match router::route(&req.method, &req.path) {
         Match::Found(endpoint, values) => {
+            let observation = matches!(
+                endpoint,
+                router::Endpoint::Index
+                    | router::Endpoint::Static
+                    | router::Endpoint::JobStatus
+                    | router::Endpoint::JobStop
+                    | router::Endpoint::JobLog
+                    | router::Endpoint::JobLogDownload
+                    | router::Endpoint::HlsJobs
+                    | router::Endpoint::QueueState
+            );
+            if app.closing.load(std::sync::atomic::Ordering::SeqCst) && !observation {
+                return Reply::json_error(503, "server-shutting-down");
+            }
             if routes::reads_body(endpoint, &req.method) {
                 if req
                     .content_length()

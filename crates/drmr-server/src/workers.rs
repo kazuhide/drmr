@@ -67,6 +67,17 @@ impl Workers {
             .closing
     }
 
+    /// Reopen only after a completed drain, to retain diagnostics after failed shutdown.
+    pub(crate) fn reopen_after_drain(&self) {
+        let _drain = self.drain.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        assert!(
+            state.handles.is_empty(),
+            "diagnostics reopen only after draining workers"
+        );
+        state.closing = false;
+    }
+
     pub(crate) fn shutdown(&self) -> io::Result<()> {
         let _drain = self.drain.lock().unwrap_or_else(PoisonError::into_inner);
         self.close();
@@ -121,6 +132,15 @@ impl Requests {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .closing = true;
+    }
+
+    pub(crate) fn reopen(&self) {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        assert_eq!(
+            state.active, 0,
+            "diagnostics reopen only after draining requests"
+        );
+        state.closing = false;
     }
 
     pub(crate) fn drain(&self) {
