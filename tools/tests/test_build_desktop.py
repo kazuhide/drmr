@@ -210,7 +210,34 @@ class DesktopPackages(unittest.TestCase):
             with patch.object(BUILD.sys, "platform", "darwin"):
                 archive = BUILD.archive_bundle(bundle)
             with BUILD.tarfile.open(archive) as stream:
-                cli = stream.getmember("drmr.app/Contents/MacOS/drmr")
-                self.assertEqual(cli.mode & 0o777, 0o755)
-                self.assertEqual(cli.uname, "")
-                self.assertEqual(stream.extractfile(cli).read(), b"drmr")
+                for name in ("drmr", "drmr-desktop"):
+                    binary = stream.getmember("drmr.app/Contents/MacOS/" + name)
+                    self.assertEqual(binary.mode & 0o777, 0o755)
+                    self.assertEqual(binary.uname, "")
+                    self.assertEqual(stream.extractfile(binary).read(), name.encode())
+
+
+    def test_tar_binary_permissions_do_not_depend_on_host_executable_bits(self):
+        for platform in ("darwin", "linux"):
+            with self.subTest(platform=platform), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                bundle = root / ("drmr.app" if platform == "darwin" else "drmr-desktop")
+                binaries = bundle / "Contents" / "MacOS" if platform == "darwin" else bundle
+                binaries.mkdir(parents=True)
+                for name in ("drmr", "drmr-desktop"):
+                    (binaries / name).write_bytes(name.encode())
+                    (binaries / name).chmod(0o666)
+                notice = bundle / "NOTICE.txt"
+                notice.write_text("publisher notice")
+                notice.chmod(0o666)
+                with patch.object(BUILD.sys, "platform", platform):
+                    archive = BUILD.archive_bundle(bundle)
+                with BUILD.tarfile.open(archive) as stream:
+                    prefix = bundle.name + ("/Contents/MacOS/" if platform == "darwin" else "/")
+                    for name in ("drmr", "drmr-desktop"):
+                        binary = stream.getmember(prefix + name)
+                        self.assertEqual(binary.mode & 0o777, 0o755)
+                        self.assertEqual(stream.extractfile(binary).read(), name.encode())
+                    document = stream.getmember(bundle.name + "/NOTICE.txt")
+                    self.assertEqual(document.mode & 0o777, 0o666)
+                    self.assertEqual(stream.extractfile(document).read(), b"publisher notice")

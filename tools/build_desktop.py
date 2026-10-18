@@ -210,9 +210,16 @@ def archive_bundle(destination):
                 output.write(source, source.relative_to(destination.parent))
     else:
         archive = destination.parent / (destination.name + ".tar.gz")
+        binary_root = PurePosixPath(destination.name)
+        if sys.platform == "darwin":
+            binary_root = binary_root / "Contents" / "MacOS"
+        executables = {str(binary_root / name) for name in ("drmr", "drmr-desktop")}
         def metadata(member):
             member.uid = member.gid = 0
             member.uname = member.gname = ""
+            # Target executables need POSIX modes even when the host cannot represent them.
+            if member.isfile() and member.name in executables:
+                member.mode = 0o755
             return member
         with tarfile.open(archive, "x:gz") as output:
             output.add(destination, arcname=destination.name, filter=metadata)
