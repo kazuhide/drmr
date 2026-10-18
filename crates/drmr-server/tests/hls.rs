@@ -1640,13 +1640,13 @@ fn stopping_analysis_removes_request_secrets_only_after_confirmed_completion() {
     let job_id = answer.json()["job_id"].as_str().unwrap().to_string();
     w.h.cli.wait_calls(1);
     let requests = w.h.output.join("stopped-source/clear/_requests");
-    assert!(!json_files(&requests).is_empty());
+    assert_ne!(json_files(&requests), Vec::<PathBuf>::new());
     let stop = w.post(&format!("/api/jobs/{job_id}/stop"), &json!({}));
     assert!(matches!(stop.status, 200 | 202));
     assert_eq!(stop.json()["stop_requested"], true);
     let final_state = w.h.wait_job(&job_id);
     assert_eq!(final_state["state"], "interrupted");
-    assert!(json_files(&requests).is_empty());
+    assert_eq!(json_files(&requests), Vec::<PathBuf>::new());
     assert_eq!(
         w.get("/api/hls/jobs").json()["jobs"][0]["state"],
         "interrupted"
@@ -1665,12 +1665,12 @@ fn explicit_shutdown_confirms_analysis_cleanup_with_external_app_ownership() {
     let job_id = response.json()["job_id"].as_str().unwrap().to_string();
     w.h.cli.wait_calls(1);
     let requests = w.h.output.join("close-active/clear/_requests");
-    assert!(!json_files(&requests).is_empty());
+    assert_ne!(json_files(&requests), Vec::<PathBuf>::new());
     let mut server = w.h.server.take().unwrap();
     let app = server.app.clone();
     server.shutdown().unwrap();
     assert_eq!(app.service.status(&job_id).unwrap()["state"], "interrupted");
-    assert!(json_files(&requests).is_empty());
+    assert_eq!(json_files(&requests), Vec::<PathBuf>::new());
     assert!(!app.manager.is_busy());
     assert!(!app.queue.runner_active());
 }
