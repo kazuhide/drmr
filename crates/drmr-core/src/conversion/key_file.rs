@@ -19,6 +19,7 @@ pub struct OperatorKeys {
     pub output: Option<OutputKey>,
     pub hls_input: HlsInputKeys,
     pub hls_output: Option<HlsOutputKey>,
+    pub signaling: Option<super::OutputSignaling>,
     sample_hls_uri: Option<Zeroizing<String>>,
 }
 
@@ -30,6 +31,7 @@ impl std::fmt::Debug for OperatorKeys {
             .field("output", &self.output)
             .field("hls_input", &self.hls_input)
             .field("hls_output", &self.hls_output)
+            .field("signaling", &self.signaling)
             .finish_non_exhaustive()
     }
 }
@@ -112,6 +114,19 @@ struct RawOutput {
     key: String,
     hls_key_uri: Option<String>,
     iv: Option<String>,
+    signaling: Option<RawSignaling>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawSignaling {
+    system: String,
+    license_url: String,
+}
+impl Drop for RawSignaling {
+    fn drop(&mut self) {
+        self.license_url.zeroize();
+    }
 }
 
 impl Drop for RawOutput {
@@ -223,13 +238,32 @@ pub fn read(path: &Path) -> Result<OperatorKeys, ConversionError> {
             }
         })
         .transpose()?;
+    let signaling = read_signaling(&raw, output.is_some(), sample_hls_uri.is_some())?;
     Ok(OperatorKeys {
         input,
         output,
         hls_input,
         hls_output,
+        signaling,
         sample_hls_uri,
     })
+}
+
+fn read_signaling(
+    raw: &RawFile,
+    has_output: bool,
+    has_uri: bool,
+) -> Result<Option<super::OutputSignaling>, ConversionError> {
+    raw.output
+        .as_ref()
+        .and_then(|key| key.signaling.as_ref())
+        .map(|value| {
+            if value.system != "playready" || !has_output || has_uri {
+                return Err(INVALID);
+            }
+            super::OutputSignaling::playready(&value.license_url).map_err(|_| INVALID)
+        })
+        .transpose()
 }
 
 fn private_file(path: &Path) -> Result<std::fs::File, ConversionError> {

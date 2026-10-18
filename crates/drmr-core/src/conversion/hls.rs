@@ -699,6 +699,7 @@ impl Converter {
         input_keys: &InputKeys,
         output_key: &HlsOutputKey,
     ) -> Result<ConversionReport, ConversionError> {
+        self.refuse_signaling()?;
         if output_key.associated_iv().is_some() {
             return Err(ConversionError("output-iv-not-used"));
         }

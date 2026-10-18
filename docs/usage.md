@@ -165,6 +165,31 @@ New commands use an owner-only JSON configuration, with no environment fallback.
 
 `input.keys` maps MP4 key identifiers (KIDs) to decryption keys. `input.hls_keys` maps each exact HLS AES-128 or SAMPLE-AES TS key URI to a key supplied by you; drmr never retrieves those URIs. Omit unused input entries. For `cenc`/`cbcs`, provide `output.kid` and `output.key`. CBCS HLS also requires `output.hls_key_uri` for playlist signaling. For HLS AES-128, omit `output.kid` and provide `output.key` plus `output.hls_key_uri`; segment encryption does not use an MP4 key identifier. For clear output, omit `output` entirely.
 
+To explicitly generate PlayReady signaling, add this object inside `output`
+alongside its `kid` and `key`, then use `--to cbcs --format dash`:
+
+```json
+"signaling": {"system": "playready", "license_url": "https://example.invalid/license"}
+```
+
+This first profile accepts a qualified clear MP4 containing H.264 video and
+optional AAC audio from the same complete file. Existing PSSH/protection and
+unknown opaque metadata are refused, including encoder tags whose preservation
+has not been qualified. Other input formats, encryption targets, and DRM systems
+are outside this profile; see [conversion support](conversion-support.md#explicit-playready-signaling).
+Omitting `signaling` retains the existing conversion behavior.
+
+The license URL must be an absolute HTTP(S) address without credentials,
+fragments, whitespace, or control characters, at most 4096 UTF-8 bytes. Its exact
+text is retained in the generated metadata; drmr does not canonicalize or request
+it. It can contain sensitive query parameters: keep the operator JSON private
+and treat the generated MPD and initialization segments as publishing that
+address. The URL, PRO, and PSSH are excluded from logs and JSON reports.
+The external packager's live process arguments can expose the PSSH and its
+embedded URL to operating-system process inspection, as they can expose keys.
+Generated metadata and known-key media verification do not establish license
+acquisition or device playback; `license_playback_verified` remains false.
+
 For SAMPLE-AES TS, the content key also needs its associated initialization
 vector (IV). Supply `input.hls_keys[].iv` when the playlist does not provide an
 explicit IV. If both are supplied, they must match. Use the IV associated with

@@ -54,6 +54,7 @@ impl Converter {
         &self,
         request: TrackConversionRequest<'_>,
     ) -> Result<ConversionReport, ConversionError> {
+        self.validate_signaling_tracks(&request)?;
         if request.format == OutputFormat::HlsTs {
             return Err(ConversionError("ts-original-evidence-required"));
         }
@@ -261,6 +262,7 @@ impl Converter {
         if !passed {
             return Err(ConversionError("round-trip-verification-failed"));
         }
+        self.verify_signaled_output(&sources[0].source, request, stage)?;
         Ok((checks, output_tracks, input_tracks))
     }
     fn normalize_tracks(
@@ -277,12 +279,16 @@ impl Converter {
             super::files::create_dir(&directory)?;
             let source = directory.join("source.mp4");
             copy_private(&track.source, &source)?;
+            if self.output_signaling.is_some() {
+                super::signaling::clear_mp4(&source, &self.backend.stop)?;
+            }
             let prepared = prepare(&source, track.index, track.kind, request.input_keys)?;
             let profile = self.backend.profile_stream(
                 &source,
                 track.index,
                 key_for(&prepared, request.input_keys),
             )?;
+            self.validate_signaling_codec(&profile, track.kind)?;
             if profile["codec_type"].as_str()
                 != Some(if track.kind == TrackKind::Audio {
                     "audio"
@@ -365,6 +371,17 @@ impl Converter {
             ]);
         }
         let secret = request.output_key.map(|k| k.0.key_hex());
+        let signaling = self
+            .output_signaling
+            .as_ref()
+            .map(|value| {
+                value.objects(
+                    request
+                        .output_key
+                        .ok_or(ConversionError("output-key-required"))?,
+                )
+            })
+            .transpose()?;
         if let (Some(key), Some(secret)) = (request.output_key, secret.as_ref()) {
             argv.extend([
                 "--enable_raw_key_encryption".into(),
@@ -383,12 +400,27 @@ impl Converter {
                 ]);
             }
         }
-        let secrets: Vec<&str> = secret
+        if let Some(signaling) = &signaling {
+            argv.extend(["--pssh".into(), signaling.hex.to_string()]);
+        }
+        let mut secrets: Vec<&str> = secret
             .iter()
             .map(|s| s.as_str())
             .chain(request.hls_key_uri)
             .collect();
+        if let Some(signaling) = &signaling {
+            secrets.extend(signaling.secrets());
+        }
         self.backend.run(&argv, "packager", &secrets)?;
+        if let Some(signaling) = &signaling {
+            signaling.finish(
+                root,
+                clear.len(),
+                request
+                    .output_key
+                    .ok_or(ConversionError("output-key-required"))?,
+            )?;
+        }
         Ok(())
     }
 }
@@ -1143,6 +1175,7 @@ impl Converter {
         &self,
         request: ConversionRequest<'_>,
     ) -> Result<ConversionReport, ConversionError> {
+        self.validate_signaling_input(&request)?;
         validate_output(&request)?;
         let work = workspace()?;
         let input = VerificationSource {

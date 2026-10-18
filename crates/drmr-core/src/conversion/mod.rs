@@ -23,6 +23,8 @@ mod cenc;
 mod files;
 mod hls;
 mod keys;
+mod signaling;
+pub use signaling::OutputSignaling;
 mod presentation;
 mod progressive;
 mod timing;
@@ -89,6 +91,7 @@ pub struct Converter {
     backend: Backend,
     maximum_workers: Option<usize>,
     downloaded: Option<Arc<download::Seal>>,
+    output_signaling: Option<Arc<OutputSignaling>>,
 }
 impl Converter {
     pub fn new(
@@ -99,6 +102,7 @@ impl Converter {
         Self {
             maximum_workers: None,
             downloaded: None,
+            output_signaling: None,
             backend: Backend {
                 stop: crate::concurrency::Stop::new(),
                 runner,
@@ -133,6 +137,7 @@ impl Converter {
             backend,
             maximum_workers: self.maximum_workers,
             downloaded: self.downloaded.clone(),
+            output_signaling: self.output_signaling.clone(),
         };
         let result = execute(&command);
         (result, measurement.report())
@@ -142,6 +147,18 @@ impl Converter {
     pub fn with_stop(mut self, stop: crate::concurrency::Stop) -> Self {
         self.backend.stop = stop;
         self
+    }
+    /// Opt into one qualified output-signaling profile; unsupported routes refuse it.
+    #[must_use]
+    pub fn with_output_signaling(mut self, signaling: impl Into<Option<OutputSignaling>>) -> Self {
+        self.output_signaling = signaling.into().map(Arc::new);
+        self
+    }
+    fn refuse_signaling(&self) -> Result<(), ConversionError> {
+        if self.output_signaling.is_some() {
+            return Err(ConversionError("output-signaling-profile-not-supported"));
+        }
+        Ok(())
     }
     fn publish(&self, source: &Path, destination: &Path) -> Result<(), ConversionError> {
         let _scope = self.backend.scope(measurement::Phase::Publication);
@@ -184,6 +201,7 @@ impl Converter {
         hls_keys: &HlsInputKeys,
         output_key: &HlsOutputKey,
     ) -> Result<ConversionReport, ConversionError> {
+        self.refuse_signaling()?;
         if output_key.associated_iv().is_some() {
             return Err(ConversionError("output-iv-not-used"));
         }
@@ -216,6 +234,7 @@ impl Converter {
         hls_keys: &HlsInputKeys,
         output_key: Option<&OutputKey>,
     ) -> Result<ConversionReport, ConversionError> {
+        self.refuse_signaling()?;
         self.hls_input(input, output, target, input_keys, hls_keys, output_key)
     }
     pub fn convert_mp4(
@@ -226,6 +245,7 @@ impl Converter {
         input_keys: &InputKeys,
         output_key: Option<&OutputKey>,
     ) -> Result<ConversionReport, ConversionError> {
+        self.refuse_signaling()?;
         if target == TargetProtection::HlsSampleAes {
             return Err(ConversionError("target-requires-ts-output"));
         }
