@@ -979,7 +979,8 @@ fn hls_media_paths(path: &Path) -> Result<Vec<MediaPath>, ConversionError> {
             }
             paths.push(MediaPath {
                 path: hls::local_resource(&root, line)?,
-                role: audio_group.as_ref().map(|_| TrackKind::Video),
+                // Resolve variant roles only after every rendition declaration is known.
+                role: None,
                 variants: 0,
             });
             pending = false;
@@ -999,12 +1000,33 @@ fn hls_media_paths(path: &Path) -> Result<Vec<MediaPath>, ConversionError> {
     if variant_groups.iter().any(|group| *group != audio_group) {
         return Err(ConversionError("hls-audio-association-not-supported"));
     }
-    let mut seen = std::collections::BTreeSet::new();
-    paths.retain(|p| seen.insert(p.path.clone()));
-    for media in &mut paths {
-        media.variants = variant_groups.len();
+    reconcile_media_paths(paths, audio_group.is_some(), variant_groups.len())
+}
+fn reconcile_media_paths(
+    paths: Vec<MediaPath>,
+    separate_audio: bool,
+    variants: usize,
+) -> Result<Vec<MediaPath>, ConversionError> {
+    let mut seen = std::collections::BTreeMap::new();
+    let mut unique = Vec::new();
+    for mut media in paths {
+        if separate_audio && media.role.is_none() {
+            media.role = Some(TrackKind::Video);
+        }
+        // Canonical aliases must agree before any duplicate resource can be discarded.
+        match seen.get(&media.path) {
+            Some(role) if *role != media.role => {
+                return Err(ConversionError("hls-audio-association-not-supported"));
+            }
+            Some(_) => continue,
+            None => {
+                seen.insert(media.path.clone(), media.role);
+            }
+        }
+        media.variants = variants;
+        unique.push(media);
     }
-    Ok(paths)
+    Ok(unique)
 }
 
 /// Local conversion inputs with independent input and output keys. No URI retrieves a key.

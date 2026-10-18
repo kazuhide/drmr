@@ -2,7 +2,7 @@
 use super::{
     Aes128Key, ConversionRequest, Converter, HlsInputKeys, HlsOutputKey, INPUT_IV, INPUT_KEY,
     InputKeys, KEY_URI, OUTPUT_IV, OUTPUT_KEY, OutputFormat, Path, SegmentIv, TargetProtection,
-    all_checks, common, converter, sample_aes_fixture,
+    all_checks, common, converter, sample_aes_fixture, shaka_source,
 };
 use drmr_core::conversion::{VerificationReport, VerificationRequest, VerificationSource};
 use drmr_core::toolrun::{Secrets, ToolRunner};
@@ -215,6 +215,19 @@ fn final_cipher_picture_audio_clock_and_master_associations_cannot_escape_fresh_
     let master = output.join("master.m3u8");
     let before = std::fs::read_to_string(&master).unwrap();
     assert!(before.contains("AUDIO=\"default-audio-group\""));
+    let mut reordered = before
+        .lines()
+        .filter(|line| !line.starts_with("#EXT-X-MEDIA:"))
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    reordered.extend(
+        before
+            .lines()
+            .filter(|line| line.starts_with("#EXT-X-MEDIA:"))
+            .map(str::to_owned),
+    );
+    std::fs::write(&master, reordered.join("\n") + "\n").unwrap();
+    all_checks(&verify(&c, &fixture.clear, &output, &correct).unwrap());
     std::fs::write(
         &master,
         before.replace("AUDIO=\"default-audio-group\"", "AUDIO=\"unrelated-group\""),
@@ -385,4 +398,63 @@ fn whole_resource_aes_ts_rejects_wrong_key_manifest_iv_and_last_padding_block_co
     std::fs::write(segment, original).unwrap();
     all_checks(&verify(&c, &source, &output, &material.keys).unwrap());
     assert_eq!(common::snapshot_tree(source.parent().unwrap()), before);
+}
+
+#[test]
+fn master_audio_video_aliases_are_reconciled_independently_of_declaration_order() {
+    let root = drmr_core::native::private_tempdir().unwrap();
+    let input = shaka_source(&root.path().join("video"), "video", false);
+    let directory = input.parent().unwrap();
+    let original = common::snapshot_tree(directory);
+    let master = directory.join("master.m3u8");
+    let original_master = std::fs::read(&master).ok();
+    let uri = input.file_name().unwrap().to_str().unwrap();
+    let plain = format!("#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=100000\n{uri}\n");
+    std::fs::write(&master, &plain).unwrap();
+    let c = converter();
+    all_checks(&verify(&c, &input, directory, &HlsInputKeys::default()).unwrap());
+    let variant = format!("#EXT-X-STREAM-INF:BANDWIDTH=100000,AUDIO=\"g\"\n{uri}\n");
+    let events = Arc::new(drmr_core::events::Collector::default());
+    let guarded = Converter::new(
+        Arc::new(ToolRunner::new(
+            Arc::new(Secrets::default()),
+            events.clone(),
+        )),
+        "packager",
+        "ffmpeg",
+    );
+    let output = root.path().join("refused-output");
+    let mut outcomes = Vec::new();
+    for audio_uri in [uri.to_owned(), format!("./{uri}")] {
+        let audio = format!(
+            "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"g\",NAME=\"stream_0\",URI=\"{audio_uri}\"\n"
+        );
+        for declarations in [format!("{variant}{audio}"), format!("{audio}{variant}")] {
+            std::fs::write(&master, format!("#EXTM3U\n{declarations}")).unwrap();
+            let result = verify(&c, &input, directory, &HlsInputKeys::default())
+                .map(|report| (report.passed, report.media_verified))
+                .map_err(|error| error.0);
+            outcomes.push(result);
+            assert_eq!(
+                convert(&guarded, &master, &output, &HlsInputKeys::default())
+                    .unwrap_err()
+                    .0,
+                "hls-audio-association-not-supported"
+            );
+            assert_eq!(events.records().len(), 0);
+            assert!(!output.exists());
+        }
+    }
+    assert_eq!(outcomes, [Err("hls-audio-association-not-supported"); 4]);
+    std::fs::write(&master, plain).unwrap();
+    all_checks(&verify(&c, &input, directory, &HlsInputKeys::default()).unwrap());
+    if let Some(bytes) = original_master {
+        std::fs::write(master, bytes).unwrap();
+    } else {
+        std::fs::remove_file(master).unwrap();
+    }
+    assert!(
+        common::snapshot_tree(directory) == original,
+        "source bytes must remain unchanged"
+    );
 }
