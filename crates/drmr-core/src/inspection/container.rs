@@ -185,5 +185,6 @@ pub(super) fn inspect_mp4(path: &Path) -> Result<Inspection, InspectionError> {
         tracks,
         systems,
         findings,
-    ))
+    )
+    .with_details(super::PeriodCount::not_applicable()))
 }

@@ -54,19 +54,57 @@ fn summary(report: &Inspection, out: &mut impl Write) -> std::io::Result<()> {
     writeln!(out, "Protection: {}", report.protection.as_str())?;
     writeln!(
         out,
-        "Evidence: {:?}; media samples have not been verified",
-        report.evidence
+        "Evidence: {}; media samples have not been verified",
+        match report.evidence {
+            inspection::Evidence::ContainerMetadata => "container metadata",
+            inspection::Evidence::Manifest => "manifest declarations",
+        }
     )?;
     for track in &report.tracks {
         // Debug quoting prevents metadata from injecting terminal control sequences.
         writeln!(
             out,
-            "  {:?}: {:?}, codec {:?}, {}",
+            "  {:?}: {}, codec {:?}, {}",
             track.id,
-            track.kind,
-            track.codec,
+            track.kind.as_str(),
+            track.codec.as_deref().unwrap_or("unknown"),
             track.protection.as_str()
         )?;
+    }
+    if let Some(details) = &report.details {
+        use inspection::{FactStatus, SampleCoverage};
+        for detail in &details.track_protection {
+            writeln!(
+                out,
+                "  {:?}: cipher {}; encryption unit {} ({})",
+                detail.track_id.as_deref().unwrap_or("unknown"),
+                detail.cipher.description(),
+                detail.encryption_unit.description(),
+                detail.evidence.description()
+            )?;
+            match &detail.pattern.value {
+                Some(value) => writeln!(
+                    out,
+                    "    Default pattern: {} encrypted / {} clear blocks (16 bytes each)",
+                    value.encrypted_blocks, value.clear_blocks
+                )?,
+                None => writeln!(out, "    Pattern: {}", detail.pattern.status.description())?,
+            }
+            writeln!(
+                out,
+                "    Full or partial sample encryption: {}",
+                match detail.sample_coverage {
+                    SampleCoverage::Unknown => "unknown; sample auxiliary data was not inspected",
+                    SampleCoverage::NotApplicable =>
+                        "not applicable to the declared protection unit",
+                }
+            )?;
+        }
+        match (details.periods.status, details.periods.count) {
+            (FactStatus::Known, Some(count)) => writeln!(out, "Declared DASH periods: {count}")?,
+            (FactStatus::NotApplicable, _) => writeln!(out, "DASH periods: not applicable")?,
+            _ => writeln!(out, "Declared DASH periods: unknown")?,
+        }
     }
     for finding in &report.findings {
         writeln!(out, "Note: {}", finding.code)?;
@@ -116,6 +154,38 @@ fn text_plan(plan: &inspection::ConversionPlan) -> std::io::Result<()> {
         formats.join(", ")
     )?;
     writeln!(out, "Operations: {}", plan.operations.join(" -> "))?;
+    if let Some(processing) = &plan.processing {
+        writeln!(
+            out,
+            "Target cipher: {}; encryption unit {} (requested intent)",
+            processing.target.cipher.description(),
+            processing.target.encryption_unit.description()
+        )?;
+        for candidate in &processing.candidates {
+            let tools = candidate
+                .required_tools
+                .iter()
+                .map(|tool| tool.as_str())
+                .collect::<Vec<_>>();
+            writeln!(
+                out,
+                "Conditional route: {} -> {}",
+                candidate.route.as_str(),
+                candidate.output_format.as_str()
+            )?;
+            writeln!(out, "  {}", candidate.explanation)?;
+            writeln!(
+                out,
+                "  Required tools: {}; conditions: {}",
+                tools.join(", "),
+                candidate.condition_codes.join(", ")
+            )?;
+        }
+        writeln!(
+            out,
+            "Source revalidation is required; tools and media have not been verified by this plan."
+        )?;
+    }
     for keys in &plan.keys {
         writeln!(out, "Keys required: {}", keys.role)?;
     }

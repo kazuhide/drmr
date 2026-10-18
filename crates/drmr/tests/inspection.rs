@@ -101,3 +101,28 @@ fn errors_do_not_echo_secret_source_urls_and_new_plan_requires_a_target() {
     assert_eq!(output.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&output.stderr).contains("--to"));
 }
+
+#[test]
+fn human_plan_explains_unknown_sample_coverage_and_conditional_tools_without_running_them() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = fixture(
+        dir.path(),
+        "input.mpd",
+        r#"<MPD><Period><AdaptationSet contentType="video"><ContentProtection schemeIdUri="urn:mpeg:dash:mp4protection:2011" value="cenc"/><Representation codecs="avc1.64001f"/></AdaptationSet></Period></MPD>"#,
+    );
+    let output = run(&["plan", &input, "--to", "cbcs", "--format", "hls"]);
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(text.contains("AES-128 in counter mode"));
+    assert!(text.contains("Full or partial sample encryption: unknown"));
+    assert!(text.contains("Conditional route: fmp4-hls-presentation"));
+    assert!(text.contains("Required tools: ffmpeg, ffprobe, shaka-packager"));
+    assert!(text.contains("Source revalidation is required"));
+    assert!(text.contains("manifest declaration"));
+    assert!(
+        !text.contains("Some(")
+            && !text.contains("ManifestDeclaration")
+            && !text.contains("NotApplicable")
+    );
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+}

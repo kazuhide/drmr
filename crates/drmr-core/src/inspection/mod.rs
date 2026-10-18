@@ -4,10 +4,20 @@
 //! proves that every media sample is valid or that a DRM license will play on a device.
 
 mod container;
+mod details;
 mod manifests;
 mod planning;
+mod processing;
 
+pub use details::{
+    Cipher, DescriptionEvidence, EncryptionUnit, FactStatus, InspectionDetails, PatternDescription,
+    PeriodCount, ProtectionDescription, SampleCoverage,
+};
 pub use planning::{ConversionPlan, OutputFormat, TargetProtection, plan};
+pub use processing::{
+    ActualProcessing, CandidateRoute, InputPreparation, PlannedProcessing, PlanningStatus,
+    ProcessingRouteId, RequiredTool,
+};
 
 use serde::{Deserialize, Serialize};
 use std::fs::File;
@@ -93,6 +103,16 @@ pub enum TrackKind {
     Text,
     Unknown,
 }
+impl TrackKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Video => "video",
+            Self::Audio => "audio",
+            Self::Text => "text",
+            Self::Unknown => "unknown",
+        }
+    }
+}
 
 /// Counts of encrypted and skipped 16-byte blocks, never IV or key bytes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -135,6 +155,8 @@ pub struct Inspection {
     pub drm_systems: Vec<String>,
     pub findings: Vec<Finding>,
     pub media_verified: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub details: Option<InspectionDetails>,
 }
 
 impl Inspection {
@@ -156,7 +178,20 @@ impl Inspection {
             drm_systems,
             findings,
             media_verified: false,
+            details: None,
         }
+    }
+
+    pub(super) fn with_details(mut self, periods: PeriodCount) -> Self {
+        self.details = Some(InspectionDetails {
+            track_protection: self
+                .tracks
+                .iter()
+                .map(|track| ProtectionDescription::track(track, self.evidence))
+                .collect(),
+            periods,
+        });
+        self
     }
 }
 
