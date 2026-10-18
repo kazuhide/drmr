@@ -26,13 +26,13 @@ impl ProcessingRouteId {
                 "Copy the complete original tracks directly into progressive MP4 to preserve a finite audio presentation, then verify every original track."
             }
             Self::FragmentedMp4 => {
-                "Decrypt and repackage one complete track through fragmented MP4, apply the requested output protection, then compare it with the original."
+                "Decrypt when needed and repackage one complete track through fragmented MP4, apply the requested output protection, then compare it with the original."
             }
             Self::DashPresentation => {
                 "Prepare complete local tracks, package them into DASH segments, and verify each original track against the output presentation."
             }
             Self::Fmp4HlsPresentation => {
-                "Prepare complete local tracks, package fragmented MP4 HLS resources, apply the requested resource or sample protection, and verify each original track."
+                "Prepare complete local tracks, package fragmented MP4 HLS resources, apply output encryption when requested, and verify each original track."
             }
             Self::MpegTsHls => {
                 "Admit the original local transport-stream resources, demultiplex their tracks, package fragmented MP4 HLS, and verify the actual final playlists against the original transport streams."
