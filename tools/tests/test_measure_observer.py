@@ -56,6 +56,20 @@ class Api:
 
 
 class AttributionTests(unittest.TestCase):
+    def test_exhausted_ancestry_budget_reports_the_known_missing_descendants(self):
+        api = Api()
+        api.states = {pid: {"birth": pid + 100, "bytes": 1} for pid in range(10, 81)}
+        api.rows = [(pid, pid - 1) for pid in reversed(range(11, 81))] + [(10, 1)]
+        sampler = observer.Sampler(api, 10, 110, 0.1)
+        try:
+            sampler.sample()
+            result = sampler.summary()
+            self.assertEqual(result["status"], "partial")
+            self.assertEqual(result["reason"], "observation-limit")
+            self.assertGreater(result["incomplete_samples"], 0)
+        finally:
+            sampler.close()
+
     def test_running_exit_time_is_undefined_and_never_used_as_an_edge_boundary(self):
         class FileTime(ctypes.Structure):
             _fields_ = [("dwLowDateTime", ctypes.c_uint32), ("dwHighDateTime", ctypes.c_uint32)]
@@ -144,6 +158,23 @@ class AttributionTests(unittest.TestCase):
 
 
 class CompletionTests(unittest.TestCase):
+    def test_bounded_large_integer_and_deep_json_are_fixed_invalid_reports(self):
+        value = observer.missing("no-process-samples")
+        value["sample_interval_seconds"] = 10**400
+        raw_values = [(json.dumps(value) + "\n").encode("ascii"), b"[" * 1000 + b"]" * 1000 + b"\n"]
+        for raw in raw_values:
+            self.assertLessEqual(len(raw), observer.MAX_SUMMARY_BYTES)
+            class Finished:
+                returncode = 0
+                stdout = io.BytesIO(raw)
+                def wait(self, timeout):
+                    return 0
+                def poll(self):
+                    return 0
+            result = observer.finish(Finished())
+            self.assertEqual(result["reason"], "observer-output-invalid")
+            self.assertEqual(result["observer_cleanup"], "confirmed-exit")
+
     def start(self, body):
         return subprocess.Popen([sys.executable, "-c", body], stdin=subprocess.DEVNULL,
                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, close_fds=True)

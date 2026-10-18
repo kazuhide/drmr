@@ -43,7 +43,7 @@ def validate(value):
         if type(value[name]) is not type(template[name]) or value[name] != template[name]:
             raise Unavailable("observer-output-invalid")
     interval = value["sample_interval_seconds"]
-    if type(interval) not in (int, float) or not math.isfinite(interval) or not 0.02 <= interval <= 10:
+    if type(interval) not in (int, float) or not 0.02 <= interval <= 10 or not math.isfinite(interval):
         raise Unavailable("observer-output-invalid")
     if type(value["status"]) is not str or value["status"] not in ("sampled", "partial", "unmeasured"):
         raise Unavailable("observer-output-invalid")
@@ -75,6 +75,7 @@ class Sampler:
         self.root_pid = root_pid
         self.handles = {}
         self.value = missing("no-process-samples", interval)
+        self.limit_hit = False
         root = api.open(root_pid)
         try:
             if root.times()[0] != creation:
@@ -93,6 +94,7 @@ class Sampler:
         try:
             rows = self.api.snapshot()
             if len(rows) > MAX_SNAPSHOT_ROWS:
+                self.limit_hit = True
                 raise Unavailable("observation-limit")
             pending = dict(rows)
             if self.root_pid not in pending:
@@ -135,6 +137,7 @@ class Sampler:
                             continue
                         if previous is None:
                             if len(self.handles) >= MAX_PROCESSES:
+                                self.limit_hit = True
                                 raise Unavailable("observation-limit")
                             self.handles[pid] = handle
                             handle = None
@@ -145,6 +148,9 @@ class Sampler:
                             handle.close()
                 if not changed:
                     break
+            else:
+                incomplete = True
+                self.limit_hit = True
             parent_bytes = self.root.resident_bytes()
             children_bytes = 0
             child_count = 0
@@ -177,6 +183,7 @@ class Sampler:
             self.value["failed_samples"] += 1
 
     def summary(self, reason=None):
+        reason = reason or ("observation-limit" if self.limit_hit else None)
         result = dict(self.value)
         if result["samples"]:
             partial = reason is not None or any(result[name] for name in (
@@ -232,7 +239,7 @@ def finish(process, timeout=2):
         value = validate(value)
         value["observer_cleanup"] = "confirmed-exit"
         return value
-    except (OSError, ValueError, UnicodeError, Unavailable):
+    except (OSError, ValueError, UnicodeError, OverflowError, RecursionError, Unavailable):
         stopped = process.poll() is not None
         result = missing("observer-output-invalid" if stopped else "observer-cleanup-unconfirmed")
         result["observer_cleanup"] = "confirmed-exit" if stopped else "unconfirmed"
