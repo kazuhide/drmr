@@ -59,7 +59,31 @@ New commands use an owner-only JSON configuration, with no environment fallback.
 }
 ```
 
-`input.keys` maps MP4 key identifiers (KIDs) to decryption keys. `input.hls_keys` maps each exact HLS AES-128 key URI to a key supplied by you; drmr never retrieves those URIs. Omit unused input entries. For `cenc`/`cbcs`, provide `output.kid` and `output.key`. CBCS HLS also requires `output.hls_key_uri` for playlist signaling. For HLS AES-128, omit `output.kid` and provide `output.key` plus `output.hls_key_uri`; segment encryption does not use an MP4 key identifier. For clear output, omit `output` entirely.
+`input.keys` maps MP4 key identifiers (KIDs) to decryption keys. `input.hls_keys` maps each exact HLS AES-128 or SAMPLE-AES TS key URI to a key supplied by you; drmr never retrieves those URIs. Omit unused input entries. For `cenc`/`cbcs`, provide `output.kid` and `output.key`. CBCS HLS also requires `output.hls_key_uri` for playlist signaling. For HLS AES-128, omit `output.kid` and provide `output.key` plus `output.hls_key_uri`; segment encryption does not use an MP4 key identifier. For clear output, omit `output` entirely.
+
+For SAMPLE-AES TS, the content key also needs its associated initialization
+vector (IV). Supply `input.hls_keys[].iv` when the playlist does not provide an
+explicit IV. If both are supplied, they must match. Use the IV associated with
+that key; the segment number is not a substitute. A clear-output configuration
+can contain only:
+
+```json
+{
+  "schema_version": 1,
+  "input": {
+    "hls_keys": [{
+      "uri": "<exact URI from the input playlist>",
+      "key": "<32 hexadecimal characters>",
+      "iv": "<32 hexadecimal characters>"
+    }]
+  }
+}
+```
+
+```sh
+drmr convert encrypted-ts/media.m3u8 --to clear --format hls --output clear-hls --keys-file keys.json
+drmr verify clear-hls/master.m3u8 --source encrypted-ts/media.m3u8 --keys-file keys.json --json
+```
 
 The advertised HLS URI is written to output playlists, so choose a location suitable for publication. drmr generates fresh output initialization vectors and never publishes a key file. Input key URI mappings, raw keys, and initialization vectors are excluded from reports and diagnostics. The external packager accepts raw keys in child-process arguments; an operating-system process inspector with sufficient access can observe them.
 

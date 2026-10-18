@@ -74,6 +74,40 @@ Audio-only input is currently refused with `ts-audio-only-timing-proof-not-suppo
 
 Creating a transport stream from a progressive MP4 can itself change audio trimming or padding. This route proves identity to the supplied transport-stream presentation, not to an earlier file from which it was created. All existing staged-size, resource-budget, timeout, cancellation, and confirmed-process-cleanup limits still apply. Access-unit evidence is streamed with an 8 MiB per-packet limit and a charged 64 MiB reader bound; a malformed, oversized, incomplete, or unsuccessful read fails rather than returning a partial proof.
 
+### SAMPLE-AES transport streams
+
+SAMPLE-AES TS uses the [Apple sample-encryption format](https://developer.apple.com/library/archive/documentation/AudioVideo/Conceptual/HLS_Sample_Encryption/Encryption/Encryption.html).
+H.264 keeps codec headers clear and encrypts designated 16-byte blocks in a
+one-encrypted/nine-clear pattern. AAC keeps its transport header and an initial
+clear prefix, then encrypts complete blocks within each audio frame. The IV is
+reset for each protected H.264 network abstraction layer (NAL) unit or audio
+frame. These rules require
+sample-level decryption rather than whole-segment AES-128 decryption.
+
+drmr checks the original encrypted program tables, packet continuity, clocks,
+and packetized elementary streams (PES) before external demultiplexing. It then
+decrypts encoded frames in Rust and records every original frame's content,
+configuration, count, and presentation/decode times. A private clear TS view may
+change encryption signaling and payload stuffing, but must retain those original
+facts and clock references. H.264 escape bytes introduced by encryption are
+removed once; the original encoded escape bytes remain intact.
+
+The private view is checked against that original evidence before packaging.
+Video packet durations are derived from the same unchanged encoded source by
+FFprobe, since PES headers do not store them. Every duration is still required
+and compared exactly. Decoded video-frame counts must match the original encoded
+picture count; AAC must decode all 1,024 samples per frame and channel. Final
+output also passes the existing complete content and timing checks. This covers
+the last buffered packet as well as earlier segments.
+
+The initial profile requires complete PES packets within each segment, a fixed
+SAMPLE-AES method, and the supported Apple stream descriptors. AAC is 48 kHz
+AAC-LC with seven-byte headers, no checksum, and zero declared priming. Unsupported
+descriptors or configuration changes are refused. PES payloads are limited to
+8 MiB each, with bounded simultaneous payloads and packet-position records.
+The native decryption phase shares the command's CPU/memory admission and
+cancellation; its permit is released before external tools run.
+
 ## Packet verification for long presentations
 
 Packet timing verification reads every packet in the selected track. It hashes the ordered presentation time, decode time and duration as fixed-width signed integers with SHA-256, then compares both the complete digest and packet count. Clock units must match; times are never rounded, shifted or sampled. An independent whole-track probe supplies the expected count. Stream metadata, encoded payload and complete decoded content are still checked separately.
