@@ -26,6 +26,12 @@ pub use process_session::ProcessSession;
 #[doc(inline)]
 pub use reset_sigmask::ResetSigmask;
 
+#[cfg(all(windows, feature = "job-object"))]
+#[doc(inline)]
+pub use nonblocking_pipe::NonblockingPipe;
+#[cfg(all(windows, feature = "job-object"))]
+mod nonblocking_pipe;
+
 mod core;
 #[cfg(all(windows, feature = "creation-flags"))]
 mod creation_flags;
