@@ -278,6 +278,8 @@ details.disclosure > .disclosure-body { margin-top: 10px; }
   .brand-name { display: none; }
 }
 @media (max-width: 600px) {
+  .top { gap: 8px; }
+  .top-actions { gap: 4px; }
   .run-row { grid-template-columns: 1fr auto; }
   .log-line { grid-template-columns: 1fr; gap: 0; }
 }
