@@ -127,12 +127,8 @@ fn converter(
         .expect("clap validates the worker upper bound")
 }
 
-fn error(command: &str, error: ConversionError) -> ExitCode {
-    eprintln!("{command}: {error}");
-    if error.0 == "cancelled" {
-        return ExitCode::from(130);
-    }
-    if let Some(hint) = match error.0 {
+fn error_hint(code: &str) -> Option<&'static str> {
+    match code {
         "download-directory-required" => Some(
             "URL input requires --download-dir pointing to a new directory under an existing parent.",
         ),
@@ -151,6 +147,21 @@ fn error(command: &str, error: ConversionError) -> ExitCode {
         "fetch-policy-invalid" => {
             Some("Use an owner-only JSON object with supported, correctly typed fetch settings.")
         }
+        "download-source-unavailable" => Some(
+            "Check network access, allowed origins, authentication, and fetch limits in --fetch-policy.",
+        ),
+        "download-source-not-supported" => Some(
+            "URL input requires completed clear HLS with supported TS or fragmented MP4 media. See docs/conversion-support.md.",
+        ),
+        "download-source-changed" => Some(
+            "The retained source changed or became unavailable. Inspect it and choose a new download directory before retrying the URL.",
+        ),
+        "download-graph-limit" => Some(
+            "The playlist references exceed the bounded URL acquisition profile. See docs/media-processing.md.",
+        ),
+        "download-cleanup-unconfirmed" => Some(
+            "Partial source cleanup could not be confirmed. Inspect the chosen download directory before retrying.",
+        ),
         "resource-budget" => Some(
             "Free memory or run fewer jobs; the worker maximum does not override memory admission.",
         ),
@@ -185,7 +196,15 @@ fn error(command: &str, error: ConversionError) -> ExitCode {
             "Use an FFmpeg build that supplies complete packet timestamps and durations. See docs/media-processing.md.",
         ),
         _ => None,
-    } {
+    }
+}
+
+fn error(command: &str, error: ConversionError) -> ExitCode {
+    eprintln!("{command}: {error}");
+    if error.0 == "cancelled" {
+        return ExitCode::from(130);
+    }
+    if let Some(hint) = error_hint(error.0) {
         eprintln!("{hint}");
     }
     ExitCode::from(

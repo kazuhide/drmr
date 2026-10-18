@@ -77,6 +77,12 @@ acquisition is removed only after active work has stopped.
 Cancellation interrupts active response reads. Name resolution and connection
 setup may wait for the operating system or request timeout before stopping.
 
+Acquisition caps each playlist at 4 MiB, the combined playlist and media resource
+count at 100,000, and planned text and URL metadata at 16 MiB. URI expansion is
+checked before constructing the reference graph. Fetch settings can impose
+additional lower limits; increasing a setting does not bypass the profile. Resource
+bodies stream to private files rather than being retained together in memory.
+
 ## MPEG transport stream input
 
 The fragmented MP4 output route accepts a completed local HLS media playlist, or one local variant pointing to it. Segments must use 188-byte packets, one fixed program, one progressive H.264 video stream, and optionally one AAC-LC audio stream at 48,000 samples per second. It supports a fixed single SPS/PPS video configuration (the sequence and picture parameter sets required by a decoder) and ordinary AAC channel configurations. AAC uses seven-byte transport headers without a checksum and one raw data block per frame. Output is fragmented MP4 HLS with `clear`, `cbcs`, or whole-resource AES-128 protection. Input key URI mappings are supplied by the operator; drmr never retrieves a playlist key URI.
