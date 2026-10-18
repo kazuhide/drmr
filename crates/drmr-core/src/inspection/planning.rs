@@ -240,7 +240,13 @@ fn describe_processing(
         TargetProtection::HlsAes128 => Protection::HlsAes128,
     };
     let mut candidates = Vec::new();
-    if compatible {
+    // Unknown manifest roles need resource admission; known text tracks are refused by every handler.
+    if compatible
+        && !input
+            .tracks
+            .iter()
+            .any(|track| track.kind == TrackKind::Text)
+    {
         for &format in formats {
             match format {
                 OutputFormat::Mp4 => {

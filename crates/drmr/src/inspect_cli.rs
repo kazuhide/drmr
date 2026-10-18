@@ -181,6 +181,12 @@ fn text_plan(plan: &inspection::ConversionPlan) -> std::io::Result<()> {
                 candidate.condition_codes.join(", ")
             )?;
         }
+        if processing.candidates.is_empty() {
+            writeln!(
+                out,
+                "No candidate route is available from the inspected declarations."
+            )?;
+        }
         writeln!(
             out,
             "Source revalidation is required; tools and media have not been verified by this plan."

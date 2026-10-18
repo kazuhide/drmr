@@ -192,3 +192,86 @@ fn the_original_version_one_json_shape_keeps_its_values() {
         serde_json::json!({"schema_version":1,"input":original,"target":"cbcs","formats":["mp4"],"operations":["validate-source","repackage-media","encrypt-output","verify-output"],"keys":[{"role":"output","known_key_ids":[]}],"compatible":true,"execution_available":true,"findings":[{"code":"media-validation-required"},{"code":"source-profile-validation-required"}]})
     );
 }
+
+#[test]
+fn known_text_roles_have_no_executable_candidates_but_keep_version_one_intent_fields() {
+    use inspection::{Evidence, InputFormat, Protection, Track, TrackKind};
+    for codec in ["wvtt", "stpp"] {
+        for format in [OutputFormat::Mp4, OutputFormat::Dash, OutputFormat::Hls] {
+            let report = inspection::plan(
+                Inspection::new(
+                    InputFormat::Mp4,
+                    Evidence::ContainerMetadata,
+                    vec![Track {
+                        id: "text-1".into(),
+                        kind: TrackKind::Text,
+                        codec: Some(codec.into()),
+                        protection: Protection::Clear,
+                        key_ids: vec![],
+                        pattern: None,
+                    }],
+                    vec![],
+                    vec![],
+                ),
+                TargetProtection::Clear,
+                vec![format],
+            );
+            assert!(
+                report.compatible && report.execution_available,
+                "existing intent fields must remain unchanged"
+            );
+            assert!(
+                report.processing.unwrap().candidates.is_empty(),
+                "{codec} -> {format:?} must not advertise an impossible media handler"
+            );
+        }
+    }
+    let mixed = Inspection::new(
+        InputFormat::Mp4,
+        Evidence::ContainerMetadata,
+        vec![
+            Track {
+                id: "video".into(),
+                kind: TrackKind::Video,
+                codec: Some("avc1".into()),
+                protection: Protection::Clear,
+                key_ids: vec![],
+                pattern: None,
+            },
+            Track {
+                id: "text".into(),
+                kind: TrackKind::Text,
+                codec: Some("wvtt".into()),
+                protection: Protection::Clear,
+                key_ids: vec![],
+                pattern: None,
+            },
+        ],
+        vec![],
+        vec![],
+    );
+    let report = inspection::plan(mixed, TargetProtection::Clear, vec![OutputFormat::Dash]);
+    assert!(report.compatible && report.execution_available);
+    assert!(
+        report.processing.unwrap().candidates.is_empty(),
+        "the whole source includes a refused text track"
+    );
+    let root = tempfile::tempdir().unwrap();
+    let playlist = root.path().join("unknown.m3u8");
+    std::fs::write(
+        &playlist,
+        "#EXTM3U\n#EXTINF:2,\nnot-read.ts\n#EXT-X-ENDLIST\n",
+    )
+    .unwrap();
+    let input = inspection::inspect(&playlist).unwrap();
+    assert_eq!(input.tracks[0].kind, TrackKind::Unknown);
+    assert_eq!(
+        inspection::plan(input, TargetProtection::Clear, vec![OutputFormat::Hls])
+            .processing
+            .unwrap()
+            .candidates
+            .len(),
+        2,
+        "unknown HLS roles still require actual resource admission"
+    );
+}

@@ -126,3 +126,31 @@ fn human_plan_explains_unknown_sample_coverage_and_conditional_tools_without_run
     );
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
 }
+
+#[test]
+fn known_text_declarations_have_no_candidate_in_human_or_json_plan() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = fixture(
+        dir.path(),
+        "text.mpd",
+        "<MPD><Period><AdaptationSet contentType=\"text\"><Representation codecs=\"wvtt\"/></AdaptationSet></Period></MPD>",
+    );
+    let output = run(&[
+        "plan", &input, "--to", "clear", "--format", "dash", "--json",
+    ]);
+    assert!(
+        output.status.success(),
+        "legacy intent exit status is unchanged"
+    );
+    let report = json(&output);
+    assert_eq!(report["compatible"], true);
+    assert_eq!(report["execution_available"], true);
+    assert_eq!(report["processing"]["candidates"], serde_json::json!([]));
+    let output = run(&["plan", &input, "--to", "clear", "--format", "dash"]);
+    assert!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .contains("No candidate route is available from the inspected declarations.")
+    );
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+}

@@ -46,6 +46,8 @@ Original local HLS transport-stream resources → native structure admission and
 
 Metadata alone may not qualify a finite MP4 profile or distinguish supported fragmented MP4 HLS from transport-stream HLS. A plan can therefore contain several conditional candidates. Each has `revalidation_required: true` and fixed condition codes. Actual source validation selects a handler or refuses the input; a rejected progressive profile does not imply permission to fall back to another route. Multiple output formats still require separate conversion commands.
 
+The existing `compatible` and `execution_available` fields are coarse intent checks. Declared text tracks have no conversion candidate even when those fields are true: the media handlers support audio and video. Unknown HLS roles retain conditional candidates until actual resource inspection establishes their roles.
+
 ## Encryption facts and their limits
 
 `details.track_protection` uses the same cipher and encryption-unit terms for MP4, DASH, and HLS. `container-default` evidence describes sample-description defaults; `manifest-declaration` describes signaling. Neither proves that all media samples follow those defaults. In MP4, the reported entries retain the existing sample-description granularity, which is not necessarily one entry per actual track.
