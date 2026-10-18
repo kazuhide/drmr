@@ -12,7 +12,20 @@ The macOS bundle permits plain HTTP only for the loopback IP `127.0.0.1`; window
 
 To change folders after opening the console, quit and reopen the application. Source URLs and downloaded media can remain in private analysis folders; closing the window does not delete them. See [usage](usage.md) for saved-source and history retention.
 
-**Quit drmr** stops admission and waits for the local server to confirm cleanup. If cleanup cannot be confirmed, the application stays open and shows an error. An operating-system force quit is separate from this orderly shutdown.
+**Quit drmr** stops admission and waits for the local server to confirm cleanup. If cleanup cannot be confirmed, the application stays open, retains its running work and shows an error. Correct the reported cause, then select **Quit drmr** again to retry orderly cleanup. An operating-system force quit is separate from this orderly shutdown.
+
+## External tools and launch environment
+
+The host and its jobs inherit `PATH` from the application launcher. Finder may provide a different environment from your terminal. The host does not search extra installation folders or run shell startup files.
+
+Before launching on macOS, use the bundled CLI in a terminal where your media tools are available:
+
+```sh
+"/path/to/drmr.app/Contents/MacOS/drmr" doctor
+"/path/to/drmr.app/Contents/MacOS/drmr-desktop"
+```
+
+`doctor` checks tool discovery, not tool versions or media compatibility. A missing media tool can make jobs fail even when the window opens successfully; check the job log. Windows and Linux portable builds likewise inherit the environment used to launch their native executable.
 
 ## Build from source
 

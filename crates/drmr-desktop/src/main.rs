@@ -135,71 +135,64 @@ fn finish(app: &AppHandle, state: &Desktop) {
         title(app, "drmr — cleanup unconfirmed");
         error(
             app,
-            "Cleanup could not be confirmed. drmr is still open and retains ownership of its running work. See the job log before closing the application externally.",
+            "Cleanup could not be confirmed. drmr is still open and retains ownership of its running work. Check the job log, resolve the cause and select Quit drmr again to retry cleanup.",
         );
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum CloseAction {
+    Exit,
+    WaitForStartup,
+    Shutdown { previous: u8 },
+}
+
+fn claim_close(phase: &AtomicU8) -> Option<CloseAction> {
+    loop {
+        let current = phase.load(Ordering::Acquire);
+        let action = match current {
+            IDLE => CloseAction::Exit,
+            STARTING => CloseAction::WaitForStartup,
+            RUNNING | UNCONFIRMED => CloseAction::Shutdown { previous: current },
+            _ => return None,
+        };
+        if phase
+            .compare_exchange(current, CLOSING, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            return Some(action);
+        }
     }
 }
 
 fn request_close(app: &AppHandle) {
     let state = app.state::<Arc<Desktop>>().inner().clone();
-    loop {
-        let phase = state.phase.load(Ordering::Acquire);
-        match phase {
-            UNCONFIRMED => {
+    match claim_close(&state.phase) {
+        Some(CloseAction::Exit) => {
+            state.exit_allowed.store(true, Ordering::Release);
+            app.exit(0);
+        }
+        Some(CloseAction::WaitForStartup) => {
+            // The startup worker owns completion and drains any server it creates.
+            title(app, "drmr — closing");
+        }
+        Some(CloseAction::Shutdown { previous }) => {
+            title(app, "drmr — closing");
+            let handle = app.clone();
+            let worker_state = state.clone();
+            if std::thread::Builder::new()
+                .name("drmr-desktop-shutdown".into())
+                .spawn(move || finish(&handle, &worker_state))
+                .is_err()
+            {
+                state.phase.store(previous, Ordering::Release);
                 error(
                     app,
-                    "Cleanup could not be confirmed. drmr remains open to retain its running work.",
+                    "The shutdown worker could not start. drmr remains open. Select Quit drmr again to retry.",
                 );
-                return;
             }
-            IDLE => {
-                if state
-                    .phase
-                    .compare_exchange(IDLE, CLOSING, Ordering::AcqRel, Ordering::Acquire)
-                    .is_ok()
-                {
-                    state.exit_allowed.store(true, Ordering::Release);
-                    app.exit(0);
-                    return;
-                }
-            }
-            STARTING => {
-                // The startup worker owns completion and will drain any server it creates.
-                if state
-                    .phase
-                    .compare_exchange(STARTING, CLOSING, Ordering::AcqRel, Ordering::Acquire)
-                    .is_ok()
-                {
-                    title(app, "drmr — closing");
-                    return;
-                }
-            }
-            RUNNING => {
-                if state
-                    .phase
-                    .compare_exchange(RUNNING, CLOSING, Ordering::AcqRel, Ordering::Acquire)
-                    .is_err()
-                {
-                    continue;
-                }
-                title(app, "drmr — closing");
-                let handle = app.clone();
-                let worker_state = state.clone();
-                if std::thread::Builder::new()
-                    .name("drmr-desktop-shutdown".into())
-                    .spawn(move || finish(&handle, &worker_state))
-                    .is_err()
-                {
-                    state.phase.store(RUNNING, Ordering::Release);
-                    error(
-                        app,
-                        "The shutdown worker could not start. drmr remains open.",
-                    );
-                }
-                return;
-            }
-            _ => return,
         }
+        None => {}
     }
 }
 
@@ -403,4 +396,63 @@ fn main() -> std::process::ExitCode {
         _ => {}
     });
     std::process::ExitCode::SUCCESS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn closing_claims_keep_idle_startup_and_running_behavior() {
+        for (initial, expected) in [
+            (IDLE, CloseAction::Exit),
+            (STARTING, CloseAction::WaitForStartup),
+            (RUNNING, CloseAction::Shutdown { previous: RUNNING }),
+        ] {
+            let phase = AtomicU8::new(initial);
+            assert_eq!(claim_close(&phase), Some(expected));
+            assert_eq!(phase.load(Ordering::Acquire), CLOSING);
+            assert_eq!(claim_close(&phase), None);
+        }
+    }
+
+    #[test]
+    fn an_unconfirmed_cleanup_can_be_deliberately_retried_after_each_failure() {
+        let phase = AtomicU8::new(UNCONFIRMED);
+        for _ in 0..2 {
+            assert_eq!(
+                claim_close(&phase),
+                Some(CloseAction::Shutdown {
+                    previous: UNCONFIRMED
+                })
+            );
+            assert_eq!(phase.load(Ordering::Acquire), CLOSING);
+            assert_eq!(claim_close(&phase), None);
+            phase.store(UNCONFIRMED, Ordering::Release);
+        }
+    }
+
+    #[test]
+    fn simultaneous_close_requests_claim_only_one_cleanup_worker() {
+        let phase = Arc::new(AtomicU8::new(UNCONFIRMED));
+        let barrier = Arc::new(std::sync::Barrier::new(8));
+        let workers: Vec<_> = (0..8)
+            .map(|_| {
+                let phase = phase.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    claim_close(&phase)
+                })
+            })
+            .collect();
+        assert_eq!(
+            workers
+                .into_iter()
+                .filter_map(|worker| worker.join().unwrap())
+                .count(),
+            1
+        );
+        assert_eq!(phase.load(Ordering::Acquire), CLOSING);
+    }
 }
