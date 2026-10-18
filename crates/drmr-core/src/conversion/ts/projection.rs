@@ -370,8 +370,10 @@ mod tests {
     fn projection_keeps_media_slots_raw_clocks_and_interleaved_packets() {
         let packets = projection_packets();
         let root = crate::native::private_tempdir().unwrap();
-        let source = root.path().join("source.ts");
-        let destination = root.path().join("clear.ts");
+        let media = root.path().join("media");
+        crate::native::create_media_dir_all(&media).unwrap();
+        let source = media.join("source.ts");
+        let destination = media.join("clear.ts");
         std::fs::write(&source, packets.concat()).unwrap();
         let mut projection = Projector::new();
         projection
@@ -394,8 +396,10 @@ mod tests {
     fn pending_span_counts_interleaved_null_packets_not_only_elementary_bytes() {
         let packets = projection_packets();
         let root = crate::native::private_tempdir().unwrap();
-        let source = root.path().join("source.ts");
-        let destination = root.path().join("clear.ts");
+        let media = root.path().join("media");
+        crate::native::create_media_dir_all(&media).unwrap();
+        let source = media.join("source.ts");
+        let destination = media.join("clear.ts");
         let mut writer = std::io::BufWriter::new(File::create(&source).unwrap());
         for packet in &packets[..3] {
             writer.write_all(packet).unwrap();
