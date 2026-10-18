@@ -96,7 +96,7 @@ fn run(server: &Server, output: &Path, extra: &[&std::ffi::OsStr]) -> Output {
 
 fn refused(result: &Output, token: &str) {
     assert_eq!(result.status.code(), Some(2));
-    assert!(result.stdout.is_empty());
+    assert_eq!(result.stdout, [] as [u8; 0]);
     let diagnostic = String::from_utf8_lossy(&result.stderr);
     assert!(diagnostic.contains(token), "{diagnostic}");
     assert!(!diagnostic.contains("private-sentinel"));
@@ -196,6 +196,8 @@ fn fetch_policy_is_strict_private_configuration_and_never_echoes_values() {
     let download = root.path().join("source");
     let config = root.path().join("policy.json");
     for contents in [
+        "[]",
+        "[[],{},true,true]",
         r#"{"allow_http":"private-sentinel"}"#,
         r#"{"allow_http":true,"allow_http":false}"#,
         r#"{"allowed_origins":"private-sentinel"}"#,

@@ -108,7 +108,16 @@ fn root_help_shows_getting_started_examples_and_command_help_is_available() {
         .unwrap();
     assert!(output.status.success());
     let text = String::from_utf8(output.stdout).unwrap();
-    for example in ["drmr doctor", "drmr plan --mpd", "drmr run --help"] {
+    for example in [
+        "drmr doctor",
+        "drmr inspect",
+        "drmr plan media.mp4 --to cbcs",
+        "drmr convert",
+        "drmr verify",
+        "--download-dir",
+        "drmr plan --mpd",
+        "drmr run --help",
+    ] {
         assert!(text.contains(example), "missing {example}: {text}");
     }
     let output = Command::new(env!("CARGO_BIN_EXE_drmr"))

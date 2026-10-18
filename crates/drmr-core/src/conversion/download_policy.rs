@@ -58,11 +58,8 @@ pub fn read(url: &str, path: Option<&Path>) -> Result<FetchPolicy, ConversionErr
                 return Err(INVALID);
             }
             let value = serde_json::from_slice::<UniqueValue>(&bytes).map_err(|_| INVALID)?;
-            if value
-                .0
-                .as_object()
-                .is_some_and(|settings| settings.values().any(Value::is_null))
-            {
+            let settings = value.0.as_object().ok_or(INVALID)?;
+            if settings.values().any(Value::is_null) {
                 return Err(INVALID);
             }
             serde_json::from_value::<Settings>(value.0).map_err(|_| INVALID)?
@@ -188,6 +185,8 @@ mod tests {
         let root = crate::native::private_tempdir().unwrap();
         let path = root.path().join("fetch.json");
         for body in [
+            "[]",
+            "[[],{},true,true]",
             r#"{"allow_http":"true"}"#,
             r#"{"allow_http":true,"allow_http":false}"#,
             r#"{"headers_by_origin":{"https://example.test":{"Authorization":"first","Authorization":"second"}}}"#,

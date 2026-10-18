@@ -618,7 +618,9 @@ mod tests {
         assert!(result.stdout.len().is_multiple_of(2));
         let mut units: Vec<_> = result
             .stdout
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|v| u16::from_le_bytes([v[0], v[1]]))
             .collect();
         while units.last().is_some_and(|value| matches!(*value, 10 | 13)) {
