@@ -134,7 +134,9 @@ impl ManagedChild {
     /// Terminate owned descendants and reap the direct child before releasing
     /// resources used by them. Successful confirmation is idempotent. Errors
     /// mean cleanup is unconfirmed; callers must not report successful work.
-    /// Windows waits at most 30 seconds for the terminal job notification.
+    /// After reaping its direct child, Unix waits up to 30 seconds for group absence.
+    /// Windows waits up to 30 seconds for the terminal job notification.
+    /// This deadline does not bound other blocking I/O or pipe-reader joins.
     pub fn finish(&mut self) -> io::Result<()> {
         if self.cleanup == CleanupState::Confirmed {
             return Ok(());
@@ -160,11 +162,20 @@ impl ManagedChild {
             let reaped = self.child.wait();
             reaped?;
             if self.own_tree {
-                confirm_group_signal(killed, || {
-                    rustix::process::test_kill_process_group(rustix::process::Pid::from_child(
-                        &self.child,
-                    ))
-                })
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+                // SIGKILL delivery and the direct child's reap do not finish descendants.
+                // The completion loop only observes: after this reap, the identifier could
+                // be reused once the owned group disappears, so it must not signal again.
+                confirm_group_completion(
+                    killed,
+                    || {
+                        rustix::process::test_kill_process_group(rustix::process::Pid::from_child(
+                            &self.child,
+                        ))
+                    },
+                    || std::time::Instant::now() >= deadline,
+                    || std::thread::sleep(std::time::Duration::from_millis(1)),
+                )
             } else {
                 match killed {
                     Err(error)
@@ -194,24 +205,33 @@ impl ManagedChild {
 }
 
 #[cfg(unix)]
-fn confirm_group_signal(
+fn confirm_group_completion(
     killed: io::Result<()>,
-    group_exists: impl FnOnce() -> rustix::io::Result<()>,
+    mut group_exists: impl FnMut() -> rustix::io::Result<()>,
+    mut expired: impl FnMut() -> bool,
+    mut wait: impl FnMut(),
 ) -> io::Result<()> {
-    match killed {
-        Err(error) if error.raw_os_error() == Some(rustix::io::Errno::SRCH.raw_os_error()) => {
-            Ok(())
+    use rustix::io::Errno;
+    if let Err(error) = killed
+        && !matches!(error.raw_os_error(), Some(code) if code == Errno::SRCH.raw_os_error() || code == Errno::PERM.raw_os_error())
+    {
+        return Err(error);
+    }
+    loop {
+        match group_exists() {
+            Err(Errno::SRCH) => return Ok(()),
+            // Darwin can retain a zombie group while excluding its members from signals.
+            // Neither an existing group nor EPERM proves that its resources are released.
+            Ok(()) | Err(Errno::PERM) => {}
+            Err(error) => return Err(error.into()),
         }
-        // Darwin skips zombie members when signalling a group and can return
-        // EPERM before its leader is reaped. Only an absent group after the
-        // successful reap establishes that this was not a live permission failure.
-        Err(error)
-            if error.raw_os_error() == Some(rustix::io::Errno::PERM.raw_os_error())
-                && group_exists() == Err(rustix::io::Errno::SRCH) =>
-        {
-            Ok(())
+        if expired() {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "process group cleanup timed out",
+            ));
         }
-        result => result,
+        wait();
     }
 }
 
@@ -333,15 +353,61 @@ mod cleanup_tests {
     use rustix::io::Errno;
 
     #[test]
-    fn a_permission_failure_requires_observed_group_absence() {
-        for presence in [Ok(()), Err(Errno::PERM), Err(Errno::IO)] {
-            let error = confirm_group_signal(Err(Errno::PERM.into()), || presence).unwrap_err();
-            assert_eq!(error.raw_os_error(), Some(Errno::PERM.raw_os_error()));
+    fn a_live_or_zombie_group_requires_observed_absence_even_after_a_successful_kill() {
+        for killed in [Ok(()), Err(Errno::PERM.into()), Err(Errno::SRCH.into())] {
+            let mut states = [Ok(()), Err(Errno::PERM), Err(Errno::SRCH)].into_iter();
+            let waits = std::cell::Cell::new(0);
+            confirm_group_completion(
+                killed,
+                || states.next().expect("must stop at observed absence"),
+                || false,
+                || waits.set(waits.get() + 1),
+            )
+            .unwrap();
+            assert_eq!(waits.get(), 2);
         }
-        assert!(confirm_group_signal(Err(Errno::PERM.into()), || Err(Errno::SRCH)).is_ok());
-        let error =
-            confirm_group_signal(Err(Errno::IO.into()), || panic!("must preserve I/O error"))
-                .unwrap_err();
+    }
+
+    #[test]
+    fn absence_needs_no_wait_and_live_or_permission_states_reach_the_deadline() {
+        confirm_group_completion(
+            Ok(()),
+            || Err(Errno::SRCH),
+            || true,
+            || panic!("absent group needs no wait"),
+        )
+        .unwrap();
+        for state in [Ok(()), Err(Errno::PERM)] {
+            let waits = std::cell::Cell::new(0);
+            let error = confirm_group_completion(
+                Ok(()),
+                || state,
+                || waits.get() == 2,
+                || waits.set(waits.get() + 1),
+            )
+            .unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+            assert_eq!(waits.get(), 2);
+        }
+    }
+
+    #[test]
+    fn unrelated_kill_and_observation_errors_remain_unconfirmed() {
+        let error = confirm_group_completion(
+            Err(Errno::IO.into()),
+            || panic!("must preserve kill error"),
+            || false,
+            || panic!("must not wait after error"),
+        )
+        .unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(Errno::IO.raw_os_error()));
+        let error = confirm_group_completion(
+            Ok(()),
+            || Err(Errno::IO),
+            || false,
+            || panic!("must not wait after error"),
+        )
+        .unwrap_err();
         assert_eq!(error.raw_os_error(), Some(Errno::IO.raw_os_error()));
     }
 }

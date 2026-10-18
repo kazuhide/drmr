@@ -13,7 +13,17 @@ pub fn child_entry(args: &[std::ffi::OsString]) -> io::Result<bool> {
         thread::sleep(Duration::from_secs(60));
         return Ok(true);
     }
-    if args.len() == 3 && args[0] == "--fixture-lock" {
+    if matches!(args.len(), 3 | 5) && args[0] == "--fixture-lock" {
+        let ordinary = if args.len() == 5 {
+            let requested = args[3]
+                .to_str()
+                .and_then(|value| value.parse::<usize>().ok())
+                .filter(|count| *count <= 4096)
+                .ok_or_else(|| io::Error::other("invalid descriptor fixture bound"))?;
+            ordinary_handles(requested)?
+        } else {
+            Vec::new()
+        };
         let mut options = fs::OpenOptions::new();
         options.create_new(true).write(true);
         #[cfg(windows)]
@@ -24,6 +34,9 @@ pub fn child_entry(args: &[std::ffi::OsString]) -> io::Result<bool> {
         let held = options.open(&args[1])?;
         #[cfg(unix)]
         held.lock()?;
+        if args.len() == 5 {
+            fs::write(&args[4], ordinary.len().to_string())?;
+        }
         fs::write(&args[2], b"ready")?;
         thread::sleep(Duration::from_secs(60));
         drop(held);
@@ -32,14 +45,32 @@ pub fn child_entry(args: &[std::ffi::OsString]) -> io::Result<bool> {
     Ok(false)
 }
 
+#[cfg(unix)]
+fn ordinary_handles(requested: usize) -> io::Result<Vec<fs::File>> {
+    (0..requested)
+        .map(|_| fs::File::open("/dev/null"))
+        .collect()
+}
+
+#[cfg(not(unix))]
+fn ordinary_handles(requested: usize) -> io::Result<Vec<fs::File>> {
+    if requested != 0 {
+        return Err(io::Error::other(
+            "descriptor teardown fixture requires Unix",
+        ));
+    }
+    Ok(Vec::new())
+}
+
 pub fn spawn_descendant(pidfile: &Path, lock_file: Option<&Path>) -> io::Result<()> {
-    spawn_descendant_with_console(pidfile, lock_file, false)
+    spawn_descendant_with_console(pidfile, lock_file, false, None)
 }
 
 fn spawn_descendant_with_console(
     pidfile: &Path,
     lock_file: Option<&Path>,
     detached_console: bool,
+    descriptors: Option<(&str, &Path)>,
 ) -> io::Result<()> {
     let mut command = Command::new(env::current_exe()?);
     let ready = lock_file.map(|path| {
@@ -49,6 +80,9 @@ fn spawn_descendant_with_console(
     });
     if let (Some(lock), Some(ready)) = (lock_file, &ready) {
         command.arg("--fixture-lock").arg(lock).arg(ready);
+        if let Some((count, report)) = descriptors {
+            command.arg(count).arg(report);
+        }
     } else {
         command.arg("--fixture-sleep");
     }
@@ -104,12 +138,26 @@ pub fn before_response(spec: &ToolSpec) -> io::Result<()> {
         fs::write(path, values.join(" "))?;
     }
     if let Some(path) = spec.values.get("descendant_pid_file") {
+        let descriptors = spec
+            .values
+            .get("descendant_open_files")
+            .map(|count| {
+                spec.values
+                    .get("descendant_descriptor_count_file")
+                    .map(|report| (count.as_str(), Path::new(report)))
+                    .ok_or_else(|| io::Error::other("missing descriptor fixture report"))
+            })
+            .transpose()?;
+        if descriptors.is_some() && !spec.values.contains_key("descendant_lock_file") {
+            return Err(io::Error::other("descriptor fixture requires a lock"));
+        }
         spawn_descendant_with_console(
             Path::new(path),
             spec.values.get("descendant_lock_file").map(Path::new),
             spec.values
                 .get("descendant_detached_console")
                 .is_some_and(|value| value == "1"),
+            descriptors,
         )?;
     }
     if let Some(path) = spec.values.get("ready_file") {
