@@ -64,8 +64,12 @@ Generic `convert` and `verify` register Unix SIGINT and SIGTERM before starting 
 The same cancellation flag reaches track scheduling, resource admission, and active
 media commands; cancellation observed before final publication prevents that publication.
 Synchronous file operations finish their current operation before the next check.
-The CLI returns `130` after cooperative cancellation. Windows console-event handling
-is compiled but has no runtime qualification claim here.
+The CLI returns `130` after cooperative cancellation and confirmed process cleanup.
+On Windows, Ctrl+C and Ctrl+Break use the same cooperative path. Native tests deliver
+both console events to `convert` and `verify`, then check descendant termination,
+released file locks, removed workspaces, and that output was not published. A detached
+media descendant cannot receive the console event, so these checks also exercise the
+CLI's own process-tree cleanup.
 
 The conversion measurement tool first requests cooperative termination and allows five
 seconds for the CLI to return. Its `cooperative-exit` label records the CLI's cancellation
