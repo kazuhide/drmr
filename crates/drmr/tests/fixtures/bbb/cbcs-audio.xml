@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<GPACDRM type="cbcs">
+ <CrypTrack trackID="1" IsEncrypted="1" IV_size="16" first_IV="0x11121314151617180000000000000000" saiSavedBox="senc" crypt_byte_block="1" skip_byte_block="0">
+  <key KID="0x303132333435363738393a3b3c3d3e3f" value="0x202122232425262728292a2b2c2d2e2f"/>
+ </CrypTrack>
+</GPACDRM>

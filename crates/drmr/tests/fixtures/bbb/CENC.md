@@ -25,3 +25,19 @@ MP4Box -p=0 -no-save -crypt cenc-iv16.xml clip.mp4 -out rebuilt-iv16.mp4
 The recorded files have auxiliary sample encryption data in each track, with sample auxiliary sizes and absolute offsets in its sample table. Both vector widths are covered. Video uses subsample encryption; audio encrypts each complete sample. The ordinary AAC roll recovery description is retained. Regeneration may change nonessential metadata or random values in other tool versions; verify the hashes and every media invariant before replacing fixtures.
 
 Independent local FFmpeg 9.0.2 checks used the complete two-key dictionary. Every per-track packet payload, absolute presentation/decode timestamp, duration, finite presentation window, decoded video frame, and decoded audio sample matched the original clip. Missing, wrong, and swapped key checks failed for the affected tracks. These observations establish fixture correspondence; they do not establish DRM playback or independent format conformance.
+
+## CBCS verification fixture
+
+`cbcs-audio.mp4` is an 83,721-byte, audio-only adaptation of `clip.mp4`, with SHA-256 `0868265d3c884bbf87a60cea8bb3de12df387393ffb33afa1652a089a95cea1d`. It retains all 470 AAC packets, their absolute clocks and payloads after decryption, and the finite presentation of 480,000 decoded samples per channel. The same attribution and Creative Commons Attribution 3.0 license apply.
+
+This file exercises independent known-key verification of an existing progressive CBCS presentation. It does not add CBCS input to finite progressive conversion. The `cbcs-audio.xml` key, identifier, and constant initialization vector are public test values only. The identifier differs from every public test key.
+
+The same official GPAC source build recorded above generated the encrypted bytes without manual media or cryptographic editing. FFmpeg 9.0.2 first copied the original audio sample tables; MP4Box then encrypted that complete presentation. From this directory:
+
+```sh
+ffmpeg -v error -nostdin -threads 1 -copyts -i clip.mp4 \
+  -map 0:a:0 -c copy -avoid_negative_ts disabled -use_editlist 1 audio-clear.mp4
+MP4Box -p=0 -no-save -crypt cbcs-audio.xml audio-clear.mp4 -out rebuilt-cbcs-audio.mp4
+```
+
+Independent local FFmpeg checks decrypted the result with its known key and matched every packet payload and absolute clock, and all 480,000 decoded samples per channel, against the clear audio. No GPAC binary is required to run the committed regression. This is media-identity evidence, not a DRM license or device-playback qualification. The XML syntax and cipher selection follow the [official GPAC encryption documentation](https://wiki.gpac.io/xmlformats/Common-Encryption/).

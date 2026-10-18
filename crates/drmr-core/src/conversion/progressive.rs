@@ -367,6 +367,32 @@ pub(super) fn validate_input(
     }
     Ok(finite)
 }
+/// Verification compares existing media without imposing conversion's DRM/auxiliary policy.
+/// A finite whole-file input still needs all declared role keys and exact presentation metadata.
+pub(super) fn verification_input(
+    source: &Path,
+    input: &Inspection,
+    keys: &super::InputKeys,
+) -> Result<bool, ConversionError> {
+    if !matches!(input.protection, Protection::Clear | Protection::Cenc) || !profile_shape(input) {
+        return Ok(false);
+    }
+    if layout(&audio::movie(source)?, input)
+        .map_err(|_| WINDOW_UNSUPPORTED)?
+        .is_none()
+    {
+        return Ok(false);
+    }
+    if input.protection == Protection::Cenc
+        && input
+            .tracks
+            .iter()
+            .any(|t| t.key_ids.len() != 1 || !keys.contains(&t.key_ids[0]))
+    {
+        return Err(ConversionError("input-key-required"));
+    }
+    Ok(true)
+}
 impl Converter {
     pub(super) fn progressive_mp4(
         &self,
@@ -444,7 +470,6 @@ impl Converter {
         input: &Inspection,
         keys: &super::InputKeys,
     ) -> Result<VerificationReport, ConversionError> {
-        super::cenc::clear(&audio::movie(candidate)?)?;
         let checks = self.run_tracks(input.tracks.len(), |index| {
             let source_view = super::verify::StreamView::new(source, index, None);
             let source_view = if input.protection == Protection::Clear {

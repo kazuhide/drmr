@@ -411,18 +411,37 @@ fn validate_request(request: &TrackConversionRequest<'_>) -> Result<(), Conversi
     }
     Ok(())
 }
+#[derive(Clone, Copy)]
+enum Preparation {
+    Conversion,
+    Verification,
+}
 fn prepare(
     source: &Path,
     index: usize,
     kind: TrackKind,
     keys: &InputKeys,
 ) -> Result<Prepared, ConversionError> {
+    prepare_for(source, index, kind, keys, Preparation::Conversion)
+}
+fn prepare_for(
+    source: &Path,
+    index: usize,
+    kind: TrackKind,
+    keys: &InputKeys,
+    purpose: Preparation,
+) -> Result<Prepared, ConversionError> {
     let report = inspection::inspect(source).map_err(|_| ConversionError("invalid-input-media"))?;
     if report.format != InputFormat::Mp4 || report.tracks.len() > 64 {
         return Err(ConversionError("input-format-not-supported"));
     }
     let source_dictionary = report.protection == Protection::Cenc
-        && super::progressive::validate_input(source, &report, keys)?;
+        && match purpose {
+            Preparation::Conversion => super::progressive::validate_input(source, &report, keys)?,
+            Preparation::Verification => {
+                super::progressive::verification_input(source, &report, keys)?
+            }
+        };
     let track = report
         .tracks
         .get(index)
@@ -609,9 +628,6 @@ impl Converter {
                     },
                 );
             }
-            if a.source_dictionary && b.report.protection == Protection::Clear {
-                super::cenc::clear(&audio::movie(&b.media)?)?;
-            }
             let a_view = StreamView::new(&a.source, a.index, key_for(a, source_keys))
                 .with_metadata(&a.media);
             let b_view = StreamView::new(&b.source, b.index, key_for(b, result_keys))
@@ -681,7 +697,15 @@ fn prepare_presentation(
                 .tracks
                 .iter()
                 .enumerate()
-                .map(|(index, track)| prepare(&path, index, track.kind, input.input_keys))
+                .map(|(index, track)| {
+                    prepare_for(
+                        &path,
+                        index,
+                        track.kind,
+                        input.input_keys,
+                        Preparation::Verification,
+                    )
+                })
                 .collect()
         }
         InputFormat::Hls => {

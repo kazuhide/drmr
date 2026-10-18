@@ -269,8 +269,9 @@ impl Converter {
         if result_report.format != InputFormat::Mp4 {
             return Err(ConversionError("input-format-not-supported"));
         }
-        if progressive::validate_input(&source, &inspected, input_keys)?
-            && result_report.protection == Protection::Clear
+        if result_report.protection == Protection::Clear
+            && inspected.tracks.len() > 1
+            && progressive::verification_input(&source, &inspected, input_keys)?
         {
             if result_report.tracks.len() != inspected.tracks.len() {
                 return Err(ConversionError("output-protection-mismatch"));
