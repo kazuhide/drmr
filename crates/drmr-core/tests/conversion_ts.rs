@@ -177,10 +177,10 @@ fn single_track_and_b_frame_sources_preserve_their_absolute_clocks() {
     }
 }
 
-fn interlaced_hls(root: &Path) -> std::path::PathBuf {
+fn interlaced_hls_command() -> std::process::Command {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../drmr/tests/fixtures/bbb/clip.mp4");
-    let playlist = root.join("media.m3u8");
-    let result = std::process::Command::new("ffmpeg")
+    let mut command = std::process::Command::new("ffmpeg");
+    command
         .args(["-v", "error", "-threads", "1", "-i"])
         .arg(fixture)
         .args([
@@ -206,20 +206,154 @@ fn interlaced_hls(root: &Path) -> std::path::PathBuf {
             "-hls_playlist_type",
             "vod",
             "-hls_segment_filename",
-        ])
-        .arg(root.join("segment-%d.m4s"))
-        .arg(&playlist)
+        ]);
+    command
+}
+
+fn interlaced_hls(root: &Path) -> std::path::PathBuf {
+    let playlist = root.join("media.m3u8");
+    // FFmpeg 9.0.2 hlsenc.c resolves the default init file using '/' in the playlist URL.
+    // A dedicated child directory and relative outputs keep every resource beside the playlist.
+    let result = interlaced_hls_command()
+        .current_dir(root)
+        .arg("segment-%d.m4s")
+        .arg("media.m3u8")
         .output()
         .unwrap();
     assert!(
         result.status.success(),
         "interlaced HLS fixture generation failed"
     );
+    assert_interlaced_resources(&playlist);
     playlist
+}
+
+fn assert_interlaced_resources(playlist: &Path) {
+    let root = playlist.parent().unwrap();
+    let text = std::fs::read_to_string(playlist).unwrap();
+    let mut names = vec!["media.m3u8"];
+    let mut maps = 0;
+    for line in text.lines() {
+        if let Some(map) = line.strip_prefix("#EXT-X-MAP:URI=\"") {
+            assert_eq!(map, "init.mp4\"");
+            maps += 1;
+            names.push("init.mp4");
+        } else if !line.is_empty() && !line.starts_with('#') {
+            assert!(line.starts_with("segment-"));
+            assert_eq!(
+                Path::new(line).extension(),
+                Some(std::ffi::OsStr::new("m4s"))
+            );
+            names.push(line);
+        }
+    }
+    assert_eq!(maps, 1);
+    assert!(names.len() > 2);
+    for name in names {
+        assert!(!name.contains(['/', '\\', ':']));
+        assert_eq!(
+            Path::new(name).file_name(),
+            Some(Path::new(name).as_os_str())
+        );
+        assert!(
+            std::fs::symlink_metadata(root.join(name))
+                .unwrap()
+                .is_file()
+        );
+        let held = std::fs::File::open(root.join(name)).unwrap_or_else(|error| {
+            panic!(
+                "fixture resource {name}: {:?}/{:?}",
+                error.kind(),
+                error.raw_os_error()
+            )
+        });
+        assert!(held.metadata().unwrap().is_file());
+        assert_ne!(std::fs::read(root.join(name)).unwrap(), [] as [u8; 0]);
+    }
+}
+
+#[cfg(windows)]
+fn observe_legacy_interlaced_init_placement() {
+    let control = common::private_tempdir().unwrap();
+    let output = control.path().join("playlist");
+    drmr_core::native::create_private_dir_all(&output).unwrap();
+    let result = interlaced_hls_command()
+        .current_dir(control.path())
+        .arg(output.join("segment-%d.m4s"))
+        .arg(output.join("media.m3u8"))
+        .output()
+        .unwrap();
+    assert!(result.status.success());
+    let in_playlist = output.join("init.mp4").is_file();
+    let in_working_directory = control.path().join("init.mp4").is_file();
+    eprintln!(
+        "legacy-backslash-init-placement: playlist_parent={in_playlist}; controlled_cwd={in_working_directory}"
+    );
+    // Either tool behavior is acceptable here; only the fixed fixture must be fully confined.
+    assert!(in_playlist || in_working_directory);
+}
+
+fn acquisition_report(input: &Path) -> Vec<String> {
+    let root = input.parent().unwrap();
+    let mut pending = vec![root.to_path_buf()];
+    let mut report = vec![format!(
+        "input: {:?}",
+        std::fs::File::open(input)
+            .and_then(|file| file.metadata().map(|metadata| metadata.len()))
+            .map_err(|error| (error.kind(), error.raw_os_error()))
+    )];
+    while let Some(path) = pending.pop() {
+        if report.len() >= 128 {
+            report.push("diagnostic entry limit reached".into());
+            break;
+        }
+        let relative = path.strip_prefix(root).unwrap().display();
+        match std::fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.is_dir() => match std::fs::read_dir(&path) {
+                Ok(entries) => {
+                    pending.extend(entries.filter_map(Result::ok).map(|entry| entry.path()));
+                }
+                Err(error) => report.push(format!(
+                    "{relative}: {:?}/{:?}",
+                    error.kind(),
+                    error.raw_os_error()
+                )),
+            },
+            Ok(_) => report.push(format!(
+                "{relative}: {:?}",
+                std::fs::File::open(&path)
+                    .and_then(|file| file.metadata().map(|metadata| metadata.len()))
+                    .map_err(|error| (error.kind(), error.raw_os_error()))
+            )),
+            Err(error) => report.push(format!(
+                "{relative}: {:?}/{:?}",
+                error.kind(),
+                error.raw_os_error()
+            )),
+        }
+    }
+    report.sort();
+    report
+}
+
+fn proxy_roles(audit: &Path) -> Vec<String> {
+    std::fs::read_dir(audit)
+        .unwrap()
+        .map(|entry| {
+            let call = entry.unwrap().path();
+            format!(
+                "{}: {:?}",
+                call.file_name().unwrap().to_string_lossy(),
+                std::fs::read_to_string(call.join("role"))
+            )
+        })
+        .collect()
 }
 
 #[test]
 fn complete_frame_evidence_rejects_an_interlaced_source_or_actual_hls_result() {
+    #[cfg(windows)]
+    observe_legacy_interlaced_init_placement();
     let source_root = common::private_tempdir().unwrap();
     let input = source_profile(source_root.path(), "video");
     let output = source_root.path().join("result");
@@ -287,7 +421,11 @@ fn complete_frame_evidence_rejects_an_interlaced_source_or_actual_hls_result() {
                 })
                 .unwrap_err()
                 .0,
-            "ts-progressive-frame-evidence-required"
+            "ts-progressive-frame-evidence-required",
+            "selected_role={role}; source={:?}; result={:?}; proxy_roles={:?}",
+            acquisition_report(source),
+            acquisition_report(result),
+            proxy_roles(&audit)
         );
         assert_profile_omission(&audit, role);
     }
