@@ -647,7 +647,7 @@
   // Make the counts honest: anything still running after a terminal state was aborted -- unless
   // part of the log was never received, in which case unseen work is marked unknown.
   function settleProgress(view, success) {
-    var settle = view.interrupted ? 'unknown' : (success ? 'done' : 'failed');
+    var settle = view.interrupted ? 'unknown' : view.outcome === 'interrupted' ? 'interrupted' : (success ? 'done' : 'failed');
     Object.keys(view.progress.renditions).forEach(function (id) { if (view.progress.renditions[id] === 'running') view.progress.renditions[id] = settle; });
     Object.keys(view.progress.tracks).forEach(function (id) { if (view.progress.tracks[id].status === 'running') view.progress.tracks[id].status = settle; });
   }
@@ -733,7 +733,7 @@
     UI.setText(els.logNotice, view.notice || (view.interrupted && !live ? t('logInterrupted') : ''));
     var p = view.progress;
     var rows = Object.keys(p.renditions).map(function (id) { var st = p.renditions[id]; return { id: id, label: id, status: st, fraction: null, state: t('strip_' + st) }; })
-      .concat(Object.keys(p.tracks).map(function (id) { var row = p.tracks[id]; var fraction = row.total ? Math.min(1, row.index / row.total) : null; return { id: id, label: id, status: row.status, fraction: fraction, state: row.total ? row.index + '/' + row.total : t('strip_' + row.status) }; }));
+      .concat(Object.keys(p.tracks).map(function (id) { var row = p.tracks[id]; var fraction = row.total ? Math.min(1, row.index / row.total) : null; return { id: id, label: id, status: row.status, fraction: fraction, state: row.total ? row.index + '/' + row.total + (row.status === 'interrupted' ? ' · ' + t('strip_interrupted') : '') : t('strip_' + row.status) }; }));
     UI.replace(els.logStrips, rows.length ? UI.strips(rows) : null);
   }
   function renderLogPanel() {
@@ -999,6 +999,7 @@
   }
   function finishRun(run, status) {
     var success = status.state === 'succeeded';
+    var interrupted = status.state === 'interrupted';
     if (run.jobId) state.finishedJobs[run.jobId] = true;
     run.outcome = status.state; run.exitCode = status.exit_code;
     run.view.outcome = status.state; run.view.live = false; run.view.notice = '';
@@ -1011,14 +1012,14 @@
       refresh.then(function () {
         var completed = state.contents.filter(function (c) { return c.asset_id === run.assetId; })[0];
         var ready = success && Model.hasVerifiedOutput(completed);
-        notify(run.assetId, !success ? 'fail' : ready ? 'good' : 'warn', !success ? t('convertFailed', { code: status.exit_code != null ? String(status.exit_code) : '—', elapsed: elapsed }) : t(ready ? 'convertDone' : 'convertUnverified', { elapsed: elapsed }));
+        notify(run.assetId, interrupted ? 'warn' : !success ? 'fail' : ready ? 'good' : 'warn', interrupted ? t('convertInterrupted', { elapsed: elapsed }) : !success ? t('convertFailed', { code: status.exit_code != null ? String(status.exit_code) : '—', elapsed: elapsed }) : t(ready ? 'convertDone' : 'convertUnverified', { elapsed: elapsed }));
         var content = selected();
         if (content && content.asset_id === run.assetId) { renderDetail(content); if (Model.hasCatalogReport(content)) loadCatalogReport(content, state.selectToken); }
       });
       return;
     }
     if (run.kind === 'analysis') {
-      if (!success) notify(run.assetId, 'fail', t(status.state === 'interrupted' ? 'finding_analysis-interrupted' : 'analysisJobFailed'));
+      if (!success) notify(run.assetId, interrupted ? 'warn' : 'fail', t(interrupted ? 'finding_analysis-interrupted' : 'analysisJobFailed'));
       else if (state.selectedId === run.assetId) UI.replace(els.contentNotice); // the input section states the verdict
       refresh.then(function () {
         var content = selected();
@@ -1030,7 +1031,7 @@
     }
     if (run.kind === 'package') {
       if (state.selectedId === run.assetId) UI.replace(els.transformState); // the content notice states the outcome
-      if (!success) { notify(run.assetId, 'fail', t(status.state === 'interrupted' ? 'packageInterrupted' : 'packageFailed') + ' ' + t('reenterDrm')); refresh.then(function () { var c = selected(); if (c && c.asset_id === run.assetId) renderDetail(c); }); return; }
+      if (!success) { notify(run.assetId, interrupted ? 'warn' : 'fail', t(interrupted ? 'packageInterrupted' : 'packageFailed') + ' ' + t('reenterDrm')); refresh.then(function () { var c = selected(); if (c && c.asset_id === run.assetId) renderDetail(c); }); return; }
       notify(run.assetId, 'good', t('packageDone', { elapsed: elapsed }));
       // The SSE terminal event only promises state/exit_code; the authoritative result id comes
       // from the job status, and the result body from its own endpoint.
