@@ -4,7 +4,7 @@ Use a regular, non-administrator PowerShell terminal on Windows x64 with a local
 
 ## Install and check tools
 
-Build from the repository with Rust 1.99.0:
+Build from the repository with Rust 1.95 or newer. See [requirements and tested versions](requirements.md):
 
 ```powershell
 cargo build --release --locked -p drmr
