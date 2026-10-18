@@ -379,6 +379,10 @@ fn api_convert(app: &Arc<App>, req: &Req) -> Answer {
         Err(JobError::CleanupUnconfirmed) => {
             return Ok(Reply::json_error(503, "cleanup-unconfirmed"));
         }
+        Err(JobError::SupervisionFailed(handle)) => {
+            app.service.record_conversion(&handle, &asset_id);
+            return Ok(Reply::json_error(503, "job-supervision-failed"));
+        }
         Err(_) => return Err(RouteError::Internal),
     };
     // The job is running: a record that cannot be written is logged, never an error answer.

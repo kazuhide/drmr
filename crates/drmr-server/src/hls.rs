@@ -1036,11 +1036,12 @@ impl HlsService {
             "--output".into(),
             self.output.clone().into_os_string(),
         ];
-        let handle = match self
+        let (handle, supervision_failed) = match self
             .manager
             .submit_command(&arguments, &self.manager.fresh_env())
         {
-            Ok(handle) => handle,
+            Ok(handle) => (handle, false),
+            Err(JobError::SupervisionFailed(handle)) => (handle, true),
             Err(error) => {
                 let _ = std::fs::remove_file(&path);
                 if !existing {
@@ -1055,6 +1056,9 @@ impl HlsService {
             }
         };
         self.record_private(&mut state, &handle, "analysis", &asset_id, None, vec![path])?;
+        if supervision_failed {
+            return Err(HlsApiError::status("job-supervision-failed", 503).into());
+        }
         let analysis_id = state
             .records
             .get(&handle.job_id)
@@ -1228,7 +1232,8 @@ impl HlsService {
             .join("_requests");
         let (drm_path, selection_path) =
             write_package_configs(&request_dir, &signaling, &analysis, choice)?;
-        let handle = self.launch_package(&keys, &analysis, &drm_path, &selection_path)?;
+        let (handle, supervision_failed) =
+            self.launch_package(&keys, &analysis, &drm_path, &selection_path)?;
         state.pending_keys.insert(
             handle.job_id.clone(),
             Credentials {
@@ -1244,21 +1249,25 @@ impl HlsService {
             row.analysis_id.as_deref(),
             vec![drm_path, selection_path],
         )?;
+        if supervision_failed {
+            return Err(HlsApiError::status("job-supervision-failed", 503).into());
+        }
         drop(state);
         let mut answer = Map::new();
         answer.insert("job_id".into(), Value::from(handle.job_id));
         Ok(Value::Object(answer))
     }
 
-    /// `package-hls` under the lease with the key material in a fresh environment; the request
-    /// configs are deleted when the launch fails (`job-busy` 409, `job-launch-failed` 503).
+    /// `package-hls` under the lease with key material in a fresh environment.
+    /// Request configs are deleted only if no child was launched. A failed supervision
+    /// handshake still returns its launched owner so the caller can retain them.
     fn launch_package(
         &self,
         keys: &KeyMaterial,
         analysis: &SourceAnalysis,
         drm_path: &Path,
         selection_path: &Path,
-    ) -> Result<JobHandle, ServiceError> {
+    ) -> Result<(JobHandle, bool), ServiceError> {
         let mut env = self.manager.fresh_env();
         env.push(("DRM_KID".into(), keys.key_id_hex().into()));
         env.push(("DRM_KEY".into(), keys.key_hex().into()));
@@ -1276,17 +1285,19 @@ impl HlsService {
             command.push("--max-workers".into());
             command.push(workers.to_string().into());
         }
-        self.manager
-            .submit_command(&command, &env)
-            .map_err(|error| {
+        match self.manager.submit_command(&command, &env) {
+            Ok(handle) => Ok((handle, false)),
+            Err(JobError::SupervisionFailed(handle)) => Ok((handle, true)),
+            Err(error) => {
                 let _ = std::fs::remove_file(drm_path);
                 let _ = std::fs::remove_file(selection_path);
-                match error {
+                Err(match error {
                     JobError::AlreadyRunning => HlsApiError::status("job-busy", 409),
                     _ => HlsApiError::status("job-launch-failed", 503),
                 }
-                .into()
-            })
+                .into())
+            }
+        }
     }
 
     // --------------------------------------------------------------------------------------
@@ -2360,6 +2371,53 @@ fn b64decode_lenient(text: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_cli_handshake_retains_the_launched_analysis_and_request_until_cleanup() {
+        let root = tempfile::tempdir().unwrap();
+        let manager = Arc::new(
+            ConversionJobManager::new(
+                &root.path().join("jobs"),
+                vec!["/usr/bin/true".into()],
+                Arc::new(Vec::new),
+            )
+            .unwrap(),
+        );
+        let mut config = ServerConfig::new(root.path().join("catalog"), root.path().join("output"));
+        config.hooks.monitor = false;
+        let service = HlsService::new(Arc::new(config), manager.clone()).unwrap();
+        let body = serde_json::json!({
+            "asset_id": "handshake-failure",
+            "url": "https://example.invalid/master.m3u8"
+        });
+        let result = service.analyze(body.as_object().unwrap());
+        assert!(matches!(result, Err(ServiceError::Api(ref error))
+            if error.code == "job-supervision-failed" && error.status == 503));
+        let (job_id, requests) = {
+            let state = service.lock();
+            assert_eq!(state.records.len(), 1);
+            let row = state.records.values().next().unwrap();
+            assert_eq!(row.asset_id, "handshake-failure");
+            assert_eq!(row.state, "running");
+            (row.job_id.clone(), row.private_files.clone())
+        };
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].is_file());
+        assert!(service.output.join("handshake-failure").is_dir());
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while manager.status(&job_id).unwrap().state == "running" {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        manager.shutdown().unwrap();
+        service.shutdown().unwrap();
+        let status = service.status(&job_id).unwrap();
+        assert_eq!(status["state"], "failed");
+        assert_eq!(status["exit_code"], 0);
+        assert!(!requests[0].exists());
+        assert!(service.output.join("handshake-failure").is_dir());
+    }
 
     #[test]
     fn unconfirmed_cleanup_keeps_history_keys_and_request_files_owned() {
