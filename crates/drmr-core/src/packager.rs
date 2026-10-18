@@ -378,6 +378,9 @@ impl fmt::Debug for Packager {
     }
 }
 
+// Keep each admitted content job single-threaded and avoid per-file threaded I/O caches.
+pub(crate) const RESOURCE_FLAGS: [&str; 2] = ["--single_threaded", "--io_cache_size=0"];
+
 impl Packager {
     /// Shaka Packager as `packager` on the `PATH`, no timeout, through `runner`.
     pub fn new(runner: Arc<ToolRunner>) -> Self {
@@ -421,6 +424,10 @@ impl Packager {
         argv_redacted: Vec<String>,
         secrets: &[&str],
     ) -> Result<PackagerResult, Error> {
+        let mut argv_real = zeroize::Zeroizing::new(argv_real.to_vec());
+        argv_real.extend(RESOURCE_FLAGS.map(String::from));
+        let mut argv_redacted = argv_redacted;
+        argv_redacted.extend(RESOURCE_FLAGS.map(String::from));
         let timeout = self
             .timeout_s
             .filter(|seconds| !seconds.is_nan())
@@ -435,7 +442,7 @@ impl Packager {
             ..RunOptions::default()
         };
         let start = Instant::now();
-        let completed = match self.runner.run_tool(argv_real, "packager", &options) {
+        let completed = match self.runner.run_tool(&argv_real, "packager", &options) {
             Ok(completed) => completed,
             Err(failure) => {
                 let message = if failure.kind == "timeout" {

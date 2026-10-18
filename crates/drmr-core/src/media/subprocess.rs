@@ -77,6 +77,30 @@ fn strings(items: &[&str]) -> Vec<String> {
     items.iter().map(|item| (*item).to_string()).collect()
 }
 
+fn constrained_ffmpeg(argv: &[String]) -> Vec<String> {
+    let mut bounded = Vec::with_capacity(argv.len() + 10);
+    bounded.push(argv[0].clone());
+    bounded.extend(strings(&[
+        "-filter_threads",
+        "1",
+        "-filter_complex_threads",
+        "1",
+        "-threads",
+        "1",
+    ]));
+    bounded.extend_from_slice(&argv[1..argv.len() - 1]);
+    // Input decoder and output encoder options have separate scopes in FFmpeg.
+    bounded.extend(strings(&["-threads", "1"]));
+    bounded.push(argv.last().expect("media commands have an output").clone());
+    bounded
+}
+
+fn constrained_ffprobe(argv: &[String]) -> Vec<String> {
+    let mut bounded = strings(&[&argv[0], "-threads", "1"]);
+    bounded.extend_from_slice(&argv[1..]);
+    bounded
+}
+
 /// Python's text mode: strict UTF-8 (a `UnicodeDecodeError` — a `ValueError` — otherwise),
 /// universal newlines.
 fn decode_text(bytes: &[u8]) -> Result<String, MediaError> {
@@ -117,6 +141,13 @@ impl Subprocess {
             MediaError::uncaught("IndexError", "list index out of range".to_string())
         })?;
         let tool = first.rsplit('/').next().unwrap_or_default();
+        let bounded;
+        let argv = if first == &self.ffprobe_bin {
+            bounded = constrained_ffprobe(argv);
+            &bounded
+        } else {
+            argv
+        };
         let options = RunOptions {
             text: false,
             max_output_chars: MEDIA_MAX_OUTPUT_CHARS,
@@ -127,10 +158,12 @@ impl Subprocess {
             .runner
             .run_tool(argv, tool, &options)
             .map_err(|error| {
-                HlsMediaError::new(if error.kind == "cleanup-unconfirmed" {
-                    "media-cleanup-unconfirmed"
-                } else {
-                    "media-tool-unavailable"
+                HlsMediaError::new(match error.kind {
+                    "cleanup-unconfirmed" => "media-cleanup-unconfirmed",
+                    "output-limit" => "media-output-limit",
+                    "resource-budget" => "resource-budget",
+                    "pipe-timeout" => "media-pipe-timeout",
+                    _ => "media-tool-unavailable",
                 })
             })?;
         if result.returncode != Some(0) {
@@ -146,6 +179,16 @@ impl Subprocess {
         tool: &str,
         max_output_chars: usize,
     ) -> Result<TextOutput, MediaError> {
+        let bounded;
+        let argv = if tool == FFMPEG {
+            bounded = constrained_ffmpeg(argv);
+            &bounded
+        } else if tool == FFPROBE {
+            bounded = constrained_ffprobe(argv);
+            &bounded
+        } else {
+            argv
+        };
         let options = RunOptions {
             max_output_chars,
             ..RunOptions::default()
@@ -301,7 +344,7 @@ impl MediaEngine for Subprocess {
         #[cfg(windows)]
         let _output_guard =
             crate::native::pin_media_directory(destination.parent().unwrap_or(Path::new(".")))?;
-        self.run_media(&argv, true)?;
+        self.run_media(&constrained_ffmpeg(&argv), true)?;
         Ok(destination.to_path_buf())
     }
 
@@ -336,7 +379,17 @@ impl MediaEngine for Subprocess {
                 "-",
             ]));
         }
-        // Streamed: the output is the digest's input, not log text.
+        let argv = constrained_ffmpeg(&argv);
+        // Streamed: the output is the digest's input, not log text. Hold the same shared
+        // reservation as captured commands, without nesting another run_tool invocation.
+        let _permit = self.runner.reserve(
+            FFMPEG,
+            &RunOptions {
+                max_stdout_bytes: 0,
+                max_stderr_bytes: 0,
+                ..RunOptions::default()
+            },
+        )?;
         let call_id = self.runner.note_command(&argv, FFMPEG, None);
         let started = Instant::now();
         let result = stream_digest(&argv, audio);
@@ -540,11 +593,24 @@ fn strip_bytes(line: &[u8]) -> &[u8] {
 
 /// The digest input of one framemd5 line: its last two fields (`size, hash`) joined by `,`.
 fn hash_frame_lines(stdout: impl Read, digest: &mut Sha256) -> std::io::Result<()> {
+    const MAX_LINE_BYTES: u64 = 64 * 1024;
     let mut reader = BufReader::new(stdout);
     let mut line = Vec::new();
     loop {
         line.clear();
-        if reader.read_until(b'\n', &mut line)? == 0 {
+        // Normal framemd5 records are short. Bound even an unterminated or malformed
+        // record before retaining its bytes; truncating one would change the proof.
+        let count = reader
+            .by_ref()
+            .take(MAX_LINE_BYTES + 1)
+            .read_until(b'\n', &mut line)?;
+        if count as u64 > MAX_LINE_BYTES {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "frame record size limit exceeded",
+            ));
+        }
+        if count == 0 {
             return Ok(());
         }
         let stripped = strip_bytes(&line);
@@ -778,5 +844,28 @@ mod lifecycle_tests {
         let error = stream_digest(&argv, false).unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
         assert!(started.elapsed() < Duration::from_secs(5));
+    }
+}
+
+#[cfg(test)]
+mod digest_tests {
+    use super::*;
+    use std::io::{self, Cursor};
+
+    #[test]
+    fn an_unterminated_frame_record_is_rejected_before_it_can_grow_without_bound() {
+        let mut input = Cursor::new(vec![b'x'; 1024 * 1024]);
+        let error = hash_frame_lines(&mut input, &mut Sha256::new()).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(input.position() <= 64 * 1024 + 8192);
+    }
+
+    #[test]
+    fn framing_keeps_the_existing_digest_for_comments_crlf_and_a_final_partial_line() {
+        let input = b"#format: frame checksums\r\n\n0, 1, 2, 3, 12, abc\r\n0, 2, 3, 4, 16, def";
+        let mut actual = Sha256::new();
+        hash_frame_lines(&input[..], &mut actual).unwrap();
+        let expected = Sha256::digest(b"12, abc\n16, def\n");
+        assert_eq!(actual.finalize(), expected);
     }
 }

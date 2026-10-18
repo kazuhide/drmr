@@ -7,6 +7,8 @@ use super::fetch::{LOCAL_CHUNK, open_exclusive, read_full};
 #[cfg(unix)]
 use super::pypath::with_suffix;
 use super::{Escaped, Failure, SourceError};
+use crate::concurrency::Stop;
+use crate::resources::Workload;
 use crate::toolrun::{RunOptions, ToolRunner};
 use serde_json::{Map, Value};
 use std::fs::File;
@@ -24,6 +26,16 @@ pub type ProbeStream = Map<String, Value>;
 pub trait Prober: Send + Sync {
     /// The streams, or the classification of why they are not admitted.
     fn probe(&self, path: &Path, init_path: Option<&Path>) -> Result<Vec<ProbeStream>, Failure>;
+    /// Pass cancellation to a subprocess admission wait. Injected synchronous probes may
+    /// keep their normal drain behavior after the scheduler has started them.
+    fn probe_with_stop(
+        &self,
+        path: &Path,
+        init_path: Option<&Path>,
+        _stop: &Stop,
+    ) -> Result<Vec<ProbeStream>, Failure> {
+        self.probe(path, init_path)
+    }
 }
 
 impl<F> Prober for F
@@ -106,6 +118,7 @@ pub fn check_init(path: &Path) -> Result<(), SourceError> {
 pub struct FfprobeProber<'r> {
     runner: &'r ToolRunner,
     program: String,
+    stop: Option<&'r Stop>,
 }
 
 impl std::fmt::Debug for FfprobeProber<'_> {
@@ -127,6 +140,7 @@ impl<'r> FfprobeProber<'r> {
         FfprobeProber {
             runner,
             program: program.to_string(),
+            stop: None,
         }
     }
 
@@ -180,12 +194,26 @@ impl<'r> FfprobeProber<'r> {
         let options = RunOptions {
             text: false,
             timeout: Some(Duration::from_secs(30)),
+            workload: Some(Workload {
+                input_buffer_bytes: argv
+                    .last()
+                    .and_then(|path| std::fs::metadata(path).ok())
+                    .map(|metadata| metadata.len()),
+                tracks: 1,
+                ..Workload::default()
+            }),
+            stop: self.stop,
             ..RunOptions::default()
         };
         // The runner turns a timeout or a spawn failure into a ToolError.
         self.runner
             .run_tool(argv, "ffprobe", &options)
-            .map_err(|_| Failure::source("media-probe-failed"))
+            .map_err(|error| match error.kind {
+                "cancelled" => Failure::Cancelled,
+                "output-limit" => Failure::source("media-probe-output-limit"),
+                "resource-budget" => Failure::source("resource-budget"),
+                _ => Failure::source("media-probe-failed"),
+            })
     }
 
     /// Both ffprobe passes over `probe_path`.
@@ -259,6 +287,20 @@ fn json_list(output: &[u8], key: &str) -> Result<Vec<ProbeStream>, Failure> {
 }
 
 impl Prober for FfprobeProber<'_> {
+    fn probe_with_stop(
+        &self,
+        path: &Path,
+        init_path: Option<&Path>,
+        stop: &Stop,
+    ) -> Result<Vec<ProbeStream>, Failure> {
+        FfprobeProber {
+            runner: self.runner,
+            program: self.program.clone(),
+            stop: Some(stop),
+        }
+        .probe(path, init_path)
+    }
+
     fn probe(&self, path: &Path, init_path: Option<&Path>) -> Result<Vec<ProbeStream>, Failure> {
         let head = File::open(path)
             .and_then(|mut file| read_full(&mut file, 16))

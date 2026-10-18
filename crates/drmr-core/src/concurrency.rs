@@ -15,6 +15,8 @@ use std::time::{Duration, Instant};
 /// The cap of the default pool size (`concurrency.default_workers`); an explicit value is
 /// bounded separately, at 64.
 pub const DEFAULT_WORKERS_CAP: usize = 32;
+/// Maximum submitted but unconsumed units per ordered coordinator. Producers stay lazy.
+pub const MAX_PENDING_TASKS: usize = 128;
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     // A panicking unit never holds these locks (units run outside them), so a poisoned lock
@@ -102,13 +104,11 @@ impl UnitError for Cancelled {
     }
 }
 
-/// The default size of a CPU-bound pool: the CPUs this process may run on (the affinity mask
-/// where the platform has one, else the CPU count), at most 32. A CFS quota (`docker --cpus`)
-/// is not visible here; the CLI's `--max-workers` and the console's
-/// `DRMR_MAX_WORKERS` bound the pools explicitly. (A value given explicitly is
-/// bounded separately, at 64.)
+/// Default CPU-bound pool size, respecting the process affinity and readable Linux CPU
+/// quotas through `available_parallelism`, at most 32. Media backends further account for
+/// available memory and content. Explicit maximums are bounded separately at 64.
 pub fn default_workers() -> usize {
-    workers_for(affinity_cpus(), cpu_count)
+    workers_for(None, cpu_count)
 }
 
 /// `default_workers` over its inputs: `affinity` is the size of the affinity mask when the
@@ -123,23 +123,7 @@ pub fn workers_for(affinity: Option<usize>, cpu_count: impl FnOnce() -> Option<u
     cpus.clamp(1, DEFAULT_WORKERS_CAP)
 }
 
-/// `len(os.sched_getaffinity(0))` where the platform has it (Linux), else `None` (Python's
-/// `AttributeError`); a failing call is `None` too (its `OSError`).
-#[cfg(any(target_os = "linux", target_os = "android"))]
-fn affinity_cpus() -> Option<usize> {
-    rustix::thread::sched_getaffinity(None)
-        .ok()
-        .map(|set| usize::try_from(set.count()).unwrap_or(usize::MAX))
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "android")))]
-fn affinity_cpus() -> Option<usize> {
-    None
-}
-
-/// `os.cpu_count`: the online CPUs (`sysconf(_SC_NPROCESSORS_ONLN)`, which is what Rust's
-/// `available_parallelism` reads on every platform without an affinity mask; on Linux it is
-/// asked only when `sched_getaffinity` failed).
+/// Process parallelism, including readable affinity and control-group quotas.
 fn cpu_count() -> Option<usize> {
     std::thread::available_parallelism()
         .ok()
@@ -496,44 +480,51 @@ where
     S: FnMut(Unit<'a, T, E>) -> Task<Result<T, E>>,
 {
     let gate = stop.cloned().unwrap_or_default();
-    let tasks: Vec<Task<Result<T, E>>> = units
-        .into_iter()
-        .map(|unit| {
+    let mut units = units.into_iter();
+    let mut tasks: Vec<Task<Result<T, E>>> = Vec::new();
+    let mut results = Vec::new();
+    loop {
+        while tasks.len() < MAX_PENDING_TASKS && (!gate.is_set() || tasks.is_empty()) {
+            let Some(unit) = units.next() else {
+                break;
+            };
             let gate = gate.clone();
             let gated: Unit<'a, T, E> = Box::new(move || run_gated(&gate, unit));
-            submit(gated)
-        })
-        .collect();
-    if tasks.is_empty() {
-        return Ok(Vec::new());
-    }
-    wait_first_exception(&tasks);
-    if tasks.iter().any(raised) {
-        gate.set();
-        for task in &tasks {
-            task.cancel(); // only units that have not started can be cancelled
+            tasks.push(submit(gated));
         }
-        for task in &tasks {
-            task.wait(); // the ones already running drain
+        if tasks.is_empty() {
+            return Ok(results);
         }
-        let chosen = tasks
-            .iter()
-            .find(|task| raised_for_real(task))
-            .or_else(|| tasks.iter().find(|task| raised(task)))
-            .expect("a task raised");
-        return match chosen.take() {
-            Some(Outcome::Returned(Err(error))) => Err(error),
-            Some(Outcome::Panicked(payload)) => panic::resume_unwind(payload),
-            _ => unreachable!("the chosen task raised"),
-        };
+        wait_window(&tasks);
+        // Finished states are immutable. Snapshot the prefix before checking failures so
+        // a concurrent failure outside that prefix cannot be consumed as a success.
+        let ready = tasks.iter().take_while(|task| task.done()).count();
+        if tasks.iter().any(raised) {
+            gate.set();
+            for task in &tasks {
+                task.cancel();
+            }
+            for task in &tasks {
+                task.wait();
+            }
+            let chosen = tasks
+                .iter()
+                .find(|task| raised_for_real(task))
+                .or_else(|| tasks.iter().find(|task| raised(task)))
+                .expect("a task raised");
+            return match chosen.take() {
+                Some(Outcome::Returned(Err(error))) => Err(error),
+                Some(Outcome::Panicked(payload)) => panic::resume_unwind(payload),
+                _ => unreachable!("the chosen task raised"),
+            };
+        }
+        for task in tasks.drain(..ready) {
+            match task.take().map(Outcome::into_value) {
+                Some(Ok(value)) => results.push(value),
+                _ => unreachable!("the completed prefix returned values"),
+            }
+        }
     }
-    Ok(tasks
-        .iter()
-        .map(|task| match task.take().map(Outcome::into_value) {
-            Some(Ok(value)) => value,
-            _ => unreachable!("every unit returned a value"),
-        })
-        .collect())
 }
 
 /// The start gate around one unit: nothing runs once the flag is set; a failure (not a
@@ -557,8 +548,8 @@ fn run_gated<T, E: UnitError>(gate: &Stop, unit: Unit<'_, T, E>) -> Result<T, E>
     }
 }
 
-/// `wait(futures, return_when=FIRST_EXCEPTION)`: until one task raised or every task is done.
-fn wait_first_exception<T, E>(tasks: &[Task<Result<T, E>>]) {
+/// Wait for a failure or a consumable ordered prefix, then refill the bounded window.
+fn wait_window<T, E>(tasks: &[Task<Result<T, E>>]) {
     let signal = Arc::new((Mutex::new(()), Condvar::new()));
     for task in tasks {
         let signal = Arc::clone(&signal);
@@ -569,7 +560,7 @@ fn wait_first_exception<T, E>(tasks: &[Task<Result<T, E>>]) {
     }
     let mut guard = lock(&signal.0);
     loop {
-        if tasks.iter().any(raised) || tasks.iter().all(Task::done) {
+        if tasks.iter().any(raised) || tasks.first().is_some_and(Task::done) {
             return;
         }
         // The callbacks notify under the same lock, so no completion is missed between the

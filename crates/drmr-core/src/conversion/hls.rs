@@ -503,7 +503,7 @@ impl Converter {
         }
         let output_report = inspection::inspect(&staged.path().join("media.m3u8"))
             .map_err(|_| ConversionError("hls-inspection-failed"))?;
-        publish_directory(staged.path(), &destination)?;
+        self.publish_directory(staged.path(), &destination)?;
         Ok(ConversionReport {
             schema_version: 1,
             input: input_report,
@@ -555,7 +555,7 @@ impl Converter {
             return Err(ConversionError("round-trip-verification-failed"));
         }
         report.input = localized.report;
-        super::publish(&candidate, &destination)?;
+        self.publish(&candidate, &destination)?;
         Ok(report)
     }
 }
@@ -632,9 +632,6 @@ pub(super) fn encrypt_media(
         .write_all(encrypted.as_bytes())
         .map_err(|_| ConversionError("output-staging-failed"))?;
     Ok(())
-}
-pub(super) fn publish_directory(source: &Path, destination: &Path) -> Result<(), ConversionError> {
-    super::files::publish_directory(source, destination)
 }
 
 fn charge_snapshot(file: &File, total: &mut u64, limit: u64) -> Result<(), ConversionError> {

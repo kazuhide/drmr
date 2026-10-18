@@ -1540,3 +1540,47 @@ fn media_outputs_refuse_windows_work_directory_junctions_before_outputs() {
     assert_eq!(fake.events(), []);
     fs::remove_dir(link).unwrap();
 }
+
+#[test]
+fn track_coordinator_threads_are_bounded_alongside_segment_workers() {
+    let tmp = tempfile::tempdir().unwrap();
+    let seg = segment(0, tmp.path().join("source.ts"), 2.0);
+    let tracks = (0..12)
+        .map(|index| {
+            track(
+                &format!("v{index:03}"),
+                "video",
+                "ts",
+                "h264",
+                vec![seg.clone()],
+            )
+        })
+        .collect();
+    let analysis = analysis(tmp.path(), tracks);
+    let coordinators = Mutex::new(HashSet::new());
+    let on_log = |record: Record| {
+        if record.get("message").and_then(Value::as_str) == Some("track-started") {
+            coordinators
+                .lock()
+                .unwrap()
+                .insert(std::thread::current().id());
+        }
+    };
+    let report = package_hls(
+        &analysis,
+        &keys(),
+        &signaling(),
+        None,
+        Some(&on_log),
+        "packager",
+        Some(2),
+        &Fake::default(),
+    )
+    .unwrap();
+    assert!(report.success);
+    assert_eq!(report.track_results.len(), 12);
+    assert!(
+        coordinators.lock().unwrap().len() <= 2,
+        "one coordinator thread per track defeats the worker bound"
+    );
+}

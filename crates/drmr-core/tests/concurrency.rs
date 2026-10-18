@@ -314,3 +314,41 @@ fn a_stop_wait_times_out_unset_and_returns_at_once_once_set() {
     assert!(stop.wait(None));
     assert!(stop.wait(Some(Duration::ZERO)));
 }
+
+#[test]
+fn a_blocked_head_applies_backpressure_to_a_lazy_unit_producer() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let constructed = AtomicUsize::new(0);
+    let full = Stop::new();
+    let release = Stop::new();
+    let (observed, results) = std::thread::scope(|scope| {
+        let producer = scope.spawn(|| {
+            let pool = Pool::new(scope, 1);
+            let units = (0..512).map(|index| {
+                constructed.fetch_add(1, Ordering::SeqCst);
+                if index == 127 {
+                    full.set();
+                }
+                let release = release.clone();
+                unit(move || {
+                    if index == 0 {
+                        assert!(release.wait(Some(Duration::from_secs(5))));
+                    }
+                    Ok(index)
+                })
+            });
+            run_ordered(|unit| pool.submit(unit), units, None).unwrap()
+        });
+        assert!(full.wait(Some(Duration::from_secs(5))));
+        // Give an unbounded producer time to expose work beyond the blocked window.
+        std::thread::sleep(Duration::from_millis(50));
+        let observed = constructed.load(Ordering::SeqCst);
+        release.set();
+        (observed, producer.join().unwrap())
+    });
+    assert!(
+        observed <= 128,
+        "constructed {observed} closures while the head was blocked"
+    );
+    assert_eq!(results, (0..512).collect::<Vec<_>>());
+}

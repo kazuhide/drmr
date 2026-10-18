@@ -13,7 +13,7 @@ const OUT_DONE: u8 = 1;
 const ERR_DONE: u8 = 2;
 const EXCEEDED: u8 = 4;
 const READ_ERROR: u8 = 8;
-const POLL: Duration = Duration::from_millis(5);
+const POLL: Duration = Duration::from_millis(1);
 const PIPE_GRACE: Duration = Duration::from_secs(2);
 
 #[derive(Default)]
@@ -76,11 +76,15 @@ fn control(
     child: &mut ManagedChild,
     state: &State,
     timeout: Option<Duration>,
+    stop: Option<&crate::concurrency::Stop>,
 ) -> Result<ExitStatus, Failure> {
     let deadline = timeout.map(|limit| Instant::now() + limit);
     let mut pipe_deadline = None;
     let mut status = None;
     loop {
+        if stop.is_some_and(crate::concurrency::Stop::is_set) {
+            return Err(failure("cancelled", "tool execution cancelled"));
+        }
         let flags = state.flags.load(Ordering::Acquire);
         if flags & EXCEEDED != 0 {
             return Err(failure(
@@ -134,6 +138,9 @@ fn execute_with_cleanup(
     path: Option<&OsStr>,
     mut cleanup: impl FnMut(&mut ManagedChild) -> io::Result<()>,
 ) -> Result<Completed, Failure> {
+    if options.stop.is_some_and(crate::concurrency::Stop::is_set) {
+        return Err(failure("cancelled", "tool execution cancelled"));
+    }
     let Some((program, arguments)) = argv.split_first() else {
         return Err(failure("unavailable", "could not run: empty command"));
     };
@@ -146,6 +153,8 @@ fn execute_with_cleanup(
     if let Some(path) = path {
         command.env("PATH", path);
     }
+    // Asset workers inherit one supervisor-owned Unix group. Creating a subgroup here
+    // would let media tools survive a hard worker kill; Windows retains nested jobs.
     let mut child = ManagedChild::spawn(command, !crate::native::in_asset_worker())
         .map_err(|error| failure("unavailable", format!("could not run: {error}")))?;
     let stdout = child.stdout.take().expect("stdout is piped");
@@ -198,7 +207,7 @@ fn execute_with_cleanup(
                 ));
             }
         };
-        let result = control(&mut child, &state, options.timeout);
+        let result = control(&mut child, &state, options.timeout, options.stop);
         let confirmed = confirm_cleanup(&mut child, &mut cleanup);
         state.stop.store(true, Ordering::Release);
         let stdout = output
@@ -232,6 +241,51 @@ fn confirm_cleanup(
 #[cfg(test)]
 mod lifecycle_tests {
     use super::*;
+
+    #[test]
+    fn cleanup_failure_overrides_active_cancellation() {
+        let root = tempfile::tempdir().unwrap();
+        let ready = root.path().join("ready");
+        let tool = drmr_test_support::program_path(&root.path().join("response"));
+        drmr_test_support::install(
+            &tool,
+            &drmr_test_support::ToolSpec::default()
+                .with("ready_file", ready.to_str().unwrap())
+                .with(
+                    "release_file",
+                    root.path().join("release").to_str().unwrap(),
+                ),
+        )
+        .unwrap();
+        let argv = vec![tool.to_str().unwrap().to_string()];
+        let stop = crate::concurrency::Stop::new();
+        let options = RunOptions {
+            stop: Some(&stop),
+            timeout: Some(Duration::from_secs(20)),
+            ..RunOptions::default()
+        };
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                let deadline = Instant::now() + Duration::from_secs(15);
+                while !ready.is_file() {
+                    assert!(Instant::now() < deadline, "tool did not become ready");
+                    std::thread::sleep(POLL);
+                }
+                stop.set();
+            });
+            let mut attempts = 0;
+            let error = execute_with_cleanup(&argv, &options, None, |child| {
+                attempts += 1;
+                child.finish()?;
+                Err(io::Error::other("private cleanup diagnostic"))
+            })
+            .expect_err("cancellation must not conceal unconfirmed cleanup");
+            assert!(stop.is_set());
+            assert_eq!(error.kind, "cleanup-unconfirmed");
+            assert_eq!(error.text, "process tree cleanup could not be confirmed");
+            assert_eq!(attempts, 1);
+        });
+    }
 
     #[test]
     fn cleanup_failure_overrides_completed_and_timed_out_tools() {

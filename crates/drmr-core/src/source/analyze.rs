@@ -16,13 +16,13 @@ use super::{
     SourceTrack,
 };
 use crate::canonical::Dumps;
-use crate::concurrency::{Outcome, Pool, Task, Unit, run_ordered};
+use crate::concurrency::{MAX_PENDING_TASKS, Outcome, Pool, Task, Unit, run_ordered};
 use crate::events::{Record, Sink};
 use crate::m3u8::Attributes;
 use crate::snapshot::{analysis_id, sha256_hex, snapshot_digest};
 use crate::toolrun::ToolRunner;
 use serde_json::{Map, Value};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::fs::File;
 use std::io::Write as _;
@@ -96,6 +96,15 @@ pub fn analyze_hls(
     on_log: Option<&dyn Sink>,
     runner: &ToolRunner,
 ) -> Result<SourceAnalysis, Failure> {
+    policy.validate()?;
+    let budget = crate::resources::Budget::choose(
+        crate::resources::Hardware::detect(),
+        crate::resources::Workload::default(),
+        policy.probe_workers,
+    )
+    .map_err(|_| Failure::source("resource-budget"))?;
+    let mut bounded_policy = policy.clone();
+    bounded_policy.probe_workers = Some(budget.workers);
     let prober = FfprobeProber::new(runner);
     let options = AnalyzeOptions {
         on_log,
@@ -103,7 +112,9 @@ pub fn analyze_hls(
         platform: Arc::new(SystemPlatform),
         hooks: &Direct,
     };
-    analyze_hls_with(source, asset_id, output_root, policy, &options)
+    let analysis = analyze_hls_with(source, asset_id, output_root, &bounded_policy, &options)?;
+    runner.note_resource_budget(&budget);
+    Ok(analysis)
 }
 
 /// `[A-Za-z0-9][A-Za-z0-9_.-]{0,127}`.
@@ -252,8 +263,35 @@ struct Landed {
     size: u64,
 }
 
-/// A media playlist of the analysis and its download / inspection state (coordinator-owned;
-/// its order is its index in the analysis's playlists).
+/// Position in the download plan without materializing a closure for every resource.
+#[derive(Default)]
+struct DownloadCursor {
+    playlist: usize,
+    resource: usize,
+}
+
+impl DownloadCursor {
+    fn next(&mut self, state: &State) -> Option<(usize, Which)> {
+        loop {
+            let playlist = state.playlists.get(self.playlist)?;
+            if self.resource == 0 {
+                self.resource = 1;
+                if playlist.plan.init.is_some() {
+                    return Some((self.playlist, Which::Init));
+                }
+            }
+            let index = self.resource - 1;
+            if index < playlist.plan.segments.len() {
+                self.resource += 1;
+                return Some((self.playlist, Which::Segment(index)));
+            }
+            self.playlist += 1;
+            self.resource = 0;
+        }
+    }
+}
+
+/// A media playlist and its coordinator-owned download and inspection state.
 struct PlaylistState {
     path: PathBuf,
     attrs: PlaylistAttrs,
@@ -269,7 +307,7 @@ struct PlaylistState {
     downloaded: usize,
     probed: usize,
     probe_started: bool,
-    waiting: Vec<usize>,
+    waiting: VecDeque<usize>,
     streams: Vec<Option<Vec<ProbeStream>>>,
     specs: Vec<Spec>,
 }
@@ -296,7 +334,7 @@ impl PlaylistState {
             downloaded: 0,
             probed: 0,
             probe_started: false,
-            waiting: Vec::new(),
+            waiting: VecDeque::new(),
             streams: vec![None; count],
             specs: Vec::new(),
         }
@@ -441,6 +479,7 @@ impl Units {
         which: Which,
         task: Task<Result<Output, Failure>>,
     ) {
+        debug_assert!(self.pending.len() < MAX_PENDING_TASKS);
         let id = self.next;
         self.next += 1;
         let sender = self.sender.clone();
@@ -577,15 +616,12 @@ impl<'e: 's, 's> Run<'e, 's, '_> {
         // Every media playlist at once; results and failures are taken in master order.
         let fetch = self.fetch;
         let hooks = self.hooks;
-        let units: Vec<Unit<'s, (Vec<u8>, String), Failure>> = plan
-            .iter()
-            .map(|(url, _, _)| {
-                let url = url.clone();
-                let unit: Unit<'s, (Vec<u8>, String), Failure> =
-                    Box::new(move || hooks.read(fetch, &url, true));
-                unit
-            })
-            .collect();
+        let units = plan.iter().map(|(url, _, _)| {
+            let url = url.clone();
+            let unit: Unit<'s, (Vec<u8>, String), Failure> =
+                Box::new(move || hooks.read(fetch, &url, true));
+            unit
+        });
         let bodies = run_ordered(|unit| self.fetch_pool.submit(unit), units, None)?;
         for ((url, attrs, kind), (child_body, child_effective)) in plan.into_iter().zip(bodies) {
             if child_effective == location && child_effective != url {
@@ -619,14 +655,8 @@ impl<'e: 's, 's> Run<'e, 's, '_> {
             pending: HashMap::new(),
             next: 0,
         };
-        for order in 0..state.playlists.len() {
-            if state.playlists[order].plan.init.is_some() {
-                self.submit_download(state, &mut units, order, Which::Init);
-            }
-            for index in 0..state.playlists[order].plan.segments.len() {
-                self.submit_download(state, &mut units, order, Which::Segment(index));
-            }
-        }
+        let mut cursor = DownloadCursor::default();
+        self.fill_window(state, &mut units, &mut cursor);
         let mut failures: Vec<(Key, SourceError)> = Vec::new();
         while !units.pending.is_empty() && failures.is_empty() {
             // One completion queue: collecting a finished unit costs O(1) whatever the plan.
@@ -642,7 +672,7 @@ impl<'e: 's, 's> Run<'e, 's, '_> {
                 Some(Outcome::Panicked(payload)) => panic::resume_unwind(payload),
                 Some(Outcome::Returned(Err(failure))) => Err(failure),
                 Some(Outcome::Returned(Ok(Output::Downloaded(landed)))) => {
-                    self.downloaded(state, &mut units, done.playlist, done.which, landed)
+                    self.downloaded(state, done.playlist, done.which, landed)
                 }
                 Some(Outcome::Returned(Ok(Output::Probed(streams)))) => {
                     self.probed(state, done.playlist, done.which, streams)
@@ -655,6 +685,9 @@ impl<'e: 's, 's> Run<'e, 's, '_> {
                     self.fetch.stop().set();
                 }
                 Err(escaping @ Failure::Escaped(_)) => return Err(escaping),
+            }
+            if failures.is_empty() {
+                self.fill_window(state, &mut units, &mut cursor);
             }
         }
         if failures.is_empty() {
@@ -679,6 +712,29 @@ impl<'e: 's, 's> Run<'e, 's, '_> {
             .reduce(|best, item| if item.0 < best.0 { item } else { best })
             .expect("a failure was recorded");
         Err(Failure::Source(earliest.1))
+    }
+
+    fn fill_window(&self, state: &mut State, units: &mut Units, cursor: &mut DownloadCursor) {
+        while units.pending.len() < MAX_PENDING_TASKS {
+            let ready = state
+                .playlists
+                .iter_mut()
+                .enumerate()
+                .find_map(|(order, playlist)| {
+                    playlist
+                        .init_ready()
+                        .then(|| playlist.waiting.pop_front())
+                        .flatten()
+                        .map(|index| (order, index))
+                });
+            if let Some((order, index)) = ready {
+                self.submit_probe(state, units, order, index);
+            } else if let Some((order, which)) = cursor.next(state) {
+                self.submit_download(state, units, order, which);
+            } else {
+                break;
+            }
+        }
     }
 
     fn submit_download(&self, state: &State, units: &mut Units, order: usize, which: Which) {
@@ -731,7 +787,6 @@ impl<'e: 's, 's> Run<'e, 's, '_> {
     fn downloaded(
         &self,
         state: &mut State,
-        units: &mut Units,
         order: usize,
         which: Which,
         landed: Downloaded,
@@ -748,10 +803,6 @@ impl<'e: 's, 's> Run<'e, 's, '_> {
                     planned.byte_range,
                 );
                 playlist.init_sha256 = Some(landed.sha256);
-                let waiting = std::mem::take(&mut playlist.waiting);
-                for index in waiting {
-                    self.submit_probe(state, units, order, index);
-                }
                 Ok(())
             }
             Which::Segment(index) => {
@@ -787,11 +838,7 @@ impl<'e: 's, 's> Run<'e, 's, '_> {
                         ],
                     );
                 }
-                if playlist.init_ready() {
-                    self.submit_probe(state, units, order, index);
-                } else {
-                    state.playlists[order].waiting.push(index);
-                }
+                state.playlists[order].waiting.push_back(index);
                 Ok(())
             }
         }
@@ -993,12 +1040,12 @@ fn inspect(
         return Err(Failure::Cancelled);
     }
     let Some((init_path, init_size)) = init else {
-        return prober.probe(path, None);
+        return prober.probe_with_stop(path, None, fetch.stop());
     };
     let count = u128::from(init_size) + u128::from(size);
     fetch.claim_disk_or_escape(count)?;
     let _claim = Claim { fetch, count };
-    prober.probe(path, Some(&init_path))
+    prober.probe_with_stop(path, Some(&init_path), fetch.stop())
 }
 
 /// One stream's topology (`index` defaulting to 0, `codec_type`, `codec_name`, `profile`,

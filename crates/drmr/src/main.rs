@@ -2,6 +2,7 @@
 //! Exit codes: 0 success, 1 the check failed, 2 usage or an input that is not what the
 //! command expects.
 
+mod cancellation;
 mod convert_cli;
 mod doctor;
 mod inspect_cli;

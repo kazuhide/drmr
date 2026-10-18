@@ -8,6 +8,7 @@ use std::{fmt::Write as _, path::Path, sync::Arc, time::Duration};
 use zeroize::Zeroizing;
 
 pub(super) struct Backend {
+    pub stop: crate::concurrency::Stop,
     pub runner: Arc<ToolRunner>,
     pub packager: String,
     pub ffmpeg: String,
@@ -15,13 +16,24 @@ pub(super) struct Backend {
     pub timeout: Duration,
 }
 impl Backend {
+    pub fn check_cancelled(&self) -> Result<(), ConversionError> {
+        if self.stop.is_set() {
+            Err(ConversionError("cancelled"))
+        } else {
+            Ok(())
+        }
+    }
     pub fn run(
         &self,
         argv: &[String],
         tool: &str,
         secrets: &[&str],
     ) -> Result<Vec<u8>, ConversionError> {
+        self.check_cancelled()?;
         let mut effective = Zeroizing::new(argv.to_vec());
+        if tool == "ffprobe" {
+            effective.splice(1..1, ["-threads".into(), "1".into()]);
+        }
         if matches!(tool, "ffmpeg" | "ffprobe") {
             let input = effective
                 .iter()
@@ -36,8 +48,12 @@ impl Backend {
                 effective.splice(at..at, ["-allowed_extensions".into(), "ALL".into()]);
             }
         }
+        if tool == "packager" {
+            effective.extend(crate::packager::RESOURCE_FLAGS.map(String::from));
+        }
         let shown = vec![tool.to_string(), "[arguments redacted]".into()];
         let options = RunOptions {
+            stop: Some(&self.stop),
             argv_redacted: Some(&shown),
             secrets,
             timeout: Some(self.timeout),
@@ -56,12 +72,16 @@ impl Backend {
             .runner
             .run_tool(&effective, tool, &options)
             .map_err(|error| {
-                ConversionError(if error.kind == "cleanup-unconfirmed" {
-                    "media-cleanup-unconfirmed"
-                } else {
-                    "media-tool-unavailable-or-timeout"
+                ConversionError(match error.kind {
+                    "cleanup-unconfirmed" => "media-cleanup-unconfirmed",
+                    "output-limit" => "media-output-limit",
+                    "resource-budget" => "resource-budget",
+                    "timeout" | "pipe-timeout" => "media-tool-timeout",
+                    "cancelled" => "cancelled",
+                    _ => "media-tool-unavailable-or-timeout",
                 })
             })?;
+        self.check_cancelled()?;
         if completed.returncode != Some(0) {
             return Err(ConversionError("media-tool-failed"));
         }
@@ -257,7 +277,10 @@ impl Backend {
             "language".into(),
             stream["tags"]["language"].as_str().unwrap_or("und").into(),
         );
-        Ok(serde_json::Value::Object(profile))
+        let profile = serde_json::Value::Object(profile);
+        self.runner
+            .register_workload(super::execution::observe_profile(&profile, path)?);
+        Ok(profile)
     }
     pub fn packets_stream(
         &self,

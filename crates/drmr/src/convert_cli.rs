@@ -5,13 +5,13 @@ use drmr_core::conversion::{
     ConversionError, ConversionRequest, Converter, VerificationRequest, VerificationSource,
     key_file::{self, OperatorKeys},
 };
-use drmr_core::events::NoSink;
+use drmr_core::events::{Record, Sink};
 use drmr_core::inspection::{self, OutputFormat, TargetProtection};
 use drmr_core::toolrun::{Secrets, ToolRunner};
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 #[derive(Args)]
 pub struct ConvertArgs {
@@ -32,6 +32,9 @@ pub struct ConvertArgs {
     /// Shaka Packager executable, selected by the operator.
     #[arg(long, default_value = "packager")]
     pub packager_bin: String,
+    /// Upper bound for simultaneous media work (1-64); default adapts to CPU and memory.
+    #[arg(long, value_parser = clap::value_parser!(u8).range(1..=64))]
+    pub max_workers: Option<u8>,
     /// Print the versioned result as one JSON object.
     #[arg(long)]
     pub json: bool,
@@ -50,6 +53,9 @@ pub struct VerifyArgs {
     /// Shaka Packager executable, selected by the operator.
     #[arg(long, default_value = "packager")]
     pub packager_bin: String,
+    /// Upper bound for simultaneous media work (1-64); default adapts to CPU and memory.
+    #[arg(long, value_parser = clap::value_parser!(u8).range(1..=64))]
+    pub max_workers: Option<u8>,
     /// Print the versioned verification result as one JSON object.
     #[arg(long)]
     pub json: bool,
@@ -67,14 +73,59 @@ fn load(path: Option<&PathBuf>) -> Result<OperatorKeys, ExitCode> {
     )
 }
 
-fn converter(packager: &str) -> Converter {
-    let runner = Arc::new(ToolRunner::new(Arc::new(Secrets::new()), Arc::new(NoSink)));
+struct Progress {
+    enabled: bool,
+    workers: Mutex<Option<u64>>,
+}
+impl Sink for Progress {
+    fn emit(&self, record: &Record) {
+        if !self.enabled
+            || record.get("stage").and_then(serde_json::Value::as_str) != Some("resources")
+        {
+            return;
+        }
+        let Some(workers) = record.get("workers").and_then(serde_json::Value::as_u64) else {
+            return;
+        };
+        let mut previous = self
+            .workers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if *previous != Some(workers) {
+            eprintln!("Processing up to {workers} tracks at a time (CPU and memory limits).");
+            *previous = Some(workers);
+        }
+    }
+}
+fn converter(
+    packager: &str,
+    maximum: Option<u8>,
+    progress: bool,
+    stop: drmr_core::concurrency::Stop,
+) -> Converter {
+    let sink = Arc::new(Progress {
+        enabled: progress,
+        workers: Mutex::new(None),
+    });
+    let runner = Arc::new(ToolRunner::new(Arc::new(Secrets::new()), sink));
     Converter::new(runner, packager, "ffmpeg")
+        .with_stop(stop)
+        .with_max_workers(maximum.map(usize::from))
+        .expect("clap validates the worker upper bound")
 }
 
 fn error(command: &str, error: ConversionError) -> ExitCode {
     eprintln!("{command}: {error}");
+    if error.0 == "cancelled" {
+        return ExitCode::from(130);
+    }
     if let Some(hint) = match error.0 {
+        "resource-budget" => Some(
+            "Free memory or run fewer jobs; the worker maximum does not override memory admission.",
+        ),
+        "media-output-limit" => {
+            Some("The tool output exceeded the capture limit. Partial evidence is never accepted.")
+        }
         "input-key-required" => {
             Some("Provide every source key in input.keys; use input.hls_keys for HLS AES-128.")
         }
@@ -135,6 +186,9 @@ fn json(value: &serde_json::Value) -> std::io::Result<()> {
 }
 
 pub fn convert(args: &ConvertArgs) -> ExitCode {
+    let Ok(cancellation) = crate::cancellation::Cancellation::install() else {
+        return error("convert", ConversionError("signal-monitor-unavailable"));
+    };
     let keys = match load(args.keys_file.as_ref()) {
         Ok(keys) => keys,
         Err(code) => return code,
@@ -149,7 +203,13 @@ pub fn convert(args: &ConvertArgs) -> ExitCode {
     if !args.json {
         eprintln!("Converting and checking media...");
     }
-    let report = match converter(&args.packager_bin).convert(ConversionRequest {
+    let report = match converter(
+        &args.packager_bin,
+        args.max_workers,
+        !args.json,
+        cancellation.stop.clone(),
+    )
+    .convert(ConversionRequest {
         input: &args.input,
         output: &args.output,
         format,
@@ -163,6 +223,9 @@ pub fn convert(args: &ConvertArgs) -> ExitCode {
         Ok(report) => report,
         Err(cause) => return error("convert", cause),
     };
+    if cancellation.stop.is_set() {
+        return error("convert", ConversionError("cancelled"));
+    }
     let result = if args.json {
         json(&serde_json::to_value(&report).expect("conversion report serializes"))
     } else {
@@ -184,6 +247,9 @@ pub fn convert(args: &ConvertArgs) -> ExitCode {
 }
 
 pub fn verify(args: &VerifyArgs) -> ExitCode {
+    let Ok(cancellation) = crate::cancellation::Cancellation::install() else {
+        return error("verify", ConversionError("signal-monitor-unavailable"));
+    };
     let keys = match load(args.keys_file.as_ref()) {
         Ok(keys) => keys,
         Err(code) => return code,
@@ -199,7 +265,13 @@ pub fn verify(args: &VerifyArgs) -> ExitCode {
     if !args.json {
         eprintln!("Comparing the source and result...");
     }
-    let report = match converter(&args.packager_bin).verify(VerificationRequest {
+    let report = match converter(
+        &args.packager_bin,
+        args.max_workers,
+        !args.json,
+        cancellation.stop.clone(),
+    )
+    .verify(VerificationRequest {
         source: VerificationSource {
             input: &args.source,
             input_keys: &keys.input,
@@ -214,6 +286,9 @@ pub fn verify(args: &VerifyArgs) -> ExitCode {
         Ok(report) => report,
         Err(cause) => return error("verify", cause),
     };
+    if cancellation.stop.is_set() {
+        return error("verify", ConversionError("cancelled"));
+    }
     let result = if args.json {
         json(&serde_json::to_value(&report).expect("verification report serializes"))
     } else {

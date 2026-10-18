@@ -14,7 +14,9 @@
 //! the kind of failure only, never the argv.
 
 use crate::canonical::python_float_repr;
+use crate::concurrency::Stop;
 use crate::events::{Record, Sink, now_iso, round3};
+use crate::resources::{Claim, Limiter, Permit, Workload, process_limiter};
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE};
 use regex::Regex;
@@ -285,13 +287,13 @@ pub fn bounded(text: &str, limit: usize) -> (String, bool) {
     (kept, true)
 }
 
-/// A tool could not be run to completion: a spawn failure (`unavailable`) or a `timeout`.
+/// A tool could not complete, including capture, resource, timeout, and spawn failures.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[error("{tool}: {kind}")]
 pub struct ToolError {
     /// The tool's name as recorded (`packager`, `ffmpeg`, `ffprobe`, `mp4dump`).
     pub tool: String,
-    /// `timeout` or `unavailable`.
+    /// A fixed classification, without arguments or untrusted tool output.
     pub kind: &'static str,
 }
 
@@ -359,6 +361,10 @@ pub struct RunOptions<'a> {
     /// `false` keeps stdout out of the record (output consumed as data): the record notes
     /// its size only.
     pub log_stdout: bool,
+    /// Optional known media for this call; it can only raise an already registered job estimate.
+    pub workload: Option<Workload>,
+    /// Cooperative cancellation while waiting to admit a child. Running children drain normally.
+    pub stop: Option<&'a Stop>,
 }
 
 impl fmt::Debug for RunOptions<'_> {
@@ -373,6 +379,8 @@ impl fmt::Debug for RunOptions<'_> {
             .field("max_stdout_bytes", &self.max_stdout_bytes)
             .field("max_stderr_bytes", &self.max_stderr_bytes)
             .field("log_stdout", &self.log_stdout)
+            .field("workload", &self.workload)
+            .field("stop", &self.stop.is_some())
             .finish()
     }
 }
@@ -389,6 +397,8 @@ impl Default for RunOptions<'_> {
             max_stdout_bytes: DEFAULT_STDOUT_BYTES,
             max_stderr_bytes: DEFAULT_STDERR_BYTES,
             log_stdout: true,
+            workload: None,
+            stop: None,
         }
     }
 }
@@ -412,6 +422,8 @@ pub struct ToolRunner {
     secrets: Arc<Secrets>,
     sink: Arc<dyn Sink>,
     path: Option<OsString>,
+    limiter: Arc<Limiter>,
+    workload: RwLock<Option<Workload>>,
 }
 
 impl ToolRunner {
@@ -422,6 +434,8 @@ impl ToolRunner {
             secrets,
             sink,
             path: None,
+            limiter: process_limiter(),
+            workload: RwLock::new(None),
         }
     }
 
@@ -437,6 +451,85 @@ impl ToolRunner {
     /// The `PATH` this runner's tools resolve on, when it is not this process's.
     pub fn path(&self) -> Option<&OsStr> {
         self.path.as_deref()
+    }
+
+    /// Use an enclosing application's allocation. Default runners share the process limiter.
+    #[must_use]
+    pub fn with_limiter(mut self, limiter: Arc<Limiter>) -> Self {
+        self.limiter = limiter;
+        self
+    }
+
+    /// The conservative observation currently registered for this runner.
+    pub(crate) fn registered_workload(&self) -> Option<Workload> {
+        *self.workload.read().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Register known source metadata before scheduling its tools. The first observation
+    /// replaces the unknown fallback; later observations can only raise the estimate.
+    pub fn register_workload(&self, workload: Workload) {
+        let mut current = self
+            .workload
+            .write()
+            .unwrap_or_else(PoisonError::into_inner);
+        *current = Some(current.map_or(workload, |previous| previous.merge(workload)));
+    }
+
+    /// Record numeric admission choices without source paths, arguments, or machine identifiers.
+    pub fn note_resource_budget(&self, budget: &crate::resources::Budget) {
+        let mut record = Record::new();
+        put(&mut record, "ts", now_iso());
+        put(&mut record, "stage", "resources");
+        put(&mut record, "level", "info");
+        put(&mut record, "message", "resource-budget");
+        put(&mut record, "workers", budget.workers);
+        put(&mut record, "child_threads", budget.child_threads);
+        put(&mut record, "cpu_tokens", budget.cpu_tokens);
+        put(
+            &mut record,
+            "memory_tokens_bytes",
+            budget.memory_tokens_bytes,
+        );
+        put(
+            &mut record,
+            "estimated_child_bytes",
+            budget.estimated_child_bytes,
+        );
+        put(
+            &mut record,
+            "memory_source",
+            match budget.memory_source {
+                crate::resources::MemorySource::Host => "host",
+                crate::resources::MemorySource::ProcessCgroup => "process-cgroup",
+                crate::resources::MemorySource::Unknown => "unknown",
+            },
+        );
+        self.sink.emit(&record);
+    }
+
+    /// Reserve exactly once for a child that streams its output outside `run_tool`.
+    /// The caller keeps this guard through child cleanup and never calls `run_tool` inside it.
+    pub fn reserve(&self, tool: &str, options: &RunOptions<'_>) -> Result<Permit, ToolError> {
+        let current = *self.workload.read().unwrap_or_else(PoisonError::into_inner);
+        let workload = match (current, options.workload) {
+            (Some(current), Some(call)) => current.merge(call),
+            (Some(current), None) => current,
+            (None, call) => call.unwrap_or_default(),
+        };
+        self.limiter
+            .acquire(
+                Claim::for_workload(workload, options.max_stdout_bytes, options.max_stderr_bytes),
+                options.stop,
+                options.timeout,
+            )
+            .map_err(|error| ToolError {
+                tool: tool.to_owned(),
+                kind: match error {
+                    crate::resources::ReservationError::Insufficient => "resource-budget",
+                    crate::resources::ReservationError::Cancelled => "cancelled",
+                    crate::resources::ReservationError::Timeout => "timeout",
+                },
+            })
     }
 
     /// The shared registry.
@@ -467,7 +560,31 @@ impl ToolRunner {
         self.sink
             .emit(&self.command_record(&base, options.argv_redacted.unwrap_or(argv), &extra));
         let start = Instant::now();
-        match capture::execute(argv, options, self.path.as_deref()) {
+        // Hold admission through capture, record construction, and emission, where output
+        // may have temporary scrubbed copies. Waiting consumes the same call deadline.
+        let reservation = self.reserve(tool, options);
+        let result = match &reservation {
+            Ok(_) => {
+                let mut bounded = *options;
+                bounded.timeout = options
+                    .timeout
+                    .map(|limit| limit.saturating_sub(start.elapsed()));
+                capture::execute(argv, &bounded, self.path.as_deref())
+            }
+            Err(error) => Err(Failure {
+                kind: error.kind,
+                text: format!("tool admission failed: {}", error.kind),
+            }),
+        }
+        .map_err(|mut failure| {
+            if failure.kind == "timeout"
+                && let Some(limit) = options.timeout
+            {
+                failure.text = format!("timed out after {}s", seconds_text(limit));
+            }
+            failure
+        });
+        match result {
             Ok(completed) => {
                 let record = self.output_record(
                     &base,

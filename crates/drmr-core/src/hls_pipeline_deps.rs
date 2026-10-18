@@ -11,6 +11,7 @@ use crate::media::{self, InitProbe, MediaEngine, MediaError, PacketInfo};
 use crate::mp4::audio_edit::AudioEdit;
 use crate::packager::{self, PackagerResult};
 use crate::pipeline_deps::EncryptCbcs;
+use crate::resources::{Budget, Hardware, Workload};
 use crate::source::{self, Failure, SourceAnalysis};
 use crate::toolrun::ToolRunner;
 use num_rational::BigRational;
@@ -22,6 +23,16 @@ use std::sync::Arc;
 /// The functions `hls_pipeline` takes from the other modules, with explicit parameters and the
 /// core modules' types and errors.
 pub trait PipelineDeps: Sync {
+    /// Recommend workers within the validated caller maximum. Injected media backends
+    /// may keep the supplied maximum; the subprocess backend uses hardware and content.
+    fn resource_workers(
+        &self,
+        _analysis: &SourceAnalysis,
+        maximum: usize,
+    ) -> Result<usize, MediaError> {
+        Ok(maximum)
+    }
+
     /// `media::concatenate(paths, output)`: the files byte for byte into `output`.
     fn concatenate(&self, parts: &[PathBuf], output: &Path) -> Result<PathBuf, MediaError>;
 
@@ -143,6 +154,21 @@ impl Ports {
 }
 
 impl PipelineDeps for Ports {
+    fn resource_workers(
+        &self,
+        analysis: &SourceAnalysis,
+        maximum: usize,
+    ) -> Result<usize, MediaError> {
+        let workload = Workload::from_analysis(analysis)?;
+        self.engine.runner().register_workload(workload);
+        Budget::choose(Hardware::detect(), workload, Some(maximum))
+            .map(|budget| {
+                self.engine.runner().note_resource_budget(&budget);
+                budget.workers
+            })
+            .map_err(|error| media::HlsMediaError::new(&error.to_string()).into())
+    }
+
     fn concatenate(&self, parts: &[PathBuf], output: &Path) -> Result<PathBuf, MediaError> {
         media::concatenate(parts, output)
     }

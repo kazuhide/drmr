@@ -211,6 +211,14 @@ Requests must address `localhost`, `127.0.0.1`, `::1`, or an explicitly configur
 
 ## Exit codes
 
-Most commands return `0` for success, `1` for a failed operation or validation, and `2` for invalid usage or configuration. `verify-snapshot` returns `1` for changed content and `2` for an invalid snapshot. Batch processing can return `130` when interrupted.
+Most commands return `0` for success, `1` for a failed operation or validation, and `2` for invalid usage or configuration. `verify-snapshot` returns `1` for changed content and `2` for an invalid snapshot. Batch processing can return `130` when interrupted. `convert` and `verify` also return `130` after cooperative cancellation: on Unix, send SIGINT (Ctrl+C) or SIGTERM. They stop queued work and terminate managed media subprocesses before returning. Cancellation observed before publication prevents publishing the result. Force-killing the CLI bypasses cooperative cleanup; the measurement tool reports that fallback as cleanup unconfirmed.
 
 `doctor` returns `0` when all four tools are found and `1` when any are missing. Its `--json` output is a single JSON object with `ready` and `tools`; each tool has `name`, `purpose`, `available`, and `required` fields. Finding a tool does not verify its version or media compatibility.
+
+### Automatic worker limits
+
+`convert` and `verify` choose concurrency from processor capacity, available memory,
+and observed media dimensions. Use `--max-workers 1` to process one track at a time,
+or another value from 1 to 64 as an upper bound. Resource admission may choose fewer.
+The same content and timing checks run in either mode. See [resource limits and
+measurements](resources.md) for the estimates and a repeatable comparison.

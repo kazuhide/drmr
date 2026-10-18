@@ -76,6 +76,8 @@ foreach ($executable in $executables) {
     & $executable --nocapture
     if ($LASTEXITCODE -ne 0) { $failed = $true }
 }
+& python -W error::ResourceWarning -m unittest discover -s tools/tests -v
+if ($LASTEXITCODE -ne 0) { $failed = $true }
 if ($failed) { exit 1 }
 exit 0
 '@ | Set-Content $script

@@ -19,9 +19,14 @@ drmr-core = { path = "../drmr-core" }
 # of both.
 drmr-server = { path = "../drmr-server" }
 serde_json.workspace = true
+tokio = { workspace = true, features = ["macros"] }
 
 [dev-dependencies]
 tempfile.workspace = true
+drmr-test-support = { path = "../drmr-test-support" }
+
+[target.'cfg(unix)'.dev-dependencies]
+rustix.workspace = true
 
 [target.'cfg(windows)'.dev-dependencies]
 private-fs = "=0.2.1"

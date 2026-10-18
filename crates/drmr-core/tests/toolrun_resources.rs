@@ -1,6 +1,7 @@
 //! Resource regressions and an opt-in, repeatable large-output capture measurement.
 
 use drmr_core::events::NoSink;
+use drmr_core::resources::{Claim, Limiter, Workload};
 use drmr_core::toolrun::{RunOptions, Secrets, ToolRunner};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -31,6 +32,10 @@ fn capture_measurement_worker() {
             assert!(
                 measurement.is_some(),
                 "normal bounded capture must succeed: {error}"
+            );
+            assert_eq!(
+                error.kind, "output-limit",
+                "the measurement must fail only because of the configured capture cap"
             );
             println!(
                 "{}",
@@ -112,7 +117,10 @@ fn exact_byte_boundaries_are_complete_and_one_extra_byte_fails() {
 fn escaped_descendant_pipes_do_not_leave_blocked_reader_threads() {
     let directory = tempfile::tempdir().unwrap();
     let pid_file = directory.path().join("child.pid");
-    let runner = ToolRunner::new(Arc::new(Secrets::new()), Arc::new(NoSink));
+    // This test measures reader cleanup after a real spawn, independently of other
+    // tests' admission waits. Queued deadline behavior has a separate regression.
+    let runner = ToolRunner::new(Arc::new(Secrets::new()), Arc::new(NoSink))
+        .with_limiter(Arc::new(Limiter::new(1, 1024 * 1024 * 1024)));
     let started = Instant::now();
     let error = runner.run_tool(&[
         PYTHON.into(), "-c".into(),
@@ -134,7 +142,8 @@ fn escaped_descendant_pipes_do_not_leave_blocked_reader_threads() {
 
 #[test]
 fn inherited_pipes_get_a_close_deadline_even_without_a_command_timeout() {
-    let runner = ToolRunner::new(Arc::new(Secrets::new()), Arc::new(NoSink));
+    let runner = ToolRunner::new(Arc::new(Secrets::new()), Arc::new(NoSink))
+        .with_limiter(Arc::new(Limiter::new(1, 1024 * 1024 * 1024)));
     let started = Instant::now();
     let error = runner.run_tool(&[
         PYTHON.into(), "-c".into(),
@@ -142,4 +151,225 @@ fn inherited_pipes_get_a_close_deadline_even_without_a_command_timeout() {
     ], "inherited-pipes", &RunOptions::default()).unwrap_err();
     assert_eq!(error.kind, "pipe-timeout");
     assert!(started.elapsed() < Duration::from_secs(5));
+}
+
+#[test]
+fn runners_share_a_limit_across_real_child_processes_and_nested_pools() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = directory.path().join("concurrency.sqlite");
+    let init = run_python(&format!(
+        "import sqlite3; c=sqlite3.connect({:?}); c.execute('create table counts(active integer, peak integer)'); c.execute('insert into counts values(0,0)'); c.commit()",
+        database.to_string_lossy()
+    )).unwrap();
+    assert_eq!(init.returncode, Some(0));
+    let workload = Workload::default();
+    let claim = Claim::for_workload(workload, 16 * 1024 * 1024, 1024 * 1024);
+    let limiter = Arc::new(Limiter::new(2, claim.memory_bytes * 2));
+    let script = "import sqlite3,sys,time; c=sqlite3.connect(sys.argv[1],timeout=10); c.execute('begin immediate'); c.execute('update counts set active=active+1,peak=max(peak,active+1)'); c.commit(); time.sleep(0.08); c.execute('begin immediate'); c.execute('update counts set active=active-1'); c.commit()";
+    std::thread::scope(|scope| {
+        let outer = drmr_core::concurrency::Pool::new(scope, 2);
+        let inner = Arc::new(drmr_core::concurrency::Pool::new(scope, 4));
+        let mut parents = Vec::new();
+        for _ in 0..2 {
+            let database = &database;
+            let inner = Arc::clone(&inner);
+            let limiter = Arc::clone(&limiter);
+            parents.push(outer.submit(move || {
+                let mut children = Vec::new();
+                for _ in 0..4 {
+                    let limiter = Arc::clone(&limiter);
+                    children.push(inner.submit(move || {
+                        let runner = ToolRunner::new(Arc::new(Secrets::new()), Arc::new(NoSink))
+                            .with_limiter(limiter);
+                        let result = runner
+                            .run_tool(
+                                &[
+                                    PYTHON.into(),
+                                    "-c".into(),
+                                    script.into(),
+                                    database.to_string_lossy().into_owned(),
+                                ],
+                                "counted-child",
+                                &RunOptions::default(),
+                            )
+                            .unwrap();
+                        assert_eq!(result.returncode, Some(0));
+                    }));
+                }
+                for child in children {
+                    child.wait();
+                    child.take().unwrap().into_value();
+                }
+            }));
+        }
+        for parent in parents {
+            parent.wait();
+            parent.take().unwrap().into_value();
+        }
+    });
+    let result = run_python(&format!("import sqlite3; print(*sqlite3.connect({:?}).execute('select active,peak from counts').fetchone())", database.to_string_lossy())).unwrap();
+    assert_eq!(String::from_utf8(result.stdout).unwrap().trim(), "0 2");
+}
+
+#[test]
+fn a_larger_capture_override_is_charged_before_spawning() {
+    let normal = Claim::for_workload(Workload::default(), 16 * 1024 * 1024, 1024 * 1024);
+    let runner = ToolRunner::new(Arc::new(Secrets::new()), Arc::new(NoSink))
+        .with_limiter(Arc::new(Limiter::new(1, normal.memory_bytes)));
+    let argv = [PYTHON.into(), "-c".into(), "print('complete')".into()];
+    assert_eq!(
+        runner
+            .run_tool(&argv, "metadata", &RunOptions::default())
+            .unwrap()
+            .returncode,
+        Some(0)
+    );
+    assert_eq!(
+        runner
+            .run_tool(
+                &argv,
+                "packet-probe",
+                &RunOptions {
+                    max_stdout_bytes: 32 * 1024 * 1024,
+                    ..RunOptions::default()
+                }
+            )
+            .unwrap_err()
+            .kind,
+        "resource-budget"
+    );
+    assert_eq!(
+        runner
+            .run_tool(&argv, "metadata", &RunOptions::default())
+            .unwrap()
+            .returncode,
+        Some(0)
+    );
+}
+
+#[test]
+fn admission_waits_obey_the_call_deadline_and_cancel_without_spawning() {
+    use drmr_core::concurrency::Stop;
+    let directory = tempfile::tempdir().unwrap();
+    let marker = directory.path().join("must-not-exist");
+    let claim = Claim::for_workload(Workload::default(), 16 * 1024 * 1024, 1024 * 1024);
+    let limiter = Arc::new(Limiter::new(1, claim.memory_bytes));
+    let _held = limiter.acquire(claim, None, None).unwrap();
+    let runner = ToolRunner::new(Arc::new(Secrets::new()), Arc::new(NoSink)).with_limiter(limiter);
+    let argv = [
+        PYTHON.into(),
+        "-c".into(),
+        "import pathlib,sys; pathlib.Path(sys.argv[1]).write_text('spawned')".into(),
+        marker.to_string_lossy().into_owned(),
+    ];
+    let started = Instant::now();
+    assert_eq!(
+        runner
+            .run_tool(
+                &argv,
+                "waiting",
+                &RunOptions {
+                    timeout: Some(Duration::from_millis(40)),
+                    ..RunOptions::default()
+                }
+            )
+            .unwrap_err()
+            .kind,
+        "timeout"
+    );
+    assert!(started.elapsed() < Duration::from_secs(1));
+    let stop = Stop::new();
+    std::thread::scope(|scope| {
+        let waiter = scope.spawn(|| {
+            runner.run_tool(
+                &argv,
+                "waiting",
+                &RunOptions {
+                    stop: Some(&stop),
+                    ..RunOptions::default()
+                },
+            )
+        });
+        stop.set();
+        assert_eq!(waiter.join().unwrap().unwrap_err().kind, "cancelled");
+    });
+    assert!(!marker.exists());
+}
+
+#[test]
+fn a_capture_failure_returns_its_reservation_for_the_next_child() {
+    let claim = Claim::for_workload(Workload::default(), 16 * 1024 * 1024, 1024 * 1024);
+    let runner = ToolRunner::new(Arc::new(Secrets::new()), Arc::new(NoSink))
+        .with_limiter(Arc::new(Limiter::new(1, claim.memory_bytes)));
+    assert_eq!(
+        runner
+            .run_tool(
+                &[
+                    PYTHON.into(),
+                    "-c".into(),
+                    "print('x'*(20*1024*1024))".into()
+                ],
+                "oversized",
+                &RunOptions::default()
+            )
+            .unwrap_err()
+            .kind,
+        "output-limit"
+    );
+    assert_eq!(
+        runner
+            .run_tool(
+                &[
+                    PYTHON.into(),
+                    "-c".into(),
+                    "import os; os.write(1,b'complete\\n')".into()
+                ],
+                "next-child",
+                &RunOptions {
+                    timeout: Some(Duration::from_secs(1)),
+                    ..RunOptions::default()
+                }
+            )
+            .unwrap()
+            .stdout,
+        b"complete\n"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn captured_tools_stay_in_the_asset_worker_supervisor_group() {
+    use std::os::unix::process::CommandExt;
+    const CHILD: &str = "DRMR_TEST_CAPTURE_WORKER_GROUP";
+    if std::env::var_os(CHILD).is_some() {
+        // Empty configuration returns a classified failure result; entry still establishes
+        // the real worker context before configuration handling.
+        assert_eq!(drmr_core::batch::worker_main(), 0);
+        assert!(drmr_core::native::in_asset_worker());
+        let result = run_python("import os; print(os.getpgrp())").unwrap();
+        let group: i32 = String::from_utf8(result.stdout)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert_eq!(group, rustix::process::getpgrp().as_raw_nonzero().get());
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "captured_tools_stay_in_the_asset_worker_supervisor_group",
+            "--nocapture",
+        ])
+        .env(CHILD, "1")
+        .stdin(std::process::Stdio::null())
+        .process_group(0)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }

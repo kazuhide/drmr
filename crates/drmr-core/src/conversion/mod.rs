@@ -9,6 +9,7 @@ mod aes128;
 mod audio;
 mod backend;
 pub(crate) mod dash;
+mod execution;
 pub mod key_file;
 pub use aes128::{
     Aes128Key, HlsInputKeys, HlsOutputKey, SegmentIv, decrypt_segment, encrypt_segment,
@@ -68,6 +69,7 @@ impl std::fmt::Debug for LocalTrack {
 /// Explicit backend configuration; no executable is selected from source metadata.
 pub struct Converter {
     backend: Backend,
+    maximum_workers: Option<usize>,
 }
 impl Converter {
     pub fn new(
@@ -76,7 +78,9 @@ impl Converter {
         ffmpeg: impl Into<String>,
     ) -> Self {
         Self {
+            maximum_workers: None,
             backend: Backend {
+                stop: crate::concurrency::Stop::new(),
                 runner,
                 packager: packager.into(),
                 ffmpeg: ffmpeg.into(),
@@ -84,6 +88,20 @@ impl Converter {
                 timeout: Duration::from_secs(3600),
             },
         }
+    }
+    /// Share a cooperative cancellation flag with scheduling and media subprocesses.
+    #[must_use]
+    pub fn with_stop(mut self, stop: crate::concurrency::Stop) -> Self {
+        self.backend.stop = stop;
+        self
+    }
+    fn publish(&self, source: &Path, destination: &Path) -> Result<(), ConversionError> {
+        self.backend.check_cancelled()?;
+        files::publish_file(source, destination, Some(&self.backend.stop))
+    }
+    fn publish_directory(&self, source: &Path, destination: &Path) -> Result<(), ConversionError> {
+        self.backend.check_cancelled()?;
+        files::publish_directory(source, destination, Some(&self.backend.stop))
     }
     #[must_use]
     pub fn with_ffprobe(mut self, binary: impl Into<String>) -> Self {
@@ -201,7 +219,7 @@ impl Converter {
         if !verification.passed {
             return Err(ConversionError("round-trip-verification-failed"));
         }
-        publish(&candidate, &destination)?;
+        self.publish(&candidate, &destination)?;
         Ok(ConversionReport {
             schema_version: 1,
             input: input_report,
@@ -321,7 +339,7 @@ fn private_file_mode(path: &Path) -> Result<(), ConversionError> {
     )
 }
 fn publish(source: &Path, destination: &Path) -> Result<(), ConversionError> {
-    files::publish_file(source, destination)
+    files::publish_file(source, destination, None)
 }
 
 fn validate_held_input(file: &File) -> Result<(), ConversionError> {

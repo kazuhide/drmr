@@ -11,7 +11,7 @@
   "pcm_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff",
   "stubs": {
    "ffprobe": "#!/bin/sh\ncase \"$*\" in\n  *missing*) echo \"missing: No such file or directory\" >&2; exit 1 ;;\n  *-show_streams*) cat @DIR@/probe.json ;;\n  *-show_data_hash*) cat @DIR@/hash.json ;;\n  *-show_data*) cat @DIR@/data.json ;;\n  *format=duration*) cat @DIR@/timing.json ;;\n  *) exit 3 ;;\nesac\n",
-   "ffmpeg": "#!/bin/sh\nfor a in \"$@\"; do last=\"$a\"; done\ncase \"$*\" in\n  *broken*) printf 'broken: Invalid data found when processing input\\r\\n' >&2; exit 183 ;;\n  *-f\\ framemd5\\ -*) cat @DIR@/framemd5.txt ;;\n  *-f\\ s32le*) cat @DIR@/pcm.bin ;;\n  *-f\\ framemd5*) cp @DIR@/framemd5.txt \"$last\" ;;\n  *) : > \"$last\" ;;\nesac\n",
+   "ffmpeg": "#!/bin/sh\nfor a in \"$@\"; do last=\"$a\"; done\ncase \"$*\" in\n  *broken*) printf 'broken: Invalid data found when processing input\\r\\n' >&2; exit 183 ;;\n  *-f\\ framemd5*) if [ \"$last\" = \"-\" ]; then cat @DIR@/framemd5.txt; else cp @DIR@/framemd5.txt \"$last\"; fi ;;\n  *-f\\ s32le*) cat @DIR@/pcm.bin ;;\n  *) : > \"$last\" ;;\nesac\n",
    "mp4dump": "#!/bin/sh\ncase \"$*\" in\n  *missing*) echo \"ERROR: cannot open input file (@IV_SPACED@)\" >&2; exit 1 ;;\n  *) cat @DIR@/tree.json ;;\nesac\n"
   }
  },
@@ -45,6 +45,8 @@
      "event": "command",
      "argv": [
       "ffprobe",
+      "-threads",
+      "1",
       "-v",
       "error",
       "-show_streams",
@@ -82,6 +84,8 @@
      "event": "command",
      "argv": [
       "ffprobe",
+      "-threads",
+      "1",
       "-v",
       "error",
       "-show_streams",
@@ -120,6 +124,8 @@
      "event": "command",
      "argv": [
       "ffprobe",
+      "-threads",
+      "1",
       "-v",
       "error",
       "-show_packets",
@@ -158,6 +164,8 @@
      "event": "command",
      "argv": [
       "ffprobe",
+      "-threads",
+      "1",
       "-v",
       "error",
       "-show_packets",
@@ -195,6 +203,12 @@
      "event": "command",
      "argv": [
       "ffmpeg",
+      "-filter_threads",
+      "1",
+      "-filter_complex_threads",
+      "1",
+      "-threads",
+      "1",
       "-v",
       "error",
       "-y",
@@ -217,6 +231,8 @@
       "0",
       "-f",
       "mpegts",
+      "-threads",
+      "1",
       "<dir>/out-video.ts"
      ],
      "stage": "tool",
@@ -247,6 +263,8 @@
      "event": "command",
      "argv": [
       "ffprobe",
+      "-threads",
+      "1",
       "-v",
       "error",
       "-show_streams",
@@ -275,6 +293,12 @@
      "event": "command",
      "argv": [
       "ffmpeg",
+      "-filter_threads",
+      "1",
+      "-filter_complex_threads",
+      "1",
+      "-threads",
+      "1",
       "-v",
       "error",
       "-y",
@@ -295,6 +319,8 @@
       "+frag_keyframe+delay_moov+default_base_moof",
       "-f",
       "mp4",
+      "-threads",
+      "1",
       "<dir>/out-audio.ts"
      ],
      "stage": "tool",
@@ -325,6 +351,8 @@
      "event": "command",
      "argv": [
       "ffprobe",
+      "-threads",
+      "1",
       "-v",
       "error",
       "-show_streams",
@@ -353,6 +381,12 @@
      "event": "command",
      "argv": [
       "ffmpeg",
+      "-filter_threads",
+      "1",
+      "-filter_complex_threads",
+      "1",
+      "-threads",
+      "1",
       "-v",
       "error",
       "-y",
@@ -375,6 +409,8 @@
       "1",
       "-f",
       "mp4",
+      "-threads",
+      "1",
       "<dir>/out-text.ts"
      ],
      "stage": "tool",
@@ -405,6 +441,12 @@
      "event": "command",
      "argv": [
       "ffmpeg",
+      "-filter_threads",
+      "1",
+      "-filter_complex_threads",
+      "1",
+      "-threads",
+      "1",
       "-v",
       "error",
       "-y",
@@ -427,6 +469,8 @@
       "0",
       "-f",
       "mpegts",
+      "-threads",
+      "1",
       "<dir>/out.ts"
      ],
      "stage": "tool",
@@ -459,6 +503,12 @@
      "tool": "ffmpeg",
      "argv": [
       "ffmpeg",
+      "-filter_threads",
+      "1",
+      "-filter_complex_threads",
+      "1",
+      "-threads",
+      "1",
       "-v",
       "error",
       "-threads",
@@ -471,6 +521,8 @@
       "passthrough",
       "-f",
       "framemd5",
+      "-threads",
+      "1",
       "-"
      ]
     },
@@ -501,6 +553,12 @@
      "tool": "ffmpeg",
      "argv": [
       "ffmpeg",
+      "-filter_threads",
+      "1",
+      "-filter_complex_threads",
+      "1",
+      "-threads",
+      "1",
       "-v",
       "error",
       "-threads",
@@ -513,6 +571,8 @@
       "s32le",
       "-acodec",
       "pcm_s32le",
+      "-threads",
+      "1",
       "-"
      ]
     },
@@ -544,6 +604,12 @@
      "tool": "ffmpeg",
      "argv": [
       "ffmpeg",
+      "-filter_threads",
+      "1",
+      "-filter_complex_threads",
+      "1",
+      "-threads",
+      "1",
       "-v",
       "error",
       "-threads",
@@ -556,6 +622,8 @@
       "passthrough",
       "-f",
       "framemd5",
+      "-threads",
+      "1",
       "-"
      ]
     },
@@ -585,6 +653,8 @@
      "event": "command",
      "argv": [
       "ffprobe",
+      "-threads",
+      "1",
       "-v",
       "error",
       "<dir>/media.mp4"
@@ -648,6 +718,8 @@
      "event": "command",
      "argv": [
       "ffprobe",
+      "-threads",
+      "1",
       "-show_data",
       "<dir>/media.mp4"
      ],
@@ -679,12 +751,20 @@
      "event": "command",
      "argv": [
       "ffmpeg",
+      "-filter_threads",
+      "1",
+      "-filter_complex_threads",
+      "1",
+      "-threads",
+      "1",
       "-v",
       "error",
       "-i",
       "<dir>/media.mp4",
       "-f",
       "framemd5",
+      "-threads",
+      "1",
       "-"
      ],
      "stage": "tool",
@@ -716,12 +796,20 @@
      "event": "command",
      "argv": [
       "ffmpeg",
+      "-filter_threads",
+      "1",
+      "-filter_complex_threads",
+      "1",
+      "-threads",
+      "1",
       "-v",
       "error",
       "-i",
       "<dir>/broken.mp4",
       "-f",
       "framemd5",
+      "-threads",
+      "1",
       "-"
      ],
      "stage": "tool",
@@ -755,6 +843,8 @@
      "event": "command",
      "argv": [
       "ffprobe",
+      "-threads",
+      "1",
       "-v",
       "error",
       "-show_entries",
@@ -794,6 +884,8 @@
      "event": "command",
      "argv": [
       "ffprobe",
+      "-threads",
+      "1",
       "-v",
       "error",
       "-show_entries",
@@ -1020,6 +1112,8 @@
      "event": "command",
      "argv": [
       "ffprobe",
+      "-threads",
+      "1",
       "-v",
       "error",
       "-show_entries",
@@ -1058,6 +1152,12 @@
      "event": "command",
      "argv": [
       "ffmpeg",
+      "-filter_threads",
+      "1",
+      "-filter_complex_threads",
+      "1",
+      "-threads",
+      "1",
       "-v",
       "error",
       "-y",
@@ -1070,6 +1170,8 @@
       "2",
       "-ar",
       "48000",
+      "-threads",
+      "1",
       "<dir>/pcm/out.pcm"
      ],
      "stage": "tool",
@@ -1101,6 +1203,12 @@
      "event": "command",
      "argv": [
       "ffmpeg",
+      "-filter_threads",
+      "1",
+      "-filter_complex_threads",
+      "1",
+      "-threads",
+      "1",
       "-v",
       "error",
       "-y",
@@ -1113,6 +1221,8 @@
       "2",
       "-ar",
       "48000",
+      "-threads",
+      "1",
       "<dir>/out.pcm"
      ],
      "stage": "tool",
@@ -1143,6 +1253,12 @@
      "event": "command",
      "argv": [
       "ffmpeg",
+      "-filter_threads",
+      "1",
+      "-filter_complex_threads",
+      "1",
+      "-threads",
+      "1",
       "-v",
       "error",
       "-y",
@@ -1157,6 +1273,8 @@
       "2",
       "-ar",
       "48000",
+      "-threads",
+      "1",
       "<dir>/decoded/out.pcm"
      ],
      "stage": "tool",
@@ -1187,6 +1305,12 @@
      "event": "command",
      "argv": [
       "ffmpeg",
+      "-filter_threads",
+      "1",
+      "-filter_complex_threads",
+      "1",
+      "-threads",
+      "1",
       "-v",
       "error",
       "-y",
@@ -1197,6 +1321,8 @@
       "-an",
       "-f",
       "framemd5",
+      "-threads",
+      "1",
       "<dir>/decoded/out.framemd5"
      ],
      "stage": "tool",
@@ -1236,6 +1362,12 @@
      "event": "command",
      "argv": [
       "ffmpeg",
+      "-filter_threads",
+      "1",
+      "-filter_complex_threads",
+      "1",
+      "-threads",
+      "1",
       "-v",
       "error",
       "-y",
@@ -1250,6 +1382,8 @@
       "2",
       "-ar",
       "48000",
+      "-threads",
+      "1",
       "<dir>/out.pcm"
      ],
      "stage": "tool",
