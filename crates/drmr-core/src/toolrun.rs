@@ -76,6 +76,8 @@ pub const DEFAULT_STDERR_BYTES: usize = 1024 * 1024;
 pub const MAX_CAPTURE_BYTES: usize = 64 * 1024 * 1024;
 
 mod capture;
+mod cleanup;
+pub use cleanup::CleanupOwner;
 /// Shorter strings would redact unrelated text; keys and IVs are 32 hex characters.
 const MIN_SECRET_CHARS: usize = 8;
 /// Between two bytes of a hex secret, as tools print them. Python's `\s` also matches
@@ -460,6 +462,7 @@ pub struct ToolRunner {
     path: Option<OsString>,
     limiter: Arc<Limiter>,
     workload: RwLock<Option<Workload>>,
+    cleanup_owner: Option<Arc<CleanupOwner>>,
 }
 
 impl ToolRunner {
@@ -473,6 +476,7 @@ impl ToolRunner {
             path: None,
             limiter: process_limiter(),
             workload: RwLock::new(None),
+            cleanup_owner: None,
         }
     }
 
@@ -485,7 +489,16 @@ impl ToolRunner {
             path: self.path.clone(),
             limiter: Arc::clone(&self.limiter),
             workload: RwLock::new(self.registered_workload()),
+            cleanup_owner: self.cleanup_owner.clone(),
         }
+    }
+
+    /// Explicitly retain one unconfirmed child tree instead of dropping its owner.
+    /// Keep the supplied owner alive and retry cleanup before permitting host exit.
+    #[must_use]
+    pub fn with_cleanup_owner(mut self, owner: Arc<CleanupOwner>) -> Self {
+        self.cleanup_owner = Some(owner);
+        self
     }
 
     fn emit(&self, record: &Record) {
@@ -616,8 +629,20 @@ impl ToolRunner {
         tool: &str,
         options: &RunOptions<'_>,
     ) -> Result<Completed, ToolError> {
-        self.run_tool_with(argv, tool, options, false, |bounded| {
-            capture::execute(argv, bounded, self.path.as_deref())
+        self.run_tool_with(argv, tool, options, false, |bounded, lease| {
+            capture::execute(argv, bounded, self.path.as_deref(), lease)
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn run_tool_injected_cleanup(
+        &self,
+        argv: &[String],
+        options: &RunOptions<'_>,
+        cleanup: impl FnMut(&mut crate::native::ManagedChild) -> std::io::Result<()>,
+    ) -> Result<Completed, ToolError> {
+        self.run_tool_with(argv, "fixture", options, false, |bounded, lease| {
+            capture::execute_injected_cleanup(argv, bounded, self.path.as_deref(), lease, cleanup)
         })
     }
 
@@ -630,8 +655,8 @@ impl ToolRunner {
         options: &RunOptions<'_>,
         consume: impl FnMut(&[u8]) -> Result<(), ()> + Send,
     ) -> Result<Completed, ToolError> {
-        self.run_tool_with(argv, tool, options, true, |bounded| {
-            capture::execute_streamed(argv, bounded, self.path.as_deref(), consume)
+        self.run_tool_with(argv, tool, options, true, |bounded, lease| {
+            capture::execute_streamed(argv, bounded, self.path.as_deref(), lease, consume)
         })
     }
 
@@ -641,7 +666,7 @@ impl ToolRunner {
         tool: &str,
         options: &RunOptions<'_>,
         streamed: bool,
-        execute: impl FnOnce(&RunOptions<'_>) -> Result<Completed, Failure>,
+        execute: impl FnOnce(&RunOptions<'_>, Option<&cleanup::Lease<'_>>) -> Result<Completed, Failure>,
     ) -> Result<Completed, ToolError> {
         let base = CallBase {
             tool,
@@ -659,14 +684,28 @@ impl ToolRunner {
         let start = Instant::now();
         // Hold admission through capture, record construction, and emission, where output
         // may have temporary scrubbed copies. Waiting consumes the same call deadline.
-        let reservation = self.reserve(tool, options);
+        // Reserve the caller's single ownership slot before waiting for shared
+        // resources. A retained child must not deadlock a later call on its permit.
+        let lease = self
+            .cleanup_owner
+            .as_deref()
+            .map(CleanupOwner::claim)
+            .transpose();
+        let reservation = if lease.is_ok() {
+            self.reserve(tool, options)
+        } else {
+            Err(ToolError {
+                tool: tool.to_owned(),
+                kind: "cleanup-unconfirmed",
+            })
+        };
         let result = match &reservation {
             Ok(_) => {
                 let mut bounded = *options;
                 bounded.timeout = options
                     .timeout
                     .map(|limit| limit.saturating_sub(start.elapsed()));
-                execute(&bounded)
+                execute(&bounded, lease.as_ref().ok().and_then(Option::as_ref))
             }
             Err(error) => Err(Failure {
                 kind: error.kind,
@@ -681,6 +720,15 @@ impl ToolRunner {
             }
             failure
         });
+        let mut permit = reservation.ok();
+        if result
+            .as_ref()
+            .is_err_and(|error| error.kind == "cleanup-unconfirmed")
+            && let Ok(Some(lease)) = &lease
+            && let Some(permit) = permit.take()
+        {
+            lease.retain_permit(permit);
+        }
         match result {
             Ok(completed) => {
                 let mut record = self.output_record(

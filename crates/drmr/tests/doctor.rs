@@ -98,12 +98,13 @@ fn probing_tool(directory: &Path, name: &str, version: &str, options: &str) {
 }
 
 fn probing_pair(directory: &Path, version: &str, ffmpeg_options: &str) {
-    probing_tool(directory, "ffmpeg", version, ffmpeg_options);
+    let ffmpeg_options = format!("{ffmpeg_options}\n-decryption_keys");
+    probing_tool(directory, "ffmpeg", version, &ffmpeg_options);
     probing_tool(
         directory,
         "ffprobe",
         "9.0.1",
-        "-show_packets\n-show_entries\n-show_data_hash",
+        "-show_packets\n-show_entries\n-show_data_hash\n-decryption_keys",
     );
 }
 
@@ -143,6 +144,56 @@ fn explicit_probe_reports_resolved_paths_versions_and_required_features() {
     );
     assert!(!all.contains("untrusted-secret"));
     assert!(!all.contains("secret-must-not-appear"));
+}
+
+#[test]
+fn keyed_routes_require_the_plural_kid_dictionary_option_in_both_tools() {
+    let mut actual = Vec::new();
+    for lacking in ["ffmpeg", "ffprobe"] {
+        let directory = tempfile::tempdir().unwrap();
+        for name in ["ffmpeg", "ffprobe"] {
+            let options = if name == "ffmpeg" {
+                "-encryption_scheme\n-decryption_key"
+            } else {
+                "-show_packets\n-show_entries\n-show_data_hash"
+            };
+            let options = if lacking == name {
+                options.to_owned()
+            } else {
+                format!("{options}\n-decryption_keys")
+            };
+            probing_tool(directory.path(), name, "9.0.1", &options);
+        }
+        let output = doctor(
+            directory.path(),
+            &["--probe", "--route", "progressive-mp4", "--json"],
+        );
+        let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+        let index = usize::from(lacking == "ffprobe");
+        actual.push((
+            lacking,
+            output.status.code(),
+            report["tools"][index]["feature_status"].clone(),
+            report["ready"].clone(),
+        ));
+    }
+    assert_eq!(
+        actual,
+        vec![
+            (
+                "ffmpeg",
+                Some(1),
+                Value::from("missing"),
+                Value::Bool(false)
+            ),
+            (
+                "ffprobe",
+                Some(1),
+                Value::from("missing"),
+                Value::Bool(false)
+            )
+        ]
+    );
 }
 
 #[test]
@@ -191,7 +242,7 @@ fn probes_bound_hanging_and_oversized_version_output() {
             directory.path(),
             "ffprobe",
             "9.0.1",
-            "-show_packets\n-show_entries\n-show_data_hash",
+            "-show_packets\n-show_entries\n-show_data_hash\n-decryption_keys",
         );
         let started = std::time::Instant::now();
         let output = doctor(
@@ -230,7 +281,7 @@ fn non_utf8_tool_paths_are_reported_without_panics_or_ambiguous_execution() {
     assert_eq!(report["tools"][0]["path"], Value::Null);
     assert_eq!(report["tools"][0]["path_status"], "not-utf8");
     assert_eq!(report["tools"][0]["failure_code"], "probe-path-not-utf8");
-    assert!(output.stderr.is_empty());
+    assert_eq!(output.stderr, [] as [u8; 0]);
 }
 
 #[test]

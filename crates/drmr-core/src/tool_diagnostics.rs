@@ -4,12 +4,12 @@
 //! media compatibility, license delivery, or the correctness of a particular build.
 
 use crate::events::NoSink;
-use crate::toolrun::{RunOptions, Secrets, ToolRunner};
+use crate::toolrun::{CleanupOwner, RunOptions, Secrets, ToolRunner};
 use regex::Regex;
 use serde::Serialize;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 const TOOLS: [(&str, &str, &str); 4] = [
@@ -90,6 +90,8 @@ pub struct DiagnosticReport {
     pub profile: &'static str,
     pub ready: bool,
     pub media_compatibility_checked: bool,
+    pub cleanup_status: &'static str,
+    pub cancelled: bool,
     pub tools: Vec<ToolDiagnostic>,
 }
 
@@ -135,18 +137,120 @@ impl DiagnosticReport {
     }
 }
 
-/// Use exactly the current launcher's PATH; do not read shell startup files or guess folders.
-/// Each probe has a three-second execution/admission deadline and a 1 MiB limit per stream.
-/// Managed cleanup retains process ownership if termination cannot be confirmed.
-pub fn diagnose(profile: Profile, probe: bool) -> DiagnosticReport {
-    let path = std::env::var_os("PATH");
+/// A serial diagnostic operation that retains any unconfirmed process owner.
+/// Keep this session alive until cleanup is confirmed; explicitly retry on failure.
+/// Each call keeps its three-second admission/execution budget and native cleanup
+/// keeps its separate existing deadline. No window or media processing is started.
+pub struct DiagnosticSession {
+    profile: Profile,
+    probe: bool,
+    cleanup: Arc<CleanupOwner>,
+    runner: ToolRunner,
+    stop: crate::concurrency::Stop,
+    state: Mutex<SessionState>,
+}
+
+#[derive(Default)]
+struct SessionState {
+    running: bool,
+    report: Option<Arc<DiagnosticReport>>,
+}
+
+impl DiagnosticSession {
+    pub fn new(profile: Profile, probe: bool) -> Self {
+        let cleanup = Arc::new(CleanupOwner::new());
+        let runner = ToolRunner::new(Arc::new(Secrets::new()), Arc::new(NoSink))
+            .with_cleanup_owner(Arc::clone(&cleanup));
+        Self {
+            profile,
+            probe,
+            cleanup,
+            runner,
+            stop: crate::concurrency::Stop::new(),
+            state: Mutex::new(SessionState::default()),
+        }
+    }
+
+    /// Run once, or return the same completed report. Concurrent runs are refused.
+    pub fn run(&self) -> std::io::Result<Arc<DiagnosticReport>> {
+        let path = std::env::var_os("PATH");
+        self.run_with(path.as_deref(), probe_tool)
+    }
+
+    fn run_with(
+        &self,
+        path: Option<&std::ffi::OsStr>,
+        probe: impl FnMut(
+            &ToolRunner,
+            &mut ToolDiagnostic,
+            &crate::concurrency::Stop,
+        ) -> Result<(), &'static str>,
+    ) -> std::io::Result<Arc<DiagnosticReport>> {
+        {
+            let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            if let Some(report) = &state.report {
+                return Ok(Arc::clone(report));
+            }
+            if state.running {
+                return Err(std::io::Error::other("diagnostics-still-running"));
+            }
+            state.running = true;
+        }
+        let report = Arc::new(diagnose(self, path, probe));
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        state.running = false;
+        state.report = Some(Arc::clone(&report));
+        Ok(report)
+    }
+
+    /// Stop the active call and prevent every subsequent probe from starting.
+    pub fn request_stop(&self) {
+        self.stop.set();
+    }
+
+    /// Whether the worker finished and no active or retained tree remains.
+    pub fn cleanup_confirmed(&self) -> bool {
+        !self
+            .state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .running
+            && !self.cleanup.has_pending()
+    }
+
+    /// Retry previously unconfirmed cleanup once, after the worker has returned.
+    pub fn retry_cleanup(&self) -> std::io::Result<()> {
+        self.request_stop();
+        if self
+            .state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .running
+        {
+            return Err(std::io::Error::other("diagnostics-still-running"));
+        }
+        self.cleanup.retry_finish()
+    }
+}
+
+// Discovery uses exactly the launcher's PATH and never runs a shell or guesses folders.
+fn diagnose(
+    session: &DiagnosticSession,
+    path: Option<&std::ffi::OsStr>,
+    mut run_probe: impl FnMut(
+        &ToolRunner,
+        &mut ToolDiagnostic,
+        &crate::concurrency::Stop,
+    ) -> Result<(), &'static str>,
+) -> DiagnosticReport {
+    let profile = session.profile;
+    let probe = session.probe;
     let directories: Vec<_> = path
-        .as_deref()
         .map(std::env::split_paths)
         .into_iter()
         .flatten()
         .collect();
-    let runner = ToolRunner::new(Arc::new(Secrets::new()), Arc::new(NoSink));
+    let runner = &session.runner;
     let tools: Vec<_> = TOOLS
         .iter()
         .map(|&(name, purpose, minimum_version)| {
@@ -186,29 +290,42 @@ pub fn diagnose(profile: Profile, probe: bool) -> DiagnosticReport {
                     Some("probe-path-not-utf8")
                 },
             };
-            if probe
+            if probe && (session.stop.is_set() || session.cleanup.has_pending()) {
+                tool.failure_code = Some("probe-not-started");
+            } else if probe
                 && tool.available
                 && tool.failure_code.is_none()
-                && let Err(code) = probe_tool(&runner, &mut tool)
+                && let Err(code) = run_probe(runner, &mut tool, &session.stop)
             {
                 tool.failure_code = Some(code);
             }
             tool
         })
         .collect();
-    let ready = tools.iter().filter(|t| t.required).all(|t| {
-        t.available
-            && (!probe
-                || (matches!(t.version_status, "supported" | "build-unverified")
-                    && t.feature_status == "available"
-                    && t.failure_code.is_none()))
-    });
+    let cleanup_confirmed = !session.cleanup.has_pending();
+    let ready = cleanup_confirmed
+        && !session.stop.is_set()
+        && tools.iter().filter(|t| t.required).all(|t| {
+            t.available
+                && (!probe
+                    || (matches!(t.version_status, "supported" | "build-unverified")
+                        && t.feature_status == "available"
+                        && t.failure_code.is_none()))
+        });
     DiagnosticReport {
         schema_version: 1,
         mode: if probe { "probe" } else { "discovery" },
         profile: profile.0,
         ready,
         media_compatibility_checked: false,
+        cleanup_status: if !probe {
+            "not-required"
+        } else if cleanup_confirmed {
+            "confirmed"
+        } else {
+            "unconfirmed"
+        },
+        cancelled: session.stop.is_set(),
         tools,
     }
 }
@@ -218,6 +335,7 @@ fn output(
     tool: &ToolDiagnostic,
     arguments: &[&str],
     usage: bool,
+    stop: &crate::concurrency::Stop,
 ) -> Result<String, &'static str> {
     let mut argv = vec![
         tool.path
@@ -235,6 +353,7 @@ fn output(
             tool.name,
             &RunOptions {
                 timeout: Some(Duration::from_secs(3)),
+                stop: Some(stop),
                 max_stdout_bytes: 1024 * 1024,
                 max_stderr_bytes: 1024 * 1024,
                 max_output_chars: 0,
@@ -245,6 +364,7 @@ fn output(
         )
         .map_err(|e| match e.kind {
             "timeout" => "probe-timeout",
+            "cancelled" => "probe-cancelled",
             "output-limit" => "probe-output-limit",
             "cleanup-unconfirmed" => "probe-cleanup-unconfirmed",
             _ => "probe-execution-failed",
@@ -259,13 +379,17 @@ fn output(
     ))
 }
 
-fn probe_tool(runner: &ToolRunner, tool: &mut ToolDiagnostic) -> Result<(), &'static str> {
+fn probe_tool(
+    runner: &ToolRunner,
+    tool: &mut ToolDiagnostic,
+    stop: &crate::concurrency::Stop,
+) -> Result<(), &'static str> {
     let args: &[&str] = match tool.name {
         "ffmpeg" | "ffprobe" => &["-version"],
         "packager" => &["--version"],
         _ => &[],
     };
-    let banner = output(runner, tool, args, tool.name == "mp4dump")?;
+    let banner = output(runner, tool, args, tool.name == "mp4dump", stop)?;
     let pattern = match tool.name {
         "ffmpeg" => r"(?m)^ffmpeg version ([0-9]+)\.([0-9]+)(?:\.([0-9]+))?",
         "ffprobe" => r"(?m)^ffprobe version ([0-9]+)\.([0-9]+)(?:\.([0-9]+))?",
@@ -303,17 +427,34 @@ fn probe_tool(runner: &ToolRunner, tool: &mut ToolDiagnostic) -> Result<(), &'st
         "ffmpeg" => (
             format!(
                 "{}\n{}",
-                output(runner, tool, &["-hide_banner", "-h", "muxer=mp4"], false)?,
-                output(runner, tool, &["-hide_banner", "-h", "demuxer=mov"], false)?
+                output(
+                    runner,
+                    tool,
+                    &["-hide_banner", "-h", "muxer=mp4"],
+                    false,
+                    stop
+                )?,
+                output(
+                    runner,
+                    tool,
+                    &["-hide_banner", "-h", "demuxer=mov"],
+                    false,
+                    stop
+                )?
             ),
-            &["encryption_scheme", "decryption_key"],
+            &["encryption_scheme", "decryption_key", "decryption_keys"],
         ),
         "ffprobe" => (
-            output(runner, tool, &["-hide_banner", "-h", "full"], false)?,
-            &["show_packets", "show_data_hash", "show_entries"],
+            output(runner, tool, &["-hide_banner", "-h", "full"], false, stop)?,
+            &[
+                "show_packets",
+                "show_data_hash",
+                "show_entries",
+                "decryption_keys",
+            ],
         ),
         "packager" => (
-            output(runner, tool, &["--help"], true)?,
+            output(runner, tool, &["--help"], true, stop)?,
             &[
                 "enable_raw_key_encryption",
                 "enable_raw_key_decryption",
@@ -360,5 +501,178 @@ fn is_executable(path: &Path) -> bool {
     #[cfg(not(unix))]
     {
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Instant;
+
+    fn isolated_session(profile: Profile) -> DiagnosticSession {
+        let mut session = DiagnosticSession::new(profile, true);
+        // Isolate fixture admission from unrelated parallel media tests while
+        // preserving the actual session runner and its shared cleanup owner.
+        session.runner = session
+            .runner
+            .observed(Arc::new(NoSink))
+            .with_limiter(Arc::new(crate::resources::Limiter::new(
+                1,
+                1024 * 1024 * 1024,
+            )));
+        session
+    }
+
+    fn fixtures(root: &Path) -> std::path::PathBuf {
+        for name in ["ffmpeg", "ffprobe"] {
+            drmr_test_support::install(&root.join(name), &drmr_test_support::ToolSpec::default())
+                .unwrap();
+        }
+        drmr_test_support::program_path(&root.join("ffmpeg"))
+    }
+
+    fn held_arguments(program: &Path, lock: &Path, ready: &Path) -> Vec<String> {
+        vec![
+            program.to_str().unwrap().into(),
+            "--fixture-lock".into(),
+            lock.to_str().unwrap().into(),
+            ready.to_str().unwrap().into(),
+        ]
+    }
+
+    fn wait_ready(path: &Path) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !path.is_file() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        path.is_file()
+    }
+
+    #[test]
+    fn unconfirmed_probe_keeps_the_actual_child_and_stops_later_probes_until_explicit_retry() {
+        let root = tempfile::tempdir().unwrap();
+        let program = fixtures(root.path());
+        let lock = root.path().join("held-lock");
+        let ready = root.path().join("ready");
+        let argv = held_arguments(&program, &lock, &ready);
+        let session = isolated_session(Profile::parse("progressive-mp4").unwrap());
+        let mut calls = 0;
+        let mut ready_observed = false;
+        let report = session
+            .run_with(Some(root.path().as_os_str()), |runner, _, stop| {
+                calls += 1;
+                runner
+                    .run_tool_injected_cleanup(
+                        &argv,
+                        &RunOptions {
+                            timeout: Some(Duration::from_millis(100)),
+                            stop: Some(stop),
+                            ..RunOptions::default()
+                        },
+                        |_| {
+                            ready_observed = wait_ready(&ready);
+                            Err(std::io::Error::other("injected cleanup uncertainty"))
+                        },
+                    )
+                    .map(|_| ())
+                    .map_err(|error| {
+                        assert_eq!(error.kind, "cleanup-unconfirmed");
+                        "probe-cleanup-unconfirmed"
+                    })
+            })
+            .unwrap();
+        assert_eq!(calls, 1);
+        assert!(ready_observed, "diagnostic fixture did not become ready");
+        assert!(!report.ready);
+        assert_eq!(report.cleanup_status, "unconfirmed");
+        assert_eq!(
+            report.tools[0].failure_code,
+            Some("probe-cleanup-unconfirmed")
+        );
+        assert_eq!(report.tools[1].failure_code, Some("probe-not-started"));
+        assert!(!session.cleanup_confirmed());
+        session.retry_cleanup().unwrap();
+        assert!(session.cleanup_confirmed());
+        let released = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&lock)
+            .unwrap();
+        released.try_lock().unwrap();
+        assert!(Arc::ptr_eq(&session.run().unwrap(), &report));
+        assert_eq!(
+            report.cleanup_status, "unconfirmed",
+            "the original failed attempt stays truthful after cleanup"
+        );
+    }
+
+    #[test]
+    fn stop_during_an_actual_probe_drains_it_and_prevents_the_next_probe() {
+        let root = tempfile::tempdir().unwrap();
+        let program = fixtures(root.path());
+        let lock = root.path().join("held-lock");
+        let ready = root.path().join("ready");
+        let argv = held_arguments(&program, &lock, &ready);
+        let session = isolated_session(Profile::ALL);
+        let mut calls = 0;
+        let report = std::thread::scope(|scope| {
+            scope.spawn(|| {
+                let ready_observed = wait_ready(&ready);
+                let worker_active = !session.cleanup_confirmed();
+                session.request_stop();
+                assert!(
+                    ready_observed && worker_active,
+                    "diagnostic did not reach its active fixture"
+                );
+            });
+            session
+                .run_with(Some(root.path().as_os_str()), |runner, _, stop| {
+                    calls += 1;
+                    runner
+                        .run_tool(
+                            &argv,
+                            "fixture",
+                            &RunOptions {
+                                timeout: Some(Duration::from_secs(3)),
+                                stop: Some(stop),
+                                ..RunOptions::default()
+                            },
+                        )
+                        .map(|_| ())
+                        .map_err(|error| {
+                            assert_eq!(error.kind, "cancelled");
+                            "probe-cancelled"
+                        })
+                })
+                .unwrap()
+        });
+        assert_eq!(calls, 1);
+        assert!(report.cancelled);
+        assert!(!report.ready);
+        assert_eq!(report.cleanup_status, "confirmed");
+        assert!(session.cleanup_confirmed());
+        let released = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&lock)
+            .unwrap();
+        released.try_lock().unwrap();
+    }
+
+    #[test]
+    fn stop_before_start_never_executes_a_probe() {
+        let root = tempfile::tempdir().unwrap();
+        fixtures(root.path());
+        let session = isolated_session(Profile::ALL);
+        session.request_stop();
+        let report = session
+            .run_with(Some(root.path().as_os_str()), |_, _, _| {
+                panic!("probe started after stop")
+            })
+            .unwrap();
+        assert!(!report.ready);
+        assert!(report.cancelled);
+        assert!(session.cleanup_confirmed());
+        session.retry_cleanup().unwrap();
     }
 }

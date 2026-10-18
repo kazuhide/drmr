@@ -404,13 +404,13 @@ Most commands return `0` for success, `1` for a failed operation or validation, 
 
 `doctor` discovers executable files on the current launch environment's `PATH` without executing them. Add `--probe` to run version and help checks with a three-second deadline per call and a 1 MiB output limit per stream. Raw tool output is excluded from the report. Discovery returns `0` when required tools are found; probing additionally requires recognized supported versions and the advertised options. A missing or failed required check returns `1`; invalid arguments return `2`.
 
-Use `--route progressive-mp4` for FFmpeg and ffprobe, or another route from [processing routes](processing-routes.md) to additionally require Shaka Packager. `--route all` (the default) and `--route prepared-dash` also require Bento4. Unrelated tools remain optional, so their failure does not block the selected route. For example:
+Use `--route progressive-mp4` for FFmpeg and ffprobe, or another route from [processing routes](processing-routes.md) to additionally require Shaka Packager. `--route all` (the default) and `--route prepared-dash` also require Bento4. Unrelated tools remain optional, so an unsupported version or missing feature does not block the selected route. Unconfirmed process cleanup always blocks readiness, including an optional probe. For example:
 
 ```sh
 drmr doctor --probe --route progressive-mp4 --json
 ```
 
-The single JSON object retains `ready` and `tools`, with each tool's `name`, `purpose`, `available`, and `required`. Added version-one fields include `mode` (`discovery` or `probe`), `profile`, resolved `path`, `path_status`, `version`, `version_status`, `feature_status`, individual `features`, and fixed `failure_code`. `ready` covers the selected checks only; `media_compatibility_checked` remains false. Bento4 reports `build-unverified` because its banner omits the build number: confirm build 641 or newer separately. Non-UTF-8 executable paths are reported without an ambiguous replacement path and are refused for probing. A successful diagnostic does not validate media, keys, licensing, or device playback.
+The single JSON object retains `ready` and `tools`, with each tool's `name`, `purpose`, `available`, and `required`. Added version-one fields include `mode` (`discovery` or `probe`), `profile`, resolved `path`, `path_status`, `version`, `version_status`, `feature_status`, individual `features`, fixed `failure_code`, `cancelled`, and `cleanup_status` (`not-required`, `confirmed`, or `unconfirmed`). `ready` covers the selected checks only; `media_compatibility_checked` remains false. Bento4 reports `build-unverified` because its banner omits the build number: confirm build 641 or newer separately. Non-UTF-8 executable paths are reported without an ambiguous replacement path and are refused for probing. A successful diagnostic does not validate media, keys, licensing, or device playback.
 
 ### Automatic worker limits
 

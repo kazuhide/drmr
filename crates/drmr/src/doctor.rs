@@ -1,14 +1,15 @@
 //! Explain discovery separately from bounded version and advertised-feature checks.
 
-use drmr_core::tool_diagnostics::{Profile, diagnose};
+use drmr_core::tool_diagnostics::{DiagnosticSession, Profile};
 use std::process::ExitCode;
 
 pub fn run(as_json: bool, probe: bool, route: &str) -> ExitCode {
-    let report = diagnose(Profile::parse(route).expect("validated route"), probe);
+    let session = DiagnosticSession::new(Profile::parse(route).expect("validated route"), probe);
+    let report = session.run().expect("single diagnostic caller");
     if as_json {
         println!(
             "{}",
-            serde_json::to_string(&report).expect("diagnostic report")
+            serde_json::to_string(report.as_ref()).expect("diagnostic report")
         );
     } else {
         println!(
@@ -64,6 +65,9 @@ pub fn run(as_json: bool, probe: bool, route: &str) -> ExitCode {
             println!(
                 "\nDiscovery does not run tools or verify versions. Use 'drmr doctor --probe' to check versions and advertised options."
             );
+        }
+        if probe {
+            println!("Cleanup: {}", report.cleanup_status);
         }
         if !report.ready {
             println!(

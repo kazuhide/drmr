@@ -191,25 +191,54 @@ pub(super) fn execute(
     argv: &[String],
     options: &RunOptions<'_>,
     path: Option<&OsStr>,
+    lease: Option<&super::cleanup::Lease<'_>>,
 ) -> Result<Completed, Failure> {
-    execute_with_cleanup(argv, options, path, ManagedChild::finish)
+    execute_owned_with_reader(
+        argv,
+        options,
+        path,
+        lease,
+        ManagedChild::finish,
+        |stdout, limit, state| read_bounded(stdout, limit, state, OUT_DONE),
+    )
 }
 
 pub(super) fn execute_streamed(
     argv: &[String],
     options: &RunOptions<'_>,
     path: Option<&OsStr>,
+    lease: Option<&super::cleanup::Lease<'_>>,
     mut consume: impl FnMut(&[u8]) -> Result<(), ()> + Send,
 ) -> Result<Completed, Failure> {
-    execute_with_reader(
+    execute_owned_with_reader(
         argv,
         options,
         path,
+        lease,
         ManagedChild::finish,
         move |stdout, _, state| read_streamed(stdout, state, &mut consume),
     )
 }
 
+#[cfg(test)]
+pub(super) fn execute_injected_cleanup(
+    argv: &[String],
+    options: &RunOptions<'_>,
+    path: Option<&OsStr>,
+    lease: Option<&super::cleanup::Lease<'_>>,
+    cleanup: impl FnMut(&mut ManagedChild) -> io::Result<()>,
+) -> Result<Completed, Failure> {
+    execute_owned_with_reader(
+        argv,
+        options,
+        path,
+        lease,
+        cleanup,
+        |stdout, limit, state| read_bounded(stdout, limit, state, OUT_DONE),
+    )
+}
+
+#[cfg(test)]
 fn execute_with_cleanup(
     argv: &[String],
     options: &RunOptions<'_>,
@@ -221,10 +250,22 @@ fn execute_with_cleanup(
     })
 }
 
+#[cfg(test)]
 fn execute_with_reader(
     argv: &[String],
     options: &RunOptions<'_>,
     path: Option<&OsStr>,
+    cleanup: impl FnMut(&mut ManagedChild) -> io::Result<()>,
+    read_stdout: impl FnOnce(CapturedStdout, usize, &State) -> Vec<u8> + Send,
+) -> Result<Completed, Failure> {
+    execute_owned_with_reader(argv, options, path, None, cleanup, read_stdout)
+}
+
+fn execute_owned_with_reader(
+    argv: &[String],
+    options: &RunOptions<'_>,
+    path: Option<&OsStr>,
+    lease: Option<&super::cleanup::Lease<'_>>,
     cleanup: impl FnMut(&mut ManagedChild) -> io::Result<()>,
     read_stdout: impl FnOnce(CapturedStdout, usize, &State) -> Vec<u8> + Send,
 ) -> Result<Completed, Failure> {
@@ -257,7 +298,16 @@ fn execute_with_reader(
     .map_err(|error| failure("unavailable", format!("could not run: {error}")))?;
     let stdout = child.stdout.take().expect("stdout is piped");
     let stderr = child.stderr.take().expect("stderr is piped");
-    capture_pipes(&mut child, stdout, stderr, options, cleanup, read_stdout)
+    let result = capture_pipes(&mut child, stdout, stderr, options, cleanup, read_stdout);
+    if result
+        .as_ref()
+        .is_err_and(|error| error.kind == "cleanup-unconfirmed")
+        && let Some(lease) = lease
+    {
+        // Reader scopes are joined before transferring the live native owner.
+        lease.retain(child);
+    }
+    result
 }
 
 fn capture_pipes(
@@ -633,7 +683,7 @@ mod lifecycle_tests {
             ..RunOptions::default()
         };
         let mut total = 0;
-        let completed = execute_streamed(&argv, &options, None, |chunk| {
+        let completed = execute_streamed(&argv, &options, None, None, |chunk| {
             assert!(chunk.len() <= 8192);
             total += chunk.len();
             Ok(())
@@ -684,7 +734,7 @@ mod lifecycle_tests {
                 timeout,
                 ..RunOptions::default()
             };
-            let error = execute_streamed(&argv, &options, None, |_| {
+            let error = execute_streamed(&argv, &options, None, None, |_| {
                 if case == "invalid" { Err(()) } else { Ok(()) }
             })
             .unwrap_err();
@@ -705,7 +755,7 @@ mod lifecycle_tests {
             stop: Some(&stop),
             ..RunOptions::default()
         };
-        let error = execute_streamed(&argv, &options, None, |_| {
+        let error = execute_streamed(&argv, &options, None, None, |_| {
             stop.set();
             Ok(())
         })
