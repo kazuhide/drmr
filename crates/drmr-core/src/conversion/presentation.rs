@@ -956,8 +956,11 @@ impl Converter {
             input_keys: request.input_keys,
             hls_keys: request.hls_input_keys,
         };
-        let input_report = inspection::inspect(request.input)
-            .map_err(|_| ConversionError("input-inspection-failed"))?;
+        let input_report = {
+            let _scope = self.backend.scope(super::measurement::Phase::Inspection);
+            inspection::inspect(request.input)
+                .map_err(|_| ConversionError("input-inspection-failed"))?
+        };
         let preparation = self
             .backend
             .scope(super::measurement::Phase::InputPreparation);

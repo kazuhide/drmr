@@ -65,3 +65,62 @@ fn measured_conversion_and_verification_keep_the_complete_proof_and_default_shap
     assert!(!encoded.contains("clip.mp4"));
     assert_eq!(std::fs::read(source).unwrap(), before);
 }
+
+#[test]
+fn measurement_helper_observes_real_bbb_tools_in_both_worker_modes() {
+    for condition in ["uncontrolled", "warmed-by-equivalent-verified-run"] {
+        let directory = tempfile::tempdir().unwrap();
+        let harness = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/bbb/measurement_regression.py");
+        let output = Command::new(if cfg!(windows) { "python" } else { "python3" })
+            .arg(harness)
+            .arg("--drmr")
+            .arg(env!("CARGO_BIN_EXE_drmr"))
+            .arg("--output")
+            .arg(directory.path())
+            .arg("--condition")
+            .arg(condition)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["success"], true);
+        assert_eq!(report["runs"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            report["warmups"].as_array().unwrap().len(),
+            if condition == "uncontrolled" { 0 } else { 2 }
+        );
+        for row in report["runs"].as_array().unwrap() {
+            assert_eq!(row["conversion_proof"]["media_verified"], true);
+            assert_eq!(row["independent_proof"]["media_verified"], true);
+            assert_eq!(
+                row["independent_proof"]["checks"]["packet_timing_equal"],
+                true
+            );
+        }
+        println!("{}", String::from_utf8_lossy(&output.stdout));
+    }
+}
+
+#[test]
+fn measurements_require_json_and_failure_results_keep_the_existing_exit_contract() {
+    for command in ["convert", "verify"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_drmr"))
+            .args([command, "--measure"])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2));
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let missing = directory.path().join("source-does-not-exist.mp4");
+    let default = convert(&missing, &directory.path().join("plain.mp4"), false);
+    let measured = convert(&missing, &directory.path().join("measured.mp4"), true);
+    assert_eq!(default.status.code(), measured.status.code());
+    assert_eq!(default.stdout, measured.stdout);
+    assert_eq!(default.stderr, measured.stderr);
+    assert!(!directory.path().join("measured.mp4").exists());
+}

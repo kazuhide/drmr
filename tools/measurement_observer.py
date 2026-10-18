@@ -212,10 +212,10 @@ def _pairs(values):
     return result
 
 
-def finish(process, timeout=2):
+def finish(process, timeout=2, interval=0.1):
     """Read only after the sole writer has exited; never communicate or start reader threads."""
     if process is None:
-        result = missing("observer-unavailable")
+        result = missing("observer-unavailable", interval)
         result["observer_cleanup"] = "not-started"
         return result
     try:
@@ -226,10 +226,10 @@ def finish(process, timeout=2):
             try:
                 process.wait(timeout=2)
             except subprocess.TimeoutExpired:
-                result = missing("observer-cleanup-unconfirmed")
+                result = missing("observer-cleanup-unconfirmed", interval)
                 result["observer_cleanup"] = "unconfirmed"
                 return result
-            result = missing("observer-timeout")
+            result = missing("observer-timeout", interval)
             result["observer_cleanup"] = "confirmed-termination"
             return result
         raw = process.stdout.read(MAX_SUMMARY_BYTES + 1)
@@ -241,7 +241,7 @@ def finish(process, timeout=2):
         return value
     except (OSError, ValueError, UnicodeError, OverflowError, RecursionError, Unavailable):
         stopped = process.poll() is not None
-        result = missing("observer-output-invalid" if stopped else "observer-cleanup-unconfirmed")
+        result = missing("observer-output-invalid" if stopped else "observer-cleanup-unconfirmed", interval)
         result["observer_cleanup"] = "confirmed-exit" if stopped else "unconfirmed"
         return result
     finally:

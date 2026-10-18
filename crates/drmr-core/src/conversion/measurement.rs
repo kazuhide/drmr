@@ -415,6 +415,31 @@ mod tests {
             b"unchanged"
         );
     }
+    #[cfg(windows)]
+    #[test]
+    fn checkpoint_never_follows_an_outside_junction() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("sentinel"), b"unchanged").unwrap();
+        assert!(
+            std::process::Command::new("cmd")
+                .args(["/D", "/C", "mklink", "/J"])
+                .arg(drmr_test_support::command_path(&root.path().join("escape")).unwrap())
+                .arg(drmr_test_support::command_path(outside.path()).unwrap())
+                .output()
+                .unwrap()
+                .status
+                .success()
+        );
+        assert_eq!(
+            walk(&[root.path()], 100, 5, Duration::from_secs(1)),
+            Err("checkpoint-reparse-or-symlink")
+        );
+        assert_eq!(
+            fs::read(outside.path().join("sentinel")).unwrap(),
+            b"unchanged"
+        );
+    }
     #[test]
     fn reused_and_concurrent_converters_isolate_observers_and_preserve_the_original_sink() {
         let original = Arc::new(crate::events::Collector::default());

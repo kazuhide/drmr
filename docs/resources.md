@@ -204,7 +204,39 @@ Use `drmr.exe` on Windows. The tool alternates automatic and one-worker runs, cr
 fresh outputs, and independently verifies every result. Reports omit operator paths,
 arguments, and raw diagnostics. The input-entry hash covers that file only, including
 just the manifest when one is supplied. Referenced media is not fingerprinted by this
-measurement tool. Windows process-memory sampling is reported as unmeasured.
+measurement tool. Helper report schema 2 keeps optional work measurements under
+each conversion and verification, alongside command elapsed time and memory samples.
+The media-proof fields remain separate.
+
+Linux and macOS use process-table RSS samples. Windows uses read-only process
+handles and working-set samples, checking creation identities and parent lifetimes
+before attributing descendants. A pass queries processes sequentially; its sum is
+not an atomic simultaneous snapshot. Short-lived processes, query failures, and
+sampling limits can leave incomplete observations. These are labelled partial or
+unmeasured, with null values when no usable sample exists. They are not complete
+zero-byte observations or proof that every child was seen.
+
+The Windows observer is a separate owned helper, with no child processes or threads.
+It emits one bounded numeric summary through a private pipe. The controller reads
+only after confirming observer exit, with finite termination on timeout. Observer
+cleanup is reported separately from media cleanup. The summary byte cap does not
+guarantee pipe capacity: a blocked writer produces an unmeasured timeout, never a
+successful observation. No observer thread is added to the CLI.
+
+The default cache condition is `uncontrolled`. To perform an equivalent conversion
+and independent verification before each measured case, add:
+
+```sh
+--condition warmed-by-equivalent-verified-run
+```
+
+Warmups use fresh outputs and must pass the same media checks. Their results are
+recorded separately and excluded from measured medians. This condition means an
+equivalent verified run happened immediately beforehand; it does not prove full
+cache residency. Neither condition establishes a physically cold cache. Hashing
+input entries and querying the binary can themselves warm caches. The helper does
+not flush operating-system caches or alter host settings. Total I/O, exact disk
+peaks, and physical-cold measurements remain unmeasured.
 
 One macOS ARM64 release build with FFmpeg 9.0.2 and Shaka Packager 3.8.0 measured three
 paired runs of ten-second Big Buck Bunny clear DASH to CBCS DASH, with five two-second video segments:
