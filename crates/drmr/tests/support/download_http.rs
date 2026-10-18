@@ -169,7 +169,20 @@ fn accepted_stream_mode_is_explicit_even_when_the_listener_is_nonblocking() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
     let peer = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
-    let (stream, _) = listener.accept().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let stream = loop {
+        match listener.accept() {
+            Ok((stream, _)) => break stream,
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                assert!(
+                    Instant::now() < deadline,
+                    "fixture accept readiness deadline"
+                );
+                thread::sleep(Duration::from_millis(5));
+            }
+            Err(error) => panic!("fixture accept failed: {:?}", error.kind()),
+        }
+    };
     let inherited = rustix::fs::fcntl_getfl(&stream)
         .unwrap()
         .contains(rustix::fs::OFlags::NONBLOCK);
