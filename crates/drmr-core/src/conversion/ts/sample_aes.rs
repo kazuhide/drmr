@@ -461,8 +461,11 @@ mod tests {
         result
     }
     fn fixture_pes(directory: &std::path::Path) -> Vec<Vec<u8>> {
+        fixture_role_pes(directory, 5, false)
+    }
+    fn fixture_role_pes(directory: &std::path::Path, segments: usize, audio: bool) -> Vec<Vec<u8>> {
         let mut output = Vec::new();
-        for number in 1..=5 {
+        for number in 1..=segments {
             let file = directory.join(format!("seg_{number}.ts"));
             assert!(std::fs::metadata(&file).unwrap().len() <= MAX_BYTES as u64);
             let bytes = std::fs::read(file).unwrap();
@@ -486,7 +489,11 @@ mod tests {
                 if start
                     && payload.len() >= 4
                     && payload[..3] == [0, 0, 1]
-                    && (0xe0..=0xef).contains(&payload[3])
+                    && if audio {
+                        (0xc0..=0xdf).contains(&payload[3])
+                    } else {
+                        (0xe0..=0xef).contains(&payload[3])
+                    }
                 {
                     assert!(pid.is_none_or(|previous| previous == id));
                     pid = Some(id);
@@ -617,6 +624,155 @@ mod tests {
             frames.push(rows);
         }
         assert_eq!(frames[0], frames[1]);
+        assert_eq!(Sha256::digest(std::fs::read(source).unwrap()), before);
+    }
+    fn prepare_real_audio_fixture(
+        work: &std::path::Path,
+        source: &std::path::Path,
+    ) -> (std::path::PathBuf, Vec<u8>) {
+        use sha2::{Digest as _, Sha256};
+        let baseline = work.join("baseline");
+        crate::conversion::files::create_dir(&baseline).unwrap();
+        let transport = baseline.join("source.ts");
+        // The original MP4 has a finite audio edit and negative priming DTS.
+        // A clear TS reference retains all coded frames at its explicitly observed
+        // nonzero transport origin. No samples, offsets, or padding are trimmed.
+        real_tool(
+            "ffmpeg",
+            vec![
+                "-v".into(),
+                "error".into(),
+                "-nostdin".into(),
+                "-threads".into(),
+                "1".into(),
+                "-i".into(),
+                crate::conversion::files::tool_path(source).unwrap(),
+                "-map".into(),
+                "0:v:0".into(),
+                "-map".into(),
+                "0:a:0".into(),
+                "-c".into(),
+                "copy".into(),
+                "-f".into(),
+                "mpegts".into(),
+                crate::conversion::files::tool_path(&transport).unwrap(),
+            ],
+        );
+        let transport_before = Sha256::digest(std::fs::read(&transport).unwrap()).to_vec();
+        for encrypted in [false, true] {
+            let dir = work.join(if encrypted {
+                "cipher-audio"
+            } else {
+                "clear-audio"
+            });
+            crate::conversion::files::create_dir(&dir).unwrap();
+            let input = crate::conversion::files::tool_path(&transport).unwrap();
+            let template =
+                crate::conversion::files::tool_path(&dir.join("seg_$Number$.ts")).unwrap();
+            let mut arguments = vec![
+                format!(
+                    "input={input},stream=audio,segment_template={template},playlist_name=media.m3u8"
+                ),
+                "--hls_master_playlist_output".into(),
+                crate::conversion::files::tool_path(&dir.join("master.m3u8")).unwrap(),
+                "--segment_duration".into(),
+                "2".into(),
+                "--fragment_duration".into(),
+                "2".into(),
+                "--transport_stream_timestamp_offset_ms".into(),
+                "0".into(),
+            ];
+            if encrypted {
+                arguments.extend([
+                "--enable_raw_key_encryption".into(), "--keys".into(),
+                "label=:key_id=000102030405060708090a0b0c0d0e0f:key=101112131415161718191a1b1c1d1e1f".into(),
+                "--iv".into(), "303132333435363738393a3b3c3d3e3f".into(),
+                "--protection_scheme".into(), "cbcs".into(), "--clear_lead".into(), "0".into(),
+                "--hls_key_uri".into(), "https://operator.invalid/public-fixture".into()]);
+            }
+            real_tool("packager", arguments);
+        }
+        (transport, transport_before)
+    }
+    #[test]
+    fn real_shaka_all_470_aac_frames_preserve_coded_bytes_clocks_and_complete_pcm() {
+        use sha2::{Digest as _, Sha256};
+        use std::io::Write as _;
+        let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../drmr/tests/fixtures/bbb/clip.mp4");
+        let before = Sha256::digest(std::fs::read(&source).unwrap());
+        let work = crate::native::private_tempdir().unwrap();
+        let (transport, transport_before) = prepare_real_audio_fixture(work.path(), &source);
+        let clear = fixture_role_pes(&work.path().join("clear-audio"), 6, true);
+        let cipher = fixture_role_pes(&work.path().join("cipher-audio"), 6, true);
+        assert_eq!(clear.len(), 470);
+        assert_eq!(cipher.len(), 470);
+        let key = Aes128Key::from_hex("101112131415161718191a1b1c1d1e1f").unwrap();
+        let iv = SegmentIv::from_hex("303132333435363738393a3b3c3d3e3f").unwrap();
+        let mut expected = Zeroizing::new(Vec::new());
+        let mut decrypted = Zeroizing::new(Vec::new());
+        let mut changed = 0;
+        for (index, (plain, encrypted)) in clear.iter().zip(&cipher).enumerate() {
+            let a = 9 + usize::from(plain[8]);
+            let b = 9 + usize::from(encrypted[8]);
+            assert_eq!(
+                &plain[..a],
+                &encrypted[..b],
+                "original AAC PES length/flags/PTS/DTS at {index}"
+            );
+            changed += usize::from(plain[a..] != encrypted[b..]);
+            let actual = decrypt_aac_adts(&encrypted[b..], &key, &iv).unwrap();
+            assert_eq!(
+                actual.as_slice(),
+                &plain[a..],
+                "complete original ADTS at {index}"
+            );
+            expected.extend_from_slice(&plain[a..]);
+            decrypted.extend_from_slice(&actual);
+        }
+        assert_eq!(
+            changed, 470,
+            "every real audio frame must exercise encryption"
+        );
+        let mut pcm = Vec::new();
+        for (name, data) in [("expected.aac", &expected), ("decrypted.aac", &decrypted)] {
+            let path = work.path().join(name);
+            crate::native::create_private_new(&path)
+                .unwrap()
+                .write_all(data)
+                .unwrap();
+            let result = real_tool(
+                "ffmpeg",
+                vec![
+                    "-v".into(),
+                    "error".into(),
+                    "-xerror".into(),
+                    "-nostdin".into(),
+                    "-threads".into(),
+                    "1".into(),
+                    "-f".into(),
+                    "aac".into(),
+                    "-i".into(),
+                    crate::conversion::files::tool_path(&path).unwrap(),
+                    "-map".into(),
+                    "0:a:0".into(),
+                    "-threads".into(),
+                    "1".into(),
+                    "-c:a".into(),
+                    "pcm_s16le".into(),
+                    "-f".into(),
+                    "s16le".into(),
+                    "-".into(),
+                ],
+            );
+            assert_eq!(result.stdout.len(), 470 * 1024 * 2 * 2);
+            pcm.push(result.stdout);
+        }
+        assert_eq!(pcm[0], pcm[1]);
+        assert_eq!(
+            Sha256::digest(std::fs::read(&transport).unwrap()).to_vec(),
+            transport_before
+        );
         assert_eq!(Sha256::digest(std::fs::read(source).unwrap()), before);
     }
 }
