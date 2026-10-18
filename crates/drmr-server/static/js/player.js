@@ -26,9 +26,9 @@
 
   // Keyless ClearKey: fetch this asset's license endpoint, convert its JWK Set into Shaka's
   // client-side clearKeys hex map in memory. Returns Promise<{'<kidHex>': '<keyHex>'}>.
-  function fetchKeylessClearKeys(assetId, licenseUrl) {
+  function fetchKeylessClearKeys(assetId, licenseUrl, signal) {
     return fetch(licenseUrl || '/clearkey/license?asset_id=' + encodeURIComponent(assetId),
-      licenseUrl ? {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'} : undefined).then(function (r) {
+      licenseUrl ? {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}', signal: signal} : {signal: signal}).then(function (r) {
       if (!r.ok) throw new Error('ClearKey license fetch failed: HTTP ' + r.status);
       return r.json();
     }).then(function (jwk) {
@@ -50,11 +50,16 @@
     var generation = 0;
     var sourceRenditions = [];
     var pendingDestroy = Promise.resolve();
+    var destroyOwner = null;
+    var activeSetup = null;
+    // One local setup budget includes the previous owner's teardown, key body and media load.
+    var SETUP_TIMEOUT_MS = 20000;
     var bufferPollTimer = null;
     var listeners = { event: [], state: [] };
 
     var state = {
       status: 'idle', // idle | loading | playing | error
+      phase: 'idle', // idle | teardown | key | media | ready
       url: null,
       renditions: [], // [{id, label}] -- Shaka's own view, one row per distinct DASH rep_id
       currentRenditionId: null, // last-selected rendition (video OR audio rep_id) / active video id
@@ -84,6 +89,7 @@
     function getState() {
       return {
         status: state.status,
+        phase: state.phase,
         url: state.url,
         renditions: state.renditions.slice(),
         currentRenditionId: state.currentRenditionId,
@@ -137,19 +143,29 @@
       }
     }
 
+    function destroyCurrent() {
+      if (!shakaPlayer) return;
+      var owner = { player: shakaPlayer };
+      destroyOwner = owner;
+      shakaPlayer = null;
+      // Keep the owner even when native destruction rejects. A failed destroy cannot
+      // authorize a second player on this video; reloading the page is the recovery path.
+      pendingDestroy = Promise.resolve().then(function () { return owner.player.destroy(); }).then(function () {
+        if (destroyOwner === owner) destroyOwner = null;
+      }, function () {});
+    }
+
     function stop() {
-      // Invalidate pending license/load callbacks immediately, before asynchronous destroy.
       var stoppedGeneration = ++generation;
+      if (activeSetup) activeSetup.cancel();
       stopBufferPoll();
       detachPlayingHandler();
-      if (shakaPlayer) pendingDestroy = shakaPlayer.destroy().catch(function () {});
-      shakaPlayer = null;
-      // A second stop/load must still wait for an earlier destroy: that instance owns the
-      // same <video> until teardown finishes, even though shakaPlayer is already null.
+      destroyCurrent();
       return pendingDestroy.then(function () {
         if (generation !== stoppedGeneration) return;
         clearRenditions();
         state.status = 'idle';
+        state.phase = 'idle';
         state.url = null;
         state.abrEnabled = true;
         state.keyStatus = 'n/a';
@@ -278,28 +294,80 @@
     // races two shaka.Player instances against the same <video>.
     function load(assetId, url, preferredVideoCodecs, options) {
       options = options || {};
+      var deadline = performance.now() + SETUP_TIMEOUT_MS;
       var stopped = stop();
       var loadGeneration = generation;
+      var controller = new AbortController();
+      var timer, resolveSetup, rejectSetup;
+      var attempt = { settled: false, cancel: cancel };
+      var result = new Promise(function (resolve, reject) { resolveSetup = resolve; rejectSetup = reject; });
+      activeSetup = attempt;
+      state.url = url;
+      state.status = 'loading';
+      state.phase = 'teardown';
+      state.keyStatus = 'n/a';
+      state.lastError = null;
+      emitState();
       function isCurrent() { return generation === loadGeneration; }
-      return stopped.then(function () {
+      function finish() {
+        attempt.settled = true;
+        clearTimeout(timer);
+        if (activeSetup === attempt) activeSetup = null;
+      }
+      function cancel() {
+        if (attempt.settled) return;
+        finish();
+        controller.abort();
+        resolveSetup();
+      }
+      function setupError() {
+        var code = state.phase === 'teardown' ? 'playback-cleanup-unconfirmed' : 'playback-setup-timeout';
+        var error = new Error(code);
+        error.code = code;
+        return error;
+      }
+      function checkDeadline() {
+        if (performance.now() >= deadline) throw setupError();
+      }
+      var keyFetchFailed = false;
+      function fail(e) {
+        if (!isCurrent() || attempt.settled) return;
+        finish();
+        controller.abort();
+        // Invalidate every callback from this attempt before beginning asynchronous teardown.
+        ++generation;
+        stopBufferPoll();
+        detachPlayingHandler();
+        destroyCurrent();
+        if (!e || typeof e !== 'object') e = new Error('playback-load-failed');
+        var message = typeof e.message === 'string' ? e.message : (typeof e.code === 'number' ? 'shaka error ' + e.code : 'playback-load-failed');
+        var isKeyError = keyFetchFailed;
+        try { isKeyError = isKeyError || (e && e.category === shaka.util.Error.Category.DRM); } catch (_e) { /* defensive */ }
+        state.keyStatus = isKeyError ? 'error' : (state.keyStatus === 'configured' ? 'configured' : 'n/a');
+        state.status = 'error';
+        state.lastError = { message: message, code: e.code, url: url };
+        emitEvent('error', 'load failed: ' + (e.code || '') + ' ' + message + ' (url: ' + url + ')');
+        emitState();
+        var wrapped = e instanceof Error ? e : new Error(message);
+        wrapped.code = e.code;
+        wrapped.url = url;
+        rejectSetup(wrapped);
+      }
+      timer = setTimeout(function () { fail(setupError()); }, Math.max(0, deadline - performance.now()));
+      stopped.then(function () {
         if (!isCurrent()) return;
+        checkDeadline();
+        if (destroyOwner) {
+          var cleanup = new Error('playback-cleanup-unconfirmed');
+          cleanup.code = 'playback-cleanup-unconfirmed';
+          throw cleanup;
+        }
         sourceRenditions = options.clear ? (options.sourceRenditions || []).slice() : [];
         state.url = url;
         state.status = 'loading';
-        emitState();
-
         videoEl.style.display = '';
         shaka.polyfill.installAll();
-        if (!shaka.Player.isBrowserSupported()) {
-          var unsupported = Object.assign(new Error('browser not supported by Shaka Player'), { url: url });
-          // Reflect the failure in the player STATE (not only in the rejection), so a UI that
-          // renders purely from onState() -- console.js does -- never stays stuck on "loading".
-          state.status = 'error';
-          state.lastError = { message: unsupported.message, url: url };
-          emitEvent('error', 'load failed: ' + unsupported.message + ' (url: ' + url + ')');
-          emitState();
-          throw unsupported;
-        }
+        if (!shaka.Player.isBrowserSupported()) throw new Error('browser not supported by Shaka Player');
         var player = new shaka.Player(videoEl);
         shakaPlayer = player;
         player.configure('abr.enabled', true);
@@ -309,6 +377,7 @@
         player.addEventListener('error', function (e) {
           if (!isCurrent()) return;
           var detail = e.detail || {};
+          if (!attempt.settled) { fail(detail); return; }
           var isDrm = false;
           try { isDrm = detail.category === shaka.util.Error.Category.DRM; } catch (_e) { /* defensive */ }
           if (isDrm) state.keyStatus = 'error';
@@ -320,24 +389,25 @@
         player.addEventListener('trackschanged', function () {
           if (isCurrent()) populateRenditions();
         });
-
+        state.phase = options.clear ? 'media' : 'key';
         state.keyStatus = options.clear ? 'n/a' : 'requesting';
         emitState();
-        var keyFetchFailed = false;
-        return (options.clear ? Promise.resolve(null) : fetchKeylessClearKeys(assetId, options.licenseUrl))
-          .catch(function (err) {
-            keyFetchFailed = true;
-            throw err;
-          })
+        return (options.clear ? Promise.resolve(null) : fetchKeylessClearKeys(assetId, options.licenseUrl, controller.signal))
+          .catch(function (err) { keyFetchFailed = true; throw err; })
           .then(function (clearKeys) {
             if (!isCurrent()) return;
-            // See file header: ignoreDrmInfo is required alongside clearKeys, or a real
-            // Widevine CDM still prefers the manifest's own DRM signaling and fails 6012.
+            checkDeadline();
+            state.phase = 'media';
+            state.keyStatus = clearKeys ? 'configured' : 'n/a';
+            emitState();
+            // Explicit local test keys override the source manifest's DRM-system signaling.
             if (clearKeys) player.configure({ drm: { clearKeys: clearKeys }, manifest: { dash: { ignoreDrmInfo: true } } });
             return player.load(url);
           })
           .then(function () {
             if (!isCurrent()) return;
+            checkDeadline();
+            state.phase = 'ready';
             emitEvent('info', 'loaded ' + url);
             populateRenditions();
             detachPlayingHandler();
@@ -351,24 +421,11 @@
             };
             videoEl.addEventListener('playing', onPlayingHandler);
             startBufferPoll();
-          })
-          .catch(function (e) {
-            if (!isCurrent()) return;
-            // A key-related failure (the ClearKey license fetch, or a Shaka DRM-category error
-            // such as 6012) is a key error. Anything else (manifest/network/media) says nothing
-            // about the key, so don't leave a stale "requesting" showing next to the error.
-            var isKeyError = keyFetchFailed;
-            try { isKeyError = isKeyError || (e && e.category === shaka.util.Error.Category.DRM); } catch (_e) { /* defensive */ }
-            state.keyStatus = isKeyError ? 'error' : 'n/a';
-            state.status = 'error';
-            state.lastError = { message: e.message, url: url };
-            emitEvent('error', 'load failed: ' + (e.code || '') + ' ' + e.message + ' (url: ' + url + ')');
-            emitState();
-            var wrapped = e instanceof Error ? e : new Error(String(e));
-            wrapped.url = url;
-            throw wrapped;
+            finish();
+            resolveSetup();
           });
-      });
+      }).catch(fail);
+      return result;
     }
 
     return {

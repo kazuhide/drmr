@@ -14,6 +14,12 @@ To change folders after opening the console, quit and reopen the application. So
 
 **Quit drmr** stops admission and waits for the local server to confirm cleanup. If cleanup cannot be confirmed, the application stays open, retains its running work and shows an error. Correct the reported cause, then select **Quit drmr** again to retry orderly cleanup. An operating-system force quit is separate from this orderly shutdown.
 
+## Local playback
+
+The before/after player is a local ClearKey playback test, independent of the conversion's media checks. A fetched or configured test key is not reported as usable until the video emits a playing event. Successful playback in Chrome does not qualify WKWebView, WebView2 or WebKitGTK; each native WebView needs its own runtime check. No DRM service or device playback guarantee follows from this test.
+
+Playback setup has a 20-second budget covering previous-player cleanup, the local test-key response and Shaka media loading. This bounds a stalled setup in the running page without changing media-processing timeouts. On expiry the controls return with recovery guidance; conversion results remain unchanged. Retry after a setup timeout. If previous-player cleanup cannot be confirmed, reload the console page before retrying: drmr retains that owner and does not create another player on the same video. JavaScript timers depend on the WebView event loop running and are not an operating-system termination deadline.
+
 ## External tools and launch environment
 
 The host and its jobs inherit `PATH` from the application launcher. Finder may provide a different environment from your terminal. The host does not search extra installation folders or run shell startup files.

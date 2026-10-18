@@ -19,6 +19,8 @@ function harness() {
   const requests = new Map();
   const instances = [];
   const timers = new Set();
+  const deadlines = new Map();
+  let now = 0, nextTimer = 0;
   const videoListeners = new Map();
   const video = {
     style: {},
@@ -54,10 +56,15 @@ function harness() {
     window: {},
     console: { log() {}, error() {} },
     atob: value => Buffer.from(value, 'base64').toString('binary'),
+    performance: { now: () => now },
+    AbortController,
+    setTimeout(callback, delay) { const id = ++nextTimer; deadlines.set(id, { callback, at: now + delay }); return id; },
+    clearTimeout(id) { deadlines.delete(id); },
     setInterval(callback) { timers.add(callback); return callback; },
     clearInterval(callback) { timers.delete(callback); },
-    fetch(url) {
+    fetch(url, options) {
       const request = deferred();
+      request.signal = options?.signal;
       requests.set(url, request);
       return request.promise;
     },
@@ -77,7 +84,13 @@ function harness() {
       json: () => Promise.resolve({ keys: [{ kid: 'AA', k: assetId === 'a' ? 'AA' : 'AQ' }] }),
     });
   }
-  return { player, instances, timers, videoListeners, requests, events, license };
+  function advance(milliseconds) {
+    now += milliseconds;
+    for (const [id, timer] of deadlines) {
+      if (timer.at <= now) { deadlines.delete(id); timer.callback(); }
+    }
+  }
+  return { player, instances, timers, deadlines, videoListeners, requests, events, license, advance, sandbox, video };
 }
 
 test('stop during the license fetch leaves the player idle without rearming listeners or timers', async () => {
@@ -85,6 +98,7 @@ test('stop during the license fetch leaves the player idle without rearming list
   const loading = h.player.load('a', '/a').catch(() => {});
   await flush();
   await h.player.stop();
+  assert.equal(h.requests.get('/clearkey/license?asset_id=a').signal.aborted, true);
   h.license('a');
   await loading;
   assert.equal(h.player.getState().status, 'idle');
@@ -271,4 +285,230 @@ test('independent HLS audio from the sanitized master selects its stable ID and 
   assert.equal(h.player.getState().currentRenditionId, audioId);
   assert.equal(h.player.getState().abrEnabled, false);
   await h.player.stop();
+});
+
+
+for (const stage of ['http', 'json', 'media']) {
+  test('the setup deadline bounds an unresolved ' + stage + ' operation and ignores its late result', async () => {
+    const h = harness();
+    let outcome;
+    const loading = h.player.load('a', '/a').then(() => { outcome = 'loaded'; }, error => { outcome = error; });
+    await flush();
+    const body = deferred();
+    if (stage === 'json') h.requests.get('/clearkey/license?asset_id=a').resolve({ ok: true, json: () => body.promise });
+    if (stage === 'media') { h.instances[0].pendingLoad = body; h.license('a'); }
+    await flush();
+    if (stage === 'media') assert.equal(h.player.getState().keyStatus, 'configured', 'a fetched test key is not yet usable');
+    h.advance(19999);
+    await flush();
+    assert.equal(outcome, undefined);
+    h.advance(1);
+    await flush();
+    assert.equal(h.player.getState().status, 'error');
+    assert.equal(outcome.code, 'playback-setup-timeout');
+    assert.equal(h.player.getState().lastError.code, 'playback-setup-timeout');
+    assert.equal(h.requests.get('/clearkey/license?asset_id=a').signal.aborted, true);
+    assert.equal(h.deadlines.size, 0);
+    assert.equal(h.timers.size, 0);
+    assert.equal(h.videoListeners.get('playing')?.size || 0, 0);
+    const next = h.player.load('b', '/b');
+    await flush();
+    h.license('b');
+    await next;
+    const before = JSON.stringify(h.player.getState());
+    if (stage === 'http') h.license('a');
+    else body.resolve(stage === 'json' ? { keys: [{ kid: 'AA', k: 'AA' }] } : undefined);
+    await flush();
+    await loading;
+    h.instances[0].emit('error', { category: 6, code: 6001 });
+    h.instances[0].emit('trackschanged');
+    assert.equal(JSON.stringify(h.player.getState()), before);
+    assert.equal(h.player.getState().url, '/b');
+    await h.player.stop();
+  });
+}
+
+test('the same setup budget includes previous destruction and never overlaps an unconfirmed owner', async () => {
+  const h = harness();
+  await h.player.load('source', '/clear', [], { clear: true });
+  const destruction = h.instances[0].pendingDestroy = deferred();
+  let outcome;
+  h.player.load('b', '/b').catch(error => { outcome = error; });
+  await flush();
+  h.advance(20000);
+  await flush();
+  assert.equal(h.player.getState().status, 'error');
+  assert.equal(outcome.code, 'playback-cleanup-unconfirmed');
+  assert.equal(h.instances.length, 1);
+  let retryError;
+  h.player.load('c', '/c').catch(error => { retryError = error; });
+  await flush();
+  h.advance(20000);
+  await flush();
+  assert.equal(retryError.code, 'playback-cleanup-unconfirmed');
+  assert.equal(h.instances.length, 1, 'a timed-out destroy still owns the video');
+  destruction.resolve();
+  await flush();
+  const recovered = h.player.load('d', '/d');
+  await flush();
+  h.license('d');
+  await recovered;
+  assert.equal(h.instances.length, 2);
+  assert.equal(h.player.getState().url, '/d');
+  await h.player.stop();
+});
+
+test('time spent waiting for teardown is not added to the key-fetch budget', async () => {
+  const h = harness();
+  await h.player.load('source', '/clear', [], { clear: true });
+  const destruction = h.instances[0].pendingDestroy = deferred();
+  let outcome;
+  h.player.load('b', '/b').catch(error => { outcome = error; });
+  await flush();
+  h.advance(15000);
+  destruction.resolve();
+  await flush();
+  assert.equal(h.instances.length, 2);
+  h.advance(5000);
+  await flush();
+  assert.equal(outcome?.code, 'playback-setup-timeout');
+  assert.equal(h.player.getState().status, 'error');
+});
+
+test('a rejected destroy remains owned and cannot authorize a replacement player', async () => {
+  const h = harness();
+  await h.player.load('source', '/clear', [], { clear: true });
+  h.instances[0].pendingDestroy = deferred();
+  let outcome;
+  h.player.load('b', '/b').catch(error => { outcome = error; });
+  await flush();
+  h.instances[0].pendingDestroy.reject(new Error('native teardown failed'));
+  await flush();
+  assert.equal(outcome?.code, 'playback-cleanup-unconfirmed');
+  await assert.rejects(h.player.load('c', '/c'), error => error.code === 'playback-cleanup-unconfirmed');
+  assert.equal(h.instances.length, 1);
+  assert.equal(h.requests.has('/clearkey/license?asset_id=b'), false);
+});
+
+
+function playbackHarness(language) {
+  const h = harness();
+  const elements = new Map();
+  function element(id) {
+    if (!elements.has(id)) {
+      const listeners = new Map();
+      elements.set(id, {
+        children: [], value: '', textContent: '', style: {}, disabled: false,
+        classList: { toggle() {} },
+        get options() { return this.children; },
+        addEventListener(name, callback) { listeners.set(name, callback); },
+        removeEventListener(name, callback) { if (listeners.get(name) === callback) listeners.delete(name); },
+        dispatch(name) { listeners.get(name)?.(); },
+        play() { return Promise.resolve(); },
+      });
+    }
+    return elements.get(id);
+  }
+  const App = h.sandbox.window.App;
+  App.UI = {
+    safeOutputUrl: value => value,
+    h: (_tag, options) => options,
+    replace: (target, ...values) => { target.children = values.flat(Infinity); },
+    setText: (target, value) => { target.textContent = value; },
+  };
+  h.sandbox.localStorage = { getItem: () => language };
+  for (const file of ['i18n.js', 'playback.js']) {
+    vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../../static/js', file), 'utf8'), h.sandbox);
+  }
+  const playback = App.Playback.create(element);
+  playback.prepareCatalog('a', { old_url: '/a', new_url: '/b', renditions: {}, output_readiness: { state: 'verified' } });
+  return { ...h, element, playback, i18n: App.I18n };
+}
+
+for (const language of ['en', 'ja']) {
+  test(language + ': a stalled local playback releases the actual controls and an old result cannot end the next busy state', async () => {
+    const h = playbackHarness(language);
+    const play = h.element('play-old-btn'), select = h.element('old-rendition-select');
+    play.dispatch('click');
+    await flush();
+    assert.equal(play.disabled, true);
+    const oldRequest = h.requests.get('/clearkey/license?asset_id=a');
+    h.advance(20000);
+    await flush();
+    assert.equal(play.disabled, false);
+    assert.equal(select.disabled, false);
+    assert.notEqual(h.i18n.t('playbackSetupTimeout'), 'playbackSetupTimeout');
+    assert.ok(h.element('old-state').textContent.includes(h.i18n.t('playbackSetupTimeout')));
+    play.dispatch('click');
+    await flush();
+    assert.equal(play.disabled, true);
+    oldRequest.resolve({ ok: true, json: () => Promise.resolve({ keys: [{ kid: 'AA', k: 'AA' }] }) });
+    await flush();
+    assert.equal(play.disabled, true, 'a stale source cannot clear the new attempt');
+    h.license('a');
+    await flush();
+    assert.equal(play.disabled, false);
+    assert.ok(h.element('old-state').textContent.includes(h.i18n.t('keyConfigured')));
+    h.playback.hide();
+    await flush();
+    assert.equal(h.deadlines.size, 0);
+    assert.equal(h.timers.size, 0);
+  });
+}
+
+
+test('a configured local test key becomes usable only after the video actually plays', async () => {
+  const h = harness();
+  const loading = h.player.load('a', '/a');
+  await flush();
+  assert.equal(h.player.getState().phase, 'key');
+  assert.equal(h.player.getState().keyStatus, 'requesting');
+  h.license('a');
+  await loading;
+  assert.equal(h.player.getState().phase, 'ready');
+  assert.equal(h.deadlines.size, 0);
+  assert.equal(h.player.getState().keyStatus, 'configured');
+  for (const callback of h.videoListeners.get('playing')) callback();
+  assert.equal(h.player.getState().status, 'playing');
+  assert.equal(h.player.getState().keyStatus, 'usable');
+  await h.player.stop();
+});
+
+test('an expired native teardown restores controls with reload guidance and retains its owner', async () => {
+  const h = playbackHarness('en');
+  const play = h.element('play-old-btn');
+  play.dispatch('click');
+  await flush();
+  h.license('a');
+  await flush();
+  const destruction = h.instances[0].pendingDestroy = deferred();
+  play.dispatch('click');
+  await flush();
+  assert.equal(play.disabled, true);
+  h.advance(20000);
+  await flush();
+  assert.equal(play.disabled, false);
+  assert.ok(h.element('old-state').textContent.includes(h.i18n.t('playbackCleanupUnconfirmed')));
+  assert.equal(h.instances.length, 1);
+  destruction.resolve();
+  await flush();
+  h.playback.hide();
+  await flush();
+});
+
+
+test('a Shaka DRM error event settles a still-pending setup and retains its safe numeric code', async () => {
+  const h = harness();
+  let outcome;
+  h.player.load('a', '/a').catch(error => { outcome = error; });
+  await flush();
+  h.instances[0].pendingLoad = deferred();
+  h.license('a');
+  await flush();
+  h.instances[0].emit('error', { category: 6, code: 6001 });
+  await flush();
+  assert.equal(outcome?.code, 6001);
+  assert.equal(h.player.getState().keyStatus, 'error');
+  assert.match(h.player.getState().lastError.message, /6001/);
+  assert.equal(h.deadlines.size, 0);
 });

@@ -392,6 +392,8 @@ verified output, but does not read the newer attempt's files under that authorit
 
 Requests must address `localhost`, `127.0.0.1`, `::1`, or an explicitly configured bind hostname/address. Binding to a wildcard address does not permit arbitrary hostnames. Reverse proxies and remote access are outside this local console's default setup.
 
+The console's before/after player uses local ClearKey test keys. Playback setup waits at most 20 seconds while the page's event loop runs, including previous-player cleanup, the local key response and media loading. A setup timeout restores the controls without changing conversion or verification results. Retry, or use a browser where this ClearKey test works. If cleanup of the previous player is unconfirmed, reload the page before retrying; the console keeps that owner instead of overlapping players. A key being configured is separate from usable playback, and a successful browser test does not qualify another browser or native WebView.
+
 ## Exit codes
 
 Most commands return `0` for success, `1` for a failed operation or validation, and `2` for invalid usage or configuration. `verify-snapshot` returns `1` for changed content and `2` for an invalid snapshot. Batch processing can return `130` when interrupted. `convert` and `verify` also return `130` after cooperative cancellation: on Unix, send SIGINT (Ctrl+C) or SIGTERM. They stop queued work and terminate managed media subprocesses before returning. Cancellation observed before publication prevents publishing the result. Force-killing the CLI bypasses cooperative cleanup; the measurement tool reports that fallback as cleanup unconfirmed.
