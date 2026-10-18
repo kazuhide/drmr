@@ -325,7 +325,8 @@ impl Parser {
             bytes = &bytes[end..];
             if self.buffer.last() == Some(&b'\n') {
                 let record = std::mem::take(&mut self.buffer);
-                self.record(&record[..record.len() - 1])?;
+                let line = &record[..record.len() - 1];
+                self.record(line.strip_suffix(b"\r").unwrap_or(line))?;
                 self.buffer = record;
                 self.buffer.clear();
             }
@@ -492,6 +493,11 @@ mod tests {
             }
             parser.finish().unwrap();
         }
+        let mut parser = Parser::new(0, 2, false, video());
+        parser
+            .push(format!("{first}{second}").replace('\n', "\r\n").as_bytes())
+            .unwrap();
+        parser.finish().unwrap();
         for bad in [
             record(1, "90000", 90000, 3750),
             record(0, "N/A", 90000, 3750),
