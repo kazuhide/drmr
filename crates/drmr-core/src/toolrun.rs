@@ -421,6 +421,7 @@ fn next_call_id() -> u64 {
 pub struct ToolRunner {
     secrets: Arc<Secrets>,
     sink: Arc<dyn Sink>,
+    observer: Option<Arc<dyn Sink>>,
     path: Option<OsString>,
     limiter: Arc<Limiter>,
     workload: RwLock<Option<Workload>>,
@@ -433,10 +434,30 @@ impl ToolRunner {
         ToolRunner {
             secrets,
             sink,
+            observer: None,
             path: None,
             limiter: process_limiter(),
             workload: RwLock::new(None),
         }
+    }
+
+    /// Preserve the original sink, admission pool, and secrets while observing this fork only.
+    pub(crate) fn observed(&self, observer: Arc<dyn Sink>) -> Self {
+        Self {
+            secrets: Arc::clone(&self.secrets),
+            sink: Arc::clone(&self.sink),
+            observer: Some(observer),
+            path: self.path.clone(),
+            limiter: Arc::clone(&self.limiter),
+            workload: RwLock::new(self.registered_workload()),
+        }
+    }
+
+    fn emit(&self, record: &Record) {
+        if let Some(observer) = &self.observer {
+            observer.emit(record);
+        }
+        self.sink.emit(record);
     }
 
     /// Every tool of this runner looked up on and run with `path` as its `PATH` — what a
@@ -504,7 +525,7 @@ impl ToolRunner {
                 crate::resources::MemorySource::Unknown => "unknown",
             },
         );
-        self.sink.emit(&record);
+        self.emit(&record);
     }
 
     /// Reserve exactly once for a child that streams its output outside `run_tool`.
@@ -584,8 +605,7 @@ impl ToolRunner {
             .iter()
             .flat_map(|secret| patterns_for(secret))
             .collect();
-        self.sink
-            .emit(&self.command_record(&base, options.argv_redacted.unwrap_or(argv), &extra));
+        self.emit(&self.command_record(&base, options.argv_redacted.unwrap_or(argv), &extra));
         let start = Instant::now();
         // Hold admission through capture, record construction, and emission, where output
         // may have temporary scrubbed copies. Waiting consumes the same call deadline.
@@ -627,13 +647,13 @@ impl ToolRunner {
                         "stdout streamed without retaining payload",
                     );
                 }
-                self.sink.emit(&record);
+                self.emit(&record);
                 Ok(completed)
             }
             Err(failure) => {
                 let record =
                     self.failure_record(&base, &extra, &failure, start.elapsed().as_secs_f64());
-                self.sink.emit(&record);
+                self.emit(&record);
                 Err(ToolError {
                     tool: tool.to_string(),
                     kind: failure.kind,
@@ -775,7 +795,7 @@ impl ToolRunner {
         if let Some(id) = rendition_id {
             put(&mut record, "rendition_id", id);
         }
-        self.sink.emit(&record);
+        self.emit(&record);
         call_id
     }
 
@@ -819,7 +839,7 @@ impl ToolRunner {
         if let Some(id) = rendition_id {
             put(&mut record, "rendition_id", id);
         }
-        self.sink.emit(&record);
+        self.emit(&record);
     }
 }
 

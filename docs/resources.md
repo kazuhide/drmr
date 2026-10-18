@@ -151,6 +151,30 @@ This synthetic pipe observation does not establish media conversion speed.
 
 ## Generic conversion
 
+Use `convert ... --measure --json` or `verify ... --measure --json` to add an
+optional `measurements` object to the normal result. The media checks and exit
+codes are unchanged. Without `--measure`, the JSON result has no measurement
+fields. A failed command retains its normal error rather than manufacturing a
+successful measurement report.
+
+Phase values are sums of explicitly timed scopes, including combined operations
+such as decryption and container changes in one Packager call. Parallel scopes
+can overlap: their sum is neither command wall time nor CPU time. Tool durations
+also sum overlapping calls and include admission waiting, captured or streamed
+output handling, and child cleanup. Do not add tool and phase sums together.
+Zero-count phases are unmeasured; coverage excludes uninstrumented Rust work.
+
+Workspace measurements inspect only owned private staging directories at explicit
+checkpoints after their tools have finished. They report regular-file logical
+lengths, with bounded traversal and no symlink or reparse-point following. These
+checkpoints can miss files created and deleted between observations. They are not
+an exact temporary-disk peak, allocated blocks, or total I/O bytes. Unavailable
+or incomplete observations are labelled; total process I/O remains unmeasured.
+Each checkpoint covers its selected staging directories, which can omit other
+live command workspaces. The scan assumes the private stage owners remain held
+and all writers have finished; metadata checks and directory traversal do not
+atomically prevent path replacement or impose a hard filesystem I/O deadline.
+
 `convert` and `verify` accept `--max-workers 1` through `64` as an upper bound.
 With no option, independent tracks share the CPU and memory admission described above.
 Snapshots and stream metadata are checked before parallel normalization. Results retain
@@ -167,6 +191,9 @@ one thread. Shaka Packager uses `--single_threaded` and `--io_cache_size=0`, dis
 otherwise separate per-file threaded I/O caches. Parallel work is coordinated outside
 these tools. The tradeoff is measured with the same complete verification in both modes.
 
+The optional benchmark scripts are in the source checkout; run them from the repository
+root with Python 3.9 or later. Python is not required for the CLI itself.
+
 For a paired worker comparison, build the CLI first, then run:
 
 ```sh
@@ -180,7 +207,56 @@ Use `drmr.exe` on Windows. The tool alternates automatic and one-worker runs, cr
 fresh outputs, and independently verifies every result. Reports omit operator paths,
 arguments, and raw diagnostics. The input-entry hash covers that file only, including
 just the manifest when one is supplied. Referenced media is not fingerprinted by this
-measurement tool. Windows process-memory sampling is reported as unmeasured.
+measurement tool. Helper report schema 2 keeps optional work measurements under
+each conversion and verification, alongside command elapsed time and memory samples.
+The media-proof fields remain separate.
+
+Linux and macOS use process-table resident set size (RSS) samples. Windows uses read-only process
+handles and working-set samples, checking creation identities and parent lifetimes
+before attributing descendants. A pass queries processes sequentially; its sum is
+not an atomic simultaneous snapshot. Short-lived processes, query failures, and
+sampling limits can leave incomplete observations. These are labelled partial or
+unmeasured, with null values when no usable sample exists. They are not complete
+zero-byte observations or proof that every child was seen.
+
+A short command can finish between samples. Parent and descendant peaks are
+positive observations or `null`, never an assumed zero when memory was not observed.
+Fixed counters distinguish a missing root, a failed query, no observed child rows,
+and child rows whose resident bytes were zero. A positive observed child count with
+a null memory peak means child rows were seen, without a positive memory observation.
+It does not establish that the child's lifetime peak was zero. Status and reason
+labels describe these gaps separately from media verification.
+
+Summary medians use a separate observed-run count for parent and descendant memory.
+Missing values are excluded with their own counts; an entirely missing metric stays
+null. Command elapsed-time medians still include all successfully verified measured
+runs. The helper's success field means media conversion and independent verification
+passed, not that every memory metric was measured. Each operating system also has a
+mandatory held-child test through the real measurement helper, requiring positive
+memory observations and confirmed owned cleanup. This checks the observation path
+without extending a real media command artificially or replacing its media checks.
+
+The Windows observer is a separate owned helper, with no child processes or threads.
+It emits one bounded numeric summary through a private pipe. The controller reads
+only after confirming observer exit, with finite termination on timeout. Observer
+cleanup is reported separately from media cleanup. The summary byte cap does not
+guarantee pipe capacity: a blocked writer produces an unmeasured timeout, never a
+successful observation. No observer thread is added to the CLI.
+
+The default cache condition is `uncontrolled`. To perform an equivalent conversion
+and independent verification before each measured case, add:
+
+```sh
+--condition warmed-by-equivalent-verified-run
+```
+
+Warmups use fresh outputs and must pass the same media checks. Their results are
+recorded separately and excluded from measured medians. This condition means an
+equivalent verified run happened immediately beforehand; it does not prove full
+cache residency. Neither condition establishes a physically cold cache. Hashing
+input entries and querying the binary can themselves warm caches. The helper does
+not flush operating-system caches or alter host settings. Total I/O, exact disk
+peaks, and physical-cold measurements remain unmeasured.
 
 One macOS ARM64 release build with FFmpeg 9.0.2 and Shaka Packager 3.8.0 measured three
 paired runs of ten-second Big Buck Bunny clear DASH to CBCS DASH, with five two-second video segments:

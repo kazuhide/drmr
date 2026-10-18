@@ -132,6 +132,7 @@ impl Converter {
             Vec::new(),
             Vec::new(),
         );
+        self.backend.checkpoint(&[&work, &stage]);
         self.publish_directory(stage.path(), &destination)?;
         Ok(ConversionReport {
             schema_version: 1,
@@ -291,6 +292,7 @@ impl Converter {
                 .parent()
                 .ok_or(ConversionError("temporary-workspace-unavailable"))?
                 .join("clear.mp4");
+            let normalization_scope = self.backend.scope(super::measurement::Phase::Normalization);
             self.backend.package_stream(
                 &source.media,
                 source.index,
@@ -298,6 +300,7 @@ impl Converter {
                 source.key_id.is_some().then_some(request.input_keys),
                 None,
             )?;
+            drop(normalization_scope);
             let normalization = self.backend.verify_streams(
                 &source.source,
                 source.index,
@@ -319,6 +322,7 @@ impl Converter {
         root: &Path,
         request: &TrackConversionRequest<'_>,
     ) -> Result<(), ConversionError> {
+        let _scope = self.backend.scope(super::measurement::Phase::Packaging);
         let mut argv = Zeroizing::new(vec![
             self.backend.packager.clone(),
             "--mp4_reset_initial_composition_offset_to_zero=false".into(),
@@ -575,14 +579,22 @@ impl Converter {
             .map_err(|_| ConversionError("temporary-workspace-unavailable"))?;
         super::files::create_dir(&result_dir)
             .map_err(|_| ConversionError("temporary-workspace-unavailable"))?;
+        let preparation = self
+            .backend
+            .scope(super::measurement::Phase::InputPreparation);
         let source = prepare_presentation(&request.source, &source_dir, &self.backend)?;
         let result = prepare_presentation(&request.output, &result_dir, &self.backend)?;
-        self.compare_presentations(
+        drop(preparation);
+        let report = self.compare_presentations(
             source,
             result,
             request.source.input_keys,
             request.output.input_keys,
-        )
+        );
+        if report.is_ok() {
+            self.backend.checkpoint(&[&work]);
+        }
+        report
     }
     fn compare_presentations(
         &self,
@@ -944,9 +956,16 @@ impl Converter {
             input_keys: request.input_keys,
             hls_keys: request.hls_input_keys,
         };
-        let input_report = inspection::inspect(request.input)
-            .map_err(|_| ConversionError("input-inspection-failed"))?;
+        let input_report = {
+            let _scope = self.backend.scope(super::measurement::Phase::Inspection);
+            inspection::inspect(request.input)
+                .map_err(|_| ConversionError("input-inspection-failed"))?
+        };
+        let preparation = self
+            .backend
+            .scope(super::measurement::Phase::InputPreparation);
         let prepared = prepare_presentation(&input, work.path(), &self.backend)?;
+        drop(preparation);
         let transport = prepared.iter().any(|p| p.transport_index.is_some());
         if transport
             && (request.format != OutputFormat::Hls
@@ -1009,8 +1028,12 @@ impl Converter {
             if !report.verification.passed {
                 return Err(ConversionError("round-trip-verification-failed"));
             }
+            if let Some(stage) = &stage {
+                self.backend.checkpoint(&[&work, stage]);
+            }
             self.publish_directory(candidate, destination)?;
         }
+        self.backend.checkpoint(&[&work]);
         report.input = input_report;
         if transport {
             report.processing = Some(inspection::ActualProcessing::new(

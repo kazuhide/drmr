@@ -324,6 +324,7 @@ impl Backend {
         source: View<'_>,
         result: View<'_>,
     ) -> Result<VerificationReport, ConversionError> {
+        let _scope = self.scope(super::measurement::Phase::Verification);
         let mut a = self.profile_stream(source.input, source.index, source.key)?;
         let mut b = self.profile_stream(result.metadata, result.index, result.key)?;
         let config_a = self.transport_config(source, &a)?;
