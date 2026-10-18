@@ -270,7 +270,7 @@ def binary(archive, name, target):
             require(int.from_bytes(header[12:16], "little") == 2, "binary-not-executable")
     if system != "windows":
         mode = archive.files[name][2]
-        require(mode & 0o100 and not mode & 0o022, "binary-executable-permissions")
+        require(mode & 0o500 == 0o500 and not mode & 0o7022, "binary-executable-permissions")
     return {"sha256": archive.digest(name), "bytes": archive.files[name][1], "mode": oct(archive.files[name][2] & 0o777), "header_target": target}
 
 def layout(archive, kind, target):

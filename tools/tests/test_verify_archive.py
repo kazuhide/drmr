@@ -80,7 +80,9 @@ class Archives(unittest.TestCase):
     def test_wrong_target_and_non_executable_refused(self):
         wrong = bytearray(elf()); wrong[18:20] = (183).to_bytes(2, "little")
         for files, mode, token in [(dict(self.files, drmr=bytes(wrong)), 0o755, "binary-architecture"),
-                                   (self.files, 0o644, "binary-executable-permissions")]:
+                                   (self.files, 0o644, "binary-executable-permissions"),
+                                   (self.files, 0o111, "binary-executable-permissions"),
+                                   (self.files, 0o4755, "binary-executable-permissions")]:
             with self.subTest(token=token):
                 with self.assertRaisesRegex(VERIFY.Failure, token): self.check(self.archive(files, mode))
 
