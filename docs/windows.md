@@ -68,6 +68,18 @@ Use the [usage guide](usage.md) for prepared DASH, clear-HLS snapshots, batch wo
 
 The Windows qualification workflow runs the native CLI, batch supervision, access-control and descendant-process tests as a regular user with pinned media tools. Its artifacts retain real-media JSON reports and test logs. These checks establish only the tested media profiles; license acquisition and device playback require separate validation.
 
+## Cancel a media operation
+
+Press Ctrl+C or Ctrl+Break to cancel `convert` or `verify`. The CLI stops scheduling
+work, terminates its owned media processes, and removes temporary workspaces. If
+cancellation is observed before final publication, the destination is not published.
+Exit code `130` means cancellation completed with confirmed process cleanup; an
+unconfirmed cleanup is an error instead.
+
+The native Windows tests deliver both console events for both commands and check
+immediate descendant termination, released file locks, unchanged input, and no
+published output. These tests use a regular user on a local NTFS filesystem.
+
 ## Unconfirmed process cleanup
 
 `cleanup-unconfirmed` or `media-cleanup-unconfirmed` means drmr could not confirm that its child processes finished. The operation must not be treated as successful or as a completed cancellation.
