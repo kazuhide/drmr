@@ -1328,11 +1328,33 @@ fn run_jsonl_registers_source_and_generated_signaling_before_tool_records() {
 
 #[test]
 fn run_jsonl_scrubs_compact_tool_output_for_accepted_spaced_key_material() {
+    // Keep synthetic asset enumeration, but exercise the production key parser: the
+    // general FakeConfig uses hex::decode and rejects valid byte-separated whitespace.
+    struct RealKeys<'a>(&'a FakeConfig);
+    impl drmr_core::pipeline_deps::Config for RealKeys<'_> {
+        fn load_key_material(
+            &self,
+            env: &std::collections::HashMap<String, String>,
+        ) -> Result<drmr_core::config::KeyMaterial, PyError> {
+            Ok(drmr_core::config::load_key_material(Some(env))?)
+        }
+
+        fn load_asset(
+            &self,
+            mpd: &Path,
+            key: drmr_core::config::KeyMaterial,
+            output: &Path,
+            asset_id: Option<&str>,
+        ) -> Result<drmr_core::config::Asset, PyError> {
+            drmr_core::pipeline_deps::Config::load_asset(self.0, mpd, key, output, asset_id)
+        }
+    }
+
     let mut cli = Cli::new();
     let spec = drmr_test_support::ToolSpec {
         stdout: b"[]".to_vec(),
         stderr: format!(
-            "{} {}",
+            "synthetic-key-probe {} {}",
             KEY,
             base64::engine::general_purpose::STANDARD.encode(hex::decode(KEY).unwrap())
         )
@@ -1350,21 +1372,47 @@ fn run_jsonl_scrubs_compact_tool_output_for_accepted_spaced_key_material() {
         .collect::<Vec<_>>()
         .join(" ");
     env.insert("DRM_KEY".into(), spaced);
-    let result = cli.main(
-        &[
-            "run",
-            "--mpd",
-            &mpd,
-            "--output",
-            &cli.path("out"),
-            "--no-manifests",
-            "--log-format",
-            "jsonl",
-        ],
-        &env,
-    );
-    assert_eq!(result.code, EXIT_RENDITION_FAIL);
-    assert!(result.stdout.contains("mp4dump"));
-    assert_no_secrets(&result.stdout);
-    assert_no_secrets(&result.stderr);
+    let config = RealKeys(&cli.config);
+    let modules = Modules {
+        config: &config,
+        ..cli.modules()
+    };
+    let argv = [
+        "run".into(),
+        "--mpd".into(),
+        mpd,
+        "--output".into(),
+        cli.path("out"),
+        "--no-manifests".into(),
+        "--log-format".into(),
+        "jsonl".into(),
+    ];
+    let stdout = SharedBuf::default();
+    let mut stderr = SharedBuf::default();
+    let code = cli::main(&argv, &env, &modules, stdout.clone(), &mut stderr);
+    assert_eq!(code, EXIT_RENDITION_FAIL);
+    let log = stdout.text();
+    let outputs: Vec<Value> = log
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|record| record["event"] == "tool-output" && record["tool"] == "mp4dump")
+        .collect();
+    assert!(!outputs.is_empty(), "the native secret-emitting probe ran");
+    for output in outputs {
+        assert_eq!(output["returncode"], 0);
+        assert!(
+            output["stderr"]
+                .as_str()
+                .unwrap()
+                .starts_with("synthetic-key-probe ")
+        );
+        assert!(
+            output["stderr"]
+                .as_str()
+                .unwrap()
+                .contains("***REDACTED***")
+        );
+    }
+    assert_no_secrets(&log);
+    assert_no_secrets(&stderr.text());
 }
