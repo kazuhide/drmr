@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="{{lang}}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="{{description}}">
+  <title>{{title}} — drmr</title>
+  <link rel="canonical" href="{{canonical}}">
+  <link rel="alternate" hreflang="en" href="https://kazuhide.github.io/drmr/guide/">
+  <link rel="alternate" hreflang="ja" href="https://kazuhide.github.io/drmr/ja/guide/">
+  <link rel="alternate" hreflang="x-default" href="https://kazuhide.github.io/drmr/guide/">
+  <link rel="icon" type="image/svg+xml" href="{{asset_prefix}}assets/drmr.svg">
+  <link rel="stylesheet" href="{{asset_prefix}}assets/site.css">
+  <link rel="stylesheet" href="{{asset_prefix}}assets/guide.css">
+</head>
+<body class="guide-page">
+  <a class="skip-link" href="#main">{{skip}}</a>
+  <header class="wrap guide-header">
+    <a class="brand" href="{{home_url}}" aria-label="drmr {{home}}"><img src="{{asset_prefix}}assets/drmr.svg" width="32" height="32" alt="">drmr</a>
+    <nav class="guide-header-nav" aria-label="{{title}}">
+      <a href="{{home_url}}">{{home}}</a>
+      <a href="{{home_url}}#support">{{support}}</a>
+      <a href="#guide-toc">{{toc}}</a>
+    </nav>
+    <nav class="language-switch" aria-label="{{language_label}}">
+      <a href="{{other_url}}" lang="{{other_lang}}" hreflang="{{other_lang}}">{{other}}</a>
+    </nav>
+  </header>
+  <main class="wrap" id="main" tabindex="-1">
+    <div class="guide-intro">
+      <p class="eyebrow">drmr / {{version}}</p>
+      <h1>{{title}}</h1>
+      <p>{{description}}</p>
+      <p class="guide-meta">{{updated_label}}: <time datetime="{{updated}}">{{updated}}</time> · {{version_label}}: {{version}}</p>
+    </div>
+    <div class="guide-layout">
+      <aside class="guide-toc" id="guide-toc">
+        <nav class="guide-toc-nav" aria-label="{{toc}}">
+          <h2>{{toc}}</h2>
+          <ol>{{toc_items}}</ol>
+        </nav>
+      </aside>
+      <article class="guide-content" id="guide-content">{{content}}</article>
+    </div>
+    <p class="guide-toplink"><a href="#guide-toc">{{top}}</a></p>
+  </main>
+  <footer class="wrap guide-footer">
+    <p>drmr · <a href="https://github.com/kazuhide/drmr/blob/main/docs/usage.md">{{docs}}</a></p>
+    <p><a href="{{asset_prefix}}assets/fonts/LICENSE-ibm-plex.txt">{{notice}}</a></p>
+  </footer>
+</body>
+</html>
