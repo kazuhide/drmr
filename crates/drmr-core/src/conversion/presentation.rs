@@ -248,7 +248,8 @@ impl Converter {
                     source.index,
                     key_for(source, request.input_keys),
                 )
-                .with_metadata(&source.media),
+                .with_metadata(&source.media)
+                .with_original_keys(source.source_dictionary, request.input_keys),
                 StreamView::new(&reference, 0, request.output_key.map(|k| &k.0))
                     .with_metadata(&combined),
             )?;
@@ -297,10 +298,28 @@ impl Converter {
                 super::signaling::clear_mp4(&source, &self.backend.stop)?;
             }
             let prepared = prepare(&source, track.index, track.kind, request.input_keys)?;
-            let profile = self.backend.profile_stream(
+            if super::finite::has_audio(&source)? && !audio::movie(&source)?.fragmented {
+                let report = inspection::inspect(&source)
+                    .map_err(|_| ConversionError("invalid-input-media"))?;
+                if !super::progressive::validate_input(&source, &report, request.input_keys)? {
+                    return Err(ConversionError("progressive-mp4-profile-not-supported"));
+                }
+                self.progressive_codecs(
+                    &source,
+                    &report,
+                    (report.protection != Protection::Clear)
+                        .then_some(super::keys::ProbeKeys::All(request.input_keys)),
+                )?;
+            }
+
+            let profile = self.backend.profile_stream_keys(
                 &source,
                 track.index,
-                key_for(&prepared, request.input_keys),
+                if prepared.source_dictionary {
+                    Some(super::keys::ProbeKeys::All(request.input_keys))
+                } else {
+                    key_for(&prepared, request.input_keys).map(super::keys::ProbeKeys::One)
+                },
             )?;
             self.validate_signaling_codec(&profile, track.kind)?;
             if profile["codec_type"].as_str()
@@ -322,21 +341,41 @@ impl Converter {
                 .ok_or(ConversionError("temporary-workspace-unavailable"))?
                 .join("clear.mp4");
             let normalization_scope = self.backend.scope(super::measurement::Phase::Normalization);
+            let whole_clear = source
+                .media
+                .parent()
+                .ok_or(ConversionError("temporary-workspace-unavailable"))?
+                .join("whole-clear.mp4");
+            let packaging_source = if source.source_dictionary {
+                let report = inspection::inspect(&source.source)
+                    .map_err(|_| ConversionError("invalid-input-media"))?;
+                self.clear_finite(&source.source, &whole_clear, &report, request.input_keys)?;
+                &whole_clear
+            } else {
+                &source.media
+            };
+
             self.backend.package_stream(
-                &source.media,
+                packaging_source,
                 source.index,
                 &clear,
-                source.key_id.is_some().then_some(request.input_keys),
+                (source.key_id.is_some() && !source.source_dictionary)
+                    .then_some(request.input_keys),
                 None,
             )?;
             drop(normalization_scope);
-            let normalization = self.backend.verify_streams(
+            let a = StreamView::new(
                 &source.source,
                 source.index,
-                &clear,
-                0,
                 key_for(source, request.input_keys),
-                None,
+            );
+            let normalization = self.backend.verify_views(
+                if source.source_dictionary {
+                    a.with_all_keys(request.input_keys)
+                } else {
+                    a
+                },
+                StreamView::new(&clear, 0, None),
             )?;
             if !normalization.passed {
                 return Err(ConversionError("source-normalization-verification-failed"));
@@ -426,6 +465,21 @@ impl Converter {
             secrets.extend(signaling.secrets());
         }
         self.backend.run(&argv, "packager", &secrets)?;
+        for (index, source) in clear.iter().enumerate() {
+            super::finite::restore(
+                source,
+                0,
+                &root.join(format!("track-{index:04}/init.mp4")),
+                &self.backend.stop,
+            )?;
+        }
+        super::finite::manifest::finish(root, clear, request.format, &self.backend.stop)?;
+        if request.format == OutputFormat::Hls
+            && request.tracks.len() == 1
+            && request.tracks[0].kind == TrackKind::Audio
+        {
+            ts_output::single_audio_variant(root)?;
+        }
         if let Some(signaling) = &signaling {
             signaling.finish(
                 root,
@@ -451,7 +505,7 @@ fn validate_request(request: &TrackConversionRequest<'_>) -> Result<(), Conversi
     }
     if request.format == OutputFormat::Mp4
         && (request.tracks.len() != 1 || request.tracks[0].index != 0)
-        && !(request.target == TargetProtection::Clear && request.tracks.len() == 2)
+        && request.tracks.len() != 2
     {
         return Err(ConversionError("multi-track-mp4-output-not-supported"));
     }
@@ -515,7 +569,7 @@ fn prepare_for(
     if report.format != InputFormat::Mp4 || report.tracks.len() > 64 {
         return Err(ConversionError("input-format-not-supported"));
     }
-    let source_dictionary = report.protection == Protection::Cenc
+    let source_dictionary = matches!(report.protection, Protection::Cenc | Protection::Cbcs)
         && match purpose {
             Preparation::Conversion => super::progressive::validate_input(source, &report, keys)?,
             Preparation::Verification => {

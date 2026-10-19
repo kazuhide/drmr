@@ -258,7 +258,7 @@ fn output_symlinks_are_rejected_without_modifying_their_target() {
 }
 
 #[test]
-fn missing_keys_and_encrypted_multi_track_inputs_fail_closed() {
+fn missing_keys_fail_closed_and_finite_joint_tracks_are_independently_verified() {
     let directory = tempfile::tempdir().unwrap();
     let source = directory.path().join("input.mp4");
     video(&source, "testsrc2=size=64x64:rate=5");
@@ -313,19 +313,30 @@ fn missing_keys_and_encrypted_multi_track_inputs_fail_closed() {
         .status()
         .unwrap();
     assert!(status.success());
-    assert_eq!(
-        converter
-            .convert_mp4(
-                &av,
-                &output,
-                TargetProtection::Cenc,
-                &InputKeys::default(),
-                Some(&OutputKey::from_hex(KID_OUT, KEY_OUT).unwrap())
-            )
-            .unwrap_err(),
-        ConversionError("single-track-mp4-required")
-    );
-    assert!(!output.exists());
+    let original = std::fs::read(&av).unwrap();
+    let report = converter
+        .convert_mp4(
+            &av,
+            &output,
+            TargetProtection::Cenc,
+            &InputKeys::default(),
+            Some(&OutputKey::from_hex(KID_OUT, KEY_OUT).unwrap()),
+        )
+        .unwrap();
+    let source_keys = InputKeys::default();
+    let result_keys = input_keys(KID_OUT, KEY_OUT);
+    let fresh = converter
+        .verify_mp4(&av, &source_keys, &output, &result_keys)
+        .unwrap();
+    for verified in [&report.verification, &fresh] {
+        assert!(verified.passed && verified.media_verified);
+        assert!(verified.checks.stream_metadata.is_pass());
+        assert!(verified.checks.packet_payloads_equal);
+        assert!(verified.checks.packet_timing_equal);
+        assert!(verified.checks.decoded_content_equal);
+        assert!(!verified.license_playback_verified);
+    }
+    assert_eq!(std::fs::read(&av).unwrap(), original);
 }
 #[test]
 fn cbcs_output_uses_fresh_random_initialization_vectors_and_private_permissions() {
@@ -582,7 +593,7 @@ fn fragmented_b_frame_input_keeps_its_original_presentation_timeline() {
 }
 
 #[test]
-fn progressive_aac_with_finite_tail_padding_fails_before_publication() {
+fn progressive_aac_with_finite_tail_padding_preserves_the_complete_presentation() {
     let directory = tempfile::tempdir().unwrap();
     let source = directory.path().join("source.mp4");
     let status = std::process::Command::new("ffmpeg")
@@ -603,7 +614,9 @@ fn progressive_aac_with_finite_tail_padding_fails_before_publication() {
         .unwrap();
     assert!(status.success());
     let output = directory.path().join("output.mp4");
-    let failure = converter()
+    let original = std::fs::read(&source).unwrap();
+    let converter = converter();
+    let report = converter
         .convert_mp4(
             &source,
             &output,
@@ -611,9 +624,24 @@ fn progressive_aac_with_finite_tail_padding_fails_before_publication() {
             &InputKeys::default(),
             Some(&OutputKey::from_hex(KID_OUT, KEY_OUT).unwrap()),
         )
-        .unwrap_err();
-    assert_eq!(failure, ConversionError("finite-audio-tail-not-supported"));
-    assert!(!output.exists());
+        .unwrap();
+    let fresh = converter
+        .verify_mp4(
+            &source,
+            &InputKeys::default(),
+            &output,
+            &input_keys(KID_OUT, KEY_OUT),
+        )
+        .unwrap();
+    for verified in [&report.verification, &fresh] {
+        assert!(verified.passed && verified.media_verified);
+        assert!(verified.checks.stream_metadata.is_pass());
+        assert!(verified.checks.packet_payloads_equal);
+        assert!(verified.checks.packet_timing_equal);
+        assert!(verified.checks.decoded_content_equal);
+        assert!(!verified.license_playback_verified);
+    }
+    assert_eq!(std::fs::read(&source).unwrap(), original);
 }
 
 #[test]

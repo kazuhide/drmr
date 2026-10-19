@@ -1,4 +1,4 @@
-# Progressive CENC test fixtures
+# Progressive Common Encryption test fixtures
 
 `cenc-iv8.mp4` and `cenc-iv16.mp4` encrypt the complete `clip.mp4` presentation with the counter-mode Common Encryption scheme (`cenc`). They retain 240 H.264 video frames, 470 AAC packets, and the finite audio presentation of 480,000 samples per channel. These media adaptations have the same [Big Buck Bunny attribution and Creative Commons Attribution 3.0 license](README.md) as the clear clip.
 
@@ -26,11 +26,11 @@ The recorded files have auxiliary sample encryption data in each track, with sam
 
 Independent local FFmpeg 9.0.2 checks used the complete two-key dictionary. Every per-track packet payload, absolute presentation/decode timestamp, duration, finite presentation window, decoded video frame, and decoded audio sample matched the original clip. Missing, wrong, and swapped key checks failed for the affected tracks. These observations establish fixture correspondence; they do not establish DRM playback or independent format conformance.
 
-## CBCS verification fixture
+## Audio-only CBCS fixture
 
 `cbcs-audio.mp4` is an 83,721-byte, audio-only adaptation of `clip.mp4`, with SHA-256 `0868265d3c884bbf87a60cea8bb3de12df387393ffb33afa1652a089a95cea1d`. It retains all 470 AAC packets, their absolute clocks and payloads after decryption, and the finite presentation of 480,000 decoded samples per channel. The same attribution and Creative Commons Attribution 3.0 license apply.
 
-This file exercises independent known-key verification of an existing progressive CBCS presentation. It does not add CBCS input to finite progressive conversion. The `cbcs-audio.xml` key, identifier, and constant initialization vector are public test values only. The identifier differs from every public test key.
+This file exercises independent known-key verification of an existing progressive CBCS presentation. The `cbcs-audio.xml` key, identifier, and constant initialization vector are public test values only. The identifier differs from every public test key.
 
 The same official GPAC source build recorded above generated the encrypted bytes without manual media or cryptographic editing. FFmpeg 9.0.2 first copied the original audio sample tables; MP4Box then encrypted that complete presentation. From this directory:
 
@@ -41,3 +41,17 @@ MP4Box -p=0 -no-save -crypt cbcs-audio.xml audio-clear.mp4 -out rebuilt-cbcs-aud
 ```
 
 Independent local FFmpeg checks decrypted the result with its known key and matched every packet payload and absolute clock, and all 480,000 decoded samples per channel, against the clear audio. No GPAC binary is required to run the committed regression. This is media-identity evidence, not a DRM license or device-playback qualification. The XML syntax and cipher selection follow the [official GPAC encryption documentation](https://wiki.gpac.io/xmlformats/Common-Encryption/).
+
+## Joint video and audio CBCS fixture
+
+`cbcs-joint.mp4` encrypts `clip.mp4` directly, retaining both tracks and the original audio presentation window. It is 195,719 bytes with SHA-256 `89102552e8aae65cc290594b8d72357ffca17f1ea5cc2e1e4e450b2405fa4870`. The same Big Buck Bunny attribution and Creative Commons Attribution 3.0 license apply.
+
+`cbcs-joint.xml` assigns different public test keys and identifiers to video and audio. Video encrypts one block and skips nine blocks, with subsample encryption records and a 16-byte constant initialization vector. Audio encrypts complete samples with a different 16-byte constant vector. These fixed values are for reproducible tests only.
+
+The same official GPAC release generated this fixture without an intermediate remux or manual box editing. The local static build also enabled ISO media fragments; optional libraries and network support remained disabled. From this fixture directory:
+
+```sh
+MP4Box -p=0 -no-save -crypt cbcs-joint.xml clip.mp4 -out rebuilt-cbcs-joint.mp4
+```
+
+Independent FFmpeg 9.0.2 checks with both role keys matched every video and audio packet's decrypted payload, absolute presentation and decode timestamps, and duration. All 240 decoded video frames, 480,000 presented audio samples per channel, and 481,280 audio samples per channel before applying the presentation window matched the clear source. Interchanging the two role keys changed the payloads of both tracks and failed the comparison. File hashes were unchanged by verification. These checks establish media correspondence; they do not qualify a license service, device playback, or independent format conformance.

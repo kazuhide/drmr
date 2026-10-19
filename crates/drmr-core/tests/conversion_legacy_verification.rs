@@ -87,9 +87,14 @@ fn cenc(source: &Path, output: &Path) {
 fn verification(c: &Converter, source: &Path, result: &Path, result_keys: &InputKeys) {
     let keys = keys();
     let before = std::fs::read(source).unwrap();
+    let candidate = std::fs::read(result).unwrap();
     let direct = c.verify_mp4(source, &keys, result, result_keys).unwrap();
     assert!(direct.passed && direct.media_verified);
     assert!(!direct.license_playback_verified);
+    assert!(direct.checks.stream_metadata.is_pass());
+    assert!(direct.checks.packet_payloads_equal);
+    assert!(direct.checks.packet_timing_equal);
+    assert!(direct.checks.decoded_content_equal);
     let generic = c
         .verify(VerificationRequest {
             source: VerificationSource {
@@ -106,7 +111,12 @@ fn verification(c: &Converter, source: &Path, result: &Path, result_keys: &Input
         .unwrap();
     assert!(generic.passed && generic.media_verified);
     assert!(!generic.license_playback_verified);
+    assert!(generic.checks.stream_metadata.is_pass());
+    assert!(generic.checks.packet_payloads_equal);
+    assert!(generic.checks.packet_timing_equal);
+    assert!(generic.checks.decoded_content_equal);
     assert_eq!(std::fs::read(source).unwrap(), before);
+    assert_eq!(std::fs::read(result).unwrap(), candidate);
 }
 #[test]
 fn legacy_single_track_cenc_with_pssh_and_cbcs_keep_both_verification_interfaces() {
@@ -224,9 +234,15 @@ fn conversion_admission_still_refuses_legacy_verifiable_protection_before_tools(
     cenc(&audio, &source);
     let joint = root.path().join("joint-pssh.mp4");
     cenc(&fixture("clip.mp4"), &joint);
-    for (index, source) in [&source, &fixture("cbcs-audio.mp4"), &joint]
-        .into_iter()
-        .enumerate()
+    let cbcs = root.path().join("cbcs-pssh.mp4");
+    pssh(&fixture("cbcs-audio.mp4"), &cbcs);
+    for (index, (source, code)) in [
+        (&source, "progressive-cenc-profile-not-supported"),
+        (&joint, "progressive-cenc-profile-not-supported"),
+        (&cbcs, "progressive-cbcs-profile-not-supported"),
+    ]
+    .into_iter()
+    .enumerate()
     {
         let (c, events) = converter();
         let output = root.path().join(format!("refused-{index}.mp4"));
@@ -236,7 +252,7 @@ fn conversion_admission_still_refuses_legacy_verifiable_protection_before_tools(
             c.convert_mp4(source, &output, TargetProtection::Clear, &keys, None)
                 .unwrap_err()
                 .0,
-            "progressive-cenc-profile-not-supported"
+            code
         );
         assert_eq!(
             c.convert(ConversionRequest {
@@ -252,7 +268,7 @@ fn conversion_admission_still_refuses_legacy_verifiable_protection_before_tools(
             })
             .unwrap_err()
             .0,
-            "progressive-cenc-profile-not-supported"
+            code
         );
         assert!(!output.exists());
         assert_eq!(std::fs::read(source).unwrap(), before);
@@ -286,4 +302,84 @@ fn joint_mp4_verification_uses_keys_without_conversion_admission() {
     assert!(!report.license_playback_verified);
     assert_eq!(std::fs::read(source).unwrap(), before);
     assert_eq!(std::fs::read(output).unwrap(), result);
+}
+
+#[test]
+fn qualified_cbcs_audio_converts_but_still_requires_its_original_key() {
+    use drmr_core::{
+        conversion::ConversionRequest,
+        inspection::{OutputFormat, TargetProtection},
+    };
+    let root = common::private_tempdir().unwrap();
+    let source = fixture("cbcs-audio.mp4");
+    let before = std::fs::read(&source).unwrap();
+    let keys = keys();
+    for generic in [false, true] {
+        let (c, events) = converter();
+        let output = root.path().join(format!("clear-{generic}.mp4"));
+        let report = if generic {
+            c.convert(ConversionRequest {
+                input: &source,
+                output: &output,
+                format: OutputFormat::Mp4,
+                target: TargetProtection::Clear,
+                input_keys: &keys,
+                hls_input_keys: &HlsInputKeys::default(),
+                output_key: None,
+                hls_key_uri: None,
+                hls_output_key: None,
+            })
+        } else {
+            c.convert_mp4(&source, &output, TargetProtection::Clear, &keys, None)
+        }
+        .unwrap();
+        let proof = report.verification;
+        assert!(proof.passed && proof.media_verified);
+        assert!(proof.checks.stream_metadata.is_pass());
+        assert!(proof.checks.packet_payloads_equal);
+        assert!(proof.checks.packet_timing_equal);
+        assert!(proof.checks.decoded_content_equal);
+        assert!(!proof.license_playback_verified);
+        verification(&c, &source, &output, &InputKeys::default());
+        assert!(
+            events
+                .records()
+                .iter()
+                .any(|record| record["event"] == "command")
+        );
+        assert_eq!(std::fs::read(&source).unwrap(), before);
+    }
+    let (c, events) = converter();
+    let output = root.path().join("missing-key.mp4");
+    assert_eq!(
+        c.convert_mp4(
+            &source,
+            &output,
+            TargetProtection::Clear,
+            &InputKeys::default(),
+            None
+        )
+        .unwrap_err()
+        .0,
+        "input-key-required"
+    );
+    assert_eq!(
+        c.convert(ConversionRequest {
+            input: &source,
+            output: &output,
+            format: OutputFormat::Mp4,
+            target: TargetProtection::Clear,
+            input_keys: &InputKeys::default(),
+            hls_input_keys: &HlsInputKeys::default(),
+            output_key: None,
+            hls_key_uri: None,
+            hls_output_key: None,
+        })
+        .unwrap_err()
+        .0,
+        "input-key-required"
+    );
+    assert!(!output.exists());
+    assert_eq!(events.records().len(), 0);
+    assert_eq!(std::fs::read(source).unwrap(), before);
 }

@@ -309,6 +309,55 @@ fn layout(movie: &audio::Movie, report: &Inspection) -> Result<Option<Layout>, C
         windows,
     }))
 }
+/// Fragment duration headers are zero, but movie/track playback controls remain authoritative.
+fn playback_controls(
+    path: &Path,
+    index: usize,
+) -> Result<(bool, Option<(u32, u32)>), ConversionError> {
+    let movie = audio::movie(path)?;
+    let nodes = mp4::parse_boxes(&movie.bytes).map_err(|_| WINDOW_UNSUPPORTED)?;
+    let moov = nodes
+        .iter()
+        .find(|n| n.kind() == *b"moov")
+        .ok_or(WINDOW_UNSUPPORTED)?;
+    movie_playback(child(moov, *b"mvhd")?, &movie.bytes)?;
+    let track = moov
+        .children
+        .iter()
+        .filter(|n| n.kind() == *b"trak")
+        .nth(index)
+        .ok_or(WINDOW_UNSUPPORTED)?;
+    let handler = child(child(track, *b"mdia")?, *b"hdlr")?
+        .header
+        .payload(&movie.bytes)
+        .get(8..12)
+        .ok_or(WINDOW_UNSUPPORTED)?;
+    let audio = match handler {
+        b"soun" => true,
+        b"vide" => false,
+        _ => return Err(WINDOW_UNSUPPORTED),
+    };
+    track_playback(track, audio, &movie.bytes)?;
+    Ok((
+        audio,
+        if audio {
+            None
+        } else {
+            Some(display_extent(track, &movie.bytes)?)
+        },
+    ))
+}
+pub(super) fn playback_controls_equal(
+    source: &Path,
+    source_index: usize,
+    result: &Path,
+    result_index: usize,
+) -> Result<bool, ConversionError> {
+    Ok(
+        playback_controls(source, source_index).map_err(|_| WINDOW_UNSUPPORTED)?
+            == playback_controls(result, result_index).map_err(|_| WINDOW_UNSUPPORTED)?,
+    )
+}
 /// Add exact edit-window evidence only for the finite progressive source profile.
 /// Protection and keys are independently validated; clear and encrypted tracks expose the same windows.
 pub(super) fn presentation_windows_equal(
@@ -333,6 +382,10 @@ pub(super) fn presentation_windows_equal(
     let Some(source) = source else {
         return Ok(true);
     };
+    if audio::movie(result)?.fragmented {
+        // Per-stream windows and native playback controls are compared independently by verify_views.
+        return Ok(true);
+    }
     let output = crate::inspection::inspect(result).map_err(|_| WINDOW_UNSUPPORTED)?;
     let result = layout(&audio::movie(result)?, &output)
         .map_err(|_| WINDOW_UNSUPPORTED)?
@@ -356,7 +409,11 @@ pub(super) fn validate_input(
     let finite = layout(&movie, input)
         .map_err(|error| {
             if protected {
-                ConversionError("progressive-cenc-profile-not-supported")
+                ConversionError(if input.protection == Protection::Cbcs {
+                    "progressive-cbcs-profile-not-supported"
+                } else {
+                    "progressive-cenc-profile-not-supported"
+                })
             } else {
                 error
             }
@@ -374,7 +431,11 @@ pub(super) fn verification_input(
     input: &Inspection,
     keys: &super::InputKeys,
 ) -> Result<bool, ConversionError> {
-    if !matches!(input.protection, Protection::Clear | Protection::Cenc) || !profile_shape(input) {
+    if !matches!(
+        input.protection,
+        Protection::Clear | Protection::Cenc | Protection::Cbcs
+    ) || !profile_shape(input)
+    {
         return Ok(false);
     }
     if layout(&audio::movie(source)?, input)
@@ -383,7 +444,7 @@ pub(super) fn verification_input(
     {
         return Ok(false);
     }
-    if input.protection == Protection::Cenc
+    if input.protection != Protection::Clear
         && input
             .tracks
             .iter()
@@ -394,6 +455,34 @@ pub(super) fn verification_input(
     Ok(true)
 }
 impl Converter {
+    pub(super) fn clear_finite(
+        &self,
+        source: &Path,
+        candidate: &Path,
+        input: &Inspection,
+        keys: &super::InputKeys,
+    ) -> Result<(), ConversionError> {
+        if !validate_input(source, input, keys)? {
+            return Err(UNSUPPORTED);
+        }
+        let movie = audio::movie(source)?;
+        let original = layout(&movie, input)?.ok_or(UNSUPPORTED)?;
+        let probe =
+            (input.protection != Protection::Clear).then_some(super::keys::ProbeKeys::All(keys));
+        self.progressive_codecs(source, input, probe)?;
+        self.mux_progressive(source, candidate, input.tracks.len(), &original, probe)?;
+        let actual = crate::inspection::inspect(candidate).map_err(|_| UNSUPPORTED)?;
+        super::cenc::clear(&audio::movie(candidate)?)?;
+        if actual.protection != Protection::Clear
+            || layout(&audio::movie(candidate)?, &actual)? != Some(original)
+            || !self
+                .verify_progressive(source, candidate, input, keys)?
+                .passed
+        {
+            return Err(ConversionError("source-decryption-verification-failed"));
+        }
+        Ok(())
+    }
     pub(super) fn progressive_mp4(
         &self,
         source: &Path,
@@ -517,7 +606,7 @@ impl Converter {
             license_playback_verified: false,
         })
     }
-    fn progressive_codecs(
+    pub(super) fn progressive_codecs(
         &self,
         source: &Path,
         input: &Inspection,

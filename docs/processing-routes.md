@@ -10,14 +10,14 @@ Original local file or manifest resources
   -> new output, published only after verification
 ```
 
-The finite progressive route copies the original encoded tracks directly, retaining their finite presentation window. It avoids fragmenting and then reconstructing that window. Other routes prepare complete tracks before packaging new segments; they do not transcrypt each original segment independently.
+The progressive MP4 route copies the original encoded tracks directly, retaining their finite presentation window. Other routes prepare complete tracks before packaging new fragments and preserve qualified playback windows in the resulting metadata. They do not transcrypt each original segment independently.
 
 ## Route conditions
 
 | Identifier | Conditions and behavior | Required external tools |
 | --- | --- | --- |
-| `progressive-mp4` | Qualified clear or `cenc` progressive AAC-LC, optionally with H.264 from the same file, to clear MP4. Direct copying preserves the finite audio end. | FFmpeg, FFprobe |
-| `fragmented-mp4` | One supported track to clear, `cenc`, or `cbcs` MP4. Shaka Packager creates fragmented intermediate/output media. Finite audio tails are refused here. | FFmpeg, FFprobe, Shaka Packager |
+| `progressive-mp4` | Qualified clear, `cenc`, or `cbcs` progressive AAC-LC, optionally with H.264 from the same file, to clear MP4. Direct copying preserves the finite audio end. | FFmpeg, FFprobe |
+| `fragmented-mp4` | One supported track, or qualified finite audio and optional video from the same progressive source, to clear, `cenc`, or `cbcs` MP4. Shaka Packager creates fragments; qualified finite playback windows are preserved. | FFmpeg, FFprobe, Shaka Packager |
 | `dash-presentation` | Supported complete local tracks to static DASH. Source manifest resources are localized and assembled into tracks before new segmentation. | FFmpeg, FFprobe, Shaka Packager |
 | `fmp4-hls-presentation` | Supported complete tracks to fragmented MP4 HLS. Sample encryption applies within media samples; HLS AES-128 separately encrypts each complete output resource. | FFmpeg, FFprobe, Shaka Packager |
 | `mpeg-ts-hls` | The narrow local MPEG transport stream profile to fragmented MP4 HLS. Tracks are demultiplexed, and the actual final playlists are checked against the original transport streams. | FFmpeg, FFprobe, Shaka Packager |
@@ -33,7 +33,7 @@ Complete original MP4 → direct encoded-track copy with its presentation edits 
 
 ### fragmented-mp4
 
-Complete original track → Shaka decryption/repackaging → requested output encryption/repackaging → original-to-output checks. Finite audio edits must use the qualified progressive route instead.
+Complete original tracks → decryption when required → Shaka packaging and requested output encryption → preserve qualified playback windows → original-to-output checks. Finite audio and optional video from one qualified progressive source can share the resulting encrypted MP4. Its full coded content, native windows, playback settings, and each file's own presented samples must match the original; see [finite audio checks](media-processing.md#finite-audio-presentation-windows).
 
 ### dash-presentation
 

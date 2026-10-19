@@ -148,8 +148,8 @@ async function renderedMatrix(page, locale) {
   await expect(table.locator('thead th .axis-input')).toHaveText(locale.matrixCorner.split(' / ')[0]);
   await expect(table.locator('thead th .axis-output')).toHaveText(locale.matrixCorner.split(' / ')[1]);
   for (const [index, name] of matrixColumns.entries()) await expect(table.getByRole('columnheader').nth(index + 1)).toHaveText(name);
-  await expect(table.getByRole('rowheader')).toHaveCount(6);
-  await expect(table.getByRole('cell')).toHaveCount(24);
+  await expect(table.getByRole('rowheader')).toHaveCount(5);
+  await expect(table.getByRole('cell')).toHaveCount(20);
   const facts = [];
   for (const [index, expected] of matrixRows.entries()) {
     const row = table.locator('tbody > tr').nth(index);
@@ -160,7 +160,7 @@ async function renderedMatrix(page, locale) {
     expect(await header.locator('.input-profile').evaluate(textWithoutNotes)).toBe(locale.profiles[index]);
     await expect(header.locator('.input-protections code')).toHaveText(expected.input.slice(1));
     const inputs = await header.locator('.input-protections').innerText();
-    expect(inputs.replace(locale.qualified, '').replace(/[\s/]/g, '')).toBe(expected.input.join(''));
+    expect(inputs.replace(/[\s/]/g, '')).toBe(expected.input.join(''));
     const cells = row.getByRole('cell');
     const values = [];
     for (const [column, protections] of expected.output.entries()) {
@@ -422,7 +422,7 @@ for (const locale of locales) test(`${locale.language}: core content and anchor 
       await expect(page.getByRole('main')).toBeVisible();
       await expect(page.getByRole('heading', { level: 1 })).toHaveCount(1);
       await expect(page.getByRole('table', { name: locale.matrixCaption, exact: true })).toHaveCount(1);
-      await expect(page.getByRole('table', { name: locale.matrixCaption, exact: true }).getByRole('cell')).toHaveCount(24);
+      await expect(page.getByRole('table', { name: locale.matrixCaption, exact: true }).getByRole('cell')).toHaveCount(20);
       const link = page.getByRole('navigation', { name: locale.navigation, exact: true }).getByRole('link', { name: locale.anchors[0], exact: true });
       for (let i = 0; i < 3; i++) await page.keyboard.press('Tab');
       await expect(link).toBeFocused();

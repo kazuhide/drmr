@@ -113,7 +113,9 @@ impl Backend {
         decryption: Option<&InputKeys>,
         encryption: Option<(&OutputKey, TargetProtection)>,
     ) -> Result<(), ConversionError> {
-        super::audio::require_supported_audio(input, index)?;
+        if super::finite::window(input, index)?.is_none() {
+            super::audio::require_supported_audio(input, index)?;
+        }
         let input = super::files::tool_path(input)?;
         let output = super::files::tool_path(output)?;
         if input.contains([',', '\n', '\r']) || output.contains([',', '\n', '\r']) {
@@ -164,6 +166,7 @@ impl Backend {
         }
         let secrets: Vec<_> = key_hex.iter().map(|value| value.as_str()).collect();
         self.run(&argv, "packager", &secrets)?;
+        super::finite::restore(Path::new(&input), index, Path::new(&output), &self.stop)?;
         super::private_file_mode(Path::new(&output))?;
         Ok(())
     }
@@ -188,6 +191,12 @@ impl Backend {
             format!("{output}/master.m3u8"),
         ];
         self.run(&argv, "packager", &[])?;
+        super::finite::restore(
+            Path::new(&input),
+            0,
+            &Path::new(&output).join("init.mp4"),
+            &self.stop,
+        )?;
         Ok(())
     }
     pub fn profile(
@@ -440,6 +449,76 @@ impl Backend {
             .filter(|value| value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit()))
             .ok_or(ConversionError("invalid-verification-result"))?;
         Ok(digest.to_ascii_lowercase())
+    }
+
+    pub(super) fn finite_audio_decode(
+        &self,
+        path: &Path,
+        index: usize,
+        key: Option<super::keys::ProbeKeys<'_>>,
+        window: super::finite::Window,
+        format: (u32, u32),
+        complete: bool,
+    ) -> Result<super::finite::Decoded, ConversionError> {
+        let mut argv = vec![
+            self.ffmpeg.clone(),
+            "-v".into(),
+            "error".into(),
+            "-nostdin".into(),
+            "-xerror".into(),
+            "-threads".into(),
+            "1".into(),
+            "-filter_threads".into(),
+            "1".into(),
+            "-protocol_whitelist".into(),
+            "file,crypto".into(),
+            "-i".into(),
+            super::files::tool_path(path)?,
+            "-map".into(),
+            format!("0:{index}"),
+            "-threads".into(),
+            "1".into(),
+            "-c:a".into(),
+            "pcm_f32le".into(),
+            "-f".into(),
+            "f32le".into(),
+            "-".into(),
+        ];
+        if complete {
+            argv.splice(
+                1..1,
+                [
+                    "-ignore_editlist".into(),
+                    "1".into(),
+                    "-flags2".into(),
+                    "+skip_manual".into(),
+                ],
+            );
+        }
+        let keyed = super::keys::KeyedArguments::new(argv, key);
+        let secrets = keyed.secrets();
+        let shown = ["ffmpeg".into(), "[arguments redacted]".into()];
+        let options = RunOptions {
+            stop: Some(&self.stop),
+            secrets: &secrets,
+            argv_redacted: Some(&shown),
+            timeout: Some(self.timeout),
+            max_output_chars: 0,
+            max_stdout_bytes: 16 * 1024,
+            log_stdout: false,
+            ..RunOptions::default()
+        };
+        self.check_cancelled()?;
+        let mut pcm = super::finite::Pcm::new(window, format.0, format.1)?;
+        let complete = self
+            .runner
+            .run_tool_streamed(&keyed.argv, "ffmpeg", &options, |bytes| pcm.push(bytes))
+            .map_err(|e| tool_error(&e))?;
+        self.check_cancelled()?;
+        if complete.returncode != Some(0) {
+            return Err(ConversionError("media-tool-failed"));
+        }
+        pcm.finish()
     }
 }
 

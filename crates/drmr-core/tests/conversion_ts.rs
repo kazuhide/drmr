@@ -185,7 +185,7 @@ fn single_track_and_b_frame_sources_preserve_their_absolute_clocks() {
     }
 }
 
-fn interlaced_hls_command() -> std::process::Command {
+fn interlaced_hls_command(write_edits: bool) -> std::process::Command {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../drmr/tests/fixtures/bbb/clip.mp4");
     let mut command = std::process::Command::new("ffmpeg");
     command
@@ -208,7 +208,11 @@ fn interlaced_hls_command() -> std::process::Command {
             "-hls_segment_type",
             "fmp4",
             "-hls_segment_options",
-            "video_track_timescale=90000",
+            if write_edits {
+                "video_track_timescale=90000"
+            } else {
+                "video_track_timescale=90000:use_editlist=0"
+            },
             "-hls_time",
             "2",
             "-hls_playlist_type",
@@ -218,11 +222,11 @@ fn interlaced_hls_command() -> std::process::Command {
     command
 }
 
-fn interlaced_hls(root: &Path) -> std::path::PathBuf {
+fn interlaced_hls(root: &Path, write_edits: bool) -> std::path::PathBuf {
     let playlist = root.join("media.m3u8");
     // FFmpeg 9.0.2 hlsenc.c resolves the default init file using '/' in the playlist URL.
     // A dedicated child directory and relative outputs keep every resource beside the playlist.
-    let result = interlaced_hls_command()
+    let result = interlaced_hls_command(write_edits)
         .current_dir(root)
         .arg("segment-%d.m4s")
         .arg("media.m3u8")
@@ -233,7 +237,36 @@ fn interlaced_hls(root: &Path) -> std::path::PathBuf {
         "interlaced HLS fixture generation failed"
     );
     assert_interlaced_resources(&playlist);
+    assert_interlaced_native_frames(&playlist);
     playlist
+}
+
+fn assert_interlaced_native_frames(playlist: &Path) {
+    let probe = std::process::Command::new("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_frames",
+            "-count_frames",
+            "-show_entries",
+            "stream=codec_name,time_base,nb_read_frames:frame=interlaced_frame,top_field_first",
+            "-of",
+            "json",
+        ])
+        .arg(playlist)
+        .output()
+        .unwrap();
+    assert!(probe.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&probe.stdout).unwrap();
+    assert_eq!(value["streams"][0]["codec_name"], "h264");
+    assert_eq!(value["streams"][0]["time_base"], "1/90000");
+    assert_eq!(value["streams"][0]["nb_read_frames"], "240");
+    let frames = value["frames"].as_array().unwrap();
+    assert_eq!(frames.len(), 240);
+    assert!(frames.iter().all(|frame| frame["interlaced_frame"] == 1
+        && matches!(frame["top_field_first"].as_u64(), Some(0 | 1))));
 }
 
 fn assert_interlaced_resources(playlist: &Path) {
@@ -285,7 +318,7 @@ fn observe_legacy_interlaced_init_placement() {
     let control = common::private_tempdir().unwrap();
     let output = control.path().join("playlist");
     drmr_core::native::create_private_dir_all(&output).unwrap();
-    let result = interlaced_hls_command()
+    let result = interlaced_hls_command(true)
         .current_dir(control.path())
         .arg(output.join("segment-%d.m4s"))
         .arg(output.join("media.m3u8"))
@@ -375,15 +408,38 @@ fn complete_frame_evidence_rejects_an_interlaced_source_or_actual_hls_result() {
             .passed
     );
     let result_root = common::private_tempdir().unwrap();
-    let interlaced_result = interlaced_hls(result_root.path());
+    // This candidate isolates frame evidence from unsupported empty/multiple edits.
+    // Disabling fixture edit writing changes its absolute origin; verification never shifts it.
+    let interlaced_result = interlaced_hls(result_root.path(), false);
+    let complex_root = common::private_tempdir().unwrap();
+    let complex_result = interlaced_hls(complex_root.path(), true);
     let interlaced_root = common::private_tempdir().unwrap();
     let interlaced_source = source_profile(interlaced_root.path(), "interlaced-video");
     let originals = [
         source_root.path(),
         result_root.path(),
         interlaced_root.path(),
+        complex_root.path(),
     ]
     .map(|path| (path, common::snapshot_tree(path)));
+    // Keep the original fixture's complex-edit refusal as its own exact boundary.
+    assert_eq!(
+        c.verify(VerificationRequest {
+            source: VerificationSource {
+                input: &input,
+                input_keys: &keys,
+                hls_keys: &hls
+            },
+            output: VerificationSource {
+                input: &complex_result,
+                input_keys: &keys,
+                hls_keys: &hls
+            },
+        })
+        .unwrap_err()
+        .0,
+        "presentation-window-not-supported"
+    );
     let clear_result = output.join("master.m3u8");
     let real_probe = std::env::split_paths(&std::env::var_os("PATH").unwrap())
         .map(|directory| drmr_test_support::program_path(&directory.join("ffprobe")))

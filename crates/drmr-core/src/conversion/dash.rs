@@ -147,7 +147,7 @@ fn integer(text: Option<&str>, default: u64) -> Result<u64, ConversionError> {
     })
 }
 
-fn sequence(
+pub(super) fn sequence(
     templates: &[Node<'_, '_>],
     remaining: usize,
 ) -> Result<Vec<(u64, u64, u64)>, ConversionError> {

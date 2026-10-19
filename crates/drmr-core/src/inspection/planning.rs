@@ -110,13 +110,19 @@ pub struct ConversionPlan {
 
 fn progressive_candidate(input: &Inspection, target: TargetProtection) -> bool {
     input.format == InputFormat::Mp4
-        && target == TargetProtection::Clear
+        && matches!(
+            target,
+            TargetProtection::Clear | TargetProtection::Cenc | TargetProtection::Cbcs
+        )
         && input.tracks.len() == 2
         && input
             .tracks
             .iter()
             .all(|track| track.protection == input.protection)
-        && matches!(input.protection, Protection::Clear | Protection::Cenc)
+        && matches!(
+            input.protection,
+            Protection::Clear | Protection::Cenc | Protection::Cbcs
+        )
         && input
             .tracks
             .iter()
@@ -343,7 +349,10 @@ fn describe_processing(
                 OutputFormat::Mp4 => {
                     let finite = input.format == InputFormat::Mp4
                         && target == TargetProtection::Clear
-                        && matches!(input.protection, Protection::Clear | Protection::Cenc)
+                        && matches!(
+                            input.protection,
+                            Protection::Clear | Protection::Cenc | Protection::Cbcs
+                        )
                         && (progressive_candidate(input, target)
                             || (input.tracks.len() == 1
                                 && input.tracks[0].kind == TrackKind::Audio
@@ -355,11 +364,11 @@ fn describe_processing(
                             "finite-progressive-profile-must-pass",
                         ));
                     }
-                    if input.tracks.len() == 1 {
+                    if input.tracks.len() == 1 || progressive_candidate(input, target) {
                         candidates.push(CandidateRoute::new(
                             Route::FragmentedMp4,
                             format,
-                            "single-track-fragmented-profile-without-finite-audio-tail-must-pass",
+                            "fragmented-output-profile-and-presentation-windows-must-pass",
                         ));
                     }
                 }

@@ -92,28 +92,54 @@ Set `DRMR_CONVERSION_REPORT` to a path outside the repository to save the JSON r
 
 | Output format | Available protection | Initial profile |
 | --- | --- | --- |
-| MP4 file | Clear, `cenc`, `cbcs` | One audio or video track; finite audio edits use the progressive profile below |
+| MP4 file | Clear, `cenc`, `cbcs` | One track, or the audio and video from one qualified progressive source below |
 | DASH directory | Clear, `cenc`, `cbcs` | Separate fragmented MP4 tracks in one static presentation |
 | HLS directory (`hls`) | Clear, `cbcs`, AES-128 | fMP4 resources and completed playlists |
 | HLS directory (`hls-ts`) | Clear, AES-128, SAMPLE-AES | Supported local TS input; separate TS audio/video playlists when both are present |
 
-Clear or qualified `cenc` progressive MP4 input can also produce clear progressive MP4 with one AAC-LC audio track (`mp4a`) and optionally one H.264 video track (`avc1`) from the same original file. Encrypted input requires every source track key by identifier and refuses DRM initialization headers (PSSH), key rotation, and other encryption schemes. This profile preserves a simple finite audio edit, including initial priming and final padding, and verifies every original track before publishing. It selects the layout automatically; no layout option or output key is required:
+### Progressive MP4 with a finite audio range
+
+MP4 can use an edit list to specify which part of decoded audio should play. This commonly excludes encoder warm-up samples at the start and padding at the end; it is playback metadata, rather than a different audio format. drmr preserves a qualified finite range across these output choices:
+
+| Progressive MP4 input | MP4 output | DASH output | fMP4 HLS output |
+| --- | --- | --- | --- |
+| Clear | Clear, `cenc`, `cbcs` | Clear, `cenc`, `cbcs` | Clear, `cbcs`, AES-128 |
+| `cenc` | Clear, `cenc`, `cbcs` | Clear, `cenc`, `cbcs` | Clear, `cbcs`, AES-128 |
+| `cbcs` | Clear, `cenc`, `cbcs` | Clear, `cenc`, `cbcs` | Clear, `cbcs`, AES-128 |
+
+The source must contain one AAC-LC (AAC Low Complexity) audio track stored as `mp4a`, with optional H.264 video stored as `avc1`, from the same complete progressive file. A single normal-rate audio edit must have a nonnegative start and a finite duration that converts exactly into audio clock units. Encrypted input requires every track key by identifier. The supported encryption layouts and presentation checks are described in [processing and verification](media-processing.md#finite-audio-presentation-windows). Multiple edits, initial empty edits, rate changes, extra tracks, combining different source files, key rotation, and input DRM initialization headers remain outside this profile.
+
+Clear MP4 output retains progressive sample tables. Encrypted MP4 output contains fragments and can retain both tracks from this qualified source in one file. DASH and fMP4 HLS use separate audio and video tracks with a two-second segment target. Each track keeps its original finite playback range; packet payloads, absolute clocks, complete decoded media, and playback settings must match before publication. Separate DASH/HLS source tracks are not combined into one MP4 by this feature.
+
+For clear input and output, no key configuration is needed:
 
 ```sh
 drmr convert original.mp4 --to clear --format mp4 --output clear.mp4
 drmr verify clear.mp4 --source original.mp4 --json
 ```
 
-For qualified `cenc` input, supply every track's identifier and key in the protected configuration's `input.keys` array. Clear output needs no output key:
+For encrypted input, supply every track's identifier and key in the protected configuration's `input.keys` array. Clear output needs no output key:
 
 ```sh
 drmr convert encrypted.mp4 --to clear --format mp4 --output clear.mp4 --keys-file source-keys.json
 drmr verify clear.mp4 --source encrypted.mp4 --keys-file source-keys.json --json
 ```
 
-The existing clear-input finite-edit regressions use the attributed BBB fixture and pass automated tests on Linux x86_64 and Windows x64 with FFmpeg 9.0.2, and macOS ARM64 with FFmpeg 9.0.1. Cases cover audio alone, joint video/audio, reordered pictures, exact presentation windows, and rejected changes to timing and display properties. Encrypted output, complex edits, additional tracks, and combining different MP4 files are outside this progressive profile. See [processing and verification](media-processing.md) for the exact restrictions and why this route keeps progressive sample tables.
+For CBCS DASH, provide a separate output key as well:
 
-The finite `cenc` input profile also passes automated conversion and independent verification on those three platforms and FFmpeg versions. Public fixtures cover both eight- and sixteen-byte sample vectors, distinct video/audio keys, complete packet and decoded-media equality, and finite presentation windows. Additional regressions preserve existing known-key CENC/CBCS verification with DRM initialization metadata. GPAC is used only for offline fixture generation, not by tests or conversion. These results do not qualify license services or device playback.
+```sh
+drmr convert original.mp4 --to cbcs --format dash --output result-dash --keys-file keys.json
+drmr verify result-dash/manifest.mpd --source original.mp4 --keys-file keys.json --json
+```
+
+The ten-second Big Buck Bunny regressions cover all nine output choices from each input protection, with audio-only and joint video/audio sources: 54 routes. Every result must pass conversion and fresh verification against the original protected source, including the exact playback range. Additional cases change the audio end by one sample, use reordered video pictures, and reject modified keys, payloads, playback settings, display properties, and manifest declarations. The [public encryption fixtures](https://github.com/kazuhide/drmr/blob/main/crates/drmr/tests/fixtures/bbb/CENC.md) use distinct video/audio keys. GPAC is used only for offline fixture generation, not by tests or conversion. These media checks do not qualify a license service or device playback.
+
+```sh
+cargo test --locked -p drmr-core --test conversion_finite_outputs -- --nocapture
+cargo test --locked -p drmr --test conversion_finite_outputs -- --nocapture
+```
+
+Earlier clear-output finite-edit regressions also cover eight- and sixteen-byte CENC sample vectors and known-key verification of existing CENC/CBCS files carrying DRM initialization metadata. Conversion's stricter input rules still apply. Use CI artifacts for the exact revision, platforms, and tool versions tested.
 
 The backend also tests joint video/audio HLS with clear, `cbcs`, and AES-128 output. `cenc` HLS output is refused. HLS AES-128 applies to HLS resources, so it cannot be selected as a standalone MP4 or DASH protection scheme. `cens` and `cbc1` can be identified but are not conversion targets.
 
@@ -247,8 +273,9 @@ As in the existing fragmented baseline, the progressive clip's final AAC
 discard-padding declaration is not a claim of this derived source: its decoder
 may present final padding. The conversion and fresh verification compare the
 whole derived source without trimming, dropping packets, or applying timestamp
-tolerances. Finite progressive AAC end edits retain their existing refusals for
-fragmented output. Run the real CLI regression with:
+tolerances. This signaling regression uses the derived fragmented source; the
+qualified finite progressive AAC profile is described above. Run the real CLI
+regression with:
 
 ```sh
 cargo test --locked -p drmr --test conversion_signaling -- --nocapture

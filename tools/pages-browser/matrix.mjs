@@ -4,8 +4,7 @@ import assert from 'node:assert/strict';
 const standard = [['Clear', 'cenc', 'cbcs'], ['Clear', 'cenc', 'cbcs'], ['Clear', 'cbcs', 'AES-128'], []];
 export const matrixColumns = ['MP4', 'DASH', 'HLS fMP4', 'HLS MPEG-TS'];
 export const matrixRows = [
-  { id: 'mp4-standard', format: 'MP4', input: ['Clear', 'cenc', 'cbcs'], output: standard },
-  { id: 'mp4-audio-edit', format: 'MP4', input: ['Clear', 'cenc'], output: [['Clear'], [], [], []] },
+  { id: 'mp4', format: 'MP4', input: ['Clear', 'cenc', 'cbcs'], output: standard },
   { id: 'dash', format: 'DASH', input: ['Clear', 'cenc', 'cbcs'], output: standard },
   { id: 'hls-fmp4', format: 'HLS', input: ['Clear', 'cbcs', 'AES-128'], output: standard },
   { id: 'hls-ts-video', format: 'HLS / MPEG-TS', input: ['Clear', 'AES-128', 'SAMPLE-AES'],
@@ -22,7 +21,7 @@ export function requireMatrixLayout(value) {
   assert.deepEqual(value.hiddenText, [], 'Rendered matrix text must remain visible and inside its cell');
   assert.ok(value.renderedTextCount > 0, 'Rendered matrix text needs actual text rectangles');
   assert.deepEqual(value.clippedCells, [], 'Matrix cells must retain their complete content');
-  assert.equal(value.rowHeaders.length, 6);
+  assert.equal(value.rowHeaders.length, 5);
   for (const header of value.rowHeaders) {
     assert.equal(header.position, 'sticky');
     assert.ok(header.left >= value.contentLeft && header.right <= value.contentRight,

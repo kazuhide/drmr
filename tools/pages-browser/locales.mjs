@@ -8,8 +8,8 @@ export const locales = [
     groups: ['Inspect command', 'Plan command', 'Convert command', 'Verify command', 'Build and check the CLI'],
     anchors: ['Support', 'Workflow', 'Get started'],
     matrixRegion: 'Conversion support matrix', matrixCaption: 'Supported conversion profiles',
-    matrixCorner: 'Input ↓ / Output →', outside: 'Outside profile', qualified: '(qualified)',
-    profiles: ['Standard profile', 'Finite audio edits', 'Fragmented MP4 tracks', 'Fragmented MP4 (fMP4)', 'Video with optional audio', 'Audio only'],
+    matrixCorner: 'Input ↓ / Output →', outside: 'Outside profile',
+    profiles: ['Progressive or fragmented', 'Fragmented MP4 tracks', 'Fragmented MP4 (fMP4)', 'Video with optional audio', 'Audio only'],
     matrix: 'Read the full support matrix and restrictions', license: 'Font license',
   },
   {
@@ -20,8 +20,8 @@ export const locales = [
     groups: ['入力を調べるコマンド', '変換を計画するコマンド', '変換するコマンド', '原本と比較するコマンド', 'CLIのビルドとツール確認'],
     anchors: ['対応範囲', '使い方', '始める'],
     matrixRegion: '変換対応表', matrixCaption: '対応する変換プロファイル',
-    matrixCorner: '入力 ↓ / 出力 →', outside: '対象外', qualified: '（限定条件）',
-    profiles: ['通常プロファイル', '再生時間を指定した音声編集', 'フラグメント化MP4トラック', 'フラグメント化MP4（fMP4）', '映像（音声は省略可）', '音声のみ'],
+    matrixCorner: '入力 ↓ / 出力 →', outside: '対象外',
+    profiles: ['プログレッシブ / フラグメント化', 'フラグメント化MP4トラック', 'フラグメント化MP4（fMP4）', '映像（音声は省略可）', '音声のみ'],
     matrix: '対応範囲と制約を読む（英語）', license: 'フォントライセンス（英語）',
   },
 ];
