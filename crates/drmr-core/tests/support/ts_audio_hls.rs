@@ -155,7 +155,7 @@ fn verify_clear(
 
 fn join_resources(playlist: &Path, destination: &Path, init: bool) {
     use std::io::Write as _;
-    let mut file = drmr_core::native::create_media_new(destination).unwrap();
+    let mut file = drmr_core::native::create_private_new(destination).unwrap();
     if init {
         file.write_all(&std::fs::read(playlist.parent().unwrap().join("init.mp4")).unwrap())
             .unwrap();
