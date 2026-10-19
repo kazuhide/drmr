@@ -94,12 +94,11 @@ fn hevc_codec(conf: &[u8]) -> String {
 }
 
 /// `media::write_raw_key_file`: the raw 16-byte content key (from hex) into `dest` for
-/// ffmpeg's identity-KEYFORMAT decrypt; returns `dest`. The key touches only this file, which is
-/// private before a byte is written: a new file is created 0o600 (never world-readable, not even
-/// empty, so no other process can hold it open), an existing one is truncated and set to 0o600
-/// on the open descriptor. The decoded bytes are wiped, and no error carries the key (Python's
-/// `bytes.fromhex` error names a position only). Python writes with the umask's mode; the
-/// private mode is this implementation's (private key-file handling).
+/// ffmpeg's identity-KEYFORMAT decrypt; returns `dest`. A new file is private from
+/// creation. An existing file is truncated only after the opened object passes
+/// the native private-file checks; symlinks, multiple hard links, and files with
+/// public access are refused rather than repaired. The decoded bytes are wiped,
+/// and no error carries the key (Python's `bytes.fromhex` error names a position only).
 pub fn write_raw_key_file(key_hex: &str, dest: &Path) -> Result<PathBuf, MediaError> {
     if let Some(parent) = dest.parent() {
         #[cfg(unix)]
@@ -114,34 +113,6 @@ pub fn write_raw_key_file(key_hex: &str, dest: &Path) -> Result<PathBuf, MediaEr
 }
 
 /// `dest` opened for writing, empty and private (see [`write_raw_key_file`]).
-#[cfg(windows)]
 fn open_private(dest: &Path) -> std::io::Result<std::fs::File> {
     crate::native::create_private_or_truncate(dest)
-}
-
-#[cfg(unix)]
-fn open_private(dest: &Path) -> std::io::Result<std::fs::File> {
-    let mut fresh = std::fs::OpenOptions::new();
-    fresh.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        fresh.mode(0o600);
-    }
-    match fresh.open(dest) {
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            // As Python's open(…, "wb"): an existing file (or a symlink's target) is truncated.
-            let file = std::fs::OpenOptions::new()
-                .write(true)
-                .truncate(true)
-                .open(dest)?;
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt as _;
-                file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
-            }
-            Ok(file)
-        }
-        opened => opened,
-    }
 }

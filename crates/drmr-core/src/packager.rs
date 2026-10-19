@@ -13,7 +13,7 @@
 use crate::canonical::python_float_repr;
 use crate::config::KeyMaterial;
 use crate::pycompat::{GlobError, PurePosixPath, glob, int, repr_int_list};
-use crate::toolrun::{REDACTED, RunOptions, ToolRunner, universal_newlines};
+use crate::toolrun::{REDACTED, RunOptions, ToolRunner, patterns_for, universal_newlines};
 use regex::Regex;
 use std::collections::BTreeMap;
 use std::fmt;
@@ -332,7 +332,8 @@ pub fn format_duration(seconds: f64) -> Result<String, Error> {
 
 /// `_scrub(text, secrets)`: every secret replaced by [`REDACTED`] as written, lower-cased and
 /// upper-cased — applied to the WHOLE stderr before it is tailed, so a secret straddling the
-/// tail boundary cannot survive. (The job log's every-encoding scrub is the tool runner's.)
+/// tail boundary cannot survive. This legacy helper keeps its literal-only API behavior;
+/// tool logs and retained runtime diagnostics use the shared `Secrets` encoding scrub.
 pub fn scrub(text: &str, secrets: &[&str]) -> String {
     // Python iterates the set {secret, lower, upper} in hash order; the variants of a hex
     // secret never overlap one another, so this fixed order gives the same text.
@@ -426,7 +427,31 @@ impl Packager {
     ) -> Result<PackagerResult, Error> {
         let mut argv_real = zeroize::Zeroizing::new(argv_real.to_vec());
         argv_real.extend(RESOURCE_FLAGS.map(String::from));
+        let mut call_secrets = secrets.to_vec();
+        call_secrets.extend(
+            argv_real
+                .windows(2)
+                .filter(|pair| pair[0] == "--pssh")
+                .map(|pair| pair[1].as_str()),
+        );
+        let patterns: Vec<_> = call_secrets
+            .iter()
+            .flat_map(|secret| patterns_for(secret))
+            .collect();
         let mut argv_redacted = argv_redacted;
+        let mut opaque_pssh = false;
+        for argument in &mut argv_redacted {
+            if opaque_pssh {
+                *argument = REDACTED.into();
+                opaque_pssh = false;
+            } else {
+                opaque_pssh = argument == "--pssh";
+                *argument = self
+                    .runner
+                    .secrets()
+                    .scrub_with_patterns(argument, &patterns);
+            }
+        }
         argv_redacted.extend(RESOURCE_FLAGS.map(String::from));
         let timeout = self
             .timeout_s
@@ -436,7 +461,7 @@ impl Packager {
             // The runner records ONLY the redacted argv, and scrubs this call's key and IV
             // (plus the job's registered secrets) from the output it records.
             argv_redacted: Some(&argv_redacted),
-            secrets,
+            secrets: &call_secrets,
             timeout,
             text: true,
             ..RunOptions::default()
@@ -460,13 +485,16 @@ impl Packager {
         };
         let duration_s = start.elapsed().as_secs_f64();
         // Python's text mode: the decoded text with universal newlines.
-        let stderr = universal_newlines(&completed.stderr_text());
+        let stderr = self
+            .runner
+            .secrets()
+            .scrub_with_patterns(&universal_newlines(&completed.stderr_text()), &patterns);
         Ok(PackagerResult {
             argv_redacted,
             // On Unix a process ends with a code or a signal, both of which the runner maps.
             returncode: completed.returncode.unwrap_or(-1),
             duration_s,
-            stderr_tail: tail_chars(&scrub(&stderr, secrets), STDERR_TAIL_CHARS),
+            stderr_tail: tail_chars(&stderr, STDERR_TAIL_CHARS),
         })
     }
 

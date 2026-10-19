@@ -148,6 +148,8 @@ conversions retain their existing result shape.
 
 New commands use an owner-only JSON configuration, with no environment fallback. Store this outside the output tree and version control. Here is its structure using placeholders; replace each placeholder with your own hexadecimal value before use:
 
+Read [keys and local security](security.md) before using confidential media. It explains which values are masked, which metadata is published, and how keys reach external tools, temporary files, and local playback.
+
 ```json
 {
   "schema_version": 1,
@@ -382,6 +384,8 @@ Use `--plan` to inspect planned work before processing. The default key provider
 ## Experimental web console
 
 The web console is a local operator interface without authentication. Keep it bound to loopback on a trusted machine.
+
+Local playback intentionally delivers ClearKey keys to the browser; masked form fields do not hide them from developer tools or network-recording exports. See the [local playback security boundary](security.md#local-web-and-desktop-playback).
 
 ```sh
 DRMR_CATALOG_ROOT=/absolute/path/catalog \

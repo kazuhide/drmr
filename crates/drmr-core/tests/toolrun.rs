@@ -1100,3 +1100,25 @@ fn a_runner_with_its_own_path_looks_bare_windows_names_up_and_preserves_child_pa
         .unwrap_err();
     assert_eq!((error.tool.as_str(), error.kind), ("probe", "unavailable"));
 }
+
+#[test]
+fn accepted_whitespace_hex_secrets_cover_canonical_byte_encodings() {
+    let compact = "00112233445566778899aabbccddeeff";
+    let spaced = compact
+        .as_bytes()
+        .chunks(2)
+        .map(|pair| std::str::from_utf8(pair).unwrap())
+        .collect::<Vec<_>>()
+        .join(" \t");
+    drmr_core::config::KeyMaterial::new(compact, &spaced, &spaced).unwrap();
+    let secrets = Secrets::with([spaced.as_str()]);
+    for (name, form) in forms(compact) {
+        assert_eq!(secrets.scrub(&form), REDACTED, "canonical form: {name}");
+    }
+    assert_eq!(secrets.scrub(&spaced), REDACTED);
+    let mixed = compact.replace('a', "A").replace('c', "C");
+    let encoded = STANDARD.encode(mixed.as_bytes());
+    assert_eq!(Secrets::with([mixed]).scrub(&encoded), REDACTED);
+    assert_eq!(Secrets::with(["short"]).scrub("short"), "short");
+    assert_eq!(Secrets::with(["aa      bb"]).scrub("aabb"), "aabb");
+}
