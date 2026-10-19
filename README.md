@@ -10,6 +10,8 @@ The CLI is the primary interface. The local web console and optional [Desktop ho
 
 [Project website (English)](https://kazuhide.github.io/drmr/) · [Japanese website](https://kazuhide.github.io/drmr/ja/) · [Usage guide](docs/usage.md) · [Conversion support](docs/conversion-support.md)
 
+See [keys and local security](docs/security.md) for diagnostic masking, temporary files, external-tool process arguments, and browser playback boundaries.
+
 ## Install
 
 To run the CLI with its media tools included, use the [Docker guide](docs/docker.md). It also covers the experimental local web console.
