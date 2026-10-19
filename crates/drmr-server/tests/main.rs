@@ -242,20 +242,109 @@ fn the_binary_serves_the_embedded_page_and_the_api_on_the_configured_port() {
     );
 }
 
+const PIPE_CLOSE_PROBES: usize = 32;
+
+fn wait_for_broken_pipe(
+    writer: &mut std::io::PipeWriter,
+    deadline: std::time::Instant,
+) -> std::io::Result<()> {
+    for attempt in 0..PIPE_CLOSE_PROBES {
+        match writer.write(&[0]) {
+            Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => return Ok(()),
+            Err(error) => return Err(error),
+            Ok(1) => {}
+            Ok(_) => return Err(std::io::ErrorKind::WriteZero.into()),
+        }
+        if attempt + 1 == PIPE_CLOSE_PROBES || std::time::Instant::now() >= deadline {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "stderr pipe still has a reader",
+            ));
+        }
+        std::thread::sleep(
+            std::time::Duration::from_millis(10)
+                .min(deadline.saturating_duration_since(std::time::Instant::now())),
+        );
+    }
+    unreachable!("a successful final probe exhausts the bounded attempts")
+}
+
+struct OwnedServer(std::process::Child);
+
+impl Drop for OwnedServer {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+#[test]
+fn the_pipe_barrier_waits_for_the_actual_reader_to_close() {
+    let (mut reader, mut writer) = std::io::pipe().unwrap();
+    let reader = std::thread::spawn(move || {
+        let mut byte = [255];
+        let result = reader.read_exact(&mut byte);
+        drop(reader);
+        result.map(|()| byte)
+    });
+    let result = wait_for_broken_pipe(
+        &mut writer,
+        std::time::Instant::now() + std::time::Duration::from_secs(1),
+    );
+    drop(writer);
+    let observed = reader.join().unwrap();
+    result.unwrap();
+    assert_eq!(observed.unwrap(), [0]);
+}
+
+#[test]
+fn an_open_reader_cannot_pass_an_exhausted_pipe_deadline() {
+    let (mut reader, mut writer) = std::io::pipe().unwrap();
+    let error = wait_for_broken_pipe(&mut writer, std::time::Instant::now()).unwrap_err();
+    drop(writer);
+    let mut bytes = Vec::new();
+    reader.read_to_end(&mut bytes).unwrap();
+    assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+    assert_eq!(
+        bytes,
+        [0],
+        "the actual write succeeded but did not prove closure"
+    );
+}
+
+#[test]
+fn an_open_reader_exhausts_the_pipe_probe_bound() {
+    let (mut reader, mut writer) = std::io::pipe().unwrap();
+    let error = wait_for_broken_pipe(
+        &mut writer,
+        std::time::Instant::now() + std::time::Duration::from_secs(1),
+    )
+    .unwrap_err();
+    drop(writer);
+    let mut bytes = Vec::new();
+    reader.read_to_end(&mut bytes).unwrap();
+    assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+    assert!(!bytes.is_empty() && bytes.len() <= PIPE_CLOSE_PROBES);
+}
+
 #[test]
 fn a_closed_stderr_returns_an_internal_error_page() {
     let dir = tempfile::tempdir().unwrap();
     let catalog = dir.path().join("catalog");
     std::fs::create_dir(&catalog).unwrap();
-    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_drmr-server"))
-        .env("DRMR_CATALOG_ROOT", &catalog)
-        .env("DRMR_OUTPUT_ROOT", dir.path().join("output"))
-        .env("DRMR_BIND_PORT", "0")
-        .env_remove("DRMR_BIND_HOST")
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
-    let mut stderr = BufReader::new(child.stderr.take().unwrap());
+    let (reader, writer) = std::io::pipe().unwrap();
+    let mut probe = writer.try_clone().unwrap();
+    let mut child = OwnedServer(
+        std::process::Command::new(env!("CARGO_BIN_EXE_drmr-server"))
+            .env("DRMR_CATALOG_ROOT", &catalog)
+            .env("DRMR_OUTPUT_ROOT", dir.path().join("output"))
+            .env("DRMR_BIND_PORT", "0")
+            .env_remove("DRMR_BIND_HOST")
+            .stderr(writer)
+            .spawn()
+            .unwrap(),
+    );
+    let mut stderr = BufReader::new(reader);
     let mut banner = String::new();
     stderr.read_line(&mut banner).unwrap();
     let address = banner
@@ -275,14 +364,22 @@ fn a_closed_stderr_returns_an_internal_error_page() {
         answer
     };
     let open = fetch("/api/catalog");
-    drop(stderr); // the reader goes away: the server's stderr is now a closed pipe
+    drop(stderr);
+    // A concurrent spawn can temporarily retain another reader. Establish the
+    // kernel's actual BrokenPipe state before asserting any HTTP error response.
+    // At most 32 single bytes are written, well below this otherwise idle pipe's capacity.
+    wait_for_broken_pipe(
+        &mut probe,
+        std::time::Instant::now() + std::time::Duration::from_secs(1),
+    )
+    .unwrap();
     let answers: Vec<String> = ["/api/catalog", "/api/hls/jobs", "/api/hls/jobs"]
         .iter()
         .map(|path| fetch(path))
         .collect();
-    let still_running = child.try_wait().unwrap().is_none();
-    child.kill().unwrap();
-    child.wait().unwrap();
+    let still_running = child.0.try_wait().unwrap().is_none();
+    child.0.kill().unwrap();
+    child.0.wait().unwrap();
     assert!(open.starts_with("HTTP/1.1 200"), "{open}");
     for answer in &answers {
         assert!(answer.starts_with("HTTP/1.1 500"), "{answer}");
