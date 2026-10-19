@@ -367,8 +367,12 @@ def media(image, root):
         shutil.copytree(destination, root / "input" / kind)
     before = hashes(root / "input")
     rows = []
+    prepared_sources = {}
     for kind in ("dash", "hls"):
         source = f"/input/{kind}/" + ("manifest.mpd" if kind == "dash" else "master.m3u8")
+        prepared_sources[kind] = load_json(image.checked([
+            "verify", source, "--source", "/work/video.mp4", "--max-workers", "1", "--json"]))
+        require_verification(prepared_sources[kind])
         for protection in ("clear", "cbcs"):
             output = f"/work/{kind}-{protection}"
             options = ["--keys-file", "/keys/safe.json"] if protection == "cbcs" else []
@@ -389,7 +393,8 @@ def media(image, root):
     require_verification(finite_verify)
     if hashes(root / "input") != before:
         raise Refusal("source-changed")
-    return {"representative_video_only_routes": rows, "full_original_finite_av": finite_verify,
+    return {"prepared_source_against_all_original_video": prepared_sources,
+            "representative_video_only_routes": rows, "full_original_finite_av": finite_verify,
             "finite_original_counts": finite_audio_evidence(image),
             "video_packets": 240, "decoded_video_frames": 240, "video_segments": 5,
             "source_hashes": before}
