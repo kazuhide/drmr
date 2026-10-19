@@ -106,6 +106,7 @@ pub fn patterns_for(secret: &str) -> Vec<Regex> {
         )));
         vec![
             hex::decode(secret).expect("validated hex"),
+            secret.as_bytes().to_vec(),
             secret.to_ascii_lowercase().into_bytes(),
             secret.to_ascii_uppercase().into_bytes(),
         ]
@@ -144,6 +145,16 @@ pub fn patterns_for(secret: &str) -> Vec<Regex> {
     for text in ordered {
         if text.to_lowercase() != lowered {
             patterns.push(literal(&text, !even_hex));
+        }
+    }
+    // Legacy key material admits ASCII whitespace between complete byte pairs.
+    // Keep its original text encodings above and also cover the same bytes in
+    // canonical hex. Do not turn whitespace-padded short text into broad masks.
+    if !even_hex && let Ok(bytes) = crate::pycompat::fromhex(secret) {
+        let bytes = zeroize::Zeroizing::new(bytes);
+        let canonical = zeroize::Zeroizing::new(hex::encode(bytes.as_slice()));
+        if canonical.len() >= MIN_SECRET_CHARS {
+            patterns.extend(patterns_for(canonical.as_str()));
         }
     }
     patterns

@@ -369,18 +369,20 @@ pub fn cmd_run<O: Write + Send + 'static>(
     }
     // The single PlayReady source, built before encryption: its pssh joins every rendition's
     // --pssh set as well as the manifest patch.
-    let playready_objects = if emit_manifests {
+    let (playready_objects, source_license_url) = if emit_manifests {
         let parsed_pro = modules.manifests.parse_source_playready(&args.mpd)?;
         if parsed_pro.has_custom_attributes {
             return Err(usage("unsupported PlayReady custom attributes or DS_ID"));
         }
-        Some(
-            modules
-                .playready
-                .build_playready_v43(asset.key.key_id_hex(), parsed_pro.la_url.as_deref())?,
+        let objects = modules
+            .playready
+            .build_playready_v43(asset.key.key_id_hex(), parsed_pro.la_url.as_deref())?;
+        (
+            Some(objects),
+            parsed_pro.la_url.map(zeroize::Zeroizing::new),
         )
     } else {
-        None
+        (None, None)
     };
 
     let pssh = widevine_pssh_by_rendition(&asset);
@@ -396,6 +398,11 @@ pub fn cmd_run<O: Write + Send + 'static>(
     };
     // The job's key and IV are scrubbed from every record in every encoding.
     let secrets = Arc::new(Secrets::with([asset.key.key_hex(), asset.key.iv_hex()]));
+    register_run_signaling(
+        &secrets,
+        source_license_url.as_ref().map(|url| url.as_str()),
+        playready_objects.as_ref(),
+    );
     let job_runner = |sink: Arc<dyn Sink>| {
         let runner = ToolRunner::new(secrets.clone(), sink);
         Arc::new(match &tool_path {
@@ -429,6 +436,26 @@ pub fn cmd_run<O: Write + Send + 'static>(
             complete_receipt(env, &asset, &result)?;
             Ok(exit_code(&result))
         }
+    }
+}
+
+// Register source and generated signaling before the first tool record.
+// The public media retains these bytes; diagnostics retain only masks.
+fn register_run_signaling(
+    secrets: &Secrets,
+    url: Option<&str>,
+    objects: Option<&crate::playready::PlayReadyObjects>,
+) {
+    secrets.register(url);
+    if let Some(objects) = objects {
+        let pro_hex = zeroize::Zeroizing::new(hex::encode(&objects.pro_bytes));
+        secrets.register([
+            objects.wrmheader_xml.as_str(),
+            objects.pro_b64.as_str(),
+            objects.pssh_b64.as_str(),
+            objects.pssh_hex.as_str(),
+            pro_hex.as_str(),
+        ]);
     }
 }
 

@@ -1116,5 +1116,9 @@ fn accepted_whitespace_hex_secrets_cover_canonical_byte_encodings() {
         assert_eq!(secrets.scrub(&form), REDACTED, "canonical form: {name}");
     }
     assert_eq!(secrets.scrub(&spaced), REDACTED);
+    let mixed = compact.replace('a', "A").replace('c', "C");
+    let encoded = STANDARD.encode(mixed.as_bytes());
+    assert_eq!(Secrets::with([mixed]).scrub(&encoded), REDACTED);
     assert_eq!(Secrets::with(["short"]).scrub("short"), "short");
+    assert_eq!(Secrets::with(["aa      bb"]).scrub("aabb"), "aabb");
 }
