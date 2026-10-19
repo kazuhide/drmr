@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { assets, digest, liveMode, allowedRequest } from './source.mjs';
 import { matchesPublication } from './wait-published.mjs';
 import { resource } from './server.mjs';
-import { requireFocus, requireImages, requireLayout, focusObservation, requireClippedFocusTimeout, pollFocus, FocusConditionTimeout } from './checks.mjs';
+import { requireFocus, requireImages, requireLayout, focusObservation, requireClippedFocusTimeout, pollFocus, FocusConditionTimeout, FocusObservationDeadline } from './checks.mjs';
 
 test('only the fixed static payload resolves at either mount', () => {
   assert.equal(resource('/').relative, 'index.html');
@@ -109,11 +109,22 @@ const healthyPartial = () => ({ matchesTarget: true, inViewport: false, width: 2
   rect: { top: 878.328125, bottom: 900.328125, left: 16, right: 255, width: 239, height: 22 },
   viewport: { width: 1440, height: 900 } });
 
+// The scheduler advances an injected clock only after queued observation
+// microtasks finish. No control waits five wall-clock seconds.
+function virtualDeadline() {
+  let clock = 0;
+  return { now: () => clock,
+    pause: async milliseconds => { clock += milliseconds; },
+    schedule: callback => {
+      const timer = setImmediate(() => { clock = 5000; callback(); });
+      return () => clearImmediate(timer);
+    } };
+}
+
 async function timedPartial(sample = healthyPartial()) {
   const samples = [];
-  let clock = 0;
   try {
-    await pollFocus(async () => sample, samples, { now: () => clock, pause: async () => { clock += 2500; } });
+    await pollFocus(async () => sample, samples, virtualDeadline());
     assert.fail('A clipped target cannot pass');
   } catch (failure) {
     return { failure, check: { passed: false, samples } };
@@ -140,15 +151,15 @@ test('two partial samples followed by evaluation or polling errors remain fatal'
   for (const stage of ['evaluation', 'polling']) {
     const arbitrary = new Error(stage + '-failure');
     const samples = [];
-    let clock = 0;
+    const timer = virtualDeadline();
     let calls = 0;
     const measure = async () => {
       if (stage === 'evaluation' && calls++ === 2) throw arbitrary;
       return healthyPartial();
     };
-    await assert.rejects(pollFocus(measure, samples, { now: () => clock, pause: async () => {
+    await assert.rejects(pollFocus(measure, samples, { ...timer, pause: async milliseconds => {
       if (stage === 'polling' && samples.length === 2) throw arbitrary;
-      clock += 100;
+      await timer.pause(milliseconds);
     } }), error => {
       assert.equal(error, arbitrary);
       assert.equal(samples.length, 2);
@@ -166,5 +177,79 @@ test('complete focus passes within the budget but never after the deadline', asy
   let clock = 0;
   const late = [];
   await assert.rejects(pollFocus(async () => { clock = 5001; return complete; }, late,
-    { now: () => clock }), error => error instanceof FocusConditionTimeout);
+    { now: () => clock }), error => error instanceof FocusObservationDeadline);
+});
+
+
+test('a never-settling measurement cannot outlive the absolute observation deadline', async () => {
+  let clock = 0;
+  let expire;
+  const samples = [];
+  let started = false;
+  const pending = pollFocus(() => { started = true; return new Promise(() => {}); }, samples, {
+    now: () => clock,
+    schedule: callback => { expire = callback; return () => {}; },
+  }).then(() => ({ kind: 'passed' }), error => ({ kind: 'failed', error }));
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(started, true);
+  clock = 5000;
+  expire();
+  const outcome = await Promise.race([pending,
+    new Promise(resolve => setImmediate(() => resolve({ kind: 'still-pending' })))]);
+  assert.equal(outcome.kind, 'failed');
+  assert.ok(outcome.error instanceof FocusObservationDeadline);
+  assert.equal(outcome.error.operation, 'measurement');
+  assert.equal(samples.length, 0);
+});
+
+
+test('an unfinished poll wait is fatal and its late completion cannot start another measurement', async () => {
+  let clock = 0;
+  let expire, release;
+  let measurements = 0;
+  const samples = [];
+  const pending = pollFocus(async () => { measurements++; return healthyPartial(); }, samples, {
+    now: () => clock,
+    schedule: callback => { expire = callback; return () => {}; },
+    pause: async milliseconds => {
+      if (samples.length === 2) return new Promise(resolve => { release = resolve; });
+      clock += milliseconds;
+    },
+  });
+  for (let i = 0; i < 100 && !release; i++) await Promise.resolve();
+  assert.equal(typeof release, 'function');
+  clock = 5000;
+  expire();
+  await assert.rejects(pending, error => {
+    assert.ok(error instanceof FocusObservationDeadline);
+    assert.equal(error.operation, 'poll-wait');
+    assert.throws(() => requireClippedFocusTimeout(error, { passed: false, samples }), value => value === error);
+    return true;
+  });
+  assert.equal(samples.length, 2);
+  release();
+  for (let i = 0; i < 10; i++) await Promise.resolve();
+  assert.equal(measurements, 2);
+  assert.equal(samples.length, 2);
+});
+
+test('late successful measurements never append samples or publish success after expiry', async () => {
+  let clock = 0;
+  let expire, release;
+  let cancellations = 0;
+  const samples = [];
+  const pending = pollFocus(() => new Promise(resolve => { release = resolve; }), samples, {
+    now: () => clock,
+    schedule: callback => { expire = callback; return () => { cancellations++; }; },
+  });
+  await Promise.resolve();
+  await Promise.resolve();
+  clock = 5000;
+  expire();
+  await assert.rejects(pending, error => error instanceof FocusObservationDeadline);
+  assert.equal(cancellations, 1);
+  release({ ...healthyPartial(), inViewport: true });
+  for (let i = 0; i < 10; i++) await Promise.resolve();
+  assert.equal(samples.length, 0);
 });

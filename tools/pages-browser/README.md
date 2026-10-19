@@ -16,6 +16,11 @@ existing focus outline. They never scroll or refocus to make a check pass.
 Production focusable elements have 16px of vertical scroll margin so native
 focus leaves room for the 8px outline outset and fractional layout edges. The
 complete viewport comparisons retain zero epsilon.
+One absolute five-second deadline bounds awaiting every measurement and delegated
+polling wait. An unfinished operation at expiry is a fatal observation error,
+not an accepted negative control. During the final owned cadence window no
+operation is outstanding; healthy partial observations can then expire as a
+condition timeout. Late completions cannot append samples or pass.
 Every observation records element identity, the full rectangle, viewport, scroll
 position and time; failed checks retain these samples too. Persistent clipping
 still fails. The suite covers:

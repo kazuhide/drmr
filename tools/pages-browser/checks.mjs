@@ -55,27 +55,74 @@ export class FocusConditionTimeout extends Error {
   }
 }
 
+export class FocusObservationDeadline extends Error {
+  constructor(operation, elapsedMs) {
+    super('Keyboard focus observation exceeded its absolute five-second deadline');
+    this.name = 'FocusObservationDeadline';
+    this.operation = operation;
+    this.elapsedMs = elapsedMs;
+  }
+}
+
 export async function pollFocus(measure, samples, {
   now = () => performance.now(),
   pause = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds)),
+  schedule = (callback, milliseconds) => {
+    const timer = setTimeout(callback, milliseconds);
+    return () => clearTimeout(timer);
+  },
 } = {}) {
   const start = now();
-  for (;;) {
-    // Transport/evaluation errors propagate; they are never condition timeouts.
-    const sample = await measure();
-    samples.push(sample);
-    const elapsed = now() - start;
-    let complete = false;
-    try {
-      requireFocus(sample);
-      complete = true;
-    } catch (error) {
-      if (!(error instanceof AssertionError)) throw error;
+  const end = start + 5000;
+  const expiredSignal = Symbol('observation deadline');
+  let expired = false;
+  let cancel = () => {};
+  const deadline = new Promise(resolve => {
+    const expire = () => {
+      const remaining = end - now();
+      // Timer precision must not move the absolute deadline earlier.
+      if (remaining > 0) { cancel = schedule(expire, Math.ceil(remaining)); return; }
+      expired = true;
+      resolve(expiredSignal);
+    };
+    cancel = schedule(expire, 5000);
+  });
+  const bounded = async (operation, kind) => {
+    const task = Promise.resolve().then(() => {
+      if (expired || now() >= end) throw new FocusObservationDeadline(kind, now() - start);
+      return operation();
+    }).then(value => ({ value }));
+    const outcome = await Promise.race([task, deadline]);
+    if (outcome === expiredSignal || expired || now() >= end) throw new FocusObservationDeadline(kind, now() - start);
+    return outcome.value;
+  };
+  try {
+    for (;;) {
+      const sample = await bounded(measure, 'measurement');
+      // A late promise completion cannot publish a sample after expiry.
+      if (expired || now() >= end) throw new FocusObservationDeadline('measurement', now() - start);
+      samples.push(sample);
+      let complete = false;
+      try {
+        requireFocus(sample);
+        complete = true;
+      } catch (error) {
+        if (!(error instanceof AssertionError)) throw error;
+      }
+      const elapsed = now() - start;
+      if (expired || elapsed >= 5000) throw new FocusObservationDeadline('measurement', now() - start);
+      if (complete) return sample;
+      if (end - now() <= 100) {
+        // No delegated observation or pause is outstanding during this final
+        // owned cadence window. Only this healthy idle expiry is a condition
+        // timeout; an unfinished measurement/pause always remains fatal.
+        await deadline;
+        throw new FocusConditionTimeout(samples, now() - start);
+      }
+      await bounded(() => pause(100), 'poll-wait');
     }
-    // A late successful measurement cannot pass the deadline either.
-    if (elapsed >= 5000) throw new FocusConditionTimeout(samples, elapsed);
-    if (complete) return sample;
-    await pause(Math.min(100, 5000 - elapsed));
+  } finally {
+    cancel();
   }
 }
 

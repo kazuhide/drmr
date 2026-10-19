@@ -58,6 +58,7 @@ async function requireTargetFocus(page, target, phase, ordinal) {
     return check.samples.at(-1);
   } catch (error) {
     check.failureKind = error instanceof FocusConditionTimeout ? 'condition-timeout' : 'observation-error';
+    if (Number.isFinite(error.elapsedMs)) check.failureElapsedMs = error.elapsedMs;
     throw error;
   } finally {
     check.passed ??= false;
