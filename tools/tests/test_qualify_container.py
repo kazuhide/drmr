@@ -3,6 +3,7 @@ import copy
 import importlib.util
 import http.server
 import json
+import subprocess
 from pathlib import Path
 import sys
 import tempfile
@@ -178,6 +179,111 @@ class EvidenceTests(unittest.TestCase):
                 with self.assertRaisesRegex(module.Refusal, "^web-host-guard-failed$"):
                     module.verify_web_host_guards(port)
                 self.assertEqual(requests[-1], ("/api/catalog", [host]))
+
+    def test_published_barrier_is_observed_when_the_real_child_exits_between_samples(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "shutdown-ready"
+            script = "import sys; from pathlib import Path; sys.stdin.buffer.read(1); Path(sys.argv[1]).write_bytes(b'ready')"
+            with subprocess.Popen([sys.executable, "-c", script, str(path)], stdin=subprocess.PIPE,
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) as child:
+                owner = self
+
+                class Barrier:
+                    sampled = False
+
+                    def is_file(self):
+                        if self.sampled:
+                            return path.is_file()
+                        self.sampled = True
+                        observed = path.is_file()
+                        owner.assertFalse(observed)
+                        child.stdin.write(b"!")
+                        child.stdin.flush()
+                        owner.assertEqual(child.wait(timeout=2), 0)
+                        owner.assertTrue(path.is_file())
+                        return observed
+
+                module.wait_file(Barrier(), child)
+                self.assertEqual(path.read_bytes(), b"ready")
+
+    def test_a_completed_child_without_its_barrier_still_fails_closed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "shutdown-ready"
+            with subprocess.Popen([sys.executable, "-c", "pass"]) as child:
+                self.assertEqual(child.wait(timeout=2), 0)
+                with self.assertRaisesRegex(module.Refusal, "^web-lifecycle-barrier-missing$") as denied:
+                    module.wait_file(path, child)
+            self.assertEqual(denied.exception.evidence, {
+                "barrier": "shutdown-ready", "reason": "driver-exited", "driver_returncode": 0})
+            self.assertFalse(path.exists())
+
+    def test_an_alive_child_cannot_remove_the_original_barrier_deadline(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "shutdown-ready"
+            with subprocess.Popen([sys.executable, "-c", "import sys; sys.stdin.buffer.read()"],
+                                  stdin=subprocess.PIPE) as child:
+                with patch.object(module.time, "monotonic", side_effect=[100, 130]):
+                    with self.assertRaisesRegex(module.Refusal, "^web-lifecycle-barrier-missing$") as denied:
+                        module.wait_file(path, child)
+                self.assertEqual(denied.exception.evidence["reason"], "deadline")
+                self.assertIsNone(denied.exception.evidence["driver_returncode"])
+
+    def test_web_failure_keeps_fixed_diagnostics_before_workspace_cleanup(self):
+        class Image:
+            def command(self, *_args, **_kwargs):
+                lines = ["private key and URL must not enter evidence",
+                         "container-qualification: phase=web-await-stop-job",
+                         "container-qualification: owner-exit code=None signal=Some(15)",
+                         "container-qualification: lifecycle-unconfirmed kind=PermissionDenied errno=Some(13)"]
+                message = "\n".join(lines) + "\n"
+                script = f"import sys; sys.stderr.write({message!r}); raise SystemExit(7)"
+                return [sys.executable, "-c", script]
+
+        def request(_port, method, path, body=None, headers=None):
+            if headers and headers.get("Origin") == "https://other.invalid":
+                return 403, b'{"error":"same-origin-required"}'
+            if method == "GET" and path == "/api/catalog":
+                return 200, b"{}"
+            self.assertEqual((method, path), ("POST", "/api/hls/analyses"))
+            return 202, json.dumps({"job_id": "0" * 32}).encode()
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "input/hls").mkdir(parents=True)
+            (root / "work/web-control").mkdir(parents=True)
+            with patch.object(module, "http_request", side_effect=request), \
+                    patch.object(module, "verify_web_host_guards", return_value=[]):
+                with self.assertRaisesRegex(module.Refusal, "^web-lifecycle-barrier-missing$") as denied:
+                    module.web(Image(), root)
+            evidence = denied.exception.evidence
+            self.assertEqual(evidence["driver_returncode"], 7)
+            self.assertEqual(evidence["driver_phase"], "web-await-stop-job")
+            self.assertEqual(evidence["error_kind"], "PermissionDenied")
+            self.assertEqual(evidence["errno"], 13)
+            self.assertTrue(evidence["server_exit_observed"])
+            self.assertIsNone(evidence["server_returncode"])
+            self.assertEqual(evidence["server_signal"], 15)
+            self.assertTrue(evidence["barriers"]["stop-job"])
+            self.assertFalse(evidence["barriers"]["stop-ready"])
+            self.assertEqual(evidence["failure_context"]["barrier"], "stop-ready")
+            log = root / "work/web-driver.stderr"
+            self.assertEqual(evidence["logs"]["driver-stderr"]["sha256"], module.sha256(log))
+            self.assertNotIn("private key", json.dumps(evidence))
+        self.assertFalse(root.exists())
+        self.assertEqual(evidence["driver_returncode"], 7)
+
+    def test_diagnostic_log_reads_are_bounded_and_do_not_follow_links(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "work/web-control").mkdir(parents=True)
+            (root / "work/web-driver.stderr").write_bytes(b"x" * 33)
+            with patch.object(module, "MAX_OUTPUT", 32):
+                evidence = module.web_failure_evidence(root, None)
+            self.assertEqual(evidence["logs"]["driver-stderr"], {"output_limit": True})
+            self.assertIsNone(evidence["driver_phase"])
+            if sys.platform != "win32":
+                (root / "work/web-control/server.stderr").symlink_to(root / "work/web-driver.stderr")
+                self.assertNotIn("server-stderr", module.web_failure_evidence(root, None)["logs"])
 
     def test_output_limit_terminates_a_live_writer_before_its_deadline(self):
         command = [sys.executable, "-c", "import os,time; os.write(1,b'x'*4096); time.sleep(10)"]

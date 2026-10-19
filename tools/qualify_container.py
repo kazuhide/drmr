@@ -12,6 +12,7 @@ from pathlib import Path, PurePosixPath
 import re
 import shutil
 import socket
+import stat
 import struct
 import subprocess
 import tempfile
@@ -519,9 +520,67 @@ def available_port():
 def wait_file(path, process):
     deadline = time.monotonic() + 30
     while not path.is_file():
-        if process.poll() is not None or time.monotonic() >= deadline:
-            raise Refusal("web-lifecycle-barrier-missing")
+        returncode = process.poll()
+        if returncode is not None:
+            # The child may publish the barrier and exit between the two observations.
+            # Observe that completed publication before declaring its barrier missing.
+            if path.is_file():
+                return
+            raise Refusal("web-lifecycle-barrier-missing", {
+                "reason": "driver-exited", "driver_returncode": returncode,
+                "barrier": path.name if path.name in WEB_BARRIERS else "unknown"})
+        if time.monotonic() >= deadline:
+            raise Refusal("web-lifecycle-barrier-missing", {
+                "reason": "deadline", "driver_returncode": None,
+                "barrier": path.name if path.name in WEB_BARRIERS else "unknown"})
         time.sleep(0.01)
+
+
+WEB_BARRIERS = ("stop-job", "stop-ready", "stop-confirmed", "shutdown-job", "shutdown-ready")
+WEB_PHASES = ("web-await-stop-job", "web-await-shutdown-job", "web-shutdown-return-state")
+
+
+def web_failure_evidence(root, process):
+    # Keep only fixed labels, typed statuses and bounded log fingerprints before cleanup.
+    # Raw tool output, arguments, key material and references never enter this evidence.
+    control = root / "work/web-control"
+    evidence = {"driver_returncode": None if process is None else process.poll(),
+                "server_returncode": None, "server_signal": None, "server_exit_observed": False,
+                "driver_phase": None, "error_kind": None, "errno": None,
+                "barriers": {name: (control / name).is_file() for name in WEB_BARRIERS},
+                "logs": {}}
+    for label, path in (("driver-stderr", root / "work/web-driver.stderr"),
+                        ("server-stderr", control / "server.stderr")):
+        try:
+            if not stat.S_ISREG(path.lstat().st_mode):
+                continue
+            with path.open("rb") as stream:
+                data = stream.read(MAX_OUTPUT + 1)
+            if len(data) > MAX_OUTPUT:
+                evidence["logs"][label] = {"output_limit": True}
+                continue
+            evidence["logs"][label] = {"snapshot_bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+            if label != "driver-stderr":
+                continue
+            for line in data.decode("ascii", errors="replace").splitlines():
+                if line.startswith("container-qualification: phase="):
+                    phase = line.removeprefix("container-qualification: phase=")
+                    if phase in WEB_PHASES:
+                        evidence["driver_phase"] = phase
+                error = re.fullmatch(r"container-qualification: lifecycle-unconfirmed kind=([A-Za-z]+) errno=(None|Some\((-?[0-9]{1,10})\))", line)
+                if error:
+                    known = {"Other", "NotFound", "PermissionDenied", "InvalidData", "InvalidInput", "TimedOut",
+                             "WouldBlock", "ConnectionRefused", "ConnectionReset", "BrokenPipe", "UnexpectedEof"}
+                    evidence["error_kind"] = error[1] if error[1] in known else "unrecognized"
+                    evidence["errno"] = None if error[3] is None else int(error[3])
+                status = re.fullmatch(r"container-qualification: owner-exit code=(None|Some\((-?[0-9]{1,10})\)) signal=(None|Some\(([0-9]{1,3})\))", line)
+                if status:
+                    evidence.update(server_exit_observed=True,
+                                    server_returncode=None if status[2] is None else int(status[2]),
+                                    server_signal=None if status[4] is None else int(status[4]))
+        except OSError:
+            continue
+    return evidence
 
 
 def atomic_text(path, value):
@@ -614,6 +673,11 @@ def web(image, root):
             raise Refusal("web-changed-source")
         return {"status": "http-api-qualified", "browser_gui": "not-tested", "host_origin_guards": True,
                 "host_guard_cases": host_guard_cases, "two_real_jobs": len(ids), "lifecycle": result}
+    except Refusal as error:
+        evidence = web_failure_evidence(root, process)
+        if error.evidence is not None:
+            evidence["failure_context"] = error.evidence
+        raise Refusal(str(error), evidence) from None
     finally:
         fixture.shutdown()
         fixture.server_close()

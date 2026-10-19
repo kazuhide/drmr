@@ -95,12 +95,21 @@ impl Drop for Owned {
             }
         }
         let _ = self.child.kill();
-        let _ = self.child.wait();
+        let status = self.child.wait();
         if let (Some(lock), Some(group)) = (&self.lock, self.group)
             && matches!(lock.try_lock(), Err(fs::TryLockError::WouldBlock))
         {
             // The original still-held fixture lock pins this group's identity.
             let _ = signal(-group, "KILL");
+        }
+        if let Ok(status) = status {
+            use std::os::unix::process::ExitStatusExt;
+            let _ = writeln!(
+                io::stderr().lock(),
+                "container-qualification: owner-exit code={:?} signal={:?}",
+                status.code(),
+                status.signal()
+            );
         }
     }
 }
