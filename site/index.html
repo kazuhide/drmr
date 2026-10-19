@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Inspect, repackage, and independently verify qualified streaming media with drmr. Preserve the encoding and compare the result with its original.">
+  <meta name="color-scheme" content="light">
+  <title>drmr — Repackage media. Check it against the original.</title>
+  <link rel="icon" href="./assets/drmr.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="./assets/site.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header wrap">
+    <a class="brand" href="#main" aria-label="drmr home"><img src="./assets/drmr.svg" width="32" height="32" alt="">drmr</a>
+    <nav aria-label="Main navigation">
+      <a href="#workflow">Workflow</a>
+      <a href="#support">Support</a>
+      <a href="#get-started">Get started</a>
+      <a href="https://github.com/kazuhide/drmr">GitHub</a>
+    </nav>
+  </header>
+  <main id="main" class="wrap" tabindex="-1">
+    <section class="hero" aria-labelledby="title">
+      <div class="hero-copy">
+        <h1 id="title">Repackage media.<br>Check it against<br class="wide-break"> the original.</h1>
+        <p class="lead">Change the packaging and protection of supported on-demand media. Keep the existing video and audio encoding. Check the result against the source.</p>
+        <p>Supply the keys for media you are authorized to manage. Input decryption and output encryption stay separate.</p>
+        <div class="actions">
+          <a class="button" href="#get-started">Get started</a>
+          <a class="text-link" href="https://github.com/kazuhide/drmr">Read the source</a>
+        </div>
+        <p class="hero-note">A native CLI for Windows, macOS, and Linux.<br>Local Web and Desktop interfaces are experimental.</p>
+      </div>
+      <figure class="workbench" aria-labelledby="bench-caption">
+        <div class="bench-heading"><span class="bench-mark" aria-hidden="true"></span>Keep the original in the loop</div>
+        <div class="bench-media">
+          <div><span class="bench-label">Original</span><strong>Encoded media</strong><span class="packets" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></span></div>
+          <div><span class="bench-label">Requested output</span><strong>New packaging</strong><span class="packets repacked" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></span></div>
+        </div>
+        <div class="bench-operation">Repackage without re-encoding</div>
+        <div class="bench-comparison">
+          <span>Compare source and result</span>
+          <ul>
+            <li><span>Stream metadata</span><b aria-hidden="true">↔</b></li>
+            <li><span>Encoded packet content</span><b aria-hidden="true">↔</b></li>
+            <li><span>Every packet’s timing</span><b aria-hidden="true">↔</b></li>
+            <li><span>Complete decoded media</span><b aria-hidden="true">↔</b></li>
+          </ul>
+        </div>
+        <figcaption id="bench-caption">The comparison model, not a live conversion or a playback certification.</figcaption>
+      </figure>
+    </section>
+
+    <section id="workflow" class="section" aria-labelledby="workflow-title">
+      <div class="section-intro">
+        <h2 id="workflow-title">From declarations to checked media</h2>
+        <p>Inspect what is declared, plan a supported route, then process the actual media. Keep the source for a separate verification.</p>
+      </div>
+      <ol class="workflow">
+        <li>
+          <div class="step-title"><span aria-hidden="true">1</span><h3>Inspect</h3></div>
+          <p>Read local MP4 metadata or DASH/HLS declarations. Unknown sample coverage stays unknown.</p>
+          <pre tabindex="0" aria-label="Inspect command"><code>drmr inspect source.mpd</code></pre>
+        </li>
+        <li>
+          <div class="step-title"><span aria-hidden="true">2</span><h3>Plan</h3></div>
+          <p>Describe conditional routes and required tools. A plan does not prove usable keys or a qualified asset.</p>
+          <pre tabindex="0" aria-label="Plan command"><code>drmr plan source.mpd \
+  --to cbcs --format dash</code></pre>
+        </li>
+        <li>
+          <div class="step-title"><span aria-hidden="true">3</span><h3>Convert</h3></div>
+          <p>Repackage qualified media and compare it with the original before publishing a new output.</p>
+          <pre tabindex="0" aria-label="Convert command"><code>drmr convert source.mpd \
+  --to cbcs --format dash \
+  --output converted \
+  --keys-file keys.json</code></pre>
+        </li>
+        <li>
+          <div class="step-title"><span aria-hidden="true">4</span><h3>Verify</h3></div>
+          <p>Run an independent comparison with the original source and the keys for each role.</p>
+          <pre tabindex="0" aria-label="Verify command"><code>drmr verify converted/manifest.mpd \
+  --source source.mpd \
+  --keys-file keys.json --json</code></pre>
+        </li>
+      </ol>
+      <p class="section-note">These commands illustrate a qualified DASH-to-CBCS-DASH route. <a href="https://github.com/kazuhide/drmr/blob/main/docs/usage.md#separate-input-and-output-keys">Prepare an owner-only key configuration</a>; do not put raw keys in command arguments or version control.</p>
+    </section>
+
+    <section id="support" class="section support" aria-labelledby="support-title">
+      <div class="section-intro">
+        <h2 id="support-title">The container matters</h2>
+        <p>MP4, DASH, and HLS are not interchangeable profiles. HLS playlists can reference fragmented MP4 or MPEG transport streams, with different limits.</p>
+      </div>
+      <div class="profile-list">
+        <div class="profile"><h3>MP4</h3><p>Qualified local files. Single-track packaging and a separate finite AAC/H.264 progressive profile have different output rules.</p></div>
+        <div class="profile"><h3>DASH</h3><p>Qualified static presentations with fragmented MP4 tracks. Clear, <code>cenc</code>, and <code>cbcs</code> protection routes.</p></div>
+        <div class="profile"><h3>HLS / fragmented MP4</h3><p>Completed local playlists with qualified fMP4 tracks. Clear, CBCS, and full-resource AES-128 output routes.</p></div>
+        <div class="profile"><h3>HLS / MPEG-TS</h3><p>A narrower H.264/AAC profile. Clear, AES-128, and SAMPLE-AES transport-stream routes, plus qualified fMP4 HLS outputs.</p></div>
+      </div>
+      <div class="support-detail">
+        <p><code>cenc</code> uses counter-mode sample encryption. <code>cbcs</code> uses pattern encryption with cipher block chaining. HLS AES-128 encrypts whole resources; SAMPLE-AES TS encrypts selected media bytes. These names do not establish a DRM license or device capability.</p>
+        <a class="text-link" href="https://github.com/kazuhide/drmr/blob/main/docs/conversion-support.md">Read the full support matrix and restrictions</a>
+      </div>
+      <aside class="url-note" aria-labelledby="url-title">
+        <h3 id="url-title">Starting with an HLS URL?</h3>
+        <p>Only completed <strong>clear HLS</strong> is supported for URL acquisition. <code>--download-dir</code> is required: it retains the source for offline retries and independent verification. Remote MP4/DASH, encrypted URLs, live input, and byte ranges are outside this acquisition profile.</p>
+        <a href="https://github.com/kazuhide/drmr/blob/main/docs/usage.md#convert-a-url">Convert a URL and keep its source</a>
+      </aside>
+    </section>
+
+    <section id="verification" class="section" aria-labelledby="verification-title">
+      <div class="section-intro">
+        <h2 id="verification-title">Four ways back to the original</h2>
+        <p>A matching manifest is not enough. Media verification compares the result with its original across four distinct kinds of evidence.</p>
+      </div>
+      <dl class="evidence-list">
+        <div><dt>Stream metadata</dt><dd>Compare the qualified codec, track configuration, and presentation properties.</dd></div>
+        <div><dt>Encoded packet content</dt><dd>Compare coded media payloads while allowing the supported packaging and protection changes.</dd></div>
+        <div><dt>Every packet’s timing</dt><dd>Compare absolute presentation time, decode time, and duration. No timing tolerance is used to hide a mismatch.</dd></div>
+        <div><dt>Complete decoded media</dt><dd>Decode the entire qualified presentation and compare the resulting pictures and audio.</dd></div>
+      </dl>
+      <div class="verification-boundary">
+        <h3>Media proof has a boundary</h3>
+        <p>Metadata analysis is not media verification. Known-key media verification is not DRM license acquisition or device playback qualification. drmr does not provide a license server, obtain content keys, or bypass licenses.</p>
+        <p><a href="https://github.com/kazuhide/drmr/blob/main/docs/media-processing.md">Read how processing and verification work</a></p>
+      </div>
+    </section>
+
+    <section id="get-started" class="section getting-started" aria-labelledby="start-title">
+      <div class="section-intro">
+        <h2 id="start-title">Start with the CLI</h2>
+        <p>Build from source with Rust 1.95 or newer. Windows is a native CLI target; use the Windows guide for PowerShell, paths, and protected files.</p>
+      </div>
+      <div class="install-layout">
+        <div class="install-commands">
+          <p>From a source checkout:</p>
+          <pre tabindex="0" aria-label="Build and check the CLI"><code>cargo install --path crates/drmr --locked
+drmr --version
+drmr doctor --probe --route progressive-mp4</code></pre>
+          <p class="section-note">The probe checks tool versions and advertised options. It does not verify a media asset.</p>
+          <a href="https://github.com/kazuhide/drmr#install">Source installation instructions</a>
+        </div>
+        <div class="requirements">
+          <h3>Media tools</h3>
+          <dl>
+            <div><dt>FFmpeg / FFprobe</dt><dd>9.0.1 or newer</dd></div>
+            <div><dt>Bento4 mp4dump</dt><dd>1.6.0, build 641 or newer</dd></div>
+            <div><dt>Shaka Packager</dt><dd>3.8.0 or newer</dd></div>
+          </dl>
+          <p>Required tools depend on the processing route.</p>
+          <p><a href="https://github.com/kazuhide/drmr/blob/main/docs/requirements.md">Requirements and tested versions</a><br><a href="https://github.com/kazuhide/drmr/blob/main/docs/windows.md">Windows setup</a></p>
+        </div>
+      </div>
+      <div class="other-interfaces">
+        <div><h3>Docker</h3><p>Use the container guide for the CLI and its media tools, mounting your own media and protected configuration.</p><a href="https://github.com/kazuhide/drmr/blob/main/docs/docker.md">Docker guide</a></div>
+        <div><h3>Experimental local interfaces</h3><p>The Web console and optional Desktop host cover a narrower workflow than the generic CLI. GUI and playback qualification have separate limits.</p><a href="https://github.com/kazuhide/drmr/blob/main/docs/desktop.md">Desktop scope and known limits</a></div>
+      </div>
+    </section>
+  </main>
+  <footer class="site-footer wrap">
+    <a class="brand" href="#main"><img src="./assets/drmr.svg" width="24" height="24" alt="">drmr</a>
+    <nav aria-label="Documentation and source">
+      <a href="https://github.com/kazuhide/drmr/blob/main/docs/usage.md">Usage</a>
+      <a href="https://github.com/kazuhide/drmr/blob/main/docs/conversion-support.md">Support</a>
+      <a href="https://github.com/kazuhide/drmr/blob/main/docs/resources.md">Resources</a>
+      <a href="https://github.com/kazuhide/drmr">Source on GitHub</a>
+      <a href="https://github.com/kazuhide/drmr/blob/main/LICENSE">MIT license</a>
+      <a href="./assets/fonts/LICENSE-ibm-plex.txt">Font license</a>
+    </nav>
+    <p>A static project guide. No media, keys, or conversion jobs are submitted through this page.</p>
+  </footer>
+</body>
+</html>
