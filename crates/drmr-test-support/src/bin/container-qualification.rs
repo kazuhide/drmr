@@ -1,0 +1,254 @@
+//! Test-only in-container observer. Never copied into the production runtime image.
+use std::{fs, io, path::PathBuf};
+#[cfg(target_os = "linux")]
+use std::{
+    fs::File,
+    path::Path,
+    process::{Child, Command, Stdio},
+    thread,
+    time::{Duration, Instant},
+};
+
+fn fail() -> io::Error {
+    io::Error::other("container-lifecycle-unconfirmed")
+}
+
+#[cfg(target_os = "linux")]
+fn install(fixture: &Path, target: &Path, spec: &drmr_test_support::ToolSpec) -> io::Result<()> {
+    let mut child = Command::new(fixture)
+        .arg("--install")
+        .arg(target)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+    let written = spec.encode(child.stdin.take().ok_or_else(fail)?);
+    let status = child.wait()?;
+    written?;
+    if !status.success() {
+        return Err(fail());
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn signal(pid: i32, value: &str) -> io::Result<()> {
+    if pid == 0 || pid == 1 || pid == -1 || !matches!(value, "TERM" | "KILL") {
+        return Err(fail());
+    }
+    let status = Command::new("/bin/sh")
+        .args([
+            "-c",
+            "kill -s \"$1\" \"$2\"",
+            "fixture",
+            value,
+            &pid.to_string(),
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(fail())
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn identity(pid: u32) -> io::Result<(u32, u32)> {
+    let stat = fs::read_to_string(format!("/proc/{pid}/stat"))?;
+    let (_, fields) = stat.rsplit_once(") ").ok_or_else(fail)?;
+    let fields: Vec<_> = fields.split_whitespace().collect();
+    // After comm: state, ppid, pgrp. Read only explicitly owned process IDs.
+    Ok((
+        fields
+            .get(1)
+            .ok_or_else(fail)?
+            .parse()
+            .map_err(|_| fail())?,
+        fields
+            .get(2)
+            .ok_or_else(fail)?
+            .parse()
+            .map_err(|_| fail())?,
+    ))
+}
+
+#[cfg(target_os = "linux")]
+struct Owned {
+    child: Child,
+    lock: Option<File>,
+    group: Option<i32>,
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for Owned {
+    fn drop(&mut self) {
+        if self.child.try_wait().ok().flatten().is_none() {
+            let _ = signal(i32::try_from(self.child.id()).unwrap_or(0), "TERM");
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while self.child.try_wait().ok().flatten().is_none() && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(5));
+            }
+        }
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        if let (Some(lock), Some(group)) = (&self.lock, self.group)
+            && matches!(lock.try_lock(), Err(fs::TryLockError::WouldBlock))
+        {
+            // The original still-held fixture lock pins this group's identity.
+            let _ = signal(-group, "KILL");
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn pid_file(path: &Path) -> Option<u32> {
+    let value = fs::read_to_string(path).ok()?;
+    value.ends_with('\n').then_some(())?;
+    value.trim().parse().ok().filter(|pid| *pid > 1)
+}
+
+#[cfg(target_os = "linux")]
+fn wait_held(owned: &mut Owned, control: &Path) -> io::Result<(u32, u32)> {
+    let tool_pid = control.join("tool.pid");
+    let descendant_pid = control.join("descendant.pid");
+    let lock_path = control.join("descendant.lock");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let (tool, descendant) = loop {
+        if let (Some(tool), Some(descendant)) = (pid_file(&tool_pid), pid_file(&descendant_pid)) {
+            break (tool, descendant);
+        }
+        if owned.child.try_wait()?.is_some() || Instant::now() >= deadline {
+            return Err(fail());
+        }
+        thread::sleep(Duration::from_millis(5));
+    };
+    let lock = File::open(&lock_path)?;
+    let (_, group) = identity(tool)?;
+    let (_, descendant_group) = identity(descendant)?;
+    let (_, cli_group) = identity(owned.child.id())?;
+    owned.group = Some(i32::try_from(group).map_err(|_| fail())?);
+    owned.lock = Some(lock);
+    if group != tool
+        || descendant_group != group
+        || cli_group == group
+        || !matches!(
+            owned.lock.as_ref().ok_or_else(fail)?.try_lock(),
+            Err(fs::TryLockError::WouldBlock)
+        )
+    {
+        return Err(fail());
+    }
+    Ok((tool, descendant))
+}
+
+#[cfg(target_os = "linux")]
+fn stop(cli: &Path, fixture: &Path, source: &Path, work: &Path) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+    let control = work.join("stop-control");
+    fs::create_dir(&control)?;
+    fs::set_permissions(&control, fs::Permissions::from_mode(0o700))?;
+    let tool_pid = control.join("tool.pid");
+    let descendant_pid = control.join("descendant.pid");
+    let lock_path = control.join("descendant.lock");
+    let program = control.join("ffprobe");
+    install(
+        fixture,
+        &program,
+        &drmr_test_support::ToolSpec::default()
+            .with("pid_file", tool_pid.to_str().ok_or_else(fail)?)
+            .with(
+                "descendant_pid_file",
+                descendant_pid.to_str().ok_or_else(fail)?,
+            )
+            .with("descendant_lock_file", lock_path.to_str().ok_or_else(fail)?)
+            .with(
+                "release_file",
+                control.join("never-release").to_str().ok_or_else(fail)?,
+            ),
+    )?;
+    let output = work.join("cancelled-output");
+    let stdout_path = control.join("stdout");
+    let stderr_path = control.join("stderr");
+    let child = Command::new(cli)
+        .arg("convert")
+        .arg(source)
+        .args(["--to", "clear", "--format", "dash", "--output"])
+        .arg(&output)
+        .args(["--json", "--max-workers", "1"])
+        .env("PATH", &control)
+        .stdin(Stdio::null())
+        .stdout(File::create(&stdout_path)?)
+        .stderr(File::create(&stderr_path)?)
+        .spawn()?;
+    let mut owned = Owned {
+        child,
+        lock: None,
+        group: None,
+    };
+    let (tool, descendant) = wait_held(&mut owned, &control)?;
+    signal(i32::try_from(owned.child.id()).map_err(|_| fail())?, "TERM")?;
+    let began = Instant::now();
+    let status = loop {
+        if let Some(status) = owned.child.try_wait()? {
+            break status;
+        }
+        if began.elapsed() >= Duration::from_secs(5) {
+            return Err(fail());
+        }
+        thread::sleep(Duration::from_millis(5));
+    };
+    // Capture immediate kernel/lock state BEFORE output reads and while this driver lives.
+    let released = owned.lock.as_ref().ok_or_else(fail)?.try_lock();
+    let tool_absent = !Path::new(&format!("/proc/{tool}")).exists();
+    let descendant_absent = !Path::new(&format!("/proc/{descendant}")).exists();
+    if released.is_err()
+        || !tool_absent
+        || !descendant_absent
+        || status.code() != Some(130)
+        || output.exists()
+    {
+        return Err(fail());
+    }
+    owned.group = None;
+    for path in [&stdout_path, &stderr_path] {
+        if path.metadata()?.len() > 1024 * 1024 {
+            return Err(fail());
+        }
+    }
+    println!(
+        "{{\"schema_version\":1,\"success\":true,\"kind\":\"sigterm-cli-return\",\"driver_still_alive\":true,\"independent_tool_group\":true,\"immediate_lock_released\":true,\"tool_absent\":true,\"descendant_absent\":true,\"exit_code\":130,\"elapsed_milliseconds\":{}}}",
+        began.elapsed().as_millis()
+    );
+    Ok(())
+}
+
+fn main() -> std::process::ExitCode {
+    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    let result = match args.as_slice() {
+        [mode, destination] if mode == "export-fixture" => {
+            let destination = PathBuf::from(destination);
+            if destination.exists() {
+                Err(fail())
+            } else {
+                fs::copy(env!("DRMR_NATIVE_FIXTURE"), destination).map(|_| ())
+            }
+        }
+        #[cfg(target_os = "linux")]
+        [mode, cli, fixture, source, work] if mode == "stop" => stop(
+            Path::new(cli),
+            Path::new(fixture),
+            Path::new(source),
+            Path::new(work),
+        ),
+        _ => Err(fail()),
+    };
+    if result.is_ok() {
+        std::process::ExitCode::SUCCESS
+    } else {
+        eprintln!("container-qualification: lifecycle-unconfirmed");
+        std::process::ExitCode::from(1)
+    }
+}
