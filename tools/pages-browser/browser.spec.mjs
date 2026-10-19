@@ -27,7 +27,7 @@ async function ready(page) {
 }
 
 function monitor(page) {
-  const evidence = { console: [], pageErrors: [], failedRequests: [], responses: [] };
+  const evidence = { console: [], pageErrors: [], failedRequests: [], responses: [], focusChecks: [] };
   const pending = [];
   page.on('console', value => {
     if (['error', 'warning'].includes(value.type())) evidence.console.push({ type: value.type(), text: value.text() });
@@ -43,6 +43,37 @@ function monitor(page) {
   });
   monitors.set(page, { evidence, pending });
   return evidence;
+}
+
+// Focus identity alone does not prove the native viewport movement has settled.
+// Observe the same complete condition for at most the existing five-second
+// element-state budget. Do not scroll, refocus, or restart a failed test.
+async function requireTargetFocus(page, target, phase, ordinal) {
+  const check = { phase, ordinal, samples: [] };
+  monitors.get(page).evidence.focusChecks.push(check);
+  try {
+    await expect.poll(async () => {
+      const sample = await target.evaluate(focusObservation);
+      check.samples.push(sample);
+      try {
+        requireFocus(sample);
+        return true;
+      } catch {
+        return false;
+      }
+    }, { timeout: 5000, message: `Complete visible focus on ${phase} target ${ordinal}` }).toBe(true);
+    requireFocus(check.samples.at(-1));
+    check.passed = true;
+    return check.samples.at(-1);
+  } finally {
+    check.passed ??= false;
+    const info = test.info();
+    // Persist before another Tab or afterEach network processing, also on failure.
+    await writeFile(info.outputPath('keyboard-focus.json'), JSON.stringify({ schema_version: 1,
+      source_head: info.config.metadata.sourceHead, source_tree: info.config.metadata.sourceTree,
+      mode: info.config.metadata.mode, asset_hashes: info.config.metadata.assetHashes,
+      checks: monitors.get(page).evidence.focusChecks }, null, 2) + '\n');
+  }
 }
 
 test.afterEach(async ({ page }, info) => {
@@ -112,7 +143,7 @@ for (const width of [320, 768, 1024, 1440]) {
     // Native Tab/Enter, not script-triggered click, proves skip-link movement.
     await page.keyboard.press('Tab');
     await expect(page.getByRole('link', { name: 'Skip to content', exact: true })).toBeFocused();
-    requireFocus(await page.evaluate(focusObservation));
+    await requireTargetFocus(page, page.getByRole('link', { name: 'Skip to content', exact: true }), 'skip-link', 1);
     await page.keyboard.press('Enter');
     await expect(page.getByRole('main')).toBeFocused();
     await expect(page).toHaveURL(origin + '/drmr/#main');
@@ -124,8 +155,7 @@ for (const width of [320, 768, 1024, 1440]) {
     for (let i = 0; i < await focusable.count(); i++) {
       await page.keyboard.press('Tab');
       await expect(focusable.nth(i)).toBeFocused();
-      const observed = await page.evaluate(focusObservation);
-      requireFocus(observed);
+      const observed = await requireTargetFocus(page, focusable.nth(i), 'tab-order', i + 1);
       focusRecords.push({ ordinal: i + 1, ...observed });
     }
     for (const [name, id] of [['Workflow', 'workflow'], ['Support', 'support'], ['Get started', 'get-started']]) {

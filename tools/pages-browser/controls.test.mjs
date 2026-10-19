@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { assets, digest, liveMode, allowedRequest } from './source.mjs';
 import { matchesPublication } from './wait-published.mjs';
 import { resource } from './server.mjs';
-import { requireFocus, requireImages, requireLayout } from './checks.mjs';
+import { requireFocus, requireImages, requireLayout, focusObservation } from './checks.mjs';
 
 test('only the fixed static payload resolves at either mount', () => {
   assert.equal(resource('/').relative, 'index.html');
@@ -22,9 +22,9 @@ test('layout controls fail for overflow or clipped content', () => {
 });
 
 test('focus controls refuse hidden, offscreen or unoutlined focus', () => {
-  const visible = { width: 100, height: 32, inViewport: true, outlineWidth: 3, outlineStyle: 'solid' };
+  const visible = { matchesTarget: true, width: 100, height: 32, inViewport: true, outlineWidth: 3, outlineStyle: 'solid' };
   requireFocus(visible);
-  for (const changed of [{ width: 0 }, { inViewport: false }, { outlineWidth: 0 }, { outlineStyle: 'none' }]) {
+  for (const changed of [{ matchesTarget: false }, { width: 0 }, { inViewport: false }, { outlineWidth: 0 }, { outlineStyle: 'none' }]) {
     assert.throws(() => requireFocus({ ...visible, ...changed }));
   }
 });
@@ -58,4 +58,35 @@ test('all eight published raw hashes must match once; stale, missing or duplicat
   assert.equal(matchesPublication(rows.map((row, i) => i ? row : { ...row, status: 404 }), hashes), false);
   assert.equal(matchesPublication(rows.map((row, i) => i ? row : { ...row, sha256: digest(Buffer.from('stale')) }), hashes), false);
   assert.notEqual(digest(Buffer.from('line\n')), digest(Buffer.from('line\r\n')));
+});
+
+test('focus measurements retain identity and refuse partial or entirely offscreen rectangles', () => {
+  const names = ['document', 'getComputedStyle', 'innerWidth', 'innerHeight', 'scrollX', 'scrollY'];
+  const saved = new Map(names.map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)]));
+  let rect = { top: 800, bottom: 899, left: 16, right: 304, x: 16, y: 800, width: 288, height: 99 };
+  const target = { tagName: 'PRE', id: '', textContent: 'Build command', getAttribute: () => null,
+    getBoundingClientRect: () => rect };
+  try {
+    Object.assign(globalThis, { document: { activeElement: target }, innerWidth: 320, innerHeight: 900,
+      scrollX: 0, scrollY: 5331, getComputedStyle: () => ({ outlineWidth: '3px', outlineStyle: 'solid' }) });
+    const complete = focusObservation(target);
+    requireFocus(complete);
+    assert.deepEqual(complete.rect, rect);
+    assert.deepEqual(complete.scroll, { x: 0, y: 5331 });
+    assert.equal(complete.target.tag, 'PRE');
+    assert.ok(Number.isFinite(complete.at));
+    for (const changed of [{ bottom: 901 }, { top: -1 }, { left: -1 }, { right: 321 },
+      { top: 901, bottom: 1000 }]) {
+      const original = rect;
+      rect = { ...rect, ...changed };
+      assert.throws(() => requireFocus(focusObservation(target)));
+      rect = original;
+    }
+    assert.throws(() => requireFocus(focusObservation({ ...target, id: 'different-target' })));
+  } finally {
+    for (const name of names) {
+      if (saved.get(name)) Object.defineProperty(globalThis, name, saved.get(name));
+      else delete globalThis[name];
+    }
+  }
 });

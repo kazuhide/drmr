@@ -162,7 +162,7 @@ jobs:
       - name: Install the pinned Playwright Chromium and system dependencies
         run: ./node_modules/.bin/playwright install --with-deps chromium
 
-      - name: Check the actual published page without retrying browser assertions
+      - name: Check the published page with zero whole-test retries
         run: npm run test:browser
 
       - name: Preserve separate published-site evidence

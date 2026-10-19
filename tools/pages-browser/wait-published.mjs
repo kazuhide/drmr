@@ -1,4 +1,4 @@
-// Only publication propagation is polled. Browser assertions never retry.
+// Only publication propagation is polled here. Whole-test retries remain disabled.
 import { mkdir, writeFile } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { pathToFileURL } from 'node:url';

@@ -9,7 +9,13 @@ then uses the official Playwright command to install its pinned Chromium and
 system dependencies. Node 24.22.0 is pinned by the workflow. Browser installation
 and execution are confined to CI; pure controls use `npm run test:controls`.
 
-The single-worker suite has six tests and zero retries:
+The single-worker suite has six tests and zero whole-test retries. Element-state
+assertions can wait for at most five seconds. After each native Tab, read-only
+observations require the same target, complete viewport containment and the
+existing focus outline. They never scroll or refocus to make a check pass.
+Every observation records element identity, the full rectangle, viewport, scroll
+position and time; failed checks retain these samples too. Persistent clipping
+still fails. The suite covers:
 
 - 320, 768, 1024 and 1440 px: document overflow and clipped layout boxes, locally
   hosted fonts and images, exact served asset bytes, native Tab/Enter focus and
@@ -31,7 +37,7 @@ The post-publish job is main-only, needs successful deployment, and has only
 Before published browser checks, `wait-published.mjs` polls all eight raw file
 hashes against the workflow checkout, with at most 30 passes, a 120-second
 budget and at most five seconds per request. This bounded propagation wait does
-not retry failed browser assertions. Redirects are rejected. A later deployment
+not restart failed browser tests. Redirects are rejected. A later deployment
 replacing these bytes can therefore fail an earlier job instead of being
 misattributed to its source commit.
 
