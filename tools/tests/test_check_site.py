@@ -50,6 +50,15 @@ class Site(unittest.TestCase):
         self.assertEqual(set(result["sha256"]), CHECK.FILES)
         self.assertEqual(result["pending_docs"], ["docs/docker.md"])
 
+    def test_missing_conversion_matrix_is_refused(self):
+        for origin in ("index.html", "ja/index.html"):
+            path = self.site / origin
+            value = path.read_text(encoding="utf-8")
+            value = re.sub(r'<table\b[^>]*class="conversion-matrix"[\s\S]*?</table>', '', value)
+            path.write_text(value, encoding="utf-8")
+        with self.assertRaisesRegex(CHECK.Failure, "site-conversion-matrix"):
+            self.check()
+
     def test_localized_assets_and_language_root_resolve_without_escape(self):
         files = CHECK.FILES
         self.assertEqual(CHECK.local_reference("../assets/site.css", "ja/index.html", files),
@@ -208,7 +217,7 @@ class Site(unittest.TestCase):
         path = self.site / "index.html"
         original = path.read_text(encoding="utf-8")
         for old, new, token in (( 'lang="en"', 'lang=""', "site-document-semantics"),
-                                ('<h2 id="workflow-title">', '<h4 id="workflow-title">', "site-heading-semantics"),
+                                ('<h2 id="support-title">', '<h4 id="support-title">', "site-heading-semantics"),
                                 ('height="32" alt=""', 'height="32"', "site-image-semantics")):
             with self.subTest(token=token):
                 self.assertIn(old, original)
@@ -231,6 +240,86 @@ class Site(unittest.TestCase):
                 with self.assertRaisesRegex(CHECK.Failure, "site-vendored-bytes"):
                     self.check()
                 path.write_bytes(original)
+
+
+class ConversionMatrix(unittest.TestCase):
+    def fixture(self, language="en"):
+        labels = {
+            "en": ("Input and output support", "Conversion support matrix", "Supported conversion profiles", "Input ↓ / Output →", "Outside profile", "(qualified)",
+                   ["Standard profile", "Finite audio edits", "Fragmented MP4 tracks", "Fragmented MP4 (fMP4)", "Video with optional audio", "Audio only"]),
+            "ja": ("入力と出力の対応表", "変換対応表", "対応する変換プロファイル", "入力 ↓ / 出力 →", "対象外", "（限定条件）",
+                   ["通常プロファイル", "再生時間を指定した音声編集", "フラグメント化MP4トラック", "フラグメント化MP4（fMP4）", "映像（音声は省略可）", "音声のみ"]),
+        }
+        heading, region, caption, corner, outside, qualified, profiles = labels[language]
+        standard = ["Clear/cenc/cbcs", "Clear/cenc/cbcs", "Clear/cbcs/AES-128", ""]
+        rows = [
+            ("mp4-standard", "MP4", "Clear/cenc/cbcs", standard),
+            ("mp4-audio-edit", "MP4", "Clear/cenc", ["Clear", "", "", ""]),
+            ("dash", "DASH", "Clear/cenc/cbcs", standard),
+            ("hls-fmp4", "HLS", "Clear/cbcs/AES-128", standard),
+            ("hls-ts-video", "HLS / MPEG-TS", "Clear/AES-128/SAMPLE-AES", ["", "", "Clear/cbcs/AES-128", "Clear/AES-128/SAMPLE-AES"]),
+            ("hls-ts-audio", "HLS / MPEG-TS", "Clear/AES-128/SAMPLE-AES", ["", "", "", "Clear/AES-128/SAMPLE-AES"]),
+        ]
+        def protection(value):
+            return " / ".join('<span>Clear</span>' if token == "Clear" else '<code>' + token + '</code>' for token in value.split("/"))
+        body = []
+        for index, (name, form, inputs, outputs) in enumerate(rows):
+            note = "<sup>2</sup>" if index == 1 else "<sup>3</sup>" if index >= 4 else ""
+            header = ('<th scope="row"><strong class="input-format">' + form + '</strong>'
+                      '<span class="input-profile">' + profiles[index] + note + '</span>'
+                      '<span class="input-protections">' + protection(inputs) + (qualified if index == 1 else "") + '</span></th>')
+            cells = ['<td>' + (protection(value) if value else outside) + ('<sup>1</sup>' if column == 0 and index in (0, 2, 3) else "") + '</td>' for column, value in enumerate(outputs)]
+            body.append('<tr id="' + name + '">' + header + "".join(cells) + '</tr>')
+        return ('<main><section class="hero"><h1>drmr</h1></section><section id="support"><h2>' + heading + '</h2>'
+                '<p id="matrix-guide">Qualified profiles only.</p><p id="matrix-scroll-hint">Scroll horizontally.</p>'
+                '<div class="matrix-scroll" role="region" tabindex="0" aria-label="' + region + '" aria-describedby="matrix-guide matrix-scroll-hint">'
+                '<table class="conversion-matrix" aria-describedby="matrix-limits matrix-definitions"><caption>' + caption + '</caption><thead><tr>'
+                + '<th scope="col" aria-label="' + corner + '"><span class="axis-input">' + corner.split(' / ')[0] + '</span> <span class="axis-output">' + corner.split(' / ')[1] + '</span></th>'
+                + ''.join('<th scope="col">' + label + '</th>' for label in ["MP4", "DASH", "HLS fMP4", "HLS MPEG-TS"])
+                + '</tr></thead><tbody>' + ''.join(body) + '</tbody></table></div>'
+                '<ol id="matrix-limits"><li>Single track.</li><li>Audio edit profile.</li><li>Transport stream profile.</li></ol>'
+                '<p id="matrix-definitions">Protection definitions.</p></section><section id="workflow"></section></main>')
+
+    def test_both_locale_matrices_retain_all_input_and_output_profiles(self):
+        for language in ("en", "ja"):
+            with self.subTest(language=language):
+                result = CHECK.validate_matrix(self.fixture(language), language)
+                self.assertEqual((result["rows"], result["output_columns"], result["cells"]), (6, 4, 24))
+
+    def test_missing_duplicate_transposed_and_changed_cells_are_refused(self):
+        original = self.fixture()
+        mutations = [
+            original.replace('<td>Outside profile</td>', '', 1),
+            original.replace('id="mp4-audio-edit"', 'id="mp4-standard"', 1),
+            original.replace('<th scope="col">MP4</th>', '<th scope="col">DASH</th>', 1),
+            original.replace('<td>Outside profile</td>', '<td><span>Clear</span></td>', 1),
+            original.replace('<code>cbcs</code>', '<code>SAMPLE-AES</code>', 1),
+            original.replace('<code>cenc</code>', '<span>cenc</span>', 1),
+        ]
+        for value in mutations:
+            with self.subTest(value=value[:80]), self.assertRaises(CHECK.Failure):
+                CHECK.validate_matrix(value, "en")
+
+    def test_header_scopes_qualification_notes_and_priority_are_required(self):
+        original = self.fixture()
+        for old, new in [
+            ('scope="row"', 'scope="col"'), ('scope="col"', ''),
+            ('<td>', '<td colspan="2">'), ('<th scope="row">', '<th scope="row" rowspan="2">'),
+            ('(qualified)', ''), ('<sup>2</sup>', ''), ('<sup>1</sup>', '<sup>3</sup>'),
+            ('tabindex="0"', ''), ('role="region"', 'role="group"'),
+            ('aria-describedby="matrix-guide matrix-scroll-hint"', 'aria-describedby="matrix-guide"'),
+            ('<p id="matrix-scroll-hint">Scroll horizontally.</p>', ''),
+            ('<section id="support">', '<section id="support-old">'),
+            ('<li>Single track.</li>', ''), ('<span>Clear</span>', 'Clear'),
+        ]:
+            with self.subTest(old=old), self.assertRaises(CHECK.Failure):
+                CHECK.validate_matrix(original.replace(old, new, 1), "en")
+
+    def test_the_audio_edit_row_never_implies_general_mp4_or_ts_support(self):
+        value = self.fixture()
+        value = value.replace('<td>Outside profile</td>', '<td><span>Clear</span></td>')
+        with self.assertRaisesRegex(CHECK.Failure, "site-matrix-protections"):
+            CHECK.validate_matrix(value, "en")
 
 
 if __name__ == "__main__":

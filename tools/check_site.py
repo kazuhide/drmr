@@ -156,6 +156,166 @@ class Page(HTMLParser):
         self.handle_starttag(tag, attrs)
 
 
+MATRIX_ROWS = (
+    ("mp4-standard", ("Clear", "cenc", "cbcs")),
+    ("mp4-audio-edit", ("Clear", "cenc")),
+    ("dash", ("Clear", "cenc", "cbcs")),
+    ("hls-fmp4", ("Clear", "cbcs", "AES-128")),
+    ("hls-ts-video", ("Clear", "AES-128", "SAMPLE-AES")),
+    ("hls-ts-audio", ("Clear", "AES-128", "SAMPLE-AES")),
+)
+STANDARD_OUTPUTS = (("Clear", "cenc", "cbcs"), ("Clear", "cenc", "cbcs"),
+                    ("Clear", "cbcs", "AES-128"), ())
+MATRIX_CELLS = (STANDARD_OUTPUTS, (("Clear",), (), (), ()), STANDARD_OUTPUTS,
+                STANDARD_OUTPUTS, ((), (), ("Clear", "cbcs", "AES-128"),
+                                  ("Clear", "AES-128", "SAMPLE-AES")),
+                ((), (), (), ("Clear", "AES-128", "SAMPLE-AES")))
+MATRIX_LOCALES = {
+    "en": {"heading": "Input and output support", "region": "Conversion support matrix",
+           "caption": "Supported conversion profiles", "corner": "Input ↓ / Output →",
+           "outside": "Outside profile", "qualified": "(qualified)",
+           "profiles": ("Standard profile", "Finite audio edits", "Fragmented MP4 tracks",
+                        "Fragmented MP4 (fMP4)", "Video with optional audio", "Audio only")},
+    "ja": {"heading": "入力と出力の対応表", "region": "変換対応表",
+           "caption": "対応する変換プロファイル", "corner": "入力 ↓ / 出力 →",
+           "outside": "対象外", "qualified": "（限定条件）",
+           "profiles": ("通常プロファイル", "再生時間を指定した音声編集",
+                        "フラグメント化MP4トラック", "フラグメント化MP4（fMP4）",
+                        "映像（音声は省略可）", "音声のみ")},
+}
+
+
+class Element:
+    def __init__(self, tag, attrs=()):
+        self.tag, self.attrs, self.children = tag, dict(attrs), []
+
+    def descendants(self, tag=None):
+        for child in self.children:
+            if isinstance(child, Element):
+                if tag is None or child.tag == tag:
+                    yield child
+                yield from child.descendants(tag)
+
+    def text(self, omit=()):
+        return "".join(child if isinstance(child, str) else "" if child.tag in omit
+                       else child.text(omit) for child in self.children)
+
+    def one(self, tag=None, **attrs):
+        matches = [node for node in self.descendants(tag)
+                   if all(node.attrs.get(key) == value for key, value in attrs.items())]
+        require(len(matches) == 1, "site-conversion-matrix")
+        return matches[0]
+
+
+class MatrixMarkup(HTMLParser):
+    VOID = frozenset(("area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"))
+
+    def __init__(self, text):
+        super().__init__(convert_charrefs=True)
+        self.root = Element("document")
+        self.stack = [self.root]
+        self.feed(text)
+        self.close()
+        require(len(self.stack) == 1, "site-conversion-matrix")
+
+    def handle_starttag(self, tag, attrs):
+        node = Element(tag, attrs)
+        self.stack[-1].children.append(node)
+        if tag not in self.VOID:
+            self.stack.append(node)
+
+    def handle_startendtag(self, tag, attrs):
+        self.handle_starttag(tag, attrs)
+        if tag not in self.VOID:
+            self.handle_endtag(tag)
+
+    def handle_endtag(self, tag):
+        require(len(self.stack) > 1 and self.stack[-1].tag == tag, "site-conversion-matrix")
+        self.stack.pop()
+
+    def handle_data(self, data):
+        self.stack[-1].children.append(data)
+
+
+def matrix_text(node, omit=()):
+    return " ".join(node.text(omit).split())
+
+
+def matrix_protections(node, expected, qualified=""):
+    require([matrix_text(code) for code in node.descendants("code")] == list(expected[1:]),
+            "site-matrix-protections")
+    require(any(matrix_text(span) == "Clear" for span in node.descendants("span")),
+            "site-matrix-protections")
+    actual = matrix_text(node, omit=("sup",))
+    if qualified:
+        require(actual.count(qualified) == 1, "site-matrix-protections")
+        actual = actual.replace(qualified, "")
+    require(re.sub(r"[\s/]", "", actual) == "".join(expected), "site-matrix-protections")
+
+
+def validate_matrix(text, language):
+    document = MatrixMarkup(text).root
+    locale = MATRIX_LOCALES[language]
+    require(len(list(document.descendants("table"))) == 1, "site-conversion-matrix")
+    main = document.one("main")
+    sections = [node for node in main.children if isinstance(node, Element) and node.tag == "section"]
+    require(len(sections) >= 3 and sections[0].attrs.get("class") == "hero"
+            and sections[1].attrs.get("id") == "support"
+            and sections[2].attrs.get("id") == "workflow", "site-matrix-priority")
+    require(not any("workbench" in node.attrs.get("class", "").split()
+                    for node in document.descendants()), "site-matrix-priority")
+    section = sections[1]
+    require(matrix_text(section.one("h2")) == locale["heading"], "site-conversion-matrix")
+    wrapper = section.one("div", **{"class": "matrix-scroll"})
+    require(wrapper.attrs.get("role") == "region" and wrapper.attrs.get("tabindex") == "0"
+            and wrapper.attrs.get("aria-label") == locale["region"]
+            and wrapper.attrs.get("aria-describedby", "").split() == ["matrix-guide", "matrix-scroll-hint"],
+            "site-conversion-matrix")
+    for name in ("matrix-guide", "matrix-scroll-hint", "matrix-limits", "matrix-definitions"):
+        require(matrix_text(section.one(id=name)), "site-conversion-matrix")
+    table = wrapper.one("table", **{"class": "conversion-matrix"})
+    require(matrix_text(table.one("caption")) == locale["caption"]
+            and table.attrs.get("aria-describedby", "").split() == ["matrix-limits", "matrix-definitions"], "site-conversion-matrix")
+    require(all(node.attrs.get("colspan", "1") == "1" and node.attrs.get("rowspan", "1") == "1"
+                for node in table.descendants() if node.tag in ("th", "td")), "site-matrix-headers")
+    head = table.one("thead").one("tr")
+    columns = [node for node in head.children if isinstance(node, Element)]
+    require(len(columns) == 5 and all(node.tag == "th" and node.attrs.get("scope") == "col"
+                                     for node in columns), "site-matrix-headers")
+    require(columns[0].attrs.get("aria-label") == locale["corner"]
+            and matrix_text(columns[0].one("span", **{"class": "axis-input"})) == locale["corner"].split(" / ")[0]
+            and matrix_text(columns[0].one("span", **{"class": "axis-output"})) == locale["corner"].split(" / ")[1]
+            and [matrix_text(node) for node in columns[1:]] == ["MP4", "DASH", "HLS fMP4", "HLS MPEG-TS"],
+            "site-matrix-headers")
+    rows = [node for node in table.one("tbody").children if isinstance(node, Element)]
+    require(len(rows) == 6 and [node.attrs.get("id") for node in rows] == [row[0] for row in MATRIX_ROWS],
+            "site-matrix-rows")
+    for index, (row, (_, inputs), outputs) in enumerate(zip(rows, MATRIX_ROWS, MATRIX_CELLS)):
+        cells = [node for node in row.children if isinstance(node, Element)]
+        require(row.tag == "tr" and len(cells) == 5 and cells[0].tag == "th"
+                and cells[0].attrs.get("scope") == "row"
+                and all(cell.tag == "td" for cell in cells[1:]), "site-matrix-headers")
+        header = cells[0]
+        require(matrix_text(header.one("strong", **{"class": "input-format"}))
+                == ("MP4", "MP4", "DASH", "HLS", "HLS / MPEG-TS", "HLS / MPEG-TS")[index], "site-matrix-headers")
+        profile = header.one("span", **{"class": "input-profile"})
+        require(matrix_text(profile, omit=("sup",)) == locale["profiles"][index], "site-matrix-headers")
+        require([matrix_text(node) for node in profile.descendants("sup")]
+                == (["2"] if index == 1 else ["3"] if index >= 4 else []), "site-matrix-notes")
+        matrix_protections(header.one("span", **{"class": "input-protections"}), inputs,
+                           locale["qualified"] if index == 1 else "")
+        for column, (cell, protections) in enumerate(zip(cells[1:], outputs)):
+            if protections:
+                matrix_protections(cell, protections)
+            else:
+                require(matrix_text(cell) == locale["outside"] and not list(cell.descendants("code")),
+                        "site-matrix-protections")
+            require([matrix_text(node) for node in cell.descendants("sup")]
+                    == (["1"] if column == 0 and index in (0, 2, 3) else []), "site-matrix-notes")
+    require(len(list(section.one(id="matrix-limits").descendants("li"))) == 3, "site-matrix-notes")
+    return {"rows": 6, "output_columns": 4, "cells": 24, "caption": locale["caption"]}
+
+
 def document(reference, repository, pending_docs):
     parsed = urlsplit(reference)
     require(parsed.scheme == "https" and parsed.netloc == "github.com" and not parsed.query, "site-external-link")
@@ -195,6 +355,8 @@ def validate(root, repository, pending_docs=()):
         require(len(page.language_links) == 1 and page.language_links[0][:2] == (other, other), "site-language-links")
         target, fragment = local_reference(page.language_links[0][2], origin, files)
         require(target == ("ja/index.html" if other == "ja" else "index.html") and not fragment, "site-language-links")
+    matrices = {origin: validate_matrix((root / origin).read_text(encoding="utf-8"), language)
+                for origin, (language, _) in PAGES.items()}
     pending = set()
     for origin, page in pages.items():
         notice_link = False
@@ -226,7 +388,7 @@ def validate(root, repository, pending_docs=()):
             "files": len(files), "bytes": sum(files.values()), "scripts": 0,
             "mounts": ["/", "/drmr/"], "languages": ["en", "ja"],
             "pages": {path: {"language": value[0], "canonical": value[1]} for path, value in PAGES.items()},
-            "pending_docs": sorted(pending),
+            "pending_docs": sorted(pending), "conversion_matrices": matrices,
             "sha256": {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in sorted(files)},
             "limits": ["static checks only; no browser, keyboard, visual or screen-reader qualification", "repository document existence checked locally; no remote HTTP requests"]}
 

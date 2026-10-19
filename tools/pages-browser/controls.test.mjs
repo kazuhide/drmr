@@ -1,10 +1,11 @@
 import { locales } from './locales.mjs';
+import { matrixRows, matrixColumns, matrixObservation, requireMatrixLayout, requireMatrixMovement, completeMatrixKey, MatrixKeyDeadline } from './matrix.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { assets, assetRoute, assetPath, digest, liveMode, allowedRequest } from './source.mjs';
 import { matchesPublication } from './wait-published.mjs';
 import { resource } from './server.mjs';
-import { requireFocus, requireImages, requireLayout, focusObservation, requireClippedFocusTimeout, pollFocus, FocusConditionTimeout, FocusObservationDeadline } from './checks.mjs';
+import { requireFocus, requireImages, requireLayout, layoutObservation, focusObservation, requireClippedFocusTimeout, partialFocusCandidate, pollFocus, FocusConditionTimeout, FocusObservationDeadline } from './checks.mjs';
 
 test('only the fixed static payload resolves at either mount', () => {
   assert.equal(resource('/').relative, 'index.html');
@@ -297,6 +298,10 @@ test('both fixed locale routes bind separate pages and reciprocal native languag
     assert.equal(assetRoute(locale.asset), locale.route);
     assert.equal(locale.switchLanguage, other.language);
     assert.equal(locale.groups.length, 5);
+    assert.equal(locale.profiles.length, 6);
+    assert.ok(locale.matrixCaption && locale.matrixRegion);
+    assert.deepEqual(locale.matrixCorner.split(' / ').length, 2);
+    assert.equal(locale.headings[0], locale.language === 'en' ? 'Input and output support' : '入力と出力の対応表');
     assert.equal(locale.headings.length, 4);
     assert.equal(new Set(locale.groups).size, 5);
     for (const mount of ['/', '/drmr/']) {
@@ -307,4 +312,185 @@ test('both fixed locale routes bind separate pages and reciprocal native languag
       assert.equal(assetPath(next), other.asset);
     }
   }
+});
+
+
+function matrixSample(changes = {}) {
+  return { overflowX: 'auto', clientWidth: 286, clientHeight: 640,
+    rect: { left: 16, right: 304 }, contentLeft: 17, contentRight: 303,
+    documentWidth: 320, documentScrollWidth: 320, scrollWidth: 648, scrollLeft: 0,
+    pageX: 0, pageY: 250, focused: true, clippedCells: [], hiddenText: [], renderedTextCount: 30,
+    rowHeaders: Array.from({ length: 6 }, () => ({ left: 17, right: 153, position: 'sticky' })),
+    ...changes };
+}
+
+test('conversion facts distinguish audio edits, TS video and TS audio-only routes', () => {
+  assert.deepEqual(matrixColumns, ['MP4', 'DASH', 'HLS fMP4', 'HLS MPEG-TS']);
+  assert.deepEqual(matrixRows.map(row => row.id), ['mp4-standard', 'mp4-audio-edit', 'dash', 'hls-fmp4', 'hls-ts-video', 'hls-ts-audio']);
+  assert.equal(matrixRows.flatMap(row => row.output).length, 24);
+  assert.deepEqual(matrixRows[1].input, ['Clear', 'cenc']);
+  assert.deepEqual(matrixRows[1].output, [['Clear'], [], [], []]);
+  assert.deepEqual(matrixRows[4].output.slice(0, 2), [[], []]);
+  assert.deepEqual(matrixRows[5].output, [[], [], [], ['Clear', 'AES-128', 'SAMPLE-AES']]);
+  for (const index of [0, 2, 3]) assert.deepEqual(matrixRows[index].output[3], []);
+});
+
+test('matrix bounds refuse page overflow, clipped cells and unanchored row headers', () => {
+  requireMatrixLayout(matrixSample());
+  for (const change of [{ overflowX: 'hidden' }, { clientWidth: 0 },
+    { rect: { left: -1, right: 304 } }, { documentScrollWidth: 321 },
+    { clippedCells: ['SAMPLE-AES'] }, { hiddenText: [{ text: 'Clear', hidden: true }] }, { renderedTextCount: 0 }, { rowHeaders: [] },
+    { rowHeaders: Array.from({ length: 6 }, () => ({ left: 17, right: 153, position: 'static' })) },
+    { rowHeaders: Array.from({ length: 6 }, () => ({ left: 17, right: 330, position: 'sticky' })) }]) {
+    assert.throws(() => requireMatrixLayout(matrixSample(change)));
+  }
+});
+
+test('native matrix movement cannot pass for a stationary matrix, lost focus or document movement', () => {
+  const before = matrixSample();
+  const after = matrixSample({ scrollLeft: 40 });
+  requireMatrixMovement(before, after, 'right');
+  requireMatrixMovement(after, before, 'left');
+  for (const change of [{ scrollLeft: 0 }, { focused: false }, { pageX: 1 }, { pageY: 251 },
+    { rowHeaders: Array.from({ length: 6 }, () => ({ left: 18, right: 154, position: 'sticky' })) }]) {
+    assert.throws(() => requireMatrixMovement(before, { ...after, ...change }, 'right'));
+  }
+  assert.throws(() => requireMatrixMovement(before, after, 'left'));
+});
+
+test('layout only permits matrix-owned content inside its full scrollable bounds', () => {
+  const saved = Object.getOwnPropertyDescriptor(globalThis, 'document');
+  const rectangle = (left, right) => ({ left, right, width: right - left });
+  const wrapper = { tagName: 'DIV', textContent: 'Matrix', clientLeft: 1, scrollLeft: 0, scrollWidth: 648,
+    getBoundingClientRect: () => rectangle(16, 304), closest: () => wrapper };
+  let tableRight = 665;
+  const table = { tagName: 'TABLE', textContent: 'Facts', getBoundingClientRect: () => rectangle(17, tableRight), closest: () => wrapper };
+  const outside = { tagName: 'P', textContent: 'Unrelated', getBoundingClientRect: () => rectangle(16, 304), closest: () => null };
+  try {
+    Object.defineProperty(globalThis, 'document', { configurable: true, value: {
+      documentElement: { clientWidth: 320, scrollWidth: 320 }, querySelectorAll: () => [wrapper, table, outside],
+    } });
+    requireLayout(layoutObservation());
+    tableRight = 666;
+    assert.throws(() => requireLayout(layoutObservation()));
+    tableRight = 665;
+    outside.getBoundingClientRect = () => rectangle(16, 321);
+    assert.throws(() => requireLayout(layoutObservation()));
+    outside.getBoundingClientRect = () => rectangle(16, 304);
+    wrapper.getBoundingClientRect = () => rectangle(16, 321);
+    assert.throws(() => requireLayout(layoutObservation()));
+  } finally {
+    if (saved) Object.defineProperty(globalThis, 'document', saved);
+    else delete globalThis.document;
+  }
+});
+
+
+test('rendered matrix guards refuse hidden Clear children even when their cell stays visible', () => {
+  const names = ['document', 'getComputedStyle', 'NodeFilter', 'scrollX', 'scrollY'];
+  const saved = new Map(names.map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)]));
+  const rectangle = (left, right) => ({ left, right, top: 20, bottom: 60, width: right - left, height: 40 });
+  const box = (rect, style = {}) => ({ style, parentElement: null, texts: [], textContent: '',
+    scrollWidth: rect.width, clientWidth: rect.width, scrollHeight: 40, clientHeight: 40,
+    getBoundingClientRect: () => rect });
+  const wrapper = box({ left: 16, right: 304, top: 10, bottom: 650, width: 288, height: 640 }, { overflowX: 'auto' });
+  Object.assign(wrapper, { clientLeft: 1, clientWidth: 286, clientHeight: 640, scrollWidth: 648, scrollLeft: 0 });
+  const headers = Array.from({ length: 6 }, () => box(rectangle(17, 153), { position: 'sticky' }));
+  const cell = box(rectangle(153, 281));
+  const clear = box(rectangle(165, 202));
+  cell.parentElement = wrapper;
+  clear.parentElement = cell;
+  const text = { textContent: 'Clear', parentElement: clear, rects: [rectangle(165, 202)] };
+  cell.texts = [text]; cell.textContent = 'Clear';
+  wrapper.querySelectorAll = selector => selector === 'tbody th[scope="row"]' ? headers :
+    selector === 'th,td' ? [...headers, cell] : [cell];
+  try {
+    Object.assign(globalThis, { scrollX: 0, scrollY: 250, NodeFilter: { SHOW_TEXT: 4 },
+      getComputedStyle: element => ({ display: 'block', visibility: 'visible', opacity: '1', ...element.style }),
+      document: { activeElement: wrapper, documentElement: { clientWidth: 320, scrollWidth: 320 },
+        createTreeWalker: element => { let index = 0; return { nextNode: () => element.texts[index++] || null }; },
+        createRange: () => { let node; return { selectNodeContents: value => { node = value; }, getClientRects: () => node.rects }; },
+      } });
+    requireMatrixLayout(matrixObservation(wrapper));
+    clear.style.visibility = 'hidden';
+    assert.throws(() => requireMatrixLayout(matrixObservation(wrapper)), /Rendered matrix text/);
+    clear.style.visibility = 'visible';
+    cell.style.opacity = '0';
+    assert.throws(() => requireMatrixLayout(matrixObservation(wrapper)), /Rendered matrix text/);
+    cell.style.opacity = '1';
+    text.rects = [];
+    assert.throws(() => requireMatrixLayout(matrixObservation(wrapper)), /Rendered matrix text/);
+    text.rects = [rectangle(165, 290)];
+    assert.throws(() => requireMatrixLayout(matrixObservation(wrapper)), /Rendered matrix text/);
+    text.rects = [rectangle(165, 202)];
+    requireMatrixLayout(matrixObservation(wrapper));
+  } finally {
+    for (const name of names) {
+      const previous = saved.get(name);
+      if (previous) Object.defineProperty(globalThis, name, previous);
+      else delete globalThis[name];
+    }
+  }
+});
+
+
+test('matrix keys wait for their own native scrollend before observing or issuing the next key', async () => {
+  const calls = [];
+  let release;
+  let entered;
+  const waiting = new Promise(resolve => { entered = resolve; });
+  const ended = new Promise(resolve => { release = resolve; });
+  const pending = completeMatrixKey({ before: matrixSample(), direction: 'right', deadline: 5000,
+    now: () => 0, schedule: () => () => {},
+    arm: async () => { calls.push('arm'); return { dispose: async () => { calls.push('dispose'); } }; },
+    press: async () => { calls.push('press'); },
+    wait: async () => { calls.push('wait'); entered(); await ended; },
+    observe: async () => { calls.push('observe'); return matrixSample({ scrollLeft: 40 }); },
+  });
+  await waiting;
+  // A partial animation delta can exist, but cannot complete this operation.
+  assert.deepEqual(calls, ['arm', 'press', 'wait']);
+  release();
+  assert.equal((await pending).scrollLeft, 40);
+  assert.deepEqual(calls, ['arm', 'press', 'wait', 'observe', 'dispose']);
+});
+
+test('matrix key failures retain their cause, remove the listener and never start a later observation', async () => {
+  const failure = new Error('native-input-failed');
+  let disposed = 0;
+  let observed = 0;
+  await assert.rejects(completeMatrixKey({ before: matrixSample(), direction: 'right', deadline: 5000,
+    now: () => 0, schedule: () => () => {},
+    arm: async () => ({ dispose: async () => { disposed++; } }),
+    press: async () => { throw failure; }, wait: async () => assert.fail('no wait after input failure'),
+    observe: async () => { observed++; return matrixSample({ scrollLeft: 40 }); },
+  }), error => error === failure);
+  assert.equal(disposed, 1);
+  assert.equal(observed, 0);
+});
+
+test('each pending matrix-key operation is bounded by the same five-second traversal deadline', async () => {
+  for (const stage of ['setup', 'keypress', 'scrollend', 'geometry', 'cleanup']) {
+    const timer = virtualDeadline();
+    const never = () => new Promise(() => {});
+    const owner = { dispose: stage === 'cleanup' ? never : async () => {} };
+    await assert.rejects(completeMatrixKey({ before: matrixSample(), direction: 'right', deadline: 5000,
+      now: timer.now, schedule: timer.schedule,
+      arm: stage === 'setup' ? never : async () => owner,
+      press: stage === 'keypress' ? never : async () => {},
+      wait: stage === 'scrollend' ? never : async () => {},
+      observe: stage === 'geometry' ? never : async () => matrixSample({ scrollLeft: 40 }),
+    }), error => error instanceof MatrixKeyDeadline);
+  }
+});
+
+test('OFF discovery selects only a healthy partial bottom and refuses unrelated failures', () => {
+  assert.equal(partialFocusCandidate(healthyPartial()), true);
+  assert.equal(partialFocusCandidate({ ...healthyPartial(), inViewport: true }), false);
+  for (const change of [{ matchesTarget: false }, { outlineWidth: 0 }, { outlineStyle: 'none' },
+    { width: 0 }, { rect: { ...healthyPartial().rect, top: 901, bottom: 923 } },
+    { rect: { ...healthyPartial().rect, left: -1 } }]) {
+    assert.throws(() => partialFocusCandidate({ ...healthyPartial(), ...change }));
+  }
+  assert.throws(() => partialFocusCandidate(null), TypeError);
 });
