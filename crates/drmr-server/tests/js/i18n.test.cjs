@@ -59,3 +59,14 @@ test('readiness and diagnostic states have fixed English and Japanese copy', () 
     }
   }
 });
+
+test('response timeouts and unknown mutations have fixed localized recovery guidance', () => {
+  for (const language of ['en', 'ja']) {
+    const i18n = translations(language);
+    assert.equal(i18n.error({ code: 'request-timeout', message: 'private-sentinel' }), i18n.t('requestTimeout'));
+    assert.equal(i18n.error({ uncertain: true, body: { error: 'private-sentinel' } }), i18n.t('mutationOutcomeUnknown'));
+    for (const key of ['launchOutcomeUnknown', 'jobOutcomeUnknown', 'stopOutcomeUnknown', 'checkJobStatus']) {
+      assert.notEqual(i18n.t(key), key); assert.doesNotMatch(i18n.t(key), /private-sentinel/);
+    }
+  }
+});

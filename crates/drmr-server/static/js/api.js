@@ -3,34 +3,71 @@
   'use strict';
   var App = (window.App = window.App || {});
 
+  // This is a page-response budget, not a deadline for the server's media work.
+  var REQUEST_TIMEOUT_MS = 15000;
+  function requestError(code, uncertain) {
+    var error = new Error(code);
+    error.code = code;
+    error.uncertain = uncertain;
+    return error;
+  }
   function fetchJson(url, options) {
-    return fetch(url, options)
-      .catch(function (networkErr) {
-        var err = new Error('network_error');
-        err.url = url;
-        err.cause = networkErr;
-        throw err;
-      })
-      .then(function (res) {
-        return res.text().then(function (text) {
-          var body = null;
+    options = Object.assign({}, options || {});
+    var mutation = !/^(GET|HEAD)$/i.test(options.method || 'GET');
+    var controller = new AbortController();
+    options.signal = controller.signal;
+    var deadline = performance.now() + REQUEST_TIMEOUT_MS;
+    return new Promise(function (resolve, reject) {
+      var settled = false, refusal = null;
+      function interrupted(code) {
+        if (refusal !== null) { var error = requestError('request-failed', false); error.status = refusal; error.body = null; return error; }
+        return requestError(code, mutation);
+      }
+      function finish(error, body) {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (error) { controller.abort(); reject(error); }
+        else resolve(body);
+      }
+      var timer = setTimeout(function () { finish(interrupted('request-timeout')); }, REQUEST_TIMEOUT_MS);
+      Promise.resolve().then(function () { return fetch(url, options); }).then(function (response) {
+        if (!response.ok) refusal = response.status;
+        return response.text().then(function (text) {
+          if (settled) return;
+          if (performance.now() >= deadline) { finish(interrupted('request-timeout')); return; }
+          var body = null, valid = true;
           if (text) {
-            try {
-              body = JSON.parse(text);
-            } catch (_parseErr) {
-              body = { raw: text };
-            }
+            try { body = JSON.parse(text); }
+            catch (_error) { valid = false; }
           }
-          if (!res.ok) {
-            var err = new Error('request_failed');
-            err.url = url;
-            err.status = res.status;
-            err.body = body;
-            throw err;
-          }
-          return body;
+          if (performance.now() >= deadline) { finish(interrupted('request-timeout')); return; }
+          if (!response.ok) {
+            var error = requestError('request-failed', false);
+            error.status = response.status;
+            error.body = valid ? body : null;
+            finish(error);
+          } else if (!valid) finish(requestError('request-response-invalid', mutation));
+          else finish(null, body);
         });
-      });
+      }).catch(function () { finish(interrupted('network-error')); });
+    });
+  }
+  function objectResponse(body) {
+    if (!body || typeof body !== 'object' || Array.isArray(body)) throw requestError('request-response-invalid', true);
+    return body;
+  }
+  function jobResponse(body) {
+    objectResponse(body);
+    if (typeof body.job_id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(body.job_id)) throw requestError('request-response-invalid', true);
+    return body;
+  }
+
+  function statusResponse(body, mutation) {
+    if (!body || typeof body !== 'object' || Array.isArray(body) ||
+        !/^(running|succeeded|failed|interrupted)$/.test(body.state) ||
+        (mutation && typeof body.stop_requested !== 'boolean')) throw requestError('request-response-invalid', mutation);
+    return body;
   }
 
   function getCatalog() {
@@ -46,11 +83,11 @@
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ asset_id: assetId }),
-    });
+    }).then(jobResponse);
   }
 
   function getJobStatus(jobId) {
-    return fetchJson('/api/jobs/' + encodeURIComponent(jobId));
+    return fetchJson('/api/jobs/' + encodeURIComponent(jobId)).then(function (body) { return statusResponse(body, false); });
   }
   //   * every log record is an unnamed `data:` message -> onLine(rawJsonLine)
   //   * the stream ends with ONE terminal `event: done` whose data is
@@ -101,14 +138,14 @@
   }
 
   function postJson(url, body) {
-    return fetchJson(url, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    return fetchJson(url, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(objectResponse);
   }
 
   App.Api = {
     fetchJson: fetchJson,
-    analyzeHls: function (body) { return postJson('/api/hls/analyses', body); },
+    analyzeHls: function (body) { return postJson('/api/hls/analyses', body).then(jobResponse); },
     getAnalysis: function (id) { return fetchJson('/api/hls/analyses/' + encodeURIComponent(id)); },
-    packageHls: function (body) { return postJson('/api/hls/packages', body); },
+    packageHls: function (body) { return postJson('/api/hls/packages', body).then(jobResponse); },
     getHlsResult: function (id) { return fetchJson('/api/hls/results/' + encodeURIComponent(id)); },
     getHlsJobs: function (cursor) { return fetchJson('/api/hls/jobs?limit=50' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '')); },
     deleteHlsJob: function (id) { return fetchJson('/api/hls/jobs/' + encodeURIComponent(id), {method:'DELETE'}); },
@@ -123,7 +160,7 @@
     getAssetUrls: getAssetUrls,
     postConvert: postConvert,
     getJobStatus: getJobStatus,
-    stopJob: function (id) { return postJson('/api/jobs/' + encodeURIComponent(id) + '/stop', {}); },
+    stopJob: function (id) { return postJson('/api/jobs/' + encodeURIComponent(id) + '/stop', {}).then(function (body) { return statusResponse(body, true); }); },
     streamJobLog: streamJobLog,
   };
 })();

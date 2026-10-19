@@ -40,7 +40,8 @@
     var rows = [];
     function page(cursor, n) {
       return App.Api.getHlsJobs(cursor).then(function (data) {
-        rows = rows.concat(data.jobs || []);
+        if (!data || !Array.isArray(data.jobs) || data.jobs.some(function (job) { return !job || typeof job !== 'object' || typeof job.job_id !== 'string'; })) throw new Error('request-response-invalid');
+        rows = rows.concat(data.jobs);
         if (data.next_cursor && n < MAX_JOB_PAGES) return page(data.next_cursor, n + 1);
         return { rows: rows, truncated: !!data.next_cursor }; // the cap is never silent
       });
@@ -530,9 +531,11 @@
       var current = state.logView && state.logView.jobId === job.job_id;
       var actions = [h('button', { type: 'button', className: 'btn btn-sm', text: t('openLog'), 'aria-pressed': current ? 'true' : 'false', dataset: { focusKey: 'log:' + job.job_id }, onclick: function () { openLog(job); } })];
       if (job.state === 'running') {
-        var stopping = job.stop_requested || state.stopRequests[job.job_id];
-        actions.push(h('button', { type: 'button', className: 'btn btn-quiet btn-sm', text: t(stopping ? 'stopPending' : 'stopJob'),
-          'aria-label': t(stopping ? 'stopPendingLabel' : 'stopJobLabel', { asset: job.asset_id || job.job_id }), 'aria-disabled': stopping ? 'true' : null,
+        var stopState = state.stopRequests[job.job_id];
+        var stopping = job.stop_requested || stopState;
+        var uncertain = stopState === 'unknown';
+        actions.push(h('button', { type: 'button', className: 'btn btn-quiet btn-sm', text: t(uncertain ? 'checkJobStatus' : stopping ? 'stopPending' : 'stopJob'),
+          'aria-label': uncertain ? t('checkJobStatus') : t(stopping ? 'stopPendingLabel' : 'stopJobLabel', { asset: job.asset_id || job.job_id }), 'aria-disabled': stopping && !uncertain ? 'true' : null,
           title: t('stopHelp'), dataset: { focusKey: 'stop:' + job.job_id }, onclick: function () { requestStop(job); } }));
       }
       if (job.state !== 'running') actions.push(h('button', { type: 'button', className: 'btn btn-quiet btn-sm', text: t('removeHistory'), title: t('historyHelp'), 'aria-label': t('removeHistoryLabel', { asset: job.asset_id || job.job_id }), dataset: { focusKey: 'rm:' + job.job_id }, onclick: function (e) { deleteHistoryJob(job, e.target); } }));
@@ -544,12 +547,20 @@
     }));
     restoreFocus(els.runsList, focused);
   }
+  function ownsStopObservation(job) {
+    return !!job && !state.finishedJobs[job.job_id] &&
+      (!state.run || state.run.jobId === job.job_id) &&
+      !state.jobs.some(function (row) { return row.job_id === job.job_id && Model.isTerminal(row.state); });
+  }
   function requestStop(job) {
+    if (!ownsStopObservation(job)) return Promise.resolve();
+    if (job && state.stopRequests[job.job_id] === 'unknown') return reconcileStop(job);
     if (!job || job.state !== 'running' || job.stop_requested || state.stopRequests[job.job_id]) return Promise.resolve();
     state.stopRequests[job.job_id] = 'sending';
     var content = selected();
     if (content) renderRuns(content);
     return App.Api.stopJob(job.job_id).then(function (status) {
+      if (!ownsStopObservation(job)) return;
       if (status && status.stop_requested) {
         state.stopRequests[job.job_id] = 'requested';
         if (!state.finishedJobs[job.job_id] && (!state.run || state.run.jobId === job.job_id)) notify(job.asset_id, 'info', t('stopRequested') + ' ' + t('stopHelp'));
@@ -557,11 +568,35 @@
       // Acceptance is not a terminal event: keep observing the same run and its log.
       return loadAll(true);
     }, function (error) {
+      if (!ownsStopObservation(job)) return;
+      if (error && error.uncertain) {
+        state.stopRequests[job.job_id] = 'unknown';
+        notify(job.asset_id, 'warn', t('stopOutcomeUnknown'));
+        return reconcileStop(job);
+      }
       delete state.stopRequests[job.job_id];
       if (!state.finishedJobs[job.job_id] && (!state.run || state.run.jobId === job.job_id)) notify(job.asset_id, 'fail', t('stopFailed') + ' ' + App.I18n.error(error));
       var current = selected();
       if (current) renderRuns(current);
     });
+  }
+  function reconcileStop(job) {
+    if (!ownsStopObservation(job)) return Promise.resolve();
+    state.stopRequests[job.job_id] = 'checking';
+    function refresh() { if (!ownsStopObservation(job)) return; var content = selected(); if (content) renderRuns(content); }
+    refresh();
+    return App.Api.getJobStatus(job.job_id).then(function (status) {
+      if (!ownsStopObservation(job)) return;
+      if (!status || !/^(running|succeeded|failed|interrupted)$/.test(status.state)) throw new Error('request-response-invalid');
+      if (status.state === 'running' && status.stop_requested === true) state.stopRequests[job.job_id] = 'requested';
+      else delete state.stopRequests[job.job_id];
+      // Only the job observer may publish a terminal outcome, after the server reports it.
+      return loadAll(true);
+    }).catch(function () {
+      if (!ownsStopObservation(job)) return;
+      state.stopRequests[job.job_id] = 'unknown';
+      notify(job.asset_id, 'warn', t('stopOutcomeUnknown'));
+    }).then(refresh);
   }
   function deleteHistoryJob(job, button) {
     if (button) button.disabled = true;
@@ -953,7 +988,17 @@
   function stopElapsedTimer() { if (elapsedTimer) { clearInterval(elapsedTimer); elapsedTimer = null; } }
   function renderLease() {
     var run = state.run;
+    var unknown = !!(run && (run.launchUnknown || run.observationUnknown));
+    els.requestRecovery.hidden = !unknown;
+    els.reconcileBtn.hidden = !unknown;
+    UI.setText(els.requestRecoveryText, unknown ? t(run.launchUnknown ? 'launchOutcomeUnknown' : 'jobOutcomeUnknown') : '');
+    els.reconcileBtn.disabled = !!(run && run.checking);
     els.lease.dataset.running = String(!!run);
+    if (unknown) {
+      UI.setText(els.leaseText, t(run.launchUnknown ? 'launchOutcomeUnknown' : 'jobOutcomeUnknown'));
+      UI.setText(els.leaseElapsed, '');
+      return;
+    }
     if (run) {
       // The live region carries only text that changes with the job (asset, kind, stage); the
       // ticking elapsed time sits in an aria-hidden span so screen readers are not spammed.
@@ -981,10 +1026,10 @@
       },
       onLost: function (reason) {
         if (state.run !== run) return;
-        if (run.jobId) state.finishedJobs[run.jobId] = true;
+        run.observationUnknown = true;
         run.outcome = 'lost'; run.view.outcome = 'lost'; run.view.live = false; run.view.notice = t(reason);
-        endRun(run);
-        notify(run.assetId, 'fail', t(reason));
+        renderLease();
+        notify(run.assetId, 'warn', t('jobOutcomeUnknown'));
         renderLogPanel();
         loadAll();
       },
@@ -1057,12 +1102,65 @@
     renderLease();
   }
 
+  // Retain an uncertain mutation owner. Reconciliation reads records; it never repeats a POST.
+  function submitRun(run, send, accepted, rejected) {
+    return loadAllJobs().then(function (snapshot) {
+      if (state.run !== run) return;
+      run.baseline = Object.create(null);
+      snapshot.rows.forEach(function (job) { run.baseline[job.job_id] = true; });
+      run.baselineComplete = !snapshot.truncated;
+      return Promise.resolve().then(send).then(accepted, function (error) {
+        if (state.run !== run) return;
+        if (!error || !error.uncertain) { rejected(error); return; }
+        run.launchUnknown = true;
+        renderLease();
+        return reconcileRun();
+      });
+    }, rejected);
+  }
+  function reconcileRun() {
+    var run = state.run;
+    if (!run || run.checking || (!run.launchUnknown && !run.observationUnknown)) return Promise.resolve();
+    run.checking = true;
+    renderLease();
+    var request = run.launchUnknown ? loadAllJobs() : App.Api.getJobStatus(run.jobId);
+    return request.then(function (value) {
+      if (state.run !== run) return;
+      if (run.launchUnknown) {
+        var matches = value.rows.filter(function (job) {
+          return job.asset_id === run.assetId && job.kind === run.kind &&
+            typeof job.job_id === 'string' && UI.safeId(job.job_id) && !run.baseline[job.job_id] &&
+            /^(running|succeeded|failed|interrupted)$/.test(job.state);
+        });
+        if (!run.baselineComplete || value.truncated || matches.length !== 1) return;
+        run.jobId = matches[0].job_id;
+        run.analysisId = matches[0].analysis_id;
+        run.launchUnknown = false;
+      } else if (!value || !/^(running|succeeded|failed|interrupted)$/.test(value.state)) return;
+      if (run.observationUnknown) {
+        var previousView = run.view;
+        run.view = newLogView(run.jobId, run.assetId, run.kind, true);
+        if (state.logView === previousView) state.logView = run.view;
+      }
+      run.observationUnknown = false;
+      run.outcome = null; run.view.outcome = null; run.view.live = true;
+      watchRun(run, true);
+      return loadAll();
+    }).catch(function () {
+      // A failed GET cannot resolve ownership, including a missing record after a restart.
+    }).then(function () {
+      if (state.run !== run) return;
+      run.checking = false;
+      renderLease();
+    });
+  }
+
   // --- launchers -----------------------------------------------------------------------------
   function startConvert(content) {
     if (isJobRunning() || content.kind !== 'catalog') return;
     var run = startRun('convert', content.asset_id, null);
     notify(content.asset_id, 'info', t('convertStarting'));
-    App.Api.postConvert(content.asset_id).then(function (res) {
+    submitRun(run, function () { return App.Api.postConvert(content.asset_id); }, function (res) {
       if (state.run !== run) return;
       run.jobId = res.job_id; run.view.jobId = res.job_id; if (state.logView === run.view) renderLogPanel();
       notify(content.asset_id, 'info', t('converting'));
@@ -1141,7 +1239,7 @@
     var url = els.hlsUrl.value.trim(), assetId = els.hlsAssetId.value.trim();
     var run = startRun('analysis', assetId, null);
     UI.replace(els.addState, h('p', { className: 'state-line', text: t('analysisStarting') }));
-    App.Api.analyzeHls({ url: url, asset_id: assetId, access_profile: 'default' }).then(function (res) {
+    submitRun(run, function () { return App.Api.analyzeHls({ url: url, asset_id: assetId, access_profile: 'default' }); }, function (res) {
       if (state.run !== run) return;
       run.jobId = res.job_id; run.analysisId = res.analysis_id; run.view.jobId = res.job_id; if (state.logView === run.view) renderLogPanel();
       els.hlsUrl.value = ''; // Clear the submitted field; the server retains its private source analysis.
@@ -1165,15 +1263,15 @@
     Object.keys(DRM_FIELDS).forEach(function (key) { drm[key] = byId(DRM_FIELDS[key]).value.trim(); });
     var run = startRun('package', content.asset_id, null);
     run.analysisId = analysis.analysis_id;
-    var request = App.Api.packageHls({
+    var body = {
       analysis_id: analysis.analysis_id,
       selection: { analysis_id: analysis.analysis_id, snapshot_digest: analysis.snapshot_digest, audio_source_id: audioSelectionRequired() ? els.audioSelect.value : null },
       drm: drm,
-    });
+    };
     clearSecrets();
     drm = null;
     UI.replace(els.transformState, h('p', { className: 'state-line', text: t('packaging') }));
-    request.then(function (res) {
+    submitRun(run, function () { var request = App.Api.packageHls(body); body = null; return request; }, function (res) {
       if (state.run !== run) return;
       run.jobId = res.job_id; run.view.jobId = res.job_id; if (state.logView === run.view) renderLogPanel();
       watchRun(run, false);
@@ -1183,6 +1281,7 @@
       run.outcome = 'failed'; run.view.live = false;
       endRun(run);
       if (state.logView === run.view) closeLogView();
+      body = null;
       var code = e && e.status === 409 && e.body ? e.body.error : null;
       var exists = code === 'result-already-exists' || code === 'result-already-published';
       UI.replace(els.transformState, UI.notice('fail', App.I18n.error(e) + (exists ? '' : ' ' + t('reenterDrm'))));
@@ -1233,7 +1332,7 @@
   // Boot
   // ========================================================================================
   function cacheElements() {
-    ['lease', 'lease-text', 'lease-elapsed', 'list-truncated', 'add-btn', 'add-title', 'add-rescan-btn', 'add-rescan-state', 'add-conventions-btn', 'add-catalog-tree', 'conventions-btn', 'conventions', 'conventions-close', 'conventions-body', 'list-count', 'list-refresh', 'list-filter', 'list-error', 'bulk-bar', 'bulk-count', 'bulk-queue-btn', 'bulk-clear-btn', 'queue-pane', 'queue-list', 'queue-skipped', 'queue-notice', 'content-list',
+    ['request-recovery', 'request-recovery-text', 'reconcile-btn', 'lease', 'lease-text', 'lease-elapsed', 'list-truncated', 'add-btn', 'add-title', 'add-rescan-btn', 'add-rescan-state', 'add-conventions-btn', 'add-catalog-tree', 'conventions-btn', 'conventions', 'conventions-close', 'conventions-body', 'list-count', 'list-refresh', 'list-filter', 'list-error', 'bulk-bar', 'bulk-count', 'bulk-queue-btn', 'bulk-clear-btn', 'queue-pane', 'queue-list', 'queue-skipped', 'queue-notice', 'content-list',
       'detail-empty', 'hls-url', 'hls-asset-id', 'analyze-btn', 'add-cancel-btn', 'add-state', 'content', 'content-id', 'content-label', 'content-chips', 'content-actions', 'content-notice',
       'input-state', 'input-kv', 'input-findings', 'input-table', 'audio-choice', 'audio-source-select', 'transform-summary', 'transform-help', 'transform-rules', 'drm-form', 'drm-reveal', 'drm-sample', 'package-btn', 'transform-state',
       'runs-list', 'log-panel', 'log-title', 'log-chip', 'log-stage', 'log-count', 'log-close', 'log-json', 'log-download', 'log-notice', 'log-strips', 'log-list', 'report-state', 'report-view',
@@ -1243,6 +1342,7 @@
     els.addSection = byId('add-content'); els.audioSelect = byId('audio-source-select');
   }
   function bind() {
+    els.reconcileBtn.addEventListener('click', reconcileRun);
     els.addBtn.addEventListener('click', openAdd);
     els.addRescanBtn.addEventListener('click', function () {
       UI.replace(els.addRescanState, h('p', { className: 'state-line', text: t('loading') }));

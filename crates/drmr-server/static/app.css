@@ -56,6 +56,10 @@ h1[tabindex="-1"]:focus { outline: none; }
 .top-actions { display: flex; align-items: center; gap: 8px; }
 .lang select { min-height: 30px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); padding: 0 6px; font-size: 12px; }
 
+/* Request recovery stays readable independently of the compact header. */
+.request-recovery { margin: 12px; align-items: center; flex-wrap: wrap; }
+.request-recovery > span { flex: 1 1 240px; min-width: 0; }
+
 /* ------------------------------------------------------------------ console layout */
 .console { display: grid; grid-template-columns: var(--list-w) minmax(0, 1fr); min-height: calc(100vh - var(--top-h)); }
 .list-pane { position: sticky; top: var(--top-h); height: calc(100vh - var(--top-h)); overflow: auto; background: var(--surface); border-right: 1px solid var(--line); padding: 14px 12px 20px; display: flex; flex-direction: column; gap: 10px; }

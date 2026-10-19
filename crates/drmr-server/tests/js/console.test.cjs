@@ -44,11 +44,14 @@ function harness(options = {}) {
   const queued = [];
   const sandbox = {
     window: { addEventListener() {}, App: {
+      Jobs: options.observer || { watch() { return { stop() {} }; }, resume() { return { stop() {} }; } },
       I18n: { t: (key, values) => key + (values?.n == null ? '' : ':' + values.n), has: () => false, getLanguage: () => 'en', error: () => 'fixed-error' },
       Api: {
         postQueue: assetIds => { queued.push(Array.from(assetIds)); return Promise.resolve(); },
         getCatalog: options.getCatalog || (() => Promise.resolve(catalog)),
-        getHlsJobs: () => Promise.resolve({ jobs: options.jobs || [] }),
+        getHlsJobs: options.getHlsJobs || (() => Promise.resolve({ jobs: options.jobs || [] })),
+        analyzeHls: options.analyzeHls, packageHls: options.packageHls,
+        getJobStatus: options.getJobStatus || (() => Promise.resolve({ state: 'running' })),
         postConvert: options.postConvert || (() => Promise.reject({ status: 409 })),
         getAssetUrls: options.getAssetUrls || (() => Promise.resolve({})),
         getCatalogReport: options.getCatalogReport || (() => Promise.reject({ status: 404 })),
@@ -73,9 +76,9 @@ function harness(options = {}) {
       const boot = "  document.addEventListener('DOMContentLoaded', boot);";
       assert.ok(source.includes(boot));
       source = source.replace(boot, `window.controller = {
-        state, cacheElements, bind, renderList, newLogView, applyRecord, settleProgress, finishRun,
+        state, cacheElements, bind, loadAll, renderList, newLogView, applyRecord, settleProgress, finishRun,
         renderLogMeta, suggestedName, discoverRunning, renderRuns, requestStop,
-        renderPlaybackControls, preparePreview, recompose, renderReport, loadCatalogReport, startConvert, renderInput, renderHead,
+        startAnalysis, startPackage, reconcileRun: typeof reconcileRun === 'function' ? reconcileRun : undefined, renderPlaybackControls, preparePreview, recompose, renderReport, loadCatalogReport, startConvert, renderInput, renderHead,
         onPlayback: function (value) { playback = value; },
         onRestore: function (callback) { restoreRun = callback; }
       };`);
@@ -448,5 +451,141 @@ for (const kind of ['analysis', 'package']) {
     assert.match(notice.className, /notice-warn/);
     assert.match(descendants(notice).map(node => node.textContent).join(''), kind === 'analysis' ? /finding_analysis-interrupted/ : /packageInterrupted/);
     assert.equal(run.exitCode, -9);
+  });
+}
+
+function deferred() { let resolve, reject; const promise = new Promise((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; }
+const unknownRequest = () => ({ code: 'request-timeout', uncertain: true });
+test('an uncertain launch adopts only a new exact asset and kind, never resends the POST', async () => {
+  let posts = 0, rows = [{ job_id: 'old', asset_id: 'asset', kind: 'convert', state: 'succeeded' }];
+  const observed = [];
+  const h = harness({ catalog: [{ asset_id: 'asset' }], getHlsJobs: () => Promise.resolve({ jobs: rows }),
+    postConvert: () => { posts++; rows = [...rows, { job_id: 'different-kind', asset_id: 'asset', kind: 'analysis', state: 'running' }, { job_id: 'different-asset', asset_id: 'other', kind: 'convert', state: 'running' }, { job_id: 'new', asset_id: 'asset', kind: 'convert', state: 'running' }]; return Promise.reject(unknownRequest()); },
+    observer: { resume(id) { observed.push(id); return { stop() {} }; } } });
+  h.controller.startConvert(h.controller.state.contents[0]); await flush();
+  assert.equal(posts, 1); assert.equal(h.controller.state.run?.jobId, 'new'); assert.deepEqual(observed, ['new']);
+  assert.equal(h.controller.state.run.view.outcome, null);
+});
+test('ambiguous or missing launch correspondence retains an owner and offers GET-only recovery', async () => {
+  let posts = 0, rows = []; const observed = [];
+  const h = harness({ catalog: [{ asset_id: 'asset' }], getHlsJobs: () => Promise.resolve({ jobs: rows }),
+    postConvert: () => { posts++; rows = ['one', 'two'].map(job_id => ({ job_id, asset_id: 'asset', kind: 'convert', state: 'running' })); return Promise.reject(unknownRequest()); },
+    observer: { resume(id) { observed.push(id); return { stop() {} }; } } });
+  const content = h.controller.state.contents[0]; h.controller.startConvert(content); await flush();
+  const run = h.controller.state.run; assert.ok(run); assert.equal(run.launchUnknown, true);
+  assert.equal(h.element('reconcile-btn').hidden, false);
+  h.controller.startConvert(content); assert.equal(posts, 1);
+  rows = []; await h.controller.reconcileRun(); assert.equal(h.controller.state.run, run); assert.equal(run.launchUnknown, true);
+  rows = [{ job_id: 'one', asset_id: 'asset', kind: 'convert', state: 'running' }]; await h.controller.reconcileRun();
+  assert.equal(posts, 1); assert.equal(run.jobId, 'one'); assert.deepEqual(observed, ['one']);
+});
+test('a failed pre-submit baseline does not send a mutation', async () => {
+  let posts = 0; const h = harness({ catalog: [{ asset_id: 'asset' }], getHlsJobs: () => Promise.reject({ code: 'request-timeout' }), postConvert: () => { posts++; return Promise.resolve({ job_id: 'new' }); } });
+  h.controller.startConvert(h.controller.state.contents[0]); await flush();
+  assert.equal(posts, 0); assert.equal(h.controller.state.run, null);
+});
+test('a retired pending launch cannot send after its baseline finishes', async () => {
+  const pending = deferred(); let posts = 0;
+  const h = harness({ catalog: [{ asset_id: 'asset' }], getHlsJobs: () => pending.promise, postConvert: () => { posts++; return Promise.resolve({ job_id: 'new' }); } });
+  h.controller.startConvert(h.controller.state.contents[0]); h.controller.state.run = null;
+  pending.resolve({ jobs: [] }); await flush(); assert.equal(posts, 0); assert.equal(h.controller.state.run, null);
+});
+test('an uncertain Stop reconciles its exact job without resending or claiming completion', async () => {
+  let posts = 0; const gets = [];
+  const job = { job_id: 'job', asset_id: 'asset', kind: 'analysis', state: 'running' };
+  const h = harness({ stopJob: () => { posts++; return Promise.reject(unknownRequest()); }, getJobStatus: id => { gets.push(id); return Promise.resolve({ state: 'running', stop_requested: true }); } });
+  const run = { jobId: job.job_id, assetId: 'asset', kind: 'analysis', startedAt: Date.now(), view: h.controller.newLogView(job.job_id, 'asset', 'analysis', true) }; h.controller.state.run = run;
+  await h.controller.requestStop(job);
+  assert.equal(posts, 1); assert.deepEqual(gets, ['job']); assert.equal(h.controller.state.run, run);
+  assert.equal(h.controller.state.stopRequests.job, 'requested');
+});
+
+test('a truncated baseline cannot authorize adoption even if one visible job matches', async () => {
+  let posts = 0; const h = harness({ catalog: [{ asset_id: 'asset' }], getHlsJobs: () => Promise.resolve({ jobs: [{ job_id: 'visible', asset_id: 'asset', kind: 'convert', state: 'running' }], next_cursor: 'more' }),
+    postConvert: () => { posts++; return Promise.reject(unknownRequest()); } });
+  h.controller.startConvert(h.controller.state.contents[0]); await flush();
+  assert.equal(posts, 1); assert.equal(h.controller.state.run.launchUnknown, true); assert.equal(h.controller.state.run.jobId, null);
+});
+test('repeated unknown Stop recovery is GET-only and terminal observations are not invented', async () => {
+  let posts = 0, gets = 0;
+  const job = { job_id: 'job', asset_id: 'asset', kind: 'analysis', state: 'running' };
+  const h = harness({ stopJob: () => { posts++; return Promise.reject(unknownRequest()); }, getJobStatus: () => { gets++; return Promise.reject({ code: 'request-timeout' }); } });
+  const run = { jobId: 'job', assetId: 'asset', kind: 'analysis', startedAt: Date.now(), view: h.controller.newLogView('job', 'asset', 'analysis', true) };
+  h.controller.state.run = run;
+  await h.controller.requestStop(job); await h.controller.requestStop(job);
+  assert.equal(posts, 1); assert.equal(gets, 2); assert.equal(h.controller.state.run, run); assert.equal(run.view.outcome, null);
+  assert.equal(h.controller.state.stopRequests.job, 'unknown');
+});
+test('lost observation retains job ownership until a status-only recovery can resume it', async () => {
+  let handlers, resumed = 0;
+  const h = harness({ catalog: [{ asset_id: 'asset' }], postConvert: () => Promise.resolve({ job_id: 'job' }),
+    observer: { watch(_id, value) { handlers = value; return { stop() {} }; }, resume() { resumed++; return { stop() {} }; } } });
+  h.controller.startConvert(h.controller.state.contents[0]); await flush();
+  const run = h.controller.state.run; run.view.lines.push({ stage: 'raw', message: 'previous stream' });
+  handlers.onLost('jobUnreachable'); assert.equal(h.controller.state.run, run); assert.equal(run.observationUnknown, true);
+  assert.equal(h.element('reconcile-btn').hidden, false);
+  await h.controller.reconcileRun(); assert.equal(resumed, 1); assert.equal(h.controller.state.run, run);
+  assert.equal(run.observationUnknown, false); assert.equal(run.view.lines.length, 0); assert.equal(run.view.outcome, null);
+});
+test('a late reconciliation cannot adopt into a replacement owner', async () => {
+  const pending = deferred(); let reads = 0;
+  const h = harness({ catalog: [{ asset_id: 'asset' }], getHlsJobs: () => ++reads === 1 ? Promise.resolve({ jobs: [] }) : pending.promise,
+    postConvert: () => Promise.reject(unknownRequest()), observer: { resume() { assert.fail('retired request cannot resume'); } } });
+  h.controller.startConvert(h.controller.state.contents[0]); await flush();
+  const replacement = { checking: false }; h.controller.state.run = replacement;
+  pending.resolve({ jobs: [{ job_id: 'new', kind: 'convert', asset_id: 'asset', state: 'running' }] }); await flush();
+  assert.equal(h.controller.state.run, replacement); assert.equal(replacement.jobId, undefined);
+});
+test('uncertain analysis launch uses the same retained-owner reconciliation', async () => {
+  let rows = [], posts = 0;
+  const h = harness({ getHlsJobs: () => Promise.resolve({ jobs: rows }), analyzeHls: () => { posts++; rows = [{ job_id: 'analysis-job', asset_id: 'new-asset', kind: 'analysis', state: 'running' }]; return Promise.reject(unknownRequest()); } });
+  h.element('hls-url').value = 'https://example.invalid/master.m3u8'; h.element('hls-asset-id').value = 'new-asset';
+  h.controller.startAnalysis(); await flush(); assert.equal(posts, 1); assert.equal(h.controller.state.run.jobId, 'analysis-job');
+});
+
+test('uncertain package launch retains its owner and submits protected fields only once', async () => {
+  let rows = [], posts = 0, sent;
+  const h = harness({ catalog: [], getHlsJobs: () => Promise.resolve({ jobs: rows }), packageHls: body => { posts++; sent = body; rows = [{ job_id: 'package-job', asset_id: 'asset', kind: 'package', state: 'running' }]; return Promise.reject(unknownRequest()); } });
+  h.controller.state.contents = [{ asset_id: 'asset', kind: 'hls', state: 'analyzed', jobs: [] }];
+  h.controller.state.selectedId = 'asset'; h.controller.state.detail.analysis = { analysis_id: 'analysis', snapshot_digest: 'digest', admitted: true, tracks: [] };
+  h.controller.onPlayback({ hide() {} });
+  h.element('drm-sample').dispatch('click');
+  h.controller.startPackage(); await flush();
+  assert.equal(posts, 1); assert.equal(sent.analysis_id, 'analysis'); assert.equal(sent.selection.snapshot_digest, 'digest');
+  assert.equal(h.controller.state.run.jobId, 'package-job'); assert.equal(h.element('drm-key').value, '');
+  assert.equal(h.controller.state.run.view.outcome, null);
+});
+
+test('a failed listing response releases the loading slot for a deliberate GET retry', async () => {
+  let fail = true, reads = 0;
+  const h = harness({ getCatalog: () => { reads++; return fail ? Promise.reject({ code: 'request-timeout' }) : Promise.resolve([]); } });
+  await h.controller.loadAll(); assert.equal(h.controller.state.loading, null); assert.ok(h.controller.state.listError);
+  fail = false; await h.controller.loadAll(); assert.equal(reads, 2); assert.equal(h.controller.state.loading, null); assert.equal(h.controller.state.listError, null);
+});
+
+for (const phase of ['post-timeout', 'status-timeout', 'post-accepted', 'status-accepted']) {
+  test('a retired Stop ' + phase + ' cannot mutate or notify the next same-asset run', async () => {
+    const delayed = deferred(); let generation = 'old', statusGets = 0;
+    let rows = [{ job_id: 'old', asset_id: 'asset', kind: 'convert', state: 'running' }];
+    const h = harness({ catalog: [{ asset_id: 'asset' }], getHlsJobs: () => Promise.resolve({ jobs: rows }),
+      postConvert: () => Promise.resolve({ job_id: generation }),
+      stopJob: () => phase.startsWith('post') ? delayed.promise : Promise.reject(unknownRequest()),
+      getJobStatus: () => { statusGets++; return delayed.promise; } });
+    h.controller.onPlayback({ hide() {} }); h.controller.state.selectedId = 'asset';
+    h.controller.startConvert(h.controller.state.contents[0]); await flush();
+    const old = h.controller.state.run; const stopping = h.controller.requestStop(rows[0]); await flush();
+    rows = [{ ...rows[0], state: 'interrupted', exit_code: -9 }];
+    h.controller.finishRun(old, { state: 'interrupted', exit_code: -9 }); await flush();
+    generation = 'new'; rows = [...rows, { job_id: 'new', asset_id: 'asset', kind: 'convert', state: 'running' }];
+    h.controller.startConvert(h.controller.state.contents[0]); await flush();
+    const current = h.controller.state.run;
+    const notice = () => descendants(h.element('content-notice')).map(node => node.textContent).join('|');
+    const before = notice(); assert.match(before, /converting/);
+    if (phase.endsWith('timeout')) delayed.reject(unknownRequest());
+    else delayed.resolve({ state: 'running', stop_requested: true });
+    await stopping; await flush();
+    assert.equal(notice(), before); assert.equal(h.controller.state.run, current);
+    assert.equal(h.controller.state.stopRequests.old, undefined);
+    assert.equal(statusGets, phase.startsWith('post') ? 0 : 1);
   });
 }
