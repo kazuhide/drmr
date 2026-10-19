@@ -60,7 +60,7 @@ class GuideBuilderTests(unittest.TestCase):
 
         for route, page in builder.render(TOOLS.parent).items():
             locale = 'ja' if route.startswith('ja/') else 'en'
-            source = (TOOLS.parent / f'site-content/guide/{locale}.md').read_text()
+            source = (TOOLS.parent / f'site-content/guide/{locale}.md').read_text(encoding='utf-8')
             expected = [[language, code] for language, code in
                         re.findall(r'^```([^\n]*)\n(.*?)^```', source, re.M | re.S)]
             parser = Examples()
