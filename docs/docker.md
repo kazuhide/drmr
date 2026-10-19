@@ -99,6 +99,12 @@ The media cases use the complete attributed [ten-second Big Buck Bunny fixture](
 
 The experimental web console's HTTP, request-origin, Stop, and orderly-shutdown checks are required on the native Linux CI host. The local ARM64 result above excludes Web and GUI testing. Use each workflow run's report for its actual result; media comparisons do not qualify DRM license services or playback devices.
 
+The native Linux CI qualification also converts an audio-only clear MPEG-TS
+playlist to CBCS fMP4 HLS, followed by separate verification against that original
+TS playlist. This additional route is recorded separately from the historical
+local ARM64 results above. It preserves the TS presentation's complete audio
+frames, rather than applying the earlier MP4 file's trimming settings.
+
 ## Clean up
 
 After removing containers that use this image, remove your local tag with:

@@ -156,7 +156,7 @@ Clear output needs no output-key section. Keep the original media and keys until
 
 ## MPEG transport stream input
 
-Completed local HLS playlists containing clear, AES-128, or SAMPLE-AES transport stream segments can produce DASH with clear, `cenc`, or `cbcs` protection, or fragmented MP4 HLS with clear, `cbcs`, or AES-128 protection. Encrypted input requires operator-supplied keys. The profile accepts one progressive H.264 video stream, optionally accompanied by one 48 kHz AAC-LC audio stream, in a single program. DASH and TS output also accept audio-only input with the strict native audio timing checks described in [processing and verification](media-processing.md#mpeg-transport-stream-input). Audio-only input cannot produce fMP4 HLS in this profile. 44.1 kHz audio, SAMPLE-AES-CTR transport streams, and standalone MP4 output from this input are refused.
+Completed local HLS playlists containing clear, AES-128, or SAMPLE-AES transport stream segments can produce DASH with clear, `cenc`, or `cbcs` protection, or fragmented MP4 HLS with clear, `cbcs`, or AES-128 protection. Encrypted input requires operator-supplied keys. The profile accepts one progressive H.264 video stream, one 48 kHz AAC-LC audio stream, or both, in a single program. Audio-only input supports DASH, fMP4 HLS, and TS output with the strict native audio timing checks described in [processing and verification](media-processing.md#mpeg-transport-stream-input). 44.1 kHz audio, SAMPLE-AES-CTR transport streams, and standalone MP4 output from this input are refused.
 
 For example, create CBCS DASH from a supported local TS playlist:
 
@@ -172,6 +172,19 @@ The ten-second BBB regression covers all nine input/output protection pairs for 
 ```sh
 cargo test --locked -p drmr-core --test conversion_ts_output dash_ -- --nocapture
 cargo test --locked -p drmr --test conversion_ts_dash -- --nocapture
+```
+
+Audio-only TS to fMP4 HLS has a separate nine-pair regression: clear, AES-128,
+and SAMPLE-AES input, each converted to clear, `cbcs`, and AES-128 output.
+The complete ten-second fixture contains 470 AAC frames; every frame and all
+decoded samples are compared with the original TS. Input and output use separate
+keys. Conversion checks and fresh verification include the actual master and
+media playlists, initialization segment, every media segment, packet clocks,
+and final playback end. Altered media, times, durations, playlist endings, and
+keys must fail. Run this regression with:
+
+```sh
+cargo test --locked -p drmr-core --test conversion_ts_output audio_hls -- --nocapture
 ```
 
 Earlier fMP4 HLS regressions passed clear, `cbcs`, and AES-128 output from clear MPEG-TS input, with separate verification on Linux x86_64 and Windows x64 with FFmpeg 9.0.2, and macOS ARM64 with FFmpeg 9.0.1; all used Shaka Packager 3.8.0. Separate AES-128 MPEG-TS input regressions verify clear HLS output with key rotation, explicit and sequence-derived initialization vectors, and transitions to clear segments. Additional cases cover reordered pictures and video-only input. These results qualify the tested profile, tools, and platforms. They do not establish other codecs or arbitrary broadcast streams. See [the exact input and verification limits](media-processing.md#mpeg-transport-stream-input).
