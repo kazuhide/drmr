@@ -60,6 +60,24 @@ class SourceEvidence(unittest.TestCase):
                     native.unpack(archive, Path(temp) / "unpacked")
                 self.assertFalse((Path(temp) / "outside").exists())
 
+    def test_pinned_publisher_copyright_is_an_explicit_license(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "source"
+            root.mkdir()
+            body = b"Copyright publisher\r\nPermission is hereby granted...\r\n"
+            (root / "Copyright").write_bytes(body)
+            with self.assertRaisesRegex(ValueError, "component-license-missing"):
+                native.collect_notices(root, Path(temp) / "default")
+            with patch.object(native, "PREFIX", Path(temp) / "prefix"):
+                native.record("publisher", {"license_files": ["Copyright"], "notices": [
+                    {"path": "Copyright", "sha256": hashlib.sha256(body).hexdigest()}]}, root)
+                self.assertEqual((native.PREFIX / "licenses/publisher/Copyright").read_bytes(), body)
+                with self.assertRaisesRegex(ValueError, "component-license-pin-missing"):
+                    native.record("unbound", {"license_files": ["Copyright"], "notices": []}, root)
+                with self.assertRaisesRegex(ValueError, "source-checksum-mismatch"):
+                    native.record("changed", {"license_files": ["Copyright"], "notices": [
+                        {"path": "Copyright", "sha256": "0" * 64}]}, root)
+
     def test_component_without_license_fails_closed(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp) / "source"

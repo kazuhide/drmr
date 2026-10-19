@@ -27,7 +27,7 @@ def verify_file(path, expected):
     if digest(path) != expected:
         raise ValueError("source-checksum-mismatch: " + path.name)
 
-def collect_notices(source, destination):
+def collect_notices(source, destination, license_files=None):
     """Retain source-wide notices; selected link targets are recorded separately."""
     files = []
     for path in sorted(source.rglob("*")):
@@ -39,7 +39,12 @@ def collect_notices(source, destination):
                                or "LICENSES" in (part.upper() for part in relative.parts)
                                or name in ("AUTHORS", "THANKS")):
             files.append(path)
-    if not any(path.name.upper().startswith(("LICENSE", "LICENCE", "COPYING", "UNLICENSE")) for path in files):
+    collected = {path.relative_to(source).as_posix() for path in files}
+    if license_files is not None:
+        primary = bool(license_files) and all(name in collected for name in license_files)
+    else:
+        primary = any(path.name.upper().startswith(("LICENSE", "LICENCE", "COPYING", "UNLICENSE")) for path in files)
+    if not primary:
         raise ValueError("component-license-missing: " + source.name)
     records = []
     for path in files:
@@ -90,9 +95,13 @@ def unpack(archive, destination):
     return entries[0]
 
 def record(name, pin, source, extra=None):
+    pinned = {notice["path"] for notice in pin.get("notices", [])}
+    primary = pin.get("license_files")
+    if primary is not None and (not primary or any(path not in pinned for path in primary)):
+        raise ValueError("component-license-pin-missing: " + name)
     for notice in pin.get("notices", []):
         verify_file(source / notice["path"], notice["sha256"])
-    notices = collect_notices(source, PREFIX / "licenses" / name)
+    notices = collect_notices(source, PREFIX / "licenses" / name, primary)
     result = {"name": name, "pin": pin, "notices": notices, **(extra or {})}
     (PREFIX / "metadata").mkdir(parents=True, exist_ok=True)
     (PREFIX / "metadata" / (name + ".json")).write_text(json.dumps(result, indent=2) + "\n")

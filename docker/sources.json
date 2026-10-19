@@ -42,6 +42,10 @@
         "path": "LICENSE.md",
         "sha256": "2e1d16c72fd74e12063776371da757322f8b77589386532f4fd8634bde7de1af"
       }
+    ],
+    "license_files": [
+      "LICENSE.md",
+      "COPYING.LGPLv2.1"
     ]
   },
   "bento4": {
@@ -55,6 +59,9 @@
         "path": "Documents/LICENSE.txt",
         "sha256": "7daae92c8628ada28def8d096fe2fde298b72ec3e2d64a3c408afce38edb361b"
       }
+    ],
+    "license_files": [
+      "Documents/LICENSE.txt"
     ]
   },
   "shaka": {
@@ -87,6 +94,10 @@
             "path": "AUTHORS",
             "sha256": "1fd39030c119b4c97014f59e0ad0ed65f23475bbdf55a52740f31eb82b34b4ee"
           }
+        ],
+        "license_files": [
+          "LICENSE",
+          "AUTHORS"
         ]
       },
       {
@@ -131,6 +142,17 @@
             "path": "LICENSES/MIT.txt",
             "sha256": "f2a60bcd22282f235328a23d36af62dd32956d7cf4d21a622d71863d6a7ab7ab"
           }
+        ],
+        "license_files": [
+          "LICENSE.md",
+          "AUTHORS",
+          "LICENSES/APSL-2.0.txt",
+          "LICENSES/Autoconf-exception-3.0.txt",
+          "LICENSES/BSD-3-Clause.txt",
+          "LICENSES/FSFAP.txt",
+          "LICENSES/GPL-3.0-or-later.txt",
+          "LICENSES/LGPL-2.1-or-later.txt",
+          "LICENSES/MIT.txt"
         ]
       },
       {
@@ -155,6 +177,12 @@
             "path": "LICENSES/curl.txt",
             "sha256": "8c93cc9b95bc7d8e37c87fe3645a21d88871e791ef2fec43317f30b649078525"
           }
+        ],
+        "license_files": [
+          "COPYING",
+          "LICENSES/BSD-4-Clause-UC.txt",
+          "LICENSES/ISC.txt",
+          "LICENSES/curl.txt"
         ]
       },
       {
@@ -167,6 +195,9 @@
             "path": "LICENSE",
             "sha256": "9702de7e4117a8e2b20dafab11ffda58c198aede066406496bef670d40a22138"
           }
+        ],
+        "license_files": [
+          "LICENSE"
         ]
       },
       {
@@ -195,6 +226,13 @@
             "path": "LICENSES/MIT.txt",
             "sha256": "b85dcd3e453d05982552c52b5fc9e0bdd6d23c6f8e844b984a88af32570b0cc0"
           }
+        ],
+        "license_files": [
+          "LICENSE.MIT",
+          "LICENSES/Apache-2.0.txt",
+          "LICENSES/BSD-3-Clause.txt",
+          "LICENSES/GPL-3.0-only.txt",
+          "LICENSES/MIT.txt"
         ]
       },
       {
@@ -211,6 +249,10 @@
             "path": "AUTHORS",
             "sha256": "5d9d94afa7d911c590ee287da91787d84e49a04a9ee67ef57f1f42970249f5c2"
           }
+        ],
+        "license_files": [
+          "LICENSE",
+          "AUTHORS"
         ]
       },
       {
@@ -223,6 +265,9 @@
             "path": "LICENSE.TXT",
             "sha256": "5aec868f669e384a22372a4e8a1a6cd7d44c64cd451f960ca69cc170d1e13acf"
           }
+        ],
+        "license_files": [
+          "LICENSE.TXT"
         ]
       },
       {
@@ -235,6 +280,9 @@
             "path": "Copyright",
             "sha256": "5d4873884a890122a4b9b20ad56ac6f7da1d796a5bfcf04a427970ac96217626"
           }
+        ],
+        "license_files": [
+          "Copyright"
         ]
       },
       {
@@ -247,6 +295,9 @@
             "path": "LICENSE",
             "sha256": "9b405ef4c89342f5eae1dd828882f931747f71001cfba7d114801039b52ad09b"
           }
+        ],
+        "license_files": [
+          "LICENSE"
         ]
       },
       {
@@ -259,6 +310,9 @@
             "path": "LICENSE",
             "sha256": "19c99805e7a44a34b297a75d1edea9985e300066dfc024d5c99d4236d4573b5d"
           }
+        ],
+        "license_files": [
+          "LICENSE"
         ]
       },
       {
@@ -271,6 +325,9 @@
             "path": "LICENSE",
             "sha256": "4ba646f5a7012d8b52f3a74398e446f56960dde0572f7241a2215430da5dd5a2"
           }
+        ],
+        "license_files": [
+          "LICENSE"
         ]
       },
       {
@@ -283,6 +340,9 @@
             "path": "LICENSE",
             "sha256": "6e5e117324afd944dcf67f36cf329843bc1a92229a8cd9bb573d7a83130fea7d"
           }
+        ],
+        "license_files": [
+          "LICENSE"
         ]
       },
       {
@@ -295,6 +355,9 @@
             "path": "LICENSE",
             "sha256": "0f854f426019c475697e17f1b0fa638270f6e700bc756d9bfe50d17268bd3281"
           }
+        ],
+        "license_files": [
+          "LICENSE"
         ]
       },
       {
@@ -307,8 +370,15 @@
             "path": "LICENSE",
             "sha256": "11402351e38392230bb8934ba1095c0c0049a296c0f8821f76e4672dff54b490"
           }
+        ],
+        "license_files": [
+          "LICENSE"
         ]
       }
+    ],
+    "license_files": [
+      "LICENSE",
+      "chromium-LICENSE"
     ]
   }
 }
