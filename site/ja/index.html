@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="drmrで対応する配信メディアを調査・変換し、原本と比較して検証します。映像・音声のエンコードを保ったまま、配信形式や暗号化方式を変換します。">
   <meta name="color-scheme" content="light">
-  <title>drmr — 配信形式を変える。原本と比べて確かめる。</title>
+  <title>drmr — 配信メディアの変換と比較検証</title>
   <link rel="canonical" href="https://kazuhide.github.io/drmr/ja/">
   <link rel="alternate" hreflang="en" href="https://kazuhide.github.io/drmr/">
   <link rel="alternate" hreflang="ja" href="https://kazuhide.github.io/drmr/ja/">
@@ -30,9 +30,9 @@
   <main id="main" class="wrap" tabindex="-1">
     <section class="hero" aria-labelledby="title">
       <div class="hero-copy">
-        <h1 id="title">配信形式を変える。<br>原本と比べて<br class="wide-break">確かめる。</h1>
-        <p class="lead">対応するオンデマンドメディアの配信形式や暗号化方式を変換します。映像・音声は再エンコードせず、変換後のデータを原本と比較します。</p>
-        <p>管理する権限のあるメディアと、その鍵を用意してください。入力の復号と出力の暗号化は、別々の鍵設定として扱います。</p>
+        <h1 id="title">配信メディアの変換と比較検証</h1>
+        <p class="lead">drmrは、対応条件を満たすオンデマンド配信（VOD）のメディアを対象に、配信形式や暗号化方式を変換します。映像・音声の再エンコードは行いません。変換したメディアは、原本と比較して検証します。</p>
+        <p>暗号化メディアには、利用者が用意した鍵を使います。入力の復号と出力の暗号化は別々の鍵設定として扱います。管理する権限のあるメディアを対象としてください。</p>
         <div class="actions">
           <a class="button" href="#get-started">始める</a>
           <a class="text-link" href="https://github.com/kazuhide/drmr">ソースを見る（英語）</a>
@@ -40,7 +40,7 @@
         <p class="hero-note">Windows・macOS・Linuxで動くネイティブCLI（コマンドラインツール）です。<br>ローカルWeb・Desktopインターフェースは実験的な機能です。</p>
       </div>
       <figure class="workbench" aria-labelledby="bench-caption">
-        <div class="bench-heading"><span class="bench-mark" aria-hidden="true"></span>いつも原本と照らし合わせる</div>
+        <div class="bench-heading"><span class="bench-mark" aria-hidden="true"></span>原本と変換結果を比較</div>
         <div class="bench-media">
           <div><span class="bench-label">原本</span><strong>エンコード済みデータ</strong><span class="packets" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></span></div>
           <div><span class="bench-label">指定した出力</span><strong>新しい配信形式</strong><span class="packets repacked" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></span></div>
@@ -55,7 +55,7 @@
             <li><span>全体をデコードした映像・音声</span><b aria-hidden="true">↔</b></li>
           </ul>
         </div>
-        <figcaption id="bench-caption">保存する前に、エンコード済みデータ・時刻・デコードした内容を原本と比較します。</figcaption>
+        <figcaption id="bench-caption">出力を保存する前に、エンコード済みデータ・パケットの時刻・デコードした映像と音声を原本と比較します。</figcaption>
       </figure>
     </section>
 
@@ -107,7 +107,7 @@
         <div class="profile"><h3>HLS / MPEG-TS</h3><p>H.264/AACに限定した、より狭い対応範囲です。非暗号化・AES-128・SAMPLE-AESのTS変換経路と、条件を満たすfMP4 HLS出力に対応します。</p></div>
       </div>
       <div class="support-detail">
-        <p><code>cenc</code>はカウンターモードでサンプルを暗号化します。<code>cbcs</code>はCBC（暗号ブロック連鎖）によるパターン暗号化です。HLS AES-128はリソース全体を、SAMPLE-AES TSはメディア内の指定部分を暗号化します。名称だけでDRMライセンスや端末の対応可否が分かるわけではありません。</p>
+        <p><code>cenc</code>はカウンターモードでサンプルを暗号化します。<code>cbcs</code>はCBC（暗号ブロック連鎖）によるパターン暗号化です。HLS AES-128はリソース全体を、SAMPLE-AES TSはメディア内の指定部分を暗号化します。DRMライセンスの取得や端末での再生可否は、これらの暗号化方式とは別に確認する項目です。</p>
         <a class="text-link" href="https://github.com/kazuhide/drmr/blob/main/docs/conversion-support.md">対応範囲と制約を読む（英語）</a>
       </div>
       <aside class="url-note" aria-labelledby="url-title">
@@ -120,12 +120,12 @@
     <section id="verification" class="section" aria-labelledby="verification-title">
       <div class="section-intro">
         <h2 id="verification-title">原本と比べる4つの確認</h2>
-        <p>マニフェストが一致するだけでは十分ではありません。メディアの検証では、4種類の証拠を使って変換結果を原本と比較します。</p>
+        <p>実際のメディアについて、ストリームの設定情報、エンコード済みパケット、時刻、デコード結果の4項目を原本と比較します。</p>
       </div>
       <dl class="evidence-list">
-        <div><dt>ストリームの設定情報</dt><dd>対応するコーデック・トラック構成・再生に関する設定を比較します。</dd></div>
-        <div><dt>エンコード済みパケットの内容</dt><dd>対応範囲内の配信形式や暗号化方式の変更を許容しつつ、符号化されたメディアの内容を比較します。</dd></div>
-        <div><dt>各パケットの時刻</dt><dd>各パケットの絶対的な表示時刻・デコード時刻・継続時間を比較します。ずれを許容値で隠しません。</dd></div>
+        <div><dt>ストリームの設定情報</dt><dd>コーデック、トラック構成、対応範囲内の再生設定を比較します。</dd></div>
+        <div><dt>エンコード済みパケットの内容</dt><dd>配信形式や暗号化方式による差を処理したうえで、パケット内のエンコード済み映像・音声データを比較します。</dd></div>
+        <div><dt>各パケットの時刻</dt><dd>各パケットの絶対的な表示時刻・デコード時刻・継続時間を、許容誤差を設けずに比較します。</dd></div>
         <div><dt>全体をデコードした映像・音声</dt><dd>対象のメディアを最初から最後までデコードし、得られた映像と音声を比較します。</dd></div>
       </dl>
       <div class="verification-boundary">
