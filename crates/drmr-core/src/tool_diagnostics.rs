@@ -436,8 +436,8 @@ fn probe_tool(
     };
     let banner = output(runner, tool, args, tool.name == "mp4dump", stop)?;
     let pattern = match tool.name {
-        "ffmpeg" => r"(?m)^ffmpeg version ([0-9]+)\.([0-9]+)(?:\.([0-9]+))?",
-        "ffprobe" => r"(?m)^ffprobe version ([0-9]+)\.([0-9]+)(?:\.([0-9]+))?",
+        "ffmpeg" => r"(?m)^ffmpeg version n?([0-9]+)\.([0-9]+)(?:\.([0-9]+))?",
+        "ffprobe" => r"(?m)^ffprobe version n?([0-9]+)\.([0-9]+)(?:\.([0-9]+))?",
         "packager" => r"(?m)^packager version v?([0-9]+)\.([0-9]+)(?:\.([0-9]+))?",
         _ => r"\(Bento4 Version ([0-9]+)\.([0-9]+)\.([0-9]+)",
     };

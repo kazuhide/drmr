@@ -147,6 +147,102 @@ fn explicit_probe_reports_resolved_paths_versions_and_required_features() {
 }
 
 #[test]
+fn release_tag_banners_are_recognized_without_guessing_unversioned_builds() {
+    for (version, status, parsed) in [
+        ("n9.0.2-17-g2a571b6068-20260930", "supported", Some("9.0.2")),
+        ("n8.0.0", "below-minimum", Some("8.0.0")),
+        ("n9.0.0", "below-minimum", Some("9.0.0")),
+        ("N-123456-g2a571b6068", "unrecognized", None),
+        ("unknown", "unrecognized", None),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        for name in ["ffmpeg", "ffprobe"] {
+            let options = if name == "ffmpeg" {
+                "-encryption_scheme\n-decryption_key\n-decryption_keys"
+            } else {
+                "-show_packets\n-show_entries\n-show_data_hash\n-decryption_keys"
+            };
+            probing_tool(directory.path(), name, version, options);
+        }
+        let output = doctor(
+            directory.path(),
+            &["--probe", "--route", "progressive-mp4", "--json"],
+        );
+        assert_eq!(output.status.code(), Some(i32::from(status != "supported")));
+        let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["ready"], status == "supported");
+        assert_eq!(report["cleanup_status"], "confirmed");
+        assert_eq!(report["media_compatibility_checked"], false);
+        for tool in &report["tools"].as_array().unwrap()[..2] {
+            assert_eq!(tool["version_status"], status);
+            assert_eq!(tool["version"].as_str(), parsed);
+            assert_eq!(
+                tool["feature_status"],
+                if parsed.is_some() {
+                    "available"
+                } else {
+                    "not-checked"
+                }
+            );
+        }
+    }
+}
+
+#[test]
+fn installed_tools_pass_the_actual_progressive_route_probe() {
+    let output = Command::new(env!("CARGO_BIN_EXE_drmr"))
+        .args(["doctor", "--probe", "--route", "progressive-mp4", "--json"])
+        .env("DRM_KEY", "real-probe-secret-must-not-appear")
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "actual installed tool probe failed: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["mode"], "probe");
+    assert_eq!(report["profile"], "progressive-mp4");
+    assert_eq!(report["ready"], true);
+    assert_eq!(report["cleanup_status"], "confirmed");
+    assert_eq!(report["media_compatibility_checked"], false);
+    for (tool, name) in report["tools"].as_array().unwrap()[..2]
+        .iter()
+        .zip(["ffmpeg", "ffprobe"])
+    {
+        assert_eq!(tool["name"], name);
+        assert_eq!(tool["required"], true);
+        assert_eq!(tool["available"], true);
+        assert_eq!(tool["version_status"], "supported");
+        assert_eq!(tool["feature_status"], "available");
+        assert_eq!(tool["failure_code"], Value::Null);
+        let expected: &[&str] = if name == "ffmpeg" {
+            &["encryption_scheme", "decryption_key", "decryption_keys"]
+        } else {
+            &[
+                "show_packets",
+                "show_data_hash",
+                "show_entries",
+                "decryption_keys",
+            ]
+        };
+        let features = tool["features"].as_array().unwrap();
+        assert_eq!(features.len(), expected.len());
+        for name in expected {
+            assert!(
+                features
+                    .iter()
+                    .any(|f| f["name"] == *name && f["available"] == true)
+            );
+        }
+    }
+    for bytes in [&output.stdout, &output.stderr] {
+        assert!(!String::from_utf8_lossy(bytes).contains("real-probe-secret-must-not-appear"));
+    }
+}
+
+#[test]
 fn keyed_routes_require_the_plural_kid_dictionary_option_in_both_tools() {
     let mut actual = Vec::new();
     for lacking in ["ffmpeg", "ffprobe"] {
