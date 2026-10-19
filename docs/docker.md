@@ -21,7 +21,7 @@ git archive --format=tar "$revision" | docker build \
 docker run --rm --init drmr:local doctor --probe --route all
 ```
 
-The build uses that captured commit, including its dependency lockfile. Uncommitted files are excluded. Keep keys, downloaded media, and conversion results outside the repository; mount them only when running a container. The first build compiles the included tools and can take several minutes.
+The build uses that captured commit, including its dependency lockfile. Uncommitted files are excluded. Keep keys, downloaded media, and conversion results outside the repository; mount them only when running a container. The first build compiles the included tools and retains build caches in Docker.
 
 The recipe pins its compiler, base images, and media-tool sources. Those pins describe this image; the source build's minimum Rust requirement remains [Rust 1.95 or newer](requirements.md). `doctor --probe` checks installed versions and advertised options; conversion still validates the actual media.
 
@@ -52,7 +52,9 @@ docker run --rm --init --user "$(id -u):$(id -g)" \
   --source /input/manifest.mpd --keys-file /config/keys.json --json
 ```
 
-`--rm` removes the container's temporary filesystem when it exits. Mounted results remain on the host. `--init` forwards stop signals and reaps exited child processes; drmr retains its own cancellation and cleanup checks. Press Ctrl+C for an attached command, or use `docker stop` for a named container.
+drmr chooses workers automatically, using the CPU and memory available to its process. Readable Linux container limits also contribute to that estimate. See [resource limits](resources.md) for the distinction between these estimates and operating-system enforcement.
+
+`--rm` removes the container's temporary filesystem when it exits. Mounted results remain on the host. `--init` forwards stop signals and reaps exited child processes; drmr retains its own cancellation and cleanup checks. Press Ctrl+C for an attached command. For a named container, `docker stop --timeout 60 NAME` allows time for cooperative shutdown before Docker forces termination. drmr's final status establishes confirmed cleanup.
 
 ## Experimental web console
 
