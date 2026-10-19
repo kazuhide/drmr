@@ -9,10 +9,13 @@ then uses the official Playwright command to install its pinned Chromium and
 system dependencies. Node 24.22.0 is pinned by the workflow. Browser installation
 and execution are confined to CI; pure controls use `npm run test:controls`.
 
-The single-worker suite has six tests and zero whole-test retries. Element-state
+The single-worker suite has seven tests and zero whole-test retries. Element-state
 assertions can wait for at most five seconds. After each native Tab, read-only
 observations require the same target, complete viewport containment and the
 existing focus outline. They never scroll or refocus to make a check pass.
+Production focusable elements have 16px of vertical scroll margin so native
+focus leaves room for the 8px outline outset and fractional layout edges. The
+complete viewport comparisons retain zero epsilon.
 Every observation records element identity, the full rectangle, viewport, scroll
 position and time; failed checks retain these samples too. Persistent clipping
 still fails. The suite covers:
@@ -27,6 +30,12 @@ still fails. The suite covers:
 - Negative controls inject overflow, an invisible focus outline and a broken
   image into the isolated browser DOM. Each real measurement must reject its
   corresponding fault; the production files are unchanged.
+- A native Tab comparison replays both observed edge targets in fresh documents
+  with the production 16px scroll margin, a test-only zero-margin override, then
+  the restored production style. Both production states must satisfy the exact
+  complete-focus condition. The zero-margin state must retain partial clipping
+  of the correct target throughout the existing five-second observation budget.
+  No programmatic scroll, refocus or viewport epsilon is used.
 
 The pre-publish job serves only the eight allowlisted files on loopback. It must
 pass, along with static validation on both operating systems, before deployment.

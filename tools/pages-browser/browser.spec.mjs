@@ -257,3 +257,63 @@ test('browser guard controls detect real overflow, invisible focus and a missing
   await artifact(info, 'negative-controls.json', { schema_version: 1, badLayout, badFocus,
     missing_image_status: 404, badImages });
 });
+
+test('native Tab keeps edge targets fully visible only with the production scroll margin', async ({ page, context }, info) => {
+  await projectOnly(context);
+  monitor(page);
+  const comparisons = [];
+  try {
+    for (const [width, ordinal, expected] of [
+      [320, 17, page.locator('pre[aria-label="Build and check the CLI"]')],
+      [1440, 18, page.getByRole('link', { name: 'Source installation instructions', exact: true })],
+    ]) {
+      // Replay the same native Tab sequence in a fresh document for each state.
+      for (const state of ['production', 'disabled-control', 'restored']) {
+        await page.setViewportSize({ width, height: 900 });
+        await page.goto('about:blank');
+        await ready(page);
+        if (state === 'disabled-control') {
+          await page.addStyleTag({ content: 'a[href], pre[tabindex="0"] { scroll-margin-block: 0 !important; }' });
+        }
+        expect(await expected.evaluate(element => getComputedStyle(element).scrollMarginBlockStart))
+          .toBe(state === 'disabled-control' ? '0px' : '16px');
+        const focusable = page.locator('a[href], pre[tabindex="0"]');
+        for (let i = 0; i < ordinal; i++) {
+          await page.keyboard.press('Tab');
+          await expect(focusable.nth(i)).toBeFocused();
+        }
+        await expect(expected).toBeFocused();
+        const phase = `scroll-margin-${width}-${state}`;
+        let failure;
+        try {
+          await requireTargetFocus(page, expected, phase, ordinal);
+        } catch (error) {
+          failure = error;
+        }
+        const check = monitors.get(page).evidence.focusChecks.at(-1);
+        comparisons.push({ width, state, ...check });
+        if (state === 'disabled-control') {
+          // The negative must be actual partial clipping of the correct target,
+          // not a missing element, broken outline or unrelated failure.
+          expect(failure).toBeDefined();
+          expect(check.passed).toBe(false);
+          expect(check.samples.length).toBeGreaterThan(1);
+          for (const sample of check.samples) {
+            expect(sample.matchesTarget).toBe(true);
+            expect(sample.outlineWidth).toBe(3);
+            expect(sample.outlineStyle).toBe('solid');
+            expect(sample.rect.top).toBeGreaterThanOrEqual(0);
+            expect(sample.rect.bottom).toBeGreaterThan(sample.viewport.height);
+          }
+        } else {
+          if (failure) throw failure;
+          requireFocus(check.samples.at(-1));
+        }
+      }
+    }
+  } finally {
+    await artifact(info, 'scroll-margin-comparison.json', { schema_version: 1,
+      source_head: info.config.metadata.sourceHead, source_tree: info.config.metadata.sourceTree,
+      mode: info.config.metadata.mode, comparisons });
+  }
+});
