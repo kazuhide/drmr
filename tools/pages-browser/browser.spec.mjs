@@ -197,17 +197,23 @@ async function settledMatrixKey(page, wrapper, key, before, deadline) {
       // Arm before keydown; even an instant scrollend must belong to this key.
       const handle = await wrapper.evaluateHandle(target => {
         const signal = { target, ended: false };
-        signal.listener = event => { if (event.target === target) signal.ended = true; };
+        signal.completion = new Promise(resolve => { signal.finish = resolve; });
+        signal.listener = event => {
+          if (event.target === target) { signal.ended = true; signal.finish(true); }
+        };
         target.addEventListener('scrollend', signal.listener);
         return signal;
       });
       return { handle, dispose: async () => {
-        try { await handle.evaluate(signal => signal.target.removeEventListener('scrollend', signal.listener)); }
+        try { await handle.evaluate(signal => {
+          signal.target.removeEventListener('scrollend', signal.listener);
+          signal.finish(false);
+        }); }
         finally { await handle.dispose(); }
       } };
     },
     press: () => page.keyboard.press(key),
-    wait: (signal, timeout) => expect.poll(() => signal.handle.evaluate(value => value.ended), { timeout }).toBe(true),
+    wait: async signal => expect(await signal.handle.evaluate(value => value.completion)).toBe(true),
     observe: () => wrapper.evaluate(matrixObservation),
   });
   return { ...after, completedKey: key, scrollEndObserved: true };
