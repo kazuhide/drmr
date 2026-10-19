@@ -136,6 +136,20 @@ fn verify_clear(
     source: &Path,
     result: &Path,
 ) -> Result<drmr_core::conversion::VerificationReport, drmr_core::conversion::ConversionError> {
+    verify_with_result_keys(
+        source,
+        result,
+        &InputKeys::default(),
+        &HlsInputKeys::default(),
+    )
+}
+
+fn verify_with_result_keys(
+    source: &Path,
+    result: &Path,
+    output_keys: &InputKeys,
+    output_hls_keys: &HlsInputKeys,
+) -> Result<drmr_core::conversion::VerificationReport, drmr_core::conversion::ConversionError> {
     use drmr_core::conversion::{VerificationRequest, VerificationSource};
     let empty = InputKeys::default();
     let hls = HlsInputKeys::default();
@@ -147,8 +161,8 @@ fn verify_clear(
         },
         output: VerificationSource {
             input: result,
-            input_keys: &empty,
-            hls_keys: &hls,
+            input_keys: output_keys,
+            hls_keys: output_hls_keys,
         },
     })
 }
@@ -289,14 +303,74 @@ fn audio_fmp4_hls_keeps_absolute_packet_end_and_all_481280_decoded_samples() {
     assert_eq!(common::snapshot_tree(source.parent().unwrap()), before);
 }
 
+fn expected_error(error: drmr_core::conversion::ConversionError, expected: &str) {
+    assert_eq!(
+        error.0, expected,
+        "unexpected failure cannot prove media rejection"
+    );
+}
+
 fn refused(
     result: Result<
         drmr_core::conversion::VerificationReport,
         drmr_core::conversion::ConversionError,
     >,
+    expected: &str,
 ) {
-    if let Ok(report) = result {
-        assert!(!report.passed && !report.media_verified);
+    match result {
+        Ok(report) => {
+            assert_eq!(report.schema_version, 1);
+            assert!(!report.passed && !report.media_verified && !report.license_playback_verified);
+            assert!(
+                !report.checks.stream_metadata.is_pass()
+                    || !report.checks.packet_payloads_equal
+                    || !report.checks.packet_timing_equal
+                    || !report.checks.decoded_content_equal
+            );
+        }
+        Err(error) => expected_error(error, expected),
+    }
+}
+
+#[test]
+fn audio_fmp4_hls_negative_oracle_rejects_operational_and_unknown_failures() {
+    use drmr_core::conversion::ConversionError;
+    let expected_codes = [
+        "manifest-segment-duration-mismatch",
+        "hls-complete-vod-required",
+        "ts-original-access-unit-count-mismatch",
+        "fragment-timeline-gap-or-overlap",
+        "media-tool-failed",
+        "invalid-encrypted-segment",
+        "ts-aac-sample-rate-not-supported",
+        "ts-clock-wrap-or-discontinuity-not-supported",
+    ];
+    for expected in expected_codes {
+        for code in [
+            "media-tool-timeout",
+            "resource-budget",
+            "cleanup-unconfirmed",
+            "media-cleanup-unconfirmed",
+            "media-output-limit",
+            "media-tool-unavailable-or-timeout",
+            "cancelled",
+            "unknown-fixture-error",
+        ] {
+            assert!(
+                std::panic::catch_unwind(|| refused(Err(ConversionError(code)), expected)).is_err(),
+                "operational or unknown failure was accepted as media rejection: {code}"
+            );
+        }
+        let wrong_semantic = if expected == "hls-complete-vod-required" {
+            "invalid-encrypted-segment"
+        } else {
+            "hls-complete-vod-required"
+        };
+        assert!(
+            std::panic::catch_unwind(|| refused(Err(ConversionError(wrong_semantic)), expected))
+                .is_err()
+        );
+        refused(Err(ConversionError(expected)), expected);
     }
 }
 
@@ -338,20 +412,33 @@ fn audio_fmp4_hls_rejects_changed_duration_end_resources_payload_and_decode_cloc
         .trim_end_matches(',')
         .parse::<f64>()
         .unwrap();
-    for (label, changed) in [
+    for (label, expected, changed) in [
         (
             "duration",
+            "manifest-segment-duration-mismatch",
             original.replace(
                 lines[last - 1],
                 &format!("#EXTINF:{},", duration + 1024.0 / 48000.0),
             ),
         ),
-        ("end", original.replace("#EXT-X-ENDLIST", "")),
-        ("missing-segment", missing.join("\n") + "\n"),
-        ("repeated-segment", repeated.join("\n") + "\n"),
+        (
+            "end",
+            "hls-complete-vod-required",
+            original.replace("#EXT-X-ENDLIST", ""),
+        ),
+        (
+            "missing-segment",
+            "ts-original-access-unit-count-mismatch",
+            missing.join("\n") + "\n",
+        ),
+        (
+            "repeated-segment",
+            "fragment-timeline-gap-or-overlap",
+            repeated.join("\n") + "\n",
+        ),
     ] {
         std::fs::write(&playlist, changed).unwrap();
-        refused(verify_clear(&source, &result));
+        refused(verify_clear(&source, &result), expected);
         std::fs::write(&playlist, &original).unwrap();
         all_checks(&verify_clear(&source, &result).unwrap());
         println!("audio-fmp4-hls-negative: {label}");
@@ -372,9 +459,13 @@ fn audio_fmp4_hls_rejects_changed_duration_end_resources_payload_and_decode_cloc
     let mut corrupt = bytes.clone();
     let mdat = bytes.windows(4).position(|w| w == b"mdat").unwrap();
     corrupt[mdat + 4] ^= 1;
-    for (label, changed) in [("decode-clock", shifted), ("payload", corrupt)] {
+    // Corrupt payload bytes can make decoding fail before a mismatch report is produced.
+    for (label, expected, changed) in [
+        ("decode-clock", "fragment-timeline-gap-or-overlap", shifted),
+        ("payload", "media-tool-failed", corrupt),
+    ] {
         std::fs::write(&last_segment, changed).unwrap();
-        refused(verify_clear(&source, &result));
+        refused(verify_clear(&source, &result), expected);
         std::fs::write(&last_segment, &bytes).unwrap();
         all_checks(&verify_clear(&source, &result).unwrap());
         println!("audio-fmp4-hls-negative: {label}");
@@ -386,7 +477,7 @@ fn audio_fmp4_hls_rejects_changed_duration_end_resources_payload_and_decode_cloc
 #[test]
 fn audio_fmp4_hls_rejects_wrong_key_domains_and_noncontiguous_original_sample_aes_before_publication()
  {
-    use drmr_core::conversion::{ContentKey, OutputKey, VerificationRequest, VerificationSource};
+    use drmr_core::conversion::{ContentKey, OutputKey};
     let root = drmr_core::native::private_tempdir().unwrap();
     let (source, sample) = audio_sources(root.path());
     let source_before = common::snapshot_tree(source.parent().unwrap());
@@ -399,14 +490,16 @@ fn audio_fmp4_hls_rejects_wrong_key_domains_and_noncontiguous_original_sample_ae
         Some(SegmentIv::from_hex(INPUT_IV).unwrap()),
     )])
     .unwrap();
-    for (label, protected) in [("aes", &aes), ("sample", &sample)] {
+    for (label, protected, expected) in [
+        ("aes", &aes, "invalid-encrypted-segment"),
+        ("sample", &sample, "ts-aac-sample-rate-not-supported"),
+    ] {
         let before = common::snapshot_tree(protected.parent().unwrap());
         let output = root.path().join(format!("refused-{label}"));
-        assert!(
-            converter()
-                .convert(clear_request(protected, &output, &empty, &wrong))
-                .is_err()
-        );
+        let error = converter()
+            .convert(clear_request(protected, &output, &empty, &wrong))
+            .unwrap_err();
+        expected_error(error, expected);
         assert!(!output.exists());
         assert_eq!(common::snapshot_tree(protected.parent().unwrap()), before);
     }
@@ -430,18 +523,33 @@ fn audio_fmp4_hls_rejects_wrong_key_domains_and_noncontiguous_original_sample_ae
         )])
         .unwrap();
         let output_before = common::snapshot_tree(&output);
-        refused(converter().verify(VerificationRequest {
-            source: VerificationSource {
-                input: &source,
-                input_keys: &empty,
-                hls_keys: &no_hls,
-            },
-            output: VerificationSource {
-                input: &output.join("master.m3u8"),
-                input_keys: &wrong_content,
-                hls_keys: &wrong_hls,
-            },
-        }));
+        let correct_content = InputKeys::new(vec![
+            ContentKey::from_hex("909192939495969798999a9b9c9d9e9f", OUTPUT_KEY).unwrap(),
+        ])
+        .unwrap();
+        let correct_hls = HlsInputKeys::new(vec![(
+            KEY_URI.into(),
+            Aes128Key::from_hex(OUTPUT_KEY).unwrap(),
+        )])
+        .unwrap();
+        let candidate = output.join("master.m3u8");
+        all_checks(
+            &verify_with_result_keys(&source, &candidate, &correct_content, &correct_hls).unwrap(),
+        );
+        // Wrong CBCS bytes can fail the decoder. Only this observed failure code is accepted;
+        // timeouts, cleanup/resource failures and missing tools are never media refusals.
+        let expected = if target == TargetProtection::Cbcs {
+            "media-tool-failed"
+        } else {
+            "invalid-encrypted-segment"
+        };
+        refused(
+            verify_with_result_keys(&source, &candidate, &wrong_content, &wrong_hls),
+            expected,
+        );
+        all_checks(
+            &verify_with_result_keys(&source, &candidate, &correct_content, &correct_hls).unwrap(),
+        );
         assert_eq!(common::snapshot_tree(&output), output_before);
     }
     assert_eq!(
@@ -462,11 +570,10 @@ fn audio_fmp4_hls_rejects_wrong_key_domains_and_noncontiguous_original_sample_ae
     )])
     .unwrap();
     let output = root.path().join("noncontiguous-refused");
-    assert!(
-        converter()
-            .convert(clear_request(&sample, &output, &empty, &correct))
-            .is_err()
-    );
+    let error = converter()
+        .convert(clear_request(&sample, &output, &empty, &correct))
+        .unwrap_err();
+    expected_error(error, "ts-clock-wrap-or-discontinuity-not-supported");
     assert!(!output.exists());
     assert_eq!(common::snapshot_tree(sample.parent().unwrap()), before);
 }
