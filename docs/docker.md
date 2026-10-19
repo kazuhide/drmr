@@ -23,6 +23,8 @@ docker run --rm --init drmr:local doctor --probe --route all
 
 The build uses that captured commit, including its dependency lockfile. Uncommitted files are excluded. Keep keys, downloaded media, and conversion results outside the repository; mount them only when running a container. The first build compiles the included tools and retains build caches in Docker.
 
+Git archives restore commit-time file timestamps. Before reusing compiled Rust artifacts, the build compares compilation inputs by content and refreshes its single target cache when they change. This also covers bundled web assets and builds of older commits.
+
 The recipe pins its compiler, base images, and media-tool sources. Those pins describe this image; the source build's minimum Rust requirement remains [Rust 1.95 or newer](requirements.md). `doctor --probe` checks installed versions and advertised options; conversion still validates the actual media.
 
 ## Convert local media
