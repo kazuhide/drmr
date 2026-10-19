@@ -15,9 +15,16 @@ concurrency:
 
 jobs:
   build:
-    name: Pages / static validation
-    runs-on: ubuntu-24.04
+    name: Pages / static validation / ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -32,11 +39,11 @@ jobs:
       - name: Check the validator and the complete static site
         run: |
           set -euo pipefail
-          python3 -W error::ResourceWarning -m unittest discover -s tools/tests -p test_check_site.py -v
-          python3 tools/check_site.py --root site --report "$RUNNER_TEMP/site-report.json"
+          python -W error::ResourceWarning -m unittest discover -s tools/tests -p test_check_site.py -v
+          python tools/check_site.py --root site --report "$RUNNER_TEMP/site-report.json"
 
       - name: Upload only the validated website
-        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        if: matrix.os == 'ubuntu-24.04' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: site
