@@ -48,3 +48,6 @@ workspace = true
 
 [target.'cfg(windows)'.dev-dependencies]
 windows-permissions = "0.2.4"
+
+[target.'cfg(unix)'.dev-dependencies]
+rustix.workspace = true

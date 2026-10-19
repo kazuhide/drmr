@@ -532,6 +532,15 @@ pub enum ServeError {
 }
 
 pub fn serve(config: ServerConfig) -> Result<(), ServeError> {
+    serve_with_ready(config, |address| {
+        let _ = writeln!(std::io::stderr(), " * Running on http://{address}");
+    })
+}
+
+fn serve_with_ready(
+    config: ServerConfig,
+    ready: impl FnOnce(SocketAddr),
+) -> Result<(), ServeError> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
@@ -541,7 +550,7 @@ pub fn serve(config: ServerConfig) -> Result<(), ServeError> {
     let result = runtime.block_on(async {
         let listener = tokio::net::TcpListener::bind((host.as_str(), port)).await?;
         let address = listener.local_addr()?;
-        let _ = writeln!(std::io::stderr(), " * Running on http://{address}");
+        ready(address);
         let shutdown_app = app.clone();
         tokio::select! {
             result = axum::serve(listener, build_router(app.clone())) => result,
@@ -762,3 +771,6 @@ mod host_tests {
         }
     }
 }
+
+#[cfg(all(test, unix))]
+mod signal_tests;
