@@ -30,6 +30,16 @@ class Site(unittest.TestCase):
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(SOURCE / relative, dest)
         shutil.copytree(SOURCE / "crates/drmr-server/static/vendor/fonts", self.repo / "crates/drmr-server/static/vendor/fonts")
+        for original in (SOURCE / "docs").rglob("*.md"):
+            if original.name != "docker.md":
+                dest = self.repo / original.relative_to(SOURCE)
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(original, dest)
+        for relative in ("crates/drmr-core/src/batch_cli.rs", "crates/drmr/tests/fixtures/bbb/CENC.md",
+                         "crates/drmr/tests/fixtures/bbb/README.md") + CHECK.BUILDER_INPUTS:
+            dest = self.repo / relative
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(SOURCE / relative, dest)
 
     def check(self):
         return CHECK.validate(self.site, self.repo, pending_docs=("docs/docker.md",))
@@ -42,13 +52,74 @@ class Site(unittest.TestCase):
 
     def test_actual_site_is_small_self_contained_and_mount_independent(self):
         result = self.check()
-        self.assertEqual(result["files"], 9)
-        self.assertLessEqual(result["bytes"], 180 * 1024)
+        self.assertEqual(result["files"], 12)
+        self.assertLessEqual(result["bytes"], 512 * 1024)
+        self.assertEqual(result["byte_budget"], 512 * 1024)
+        self.assertEqual(set(result["builder_inputs"]), set(CHECK.BUILDER_INPUTS))
+        self.assertEqual({v["chapters"] for v in result["guides"].values()}, {20})
         self.assertEqual(result["mounts"], ["/", "/drmr/"])
         self.assertEqual(result["scripts"], 0)
         self.assertEqual(result["languages"], ["en", "ja"])
         self.assertEqual(set(result["sha256"]), CHECK.FILES)
         self.assertEqual(result["pending_docs"], ["docs/docker.md"])
+
+
+    def test_stale_generated_guide_is_refused_without_rewriting_inputs_or_output(self):
+        path = self.site / "guide/index.html"
+        path.write_bytes(path.read_bytes().replace(b"User guide", b"Stale guide", 1))
+        changed = path.read_bytes()
+        with self.assertRaisesRegex(CHECK.Failure, "site-guide-generated"):
+            self.check()
+        self.assertEqual(path.read_bytes(), changed)
+
+
+    def test_crlf_generated_output_is_not_accepted_as_byte_identical(self):
+        path = self.site / "ja/guide/index.html"
+        original = path.read_bytes()
+        self.assertIn(b"\n", original)
+        path.write_bytes(original.replace(b"\n", b"\r\n"))
+        with self.assertRaisesRegex(CHECK.Failure, "site-guide-generated"):
+            self.check()
+
+    def test_generation_input_directories_cannot_follow_external_links(self):
+        directory = self.repo / "site-content/guide"
+        external = self.root / "external guide sources"
+        directory.rename(external)
+        self.directory_link(directory, external)
+        before = {p.name: p.read_bytes() for p in external.iterdir()}
+        with self.assertRaisesRegex(CHECK.Failure, "site-guide-input"):
+            self.check()
+        self.assertEqual({p.name: p.read_bytes() for p in external.iterdir()}, before)
+
+    def rewrite_guides_from_template(self, old, new):
+        template = self.repo / "tools/templates/guide.html"
+        original = template.read_text(encoding="utf-8")
+        self.assertIn(old, original)
+        template.write_text(original.replace(old, new), encoding="utf-8")
+        spec = importlib.util.spec_from_file_location("guide_builder_fixture", self.repo / "tools/build_guide_site.py")
+        builder = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(builder)
+        for relative, content in builder.render(self.repo).items():
+            (self.site / relative).write_bytes(content)
+
+    def test_regeneration_does_not_waive_guide_canonical_or_locale_contract(self):
+        self.rewrite_guides_from_template('{{canonical}}', 'https://example.com/guide/')
+        with self.assertRaisesRegex(CHECK.Failure, "site-language-links"):
+            self.check()
+
+    def test_regeneration_does_not_waive_the_guide_font_notice(self):
+        self.rewrite_guides_from_template('assets/fonts/LICENSE-ibm-plex.txt', 'assets/fonts/README.txt')
+        with self.assertRaisesRegex(CHECK.Failure, "site-font-license-link"):
+            self.check()
+
+    def test_generation_inputs_are_regular_single_link_files(self):
+        source = self.repo / "site-content/guide/en.md"
+        external = self.root / "linked-source.md"
+        shutil.copyfile(source, external)
+        source.unlink()
+        os.link(external, source)
+        with self.assertRaisesRegex(CHECK.Failure, "site-guide-input"):
+            self.check()
 
     def test_missing_conversion_matrix_is_refused(self):
         for origin in ("index.html", "ja/index.html"):
@@ -109,6 +180,30 @@ class Site(unittest.TestCase):
             path.write_text(value, encoding="utf-8")
             with self.assertRaisesRegex(CHECK.Failure, "site-language-links"):
                 self.check()
+
+    def test_fixed_revision_and_ci_job_links_use_only_this_repository(self):
+        revision = "0123456789abcdef0123456789abcdef01234567"
+        for path in ("commit/" + revision, "actions/runs/123/job/456"):
+            with self.subTest(path=path):
+                self.assertIsNone(CHECK.document("https://github.com/kazuhide/drmr/" + path,
+                                                 self.repo, ()))
+
+    def test_evidence_link_variants_and_other_repositories_are_refused(self):
+        revision = "0123456789abcdef0123456789abcdef01234567"
+        paths = ("commit/main", "commit/" + revision[:-1], "commit/" + revision.upper(),
+                 "commit/" + revision + "/", "commit/%30" + revision[1:],
+                 "actions/runs/0/job/456", "actions/runs/123/job/0",
+                 "actions/runs/123", "actions/runs/123/job/456/", "issues/123")
+        references = ["https://github.com/kazuhide/drmr/" + path for path in paths]
+        references += ["https://github.com/kazuhide/other/commit/" + revision,
+                       "https://github.com/other/drmr/actions/runs/123/job/456",
+                       "http://github.com/kazuhide/drmr/commit/" + revision,
+                       "https://github.com/kazuhide/drmr/commit/" + revision + "?raw=1",
+                       "https://github.com/kazuhide/drmr/commit/" + revision + "#diff",
+                       "https://github.com/kazuhide/drmr/actions/runs/123/job/456#step:1:1"]
+        for reference in references:
+            with self.subTest(reference=reference), self.assertRaises(CHECK.Failure):
+                CHECK.document(reference, self.repo, ())
 
     def test_pending_document_is_an_explicit_failure_by_default(self):
         with self.assertRaisesRegex(CHECK.Failure, "missing-repository-document"):
@@ -227,7 +322,7 @@ class Site(unittest.TestCase):
 
     def test_transfer_budget_is_enforced_on_actual_payload_bytes(self):
         path = self.site / "assets/site.css"
-        path.write_bytes(path.read_bytes() + b" " * (180 * 1024))
+        path.write_bytes(path.read_bytes() + b" " * CHECK.MAX_BYTES)
         with self.assertRaisesRegex(CHECK.Failure, "site-byte-budget"):
             self.check()
 
@@ -319,6 +414,72 @@ class ConversionMatrix(unittest.TestCase):
         value = value.replace('<td>Outside profile</td>', '<td><span>Clear</span></td>')
         with self.assertRaisesRegex(CHECK.Failure, "site-matrix-protections"):
             CHECK.validate_matrix(value, "en")
+
+
+class GuideReferences(unittest.TestCase):
+    def test_nested_guides_reach_only_allowlisted_pages_and_shared_assets(self):
+        files = CHECK.FILES | {"guide/index.html", "ja/guide/index.html", "assets/guide.css"}
+        cases = [("../assets/guide.css", "guide/index.html", "assets/guide.css"),
+                 ("../../assets/guide.css", "ja/guide/index.html", "assets/guide.css"),
+                 ("../ja/guide/#verification", "guide/index.html", "ja/guide/index.html"),
+                 ("../../guide/#verification", "ja/guide/index.html", "guide/index.html"),
+                 ("../", "ja/guide/index.html", "ja/index.html"),
+                 ("./guide/", "index.html", "guide/index.html")]
+        for reference, origin, expected in cases:
+            with self.subTest(reference=reference, origin=origin):
+                self.assertEqual(CHECK.local_reference(reference, origin, files),
+                                 (expected, "verification" if "#" in reference else ""))
+        for reference in ("../../../README.md", "../../%2e%2e/README.md",
+                          "%2e%2e/../assets/guide.css", "../../assets/../index.html",
+                          "../../assets%2fguide.css", "../../keys.json"):
+            with self.subTest(reference=reference), self.assertRaises(CHECK.Failure):
+                CHECK.local_reference(reference, "ja/guide/index.html", files)
+
+
+class GuideMarkup(unittest.TestCase):
+    def fixture(self):
+        chapters = []
+        for name in CHECK.GUIDE_CHAPTERS:
+            body = "<p>Complete chapter content with a bounded, meaningful explanation.</p>"
+            if name == "introduction":
+                body += ('<figure class="guide-example" data-code-language="sh" aria-labelledby="example-1-title">'
+                         '<figcaption id="example-1-title">Inspect the complete media</figcaption>'
+                         '<pre tabindex="0"><code>drmr inspect source.mp4</code></pre></figure>'
+                         '<div class="guide-table-scroll" role="region" aria-labelledby="table-1-title" tabindex="0">'
+                         '<table><caption id="table-1-title">Known profiles</caption><thead><tr><th scope="col">Input</th></tr></thead>'
+                         '<tbody><tr><th scope="row">MP4</th></tr></tbody></table></div>')
+            if name == "references":
+                for url in ("https://www.w3.org/TR/eme-stream-mp4/", "https://www.rfc-editor.org/rfc/rfc8216.html",
+                            "https://developer.apple.com/library/archive/documentation/AudioVideo/Conceptual/HLS_Sample_Encryption/",
+                            "https://www.w3.org/TR/mse-byte-stream-format-isobmff/"):
+                    body += '<a href="' + url + '">Primary format reference</a>'
+            chapters.append('<section id="' + name + '" data-guide-chapter="' + name + '"><h2 id="' + name + '-title">'
+                            + name + '</h2>' + body + '</section>')
+        toc = ''.join('<a href="#' + name + '">' + name + '</a>' for name in CHECK.GUIDE_CHAPTERS)
+        return '<nav class="guide-toc-nav" aria-label="Guide chapters">' + toc + '</nav><article class="guide-content" id="guide-content">' + ''.join(chapters) + '</article>'
+
+    def test_external_primary_references_are_exact_and_guide_chapter_scoped(self):
+        original = self.fixture()
+        CHECK.validate_guide(original, "en")
+        for value in (original.replace('https://www.w3.org/TR/eme-stream-mp4/', 'https://example.com/reference'),
+                      original.replace('https://www.w3.org/TR/eme-stream-mp4/', 'https://www.w3.org/TR/eme-stream-mp4/?token=hidden'),
+                      original.replace('<h2 id="introduction-title">', '<a href="https://www.w3.org/TR/eme-stream-mp4/">Extra</a><h2 id="introduction-title">')):
+            with self.subTest(), self.assertRaises(CHECK.Failure):
+                CHECK.validate_guide(value, "en")
+
+    def test_native_figure_cannot_be_overridden_with_a_group_role(self):
+        invalid = self.fixture().replace('class="guide-example"', 'class="guide-example" role="group"')
+        with self.assertRaises(CHECK.Failure):
+            CHECK.validate_guide(invalid, "en")
+
+    def test_missing_chapters_code_labels_and_table_scopes_remain_refused(self):
+        original = self.fixture()
+        self.assertEqual(CHECK.validate_guide(original, "en"), {"chapters": 20, "code_examples": 1, "tables": 1})
+        for old, new in [('data-guide-chapter="verification"', 'data-guide-chapter="missing"'),
+                         ('href="#verification"', 'href="#missing"'), ('tabindex="0"', ''),
+                         ('aria-labelledby="example-1-title"', ''), ('data-code-language="sh"', 'data-code-language="unknown"'), ('scope="row"', '')]:
+            with self.subTest(old=old), self.assertRaises(CHECK.Failure):
+                CHECK.validate_guide(original.replace(old, new, 1), "en")
 
 
 if __name__ == "__main__":

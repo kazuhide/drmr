@@ -6,7 +6,8 @@
   "engines": { "node": ">=22.12.0" },
   "scripts": {
     "test:controls": "node --test controls.test.mjs",
-    "test:browser": "playwright test"
+    "test:browser": "playwright test",
+    "test:guide": "playwright test --config guide.config.mjs"
   },
   "devDependencies": {
     "@axe-core/playwright": "4.14.0",

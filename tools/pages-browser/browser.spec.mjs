@@ -107,7 +107,7 @@ async function requireTargetFocus(page, target, phase, ordinal) {
     // Persist before another Tab or afterEach network processing, also on failure.
     await writeFile(info.outputPath('keyboard-focus.json'), JSON.stringify({ schema_version: 1,
       source_head: info.config.metadata.sourceHead, source_tree: info.config.metadata.sourceTree,
-      mode: info.config.metadata.mode, asset_hashes: info.config.metadata.assetHashes,
+      mode: info.config.metadata.mode, asset_hashes: info.config.metadata.assetHashes, builder_inputs: info.config.metadata.builderInputHashes,
       checks: monitors.get(page).evidence.focusChecks }, null, 2) + '\n');
   }
 }
@@ -118,7 +118,7 @@ test.afterEach(async ({ page }, info) => {
     await Promise.all(pending);
     await artifact(info, 'browser-observations.json', { schema_version: 1,
       source_head: info.config.metadata.sourceHead, source_tree: info.config.metadata.sourceTree,
-      asset_hashes: info.config.metadata.assetHashes, mode: info.config.metadata.mode,
+      asset_hashes: info.config.metadata.assetHashes, builder_inputs: info.config.metadata.builderInputHashes, mode: info.config.metadata.mode,
       test_status: info.status, observations: evidence });
   }
 });
@@ -349,7 +349,7 @@ for (const locale of locales) for (const width of [320, 768, 1024, 1440]) {
     await page.goto('about:blank');
     await ready(page, locale);
     const focusable = page.locator(focusSelector);
-    await expect(focusable).toHaveCount(31);
+    await expect(focusable).toHaveCount(32);
     const focusRecords = [];
     let matrixKeyboard;
     for (let i = 0; i < await focusable.count(); i++) {
@@ -402,7 +402,7 @@ for (const locale of locales) for (const width of [320, 768, 1024, 1440]) {
     await artifact(info, 'evidence.json', { schema_version: 1, source_head: info.config.metadata.sourceHead,
       source_tree: info.config.metadata.sourceTree, mode: info.config.metadata.mode,
       language: locale.language, page_asset: locale.asset, page_sha256: info.config.metadata.assetHashes[locale.asset],
-      asset_hashes: info.config.metadata.assetHashes, servedAssets, chromium: browser.version(), viewport: { width, height: 900 }, production_scripts: 0,
+      asset_hashes: info.config.metadata.assetHashes, builder_inputs: info.config.metadata.builderInputHashes, servedAssets, chromium: browser.version(), viewport: { width, height: 900 }, production_scripts: 0,
       initial_viewport: initialViewport, matrix: matrix.evidence, matrix_keyboard: matrixKeyboard, layout, fonts, platform_fonts: platformFonts, images, headings, code_groups: renderedCodeGroups, keyboard: focusRecords, network,
       axe: { version: accessibility.testEngine.version, violations: 0, incomplete: accessibility.incomplete.length },
       limitations: ['automated Chromium only; no manual screen-reader or other-browser qualification',
@@ -438,7 +438,7 @@ for (const locale of locales) test(`${locale.language}: core content and anchor 
       await expect(page.locator('#support')).toBeInViewport();
     }
     await artifact(info, 'evidence.json', { schema_version: 1, source_head: info.config.metadata.sourceHead,
-      source_tree: info.config.metadata.sourceTree, asset_hashes: info.config.metadata.assetHashes,
+      source_tree: info.config.metadata.sourceTree, asset_hashes: info.config.metadata.assetHashes, builder_inputs: info.config.metadata.builderInputHashes,
       language: locale.language, page_asset: locale.asset, page_sha256: info.config.metadata.assetHashes[locale.asset],
       java_script_enabled: false, mode: info.config.metadata.mode, pages, browser: browser.version() });
   } finally {
@@ -461,13 +461,13 @@ test('native keyboard switches English to Japanese and back at each supported mo
       await expect(link).toHaveAttribute('href', from.switchHref);
       await expect(link).toHaveAttribute('hreflang', to.language);
       const focusable = page.locator(focusSelector);
-      await expect(focusable).toHaveCount(31);
-      for (let index = 0; index < 7; index++) {
+      await expect(focusable).toHaveCount(32);
+      for (let index = 0; index < 8; index++) {
         await page.keyboard.press('Tab');
         await expect(focusable.nth(index)).toBeFocused();
       }
       await expect(link).toBeFocused();
-      await requireTargetFocus(page, link, 'language-switch', 7);
+      await requireTargetFocus(page, link, 'language-switch', 8);
       const target = origin + mount + to.route;
       const [response] = await Promise.all([
         page.waitForResponse(response => response.url() === target && response.request().isNavigationRequest()),
@@ -488,7 +488,7 @@ test('native keyboard switches English to Japanese and back at each supported mo
   expect(network.failedRequests).toEqual([]);
   await artifact(info, 'language-roundtrip.json', { schema_version: 1,
     source_head: info.config.metadata.sourceHead, source_tree: info.config.metadata.sourceTree,
-    asset_hashes: info.config.metadata.assetHashes, mode: info.config.metadata.mode, hops });
+    asset_hashes: info.config.metadata.assetHashes, builder_inputs: info.config.metadata.builderInputHashes, mode: info.config.metadata.mode, hops });
 });
 
 test('browser guard controls detect real overflow, invisible focus, blocked matrix scrolling and a missing image', async ({ page, context }, info) => {
@@ -511,9 +511,10 @@ test('browser guard controls detect real overflow, invisible focus, blocked matr
   await page.goto('about:blank');
   await ready(page);
   const wrapper = page.getByRole('region', { name: english.matrixRegion, exact: true });
-  for (let index = 0; index < 10; index++) await page.keyboard.press('Tab');
+  const matrixTabOrdinal = 11;
+  for (let index = 0; index < matrixTabOrdinal; index++) await page.keyboard.press('Tab');
   await expect(wrapper).toBeFocused();
-  await requireTargetFocus(page, wrapper, 'matrix-disabled-control', 10);
+  await requireTargetFocus(page, wrapper, 'matrix-disabled-control', matrixTabOrdinal);
   const matrixBefore = await wrapper.evaluate(matrixObservation);
   expect(matrixBefore.scrollWidth).toBeGreaterThan(matrixBefore.clientWidth);
   const hiddenContent = await page.addStyleTag({ content: '.conversion-matrix td > .clear { visibility: hidden !important; }' });
@@ -571,9 +572,9 @@ test('native Tab keeps edge targets fully visible only with the production scrol
       const discovery = { width, viewportHeight: 900, route };
       discoveries.push(discovery);
       const candidates = page.locator(focusSelector);
-      await expect(candidates).toHaveCount(31);
+      await expect(candidates).toHaveCount(32);
       let selected;
-      for (let index = 0; index < 31; index++) {
+      for (let index = 0; index < 32; index++) {
         await page.keyboard.press('Tab');
         await expect(candidates.nth(index)).toBeFocused();
         const sample = await candidates.nth(index).evaluate(focusObservation);
@@ -597,7 +598,7 @@ test('native Tab keeps edge targets fully visible only with the production scrol
           await page.addStyleTag({ content: `${focusSelector} { scroll-margin-block: 0 !important; }` });
         }
         const focusable = page.locator(focusSelector);
-        await expect(focusable).toHaveCount(31);
+        await expect(focusable).toHaveCount(32);
         const expected = focusable.nth(ordinal - 1);
         expect(await expected.evaluate(element => getComputedStyle(element).scrollMarginBlockStart))
           .toBe(state === 'disabled-control' ? '0px' : '16px');
