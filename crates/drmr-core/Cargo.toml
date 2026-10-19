@@ -33,6 +33,7 @@ tempfile.workspace = true
 thiserror.workspace = true
 unicode-normalization.workspace = true
 ureq.workspace = true
+url = "2.5.8"
 webpki-roots.workspace = true
 zeroize.workspace = true
 zmij.workspace = true
@@ -60,7 +61,6 @@ same-file = "1.0.6"
 process-wrap = { version = "=10.0.1", default-features = false, features = ["std", "job-object", "creation-flags"] }
 win32job = "2.0.3"
 winapi-util = "0.1.11"
-url = "2.5.8"
 
 windows-permissions = "0.2.4"
 winsafe = { version = "0.0.29", default-features = false, features = ["kernel"] }

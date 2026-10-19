@@ -110,6 +110,9 @@ fn error_hint(code: &str) -> Option<&'static str> {
         "media-cleanup-unconfirmed" => Some(
             "Cleanup is unconfirmed. Resolve the owned process failure before retrying; no verified result is established.",
         ),
+        "output-signaling-profile-not-supported" => Some(
+            "Explicit PlayReady signaling requires CBCS DASH from a qualified clear MP4 without existing or unknown initialization metadata. See docs/conversion-support.md.",
+        ),
         "download-directory-required" => Some(
             "URL input requires --download-dir pointing to a new directory under an existing parent.",
         ),
@@ -232,6 +235,7 @@ fn error(
                 | "input-format-not-supported"
                 | "single-track-mp4-required"
                 | "input-protection-not-supported"
+                | "output-signaling-profile-not-supported"
         ) {
             2
         } else {
@@ -429,7 +433,8 @@ pub fn convert(args: &ConvertArgs) -> ExitCode {
         args.max_workers,
         progress.clone(),
         cancellation.stop.clone(),
-    );
+    )
+    .with_output_signaling(keys.signaling.clone());
     let execute = |command: &Converter| {
         execute_conversion(
             command,

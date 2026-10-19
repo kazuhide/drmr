@@ -303,6 +303,7 @@ impl Converter {
             backend: self.backend.clone(),
             maximum_workers: self.maximum_workers,
             downloaded: Some(source.seal.clone()),
+            output_signaling: self.output_signaling.clone(),
         };
         converter.convert(ConversionRequest {
             input: source.entrypoint(),
