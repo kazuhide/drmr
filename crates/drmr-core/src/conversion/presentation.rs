@@ -1329,7 +1329,7 @@ impl Converter {
             return self.convert_transport_output(&request, prepared, input_report, &work);
         }
         if transport
-            && request.format != OutputFormat::Dash
+            && request.format == OutputFormat::Mp4
             && !prepared
                 .iter()
                 .any(|p| p.report.tracks[0].kind == TrackKind::Video)
