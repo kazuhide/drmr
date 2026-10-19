@@ -1,0 +1,27 @@
+# The documented git-archive context excludes every untracked file.
+# This allowlist is additional protection for ordinary directory builds.
+**
+!Dockerfile
+!Cargo.toml
+!Cargo.lock
+!LICENSE
+!README.md
+!crates/
+!crates/**
+!vendor/
+!vendor/**
+!tools/
+!tools/collect_notices.py
+!tools/build_desktop.py
+!tools/pinned_notices.py
+!tools/desktop-licenses/
+!tools/desktop-licenses/**
+!docker/
+!docker/**
+**/.git
+**/target
+**/__pycache__
+**/*.pyc
+**/.env*
+**/*keys*.json
+**/*credentials*
