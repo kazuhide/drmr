@@ -26,11 +26,20 @@ position and time; failed checks retain these samples too. Persistent clipping
 still fails. The suite covers:
 
 - English and Japanese at 320, 768, 1024 and 1440 px (eight cases): document overflow and clipped layout boxes, locally
-  hosted fonts and images, exact served asset bytes, all 30 native Tab targets and
+  hosted fonts and images, exact served asset bytes, all 31 native Tab targets and
   anchor navigation, rendered ARIA landmarks/headings/link names, and axe checks
   including color contrast. Both violations and incomplete checks must be empty.
   The five named code groups retain their full command text in both rendered
-  accessibility trees. Chromium CDP records actual glyph-producing platform
+  accessibility trees. The first main section is a six-input-profile by four-output-format
+  semantic table. Exact row/column headers, all 24 output cells, input protection
+  qualifications and linked notes are checked independently of the HTML.
+  Each scrollable matrix is reached by native Tab and traversed to both
+  horizontal edges with arrow keys while sticky row headers and document scroll
+  positions remain unchanged. Its first and last output columns must fit next
+  to the input headers. Only the matrix owns intentional horizontal overflow;
+  page overflow and clipped cells remain failures. Initial viewport screenshots
+  are captured after navigation/font readiness and before keyboard/focus/scroll
+  interaction, alongside the existing full-page captures. Chromium CDP records actual glyph-producing platform
   fonts for the heading, lead and code, including Japanese fallback; it does
   not establish manual readability or glyph coverage for other text.
 - Core content and native anchor navigation with JavaScript disabled in each
@@ -42,8 +51,9 @@ still fails. The suite covers:
   load the matching raw page hash and declared language without scripts,
   language detection or cookies.
 - Negative controls inject overflow, an invisible focus outline and a broken
-  image into the isolated browser DOM. Each real measurement must reject its
-  corresponding fault; the production files are unchanged.
+  image, plus block native matrix scrolling, in the isolated browser DOM. Each real measurement must reject its
+  corresponding fault. Removing the matrix override must restore actual native
+  arrow movement; the production files are unchanged.
 - An English native Tab comparison replays both observed edge targets in fresh documents
   with the production 16px scroll margin, a test-only zero-margin override, then
   the restored production style. Both production states must satisfy the exact
@@ -94,7 +104,7 @@ The lockfile has five exact development packages: `@playwright/test`,
 `@axe-core/playwright` and `axe-core` 4.14.0 (MPL-2.0). They are CI-only and are not
 redistributed in the nine-file Pages artifact. The npm audit gate is a current
 advisory check, not a claim that these dependencies can never have a defect.
-The pure Node suite has 16 controls, separate from the 13 CI browser cases and
+The pure Node suite has 20 controls, separate from the 13 CI browser cases and
 19 workflow checks (17 successful checks plus intentionally skipped publish/live
 jobs on a pull request). Production HTML still contains zero scripts; CI-only
 axe injection does not change that source contract.

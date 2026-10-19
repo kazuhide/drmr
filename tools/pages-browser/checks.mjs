@@ -20,9 +20,16 @@ export function requireImages(images) {
 export function layoutObservation() {
   const width = document.documentElement.clientWidth;
   const clipped = [];
-  for (const element of document.querySelectorAll('h1,h2,h3,p,li,dt,dd,figcaption,a,img,pre,figure,nav')) {
+  for (const element of document.querySelectorAll('h1,h2,h3,p,li,dt,dd,figcaption,a,img,pre,figure,nav,table,th,td,.matrix-scroll')) {
     const rect = element.getBoundingClientRect();
-    if (rect.width && (rect.left < 0 || rect.right > width)) clipped.push(element.tagName + ':' + element.textContent.trim().slice(0, 60));
+    // Only the declared matrix viewport owns intentional horizontal overflow.
+    // Its descendants still have to fit its complete scrollable content box.
+    const owner = element.closest('div.matrix-scroll[role="region"][tabindex="0"]');
+    const boundary = owner && owner !== element ? owner.getBoundingClientRect().left + owner.clientLeft : 0;
+    const left = rect.left + (owner && owner !== element ? owner.scrollLeft : 0);
+    const right = rect.right + (owner && owner !== element ? owner.scrollLeft : 0);
+    const end = owner && owner !== element ? boundary + owner.scrollWidth : width;
+    if (rect.width && (left < boundary || right > end)) clipped.push(element.tagName + ':' + element.textContent.trim().slice(0, 60));
   }
   return { clientWidth: width, scrollWidth: document.documentElement.scrollWidth, clipped };
 }

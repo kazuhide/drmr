@@ -1,10 +1,11 @@
 import { locales } from './locales.mjs';
+import { matrixRows, matrixColumns, requireMatrixLayout, requireMatrixMovement } from './matrix.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { assets, assetRoute, assetPath, digest, liveMode, allowedRequest } from './source.mjs';
 import { matchesPublication } from './wait-published.mjs';
 import { resource } from './server.mjs';
-import { requireFocus, requireImages, requireLayout, focusObservation, requireClippedFocusTimeout, pollFocus, FocusConditionTimeout, FocusObservationDeadline } from './checks.mjs';
+import { requireFocus, requireImages, requireLayout, layoutObservation, focusObservation, requireClippedFocusTimeout, pollFocus, FocusConditionTimeout, FocusObservationDeadline } from './checks.mjs';
 
 test('only the fixed static payload resolves at either mount', () => {
   assert.equal(resource('/').relative, 'index.html');
@@ -297,6 +298,10 @@ test('both fixed locale routes bind separate pages and reciprocal native languag
     assert.equal(assetRoute(locale.asset), locale.route);
     assert.equal(locale.switchLanguage, other.language);
     assert.equal(locale.groups.length, 5);
+    assert.equal(locale.profiles.length, 6);
+    assert.ok(locale.matrixCaption && locale.matrixRegion);
+    assert.deepEqual(locale.matrixCorner.split(' / ').length, 2);
+    assert.equal(locale.headings[0], locale.language === 'en' ? 'Input and output support' : '入力と出力の対応表');
     assert.equal(locale.headings.length, 4);
     assert.equal(new Set(locale.groups).size, 5);
     for (const mount of ['/', '/drmr/']) {
@@ -306,5 +311,76 @@ test('both fixed locale routes bind separate pages and reciprocal native languag
       assert.equal(resource(new URL(next).pathname).relative, other.asset);
       assert.equal(assetPath(next), other.asset);
     }
+  }
+});
+
+
+function matrixSample(changes = {}) {
+  return { overflowX: 'auto', clientWidth: 286, clientHeight: 640,
+    rect: { left: 16, right: 304 }, contentLeft: 17, contentRight: 303,
+    documentWidth: 320, documentScrollWidth: 320, scrollWidth: 648, scrollLeft: 0,
+    pageX: 0, pageY: 250, focused: true, clippedCells: [],
+    rowHeaders: Array.from({ length: 6 }, () => ({ left: 17, right: 153, position: 'sticky' })),
+    ...changes };
+}
+
+test('conversion facts distinguish audio edits, TS video and TS audio-only routes', () => {
+  assert.deepEqual(matrixColumns, ['MP4', 'DASH', 'HLS fMP4', 'HLS MPEG-TS']);
+  assert.deepEqual(matrixRows.map(row => row.id), ['mp4-standard', 'mp4-audio-edit', 'dash', 'hls-fmp4', 'hls-ts-video', 'hls-ts-audio']);
+  assert.equal(matrixRows.flatMap(row => row.output).length, 24);
+  assert.deepEqual(matrixRows[1].input, ['Clear', 'cenc']);
+  assert.deepEqual(matrixRows[1].output, [['Clear'], [], [], []]);
+  assert.deepEqual(matrixRows[4].output.slice(0, 2), [[], []]);
+  assert.deepEqual(matrixRows[5].output, [[], [], [], ['Clear', 'AES-128', 'SAMPLE-AES']]);
+  for (const index of [0, 2, 3]) assert.deepEqual(matrixRows[index].output[3], []);
+});
+
+test('matrix bounds refuse page overflow, clipped cells and unanchored row headers', () => {
+  requireMatrixLayout(matrixSample());
+  for (const change of [{ overflowX: 'hidden' }, { clientWidth: 0 },
+    { rect: { left: -1, right: 304 } }, { documentScrollWidth: 321 },
+    { clippedCells: ['SAMPLE-AES'] }, { rowHeaders: [] },
+    { rowHeaders: Array.from({ length: 6 }, () => ({ left: 17, right: 153, position: 'static' })) },
+    { rowHeaders: Array.from({ length: 6 }, () => ({ left: 17, right: 330, position: 'sticky' })) }]) {
+    assert.throws(() => requireMatrixLayout(matrixSample(change)));
+  }
+});
+
+test('native matrix movement cannot pass for a stationary matrix, lost focus or document movement', () => {
+  const before = matrixSample();
+  const after = matrixSample({ scrollLeft: 40 });
+  requireMatrixMovement(before, after, 'right');
+  requireMatrixMovement(after, before, 'left');
+  for (const change of [{ scrollLeft: 0 }, { focused: false }, { pageX: 1 }, { pageY: 251 },
+    { rowHeaders: Array.from({ length: 6 }, () => ({ left: 18, right: 154, position: 'sticky' })) }]) {
+    assert.throws(() => requireMatrixMovement(before, { ...after, ...change }, 'right'));
+  }
+  assert.throws(() => requireMatrixMovement(before, after, 'left'));
+});
+
+test('layout only permits matrix-owned content inside its full scrollable bounds', () => {
+  const saved = Object.getOwnPropertyDescriptor(globalThis, 'document');
+  const rectangle = (left, right) => ({ left, right, width: right - left });
+  const wrapper = { tagName: 'DIV', textContent: 'Matrix', clientLeft: 1, scrollLeft: 0, scrollWidth: 648,
+    getBoundingClientRect: () => rectangle(16, 304), closest: () => wrapper };
+  let tableRight = 665;
+  const table = { tagName: 'TABLE', textContent: 'Facts', getBoundingClientRect: () => rectangle(17, tableRight), closest: () => wrapper };
+  const outside = { tagName: 'P', textContent: 'Unrelated', getBoundingClientRect: () => rectangle(16, 304), closest: () => null };
+  try {
+    Object.defineProperty(globalThis, 'document', { configurable: true, value: {
+      documentElement: { clientWidth: 320, scrollWidth: 320 }, querySelectorAll: () => [wrapper, table, outside],
+    } });
+    requireLayout(layoutObservation());
+    tableRight = 666;
+    assert.throws(() => requireLayout(layoutObservation()));
+    tableRight = 665;
+    outside.getBoundingClientRect = () => rectangle(16, 321);
+    assert.throws(() => requireLayout(layoutObservation()));
+    outside.getBoundingClientRect = () => rectangle(16, 304);
+    wrapper.getBoundingClientRect = () => rectangle(16, 321);
+    assert.throws(() => requireLayout(layoutObservation()));
+  } finally {
+    if (saved) Object.defineProperty(globalThis, 'document', saved);
+    else delete globalThis.document;
   }
 });

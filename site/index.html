@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Inspect, repackage, and independently verify qualified streaming media with drmr. Preserve the encoding and compare the result with its original.">
+  <meta name="description" content="See supported input and output combinations for MP4, DASH and HLS. Convert media packaging and encryption with supplied keys, without re-encoding.">
   <meta name="color-scheme" content="light">
-  <title>drmr — Repackage media. Check it against the original.</title>
+  <title>drmr — MP4, DASH and HLS conversion support</title>
   <link rel="canonical" href="https://kazuhide.github.io/drmr/">
   <link rel="alternate" hreflang="en" href="https://kazuhide.github.io/drmr/">
   <link rel="alternate" hreflang="ja" href="https://kazuhide.github.io/drmr/ja/">
@@ -18,8 +18,8 @@
   <header class="site-header wrap">
     <a class="brand" href="#main" aria-label="drmr home"><img src="./assets/drmr.svg" width="32" height="32" alt="">drmr</a>
     <nav aria-label="Main navigation">
-      <a href="#workflow">Workflow</a>
       <a href="#support">Support</a>
+      <a href="#workflow">Workflow</a>
       <a href="#get-started">Get started</a>
       <a href="https://github.com/kazuhide/drmr">GitHub</a>
     </nav>
@@ -30,33 +30,90 @@
   <main id="main" class="wrap" tabindex="-1">
     <section class="hero" aria-labelledby="title">
       <div class="hero-copy">
-        <h1 id="title">Repackage media.<br>Check it against<br class="wide-break"> the original.</h1>
-        <p class="lead">Change the packaging and protection of supported on-demand media. Keep the existing video and audio encoding. Check the result against the source.</p>
-        <p>Supply the keys for media you are authorized to manage. Input decryption and output encryption stay separate.</p>
+        <h1 id="title">Convert formats and encryption.</h1>
+        <p class="lead">Convert supported MP4, DASH and HLS media without re-encoding. Supply the keys for input decryption and output encryption.</p>
         <div class="actions">
-          <a class="button" href="#get-started">Get started</a>
+          <a class="button" href="#get-started">Start with the CLI</a>
           <a class="text-link" href="https://github.com/kazuhide/drmr">Read the source</a>
         </div>
-        <p class="hero-note">A native command-line tool for Windows, macOS, and Linux.<br>Local Web and Desktop interfaces are experimental.</p>
+        <p class="hero-note">For Windows, macOS and Linux. Local Web and Desktop interfaces are experimental.</p>
       </div>
-      <figure class="workbench" aria-labelledby="bench-caption">
-        <div class="bench-heading"><span class="bench-mark" aria-hidden="true"></span>Keep the original in the loop</div>
-        <div class="bench-media">
-          <div><span class="bench-label">Original</span><strong>Encoded media</strong><span class="packets" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></span></div>
-          <div><span class="bench-label">Requested output</span><strong>New packaging</strong><span class="packets repacked" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></span></div>
-        </div>
-        <div class="bench-operation">Repackage without re-encoding</div>
-        <div class="bench-comparison">
-          <span>Compare source and result</span>
-          <ul>
-            <li><span>Stream metadata</span><b aria-hidden="true">↔</b></li>
-            <li><span>Encoded packet content</span><b aria-hidden="true">↔</b></li>
-            <li><span>Every packet’s timing</span><b aria-hidden="true">↔</b></li>
-            <li><span>Complete decoded media</span><b aria-hidden="true">↔</b></li>
-          </ul>
-        </div>
-        <figcaption id="bench-caption">Compare encoded media, timing, and decoded content before saving the result.</figcaption>
-      </figure>
+    </section>
+
+    <section id="support" class="section support" aria-labelledby="support-title">
+      <div class="section-intro">
+        <h2 id="support-title">Input and output support</h2>
+        <p id="matrix-guide">For completed local media. Rows list input protection; cells list output choices.</p>
+      </div>
+      <p id="matrix-scroll-hint" class="matrix-hint">Scroll sideways on narrow screens. Keyboard: Tab to the table, then use ← / →.</p>
+      <div class="matrix-scroll" role="region" aria-label="Conversion support matrix" aria-describedby="matrix-guide matrix-scroll-hint" tabindex="0">
+        <table class="conversion-matrix" aria-describedby="matrix-limits matrix-definitions">
+          <caption class="visually-hidden">Supported conversion profiles</caption>
+          <thead>
+            <tr><th scope="col" aria-label="Input ↓ / Output →"><span class="axis-input">Input ↓</span> <span class="axis-output">Output →</span></th><th scope="col">MP4</th><th scope="col">DASH</th><th scope="col">HLS <span class="output-container">fMP4</span></th><th scope="col">HLS <span class="output-container">MPEG-TS</span></th></tr>
+          </thead>
+          <tbody>
+            <tr id="mp4-standard">
+              <th scope="row"><strong class="input-format">MP4</strong><span class="input-profile">Standard profile</span><span class="input-protections"><span class="clear">Clear</span> / <code>cenc</code> / <code>cbcs</code></span></th>
+              <td><span class="clear">Clear</span> / <code>cenc</code> / <code>cbcs</code><sup>1</sup></td>
+              <td><span class="clear">Clear</span> / <code>cenc</code> / <code>cbcs</code></td>
+              <td><span class="clear">Clear</span> / <code>cbcs</code> / <code>AES-128</code></td>
+              <td class="unavailable">Outside profile</td>
+            </tr>
+            <tr id="mp4-audio-edit">
+              <th scope="row"><strong class="input-format">MP4</strong><span class="input-profile">Audio start/end edits<sup>2</sup></span><span class="input-protections"><span class="clear">Clear</span> / <code>cenc</code> (qualified)</span></th>
+              <td><span class="clear">Clear</span></td>
+              <td class="unavailable">Outside profile</td>
+              <td class="unavailable">Outside profile</td>
+              <td class="unavailable">Outside profile</td>
+            </tr>
+            <tr id="dash">
+              <th scope="row"><strong class="input-format">DASH</strong><span class="input-profile">Fragmented MP4 tracks</span><span class="input-protections"><span class="clear">Clear</span> / <code>cenc</code> / <code>cbcs</code></span></th>
+              <td><span class="clear">Clear</span> / <code>cenc</code> / <code>cbcs</code><sup>1</sup></td>
+              <td><span class="clear">Clear</span> / <code>cenc</code> / <code>cbcs</code></td>
+              <td><span class="clear">Clear</span> / <code>cbcs</code> / <code>AES-128</code></td>
+              <td class="unavailable">Outside profile</td>
+            </tr>
+            <tr id="hls-fmp4">
+              <th scope="row"><strong class="input-format">HLS</strong><span class="input-profile">Fragmented MP4 (fMP4)</span><span class="input-protections"><span class="clear">Clear</span> / <code>cbcs</code> / <code>AES-128</code></span></th>
+              <td><span class="clear">Clear</span> / <code>cenc</code> / <code>cbcs</code><sup>1</sup></td>
+              <td><span class="clear">Clear</span> / <code>cenc</code> / <code>cbcs</code></td>
+              <td><span class="clear">Clear</span> / <code>cbcs</code> / <code>AES-128</code></td>
+              <td class="unavailable">Outside profile</td>
+            </tr>
+            <tr id="hls-ts-video">
+              <th scope="row"><strong class="input-format">HLS / MPEG-TS</strong><span class="input-profile">Video with optional audio<sup>3</sup></span><span class="input-protections"><span class="clear">Clear</span> / <code>AES-128</code> / <code>SAMPLE-AES</code></span></th>
+              <td class="unavailable">Outside profile</td>
+              <td class="unavailable">Outside profile</td>
+              <td><span class="clear">Clear</span> / <code>cbcs</code> / <code>AES-128</code></td>
+              <td><span class="clear">Clear</span> / <code>AES-128</code> / <code>SAMPLE-AES</code></td>
+            </tr>
+            <tr id="hls-ts-audio">
+              <th scope="row"><strong class="input-format">HLS / MPEG-TS</strong><span class="input-profile">Audio only<sup>3</sup></span><span class="input-protections"><span class="clear">Clear</span> / <code>AES-128</code> / <code>SAMPLE-AES</code></span></th>
+              <td class="unavailable">Outside profile</td>
+              <td class="unavailable">Outside profile</td>
+              <td class="unavailable">Outside profile</td>
+              <td><span class="clear">Clear</span> / <code>AES-128</code> / <code>SAMPLE-AES</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="matrix-scope">Clear means unencrypted. “Outside profile” describes drmr’s current implementation, rather than a limitation of the media formats.</p>
+      <ol id="matrix-limits" class="matrix-limits">
+        <li>Regular MP4 output contains one audio or video track. Separate DASH/HLS audio and video tracks cannot be combined into one MP4 output.</li>
+        <li>MP4 with simple audio start/end edits converts from clear or qualified <code>cenc</code> input to clear MP4. This profile accepts one AAC-LC audio track and optional H.264 video from the same original file. Complex edits and encrypted input with DRM initialization metadata are outside this profile.</li>
+        <li>TS input uses a limited profile of progressive H.264 video and 48 kHz AAC-LC audio. Audio-only input has TS output only. TS output with both video and audio uses separate playlists.</li>
+      </ol>
+      <div id="matrix-definitions" class="support-detail">
+        <p>MP4 stores media. DASH (Dynamic Adaptive Streaming over HTTP) and HLS (HTTP Live Streaming) describe media segments in manifests or playlists. fMP4 means fragmented MP4; MPEG-TS means MPEG transport stream.</p>
+        <p><code>cenc</code> uses counter-mode sample encryption; <code>cbcs</code> uses pattern encryption with cipher block chaining. HLS <code>AES-128</code> encrypts whole resources; <code>SAMPLE-AES</code> encrypts selected bytes in TS media. DRM license acquisition and device playback need separate checks.</p>
+        <a class="text-link" href="https://github.com/kazuhide/drmr/blob/main/docs/conversion-support.md">Read the full support matrix and restrictions</a>
+      </div>
+      <aside class="url-note" aria-labelledby="url-title">
+        <h3 id="url-title">Starting with an HLS URL?</h3>
+        <p>Only completed <strong>clear HLS</strong> is supported for URL acquisition. <code>--download-dir</code> is required: it retains the source for offline retries and independent verification. Remote MP4/DASH, encrypted URLs, live input, and byte ranges are outside this acquisition profile.</p>
+        <a href="https://github.com/kazuhide/drmr/blob/main/docs/usage.md#convert-a-url">Convert a URL and keep its source</a>
+      </aside>
     </section>
 
     <section id="workflow" class="section" aria-labelledby="workflow-title">
@@ -93,28 +150,6 @@
         </li>
       </ol>
       <p class="section-note">These commands illustrate a qualified DASH-to-CBCS-DASH route. <a href="https://github.com/kazuhide/drmr/blob/main/docs/usage.md#separate-input-and-output-keys">Prepare an owner-only key configuration</a>; do not put raw keys in command arguments or version control.</p>
-    </section>
-
-    <section id="support" class="section support" aria-labelledby="support-title">
-      <div class="section-intro">
-        <h2 id="support-title">The container matters</h2>
-        <p>MP4 stores media. DASH (Dynamic Adaptive Streaming over HTTP) and HLS (HTTP Live Streaming) describe media segments with manifests or playlists. HLS can carry fragmented MP4 (fMP4) or MPEG transport streams (MPEG-TS).</p>
-      </div>
-      <div class="profile-list">
-        <div class="profile"><h3>MP4</h3><p>Single audio or video tracks, plus a separate profile for AAC audio with optional H.264 video. See the support matrix for output limits.</p></div>
-        <div class="profile"><h3>DASH</h3><p>Qualified static presentations with fragmented MP4 tracks. Clear, <code>cenc</code>, and <code>cbcs</code> protection routes.</p></div>
-        <div class="profile"><h3>HLS / fragmented MP4</h3><p>Completed local playlists with qualified fMP4 tracks. Clear, CBCS, and full-resource AES-128 output routes.</p></div>
-        <div class="profile"><h3>HLS / MPEG-TS</h3><p>A narrower H.264/AAC profile. Clear, AES-128, and SAMPLE-AES transport-stream routes, plus qualified fMP4 HLS outputs.</p></div>
-      </div>
-      <div class="support-detail">
-        <p><code>cenc</code> uses counter-mode sample encryption. <code>cbcs</code> uses pattern encryption with cipher block chaining. HLS AES-128 encrypts whole resources; SAMPLE-AES TS encrypts selected media bytes. These names do not establish a DRM license or device capability.</p>
-        <a class="text-link" href="https://github.com/kazuhide/drmr/blob/main/docs/conversion-support.md">Read the full support matrix and restrictions</a>
-      </div>
-      <aside class="url-note" aria-labelledby="url-title">
-        <h3 id="url-title">Starting with an HLS URL?</h3>
-        <p>Only completed <strong>clear HLS</strong> is supported for URL acquisition. <code>--download-dir</code> is required: it retains the source for offline retries and independent verification. Remote MP4/DASH, encrypted URLs, live input, and byte ranges are outside this acquisition profile.</p>
-        <a href="https://github.com/kazuhide/drmr/blob/main/docs/usage.md#convert-a-url">Convert a URL and keep its source</a>
-      </aside>
     </section>
 
     <section id="verification" class="section" aria-labelledby="verification-title">
