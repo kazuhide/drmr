@@ -1,10 +1,12 @@
 """Container report controls do not substitute for real image qualification."""
 import copy
 import importlib.util
+import http.server
 import json
 from pathlib import Path
 import sys
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -124,6 +126,58 @@ class EvidenceTests(unittest.TestCase):
                 patch.object(module, "successful", return_value=b"drmr-qualify-owned\n"):
             with self.assertRaisesRegex(module.Refusal, "^owned-container-cleanup-unconfirmed$"):
                 image.close()
+
+    def host_guard_control(self, response_overrides=None):
+        requests = []
+        replies = {"other.invalid": (403, "untrusted-host"),
+                   "user@localhost": (400, "invalid-host")}
+        replies.update(response_overrides or {})
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                hosts = self.headers.get_all("Host")
+                requests.append((self.path, hosts))
+                status, error = replies.get(hosts[0], (500, "fixture-invalid-host"))
+                body = json.dumps({"error": error}).encode("utf-8")
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *_):
+                pass
+
+        server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        worker = threading.Thread(target=lambda: server.serve_forever(poll_interval=0.01), daemon=True)
+        worker.start()
+        def cleanup():
+            server.shutdown()
+            server.server_close()
+            worker.join(timeout=2)
+            self.assertFalse(worker.is_alive(), "The owned HTTP fixture must finish")
+        self.addCleanup(cleanup)
+        return server.server_port, requests
+
+    def test_real_http_headers_distinguish_untrusted_and_malformed_authorities(self):
+        port, requests = self.host_guard_control()
+        self.assertEqual(module.verify_web_host_guards(port), [
+            {"case": "untrusted-authority", "status": 403, "error": "untrusted-host"},
+            {"case": "malformed-authority", "status": 400, "error": "invalid-host"}])
+        self.assertEqual(requests, [
+            ("/api/catalog", ["other.invalid"]),
+            ("/api/catalog", ["user@localhost"])])
+
+    def test_real_http_guard_controls_refuse_success_and_wrong_failure_classes(self):
+        for host, reply in (("other.invalid", (200, "untrusted-host")),
+                            ("other.invalid", (400, "invalid-host")),
+                            ("user@localhost", (403, "untrusted-host")),
+                            ("user@localhost", (400, "untrusted-host"))):
+            with self.subTest(host=host, reply=reply):
+                port, requests = self.host_guard_control({host: reply})
+                with self.assertRaisesRegex(module.Refusal, "^web-host-guard-failed$"):
+                    module.verify_web_host_guards(port)
+                self.assertEqual(requests[-1], ("/api/catalog", [host]))
 
     def test_output_limit_terminates_a_live_writer_before_its_deadline(self):
         command = [sys.executable, "-c", "import os,time; os.write(1,b'x'*4096); time.sleep(10)"]

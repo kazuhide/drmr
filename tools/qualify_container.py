@@ -494,6 +494,22 @@ def http_request(port, method, path, body=None, headers=None):
         connection.close()
 
 
+def verify_web_host_guards(port):
+    cases = (("untrusted-authority", "other.invalid", 403, "untrusted-host"),
+             ("malformed-authority", "user@localhost", 400, "invalid-host"))
+    records = []
+    for case, host, expected_status, expected_error in cases:
+        status, content = http_request(port, "GET", "/api/catalog", headers={"Host": host})
+        parsed = load_json(content)
+        error = parsed.get("error") if isinstance(parsed, dict) else None
+        if status != expected_status or error != expected_error:
+            raise Refusal("web-host-guard-failed", {
+                "case": case, "actual_status": status,
+                "actual_error": error if error in ("untrusted-host", "invalid-host") else "unexpected"})
+        records.append({"case": case, "status": status, "error": error})
+    return records
+
+
 def available_port():
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
@@ -563,9 +579,7 @@ def web(image, root):
                 status, content = http_request(port, "POST", path, {}, {"Origin": "https://other.invalid"})
                 if status != 403 or load_json(content).get("error") != "same-origin-required":
                     raise Refusal("web-origin-guard-failed")
-            status, content = http_request(port, "GET", "/api/catalog", headers={"Host": "other.invalid"})
-            if status != 400 or load_json(content).get("error") != "invalid-host":
-                raise Refusal("web-host-guard-failed")
+            host_guard_cases = verify_web_host_guards(port)
             controls = root / "work/web-control"
             ids = []
             for label in ("stop", "shutdown"):
@@ -599,7 +613,7 @@ def web(image, root):
         if hashes(root / "input") != before:
             raise Refusal("web-changed-source")
         return {"status": "http-api-qualified", "browser_gui": "not-tested", "host_origin_guards": True,
-                "two_real_jobs": len(ids), "lifecycle": result}
+                "host_guard_cases": host_guard_cases, "two_real_jobs": len(ids), "lifecycle": result}
     finally:
         fixture.shutdown()
         fixture.server_close()
