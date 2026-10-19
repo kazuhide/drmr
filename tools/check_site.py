@@ -33,8 +33,17 @@ def require(value, token):
         raise Failure(token)
 
 
+def linked(info):
+    # lstat exposes junctions and other Windows name-surrogate reparse points
+    # through file attributes, even when their mode is an ordinary directory.
+    return stat.S_ISLNK(info.st_mode) or bool(
+        getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT)
+
+
 def inventory(root):
-    require(not root.is_symlink() and root.is_dir(), "site-root")
+    root_info = root.lstat()
+    require(not linked(root_info), "site-link-or-special-file")
+    require(stat.S_ISDIR(root_info.st_mode), "site-root")
     files = {}
     pending = [root]
     while pending:
@@ -42,7 +51,7 @@ def inventory(root):
         for path in sorted(directory.iterdir()):
             info = path.lstat()
             relative = path.relative_to(root).as_posix()
-            require(not stat.S_ISLNK(info.st_mode), "site-link-or-special-file")
+            require(not linked(info), "site-link-or-special-file")
             if stat.S_ISDIR(info.st_mode):
                 require(relative in DIRECTORIES, "site-file-set")
                 pending.append(path)

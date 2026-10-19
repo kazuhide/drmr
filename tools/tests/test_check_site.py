@@ -3,8 +3,12 @@ import importlib.util
 import os
 from pathlib import Path
 import shutil
+import stat
+import subprocess
 import tempfile
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 SPEC = importlib.util.spec_from_file_location("check_site", Path(__file__).resolve().parents[1] / "check_site.py")
 CHECK = importlib.util.module_from_spec(SPEC)
@@ -56,19 +60,62 @@ class Site(unittest.TestCase):
         with self.assertRaisesRegex(CHECK.Failure, "site-file-set"):
             self.check()
 
-    def test_symlinks_and_hardlinks_are_refused_before_upload(self):
+    def test_hardlinks_are_refused_before_upload(self):
         path = self.site / "assets/drmr.svg"
         original = path.read_bytes()
         external = self.root / "external.svg"
         external.write_bytes(original)
         path.unlink()
-        path.symlink_to(external)
-        with self.assertRaisesRegex(CHECK.Failure, "site-link-or-special-file"):
-            self.check()
-        path.unlink()
         os.link(external, path)
         with self.assertRaisesRegex(CHECK.Failure, "site-link-or-special-file"):
             self.check()
+
+    def directory_link(self, link, target):
+        if os.name == "nt":
+            # Junctions require no symbolic-link privilege. Pass paths only as
+            # environment data; a fixed command string avoids MS C argv quoting
+            # rules being applied to cmd's own command-language quotes.
+            environment = dict(os.environ, DRMR_SITE_TEST_LINK=str(link.absolute()),
+                               DRMR_SITE_TEST_TARGET=str(target.absolute()))
+            command = 'cmd.exe /D /V:OFF /Q /C mklink /J "%DRMR_SITE_TEST_LINK%" "%DRMR_SITE_TEST_TARGET%"'
+            result = subprocess.run(command, executable=os.environ["COMSPEC"], env=environment,
+                                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE, timeout=10)
+            self.assertEqual(result.returncode, 0, "directory junction fixture failed")
+            self.addCleanup(link.rmdir)
+            self.assertTrue(link.lstat().st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT)
+        else:
+            link.symlink_to(target, target_is_directory=True)
+            self.addCleanup(link.unlink)
+            self.assertTrue(link.is_symlink())
+
+    def test_actual_directory_links_are_refused_at_root_and_child(self):
+        alias = self.root / "site alias & !data"
+        self.directory_link(alias, self.site)
+        with self.assertRaises(CHECK.Failure):
+            CHECK.validate(alias, self.repo, pending_docs=("docs/docker.md",))
+        outside = self.root / "outside fonts \u65e5\u672c\u8a9e"
+        shutil.copytree(self.site / "assets/fonts", outside)
+        expected = {p.name: p.read_bytes() for p in outside.iterdir()}
+        shutil.rmtree(self.site / "assets/fonts")
+        self.directory_link(self.site / "assets/fonts", outside)
+        with self.assertRaisesRegex(CHECK.Failure, "site-link-or-special-file"):
+            self.check()
+        self.assertEqual({p.name: p.read_bytes() for p in outside.iterdir()}, expected)
+
+    def test_reparse_attributes_are_refused_even_with_directory_mode(self):
+        real_lstat = Path.lstat
+        for selected in (self.site, self.site / "assets/fonts"):
+            def reparse_lstat(path, *args, **kwargs):
+                actual = real_lstat(path, *args, **kwargs)
+                if path == selected:
+                    return SimpleNamespace(st_mode=actual.st_mode, st_nlink=actual.st_nlink,
+                                           st_size=actual.st_size,
+                                           st_file_attributes=stat.FILE_ATTRIBUTE_REPARSE_POINT)
+                return actual
+            with self.subTest(path=selected.name), patch.object(Path, "lstat", reparse_lstat):
+                with self.assertRaisesRegex(CHECK.Failure, "site-link-or-special-file"):
+                    self.check()
 
     def test_relative_and_encoded_asset_escapes_are_refused(self):
         path = self.site / "index.html"
