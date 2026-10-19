@@ -10,6 +10,8 @@ The CLI is the primary interface. The local web console and optional [Desktop ho
 
 ## Install
 
+To run the CLI with its media tools included, use the [Docker guide](docs/docker.md). It also covers the experimental local web console.
+
 Building from source requires **Rust 1.95 or newer**. Use your selected Rust toolchain; CI checks the minimum version and the latest stable release. See [requirements and tested versions](docs/requirements.md). The commands below use a macOS/Linux shell; see the [Windows guide](docs/windows.md) for PowerShell, native paths, and protected configuration.
 
 From the repository root:

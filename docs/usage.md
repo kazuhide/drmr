@@ -1,6 +1,6 @@
 # Using drmr
 
-The examples below assume `drmr` is installed and the external tools are on `PATH`. Run `drmr doctor` first. Commands process existing media; they do not encode new video qualities. For PowerShell examples and Windows file permissions, see the [Windows guide](windows.md).
+The examples below assume `drmr` is installed and the external tools are on `PATH`. The [Docker guide](docker.md) provides an alternative with those tools included. Run `drmr doctor` first. Commands process existing media; they do not encode new video qualities. For PowerShell examples and Windows file permissions, see the [Windows guide](windows.md).
 
 ## Choose a workflow
 
