@@ -8,7 +8,7 @@ drmr inspects local MP4, DASH, and HLS media and converts qualified on-demand pr
 
 The CLI is the primary interface. The local web console and optional [Desktop host](docs/desktop.md) are experimental.
 
-[Project website](https://kazuhide.github.io/drmr/) · [Usage guide](docs/usage.md) · [Conversion support](docs/conversion-support.md)
+[Project website (English)](https://kazuhide.github.io/drmr/) · [Japanese website](https://kazuhide.github.io/drmr/ja/) · [Usage guide](docs/usage.md) · [Conversion support](docs/conversion-support.md)
 
 ## Install
 

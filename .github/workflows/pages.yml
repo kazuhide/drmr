@@ -156,13 +156,13 @@ jobs:
           npm audit --audit-level=low
           npm run test:controls
 
-      - name: Require all eight published files to match this source
+      - name: Require all published files to match this source
         run: node wait-published.mjs
 
       - name: Install the pinned Playwright Chromium and system dependencies
         run: ./node_modules/.bin/playwright install --with-deps chromium
 
-      - name: Check the published page with zero whole-test retries
+      - name: Check both published languages with zero whole-test retries
         run: npm run test:browser
 
       - name: Preserve separate published-site evidence
