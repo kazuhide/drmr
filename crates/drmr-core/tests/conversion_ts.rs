@@ -566,15 +566,13 @@ fn segment_durations_and_output_profile_are_not_silently_normalized() {
     );
     assert!(!output.exists());
     std::fs::write(&input, original).unwrap();
-    for format in [OutputFormat::Dash, OutputFormat::Mp4] {
-        let mut request = clear_request(&input, &output, &keys, &hls);
-        request.format = format;
-        assert_eq!(
-            converter().convert(request).unwrap_err().0,
-            "ts-output-profile-not-supported"
-        );
-        assert!(!output.exists());
-    }
+    let mut request = clear_request(&input, &output, &keys, &hls);
+    request.format = OutputFormat::Mp4;
+    assert_eq!(
+        converter().convert(request).unwrap_err().0,
+        "ts-output-profile-not-supported"
+    );
+    assert!(!output.exists());
     let mut request = clear_request(&input, &output, &keys, &hls);
     request.target = TargetProtection::Cenc;
     assert_eq!(
@@ -1059,5 +1057,60 @@ fn unsupported_transport_playlist_metadata_and_escaping_uris_fail_closed() {
                 .is_err()
         );
         assert!(!output.exists());
+    }
+}
+
+#[test]
+fn dash_b_frames_preserve_absolute_decode_and_presentation_clocks() {
+    let root = common::private_tempdir().unwrap();
+    let input = source_profile(root.path(), "bframes");
+    let before = common::snapshot_tree(root.path());
+    let empty = InputKeys::default();
+    let hls = HlsInputKeys::default();
+    let key = OutputKey::from_hex(KID, KEY).unwrap();
+    let output_keys = InputKeys::new(vec![ContentKey::from_hex(KID, KEY).unwrap()]).unwrap();
+    let c = converter();
+    for target in [
+        TargetProtection::Clear,
+        TargetProtection::Cenc,
+        TargetProtection::Cbcs,
+    ] {
+        let output = root.path().join(target.as_str());
+        let mut request = clear_request(&input, &output, &empty, &hls);
+        request.format = OutputFormat::Dash;
+        request.target = target;
+        request.output_key = (target != TargetProtection::Clear).then_some(&key);
+        let result = c
+            .convert(request)
+            .unwrap_or_else(|e| panic!("{}: {e}", target.as_str()));
+        assert!(result.verification.passed);
+        let proof = c
+            .verify(VerificationRequest {
+                source: VerificationSource {
+                    input: &input,
+                    input_keys: &empty,
+                    hls_keys: &hls,
+                },
+                output: VerificationSource {
+                    input: &output.join("manifest.mpd"),
+                    input_keys: &output_keys,
+                    hls_keys: &hls,
+                },
+            })
+            .unwrap_or_else(|e| panic!("fresh {}: {e}", target.as_str()));
+        assert!(proof.passed && proof.media_verified);
+        assert_eq!(
+            proof.checks.stream_metadata,
+            drmr_core::conversion::CheckOutcome::Pass
+        );
+        assert!(
+            proof.checks.packet_payloads_equal
+                && proof.checks.packet_timing_equal
+                && proof.checks.decoded_content_equal
+        );
+        assert!(!proof.license_playback_verified);
+    }
+    for (name, bytes) in before {
+        assert_eq!(std::fs::read(root.path().join(name)).unwrap(), bytes);
     }
 }

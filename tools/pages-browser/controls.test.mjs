@@ -330,8 +330,8 @@ test('conversion facts distinguish audio edits, TS video and TS audio-only route
   assert.equal(matrixRows.flatMap(row => row.output).length, 24);
   assert.deepEqual(matrixRows[1].input, ['Clear', 'cenc']);
   assert.deepEqual(matrixRows[1].output, [['Clear'], [], [], []]);
-  assert.deepEqual(matrixRows[4].output.slice(0, 2), [[], []]);
-  assert.deepEqual(matrixRows[5].output, [[], [], [], ['Clear', 'AES-128', 'SAMPLE-AES']]);
+  assert.deepEqual(matrixRows[4].output.slice(0, 2), [[], ['Clear', 'cenc', 'cbcs']]);
+  assert.deepEqual(matrixRows[5].output, [[], ['Clear', 'cenc', 'cbcs'], [], ['Clear', 'AES-128', 'SAMPLE-AES']]);
   for (const index of [0, 2, 3]) assert.deepEqual(matrixRows[index].output[3], []);
 });
 

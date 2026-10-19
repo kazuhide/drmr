@@ -257,8 +257,8 @@ class ConversionMatrix(unittest.TestCase):
             ("mp4-audio-edit", "MP4", "Clear/cenc", ["Clear", "", "", ""]),
             ("dash", "DASH", "Clear/cenc/cbcs", standard),
             ("hls-fmp4", "HLS", "Clear/cbcs/AES-128", standard),
-            ("hls-ts-video", "HLS / MPEG-TS", "Clear/AES-128/SAMPLE-AES", ["", "", "Clear/cbcs/AES-128", "Clear/AES-128/SAMPLE-AES"]),
-            ("hls-ts-audio", "HLS / MPEG-TS", "Clear/AES-128/SAMPLE-AES", ["", "", "", "Clear/AES-128/SAMPLE-AES"]),
+            ("hls-ts-video", "HLS / MPEG-TS", "Clear/AES-128/SAMPLE-AES", ["", "Clear/cenc/cbcs", "Clear/cbcs/AES-128", "Clear/AES-128/SAMPLE-AES"]),
+            ("hls-ts-audio", "HLS / MPEG-TS", "Clear/AES-128/SAMPLE-AES", ["", "Clear/cenc/cbcs", "", "Clear/AES-128/SAMPLE-AES"]),
         ]
         def protection(value):
             return " / ".join('<span>Clear</span>' if token == "Clear" else '<code>' + token + '</code>' for token in value.split("/"))

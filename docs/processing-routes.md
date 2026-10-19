@@ -22,6 +22,7 @@ The finite progressive route copies the original encoded tracks directly, retain
 | `fmp4-hls-presentation` | Supported complete tracks to fragmented MP4 HLS. Sample encryption applies within media samples; HLS AES-128 separately encrypts each complete output resource. | FFmpeg, FFprobe, Shaka Packager |
 | `mpeg-ts-hls` | The narrow local MPEG transport stream profile to fragmented MP4 HLS. Tracks are demultiplexed, and the actual final playlists are checked against the original transport streams. | FFmpeg, FFprobe, Shaka Packager |
 | `mpeg-ts-sample-aes-hls` | Known-key SAMPLE-AES transport streams to fragmented MP4 HLS. Decrypted encoded frames and original clocks are checked before packaging; final playlists are verified against the original encrypted source. | FFmpeg, FFprobe, Shaka Packager |
+| `mpeg-ts-dash` | Supported clear, AES-128, or SAMPLE-AES TS input to clear, `cenc`, or `cbcs` static DASH. Video, audio, or both retain their original frame and clock evidence; the final MPD and referenced media are read again before publication. | FFmpeg, FFprobe, Shaka Packager |
 | `mpeg-ts-hls-ts` | Supported original TS input to TS HLS, with clear, whole-resource AES-128, or SAMPLE-AES protection. Original frame and clock evidence qualifies the private reference; final playlists are compared against it. | FFmpeg, FFprobe, Shaka Packager |
 
 These are dependency requirements, not a report that tools are installed or were version-checked. See [supported input profiles](conversion-support.md) for restrictions and [tool requirements](requirements.md#media-tools) for supported versions.
@@ -54,6 +55,17 @@ checked against every original encoded frame and clock → track demultiplexing 
 fragmented MP4 HLS packaging → actual final playlist checks. A separate `verify`
 reads and decrypts the original source again. It does not trust a saved conversion
 report or use only the intermediate MP4 as its reference.
+
+### mpeg-ts-dash
+
+Original local HLS TS resources → native frame and clock checks, with known-key
+decryption when needed → separate complete tracks → fMP4 segments with the
+requested sample protection and a static DASH manifest → original-source checks
+against the actual final manifest and media. Audio-only input uses the same native
+AAC evidence as TS output. Video can be accompanied by one supported audio track.
+The original TS clocks remain the reference; an intermediate MP4 is not a replacement
+for them. See [DASH timing from transport streams](media-processing.md#dash-output-from-transport-streams)
+for presentation offsets and the manifest's decimal duration representation.
 
 ### mpeg-ts-hls-ts
 

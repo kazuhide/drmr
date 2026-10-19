@@ -363,11 +363,20 @@ fn describe_processing(
                         ));
                     }
                 }
-                OutputFormat::Dash => candidates.push(CandidateRoute::new(
-                    Route::DashPresentation,
-                    format,
-                    "local-mp4-or-fragmented-manifest-profile-must-pass",
-                )),
+                OutputFormat::Dash => {
+                    candidates.push(CandidateRoute::new(
+                        Route::DashPresentation,
+                        format,
+                        "local-mp4-or-fragmented-manifest-profile-must-pass",
+                    ));
+                    if input.format == InputFormat::Hls {
+                        candidates.push(CandidateRoute::new(
+                            Route::MpegTsDash,
+                            format,
+                            "local-transport-stream-profile-and-absolute-timeline-must-pass",
+                        ));
+                    }
+                }
                 OutputFormat::HlsTs => {
                     if input.format == InputFormat::Hls {
                         candidates.push(CandidateRoute::new(

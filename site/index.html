@@ -84,14 +84,14 @@
             <tr id="hls-ts-video">
               <th scope="row"><strong class="input-format">HLS / MPEG-TS</strong><span class="input-profile">Video with optional audio<sup>3</sup></span><span class="input-protections"><span class="clear">Clear</span> / <code>AES-128</code> / <code>SAMPLE-AES</code></span></th>
               <td class="unavailable">Outside profile</td>
-              <td class="unavailable">Outside profile</td>
+              <td><span class="clear">Clear</span> / <code>cenc</code> / <code>cbcs</code></td>
               <td><span class="clear">Clear</span> / <code>cbcs</code> / <code>AES-128</code></td>
               <td><span class="clear">Clear</span> / <code>AES-128</code> / <code>SAMPLE-AES</code></td>
             </tr>
             <tr id="hls-ts-audio">
               <th scope="row"><strong class="input-format">HLS / MPEG-TS</strong><span class="input-profile">Audio only<sup>3</sup></span><span class="input-protections"><span class="clear">Clear</span> / <code>AES-128</code> / <code>SAMPLE-AES</code></span></th>
               <td class="unavailable">Outside profile</td>
-              <td class="unavailable">Outside profile</td>
+              <td><span class="clear">Clear</span> / <code>cenc</code> / <code>cbcs</code></td>
               <td class="unavailable">Outside profile</td>
               <td><span class="clear">Clear</span> / <code>AES-128</code> / <code>SAMPLE-AES</code></td>
             </tr>
@@ -102,7 +102,7 @@
       <ol id="matrix-limits" class="matrix-limits">
         <li>Regular MP4 output contains one audio or video track. Separate DASH/HLS audio and video tracks cannot be combined into one MP4 output.</li>
         <li>Finite audio edits specify an audio start position and presentation duration. Progressive MP4 with a simple finite edit converts from clear or qualified <code>cenc</code> input to clear MP4. This profile accepts one AAC-LC audio track and optional H.264 video from the same original file. Complex edits and encrypted input with DRM initialization metadata are outside this profile. The standard profile also supports open-ended initial priming trims: edits that remove encoder warm-up samples at the start without fixing the end position.</li>
-        <li>TS input uses a limited profile of progressive H.264 video and 48 kHz AAC-LC audio. Audio-only input has TS output only. TS output with both video and audio uses separate playlists.</li>
+        <li>TS input uses a limited profile of progressive H.264 video and 48 kHz AAC-LC audio. Audio-only input supports DASH and TS output. TS output with both video and audio uses separate playlists.</li>
       </ol>
       <div id="matrix-definitions" class="support-detail">
         <p>MP4 stores media. DASH (Dynamic Adaptive Streaming over HTTP) and HLS (HTTP Live Streaming) describe media segments in manifests or playlists. fMP4 means fragmented MP4; MPEG-TS means MPEG transport stream.</p>

@@ -9,9 +9,9 @@ export const matrixRows = [
   { id: 'dash', format: 'DASH', input: ['Clear', 'cenc', 'cbcs'], output: standard },
   { id: 'hls-fmp4', format: 'HLS', input: ['Clear', 'cbcs', 'AES-128'], output: standard },
   { id: 'hls-ts-video', format: 'HLS / MPEG-TS', input: ['Clear', 'AES-128', 'SAMPLE-AES'],
-    output: [[], [], ['Clear', 'cbcs', 'AES-128'], ['Clear', 'AES-128', 'SAMPLE-AES']] },
+    output: [[], ['Clear', 'cenc', 'cbcs'], ['Clear', 'cbcs', 'AES-128'], ['Clear', 'AES-128', 'SAMPLE-AES']] },
   { id: 'hls-ts-audio', format: 'HLS / MPEG-TS', input: ['Clear', 'AES-128', 'SAMPLE-AES'],
-    output: [[], [], [], ['Clear', 'AES-128', 'SAMPLE-AES']] },
+    output: [[], ['Clear', 'cenc', 'cbcs'], [], ['Clear', 'AES-128', 'SAMPLE-AES']] },
 ];
 
 export function requireMatrixLayout(value) {

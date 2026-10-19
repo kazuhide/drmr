@@ -77,6 +77,8 @@ pub(super) struct FragmentClock {
     default_duration: u32,
     trim: u64,
     next: Option<u64>,
+    first_presented: Option<u64>,
+    presented_end: u64,
 }
 impl FragmentClock {
     pub fn read(path: &Path) -> Result<Self, ConversionError> {
@@ -140,6 +142,8 @@ impl FragmentClock {
             default_duration,
             trim,
             next: None,
+            first_presented: None,
+            presented_end: 0,
         })
     }
     fn measure(&mut self, path: &Path) -> Result<(u64, u64), ConversionError> {
@@ -181,42 +185,15 @@ impl FragmentClock {
             let mut duration = 0u64;
             let mut count = 0usize;
             for trun in traf.children.iter().filter(|n| n.kind() == *b"trun") {
-                let payload = trun.header.payload(&data);
-                let flags = integer(payload, 0)? & 0x00ff_ffff;
-                let samples = integer(payload, 4)? as usize;
                 count = count
-                    .checked_add(samples)
+                    .checked_add(self.measure_run(
+                        trun.header.payload(&data),
+                        default,
+                        base,
+                        &mut duration,
+                    )?)
                     .filter(|n| *n <= 100_000)
                     .ok_or(BAD)?;
-                let mut at = 8usize;
-                if flags & 1 != 0 {
-                    at += 4;
-                }
-                if flags & 4 != 0 {
-                    at += 4;
-                }
-                for _ in 0..samples {
-                    let d = if flags & 256 != 0 {
-                        let value = integer(payload, at)?;
-                        at += 4;
-                        value
-                    } else {
-                        default
-                    };
-                    if d == 0 {
-                        return Err(BAD);
-                    }
-                    duration = duration.checked_add(u64::from(d)).ok_or(BAD)?;
-                    for flag in [512, 1024, 2048] {
-                        if flags & flag != 0 {
-                            integer(payload, at)?;
-                            at += 4;
-                        }
-                    }
-                }
-                if at != payload.len() {
-                    return Err(BAD);
-                }
             }
             if count == 0 {
                 return Err(BAD);
@@ -225,6 +202,90 @@ impl FragmentClock {
             total = total.checked_add(duration).ok_or(BAD)?;
         }
         Ok((first.ok_or(BAD)?, total))
+    }
+    fn measure_run(
+        &mut self,
+        payload: &[u8],
+        default: u32,
+        base: u64,
+        duration: &mut u64,
+    ) -> Result<usize, ConversionError> {
+        let version = *payload.first().ok_or(BAD)?;
+        if version > 1 {
+            return Err(BAD);
+        }
+        let flags = integer(payload, 0)? & 0x00ff_ffff;
+        let samples = usize::try_from(integer(payload, 4)?).map_err(|_| BAD)?;
+        if samples > 100_000 {
+            return Err(BAD);
+        }
+        let mut at = 8;
+        if flags & 1 != 0 {
+            at += 4;
+        }
+        if flags & 4 != 0 {
+            at += 4;
+        }
+        for _ in 0..samples {
+            let d = if flags & 256 != 0 {
+                let value = integer(payload, at)?;
+                at += 4;
+                value
+            } else {
+                default
+            };
+            if d == 0 {
+                return Err(BAD);
+            }
+            for flag in [512, 1024] {
+                if flags & flag != 0 {
+                    integer(payload, at)?;
+                    at += 4;
+                }
+            }
+            let offset = if flags & 2048 != 0 {
+                let value = integer(payload, at)?;
+                at += 4;
+                if version == 0 {
+                    i64::from(value)
+                } else {
+                    i64::from(i32::from_be_bytes(value.to_be_bytes()))
+                }
+            } else {
+                0
+            };
+            let dts = base.checked_add(*duration).ok_or(BAD)?;
+            self.record_presentation(dts, offset, d)?;
+            *duration = duration.checked_add(u64::from(d)).ok_or(BAD)?;
+        }
+        if at != payload.len() {
+            return Err(BAD);
+        }
+        Ok(samples)
+    }
+    fn record_presentation(
+        &mut self,
+        dts: u64,
+        offset: i64,
+        duration: u32,
+    ) -> Result<(), ConversionError> {
+        let pts = i128::from(dts) + i128::from(offset);
+        let end = pts + i128::from(duration) - i128::from(self.trim);
+        // An owned rate-one audio edit excludes priming exactly once. Coded packets remain intact.
+        if end > 0 {
+            let first = u64::try_from((pts - i128::from(self.trim)).max(0)).map_err(|_| BAD)?;
+            let end = u64::try_from(end).map_err(|_| BAD)?;
+            self.first_presented = Some(self.first_presented.map_or(first, |old| old.min(first)));
+            self.presented_end = self.presented_end.max(end);
+        }
+        Ok(())
+    }
+    pub(super) fn presentation_window(&self) -> Result<(u64, u64, u64), ConversionError> {
+        Ok((
+            self.first_presented.ok_or(BAD)?,
+            self.presented_end,
+            u64::from(self.scale),
+        ))
     }
     pub fn check_dash(
         &mut self,
@@ -264,5 +325,62 @@ impl FragmentClock {
             return Err(ConversionError("manifest-segment-duration-mismatch"));
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn clock(trim: u64) -> FragmentClock {
+        FragmentClock {
+            track_id: 1,
+            scale: 90_000,
+            default_duration: 0,
+            trim,
+            next: None,
+            first_presented: None,
+            presented_end: 0,
+        }
+    }
+    fn run(version: u8, offsets: &[u32], duration: u32) -> Vec<u8> {
+        let mut data = vec![version, 0, 9, 0];
+        data.extend(u32::try_from(offsets.len()).unwrap().to_be_bytes());
+        for offset in offsets {
+            data.extend(duration.to_be_bytes());
+            data.extend(offset.to_be_bytes());
+        }
+        data
+    }
+    #[test]
+    fn presented_bounds_inspect_every_reordered_sample_and_signed_composition_offset() {
+        let mut c = clock(0);
+        let mut duration = 0;
+        let negative = u32::from_be_bytes((-20_i32).to_be_bytes());
+        assert_eq!(
+            c.measure_run(&run(1, &[50, negative], 10), 0, 100, &mut duration)
+                .unwrap(),
+            2
+        );
+        assert_eq!(duration, 20);
+        assert_eq!(c.presentation_window().unwrap(), (90, 160, 90_000));
+        let mut unsigned = clock(0);
+        unsigned
+            .measure_run(&run(0, &[negative], 10), 0, 100, &mut 0)
+            .unwrap();
+        assert_eq!(
+            unsigned.presentation_window().unwrap().0,
+            100 + u64::from(negative)
+        );
+        assert!(
+            clock(0)
+                .measure_run(&run(2, &[0], 10), 0, 100, &mut 0)
+                .is_err()
+        );
+    }
+    #[test]
+    fn priming_edit_is_applied_once_and_excluded_coded_intervals_do_not_set_origin() {
+        let mut c = clock(1024);
+        c.measure_run(&run(0, &[0, 0], 1024), 0, 0, &mut 0).unwrap();
+        assert_eq!(c.presentation_window().unwrap(), (0, 1024, 90_000));
     }
 }

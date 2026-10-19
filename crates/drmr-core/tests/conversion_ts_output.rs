@@ -518,7 +518,8 @@ fn matrix_row(
         );
     }
 }
-fn matrix(layout: &str) {
+type MatrixRow = fn(&str, &str, &Path, &HlsInputKeys, &Path, &Path, (Option<u64>, Option<u64>));
+fn matrix_with(layout: &str, row: MatrixRow) {
     let root = drmr_core::native::private_tempdir().unwrap();
     let (clear, sample) = if layout == "joint-av" {
         let fixture = sample_aes_fixture::source(&root.path().join("input"), INPUT_KEY, INPUT_IV);
@@ -553,7 +554,7 @@ fn matrix(layout: &str) {
         ("aes-128", &aes, &encrypted_keys),
         ("sample-aes", &sample, &encrypted_keys),
     ] {
-        matrix_row(
+        row(
             layout,
             input_label,
             source,
@@ -566,13 +567,354 @@ fn matrix(layout: &str) {
 }
 #[test]
 fn video_all_nine_input_output_protection_combinations_preserve_every_access_unit() {
-    matrix("video");
+    matrix_with("video", matrix_row);
 }
 #[test]
 fn joint_av_all_nine_input_output_protection_combinations_preserve_original_offset() {
-    matrix("joint-av");
+    matrix_with("joint-av", matrix_row);
 }
 #[test]
 fn audio_all_nine_input_output_protection_combinations_preserve_all_pcm_samples() {
-    matrix("audio");
+    matrix_with("audio", matrix_row);
+}
+
+fn dash_row(
+    layout: &str,
+    input_label: &str,
+    source: &Path,
+    input_keys: &HlsInputKeys,
+    clear: &Path,
+    root: &Path,
+    counts: (Option<u64>, Option<u64>),
+) {
+    use drmr_core::conversion::{ContentKey, OutputKey, VerificationRequest, VerificationSource};
+    let empty = InputKeys::default();
+    let empty_hls = HlsInputKeys::default();
+    let c = converter();
+    let before = common::snapshot_tree(source.parent().unwrap());
+    let output_kid = "909192939495969798999a9b9c9d9e9f";
+    for target in [
+        TargetProtection::Clear,
+        TargetProtection::Cenc,
+        TargetProtection::Cbcs,
+    ] {
+        let output = root.join(format!("dash-{input_label}-{}", target.as_str()));
+        let key = (target != TargetProtection::Clear)
+            .then(|| OutputKey::from_hex(output_kid, OUTPUT_KEY).unwrap());
+        let result = c
+            .convert(ConversionRequest {
+                input: source,
+                output: &output,
+                format: OutputFormat::Dash,
+                target,
+                input_keys: &empty,
+                hls_input_keys: input_keys,
+                output_key: key.as_ref(),
+                hls_key_uri: None,
+                hls_output_key: None,
+            })
+            .unwrap_or_else(|error| {
+                panic!(
+                    "{layout}/{input_label}/{} DASH: {}",
+                    target.as_str(),
+                    error.0
+                )
+            });
+        all_checks(&result.verification);
+        assert_eq!(
+            serde_json::to_value(&result).unwrap()["processing"]["route"],
+            "mpeg-ts-dash"
+        );
+        let result_keys = if key.is_some() {
+            InputKeys::new(vec![ContentKey::from_hex(output_kid, OUTPUT_KEY).unwrap()]).unwrap()
+        } else {
+            InputKeys::default()
+        };
+        for (original, keys) in [(source, input_keys), (clear, &empty_hls)] {
+            all_checks(
+                &c.verify(VerificationRequest {
+                    source: VerificationSource {
+                        input: original,
+                        input_keys: &empty,
+                        hls_keys: keys,
+                    },
+                    output: VerificationSource {
+                        input: &output.join("manifest.mpd"),
+                        input_keys: &result_keys,
+                        hls_keys: &empty_hls,
+                    },
+                })
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "{layout}/{input_label}/{} fresh DASH verify: {}",
+                        target.as_str(),
+                        error.0
+                    )
+                }),
+            );
+        }
+        assert_eq!(common::snapshot_tree(source.parent().unwrap()), before);
+        println!(
+            "DRMR_TS_DASH_CELL {}",
+            serde_json::json!({
+                "layout": layout, "input": input_label, "target": target.as_str(),
+                "stream_metadata": true, "packet_payloads_equal": true, "packet_timing_equal": true,
+                "decoded_content_equal": true, "source_immutable": true,
+                "native_bound_video_aus": counts.0, "native_bound_audio_frames": counts.1,
+                "license_playback_verified": false
+            })
+        );
+    }
+}
+#[test]
+fn dash_video_nine_protection_routes_preserve_every_original_access_unit() {
+    matrix_with("video", dash_row);
+}
+#[test]
+fn dash_joint_av_nine_protection_routes_preserve_original_offset_and_audio_tail() {
+    matrix_with("joint-av", dash_row);
+}
+#[test]
+fn dash_audio_nine_protection_routes_preserve_all_original_pcm_samples() {
+    matrix_with("audio", dash_row);
+}
+
+fn clear_dash_request<'a>(
+    input: &'a Path,
+    output: &'a Path,
+    empty: &'a InputKeys,
+    hls: &'a HlsInputKeys,
+) -> ConversionRequest<'a> {
+    ConversionRequest {
+        input,
+        output,
+        format: OutputFormat::Dash,
+        target: TargetProtection::Clear,
+        input_keys: empty,
+        hls_input_keys: hls,
+        output_key: None,
+        hls_key_uri: None,
+        hls_output_key: None,
+    }
+}
+
+fn dash_manifest_mutations(original: &str) -> Vec<String> {
+    let doc = roxmltree::Document::parse(original).unwrap();
+    let duration = doc
+        .root_element()
+        .attribute("mediaPresentationDuration")
+        .unwrap();
+    let ns = duration
+        .strip_prefix("PT")
+        .unwrap()
+        .strip_suffix('S')
+        .unwrap()
+        .replace('.', "")
+        .parse::<u64>()
+        .unwrap();
+    let template = doc
+        .descendants()
+        .find(|n| n.has_tag_name(("urn:mpeg:dash:schema:mpd:2011", "SegmentTemplate")))
+        .unwrap();
+    let offset = template.attribute("presentationTimeOffset").unwrap_or("0");
+    let first = doc
+        .descendants()
+        .find(|n| n.has_tag_name(("urn:mpeg:dash:schema:mpd:2011", "S")))
+        .unwrap()
+        .attribute("t")
+        .unwrap();
+    let mut mutations = vec![
+        original.replace(
+            duration,
+            &format!(
+                "PT{}.{:09}S",
+                (ns - 1) / 1_000_000_000,
+                (ns - 1) % 1_000_000_000
+            ),
+        ),
+        original.replace(
+            duration,
+            &format!(
+                "PT{}.{:09}S",
+                (ns + 1) / 1_000_000_000,
+                (ns + 1) % 1_000_000_000
+            ),
+        ),
+        if original.contains("presentationTimeOffset=") {
+            original.replace(
+                &format!("presentationTimeOffset=\"{offset}\""),
+                &format!(
+                    "presentationTimeOffset=\"{}\"",
+                    offset.parse::<u64>().unwrap() + 1
+                ),
+            )
+        } else {
+            original.replacen(
+                "<SegmentTemplate ",
+                "<SegmentTemplate presentationTimeOffset=\"1\" ",
+                1,
+            )
+        },
+        original.replacen(
+            &format!("t=\"{first}\""),
+            &format!("t=\"{}\"", first.parse::<u64>().unwrap() + 1),
+            1,
+        ),
+    ];
+
+    mutations.extend(clipped_or_unbounded_manifest(original, &doc));
+    mutations
+}
+
+fn clipped_or_unbounded_manifest(original: &str, doc: &roxmltree::Document<'_>) -> Vec<String> {
+    let ns_uri = "urn:mpeg:dash:schema:mpd:2011";
+    let templates: Vec<_> = doc
+        .descendants()
+        .filter(|n| n.has_tag_name((ns_uri, "SegmentTemplate")))
+        .collect();
+    let mut first_tick = u64::MAX;
+    let mut last_tick = 0;
+    for template in &templates {
+        assert_eq!(template.attribute("timescale"), Some("90000"));
+        let mut end = 0;
+        for sample in template
+            .descendants()
+            .filter(|n| n.has_tag_name((ns_uri, "S")))
+        {
+            let begin = sample.attribute("t").map_or(end, |v| v.parse().unwrap());
+            first_tick = first_tick.min(begin);
+            let duration: u64 = sample.attribute("d").unwrap().parse().unwrap();
+            let repeats = sample
+                .attribute("r")
+                .map_or(1, |v| v.parse::<u64>().unwrap() + 1);
+            end = begin + duration * repeats;
+        }
+        last_tick = last_tick.max(end);
+    }
+    let clipped = first_tick + 1;
+    let end_ns =
+        u64::try_from((u128::from(last_tick - clipped) * 1_000_000_000).div_ceil(90_000)).unwrap();
+    let clipped_duration = format!(
+        "PT{}.{:09}S",
+        end_ns / 1_000_000_000,
+        end_ns % 1_000_000_000
+    );
+    let mut clipped_edits = Vec::new();
+    for template in &templates {
+        if let Some(attr) = template.attribute_node("presentationTimeOffset") {
+            clipped_edits.push((attr.range_value(), clipped.to_string()));
+        } else {
+            let at = template.range().start + "<SegmentTemplate".len();
+            clipped_edits.push((at..at, format!(" presentationTimeOffset=\"{clipped}\"")));
+        }
+    }
+    let mut missing = original.to_owned();
+    let mut removed = Vec::new();
+    for node in [
+        doc.root_element(),
+        doc.descendants()
+            .find(|n| n.has_tag_name((ns_uri, "Period")))
+            .unwrap(),
+    ] {
+        for name in ["mediaPresentationDuration", "duration"] {
+            if let Some(attr) = node.attribute_node(name) {
+                clipped_edits.push((attr.range_value(), clipped_duration.clone()));
+                removed.push(attr.range());
+            }
+        }
+    }
+    clipped_edits.sort_by_key(|(range, _)| std::cmp::Reverse(range.start));
+    let mut clipped_text = original.to_owned();
+    for (range, value) in clipped_edits {
+        clipped_text.replace_range(range, &value);
+    }
+
+    removed.sort_by_key(|range| std::cmp::Reverse(range.start));
+    for range in removed {
+        missing.replace_range(range, "");
+    }
+
+    let mut mutations = vec![clipped_text, missing];
+    if first_tick > 0 {
+        let origin = first_tick - 1;
+        let end_ns =
+            u64::try_from((u128::from(last_tick - origin) * 1_000_000_000).div_ceil(90_000))
+                .unwrap();
+        let duration = format!(
+            "PT{}.{:09}S",
+            end_ns / 1_000_000_000,
+            end_ns % 1_000_000_000
+        );
+        let old_duration = doc
+            .root_element()
+            .attribute("mediaPresentationDuration")
+            .unwrap();
+        let earlier = original.replace(old_duration, &duration).replace(
+            &format!("presentationTimeOffset=\"{first_tick}\""),
+            &format!("presentationTimeOffset=\"{origin}\""),
+        );
+        assert_ne!(earlier, original);
+        mutations.push(earlier);
+    }
+    mutations
+}
+
+#[test]
+fn dash_corrupted_period_origin_or_segment_clock_is_refused_without_publication() {
+    for layout in ["video", "joint-av", "audio"] {
+        corrupted_dash_manifest(layout);
+    }
+}
+fn corrupted_dash_manifest(layout: &str) {
+    use drmr_core::conversion::{VerificationRequest, VerificationSource};
+    let root = drmr_core::native::private_tempdir().unwrap();
+    let input = match layout {
+        "joint-av" => {
+            sample_aes_fixture::source(&root.path().join("input"), INPUT_KEY, INPUT_IV).clear
+        }
+        "video" => shaka_source(&root.path().join("input"), "video", false),
+        _ => audio_sources(root.path()).0,
+    };
+    let output = root.path().join("dash");
+    let empty = InputKeys::default();
+    let hls = HlsInputKeys::default();
+    let c = converter();
+    all_checks(
+        &c.convert(clear_dash_request(&input, &output, &empty, &hls))
+            .unwrap()
+            .verification,
+    );
+    let manifest = output.join("manifest.mpd");
+    let original = std::fs::read_to_string(&manifest).unwrap();
+    let mutations = dash_manifest_mutations(&original);
+    for (i, invalid) in mutations.into_iter().enumerate() {
+        assert_ne!(
+            invalid, original,
+            "{layout} mutation {i} must change the manifest"
+        );
+        std::fs::write(&manifest, invalid).unwrap();
+        assert!(
+            c.verify(VerificationRequest {
+                source: VerificationSource {
+                    input: &input,
+                    input_keys: &empty,
+                    hls_keys: &hls
+                },
+                output: VerificationSource {
+                    input: &manifest,
+                    input_keys: &empty,
+                    hls_keys: &hls
+                },
+            })
+            .is_err(),
+            "{layout} mutation {i} must not pass fresh verification"
+        );
+        let unpublished = root.path().join(format!("refused-{i}"));
+        assert!(
+            c.convert(clear_dash_request(&manifest, &unpublished, &empty, &hls))
+                .is_err()
+        );
+        assert!(!unpublished.exists());
+    }
+    std::fs::write(&manifest, original).unwrap();
 }

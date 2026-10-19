@@ -1,12 +1,14 @@
 //! Confined local static DASH snapshots; manifests never select executables or network access.
 
 use super::{ConversionError, LocalTrack};
+mod window;
 use crate::inspection::{self, Protection, TrackKind};
 use roxmltree::{Document, Node};
 use std::collections::HashSet;
 use std::fmt::Write as _;
 use std::fs::{self, File};
 use std::path::{Component, Path, PathBuf};
+pub(super) use window::finish_transport;
 
 const DASH_NS: &str = "urn:mpeg:dash:schema:mpd:2011";
 const MAX_SEGMENTS: usize = 100_000;
@@ -149,9 +151,7 @@ fn sequence(
     templates: &[Node<'_, '_>],
     remaining: usize,
 ) -> Result<Vec<(u64, u64, u64)>, ConversionError> {
-    if integer(attribute(templates, "timescale"), 1)? == 0
-        || integer(attribute(templates, "presentationTimeOffset"), 0)? != 0
-    {
+    if integer(attribute(templates, "timescale"), 1)? == 0 {
         return Err(error("dash-presentation-offset-or-timescale-not-supported"));
     }
     let timeline = templates
@@ -168,6 +168,9 @@ fn sequence(
     let mut values = Vec::new();
     for sample in children(timeline, "S") {
         let begin = integer(sample.attribute("t"), end)?;
+        if values.is_empty() {
+            end = begin;
+        }
         let duration = integer(sample.attribute("d"), 0)?;
         let repeats = integer(sample.attribute("r"), 0)?
             .checked_add(1)
@@ -286,7 +289,7 @@ fn snapshot_representation(
     stage: &Path,
     index: usize,
     remaining: usize,
-) -> Result<(LocalTrack, usize, (u64, u64)), ConversionError> {
+) -> Result<(LocalTrack, usize, window::Window), ConversionError> {
     if !matches!(
         declared,
         Protection::Clear | Protection::Cenc | Protection::Cbcs
@@ -296,12 +299,6 @@ fn snapshot_representation(
     let (base, templates) = representation_scopes(representation)?;
     let values = sequence(&templates, remaining)?;
     let used = values.len();
-    let (_, last, duration) = *values.last().ok_or(error("dash-empty-segment-timeline"))?;
-    let window = (
-        last.checked_add(duration)
-            .ok_or(error("dash-template-number-overflow"))?,
-        integer(attribute(&templates, "timescale"), 1)?,
-    );
     let initialization =
         attribute(&templates, "initialization").ok_or(error("dash-initialization-required"))?;
     let media = attribute(&templates, "media").ok_or(error("dash-media-template-required"))?;
@@ -336,6 +333,7 @@ fn snapshot_representation(
             Some((&mut clock, (time, duration, scale))),
         )?;
     }
+    let window = window::Window::read(&templates, clock.presentation_window()?)?;
     combined
         .sync_all()
         .map_err(|_| error("media-copy-failed"))?;
@@ -413,7 +411,7 @@ pub(crate) fn snapshot_dash(path: &Path, stage: &Path) -> Result<Vec<LocalTrack>
         .map_err(|_| error("input-unreadable"))?;
     let mut tracks = Vec::new();
     let mut segments = 0;
-    let mut window = (0u64, 1u64);
+    let mut windows = window::Presentation::default();
     for (index, (representation, declared)) in
         representations.into_iter().zip(declared.tracks).enumerate()
     {
@@ -427,11 +425,13 @@ pub(crate) fn snapshot_dash(path: &Path, stage: &Path) -> Result<Vec<LocalTrack>
         )?;
         tracks.push(track);
         segments += used;
-        if u128::from(track_window.0) * u128::from(window.1)
-            > u128::from(window.0) * u128::from(track_window.1)
-        {
-            window = track_window;
-        }
+        windows.include(track_window)?;
+    }
+    windows.check_origin()?;
+    if root.attribute("mediaPresentationDuration").is_none()
+        && period.attribute("duration").is_none()
+    {
+        return Err(error("dash-presentation-duration-required"));
     }
     for value in [
         root.attribute("mediaPresentationDuration"),
@@ -440,12 +440,7 @@ pub(crate) fn snapshot_dash(path: &Path, stage: &Path) -> Result<Vec<LocalTrack>
     .into_iter()
     .flatten()
     {
-        let duration = decimal_duration(value)?;
-        if u128::from(duration.0) * u128::from(window.1)
-            != u128::from(window.0) * u128::from(duration.1)
-        {
-            return Err(error("dash-presentation-duration-mismatch"));
-        }
+        windows.check_duration(value)?;
     }
     Ok(tracks)
 }
@@ -492,6 +487,31 @@ fn decimal_duration(value: &str) -> Result<(u64, u64), ConversionError> {
 mod tests {
     use super::*;
     use std::process::Command;
+
+    #[test]
+    fn absolute_segment_timeline_keeps_its_nonzero_clock_and_refuses_internal_gaps() {
+        let xml = "<SegmentTemplate timescale='90000' presentationTimeOffset='125997'><SegmentTimeline><S t='126000' d='1920' r='2'/><S d='960'/></SegmentTimeline></SegmentTemplate>";
+        let doc = Document::parse(xml).unwrap();
+        assert_eq!(
+            sequence(&[doc.root_element()], 4).unwrap(),
+            vec![
+                (1, 126_000, 1920),
+                (2, 127_920, 1920),
+                (3, 129_840, 1920),
+                (4, 131_760, 960)
+            ]
+        );
+        for changed in [
+            xml.replace("<S d='960'", "<S t='131759' d='960'"),
+            xml.replace("<S d='960'", "<S t='131761' d='960'"),
+        ] {
+            let doc = Document::parse(&changed).unwrap();
+            assert_eq!(
+                sequence(&[doc.root_element()], 4).unwrap_err().0,
+                "dash-timeline-gap-overlap-or-duration-not-supported"
+            );
+        }
+    }
 
     #[test]
     fn template_values_are_bounded_and_unknown_expressions_are_refused() {
