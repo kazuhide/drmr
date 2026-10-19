@@ -9,6 +9,7 @@ pub enum ProcessingRouteId {
     DashPresentation,
     Fmp4HlsPresentation,
     MpegTsHls,
+    MpegTsDash,
     MpegTsSampleAesHls,
     MpegTsHlsTs,
 }
@@ -20,6 +21,7 @@ impl ProcessingRouteId {
             Self::DashPresentation => "dash-presentation",
             Self::Fmp4HlsPresentation => "fmp4-hls-presentation",
             Self::MpegTsHls => "mpeg-ts-hls",
+            Self::MpegTsDash => "mpeg-ts-dash",
             Self::MpegTsSampleAesHls => "mpeg-ts-sample-aes-hls",
             Self::MpegTsHlsTs => "mpeg-ts-hls-ts",
         }
@@ -37,6 +39,9 @@ impl ProcessingRouteId {
             }
             Self::Fmp4HlsPresentation => {
                 "Prepare complete local tracks, package fragmented MP4 HLS resources, apply output encryption when requested, and verify each original track."
+            }
+            Self::MpegTsDash => {
+                "Admit the original local transport streams, decrypt when needed, demultiplex complete tracks without changing their timestamps, package static fragmented MP4 DASH, and verify the actual final manifest against every original access unit."
             }
             Self::MpegTsHls => {
                 "Admit the original local transport-stream resources, demultiplex their tracks, package fragmented MP4 HLS, and verify the actual final playlists against the original transport streams."

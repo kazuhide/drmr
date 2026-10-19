@@ -1,4 +1,6 @@
 //! Joint, codec-preserving presentations with independent evidence for every source stream.
+#[cfg(test)]
+mod staging_tests;
 mod ts_output;
 use super::{
     ContentKey, ConversionError, ConversionReport, Converter, HlsOutputKey, InputKeys, LocalTrack,
@@ -38,6 +40,7 @@ struct Prepared {
     transport_native: Option<std::sync::Arc<super::ts::NativeEvidence>>,
     transport_sample: bool,
     playlist_reference: Option<PathBuf>,
+    dash_reference: bool,
 }
 fn presentation_processing(format: OutputFormat) -> inspection::ActualProcessing {
     inspection::ActualProcessing::new(
@@ -49,10 +52,23 @@ fn presentation_processing(format: OutputFormat) -> inspection::ActualProcessing
         inspection::InputPreparation::LocalTrackFiles,
     )
 }
+fn presentation_stage(destination: &Path) -> Result<super::files::Stage, ConversionError> {
+    let parent = destination
+        .parent()
+        .ok_or(ConversionError("output-path-invalid"))?;
+    super::files::Stage::new(Some(parent))
+}
 impl Converter {
     pub fn convert_tracks(
         &self,
         request: TrackConversionRequest<'_>,
+    ) -> Result<ConversionReport, ConversionError> {
+        self.convert_tracks_inner(request, None)
+    }
+    fn convert_tracks_inner(
+        &self,
+        request: TrackConversionRequest<'_>,
+        transport_stage: Option<&super::files::Stage>,
     ) -> Result<ConversionReport, ConversionError> {
         self.validate_signaling_tracks(&request)?;
         if request.format == OutputFormat::HlsTs {
@@ -88,13 +104,16 @@ impl Converter {
                 request.output_key,
             );
         }
-        let destination = destination(request.output)?;
+        let destination = transport_stage
+            .is_none()
+            .then(|| destination(request.output))
+            .transpose()?;
         let work = workspace()?;
         let (sources, clears) = self.normalize_tracks(&request, work.path())?;
-        let parent = destination
-            .parent()
+        let owned_stage = destination.as_deref().map(presentation_stage).transpose()?;
+        let stage = transport_stage
+            .or(owned_stage.as_ref())
             .ok_or(ConversionError("output-path-invalid"))?;
-        let stage = super::files::Stage::new(Some(parent))?;
         let clear_stage = work.path().join("packaged");
         super::files::create_dir(&clear_stage)
             .map_err(|_| ConversionError("output-staging-failed"))?;
@@ -104,18 +123,11 @@ impl Converter {
             stage.path()
         };
         self.package_joint(&clears, package_root, &request)?;
+        if transport_stage.is_some() && request.format == OutputFormat::Dash {
+            super::dash::finish_transport(&package_root.join("manifest.mpd"))?;
+        }
         if let Some(key) = request.hls_output_key {
-            for ordinal in 0..clears.len() {
-                let name = format!("track-{ordinal:04}");
-                let output = stage.path().join(&name);
-                super::files::create_dir(&output)
-                    .map_err(|_| ConversionError("output-staging-failed"))?;
-                hls::encrypt_media(&package_root.join(name), &output, key)?;
-            }
-            copy_private(
-                &package_root.join("master.m3u8"),
-                &stage.path().join("master.m3u8"),
-            )?;
+            encrypt_packaged_hls(package_root, stage.path(), clears.len(), key)?;
         }
         let (checks, output_tracks, input_tracks) =
             self.verify_joint(&sources, &request, stage.path(), work.path())?;
@@ -139,8 +151,10 @@ impl Converter {
             Vec::new(),
             Vec::new(),
         );
-        self.backend.checkpoint(&[&work, &stage]);
-        self.publish_directory(stage.path(), &destination)?;
+        self.backend.checkpoint(&[&work, stage]);
+        if let Some(destination) = destination {
+            self.publish_directory(stage.path(), &destination)?;
+        }
         Ok(ConversionReport {
             schema_version: 1,
             input,
@@ -548,6 +562,7 @@ fn prepare_for(
         transport_native: None,
         transport_sample: false,
         playlist_reference: None,
+        dash_reference: false,
     })
 }
 fn key_for<'a>(source: &Prepared, keys: &'a InputKeys) -> Option<&'a ContentKey> {
@@ -681,9 +696,15 @@ impl Converter {
                 return self.verify_transport_pair(a, b);
             }
             if let Some(index) = a.transport_index {
-                let playlist = b.playlist_reference.as_ref().ok_or(ConversionError(
-                    "ts-verification-output-profile-not-supported",
-                ))?;
+                if b.playlist_reference.is_none() && !b.dash_reference {
+                    return Err(ConversionError(
+                        "ts-verification-output-profile-not-supported",
+                    ));
+                }
+                let (result_input, result_key) = b.playlist_reference.as_ref().map_or_else(
+                    || (&b.source, key_for(b, result_keys)),
+                    |playlist| (playlist, None),
+                );
                 return self.backend.verify_transport(
                     super::ts::View {
                         input: &a.source,
@@ -694,11 +715,11 @@ impl Converter {
                         native: a.transport_native.as_deref(),
                     },
                     super::ts::View {
-                        input: playlist,
-                        // The owned playlist applies its private key URI to every probe.
-                        metadata: playlist,
+                        input: result_input,
+                        // HLS carries its private key URI; DASH uses the independently supplied output key.
+                        metadata: result_input,
                         index: b.index,
-                        key: None,
+                        key: result_key,
                         transport: false,
                         native: None,
                     },
@@ -740,9 +761,11 @@ impl Converter {
         })
     }
 }
-fn describe_transport(report: &mut ConversionReport, sample_transport: bool) {
+fn describe_transport(report: &mut ConversionReport, sample_transport: bool, dash: bool) {
     report.processing = Some(inspection::ActualProcessing::new(
-        if sample_transport {
+        if dash {
+            inspection::ProcessingRouteId::MpegTsDash
+        } else if sample_transport {
             inspection::ProcessingRouteId::MpegTsSampleAesHls
         } else {
             inspection::ProcessingRouteId::MpegTsHls
@@ -753,6 +776,20 @@ fn describe_transport(report: &mut ConversionReport, sample_transport: bool) {
             inspection::InputPreparation::MpegTsDemux
         },
     ));
+}
+fn encrypt_packaged_hls(
+    root: &Path,
+    stage: &Path,
+    tracks: usize,
+    key: &super::HlsOutputKey,
+) -> Result<(), ConversionError> {
+    for ordinal in 0..tracks {
+        let name = format!("track-{ordinal:04}");
+        let output = stage.join(&name);
+        super::files::create_dir(&output).map_err(|_| ConversionError("output-staging-failed"))?;
+        hls::encrypt_media(&root.join(name), &output, key)?;
+    }
+    copy_private(&root.join("master.m3u8"), &stage.join("master.m3u8"))
 }
 fn kind_order(kind: TrackKind) -> u8 {
     match kind {
@@ -849,7 +886,12 @@ fn prepare_presentation(
             let tracks = super::dash::snapshot_dash(input.input, stage)?;
             tracks
                 .iter()
-                .map(|track| prepare(&track.source, track.index, track.kind, input.input_keys))
+                .map(|track| {
+                    let mut prepared =
+                        prepare(&track.source, track.index, track.kind, input.input_keys)?;
+                    prepared.dash_reference = true;
+                    Ok(prepared)
+                })
                 .collect()
         }
     }
@@ -1171,6 +1213,41 @@ impl Converter {
         }
         Ok(())
     }
+    fn verify_transport_output(
+        &self,
+        request: &ConversionRequest<'_>,
+        prepared: Vec<Prepared>,
+        candidate: &Path,
+        work: &Path,
+    ) -> Result<VerificationReport, ConversionError> {
+        let output_keys = request
+            .output_key
+            .map(|k| InputKeys::new(vec![ContentKey::from_hex(&k.0.id_hex(), &k.0.key_hex())?]))
+            .transpose()?
+            .unwrap_or_default();
+        let hls_keys = output_hls_keys(request.hls_output_key)?;
+        let verification_root = work.join("final-verification");
+        super::files::create_dir(&verification_root)?;
+        let result = prepare_presentation(
+            &VerificationSource {
+                input: &candidate.join(if request.format == OutputFormat::Dash {
+                    "manifest.mpd"
+                } else {
+                    "master.m3u8"
+                }),
+                input_keys: &output_keys,
+                hls_keys: &hls_keys,
+            },
+            &verification_root,
+            &self.backend,
+        )?;
+        let verification =
+            self.compare_presentations(prepared, result, request.input_keys, &output_keys)?;
+        if !verification.passed {
+            return Err(ConversionError("round-trip-verification-failed"));
+        }
+        Ok(verification)
+    }
     pub fn convert(
         &self,
         request: ConversionRequest<'_>,
@@ -1198,6 +1275,7 @@ impl Converter {
             return self.convert_transport_output(&request, prepared, input_report, &work);
         }
         if transport
+            && request.format != OutputFormat::Dash
             && !prepared
                 .iter()
                 .any(|p| p.report.tracks[0].kind == TrackKind::Video)
@@ -1205,11 +1283,16 @@ impl Converter {
             return Err(ConversionError("ts-audio-only-timing-proof-not-supported"));
         }
         if transport
-            && (request.format != OutputFormat::Hls
-                || !matches!(
-                    request.target,
+            && !matches!(
+                (request.format, request.target),
+                (
+                    OutputFormat::Hls,
                     TargetProtection::Clear | TargetProtection::Cbcs | TargetProtection::HlsAes128
-                ))
+                ) | (
+                    OutputFormat::Dash,
+                    TargetProtection::Clear | TargetProtection::Cenc | TargetProtection::Cbcs
+                )
+            )
         {
             return Err(ConversionError("ts-output-profile-not-supported"));
         }
@@ -1220,42 +1303,23 @@ impl Converter {
             .as_ref()
             .map(|path| super::files::Stage::new(path.parent()))
             .transpose()?;
-        let candidate = stage
-            .as_ref()
-            .map(|stage| stage.path().join("presentation"));
-        let mut report = self.convert_tracks(TrackConversionRequest {
-            tracks: &tracks,
-            output: candidate.as_deref().unwrap_or(request.output),
-            format: request.format,
-            target: request.target,
-            input_keys: request.input_keys,
-            output_key: request.output_key,
-            hls_key_uri: request.hls_key_uri,
-            hls_output_key: request.hls_output_key,
-        })?;
+        let candidate = stage.as_ref().map(|stage| stage.path().to_path_buf());
+        let mut report = self.convert_tracks_inner(
+            TrackConversionRequest {
+                tracks: &tracks,
+                output: candidate.as_deref().unwrap_or(request.output),
+                format: request.format,
+                target: request.target,
+                input_keys: request.input_keys,
+                output_key: request.output_key,
+                hls_key_uri: request.hls_key_uri,
+                hls_output_key: request.hls_output_key,
+            },
+            stage.as_ref(),
+        )?;
         if let (Some(candidate), Some(destination)) = (&candidate, &destination) {
-            let output_keys = request
-                .output_key
-                .map(|k| InputKeys::new(vec![ContentKey::from_hex(&k.0.id_hex(), &k.0.key_hex())?]))
-                .transpose()?
-                .unwrap_or_default();
-            let hls_keys = output_hls_keys(request.hls_output_key)?;
-            let verification_root = work.path().join("final-verification");
-            super::files::create_dir(&verification_root)?;
-            let result = prepare_presentation(
-                &VerificationSource {
-                    input: &candidate.join("master.m3u8"),
-                    input_keys: &output_keys,
-                    hls_keys: &hls_keys,
-                },
-                &verification_root,
-                &self.backend,
-            )?;
             report.verification =
-                self.compare_presentations(prepared, result, request.input_keys, &output_keys)?;
-            if !report.verification.passed {
-                return Err(ConversionError("round-trip-verification-failed"));
-            }
+                self.verify_transport_output(&request, prepared, candidate, work.path())?;
             if let Some(stage) = &stage {
                 self.backend.checkpoint(&[&work, stage]);
             }
@@ -1264,7 +1328,11 @@ impl Converter {
         self.backend.checkpoint(&[&work]);
         report.input = input_report;
         if transport {
-            describe_transport(&mut report, sample_transport);
+            describe_transport(
+                &mut report,
+                sample_transport,
+                request.format == OutputFormat::Dash,
+            );
         } else {
             report.describe_preparation(match report.input.format {
                 InputFormat::Mp4 => inspection::InputPreparation::CompleteFile,

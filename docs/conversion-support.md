@@ -13,9 +13,9 @@ unencrypted media. The two containers have different conversion limits:
 | Clear HLS | fMP4 | Clear, `cenc`, `cbcs` | Clear, `cbcs`, AES-128 | Not supported |
 | `cbcs` HLS | fMP4 | Clear, `cenc`, `cbcs` | Clear, `cbcs`, AES-128 | Not supported |
 | AES-128 HLS | fMP4 | Clear, `cenc`, `cbcs` | Clear, `cbcs`, AES-128 | Not supported |
-| Clear HLS | MPEG-TS | Not supported | Clear, `cbcs`, AES-128 | Clear, AES-128, SAMPLE-AES |
-| AES-128 HLS | MPEG-TS | Not supported | Clear, `cbcs`, AES-128 | Clear, AES-128, SAMPLE-AES |
-| SAMPLE-AES HLS | MPEG-TS | Not supported | Clear, `cbcs`, AES-128 | Clear, AES-128, SAMPLE-AES |
+| Clear HLS | MPEG-TS | Clear, `cenc`, `cbcs` | Clear, `cbcs`, AES-128 | Clear, AES-128, SAMPLE-AES |
+| AES-128 HLS | MPEG-TS | Clear, `cenc`, `cbcs` | Clear, `cbcs`, AES-128 | Clear, AES-128, SAMPLE-AES |
+| SAMPLE-AES HLS | MPEG-TS | Clear, `cenc`, `cbcs` | Clear, `cbcs`, AES-128 | Clear, AES-128, SAMPLE-AES |
 
 Choose `--format hls` for fMP4 HLS or `--format hls-ts` for MPEG-TS HLS.
 For FairPlay transport-stream encryption, use `--to hls-sample-aes`.
@@ -130,9 +130,25 @@ Clear output needs no output-key section. Keep the original media and keys until
 
 ## MPEG transport stream input
 
-Completed local HLS playlists containing clear, AES-128, or SAMPLE-AES transport stream segments can produce fragmented MP4 HLS with clear, `cbcs`, or AES-128 protection. Encrypted input requires operator-supplied keys. The initial profile accepts one H.264 video stream, optionally accompanied by one 48 kHz AAC-LC audio stream, in a single program. Video must be progressive. The TS output profile additionally accepts audio-only input with the strict native audio timing checks described in [processing and verification](media-processing.md#mpeg-transport-stream-input). 44.1 kHz audio, SAMPLE-AES-CTR transport streams, and DASH/MP4 output from this input are refused.
+Completed local HLS playlists containing clear, AES-128, or SAMPLE-AES transport stream segments can produce DASH with clear, `cenc`, or `cbcs` protection, or fragmented MP4 HLS with clear, `cbcs`, or AES-128 protection. Encrypted input requires operator-supplied keys. The profile accepts one progressive H.264 video stream, optionally accompanied by one 48 kHz AAC-LC audio stream, in a single program. DASH and TS output also accept audio-only input with the strict native audio timing checks described in [processing and verification](media-processing.md#mpeg-transport-stream-input). Audio-only input cannot produce fMP4 HLS in this profile. 44.1 kHz audio, SAMPLE-AES-CTR transport streams, and standalone MP4 output from this input are refused.
 
-The ten-second public fixture passed all three output protections from clear MPEG-TS input, with separate verification on Linux x86_64 and Windows x64 with FFmpeg 9.0.2, and macOS ARM64 with FFmpeg 9.0.1; all used Shaka Packager 3.8.0. Separate AES-128 MPEG-TS input regressions verify clear HLS output with key rotation, explicit and sequence-derived initialization vectors, and transitions to clear segments. Additional cases cover reordered pictures and video-only input. These results qualify the tested profile, tools, and platforms. They do not establish other codecs or arbitrary broadcast streams. See [the exact input and verification limits](media-processing.md#mpeg-transport-stream-input).
+For example, create CBCS DASH from a supported local TS playlist:
+
+```sh
+drmr convert source/media.m3u8 --to cbcs --format dash --output result-dash --keys-file keys.json
+drmr verify result-dash/manifest.mpd --source source/media.m3u8 --keys-file keys.json --json
+```
+
+Use separate input and output keys in the [protected configuration](usage.md#separate-input-and-output-keys). Clear output needs no output key. The conversion decrypts when required, separates the original tracks, and repackages them into fMP4 segments and a static DASH manifest. It preserves the encoding and original packet clocks; it does not re-encrypt each source segment in place. See [DASH timing from transport streams](media-processing.md#dash-output-from-transport-streams) for the manifest's time mapping and duration representation.
+
+The ten-second BBB regression covers all nine input/output protection pairs for each of video-only, joint video/audio, and audio-only TS: 27 routes. Each result must pass conversion checks and a fresh verification against both its original protected source and a matching clear reference. Checks cover every original frame, complete decoded media, packet timing, the shared presentation origin, source immutability, and rejected manifest changes. Additional cases cover reordered video pictures. These tests qualify the bounded media profile; they do not establish DRM licenses or device playback.
+
+```sh
+cargo test --locked -p drmr-core --test conversion_ts_output dash_ -- --nocapture
+cargo test --locked -p drmr --test conversion_ts_dash -- --nocapture
+```
+
+Earlier fMP4 HLS regressions passed clear, `cbcs`, and AES-128 output from clear MPEG-TS input, with separate verification on Linux x86_64 and Windows x64 with FFmpeg 9.0.2, and macOS ARM64 with FFmpeg 9.0.1; all used Shaka Packager 3.8.0. Separate AES-128 MPEG-TS input regressions verify clear HLS output with key rotation, explicit and sequence-derived initialization vectors, and transitions to clear segments. Additional cases cover reordered pictures and video-only input. These results qualify the tested profile, tools, and platforms. They do not establish other codecs or arbitrary broadcast streams. See [the exact input and verification limits](media-processing.md#mpeg-transport-stream-input).
 
 SAMPLE-AES TS is the sample encryption used for FairPlay transport-stream media.
 Its AES-CBC protection applies to specified parts of encoded frames; it differs
