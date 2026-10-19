@@ -168,7 +168,7 @@ STANDARD_OUTPUTS = (("Clear", "cenc", "cbcs"), ("Clear", "cenc", "cbcs"),
 MATRIX_CELLS = (STANDARD_OUTPUTS, STANDARD_OUTPUTS,
                 STANDARD_OUTPUTS, ((), ("Clear", "cenc", "cbcs"), ("Clear", "cbcs", "AES-128"),
                                   ("Clear", "AES-128", "SAMPLE-AES")),
-                ((), ("Clear", "cenc", "cbcs"), (), ("Clear", "AES-128", "SAMPLE-AES")))
+                ((), ("Clear", "cenc", "cbcs"), ("Clear", "cbcs", "AES-128"), ("Clear", "AES-128", "SAMPLE-AES")))
 MATRIX_LOCALES = {
     "en": {"heading": "Input and output support", "region": "Conversion support matrix",
            "caption": "Supported conversion profiles", "corner": "Input ↓ / Output →",

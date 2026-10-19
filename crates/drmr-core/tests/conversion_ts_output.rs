@@ -1,4 +1,6 @@
 //! MPEG-TS outputs retain original access units, absolute clocks and complete decode evidence.
+#[path = "support/ts_audio_hls.rs"]
+mod audio_hls;
 mod common;
 #[path = "support/ts_output_lifecycle.rs"]
 mod lifecycle;

@@ -580,7 +580,6 @@ fn assert_profile_omission(audit: &Path, selected_role: &str) {
 fn unsupported_audio_and_interlaced_video_fail_before_publication() {
     for (profile, expected) in [
         ("44100", "ts-aac-sample-rate-not-supported"),
-        ("audio", "ts-audio-only-timing-proof-not-supported"),
         ("interlaced", "ts-progressive-frame-evidence-required"),
     ] {
         let root = common::private_tempdir().unwrap();

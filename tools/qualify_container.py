@@ -373,6 +373,14 @@ def media(image, root):
         except ValueError:
             raise Refusal("source-window-preparation-invalid") from None
         shutil.copytree(destination, root / "input" / kind)
+    audio_ts = root / "work/audio-ts"
+    audio_ts.mkdir(mode=0o700)
+    image.checked([
+        "-v", "error", "-nostdin", "-copyts", "-i", "/input/clip.mp4", "-map", "0:a:0",
+        "-vn", "-c", "copy", "-f", "hls", "-hls_time", "2", "-hls_list_size", "0",
+        "-hls_segment_filename", "/work/audio-ts/seg_%03d.ts", "/work/audio-ts/master.m3u8"],
+        entry="/usr/local/bin/ffmpeg")
+    shutil.copytree(audio_ts, root / "input/audio-ts")
     before = hashes(root / "input")
     rows = []
     prepared_sources = {}
@@ -393,6 +401,15 @@ def media(image, root):
             require_verification(verified)
             rows.append({"input": kind, "output": kind, "protection": protection,
                          "conversion": converted["verification"], "independent_verification": verified})
+    audio_converted = load_json(image.checked([
+        "convert", "/input/audio-ts/master.m3u8", "--to", "cbcs", "--format", "hls",
+        "--output", "/work/audio-ts-cbcs", "--max-workers", "1", "--json",
+        "--keys-file", "/keys/safe.json"]))
+    require_verification(audio_converted["verification"])
+    audio_verified = load_json(image.checked([
+        "verify", "/work/audio-ts-cbcs/master.m3u8", "--source", "/input/audio-ts/master.m3u8",
+        "--max-workers", "1", "--json", "--keys-file", "/keys/safe.json"]))
+    require_verification(audio_verified)
     finite = load_json(image.checked(["convert", "/input/clip.mp4", "--to", "clear", "--format", "mp4",
                                       "--output", "/work/finite.mp4", "--max-workers", "1", "--json"]))
     require_verification(finite["verification"])
@@ -403,6 +420,9 @@ def media(image, root):
         raise Refusal("source-changed")
     return {"prepared_source_against_all_original_video": prepared_sources,
             "representative_video_only_routes": rows, "full_original_finite_av": finite_verify,
+            "audio_only_ts_to_fmp4_hls": {"input_protection": "clear", "output_protection": "cbcs",
+                                          "conversion": audio_converted["verification"],
+                                          "independent_verification_against_original_ts": audio_verified},
             "finite_original_counts": finite_audio_evidence(image),
             "video_packets": 240, "decoded_video_frames": 240, "video_segments": 5,
             "source_hashes": before}

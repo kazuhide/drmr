@@ -85,7 +85,7 @@
               <th scope="row"><strong class="input-format">HLS / MPEG-TS</strong><span class="input-profile">Audio only<sup>3</sup></span><span class="input-protections"><span class="clear">Clear</span> / <code>AES-128</code> / <code>SAMPLE-AES</code></span></th>
               <td class="unavailable">Outside profile</td>
               <td><span class="clear">Clear</span> / <code>cenc</code> / <code>cbcs</code></td>
-              <td class="unavailable">Outside profile</td>
+              <td><span class="clear">Clear</span> / <code>cbcs</code> / <code>AES-128</code></td>
               <td><span class="clear">Clear</span> / <code>AES-128</code> / <code>SAMPLE-AES</code></td>
             </tr>
           </tbody>
@@ -95,7 +95,7 @@
       <ol id="matrix-limits" class="matrix-limits">
         <li>MP4 output contains one track, or the audio and video from the same qualified progressive source described below. Separate DASH/HLS audio and video tracks cannot be combined into one MP4 output.</li>
         <li>MP4 can store an audio start position and presentation duration in an edit list, for example to exclude encoder padding. Qualified progressive MP4 with one AAC-LC audio track and optional H.264 video preserves this playback range when converting from Clear, <code>cenc</code>, or <code>cbcs</code> to the MP4, DASH, and fMP4 HLS choices above. Complex edits and source DRM initialization metadata are outside this profile. See the full restrictions for the supported encryption layouts and presentation checks.</li>
-        <li>TS input uses a limited profile of progressive H.264 video and 48 kHz AAC-LC audio. Audio-only input supports DASH and TS output. TS output with both video and audio uses separate playlists.</li>
+        <li>TS input uses a limited profile of progressive H.264 video and 48 kHz AAC-LC audio. Audio-only input supports DASH, fMP4 HLS, and TS output. TS output with both video and audio uses separate playlists.</li>
       </ol>
       <div id="matrix-definitions" class="support-detail">
         <p>MP4 stores media. DASH (Dynamic Adaptive Streaming over HTTP) and HLS (HTTP Live Streaming) describe media segments in manifests or playlists. fMP4 means fragmented MP4; MPEG-TS means MPEG transport stream.</p>

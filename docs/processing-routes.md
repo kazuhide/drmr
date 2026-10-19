@@ -45,7 +45,12 @@ Complete local tracks → Shaka segmentation and HLS playlists → optional whol
 
 ### mpeg-ts-hls
 
-Original local HLS transport-stream resources → native structure admission and FFmpeg demultiplexing → fragmented MP4 HLS packaging → actual final playlist checks against the original streams. The intermediate MP4 is not used as the final reference.
+Original local HLS transport-stream resources → native structure admission and complete-track demultiplexing with Shaka Packager → fragmented MP4 HLS packaging → actual final playlist checks against the original streams. FFmpeg and FFprobe supply probing, decoding, and comparison evidence. The intermediate MP4 is not used as the final reference.
+
+This includes audio-only 48 kHz AAC-LC: original PES clocks and ADTS frame evidence
+anchor all content, sample counts, and timing checks. Complete frames determine
+audio segment boundaries; a two-second target does not permit trimming samples.
+See [audio-only fMP4 HLS](media-processing.md#audio-only-fmp4-hls-from-transport-streams).
 
 ### mpeg-ts-sample-aes-hls
 

@@ -116,7 +116,7 @@ fn last_pes_offsets(bytes: &[u8], audio: bool) -> Vec<usize> {
     assert!(offsets.len() > 14);
     offsets
 }
-fn shift_final_audio_pes(path: &Path) {
+pub(super) fn shift_final_audio_pes(path: &Path) {
     let mut bytes = std::fs::read(path).unwrap();
     let offsets = last_pes_offsets(&bytes, true);
     let old: [u8; 5] = std::array::from_fn(|index| bytes[offsets[9 + index]]);
