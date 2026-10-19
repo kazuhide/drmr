@@ -31,6 +31,7 @@
 .guide-table-scroll caption { padding: 8px 0; text-align: left; color: var(--secondary); font-size: 13px; }
 .guide-table-scroll th, .guide-table-scroll td { padding: 10px 12px; border: 1px solid var(--rule); text-align: left; vertical-align: top; overflow-wrap: anywhere; }
 .guide-table-scroll th { font-weight: 600; background: var(--canvas); }
+.guide-table-scroll td { background: var(--canvas); }
 .guide-table-scroll :not(pre) > code { font-size: 12px; }
 .guide-page .guide-toplink { margin: 28px 0; }
 .guide-page .guide-footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 24px; padding-top: 20px; padding-bottom: 24px; font-size: 14px; }
