@@ -8,6 +8,13 @@ const live = liveMode(process.env.PAGES_LIVE);
 const origin = live ? publicOrigin : localOrigin;
 const fontFiles = ['ibm-plex-sans-latin-400-normal.woff2', 'ibm-plex-sans-latin-600-normal.woff2',
   'ibm-plex-mono-latin-400-normal.woff2'];
+const codeExamples = [
+  ['Inspect command', 'drmr inspect source.mpd'],
+  ['Plan command', 'drmr plan source.mpd \\ --to cbcs --format dash'],
+  ['Convert command', 'drmr convert source.mpd \\ --to cbcs --format dash \\ --output converted \\ --keys-file keys.json'],
+  ['Verify command', 'drmr verify converted/manifest.mpd \\ --source source.mpd \\ --keys-file keys.json --json'],
+  ['Build and check the CLI', 'cargo install --path crates/drmr --locked drmr --version drmr doctor --probe --route progressive-mp4'],
+];
 const monitors = new WeakMap();
 
 async function artifact(info, name, value, type = 'application/json') {
@@ -133,6 +140,21 @@ for (const width of [320, 768, 1024, 1440]) {
     expect(tree).toContain('navigation "Documentation and source"');
     expect(tree).toContain('main:');
     expect(tree).toContain('link "Read the full support matrix and restrictions"');
+    await expect(page.getByRole('group')).toHaveCount(5);
+    const renderedCodeGroups = [];
+    for (const [name, command] of codeExamples) {
+      const group = page.getByRole('group', { name, exact: true });
+      await expect(group).toHaveCount(1);
+      await expect(group).toBeVisible();
+      await expect(group).toHaveJSProperty('tagName', 'PRE');
+      await expect(group).toHaveAttribute('tabindex', '0');
+      const code = (await group.locator('code').innerText()).trim().replace(/\s+/g, ' ');
+      expect(code).toBe(command);
+      const aria = await group.ariaSnapshot();
+      expect(aria).toContain(`group "${name}"`);
+      expect(aria).toContain(`code: ${command}`);
+      renderedCodeGroups.push({ name, code, aria });
+    }
     await artifact(info, 'rendered-aria.yml', tree, 'text/yaml');
 
     // Native Tab/Enter, not script-triggered click, proves skip-link movement.
@@ -178,6 +200,7 @@ for (const width of [320, 768, 1024, 1440]) {
     const accessibility = await new AxeBuilder({ page }).analyze();
     await artifact(info, 'axe.json', accessibility);
     expect(accessibility.violations).toEqual([]);
+    expect(accessibility.incomplete).toEqual([]);
     expect(network.console).toEqual([]);
     expect(network.pageErrors).toEqual([]);
     expect(network.failedRequests).toEqual([]);
@@ -190,7 +213,7 @@ for (const width of [320, 768, 1024, 1440]) {
     await artifact(info, 'evidence.json', { schema_version: 1, source_head: info.config.metadata.sourceHead,
       source_tree: info.config.metadata.sourceTree, mode: info.config.metadata.mode,
       asset_hashes: info.config.metadata.assetHashes, servedAssets, chromium: browser.version(), viewport: { width, height: 900 }, production_scripts: 0,
-      layout, fonts, images, headings, keyboard: focusRecords, network,
+      layout, fonts, images, headings, code_groups: renderedCodeGroups, keyboard: focusRecords, network,
       axe: { version: accessibility.testEngine.version, violations: 0, incomplete: accessibility.incomplete.length },
       limitations: ['automated Chromium only; no manual screen-reader or other-browser qualification',
         'external repository links checked by source validator; no external browser navigation'] });
@@ -259,7 +282,7 @@ test('native Tab keeps edge targets fully visible only with the production scrol
   const comparisons = [];
   try {
     for (const [width, ordinal, expected] of [
-      [320, 17, page.locator('pre[aria-label="Build and check the CLI"]')],
+      [320, 17, page.getByRole('group', { name: 'Build and check the CLI', exact: true })],
       [1440, 18, page.getByRole('link', { name: 'Source installation instructions', exact: true })],
     ]) {
       // Replay the same native Tab sequence in a fresh document for each state.

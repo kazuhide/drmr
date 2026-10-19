@@ -61,18 +61,18 @@
         <li>
           <div class="step-title"><span aria-hidden="true">1</span><h3>Inspect</h3></div>
           <p>Read local MP4 metadata or DASH/HLS declarations. Media samples are checked during conversion and verification.</p>
-          <pre tabindex="0" aria-label="Inspect command"><code>drmr inspect source.mpd</code></pre>
+          <pre role="group" tabindex="0" aria-label="Inspect command"><code>drmr inspect source.mpd</code></pre>
         </li>
         <li>
           <div class="step-title"><span aria-hidden="true">2</span><h3>Plan</h3></div>
           <p>Describe conversion choices and required tools. Conversion checks the actual media and keys.</p>
-          <pre tabindex="0" aria-label="Plan command"><code>drmr plan source.mpd \
+          <pre role="group" tabindex="0" aria-label="Plan command"><code>drmr plan source.mpd \
   --to cbcs --format dash</code></pre>
         </li>
         <li>
           <div class="step-title"><span aria-hidden="true">3</span><h3>Convert</h3></div>
           <p>Repackage qualified media and compare it with the original before publishing a new output.</p>
-          <pre tabindex="0" aria-label="Convert command"><code>drmr convert source.mpd \
+          <pre role="group" tabindex="0" aria-label="Convert command"><code>drmr convert source.mpd \
   --to cbcs --format dash \
   --output converted \
   --keys-file keys.json</code></pre>
@@ -80,7 +80,7 @@
         <li>
           <div class="step-title"><span aria-hidden="true">4</span><h3>Verify</h3></div>
           <p>Run an independent comparison with the original source and the keys for each role.</p>
-          <pre tabindex="0" aria-label="Verify command"><code>drmr verify converted/manifest.mpd \
+          <pre role="group" tabindex="0" aria-label="Verify command"><code>drmr verify converted/manifest.mpd \
   --source source.mpd \
   --keys-file keys.json --json</code></pre>
         </li>
@@ -136,7 +136,7 @@
       <div class="install-layout">
         <div class="install-commands">
           <p>From a source checkout:</p>
-          <pre tabindex="0" aria-label="Build and check the CLI"><code>cargo install --path crates/drmr --locked
+          <pre role="group" tabindex="0" aria-label="Build and check the CLI"><code>cargo install --path crates/drmr --locked
 drmr --version
 drmr doctor --probe --route progressive-mp4</code></pre>
           <p class="section-note">The probe checks tool versions and advertised options. It does not verify a media asset.</p>
