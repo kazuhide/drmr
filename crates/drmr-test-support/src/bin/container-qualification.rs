@@ -227,8 +227,8 @@ fn stop(cli: &Path, fixture: &Path, source: &Path, work: &Path) -> io::Result<()
         }
         thread::sleep(Duration::from_millis(5));
     };
-    eprintln!("container-qualification: phase=stop-return-state");
     assert_gone(&owned, tool, descendant)?;
+    eprintln!("container-qualification: phase=stop-return-state");
     if status.code() != Some(130) || output.exists() {
         return Err(fail());
     }
@@ -409,8 +409,8 @@ fn web(cli: &Path, fixture: &Path, work: &Path, port: u16) -> io::Result<()> {
         }
         thread::sleep(Duration::from_millis(5));
     };
-    eprintln!("container-qualification: phase=web-shutdown-return-state");
     assert_gone(&owned, tool, descendant)?;
+    eprintln!("container-qualification: phase=web-shutdown-return-state");
     if !status.success() || TcpStream::connect(("127.0.0.1", port)).is_ok() {
         return Err(fail());
     }
