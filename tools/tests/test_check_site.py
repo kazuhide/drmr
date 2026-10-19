@@ -181,6 +181,30 @@ class Site(unittest.TestCase):
             with self.assertRaisesRegex(CHECK.Failure, "site-language-links"):
                 self.check()
 
+    def test_fixed_revision_and_ci_job_links_use_only_this_repository(self):
+        revision = "0123456789abcdef0123456789abcdef01234567"
+        for path in ("commit/" + revision, "actions/runs/123/job/456"):
+            with self.subTest(path=path):
+                self.assertIsNone(CHECK.document("https://github.com/kazuhide/drmr/" + path,
+                                                 self.repo, ()))
+
+    def test_evidence_link_variants_and_other_repositories_are_refused(self):
+        revision = "0123456789abcdef0123456789abcdef01234567"
+        paths = ("commit/main", "commit/" + revision[:-1], "commit/" + revision.upper(),
+                 "commit/" + revision + "/", "commit/%30" + revision[1:],
+                 "actions/runs/0/job/456", "actions/runs/123/job/0",
+                 "actions/runs/123", "actions/runs/123/job/456/", "issues/123")
+        references = ["https://github.com/kazuhide/drmr/" + path for path in paths]
+        references += ["https://github.com/kazuhide/other/commit/" + revision,
+                       "https://github.com/other/drmr/actions/runs/123/job/456",
+                       "http://github.com/kazuhide/drmr/commit/" + revision,
+                       "https://github.com/kazuhide/drmr/commit/" + revision + "?raw=1",
+                       "https://github.com/kazuhide/drmr/commit/" + revision + "#diff",
+                       "https://github.com/kazuhide/drmr/actions/runs/123/job/456#step:1:1"]
+        for reference in references:
+            with self.subTest(reference=reference), self.assertRaises(CHECK.Failure):
+                CHECK.document(reference, self.repo, ())
+
     def test_pending_document_is_an_explicit_failure_by_default(self):
         with self.assertRaisesRegex(CHECK.Failure, "missing-repository-document"):
             CHECK.validate(self.site, self.repo)
