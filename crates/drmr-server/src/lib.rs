@@ -548,6 +548,9 @@ fn serve_with_ready(
     let port = config.bind_port;
     let app = App::new(config)?;
     let result = runtime.block_on(async {
+        // Readiness must never precede native signal registration. Retain the receivers
+        // through cleanup retries instead of registering lazily in a select branch.
+        let mut signals = ShutdownSignals::install()?;
         let listener = tokio::net::TcpListener::bind((host.as_str(), port)).await?;
         let address = listener.local_addr()?;
         ready(address);
@@ -556,7 +559,7 @@ fn serve_with_ready(
             result = axum::serve(listener, build_router(app.clone())) => result,
             () = async move {
                 loop {
-                    shutdown_signal().await;
+                    signals.recv().await;
                     let owner = shutdown_app.clone();
                     match tokio::task::spawn_blocking(move || owner.shutdown()).await {
                         Ok(Ok(())) => break,
@@ -596,24 +599,39 @@ pub fn run_server(args: &config::ServeArgs, jobs: config::JobCli, program: &str)
     }
 }
 
-async fn shutdown_signal() {
-    let interrupt = tokio::signal::ctrl_c();
+struct ShutdownSignals {
     #[cfg(unix)]
-    {
-        let Ok(mut terminate) =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-        else {
-            let _ = interrupt.await;
-            return;
-        };
-        tokio::select! {
-            _ = interrupt => {}
-            _ = terminate.recv() => {}
+    interrupt: tokio::signal::unix::Signal,
+    #[cfg(unix)]
+    terminate: tokio::signal::unix::Signal,
+    #[cfg(windows)]
+    interrupt: tokio::signal::windows::CtrlC,
+}
+impl ShutdownSignals {
+    fn install() -> std::io::Result<Self> {
+        #[cfg(unix)]
+        {
+            use tokio::signal::unix::{SignalKind, signal};
+            Ok(Self {
+                interrupt: signal(SignalKind::interrupt())?,
+                terminate: signal(SignalKind::terminate())?,
+            })
+        }
+        #[cfg(windows)]
+        {
+            Ok(Self {
+                interrupt: tokio::signal::windows::ctrl_c()?,
+            })
         }
     }
-    #[cfg(not(unix))]
-    {
-        let _ = interrupt.await;
+    async fn recv(&mut self) {
+        #[cfg(unix)]
+        tokio::select! {
+            _ = self.interrupt.recv() => {}
+            _ = self.terminate.recv() => {}
+        }
+        #[cfg(windows)]
+        let _ = self.interrupt.recv().await;
     }
 }
 
