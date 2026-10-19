@@ -81,6 +81,24 @@ The image records its source revision, source tree, and dependency pins in `/usr
 
 Debian package versions and their packaged notices are recorded separately. The image does not include a full Debian source mirror. Packages installed from Debian's repositories can change between builds; the manifest records the versions actually installed.
 
+## Container checks
+
+The [native container workflow](https://github.com/kazuhide/drmr/actions/workflows/container.yml) builds on Linux AMD64 and saves a JSON qualification report with the source revision, image identifier, tool versions, and checks. Test observers run alongside the CLI; they are excluded from the runtime image.
+
+Local native ARM64 qualification with Docker Desktop, FFmpeg 9.0.2, and Shaka Packager 3.8.0 passed these cases:
+
+| Check | Result |
+| --- | --- |
+| Clear and CBCS output from clear DASH and fMP4 HLS, including a separate verification | Passed all four media comparisons for each of four routes |
+| Complete original MP4 with H.264 video and AAC audio | Preserved 240 video packets, 470 audio packets including priming, and 480,000 decoded audio samples per channel |
+| Unsafe key permissions, read-only output, and an existing destination | Refused without changing existing media or keys |
+| Cancellation during an active tool invocation | Exit 130; tool and descendant absent, lock released before the observing container exited |
+| Two-CPU, 1 GiB container limits | Native resource observation respected the limits; the CLI selected one worker and its result passed separate media verification |
+
+The media cases use the complete attributed [ten-second Big Buck Bunny fixture](../crates/drmr/tests/fixtures/bbb/README.md). Segmented video has five two-second segments. Resource observations and CLI checks run in separate containers with the same limits; they do not measure an exact peak memory requirement. This set of representative routes supplements the [conversion support table](conversion-support.md).
+
+The experimental web console's HTTP, request-origin, Stop, and orderly-shutdown checks are required on the native Linux CI host. The local ARM64 result above excludes Web and GUI testing. Use each workflow run's report for its actual result; media comparisons do not qualify DRM license services or playback devices.
+
 ## Clean up
 
 After removing containers that use this image, remove your local tag with:
