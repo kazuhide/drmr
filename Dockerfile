@@ -12,6 +12,10 @@ COPY docker/native.py docker/ffmpeg.py docker/sources.json docker/ffmpeg-release
 RUN python3 /recipe/ffmpeg.py --jobs "$BUILD_JOBS"
 
 # Serial stages keep simultaneous C++ and Rust compilation within a small daemon budget.
+FROM native AS cargo-cache-check
+COPY docker/cargo_cache.py docker/tests/cargo_cache_control.py /cache-recipe/
+RUN python3 /cache-recipe/cargo_cache_control.py --report /cargo-cache-control.json
+
 FROM native AS bento-build
 COPY docker/bento4.py /recipe/bento4.py
 RUN python3 /recipe/bento4.py --jobs "$BUILD_JOBS"
@@ -25,9 +29,12 @@ RUN rustup component add rust-src
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ crates/
 COPY vendor/ vendor/
+COPY docker/cargo_cache.py /recipe/cargo_cache.py
+COPY --from=cargo-cache-check /cargo-cache-control.json /opt/drmr/metadata/cargo-cache-control.json
 RUN --mount=type=cache,id=drmr-registry-${TARGETARCH},target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,id=drmr-target-${TARGETARCH},target=/source/target,sharing=locked \
-    CARGO_BUILD_JOBS="$BUILD_JOBS" cargo build --release --locked -p drmr \
+    python3 /recipe/cargo_cache.py --source /source --target /source/target --report /opt/drmr/metadata/cargo-cache.json \
+    && CARGO_BUILD_JOBS="$BUILD_JOBS" cargo build --release --locked -p drmr \
     && install -m 0755 target/release/drmr /opt/drmr/bin/drmr
 # Documentation and provenance do not invalidate the preceding compilation layer.
 COPY . .
@@ -37,7 +44,8 @@ RUN --mount=type=cache,id=drmr-registry-${TARGETARCH},target=/usr/local/cargo/re
 FROM drmr-build AS qualification-build
 RUN --mount=type=cache,id=drmr-registry-${TARGETARCH},target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,id=drmr-target-${TARGETARCH},target=/source/target,sharing=locked \
-    CARGO_BUILD_JOBS="$BUILD_JOBS" cargo build --release --locked -p drmr-test-support --bin container-qualification \
+    python3 /recipe/cargo_cache.py --source /source --target /source/target \
+    && CARGO_BUILD_JOBS="$BUILD_JOBS" cargo build --release --locked -p drmr-test-support --bin container-qualification \
     && CARGO_BUILD_JOBS="$BUILD_JOBS" cargo build --release --locked -p drmr-core --example container-resources \
     && mkdir /out \
     && install -m 0755 target/release/container-qualification /out/container-qualification \
