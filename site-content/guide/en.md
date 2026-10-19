@@ -237,7 +237,7 @@ Source and result KIDs need not be the same. Independent `verify` still uses `in
 
 ## HLS key URI and IV
 
-HLS AES-128 keys map the exact URI string from the playlist. drmr does not fetch a playlist key URI:
+HLS input keys map the exact URI string from the playlist. drmr does not fetch a playlist key URI. For SAMPLE-AES input, associate the IV with the same input key entry, as in this example:
 
 ```json
 {
@@ -252,7 +252,7 @@ HLS AES-128 keys map the exact URI string from the playlist. drmr does not fetch
 }
 ```
 
-For SAMPLE-AES input, associate the IV with the same key entry:
+For AES-128 HLS output, supply the output key and key URI:
 
 ```json
 {
@@ -413,7 +413,7 @@ Supply output key/IV/URI or source URI/IV mappings as applicable. Clear, AES-128
 
 ## Explicit PlayReady signaling
 
-This opt-in generic-conversion profile is CBCS DASH. Use complete serialized PSSH/PRO data from the intended configuration, not an invented dummy value. Source DRM initialization metadata is refused by conversion.
+This opt-in generic-conversion profile produces CBCS DASH from a qualified clear MP4 source. Supply the output key identifier (KID), key, and license URL as shown below. drmr generates the PlayReady Object (PRO) and Protection System Specific Header (PSSH), then checks their consistency in the initialization segments and DASH manifest. Source DRM initialization metadata is refused by conversion.
 
 ```json
 {

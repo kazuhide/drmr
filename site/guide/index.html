@@ -214,7 +214,7 @@ chmod 700 config
 </code></pre></figure>
 <p>Source and result KIDs need not be the same. Independent <code>verify</code> still uses <code>input</code> for the original and <code>output</code> for the candidate. Do not swap roles to accommodate a failure. Existing encrypted verification can support profiles that conversion deliberately refuses, including some input PSSH metadata; that is not conversion permission.</p>
 <h3>HLS key URI and IV</h3>
-<p>HLS AES-128 keys map the exact URI string from the playlist. drmr does not fetch a playlist key URI:</p>
+<p>HLS input keys map the exact URI string from the playlist. drmr does not fetch a playlist key URI. For SAMPLE-AES input, associate the IV with the same input key entry, as in this example:</p>
 <figure class="guide-example" role="group" aria-labelledby="example-9-title"><figcaption id="example-9-title">Example 9: json</figcaption><pre tabindex="0"><code>{
   &quot;schema_version&quot;: 1,
   &quot;input&quot;: {
@@ -226,7 +226,7 @@ chmod 700 config
   }
 }
 </code></pre></figure>
-<p>For SAMPLE-AES input, associate the IV with the same key entry:</p>
+<p>For AES-128 HLS output, supply the output key and key URI:</p>
 <figure class="guide-example" role="group" aria-labelledby="example-10-title"><figcaption id="example-10-title">Example 10: json</figcaption><pre tabindex="0"><code>{
   &quot;schema_version&quot;: 1,
   &quot;output&quot;: {
@@ -331,7 +331,7 @@ drmr verify clear-ts/master.m3u8 --source encrypted-ts/media.m3u8 \
 </code></pre></figure>
 <p>Supply output key/IV/URI or source URI/IV mappings as applicable. Clear, AES-128 and SAMPLE-AES TS outputs use the qualified source profile; license/device qualification is separate.</p>
 <h3>Explicit PlayReady signaling</h3>
-<p>This opt-in generic-conversion profile is CBCS DASH. Use complete serialized PSSH/PRO data from the intended configuration, not an invented dummy value. Source DRM initialization metadata is refused by conversion.</p>
+<p>This opt-in generic-conversion profile produces CBCS DASH from a qualified clear MP4 source. Supply the output key identifier (KID), key, and license URL as shown below. drmr generates the PlayReady Object (PRO) and Protection System Specific Header (PSSH), then checks their consistency in the initialization segments and DASH manifest. Source DRM initialization metadata is refused by conversion.</p>
 <figure class="guide-example" role="group" aria-labelledby="example-24-title"><figcaption id="example-24-title">Example 24: json</figcaption><pre tabindex="0"><code>{
   &quot;schema_version&quot;: 1,
   &quot;output&quot;: {

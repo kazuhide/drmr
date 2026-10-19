@@ -1354,7 +1354,7 @@ verify は target や format を指定して作り直すコマンドではあり
 
 ## 版に対応した公開資料
 
-以下はこのガイド の対象コミットへ固定した参照です。利用中の版が異なる場合は、対応するコミットまたは同梱ドキュメントを確認してください。
+以下は公開 main の資料へのリンクです。利用中の版が異なる場合は、そのコミットまたは同梱ドキュメントを確認してください。
 
 - [README・導入](https://github.com/kazuhide/drmr/blob/main/README.md)
 - [使い方と設定](https://github.com/kazuhide/drmr/blob/main/docs/usage.md)
