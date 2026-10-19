@@ -50,4 +50,4 @@ workspace = true
 windows-permissions = "0.2.4"
 
 [target.'cfg(unix)'.dev-dependencies]
-rustix.workspace = true
+nix = { version = "0.31.3", default-features = false, features = ["signal"] }
