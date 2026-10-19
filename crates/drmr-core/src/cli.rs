@@ -367,23 +367,8 @@ pub fn cmd_run<O: Write + Send + 'static>(
             .renditions
             .truncate(usize::try_from(limit).unwrap_or(usize::MAX));
     }
-    // The single PlayReady source, built before encryption: its pssh joins every rendition's
-    // --pssh set as well as the manifest patch.
-    let (playready_objects, source_license_url) = if emit_manifests {
-        let parsed_pro = modules.manifests.parse_source_playready(&args.mpd)?;
-        if parsed_pro.has_custom_attributes {
-            return Err(usage("unsupported PlayReady custom attributes or DS_ID"));
-        }
-        let objects = modules
-            .playready
-            .build_playready_v43(asset.key.key_id_hex(), parsed_pro.la_url.as_deref())?;
-        (
-            Some(objects),
-            parsed_pro.la_url.map(zeroize::Zeroizing::new),
-        )
-    } else {
-        (None, None)
-    };
+    let (playready_objects, source_license_url) =
+        prepare_run_signaling(&args.mpd, asset.key.key_id_hex(), emit_manifests, modules)?;
 
     let pssh = widevine_pssh_by_rendition(&asset);
     let options = AssetOptions {
@@ -437,6 +422,36 @@ pub fn cmd_run<O: Write + Send + 'static>(
             Ok(exit_code(&result))
         }
     }
+}
+
+// Build the single PlayReady source before encryption. Its PSSH joins every rendition's
+// --pssh set and the manifest patch; retain the source URL for diagnostic redaction.
+fn prepare_run_signaling(
+    mpd: &Path,
+    key_id: &str,
+    emit_manifests: bool,
+    modules: &Modules<'_>,
+) -> Result<
+    (
+        Option<crate::playready::PlayReadyObjects>,
+        Option<zeroize::Zeroizing<String>>,
+    ),
+    CliError,
+> {
+    if !emit_manifests {
+        return Ok((None, None));
+    }
+    let parsed_pro = modules.manifests.parse_source_playready(mpd)?;
+    if parsed_pro.has_custom_attributes {
+        return Err(usage("unsupported PlayReady custom attributes or DS_ID"));
+    }
+    let objects = modules
+        .playready
+        .build_playready_v43(key_id, parsed_pro.la_url.as_deref())?;
+    Ok((
+        Some(objects),
+        parsed_pro.la_url.map(zeroize::Zeroizing::new),
+    ))
 }
 
 // Register source and generated signaling before the first tool record.
