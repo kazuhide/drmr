@@ -671,8 +671,10 @@ def main():
             report["web"] = web(image, root) if arguments.web else {"status": "not-tested", "reason": "host-network-not-requested"}
             if hashes(root / "input") != report["media"]["source_hashes"]:
                 raise Refusal("source-changed")
-            report["success"] = True
-            report.pop("active_gate", None)
+        # A receipt becomes successful only after all owned cleanup callbacks
+        # have returned, including exceptions outside the expected refusal type.
+        report["success"] = True
+        report.pop("active_gate", None)
     except Refusal as error:
         report["success"] = False
         report["failure_code"] = str(error)
