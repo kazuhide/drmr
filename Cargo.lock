@@ -1071,6 +1071,7 @@ dependencies = [
  "include_dir",
  "indexmap 2.14.2",
  "libc",
+ "nix",
  "regex",
  "roxmltree",
  "serde_json",

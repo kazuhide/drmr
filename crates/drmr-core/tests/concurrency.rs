@@ -114,14 +114,21 @@ fn units_that_only_observed_the_stop_are_never_the_reported_failure() {
     let result = std::thread::scope(|scope| {
         let pool = Pool::new(scope, 2);
         let late_stop = stop.clone();
+        let (observer_started, started) = std::sync::mpsc::channel();
         let late = unit(move || {
+            // FIFO dequeue does not order entry across workers. Acknowledge that this
+            // observer passed the start gate before the other unit can fail.
+            observer_started.send(()).unwrap();
             if late_stop.wait(Some(Duration::from_secs(5))) {
                 // released by the failure, never by a timer
                 return Err(TestError::Cancelled);
             }
             Ok("ran")
         });
-        let failing = unit(|| Err(TestError::Key("real")));
+        let failing = unit(move || {
+            started.recv_timeout(Duration::from_secs(5)).unwrap();
+            Err(TestError::Key("real"))
+        });
         run_ordered(
             |u| {
                 let task = pool.submit(u);
