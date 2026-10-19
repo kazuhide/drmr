@@ -1,4 +1,7 @@
 import hashlib
+import io
+import tarfile
+from unittest.mock import patch
 import importlib.util
 from pathlib import Path
 import tempfile
@@ -30,6 +33,32 @@ class SourceEvidence(unittest.TestCase):
             self.assertEqual({r["path"] for r in records}, set(bodies))
             for name, body in bodies.items():
                 self.assertEqual((output / name).read_bytes(), body)
+
+    def test_unpack_works_without_the_new_tarfile_filter_api(self):
+        with tempfile.TemporaryDirectory() as temp:
+            archive = Path(temp) / "source.tar"
+            with tarfile.open(archive, "w") as target:
+                entry = tarfile.TarInfo("release/configure")
+                entry.size = 7
+                entry.mode = 0o755
+                target.addfile(entry, io.BytesIO(b"source!"))
+            with patch.object(tarfile.TarFile, "extractall", side_effect=TypeError("legacy tarfile API")):
+                source = native.unpack(archive, Path(temp) / "unpacked")
+            self.assertEqual((source / "configure").read_bytes(), b"source!")
+            self.assertEqual((source / "configure").stat().st_mode & 0o777, 0o755)
+
+    def test_unpack_rejects_links_and_parent_escape_before_writing_them(self):
+        for name, kind in [("release/link", tarfile.SYMTYPE), ("../outside", tarfile.REGTYPE), ("/outside", tarfile.REGTYPE), ("C:/outside", tarfile.REGTYPE)]:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temp:
+                archive = Path(temp) / "source.tar"
+                with tarfile.open(archive, "w") as target:
+                    entry = tarfile.TarInfo(name)
+                    entry.type = kind
+                    entry.linkname = "configure" if kind == tarfile.SYMTYPE else ""
+                    target.addfile(entry)
+                with self.assertRaisesRegex(ValueError, "source-archive-entry-invalid"):
+                    native.unpack(archive, Path(temp) / "unpacked")
+                self.assertFalse((Path(temp) / "outside").exists())
 
     def test_component_without_license_fails_closed(self):
         with tempfile.TemporaryDirectory() as temp:

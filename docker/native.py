@@ -2,7 +2,7 @@
 import argparse
 import hashlib
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import shutil
 import subprocess
 import tarfile
@@ -60,8 +60,30 @@ def fetch_archive(pin):
 
 def unpack(archive, destination):
     destination.mkdir(parents=True)
+    # Bookworm's Python 3.11.2 predates extraction filters. These pinned source
+    # releases need only regular files and directories; reject every link/device.
+    entries = set()
+    total = 0
     with tarfile.open(archive) as source:
-        source.extractall(destination, filter="data")
+        for member in source:
+            relative = PurePosixPath(member.name)
+            if (relative.is_absolute() or ".." in relative.parts or not relative.parts
+                    or ":" in relative.parts[0] or "\\" in member.name
+                    or not (member.isfile() or member.isdir()) or member.sparse
+                    or relative in entries):
+                raise ValueError("source-archive-entry-invalid")
+            entries.add(relative)
+            total += member.size
+            if len(entries) > 100000 or total > 512 * 1024 * 1024:
+                raise ValueError("source-archive-size-limit")
+            target = destination.joinpath(*relative.parts)
+            if member.isdir():
+                target.mkdir(parents=True, exist_ok=True)
+            else:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with source.extractfile(member) as incoming, target.open("xb") as outgoing:
+                    shutil.copyfileobj(incoming, outgoing)
+                target.chmod(0o755 if member.mode & 0o111 else 0o644)
     entries = list(destination.iterdir())
     if len(entries) != 1 or not entries[0].is_dir():
         raise ValueError("source-archive-root-invalid")
