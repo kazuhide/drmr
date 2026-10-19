@@ -21,6 +21,18 @@ pub(super) enum Phase {
     Verification,
     Publication,
 }
+impl Phase {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::InputPreparation => "input-preparation",
+            Self::Inspection => "inspection",
+            Self::Normalization => "normalization",
+            Self::Packaging => "packaging",
+            Self::Verification => "verification",
+            Self::Publication => "publication",
+        }
+    }
+}
 const PHASES: [Phase; 6] = [
     Phase::InputPreparation,
     Phase::Inspection,
@@ -108,7 +120,10 @@ impl Measurements {
         }
     }
     pub fn scope(self: &Arc<Self>, phase: Phase) -> Scope {
-        Scope(Some((Arc::clone(self), phase, Instant::now())))
+        Scope {
+            measurement: Some((Arc::clone(self), phase, Instant::now())),
+            activity: None,
+        }
     }
     fn elapsed(&self, phase: Phase, elapsed: Duration) {
         self.update(|state| {
@@ -242,11 +257,27 @@ impl Sink for Measurements {
     }
 }
 #[derive(Default)]
-pub(super) struct Scope(Option<(Arc<Measurements>, Phase, Instant)>);
+pub(super) struct Scope {
+    measurement: Option<(Arc<Measurements>, Phase, Instant)>,
+    activity: Option<(Arc<dyn Sink>, Phase)>,
+}
+impl Scope {
+    pub fn observed(mut self, sink: Option<&Arc<dyn Sink>>, phase: Phase) -> Self {
+        if let Some(sink) = sink {
+            sink.emit(serde_json::json!({"stage":"conversion", "event":"activity", "activity":phase.as_str(), "state":"started"}).as_object().unwrap());
+            self.activity = Some((Arc::clone(sink), phase));
+        }
+        self
+    }
+}
 impl Drop for Scope {
     fn drop(&mut self) {
-        if let Some((measurement, phase, started)) = self.0.take() {
+        if let Some((measurement, phase, started)) = self.measurement.take() {
             measurement.elapsed(phase, started.elapsed());
+        }
+        if let Some((sink, phase)) = self.activity.take() {
+            // Closing a scope establishes neither success nor exclusive phase execution.
+            sink.emit(serde_json::json!({"stage":"conversion", "event":"activity", "activity":phase.as_str(), "state":"closed"}).as_object().unwrap());
         }
     }
 }
@@ -330,6 +361,72 @@ fn walk(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn opt_in_activity_is_independent_of_measurement_and_preserves_parallel_scope_ownership() {
+        let original = Arc::new(crate::events::Collector::default());
+        let observed = Arc::new(crate::events::Collector::default());
+        let converter = super::super::Converter::new(
+            Arc::new(crate::toolrun::ToolRunner::new(
+                Arc::new(crate::toolrun::Secrets::new()),
+                original.clone(),
+            )),
+            "packager",
+            "ffmpeg",
+        )
+        .with_activity_sink(observed.clone());
+        let ready = std::sync::Barrier::new(3);
+        let release = std::sync::Barrier::new(3);
+        std::thread::scope(|threads| {
+            for phase in [Phase::Normalization, Phase::Verification] {
+                let converter = &converter;
+                let ready = &ready;
+                let release = &release;
+                threads.spawn(move || {
+                    let _scope = converter.backend.scope(phase);
+                    ready.wait();
+                    release.wait();
+                });
+            }
+            ready.wait();
+            assert_eq!(observed.records().len(), 2);
+            assert!(
+                observed
+                    .records()
+                    .iter()
+                    .all(|record| record["state"] == "started")
+            );
+            release.wait();
+        });
+        assert_eq!(observed.records().len(), 4);
+        assert_eq!(
+            observed
+                .records()
+                .iter()
+                .filter(|record| record["state"] == "closed")
+                .count(),
+            2
+        );
+        let (result, measured) = converter.measure(|command| {
+            let _outer = command.backend.scope(Phase::InputPreparation);
+            let _inner = command.backend.scope(Phase::Inspection);
+            Err::<(), _>(super::super::ConversionError("cancelled"))
+        });
+        assert_eq!(result, Err(super::super::ConversionError("cancelled")));
+        assert_eq!(measured.phases[0].scopes, 1);
+        assert_eq!(measured.phases[1].scopes, 1);
+        assert_eq!(observed.records().len(), 8);
+        assert!(
+            original.records().is_empty(),
+            "the legacy event stream is unchanged"
+        );
+        assert!(
+            observed
+                .records()
+                .iter()
+                .all(|record| record.len() == 4 && record["event"] == "activity")
+        );
+    }
+
     #[test]
     fn durations_are_numeric_allowlisted_sums_and_parallel_scopes_are_not_wall_time() {
         let measurement = Measurements::default();

@@ -107,8 +107,17 @@ impl Converter {
                 ffprobe: "ffprobe".into(),
                 timeout: Duration::from_hours(1),
                 measurement: None,
+                activity: None,
             },
         }
+    }
+    /// Observe fixed activity starts and scope closures, independently of optional measurements.
+    /// Scopes can overlap or nest; closure is not proof of success. No paths, keys or arguments
+    /// are supplied. The default converter does not emit these additional events.
+    #[must_use]
+    pub fn with_activity_sink(mut self, sink: Arc<dyn crate::events::Sink>) -> Self {
+        self.backend.activity = Some(sink);
+        self
     }
     /// Observe one operation in a fresh context, also when this converter is reused concurrently.
     /// The ordinary media result and errors are returned unchanged.
