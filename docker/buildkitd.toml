@@ -1,0 +1,3 @@
+# Keep source compilation stages within a modest Docker daemon budget.
+[worker.oci]
+  max-parallelism = 1

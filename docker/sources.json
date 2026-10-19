@@ -1,0 +1,384 @@
+{
+  "schema_version": 1,
+  "ffmpeg": {
+    "version": "9.0.2",
+    "commit": "946fcce07b6dcd0331c8cc609192aeff5e1924f8",
+    "archive": "ffmpeg-9.0.2.tar.xz",
+    "url": "https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz",
+    "sha256": "8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e",
+    "signature": {
+      "archive": "ffmpeg-9.0.2.tar.xz.asc",
+      "url": "https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz.asc",
+      "sha256": "d617fd94ea354dadd2a8bb16243d37c44e1e9729b06b6ad58fe30bfb0fa943f2"
+    },
+    "key_sha256": "397b3becedcd5a98769967ff1ff8501ddc89f8368b8f766e4701377d7dbaabe5",
+    "release_key_fingerprint": "FCF986EA15E6E293A5644F10B4322F04D67658D8",
+    "notices": [
+      {
+        "path": "COPYING.LGPLv2.1",
+        "sha256": "246041b6ecf9bc32d718a62c57877c78b5eb397b6467e74ed7ae2626ab189c30"
+      },
+      {
+        "path": "COPYING.GPLv2",
+        "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+      },
+      {
+        "path": "COPYING.LGPLv3",
+        "sha256": "da7eabb7bafdf7d3ae5e9f223aa5bdc1eece45ac569dc21b3b037520b4464768"
+      },
+      {
+        "path": "COPYING.GPLv3",
+        "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
+      },
+      {
+        "path": "tests/checkasm/ext/src/html_data/LICENSE",
+        "sha256": "0fd2c601fb2ead2add56807b7e32664da8d973b9835a422464f210bfea997a52"
+      },
+      {
+        "path": "tests/checkasm/ext/LICENSE",
+        "sha256": "a2dc8194271e5989c0622531c645a7b41af5da92eeb2531e4f2a3ec31023bc52"
+      },
+      {
+        "path": "LICENSE.md",
+        "sha256": "2e1d16c72fd74e12063776371da757322f8b77589386532f4fd8634bde7de1af"
+      }
+    ],
+    "license_files": [
+      "LICENSE.md",
+      "COPYING.LGPLv2.1"
+    ]
+  },
+  "bento4": {
+    "version": "1.6.0-641",
+    "commit": "dc264854d1f76c370b65b18d9f303a95f7f21ab1",
+    "archive": "bento4-v1.6.0-641.tar.gz",
+    "url": "https://codeload.github.com/axiomatic-systems/Bento4/tar.gz/refs/tags/v1.6.0-641",
+    "sha256": "e6575877708526e399cff752b4ee23cb1e2ac32fb251e2ca0a1e8d691fd172a7",
+    "notices": [
+      {
+        "path": "Documents/LICENSE.txt",
+        "sha256": "7daae92c8628ada28def8d096fe2fde298b72ec3e2d64a3c408afce38edb361b"
+      }
+    ],
+    "license_files": [
+      "Documents/LICENSE.txt"
+    ]
+  },
+  "shaka": {
+    "version": "3.8.0",
+    "repository": "https://github.com/shaka-project/shaka-packager.git",
+    "tag": "v3.8.0",
+    "commit": "75b2faf6b5b30a74f512cab0edde73fa86c1083f",
+    "notices": [
+      {
+        "path": "LICENSE",
+        "sha256": "0eea5a66a8505f758fdc8710637c5b4f5f1b18b29d0f248d6e95a3cdfc8fb599"
+      },
+      {
+        "path": "chromium-LICENSE",
+        "sha256": "856067d3864191237d89fd3d399e9221adf9d847530aac807a6e5344955b04c9"
+      }
+    ],
+    "submodules": [
+      {
+        "name": "abseil-cpp",
+        "path": "packager/third_party/abseil-cpp/source",
+        "repository": "https://github.com/abseil/abseil-cpp.git",
+        "commit": "255c84dadd029fd8ad25c5efb5933e47beaa00c7",
+        "notices": [
+          {
+            "path": "LICENSE",
+            "sha256": "c79a7fea0e3cac04cd43f20e7b648e5a0ff8fa5344e644b0ee09ca1162b62747"
+          },
+          {
+            "path": "AUTHORS",
+            "sha256": "1fd39030c119b4c97014f59e0ad0ed65f23475bbdf55a52740f31eb82b34b4ee"
+          }
+        ],
+        "license_files": [
+          "LICENSE",
+          "AUTHORS"
+        ]
+      },
+      {
+        "name": "c-ares",
+        "path": "packager/third_party/c-ares/source",
+        "repository": "https://github.com/c-ares/c-ares.git",
+        "commit": "d3a507e920e7af18a5efb7f9f1d8044ed4750013",
+        "notices": [
+          {
+            "path": "LICENSE.md",
+            "sha256": "460f5e768fda3752ca2169a95df062578a10fb126bfd65f3b9b1a1bed2f84807"
+          },
+          {
+            "path": "AUTHORS",
+            "sha256": "10274d04e1aa59b340e84dbef26550bfc9827fc70908f78bfa755e1a8729939b"
+          },
+          {
+            "path": "LICENSES/APSL-2.0.txt",
+            "sha256": "2d0c12edaaf8d31fec6796fef99291b12e833b6bef28100975120a53d209e06d"
+          },
+          {
+            "path": "LICENSES/Autoconf-exception-3.0.txt",
+            "sha256": "f679a0093482b45b83954211a96d2ffa2e4fb33fb879a30ea80b2508854e0974"
+          },
+          {
+            "path": "LICENSES/BSD-3-Clause.txt",
+            "sha256": "3cf06aba3588c41c514f6946bb2d757b413ff6491647d474800f55edca75dcb4"
+          },
+          {
+            "path": "LICENSES/FSFAP.txt",
+            "sha256": "aaff35faf88ea25b8a10315f6670017e881bc7fe738bf24d9cc192fc47091d5d"
+          },
+          {
+            "path": "LICENSES/GPL-3.0-or-later.txt",
+            "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+          },
+          {
+            "path": "LICENSES/LGPL-2.1-or-later.txt",
+            "sha256": "52908627e73fef5ff3e7ed148d6669aebcd3710548c6fa56841123f75a28c770"
+          },
+          {
+            "path": "LICENSES/MIT.txt",
+            "sha256": "f2a60bcd22282f235328a23d36af62dd32956d7cf4d21a622d71863d6a7ab7ab"
+          }
+        ],
+        "license_files": [
+          "LICENSE.md",
+          "AUTHORS",
+          "LICENSES/APSL-2.0.txt",
+          "LICENSES/Autoconf-exception-3.0.txt",
+          "LICENSES/BSD-3-Clause.txt",
+          "LICENSES/FSFAP.txt",
+          "LICENSES/GPL-3.0-or-later.txt",
+          "LICENSES/LGPL-2.1-or-later.txt",
+          "LICENSES/MIT.txt"
+        ]
+      },
+      {
+        "name": "curl",
+        "path": "packager/third_party/curl/source",
+        "repository": "https://github.com/curl/curl.git",
+        "commit": "8c908d2d0a6d32abdedda2c52e90bd56ec76c24d",
+        "notices": [
+          {
+            "path": "COPYING",
+            "sha256": "82f2f4427d6545ee5aaac4f0b80428da6cc8ba41c2cf5da3a03680ec327b9681"
+          },
+          {
+            "path": "LICENSES/BSD-4-Clause-UC.txt",
+            "sha256": "c82a5eb55679a3fd483d992c2428e66ee4b9b05b5b78b4ac916692368955b526"
+          },
+          {
+            "path": "LICENSES/ISC.txt",
+            "sha256": "2a9993525c6c65ac944dfea5fbf24a093d61cfaf69039cab1ff471c6aed821cb"
+          },
+          {
+            "path": "LICENSES/curl.txt",
+            "sha256": "8c93cc9b95bc7d8e37c87fe3645a21d88871e791ef2fec43317f30b649078525"
+          }
+        ],
+        "license_files": [
+          "COPYING",
+          "LICENSES/BSD-4-Clause-UC.txt",
+          "LICENSES/ISC.txt",
+          "LICENSES/curl.txt"
+        ]
+      },
+      {
+        "name": "googletest",
+        "path": "packager/third_party/googletest/source",
+        "repository": "https://github.com/google/googletest.git",
+        "commit": "15460959cbbfa20e66ef0b5ab497367e47fc0a04",
+        "notices": [
+          {
+            "path": "LICENSE",
+            "sha256": "9702de7e4117a8e2b20dafab11ffda58c198aede066406496bef670d40a22138"
+          }
+        ],
+        "license_files": [
+          "LICENSE"
+        ]
+      },
+      {
+        "name": "json",
+        "path": "packager/third_party/json/source",
+        "repository": "https://github.com/nlohmann/json.git",
+        "commit": "55f93686c01528224f448c19128836e7df245f72",
+        "notices": [
+          {
+            "path": "LICENSE.MIT",
+            "sha256": "46a65cffd1ea955132d95a8dd921640714a8d6b537d2e4e482d31145ae95b603"
+          },
+          {
+            "path": "LICENSES/Apache-2.0.txt",
+            "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
+          },
+          {
+            "path": "LICENSES/BSD-3-Clause.txt",
+            "sha256": "5a93d5831e1297ab10fe643e1a631e83be392896da14ee2951285a79012df69d"
+          },
+          {
+            "path": "LICENSES/GPL-3.0-only.txt",
+            "sha256": "b6a8bf63ae2c95b0aa256ee774680d7bd18f21f457da75466f7610b3b16acc4e"
+          },
+          {
+            "path": "LICENSES/MIT.txt",
+            "sha256": "b85dcd3e453d05982552c52b5fc9e0bdd6d23c6f8e844b984a88af32570b0cc0"
+          }
+        ],
+        "license_files": [
+          "LICENSE.MIT",
+          "LICENSES/Apache-2.0.txt",
+          "LICENSES/BSD-3-Clause.txt",
+          "LICENSES/GPL-3.0-only.txt",
+          "LICENSES/MIT.txt"
+        ]
+      },
+      {
+        "name": "libpng",
+        "path": "packager/third_party/libpng/source",
+        "repository": "https://github.com/glennrp/libpng.git",
+        "commit": "2b978915d82377df13fcbb1fb56660195ded868a",
+        "notices": [
+          {
+            "path": "LICENSE",
+            "sha256": "16d9daaafbf63a31a5bdc91d4600972548fef5aaa1244202393288dbd079c49a"
+          },
+          {
+            "path": "AUTHORS",
+            "sha256": "5d9d94afa7d911c590ee287da91787d84e49a04a9ee67ef57f1f42970249f5c2"
+          }
+        ],
+        "license_files": [
+          "LICENSE",
+          "AUTHORS"
+        ]
+      },
+      {
+        "name": "libwebm",
+        "path": "packager/third_party/libwebm/source",
+        "repository": "https://github.com/webmproject/libwebm.git",
+        "commit": "f2a982d748b80586ae53b89a2e6ebbc305848b8c",
+        "notices": [
+          {
+            "path": "LICENSE.TXT",
+            "sha256": "5aec868f669e384a22372a4e8a1a6cd7d44c64cd451f960ca69cc170d1e13acf"
+          }
+        ],
+        "license_files": [
+          "LICENSE.TXT"
+        ]
+      },
+      {
+        "name": "libxml2",
+        "path": "packager/third_party/libxml2/source",
+        "repository": "https://github.com/GNOME/libxml2.git",
+        "commit": "3d840e17858de03a09fba8b202e3a89267d5795a",
+        "notices": [
+          {
+            "path": "Copyright",
+            "sha256": "5d4873884a890122a4b9b20ad56ac6f7da1d796a5bfcf04a427970ac96217626"
+          }
+        ],
+        "license_files": [
+          "Copyright"
+        ]
+      },
+      {
+        "name": "mbedtls",
+        "path": "packager/third_party/mbedtls/source",
+        "repository": "https://github.com/Mbed-TLS/mbedtls.git",
+        "commit": "e185d7fd85499c8ce5ca2a54f5cf8fe7dbe3f8df",
+        "notices": [
+          {
+            "path": "LICENSE",
+            "sha256": "9b405ef4c89342f5eae1dd828882f931747f71001cfba7d114801039b52ad09b"
+          }
+        ],
+        "license_files": [
+          "LICENSE"
+        ]
+      },
+      {
+        "name": "mimalloc",
+        "path": "packager/third_party/mimalloc/source",
+        "repository": "https://github.com/microsoft/mimalloc.git",
+        "commit": "4e50d6714d471b72b2285e25a3df6c92db944593",
+        "notices": [
+          {
+            "path": "LICENSE",
+            "sha256": "19c99805e7a44a34b297a75d1edea9985e300066dfc024d5c99d4236d4573b5d"
+          }
+        ],
+        "license_files": [
+          "LICENSE"
+        ]
+      },
+      {
+        "name": "mongoose",
+        "path": "packager/third_party/mongoose/source",
+        "repository": "https://github.com/cesanta/mongoose.git",
+        "commit": "5c8e05a4fc34c5309ceea887a7e60b895b2100d7",
+        "notices": [
+          {
+            "path": "LICENSE",
+            "sha256": "4ba646f5a7012d8b52f3a74398e446f56960dde0572f7241a2215430da5dd5a2"
+          }
+        ],
+        "license_files": [
+          "LICENSE"
+        ]
+      },
+      {
+        "name": "protobuf",
+        "path": "packager/third_party/protobuf/source",
+        "repository": "https://github.com/protocolbuffers/protobuf.git",
+        "commit": "b6f9284da830b69be787732ffdaa35049d20a088",
+        "notices": [
+          {
+            "path": "LICENSE",
+            "sha256": "6e5e117324afd944dcf67f36cf329843bc1a92229a8cd9bb573d7a83130fea7d"
+          }
+        ],
+        "license_files": [
+          "LICENSE"
+        ]
+      },
+      {
+        "name": "zlib",
+        "path": "packager/third_party/zlib/source",
+        "repository": "https://github.com/madler/zlib.git",
+        "commit": "5c42a230b7b468dff011f444161c0145b5efae59",
+        "notices": [
+          {
+            "path": "LICENSE",
+            "sha256": "0f854f426019c475697e17f1b0fa638270f6e700bc756d9bfe50d17268bd3281"
+          }
+        ],
+        "license_files": [
+          "LICENSE"
+        ]
+      },
+      {
+        "name": "mbedtls-framework",
+        "path": "packager/third_party/mbedtls/source/framework",
+        "repository": "https://github.com/Mbed-TLS/mbedtls-framework.git",
+        "commit": "457996474728cb8e968ed21953b72f74d2f536b2",
+        "notices": [
+          {
+            "path": "LICENSE",
+            "sha256": "11402351e38392230bb8934ba1095c0c0049a296c0f8821f76e4672dff54b490"
+          }
+        ],
+        "license_files": [
+          "LICENSE"
+        ]
+      }
+    ],
+    "license_files": [
+      "LICENSE",
+      "chromium-LICENSE"
+    ]
+  }
+}

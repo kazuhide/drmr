@@ -1,0 +1,93 @@
+name: Native container qualification
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: container-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qualify:
+    name: Docker / native Linux AMD64 / real media and lifecycle
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      DRMR_CONTAINER_BUILDER: drmr-qualification-${{ github.run_id }}-${{ github.run_attempt }}
+      DRMR_CONTAINER_TAG: drmr-qualification:${{ github.sha }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install the qualification Python runtime
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13.12'
+
+      - name: Check container qualification controls
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s docker/tests -v
+          python3 -m unittest discover -s tools/tests -p test_qualify_container.py -v
+
+      - name: Create an owned native builder and record the source identity
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = x86_64
+          case "$(docker info --format '{{.Architecture}}')" in
+            x86_64|amd64) ;;
+            *) echo 'A native AMD64 Docker daemon is required' >&2; exit 1 ;;
+          esac
+          mkdir -p "$RUNNER_TEMP/drmr-container-evidence"
+          git rev-parse HEAD > "$RUNNER_TEMP/drmr-container-evidence/source-commit.txt"
+          git rev-parse 'HEAD^{tree}' > "$RUNNER_TEMP/drmr-container-evidence/source-tree.txt"
+          docker version > "$RUNNER_TEMP/drmr-container-evidence/docker-version.txt"
+          docker buildx create --name "$DRMR_CONTAINER_BUILDER" --driver docker-container \
+            --driver-opt image=moby/buildkit:buildx-stable-1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea \
+            --buildkitd-config docker/buildkitd.toml "$(docker context show)"
+          docker buildx inspect --bootstrap "$DRMR_CONTAINER_BUILDER" \
+            > "$RUNNER_TEMP/drmr-container-evidence/builder.txt"
+
+      - name: Build only the captured committed source as a native runtime image
+        run: |
+          set -euo pipefail
+          python3 docker/build.py --builder "$DRMR_CONTAINER_BUILDER" --platform linux/amd64 \
+            --tag "$DRMR_CONTAINER_TAG" --report "$RUNNER_TEMP/drmr-container-evidence/build.json"
+
+      - name: Export source-bound native test observers without changing the runtime image
+        run: |
+          set -euo pipefail
+          python3 docker/build.py --builder "$DRMR_CONTAINER_BUILDER" --platform linux/amd64 \
+            --target qualification-artifacts --output "$RUNNER_TEMP/drmr-container-observers" \
+            --report "$RUNNER_TEMP/drmr-container-evidence/observers.json"
+
+      - name: Require actual image tools, whole media, permissions, resources, Stop and Web shutdown
+        run: |
+          set -euo pipefail
+          python3 tools/qualify_container.py --image "$DRMR_CONTAINER_TAG" \
+            --qualifiers "$RUNNER_TEMP/drmr-container-observers/out" \
+            --expected-revision "$(cat "$RUNNER_TEMP/drmr-container-evidence/source-commit.txt")" \
+            --expected-tree "$(cat "$RUNNER_TEMP/drmr-container-evidence/source-tree.txt")" \
+            --web --report "$RUNNER_TEMP/drmr-container-evidence/qualification.json"
+
+      - name: Preserve source-bound qualification evidence
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v4
+        with:
+          name: native-amd64-container-evidence
+          path: ${{ runner.temp }}/drmr-container-evidence
+          if-no-files-found: warn
+
+      - name: Remove only this run's builder and tagged image
+        if: always()
+        run: |
+          docker buildx rm "$DRMR_CONTAINER_BUILDER"
+          docker image rm "$DRMR_CONTAINER_TAG"
