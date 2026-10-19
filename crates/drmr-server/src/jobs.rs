@@ -1073,11 +1073,13 @@ mod tests {
                 .as_u16(),
             200
         );
+        // Probe the closing gate before body/route processing. No request body
+        // means an early refusal cannot race a reset from unread request bytes.
         assert_eq!(
             agent
                 .post(&format!("{url}/api/convert"))
                 .header("Content-Type", "application/json")
-                .send("{}")
+                .send_empty()
                 .unwrap()
                 .status()
                 .as_u16(),
