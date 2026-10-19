@@ -193,6 +193,7 @@ fn stop(cli: &Path, fixture: &Path, source: &Path, work: &Path) -> io::Result<()
     let control = work.join("stop-control");
     fs::create_dir(&control)?;
     fs::set_permissions(&control, fs::Permissions::from_mode(0o700))?;
+    eprintln!("container-qualification: phase=install-stop-fixture");
     install_control(fixture, &control)?;
     let output = work.join("cancelled-output");
     let stdout_path = control.join("stdout");
@@ -213,6 +214,7 @@ fn stop(cli: &Path, fixture: &Path, source: &Path, work: &Path) -> io::Result<()
         lock: None,
         group: None,
     };
+    eprintln!("container-qualification: phase=held-stop-barrier");
     let (tool, descendant) = wait_held(&mut owned, &control)?;
     signal(i32::try_from(owned.child.id()).map_err(|_| fail())?, "TERM")?;
     let began = Instant::now();
@@ -225,6 +227,7 @@ fn stop(cli: &Path, fixture: &Path, source: &Path, work: &Path) -> io::Result<()
         }
         thread::sleep(Duration::from_millis(5));
     };
+    eprintln!("container-qualification: phase=stop-return-state");
     assert_gone(&owned, tool, descendant)?;
     if status.code() != Some(130) || output.exists() {
         return Err(fail());
@@ -364,6 +367,7 @@ fn web(cli: &Path, fixture: &Path, work: &Path, port: u16) -> io::Result<()> {
         lock: None,
         group: None,
     };
+    eprintln!("container-qualification: phase=web-await-stop-job");
     let id = wait_job(&control, "stop-job", &mut owned)?;
     assert_loopback(owned.child.id(), port)?;
     let (tool, descendant) = wait_held(&mut owned, &control)?;
@@ -390,6 +394,7 @@ fn web(cli: &Path, fixture: &Path, work: &Path, port: u16) -> io::Result<()> {
         let _ = fs::remove_file(control.join(name));
     }
     fs::write(control.join("stop-confirmed"), b"confirmed")?;
+    eprintln!("container-qualification: phase=web-await-shutdown-job");
     let _ = wait_job(&control, "shutdown-job", &mut owned)?;
     let (tool, descendant) = wait_held(&mut owned, &control)?;
     fs::write(control.join("shutdown-ready"), b"ready")?;
@@ -404,6 +409,7 @@ fn web(cli: &Path, fixture: &Path, work: &Path, port: u16) -> io::Result<()> {
         }
         thread::sleep(Duration::from_millis(5));
     };
+    eprintln!("container-qualification: phase=web-shutdown-return-state");
     assert_gone(&owned, tool, descendant)?;
     if !status.success() || TcpStream::connect(("127.0.0.1", port)).is_ok() {
         return Err(fail());
@@ -442,10 +448,15 @@ fn main() -> std::process::ExitCode {
             .and_then(|port| web(Path::new(cli), Path::new(fixture), Path::new(work), port)),
         _ => Err(fail()),
     };
-    if result.is_ok() {
-        std::process::ExitCode::SUCCESS
-    } else {
-        eprintln!("container-qualification: lifecycle-unconfirmed");
-        std::process::ExitCode::from(1)
+    match result {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!(
+                "container-qualification: lifecycle-unconfirmed kind={:?} errno={:?}",
+                error.kind(),
+                error.raw_os_error()
+            );
+            std::process::ExitCode::from(1)
+        }
     }
 }
