@@ -265,3 +265,23 @@ Both can exist at the same time, but generally you should use one or the other.
 - `process-group`: **default**, enables the [process group](#process-group) wrapper.
 - `process-session`: **default**, enables the [process session](#process-session) wrapper.
 - `reset-sigmask`: enables the [reset signal mask](#reset-signal-mask) wrapper.
+
+
+## Local output-pipe readiness extension
+
+This checkout extends the vendored Windows `std` frontend with `NonblockingPipe`.
+It exclusively owns a standard child stdout/stderr read handle, checks byte-pipe
+readiness with `PeekNamedPipe`, and reads no more than the available bytes through
+Rust's safe `Read` implementation. Empty live pipes return `WouldBlock`, not EOF.
+No other reader or duplicate handle may consume bytes between the peek and read.
+The caller transfers the read handle before starting any pipe I/O.
+
+Rust's `Stdio::piped` parent handles support overlapped I/O, which avoids the
+synchronous-handle blocking caveat of `PeekNamedPipe`. Arbitrarily supplied
+synchronous handles do not carry that same bound. The extension creates no
+endpoint, reopens no handle, changes no mode or security descriptor, and starts
+no background I/O, cancellation or flush thread. The upstream MIT/Apache-2.0
+license files and attribution remain unchanged.
+
+Primary semantics: [PeekNamedPipe](https://learn.microsoft.com/en-us/windows/win32/api/namedpipeapi/nf-namedpipeapi-peeknamedpipe)
+and [Rust 1.95 child pipe creation](https://github.com/rust-lang/rust/blob/1.95.0/library/std/src/sys/process/windows/child_pipe.rs).

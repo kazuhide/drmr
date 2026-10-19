@@ -88,17 +88,23 @@ exit code. A forced fallback is marked `cleanup: unconfirmed`: killing only the 
 process group cannot cover media children that own separate groups. The label is not
 independent operating-system proof of every descendant's exit.
 
-Unix nonblocking pipe readers wait for data readiness between bursts. Each wait is
-bounded so cancellation can stop a reader even when a descendant keeps a writer open.
+Captured output and streamed digest readers use nonblocking reads on Unix and Windows.
+Unix readers wait for data readiness between bursts; Windows readers check available bytes on their exclusively owned overlapped
+child-output handles before each read. An empty Windows pipe is treated as temporarily
+unavailable, not as end of file. Each wait is bounded so cancellation can stop and join
+the reader even while another process or the caller retains a writer.
 
 If pipes remain open after the direct child exits, cleanup starts after two seconds,
 including calls without an explicit command timeout. Windows jobs retain ordinary descendants;
 Unix uses an owned process group, or the inherited supervisor group inside an asset
 worker. A Unix child that deliberately starts a separate session can escape group
 termination; nonblocking pipe readers still stop and join at the capture deadline.
-On Windows, the 30-second job-notification wait does not bound reader joins when operating-system
-I/O remains blocked. Unconfirmed cleanup is an error, never a completed cancellation;
-see [Windows cleanup limits](windows.md#unconfirmed-process-cleanup).
+On Windows, readers no longer need every writer to close before they can stop and join.
+The existing 30-second job-notification deadline remains separate from the command deadline;
+nonblocking reads do not make thread scheduling, synchronous filesystem operations, or
+caller-supplied stream callbacks hard real-time operations. Unconfirmed process cleanup
+still takes precedence over timeout or cancellation; it is never reported as completed
+cancellation. See [Windows cleanup limits](windows.md#unconfirmed-process-cleanup).
 
 Ordered task producers submit at most 128 unconsumed tasks per coordinator. Source
 downloads and probes share a 128-task window, including probes waiting for initialization

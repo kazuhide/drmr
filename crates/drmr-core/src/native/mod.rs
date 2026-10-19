@@ -3,6 +3,8 @@
 //! Manifest URLs and object keys retain their portable syntax. Native paths and
 //! access controls are interpreted by the operating system at this boundary.
 
+mod pipe;
+pub(crate) use pipe::{CapturedStderr, CapturedStdout, prepare_stderr, prepare_stdout};
 mod identity;
 pub(crate) use identity::FileIdentity;
 mod files;

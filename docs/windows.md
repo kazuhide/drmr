@@ -84,4 +84,11 @@ published output. These tests use a regular user on a local NTFS filesystem.
 
 `cleanup-unconfirmed` or `media-cleanup-unconfirmed` means drmr could not confirm that its child processes finished. The operation must not be treated as successful or as a completed cancellation.
 
-The 30-second cleanup limit covers waiting for the Windows job termination notification. If Windows input or output remains blocked, joining the pipe readers can take longer; that limit does not bound the whole failure path. drmr retains ownership while joining those readers.
+The 30-second cleanup limit covers waiting for the Windows job termination notification.
+Captured output and streamed digest readers exclusively own the standard library’s
+overlapped child-output handles. They check available bytes before each read and
+read no more than that amount. They check their stop flag between reads and join before the operation returns,
+even if a writer remains open. Empty pipes mean “try again”; only a closed pipe means EOF.
+No reader is detached, and process cleanup must still be confirmed before a successful
+result or cancellation is reported. This does not turn operating-system scheduling,
+synchronous filesystem operations, or caller-supplied callbacks into hard real-time operations.

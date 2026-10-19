@@ -1,7 +1,7 @@
 //! Hard byte capture limits and owned pipe-reader lifetime for one managed process tree.
 
 use super::{Completed, Failure, MAX_CAPTURE_BYTES, RunOptions, exit_code, seconds_text};
-use crate::native::ManagedChild;
+use crate::native::{CapturedStderr, CapturedStdout, ManagedChild};
 use std::ffi::OsStr;
 use std::io::{self, Read};
 use std::process::{Command, ExitStatus, Stdio};
@@ -50,13 +50,6 @@ impl<T: Read> PipeReader for T {
         std::thread::sleep(POLL);
         Ok(())
     }
-}
-
-#[cfg(unix)]
-fn prepare_pipe(pipe: &impl std::os::fd::AsFd) -> io::Result<()> {
-    let flags = rustix::fs::fcntl_getfl(pipe)?;
-    rustix::fs::fcntl_setfl(pipe, flags | rustix::fs::OFlags::NONBLOCK)?;
-    Ok(())
 }
 
 fn read_bounded(mut pipe: impl PipeReader, limit: usize, state: &State, done: u8) -> Vec<u8> {
@@ -232,8 +225,8 @@ fn execute_with_reader(
     argv: &[String],
     options: &RunOptions<'_>,
     path: Option<&OsStr>,
-    mut cleanup: impl FnMut(&mut ManagedChild) -> io::Result<()>,
-    read_stdout: impl FnOnce(std::process::ChildStdout, usize, &State) -> Vec<u8> + Send,
+    cleanup: impl FnMut(&mut ManagedChild) -> io::Result<()>,
+    read_stdout: impl FnOnce(CapturedStdout, usize, &State) -> Vec<u8> + Send,
 ) -> Result<Completed, Failure> {
     if options.stop.is_some_and(crate::concurrency::Stop::is_set) {
         return Err(failure("cancelled", "tool execution cancelled"));
@@ -264,16 +257,40 @@ fn execute_with_reader(
     .map_err(|error| failure("unavailable", format!("could not run: {error}")))?;
     let stdout = child.stdout.take().expect("stdout is piped");
     let stderr = child.stderr.take().expect("stderr is piped");
-    // Windows uses the managed job to close inherited writers. Unix pipes are
-    // nonblocking so a descendant outside the process group cannot retain a reader.
-    #[cfg(unix)]
-    if let Err(error) = prepare_pipe(&stdout).and_then(|()| prepare_pipe(&stderr)) {
-        confirm_cleanup(&mut child, &mut cleanup)?;
-        return Err(failure(
-            "unavailable",
-            format!("could not configure captured output: {error}"),
-        ));
-    }
+    capture_pipes(&mut child, stdout, stderr, options, cleanup, read_stdout)
+}
+
+fn capture_pipes(
+    child: &mut ManagedChild,
+    stdout: std::process::ChildStdout,
+    stderr: std::process::ChildStderr,
+    options: &RunOptions<'_>,
+    mut cleanup: impl FnMut(&mut ManagedChild) -> io::Result<()>,
+    read_stdout: impl FnOnce(CapturedStdout, usize, &State) -> Vec<u8> + Send,
+) -> Result<Completed, Failure> {
+    let pipes = crate::native::prepare_stdout(stdout)
+        .and_then(|stdout| crate::native::prepare_stderr(stderr).map(|stderr| (stdout, stderr)));
+    let (stdout, stderr) = match pipes {
+        Ok(pipes) => pipes,
+        Err(error) => {
+            confirm_cleanup(child, &mut cleanup)?;
+            return Err(failure(
+                "unavailable",
+                format!("could not configure captured output: {error}"),
+            ));
+        }
+    };
+    capture_child(child, stdout, stderr, options, cleanup, read_stdout)
+}
+
+fn capture_child(
+    child: &mut ManagedChild,
+    stdout: CapturedStdout,
+    stderr: CapturedStderr,
+    options: &RunOptions<'_>,
+    mut cleanup: impl FnMut(&mut ManagedChild) -> io::Result<()>,
+    read_stdout: impl FnOnce(CapturedStdout, usize, &State) -> Vec<u8> + Send,
+) -> Result<Completed, Failure> {
     let state = Arc::new(State::default());
     std::thread::scope(|scope| {
         let out_state = Arc::clone(&state);
@@ -284,7 +301,7 @@ fn execute_with_reader(
         let output = match output {
             Ok(reader) => reader,
             Err(error) => {
-                confirm_cleanup(&mut child, &mut cleanup)?;
+                confirm_cleanup(child, &mut cleanup)?;
                 return Err(failure(
                     "unavailable",
                     format!("could not start captured-output reader: {error}"),
@@ -300,7 +317,7 @@ fn execute_with_reader(
             }) {
             Ok(reader) => reader,
             Err(error) => {
-                let confirmed = confirm_cleanup(&mut child, &mut cleanup);
+                let confirmed = confirm_cleanup(child, &mut cleanup);
                 state.stop.store(true, Ordering::Release);
                 let _ = output.join();
                 confirmed?;
@@ -310,8 +327,8 @@ fn execute_with_reader(
                 ));
             }
         };
-        let result = control(&mut child, &state, options.timeout, options.stop);
-        let confirmed = confirm_cleanup(&mut child, &mut cleanup);
+        let result = control(child, &state, options.timeout, options.stop);
+        let confirmed = confirm_cleanup(child, &mut cleanup);
         state.stop.store(true, Ordering::Release);
         let stdout = output
             .join()
@@ -348,6 +365,259 @@ mod lifecycle_tests {
     fn response(root: &std::path::Path, spec: &drmr_test_support::ToolSpec) -> Vec<String> {
         let tool = drmr_test_support::install(&root.join("response"), spec).unwrap();
         vec![tool.to_str().unwrap().into()]
+    }
+
+    fn capture_harness(name: &str) -> bool {
+        const HARNESS: &str = "DRMR_TEST_CAPTURE_JOIN_CHILD";
+        if std::env::var_os(HARNESS).as_deref() != Some(std::ffi::OsStr::new(name)) {
+            let mut command = Command::new(std::env::current_exe().unwrap());
+            command
+                .args(["--exact", name, "--nocapture"])
+                .env(HARNESS, name)
+                .stdin(Stdio::null());
+            let mut child = ManagedChild::spawn(command, true).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(20);
+            let status = loop {
+                if let Some(status) = child.try_wait().unwrap() {
+                    break Some(status);
+                }
+                if Instant::now() >= deadline {
+                    break None;
+                }
+                std::thread::sleep(POLL);
+            };
+            // A blocking-reader regression must fail the parent test, never hang
+            // the entire suite or abandon its child harness and fixture process.
+            child.finish().unwrap();
+            assert!(
+                status.is_some_and(|status| status.success()),
+                "captured-reader join harness failed or remained blocked"
+            );
+            return true;
+        }
+        false
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn readers_join_while_parent_owned_writers_remain_open() {
+        use std::io::Write as _;
+        #[cfg(unix)]
+        type PipeHandle = std::os::fd::OwnedFd;
+        #[cfg(windows)]
+        type PipeHandle = std::os::windows::io::OwnedHandle;
+
+        if capture_harness(
+            "toolrun::capture::lifecycle_tests::readers_join_while_parent_owned_writers_remain_open",
+        ) {
+            return;
+        }
+        for (case, expected) in [
+            ("timeout", "timeout"),
+            ("cancelled", "cancelled"),
+            ("cleanup", "cleanup-unconfirmed"),
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let ready = root.path().join("ready");
+            let argv = response(
+                root.path(),
+                &drmr_test_support::ToolSpec::default()
+                    .with("ready_file", ready.to_str().unwrap())
+                    .with(
+                        "release_file",
+                        root.path().join("release").to_str().unwrap(),
+                    ),
+            );
+            let mut command = Command::new(&argv[0]);
+            command
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            let mut child = ManagedChild::spawn(command, true).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !ready.is_file() {
+                assert!(Instant::now() < deadline, "fixture did not become ready");
+                std::thread::sleep(POLL);
+            }
+            let (out_read, mut out_write) = std::io::pipe().unwrap();
+            let (err_read, mut err_write) = std::io::pipe().unwrap();
+            let stdout = crate::native::prepare_stdout(std::process::ChildStdout::from(
+                PipeHandle::from(out_read),
+            ))
+            .unwrap();
+            let stderr = crate::native::prepare_stderr(std::process::ChildStderr::from(
+                PipeHandle::from(err_read),
+            ))
+            .unwrap();
+            let stop = crate::concurrency::Stop::new();
+            if case == "cancelled" {
+                stop.set();
+            }
+            let options = RunOptions {
+                timeout: Some(Duration::ZERO),
+                stop: Some(&stop),
+                ..RunOptions::default()
+            };
+            let started = Instant::now();
+            let mut cleanup_attempts = 0;
+            let error = capture_child(
+                &mut child,
+                stdout,
+                stderr,
+                &options,
+                |child| {
+                    cleanup_attempts += 1;
+                    child.finish()?;
+                    if case == "cleanup" {
+                        Err(io::Error::other("private fixture detail"))
+                    } else {
+                        Ok(())
+                    }
+                },
+                |stdout, limit, state| read_bounded(stdout, limit, state, OUT_DONE),
+            )
+            .unwrap_err();
+            // The reader scopes have joined before capture_child returns. These
+            // writers were NEVER passed to the child and remain open throughout.
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "reader join exceeded its bound"
+            );
+            assert_eq!(error.kind, expected);
+            assert_eq!(cleanup_attempts, 1);
+            assert!(child.try_wait().unwrap().is_some());
+            assert_eq!(
+                out_write.write(b"x").unwrap_err().kind(),
+                io::ErrorKind::BrokenPipe
+            );
+            assert_eq!(
+                err_write.write(b"x").unwrap_err().kind(),
+                io::ErrorKind::BrokenPipe
+            );
+        }
+    }
+
+    #[test]
+    fn actual_managed_stdio_readers_join_when_cleanup_cannot_close_live_writers() {
+        if capture_harness(
+            "toolrun::capture::lifecycle_tests::actual_managed_stdio_readers_join_when_cleanup_cannot_close_live_writers",
+        ) {
+            return;
+        }
+        for cancelled in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let ready = root.path().join("ready");
+            let argv = response(
+                root.path(),
+                &drmr_test_support::ToolSpec::default()
+                    .with("ready_file", ready.to_str().unwrap())
+                    .with(
+                        "release_file",
+                        root.path().join("release").to_str().unwrap(),
+                    ),
+            );
+            let mut command = Command::new(&argv[0]);
+            command
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            let mut child = ManagedChild::spawn(command, true).unwrap();
+            let stdout = crate::native::prepare_stdout(child.stdout.take().unwrap()).unwrap();
+            let stderr = crate::native::prepare_stderr(child.stderr.take().unwrap()).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !ready.is_file() {
+                assert!(
+                    Instant::now() < deadline,
+                    "actual stdio fixture did not become ready"
+                );
+                std::thread::sleep(POLL);
+            }
+            let stop = crate::concurrency::Stop::new();
+            if cancelled {
+                stop.set();
+            }
+            let options = RunOptions {
+                timeout: Some(Duration::ZERO),
+                stop: Some(&stop),
+                ..RunOptions::default()
+            };
+            let started = Instant::now();
+            let mut attempts = 0;
+            let result = capture_child(
+                &mut child,
+                stdout,
+                stderr,
+                &options,
+                |_| {
+                    attempts += 1;
+                    Err(io::Error::other("injected termination failure"))
+                },
+                |stdout, limit, state| read_bounded(stdout, limit, state, OUT_DONE),
+            );
+            let elapsed = started.elapsed();
+            // The actual process and BOTH actual Stdio::piped writers still exist
+            // when the capture scopes have returned and joined. Keep the retained
+            // native owner and finish it explicitly before making assertions.
+            let still_running = child.try_wait().unwrap().is_none();
+            child.finish().unwrap();
+            assert!(still_running);
+            assert!(elapsed < Duration::from_secs(5));
+            assert_eq!(result.unwrap_err().kind, "cleanup-unconfirmed");
+            assert_eq!(attempts, 1);
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn pipe_preparation_failure_confirms_cleanup_before_returning_its_error() {
+        use std::os::windows::io::OwnedHandle;
+        for uncertain in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let argv = response(
+                root.path(),
+                &drmr_test_support::ToolSpec {
+                    sleep_ms: 60_000,
+                    ..Default::default()
+                },
+            );
+            let mut command = Command::new(&argv[0]);
+            command
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            let mut child = ManagedChild::spawn(command, true).unwrap();
+            drop(child.stdout.take());
+            let invalid =
+                std::process::ChildStdout::from(OwnedHandle::from(tempfile::tempfile().unwrap()));
+            let stderr = child.stderr.take().unwrap();
+            let mut attempts = 0;
+            let result = capture_pipes(
+                &mut child,
+                invalid,
+                stderr,
+                &RunOptions::default(),
+                |child| {
+                    attempts += 1;
+                    child.finish()?;
+                    if uncertain {
+                        Err(io::Error::other("private cleanup error"))
+                    } else {
+                        Ok(())
+                    }
+                },
+                |_, _, _| panic!("a reader started after pipe preparation failed"),
+            );
+            assert_eq!(attempts, 1);
+            assert!(child.try_wait().unwrap().is_some());
+            assert_eq!(
+                result.unwrap_err().kind,
+                if uncertain {
+                    "cleanup-unconfirmed"
+                } else {
+                    "unavailable"
+                }
+            );
+        }
     }
 
     #[test]

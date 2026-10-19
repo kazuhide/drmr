@@ -635,13 +635,13 @@ fn hash_chunks(mut stdout: impl Read, digest: &mut Sha256) -> std::io::Result<()
     }
 }
 
-/// A streamed reader that can stop even when a Unix descendant escapes its group.
-struct DigestPipe<'a> {
-    pipe: std::process::ChildStdout,
+/// A streamed reader whose nonblocking reads stop without waiting for every writer.
+struct DigestPipe<'a, R> {
+    pipe: R,
     stop: &'a std::sync::atomic::AtomicBool,
 }
 
-impl Read for DigestPipe<'_> {
+impl<R: Read> Read for DigestPipe<'_, R> {
     fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
         use std::sync::atomic::Ordering;
         loop {
@@ -699,16 +699,13 @@ fn stream_digest_with_cleanup(
         },
     )?;
     let stdout = child.stdout.take().expect("stdout is piped");
-    #[cfg(unix)]
-    {
-        let configured = rustix::fs::fcntl_getfl(&stdout).and_then(|flags| {
-            rustix::fs::fcntl_setfl(&stdout, flags | rustix::fs::OFlags::NONBLOCK)
-        });
-        if let Err(error) = configured {
+    let stdout = match crate::native::prepare_stdout(stdout) {
+        Ok(stdout) => stdout,
+        Err(error) => {
             cleanup(&mut child).map_err(|_| std::io::Error::other(CleanupUnconfirmed))?;
-            return Err(error.into());
+            return Err(error);
         }
-    }
+    };
     let stop = AtomicBool::new(false);
     std::thread::scope(|scope| {
         let (sender, receiver) = mpsc::sync_channel(1);
@@ -797,6 +794,87 @@ fn exit_code(status: ExitStatus) -> Option<i32> {
 mod lifecycle_tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn digest_reader_stops_while_an_actual_managed_writer_remains_alive() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::mpsc;
+        struct Observed<R> {
+            pipe: R,
+            empty: mpsc::SyncSender<()>,
+        }
+        impl<R: Read> Read for Observed<R> {
+            fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+                let result = self.pipe.read(bytes);
+                if result
+                    .as_ref()
+                    .is_err_and(|e| e.kind() == std::io::ErrorKind::WouldBlock)
+                {
+                    let _ = self.empty.try_send(());
+                }
+                result
+            }
+        }
+        let root = tempfile::tempdir().unwrap();
+        let ready = root.path().join("ready");
+        let spec = drmr_test_support::ToolSpec::default()
+            .with("ready_file", ready.to_str().unwrap())
+            .with(
+                "release_file",
+                root.path().join("release").to_str().unwrap(),
+            );
+        let program = drmr_test_support::install(&root.path().join("response"), &spec).unwrap();
+        let mut command = Command::new(program);
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        let mut child = crate::native::ManagedChild::spawn(command, true).unwrap();
+        let pipe = crate::native::prepare_stdout(child.stdout.take().unwrap()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !ready.is_file() {
+            assert!(
+                Instant::now() < deadline,
+                "digest fixture did not become ready"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let stop = AtomicBool::new(false);
+        std::thread::scope(|scope| {
+            let (empty_tx, empty_rx) = mpsc::sync_channel(1);
+            let (result_tx, result_rx) = mpsc::sync_channel(1);
+            let stop = &stop;
+            let reader = scope.spawn(move || {
+                let mut reader = DigestPipe {
+                    pipe: Observed {
+                        pipe,
+                        empty: empty_tx,
+                    },
+                    stop,
+                };
+                let _ = result_tx.send(reader.read(&mut [0; 32]));
+            });
+            // Require an ACTUAL empty nonblocking read, not just a thread-start
+            // signal that could precede the first OS read.
+            let empty = empty_rx.recv_timeout(Duration::from_secs(1));
+            stop.store(true, Ordering::Release);
+            let result = result_rx.recv_timeout(Duration::from_secs(1));
+            let writer_alive = child.try_wait().unwrap().is_none();
+            if result.is_err() {
+                // On failure terminate the owned writer before joining, so a
+                // blocking-read regression cannot strand the scoped thread.
+                child.finish().unwrap();
+            }
+            reader.join().unwrap();
+            child.finish().unwrap();
+            assert!(writer_alive);
+            empty.expect("reader did not observe the live empty pipe");
+            assert_eq!(
+                result.unwrap().unwrap_err().kind(),
+                std::io::ErrorKind::TimedOut
+            );
+        });
+    }
 
     #[test]
     fn digest_cleanup_failure_prevents_success_and_preserves_no_raw_error() {
