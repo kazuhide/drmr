@@ -157,8 +157,7 @@ class Page(HTMLParser):
 
 
 MATRIX_ROWS = (
-    ("mp4-standard", ("Clear", "cenc", "cbcs")),
-    ("mp4-audio-edit", ("Clear", "cenc")),
+    ("mp4", ("Clear", "cenc", "cbcs")),
     ("dash", ("Clear", "cenc", "cbcs")),
     ("hls-fmp4", ("Clear", "cbcs", "AES-128")),
     ("hls-ts-video", ("Clear", "AES-128", "SAMPLE-AES")),
@@ -166,20 +165,20 @@ MATRIX_ROWS = (
 )
 STANDARD_OUTPUTS = (("Clear", "cenc", "cbcs"), ("Clear", "cenc", "cbcs"),
                     ("Clear", "cbcs", "AES-128"), ())
-MATRIX_CELLS = (STANDARD_OUTPUTS, (("Clear",), (), (), ()), STANDARD_OUTPUTS,
+MATRIX_CELLS = (STANDARD_OUTPUTS, STANDARD_OUTPUTS,
                 STANDARD_OUTPUTS, ((), ("Clear", "cenc", "cbcs"), ("Clear", "cbcs", "AES-128"),
                                   ("Clear", "AES-128", "SAMPLE-AES")),
                 ((), ("Clear", "cenc", "cbcs"), (), ("Clear", "AES-128", "SAMPLE-AES")))
 MATRIX_LOCALES = {
     "en": {"heading": "Input and output support", "region": "Conversion support matrix",
            "caption": "Supported conversion profiles", "corner": "Input ↓ / Output →",
-           "outside": "Outside profile", "qualified": "(qualified)",
-           "profiles": ("Standard profile", "Finite audio edits", "Fragmented MP4 tracks",
+           "outside": "Outside profile",
+           "profiles": ("Progressive or fragmented", "Fragmented MP4 tracks",
                         "Fragmented MP4 (fMP4)", "Video with optional audio", "Audio only")},
     "ja": {"heading": "入力と出力の対応表", "region": "変換対応表",
            "caption": "対応する変換プロファイル", "corner": "入力 ↓ / 出力 →",
-           "outside": "対象外", "qualified": "（限定条件）",
-           "profiles": ("通常プロファイル", "再生時間を指定した音声編集",
+           "outside": "対象外",
+           "profiles": ("プログレッシブ / フラグメント化",
                         "フラグメント化MP4トラック", "フラグメント化MP4（fMP4）",
                         "映像（音声は省略可）", "音声のみ")},
 }
@@ -241,15 +240,12 @@ def matrix_text(node, omit=()):
     return " ".join(node.text(omit).split())
 
 
-def matrix_protections(node, expected, qualified=""):
+def matrix_protections(node, expected):
     require([matrix_text(code) for code in node.descendants("code")] == list(expected[1:]),
             "site-matrix-protections")
     require(any(matrix_text(span) == "Clear" for span in node.descendants("span")),
             "site-matrix-protections")
     actual = matrix_text(node, omit=("sup",))
-    if qualified:
-        require(actual.count(qualified) == 1, "site-matrix-protections")
-        actual = actual.replace(qualified, "")
     require(re.sub(r"[\s/]", "", actual) == "".join(expected), "site-matrix-protections")
 
 
@@ -288,7 +284,7 @@ def validate_matrix(text, language):
             and [matrix_text(node) for node in columns[1:]] == ["MP4", "DASH", "HLS fMP4", "HLS MPEG-TS"],
             "site-matrix-headers")
     rows = [node for node in table.one("tbody").children if isinstance(node, Element)]
-    require(len(rows) == 6 and [node.attrs.get("id") for node in rows] == [row[0] for row in MATRIX_ROWS],
+    require(len(rows) == 5 and [node.attrs.get("id") for node in rows] == [row[0] for row in MATRIX_ROWS],
             "site-matrix-rows")
     for index, (row, (_, inputs), outputs) in enumerate(zip(rows, MATRIX_ROWS, MATRIX_CELLS)):
         cells = [node for node in row.children if isinstance(node, Element)]
@@ -297,13 +293,12 @@ def validate_matrix(text, language):
                 and all(cell.tag == "td" for cell in cells[1:]), "site-matrix-headers")
         header = cells[0]
         require(matrix_text(header.one("strong", **{"class": "input-format"}))
-                == ("MP4", "MP4", "DASH", "HLS", "HLS / MPEG-TS", "HLS / MPEG-TS")[index], "site-matrix-headers")
+                == ("MP4", "DASH", "HLS", "HLS / MPEG-TS", "HLS / MPEG-TS")[index], "site-matrix-headers")
         profile = header.one("span", **{"class": "input-profile"})
         require(matrix_text(profile, omit=("sup",)) == locale["profiles"][index], "site-matrix-headers")
         require([matrix_text(node) for node in profile.descendants("sup")]
-                == (["2"] if index == 1 else ["3"] if index >= 4 else []), "site-matrix-notes")
-        matrix_protections(header.one("span", **{"class": "input-protections"}), inputs,
-                           locale["qualified"] if index == 1 else "")
+                == (["2"] if index == 0 else ["3"] if index >= 3 else []), "site-matrix-notes")
+        matrix_protections(header.one("span", **{"class": "input-protections"}), inputs)
         for column, (cell, protections) in enumerate(zip(cells[1:], outputs)):
             if protections:
                 matrix_protections(cell, protections)
@@ -311,9 +306,9 @@ def validate_matrix(text, language):
                 require(matrix_text(cell) == locale["outside"] and not list(cell.descendants("code")),
                         "site-matrix-protections")
             require([matrix_text(node) for node in cell.descendants("sup")]
-                    == (["1"] if column == 0 and index in (0, 2, 3) else []), "site-matrix-notes")
+                    == (["1"] if column == 0 and index in (0, 1, 2) else []), "site-matrix-notes")
     require(len(list(section.one(id="matrix-limits").descendants("li"))) == 3, "site-matrix-notes")
-    return {"rows": 6, "output_columns": 4, "cells": 24, "caption": locale["caption"]}
+    return {"rows": 5, "output_columns": 4, "cells": 20, "caption": locale["caption"]}
 
 
 def document(reference, repository, pending_docs):

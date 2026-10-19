@@ -29,6 +29,7 @@ fn source(path: &Path, video: bool) {
 }
 fn assert_checks(report: &serde_json::Value) {
     assert_eq!(report["passed"], true);
+    assert_eq!(report["media_verified"], true);
     assert_eq!(report["license_playback_verified"], false);
     assert_eq!(report["checks"]["stream_metadata"], "pass");
     for check in [
@@ -123,32 +124,91 @@ fn unsupported_audio_edits_and_playback_headers_are_refused_without_publication(
     let root = tempfile::tempdir().unwrap();
     let original = root.path().join("original.mp4");
     source(&original, false);
-    for (label, kind, at, value) in [
-        ("multiple", *b"elst", 4, 2_u32),
-        ("rate", *b"elst", 16, 2_u32 << 16),
-        ("empty", *b"elst", 12, u32::MAX),
-        ("fractional", *b"mvhd", 12, 48001_u32),
-        ("wrong-handler", *b"hdlr", 8, u32::from_be_bytes(*b"vide")),
-        ("movie-rate", *b"mvhd", 20, 2_u32 << 16),
-        ("movie-gain", *b"mvhd", 24, 128_u32 << 16),
-        ("track-gain", *b"tkhd", 36, 128_u32 << 16),
-        ("disabled-track", *b"tkhd", 0, 0),
-        ("alternate-audio", *b"tkhd", 34, (2_u32 << 16) | 256),
+    let mut errors = Vec::new();
+    for (label, kind, at, value, code) in [
+        (
+            "multiple",
+            *b"elst",
+            4,
+            2_u32,
+            "presentation-window-not-supported",
+        ),
+        (
+            "rate",
+            *b"elst",
+            16,
+            2_u32 << 16,
+            "presentation-window-not-supported",
+        ),
+        (
+            "empty",
+            *b"elst",
+            12,
+            u32::MAX,
+            "presentation-window-not-supported",
+        ),
+        (
+            "fractional",
+            *b"mvhd",
+            12,
+            48001_u32,
+            "progressive-mp4-profile-not-supported",
+        ),
+        (
+            "wrong-handler",
+            *b"hdlr",
+            8,
+            u32::from_be_bytes(*b"vide"),
+            "progressive-mp4-profile-not-supported",
+        ),
+        (
+            "movie-rate",
+            *b"mvhd",
+            20,
+            2_u32 << 16,
+            "progressive-mp4-profile-not-supported",
+        ),
+        (
+            "movie-gain",
+            *b"mvhd",
+            24,
+            128_u32 << 16,
+            "progressive-mp4-profile-not-supported",
+        ),
+        (
+            "track-gain",
+            *b"tkhd",
+            36,
+            128_u32 << 16,
+            "progressive-mp4-profile-not-supported",
+        ),
+        (
+            "disabled-track",
+            *b"tkhd",
+            0,
+            0,
+            "progressive-mp4-profile-not-supported",
+        ),
+        (
+            "alternate-audio",
+            *b"tkhd",
+            34,
+            (2_u32 << 16) | 256,
+            "progressive-mp4-profile-not-supported",
+        ),
     ] {
         let input = root.path().join(format!("{label}.mp4"));
         let output = root.path().join(format!("{label}-output.mp4"));
         patch_box(&original, &input, kind, at, &value.to_be_bytes());
         let before = std::fs::read(&input).unwrap();
         let result = convert(&input, &output);
-        assert!(!result.status.success(), "{label}");
-        assert!(
-            String::from_utf8_lossy(&result.stderr)
-                .contains("progressive-mp4-profile-not-supported"),
-            "{}",
-            String::from_utf8_lossy(&result.stderr)
-        );
+        errors.push((label, code, result));
         assert!(!output.exists());
         assert_eq!(std::fs::read(&input).unwrap(), before);
+    }
+
+    for (_, code, result) in errors {
+        assert_conversion_failure(&result, code, 1);
     }
 }
 #[test]
@@ -276,12 +336,11 @@ fn an_empty_offset_edit_is_not_silently_zeroed_or_trimmed() {
         .output()
         .unwrap();
     assert!(status.status.success());
+    let before = std::fs::read(&original).unwrap();
     let result = convert(&original, &output);
-    assert!(!result.status.success());
-    assert!(
-        String::from_utf8_lossy(&result.stderr).contains("progressive-mp4-profile-not-supported")
-    );
+    assert_conversion_failure(&result, "presentation-window-not-supported", 1);
     assert!(!output.exists());
+    assert_eq!(std::fs::read(&original).unwrap(), before);
 }
 
 fn converter(ffmpeg: &str) -> drmr_core::conversion::Converter {
@@ -295,39 +354,139 @@ fn converter(ffmpeg: &str) -> drmr_core::conversion::Converter {
         ffmpeg,
     )
 }
+fn assert_conversion_failure(result: &Output, code: &str, exit: i32) {
+    assert_eq!(result.status.code(), Some(exit));
+    let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(report["schema_version"], 1);
+    assert_eq!(report["command"], "convert");
+    assert_eq!(report["status"], "failed");
+    assert_eq!(report["error"]["code"], code);
+    assert!(
+        report["error"]["hint"]
+            .as_str()
+            .is_some_and(|hint| !hint.is_empty())
+    );
+    assert!(String::from_utf8_lossy(&result.stderr).contains(code));
+}
+
+fn protected_mp4(source: &Path, output: &Path, target: &str, keys: Option<&Path>) -> Output {
+    let mut args = vec![
+        "convert",
+        source.to_str().unwrap(),
+        "--to",
+        target,
+        "--format",
+        "mp4",
+        "--output",
+        output.to_str().unwrap(),
+        "--json",
+    ];
+    if let Some(keys) = keys {
+        args.extend(["--keys-file", keys.to_str().unwrap()]);
+    }
+    command(&args)
+}
+
+fn encrypted_finite_output(original: &Path, output: &Path, target: &str, keys: &Path) {
+    let before = std::fs::read(original).unwrap();
+    let result = protected_mp4(original, output, target, Some(keys));
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_checks(&report["verification"]);
+    assert_eq!(report["output"]["protection"], target);
+    assert_eq!(report["processing"]["route"], "fragmented-mp4");
+    assert_eq!(report["output"]["tracks"].as_array().unwrap().len(), 1);
+    let candidate = std::fs::read(output).unwrap();
+    let verified = command(&[
+        "verify",
+        output.to_str().unwrap(),
+        "--source",
+        original.to_str().unwrap(),
+        "--keys-file",
+        keys.to_str().unwrap(),
+        "--json",
+    ]);
+    assert!(
+        verified.status.success(),
+        "{}",
+        String::from_utf8_lossy(&verified.stderr)
+    );
+    assert_checks(&serde_json::from_slice::<serde_json::Value>(&verified.stdout).unwrap());
+    let existing = protected_mp4(original, output, target, Some(keys));
+    assert_conversion_failure(&existing, "output-exists-or-unsafe", 1);
+    assert_eq!(std::fs::read(output).unwrap(), candidate);
+    assert_eq!(std::fs::read(original).unwrap(), before);
+    for response in [&result, &verified, &existing] {
+        for bytes in [&response.stdout, &response.stderr] {
+            assert!(!String::from_utf8_lossy(bytes).contains("11111111111111111111111111111111"));
+        }
+    }
+}
+
 #[test]
-fn unsupported_encrypted_output_has_no_clear_fallback_and_existing_outputs_are_untouched() {
-    use drmr_core::{
-        conversion::{InputKeys, OutputKey},
-        inspection::TargetProtection,
-    };
+fn finite_encrypted_audio_converts_and_verifies_without_overwriting_existing_outputs() {
+    use drmr_core::{conversion::InputKeys, inspection::TargetProtection};
+    use std::io::Write as _;
     let root = tempfile::tempdir().unwrap();
     let original = root.path().join("source.mp4");
     source(&original, false);
-    let keys = InputKeys::default();
-    let key = OutputKey::from_hex(
-        "00000000000000000000000000000001",
-        "11111111111111111111111111111111",
-    )
+    let before = std::fs::read(&original).unwrap();
+    let keys = root.path().join("private/keys.json");
+    drmr_core::native::create_private_dir_all(keys.parent().unwrap()).unwrap();
+    let key_bytes = serde_json::to_vec(&serde_json::json!({"schema_version": 1, "output": {
+        "kid": "00000000000000000000000000000001", "key": "11111111111111111111111111111111"
+    }}))
     .unwrap();
-    for target in [TargetProtection::Cenc, TargetProtection::Cbcs] {
-        let output = root.path().join(format!("{}.mp4", target.as_str()));
-        let error = converter("ffmpeg")
-            .convert_mp4(&original, &output, target, &keys, Some(&key))
-            .unwrap_err();
-        assert_eq!(error.0, "finite-audio-tail-not-supported");
+    drmr_core::native::create_private_new(&keys)
+        .unwrap()
+        .write_all(&key_bytes)
+        .unwrap();
+    for (target, protection) in [
+        ("cenc", TargetProtection::Cenc),
+        ("cbcs", TargetProtection::Cbcs),
+    ] {
+        let output = root.path().join(format!("{target}.mp4"));
+        assert_eq!(
+            converter("ffmpeg")
+                .convert_mp4(&original, &output, protection, &InputKeys::default(), None)
+                .unwrap_err()
+                .0,
+            "output-key-required"
+        );
+        let missing = protected_mp4(&original, &output, target, None);
+        assert_conversion_failure(&missing, "output-key-role-mismatch", 2);
         assert!(!output.exists());
+        encrypted_finite_output(&original, &output, target, &keys);
+        let protected_before = std::fs::read(&output).unwrap();
+        let unkeyed_output = root.path().join(format!("unkeyed-{target}.mp4"));
+        let unkeyed = protected_mp4(&output, &unkeyed_output, "clear", None);
+        assert_conversion_failure(&unkeyed, "input-key-required", 2);
+        assert!(!unkeyed_output.exists());
+        assert_eq!(std::fs::read(&output).unwrap(), protected_before);
+        assert_eq!(std::fs::read(&original).unwrap(), before);
+        assert_eq!(std::fs::read(&keys).unwrap(), key_bytes);
     }
     let output = root.path().join("existing.mp4");
     std::fs::write(&output, b"existing bytes").unwrap();
     assert_eq!(
         converter("ffmpeg")
-            .convert_mp4(&original, &output, TargetProtection::Clear, &keys, None)
+            .convert_mp4(
+                &original,
+                &output,
+                TargetProtection::Clear,
+                &InputKeys::default(),
+                None
+            )
             .unwrap_err()
             .0,
         "output-exists-or-unsafe"
     );
     assert_eq!(std::fs::read(output).unwrap(), b"existing bytes");
+    assert_eq!(std::fs::read(original).unwrap(), before);
 }
 #[test]
 fn only_complete_selectors_from_one_original_presentation_are_admitted() {
@@ -469,7 +628,7 @@ fn mux_failure_timeout_and_active_cancellation_cannot_publish() {
     assert_eq!(std::fs::read(original).unwrap(), before);
 }
 #[test]
-fn plans_offer_only_the_clear_joint_candidate_and_still_require_runtime_profile_validation() {
+fn plans_offer_qualified_joint_candidates_and_still_require_runtime_profile_validation() {
     use drmr_core::inspection::{OutputFormat, TargetProtection, inspect, plan};
     let root = tempfile::tempdir().unwrap();
     let original = root.path().join("source.mp4");
@@ -480,24 +639,42 @@ fn plans_offer_only_the_clear_joint_candidate_and_still_require_runtime_profile_
         TargetProtection::Cbcs,
     ] {
         let report = plan(inspect(&original).unwrap(), target, vec![OutputFormat::Mp4]);
-        assert_eq!(
-            report.execution_available,
-            target == TargetProtection::Clear
-        );
+        assert!(report.compatible);
+        assert!(report.execution_available);
         assert!(
             report
                 .findings
                 .iter()
                 .any(|f| f.code == "source-profile-validation-required")
         );
-        if target == TargetProtection::Clear {
-            assert!(
-                report
-                    .findings
-                    .iter()
-                    .any(|f| f.code == "progressive-mp4-profile-validation-required")
-            );
-        }
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.code == "progressive-mp4-profile-validation-required")
+        );
+        let processing = report.processing.unwrap();
+        assert_eq!(
+            serde_json::to_value(processing.status).unwrap(),
+            "metadata-only"
+        );
+        let routes: Vec<_> = processing
+            .candidates
+            .iter()
+            .map(|candidate| {
+                assert!(candidate.revalidation_required);
+                assert_eq!(candidate.output_format, OutputFormat::Mp4);
+                candidate.route.as_str()
+            })
+            .collect();
+        assert_eq!(
+            routes,
+            if target == TargetProtection::Clear {
+                vec!["progressive-mp4", "fragmented-mp4"]
+            } else {
+                vec!["fragmented-mp4"]
+            }
+        );
     }
 }
 

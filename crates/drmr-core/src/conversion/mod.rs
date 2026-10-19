@@ -1,9 +1,10 @@
 //! Local, no-transcode conversion with explicit key roles and independent round-trip checks.
 //!
 //! Qualified local MP4, static DASH, and fragmented-MP4 HLS inputs use fresh source bytes.
-//! Joint DASH/HLS output preserves audio and video without transcoding. Clear progressive
-//! MP4 output supports finite-edit AAC with optional H.264 video from the same original file.
-//! Other MP4 output supports one track. Unknown protection and unsupported features fail closed.
+//! Joint DASH/HLS output preserves audio and video without transcoding.
+//! Qualified finite-edit AAC with optional H.264 from the same original progressive file
+//! supports clear progressive or encrypted fragmented MP4 output. Other MP4 output
+//! supports one track. Unknown protection and unsupported features fail closed.
 //! Shaka's raw-key interface passes keys to its child process as arguments. Records and
 //! errors are redacted, but operating-system process inspection can observe those arguments.
 mod aes128;
@@ -14,6 +15,7 @@ mod audio;
 mod backend;
 pub(crate) mod dash;
 mod execution;
+mod finite;
 pub mod key_file;
 mod packets;
 pub use aes128::{
@@ -272,10 +274,14 @@ impl Converter {
         if inspected.format != InputFormat::Mp4 {
             return Err(ConversionError("input-format-not-supported"));
         }
-        if target == TargetProtection::Clear
-            && let Some(report) =
-                self.progressive_mp4(&snapshot, &destination, &inspected, input_keys)?
-        {
+        if let Some(report) = self.finite_mp4(
+            &snapshot,
+            &destination,
+            &inspected,
+            input_keys,
+            output_key,
+            target,
+        )? {
             return Ok(report);
         }
         let input_report = validate(&snapshot, input_keys)?;
@@ -369,6 +375,33 @@ impl Converter {
                 return Err(ConversionError("output-protection-mismatch"));
             }
             return self.verify_progressive(&source, &result, &inspected, input_keys);
+        }
+        if inspected.tracks.len() == 2
+            && matches!(
+                result_report.protection,
+                Protection::Cenc | Protection::Cbcs
+            )
+            && progressive::verification_input(&source, &inspected, input_keys)?
+            && progressive::validate_input(&source, &inspected, input_keys)?
+        {
+            if result_report.tracks.len() != inspected.tracks.len() {
+                return Err(ConversionError("output-protection-mismatch"));
+            }
+            // The same qualified finite whole-file profile accepted by convert_mp4.
+            // Keep the two key domains independent throughout every original-track proof.
+            let hls = HlsInputKeys::default();
+            return self.verify(VerificationRequest {
+                source: VerificationSource {
+                    input: &source,
+                    input_keys,
+                    hls_keys: &hls,
+                },
+                output: VerificationSource {
+                    input: &result,
+                    input_keys: output_keys,
+                    hls_keys: &hls,
+                },
+            });
         }
         let source_report = validate(&source, input_keys)?;
         let result_report = validate(&result, output_keys)?;

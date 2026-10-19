@@ -388,3 +388,229 @@ fn invalid_mp4_stream_selector_fails_before_creating_output() {
     assert_eq!(error.0, "multi-track-mp4-output-not-supported");
     assert!(!output.exists());
 }
+
+fn mixed_duration_sources(root: &Path) -> [LocalTrack; 2] {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../drmr/tests/fixtures/bbb/clip.mp4");
+    let video = root.join("video.mp4");
+    let audio = root.join("audio.mp4");
+    for (path, role) in [(&video, "0:v:0"), (&audio, "0:a:0")] {
+        let mut command = std::process::Command::new("ffmpeg");
+        command
+            .args(["-v", "error", "-nostdin", "-i"])
+            .arg(&fixture)
+            .args(["-map", role, "-c", "copy"]);
+        if role == "0:v:0" {
+            command.args(["-t", "6"]);
+        } else {
+            command.args(["-movflags", "+frag_keyframe+empty_moov"]);
+        }
+        assert!(command.arg(path).output().unwrap().status.success());
+    }
+    [
+        LocalTrack {
+            source: video,
+            kind: TrackKind::Video,
+            index: 0,
+        },
+        LocalTrack {
+            source: audio,
+            kind: TrackKind::Audio,
+            index: 0,
+        },
+    ]
+}
+
+fn complete_proof(proof: &drmr_core::conversion::VerificationReport) {
+    assert!(proof.passed && proof.media_verified);
+    assert_eq!(
+        proof.checks.stream_metadata,
+        drmr_core::conversion::CheckOutcome::Pass
+    );
+    assert!(
+        proof.checks.packet_payloads_equal
+            && proof.checks.packet_timing_equal
+            && proof.checks.decoded_content_equal
+    );
+    assert!(!proof.license_playback_verified);
+}
+
+fn mixed_manifest_negatives(c: &Converter, request: VerificationRequest<'_>, expected: &str) {
+    let original = std::fs::read_to_string(request.output.input).unwrap();
+    let ns = expected
+        .strip_prefix("PT")
+        .unwrap()
+        .strip_suffix('S')
+        .unwrap()
+        .replace('.', "")
+        .parse::<u64>()
+        .unwrap();
+    for value in [6_000_000_000, ns - 1, ns + 1] {
+        let bad = format!("PT{}.{:09}S", value / 1_000_000_000, value % 1_000_000_000);
+        let altered = original.replace(expected, &bad);
+        assert_ne!(altered, original);
+        std::fs::write(request.output.input, altered).unwrap();
+        assert_eq!(
+            c.verify(request).unwrap_err().0,
+            "dash-presentation-duration-mismatch"
+        );
+    }
+    let doc = roxmltree::Document::parse(&original).unwrap();
+    let template = doc
+        .descendants()
+        .find(|n| n.tag_name().name() == "SegmentTemplate")
+        .unwrap();
+    let mut altered = original.clone();
+    if let Some(offset) = template.attribute_node("presentationTimeOffset") {
+        assert_eq!(offset.value(), "0");
+        altered.replace_range(offset.range_value(), "1");
+    } else {
+        let at = template.range().start + "<SegmentTemplate".len();
+        altered.insert_str(at, " presentationTimeOffset=\"1\"");
+    }
+    std::fs::write(request.output.input, altered).unwrap();
+    assert!(c.verify(request).is_err());
+    let first = doc
+        .descendants()
+        .find(|n| n.tag_name().name() == "S")
+        .unwrap();
+    let start = first.attribute_node("t").unwrap();
+    let mut altered = original.clone();
+    let moved = (start.value().parse::<u64>().unwrap() + 1).to_string();
+    altered.replace_range(start.range_value(), &moved);
+    std::fs::write(request.output.input, altered).unwrap();
+    assert!(c.verify(request).is_err());
+    std::fs::write(request.output.input, &original).unwrap();
+    complete_proof(&c.verify(request).unwrap());
+}
+
+fn complete_audio_end(path: &Path) -> String {
+    let result = std::process::Command::new("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "a:0",
+            "-show_entries",
+            "packet=pts,duration:stream=time_base",
+            "-of",
+            "json",
+        ])
+        .arg(path)
+        .output()
+        .unwrap();
+    assert!(result.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(value["streams"][0]["time_base"], "1/48000");
+    let packets = value["packets"].as_array().unwrap();
+    assert_eq!(packets.len(), 470);
+    assert_eq!(packets[0]["pts"], 0);
+    let end = packets
+        .iter()
+        .map(|p| p["pts"].as_u64().unwrap() + p["duration"].as_u64().unwrap())
+        .max()
+        .unwrap();
+    assert!(end > 480_000);
+    let ns = (u128::from(end) * 1_000_000_000).div_ceil(48_000);
+    format!("PT{}.{:09}S", ns / 1_000_000_000, ns % 1_000_000_000)
+}
+
+#[test]
+fn progressive_video_and_longer_open_ended_audio_keep_the_complete_dash_presentation() {
+    let owner = drmr_core::native::private_tempdir().unwrap();
+    let root = owner.path();
+    let mut tracks = mixed_duration_sources(root);
+    let expected_end = complete_audio_end(&tracks[1].source);
+    let originals = [
+        std::fs::read(&tracks[0].source).unwrap(),
+        std::fs::read(&tracks[1].source).unwrap(),
+    ];
+    for (index, bytes) in originals.iter().enumerate() {
+        let boxes = drmr_core::mp4::parse_boxes(bytes).unwrap();
+        let moov = boxes.iter().find(|b| b.kind() == *b"moov").unwrap();
+        assert_eq!(
+            moov.children.iter().any(|b| b.kind() == *b"mvex"),
+            index == 1
+        );
+        if index == 1 {
+            let track = moov.children.iter().find(|b| b.kind() == *b"trak").unwrap();
+            assert!(!track.children.iter().any(|b| b.kind() == *b"edts"));
+        }
+    }
+    let empty = InputKeys::default();
+    let no_hls = HlsInputKeys::default();
+    let output_key = OutputKey::from_hex(KID, KEY).unwrap();
+    let output_keys = InputKeys::new(vec![ContentKey::from_hex(KID, KEY).unwrap()]).unwrap();
+    let c = converter();
+    let reference = root.join("reference");
+    let request = TrackConversionRequest {
+        tracks: &tracks,
+        output: &reference,
+        format: OutputFormat::Hls,
+        target: TargetProtection::Clear,
+        input_keys: &empty,
+        output_key: None,
+        hls_key_uri: None,
+        hls_output_key: None,
+    };
+    // This separately packaged reference checks both complete independent original tracks.
+    complete_proof(&c.convert_tracks(request).unwrap().verification);
+    for target in [
+        TargetProtection::Clear,
+        TargetProtection::Cenc,
+        TargetProtection::Cbcs,
+    ] {
+        let output = root.join(target.as_str());
+        complete_proof(
+            &c.convert_tracks(TrackConversionRequest {
+                output: &output,
+                format: OutputFormat::Dash,
+                target,
+                output_key: (target != TargetProtection::Clear).then_some(&output_key),
+                ..request
+            })
+            .unwrap()
+            .verification,
+        );
+        let manifest = output.join("manifest.mpd");
+        let fresh = VerificationRequest {
+            source: VerificationSource {
+                input: &reference.join("master.m3u8"),
+                input_keys: &empty,
+                hls_keys: &no_hls,
+            },
+            output: VerificationSource {
+                input: &manifest,
+                input_keys: &output_keys,
+                hls_keys: &no_hls,
+            },
+        };
+        complete_proof(&c.verify(fresh).unwrap());
+        let text = std::fs::read_to_string(&manifest).unwrap();
+        let doc = roxmltree::Document::parse(&text).unwrap();
+        assert_eq!(
+            doc.root_element().attribute("mediaPresentationDuration"),
+            Some(expected_end.as_str())
+        );
+        mixed_manifest_negatives(&c, fresh, &expected_end);
+    }
+    // Representation order cannot turn a complete open-ended track into a finite edit.
+    tracks.reverse();
+    complete_proof(
+        &c.convert_tracks(TrackConversionRequest {
+            tracks: &tracks,
+            output: &root.join("audio-first"),
+            format: OutputFormat::Dash,
+            target: TargetProtection::Clear,
+            input_keys: &empty,
+            output_key: None,
+            hls_key_uri: None,
+            hls_output_key: None,
+        })
+        .unwrap()
+        .verification,
+    );
+    tracks.reverse();
+    for (track, bytes) in tracks.iter().zip(&originals) {
+        assert_eq!(std::fs::read(&track.source).unwrap(), *bytes);
+    }
+}

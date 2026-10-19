@@ -77,6 +77,9 @@ pub(super) struct FragmentClock {
     default_duration: u32,
     trim: u64,
     next: Option<u64>,
+    finite: Option<super::finite::Window>,
+    segment_first: Option<u64>,
+    segment_end: u64,
     first_presented: Option<u64>,
     presented_end: u64,
 }
@@ -125,15 +128,24 @@ impl FragmentClock {
             && let Some(edts) = trak.children.iter().find(|n| n.kind() == *b"edts")
         {
             let elst = unique(&edts.children, *b"elst")?.header.payload(&data);
-            if elst.first() != Some(&0)
+            let width = match elst.first() {
+                Some(0) => 4,
+                Some(1) => 8,
+                _ => return Err(ConversionError("fragment-presentation-edit-not-supported")),
+            };
+            if elst.get(1..4) != Some(&[0, 0, 0])
                 || integer(elst, 4)? != 1
-                || integer(elst, 8)? != 0
-                || elst.get(16..) != Some(&[0, 1, 0, 0])
+                || elst.get(8 + width * 2..) != Some(&[0, 1, 0, 0])
             {
                 return Err(ConversionError("fragment-presentation-edit-not-supported"));
             }
-            let value =
-                i32::from_be_bytes(elst.get(12..16).ok_or(BAD)?.try_into().map_err(|_| BAD)?);
+            let value = if width == 4 {
+                i64::from(i32::from_be_bytes(
+                    elst.get(12..16).ok_or(BAD)?.try_into().map_err(|_| BAD)?,
+                ))
+            } else {
+                i64::from_be_bytes(elst.get(16..24).ok_or(BAD)?.try_into().map_err(|_| BAD)?)
+            };
             trim = u64::try_from(value).map_err(|_| BAD)?;
         }
         Ok(Self {
@@ -142,11 +154,16 @@ impl FragmentClock {
             default_duration,
             trim,
             next: None,
+            finite: super::finite::window(path, 0)?,
+            segment_first: None,
+            segment_end: 0,
             first_presented: None,
             presented_end: 0,
         })
     }
     fn measure(&mut self, path: &Path) -> Result<(u64, u64), ConversionError> {
+        self.segment_first = None;
+        self.segment_end = 0;
         let data = metadata(path)?;
         let nodes = mp4::parse_boxes(&data).map_err(|_| BAD)?;
         let mut total = 0u64;
@@ -270,20 +287,41 @@ impl FragmentClock {
         duration: u32,
     ) -> Result<(), ConversionError> {
         let pts = i128::from(dts) + i128::from(offset);
-        let end = pts + i128::from(duration) - i128::from(self.trim);
-        // An owned rate-one audio edit excludes priming exactly once. Coded packets remain intact.
-        if end > 0 {
-            let first = u64::try_from((pts - i128::from(self.trim)).max(0)).map_err(|_| BAD)?;
+        let trim = i128::from(self.finite.map_or(self.trim, |w| w.start));
+        let first = (pts - trim).max(0);
+        let end = pts + i128::from(duration) - trim;
+        let end = self.finite.map_or(end, |w| end.min(i128::from(w.duration)));
+        if end > first {
+            let first = u64::try_from(first).map_err(|_| BAD)?;
             let end = u64::try_from(end).map_err(|_| BAD)?;
             self.first_presented = Some(self.first_presented.map_or(first, |old| old.min(first)));
             self.presented_end = self.presented_end.max(end);
+            self.segment_first = Some(self.segment_first.map_or(first, |old| old.min(first)));
+            self.segment_end = self.segment_end.max(end);
         }
         Ok(())
     }
     pub(super) fn presentation_window(&self) -> Result<(u64, u64, u64), ConversionError> {
+        if self
+            .finite
+            .is_some_and(|w| self.first_presented != Some(0) || self.presented_end != w.duration)
+        {
+            return Err(ConversionError("fragment-presentation-window-incomplete"));
+        }
         Ok((
             self.first_presented.ok_or(BAD)?,
             self.presented_end,
+            u64::from(self.scale),
+        ))
+    }
+    pub(super) fn segment_presentation(
+        &mut self,
+        path: &Path,
+    ) -> Result<(u64, u64, u64), ConversionError> {
+        self.measure(path)?;
+        Ok((
+            self.segment_first.ok_or(BAD)?,
+            self.segment_end,
             u64::from(self.scale),
         ))
     }
@@ -295,12 +333,17 @@ impl FragmentClock {
         scale: u64,
     ) -> Result<(), ConversionError> {
         let (base, total) = self.measure(path)?;
-        let end = base
-            .checked_add(total)
-            .ok_or(BAD)?
-            .saturating_sub(self.trim);
-        let base = base.saturating_sub(self.trim);
-        let total = end.checked_sub(base).ok_or(BAD)?;
+        let (base, total) = if self.finite.is_some() {
+            let first = self.segment_first.ok_or(BAD)?;
+            (first, self.segment_end.checked_sub(first).ok_or(BAD)?)
+        } else {
+            let end = base
+                .checked_add(total)
+                .ok_or(BAD)?
+                .saturating_sub(self.trim);
+            let base = base.saturating_sub(self.trim);
+            (base, end.checked_sub(base).ok_or(BAD)?)
+        };
         if u128::from(base) * u128::from(scale) != u128::from(time) * u128::from(self.scale)
             || u128::from(total) * u128::from(scale)
                 != u128::from(duration) * u128::from(self.scale)
@@ -311,12 +354,28 @@ impl FragmentClock {
     }
     pub fn check(&mut self, path: &Path, declared: f64) -> Result<(), ConversionError> {
         let (base, total) = self.measure(path)?;
-        let total = base
-            .checked_add(total)
-            .ok_or(BAD)?
-            .saturating_sub(self.trim)
-            .checked_sub(base.saturating_sub(self.trim))
-            .ok_or(BAD)?;
+        let total = if self.finite.is_some() {
+            self.segment_end
+                .checked_sub(self.segment_first.ok_or(BAD)?)
+                .ok_or(BAD)?
+        } else {
+            base.checked_add(total)
+                .ok_or(BAD)?
+                .saturating_sub(self.trim)
+                .checked_sub(base.saturating_sub(self.trim))
+                .ok_or(BAD)?
+        };
+        if self.finite.is_some() {
+            let canonical = super::finite::manifest::seconds(total, u64::from(self.scale))?
+                .parse::<f64>()
+                .map_err(|_| BAD)?;
+            // Both values are parsed from decimal declarations; require the canonical value, not a tolerance.
+            return if declared.to_bits() == canonical.to_bits() {
+                Ok(())
+            } else {
+                Err(ConversionError("manifest-segment-duration-mismatch"))
+            };
+        }
         let actual =
             f64::from(u32::try_from(total).map_err(|_| ConversionError("segment-duration-limit"))?)
                 / f64::from(self.scale);
@@ -338,6 +397,9 @@ mod tests {
             default_duration: 0,
             trim,
             next: None,
+            finite: None,
+            segment_first: None,
+            segment_end: 0,
             first_presented: None,
             presented_end: 0,
         }

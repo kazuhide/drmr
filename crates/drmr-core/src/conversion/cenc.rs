@@ -1,4 +1,4 @@
-//! Strict admission for the complete progressive counter-mode encryption profile.
+//! Strict admission for complete progressive CENC and constant-vector CBCS profiles.
 use super::{ConversionError, InputKeys, audio};
 use crate::{
     inspection::{Inspection, Protection, TrackKind},
@@ -167,7 +167,13 @@ fn sample_entry(
         return Err(UNSUPPORTED);
     }
     let scheme = mark(sinf, *b"schm", allowed)?.header.payload(data);
-    if scheme != [0, 0, 0, 0, b'c', b'e', b'n', b'c', 0, 1, 0, 0] {
+    let cbcs = actual.protection == Protection::Cbcs;
+    let expected = if cbcs { b"cbcs" } else { b"cenc" };
+    if scheme.len() != 12
+        || scheme[..4] != [0, 0, 0, 0]
+        || &scheme[4..8] != expected
+        || scheme[8..] != [0, 1, 0, 0]
+    {
         return Err(UNSUPPORTED);
     }
     let scheme_info = mark(sinf, *b"schi", allowed)?;
@@ -175,6 +181,19 @@ fn sample_entry(
         return Err(UNSUPPORTED);
     }
     let tenc = mark(scheme_info, *b"tenc", allowed)?.header.payload(data);
+    if cbcs {
+        full(tenc, 1, 0)?;
+        if tenc.len() != 41
+            || tenc[4] != 0
+            || tenc[5] != if audio { 0 } else { 0x19 }
+            || tenc[6..8] != [1, 0]
+            || hex::encode(&tenc[8..24]) != actual.key_ids[0]
+            || tenc[24] != 16
+        {
+            return Err(UNSUPPORTED);
+        }
+        return Ok(0);
+    }
     full(tenc, 0, 0)?;
     if tenc.len() != 24
         || tenc[4..7] != [0, 0, 1]
@@ -284,14 +303,17 @@ fn auxiliary_entries(
     Ok(())
 }
 /// Validate all tracks before starting a tool, including unselected tracks inspected by demuxers.
-pub(super) fn validate(
+fn validate_inner(
     movie: &audio::Movie,
     report: &Inspection,
     keys: &InputKeys,
 ) -> Result<(), ConversionError> {
     let data = &movie.bytes;
     let boxes = mp4::parse_boxes(data).map_err(|_| UNSUPPORTED)?;
-    if movie.fragmented || movie.outside_protection || report.protection != Protection::Cenc {
+    if movie.fragmented
+        || movie.outside_protection
+        || !matches!(report.protection, Protection::Cenc | Protection::Cbcs)
+    {
         return Err(UNSUPPORTED);
     }
     let moov = boxes
@@ -308,7 +330,7 @@ pub(super) fn validate(
     }
     let mut allowed = BTreeSet::new();
     for (track, actual) in tracks.into_iter().zip(&report.tracks) {
-        if actual.protection != Protection::Cenc || actual.key_ids.len() != 1 {
+        if actual.protection != report.protection || actual.key_ids.len() != 1 {
             return Err(UNSUPPORTED);
         }
         let media_info = child(child(track, *b"mdia")?, *b"minf")?;
@@ -330,6 +352,12 @@ pub(super) fn validate(
             .chain(stbl.children.iter())
             .filter(|n| n.kind() == *b"senc")
             .collect();
+        if audio && iv == 0 && enc.is_empty() {
+            let count = u32_at(child(stbl, *b"stsz")?.header.payload(data), 8)?;
+            sizes(stbl, data)?;
+            roll(stbl, data, true, count, &mut allowed)?;
+            continue;
+        }
         if enc.len() != 1 {
             return Err(UNSUPPORTED);
         }
@@ -344,7 +372,8 @@ pub(super) fn validate(
         let sample_sizes = sizes(stbl, data)?;
         let declared = u32_at(child(stbl, *b"stsz")?.header.payload(data), 8)?;
         if count != declared
-            || usize::try_from(count).map_err(|_| UNSUPPORTED)? > p.len().saturating_sub(8) / iv
+            || usize::try_from(count).map_err(|_| UNSUPPORTED)?
+                > p.len().saturating_sub(8) / iv.max(2)
         {
             return Err(UNSUPPORTED);
         }
@@ -365,8 +394,16 @@ pub(super) fn validate(
         auxiliary_entries(p, aux_sizes, &sample_sizes, audio, iv, count)?;
         roll(stbl, data, audio, count, &mut allowed)?;
     }
+    require_census(&boxes, &allowed, report, keys)
+}
+fn require_census(
+    boxes: &[Mp4Box],
+    allowed: &BTreeSet<usize>,
+    report: &Inspection,
+    keys: &InputKeys,
+) -> Result<(), ConversionError> {
     // Census every opened metadata container: no duplicate, misplaced or alternate protection/group box.
-    for node in mp4::walk(&boxes) {
+    for node in mp4::walk(boxes) {
         if matches!(
             &node.kind(),
             b"pssh"
@@ -390,6 +427,20 @@ pub(super) fn validate(
         return Err(ConversionError("input-key-required"));
     }
     Ok(())
+}
+
+pub(super) fn validate(
+    movie: &audio::Movie,
+    report: &Inspection,
+    keys: &InputKeys,
+) -> Result<(), ConversionError> {
+    validate_inner(movie, report, keys).map_err(|e| {
+        if report.protection == Protection::Cbcs && e == UNSUPPORTED {
+            ConversionError("progressive-cbcs-profile-not-supported")
+        } else {
+            e
+        }
+    })
 }
 pub(super) fn sample_counts(movie: &audio::Movie) -> Result<Vec<u32>, ConversionError> {
     let boxes = mp4::parse_boxes(&movie.bytes).map_err(|_| UNSUPPORTED)?;

@@ -345,6 +345,8 @@ def finite_audio_evidence(image):
 
 
 def media(image, root):
+    from container_source_window import preserve_video_window
+
     original = video_evidence(image, "/input/clip.mp4")
     image.checked(["-v", "error", "-nostdin", "-copyts", "-i", "/input/clip.mp4",
                    "-map", "0:v:0", "-an", "-c", "copy", "/work/video.mp4"],
@@ -365,6 +367,11 @@ def media(image, root):
             entry="/usr/local/bin/packager")
         if len(list(destination.glob("seg_*.m4s"))) != 5:
             raise Refusal("five-source-segments-required")
+        # Preserve the actual progressive video window before treating this as an immutable source.
+        try:
+            preserve_video_window(root / "work/video.mp4", destination / "init.mp4")
+        except ValueError:
+            raise Refusal("source-window-preparation-invalid") from None
         shutil.copytree(destination, root / "input" / kind)
     before = hashes(root / "input")
     rows = []

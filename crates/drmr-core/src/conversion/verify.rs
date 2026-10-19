@@ -59,6 +59,9 @@ impl<'a> StreamView<'a> {
             key: key.map(super::keys::ProbeKeys::One),
         }
     }
+    pub fn with_original_keys(self, all: bool, keys: &'a super::InputKeys) -> Self {
+        if all { self.with_all_keys(keys) } else { self }
+    }
     pub fn with_all_keys(mut self, keys: &'a super::InputKeys) -> Self {
         self.key = Some(super::keys::ProbeKeys::All(keys));
         self
@@ -66,6 +69,15 @@ impl<'a> StreamView<'a> {
     pub fn with_metadata(mut self, metadata: &'a Path) -> Self {
         self.metadata = metadata;
         self
+    }
+}
+fn metadata_key(view: StreamView<'_>) -> Option<super::keys::ProbeKeys<'_>> {
+    if crate::inspection::inspect(view.metadata)
+        .is_ok_and(|r| r.protection == crate::inspection::Protection::Clear)
+    {
+        None
+    } else {
+        view.key
     }
 }
 impl Backend {
@@ -91,6 +103,63 @@ impl Backend {
             StreamView::new(source, source_index, source_key),
             StreamView::new(result, result_index, result_key),
         )
+    }
+    fn verify_finite_audio(
+        &self,
+        source: StreamView<'_>,
+        result: StreamView<'_>,
+        a: super::finite::Window,
+        b: super::finite::Window,
+        source_profile: &serde_json::Value,
+    ) -> Result<bool, ConversionError> {
+        let rate = source_profile["sample_rate"]
+            .as_str()
+            .and_then(|v| v.parse::<u32>().ok())
+            .ok_or(ConversionError("presentation-window-not-supported"))?;
+        // Decode complete coded audio as well as each file's independently declared window.
+        // Fragmented MOV demuxing does not apply final discard padding in current FFmpeg.
+        let a_key = metadata_key(source);
+        let b_key = metadata_key(result);
+        let channels = source_profile["channels"]
+            .as_u64()
+            .and_then(|v| u32::try_from(v).ok())
+            .ok_or(ConversionError("presentation-window-not-supported"))?;
+        let a_decoded = self.finite_audio_decode(
+            source.metadata,
+            source.index,
+            a_key,
+            a,
+            (rate, channels),
+            true,
+        )?;
+        let b_decoded = self.finite_audio_decode(
+            result.metadata,
+            result.index,
+            b_key,
+            b,
+            (rate, channels),
+            true,
+        )?;
+        let original_presentation = if super::audio::movie(source.metadata)?.fragmented {
+            true
+        } else {
+            let original = self.finite_audio_decode(
+                source.metadata,
+                source.index,
+                a_key,
+                super::finite::Window { start: 0, ..a },
+                (rate, channels),
+                false,
+            )?;
+            original.raw == a_decoded.presented
+                && original.raw_samples == a_decoded.presented_samples
+        };
+        let expected = source_profile["nb_read_packets"]
+            .as_str()
+            .and_then(|v| v.parse::<u64>().ok())
+            .and_then(|v| v.checked_mul(1024))
+            .ok_or(ConversionError("decoded-presentation-range-unavailable"))?;
+        Ok(original_presentation && a_decoded.raw_samples == expected && a_decoded == b_decoded)
     }
     pub fn verify_views(
         &self,
@@ -122,16 +191,40 @@ impl Backend {
             }
         }
         let stream_metadata_equal = source_metadata == result_metadata;
-        let packet_timing_equal = source_profile["time_base"] == result_profile["time_base"]
+        let source_window = super::finite::window(source.metadata, source.index)?;
+        let result_window = super::finite::window(result.metadata, result.index)?;
+        let windows_equal = match (source_window, result_window) {
+            (Some(a), Some(b)) => {
+                a.equivalent(b)
+                    && super::progressive::playback_controls_equal(
+                        source.metadata,
+                        source.index,
+                        result.metadata,
+                        result.index,
+                    )?
+            }
+            (None, None) => true,
+            _ => false,
+        };
+        let packet_timing_equal = windows_equal
+            && source_profile["time_base"] == result_profile["time_base"]
             && self.packets_stream_keys(source.input, source.index, source.key)?
                 == self.packets_stream_keys(result.input, result.index, result.key)?
-            && super::progressive::presentation_windows_equal(source.input, result.input)?;
+            && super::progressive::presentation_windows_equal(source.metadata, result.metadata)?;
         let packet_payloads_equal =
             self.hash_stream_keys(source.input, source.index, true, source.key)?
                 == self.hash_stream_keys(result.input, result.index, true, result.key)?;
-        let decoded_content_equal =
+        let decoded_content_equal = if let (Some(a), Some(b)) = (source_window, result_window) {
+            if a.audio && b.audio {
+                self.verify_finite_audio(source, result, a, b, &source_profile)?
+            } else {
+                self.hash_stream_keys(source.input, source.index, false, source.key)?
+                    == self.hash_stream_keys(result.input, result.index, false, result.key)?
+            }
+        } else {
             self.hash_stream_keys(source.input, source.index, false, source.key)?
-                == self.hash_stream_keys(result.input, result.index, false, result.key)?;
+                == self.hash_stream_keys(result.input, result.index, false, result.key)?
+        };
         let passed = stream_metadata_equal
             && packet_payloads_equal
             && decoded_content_equal

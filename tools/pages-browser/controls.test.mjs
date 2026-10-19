@@ -298,7 +298,7 @@ test('both fixed locale routes bind separate pages and reciprocal native languag
     assert.equal(assetRoute(locale.asset), locale.route);
     assert.equal(locale.switchLanguage, other.language);
     assert.equal(locale.groups.length, 5);
-    assert.equal(locale.profiles.length, 6);
+    assert.equal(locale.profiles.length, 5);
     assert.ok(locale.matrixCaption && locale.matrixRegion);
     assert.deepEqual(locale.matrixCorner.split(' / ').length, 2);
     assert.equal(locale.headings[0], locale.language === 'en' ? 'Input and output support' : '入力と出力の対応表');
@@ -320,19 +320,19 @@ function matrixSample(changes = {}) {
     rect: { left: 16, right: 304 }, contentLeft: 17, contentRight: 303,
     documentWidth: 320, documentScrollWidth: 320, scrollWidth: 648, scrollLeft: 0,
     pageX: 0, pageY: 250, focused: true, clippedCells: [], hiddenText: [], renderedTextCount: 30,
-    rowHeaders: Array.from({ length: 6 }, () => ({ left: 17, right: 153, position: 'sticky' })),
+    rowHeaders: Array.from({ length: 5 }, () => ({ left: 17, right: 153, position: 'sticky' })),
     ...changes };
 }
 
-test('conversion facts distinguish audio edits, TS video and TS audio-only routes', () => {
+test('conversion facts unify MP4 and distinguish TS video and TS audio-only routes', () => {
   assert.deepEqual(matrixColumns, ['MP4', 'DASH', 'HLS fMP4', 'HLS MPEG-TS']);
-  assert.deepEqual(matrixRows.map(row => row.id), ['mp4-standard', 'mp4-audio-edit', 'dash', 'hls-fmp4', 'hls-ts-video', 'hls-ts-audio']);
-  assert.equal(matrixRows.flatMap(row => row.output).length, 24);
-  assert.deepEqual(matrixRows[1].input, ['Clear', 'cenc']);
-  assert.deepEqual(matrixRows[1].output, [['Clear'], [], [], []]);
-  assert.deepEqual(matrixRows[4].output.slice(0, 2), [[], ['Clear', 'cenc', 'cbcs']]);
-  assert.deepEqual(matrixRows[5].output, [[], ['Clear', 'cenc', 'cbcs'], [], ['Clear', 'AES-128', 'SAMPLE-AES']]);
-  for (const index of [0, 2, 3]) assert.deepEqual(matrixRows[index].output[3], []);
+  assert.deepEqual(matrixRows.map(row => row.id), ['mp4', 'dash', 'hls-fmp4', 'hls-ts-video', 'hls-ts-audio']);
+  assert.equal(matrixRows.flatMap(row => row.output).length, 20);
+  assert.deepEqual(matrixRows[0].input, ['Clear', 'cenc', 'cbcs']);
+  assert.deepEqual(matrixRows[0].output, [['Clear', 'cenc', 'cbcs'], ['Clear', 'cenc', 'cbcs'], ['Clear', 'cbcs', 'AES-128'], []]);
+  assert.deepEqual(matrixRows[3].output.slice(0, 2), [[], ['Clear', 'cenc', 'cbcs']]);
+  assert.deepEqual(matrixRows[4].output, [[], ['Clear', 'cenc', 'cbcs'], [], ['Clear', 'AES-128', 'SAMPLE-AES']]);
+  for (const index of [0, 1, 2]) assert.deepEqual(matrixRows[index].output[3], []);
 });
 
 test('matrix bounds refuse page overflow, clipped cells and unanchored row headers', () => {
@@ -340,8 +340,8 @@ test('matrix bounds refuse page overflow, clipped cells and unanchored row heade
   for (const change of [{ overflowX: 'hidden' }, { clientWidth: 0 },
     { rect: { left: -1, right: 304 } }, { documentScrollWidth: 321 },
     { clippedCells: ['SAMPLE-AES'] }, { hiddenText: [{ text: 'Clear', hidden: true }] }, { renderedTextCount: 0 }, { rowHeaders: [] },
-    { rowHeaders: Array.from({ length: 6 }, () => ({ left: 17, right: 153, position: 'static' })) },
-    { rowHeaders: Array.from({ length: 6 }, () => ({ left: 17, right: 330, position: 'sticky' })) }]) {
+    { rowHeaders: Array.from({ length: 5 }, () => ({ left: 17, right: 153, position: 'static' })) },
+    { rowHeaders: Array.from({ length: 5 }, () => ({ left: 17, right: 330, position: 'sticky' })) }]) {
     assert.throws(() => requireMatrixLayout(matrixSample(change)));
   }
 });
@@ -352,7 +352,7 @@ test('native matrix movement cannot pass for a stationary matrix, lost focus or 
   requireMatrixMovement(before, after, 'right');
   requireMatrixMovement(after, before, 'left');
   for (const change of [{ scrollLeft: 0 }, { focused: false }, { pageX: 1 }, { pageY: 251 },
-    { rowHeaders: Array.from({ length: 6 }, () => ({ left: 18, right: 154, position: 'sticky' })) }]) {
+    { rowHeaders: Array.from({ length: 5 }, () => ({ left: 18, right: 154, position: 'sticky' })) }]) {
     assert.throws(() => requireMatrixMovement(before, { ...after, ...change }, 'right'));
   }
   assert.throws(() => requireMatrixMovement(before, after, 'left'));
@@ -395,7 +395,7 @@ test('rendered matrix guards refuse hidden Clear children even when their cell s
     getBoundingClientRect: () => rect });
   const wrapper = box({ left: 16, right: 304, top: 10, bottom: 650, width: 288, height: 640 }, { overflowX: 'auto' });
   Object.assign(wrapper, { clientLeft: 1, clientWidth: 286, clientHeight: 640, scrollWidth: 648, scrollLeft: 0 });
-  const headers = Array.from({ length: 6 }, () => box(rectangle(17, 153), { position: 'sticky' }));
+  const headers = Array.from({ length: 5 }, () => box(rectangle(17, 153), { position: 'sticky' }));
   const cell = box(rectangle(153, 281));
   const clear = box(rectangle(165, 202));
   cell.parentElement = wrapper;

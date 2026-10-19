@@ -261,7 +261,7 @@ fn validate_playlists(
     Ok(())
 }
 
-fn single_audio_variant(root: &Path) -> Result<(), ConversionError> {
+pub(super) fn single_audio_variant(root: &Path) -> Result<(), ConversionError> {
     let path = root.join("master.m3u8");
     let bytes = super::super::files::read_manifest(&path)?;
     let text = std::str::from_utf8(&bytes).map_err(|_| ConversionError("invalid-output-media"))?;

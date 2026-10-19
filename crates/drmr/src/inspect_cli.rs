@@ -26,7 +26,7 @@ pub struct PlanArgs {
     /// Output protection: clear, cenc, cbcs, hls-aes128, or hls-sample-aes. Required with INPUT.
     #[arg(long, requires = "input")]
     pub to: Option<TargetProtection>,
-    /// Output packaging: mp4, dash, hls, or a comma-separated list.
+    /// Output packaging: mp4, dash, hls, hls-ts, or a comma-separated list.
     #[arg(long, value_delimiter = ',', requires = "input")]
     pub format: Vec<OutputFormat>,
     /// Print the versioned JSON plan without executing any conversion.
