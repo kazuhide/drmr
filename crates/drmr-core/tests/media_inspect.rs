@@ -740,7 +740,7 @@ fn a_resolver_error_comes_back_unchanged() {
 #[cfg(unix)]
 #[test]
 fn the_raw_key_file_is_private_and_no_error_carries_the_key() {
-    use std::os::unix::fs::PermissionsExt as _;
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
     let dir = tempfile::tempdir().unwrap();
     let fresh = write_raw_key_file(KEY, &dir.path().join("k/content.key")).unwrap();
     assert_eq!(
@@ -749,8 +749,11 @@ fn the_raw_key_file_is_private_and_no_error_carries_the_key() {
     );
     let existing = dir.path().join("existing.key");
     std::fs::write(&existing, b"old contents, longer than a key").unwrap();
-    std::fs::set_permissions(&existing, std::fs::Permissions::from_mode(0o644)).unwrap();
+    std::fs::set_permissions(&existing, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let before = std::fs::metadata(&existing).unwrap();
     write_raw_key_file(KEY, &existing).unwrap();
+    let after = std::fs::metadata(&existing).unwrap();
+    assert_eq!((after.dev(), after.ino()), (before.dev(), before.ino()));
     assert_eq!(
         std::fs::metadata(&existing).unwrap().permissions().mode() & 0o777,
         0o600
@@ -774,6 +777,82 @@ fn the_raw_key_file_is_private_and_no_error_carries_the_key() {
         !dir.path().join("bad.key").exists(),
         "nothing written before the key decodes"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn raw_key_file_refuses_a_symlink_without_changing_its_private_target() {
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _, symlink};
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("original.key");
+    let alias = dir.path().join("content.key");
+    let original = b"original contents, longer than a key";
+    std::fs::write(&target, original).unwrap();
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let before = std::fs::metadata(&target).unwrap();
+    symlink(&target, &alias).unwrap();
+
+    let result = write_raw_key_file(KEY, &alias);
+
+    assert_eq!(std::fs::read(&target).unwrap(), original);
+    assert!(result.is_err());
+    assert!(std::fs::symlink_metadata(&alias).unwrap().is_symlink());
+    assert_eq!(std::fs::read_link(&alias).unwrap(), target);
+    let after = std::fs::metadata(&target).unwrap();
+    assert_eq!((after.dev(), after.ino()), (before.dev(), before.ino()));
+    assert_eq!(after.permissions().mode(), before.permissions().mode());
+}
+
+#[cfg(unix)]
+#[test]
+fn raw_key_file_refuses_hard_links_without_writing_or_removing_either_name() {
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("original.key");
+    let alias = dir.path().join("content.key");
+    let original = b"original contents, longer than a key";
+    std::fs::write(&target, original).unwrap();
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
+    std::fs::hard_link(&target, &alias).unwrap();
+    let before = std::fs::metadata(&target).unwrap();
+    assert_eq!(before.nlink(), 2);
+
+    let result = write_raw_key_file(KEY, &alias);
+
+    assert_eq!(std::fs::read(&target).unwrap(), original);
+    assert_eq!(std::fs::read(&alias).unwrap(), original);
+    assert!(result.is_err());
+    for path in [&target, &alias] {
+        let after = std::fs::metadata(path).unwrap();
+        assert_eq!((after.dev(), after.ino()), (before.dev(), before.ino()));
+        assert_eq!(after.permissions().mode(), before.permissions().mode());
+        assert_eq!(after.nlink(), 2);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn raw_key_file_refuses_a_readable_file_before_an_open_reader_can_observe_the_key() {
+    use std::io::Read as _;
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("content.key");
+    let original = b"original contents, longer than a key";
+    std::fs::write(&path, original).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let before = std::fs::metadata(&path).unwrap();
+    let mut reader = std::fs::File::open(&path).unwrap();
+
+    let result = write_raw_key_file(KEY, &path);
+
+    let mut observed = Vec::new();
+    reader.read_to_end(&mut observed).unwrap();
+    assert_eq!(observed, original);
+    assert_eq!(std::fs::read(&path).unwrap(), original);
+    assert!(result.is_err());
+    let after = std::fs::metadata(&path).unwrap();
+    assert_eq!((after.dev(), after.ino()), (before.dev(), before.ino()));
+    assert_eq!(after.permissions().mode(), before.permissions().mode());
 }
 
 /// The init and segments of a synthetic fragmented video, split with the Python rules.
