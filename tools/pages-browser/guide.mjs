@@ -69,3 +69,33 @@ export function codeAriaTemplate(text) {
   if (!code) throw new Error('Guide code must not be empty');
   return '- code: ' + JSON.stringify(code);
 }
+
+// Screenshots observe the same native owner after a completed traversal; they
+// cannot substitute another target, scroll the page, or crop the focus outline.
+export function requireGuideCheckpoint(record, expected) {
+  for (const key of ['source_head', 'source_tree', 'language', 'page_asset', 'page_sha256']) {
+    if (record[key] !== expected[key]) throw new Error('Guide checkpoint source identity changed');
+  }
+  if (JSON.stringify(record.viewport) !== JSON.stringify(expected.viewport)) throw new Error('Guide checkpoint viewport changed');
+  const tag = { 'native-code-viewport': 'PRE', 'native-table-viewport': 'DIV' }[record.phase];
+  const owner = record.selected;
+  if (!tag || owner.tag !== tag || !guideChapters.includes(owner.chapter) || !owner.identity) {
+    throw new Error('Guide checkpoint phase or owner changed');
+  }
+  for (const value of [record.before, record.after]) {
+    const f = value.focus, r = f.rect, v = f.viewport, s = value.scroll;
+    if (!(s.focused === true && s.tag === tag && s.chapter === owner.chapter && s.identity === owner.identity &&
+      s.scrollLeft === 0 && v.width === expected.viewport.width && v.height === expected.viewport.height && f.matchesTarget === true && JSON.stringify(f.target) === JSON.stringify(f.active) &&
+      f.target.tag === tag && f.inViewport === true && 0 <= r.left && r.left < r.right && r.right <= v.width &&
+      0 <= r.top && r.top < r.bottom && r.bottom <= v.height && r.width > 0 && r.height > 0 &&
+      f.outlineWidth >= 2 && f.outlineStyle !== 'none')) {
+      throw new Error('Guide checkpoint must show its fully focused native owner');
+    }
+  }
+  if (JSON.stringify(record.before.scroll) !== JSON.stringify(record.after.scroll) ||
+      JSON.stringify(record.before.focus.rect) !== JSON.stringify(record.after.focus.rect) ||
+      JSON.stringify(record.before.focus.scroll) !== JSON.stringify(record.after.focus.scroll) ||
+      JSON.stringify(record.before.focus.target) !== JSON.stringify(record.after.focus.target)) {
+    throw new Error('Guide checkpoint moved its owner or document');
+  }
+}

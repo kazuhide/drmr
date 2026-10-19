@@ -1,4 +1,4 @@
-import { guideChapters, requireGuideLayout, requireGuideMovement, codeAriaTemplate } from './guide.mjs';
+import { guideChapters, requireGuideLayout, requireGuideMovement, codeAriaTemplate, requireGuideCheckpoint } from './guide.mjs';
 import { locales } from './locales.mjs';
 import { matrixRows, matrixColumns, matrixObservation, requireMatrixLayout, requireMatrixMovement, completeMatrixKey, MatrixKeyDeadline } from './matrix.mjs';
 import { test } from 'node:test';
@@ -568,4 +568,27 @@ test('guide code ARIA templates retain complete quoted and multiline code as one
   const template = codeAriaTemplate(code);
   assert.equal(JSON.parse(template.slice('- code: '.length)), code.trim().replace(/\s+/g, ' '));
   assert.throws(() => codeAriaTemplate('  \n'));
+});
+
+
+test('guide viewport checkpoints reject wrong sources, phases, native owners, clipping and capture movement', () => {
+  const expected = { source_head: 'a'.repeat(40), source_tree: 'b'.repeat(40), language: 'en',
+    page_asset: 'guide/index.html', page_sha256: 'c'.repeat(64), viewport: { width: 320, height: 900 } };
+  const target = { tag: 'PRE', id: '', label: null, href: null, text: 'drmr --version' };
+  const observation = { scroll: { focused: true, tag: 'PRE', chapter: 'installation', identity: 'example-1-title',
+    scrollLeft: 0, pageX: 0, pageY: 1000 }, focus: { target, active: target, matchesTarget: true,
+    rect: { top: 20, bottom: 100, left: 16, right: 304, width: 288, height: 80 },
+    viewport: { width: 320, height: 900 }, scroll: { x: 0, y: 1000 }, inViewport: true,
+    outlineWidth: 3, outlineStyle: 'solid' } };
+  const record = { ...expected, phase: 'native-code-viewport', selected: { tag: 'PRE', chapter: 'installation', identity: 'example-1-title' },
+    before: observation, after: structuredClone(observation) };
+  requireGuideCheckpoint(record, expected);
+  for (const mutate of [row => { row.source_head = 'd'.repeat(40); }, row => { row.page_sha256 = 'd'.repeat(64); },
+    row => { row.phase = 'native-table-viewport'; }, row => { row.selected.identity = 'other'; },
+    row => { row.viewport.height = 901; }, row => { row.before.focus.viewport.width = 321; }, row => { row.before.focus.rect.bottom = 901; }, row => { row.after.focus.matchesTarget = false; },
+    row => { row.after.focus.outlineStyle = 'none'; }, row => { row.after.scroll.scrollLeft = 1; },
+    row => { row.after.scroll.pageY++; }, row => { row.after.focus.rect.top++; }]) {
+    const invalid = structuredClone(record); mutate(invalid);
+    assert.throws(() => requireGuideCheckpoint(invalid, expected));
+  }
 });

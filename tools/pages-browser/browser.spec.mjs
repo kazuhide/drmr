@@ -511,9 +511,10 @@ test('browser guard controls detect real overflow, invisible focus, blocked matr
   await page.goto('about:blank');
   await ready(page);
   const wrapper = page.getByRole('region', { name: english.matrixRegion, exact: true });
-  for (let index = 0; index < 10; index++) await page.keyboard.press('Tab');
+  const matrixTabOrdinal = 11;
+  for (let index = 0; index < matrixTabOrdinal; index++) await page.keyboard.press('Tab');
   await expect(wrapper).toBeFocused();
-  await requireTargetFocus(page, wrapper, 'matrix-disabled-control', 10);
+  await requireTargetFocus(page, wrapper, 'matrix-disabled-control', matrixTabOrdinal);
   const matrixBefore = await wrapper.evaluate(matrixObservation);
   expect(matrixBefore.scrollWidth).toBeGreaterThan(matrixBefore.clientWidth);
   const hiddenContent = await page.addStyleTag({ content: '.conversion-matrix td > .clear { visibility: hidden !important; }' });

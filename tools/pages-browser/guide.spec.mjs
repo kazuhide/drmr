@@ -5,7 +5,7 @@ import { assets, assetPath, assetRoute, allowedRequest, digest, liveMode, public
 import { focusObservation, pollFocus, requireFocus, requireImages } from './checks.mjs';
 import { completeMatrixKey } from './matrix.mjs';
 import { guideChapters, guideLocales, guideObservation, requireGuideLayout,
-  guideScrollObservation, requireGuideMovement, codeAriaTemplate } from './guide.mjs';
+  guideScrollObservation, requireGuideMovement, codeAriaTemplate, requireGuideCheckpoint } from './guide.mjs';
 
 const live = liveMode(process.env.PAGES_LIVE);
 const origin = live ? publicOrigin : localOrigin;
@@ -23,7 +23,7 @@ async function attach(info, name, value, type = 'application/json') {
   await info.attach(name, { path, contentType: type });
 }
 function watch(page) {
-  const value = { console: [], pageErrors: [], failedRequests: [], responses: [], focus: [], scrolls: [] };
+  const value = { console: [], pageErrors: [], failedRequests: [], responses: [], focus: [], scrolls: [], checkpoints: [] };
   const pending = [];
   page.on('console', message => {
     if (['error', 'warning'].includes(message.type())) value.console.push(message.text());
@@ -84,7 +84,7 @@ async function jumpToChapter(page, locale, chapter) {
   expect(rect.y).toBeGreaterThanOrEqual(0);
   expect(rect.y).toBeLessThan(900);
 }
-async function scrollTarget(page, locator) {
+async function scrollTarget(page, locator, checkpoint) {
   const target = await locator.elementHandle();
   expect(target).not.toBeNull();
   const record = { samples: [] };
@@ -95,7 +95,7 @@ async function scrollTarget(page, locator) {
     expect(initial.scrollLeft).toBe(0);
     record.samples.push(initial);
     record.scrollNeeded = initial.scrollWidth > initial.clientWidth;
-    if (!record.scrollNeeded) { record.passed = true; return record; }
+    if (!record.scrollNeeded) { record.passed = true; await checkpoint(target); return record; }
     const deadline = performance.now() + 5000;
     const move = async key => {
       const after = await completeMatrixKey({ before: record.samples.at(-1),
@@ -125,6 +125,7 @@ async function scrollTarget(page, locator) {
     for (let count = 0; record.samples.at(-1).scrollLeft > 0 && count < 64; count++) await move('ArrowLeft');
     expect(record.samples.at(-1).scrollLeft).toBe(0);
     record.passed = true;
+    await checkpoint(target);
     return record;
   } finally { record.passed ??= false; await target.dispose(); }
 }
@@ -138,16 +139,20 @@ async function content(page, locale) {
   await expect(page.locator('script')).toHaveCount(0);
   const groups = [];
   for (const group of await page.locator('figure.guide-example').all()) {
-    await expect(group).toHaveAttribute('role', 'group');
+    expect(await group.getAttribute('role')).toBeNull();
+    await expect(group).toHaveRole('figure');
+    await expect(group).toHaveAttribute('data-code-language', /^(sh|bash|powershell|json|text)$/);
     const caption = compact(await group.locator('figcaption').innerText());
     await expect(group).toHaveAccessibleName(caption);
     const pre = group.locator('pre');
     await expect(pre).toHaveAttribute('tabindex', '0');
-    const code = await pre.locator('code').innerText();
+    const code = await pre.locator('code').textContent();
+    const rendered = await pre.locator('code').innerText();
     expect(code.trim()).not.toBe('');
+    expect(compact(rendered)).toBe(compact(code));
     const aria = await group.ariaSnapshot();
     await expect(pre.locator('code')).toMatchAriaSnapshot(codeAriaTemplate(code));
-    groups.push({ label: caption, code, aria });
+    groups.push({ label: caption, language: await group.getAttribute('data-code-language'), role: 'figure', code, rendered, aria });
   }
   expect(groups.length).toBeGreaterThan(0);
   const tables = [];
@@ -189,10 +194,9 @@ for (const locale of guideLocales) for (const width of [320, 768, 1024, 1440]) {
     await page.setViewportSize({ width, height: 900 }); await ready(page, locale);
     const initial = await page.evaluate(() => ({ scrollX, scrollY, focusedTag: document.activeElement.tagName }));
     expect(initial).toEqual({ scrollX: 0, scrollY: 0, focusedTag: 'BODY' });
-    for (const [name, fullPage] of [['initial-viewport-before-interaction', false], ['rendered-guide', true]]) {
-      const path = info.outputPath(name + '.png'); await page.screenshot({ path, fullPage, animations: 'disabled' });
-      await info.attach(name, { path, contentType: 'image/png' });
-    }
+    const initialPath = info.outputPath('initial-viewport-before-interaction.png');
+    await page.screenshot({ path: initialPath, fullPage: false, animations: 'disabled', timeout: 5000 });
+    await info.attach('initial-viewport-before-interaction', { path: initialPath, contentType: 'image/png' });
     if (locale.language === 'en' && width === 320) {
       const heading = page.locator('#introduction-title');
       const previous = await heading.evaluate(node => node.style.visibility);
@@ -220,12 +224,32 @@ for (const locale of guideLocales) for (const width of [320, 768, 1024, 1440]) {
     for (const selector of ['pre[tabindex="0"]', '.guide-table-scroll']) {
       await ready(page, locale);
       const candidates = await page.locator(selector).evaluateAll(nodes => nodes.map((node, index) => ({ index,
-        extent: node.scrollWidth - node.clientWidth, chapter: node.closest('[data-guide-chapter]').id })));
+        extent: node.scrollWidth - node.clientWidth, chapter: node.closest('[data-guide-chapter]').id,
+        tag: node.tagName, identity: node.getAttribute('aria-labelledby') || node.parentElement.getAttribute('aria-labelledby') })));
       const selected = candidates.reduce((best, item) => item.extent > best.extent ? item : best);
       await jumpToChapter(page, locale, selected.chapter);
       const target = page.locator(selector).nth(selected.index);
       const ordinal = await tabTo(page, target, 'native-scroll-owner');
-      native.push({ selector, selected, ordinal, traversal: await scrollTarget(page, target) });
+      const phase = selector.startsWith('pre') ? 'native-code-viewport' : 'native-table-viewport';
+      const expected = { source_head: info.config.metadata.sourceHead, source_tree: info.config.metadata.sourceTree,
+        language: locale.language, page_asset: locale.asset, page_sha256: info.config.metadata.assetHashes[locale.asset],
+        viewport: { width, height: 900 } };
+      const checkpoint = async owner => {
+        await focus(page, owner, phase);
+        const observe = async () => ({ scroll: await owner.evaluate(guideScrollObservation), focus: await owner.evaluate(focusObservation) });
+        const record = { ...expected, phase, selected, before: await observe() };
+        network.checkpoints.push(record);
+        try {
+          requireGuideCheckpoint({ ...record, after: record.before }, expected);
+          const path = info.outputPath(phase + '.png');
+          await page.screenshot({ path, fullPage: false, animations: 'disabled', timeout: 5000 });
+          record.after = await observe();
+          requireGuideCheckpoint(record, expected);
+          await info.attach(phase, { path, contentType: 'image/png' });
+          record.passed = true;
+        } finally { record.passed ??= false; }
+      };
+      native.push({ selector, selected, ordinal, traversal: await scrollTarget(page, target, checkpoint) });
     }
     const served = [];
     for (const path of assets) {
@@ -242,6 +266,7 @@ for (const locale of guideLocales) for (const width of [320, 768, 1024, 1440]) {
     await attach(info, 'evidence.json', { ...identity(info), language: locale.language, page_asset: locale.asset,
       page_sha256: info.config.metadata.assetHashes[locale.asset], viewport: { width, height: 900 }, initial_viewport: initial,
       chapters: contents, native_keyboard: native, fonts, images, served_assets: served, network,
+      visual_checkpoints: { contract: 'viewport-native-v1', records: network.checkpoints },
       chromium: browser.version(), production_scripts: 0, axe: { violations: 0, incomplete: 0 } });
   });
 }

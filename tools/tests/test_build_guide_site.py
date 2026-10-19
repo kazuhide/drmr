@@ -1,5 +1,6 @@
 """Behavioral checks for the deliberately bounded guide publisher."""
 import importlib.util
+from html.parser import HTMLParser
 from pathlib import Path
 import tempfile
 import unittest
@@ -18,7 +19,8 @@ class GuideBuilderTests(unittest.TestCase):
         for route, page in pages.items():
             html = page.decode()
             self.assertEqual(html.count('data-guide-chapter='), 20)
-            self.assertIn('role="group" aria-labelledby="example-1-title"', html)
+            self.assertIn('<figure class="guide-example" aria-labelledby="example-1-title" data-code-language="sh">', html)
+            self.assertNotIn('role="group"', html)
             self.assertIn('<caption id="table-1-title">', html)
             self.assertIn('scope="row"', html)
             for chapter in builder.CHAPTER_IDS:
@@ -26,6 +28,44 @@ class GuideBuilderTests(unittest.TestCase):
                 other = "../ja/guide/" if route == "guide/index.html" else "../../guide/"
                 self.assertIn(f'href="{other}#{chapter}"', html)
             self.assertNotIn('<script', html)
+
+    def test_rendered_examples_keep_exact_source_text_and_validated_languages(self):
+        import re
+
+        class Examples(HTMLParser):
+            def __init__(self):
+                super().__init__(convert_charrefs=True)
+                self.examples = []
+                self.in_code = False
+                self.in_pre = False
+
+            def handle_starttag(self, tag, attrs):
+                attrs = dict(attrs)
+                if tag == 'figure':
+                    self.examples.append([attrs.get('data-code-language'), ''])
+                if tag == 'pre':
+                    self.in_pre = True
+                if tag == 'code' and self.in_pre:
+                    self.in_code = True
+
+            def handle_endtag(self, tag):
+                if tag == 'code':
+                    self.in_code = False
+                if tag == 'pre':
+                    self.in_pre = False
+
+            def handle_data(self, text):
+                if self.in_code:
+                    self.examples[-1][1] += text
+
+        for route, page in builder.render(TOOLS.parent).items():
+            locale = 'ja' if route.startswith('ja/') else 'en'
+            source = (TOOLS.parent / f'site-content/guide/{locale}.md').read_text()
+            expected = [[language, code] for language, code in
+                        re.findall(r'^```([^\n]*)\n(.*?)^```', source, re.M | re.S)]
+            parser = Examples()
+            parser.feed(page.decode())
+            self.assertEqual(parser.examples, expected)
 
     def test_markup_is_escaped_and_unsafe_links_are_refused(self):
         self.assertEqual(builder.inline('`<key>&value`'), '<code>&lt;key&gt;&amp;value</code>')

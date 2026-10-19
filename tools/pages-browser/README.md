@@ -80,7 +80,13 @@ before deployment. The guide suite separately covers:
 - Both languages at 320, 768, 1024 and 1440 px: all twenty ordered chapters,
   full accessible code examples and labelled tables, local fonts and brand
   images, zero document overflow, and empty axe violations and incomplete checks.
-  Initial and full-page images remain available for visual review.
+  Each width retains three 900px-high viewport images: the untouched initial view,
+  the widest native code owner after its full roundtrip, and the widest table
+  owner after its full roundtrip. The latter two record the same focused owner,
+  exact source/page identity and unchanged geometry/document position before and
+  after capture (`viewport-native-v1`). Each capture remains bounded to five
+  seconds. These are visual checkpoints, not full-guide pixel coverage; all
+  twenty chapters and complete code/table content retain automated checks.
 - Native Tab/Enter reaches the contents and selected chapter, then the widest
   code block and table. Each overflowing target is pinned to one ElementHandle,
   traversed to both edges and returned to zero using the existing shared absolute
@@ -94,6 +100,9 @@ before deployment. The guide suite separately covers:
   printer output or paginated PDF appearance. An injected hidden chapter heading
   is rejected by the actual guide measurement and restored before further checks.
 
+Code examples use native named figures and captions, without overriding the
+figure role. Validated code-language metadata permits visual JSON wrapping while
+retaining complete original code text; shell continuations retain command tokens.
 Static validation requires exact regeneration of both committed guide pages
 from the standard-library builder, template and two Markdown sources. The
 payload remains bounded to 512 KiB, including all twelve files; Markdown,
@@ -121,7 +130,8 @@ literal parents inside the originating document depth can reach an explicitly
 allowlisted page or shared asset; encoded parents, internal detours and escapes
 remain refused. All four pages directly link to the shared font notice.
 
-Separate loopback and published artifacts retain full-page screenshots, rendered
+Separate loopback and published artifacts retain landing full-page screenshots,
+guide viewport checkpoints, rendered
 ARIA snapshots, axe results (including incomplete checks), browser observations,
 HTTP asset headers, raw asset SHA-256 values, source commit/tree, per-case locale and raw page hash, dependency and
 browser pins, and machine-readable test results for three days. Landing and

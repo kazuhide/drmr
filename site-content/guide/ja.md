@@ -688,7 +688,8 @@ MPD には BaseURL、MP4 の adaptation set、representation ごとの SegmentTe
 drmr plan --mpd sample/download/manifest.example.test/sample/dash/manifest.mpd
 drmr run \
   --mpd sample/download/manifest.example.test/sample/dash/manifest.mpd \
-  --hls-master sample/download/manifest.example.test/sample/hls/manifest.m3u8 \
+  --hls-master \
+    sample/download/manifest.example.test/sample/hls/manifest.m3u8 \
   --output output --asset-id sample --log-format jsonl
 ```
 
@@ -1189,9 +1190,11 @@ Bento4 の build 番号など、設定した配布物の版と実行バナーか
 ```sh
 cargo test --locked -p drmr --test bbb_media -- --nocapture
 cargo test --locked -p drmr-core --test conversion_ts_output -- --nocapture
-cargo test --locked -p drmr-core --test conversion_ts_output audio_hls -- --nocapture
+cargo test --locked -p drmr-core --test conversion_ts_output \
+  audio_hls -- --nocapture
 cargo test --locked -p drmr --test conversion_ts_dash -- --nocapture
-cargo test --locked -p drmr-core --test conversion_finite_outputs -- --nocapture
+cargo test --locked -p drmr-core --test conversion_finite_outputs \
+  -- --nocapture
 cargo test --locked -p drmr --test conversion_finite_outputs -- --nocapture
 ```
 

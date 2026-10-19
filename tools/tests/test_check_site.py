@@ -418,7 +418,7 @@ class GuideMarkup(unittest.TestCase):
         for name in CHECK.GUIDE_CHAPTERS:
             body = "<p>Complete chapter content with a bounded, meaningful explanation.</p>"
             if name == "introduction":
-                body += ('<figure class="guide-example" role="group" aria-labelledby="example-1-title">'
+                body += ('<figure class="guide-example" data-code-language="sh" aria-labelledby="example-1-title">'
                          '<figcaption id="example-1-title">Inspect the complete media</figcaption>'
                          '<pre tabindex="0"><code>drmr inspect source.mp4</code></pre></figure>'
                          '<div class="guide-table-scroll" role="region" aria-labelledby="table-1-title" tabindex="0">'
@@ -443,12 +443,17 @@ class GuideMarkup(unittest.TestCase):
             with self.subTest(), self.assertRaises(CHECK.Failure):
                 CHECK.validate_guide(value, "en")
 
+    def test_native_figure_cannot_be_overridden_with_a_group_role(self):
+        invalid = self.fixture().replace('class="guide-example"', 'class="guide-example" role="group"')
+        with self.assertRaises(CHECK.Failure):
+            CHECK.validate_guide(invalid, "en")
+
     def test_missing_chapters_code_labels_and_table_scopes_remain_refused(self):
         original = self.fixture()
         self.assertEqual(CHECK.validate_guide(original, "en"), {"chapters": 20, "code_examples": 1, "tables": 1})
         for old, new in [('data-guide-chapter="verification"', 'data-guide-chapter="missing"'),
                          ('href="#verification"', 'href="#missing"'), ('tabindex="0"', ''),
-                         ('aria-labelledby="example-1-title"', ''), ('scope="row"', '')]:
+                         ('aria-labelledby="example-1-title"', ''), ('data-code-language="sh"', 'data-code-language="unknown"'), ('scope="row"', '')]:
             with self.subTest(old=old), self.assertRaises(CHECK.Failure):
                 CHECK.validate_guide(original.replace(old, new, 1), "en")
 

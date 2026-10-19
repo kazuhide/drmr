@@ -99,7 +99,7 @@ def body(source, locale):
             example += 1
             label = f"example-{example}-title"
             code = escape("\n".join(lines[i + 1:end]) + "\n")
-            output.append(f'<figure class="guide-example" role="group" aria-labelledby="{label}">'
+            output.append(f'<figure class="guide-example" aria-labelledby="{label}" data-code-language="{language}">'
                           f'<figcaption id="{label}">{labels["example"]} {example}: {language}</figcaption>'
                           f'<pre tabindex="0"><code>{code}</code></pre></figure>')
             i = end + 1

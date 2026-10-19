@@ -363,8 +363,9 @@ def validate_guide(text, language):
     require(examples, "site-guide-code")
     for index, example in enumerate(examples, 1):
         label = "example-" + str(index) + "-title"
-        require(example.attrs.get("class") == "guide-example" and example.attrs.get("role") == "group"
+        require(example.attrs.get("class") == "guide-example" and "role" not in example.attrs
                 and example.attrs.get("aria-labelledby") == label
+                and example.attrs.get("data-code-language") in ("sh", "bash", "powershell", "json", "text")
                 and matrix_text(example.one("figcaption", id=label)), "site-guide-code")
         pre = example.one("pre")
         require(pre.attrs.get("tabindex") == "0" and pre.one("code").text().strip(), "site-guide-code")
