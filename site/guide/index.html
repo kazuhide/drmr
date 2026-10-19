@@ -763,6 +763,7 @@ python tools/build_desktop.py --bundle
 <div class="guide-table-scroll" role="region" aria-labelledby="table-12-title" tabindex="0"><table><caption id="table-12-title">Short public media — Table 12</caption><thead><tr><th scope="col">Regression</th><th scope="col">Scope</th></tr></thead><tbody>
 <tr><th scope="row">Legacy 16 protection routes</th><td>Prepared clear/cenc/cbcs DASH and AES-128 fMP4 HLS, separate original/result keys, conversion and fresh verification</td></tr>
 <tr><th scope="row">TS to DASH: 27 routes</th><td>Three input protections, video/joint/audio layouts, clear/cenc/cbcs DASH</td></tr>
+<tr><th scope="row">Audio-only TS to fMP4 HLS: 9 pairs</th><td>Clear/AES-128/SAMPLE-AES inputs to clear/CBCS/AES-128 fMP4 HLS; complete original packet, clock and decoded-audio checks</td></tr>
 <tr><th scope="row">TS output: 27 routes</th><td>The same input protections/layouts to clear/AES-128/SAMPLE-AES TS</td></tr>
 <tr><th scope="row">Finite audio: 54 unique routes</th><td>Three MP4 input protections, audio/joint layouts, nine MP4/DASH/HLS output choices</td></tr>
 <tr><th scope="row">Finite CLI: 27 repeat routes</th><td>Real CLI confirmation of the joint subset of the same 54 combinations</td></tr>
@@ -774,6 +775,19 @@ python tools/build_desktop.py --bundle
 <p>Read each revision&#x27;s CI logs and artifacts for source identity, compilers, tools and results. This guide does not certify every later moving-main revision or arbitrary device.</p>
 <p>The 54 finite combinations consist of audio27 plus joint27; CLI27 repeats the latter. The legacy16 use a prepared fragmented reference, whereas finite tests use the original progressive file&#x27;s own playback range. Do not mix sample counts across different references/decoding paths.</p>
 <p>Bento4 installation pins and observed build banners are different evidence. Docker HTTP tests do not qualify a browser UI; native bundle construction does not qualify playback. Known-key media checks do not establish license acquisition or device operation.</p>
+<h3>Recorded audio-only TS results</h3>
+<p>The following jobs completed on 20 October 2026 (Japan Standard Time) for source <a href="https://github.com/kazuhide/drmr/commit/f0096539e698d66cc77affcd7ea891c793aa87bf">f0096539</a>. Rust 1.95 or later is required; 1.99.1 is the stable compiler observed in this run, not a fixed requirement.</p>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-13-title" tabindex="0"><table><caption id="table-13-title">Recorded audio-only TS results — Table 13</caption><thead><tr><th scope="col">Environment and job</th><th scope="col">Observed Rust</th><th scope="col">Audio HLS pairs</th><th scope="col">TS regression tests</th></tr></thead><tbody>
+<tr><th scope="row"><a href="https://github.com/kazuhide/drmr/actions/runs/39327394237/job/118317107508">Linux AMD64 / minimum</a></th><td><code>1.95.0</code></td><td>9/9</td><td>34/34</td></tr>
+<tr><th scope="row"><a href="https://github.com/kazuhide/drmr/actions/runs/39327394237/job/118317106710">Linux AMD64 / stable</a></th><td><code>1.99.1</code></td><td>9/9</td><td>34/34</td></tr>
+<tr><th scope="row"><a href="https://github.com/kazuhide/drmr/actions/runs/39327394237/job/118317107104">macOS ARM64 / minimum</a></th><td><code>1.95.0</code></td><td>9/9</td><td>34/34</td></tr>
+<tr><th scope="row"><a href="https://github.com/kazuhide/drmr/actions/runs/39327394237/job/118317107079">macOS ARM64 / stable</a></th><td><code>1.99.1</code></td><td>9/9</td><td>34/34</td></tr>
+<tr><th scope="row"><a href="https://github.com/kazuhide/drmr/actions/runs/39327394310/job/118316974281">Windows AMD64 / minimum</a></th><td><code>1.95.0</code></td><td>9/9</td><td>34/34</td></tr>
+<tr><th scope="row"><a href="https://github.com/kazuhide/drmr/actions/runs/39327394310/job/118316974370">Windows AMD64 / stable</a></th><td><code>1.99.1</code></td><td>9/9</td><td>34/34</td></tr>
+</tbody></table></div>
+<p>Each environment exercised the same nine protection pairs. The 34 tests are <code>conversion_ts</code> (11) plus <code>conversion_ts_output</code> (23), including five new audio-HLS regressions. These are nine capabilities checked on six environments.</p>
+<p>All 470 original AAC frames and 481,280 decoded samples per channel were checked, preserving the original first presentation time of 7/5 seconds and playback end of 857/75 seconds. Each output passed the four comparisons during conversion and a fresh verification against the original TS; source files were unchanged. Decoded hashes are compared within each job&#x27;s decoding environment, not assumed identical across different tool builds.</p>
+<p>The <a href="https://github.com/kazuhide/drmr/actions/runs/39327394297/job/118317216488">Linux AMD64 Docker job</a> separately passed one representative clear audio TS → CBCS fMP4 HLS route and fresh original-TS verification. It does not exercise all nine audio-HLS pairs. These results do not cover DRM license acquisition or device playback.</p>
 <h3>Reproduce selected suites</h3>
 <p>With source and media tools installed, run from the repository root:</p>
 <figure class="guide-example" aria-labelledby="example-57-title" data-code-language="sh"><figcaption id="example-57-title">Example 57: sh</figcaption><pre tabindex="0"><code>cargo test --locked -p drmr --test bbb_media -- --nocapture
@@ -795,19 +809,19 @@ cargo test --locked -p drmr --test conversion_finite_outputs -- --nocapture
 <section class="guide-chapter" id="cli-reference" data-guide-chapter="cli-reference" aria-labelledby="cli-reference-title"><h2 id="cli-reference-title">19. CLI argument and option reference</h2><a class="guide-chapter-switch" href="../ja/guide/#cli-reference" lang="ja" hreflang="ja">日本語</a>
 <p>All public commands accept <code>-h</code> / <code>--help</code>; <code>drmr help COMMAND</code> also displays help. Use top-level <code>-V</code> / <code>--version</code> or <code>drmr version</code>. Private supervision bootstrap arguments are not a user interface.</p>
 <h3>doctor</h3>
-<div class="guide-table-scroll" role="region" aria-labelledby="table-13-title" tabindex="0"><table><caption id="table-13-title">doctor — Table 13</caption><thead><tr><th scope="col">Option</th><th scope="col">Meaning/default</th></tr></thead><tbody>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-14-title" tabindex="0"><table><caption id="table-14-title">doctor — Table 14</caption><thead><tr><th scope="col">Option</th><th scope="col">Meaning/default</th></tr></thead><tbody>
 <tr><th scope="row"><code>--json</code></th><td>One machine-readable diagnostic object</td></tr>
 <tr><th scope="row"><code>--probe</code></th><td>Bounded version/help/advertised-options checks; default is discovery only</td></tr>
 <tr><th scope="row"><code>--route PROFILE</code></th><td>Required tool set, default <code>all</code></td></tr>
 </tbody></table></div>
 <p>PROFILE is <code>all</code>, <code>prepared-dash</code>, <code>progressive-mp4</code>, <code>fragmented-mp4</code>, <code>dash-presentation</code>, <code>fmp4-hls-presentation</code>, <code>mpeg-ts-hls</code>, <code>mpeg-ts-sample-aes-hls</code> or <code>mpeg-ts-hls-ts</code>. Output route names are not automatically valid doctor values; use <code>all</code> to include the tool set for TS-DASH.</p>
 <h3>inspect</h3>
-<div class="guide-table-scroll" role="region" aria-labelledby="table-14-title" tabindex="0"><table><caption id="table-14-title">inspect — Table 14</caption><thead><tr><th scope="col">Argument/option</th><th scope="col">Meaning</th></tr></thead><tbody>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-15-title" tabindex="0"><table><caption id="table-15-title">inspect — Table 15</caption><thead><tr><th scope="col">Argument/option</th><th scope="col">Meaning</th></tr></thead><tbody>
 <tr><th scope="row"><code>INPUT</code></th><td>Local MP4, MPD or M3U8; remote resources are not acquired</td></tr>
 <tr><th scope="row"><code>--json</code></th><td>Versioned metadata report</td></tr>
 </tbody></table></div>
 <h3>plan</h3>
-<div class="guide-table-scroll" role="region" aria-labelledby="table-15-title" tabindex="0"><table><caption id="table-15-title">plan — Table 15</caption><thead><tr><th scope="col">Argument/option</th><th scope="col">Meaning</th></tr></thead><tbody>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-16-title" tabindex="0"><table><caption id="table-16-title">plan — Table 16</caption><thead><tr><th scope="col">Argument/option</th><th scope="col">Meaning</th></tr></thead><tbody>
 <tr><th scope="row"><code>INPUT</code></th><td>Local input for generic conversion intent</td></tr>
 <tr><th scope="row"><code>--to TARGET</code></th><td>Required in INPUT mode: clear, cenc, cbcs, hls-aes128, hls-sample-aes</td></tr>
 <tr><th scope="row"><code>--format FORMAT</code></th><td>mp4, dash, hls, hls-ts; comma-separated alternatives allowed; omitted follows MP4/DASH/HLS, with HLS meaning fMP4</td></tr>
@@ -816,7 +830,7 @@ cargo test --locked -p drmr --test conversion_finite_outputs -- --nocapture
 <tr><th scope="row"><code>--asset-id ID</code></th><td>Asset name in MPD mode</td></tr>
 </tbody></table></div>
 <h3>convert</h3>
-<div class="guide-table-scroll" role="region" aria-labelledby="table-16-title" tabindex="0"><table><caption id="table-16-title">convert — Table 16</caption><thead><tr><th scope="col">Argument/option</th><th scope="col">Meaning</th></tr></thead><tbody>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-17-title" tabindex="0"><table><caption id="table-17-title">convert — Table 17</caption><thead><tr><th scope="col">Argument/option</th><th scope="col">Meaning</th></tr></thead><tbody>
 <tr><th scope="row"><code>INPUT</code></th><td>Supported local original or completed clear HLS URL</td></tr>
 <tr><th scope="row"><code>--to TARGET</code></th><td>Required output protection</td></tr>
 <tr><th scope="row"><code>--format FORMAT</code></th><td>One output format; HLS defaults to fMP4 even for TS input</td></tr>
@@ -831,7 +845,7 @@ cargo test --locked -p drmr --test conversion_finite_outputs -- --nocapture
 </tbody></table></div>
 <p>There are no generic <code>ffmpeg-bin</code> or <code>ffprobe-bin</code> options. Those tools are found on the launch environment&#x27;s PATH.</p>
 <h3>verify</h3>
-<div class="guide-table-scroll" role="region" aria-labelledby="table-17-title" tabindex="0"><table><caption id="table-17-title">verify — Table 17</caption><thead><tr><th scope="col">Argument/option</th><th scope="col">Meaning</th></tr></thead><tbody>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-18-title" tabindex="0"><table><caption id="table-18-title">verify — Table 18</caption><thead><tr><th scope="col">Argument/option</th><th scope="col">Meaning</th></tr></thead><tbody>
 <tr><th scope="row"><code>OUTPUT</code></th><td>Candidate MP4, MPD or M3U8</td></tr>
 <tr><th scope="row"><code>--source INPUT</code></th><td>Required original; never inferred from the result</td></tr>
 <tr><th scope="row"><code>--keys-file FILE</code></th><td>input keys for original, output keys for candidate</td></tr>
@@ -842,7 +856,7 @@ cargo test --locked -p drmr --test conversion_finite_outputs -- --nocapture
 </tbody></table></div>
 <p>Verification does not rebuild the result using a new target/format.</p>
 <h3>run</h3>
-<div class="guide-table-scroll" role="region" aria-labelledby="table-18-title" tabindex="0"><table><caption id="table-18-title">run — Table 18</caption><thead><tr><th scope="col">Option</th><th scope="col">Meaning/default</th></tr></thead><tbody>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-19-title" tabindex="0"><table><caption id="table-19-title">run — Table 19</caption><thead><tr><th scope="col">Option</th><th scope="col">Meaning/default</th></tr></thead><tbody>
 <tr><th scope="row"><code>--mpd MPD</code></th><td>Required supported prepared manifest</td></tr>
 <tr><th scope="row"><code>--output ROOT</code></th><td>Required; results under ROOT/asset-id</td></tr>
 <tr><th scope="row"><code>--asset-id ID</code></th><td>Asset name, otherwise original directory name</td></tr>
@@ -856,12 +870,12 @@ cargo test --locked -p drmr --test conversion_finite_outputs -- --nocapture
 <tr><th scope="row"><code>--no-manifests</code></th><td>Diagnostic: omit playlist/manifest generation</td></tr>
 </tbody></table></div>
 <h3>analyze-hls / package-hls</h3>
-<div class="guide-table-scroll" role="region" aria-labelledby="table-19-title" tabindex="0"><table><caption id="table-19-title">analyze-hls / package-hls — Table 19</caption><thead><tr><th scope="col">analyze-hls option</th><th scope="col">Meaning</th></tr></thead><tbody>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-20-title" tabindex="0"><table><caption id="table-20-title">analyze-hls / package-hls — Table 20</caption><thead><tr><th scope="col">analyze-hls option</th><th scope="col">Meaning</th></tr></thead><tbody>
 <tr><th scope="row"><code>--source-config FILE</code></th><td>Required private source URL/path and permission configuration</td></tr>
 <tr><th scope="row"><code>--asset-id ID</code></th><td>Required saved asset name</td></tr>
 <tr><th scope="row"><code>--output ROOT</code></th><td>Required; save under ROOT/ID/clear/source</td></tr>
 </tbody></table></div>
-<div class="guide-table-scroll" role="region" aria-labelledby="table-20-title" tabindex="0"><table><caption id="table-20-title">analyze-hls / package-hls — Table 20</caption><thead><tr><th scope="col">package-hls option</th><th scope="col">Meaning</th></tr></thead><tbody>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-21-title" tabindex="0"><table><caption id="table-21-title">analyze-hls / package-hls — Table 21</caption><thead><tr><th scope="col">package-hls option</th><th scope="col">Meaning</th></tr></thead><tbody>
 <tr><th scope="row"><code>--analysis FILE</code></th><td>Required completed analysis.json</td></tr>
 <tr><th scope="row"><code>--drm-config FILE</code></th><td>Required private signaling configuration</td></tr>
 <tr><th scope="row"><code>--selection FILE</code></th><td>Private analyzed audio selection</td></tr>
@@ -870,14 +884,14 @@ cargo test --locked -p drmr --test conversion_finite_outputs -- --nocapture
 </tbody></table></div>
 <p>Content keys for these workflows are <code>DRM_KID</code>/<code>DRM_KEY</code>/<code>DRM_IV</code>. Passing generic key JSON as drm-config is not supported.</p>
 <h3>verify-snapshot / canonical / version</h3>
-<div class="guide-table-scroll" role="region" aria-labelledby="table-21-title" tabindex="0"><table><caption id="table-21-title">verify-snapshot / canonical / version — Table 21</caption><thead><tr><th scope="col">Command/argument</th><th scope="col">Meaning</th></tr></thead><tbody>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-22-title" tabindex="0"><table><caption id="table-22-title">verify-snapshot / canonical / version — Table 22</caption><thead><tr><th scope="col">Command/argument</th><th scope="col">Meaning</th></tr></thead><tbody>
 <tr><th scope="row"><code>verify-snapshot PATH</code></th><td>Check recorded digest for snapshot directory or analysis.json</td></tr>
 <tr><th scope="row"><code>verify-snapshot --files PATH</code></th><td>Also rehash saved playlists/media</td></tr>
 <tr><th scope="row"><code>canonical PATH</code></th><td>Stable JSON output; no final LF or secret removal</td></tr>
 <tr><th scope="row"><code>version</code></th><td>Print version; no command-specific options</td></tr>
 </tbody></table></div>
 <h3>batch</h3>
-<div class="guide-table-scroll" role="region" aria-labelledby="table-22-title" tabindex="0"><table><caption id="table-22-title">batch — Table 22</caption><thead><tr><th scope="col">Option</th><th scope="col">Meaning/default</th></tr></thead><tbody>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-23-title" tabindex="0"><table><caption id="table-23-title">batch — Table 23</caption><thead><tr><th scope="col">Option</th><th scope="col">Meaning/default</th></tr></thead><tbody>
 <tr><th scope="row"><code>--work-list FILE</code></th><td>Required schema header and asset JSONL</td></tr>
 <tr><th scope="row"><code>--output ROOT</code></th><td>Required output root</td></tr>
 <tr><th scope="row"><code>--resume-log FILE</code></th><td>Required attempt-state record</td></tr>
@@ -898,7 +912,7 @@ cargo test --locked -p drmr --test conversion_finite_outputs -- --nocapture
 <tr><th scope="row"><code>--heartbeat-s SEC</code></th><td>Status interval, default 60</td></tr>
 </tbody></table></div>
 <h3>serve</h3>
-<div class="guide-table-scroll" role="region" aria-labelledby="table-23-title" tabindex="0"><table><caption id="table-23-title">serve — Table 23</caption><thead><tr><th scope="col">Option/environment</th><th scope="col">Meaning/default</th></tr></thead><tbody>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-24-title" tabindex="0"><table><caption id="table-24-title">serve — Table 24</caption><thead><tr><th scope="col">Option/environment</th><th scope="col">Meaning/default</th></tr></thead><tbody>
 <tr><th scope="row"><code>--static-dir DIR</code></th><td>Trusted UI directory replacing embedded assets</td></tr>
 <tr><th scope="row"><code>--cli FILE</code></th><td>Same-version CLI for jobs</td></tr>
 <tr><th scope="row"><code>DRMR_CATALOG_ROOT</code></th><td>Required prepared catalog root</td></tr>

@@ -1160,6 +1160,7 @@ JSON を使わない場合は、観測した活動・件数・経過時間を標
 | --- | --- |
 | 従来の 16 保護経路 | clear/cenc/cbcs DASH と AES-128 fMP4 HLS の原本から四つの出力を作る。原本・結果の鍵を分け、変換と別の verify を行う |
 | TS→DASH の 27 経路 | clear/AES-128/SAMPLE-AES 入力 × 映像のみ・映像音声・音声のみ × clear/cenc/cbcs DASH。原本の全データ・時刻と最終宣言を確認 |
+| 音声のみ TS→fMP4 HLS の 9 経路 | clear/AES-128/SAMPLE-AES 入力から clear/CBCS/AES-128 の fMP4 HLS へ変換。原本の全パケット・時刻・デコード音声を確認 |
 | TS 出力の 27 経路 | 同じ三入力保護・三トラック構成から clear/AES-128/SAMPLE-AES TS を作り、完全比較する |
 | 有限音声範囲の 54 経路 | clear/cenc/cbcs MP4 × 音声のみ・映像音声 × MP4/DASH/fMP4 HLS の九出力。全音声と各自の正確な再生範囲を確認 |
 | 有限 MP4 の CLI 27 経路 | 三入力保護の映像音声 MP4 から九出力を作り、実 CLI で独立検証する |
@@ -1174,6 +1175,25 @@ CLI の 27 経路は、54 種類のうち映像と音声を持つ組み合わせ
 ## OS と検証範囲
 
 最低 Rust 版 1.95 と最新安定版を Linux、macOS、Windows の CI で検査します。ネイティブ Windows は通常ユーザーで権限、Ctrl+C/Ctrl+Break、子孫・ロック・作業領域を検査します。Docker は Linux AMD64 で実メディアと Web の HTTP・停止・終了を確認します。Desktop の各 OS ビルドはネイティブ GUI 再生試験とは別です。
+
+## 音声のみ TS→fMP4 HLS の確認結果
+
+以下はソース [f0096539](https://github.com/kazuhide/drmr/commit/f0096539e698d66cc77affcd7ea891c793aa87bf) を対象に、2026年10月20日（日本時間）に完了した CI の結果です。最低要件は Rust 1.95 以上です。1.99.1 はこの実行で観測した安定版であり、固定の必須版ではありません。
+
+| 環境と実行結果へのリンク | Rust の実測版 | 音声 HLS の組合せ | TS 回帰試験 |
+| --- | --- | --- | --- |
+| [Linux AMD64 / 最低版](https://github.com/kazuhide/drmr/actions/runs/39327394237/job/118317107508) | `1.95.0` | 9/9 | 34/34 |
+| [Linux AMD64 / 安定版](https://github.com/kazuhide/drmr/actions/runs/39327394237/job/118317106710) | `1.99.1` | 9/9 | 34/34 |
+| [macOS ARM64 / 最低版](https://github.com/kazuhide/drmr/actions/runs/39327394237/job/118317107104) | `1.95.0` | 9/9 | 34/34 |
+| [macOS ARM64 / 安定版](https://github.com/kazuhide/drmr/actions/runs/39327394237/job/118317107079) | `1.99.1` | 9/9 | 34/34 |
+| [Windows AMD64 / 最低版](https://github.com/kazuhide/drmr/actions/runs/39327394310/job/118316974281) | `1.95.0` | 9/9 | 34/34 |
+| [Windows AMD64 / 安定版](https://github.com/kazuhide/drmr/actions/runs/39327394310/job/118316974370) | `1.99.1` | 9/9 | 34/34 |
+
+各環境で同じ九つの暗号方式の組合せを検査しました。34件は `conversion_ts` の11件と `conversion_ts_output` の23件の合計で、新しい音声 HLS の回帰試験5件を含みます。九つの対応経路を六環境で確認した結果です。
+
+原本の AAC 470フレームと、チャンネルごとに481,280個のデコード済みサンプルを省略せず確認し、最初の提示時刻7/5秒と再生終端857/75秒を維持しました。各出力は変換中の四つの比較と、元の TS を使った別の検証の両方に成功し、原本ファイルも変わっていません。デコード済みデータのハッシュは各ジョブの同じデコード環境内で照合します。異なるツールのビルド間で同一のハッシュになることは前提にしません。
+
+[Linux AMD64 の Docker 試験](https://github.com/kazuhide/drmr/actions/runs/39327394297/job/118317216488)では、clear の音声 TS から CBCS の fMP4 HLS を作る代表一経路と、元の TS に対する別の検証が成功しました。Docker で音声 HLS の全九経路を検査したという意味ではありません。これらの結果には DRM ライセンス取得や実機再生の確認は含みません。
 
 ## 実行結果の確認方法
 
