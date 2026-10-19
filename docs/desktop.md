@@ -84,7 +84,7 @@ The checks establish archive contents and the compiled host/CLI pairing. They do
 
 ## Linux dependency qualification
 
-The current Linux GUI dependency graph includes `glib 0.18.5`, affected by the `VariantStrIter` issue in [RUSTSEC-2024-0429](https://rustsec.org/advisories/RUSTSEC-2024-0429.html), and the unmaintained `proc-macro-error 1.0.4` build dependency ([RUSTSEC-2024-0370](https://rustsec.org/advisories/RUSTSEC-2024-0370.html)). No advisory is suppressed. Linux GUI runtime qualification remains open; a successful build does not resolve these warnings. These optional Linux GUI dependencies are not enabled by default CLI builds.
+The Linux GUI graph uses a source-verified backport for the `glib 0.18.5` iterator issue and retains a narrowly acknowledged, unmaintained build dependency. See [dependency advisory checks](dependency-security.md) for the exact source, optimized regression, affected graph and residual maintenance exposure. The advisory findings remain in CI reports. Linux GUI runtime qualification remains open; optional GUI dependencies are not enabled by default CLI builds.
 
 ## Development checks
 

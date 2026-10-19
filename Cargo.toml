@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-exclude = ["vendor/process-wrap"]
+exclude = ["vendor/process-wrap", "vendor/glib"]
 members = ["crates/drmr-core", "crates/drmr", "crates/drmr-server", "crates/drmr-test-support", "crates/drmr-desktop"]
 
 [workspace.package]
@@ -63,3 +63,4 @@ must_use_candidate = "allow"
 
 [patch.crates-io]
 process-wrap = { path = "vendor/process-wrap" }
+glib = { path = "vendor/glib" }
