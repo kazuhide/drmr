@@ -640,7 +640,8 @@ def main():
             shutil.copyfile(FIXTURE, root / "input/clip.mp4")
             config = root / "keys/safe.json"
             with open(config, "x", encoding="utf-8", opener=lambda path, flags: os.open(path, flags, 0o600)) as file:
-                json.dump({"schema_version": 1, "output": {"kid": KID, "key": KEY}}, file)
+                json.dump({"schema_version": 1, "output": {
+                    "kid": KID, "key": KEY, "hls_key_uri": "https://keys.example.invalid/container"}}, file)
             image = Image(arguments.image, root, arguments.qualifiers)
             stack.callback(image.close)
             report.update(image_id=image.identifier, architecture=image.architecture)
