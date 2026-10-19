@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 
 export const assets = [
-  'index.html', 'assets/site.css', 'assets/drmr.svg',
+  'index.html', 'ja/index.html', 'assets/site.css', 'assets/drmr.svg',
   'assets/fonts/LICENSE-ibm-plex.txt', 'assets/fonts/README.txt',
   'assets/fonts/ibm-plex-sans-latin-400-normal.woff2',
   'assets/fonts/ibm-plex-sans-latin-600-normal.woff2',
@@ -12,6 +12,10 @@ export const assets = [
 export const publicOrigin = 'https://kazuhide.github.io';
 export const publicBase = publicOrigin + '/drmr/';
 export const localOrigin = 'http://127.0.0.1:4173';
+export function assetRoute(path) {
+  if (!assets.includes(path)) throw new Error('Unknown Pages asset');
+  return path.endsWith('index.html') ? path.slice(0, -'index.html'.length) : path;
+}
 export const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 export function source() {
   return {
@@ -32,8 +36,9 @@ export function allowedRequest(raw, live) {
 }
 export function assetPath(raw) {
   const url = new URL(raw);
-  const relative = url.pathname === '/drmr/' ? 'index.html' : url.pathname.slice('/drmr/'.length);
-  return url.pathname.startsWith('/drmr/') && assets.includes(relative) ? relative : null;
+  let relative = url.pathname.startsWith('/drmr/') ? url.pathname.slice('/drmr/'.length) : url.pathname.slice(1);
+  if (!relative || relative === 'ja/') relative += 'index.html';
+  return assets.includes(relative) ? relative : null;
 }
 
 export function requireCi(live) {

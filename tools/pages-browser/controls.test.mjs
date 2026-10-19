@@ -1,6 +1,7 @@
+import { locales } from './locales.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { assets, digest, liveMode, allowedRequest } from './source.mjs';
+import { assets, assetRoute, assetPath, digest, liveMode, allowedRequest } from './source.mjs';
 import { matchesPublication } from './wait-published.mjs';
 import { resource } from './server.mjs';
 import { requireFocus, requireImages, requireLayout, focusObservation, requireClippedFocusTimeout, pollFocus, FocusConditionTimeout, FocusObservationDeadline } from './checks.mjs';
@@ -8,6 +9,15 @@ import { requireFocus, requireImages, requireLayout, focusObservation, requireCl
 test('only the fixed static payload resolves at either mount', () => {
   assert.equal(resource('/').relative, 'index.html');
   assert.equal(resource('/drmr/').relative, 'index.html');
+  for (const path of ['/ja/', '/ja/index.html', '/drmr/ja/', '/drmr/ja/index.html']) {
+    assert.equal(resource(path).relative, 'ja/index.html');
+    assert.equal(assetPath('http://127.0.0.1:4173' + path), 'ja/index.html');
+  }
+  assert.equal(assetRoute('ja/index.html'), 'ja/');
+  assert.equal(assets.length, 9);
+  assert.throws(() => assetRoute('../keys.json'));
+  assert.equal(resource('/drmr/ja/keys.json'), null);
+  assert.equal(resource('/drmr/ja/%2e%2e%2f%2e%2e%2fkeys.json'), null);
   assert.equal(resource('/drmr/assets/site.css').type, 'text/css; charset=utf-8');
   for (const path of ['/drmr/../../README.md', '/drmr/%2e%2e%2fREADME.md', '/drmr/assets%5csite.css',
     '/.git/config', '/drmr/assets/site.css?secret=1', '/drmr/assets/', '/drmr/%zz']) {
@@ -49,7 +59,7 @@ test('published checks have one fixed project origin and refuse arbitrary modes 
   }
 });
 
-test('all eight published raw hashes must match once; stale, missing or duplicate rows fail', () => {
+test('all nine published raw hashes must match once; stale, missing or duplicate rows fail', () => {
   const hashes = Object.fromEntries(assets.map(path => [path, digest(Buffer.from(path))]));
   const rows = assets.map(path => ({ path, status: 200, sha256: hashes[path] }));
   assert.equal(matchesPublication(rows, hashes), true);
@@ -58,6 +68,8 @@ test('all eight published raw hashes must match once; stale, missing or duplicat
   assert.equal(matchesPublication(rows.map((row, i) => i ? row : { ...row, status: 404 }), hashes), false);
   assert.equal(matchesPublication(rows.map((row, i) => i ? row : { ...row, sha256: digest(Buffer.from('stale')) }), hashes), false);
   assert.notEqual(digest(Buffer.from('line\n')), digest(Buffer.from('line\r\n')));
+  const staleJapanese = rows.map(row => row.path === 'ja/index.html' ? { ...row, sha256: digest(Buffer.from('stale-ja')) } : row);
+  assert.equal(matchesPublication(staleJapanese, hashes), false);
 });
 
 test('focus measurements retain identity and refuse partial or entirely offscreen rectangles', () => {
@@ -274,4 +286,25 @@ test('a completed delayed pause enters the final idle window without another mea
   });
   assert.equal(measurements, 2);
   assert.equal(samples.length, 2);
+});
+
+
+test('both fixed locale routes bind separate pages and reciprocal native language links', () => {
+  assert.deepEqual(locales.map(locale => locale.language), ['en', 'ja']);
+  for (const locale of locales) {
+    const other = locales.find(candidate => candidate.language !== locale.language);
+    assert.equal(assets.includes(locale.asset), true);
+    assert.equal(assetRoute(locale.asset), locale.route);
+    assert.equal(locale.switchLanguage, other.language);
+    assert.equal(locale.groups.length, 5);
+    assert.equal(locale.headings.length, 4);
+    assert.equal(new Set(locale.groups).size, 5);
+    for (const mount of ['/', '/drmr/']) {
+      const current = 'http://127.0.0.1:4173' + mount + locale.route;
+      const next = new URL(locale.switchHref, current).href;
+      assert.equal(next, 'http://127.0.0.1:4173' + mount + other.route);
+      assert.equal(resource(new URL(next).pathname).relative, other.asset);
+      assert.equal(assetPath(next), other.asset);
+    }
+  }
 });

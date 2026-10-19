@@ -1,6 +1,7 @@
 """Check the actual Pages payload, including link and artifact escape refusals."""
 import importlib.util
 import os
+import re
 from pathlib import Path
 import shutil
 import stat
@@ -41,11 +42,64 @@ class Site(unittest.TestCase):
 
     def test_actual_site_is_small_self_contained_and_mount_independent(self):
         result = self.check()
-        self.assertEqual(result["files"], 8)
+        self.assertEqual(result["files"], 9)
         self.assertLessEqual(result["bytes"], 180 * 1024)
         self.assertEqual(result["mounts"], ["/", "/drmr/"])
         self.assertEqual(result["scripts"], 0)
+        self.assertEqual(result["languages"], ["en", "ja"])
+        self.assertEqual(set(result["sha256"]), CHECK.FILES)
         self.assertEqual(result["pending_docs"], ["docs/docker.md"])
+
+    def test_localized_assets_and_language_root_resolve_without_escape(self):
+        files = CHECK.FILES
+        self.assertEqual(CHECK.local_reference("../assets/site.css", "ja/index.html", files),
+                         ("assets/site.css", ""))
+        self.assertEqual(CHECK.local_reference("../", "ja/index.html", files), ("index.html", ""))
+        self.assertEqual(CHECK.local_reference("./ja/", "index.html", files), ("ja/index.html", ""))
+        for reference in ("../../index.html", "../%2e%2e/index.html", "%2e%2e/assets/site.css",
+                          "../assets/../index.html", "../assets%2fsite.css", "../keys.json"):
+            with self.subTest(reference=reference), self.assertRaises(CHECK.Failure):
+                CHECK.local_reference(reference, "ja/index.html", files)
+
+    def test_canonical_and_reciprocal_alternates_are_required(self):
+        path = self.site / "index.html"
+        original = path.read_text(encoding="utf-8")
+        path.write_text(re.sub(r'\s*<link rel="canonical"[^>]+>', '', original), encoding="utf-8")
+        with self.assertRaisesRegex(CHECK.Failure, "site-language-links"):
+            self.check()
+
+    def test_japanese_language_links_and_footer_notice_are_checked(self):
+        path = self.site / "ja/index.html"
+        original = path.read_text(encoding="utf-8")
+        page = CHECK.Page()
+        page.feed(original)
+        reference = next(value for tag, attribute, value in page.references
+                         if tag == "a" and value.endswith("LICENSE-ibm-plex.txt"))
+        self.assertEqual(reference, "../assets/fonts/LICENSE-ibm-plex.txt")
+        self.assertEqual(CHECK.local_reference(reference, "ja/index.html", CHECK.FILES),
+                         ("assets/fonts/LICENSE-ibm-plex.txt", ""))
+        for old, new, token in (( 'lang="ja"', 'lang="en"', "site-document-semantics"),
+                                ('hreflang="en"', 'hreflang="ja"', "site-language-links"),
+                                ('href="../" lang="en"', 'href="../" lang="ja"', "site-language-links"),
+                                ('href="../" lang="en"', 'href="#main" lang="en"', "site-language-links"),
+                                ('../assets/fonts/LICENSE-ibm-plex.txt', '../assets/fonts/README.txt', "site-font-license-link"),
+                                ('../assets/fonts/LICENSE-ibm-plex.txt', '../../outside.txt', "site-reference")):
+            with self.subTest(token=token):
+                self.assertIn(old, original)
+                path.write_text(original.replace(old, new, 1), encoding="utf-8")
+                with self.assertRaisesRegex(CHECK.Failure, token):
+                    self.check()
+        path.write_text(original, encoding="utf-8")
+
+    def test_wrong_or_duplicate_alternates_and_language_switch_are_refused(self):
+        path = self.site / "index.html"
+        original = path.read_text(encoding="utf-8")
+        for value in (original.replace('hreflang="ja"', 'hreflang="en"', 1),
+                      original.replace('https://kazuhide.github.io/drmr/ja/', 'https://example.com/ja/', 1),
+                      original.replace('href="./ja/"', 'href="#main"', 1)):
+            path.write_text(value, encoding="utf-8")
+            with self.assertRaisesRegex(CHECK.Failure, "site-language-links"):
+                self.check()
 
     def test_pending_document_is_an_explicit_failure_by_default(self):
         with self.assertRaisesRegex(CHECK.Failure, "missing-repository-document"):

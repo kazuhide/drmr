@@ -14,14 +14,18 @@ import stat
 from urllib.parse import unquote, urljoin, urlsplit
 
 FILES = frozenset((
-    "index.html", "assets/site.css", "assets/drmr.svg",
+    "index.html", "ja/index.html", "assets/site.css", "assets/drmr.svg",
     "assets/fonts/ibm-plex-sans-latin-400-normal.woff2",
     "assets/fonts/ibm-plex-sans-latin-600-normal.woff2",
     "assets/fonts/ibm-plex-mono-latin-400-normal.woff2",
     "assets/fonts/LICENSE-ibm-plex.txt", "assets/fonts/README.txt",
 ))
-DIRECTORIES = frozenset(("assets", "assets/fonts"))
+DIRECTORIES = frozenset(("ja", "assets", "assets/fonts"))
 MAX_BYTES = 180 * 1024
+PAGES = {"index.html": ("en", "https://kazuhide.github.io/drmr/"),
+         "ja/index.html": ("ja", "https://kazuhide.github.io/drmr/ja/")}
+ALTERNATES = {"en": PAGES["index.html"][1], "ja": PAGES["ja/index.html"][1],
+              "x-default": PAGES["index.html"][1]}
 
 
 class Failure(ValueError):
@@ -65,19 +69,40 @@ def inventory(root):
 
 
 def local_reference(reference, origin, files):
-    require(not any(ord(c) <= 32 or c == "\\" for c in reference), "site-reference")
+    require(isinstance(reference, str) and not any(ord(c) <= 32 or c == "\\" for c in reference), "site-reference")
     parsed = urlsplit(reference)
     require(not parsed.scheme and not parsed.netloc and not parsed.query, "site-reference")
     decoded = unquote(parsed.path, errors="strict")
     require(not decoded.startswith("/") and "\\" not in decoded, "site-reference")
-    require(".." not in PurePosixPath(decoded).parts, "site-reference")
+    parts = PurePosixPath(decoded).parts
+    if ".." in parts:
+        # The Japanese document may reach the shared assets or English root
+        # through exactly one literal parent. Encoded or extra parents fail.
+        allowed_parent = origin == "ja/index.html" and parsed.path == decoded and (
+            decoded in ("../", "../index.html") or
+            decoded.startswith("../assets/") and ".." not in PurePosixPath(decoded[3:]).parts)
+        require(allowed_parent, "site-reference")
     if not decoded:
         return origin, parsed.fragment
-    resolved = (PurePosixPath(origin).parent / decoded).as_posix()
+    stack = list(PurePosixPath(origin).parent.parts)
+    for part in decoded.split("/"):
+        if part in ("", "."):
+            continue
+        if part == "..":
+            require(stack, "site-reference")
+            stack.pop()
+        else:
+            stack.append(part)
+    resolved = "/".join(stack)
+    if decoded.endswith("/") or not resolved:
+        resolved = (resolved + "/" if resolved else "") + "index.html"
     require(resolved in files, "site-reference")
     for mount in ("/", "/drmr/"):
         url = urljoin("https://pages.example" + mount + origin, reference)
-        require(urlsplit(url).path == mount + resolved, "site-reference-mount")
+        expected = mount + resolved
+        if decoded.endswith("/"):
+            expected = expected[:-len("index.html")]
+        require(urlsplit(url).path == expected, "site-reference-mount")
     return resolved, parsed.fragment
 
 
@@ -91,6 +116,9 @@ class Page(HTMLParser):
         self.language = None
         self.has_title = False
         self.has_viewport = False
+        self.canonicals = []
+        self.alternates = []
+        self.language_links = []
 
     def handle_starttag(self, tag, attrs):
         require(tag not in {"script", "base", "iframe", "object", "embed", "form", "input", "textarea", "video", "audio", "source"}, "site-active-content")
@@ -112,6 +140,14 @@ class Page(HTMLParser):
             self.headings.append(int(tag[1]))
         if tag == "img":
             require("alt" in data and "width" in data and "height" in data, "site-image-semantics")
+        if tag == "link" and data.get("rel") in ("canonical", "alternate"):
+            if data["rel"] == "canonical":
+                self.canonicals.append(data.get("href"))
+            else:
+                self.alternates.append((data.get("hreflang"), data.get("href")))
+            return
+        if tag == "a" and "hreflang" in data:
+            self.language_links.append((data.get("hreflang"), data.get("lang"), data.get("href")))
         for attribute in ("href", "src"):
             if attribute in data:
                 self.references.append((tag, attribute, data[attribute]))
@@ -144,23 +180,38 @@ def document(reference, repository, pending_docs):
 def validate(root, repository, pending_docs=()):
     root, repository = Path(root), Path(repository)
     files = inventory(root)
-    page = Page()
-    page.feed((root / "index.html").read_text(encoding="utf-8"))
-    page.close()
-    require(page.language == "en" and page.has_title and page.has_viewport and page.main_count == 1, "site-document-semantics")
-    require(page.headings and page.headings[0] == 1 and page.headings.count(1) == 1, "site-heading-semantics")
-    require(all(b <= a + 1 for a, b in zip(page.headings, page.headings[1:])), "site-heading-semantics")
+    pages = {}
+    for origin, (language, canonical) in PAGES.items():
+        page = Page()
+        page.feed((root / origin).read_text(encoding="utf-8"))
+        page.close()
+        pages[origin] = page
+        require(page.language == language and page.has_title and page.has_viewport and page.main_count == 1, "site-document-semantics")
+        require(page.headings and page.headings[0] == 1 and page.headings.count(1) == 1, "site-heading-semantics")
+        require(all(b <= a + 1 for a, b in zip(page.headings, page.headings[1:])), "site-heading-semantics")
+        require(page.canonicals == [canonical] and len(page.alternates) == len(ALTERNATES)
+                and dict(page.alternates) == ALTERNATES, "site-language-links")
+        other = "ja" if language == "en" else "en"
+        require(len(page.language_links) == 1 and page.language_links[0][:2] == (other, other), "site-language-links")
+        target, fragment = local_reference(page.language_links[0][2], origin, files)
+        require(target == ("ja/index.html" if other == "ja" else "index.html") and not fragment, "site-language-links")
     pending = set()
-    for tag, attribute, reference in page.references:
-        if urlsplit(reference).scheme:
-            require(tag == "a" and attribute == "href", "site-reference")
-            missing = document(reference, repository, pending_docs)
-            if missing:
-                pending.add(missing)
-        else:
-            target, fragment = local_reference(reference, "index.html", files)
-            if fragment:
-                require(target == "index.html" and fragment in page.ids, "site-anchor")
+    for origin, page in pages.items():
+        notice_link = False
+        for tag, attribute, reference in page.references:
+            require(isinstance(reference, str) and not any(ord(c) <= 32 or c == "\\" for c in reference), "site-reference")
+            if urlsplit(reference).scheme:
+                require(tag == "a" and attribute == "href", "site-reference")
+                missing = document(reference, repository, pending_docs)
+                if missing:
+                    pending.add(missing)
+            else:
+                target, fragment = local_reference(reference, origin, files)
+                if tag == "a" and target == "assets/fonts/LICENSE-ibm-plex.txt":
+                    notice_link = True
+                if fragment:
+                    require(target in pages and fragment in pages[target].ids, "site-anchor")
+        require(notice_link, "site-font-license-link")
     css = (root / "assets/site.css").read_text(encoding="utf-8")
     require(not re.search(r"@import|expression\s*\(|javascript:", css, re.IGNORECASE), "site-active-content")
     for match in re.finditer(r"url\(\s*(['\"]?)(.*?)\1\s*\)", css, re.IGNORECASE):
@@ -173,7 +224,9 @@ def validate(root, repository, pending_docs=()):
     require((root / "assets/drmr.svg").read_bytes() == (repository / "crates/drmr-desktop/icons/icon.svg").read_bytes(), "site-vendored-bytes")
     return {"schema_version": 1, "success": not pending, "status": "pending-documents" if pending else "passed",
             "files": len(files), "bytes": sum(files.values()), "scripts": 0,
-            "mounts": ["/", "/drmr/"], "pending_docs": sorted(pending),
+            "mounts": ["/", "/drmr/"], "languages": ["en", "ja"],
+            "pages": {path: {"language": value[0], "canonical": value[1]} for path, value in PAGES.items()},
+            "pending_docs": sorted(pending),
             "sha256": {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in sorted(files)},
             "limits": ["static checks only; no browser, keyboard, visual or screen-reader qualification", "repository document existence checked locally; no remote HTTP requests"]}
 

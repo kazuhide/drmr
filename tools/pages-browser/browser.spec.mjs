@@ -1,8 +1,9 @@
 import { test, expect } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 import { writeFile } from 'node:fs/promises';
-import { assets, digest, liveMode, publicOrigin, localOrigin, allowedRequest, assetPath } from './source.mjs';
+import { assets, digest, liveMode, publicOrigin, localOrigin, allowedRequest, assetPath, assetRoute } from './source.mjs';
 import { requireFocus, requireImages, requireLayout, layoutObservation, focusObservation, pollFocus, requireClippedFocusTimeout, FocusConditionTimeout } from './checks.mjs';
+import { locales, english } from './locales.mjs';
 
 const live = liveMode(process.env.PAGES_LIVE);
 const origin = live ? publicOrigin : localOrigin;
@@ -23,9 +24,8 @@ async function artifact(info, name, value, type = 'application/json') {
   await info.attach(name, { path, contentType: type });
 }
 
-async function ready(page) {
-  const response = await page.goto('/drmr/');
-  expect(response.status()).toBe(200);
+async function settled(page, locale) {
+  await expect(page.locator('html')).toHaveAttribute('lang', locale.language);
   await page.evaluate(async () => {
     await document.fonts.ready;
     await Promise.all([...document.fonts].map(font => font.load()));
@@ -33,8 +33,39 @@ async function ready(page) {
   await expect(page.getByRole('heading', { level: 1 })).toHaveCount(1);
 }
 
+async function ready(page, locale = english, mount = '/drmr/') {
+  const response = await page.goto(origin + mount + locale.route);
+  expect(response.status()).toBe(200);
+  await settled(page, locale);
+  const sha256 = digest(await response.body());
+  expect(sha256).toBe(test.info().config.metadata.assetHashes[locale.asset]);
+  monitors.get(page)?.evidence.pages.push({ language: locale.language, asset: locale.asset, sha256, mount });
+}
+
+async function renderedFonts(page, context) {
+  // Chromium reports the actual glyph-producing platform fonts, including
+  // system fallback for Japanese. This is not a manual readability assessment.
+  const session = await context.newCDPSession(page);
+  try {
+    await session.send('DOM.enable');
+    await session.send('CSS.enable');
+    const { root } = await session.send('DOM.getDocument', { depth: 0 });
+    const result = [];
+    for (const selector of ['h1', '.lead', 'pre code']) {
+      const { nodeId } = await session.send('DOM.querySelector', { nodeId: root.nodeId, selector });
+      expect(nodeId).toBeGreaterThan(0);
+      const { fonts } = await session.send('CSS.getPlatformFontsForNode', { nodeId });
+      expect(fonts.some(font => font.glyphCount > 0)).toBe(true);
+      result.push({ selector, fonts });
+    }
+    return result;
+  } finally {
+    await session.detach();
+  }
+}
+
 function monitor(page) {
-  const evidence = { console: [], pageErrors: [], failedRequests: [], responses: [], focusChecks: [] };
+  const evidence = { console: [], pageErrors: [], failedRequests: [], responses: [], focusChecks: [], pages: [] };
   const pending = [];
   page.on('console', value => {
     if (['error', 'warning'].includes(value.type())) evidence.console.push({ type: value.type(), text: value.text() });
@@ -56,7 +87,9 @@ function monitor(page) {
 // Observe the same complete condition for at most the existing five-second
 // element-state budget. Do not scroll, refocus, or restart a failed test.
 async function requireTargetFocus(page, target, phase, ordinal) {
-  const check = { phase, ordinal, samples: [] };
+  const pageAsset = assetPath(page.url());
+  const check = { phase, ordinal, language: locales.find(locale => locale.asset === pageAsset)?.language,
+    page_asset: pageAsset, page_sha256: test.info().config.metadata.assetHashes[pageAsset], samples: [] };
   monitors.get(page).evidence.focusChecks.push(check);
   try {
     await pollFocus(() => target.evaluate(focusObservation), check.samples);
@@ -95,16 +128,16 @@ async function projectOnly(context) {
     ? route.continue() : route.abort('blockedbyclient'));
 }
 
-for (const width of [320, 768, 1024, 1440]) {
-  test(`${width}px: layout, assets, keyboard and rendered accessibility`, async ({ page, context, browser }, info) => {
+for (const locale of locales) for (const width of [320, 768, 1024, 1440]) {
+  test(`${locale.language} / ${width}px: layout, assets, keyboard and rendered accessibility`, async ({ page, context, browser }, info) => {
     await projectOnly(context);
     const network = monitor(page);
     await page.setViewportSize({ width, height: 900 });
-    await ready(page);
+    await ready(page, locale);
     // Check production HTML before axe injects its test-only engine into the DOM.
     expect(await page.locator('script').count()).toBe(0);
     const layout = await page.evaluate(layoutObservation);
-    const screenshot = info.outputPath(`page-${width}.png`);
+    const screenshot = info.outputPath(`page-${locale.language}-${width}.png`);
     await page.screenshot({ path: screenshot, fullPage: true, animations: 'disabled' });
     await info.attach('rendered-page', { path: screenshot, contentType: 'image/png' });
     requireLayout(layout);
@@ -123,8 +156,8 @@ for (const width of [320, 768, 1024, 1440]) {
     expect(network.responses.some(row => row.url.endsWith('/drmr/assets/site.css') && row.status === 200)).toBe(true);
 
     await expect(page.getByRole('main')).toHaveCount(1);
-    for (const name of ['Main navigation', 'Documentation and source']) await expect(page.getByRole('navigation', { name, exact: true })).toHaveCount(1);
-    for (const name of ['From declarations to checked media', 'The container matters', 'Four ways back to the original', 'Start with the CLI']) {
+    for (const name of [locale.navigation, locale.footer, locale.languageNavigation]) await expect(page.getByRole('navigation', { name, exact: true })).toHaveCount(1);
+    for (const name of locale.headings) {
       await expect(page.getByRole('heading', { level: 2, name, exact: true })).toBeVisible();
     }
     const headings = await page.locator('h1,h2,h3').evaluateAll(elements => elements.map(element => ({
@@ -136,13 +169,13 @@ for (const width of [320, 768, 1024, 1440]) {
       expect(headings[i].name.length).toBeGreaterThan(0);
     }
     const tree = await page.locator('body').ariaSnapshot();
-    expect(tree).toContain('navigation "Main navigation"');
-    expect(tree).toContain('navigation "Documentation and source"');
+    for (const name of [locale.navigation, locale.footer, locale.languageNavigation]) expect(tree).toContain(`navigation "${name}"`);
     expect(tree).toContain('main:');
-    expect(tree).toContain('link "Read the full support matrix and restrictions"');
+    expect(tree).toContain(`link "${locale.matrix}"`);
     await expect(page.getByRole('group')).toHaveCount(5);
     const renderedCodeGroups = [];
-    for (const [name, command] of codeExamples) {
+    for (const [index, [, command]] of codeExamples.entries()) {
+      const name = locale.groups[index];
       const group = page.getByRole('group', { name, exact: true });
       await expect(group).toHaveCount(1);
       await expect(group).toBeVisible();
@@ -159,27 +192,29 @@ for (const width of [320, 768, 1024, 1440]) {
 
     // Native Tab/Enter, not script-triggered click, proves skip-link movement.
     await page.keyboard.press('Tab');
-    await expect(page.getByRole('link', { name: 'Skip to content', exact: true })).toBeFocused();
-    await requireTargetFocus(page, page.getByRole('link', { name: 'Skip to content', exact: true }), 'skip-link', 1);
+    await expect(page.getByRole('link', { name: locale.skip, exact: true })).toBeFocused();
+    await requireTargetFocus(page, page.getByRole('link', { name: locale.skip, exact: true }), 'skip-link', 1);
     await page.keyboard.press('Enter');
     await expect(page.getByRole('main')).toBeFocused();
-    await expect(page).toHaveURL(origin + '/drmr/#main');
+    await expect(page).toHaveURL(origin + '/drmr/' + locale.route + '#main');
 
     await page.goto('about:blank');
-    await ready(page);
+    await ready(page, locale);
     const focusable = page.locator('a[href], pre[tabindex="0"]');
+    await expect(focusable).toHaveCount(30);
     const focusRecords = [];
     for (let i = 0; i < await focusable.count(); i++) {
       await page.keyboard.press('Tab');
       await expect(focusable.nth(i)).toBeFocused();
       const observed = await requireTargetFocus(page, focusable.nth(i), 'tab-order', i + 1);
-      focusRecords.push({ ordinal: i + 1, ...observed });
+      focusRecords.push({ ordinal: i + 1, language: locale.language, page_asset: locale.asset,
+        page_sha256: info.config.metadata.assetHashes[locale.asset], ...observed });
     }
-    for (const [name, id] of [['Workflow', 'workflow'], ['Support', 'support'], ['Get started', 'get-started']]) {
-      const link = page.getByRole('navigation', { name: 'Main navigation', exact: true }).getByRole('link', { name, exact: true });
+    for (const [name, id] of locale.anchors.map((name, index) => [name, ['workflow', 'support', 'get-started'][index]])) {
+      const link = page.getByRole('navigation', { name: locale.navigation, exact: true }).getByRole('link', { name, exact: true });
       await link.focus();
       await page.keyboard.press('Enter');
-      await expect(page).toHaveURL(origin + '/drmr/#' + id);
+      await expect(page).toHaveURL(origin + '/drmr/' + locale.route + '#' + id);
       const box = await page.locator('#' + id).boundingBox();
       expect(box.y).toBeGreaterThanOrEqual(0);
       expect(box.y).toBeLessThan(900);
@@ -187,16 +222,17 @@ for (const width of [320, 768, 1024, 1440]) {
     // Every served asset must match this checkout byte for byte, including notices.
     const servedAssets = [];
     for (const path of assets) {
-      const response = await page.request.get(origin + '/drmr/' + (path === 'index.html' ? '' : path),
+      const response = await page.request.get(origin + '/drmr/' + assetRoute(path),
         { maxRedirects: 0, headers: { 'Cache-Control': 'no-cache' } });
       expect(response.status()).toBe(200);
       const sha256 = digest(await response.body());
       expect(sha256).toBe(info.config.metadata.assetHashes[path]);
       servedAssets.push({ path, sha256, headers: response.headers() });
     }
-    const license = page.getByRole('link', { name: 'Font license', exact: true });
+    const license = page.getByRole('link', { name: locale.license, exact: true });
     expect(new URL(await license.getAttribute('href'), page.url()).href)
       .toBe(origin + '/drmr/assets/fonts/LICENSE-ibm-plex.txt');
+    const platformFonts = await renderedFonts(page, context);
     const accessibility = await new AxeBuilder({ page }).analyze();
     await artifact(info, 'axe.json', accessibility);
     expect(accessibility.violations).toEqual([]);
@@ -212,37 +248,92 @@ for (const width of [320, 768, 1024, 1440]) {
     }
     await artifact(info, 'evidence.json', { schema_version: 1, source_head: info.config.metadata.sourceHead,
       source_tree: info.config.metadata.sourceTree, mode: info.config.metadata.mode,
+      language: locale.language, page_asset: locale.asset, page_sha256: info.config.metadata.assetHashes[locale.asset],
       asset_hashes: info.config.metadata.assetHashes, servedAssets, chromium: browser.version(), viewport: { width, height: 900 }, production_scripts: 0,
-      layout, fonts, images, headings, code_groups: renderedCodeGroups, keyboard: focusRecords, network,
+      layout, fonts, platform_fonts: platformFonts, images, headings, code_groups: renderedCodeGroups, keyboard: focusRecords, network,
       axe: { version: accessibility.testEngine.version, violations: 0, incomplete: accessibility.incomplete.length },
       limitations: ['automated Chromium only; no manual screen-reader or other-browser qualification',
         'external repository links checked by source validator; no external browser navigation'] });
   });
 }
 
-test('core content and anchor navigation work without production JavaScript', async ({ browser }, info) => {
+for (const locale of locales) test(`${locale.language}: core content and anchor navigation work without production JavaScript`, async ({ browser }, info) => {
   const context = await browser.newContext({ javaScriptEnabled: false, viewport: { width: 320, height: 900 } });
   try {
     await projectOnly(context);
     const page = await context.newPage();
     const mounts = live ? ['/drmr/'] : ['/', '/drmr/'];
+    const pages = [];
     for (const mount of mounts) {
-      const response = await page.goto(origin + mount);
+      await page.goto('about:blank');
+      const response = await page.goto(origin + mount + locale.route);
       expect(response.status()).toBe(200);
+      const sha256 = digest(await response.body());
+      expect(sha256).toBe(info.config.metadata.assetHashes[locale.asset]);
+      pages.push({ language: locale.language, asset: locale.asset, sha256, mount });
+      await expect(page.locator('html')).toHaveAttribute('lang', locale.language);
+      await expect(page.locator('script')).toHaveCount(0);
       await expect(page.getByRole('main')).toBeVisible();
       await expect(page.getByRole('heading', { level: 1 })).toHaveCount(1);
-      const link = page.getByRole('navigation', { name: 'Main navigation' }).getByRole('link', { name: 'Workflow', exact: true });
+      const link = page.getByRole('navigation', { name: locale.navigation, exact: true }).getByRole('link', { name: locale.anchors[0], exact: true });
       for (let i = 0; i < 3; i++) await page.keyboard.press('Tab');
       await expect(link).toBeFocused();
       await page.keyboard.press('Enter');
-      await expect(page).toHaveURL(origin + mount + '#workflow');
+      await expect(page).toHaveURL(origin + mount + locale.route + '#workflow');
       await expect(page.locator('#workflow')).toBeInViewport();
     }
     await artifact(info, 'evidence.json', { schema_version: 1, source_head: info.config.metadata.sourceHead,
-      java_script_enabled: false, mode: info.config.metadata.mode, mounts, browser: browser.version() });
+      source_tree: info.config.metadata.sourceTree, asset_hashes: info.config.metadata.assetHashes,
+      language: locale.language, page_asset: locale.asset, page_sha256: info.config.metadata.assetHashes[locale.asset],
+      java_script_enabled: false, mode: info.config.metadata.mode, pages, browser: browser.version() });
   } finally {
     await context.close();
   }
+});
+
+test('native keyboard switches English to Japanese and back at each supported mount', async ({ page, context }, info) => {
+  await projectOnly(context);
+  const network = monitor(page);
+  const hops = [];
+  const mounts = live ? ['/drmr/'] : ['/', '/drmr/'];
+  await page.setViewportSize({ width: 320, height: 900 });
+  for (const mount of mounts) {
+    await page.goto('about:blank');
+    await ready(page, english, mount);
+    for (const [from, to] of [[locales[0], locales[1]], [locales[1], locales[0]]]) {
+      const link = page.getByRole('navigation', { name: from.languageNavigation, exact: true })
+        .getByRole('link', { name: from.switchName, exact: true });
+      await expect(link).toHaveAttribute('href', from.switchHref);
+      await expect(link).toHaveAttribute('hreflang', to.language);
+      const focusable = page.locator('a[href], pre[tabindex="0"]');
+      await expect(focusable).toHaveCount(30);
+      for (let index = 0; index < 7; index++) {
+        await page.keyboard.press('Tab');
+        await expect(focusable.nth(index)).toBeFocused();
+      }
+      await expect(link).toBeFocused();
+      await requireTargetFocus(page, link, 'language-switch', 7);
+      const target = origin + mount + to.route;
+      const [response] = await Promise.all([
+        page.waitForResponse(response => response.url() === target && response.request().isNavigationRequest()),
+        page.keyboard.press('Enter'),
+      ]);
+      await expect(page).toHaveURL(target);
+      expect(response.status()).toBe(200);
+      const sha256 = digest(await response.body());
+      expect(sha256).toBe(info.config.metadata.assetHashes[to.asset]);
+      await settled(page, to);
+      await expect(page.locator('script')).toHaveCount(0);
+      hops.push({ mount, from: from.language, to: to.language, asset: to.asset, sha256, url: response.url() });
+    }
+  }
+  expect(await context.cookies()).toEqual([]);
+  expect(network.console).toEqual([]);
+  expect(network.pageErrors).toEqual([]);
+  expect(network.failedRequests).toEqual([]);
+  await artifact(info, 'language-roundtrip.json', { schema_version: 1,
+    source_head: info.config.metadata.sourceHead, source_tree: info.config.metadata.sourceTree,
+    asset_hashes: info.config.metadata.assetHashes, mode: info.config.metadata.mode, hops });
 });
 
 test('browser guard controls detect real overflow, invisible focus and a missing image', async ({ page, context }, info) => {
@@ -282,8 +373,8 @@ test('native Tab keeps edge targets fully visible only with the production scrol
   const comparisons = [];
   try {
     for (const [width, ordinal, expected] of [
-      [320, 17, page.getByRole('group', { name: 'Build and check the CLI', exact: true })],
-      [1440, 18, page.getByRole('link', { name: 'Source installation instructions', exact: true })],
+      [320, 18, page.getByRole('group', { name: 'Build and check the CLI', exact: true })],
+      [1440, 19, page.getByRole('link', { name: 'Source installation instructions', exact: true })],
     ]) {
       // Replay the same native Tab sequence in a fresh document for each state.
       for (const state of ['production', 'disabled-control', 'restored']) {

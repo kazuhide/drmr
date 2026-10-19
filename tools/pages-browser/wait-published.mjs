@@ -2,7 +2,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { assets, publicBase, source, digest, liveMode, requireCi } from './source.mjs';
+import { assets, assetRoute, publicBase, source, digest, liveMode, requireCi } from './source.mjs';
 
 export function matchesPublication(rows, hashes) {
   return rows.length === assets.length && assets.every(path => {
@@ -13,7 +13,7 @@ export function matchesPublication(rows, hashes) {
 
 async function inspect(path, remaining) {
   try {
-    const response = await fetch(publicBase + (path === 'index.html' ? '' : path), {
+    const response = await fetch(publicBase + assetRoute(path), {
       redirect: 'error', cache: 'no-store', signal: AbortSignal.timeout(Math.max(1, Math.min(5000, remaining))),
       headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' },
     });
