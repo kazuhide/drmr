@@ -13,6 +13,25 @@ ROOT = Path(__file__).resolve().parents[1]
 def command(argv, cwd=None):
     return subprocess.run(argv, cwd=cwd, check=True, stdout=subprocess.PIPE, text=True).stdout.strip()
 
+def validate_builder(builders, requested, context, endpoint):
+    bindings = {}
+    for row in builders:
+        if row.get("Name") != requested:
+            continue
+        nodes = row.get("Nodes", [])
+        key = json.dumps({"driver": row.get("Driver"), "nodes": [
+            {"name": node.get("Name"), "endpoint": node.get("Endpoint"), "options": node.get("DriverOpts")}
+            for node in nodes]}, sort_keys=True)
+        bindings[key] = row
+    if len(bindings) != 1:
+        raise ValueError("builder-binding-ambiguous")
+    row = next(iter(bindings.values()))
+    nodes = row.get("Nodes", [])
+    if (row.get("Driver") != "docker-container" or len(nodes) != 1
+            or not endpoint.startswith("unix://") or nodes[0].get("Endpoint") not in (context, endpoint)):
+        raise ValueError("builder-not-single-local-node")
+    return {"driver": row["Driver"], "node": nodes[0]["Name"], "endpoint_matches_current": True}
+
 def capture_context(repo, destination):
     revision = command(["git", "rev-parse", "HEAD"], repo)
     tree = command(["git", "rev-parse", revision + "^{tree}"], repo)
@@ -41,20 +60,23 @@ def main():
         parser.error("Report and export destinations must be new")
     if (args.target == "runtime" and (not args.tag or args.output)) or (args.target == "qualification-artifacts" and (not args.output or args.tag)):
         parser.error("runtime requires --tag; qualification-artifacts requires --output")
-    endpoint = json.loads(command(["docker", "context", "inspect", "--format", "{{json .Endpoints.docker.Host}}"] ))
+    context = command(["docker", "context", "show"])
+    docker = ["docker", "--context", context]
+    endpoint = json.loads(command(docker + ["context", "inspect", context, "--format", "{{json .Endpoints.docker.Host}}"] ))
     if not endpoint.startswith("unix://"):
         parser.error("This qualification helper requires a local Unix Docker endpoint")
-    architecture = command(["docker", "info", "--format", "{{.Architecture}}"])
+    architecture = command(docker + ["info", "--format", "{{.Architecture}}"])
     native = {"aarch64": "arm64", "arm64": "arm64", "x86_64": "amd64", "amd64": "amd64"}.get(architecture)
     if args.platform != "linux/" + str(native):
         parser.error("Use a matching native daemon; emulation is not qualification")
-    command(["docker", "buildx", "inspect", args.builder])
+    builders = [json.loads(line) for line in command(docker + ["buildx", "ls", "--format", "{{json .}}"] ).splitlines()]
+    binding = validate_builder(builders, args.builder, context, endpoint)
     args.report.parent.mkdir(parents=True, exist_ok=True)
     with args.report.open("x") as report, tempfile.TemporaryDirectory(prefix="drmr-container-context-") as temp:
         context = Path(temp) / "context.tar"
         result = capture_context(ROOT, context)
         metadata = Path(temp) / "build.json"
-        argv = ["docker", "buildx", "build", "--builder", args.builder, "--platform", args.platform,
+        argv = docker + ["buildx", "build", "--builder", args.builder, "--platform", args.platform,
                 "--target", args.target, "--progress=plain", "--build-arg", "DRMR_REVISION=" + result["source_commit"],
                 "--build-arg", "DRMR_TREE=" + result["source_tree"], "--build-arg", "BUILD_JOBS=" + str(args.jobs),
                 "--metadata-file", str(metadata)]
@@ -62,11 +84,11 @@ def main():
         argv.append("-")
         with context.open("rb") as stream:
             completed = subprocess.run(argv, stdin=stream)
-        result.update({"platform": args.platform, "builder": args.builder, "target": args.target, "exit_code": completed.returncode})
+        result.update({"platform": args.platform, "builder": args.builder, "target": args.target, "exit_code": completed.returncode, "builder_binding": binding})
         if metadata.exists():
             result["build_metadata"] = json.loads(metadata.read_text())
         if completed.returncode == 0 and args.tag:
-            image = json.loads(command(["docker", "image", "inspect", args.tag]))[0]
+            image = json.loads(command(docker + ["image", "inspect", args.tag]))[0]
             result.update({"image_id": image["Id"], "labels": image["Config"]["Labels"], "size_bytes": image["Size"]})
             if image["Config"]["Labels"].get("org.opencontainers.image.revision") != result["source_commit"] or image["Config"]["Labels"].get("io.drmr.source.tree") != result["source_tree"]:
                 raise ValueError("Built image source labels do not match the captured context")
