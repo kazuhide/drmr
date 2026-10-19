@@ -3,6 +3,8 @@ use std::{fs, io, path::PathBuf};
 #[cfg(target_os = "linux")]
 use std::{
     fs::File,
+    io::{Read as _, Write as _},
+    net::TcpStream,
     path::Path,
     process::{Child, Command, Stdio},
     thread,
@@ -126,12 +128,13 @@ fn wait_held(owned: &mut Owned, control: &Path) -> io::Result<(u32, u32)> {
         thread::sleep(Duration::from_millis(5));
     };
     let lock = File::open(&lock_path)?;
-    let (_, group) = identity(tool)?;
+    let (parent, group) = identity(tool)?;
     let (_, descendant_group) = identity(descendant)?;
     let (_, cli_group) = identity(owned.child.id())?;
     owned.group = Some(i32::try_from(group).map_err(|_| fail())?);
     owned.lock = Some(lock);
-    if group != tool
+    if parent != owned.child.id()
+        || group != tool
         || descendant_group != group
         || cli_group == group
         || !matches!(
@@ -145,30 +148,52 @@ fn wait_held(owned: &mut Owned, control: &Path) -> io::Result<(u32, u32)> {
 }
 
 #[cfg(target_os = "linux")]
-fn stop(cli: &Path, fixture: &Path, source: &Path, work: &Path) -> io::Result<()> {
-    use std::os::unix::fs::PermissionsExt as _;
-    let control = work.join("stop-control");
-    fs::create_dir(&control)?;
-    fs::set_permissions(&control, fs::Permissions::from_mode(0o700))?;
-    let tool_pid = control.join("tool.pid");
-    let descendant_pid = control.join("descendant.pid");
-    let lock_path = control.join("descendant.lock");
+fn install_control(fixture: &Path, control: &Path) -> io::Result<()> {
     let program = control.join("ffprobe");
     install(
         fixture,
         &program,
         &drmr_test_support::ToolSpec::default()
-            .with("pid_file", tool_pid.to_str().ok_or_else(fail)?)
+            .with(
+                "pid_file",
+                control.join("tool.pid").to_str().ok_or_else(fail)?,
+            )
             .with(
                 "descendant_pid_file",
-                descendant_pid.to_str().ok_or_else(fail)?,
+                control.join("descendant.pid").to_str().ok_or_else(fail)?,
             )
-            .with("descendant_lock_file", lock_path.to_str().ok_or_else(fail)?)
+            .with(
+                "descendant_lock_file",
+                control.join("descendant.lock").to_str().ok_or_else(fail)?,
+            )
             .with(
                 "release_file",
                 control.join("never-release").to_str().ok_or_else(fail)?,
             ),
     )?;
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn assert_gone(owned: &Owned, tool: u32, descendant: u32) -> io::Result<()> {
+    // First observations after terminal state/return, before file/log reads. No eventual polling.
+    let released = owned.lock.as_ref().ok_or_else(fail)?.try_lock();
+    let tool_absent = !Path::new(&format!("/proc/{tool}")).exists();
+    let descendant_absent = !Path::new(&format!("/proc/{descendant}")).exists();
+    if released.is_err() || !tool_absent || !descendant_absent {
+        return Err(fail());
+    }
+    owned.lock.as_ref().ok_or_else(fail)?.unlock()?;
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn stop(cli: &Path, fixture: &Path, source: &Path, work: &Path) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+    let control = work.join("stop-control");
+    fs::create_dir(&control)?;
+    fs::set_permissions(&control, fs::Permissions::from_mode(0o700))?;
+    install_control(fixture, &control)?;
     let output = work.join("cancelled-output");
     let stdout_path = control.join("stdout");
     let stderr_path = control.join("stderr");
@@ -200,16 +225,8 @@ fn stop(cli: &Path, fixture: &Path, source: &Path, work: &Path) -> io::Result<()
         }
         thread::sleep(Duration::from_millis(5));
     };
-    // Capture immediate kernel/lock state BEFORE output reads and while this driver lives.
-    let released = owned.lock.as_ref().ok_or_else(fail)?.try_lock();
-    let tool_absent = !Path::new(&format!("/proc/{tool}")).exists();
-    let descendant_absent = !Path::new(&format!("/proc/{descendant}")).exists();
-    if released.is_err()
-        || !tool_absent
-        || !descendant_absent
-        || status.code() != Some(130)
-        || output.exists()
-    {
+    assert_gone(&owned, tool, descendant)?;
+    if status.code() != Some(130) || output.exists() {
         return Err(fail());
     }
     owned.group = None;
@@ -220,6 +237,140 @@ fn stop(cli: &Path, fixture: &Path, source: &Path, work: &Path) -> io::Result<()
     }
     println!(
         "{{\"schema_version\":1,\"success\":true,\"kind\":\"sigterm-cli-return\",\"driver_still_alive\":true,\"independent_tool_group\":true,\"immediate_lock_released\":true,\"tool_absent\":true,\"descendant_absent\":true,\"exit_code\":130,\"elapsed_milliseconds\":{}}}",
+        began.elapsed().as_millis()
+    );
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn job_state(port: u16, id: &str) -> io::Result<String> {
+    if id.len() != 32 || !id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(fail());
+    }
+    let mut stream = TcpStream::connect(("127.0.0.1", port))?;
+    stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(2)))?;
+    write!(
+        stream,
+        "GET /api/jobs/{id} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+    )?;
+    let mut bytes = Vec::new();
+    stream.take(65_537).read_to_end(&mut bytes)?;
+    if bytes.len() > 65_536 || !bytes.starts_with(b"HTTP/1.1 200 ") {
+        return Err(fail());
+    }
+    // The fixture uses this server's fixed status endpoint, not media-supplied JSON.
+    let text = String::from_utf8(bytes).map_err(|_| fail())?;
+    let (_, body) = text.split_once("\r\n\r\n").ok_or_else(fail)?;
+    let compact: String = body.split_whitespace().collect();
+    for state in ["running", "interrupted", "failed", "succeeded"] {
+        if compact.contains(&format!("\"state\":\"{state}\"")) {
+            return Ok(state.into());
+        }
+    }
+    Err(fail())
+}
+
+#[cfg(target_os = "linux")]
+fn wait_job(control: &Path, name: &str, owner: &mut Owned) -> io::Result<String> {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        if let Ok(value) = fs::read_to_string(control.join(name)) {
+            let id = value.trim();
+            if id.len() == 32 && id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                return Ok(id.into());
+            }
+            return Err(fail());
+        }
+        if owner.child.try_wait()?.is_some() || Instant::now() >= deadline {
+            return Err(fail());
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn web(cli: &Path, fixture: &Path, work: &Path, port: u16) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+    let control = work.join("web-control");
+    for path in [
+        &control,
+        &work.join("web-catalog"),
+        &work.join("web-output"),
+    ] {
+        fs::create_dir(path)?;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+    }
+    install_control(fixture, &control)?;
+    let path = std::env::join_paths([
+        control.clone(),
+        PathBuf::from("/usr/local/bin"),
+        PathBuf::from("/usr/bin"),
+        PathBuf::from("/bin"),
+    ])
+    .map_err(|_| fail())?;
+    let child = Command::new(cli)
+        .arg("serve")
+        .env("DRMR_CATALOG_ROOT", work.join("web-catalog"))
+        .env("DRMR_OUTPUT_ROOT", work.join("web-output"))
+        .env("DRMR_HLS_PROFILES", work.join("web-profiles.json"))
+        .env("DRMR_BIND_PORT", port.to_string())
+        .env("PATH", path)
+        .stdin(Stdio::null())
+        .stdout(File::create(control.join("server.stdout"))?)
+        .stderr(File::create(control.join("server.stderr"))?)
+        .spawn()?;
+    let mut owned = Owned {
+        child,
+        lock: None,
+        group: None,
+    };
+    let id = wait_job(&control, "stop-job", &mut owned)?;
+    let (tool, descendant) = wait_held(&mut owned, &control)?;
+    fs::write(control.join("stop-ready"), b"ready")?;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        match job_state(port, &id)?.as_str() {
+            "interrupted" => {
+                assert_gone(&owned, tool, descendant)?;
+                break;
+            }
+            "running" if Instant::now() < deadline => thread::sleep(Duration::from_millis(5)),
+            _ => return Err(fail()),
+        }
+    }
+    owned.group = None;
+    owned.lock = None;
+    for name in [
+        "tool.pid",
+        "descendant.pid",
+        "descendant.lock",
+        "descendant.lock.ready",
+    ] {
+        let _ = fs::remove_file(control.join(name));
+    }
+    fs::write(control.join("stop-confirmed"), b"confirmed")?;
+    let _ = wait_job(&control, "shutdown-job", &mut owned)?;
+    let (tool, descendant) = wait_held(&mut owned, &control)?;
+    fs::write(control.join("shutdown-ready"), b"ready")?;
+    signal(i32::try_from(owned.child.id()).map_err(|_| fail())?, "TERM")?;
+    let began = Instant::now();
+    let status = loop {
+        if let Some(status) = owned.child.try_wait()? {
+            break status;
+        }
+        if began.elapsed() >= Duration::from_secs(10) {
+            return Err(fail());
+        }
+        thread::sleep(Duration::from_millis(5));
+    };
+    assert_gone(&owned, tool, descendant)?;
+    if !status.success() || TcpStream::connect(("127.0.0.1", port)).is_ok() {
+        return Err(fail());
+    }
+    owned.group = None;
+    println!(
+        "{{\"schema_version\":1,\"success\":true,\"kind\":\"web-stop-and-orderly-shutdown\",\"driver_still_alive\":true,\"immediate_lock_released\":true,\"tool_absent\":true,\"descendant_absent\":true,\"listener_released\":true,\"elapsed_milliseconds\":{}}}",
         began.elapsed().as_millis()
     );
     Ok(())
@@ -243,6 +394,12 @@ fn main() -> std::process::ExitCode {
             Path::new(source),
             Path::new(work),
         ),
+        #[cfg(target_os = "linux")]
+        [mode, cli, fixture, work, port] if mode == "web" => port
+            .to_str()
+            .and_then(|value| value.parse().ok())
+            .ok_or_else(fail)
+            .and_then(|port| web(Path::new(cli), Path::new(fixture), Path::new(work), port)),
         _ => Err(fail()),
     };
     if result.is_ok() {
