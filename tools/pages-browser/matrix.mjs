@@ -107,6 +107,7 @@ export class MatrixKeyDeadline extends Error {
 }
 
 export async function completeMatrixKey({ arm, press, wait, observe, before, direction, deadline,
+  validateMovement = requireMatrixMovement,
   now = () => performance.now(), schedule = (callback, delay) => {
     const timer = setTimeout(callback, delay);
     return () => clearTimeout(timer);
@@ -140,7 +141,7 @@ export async function completeMatrixKey({ arm, press, wait, observe, before, dir
     await run('keypress', press);
     await run('scrollend observation', remaining => wait(signal, remaining));
     after = await run('geometry observation', observe);
-    requireMatrixMovement(before, after, direction);
+    validateMovement(before, after, direction);
   } catch (error) {
     failure = error;
   } finally {

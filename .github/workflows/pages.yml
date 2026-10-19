@@ -39,6 +39,8 @@ jobs:
       - name: Check the validator and the complete static site
         run: |
           set -euo pipefail
+          python -W error::ResourceWarning -m unittest discover -s tools/tests -p test_build_guide_site.py -v
+          python tools/build_guide_site.py --check
           python -W error::ResourceWarning -m unittest discover -s tools/tests -p test_check_site.py -v
           python tools/check_site.py --root site --report "$RUNNER_TEMP/site-report.json"
 
@@ -63,12 +65,20 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Install the deterministic guide validation runtime
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13.12'
+
+      - name: Refuse stale generated guide pages
+        run: python ../../tools/build_guide_site.py --check
+
       - name: Keep test caches and evidence in this runner's temporary directory
         run: |
           printf '%s\n' \
             "NPM_CONFIG_CACHE=$RUNNER_TEMP/pages-npm-cache" \
             "PLAYWRIGHT_BROWSERS_PATH=$RUNNER_TEMP/pages-browser-binaries" \
-            "PW_REPORT_ROOT=$RUNNER_TEMP/pages-browser-evidence" >> "$GITHUB_ENV"
+            "PW_REPORT_ROOT=$RUNNER_TEMP/pages-browser-evidence/landing" >> "$GITHUB_ENV"
 
       - name: Install the test-only Node runtime
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -97,9 +107,65 @@ jobs:
           retention-days: 3
           if-no-files-found: warn
 
+  guide:
+    name: Pages / Guide Chromium accessibility and layout
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: tools/pages-browser
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install the deterministic guide validation runtime
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13.12'
+
+      - name: Refuse stale generated guide pages
+        run: python ../../tools/build_guide_site.py --check
+
+      - name: Keep test caches and evidence in this runner's temporary directory
+        run: |
+          printf '%s\n' \
+            "NPM_CONFIG_CACHE=$RUNNER_TEMP/pages-guide-npm-cache" \
+            "PLAYWRIGHT_BROWSERS_PATH=$RUNNER_TEMP/pages-guide-browser-binaries" \
+            "PW_REPORT_ROOT=$RUNNER_TEMP/pages-guide-browser-evidence/guide" >> "$GITHUB_ENV"
+
+      - name: Install the test-only Node runtime
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.22.0'
+          package-manager-cache: false
+
+      - name: Install and audit the locked test dependencies
+        run: |
+          npm ci --ignore-scripts
+          npm audit --audit-level=low
+          npm run test:controls
+
+      - name: Install the pinned Playwright Chromium and system dependencies
+        run: ./node_modules/.bin/playwright install --with-deps chromium
+
+      - name: Require actual browser layout, keyboard, asset and accessibility checks
+        run: npm run test:guide
+
+      - name: Preserve browser evidence without publishing test dependencies
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v4
+        with:
+          name: pages-guide-chromium-evidence
+          path: ${{ runner.temp }}/pages-guide-browser-evidence
+          retention-days: 3
+          if-no-files-found: warn
+
   deploy:
     name: Pages / publish
-    needs: [build, browser]
+    needs: [build, browser, guide]
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -137,6 +203,14 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Install the deterministic guide validation runtime
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13.12'
+
+      - name: Refuse stale generated guide pages
+        run: python ../../tools/build_guide_site.py --check
+
       - name: Keep test caches and evidence in this runner's temporary directory
         run: |
           printf '%s\n' \
@@ -162,8 +236,11 @@ jobs:
       - name: Install the pinned Playwright Chromium and system dependencies
         run: ./node_modules/.bin/playwright install --with-deps chromium
 
-      - name: Check both published languages with zero whole-test retries
-        run: npm run test:browser
+      - name: Check both published landing languages with zero whole-test retries
+        run: PW_REPORT_ROOT="$PW_REPORT_ROOT/landing" npm run test:browser
+
+      - name: Check both published guides with their independent bounded suite
+        run: PW_REPORT_ROOT="$PW_REPORT_ROOT/guide" npm run test:guide
 
       - name: Preserve separate published-site evidence
         if: always()

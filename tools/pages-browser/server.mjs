@@ -6,6 +6,9 @@ import { pathToFileURL } from 'node:url';
 const files = new Map([
   ['index.html', 'text/html; charset=utf-8'],
   ['ja/index.html', 'text/html; charset=utf-8'],
+  ['guide/index.html', 'text/html; charset=utf-8'],
+  ['ja/guide/index.html', 'text/html; charset=utf-8'],
+  ['assets/guide.css', 'text/css; charset=utf-8'],
   ['assets/site.css', 'text/css; charset=utf-8'],
   ['assets/drmr.svg', 'image/svg+xml'],
   ['assets/fonts/LICENSE-ibm-plex.txt', 'text/plain; charset=utf-8'],
@@ -21,7 +24,7 @@ export function resource(raw) {
     const path = decodeURIComponent(url.pathname);
     if (url.search || path.includes('\\') || path.split('/').includes('..')) return null;
     let relative = (path.startsWith('/drmr/') ? path.slice(6) : path.slice(1)) || 'index.html';
-    if (relative === 'ja/') relative = 'ja/index.html';
+    if (relative.endsWith('/')) relative += 'index.html';
     return files.has(relative) ? { relative, type: files.get(relative) } : null;
   } catch {
     return null;

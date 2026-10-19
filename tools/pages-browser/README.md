@@ -9,7 +9,8 @@ then uses the official Playwright command to install its pinned Chromium and
 system dependencies. Node 24.22.0 is pinned by the workflow. Browser installation
 and execution are confined to CI; pure controls use `npm run test:controls`.
 
-The single-worker suite has thirteen tests and zero whole-test retries. Element-state
+Two single-worker suites have thirteen landing tests and twelve guide tests.
+Each retains a separate 180-second total budget and zero whole-test retries. Element-state
 assertions can wait for at most five seconds. After each native Tab, read-only
 observations require the same target, complete viewport containment and the
 existing focus outline. They never scroll or refocus to make a check pass.
@@ -26,12 +27,12 @@ position and time; failed checks retain these samples too. Persistent clipping
 still fails. The suite covers:
 
 - English and Japanese at 320, 768, 1024 and 1440 px (eight cases): document overflow and clipped layout boxes, locally
-  hosted fonts and images, exact served asset bytes, all 31 native Tab targets and
+  hosted fonts and images, exact served asset bytes, all 32 native Tab targets and
   anchor navigation, rendered ARIA landmarks/headings/link names, and axe checks
   including color contrast. Both violations and incomplete checks must be empty.
   The five named code groups retain their full command text in both rendered
-  accessibility trees. The first main section is a six-input-profile by four-output-format
-  semantic table. Exact row/column headers, all 24 output cells, input protection
+  accessibility trees. The first main section is a five-input-profile by four-output-format
+  semantic table. Exact row/column headers, all 20 output cells, input protection
   qualifications and linked notes are checked independently of the HTML.
   Each scrollable matrix is reached by native Tab and traversed to both
   horizontal edges with arrow keys. A listener is armed before each key, and
@@ -72,13 +73,40 @@ still fails. The suite covers:
   this negative control. Discovery routes and all replay samples are retained.
   No programmatic scroll, refocus, viewport epsilon or whole-test retry is used.
 
-The pre-publish job serves only the nine allowlisted files on loopback. It must
-pass, along with static validation on both operating systems, before deployment.
+The pre-publish landing and guide jobs serve only twelve allowlisted files on
+loopback. Both must pass, along with static validation on both operating systems,
+before deployment. The guide suite separately covers:
+
+- Both languages at 320, 768, 1024 and 1440 px: all twenty ordered chapters,
+  full accessible code examples and labelled tables, local fonts and brand
+  images, zero document overflow, and empty axe violations and incomplete checks.
+  Initial and full-page images remain available for visual review.
+- Native Tab/Enter reaches the contents and selected chapter, then the widest
+  code block and table. Each overflowing target is pinned to one ElementHandle,
+  traversed to both edges and returned to zero using the existing shared absolute
+  five-second key-completion mechanism. Focus, target identity and document
+  position remain exact; no manual scroll or focus makes these checks pass.
+- Both guide languages work with production JavaScript disabled. Native language
+  links retain the selected chapter in both directions, at both local mounts or
+  the one published mount.
+- Chromium print-media styles retain all chapter content, code and tables while
+  hiding duplicated navigation. This checks computed print state, not physical
+  printer output or paginated PDF appearance. An injected hidden chapter heading
+  is rejected by the actual guide measurement and restored before further checks.
+
+Static validation requires exact regeneration of both committed guide pages
+from the standard-library builder, template and two Markdown sources. The
+payload remains bounded to 512 KiB, including all twelve files; Markdown,
+templates, build code and test dependencies are outside the uploaded site.
+The source commit/tree, twelve payload hashes and four builder/input hashes
+are retained in both browser suites. Generated output is checked again from
+that checkout before browser or published-byte inspection. No generator or
+JavaScript runs in the production page.
 The post-publish job is main-only, needs successful deployment, and has only
 `contents: read`. It has one fixed remote destination:
 `https://kazuhide.github.io/drmr/`. It does not accept another remote URL.
 
-Before published browser checks, `wait-published.mjs` polls all nine raw file
+Before published browser checks, `wait-published.mjs` polls all twelve raw file
 hashes against the workflow checkout, with at most 30 passes, a 120-second
 budget and at most five seconds per request. This bounded propagation wait does
 not restart failed browser tests. Redirects are rejected. A later deployment
@@ -87,14 +115,20 @@ misattributed to its source commit.
 
 Canonical English and Japanese pages are `/drmr/` and `/drmr/ja/`. The static
 validator requires their exact language, canonical URL, reciprocal alternates
-and visible language links. Only the Japanese document can use one literal
-`../` to reach the allowlisted shared assets or English root; traversal beyond
-that set is refused. Both pages must directly link to the shared font notice.
+and visible language links. The nested guides are `/drmr/guide/` and `/drmr/ja/guide/`, with their own
+reciprocal canonical/alternate pair and same-chapter language links. Only leading
+literal parents inside the originating document depth can reach an explicitly
+allowlisted page or shared asset; encoded parents, internal detours and escapes
+remain refused. All four pages directly link to the shared font notice.
 
 Separate loopback and published artifacts retain full-page screenshots, rendered
 ARIA snapshots, axe results (including incomplete checks), browser observations,
 HTTP asset headers, raw asset SHA-256 values, source commit/tree, per-case locale and raw page hash, dependency and
-browser pins, and machine-readable test results for three days. The HTML test
+browser pins, and machine-readable test results for three days. Landing and
+guide reports use separate `landing/` and `guide/` evidence directories. There
+are six Pages jobs: pull requests require four successes and two intentional
+publish/live skips; main requires all six successes. The main-only live job runs
+both bounded suites after publication. The HTML test
 report is evidence, not a production website asset. Missing or stale published
 bytes and browser failures remain failures.
 
@@ -110,9 +144,9 @@ human visual review. Layout measurements are not a substitute for that review.
 The lockfile has five exact development packages: `@playwright/test`,
 `playwright` and `playwright-core` 1.64.1 (Apache-2.0), plus
 `@axe-core/playwright` and `axe-core` 4.14.0 (MPL-2.0). They are CI-only and are not
-redistributed in the nine-file Pages artifact. The npm audit gate is a current
+redistributed in the twelve-file Pages artifact. The npm audit gate is a current
 advisory check, not a claim that these dependencies can never have a defect.
-The pure Node suite has 25 controls, separate from the 13 CI browser cases and
+The pure Node controls are separate from the 13 landing and 12 guide browser cases and
 the applicable workflow checks, which depend on changed paths. Publish/live
 jobs are intentionally skipped on pull requests. Production HTML still contains zero scripts; CI-only
 axe injection does not change that source contract.

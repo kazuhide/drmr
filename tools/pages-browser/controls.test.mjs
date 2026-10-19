@@ -1,8 +1,10 @@
+import { guideChapters, requireGuideLayout, requireGuideMovement, codeAriaTemplate } from './guide.mjs';
 import { locales } from './locales.mjs';
 import { matrixRows, matrixColumns, matrixObservation, requireMatrixLayout, requireMatrixMovement, completeMatrixKey, MatrixKeyDeadline } from './matrix.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { assets, assetRoute, assetPath, digest, liveMode, allowedRequest } from './source.mjs';
+import * as identity from './source.mjs';
 import { matchesPublication } from './wait-published.mjs';
 import { resource } from './server.mjs';
 import { requireFocus, requireImages, requireLayout, layoutObservation, focusObservation, requireClippedFocusTimeout, partialFocusCandidate, pollFocus, FocusConditionTimeout, FocusObservationDeadline } from './checks.mjs';
@@ -15,7 +17,7 @@ test('only the fixed static payload resolves at either mount', () => {
     assert.equal(assetPath('http://127.0.0.1:4173' + path), 'ja/index.html');
   }
   assert.equal(assetRoute('ja/index.html'), 'ja/');
-  assert.equal(assets.length, 9);
+  assert.equal(assets.length, 12);
   assert.throws(() => assetRoute('../keys.json'));
   assert.equal(resource('/drmr/ja/keys.json'), null);
   assert.equal(resource('/drmr/ja/%2e%2e%2f%2e%2e%2fkeys.json'), null);
@@ -60,7 +62,7 @@ test('published checks have one fixed project origin and refuse arbitrary modes 
   }
 });
 
-test('all nine published raw hashes must match once; stale, missing or duplicate rows fail', () => {
+test('all twelve published raw hashes must match once; stale, missing or duplicate rows fail', () => {
   const hashes = Object.fromEntries(assets.map(path => [path, digest(Buffer.from(path))]));
   const rows = assets.map(path => ({ path, status: 200, sha256: hashes[path] }));
   assert.equal(matchesPublication(rows, hashes), true);
@@ -71,6 +73,9 @@ test('all nine published raw hashes must match once; stale, missing or duplicate
   assert.notEqual(digest(Buffer.from('line\n')), digest(Buffer.from('line\r\n')));
   const staleJapanese = rows.map(row => row.path === 'ja/index.html' ? { ...row, sha256: digest(Buffer.from('stale-ja')) } : row);
   assert.equal(matchesPublication(staleJapanese, hashes), false);
+  for (const asset of ['guide/index.html', 'ja/guide/index.html', 'assets/guide.css']) {
+    assert.equal(matchesPublication(rows.map(row => row.path === asset ? { ...row, sha256: digest(Buffer.from('stale')) } : row), hashes), false);
+  }
 });
 
 test('focus measurements retain identity and refuse partial or entirely offscreen rectangles', () => {
@@ -493,4 +498,74 @@ test('OFF discovery selects only a healthy partial bottom and refuses unrelated 
     assert.throws(() => partialFocusCandidate({ ...healthyPartial(), ...change }));
   }
   assert.throws(() => partialFocusCandidate(null), TypeError);
+});
+
+
+test('nested guide routes and generation inputs belong to the exact payload contract', () => {
+  assert.equal(assets.length, 12);
+  for (const [path, expected] of [['/guide/', 'guide/index.html'],
+    ['/drmr/guide/index.html', 'guide/index.html'],
+    ['/ja/guide/', 'ja/guide/index.html'], ['/drmr/ja/guide/', 'ja/guide/index.html']]) {
+    assert.equal(resource(path).relative, expected);
+    assert.equal(assetPath('http://127.0.0.1:4173' + path), expected);
+  }
+  assert.equal(resource('/drmr/assets/guide.css').type, 'text/css; charset=utf-8');
+  assert.deepEqual(identity.builderInputs, ['tools/build_guide_site.py', 'tools/templates/guide.html',
+    'site-content/guide/en.md', 'site-content/guide/ja.md']);
+  for (const path of ['/drmr/guide/keys.json', '/drmr/ja/guide/%2e%2e%2fprivate.json',
+    '/drmr/site-content/guide/en.md', '/drmr/tools/build_guide_site.py']) {
+    assert.equal(resource(path), null);
+  }
+});
+
+
+test('guide guards refuse missing or hidden chapters and page overflow', () => {
+  const good = { clientWidth: 320, scrollWidth: 320, clipped: [],
+    chapters: guideChapters.map(id => ({ id, key: id, title: id, presented: true })) };
+  requireGuideLayout(good);
+  for (const changed of [{ scrollWidth: 321 }, { clipped: [{ tag: 'PRE' }] },
+    { chapters: good.chapters.slice(1) },
+    { chapters: good.chapters.map((row, i) => i ? row : { ...row, presented: false }) },
+    { chapters: good.chapters.map((row, i) => i ? row : { ...row, title: '' }) }]) {
+    assert.throws(() => requireGuideLayout({ ...good, ...changed }));
+  }
+});
+
+test('guide scrolling uses the shared deadline and propagates its own guard failure after cleanup', async () => {
+  const before = { focused: true, tag: 'PRE', chapter: 'installation', identity: 'example-1-title',
+    pageX: 0, pageY: 1000, clientWidth: 288, scrollWidth: 500, scrollLeft: 0,
+    overflowX: 'auto', documentWidth: 320, rect: { left: 16, right: 304, width: 288 } };
+  const after = { ...before, scrollLeft: 40 };
+  requireGuideMovement(before, after, 'right');
+  for (const changed of [{ focused: false }, { identity: 'other' }, { pageY: 1001 },
+    { scrollLeft: 0 }, { overflowX: 'clip' }, { rect: { left: 16, right: 321 } }]) {
+    assert.throws(() => requireGuideMovement(before, { ...after, ...changed }, 'right'));
+  }
+  let disposed = 0;
+  const actual = new Error('guide-owned-movement-refusal');
+  await assert.rejects(completeMatrixKey({ before, direction: 'right', deadline: performance.now() + 5000,
+    arm: async () => ({ dispose: async () => { disposed++; } }), press: async () => {},
+    wait: async () => {}, observe: async () => after,
+    validateMovement: () => { throw actual; },
+  }), error => error === actual);
+  assert.equal(disposed, 1);
+});
+
+
+test('every guide generation input contributes its exact raw hash to source identity', () => {
+  const original = identity.builderHashes(path => Buffer.from(path + '\n'));
+  assert.deepEqual(Object.keys(original), identity.builderInputs);
+  for (const changed of identity.builderInputs) {
+    const modified = identity.builderHashes(path => Buffer.from(path + (path === changed ? '\r\n' : '\n')));
+    assert.notEqual(modified[changed], original[changed]);
+    for (const other of identity.builderInputs.filter(path => path !== changed)) assert.equal(modified[other], original[other]);
+  }
+});
+
+
+test('guide code ARIA templates retain complete quoted and multiline code as one exact scalar', () => {
+  const code = '{\n  "key": "value: \\"quoted\\"",\n  "path": "C:\\\\tools"\n}';
+  const template = codeAriaTemplate(code);
+  assert.equal(JSON.parse(template.slice('- code: '.length)), code.trim().replace(/\s+/g, ' '));
+  assert.throws(() => codeAriaTemplate('  \n'));
 });
