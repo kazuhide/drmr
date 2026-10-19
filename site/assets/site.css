@@ -14,6 +14,9 @@
   --sans: "IBM Plex Sans", system-ui, sans-serif;
   --mono: "IBM Plex Mono", ui-monospace, monospace;
 }
+html:lang(ja) { --sans: "IBM Plex Sans", "Hiragino Sans", "Yu Gothic", "Meiryo", "Noto Sans CJK JP", system-ui, sans-serif; }
+html:lang(ja) h1 { font-size: clamp(30px, 4vw, 44px); line-height: 1.35; letter-spacing: normal; }
+html:lang(ja) h2 { line-height: 1.4; letter-spacing: normal; }
 * { box-sizing: border-box; }
 html { scroll-padding-top: 24px; }
 body { margin: 0; background: var(--canvas); color: var(--ink); font: 400 17px/1.6 var(--sans); -webkit-font-smoothing: antialiased; }
@@ -41,6 +44,7 @@ pre code { overflow-wrap: normal; }
 .brand { display: inline-flex; align-items: center; gap: 8px; color: var(--ink); font-size: 24px; font-weight: 600; text-decoration: none; }
 nav { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 24px; }
 nav a { padding-block: 4px; font-size: 15px; }
+.language-switch { flex-shrink: 0; }
 .hero { display: grid; grid-template-columns: 7fr 5fr; gap: 48px; align-items: center; padding-block: 72px 80px; }
 .hero > *, .install-layout > *, .workflow > * { min-width: 0; }
 .hero-copy .lead { margin-top: 24px; max-width: 46ch; font-size: 20px; line-height: 1.5; }
