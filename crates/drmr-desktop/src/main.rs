@@ -29,6 +29,7 @@ struct Desktop {
     roots: Mutex<Roots>,
     origin: Mutex<Option<ConsoleOrigin>>,
     server: Mutex<Option<RunningServer>>,
+    diagnostics: Mutex<Option<Arc<drmr_core::tool_diagnostics::DiagnosticSession>>>,
     phase: AtomicU8,
     picking: AtomicBool,
     exit_allowed: AtomicBool,
@@ -45,6 +46,124 @@ fn error(app: &AppHandle, message: &'static str) {
 fn title(app: &AppHandle, value: &'static str) {
     if let Some(window) = app.get_webview_window("console") {
         let _ = window.set_title(value);
+    }
+}
+
+fn diagnose_tools(app: &AppHandle) {
+    let state = app.state::<Arc<Desktop>>().inner().clone();
+    if state
+        .phase
+        .compare_exchange(IDLE, STARTING, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        error(
+            app,
+            "Check tools before opening the console. Quit and reopen drmr to check a different launch environment.",
+        );
+        return;
+    }
+    let session = Arc::new(drmr_core::tool_diagnostics::DiagnosticSession::new(
+        drmr_core::tool_diagnostics::Profile::ALL,
+        true,
+    ));
+    if let Ok(mut current) = state.diagnostics.lock() {
+        *current = Some(Arc::clone(&session));
+    } else {
+        state.phase.store(UNCONFIRMED, Ordering::Release);
+        error(
+            app,
+            "The diagnostic owner could not be registered. Quit drmr to retry cleanup.",
+        );
+        return;
+    }
+    title(app, "drmr — checking tools");
+    let handle = app.clone();
+    let worker_state = state.clone();
+    if std::thread::Builder::new()
+        .name("drmr-tool-diagnostics".into())
+        .spawn(move || {
+            if worker_state.phase.load(Ordering::Acquire) != STARTING { session.request_stop(); }
+            let report = session.run();
+            match complete_diagnostics(&worker_state.phase, session.cleanup_confirmed()) {
+                DiagnosticCompletion::Show => {
+                let Ok(report) = report else {
+                    error(&handle, "The diagnostic operation could not complete. Try Check external tools again.");
+                    return;
+                };
+                title(&handle, "drmr — tool check complete");
+                let kind = if report.ready {
+                    MessageDialogKind::Info
+                } else {
+                    MessageDialogKind::Warning
+                };
+                handle
+                    .dialog()
+                    .message(report.summary())
+                    .title("External media tools")
+                    .kind(kind)
+                    .show(|_| {});
+                }
+                DiagnosticCompletion::Close => finish(&handle, &worker_state),
+                DiagnosticCompletion::Unconfirmed => {
+                    title(&handle, "drmr — cleanup unconfirmed");
+                    error(&handle, "A diagnostic tool's cleanup could not be confirmed. drmr retains its process owner. Select Quit drmr to retry cleanup; opening the console is blocked until cleanup is confirmed.");
+                }
+            }
+        })
+        .is_err()
+    {
+        if state
+            .phase
+            .compare_exchange(STARTING, IDLE, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            error(
+                app,
+                "The diagnostic worker could not start. Try Check external tools again.",
+            );
+        } else {
+            finish(app, &state);
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum DiagnosticCompletion {
+    Show,
+    Close,
+    Unconfirmed,
+}
+
+fn complete_diagnostics(phase: &AtomicU8, cleanup_confirmed: bool) -> DiagnosticCompletion {
+    if !cleanup_confirmed {
+        phase.store(UNCONFIRMED, Ordering::Release);
+        DiagnosticCompletion::Unconfirmed
+    } else if phase
+        .compare_exchange(STARTING, IDLE, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok()
+    {
+        DiagnosticCompletion::Show
+    } else {
+        DiagnosticCompletion::Close
+    }
+}
+
+fn diagnostic_cleanup_confirmed(state: &Desktop) -> bool {
+    state.diagnostics.lock().is_ok_and(|session| {
+        session
+            .as_ref()
+            .is_none_or(|session| session.cleanup_confirmed())
+    })
+}
+
+fn retry_diagnostic_cleanup(state: &Desktop) {
+    let session = state
+        .diagnostics
+        .lock()
+        .ok()
+        .and_then(|session| session.clone());
+    if let Some(session) = session {
+        let _ = session.retry_cleanup();
     }
 }
 
@@ -126,7 +245,7 @@ fn finish(app: &AppHandle, state: &Desktop) {
         },
         Err(_) => false,
     };
-    if confirmed {
+    if confirmed && diagnostic_cleanup_confirmed(state) {
         state.exit_allowed.store(true, Ordering::Release);
         app.exit(0);
     } else {
@@ -173,7 +292,12 @@ fn request_close(app: &AppHandle) {
             app.exit(0);
         }
         Some(CloseAction::WaitForStartup) => {
-            // The startup worker owns completion and drains any server it creates.
+            // The startup/diagnostic worker owns completion before final cleanup.
+            if let Ok(session) = state.diagnostics.lock()
+                && let Some(session) = session.as_ref()
+            {
+                session.request_stop();
+            }
             title(app, "drmr — closing");
         }
         Some(CloseAction::Shutdown { previous }) => {
@@ -182,7 +306,12 @@ fn request_close(app: &AppHandle) {
             let worker_state = state.clone();
             if std::thread::Builder::new()
                 .name("drmr-desktop-shutdown".into())
-                .spawn(move || finish(&handle, &worker_state))
+                .spawn(move || {
+                    if previous == UNCONFIRMED {
+                        retry_diagnostic_cleanup(&worker_state);
+                    }
+                    finish(&handle, &worker_state);
+                })
                 .is_err()
             {
                 state.phase.store(previous, Ordering::Release);
@@ -286,6 +415,7 @@ fn menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let catalog = MenuItem::with_id(app, "catalog", "Choose catalog folder…", true, None::<&str>)?;
     let output = MenuItem::with_id(app, "output", "Choose output location…", true, None::<&str>)?;
     let open = MenuItem::with_id(app, "open", "Open console", true, Some("CmdOrCtrl+O"))?;
+    let tools = MenuItem::with_id(app, "tools", "Check external tools…", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit drmr", true, Some("CmdOrCtrl+Q"))?;
     let application = Submenu::with_items(
         app,
@@ -293,7 +423,7 @@ fn menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         true,
         &[&PredefinedMenuItem::about(app, None, None)?, &quit],
     )?;
-    let file = Submenu::with_items(app, "File", true, &[&catalog, &output, &open])?;
+    let file = Submenu::with_items(app, "File", true, &[&catalog, &output, &open, &tools])?;
     let edit = Submenu::with_items(
         app,
         "Edit",
@@ -346,6 +476,7 @@ fn main() -> std::process::ExitCode {
             "output" => pick(app, true),
             "open" => open_console(app),
             "quit" => request_close(app),
+            "tools" => diagnose_tools(app),
             _ => {}
         })
         .setup(move |app| {
@@ -410,6 +541,54 @@ fn main() -> std::process::ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn uncertain_diagnostic_cleanup_never_returns_to_idle_or_allows_exit() {
+        let actual = [STARTING, CLOSING].map(|initial| {
+            let phase = AtomicU8::new(initial);
+            let completion = complete_diagnostics(&phase, false);
+            (
+                completion,
+                phase.load(Ordering::Acquire),
+                claim_close(&phase),
+            )
+        });
+        assert_eq!(
+            actual,
+            [
+                (
+                    DiagnosticCompletion::Unconfirmed,
+                    UNCONFIRMED,
+                    Some(CloseAction::Shutdown {
+                        previous: UNCONFIRMED
+                    })
+                ),
+                (
+                    DiagnosticCompletion::Unconfirmed,
+                    UNCONFIRMED,
+                    Some(CloseAction::Shutdown {
+                        previous: UNCONFIRMED
+                    })
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn confirmed_diagnostics_show_results_or_finish_an_already_requested_close() {
+        let phase = AtomicU8::new(STARTING);
+        assert_eq!(
+            complete_diagnostics(&phase, true),
+            DiagnosticCompletion::Show
+        );
+        assert_eq!(phase.load(Ordering::Acquire), IDLE);
+        phase.store(CLOSING, Ordering::Release);
+        assert_eq!(
+            complete_diagnostics(&phase, true),
+            DiagnosticCompletion::Close
+        );
+        assert_eq!(phase.load(Ordering::Acquire), CLOSING);
+    }
 
     #[test]
     fn closing_claims_keep_idle_startup_and_running_behavior() {

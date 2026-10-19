@@ -404,7 +404,22 @@ The console's before/after player uses local ClearKey test keys. Playback setup 
 
 Most commands return `0` for success, `1` for a failed operation or validation, and `2` for invalid usage or configuration. `verify-snapshot` returns `1` for changed content and `2` for an invalid snapshot. Batch processing can return `130` when interrupted. `convert` and `verify` also return `130` after cooperative cancellation: on Unix, send SIGINT (Ctrl+C) or SIGTERM. They stop queued work and terminate managed media subprocesses before returning. Cancellation observed before publication prevents publishing the result. Force-killing the CLI bypasses cooperative cleanup; the measurement tool reports that fallback as cleanup unconfirmed.
 
-`doctor` returns `0` when all four tools are found and `1` when any are missing. Its `--json` output is a single JSON object with `ready` and `tools`; each tool has `name`, `purpose`, `available`, and `required` fields. Finding a tool does not verify its version or media compatibility.
+`doctor` discovers executable files on the current launch environment's `PATH` without executing them. Add `--probe` to run version and help checks with a three-second deadline per call and a 1 MiB output limit per stream. Raw tool output is excluded from the report. Discovery returns `0` when required tools are found; probing additionally requires recognized supported versions and the advertised options. A missing or failed required check returns `1`; invalid arguments return `2`.
+
+Use `--route progressive-mp4` for FFmpeg and ffprobe, or another route from [processing routes](processing-routes.md) to additionally require Shaka Packager. `--route all` (the default) and `--route prepared-dash` also require Bento4. Unrelated tools remain optional, so an unsupported version or missing feature does not block the selected route. Unconfirmed process cleanup always blocks readiness, including an optional probe. For example:
+
+```sh
+drmr doctor --probe --route progressive-mp4 --json
+```
+
+The single JSON object retains `ready` and `tools`, with each tool's `name`, `purpose`, `available`, and `required`. Added version-one fields include `mode` (`discovery` or `probe`), `profile`, resolved `path`, `path_status`, `version`, `version_status`, `feature_status`, individual `features`, fixed `failure_code`, `cancelled`, and `cleanup_status` (`not-required`, `confirmed`, or `unconfirmed`). `ready` covers the selected checks only; `media_compatibility_checked` remains false. Bento4 reports `build-unverified` because its banner omits the build number: confirm build 641 or newer separately. Non-UTF-8 executable paths are reported without an ambiguous replacement path and are refused for probing. A successful diagnostic does not validate media, keys, licensing, or device playback.
+
+If a diagnostic cannot confirm tool cleanup, the CLI retains the process owner
+and retries cleanup in the foreground, pausing between failures. Ctrl+C or
+termination requests Stop; it does not discard an unconfirmed owner. The final
+report is printed after cleanup is confirmed, while the original probe failure
+and `ready: false` remain. `cleanup_status` describes that final cleanup state.
+An operating-system hard kill or power loss cannot preserve this ownership.
 
 ### Automatic worker limits
 
