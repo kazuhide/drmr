@@ -1,0 +1,175 @@
+name: Project website
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: Pages / static validation / ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install the validation Python runtime
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13.12'
+
+      - name: Check the validator and the complete static site
+        run: |
+          set -euo pipefail
+          python -W error::ResourceWarning -m unittest discover -s tools/tests -p test_check_site.py -v
+          python tools/check_site.py --root site --report "$RUNNER_TEMP/site-report.json"
+
+      - name: Upload only the validated website
+        if: matrix.os == 'ubuntu-24.04' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: site
+          retention-days: 1
+
+  browser:
+    name: Pages / Chromium accessibility and layout
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: tools/pages-browser
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Keep test caches and evidence in this runner's temporary directory
+        run: |
+          printf '%s\n' \
+            "NPM_CONFIG_CACHE=$RUNNER_TEMP/pages-npm-cache" \
+            "PLAYWRIGHT_BROWSERS_PATH=$RUNNER_TEMP/pages-browser-binaries" \
+            "PW_REPORT_ROOT=$RUNNER_TEMP/pages-browser-evidence" >> "$GITHUB_ENV"
+
+      - name: Install the test-only Node runtime
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.22.0'
+          package-manager-cache: false
+
+      - name: Install and audit the locked test dependencies
+        run: |
+          npm ci --ignore-scripts
+          npm audit --audit-level=low
+          npm run test:controls
+
+      - name: Install the pinned Playwright Chromium and system dependencies
+        run: ./node_modules/.bin/playwright install --with-deps chromium
+
+      - name: Require actual browser layout, keyboard, asset and accessibility checks
+        run: npm run test:browser
+
+      - name: Preserve browser evidence without publishing test dependencies
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v4
+        with:
+          name: pages-chromium-evidence
+          path: ${{ runner.temp }}/pages-browser-evidence
+          retention-days: 3
+          if-no-files-found: warn
+
+  deploy:
+    name: Pages / publish
+    needs: [build, browser]
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Read the repository's Pages configuration
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+
+      - name: Publish the validated artifact from this workflow run
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+
+
+  live:
+    name: Pages / published Chromium verification
+    needs: deploy
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: tools/pages-browser
+    env:
+      PAGES_LIVE: 'true'
+    steps:
+      - name: Check out the published source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Keep test caches and evidence in this runner's temporary directory
+        run: |
+          printf '%s\n' \
+            "NPM_CONFIG_CACHE=$RUNNER_TEMP/pages-live-npm-cache" \
+            "PLAYWRIGHT_BROWSERS_PATH=$RUNNER_TEMP/pages-live-browser-binaries" \
+            "PW_REPORT_ROOT=$RUNNER_TEMP/pages-live-browser-evidence" >> "$GITHUB_ENV"
+
+      - name: Install the test-only Node runtime
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.22.0'
+          package-manager-cache: false
+
+      - name: Install and audit the locked test dependencies
+        run: |
+          npm ci --ignore-scripts
+          npm audit --audit-level=low
+          npm run test:controls
+
+      - name: Require all published files to match this source
+        run: node wait-published.mjs
+
+      - name: Install the pinned Playwright Chromium and system dependencies
+        run: ./node_modules/.bin/playwright install --with-deps chromium
+
+      - name: Check both published languages with zero whole-test retries
+        run: npm run test:browser
+
+      - name: Preserve separate published-site evidence
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v4
+        with:
+          name: pages-live-chromium-evidence
+          path: ${{ runner.temp }}/pages-live-browser-evidence
+          retention-days: 3
+          if-no-files-found: warn
