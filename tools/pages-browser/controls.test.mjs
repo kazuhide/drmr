@@ -253,3 +253,25 @@ test('late successful measurements never append samples or publish success after
   for (let i = 0; i < 10; i++) await Promise.resolve();
   assert.equal(samples.length, 0);
 });
+
+
+test('a completed delayed pause enters the final idle window without another measurement', async () => {
+  let clock = 0;
+  let measurements = 0;
+  let pauses = 0;
+  const samples = [];
+  await assert.rejects(pollFocus(async () => { measurements++; return healthyPartial(); }, samples, {
+    now: () => clock,
+    pause: async () => { clock = ++pauses === 1 ? 100 : 4950; },
+    schedule: callback => {
+      const timer = setImmediate(() => { clock = 5000; callback(); });
+      return () => clearImmediate(timer);
+    },
+  }), error => {
+    assert.ok(error instanceof FocusConditionTimeout);
+    requireClippedFocusTimeout(error, { passed: false, samples });
+    return true;
+  });
+  assert.equal(measurements, 2);
+  assert.equal(samples.length, 2);
+});

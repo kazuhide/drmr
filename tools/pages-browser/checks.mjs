@@ -98,6 +98,13 @@ export async function pollFocus(measure, samples, {
   };
   try {
     for (;;) {
+      if (samples.length && end - now() <= 100) {
+        // No delegated observation or pause is outstanding during this final
+        // owned cadence window. Only this healthy idle expiry is a condition
+        // timeout; an unfinished measurement/pause always remains fatal.
+        await deadline;
+        throw new FocusConditionTimeout(samples, now() - start);
+      }
       const sample = await bounded(measure, 'measurement');
       // A late promise completion cannot publish a sample after expiry.
       if (expired || now() >= end) throw new FocusObservationDeadline('measurement', now() - start);
@@ -112,14 +119,7 @@ export async function pollFocus(measure, samples, {
       const elapsed = now() - start;
       if (expired || elapsed >= 5000) throw new FocusObservationDeadline('measurement', now() - start);
       if (complete) return sample;
-      if (end - now() <= 100) {
-        // No delegated observation or pause is outstanding during this final
-        // owned cadence window. Only this healthy idle expiry is a condition
-        // timeout; an unfinished measurement/pause always remains fatal.
-        await deadline;
-        throw new FocusConditionTimeout(samples, now() - start);
-      }
-      await bounded(() => pause(100), 'poll-wait');
+      if (end - now() > 100) await bounded(() => pause(100), 'poll-wait');
     }
   } finally {
     cancel();
