@@ -290,6 +290,45 @@ fn wait_job(control: &Path, name: &str, owner: &mut Owned) -> io::Result<String>
 }
 
 #[cfg(target_os = "linux")]
+fn assert_loopback(pid: u32, port: u16) -> io::Result<()> {
+    let descriptors = fs::read_dir(format!("/proc/{pid}/fd"))?;
+    let sockets: Vec<_> = descriptors
+        .take(512)
+        .filter_map(Result::ok)
+        .filter_map(|entry| fs::read_link(entry.path()).ok())
+        .filter_map(|path| path.to_str().map(str::to_owned))
+        .filter_map(|value| {
+            value
+                .strip_prefix("socket:[")?
+                .strip_suffix(']')
+                .map(str::to_owned)
+        })
+        .collect();
+    let expected = format!("0100007F:{port:04X}");
+    let mut matched = 0;
+    for name in ["tcp", "tcp6"] {
+        let contents = fs::read_to_string(format!("/proc/{pid}/net/{name}"))?;
+        for row in contents.lines().skip(1) {
+            let fields: Vec<_> = row.split_whitespace().collect();
+            if fields.len() > 9
+                && fields[3] == "0A"
+                && sockets.iter().any(|inode| inode == fields[9])
+                && fields[1].ends_with(&format!(":{port:04X}"))
+            {
+                if fields[1] != expected {
+                    return Err(fail());
+                }
+                matched += 1;
+            }
+        }
+    }
+    if matched != 1 {
+        return Err(fail());
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
 fn web(cli: &Path, fixture: &Path, work: &Path, port: u16) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt as _;
     let control = work.join("web-control");
@@ -326,6 +365,7 @@ fn web(cli: &Path, fixture: &Path, work: &Path, port: u16) -> io::Result<()> {
         group: None,
     };
     let id = wait_job(&control, "stop-job", &mut owned)?;
+    assert_loopback(owned.child.id(), port)?;
     let (tool, descendant) = wait_held(&mut owned, &control)?;
     fs::write(control.join("stop-ready"), b"ready")?;
     let deadline = Instant::now() + Duration::from_secs(10);
