@@ -35,6 +35,9 @@ still fails. The suite covers:
   the restored production style. Both production states must satisfy the exact
   complete-focus condition. The zero-margin state must retain partial clipping
   of the correct target throughout the existing five-second observation budget.
+  Only the owned condition-timeout type is accepted; evaluation, transport,
+  polling and evidence-write errors remain fatal. Offscreen or horizontally
+  clipped targets cannot stand in for a healthy partial-bottom control.
   No programmatic scroll, refocus or viewport epsilon is used.
 
 The pre-publish job serves only the eight allowlisted files on loopback. It must

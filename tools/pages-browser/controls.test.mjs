@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { assets, digest, liveMode, allowedRequest } from './source.mjs';
 import { matchesPublication } from './wait-published.mjs';
 import { resource } from './server.mjs';
-import { requireFocus, requireImages, requireLayout, focusObservation } from './checks.mjs';
+import { requireFocus, requireImages, requireLayout, focusObservation, requireClippedFocusTimeout, pollFocus, FocusConditionTimeout } from './checks.mjs';
 
 test('only the fixed static payload resolves at either mount', () => {
   assert.equal(resource('/').relative, 'index.html');
@@ -89,4 +89,82 @@ test('focus measurements retain identity and refuse partial or entirely offscree
       else delete globalThis[name];
     }
   }
+});
+
+
+test('an arbitrary error after two healthy clipped samples is not a condition timeout', () => {
+  const partial = { matchesTarget: true, width: 239, height: 22, outlineWidth: 3, outlineStyle: 'solid',
+    rect: { top: 878.328125, bottom: 900.328125, left: 16, right: 255, width: 239, height: 22 },
+    viewport: { width: 1440, height: 900 } };
+  const check = { passed: false, samples: [partial, partial] };
+  for (const error of [new Error('measurement-protocol-or-persistence-failure'), new TypeError('invalid-measurement'),
+    Object.assign(new Error('not-an-owned-timeout'), { name: 'FocusConditionTimeout' })]) {
+    assert.throws(() => requireClippedFocusTimeout(error, check), value => value === error);
+  }
+});
+
+
+const healthyPartial = () => ({ matchesTarget: true, inViewport: false, width: 239, height: 22,
+  outlineWidth: 3, outlineStyle: 'solid',
+  rect: { top: 878.328125, bottom: 900.328125, left: 16, right: 255, width: 239, height: 22 },
+  viewport: { width: 1440, height: 900 } });
+
+async function timedPartial(sample = healthyPartial()) {
+  const samples = [];
+  let clock = 0;
+  try {
+    await pollFocus(async () => sample, samples, { now: () => clock, pause: async () => { clock += 2500; } });
+    assert.fail('A clipped target cannot pass');
+  } catch (failure) {
+    return { failure, check: { passed: false, samples } };
+  }
+}
+
+test('only the owned condition deadline with healthy partial samples is accepted', async () => {
+  const { failure, check } = await timedPartial();
+  assert.ok(failure instanceof FocusConditionTimeout);
+  requireClippedFocusTimeout(failure, check);
+  assert.throws(() => requireClippedFocusTimeout(failure, { ...check, samples: [...check.samples] }));
+  for (const changed of [
+    { top: 901, bottom: 923 }, { top: -1 }, { left: -1 }, { right: 1441 },
+    { width: 0 }, { height: 0 }, { bottom: NaN },
+  ]) {
+    const sample = healthyPartial();
+    sample.rect = { ...sample.rect, ...changed };
+    const invalid = await timedPartial(sample);
+    assert.throws(() => requireClippedFocusTimeout(invalid.failure, invalid.check));
+  }
+});
+
+test('two partial samples followed by evaluation or polling errors remain fatal', async () => {
+  for (const stage of ['evaluation', 'polling']) {
+    const arbitrary = new Error(stage + '-failure');
+    const samples = [];
+    let clock = 0;
+    let calls = 0;
+    const measure = async () => {
+      if (stage === 'evaluation' && calls++ === 2) throw arbitrary;
+      return healthyPartial();
+    };
+    await assert.rejects(pollFocus(measure, samples, { now: () => clock, pause: async () => {
+      if (stage === 'polling' && samples.length === 2) throw arbitrary;
+      clock += 100;
+    } }), error => {
+      assert.equal(error, arbitrary);
+      assert.equal(samples.length, 2);
+      assert.throws(() => requireClippedFocusTimeout(error, { passed: false, samples }), value => value === arbitrary);
+      return true;
+    });
+  }
+});
+
+test('complete focus passes within the budget but never after the deadline', async () => {
+  const complete = { ...healthyPartial(), inViewport: true,
+    rect: { ...healthyPartial().rect, top: 877, bottom: 899 } };
+  const samples = [];
+  assert.equal(await pollFocus(async () => complete, samples), complete);
+  let clock = 0;
+  const late = [];
+  await assert.rejects(pollFocus(async () => { clock = 5001; return complete; }, late,
+    { now: () => clock }), error => error instanceof FocusConditionTimeout);
 });

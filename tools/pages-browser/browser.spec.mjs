@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 import { writeFile } from 'node:fs/promises';
 import { assets, digest, liveMode, publicOrigin, localOrigin, allowedRequest, assetPath } from './source.mjs';
-import { requireFocus, requireImages, requireLayout, layoutObservation, focusObservation } from './checks.mjs';
+import { requireFocus, requireImages, requireLayout, layoutObservation, focusObservation, pollFocus, requireClippedFocusTimeout, FocusConditionTimeout } from './checks.mjs';
 
 const live = liveMode(process.env.PAGES_LIVE);
 const origin = live ? publicOrigin : localOrigin;
@@ -52,19 +52,13 @@ async function requireTargetFocus(page, target, phase, ordinal) {
   const check = { phase, ordinal, samples: [] };
   monitors.get(page).evidence.focusChecks.push(check);
   try {
-    await expect.poll(async () => {
-      const sample = await target.evaluate(focusObservation);
-      check.samples.push(sample);
-      try {
-        requireFocus(sample);
-        return true;
-      } catch {
-        return false;
-      }
-    }, { timeout: 5000, message: `Complete visible focus on ${phase} target ${ordinal}` }).toBe(true);
+    await pollFocus(() => target.evaluate(focusObservation), check.samples);
     requireFocus(check.samples.at(-1));
     check.passed = true;
     return check.samples.at(-1);
+  } catch (error) {
+    check.failureKind = error instanceof FocusConditionTimeout ? 'condition-timeout' : 'observation-error';
+    throw error;
   } finally {
     check.passed ??= false;
     const info = test.info();
@@ -295,16 +289,7 @@ test('native Tab keeps edge targets fully visible only with the production scrol
         if (state === 'disabled-control') {
           // The negative must be actual partial clipping of the correct target,
           // not a missing element, broken outline or unrelated failure.
-          expect(failure).toBeDefined();
-          expect(check.passed).toBe(false);
-          expect(check.samples.length).toBeGreaterThan(1);
-          for (const sample of check.samples) {
-            expect(sample.matchesTarget).toBe(true);
-            expect(sample.outlineWidth).toBe(3);
-            expect(sample.outlineStyle).toBe('solid');
-            expect(sample.rect.top).toBeGreaterThanOrEqual(0);
-            expect(sample.rect.bottom).toBeGreaterThan(sample.viewport.height);
-          }
+          requireClippedFocusTimeout(failure, check);
         } else {
           if (failure) throw failure;
           requireFocus(check.samples.at(-1));
