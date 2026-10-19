@@ -2,9 +2,9 @@ import { test, expect } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 import { writeFile } from 'node:fs/promises';
 import { assets, digest, liveMode, publicOrigin, localOrigin, allowedRequest, assetPath, assetRoute } from './source.mjs';
-import { requireFocus, requireImages, requireLayout, layoutObservation, focusObservation, pollFocus, requireClippedFocusTimeout, FocusConditionTimeout } from './checks.mjs';
+import { requireFocus, requireImages, requireLayout, layoutObservation, focusObservation, pollFocus, requireClippedFocusTimeout, partialFocusCandidate, FocusConditionTimeout } from './checks.mjs';
 import { locales, english } from './locales.mjs';
-import { matrixColumns, matrixRows, matrixObservation, requireMatrixLayout, requireMatrixMovement } from './matrix.mjs';
+import { matrixColumns, matrixRows, matrixObservation, requireMatrixLayout, requireMatrixMovement, completeMatrixKey } from './matrix.mjs';
 
 const live = liveMode(process.env.PAGES_LIVE);
 const origin = live ? publicOrigin : localOrigin;
@@ -190,6 +190,29 @@ async function renderedMatrix(page, locale) {
   return { wrapper, evidence: { facts, aria, order, layout } };
 }
 
+async function settledMatrixKey(page, wrapper, key, before, deadline) {
+  const direction = key === 'ArrowRight' ? 'right' : 'left';
+  const after = await completeMatrixKey({ before, direction, deadline,
+    arm: async () => {
+      // Arm before keydown; even an instant scrollend must belong to this key.
+      const handle = await wrapper.evaluateHandle(target => {
+        const signal = { target, ended: false };
+        signal.listener = event => { if (event.target === target) signal.ended = true; };
+        target.addEventListener('scrollend', signal.listener);
+        return signal;
+      });
+      return { handle, dispose: async () => {
+        try { await handle.evaluate(signal => signal.target.removeEventListener('scrollend', signal.listener)); }
+        finally { await handle.dispose(); }
+      } };
+    },
+    press: () => page.keyboard.press(key),
+    wait: (signal, timeout) => expect.poll(() => signal.handle.evaluate(value => value.ended), { timeout }).toBe(true),
+    observe: () => wrapper.evaluate(matrixObservation),
+  });
+  return { ...after, completedKey: key, scrollEndObserved: true };
+}
+
 async function nativeMatrixScroll(page, wrapper, width) {
   const initial = await wrapper.evaluate(matrixObservation);
   requireMatrixLayout(initial);
@@ -199,18 +222,8 @@ async function nativeMatrixScroll(page, wrapper, width) {
   if (initial.scrollWidth <= initial.clientWidth) return { initial, scrollNeeded: false };
   const deadline = performance.now() + 5000;
   const samples = [initial];
-  const move = async (key, direction) => {
-    const before = samples.at(-1);
-    expect(performance.now()).toBeLessThan(deadline);
-    await page.keyboard.press(key);
-    let after;
-    const observe = async () => { after = await wrapper.evaluate(matrixObservation); return after.scrollLeft; };
-    const options = { timeout: Math.max(1, deadline - performance.now()) };
-    if (direction === 'right') await expect.poll(observe, options).toBeGreaterThan(before.scrollLeft);
-    else await expect.poll(observe, options).toBeLessThan(before.scrollLeft);
-    expect(performance.now()).toBeLessThan(deadline);
-    requireMatrixMovement(before, after, direction);
-    samples.push(after);
+  const move = async (key) => {
+    samples.push(await settledMatrixKey(page, wrapper, key, samples.at(-1), deadline));
   };
   const first = initial.firstCells;
   const headerRight = Math.max(...initial.rowHeaders.map(header => header.right));
@@ -219,7 +232,7 @@ async function nativeMatrixScroll(page, wrapper, width) {
     expect(cell.right).toBeLessThanOrEqual(initial.contentRight);
   }
   for (let count = 0; samples.at(-1).scrollLeft < initial.scrollWidth - initial.clientWidth && count < 64; count++) {
-    await move('ArrowRight', 'right');
+    await move('ArrowRight');
   }
   const right = samples.at(-1);
   expect(right.scrollLeft).toBe(initial.scrollWidth - initial.clientWidth);
@@ -227,7 +240,7 @@ async function nativeMatrixScroll(page, wrapper, width) {
     expect(cell.left).toBeGreaterThanOrEqual(Math.max(...right.rowHeaders.map(header => header.right)));
     expect(cell.right).toBeLessThanOrEqual(right.contentRight);
   }
-  for (let count = 0; samples.at(-1).scrollLeft > 0 && count < 64; count++) await move('ArrowLeft', 'left');
+  for (let count = 0; samples.at(-1).scrollLeft > 0 && count < 64; count++) await move('ArrowLeft');
   expect(samples.at(-1).scrollLeft).toBe(0);
   return { scrollNeeded: true, samples };
 }
@@ -490,6 +503,13 @@ test('browser guard controls detect real overflow, invisible focus, blocked matr
   await requireTargetFocus(page, wrapper, 'matrix-disabled-control', 10);
   const matrixBefore = await wrapper.evaluate(matrixObservation);
   expect(matrixBefore.scrollWidth).toBeGreaterThan(matrixBefore.clientWidth);
+  const hiddenContent = await page.addStyleTag({ content: '.conversion-matrix td > .clear { visibility: hidden !important; }' });
+  const matrixHidden = await wrapper.evaluate(matrixObservation);
+  expect(matrixHidden.hiddenText.some(value => value.text === 'Clear' && value.hidden)).toBe(true);
+  expect(() => requireMatrixLayout(matrixHidden)).toThrow('Rendered matrix text must remain visible');
+  await hiddenContent.evaluate(element => element.remove());
+  const matrixVisible = await wrapper.evaluate(matrixObservation);
+  requireMatrixLayout(matrixVisible);
   const clipping = await page.addStyleTag({ content: '.matrix-scroll { overflow: clip !important; }' });
   await page.keyboard.press('ArrowRight');
   const matrixDisabled = await wrapper.evaluate(matrixObservation);
@@ -499,14 +519,10 @@ test('browser guard controls detect real overflow, invisible focus, blocked matr
     .toThrow('Matrix needs its own native horizontal scroll container');
   await clipping.evaluate(element => element.remove());
   requireMatrixLayout(await wrapper.evaluate(matrixObservation));
-  await page.keyboard.press('ArrowRight');
-  await expect.poll(() => wrapper.evaluate(element => element.scrollLeft)).toBeGreaterThan(matrixBefore.scrollLeft);
-  const matrixRestored = await wrapper.evaluate(matrixObservation);
-  requireMatrixMovement(matrixBefore, matrixRestored, 'right');
-  await page.keyboard.press('ArrowLeft');
-  await expect.poll(() => wrapper.evaluate(element => element.scrollLeft)).toBe(0);
-  const matrixReturned = await wrapper.evaluate(matrixObservation);
-  requireMatrixMovement(matrixRestored, matrixReturned, 'left');
+  const restoreDeadline = performance.now() + 5000;
+  const matrixRestored = await settledMatrixKey(page, wrapper, 'ArrowRight', matrixBefore, restoreDeadline);
+  const matrixReturned = await settledMatrixKey(page, wrapper, 'ArrowLeft', matrixRestored, restoreDeadline);
+  expect(matrixReturned.scrollLeft).toBe(0);
   const missing = page.waitForResponse(response => response.url().endsWith('/drmr/missing-image.svg'));
   await page.evaluate(() => {
     const image = document.createElement('img');
@@ -521,7 +537,7 @@ test('browser guard controls detect real overflow, invisible focus, blocked matr
   })));
   expect(() => requireImages(badImages)).toThrow();
   await artifact(info, 'negative-controls.json', { schema_version: 1, badLayout, badFocus,
-    matrix: { before: matrixBefore, disabled: matrixDisabled, restored: matrixRestored, returned: matrixReturned },
+    matrix: { hiddenContent: matrixHidden, visibleAgain: matrixVisible, before: matrixBefore, disabled: matrixDisabled, restored: matrixRestored, returned: matrixReturned },
     missing_image_status: 404, badImages });
 });
 
@@ -529,27 +545,55 @@ test('native Tab keeps edge targets fully visible only with the production scrol
   await projectOnly(context);
   monitor(page);
   const comparisons = [];
+  const discoveries = [];
   try {
-    for (const [width, ordinal, expected] of [
-      [320, 19, page.getByRole('group', { name: 'Build and check the CLI', exact: true })],
-      [1440, 20, page.getByRole('link', { name: 'Source installation instructions', exact: true })],
-    ]) {
-      // Replay the same native Tab sequence in a fresh document for each state.
+    for (const width of [320, 1440]) {
+      // Discover a naturally clipped edge, never manufacture one by scrolling
+      // or refocusing. The full five-second replay below must confirm it.
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto('about:blank');
+      await ready(page);
+      await page.addStyleTag({ content: `${focusSelector} { scroll-margin-block: 0 !important; }` });
+      const route = [];
+      const discovery = { width, viewportHeight: 900, route };
+      discoveries.push(discovery);
+      const candidates = page.locator(focusSelector);
+      await expect(candidates).toHaveCount(31);
+      let selected;
+      for (let index = 0; index < 31; index++) {
+        await page.keyboard.press('Tab');
+        await expect(candidates.nth(index)).toBeFocused();
+        const sample = await candidates.nth(index).evaluate(focusObservation);
+        const margin = await candidates.nth(index).evaluate(element => getComputedStyle(element).scrollMarginBlockStart);
+        expect(margin).toBe('0px');
+        route.push({ ordinal: index + 1, margin, sample });
+        if (partialFocusCandidate(sample)) {
+          selected = { ordinal: index + 1, identity: sample.target };
+          discovery.selected = selected;
+          break;
+        }
+      }
+      expect(selected, 'A native Tab target must naturally cross only the bottom edge with margin disabled').toBeDefined();
+      const { ordinal, identity } = selected;
+      // Reproduce the same ordinal and complete identity in all three states.
       for (const state of ['production', 'disabled-control', 'restored']) {
         await page.setViewportSize({ width, height: 900 });
         await page.goto('about:blank');
         await ready(page);
         if (state === 'disabled-control') {
-          await page.addStyleTag({ content: 'a[href], pre[tabindex="0"] { scroll-margin-block: 0 !important; }' });
+          await page.addStyleTag({ content: `${focusSelector} { scroll-margin-block: 0 !important; }` });
         }
+        const focusable = page.locator(focusSelector);
+        await expect(focusable).toHaveCount(31);
+        const expected = focusable.nth(ordinal - 1);
         expect(await expected.evaluate(element => getComputedStyle(element).scrollMarginBlockStart))
           .toBe(state === 'disabled-control' ? '0px' : '16px');
-        const focusable = page.locator(focusSelector);
-        for (let i = 0; i < ordinal; i++) {
+        for (let index = 0; index < ordinal; index++) {
           await page.keyboard.press('Tab');
-          await expect(focusable.nth(i)).toBeFocused();
+          await expect(focusable.nth(index)).toBeFocused();
         }
         await expect(expected).toBeFocused();
+        expect((await expected.evaluate(focusObservation)).target).toEqual(identity);
         const phase = `scroll-margin-${width}-${state}`;
         let failure;
         try {
@@ -559,9 +603,8 @@ test('native Tab keeps edge targets fully visible only with the production scrol
         }
         const check = monitors.get(page).evidence.focusChecks.at(-1);
         comparisons.push({ width, state, ...check });
+        for (const sample of check.samples) expect(sample.target).toEqual(identity);
         if (state === 'disabled-control') {
-          // The negative must be actual partial clipping of the correct target,
-          // not a missing element, broken outline or unrelated failure.
           requireClippedFocusTimeout(failure, check);
         } else {
           if (failure) throw failure;
@@ -572,6 +615,6 @@ test('native Tab keeps edge targets fully visible only with the production scrol
   } finally {
     await artifact(info, 'scroll-margin-comparison.json', { schema_version: 1,
       source_head: info.config.metadata.sourceHead, source_tree: info.config.metadata.sourceTree,
-      mode: info.config.metadata.mode, comparisons });
+      mode: info.config.metadata.mode, discoveries, comparisons });
   }
 });

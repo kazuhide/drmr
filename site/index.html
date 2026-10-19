@@ -61,7 +61,7 @@
               <td class="unavailable">Outside profile</td>
             </tr>
             <tr id="mp4-audio-edit">
-              <th scope="row"><strong class="input-format">MP4</strong><span class="input-profile">Audio start/end edits<sup>2</sup></span><span class="input-protections"><span class="clear">Clear</span> / <code>cenc</code> (qualified)</span></th>
+              <th scope="row"><strong class="input-format">MP4</strong><span class="input-profile">Finite audio edits<sup>2</sup></span><span class="input-protections"><span class="clear">Clear</span> / <code>cenc</code> (qualified)</span></th>
               <td><span class="clear">Clear</span></td>
               <td class="unavailable">Outside profile</td>
               <td class="unavailable">Outside profile</td>
@@ -101,7 +101,7 @@
       <p class="matrix-scope">Clear means unencrypted. “Outside profile” describes drmr’s current implementation, rather than a limitation of the media formats.</p>
       <ol id="matrix-limits" class="matrix-limits">
         <li>Regular MP4 output contains one audio or video track. Separate DASH/HLS audio and video tracks cannot be combined into one MP4 output.</li>
-        <li>MP4 with simple audio start/end edits converts from clear or qualified <code>cenc</code> input to clear MP4. This profile accepts one AAC-LC audio track and optional H.264 video from the same original file. Complex edits and encrypted input with DRM initialization metadata are outside this profile.</li>
+        <li>Finite audio edits specify an audio start position and presentation duration. Progressive MP4 with a simple finite edit converts from clear or qualified <code>cenc</code> input to clear MP4. This profile accepts one AAC-LC audio track and optional H.264 video from the same original file. Complex edits and encrypted input with DRM initialization metadata are outside this profile. The standard profile also supports open-ended initial priming trims: edits that remove encoder warm-up samples at the start without fixing the end position.</li>
         <li>TS input uses a limited profile of progressive H.264 video and 48 kHz AAC-LC audio. Audio-only input has TS output only. TS output with both video and audio uses separate playlists.</li>
       </ol>
       <div id="matrix-definitions" class="support-detail">

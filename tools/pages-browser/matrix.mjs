@@ -19,6 +19,8 @@ export function requireMatrixLayout(value) {
   assert.ok(value.clientWidth > 0 && value.clientHeight > 0);
   assert.ok(value.rect.left >= 0 && value.rect.right <= value.documentWidth, 'Matrix viewport must stay inside the page');
   assert.equal(value.documentScrollWidth, value.documentWidth, 'The page must not replace matrix scrolling');
+  assert.deepEqual(value.hiddenText, [], 'Rendered matrix text must remain visible and inside its cell');
+  assert.ok(value.renderedTextCount > 0, 'Rendered matrix text needs actual text rectangles');
   assert.deepEqual(value.clippedCells, [], 'Matrix cells must retain their complete content');
   assert.equal(value.rowHeaders.length, 6);
   for (const header of value.rowHeaders) {
@@ -57,13 +59,101 @@ export function matrixObservation(wrapper) {
     return style.display === 'none' || style.visibility !== 'visible' ||
       element.scrollWidth > element.clientWidth || element.scrollHeight > element.clientHeight;
   }).map(element => element.textContent.trim());
+  const hiddenText = [];
+  let renderedTextCount = 0;
+  for (const cell of wrapper.querySelectorAll('th,td')) {
+    const cellBox = cell.getBoundingClientRect();
+    const walker = document.createTreeWalker(cell, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (!node.textContent.trim()) continue;
+      let hidden = false;
+      // Opacity is not inherited; inspect the rendered leaf and its owners.
+      for (let owner = node.parentElement; owner; owner = owner.parentElement) {
+        const style = getComputedStyle(owner);
+        if (style.display === 'none' || style.visibility !== 'visible' ||
+            Number(style.opacity) === 0 || style.contentVisibility === 'hidden') hidden = true;
+        if (owner === wrapper) break;
+      }
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      const rectangles = [...range.getClientRects()].filter(box => box.width > 0 && box.height > 0);
+      const clipped = rectangles.some(box => box.left < cellBox.left || box.right > cellBox.right ||
+        box.top < cellBox.top || box.bottom > cellBox.bottom);
+      if (hidden || !rectangles.length || clipped) {
+        hiddenText.push({ text: node.textContent.trim(), hidden, rectangles: rectangles.length, clipped });
+      } else {
+        renderedTextCount++;
+      }
+    }
+  }
   const lastCells = [...wrapper.querySelectorAll('tbody td:last-child')].map(bounds);
   const firstCells = [...wrapper.querySelectorAll('tbody td:first-of-type')].map(bounds);
   return { rect: bounds(wrapper), contentLeft, contentRight,
     clientWidth: wrapper.clientWidth, clientHeight: wrapper.clientHeight,
     scrollWidth: wrapper.scrollWidth, scrollLeft: wrapper.scrollLeft,
     overflowX: getComputedStyle(wrapper).overflowX,
-    focused: document.activeElement === wrapper, rowHeaders, clippedCells, firstCells, lastCells,
+    focused: document.activeElement === wrapper, rowHeaders, clippedCells, hiddenText, renderedTextCount, firstCells, lastCells,
     documentWidth: document.documentElement.clientWidth, documentScrollWidth: document.documentElement.scrollWidth,
     pageX: scrollX, pageY: scrollY };
+}
+
+
+// A first animation delta is not completion of the preceding native key.
+export class MatrixKeyDeadline extends Error {
+  constructor(operation) {
+    super(`Native matrix ${operation} exceeded its five-second traversal deadline`);
+    this.name = 'MatrixKeyDeadline';
+    this.operation = operation;
+  }
+}
+
+export async function completeMatrixKey({ arm, press, wait, observe, before, direction, deadline,
+  now = () => performance.now(), schedule = (callback, delay) => {
+    const timer = setTimeout(callback, delay);
+    return () => clearTimeout(timer);
+  } }) {
+  const expired = Symbol('matrix deadline');
+  let cancel = () => {};
+  const alarm = new Promise(resolve => {
+    const check = () => {
+      const left = deadline - now();
+      if (left > 0) { cancel = schedule(check, Math.ceil(left)); return; }
+      resolve(expired);
+    };
+    cancel = schedule(check, Math.max(0, Math.ceil(deadline - now())));
+  });
+  const run = async (operation, action, cleanup = false) => {
+    const remaining = deadline - now();
+    if (!cleanup && remaining <= 0) throw new MatrixKeyDeadline(operation);
+    const task = Promise.resolve().then(() => {
+      if (!cleanup && now() >= deadline) throw new MatrixKeyDeadline(operation);
+      return action(Math.max(0, deadline - now()));
+    }).then(value => ({ value }));
+    const result = await Promise.race([task, alarm]);
+    if (result === expired || now() >= deadline) throw new MatrixKeyDeadline(operation);
+    return result.value;
+  };
+  let signal;
+  let after;
+  let failure;
+  try {
+    signal = await run('listener setup', arm);
+    await run('keypress', press);
+    await run('scrollend observation', remaining => wait(signal, remaining));
+    after = await run('geometry observation', observe);
+    requireMatrixMovement(before, after, direction);
+  } catch (error) {
+    failure = error;
+  } finally {
+    try {
+      if (signal) await run('listener cleanup', () => signal.dispose(), true);
+    } catch (error) {
+      failure ||= error;
+    } finally {
+      cancel();
+    }
+  }
+  if (failure) throw failure;
+  if (now() >= deadline) throw new MatrixKeyDeadline('completion');
+  return after;
 }

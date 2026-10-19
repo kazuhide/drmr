@@ -246,9 +246,9 @@ class ConversionMatrix(unittest.TestCase):
     def fixture(self, language="en"):
         labels = {
             "en": ("Input and output support", "Conversion support matrix", "Supported conversion profiles", "Input ↓ / Output →", "Outside profile", "(qualified)",
-                   ["Standard profile", "Audio start/end edits", "Fragmented MP4 tracks", "Fragmented MP4 (fMP4)", "Video with optional audio", "Audio only"]),
+                   ["Standard profile", "Finite audio edits", "Fragmented MP4 tracks", "Fragmented MP4 (fMP4)", "Video with optional audio", "Audio only"]),
             "ja": ("入力と出力の対応表", "変換対応表", "対応する変換プロファイル", "入力 ↓ / 出力 →", "対象外", "（限定条件）",
-                   ["音声の開始・終了の編集情報なし", "音声の開始・終了の編集情報あり", "フラグメント化MP4トラック", "フラグメント化MP4（fMP4）", "映像（音声は省略可）", "音声のみ"]),
+                   ["通常プロファイル", "再生時間を指定した音声編集", "フラグメント化MP4トラック", "フラグメント化MP4（fMP4）", "映像（音声は省略可）", "音声のみ"]),
         }
         heading, region, caption, corner, outside, qualified, profiles = labels[language]
         standard = ["Clear/cenc/cbcs", "Clear/cenc/cbcs", "Clear/cbcs/AES-128", ""]

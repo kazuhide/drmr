@@ -54,14 +54,14 @@
           </thead>
           <tbody>
             <tr id="mp4-standard">
-              <th scope="row"><strong class="input-format">MP4</strong><span class="input-profile">音声の開始・終了の編集情報なし</span><span class="input-protections"><span class="clear">Clear</span> / <code>cenc</code> / <code>cbcs</code></span></th>
+              <th scope="row"><strong class="input-format">MP4</strong><span class="input-profile">通常プロファイル</span><span class="input-protections"><span class="clear">Clear</span> / <code>cenc</code> / <code>cbcs</code></span></th>
               <td><span class="clear">Clear</span> / <code>cenc</code> / <code>cbcs</code><sup>1</sup></td>
               <td><span class="clear">Clear</span> / <code>cenc</code> / <code>cbcs</code></td>
               <td><span class="clear">Clear</span> / <code>cbcs</code> / <code>AES-128</code></td>
               <td class="unavailable">対象外</td>
             </tr>
             <tr id="mp4-audio-edit">
-              <th scope="row"><strong class="input-format">MP4</strong><span class="input-profile">音声の開始・終了の編集情報あり<sup>2</sup></span><span class="input-protections"><span class="clear">Clear</span> / <code>cenc</code>（限定条件）</span></th>
+              <th scope="row"><strong class="input-format">MP4</strong><span class="input-profile">再生時間を指定した音声編集<sup>2</sup></span><span class="input-protections"><span class="clear">Clear</span> / <code>cenc</code>（限定条件）</span></th>
               <td><span class="clear">Clear</span></td>
               <td class="unavailable">対象外</td>
               <td class="unavailable">対象外</td>
@@ -101,7 +101,7 @@
       <p class="matrix-scope">Clear は暗号化なし。「対象外」は現在の drmr の実装範囲を示し、形式の仕様として変換できないという意味ではありません。</p>
       <ol id="matrix-limits" class="matrix-limits">
         <li>通常の MP4 出力は、映像または音声の1トラックです。DASH/HLS の別々の音声・映像を、1つの MP4 に結合する出力には対応していません。</li>
-        <li>音声の開始・終了を調整する単純な編集情報を持つ MP4 は、Clear または条件を満たす <code>cenc</code> 入力から Clear MP4 に変換します。同じ元ファイル内の AAC-LC 音声1本と、任意の H.264 映像1本が対象です。複雑な編集や、DRM初期化情報などを含む暗号化入力は対象外です。</li>
+        <li>音声の開始位置と再生時間を指定する単純な編集情報を持つプログレッシブ MP4 は、Clear または条件を満たす <code>cenc</code> 入力から Clear MP4 に変換します。同じ元ファイル内の AAC-LC 音声1本と、任意の H.264 映像1本が対象です。複雑な編集や、DRM初期化情報などを含む暗号化入力は対象外です。通常プロファイルでは、エンコード時に生じる先頭の余分な音声を除く編集も、終了位置を固定しない場合に対応します。</li>
         <li>TS 入力は、プログレッシブ H.264 映像と 48 kHz AAC-LC 音声の限定的な構成が対象です。音声のみの場合は TS 出力に限ります。映像と音声がある TS 出力は、別々のプレイリストになります。</li>
       </ol>
       <div id="matrix-definitions" class="support-detail">

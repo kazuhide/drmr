@@ -34,10 +34,15 @@ still fails. The suite covers:
   semantic table. Exact row/column headers, all 24 output cells, input protection
   qualifications and linked notes are checked independently of the HTML.
   Each scrollable matrix is reached by native Tab and traversed to both
-  horizontal edges with arrow keys while sticky row headers and document scroll
+  horizontal edges with arrow keys. A listener is armed before each key, and
+  its native `scrollend` must arrive before geometry is accepted or another key
+  is sent; partial animation deltas cannot complete a key. The entire traversal
+  retains its five-second deadline. Sticky row headers and document scroll
   positions remain unchanged. Its first and last output columns must fit next
   to the input headers. Only the matrix owns intentional horizontal overflow;
-  page overflow and clipped cells remain failures. Initial viewport screenshots
+  page overflow and clipped cells remain failures. Nonempty rendered text must
+  retain visible leaf/ancestor styles and actual rectangles inside its cell;
+  hidden child labels cannot pass through unchanged DOM text. Initial viewport screenshots
   are captured after navigation/font readiness and before keyboard/focus/scroll
   interaction, alongside the existing full-page captures. Chromium CDP records actual glyph-producing platform
   fonts for the heading, lead and code, including Japanese fallback; it does
@@ -51,18 +56,21 @@ still fails. The suite covers:
   load the matching raw page hash and declared language without scripts,
   language detection or cookies.
 - Negative controls inject overflow, an invisible focus outline and a broken
-  image, plus block native matrix scrolling, in the isolated browser DOM. Each real measurement must reject its
+  image, hide real Clear labels and block native matrix scrolling in the isolated browser DOM. Each real measurement must reject its
   corresponding fault. Removing the matrix override must restore actual native
   arrow movement; the production files are unchanged.
-- An English native Tab comparison replays both observed edge targets in fresh documents
-  with the production 16px scroll margin, a test-only zero-margin override, then
-  the restored production style. Both production states must satisfy the exact
-  complete-focus condition. The zero-margin state must retain partial clipping
-  of the correct target throughout the existing five-second observation budget.
-  Only the owned condition-timeout type is accepted; evaluation, transport,
-  polling and evidence-write errors remain fatal. Offscreen or horizontally
-  clipped targets cannot stand in for a healthy partial-bottom control.
-  No programmatic scroll, refocus or viewport epsilon is used.
+- An English native Tab comparison first discovers a naturally partial-bottom
+  target using only native Tab with zero scroll margin. Only correct active
+  identity, positive dimensions, the intact 3px outline and partial bottom
+  clipping can select a candidate. No candidate, entirely offscreen content,
+  horizontal clipping and transport/evaluation errors remain failures.
+  The same width, ordinal and complete identity are replayed in fresh documents
+  with production 16px margin, zero margin, then restored production style.
+  Production states must satisfy complete focus visibility. The zero-margin
+  state must retain healthy partial clipping throughout the existing absolute
+  five-second observation budget. Only the owned condition-timeout type passes
+  this negative control. Discovery routes and all replay samples are retained.
+  No programmatic scroll, refocus, viewport epsilon or whole-test retry is used.
 
 The pre-publish job serves only the nine allowlisted files on loopback. It must
 pass, along with static validation on both operating systems, before deployment.
@@ -104,9 +112,9 @@ The lockfile has five exact development packages: `@playwright/test`,
 `@axe-core/playwright` and `axe-core` 4.14.0 (MPL-2.0). They are CI-only and are not
 redistributed in the nine-file Pages artifact. The npm audit gate is a current
 advisory check, not a claim that these dependencies can never have a defect.
-The pure Node suite has 20 controls, separate from the 13 CI browser cases and
-19 workflow checks (17 successful checks plus intentionally skipped publish/live
-jobs on a pull request). Production HTML still contains zero scripts; CI-only
+The pure Node suite has 25 controls, separate from the 13 CI browser cases and
+the applicable workflow checks, which depend on changed paths. Publish/live
+jobs are intentionally skipped on pull requests. Production HTML still contains zero scripts; CI-only
 axe injection does not change that source contract.
 The hosted IBM Plex font files and their OFL notice remain part of the website.
 

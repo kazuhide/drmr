@@ -9,7 +9,7 @@ export const locales = [
     anchors: ['Support', 'Workflow', 'Get started'],
     matrixRegion: 'Conversion support matrix', matrixCaption: 'Supported conversion profiles',
     matrixCorner: 'Input ↓ / Output →', outside: 'Outside profile', qualified: '(qualified)',
-    profiles: ['Standard profile', 'Audio start/end edits', 'Fragmented MP4 tracks', 'Fragmented MP4 (fMP4)', 'Video with optional audio', 'Audio only'],
+    profiles: ['Standard profile', 'Finite audio edits', 'Fragmented MP4 tracks', 'Fragmented MP4 (fMP4)', 'Video with optional audio', 'Audio only'],
     matrix: 'Read the full support matrix and restrictions', license: 'Font license',
   },
   {
@@ -21,7 +21,7 @@ export const locales = [
     anchors: ['対応範囲', '使い方', '始める'],
     matrixRegion: '変換対応表', matrixCaption: '対応する変換プロファイル',
     matrixCorner: '入力 ↓ / 出力 →', outside: '対象外', qualified: '（限定条件）',
-    profiles: ['音声の開始・終了の編集情報なし', '音声の開始・終了の編集情報あり', 'フラグメント化MP4トラック', 'フラグメント化MP4（fMP4）', '映像（音声は省略可）', '音声のみ'],
+    profiles: ['通常プロファイル', '再生時間を指定した音声編集', 'フラグメント化MP4トラック', 'フラグメント化MP4（fMP4）', '映像（音声は省略可）', '音声のみ'],
     matrix: '対応範囲と制約を読む（英語）', license: 'フォントライセンス（英語）',
   },
 ];

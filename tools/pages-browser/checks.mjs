@@ -140,19 +140,32 @@ export function requireClippedFocusTimeout(failure, check) {
   assert.ok(Number.isFinite(failure.elapsedMs) && failure.elapsedMs >= 5000);
   assert.equal(check.passed, false);
   assert.ok(check.samples.length > 1);
-  for (const sample of check.samples) {
-    assert.equal(sample.matchesTarget, true);
-    assert.equal(sample.inViewport, false);
-    assert.equal(sample.outlineWidth, 3);
-    assert.equal(sample.outlineStyle, 'solid');
-    const { rect, viewport } = sample;
-    assert.ok([rect.top, rect.bottom, rect.left, rect.right, rect.width, rect.height,
-      viewport.width, viewport.height, sample.width, sample.height].every(Number.isFinite));
-    assert.ok(viewport.width > 0 && viewport.height > 0 && sample.width > 0 && sample.height > 0);
-    assert.equal(rect.width, sample.width);
-    assert.equal(rect.height, sample.height);
-    assert.ok(rect.width > 0 && rect.height > 0 && rect.right > rect.left);
-    assert.ok(0 <= rect.top && rect.top < viewport.height && viewport.height < rect.bottom);
-    assert.ok(0 <= rect.left && rect.right <= viewport.width);
+  for (const sample of check.samples) requirePartialBottomFocus(sample);
+}
+
+export function requirePartialBottomFocus(sample) {
+  assert.equal(sample.matchesTarget, true);
+  assert.equal(sample.inViewport, false);
+  assert.equal(sample.outlineWidth, 3);
+  assert.equal(sample.outlineStyle, 'solid');
+  const { rect, viewport } = sample;
+  assert.ok([rect.top, rect.bottom, rect.left, rect.right, rect.width, rect.height,
+    viewport.width, viewport.height, sample.width, sample.height].every(Number.isFinite));
+  assert.ok(viewport.width > 0 && viewport.height > 0 && sample.width > 0 && sample.height > 0);
+  assert.equal(rect.width, sample.width);
+  assert.equal(rect.height, sample.height);
+  assert.ok(rect.width > 0 && rect.height > 0 && rect.right > rect.left);
+  assert.ok(0 <= rect.top && rect.top < viewport.height && viewport.height < rect.bottom);
+  assert.ok(0 <= rect.left && rect.right <= viewport.width);
+}
+
+export function partialFocusCandidate(sample) {
+  try {
+    requireFocus(sample);
+    return false;
+  } catch (error) {
+    if (!(error instanceof AssertionError)) throw error;
+    requirePartialBottomFocus(sample);
+    return true;
   }
 }
