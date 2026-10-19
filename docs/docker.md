@@ -75,7 +75,9 @@ Docker Desktop requires its optional [host networking feature](https://docs.dock
 
 ## Included versions and notices
 
-The image records its source revision, source tree, and dependency pins in `/usr/share/drmr/build-manifest.json`. Component notices are in `/usr/share/drmr/licenses`, and the corresponding build sources are in `/usr/share/drmr/sources`. The repository's MIT license covers drmr; bundled components retain their own licenses.
+The image records its source revision, source tree, and dependency pins in `/usr/share/drmr/build-manifest.json`. Component notices are in `/usr/share/drmr/licenses`. `/usr/share/drmr/sources` retains the media-tool source archives, drmr, and the selected Rust dependencies and standard-library source. The repository's MIT license covers drmr; bundled components retain their own licenses.
+
+Debian package versions and their packaged notices are recorded separately. The image does not include a full Debian source mirror. Packages installed from Debian's repositories can change between builds; the manifest records the versions actually installed.
 
 ## Clean up
 
