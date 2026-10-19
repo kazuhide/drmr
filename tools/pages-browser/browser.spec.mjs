@@ -220,35 +220,42 @@ async function settledMatrixKey(page, wrapper, key, before, deadline) {
 }
 
 async function nativeMatrixScroll(page, wrapper, width) {
-  const initial = await wrapper.evaluate(matrixObservation);
-  requireMatrixLayout(initial);
-  expect(initial.focused).toBe(true);
-  expect(initial.scrollLeft).toBe(0);
-  if (width === 320) expect(initial.scrollWidth).toBeGreaterThan(initial.clientWidth);
-  if (initial.scrollWidth <= initial.clientWidth) return { initial, scrollNeeded: false };
-  const deadline = performance.now() + 5000;
-  const samples = [initial];
-  const move = async (key) => {
-    samples.push(await settledMatrixKey(page, wrapper, key, samples.at(-1), deadline));
-  };
-  const first = initial.firstCells;
-  const headerRight = Math.max(...initial.rowHeaders.map(header => header.right));
-  for (const cell of first) {
-    expect(cell.left).toBeGreaterThanOrEqual(headerRight);
-    expect(cell.right).toBeLessThanOrEqual(initial.contentRight);
+  // Keep the same static DOM target throughout the timed native traversal.
+  const target = await wrapper.elementHandle();
+  expect(target).not.toBeNull();
+  try {
+    const initial = await target.evaluate(matrixObservation);
+    requireMatrixLayout(initial);
+    expect(initial.focused).toBe(true);
+    expect(initial.scrollLeft).toBe(0);
+    if (width === 320) expect(initial.scrollWidth).toBeGreaterThan(initial.clientWidth);
+    if (initial.scrollWidth <= initial.clientWidth) return { initial, scrollNeeded: false };
+    const deadline = performance.now() + 5000;
+    const samples = [initial];
+    const move = async (key) => {
+      samples.push(await settledMatrixKey(page, target, key, samples.at(-1), deadline));
+    };
+    const first = initial.firstCells;
+    const headerRight = Math.max(...initial.rowHeaders.map(header => header.right));
+    for (const cell of first) {
+      expect(cell.left).toBeGreaterThanOrEqual(headerRight);
+      expect(cell.right).toBeLessThanOrEqual(initial.contentRight);
+    }
+    for (let count = 0; samples.at(-1).scrollLeft < initial.scrollWidth - initial.clientWidth && count < 64; count++) {
+      await move('ArrowRight');
+    }
+    const right = samples.at(-1);
+    expect(right.scrollLeft).toBe(initial.scrollWidth - initial.clientWidth);
+    for (const cell of right.lastCells) {
+      expect(cell.left).toBeGreaterThanOrEqual(Math.max(...right.rowHeaders.map(header => header.right)));
+      expect(cell.right).toBeLessThanOrEqual(right.contentRight);
+    }
+    for (let count = 0; samples.at(-1).scrollLeft > 0 && count < 64; count++) await move('ArrowLeft');
+    expect(samples.at(-1).scrollLeft).toBe(0);
+    return { scrollNeeded: true, samples };
+  } finally {
+    await target.dispose();
   }
-  for (let count = 0; samples.at(-1).scrollLeft < initial.scrollWidth - initial.clientWidth && count < 64; count++) {
-    await move('ArrowRight');
-  }
-  const right = samples.at(-1);
-  expect(right.scrollLeft).toBe(initial.scrollWidth - initial.clientWidth);
-  for (const cell of right.lastCells) {
-    expect(cell.left).toBeGreaterThanOrEqual(Math.max(...right.rowHeaders.map(header => header.right)));
-    expect(cell.right).toBeLessThanOrEqual(right.contentRight);
-  }
-  for (let count = 0; samples.at(-1).scrollLeft > 0 && count < 64; count++) await move('ArrowLeft');
-  expect(samples.at(-1).scrollLeft).toBe(0);
-  return { scrollNeeded: true, samples };
 }
 
 async function projectOnly(context) {
