@@ -436,6 +436,11 @@ fn media_arguments_match_the_reference_with_explicit_resource_limits() {
         for arguments in [&mut real, &mut redacted] {
             arguments.extend(["--single_threaded".into(), "--io_cache_size=0".into()]);
         }
+        // Actual child arguments stay byte-for-byte equal to the reference;
+        // retained diagnostics now hide the whole opaque signaling payload.
+        if let Some(at) = redacted.iter().position(|argument| argument == "--pssh") {
+            redacted[at + 1] = REDACTED.into();
+        }
         assert_eq!(recorded(&argv_file), real[1..], "{name}: the child's argv");
         assert_eq!(result.argv_redacted[0], bin, "{name}");
         assert_eq!(
@@ -1354,4 +1359,66 @@ fn debug_output_never_carries_key_material_or_the_argv() {
         stderr_tail: "abcdef".into(),
     };
     assert!(!format!("{result:?}").contains("abcdef"));
+}
+
+#[test]
+fn retained_packager_results_and_errors_hide_signaling_and_encoded_keys() {
+    use base64::Engine as _;
+    let (_dir, root) = tempdir();
+    let url = "https://license.example.invalid/rights?token=synthetic-private-token&x=1";
+    let objects = drmr_core::playready::build_playready_v43(VALID_KID, url).unwrap();
+    let encoded_key =
+        base64::engine::general_purpose::STANDARD.encode(hex::decode(VALID_KEY).unwrap());
+    let diagnostic = format!(
+        "{url} {} {} {} {} {encoded_key}",
+        objects.wrmheader_xml, objects.pro_b64, objects.pssh_b64, objects.pssh_hex
+    );
+    let argv_file = root.join("actual-argv.txt");
+    let bin = stub(
+        &root,
+        &[
+            ("STUB_PACKAGER_STDERR", &diagnostic),
+            ("STUB_PACKAGER_ARGV_FILE", argv_file.to_str().unwrap()),
+        ],
+    );
+    let collector = Arc::new(Collector::default());
+    let runner = Arc::new(ToolRunner::new(
+        Arc::new(Secrets::with([
+            url,
+            objects.wrmheader_xml.as_str(),
+            objects.pro_b64.as_str(),
+            objects.pssh_b64.as_str(),
+        ])),
+        collector.clone(),
+    ));
+    let packager = Packager::new(runner.clone()).with_packager_bin(bin);
+    let result = encrypt(&packager, &root, &[&objects.pssh_hex]).unwrap();
+    assert_eq!(after(&recorded(&argv_file), "--pssh"), objects.pssh_hex);
+    assert_eq!(after(&result.argv_redacted, "--pssh"), REDACTED);
+    let shown = format!(
+        "{} {} {result:?} {}",
+        result.argv_redacted.join(" "),
+        result.stderr_tail,
+        serde_json::to_string(&collector.records()).unwrap()
+    );
+    for value in [
+        url,
+        objects.wrmheader_xml.as_str(),
+        objects.pro_b64.as_str(),
+        objects.pssh_b64.as_str(),
+        objects.pssh_hex.as_str(),
+        encoded_key.as_str(),
+    ] {
+        assert!(!shown.contains(value), "retained secret diagnostic");
+    }
+    let missing = Packager::new(runner).with_packager_bin(root.join("missing").to_string_lossy());
+    let Err(Error::Packager(error)) = encrypt(&missing, &root, &[&objects.pssh_hex]) else {
+        panic!("expected a missing-tool failure");
+    };
+    assert_eq!(after(error.argv_redacted(), "--pssh"), REDACTED);
+    assert_secret_free_error(&error);
+    assert!(
+        !format!("{error} {error:?} {}", error.argv_redacted().join(" "))
+            .contains(&objects.pssh_hex)
+    );
 }

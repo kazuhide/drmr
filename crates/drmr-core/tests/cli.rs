@@ -1260,3 +1260,111 @@ fn run_and_plan_help_explain_their_inputs_and_output() {
             .contains("enumerate renditions only; writes nothing (read-only)")
     );
 }
+
+#[test]
+fn run_jsonl_registers_source_and_generated_signaling_before_tool_records() {
+    // Exercise cmd_run, the pipeline and ToolRunner with the real PlayReady
+    // builder; existing fake media ports keep this a bounded synthetic test.
+    let mut cli = Cli::new();
+    let url = "https://license.example.invalid/rights?token=synthetic-license-token&x=1";
+    cli.fakes.manifests.la_url = Some(url.into());
+    let asset = cli.asset(&[h264_rep("v0")], "private-signaling");
+    let master = write_minimal_hls_master(cli.root(), "private-signaling", 3);
+    let objects = drmr_core::playready::build_playready_v43(KID, url).unwrap();
+    let probe = drmr_test_support::ToolSpec {
+        stderr: format!(
+            "{}\n{}\n{}\n{}\n{}\n",
+            url, objects.wrmheader_xml, objects.pro_b64, objects.pssh_b64, objects.pssh_hex
+        )
+        .into_bytes(),
+        stdout: b"[]".to_vec(),
+        ..Default::default()
+    };
+    let stub = drmr_test_support::install(&cli.root().join("metadata-probe"), &probe).unwrap();
+    cli.fakes.media.tenc_iv = Box::new(move |runner, path| mp4dump_tenc_iv(runner, &stub, path));
+    let ports = drmr_core::pipeline_deps::Ports;
+    let modules = Modules {
+        playready: &ports,
+        ..cli.modules()
+    };
+    let argv = vec![
+        "run".into(),
+        "--mpd".into(),
+        asset.mpd_path.display().to_string(),
+        "--output".into(),
+        cli.path("out"),
+        "--hls-master".into(),
+        master.display().to_string(),
+        "--log-format".into(),
+        "jsonl".into(),
+    ];
+    let stdout = SharedBuf::default();
+    let mut stderr = SharedBuf::default();
+    let code = cli::main(
+        &argv,
+        &real_key_env(),
+        &modules,
+        stdout.clone(),
+        &mut stderr,
+    );
+    assert_eq!(code, EXIT_RENDITION_FAIL);
+    let log = stdout.text();
+    assert!(log.contains("\"command\""));
+    assert!(log.contains("metadata-probe") || log.contains("mp4dump"));
+    for secret in [
+        url,
+        objects.wrmheader_xml.as_str(),
+        objects.pro_b64.as_str(),
+        objects.pssh_b64.as_str(),
+        objects.pssh_hex.as_str(),
+    ] {
+        assert!(!log.contains(secret), "signaling in JSONL");
+        assert!(!stderr.text().contains(secret), "signaling in stderr");
+    }
+    // Redaction must not alter the signaling submitted to encryption.
+    assert!(cli.fakes.packager.calls().iter().any(|call| matches!(call,
+        PackagerCall::Encrypt { pssh_hex: Some(boxes), .. } if boxes.contains(&objects.pssh_hex))));
+}
+
+#[test]
+fn run_jsonl_scrubs_compact_tool_output_for_accepted_spaced_key_material() {
+    let mut cli = Cli::new();
+    let spec = drmr_test_support::ToolSpec {
+        stdout: b"[]".to_vec(),
+        stderr: format!(
+            "{} {}",
+            KEY,
+            base64::engine::general_purpose::STANDARD.encode(hex::decode(KEY).unwrap())
+        )
+        .into_bytes(),
+        ..Default::default()
+    };
+    let stub = drmr_test_support::install(&cli.root().join("spaced-key-probe"), &spec).unwrap();
+    cli.fakes.media.tenc_iv = Box::new(move |runner, path| mp4dump_tenc_iv(runner, &stub, path));
+    let mpd = cli.asset_mpd();
+    let mut env = real_key_env();
+    let spaced = KEY
+        .as_bytes()
+        .chunks(2)
+        .map(|pair| std::str::from_utf8(pair).unwrap())
+        .collect::<Vec<_>>()
+        .join(" ");
+    env.insert("DRM_KEY".into(), spaced);
+    let result = cli.main(
+        &[
+            "run",
+            "--mpd",
+            &mpd,
+            "--output",
+            &cli.path("out"),
+            "--no-manifests",
+            "--log-format",
+            "jsonl",
+        ],
+        &env,
+    );
+    assert_eq!(result.code, EXIT_RENDITION_FAIL);
+    assert!(result.stdout.contains("mp4dump"));
+    assert_no_secrets(&result.stdout);
+    assert_no_secrets(&result.stderr);
+}
