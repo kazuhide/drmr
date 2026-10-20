@@ -143,3 +143,77 @@ fn unsupported_schemes_are_refused_before_the_transport_is_used() {
         Err(ureq::Error::BadUri(_))
     ));
 }
+
+fn check_earliest_handshake_budget(reason: ureq::Timeout) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let endpoint = format!("https://{}", listener.local_addr().unwrap());
+    let stopped = Arc::new(AtomicBool::new(false));
+    let stop = Arc::clone(&stopped);
+    let peer = std::thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !stop.load(Ordering::Acquire) && Instant::now() < deadline {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    stream.set_nonblocking(false).unwrap();
+                    stream
+                        .set_read_timeout(Some(Duration::from_millis(100)))
+                        .unwrap();
+                    stream
+                        .set_write_timeout(Some(Duration::from_millis(100)))
+                        .unwrap();
+                    let mut header = [0; 5];
+                    let hello = stream.read_exact(&mut header).is_ok() && header[..2] == [22, 3];
+                    stream.write_all(&[22, 3, 3, 0x40, 0]).unwrap();
+                    while !stop.load(Ordering::Acquire) && Instant::now() < deadline {
+                        if stream.write_all(&[0]).is_err() {
+                            break;
+                        }
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    return hello;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Err(error) => panic!("fixture accept failed: {error:?}"),
+            }
+        }
+        false
+    });
+    let idle = Duration::from_millis(300);
+    let short = Duration::from_millis(50);
+    let config = ureq::Agent::config_builder()
+        .timeout_connect(Some(idle))
+        .timeout_global((reason == ureq::Timeout::Global).then_some(short))
+        .timeout_per_call((reason == ureq::Timeout::PerCall).then_some(short))
+        .proxy(None)
+        .build();
+    let agent = with_config(config, idle);
+    let started = Instant::now();
+    let result = agent.get(endpoint).call();
+    let elapsed = started.elapsed();
+    stopped.store(true, Ordering::Release);
+    assert!(peer.join().unwrap());
+    assert!(
+        matches!(result, Err(ureq::Error::Timeout(actual)) if actual == reason),
+        "{result:?}"
+    );
+    assert!(
+        elapsed < Duration::from_millis(500),
+        "{reason:?}: {elapsed:?}"
+    );
+    println!("earliest TLS {reason:?}: {elapsed:?}");
+}
+
+#[test]
+fn a_global_budget_bounds_partial_tls_records_during_connect() {
+    check_earliest_handshake_budget(ureq::Timeout::Global);
+}
+
+#[test]
+fn a_per_call_budget_bounds_partial_tls_records_during_connect() {
+    check_earliest_handshake_budget(ureq::Timeout::PerCall);
+}

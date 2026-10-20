@@ -1,5 +1,7 @@
 //! Preserve S3's read/write idle limits across the HTTP client's transport boundary.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use ureq::unversioned::resolver::DefaultResolver;
 use ureq::unversioned::transport::time::{
@@ -25,7 +27,7 @@ fn with_config(config: ureq::config::Config, idle: Duration) -> ureq::Agent {
         config,
         ().chain(TcpConnector::default())
             .chain(IdleConnector(idle))
-            .chain(RustlsConnector::default()),
+            .chain(FinishingTlsConnector::default()),
         DefaultResolver::default(),
     )
 }
@@ -44,8 +46,12 @@ impl<T: Transport> Connector<T> for IdleConnector {
         Ok(chained.map(|inner| IdleTransport {
             inner,
             idle: self.0,
-            // Retain the start of TCP setup, including time spent before this connector.
-            connect_deadline: connection_deadline(details.now, details.timeout.after),
+            connect: Arc::new(ConnectBudget {
+                // Retain the start of TCP setup, including time spent before this connector.
+                deadline: connection_deadline(details.now, details.timeout.after),
+                reason: details.timeout.reason,
+                active: AtomicBool::new(true),
+            }),
         }))
     }
 }
@@ -54,7 +60,40 @@ impl<T: Transport> Connector<T> for IdleConnector {
 struct IdleTransport<T> {
     inner: T,
     idle: Duration,
-    connect_deadline: Option<Instant>,
+    connect: Arc<ConnectBudget>,
+}
+
+#[derive(Debug)]
+struct ConnectBudget {
+    deadline: Option<Instant>,
+    reason: ureq::Timeout,
+    active: AtomicBool,
+}
+
+#[derive(Debug, Default)]
+struct FinishingTlsConnector(RustlsConnector);
+
+impl<T: Transport> Connector<IdleTransport<T>> for FinishingTlsConnector {
+    type Out = <RustlsConnector as Connector<IdleTransport<T>>>::Out;
+
+    fn connect(
+        &self,
+        details: &ConnectionDetails,
+        chained: Option<IdleTransport<T>>,
+    ) -> Result<Option<Self::Out>, ureq::Error> {
+        let _phase = chained
+            .as_ref()
+            .map(|transport| ConnectionPhaseGuard(Arc::clone(&transport.connect)));
+        self.0.connect(details, chained)
+    }
+}
+
+struct ConnectionPhaseGuard(Arc<ConnectBudget>);
+
+impl Drop for ConnectionPhaseGuard {
+    fn drop(&mut self) {
+        self.0.active.store(false, Ordering::Release);
+    }
 }
 
 impl<T> IdleTransport<T> {
@@ -63,14 +102,15 @@ impl<T> IdleTransport<T> {
         timeout: NextTimeout,
         reason: ureq::Timeout,
     ) -> Result<NextTimeout, ureq::Error> {
-        // Later request/response phases must not reuse an expired handshake deadline.
-        let timeout = if timeout.reason == ureq::Timeout::Connect {
+        // The earliest connection budget may come from a global or per-call deadline.
+        let timeout = if self.connect.active.load(Ordering::Acquire) {
             let remaining = self
-                .connect_deadline
+                .connect
+                .deadline
                 .and_then(|deadline| deadline.checked_duration_since(Instant::now()))
                 .filter(|remaining| !remaining.is_zero())
-                .ok_or(ureq::Error::Timeout(ureq::Timeout::Connect))?;
-            bound(timeout, remaining, ureq::Timeout::Connect)
+                .ok_or(ureq::Error::Timeout(self.connect.reason))?;
+            bound(timeout, remaining, self.connect.reason)
         } else {
             timeout
         };
@@ -189,12 +229,20 @@ mod tests {
         }
     }
 
+    fn completed_budget() -> Arc<ConnectBudget> {
+        Arc::new(ConnectBudget {
+            deadline: None,
+            reason: ureq::Timeout::Connect,
+            active: AtomicBool::new(false),
+        })
+    }
+
     #[test]
     fn read_and_write_keep_the_earlier_deadline_and_reset_only_the_idle_limit() {
         let mut transport = IdleTransport {
             inner: Probe::default(),
             idle: Duration::from_millis(300),
-            connect_deadline: None,
+            connect: completed_budget(),
         };
         for budget in [Duration::from_millis(50), Duration::from_secs(2)] {
             let deadline = timeout(budget);
@@ -228,7 +276,7 @@ mod tests {
                 ..Probe::default()
             },
             idle: Duration::from_millis(300),
-            connect_deadline: None,
+            connect: completed_budget(),
         };
         assert!(
             matches!(transport.await_input(timeout(Duration::from_secs(2))), Err(ureq::Error::Io(error)) if error.kind() == io::ErrorKind::Interrupted)
@@ -253,7 +301,11 @@ mod tests {
         let mut transport = IdleTransport {
             inner: Probe::default(),
             idle: Duration::from_millis(300),
-            connect_deadline,
+            connect: Arc::new(ConnectBudget {
+                deadline: connect_deadline,
+                reason: ureq::Timeout::Connect,
+                active: AtomicBool::new(true),
+            }),
         };
         let deadline = NextTimeout {
             after: Duration::from_secs(2).into(),
@@ -264,11 +316,36 @@ mod tests {
             Err(ureq::Error::Timeout(ureq::Timeout::Connect))
         ));
         assert_eq!(transport.inner.reads.len(), 0);
+        transport.connect.active.store(false, Ordering::Release);
         assert!(
             !transport
                 .await_input(timeout(Duration::from_secs(2)))
                 .unwrap()
         );
         assert_eq!(transport.inner.reads.len(), 1);
+    }
+
+    #[test]
+    fn an_expired_earliest_budget_preserves_its_reason_and_performs_no_io() {
+        for reason in [ureq::Timeout::Global, ureq::Timeout::PerCall] {
+            let mut transport = IdleTransport {
+                inner: Probe::default(),
+                idle: Duration::from_millis(300),
+                connect: Arc::new(ConnectBudget {
+                    deadline: Instant::now().checked_sub(Duration::from_millis(1)),
+                    reason,
+                    active: AtomicBool::new(true),
+                }),
+            };
+            let later = timeout(Duration::from_secs(2));
+            assert!(
+                matches!(transport.await_input(later), Err(ureq::Error::Timeout(actual)) if actual == reason)
+            );
+            assert!(
+                matches!(transport.transmit_output(17, later), Err(ureq::Error::Timeout(actual)) if actual == reason)
+            );
+            assert_eq!(transport.inner.reads.len(), 0);
+            assert_eq!(transport.inner.writes.len(), 0);
+        }
     }
 }
