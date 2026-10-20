@@ -21,7 +21,7 @@ jobs:
       matrix:
         rust: [minimum, stable]
     runs-on: windows-2022
-    # Complete native media fixtures and the separate release build share this budget.
+    # Keep complete native media fixtures separate from release compilation.
     timeout-minutes: 45
     env:
       CARGO_TERM_COLOR: always
@@ -77,6 +77,47 @@ jobs:
             ${{ runner.temp }}/drmr-native-user/stdout.log
             ${{ runner.temp }}/drmr-native-user/stderr.log
           if-no-files-found: warn
+
+  release:
+    name: Windows CLI release / ${{ matrix.rust }}
+    # Release qualification starts only after both native profiles pass.
+    needs: native
+    strategy:
+      fail-fast: false
+      matrix:
+        rust: [minimum, stable]
+    runs-on: windows-2022
+    timeout-minutes: 45
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install pinned Python for the real-media harness
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13.12'
+
+      - name: Install checksummed Windows media tools
+        run: ./.github/scripts/install-windows-media-tools.ps1
+
+      - name: Install the supported Rust toolchain
+        run: |
+          $rustChannel = '${{ matrix.rust }}'
+          if ($rustChannel -eq 'minimum') {
+            $rustChannel = (& python .github/scripts/minimum-rust.py).Trim()
+            if ($LASTEXITCODE -ne 0) { throw 'Could not read the minimum Rust version' }
+          }
+          & rustup toolchain install $rustChannel --profile minimal --component clippy,rustfmt --no-self-update
+          if ($LASTEXITCODE -ne 0) { throw 'Rust toolchain installation failed' }
+          "RUSTUP_TOOLCHAIN=$rustChannel" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          & rustup run $rustChannel cargo --version
+          if ($LASTEXITCODE -ne 0) { throw 'Cargo version check failed' }
+          & rustup run $rustChannel rustc --version
+          if ($LASTEXITCODE -ne 0) { throw 'Rust compiler version check failed' }
 
       - name: Build native CLI
         run: cargo build --release --locked -p drmr
