@@ -242,6 +242,7 @@ fn representation_scopes<'a>(
         .filter(Node::is_element)
         .collect();
     scopes.reverse();
+    super::presentation::metadata::validate_dash(representation)?;
     let mut base = PathBuf::new();
     let mut templates = Vec::new();
     for scope in scopes {
@@ -250,22 +251,17 @@ fn representation_scopes<'a>(
                 !(namespace == "http://www.w3.org/2001/XMLSchema-instance"
                     && attribute.name() == "schemaLocation")
             })
-        }) || scope
-            .attribute("lang")
-            .is_some_and(|language| language != "und")
-            || [
-                "Role",
-                "Accessibility",
-                "Label",
-                "EssentialProperty",
-                "SupplementalProperty",
-                "EventStream",
-                "InbandEventStream",
-                "ContentComponent",
-                "ProducerReferenceTime",
-            ]
-            .iter()
-            .any(|name| !children(scope, name).is_empty())
+        }) || [
+            "Accessibility",
+            "EssentialProperty",
+            "SupplementalProperty",
+            "EventStream",
+            "InbandEventStream",
+            "ContentComponent",
+            "ProducerReferenceTime",
+        ]
+        .iter()
+        .any(|name| !children(scope, name).is_empty())
         {
             return Err(error("dash-presentation-metadata-not-supported"));
         }

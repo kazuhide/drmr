@@ -80,6 +80,7 @@ fn candidate(c: &Converter, parent: &Path, destination: &Path) -> Stage {
                 hls_output_key: None,
             },
             Some(&stage),
+            None,
         )
         .unwrap();
     assert!(report.verification.passed && report.verification.media_verified);
