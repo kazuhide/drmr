@@ -1,7 +1,7 @@
 //! Every DRM output is checked from its final manifest and retained clear transport source.
 use drmr_core::{
     conversion::{
-        ConversionRequest, Converter, HlsInputKeys, InputKeys, OutputSignaling,
+        ConversionReport, ConversionRequest, Converter, HlsInputKeys, InputKeys, OutputSignaling,
         VerificationRequest, VerificationSource, key_file,
     },
     events::{Collector, NoSink},
@@ -426,6 +426,20 @@ fn output_cases() -> [(
         ),
     ]
 }
+fn assert_report(report: &ConversionReport, name: &str) {
+    assert!(report.verification.passed);
+    assert!(!report.verification.license_playback_verified);
+    let expected = match name {
+        "dash" => vec!["playready", "widevine"],
+        "widevine" => vec!["widevine"],
+        "playready" => vec!["playready"],
+        _ => vec!["fairplay"],
+    };
+    assert_eq!(
+        report.output.drm_systems, expected,
+        "The report must describe actual final DRM declarations"
+    );
+}
 #[test]
 fn clear_transport_has_independently_verified_dash_and_fairplay_outputs() {
     let owner = drmr_core::native::private_tempdir().unwrap();
@@ -453,8 +467,7 @@ fn clear_transport_has_independently_verified_dash_and_fairplay_outputs() {
                 hls_output_key: keys.hls_output.as_ref(),
             })
             .unwrap();
-        assert!(report.verification.passed);
-        assert!(!report.verification.license_playback_verified);
+        assert_report(&report, name);
         let entrypoint = output.join(if format == OutputFormat::Dash {
             "manifest.mpd"
         } else {

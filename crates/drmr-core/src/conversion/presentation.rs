@@ -136,11 +136,18 @@ impl Converter {
         } else {
             InputFormat::Hls
         };
+        let manifest = stage.path().join(if request.format == OutputFormat::Dash {
+            "manifest.mpd"
+        } else {
+            "master.m3u8"
+        });
+        let declared =
+            inspection::inspect(&manifest).map_err(|_| ConversionError("invalid-output-media"))?;
         let output = Inspection::new(
             format,
             Evidence::ContainerMetadata,
             output_tracks,
-            Vec::new(),
+            declared.drm_systems,
             Vec::new(),
         );
         let input = Inspection::new(
