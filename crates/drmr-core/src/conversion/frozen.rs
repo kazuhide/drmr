@@ -212,19 +212,21 @@ impl FrozenSource {
 impl super::Converter {
     /// Carry original-source checks through measurements and final atomic publication.
     pub(super) fn using_frozen_source(&self, source: &FrozenSource) -> Self {
+        let mut guards = self.frozen_source.clone();
+        guards.push(source.guard());
         Self {
             backend: self.backend.clone(),
             maximum_workers: self.maximum_workers,
             downloaded: self.downloaded.clone(),
-            frozen_source: Some(source.guard()),
+            frozen_source: guards,
             planned_destination: self.planned_destination.clone(),
             output_signaling: self.output_signaling.clone(),
         }
     }
     pub(super) fn check_frozen_source(&self) -> Result<(), ConversionError> {
         self.frozen_source
-            .as_ref()
-            .map_or(Ok(()), |guard| guard.check())
+            .iter()
+            .try_for_each(|guard| guard.check())
     }
 }
 

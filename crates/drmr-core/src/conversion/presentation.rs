@@ -69,6 +69,41 @@ impl Converter {
         &self,
         request: TrackConversionRequest<'_>,
     ) -> Result<ConversionReport, ConversionError> {
+        if self
+            .output_signaling
+            .as_ref()
+            .is_some_and(|value| value.is_multi())
+        {
+            let first = request
+                .tracks
+                .first()
+                .ok_or(super::signaling::UNSUPPORTED)?;
+            if request
+                .tracks
+                .iter()
+                .any(|track| track.source != first.source)
+            {
+                return Err(super::signaling::UNSUPPORTED);
+            }
+            let frozen = super::FrozenSource::capture(&first.source, &self.backend.stop)?;
+            let tracks: Vec<_> = request
+                .tracks
+                .iter()
+                .map(|track| LocalTrack {
+                    source: frozen.entrypoint().to_path_buf(),
+                    kind: track.kind,
+                    index: track.index,
+                })
+                .collect();
+            return self.using_frozen_source(&frozen).convert_tracks_inner(
+                TrackConversionRequest {
+                    tracks: &tracks,
+                    ..request
+                },
+                None,
+                None,
+            );
+        }
         self.convert_tracks_inner(request, None, None)
     }
     fn convert_tracks_inner(
@@ -1836,6 +1871,26 @@ impl Converter {
         Ok(verification)
     }
     pub fn convert(
+        &self,
+        request: ConversionRequest<'_>,
+    ) -> Result<ConversionReport, ConversionError> {
+        if self
+            .output_signaling
+            .as_ref()
+            .is_some_and(|value| value.is_multi())
+        {
+            self.backend.check_cancelled()?;
+            let frozen = super::FrozenSource::capture(request.input, &self.backend.stop)?;
+            return self
+                .using_frozen_source(&frozen)
+                .convert_inner(ConversionRequest {
+                    input: frozen.entrypoint(),
+                    ..request
+                });
+        }
+        self.convert_inner(request)
+    }
+    fn convert_inner(
         &self,
         request: ConversionRequest<'_>,
     ) -> Result<ConversionReport, ConversionError> {

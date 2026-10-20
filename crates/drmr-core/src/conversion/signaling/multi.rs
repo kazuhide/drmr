@@ -198,6 +198,28 @@ impl crate::conversion::Converter {
     ) -> Result<(), ConversionError> {
         profile(systems, format, target)?;
         self.backend.check_cancelled()?;
+        let frozen = crate::conversion::FrozenSource::capture(source.input, &self.backend.stop)?;
+        let command = self.using_frozen_source(&frozen);
+        command.validate_drm_source_inner(
+            crate::conversion::VerificationSource {
+                input: frozen.entrypoint(),
+                ..source
+            },
+            systems,
+            format,
+            target,
+        )?;
+        command.check_frozen_source()
+    }
+    pub(in crate::conversion) fn validate_drm_source_inner(
+        &self,
+        source: crate::conversion::VerificationSource<'_>,
+        systems: &[DrmSystem],
+        format: OutputFormat,
+        target: TargetProtection,
+    ) -> Result<(), ConversionError> {
+        profile(systems, format, target)?;
+        self.backend.check_cancelled()?;
         let input = crate::inspection::inspect(source.input).map_err(|_| super::UNSUPPORTED)?;
         if input.format == InputFormat::Mp4 {
             super::clear_mp4(source.input, &self.backend.stop)?;

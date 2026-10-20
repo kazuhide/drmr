@@ -166,12 +166,14 @@ fn private_source_guard_survives_measurement_and_blocks_both_publication_forms()
         let root = tempfile::tempdir().unwrap();
         let input = hls(root.path());
         let source = FrozenSource::capture(&input, &Stop::new()).unwrap();
+        let nested = FrozenSource::capture(source.entrypoint(), &Stop::new()).unwrap();
         let converter = super::super::Converter::new(
             Arc::new(ToolRunner::new(Arc::new(Secrets::new()), Arc::new(NoSink))),
             "unused",
             "unused",
         )
-        .using_frozen_source(&source);
+        .using_frozen_source(&source)
+        .using_frozen_source(&nested);
         let stage = files::Stage::new(Some(root.path())).unwrap();
         let candidate = stage.path().join("candidate");
         files::create_new(&candidate)

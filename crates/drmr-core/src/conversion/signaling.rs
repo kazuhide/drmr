@@ -539,7 +539,7 @@ impl super::Converter {
         if let Some(signaling) = &self.output_signaling {
             signaling.validate_profile(request.format, request.target)?;
             if signaling.is_multi() {
-                self.validate_drm_source(
+                self.validate_drm_source_inner(
                     super::VerificationSource {
                         input: request.input,
                         input_keys: request.input_keys,
