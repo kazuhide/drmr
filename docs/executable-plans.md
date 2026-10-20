@@ -31,6 +31,12 @@ between AES-128 and clear resources. This is a source fact, not another output
 target. Verification does not accept mixed protection as matching a plan for
 one uniform output protection scheme.
 
+`compatibility_notes` lists fixed codes when source admission applies a documented
+compatibility rule, such as empty TS padding or adjacent zero-duration HLS cue
+markers. These notes do not waive packet, decoding, or timing checks. See
+[transport-stream compatibility](media-processing.md#transport-stream-compatibility)
+for the accepted conditions and handling of the unchanged original.
+
 For a local input, use `drmr analyze original/manifest.mpd --json` or
 `drmr analyze original.mp4 --json`. Supply `--keys-file` for encrypted local input.
 Local input does not accept download options. `inspect` remains the faster,

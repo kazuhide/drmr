@@ -3,7 +3,8 @@ use crate::convert_cli::{self, Progress};
 use clap::Args;
 use drmr_core::concurrency::Stop;
 use drmr_core::conversion::{
-    ConversionError, Converter, VerificationSource, key_file::OperatorKeys, plan::InputAnalysis,
+    ConversionError, Converter, SourceCompatibilityNote, VerificationSource,
+    key_file::OperatorKeys, plan::InputAnalysis,
 };
 use std::io::Write as _;
 use std::path::PathBuf;
@@ -83,6 +84,10 @@ fn text_report(report: &InputAnalysis) -> std::io::Result<()> {
         .map(|format| format.as_str())
         .collect();
     writeln!(out, "Candidate output formats: {}", names.join(", "))?;
+    for &note in &report.compatibility_notes {
+        writeln!(out, "Source compatibility: {}.", note.as_str())?;
+        writeln!(out, "  {}", compatibility_explanation(note))?;
+    }
     writeln!(
         out,
         "Checked complete encoded packets, decoded content, and timestamps."
@@ -91,6 +96,17 @@ fn text_report(report: &InputAnalysis) -> std::io::Result<()> {
         out,
         "Create a saved plan to validate the requested output scheme and format."
     )
+}
+
+fn compatibility_explanation(note: SourceCompatibilityNote) -> &'static str {
+    match note {
+        SourceCompatibilityNote::TsEmptyPayloadPadding => {
+            "Verified empty TS padding is omitted from the private demux input; originals and media/timing checks are retained."
+        }
+        SourceCompatibilityNote::HlsEmptyCuePair => {
+            "Adjacent zero-duration HLS cue markers have no active interval; the original playlist is retained."
+        }
+    }
 }
 
 fn execute_analysis(

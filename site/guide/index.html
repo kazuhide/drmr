@@ -267,6 +267,7 @@ drmr inspect source/master.m3u8 --json
 drmr analyze encrypted.mp4 --keys-file config/keys.json --json
 </code></pre></figure>
 <p><code>analyze</code> checks the actual complete source with the conversion engine, including encoded packets, decoded content and timestamps. Its <code>input_admitted</code> result applies to the checked input profile; candidate output formats still need a target-specific plan. It does not certify a converted result or DRM playback. Local MP4, DASH and HLS are accepted within their supported profiles. Chapter 8 shows URL input with mandatory source retention.</p>
+<p>When a documented source compatibility rule applies, <code>compatibility_notes</code> lists its fixed code. Examples include empty TS padding and adjacent HLS cue markers with no active interval. These rules retain the original bytes and all media and timing checks. See <a href="https://github.com/kazuhide/drmr/blob/main/docs/media-processing.md#transport-stream-compatibility">transport-stream compatibility</a> for the exact accepted conditions.</p>
 <h3>Plan a request</h3>
 <figure class="guide-example" aria-labelledby="example-14-title" data-code-language="sh"><figcaption id="example-14-title">Example 14: sh</figcaption><pre tabindex="0"><code>drmr plan media.mp4 --to cbcs --format dash --json
 drmr plan source/master.m3u8 --to clear --format dash,hls

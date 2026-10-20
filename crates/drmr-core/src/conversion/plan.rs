@@ -3,10 +3,10 @@ pub(super) mod destination;
 #[cfg(test)]
 mod tests;
 use super::{
-    ConversionError, ConversionReport, ConversionRequest, Converter, FrozenSource, SourceInventory,
-    SourceProtection, SourceQualification, SourceValidationPurpose, VerificationChecks,
-    VerificationReport, VerificationRequest, VerificationSource, files, frozen,
-    key_file::OperatorKeys,
+    ConversionError, ConversionReport, ConversionRequest, Converter, FrozenSource,
+    SourceCompatibilityNote, SourceInventory, SourceProtection, SourceQualification,
+    SourceValidationPurpose, VerificationChecks, VerificationReport, VerificationRequest,
+    VerificationSource, files, frozen, key_file::OperatorKeys,
 };
 use crate::inspection::{Inspection, OutputFormat, TargetProtection};
 use serde::{Deserialize, Serialize};
@@ -75,6 +75,7 @@ pub struct InputAnalysis {
     pub input: Inspection,
     pub actual_format: OutputFormat,
     pub track_protection: Vec<SourceProtection>,
+    pub compatibility_notes: Vec<SourceCompatibilityNote>,
     pub eligible_formats: Vec<OutputFormat>,
     pub source: SourceInventory,
 }
@@ -111,6 +112,7 @@ impl Converter {
             input: qualified.input,
             actual_format: qualified.actual_format,
             track_protection: qualified.track_protection,
+            compatibility_notes: qualified.compatibility_notes,
             eligible_formats: qualified.eligible_formats,
             source: frozen.inventory().clone(),
         })

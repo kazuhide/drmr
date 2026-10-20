@@ -291,3 +291,50 @@ Metadata inspection is evidence about declarations or initialization information
 The regression is qualified with FFmpeg 9.0.2 and Shaka Packager 3.8.0. FFmpeg 6.1.1 on Ubuntu 24.04 omits the first clear AAC packet's duration and all encrypted AAC packet durations on this fixture. drmr reports `unsupported-packet-timing` rather than guessing missing values or skipping timing checks. Use a build that provides complete packet timing. Linux CI pins a checksum-verified FFmpeg 9.0 build from the [BtbN build project](https://github.com/BtbN/FFmpeg-Builds); media tools are not bundled in the CLI archive.
 
 Use the same source media and tool versions when comparing processing time or memory. A short regression clip is useful for correctness and startup overhead; it cannot establish throughput or memory scaling for a long presentation.
+
+## Transport-stream compatibility
+
+`analyze` reports the following source facts in `compatibility_notes`. They
+describe limited compatibility handling, not general repair or a guarantee of
+transport-stream standards conformance. The retained original and the source
+fingerprints always refer to the original bytes.
+
+A packet identifier (PID) selects a TS stream. Packetized elementary stream
+(PES) packets carry its encoded media.
+
+| Code | Accepted source condition | Processing |
+| --- | --- | --- |
+| `ts-empty-payload-padding` | An established audio/video PID has a zero-body packet with adaptation-plus-payload control, adaptation length 183, no payload-unit start, zero flags and only `0xFF` stuffing; the native PES and continuity checks must still pass | Omit only these empty packets from a private demultiplexer input and adjust subsequent continuity counters for the same PID by the exact number removed |
+| `hls-empty-cue-pair` | A completed segment is followed by a zero-duration `EXT-X-CUE-OUT`, immediately paired with `EXT-X-CUE-IN` and then the next `EXTINF` | Accept the empty boundary; keep the original playlist, but do not carry an active advertisement interval into the result |
+
+The 183-byte adaptation field with the payload flag set is nonconforming:
+[ITU-T H.222.0, section 2.4.3.5](https://www.itu.int/rec/dologin_pub.asp?id=T-REC-H.222.0-201410-S%21%21PDF-E&lang=e&type=items)
+limits that form to 182 bytes. The
+[Shaka Packager 3.8 parser](https://github.com/shaka-project/shaka-packager/blob/v3.8.0/packager/media/formats/mp2t/ts_packet.cc#L110-L115)
+also rejects it. The private view lets the demultiplexer read an otherwise
+admitted source without inventing media bytes or timestamps. Original native
+packet validation, complete encoded payloads, original presentation/decode
+timestamps, and full decoded content remain the comparison reference. This view
+also feeds TS repackaging; it does not modify the retained source.
+
+Active or unbalanced cue markers, missing payload, invalid stuffing, continuity
+errors, unsupported packet flags, and incomplete PES data remain failures.
+
+### Decimal segment durations
+
+`EXTINF` is a decimal declaration of a segment's duration. The
+[HLS specification](https://www.rfc-editor.org/rfc/rfc8216.html#section-4.3.2.1)
+requires sufficient precision to avoid accumulated perceptible error; it does
+not impose a nine-digit fractional limit. Native TS timestamps use a 90 kHz
+clock: one tick is 1/90,000 second, which often has no finite decimal expansion.
+
+For zero through nine fractional digits, drmr compares the declared value at its
+stated decimal precision. For ten through seventeen digits, it also accepts a
+bounded decimal whose IEEE 754 double-precision value is exactly the same as
+the native tick duration divided by 90,000. This is an equality check, with no
+additional timing tolerance. Native duration must fit an unsigned 32-bit tick
+count for each segment, and the declaration is limited to 64 characters.
+Nonfinite numbers, exponents, excessive precision and trailing data fail this
+rule. A duration changed by one clock tick does not pass as decimal rounding.
+All media frame and absolute clock checks still apply; decimal acceptance
+cannot realign audio or video.

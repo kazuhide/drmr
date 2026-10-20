@@ -347,6 +347,8 @@ drmr analyze encrypted.mp4 --keys-file config/keys.json --json
 
 `analyze` は変換と同じ処理エンジンで原本全体を読み、符号化済みパケット、復号後の内容、時刻を確認します。`input_admitted: true` は確認した入力プロファイルに適合したという意味です。出力形式の候補が表示されても、指定する暗号方式との組み合わせは計画時に確認します。変換結果や DRM の再生を証明するものではありません。ローカル MP4・DASH・HLS が対象で、URL 入力の保存手順は第8章に示します。
 
+入力に互換処理を適用した場合は、`compatibility_notes` に固定の識別コードを示します。例えば、実データを含まない TS のパディングや、実際の区間を持たない隣接した HLS の広告境界タグが対象です。原本のバイト列は保持し、メディア内容と時刻の検査も行います。受理する条件と処理方法は、[TS の互換処理の説明（英語）](https://github.com/kazuhide/drmr/blob/main/docs/media-processing.md#transport-stream-compatibility)に記載しています。
+
 ## plan は条件付きの実行候補を示す
 
 ```sh
