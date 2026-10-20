@@ -57,6 +57,14 @@ impl OutputSignaling {
     }
 }
 impl MultiObjects {
+    pub(super) fn legacy_playready(playready: Objects) -> Self {
+        Self {
+            hex: playready.hex.clone(),
+            playready: Some(playready),
+            widevine: None,
+            widevine_hex: None,
+        }
+    }
     pub fn secrets(&self) -> Vec<&str> {
         let mut values = vec![self.hex.as_str()];
         values.extend(self.widevine_hex.iter().map(|value| value.as_str()));

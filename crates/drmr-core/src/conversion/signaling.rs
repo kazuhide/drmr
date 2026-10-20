@@ -475,11 +475,7 @@ impl super::Converter {
             });
         }
         let key = keys.output.as_ref().ok_or(INVALID)?;
-        let actual = crate::inspection::inspect(input).map_err(|_| MISMATCH)?;
-        let root = input.parent().ok_or(MISMATCH)?;
-        signaling
-            .objects(key)?
-            .finish(root, actual.tracks.len(), key)?;
+        records::MultiObjects::legacy_playready(signaling.objects(key)?).finish(input, key)?;
         frozen.check_original().map_err(|error| {
             if error.0 == "cancelled" {
                 error
