@@ -957,6 +957,70 @@ impl Converter {
             },
         )
     }
+    fn presentation_payload_digest(
+        &self,
+        track: &Prepared,
+        keys: &InputKeys,
+    ) -> Result<String, ConversionError> {
+        self.backend.hash_stream_keys(
+            &track.media,
+            track.index,
+            true,
+            if track.source_dictionary {
+                Some(super::keys::ProbeKeys::All(keys))
+            } else {
+                key_for(track, keys).map(super::keys::ProbeKeys::One)
+            },
+        )
+    }
+    fn match_ambiguous_track(
+        &self,
+        source: &Prepared,
+        candidates: &[usize],
+        available: &[Option<Prepared>],
+        keys: (&InputKeys, &InputKeys),
+        payloads: &mut [Option<String>],
+    ) -> Result<usize, ConversionError> {
+        if candidates.is_empty() {
+            return Err(ConversionError("presentation-track-content-mismatch"));
+        }
+        let source_payload = self.presentation_payload_digest(source, keys.0)?;
+        let mut preferred = candidates.to_vec();
+        for &index in candidates {
+            if payloads[index].is_none() {
+                payloads[index] = Some(self.presentation_payload_digest(
+                    available[index].as_ref().expect("unused candidate"),
+                    keys.1,
+                )?);
+            }
+        }
+        // Normalized payload hashes only order candidates. The original-source
+        // complete proof below remains mandatory before consuming any candidate.
+        preferred.sort_by_key(|&index| payloads[index].as_ref() != Some(&source_payload));
+        let mut metadata_matched = false;
+        for index in preferred {
+            let result = available[index].as_ref().expect("unused candidate");
+            match metadata::pair(&source.metadata, &result.metadata) {
+                Ok(()) => {}
+                Err(ConversionError("presentation-metadata-mismatch")) => continue,
+                Err(error) => return Err(error),
+            }
+            metadata_matched = true;
+            // Operational failures always propagate; only a completed negative
+            // media proof means this candidate does not represent the source.
+            if self
+                .verify_prepared_pair(source, result, keys.0, keys.1)?
+                .passed
+            {
+                return Ok(index);
+            }
+        }
+        Err(ConversionError(if metadata_matched {
+            "presentation-track-content-mismatch"
+        } else {
+            "presentation-metadata-mismatch"
+        }))
+    }
     fn match_presentations(
         &self,
         source: &[Prepared],
@@ -973,30 +1037,96 @@ impl Converter {
             let result_digests = self.run_tracks(result.len(), |index| {
                 self.presentation_digest(&result[index], result_keys)
             })?;
+            let result_kinds: Vec<_> = result.iter().map(|p| p.report.tracks[0].kind).collect();
             let mut available = result.into_iter().map(Some).collect::<Vec<_>>();
+            let mut payloads = vec![None; available.len()];
             result = Vec::with_capacity(source.len());
             for a in source {
                 let kind = a.report.tracks[0].kind;
-                let mut found = None;
                 let digest = self.presentation_digest(a, source_keys)?;
-                for (index, b) in available.iter().enumerate() {
-                    if let Some(b) = b
-                        && b.report.tracks[0].kind == kind
-                        && result_digests[index] == digest
-                    {
-                        found = Some(index);
-                        break;
-                    }
-                }
-                result.push(
-                    available
-                        [found.ok_or(ConversionError("presentation-track-content-mismatch"))?]
-                    .take()
-                    .expect("matched unused track"),
-                );
+                let candidates: Vec<_> = available
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, b)| {
+                        b.as_ref()
+                            .filter(|b| {
+                                b.report.tracks[0].kind == kind && result_digests[index] == digest
+                            })
+                            .map(|_| index)
+                    })
+                    .collect();
+                let ambiguous = result_digests
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, d)| result_kinds[*index] == kind && **d == digest)
+                    .count()
+                    > 1;
+                let found = if ambiguous {
+                    self.match_ambiguous_track(
+                        a,
+                        &candidates,
+                        &available,
+                        (source_keys, result_keys),
+                        &mut payloads,
+                    )?
+                } else {
+                    *candidates
+                        .first()
+                        .ok_or(ConversionError("presentation-track-content-mismatch"))?
+                };
+                result.push(available[found].take().expect("matched unused track"));
             }
         }
         Ok(result)
+    }
+    fn verify_prepared_pair(
+        &self,
+        a: &Prepared,
+        b: &Prepared,
+        source_keys: &InputKeys,
+        result_keys: &InputKeys,
+    ) -> Result<VerificationReport, ConversionError> {
+        if b.transport_index.is_some() {
+            return self.verify_transport_pair(a, b);
+        }
+        if let Some(index) = a.transport_index {
+            if b.playlist_reference.is_none() && !b.dash_reference {
+                return Err(ConversionError(
+                    "ts-verification-output-profile-not-supported",
+                ));
+            }
+            let (result_input, result_key) = b.playlist_reference.as_ref().map_or_else(
+                || (&b.source, key_for(b, result_keys)),
+                |playlist| (playlist, None),
+            );
+            return self.backend.verify_transport(
+                super::ts::View {
+                    input: &a.source,
+                    metadata: &a.source,
+                    index,
+                    key: None,
+                    transport: true,
+                    native: a.transport_native.as_deref(),
+                },
+                super::ts::View {
+                    input: result_input,
+                    // HLS carries its private key URI; DASH uses the independent output key.
+                    metadata: result_input,
+                    index: b.index,
+                    key: result_key,
+                    transport: false,
+                    native: None,
+                },
+            );
+        }
+        let a_view =
+            StreamView::new(&a.source, a.index, key_for(a, source_keys)).with_metadata(&a.media);
+        let b_view =
+            StreamView::new(&b.source, b.index, key_for(b, result_keys)).with_metadata(&b.media);
+        self.backend.verify_views(
+            a_view.with_original_keys(a.source_dictionary, source_keys),
+            b_view.with_original_keys(b.source_dictionary, result_keys),
+        )
     }
     fn compare_presentations(
         &self,
@@ -1028,49 +1158,7 @@ impl Converter {
             metadata::pair(&a.metadata, &b.metadata)?;
         }
         let verified_tracks = self.run_tracks(source.len(), |ordinal| {
-            let a = &source[ordinal];
-            let b = &result[ordinal];
-            if b.transport_index.is_some() {
-                return self.verify_transport_pair(a, b);
-            }
-            if let Some(index) = a.transport_index {
-                if b.playlist_reference.is_none() && !b.dash_reference {
-                    return Err(ConversionError(
-                        "ts-verification-output-profile-not-supported",
-                    ));
-                }
-                let (result_input, result_key) = b.playlist_reference.as_ref().map_or_else(
-                    || (&b.source, key_for(b, result_keys)),
-                    |playlist| (playlist, None),
-                );
-                return self.backend.verify_transport(
-                    super::ts::View {
-                        input: &a.source,
-                        metadata: &a.source,
-                        index,
-                        key: None,
-                        transport: true,
-                        native: a.transport_native.as_deref(),
-                    },
-                    super::ts::View {
-                        input: result_input,
-                        // HLS carries its private key URI; DASH uses the independently supplied output key.
-                        metadata: result_input,
-                        index: b.index,
-                        key: result_key,
-                        transport: false,
-                        native: None,
-                    },
-                );
-            }
-            let a_view = StreamView::new(&a.source, a.index, key_for(a, source_keys))
-                .with_metadata(&a.media);
-            let b_view = StreamView::new(&b.source, b.index, key_for(b, result_keys))
-                .with_metadata(&b.media);
-            self.backend.verify_views(
-                a_view.with_original_keys(a.source_dictionary, source_keys),
-                b_view.with_original_keys(b.source_dictionary, result_keys),
-            )
+            self.verify_prepared_pair(&source[ordinal], &result[ordinal], source_keys, result_keys)
         })?;
         for check in verified_tracks {
             checks.stream_metadata.include(check.checks.stream_metadata);
