@@ -22,6 +22,7 @@ const COMMON: &str = "urn:mpeg:dash:mp4protection:2011";
 pub(in crate::conversion) struct MultiObjects {
     playready: Option<Objects>,
     widevine: Option<Zeroizing<Vec<u8>>>,
+    widevine_hex: Option<Zeroizing<String>>,
     pub hex: Zeroizing<String>,
 }
 impl OutputSignaling {
@@ -36,9 +37,13 @@ impl OutputSignaling {
         if let Some(widevine) = &multi.widevine {
             super::multi::validate_widevine(widevine, Some(&key.0.id_hex()))?;
         }
+        let widevine_hex = multi
+            .widevine
+            .as_ref()
+            .map(|value| Zeroizing::new(hex::encode(value)));
         let mut hex = Zeroizing::new(String::new());
-        if let Some(widevine) = &multi.widevine {
-            hex.push_str(&hex::encode(widevine));
+        if let Some(widevine) = &widevine_hex {
+            hex.push_str(widevine);
         }
         if let Some(playready) = &playready {
             hex.push_str(&playready.hex);
@@ -46,6 +51,7 @@ impl OutputSignaling {
         Ok(MultiObjects {
             playready,
             widevine: multi.widevine.clone(),
+            widevine_hex,
             hex,
         })
     }
@@ -53,6 +59,7 @@ impl OutputSignaling {
 impl MultiObjects {
     pub fn secrets(&self) -> Vec<&str> {
         let mut values = vec![self.hex.as_str()];
+        values.extend(self.widevine_hex.iter().map(|value| value.as_str()));
         if let Some(playready) = &self.playready {
             values.extend(playready.secrets());
         }
@@ -720,4 +727,38 @@ fn no_provider_boxes(path: &Path) -> Result<(), ConversionError> {
         file.seek(SeekFrom::Start(at)).map_err(|_| MISMATCH)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dual_drm_secret_list_covers_standalone_widevine_encodings() {
+        let kid = "000102030405060708090a0b0c0d0e0f";
+        let bytes = crate::playready::build_pssh_box(
+            &crate::playready::WIDEVINE_SYSTEM_ID,
+            &hex::decode(format!("1210{kid}")).unwrap(),
+        )
+        .unwrap();
+        let hex = hex::encode(&bytes);
+        let signaling =
+            OutputSignaling::multi_drm(Some(&hex), Some("https://example.invalid/license"), false)
+                .unwrap();
+        let key = OutputKey::from_hex(kid, "101112131415161718191a1b1c1d1e1f").unwrap();
+        let objects = signaling.multi_objects(&key).unwrap();
+        let secrets = crate::toolrun::Secrets::with(objects.secrets());
+        for value in [
+            hex.clone(),
+            hex.to_uppercase(),
+            hex.as_bytes()
+                .chunks(2)
+                .map(|pair| std::str::from_utf8(pair).unwrap())
+                .collect::<Vec<_>>()
+                .join(" :0x"),
+            base64::engine::general_purpose::STANDARD.encode(bytes),
+        ] {
+            assert_eq!(secrets.scrub(&value), crate::toolrun::REDACTED);
+        }
+    }
 }
