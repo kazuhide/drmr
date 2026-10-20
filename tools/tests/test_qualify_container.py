@@ -1,5 +1,6 @@
 """Container report controls do not substitute for real image qualification."""
 import copy
+import hashlib
 import importlib.util
 import http.server
 import json
@@ -233,6 +234,8 @@ class EvidenceTests(unittest.TestCase):
             def command(self, *_args, **_kwargs):
                 lines = ["private key and URL must not enter evidence",
                          "container-qualification: phase=web-await-stop-job",
+                         "container-qualification: check=registry-record",
+                         "container-qualification: job-state=unavailable",
                          "container-qualification: owner-exit code=None signal=Some(15)",
                          "container-qualification: lifecycle-unconfirmed kind=PermissionDenied errno=Some(13)"]
                 message = "\n".join(lines) + "\n"
@@ -258,6 +261,8 @@ class EvidenceTests(unittest.TestCase):
             evidence = denied.exception.evidence
             self.assertEqual(evidence["driver_returncode"], 7)
             self.assertEqual(evidence["driver_phase"], "web-await-stop-job")
+            self.assertEqual(evidence["driver_check"], "registry-record")
+            self.assertEqual(evidence["driver_job_state"], "unavailable")
             self.assertEqual(evidence["error_kind"], "PermissionDenied")
             self.assertEqual(evidence["errno"], 13)
             self.assertTrue(evidence["server_exit_observed"])
@@ -284,6 +289,101 @@ class EvidenceTests(unittest.TestCase):
             if sys.platform != "win32":
                 (root / "work/web-control/server.stderr").symlink_to(root / "work/web-driver.stderr")
                 self.assertNotIn("server-stderr", module.web_failure_evidence(root, None)["logs"])
+
+    def diagnostic_evidence(self, driver, server=b""):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "work/web-control").mkdir(parents=True)
+            (root / "work/web-driver.stderr").write_bytes(driver)
+            (root / "work/web-control/server.stderr").write_bytes(server)
+            return module.web_failure_evidence(root, None)
+
+    def test_every_stop_and_shutdown_phase_is_retained_exactly(self):
+        phases = (
+            "web-await-stop-job", "web-check-stop-listener", "web-await-stop-fixture",
+            "web-await-stop-terminal", "web-check-stop-return", "web-await-shutdown-job",
+            "web-await-shutdown-fixture", "web-await-shutdown-exit",
+            "web-check-shutdown-return", "web-shutdown-return-state",
+        )
+        for phase in phases:
+            with self.subTest(phase=phase):
+                evidence = self.diagnostic_evidence(
+                    f"container-qualification: phase={phase}\n".encode("ascii"))
+                self.assertEqual(evidence["driver_phase"], phase)
+
+    def test_only_the_agreed_check_and_job_state_tokens_are_retained(self):
+        checks = (
+            "registry-bounds", "registry-entry", "registry-record", "fixture-deadline",
+            "owner-exit", "tool-parent", "tool-group", "descendant-parent", "descendant-group",
+            "owner-group", "held-lock", "tool-absent", "descendant-absent", "group-absent",
+            "lock-released", "job-state", "loopback-listener",
+        )
+        for check in checks:
+            with self.subTest(check=check):
+                evidence = self.diagnostic_evidence(
+                    f"container-qualification: check={check}\n".encode("ascii"))
+                self.assertEqual(evidence["driver_check"], check)
+        for state in ("running", "interrupted", "failed", "succeeded", "unavailable"):
+            with self.subTest(state=state):
+                evidence = self.diagnostic_evidence(
+                    f"container-qualification: job-state={state}\n".encode("ascii"))
+                self.assertEqual(evidence["driver_job_state"], state)
+
+    def test_unknown_malformed_and_unbounded_labels_cannot_replace_last_valid_diagnostics(self):
+        lines = [
+            "container-qualification: phase=web-await-stop-fixture",
+            "container-qualification: check=registry-entry",
+            "container-qualification: job-state=running",
+            "container-qualification: phase=web-check-shutdown-return",
+            "container-qualification: check=lock-released",
+            "container-qualification: job-state=interrupted",
+        ]
+        for field, valid in (("phase", "web-await-stop-job"), ("check", "tool-absent"),
+                             ("job-state", "succeeded")):
+            lines.extend((
+                f"container-qualification: {field}=PRIVATE_DIAGNOSTIC_SENTINEL",
+                f"container-qualification: {field}={valid} PRIVATE_DIAGNOSTIC_SENTINEL",
+                f"container-qualification: {field}= {valid}",
+                f"container-qualification: {field}={valid}\t",
+                f"container-qualification: {field}={valid}\x00PRIVATE_DIAGNOSTIC_SENTINEL",
+                f"prefix container-qualification: {field}={valid}",
+                f"container-qualification: {field}=" + "x" * 4096,
+            ))
+        evidence = self.diagnostic_evidence(("\n".join(lines) + "\n").encode("ascii"))
+        self.assertEqual(evidence["driver_phase"], "web-check-shutdown-return")
+        self.assertEqual(evidence["driver_check"], "lock-released")
+        self.assertEqual(evidence["driver_job_state"], "interrupted")
+        self.assertNotIn("PRIVATE_DIAGNOSTIC_SENTINEL", json.dumps(evidence))
+
+    def test_private_and_server_lines_only_produce_bounded_log_fingerprints(self):
+        driver = (b"PRIVATE_DIAGNOSTIC_SENTINEL key=not-a-real-key https://private.invalid/\n"
+                  b"container-qualification: phase=PRIVATE_DIAGNOSTIC_SENTINEL\n"
+                  b"container-qualification: check=PRIVATE_DIAGNOSTIC_SENTINEL\n"
+                  b"container-qualification: job-state=PRIVATE_DIAGNOSTIC_SENTINEL\n"
+                  b"container-qualification: check=tool-absent\xff\n")
+        server = (b"container-qualification: phase=web-check-stop-return\n"
+                  b"container-qualification: check=tool-absent\n"
+                  b"container-qualification: job-state=succeeded\n")
+        evidence = self.diagnostic_evidence(driver, server)
+        for field in ("driver_phase", "driver_check", "driver_job_state"):
+            self.assertIsNone(evidence[field])
+        self.assertEqual(evidence["logs"], {
+            "driver-stderr": {"snapshot_bytes": len(driver), "sha256": hashlib.sha256(driver).hexdigest()},
+            "server-stderr": {"snapshot_bytes": len(server), "sha256": hashlib.sha256(server).hexdigest()},
+        })
+        serialized = json.dumps(evidence)
+        for private in ("PRIVATE_DIAGNOSTIC_SENTINEL", "not-a-real-key", "private.invalid"):
+            self.assertNotIn(private, serialized)
+
+    def test_oversized_log_never_publishes_even_an_initial_valid_diagnostic(self):
+        driver = (b"container-qualification: phase=web-check-stop-return\n"
+                  b"container-qualification: check=tool-absent\n"
+                  b"container-qualification: job-state=succeeded\n" + b"x" * 512)
+        with patch.object(module, "MAX_OUTPUT", 256):
+            evidence = self.diagnostic_evidence(driver)
+        self.assertEqual(evidence["logs"]["driver-stderr"], {"output_limit": True})
+        for field in ("driver_phase", "driver_check", "driver_job_state"):
+            self.assertIsNone(evidence[field])
 
     def test_output_limit_terminates_a_live_writer_before_its_deadline(self):
         command = [sys.executable, "-c", "import os,time; os.write(1,b'x'*4096); time.sleep(10)"]

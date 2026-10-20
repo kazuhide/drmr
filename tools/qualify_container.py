@@ -564,7 +564,19 @@ def wait_file(path, process):
 
 
 WEB_BARRIERS = ("stop-job", "stop-ready", "stop-confirmed", "shutdown-job", "shutdown-ready")
-WEB_PHASES = ("web-await-stop-job", "web-await-shutdown-job", "web-shutdown-return-state")
+WEB_PHASES = (
+    "web-await-stop-job", "web-check-stop-listener", "web-await-stop-fixture",
+    "web-await-stop-terminal", "web-check-stop-return", "web-await-shutdown-job",
+    "web-await-shutdown-fixture", "web-await-shutdown-exit",
+    "web-check-shutdown-return", "web-shutdown-return-state",
+)
+WEB_CHECKS = (
+    "registry-bounds", "registry-entry", "registry-record", "fixture-deadline", "owner-exit",
+    "tool-parent", "tool-group", "descendant-parent", "descendant-group", "owner-group",
+    "held-lock", "tool-absent", "descendant-absent", "group-absent", "lock-released",
+    "job-state", "loopback-listener",
+)
+WEB_JOB_STATES = ("running", "interrupted", "failed", "succeeded", "unavailable")
 
 
 def web_failure_evidence(root, process):
@@ -573,7 +585,8 @@ def web_failure_evidence(root, process):
     control = root / "work/web-control"
     evidence = {"driver_returncode": None if process is None else process.poll(),
                 "server_returncode": None, "server_signal": None, "server_exit_observed": False,
-                "driver_phase": None, "error_kind": None, "errno": None,
+                "driver_phase": None, "driver_check": None, "driver_job_state": None,
+                "error_kind": None, "errno": None,
                 "barriers": {name: (control / name).is_file() for name in WEB_BARRIERS},
                 "logs": {}}
     for label, path in (("driver-stderr", root / "work/web-driver.stderr"),
@@ -590,10 +603,14 @@ def web_failure_evidence(root, process):
             if label != "driver-stderr":
                 continue
             for line in data.decode("ascii", errors="replace").splitlines():
-                if line.startswith("container-qualification: phase="):
-                    phase = line.removeprefix("container-qualification: phase=")
-                    if phase in WEB_PHASES:
-                        evidence["driver_phase"] = phase
+                for token, field, allowed in (("phase", "driver_phase", WEB_PHASES),
+                                              ("check", "driver_check", WEB_CHECKS),
+                                              ("job-state", "driver_job_state", WEB_JOB_STATES)):
+                    prefix = f"container-qualification: {token}="
+                    if line.startswith(prefix):
+                        value = line.removeprefix(prefix)
+                        if value in allowed:
+                            evidence[field] = value
                 error = re.fullmatch(r"container-qualification: lifecycle-unconfirmed kind=([A-Za-z]+) errno=(None|Some\((-?[0-9]{1,10})\))", line)
                 if error:
                     known = {"Other", "NotFound", "PermissionDenied", "InvalidData", "InvalidInput", "TimedOut",
