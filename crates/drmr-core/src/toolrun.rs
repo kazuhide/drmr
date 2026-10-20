@@ -78,6 +78,7 @@ pub const MAX_CAPTURE_BYTES: usize = 64 * 1024 * 1024;
 mod capture;
 mod cleanup;
 pub use cleanup::CleanupOwner;
+pub(crate) use cleanup::CleanupReceipt;
 /// Shorter strings would redact unrelated text; keys and IVs are 32 hex characters.
 const MIN_SECRET_CHARS: usize = 8;
 /// Between two bytes of a hex secret, as tools print them. Python's `\s` also matches
@@ -672,9 +673,34 @@ impl ToolRunner {
         tool: &str,
         options: &RunOptions<'_>,
     ) -> Result<Completed, ToolError> {
-        self.run_tool_with(argv, tool, options, false, |bounded, lease| {
+        self.run_tool_with(argv, tool, options, false, None, |bounded, lease| {
             capture::execute(argv, bounded, self.path.as_deref(), lease)
         })
+    }
+
+    /// Publish invocation-specific cleanup authority immediately after admission.
+    /// The caller starts with an empty receipt and retains it through its workspace's Drop.
+    pub(crate) fn run_tool_with_cleanup_receipt(
+        &self,
+        argv: &[String],
+        tool: &str,
+        options: &RunOptions<'_>,
+        receipt: &mut Option<CleanupReceipt>,
+    ) -> Result<Completed, ToolError> {
+        if receipt.is_some() {
+            return Err(ToolError {
+                tool: tool.to_owned(),
+                kind: "cleanup-unconfirmed",
+            });
+        }
+        self.run_tool_with(
+            argv,
+            tool,
+            options,
+            false,
+            Some(receipt),
+            |bounded, lease| capture::execute(argv, bounded, self.path.as_deref(), lease),
+        )
     }
 
     #[cfg(test)]
@@ -684,9 +710,35 @@ impl ToolRunner {
         options: &RunOptions<'_>,
         cleanup: impl FnMut(&mut crate::native::ManagedChild) -> std::io::Result<()>,
     ) -> Result<Completed, ToolError> {
-        self.run_tool_with(argv, "fixture", options, false, |bounded, lease| {
+        self.run_tool_with(argv, "fixture", options, false, None, |bounded, lease| {
             capture::execute_injected_cleanup(argv, bounded, self.path.as_deref(), lease, cleanup)
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn run_tool_injected_cleanup_with_receipt(
+        &self,
+        argv: &[String],
+        options: &RunOptions<'_>,
+        receipt: &mut Option<CleanupReceipt>,
+        cleanup: impl FnMut(&mut crate::native::ManagedChild) -> std::io::Result<()>,
+    ) -> Result<Completed, ToolError> {
+        self.run_tool_with(
+            argv,
+            "fixture",
+            options,
+            false,
+            Some(receipt),
+            |bounded, lease| {
+                capture::execute_injected_cleanup(
+                    argv,
+                    bounded,
+                    self.path.as_deref(),
+                    lease,
+                    cleanup,
+                )
+            },
+        )
     }
 
     /// Stream stdout into a bounded parser without retaining or logging its payload.
@@ -698,7 +750,7 @@ impl ToolRunner {
         options: &RunOptions<'_>,
         consume: impl FnMut(&[u8]) -> Result<(), ()> + Send,
     ) -> Result<Completed, ToolError> {
-        self.run_tool_with(argv, tool, options, true, |bounded, lease| {
+        self.run_tool_with(argv, tool, options, true, None, |bounded, lease| {
             capture::execute_streamed(argv, bounded, self.path.as_deref(), lease, consume)
         })
     }
@@ -709,6 +761,7 @@ impl ToolRunner {
         tool: &str,
         options: &RunOptions<'_>,
         streamed: bool,
+        receipt: Option<&mut Option<CleanupReceipt>>,
         execute: impl FnOnce(&RunOptions<'_>, Option<&cleanup::Lease<'_>>) -> Result<Completed, Failure>,
     ) -> Result<Completed, ToolError> {
         let base = CallBase {
@@ -734,6 +787,11 @@ impl ToolRunner {
             .as_deref()
             .map(CleanupOwner::claim)
             .transpose();
+        if let (Some(receipt), Ok(Some(lease)), Some(owner)) =
+            (receipt, &lease, &self.cleanup_owner)
+        {
+            *receipt = Some(lease.receipt(owner));
+        }
         let reservation = if lease.is_ok() {
             self.reserve(tool, options)
         } else {
