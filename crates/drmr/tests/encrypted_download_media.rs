@@ -273,8 +273,14 @@ fn checked(output: &Output) -> Value {
     }
     serde_json::from_slice(&output.stdout).unwrap()
 }
+#[track_caller]
 fn success(output: &Output) -> Value {
     let report = checked(output);
+    for line in String::from_utf8_lossy(&output.stderr).lines() {
+        if line.starts_with("DRMR_PROBE ") {
+            eprintln!("{line}");
+        }
+    }
     assert!(
         output.status.success(),
         "command failed with classification {}",
