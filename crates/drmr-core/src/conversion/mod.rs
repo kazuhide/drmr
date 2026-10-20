@@ -23,6 +23,8 @@ pub use aes128::{
 };
 mod cenc;
 mod files;
+mod frozen;
+pub use frozen::{FrozenSource, SourceFile, SourceInventory};
 mod hls;
 mod keys;
 mod signaling;
@@ -93,6 +95,7 @@ pub struct Converter {
     backend: Backend,
     maximum_workers: Option<usize>,
     downloaded: Option<Arc<download::Seal>>,
+    frozen_source: Option<Arc<frozen::OriginalGuard>>,
     output_signaling: Option<Arc<OutputSignaling>>,
 }
 impl Converter {
@@ -104,6 +107,7 @@ impl Converter {
         Self {
             maximum_workers: None,
             downloaded: None,
+            frozen_source: None,
             output_signaling: None,
             backend: Backend {
                 stop: crate::concurrency::Stop::new(),
@@ -139,6 +143,7 @@ impl Converter {
             backend,
             maximum_workers: self.maximum_workers,
             downloaded: self.downloaded.clone(),
+            frozen_source: self.frozen_source.clone(),
             output_signaling: self.output_signaling.clone(),
         };
         let result = execute(&command);
@@ -166,14 +171,16 @@ impl Converter {
         let _scope = self.backend.scope(measurement::Phase::Publication);
         self.backend.check_cancelled()?;
         files::publish_file_checked(source, destination, Some(&self.backend.stop), || {
-            self.check_downloaded()
+            self.check_downloaded()?;
+            self.check_frozen_source()
         })
     }
     fn publish_directory(&self, source: &Path, destination: &Path) -> Result<(), ConversionError> {
         let _scope = self.backend.scope(measurement::Phase::Publication);
         self.backend.check_cancelled()?;
         files::publish_directory_checked(source, destination, Some(&self.backend.stop), || {
-            self.check_downloaded()
+            self.check_downloaded()?;
+            self.check_frozen_source()
         })
     }
     #[must_use]

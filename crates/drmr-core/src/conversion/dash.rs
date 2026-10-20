@@ -282,6 +282,72 @@ fn representation_scopes<'a>(
     Ok((base, templates))
 }
 
+/// Enumerate the finite local resources from already-frozen manifest bytes.
+/// Media admission remains the responsibility of the ordinary snapshot handler.
+pub(super) fn source_references(bytes: &[u8]) -> Result<Vec<PathBuf>, ConversionError> {
+    let text = std::str::from_utf8(bytes).map_err(|_| error("dash-invalid-xml"))?;
+    let document = Document::parse_with_options(
+        text.trim_start_matches('\u{feff}'),
+        roxmltree::ParsingOptions {
+            nodes_limit: 20_000,
+            ..Default::default()
+        },
+    )
+    .map_err(|_| error("dash-invalid-xml"))?;
+    let root = document.root_element();
+    if root.tag_name().name() != "MPD"
+        || !matches!(root.tag_name().namespace(), None | Some(DASH_NS))
+        || root.attribute("type").unwrap_or("static") != "static"
+    {
+        return Err(error("dash-static-presentation-required"));
+    }
+    let period = one(root, "Period")?.ok_or(error("dash-single-period-required"))?;
+    let representations: Vec<_> = children(period, "AdaptationSet")
+        .into_iter()
+        .flat_map(|adaptation| children(adaptation, "Representation"))
+        .collect();
+    if representations.is_empty() || representations.len() > MAX_TRACKS {
+        return Err(error("dash-track-limit-or-structure-not-supported"));
+    }
+    let mut resources = Vec::new();
+    let mut path_bytes = 0usize;
+    let mut add = |path: PathBuf| {
+        path_bytes = path_bytes
+            .checked_add(path.as_os_str().len())
+            .filter(|bytes| *bytes <= 16 * 1024 * 1024)
+            .ok_or(error("source-graph-limit"))?;
+        resources.push(path);
+        Ok::<_, ConversionError>(())
+    };
+    let mut remaining = MAX_SEGMENTS;
+    for representation in representations {
+        let (base, templates) = representation_scopes(representation)?;
+        let values = sequence(&templates, remaining)?;
+        remaining -= values.len();
+        let initialization =
+            attribute(&templates, "initialization").ok_or(error("dash-initialization-required"))?;
+        let media = attribute(&templates, "media").ok_or(error("dash-media-template-required"))?;
+        let id = representation.attribute("id").unwrap_or("");
+        let bandwidth = representation.attribute("bandwidth").unwrap_or("");
+        add(base.join(relative(&expand(
+            initialization,
+            id,
+            bandwidth,
+            values[0].0,
+            values[0].1,
+        )?)?))?;
+        let mut seen = HashSet::new();
+        for (number, time, _) in values {
+            let path = base.join(relative(&expand(media, id, bandwidth, number, time)?)?);
+            if !seen.insert(path.clone()) {
+                return Err(error("dash-repeated-resource-not-supported"));
+            }
+            add(path)?;
+        }
+    }
+    Ok(resources)
+}
+
 fn snapshot_representation(
     representation: Node<'_, '_>,
     declared: Protection,

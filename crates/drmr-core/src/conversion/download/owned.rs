@@ -33,8 +33,14 @@ pub(super) struct OwnedDownload {
 }
 impl OwnedDownload {
     pub(super) fn reserve(download: &Path, output: &Path) -> Result<Self, ConversionError> {
+        Self::reserve_inner(download, Some(output))
+    }
+    pub(super) fn reserve_source(download: &Path) -> Result<Self, ConversionError> {
+        Self::reserve_inner(download, None)
+    }
+    fn reserve_inner(download: &Path, output: Option<&Path>) -> Result<Self, ConversionError> {
         let path = destination(download)?;
-        let output = destination(output)?;
+        let output = output.map(destination).transpose()?;
         match std::fs::symlink_metadata(&path) {
             Ok(_) => return Err(ConversionError("download-directory-exists")),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -69,7 +75,9 @@ impl OwnedDownload {
             attempted: false,
             cleaned: false,
         };
-        if let Err(error) = owned.check_output(&output) {
+        if let Some(output) = output
+            && let Err(error) = owned.check_output(&output)
+        {
             owned.cleanup()?;
             return Err(error);
         }

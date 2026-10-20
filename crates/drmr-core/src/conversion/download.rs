@@ -38,6 +38,10 @@ impl DownloadedSource {
     pub fn entrypoint(&self) -> &Path {
         &self.entrypoint
     }
+    /// Revalidate creation identities and every retained original without modifying them.
+    pub fn check(&self, stop: &Stop) -> Result<(), ConversionError> {
+        self.seal.check(stop)
+    }
 }
 
 pub(super) struct Seal {
@@ -135,12 +139,32 @@ impl Converter {
         output: &Path,
         policy: &FetchPolicy,
     ) -> Result<DownloadedSource, ConversionError> {
+        self.acquire_hls_inner(url, directory, Some(output), policy)
+    }
+    /// Retain a complete clear VOD source before a future output location is chosen.
+    pub fn acquire_hls(
+        &self,
+        url: &str,
+        directory: &Path,
+        policy: &FetchPolicy,
+    ) -> Result<DownloadedSource, ConversionError> {
+        self.acquire_hls_inner(url, directory, None, policy)
+    }
+    fn acquire_hls_inner(
+        &self,
+        url: &str,
+        directory: &Path,
+        output: Option<&Path>,
+        policy: &FetchPolicy,
+    ) -> Result<DownloadedSource, ConversionError> {
         let _scope = self
             .backend
             .scope(super::measurement::Phase::InputPreparation);
         self.backend.check_cancelled()?;
         valid_url(url)?;
-        preflight_download_output(output)?;
+        if let Some(output) = output {
+            preflight_download_output(output)?;
+        }
         // Only this bounded command label is registered. Acquired URL graphs never
         // reach subprocess arguments or diagnostics after canonical localization.
         self.backend.runner.secrets().register([url]);
@@ -157,19 +181,7 @@ impl Converter {
             .validate()
             .map_err(|_| ConversionError("invalid-fetch-policy"))?;
         policy.max_playlist_bytes = policy.max_playlist_bytes.min(4 * 1024 * 1024);
-        let capacity = self.backend.runner.native_capacity();
-        let mut budget = Budget::choose(
-            Hardware::detect(),
-            Workload::default(),
-            self.maximum_workers,
-        )
-        .map_err(|_| ConversionError("resource-budget"))?;
-        budget.workers = budget
-            .workers
-            .min(policy.connections)
-            .min(capacity.0)
-            .max(1);
-        self.backend.runner.note_resource_budget(&budget);
+        let budget = self.acquisition_budget(&policy)?;
         let _permit = self
             .backend
             .runner
@@ -185,7 +197,10 @@ impl Converter {
                 crate::resources::ReservationError::Cancelled => ConversionError("cancelled"),
                 _ => ConversionError("resource-budget"),
             })?;
-        let mut owned = OwnedDownload::reserve(directory, output)?;
+        let mut owned = match output {
+            Some(output) => OwnedDownload::reserve(directory, output)?,
+            None => OwnedDownload::reserve_source(directory)?,
+        };
         let result = self.acquire(url, &policy, budget.workers, &owned);
         match result {
             Ok(mut expected) => {
@@ -236,6 +251,22 @@ impl Converter {
                 Err(error)
             }
         }
+    }
+    fn acquisition_budget(&self, policy: &FetchPolicy) -> Result<Budget, ConversionError> {
+        let capacity = self.backend.runner.native_capacity();
+        let mut budget = Budget::choose(
+            Hardware::detect(),
+            Workload::default(),
+            self.maximum_workers,
+        )
+        .map_err(|_| ConversionError("resource-budget"))?;
+        budget.workers = budget
+            .workers
+            .min(policy.connections)
+            .min(capacity.0)
+            .max(1);
+        self.backend.runner.note_resource_budget(&budget);
+        Ok(budget)
     }
     fn acquire(
         &self,
@@ -303,6 +334,7 @@ impl Converter {
             backend: self.backend.clone(),
             maximum_workers: self.maximum_workers,
             downloaded: Some(source.seal.clone()),
+            frozen_source: self.frozen_source.clone(),
             output_signaling: self.output_signaling.clone(),
         };
         converter.convert(ConversionRequest {
