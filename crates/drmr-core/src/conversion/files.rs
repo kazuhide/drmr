@@ -20,6 +20,25 @@ const PUBLISH_ERROR: ConversionError = ConversionError("output-exists-or-publish
 #[cfg(unix)]
 const CLEANUP_ERROR: ConversionError = ConversionError("temporary-cleanup-unconfirmed");
 
+/// Ownership protection from stage creation through every unpublished helper failure.
+pub(super) struct UnpublishedStage(Stage);
+impl UnpublishedStage {
+    pub(super) fn new(parent: Option<&Path>) -> Result<Self, ConversionError> {
+        Ok(Self(Stage::new(parent)?))
+    }
+}
+impl std::ops::Deref for UnpublishedStage {
+    type Target = Stage;
+    fn deref(&self) -> &Stage {
+        &self.0
+    }
+}
+impl Drop for UnpublishedStage {
+    fn drop(&mut self) {
+        self.0.preserve_replaced_workspace();
+    }
+}
+
 pub(super) struct Stage {
     path: PathBuf,
     media: File,

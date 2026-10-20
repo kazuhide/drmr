@@ -2,6 +2,41 @@ use super::*;
 use std::os::unix::fs::{PermissionsExt as _, symlink};
 
 #[test]
+fn an_unpublished_guard_protects_early_constructor_failure() {
+    let root = tempfile::tempdir().unwrap();
+    let mut visible = PathBuf::new();
+    let failed = (|| {
+        let stage = UnpublishedStage::new(Some(root.path()))?;
+        visible = stage.path().to_owned();
+        std::fs::write(visible.join("owned"), b"owned helper bytes").unwrap();
+        std::fs::rename(&visible, root.path().join("held-media")).unwrap();
+        std::fs::create_dir(&visible).unwrap();
+        std::fs::set_permissions(&visible, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::write(visible.join("foreign"), b"preserved constructor failure").unwrap();
+        Err::<(), _>(IO_ERROR)?;
+        Ok::<(), ConversionError>(())
+    })();
+    assert_eq!(failed, Err(IO_ERROR));
+    assert_eq!(
+        std::fs::read(visible.join("foreign")).unwrap(),
+        b"preserved constructor failure"
+    );
+    assert_eq!(
+        std::fs::read(root.path().join("held-media/owned")).unwrap(),
+        b"owned helper bytes"
+    );
+}
+
+#[test]
+fn an_unpublished_guard_cleans_unchanged_constructor_failure() {
+    let root = tempfile::tempdir().unwrap();
+    let stage = UnpublishedStage::new(Some(root.path())).unwrap();
+    let outer = stage.private_root().to_owned();
+    drop(stage);
+    assert!(!outer.exists());
+}
+
+#[test]
 fn an_unpublished_helper_can_preserve_a_replaced_payload_root() {
     let root = tempfile::tempdir().unwrap();
     let mut stage = Stage::new(Some(root.path())).unwrap();
