@@ -218,8 +218,48 @@ fn reject_mutations(
             );
         }
         std::fs::write(&playlist, original).unwrap();
+        if format == OutputFormat::Hls {
+            reject_map_scope(events, output, entrypoint, target, keys);
+        }
         verify_explicit_iv(events, output, entrypoint, format, target, keys);
     }
+}
+fn reject_map_scope(
+    events: &Arc<Collector>,
+    output: &Path,
+    entrypoint: &Path,
+    target: TargetProtection,
+    keys: &key_file::OperatorKeys,
+) {
+    let path = output.join("track-0000/media.m3u8");
+    let original = std::fs::read_to_string(&path).unwrap();
+    let map = original
+        .lines()
+        .find(|line| line.starts_with("#EXT-X-MAP:"))
+        .unwrap();
+    let without = original.replace(&format!("{map}\n"), "");
+    let mut refused = Vec::new();
+    for changed in [
+        original.replace(map, &format!("{map},BYTERANGE=\"1@0\"")),
+        format!("{without}\n{map}\n"),
+        original.replace(map, &format!("{map}\n{map}")),
+        without,
+    ] {
+        assert_ne!(changed, original);
+        std::fs::write(&path, changed).unwrap();
+        refused.push(
+            converter(events)
+                .verify_output_signaling(entrypoint, OutputFormat::Hls, target, keys)
+                .err()
+                .map(|error| error.0),
+        );
+    }
+    std::fs::write(path, original).unwrap();
+    assert_eq!(
+        refused,
+        vec![Some("output-signaling-verification-failed"); 4],
+        "Ranges, late maps, duplicate maps, and missing maps cannot select a complete initialization"
+    );
 }
 fn reject_provider_bytes(
     events: &Arc<Collector>,

@@ -320,6 +320,7 @@ pub(super) fn fairplay(
         version(text, if format == OutputFormat::Hls { 6 } else { 5 }, true)?;
         let mut keys = 0;
         let mut media = 0;
+        let mut maps = 0;
         let expected_iv = playlist_iv(&path, text, format, target, key, hls_key)?;
         for value in &session_keys {
             declaration(
@@ -341,14 +342,16 @@ pub(super) fn fairplay(
                     false,
                 )?;
                 keys += 1;
+            } else if line.starts_with("#EXT-X-MAP:") {
+                if format != OutputFormat::Hls || media != 0 || maps != 0 {
+                    return Err(MISMATCH);
+                }
+                maps += 1;
             } else if !line.is_empty() && !line.starts_with('#') {
-                if keys != 1 {
+                if keys != 1 || format == OutputFormat::Hls && maps != 1 {
                     return Err(MISMATCH);
                 }
                 media += 1;
-            }
-            if format == OutputFormat::HlsTs && line.starts_with("#EXT-X-MAP:") {
-                return Err(MISMATCH);
             }
         }
         if keys != 1 || media == 0 {
@@ -372,6 +375,9 @@ fn playlist_iv(
         for line in text.lines().map(str::trim) {
             if let Some(value) = line.strip_prefix("#EXT-X-MAP:") {
                 let attrs = super::super::hls::attributes(value).map_err(|_| MISMATCH)?;
+                if attrs.get("BYTERANGE").is_some() {
+                    return Err(MISMATCH);
+                }
                 let init = read_bounded(&resource(
                     path.parent().ok_or(MISMATCH)?,
                     attrs.get("URI").ok_or(MISMATCH)?,
@@ -484,50 +490,122 @@ pub(super) fn unrequested(frozen: &super::super::FrozenSource) -> Result<(), Con
     for _ in frozen.inventory().entrypoint.components() {
         root.pop();
     }
+    let mut manifests = BTreeSet::new();
+    let mut encrypted = BTreeSet::new();
     for file in &frozen.inventory().files {
         let path = root.join(&file.path);
-        let extension = path.extension().and_then(|value| value.to_str());
-        if matches!(extension, Some("mp4" | "m4s")) {
-            no_provider_boxes(&path)?;
-        } else if extension == Some("m3u8") {
+        if let Some(hls) = manifest_kind(&path)? {
             let data = read_bounded(&path)?;
-            let text = std::str::from_utf8(&data).map_err(|_| MISMATCH)?;
-            for value in text.lines().map(str::trim).filter_map(|line| {
-                line.strip_prefix("#EXT-X-KEY:")
-                    .or_else(|| line.strip_prefix("#EXT-X-SESSION-KEY:"))
-            }) {
-                let attrs = super::super::hls::attributes(value).map_err(|_| MISMATCH)?;
-                if attrs
-                    .get("KEYFORMAT")
-                    .is_some_and(|value| value != "identity")
-                {
-                    return Err(MISMATCH);
-                }
+            let text = std::str::from_utf8(&data)
+                .map_err(|_| MISMATCH)?
+                .trim_start_matches('\u{feff}');
+            if hls {
+                encrypted.extend(unrequested_hls(&path, text)?);
+            } else {
+                unrequested_dash(text)?;
             }
-        } else if extension == Some("mpd") {
-            let data = read_bounded(&path)?;
-            let text = std::str::from_utf8(&data).map_err(|_| MISMATCH)?;
-            let document = roxmltree::Document::parse(text).map_err(|_| MISMATCH)?;
-            if document
-                .descendants()
-                .any(|node| node.is_element() && matches!(node.tag_name().name(), "pssh" | "pro"))
-            {
-                return Err(MISMATCH);
-            }
-            for node in document
-                .descendants()
-                .filter(|node| node.is_element() && node.tag_name().name() == "ContentProtection")
-            {
-                if !node.has_tag_name((DASH, "ContentProtection"))
-                    || node.attribute("schemeIdUri") != Some(COMMON)
-                    || node.children().any(|child| child.is_element())
-                {
-                    return Err(MISMATCH);
-                }
-            }
+            manifests.insert(path);
+        }
+    }
+    for file in &frozen.inventory().files {
+        let path = root.join(&file.path);
+        if !manifests.contains(&path) {
+            no_provider_media(&path, encrypted.contains(&path))?;
         }
     }
     frozen.check_original().map_err(|_| MISMATCH)
+}
+fn manifest_kind(path: &Path) -> Result<Option<bool>, ConversionError> {
+    let mut prefix = [0; 512];
+    let length = File::open(path)
+        .map_err(|_| MISMATCH)?
+        .read(&mut prefix)
+        .map_err(|_| MISMATCH)?;
+    let text = String::from_utf8_lossy(&prefix[..length]);
+    let text = text.trim_start_matches('\u{feff}').trim_start();
+    Ok(if text.starts_with("#EXTM3U") {
+        Some(true)
+    } else if text.starts_with('<') {
+        Some(false)
+    } else {
+        None
+    })
+}
+fn unrequested_hls(path: &Path, text: &str) -> Result<BTreeSet<PathBuf>, ConversionError> {
+    let mut encrypted = BTreeSet::new();
+    let mut whole_encryption = false;
+    for line in text.lines().map(str::trim) {
+        if let Some(value) = line
+            .strip_prefix("#EXT-X-KEY:")
+            .or_else(|| line.strip_prefix("#EXT-X-SESSION-KEY:"))
+        {
+            let attrs = super::super::hls::attributes(value).map_err(|_| MISMATCH)?;
+            if attrs
+                .get("KEYFORMAT")
+                .is_some_and(|value| value != "identity")
+            {
+                return Err(MISMATCH);
+            }
+            if line.starts_with("#EXT-X-KEY:") {
+                whole_encryption = attrs.get("METHOD") == Some("AES-128");
+            }
+        } else if whole_encryption {
+            let uri = if let Some(value) = line.strip_prefix("#EXT-X-MAP:") {
+                super::super::hls::attributes(value)
+                    .map_err(|_| MISMATCH)?
+                    .get("URI")
+                    .map(str::to_owned)
+            } else {
+                (!line.is_empty() && !line.starts_with('#')).then(|| line.to_owned())
+            };
+            if let Some(uri) = uri {
+                encrypted.insert(resource(path.parent().ok_or(MISMATCH)?, &uri)?);
+            }
+        }
+    }
+    Ok(encrypted)
+}
+fn unrequested_dash(text: &str) -> Result<(), ConversionError> {
+    let document = roxmltree::Document::parse(text).map_err(|_| MISMATCH)?;
+    for node in document.descendants().filter(roxmltree::Node::is_element) {
+        if matches!(node.tag_name().name(), "pssh" | "pro") {
+            return Err(MISMATCH);
+        }
+        if node.tag_name().name() == "ContentProtection"
+            && (!node.has_tag_name((DASH, "ContentProtection"))
+                || node.attribute("schemeIdUri") != Some(COMMON)
+                || node.children().any(|child| child.is_element()))
+        {
+            return Err(MISMATCH);
+        }
+    }
+    Ok(())
+}
+fn no_provider_media(path: &Path, whole_encryption: bool) -> Result<(), ConversionError> {
+    let mut file = File::open(path).map_err(|_| MISMATCH)?;
+    let mut prefix = [0; 3 * 188];
+    let length = file.read(&mut prefix).map_err(|_| MISMATCH)?;
+    let bytes = file.metadata().map_err(|_| MISMATCH)?.len();
+    let bmff = prefix[..length].get(4..8).is_some_and(|kind| {
+        matches!(
+            kind,
+            b"ftyp" | b"styp" | b"moov" | b"moof" | b"mdat" | b"sidx" | b"free" | b"pssh" | b"uuid"
+        )
+    });
+    // Opaque whole-file AES-128 bytes have no readable provider metadata. An actual
+    // BMFF header still receives the box checks, even under that manifest declaration.
+    if whole_encryption && !bmff {
+        return Ok(());
+    }
+    // Transport streams have no ISO BMFF provider boxes.
+    if !bmff
+        && bytes != 0
+        && bytes.is_multiple_of(188)
+        && prefix[..length].chunks(188).all(|packet| packet[0] == 0x47)
+    {
+        return Ok(());
+    }
+    no_provider_boxes(path)
 }
 fn no_provider_boxes(path: &Path) -> Result<(), ConversionError> {
     let mut file = File::open(path).map_err(|_| MISMATCH)?;
