@@ -1,12 +1,18 @@
 //! Signaling checks follow resource contents rather than filename extensions.
 use drmr_core::{
     concurrency::Stop,
-    conversion::{Converter, FrozenSource, key_file::OperatorKeys},
+    conversion::{
+        Aes128Key, ConversionRequest, Converter, FrozenSource, HlsInputKeys, HlsOutputKey,
+        InputKeys, key_file::OperatorKeys,
+    },
     events::NoSink,
     inspection::{OutputFormat, TargetProtection},
-    toolrun::{Secrets, ToolRunner},
+    toolrun::{RunOptions, Secrets, ToolRunner},
 };
-use std::{path::Path, sync::Arc};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 fn check(path: &Path, format: OutputFormat) -> Result<(), drmr_core::conversion::ConversionError> {
     FrozenSource::capture(path, &Stop::new()).unwrap();
@@ -146,4 +152,87 @@ fn whole_file_encryption_and_transport_resources_do_not_hide_clear_provider_boxe
     assert!(provider.len().is_multiple_of(16));
     std::fs::write(&segment, provider).unwrap();
     assert!(check(&playlist, OutputFormat::HlsTs).is_err());
+}
+
+fn video_source(root: &Path) -> PathBuf {
+    let clip = Path::new(env!("CARGO_MANIFEST_DIR")).join("../drmr/tests/fixtures/bbb/clip.mp4");
+    let output = root.join("source.mp4");
+    let runner = ToolRunner::new(Arc::new(Secrets::new()), Arc::new(NoSink));
+    let result = runner
+        .run_tool(
+            &[
+                "ffmpeg",
+                "-v",
+                "error",
+                "-nostdin",
+                "-i",
+                clip.to_str().unwrap(),
+                "-map",
+                "0:v:0",
+                "-c",
+                "copy",
+                "-map_metadata",
+                "-1",
+                "-bitexact",
+                "-movflags",
+                "delay_moov+default_base_moof+frag_keyframe",
+                output.to_str().unwrap(),
+            ]
+            .map(str::to_owned),
+            "ffmpeg",
+            &RunOptions::default(),
+        )
+        .unwrap();
+    assert_eq!(result.returncode, Some(0));
+    output
+}
+
+#[test]
+fn actual_clear_and_aes_hls_outputs_verify_without_drm_on_native_paths() {
+    let owner = drmr_core::native::private_tempdir().unwrap();
+    let source = video_source(owner.path());
+    let original = std::fs::read(&source).unwrap();
+    let converter = Converter::new(
+        Arc::new(ToolRunner::new(Arc::new(Secrets::new()), Arc::new(NoSink))),
+        "packager",
+        "ffmpeg",
+    );
+    let encryption = HlsOutputKey::new(
+        "https://example.invalid/key",
+        Aes128Key::from_hex("101112131415161718191a1b1c1d1e1f").unwrap(),
+    )
+    .unwrap();
+    for target in [TargetProtection::Clear, TargetProtection::HlsAes128] {
+        let output = owner.path().join(target.as_str());
+        let report = converter
+            .convert(ConversionRequest {
+                input: &source,
+                output: &output,
+                format: OutputFormat::Hls,
+                target,
+                input_keys: &InputKeys::default(),
+                hls_input_keys: &HlsInputKeys::default(),
+                output_key: None,
+                hls_key_uri: None,
+                hls_output_key: (target == TargetProtection::HlsAes128).then_some(&encryption),
+            })
+            .unwrap();
+        assert!(report.verification.passed && report.verification.media_verified);
+        assert!(report.verification.checks.packet_payloads_equal);
+        assert!(report.verification.checks.packet_timing_equal);
+        assert!(report.verification.checks.decoded_content_equal);
+        assert_eq!(report.output.drm_systems, Vec::<String>::new());
+        // fspath removes Windows' verbatim prefix, exercising an ordinary drive path in CI.
+        let input = PathBuf::from(
+            drmr_core::manifest_support::path::fspath(&output.join("master.m3u8")).unwrap(),
+        );
+        #[cfg(windows)]
+        assert!(
+            matches!(input.components().next(), Some(std::path::Component::Prefix(prefix)) if matches!(prefix.kind(), std::path::Prefix::Disk(_)))
+        );
+        converter
+            .verify_output_signaling(&input, OutputFormat::Hls, target, &OperatorKeys::default())
+            .unwrap();
+        assert_eq!(std::fs::read(&source).unwrap(), original);
+    }
 }

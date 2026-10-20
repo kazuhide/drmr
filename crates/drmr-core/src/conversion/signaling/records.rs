@@ -493,19 +493,28 @@ pub(super) fn valid_fairplay_uri(value: &str) -> bool {
 
 /// An empty DRM selection does not authorize provider records hidden in the output graph.
 pub(super) fn unrequested(frozen: &super::super::FrozenSource) -> Result<(), ConversionError> {
-    let mut root = frozen.entrypoint().to_path_buf();
+    unrequested_at(frozen, frozen.entrypoint())
+}
+fn unrequested_at(
+    frozen: &super::super::FrozenSource,
+    entrypoint: &Path,
+) -> Result<(), ConversionError> {
+    // Match resolver results, including Windows' canonical verbatim prefix, in one namespace.
+    let entrypoint = entrypoint.canonicalize().map_err(|_| MISMATCH)?;
+    let mut root = entrypoint.clone();
     for _ in frozen.inventory().entrypoint.components() {
         root.pop();
     }
+    let root = root.canonicalize().map_err(|_| MISMATCH)?;
     let mut manifests = BTreeSet::new();
     let mut encrypted = BTreeSet::new();
-    let mut pending = vec![frozen.entrypoint().to_path_buf()];
+    let mut pending = vec![entrypoint.clone()];
     while let Some(path) = pending.pop() {
         if manifests.contains(&path) {
             continue;
         }
         let Some(hls) = manifest_kind(&path)? else {
-            if path != frozen.entrypoint() {
+            if path != entrypoint {
                 return Err(MISMATCH);
             }
             continue;
@@ -518,7 +527,7 @@ pub(super) fn unrequested(frozen: &super::super::FrozenSource) -> Result<(), Con
             let resources = unrequested_hls(&path, text)?;
             encrypted.extend(resources.encrypted);
             pending.extend(resources.playlists);
-        } else if path == frozen.entrypoint() {
+        } else if path == entrypoint {
             unrequested_dash(text)?;
         } else {
             return Err(MISMATCH);
@@ -529,7 +538,10 @@ pub(super) fn unrequested(frozen: &super::super::FrozenSource) -> Result<(), Con
         }
     }
     for file in &frozen.inventory().files {
-        let path = root.join(&file.path);
+        let path = root.join(&file.path).canonicalize().map_err(|_| MISMATCH)?;
+        if !path.starts_with(&root) {
+            return Err(MISMATCH);
+        }
         if !manifests.contains(&path) {
             no_provider_media(&path, encrypted.contains(&path))?;
         }
@@ -740,6 +752,39 @@ fn no_provider_boxes(path: &Path) -> Result<(), ConversionError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn unrequested_graph_uses_one_path_namespace_through_an_aliased_snapshot_root() {
+        let owner = crate::native::private_tempdir().unwrap();
+        for name in ["audio", "video"] {
+            crate::native::create_media_dir_all(&owner.path().join(name)).unwrap();
+        }
+        let master = owner.path().join("master.m3u8");
+        std::fs::write(&master, "#EXTM3U\n#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"a\",NAME=\"a\",URI=\"audio/media.m3u8\"\n#EXT-X-STREAM-INF:BANDWIDTH=100,AUDIO=\"a\"\nvideo/media.m3u8\n").unwrap();
+        std::fs::write(owner.path().join("audio/media.m3u8"), "#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI=\"https://example.invalid/key\"\n#EXTINF:2,\nsegment.bin\n#EXT-X-ENDLIST\n").unwrap();
+        let mut opaque = [0x9a; 32];
+        opaque[0] = b'<';
+        std::fs::write(owner.path().join("audio/segment.bin"), opaque).unwrap();
+        std::fs::write(
+            owner.path().join("video/media.m3u8"),
+            "#EXTM3U\n#EXTINF:2,\nsegment.bin\n#EXT-X-ENDLIST\n",
+        )
+        .unwrap();
+        let mut transport = [0; 3 * 188];
+        for packet in transport.chunks_mut(188) {
+            packet[0] = 0x47;
+        }
+        std::fs::write(owner.path().join("video/segment.bin"), transport).unwrap();
+        let frozen =
+            super::super::super::FrozenSource::capture(&master, &crate::concurrency::Stop::new())
+                .unwrap();
+        unrequested(&frozen).unwrap();
+        let alias = owner.path().join("snapshot-alias");
+        std::os::unix::fs::symlink(frozen.entrypoint().parent().unwrap(), &alias).unwrap();
+        unrequested_at(&frozen, &alias.join(&frozen.inventory().entrypoint)).unwrap();
+        frozen.check_original().unwrap();
+    }
 
     #[test]
     fn dual_drm_secret_list_covers_standalone_widevine_encodings() {
