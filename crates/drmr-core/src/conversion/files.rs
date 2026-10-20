@@ -139,6 +139,7 @@ impl UnixOuter {
         &self.path
     }
     fn check(&self) -> Result<(), ConversionError> {
+        check_stage_directory(&self.held)?;
         if native::FileIdentity::read(&self.held).map_err(|_| CLEANUP_ERROR)? != self.identity
             || native::FileIdentity::read(&open_stage_directory(&self.path)?)
                 .map_err(|_| CLEANUP_ERROR)?
@@ -186,10 +187,21 @@ fn open_stage_directory(path: &Path) -> Result<File, ConversionError> {
         )
         .open(path)
         .map_err(|_| CLEANUP_ERROR)?;
-    if !file.metadata().map_err(|_| CLEANUP_ERROR)?.is_dir() {
+    check_stage_directory(&file)?;
+    Ok(file)
+}
+
+#[cfg(unix)]
+fn check_stage_directory(file: &File) -> Result<(), ConversionError> {
+    use std::os::unix::fs::MetadataExt as _;
+    let metadata = file.metadata().map_err(|_| CLEANUP_ERROR)?;
+    if !metadata.is_dir()
+        || metadata.uid() != rustix::process::geteuid().as_raw()
+        || metadata.mode() & 0o077 != 0
+    {
         return Err(CLEANUP_ERROR);
     }
-    Ok(file)
+    Ok(())
 }
 
 #[cfg(windows)]
@@ -512,6 +524,80 @@ fn check_cancelled(stop: Option<&crate::concurrency::Stop>) -> Result<(), Conver
 #[cfg(all(test, unix))]
 mod unix_stage_identity_tests {
     use super::*;
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+
+    #[test]
+    fn unix_outer_refuses_a_writable_replacement_before_acquisition() {
+        let root = tempfile::tempdir().unwrap();
+        let parent = root.path().join("shared");
+        std::fs::create_dir(&parent).unwrap();
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o777)).unwrap();
+        let directory = tempfile::Builder::new()
+            .permissions(std::fs::Permissions::from_mode(0o700))
+            .tempdir_in(&parent)
+            .unwrap();
+        let path = directory.path().to_path_buf();
+        let original = root.path().join("original");
+        std::fs::write(path.join("owned"), b"owned stage bytes").unwrap();
+        std::fs::rename(&path, &original).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o777)).unwrap();
+        std::fs::write(path.join("foreign"), b"foreign bytes must remain").unwrap();
+        // A same-user test exercises the unsafe-mode branch without requiring
+        // privilege to create a directory owned by another user.
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().uid(),
+            rustix::process::geteuid().as_raw()
+        );
+        let result = UnixOuter::new(directory);
+        let rejected = result.is_err();
+        drop(result);
+        assert!(
+            rejected,
+            "a writable replacement was adopted; foreign preserved: {}",
+            path.join("foreign").exists()
+        );
+        assert_eq!(
+            std::fs::read(original.join("owned")).unwrap(),
+            b"owned stage bytes"
+        );
+        assert_eq!(
+            std::fs::read(path.join("foreign")).unwrap(),
+            b"foreign bytes must remain"
+        );
+        assert_eq!(
+            std::fs::metadata(&original).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o777
+        );
+    }
+
+    #[test]
+    fn unix_outer_refuses_privacy_changes_after_acquisition_without_repair_or_cleanup() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = tempfile::Builder::new()
+            .permissions(std::fs::Permissions::from_mode(0o700))
+            .tempdir_in(root.path())
+            .unwrap();
+        let outer = UnixOuter::new(directory).unwrap();
+        let path = outer.path().to_path_buf();
+        std::fs::write(path.join("owned"), b"retained after privacy change").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o777)).unwrap();
+        let result = outer.check();
+        drop(outer);
+        assert_eq!(result, Err(CLEANUP_ERROR));
+        assert_eq!(
+            std::fs::read(path.join("owned")).unwrap(),
+            b"retained after privacy change"
+        );
+        assert_eq!(
+            std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            0o777
+        );
+    }
 
     #[test]
     fn stage_drop_preserves_a_foreign_tree_after_its_parent_is_replaced() {
