@@ -126,3 +126,50 @@ fn legacy_key_files_retain_the_original_profile() {
     assert_eq!(keys.signaling.unwrap().systems(), [DrmSystem::PlayReady]);
     assert!(key_file::read_bundle(&path).is_err());
 }
+
+#[test]
+fn widevine_scheme_and_all_declared_key_ids_must_agree_with_the_output() {
+    use base64::Engine as _;
+    for scheme in ["cbcs", "cenc"] {
+        let mut payload = hex::decode(format!("1210{KID}")).unwrap();
+        payload.push(0x48);
+        let mut value = u64::from(u32::from_be_bytes(scheme.as_bytes().try_into().unwrap()));
+        while value >= 128 {
+            payload.push(u8::try_from(value & 127).unwrap() | 128);
+            value >>= 7;
+        }
+        payload.push(u8::try_from(value).unwrap());
+        let bytes = drmr_core::playready::build_pssh_box(
+            &drmr_core::playready::WIDEVINE_SYSTEM_ID,
+            &payload,
+        )
+        .unwrap();
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
+        assert_eq!(
+            OutputSignaling::multi_drm(Some(&encoded), None, false).is_ok(),
+            scheme == "cbcs"
+        );
+        if scheme == "cbcs" {
+            let mut duplicate = payload;
+            let declaration = duplicate[18..].to_vec();
+            duplicate.extend(declaration);
+            let bytes = drmr_core::playready::build_pssh_box(
+                &drmr_core::playready::WIDEVINE_SYSTEM_ID,
+                &duplicate,
+            )
+            .unwrap();
+            assert!(OutputSignaling::multi_drm(Some(&hex::encode(bytes)), None, false).is_err());
+        }
+    }
+    let bytes = hex::decode(pssh()).unwrap();
+    let mut version_one = bytes[..28].to_vec();
+    version_one[8] = 1;
+    version_one.extend(1u32.to_be_bytes());
+    version_one.extend([0xff; 16]);
+    version_one.extend(&bytes[28..]);
+    let length = u32::try_from(version_one.len()).unwrap();
+    version_one[..4].copy_from_slice(&length.to_be_bytes());
+    let owner = drmr_core::native::private_tempdir().unwrap();
+    let path=write(owner.path(),&serde_json::json!({"schema_version":1,"output":{"kid":KID,"key":KEY,"signaling":{"system":"multi-drm","widevine_pssh":hex::encode(version_one)}}}).to_string());
+    assert_eq!(key_file::read(&path).unwrap_err().0, "key-file-invalid");
+}

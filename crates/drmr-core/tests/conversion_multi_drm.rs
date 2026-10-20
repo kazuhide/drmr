@@ -8,6 +8,7 @@ use drmr_core::{
     inspection::{OutputFormat, TargetProtection},
     toolrun::{RunOptions, Secrets, ToolRunner},
 };
+use sha2::Digest as _;
 use std::{
     io::Write as _,
     path::{Path, PathBuf},
@@ -17,6 +18,7 @@ use std::{
 const KID: &str = "000102030405060708090a0b0c0d0e0f";
 const KEY: &str = "101112131415161718191a1b1c1d1e1f";
 const IV: &str = "202122232425262728292a2b2c2d2e2f";
+const WRONG_IV: &str = "303132333435363738393a3b3c3d3e3f";
 const LICENSE: &str = "https://example.invalid/license?tenant=SYNTHETIC-PRIVATE-METADATA";
 const URI: &str = "skd://synthetic-private-content";
 fn path(value: &Path) -> String {
@@ -166,6 +168,7 @@ fn reject_mutations(
                 "10010203-0405-0607-0809-0a0b0c0d0e0f",
             ),
             original.replace("urn:mpeg:cenc:2013", "urn:example:wrong-cenc"),
+            original.replace("</MPD>", "<cenc:pssh>AAAA</cenc:pssh></MPD>"),
         ] {
             assert_ne!(changed, original);
             std::fs::write(entrypoint, changed).unwrap();
@@ -176,6 +179,7 @@ fn reject_mutations(
             );
         }
         std::fs::write(entrypoint, original).unwrap();
+        reject_provider_bytes(events, output, entrypoint, keys);
     } else {
         let playlist = output.join("track-0000/media.m3u8");
         let original = std::fs::read_to_string(&playlist).unwrap();
@@ -187,6 +191,14 @@ fn reject_mutations(
             "#EXT-X-VERSION:{}",
             if format == OutputFormat::Hls { 5 } else { 4 }
         );
+        let key_line = original
+            .lines()
+            .find(|line| line.starts_with("#EXT-X-KEY:"))
+            .unwrap();
+        let delayed_key = format!(
+            "{}\n{key_line}\n",
+            original.replace(&format!("{key_line}\n"), "")
+        );
         for changed in [
             original.replace(URI, "skd://different-private-content"),
             original.replace("KEYFORMATVERSIONS=\"1\"", "KEYFORMATVERSIONS=\"2\""),
@@ -195,6 +207,7 @@ fn reject_mutations(
             original.replace(&format!("{version}\n"), ""),
             original.replace(version, &format!("{version}\n{version}")),
             original.replace(version, "#EXT-X-VERSION:invalid"),
+            delayed_key,
         ] {
             assert_ne!(changed, original);
             std::fs::write(&playlist, changed).unwrap();
@@ -205,14 +218,181 @@ fn reject_mutations(
             );
         }
         std::fs::write(&playlist, original).unwrap();
+        verify_explicit_iv(events, output, entrypoint, format, target, keys);
     }
+}
+fn reject_provider_bytes(
+    events: &Arc<Collector>,
+    output: &Path,
+    entrypoint: &Path,
+    keys: &key_file::OperatorKeys,
+) {
+    let original = std::fs::read_to_string(entrypoint).unwrap();
+    let document = roxmltree::Document::parse(&original).unwrap();
+    for node in document
+        .descendants()
+        .filter(|node| node.is_element() && matches!(node.tag_name().name(), "pssh" | "pro"))
+    {
+        let range = node.first_child().unwrap().range();
+        let mut changed = original.clone();
+        changed.replace_range(
+            range.start..=range.start,
+            if &original[range.start..=range.start] == "A" {
+                "B"
+            } else {
+                "A"
+            },
+        );
+        std::fs::write(entrypoint, changed).unwrap();
+        assert!(
+            converter(events)
+                .verify_output_signaling(
+                    entrypoint,
+                    OutputFormat::Dash,
+                    TargetProtection::Cbcs,
+                    keys
+                )
+                .is_err()
+        );
+    }
+    std::fs::write(entrypoint, original).unwrap();
+    let path = output.join("track-0000/init.mp4");
+    let original = std::fs::read(&path).unwrap();
+    let boxes = drmr_core::mp4::parse_boxes(&original).unwrap();
+    for node in drmr_core::mp4::walk(&boxes)
+        .into_iter()
+        .filter(|node| node.kind() == *b"pssh")
+    {
+        let mut changed = original.clone();
+        changed[node.header.offset + node.header.size - 1] ^= 1;
+        std::fs::write(&path, changed).unwrap();
+        assert!(
+            converter(events)
+                .verify_output_signaling(
+                    entrypoint,
+                    OutputFormat::Dash,
+                    TargetProtection::Cbcs,
+                    keys
+                )
+                .is_err()
+        );
+    }
+    std::fs::write(path, original).unwrap();
+}
+fn verify_explicit_iv(
+    events: &Arc<Collector>,
+    output: &Path,
+    entrypoint: &Path,
+    format: OutputFormat,
+    target: TargetProtection,
+    keys: &key_file::OperatorKeys,
+) {
+    let path = output.join("track-0000/media.m3u8");
+    let original = std::fs::read_to_string(&path).unwrap();
+    let iv = if format == OutputFormat::Hls {
+        drmr_core::mp4::tenc_constant_iv_hex(
+            &std::fs::read(output.join("track-0000/init.mp4")).unwrap(),
+        )
+        .unwrap()
+        .unwrap()
+        .expose()
+        .to_string()
+    } else {
+        IV.into()
+    };
+    let line = original
+        .lines()
+        .find(|line| line.starts_with("#EXT-X-KEY:"))
+        .unwrap();
+    assert!(!line.contains(",IV="));
+    std::fs::write(&path, original.replace(line, &format!("{line},IV=0x{iv}"))).unwrap();
+    converter(events)
+        .verify_output_signaling(entrypoint, format, target, keys)
+        .unwrap();
+    let mut wrong = iv.clone();
+    wrong.replace_range(..1, if iv.starts_with('0') { "1" } else { "0" });
+    std::fs::write(
+        &path,
+        original.replace(line, &format!("{line},IV=0x{wrong}")),
+    )
+    .unwrap();
+    assert!(
+        converter(events)
+            .verify_output_signaling(entrypoint, format, target, keys)
+            .is_err()
+    );
+    let version = original
+        .lines()
+        .find(|line| line.starts_with("#EXT-X-VERSION:"))
+        .unwrap();
+    std::fs::write(&path, original.replace(version, "#EXT-X-VERSION:7")).unwrap();
+    converter(events)
+        .verify_output_signaling(entrypoint, format, target, keys)
+        .unwrap();
+    std::fs::write(path, original).unwrap();
+}
+fn reject_runtime_iv(events: &Arc<Collector>, input: &Path, entrypoint: &Path, root: &Path) {
+    let wrong = keys(
+        root,
+        "wrong-iv",
+        &serde_json::json!({"key":KEY,"iv":WRONG_IV,"hls_key_uri":URI,"signaling":{"system":"multi-drm","fairplay":true}}),
+    );
+    let empty = InputKeys::default();
+    let hls = HlsInputKeys::default();
+    let output_hls = wrong.output_hls_verification_keys().unwrap();
+    let result = converter(events).verify(VerificationRequest {
+        source: VerificationSource {
+            input,
+            input_keys: &empty,
+            hls_keys: &hls,
+        },
+        output: VerificationSource {
+            input: entrypoint,
+            input_keys: &empty,
+            hls_keys: &output_hls,
+        },
+    });
+    match result {
+        Ok(report) => {
+            assert!(!report.passed);
+            println!("DRMR_WRONG_IV_REJECTED comparison-mismatch");
+        }
+        Err(error) => {
+            assert!(
+                matches!(
+                    error.0,
+                    "media-tool-failed"
+                        | "ts-sample-encryption-invalid"
+                        | "ts-original-evidence-invalid"
+                        | "invalid-ts-access-unit-evidence"
+                ),
+                "Wrong-IV proof must not pass on unrelated operational failures: {}",
+                error.0
+            );
+            println!("DRMR_WRONG_IV_REJECTED {}", error.0);
+        }
+    }
+}
+fn snapshot_source(root: &Path) -> std::collections::BTreeMap<std::ffi::OsString, [u8; 32]> {
+    std::fs::read_dir(root)
+        .unwrap()
+        .map(|entry| {
+            let entry = entry.unwrap();
+            let metadata = entry.path().symlink_metadata().unwrap();
+            assert!(metadata.is_file() && !metadata.is_symlink());
+            (
+                entry.file_name(),
+                sha2::Sha256::digest(std::fs::read(entry.path()).unwrap()).into(),
+            )
+        })
+        .collect()
 }
 fn output_cases() -> [(
     &'static str,
     OutputFormat,
     TargetProtection,
     serde_json::Value,
-); 3] {
+); 5] {
     [
         (
             "dash",
@@ -232,12 +412,25 @@ fn output_cases() -> [(
             TargetProtection::HlsSampleAes,
             serde_json::json!({"key":KEY,"iv":IV,"hls_key_uri":URI,"signaling":{"system":"multi-drm","fairplay":true}}),
         ),
+        (
+            "widevine",
+            OutputFormat::Dash,
+            TargetProtection::Cbcs,
+            serde_json::json!({"kid":KID,"key":KEY,"signaling":{"system":"multi-drm","widevine_pssh":pssh()}}),
+        ),
+        (
+            "playready",
+            OutputFormat::Dash,
+            TargetProtection::Cbcs,
+            serde_json::json!({"kid":KID,"key":KEY,"signaling":{"system":"multi-drm","playready_license_url":LICENSE}}),
+        ),
     ]
 }
 #[test]
 fn clear_transport_has_independently_verified_dash_and_fairplay_outputs() {
     let owner = drmr_core::native::private_tempdir().unwrap();
     let input = source(&owner.path().join("source"));
+    let original = snapshot_source(input.parent().unwrap());
     let events = Arc::new(Collector::default());
     let empty = InputKeys::default();
     let hls = HlsInputKeys::default();
@@ -305,18 +498,33 @@ fn clear_transport_has_independently_verified_dash_and_fairplay_outputs() {
         assert!(verified.checks.packet_payloads_equal);
         assert!(verified.checks.packet_timing_equal);
         assert!(verified.checks.decoded_content_equal);
+        assert!(
+            converter(&events)
+                .verify_output_signaling(
+                    &entrypoint,
+                    format,
+                    target,
+                    &key_file::OperatorKeys::default()
+                )
+                .is_err(),
+            "Unrequested provider records must be rejected"
+        );
+        if format == OutputFormat::HlsTs {
+            reject_runtime_iv(&events, &input, &entrypoint, owner.path());
+        }
         reject_mutations(&events, &output, &entrypoint, format, target, &keys);
         converter(&events)
             .verify_output_signaling(&entrypoint, format, target, &keys)
             .unwrap();
         retain_manifests(&output, name);
+        assert_eq!(snapshot_source(input.parent().unwrap()), original);
         println!(
             "DRMR_MULTI_DRM_CELL {}",
             serde_json::json!({"format":format,"protection":target,"systems":keys.signaling.as_ref().unwrap().systems(),"media_verified":true,"independent_signaling_verified":true,"independent_media_verified":true,"packet_payloads_equal":true,"packet_timing_equal":true,"decoded_content_equal":true,"license_playback_verified":false})
         );
     }
     let rendered = format!("{:?}", events.records());
-    for private in [KEY, IV, LICENSE, URI, pssh().as_str()] {
+    for private in [KEY, IV, WRONG_IV, LICENSE, URI, pssh().as_str()] {
         assert!(!rendered.contains(private));
     }
     assert!(OutputSignaling::multi_drm(Some(&pssh()), None, false).is_ok());

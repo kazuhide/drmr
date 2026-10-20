@@ -164,10 +164,12 @@ impl MultiObjects {
         }
         let mut resources = BTreeSet::new();
         let mut declarations = 0;
+        let mut sets = 0;
         for set in document
             .descendants()
             .filter(|node| node.has_tag_name((DASH, "AdaptationSet")))
         {
+            sets += 1;
             let reps: Vec<_> = set
                 .children()
                 .filter(|node| node.has_tag_name((DASH, "Representation")))
@@ -200,6 +202,17 @@ impl MultiObjects {
                 .filter(|node| node.is_element() && node.tag_name().name() == "ContentProtection")
                 .count()
                 != declarations
+            || document
+                .descendants()
+                .filter(|node| node.is_element() && node.tag_name().name() == "pssh")
+                .count()
+                != sets
+                    * (usize::from(self.widevine.is_some()) + usize::from(self.playready.is_some()))
+            || document
+                .descendants()
+                .filter(|node| node.is_element() && node.tag_name().name() == "pro")
+                .count()
+                != sets * usize::from(self.playready.is_some())
         {
             return Err(MISMATCH);
         }
@@ -277,6 +290,9 @@ pub(super) fn fairplay(
     let mut variant = false;
     let mut session_keys = Vec::new();
     for line in text.lines().map(str::trim) {
+        if line.starts_with("#EXT-X-KEY:") {
+            return Err(MISMATCH);
+        }
         if let Some(value) = line.strip_prefix("#EXT-X-MEDIA:") {
             let attrs = super::super::hls::attributes(value).map_err(|_| MISMATCH)?;
             if let Some(uri) = attrs.get("URI") {
@@ -303,6 +319,7 @@ pub(super) fn fairplay(
         let text = std::str::from_utf8(&data).map_err(|_| MISMATCH)?;
         version(text, if format == OutputFormat::Hls { 6 } else { 5 }, true)?;
         let mut keys = 0;
+        let mut media = 0;
         let expected_iv = playlist_iv(&path, text, format, target, key, hls_key)?;
         for value in &session_keys {
             declaration(
@@ -314,6 +331,9 @@ pub(super) fn fairplay(
         }
         for line in text.lines().map(str::trim) {
             if let Some(value) = line.strip_prefix("#EXT-X-KEY:") {
+                if media != 0 {
+                    return Err(MISMATCH);
+                }
                 declaration(
                     value,
                     uri,
@@ -321,12 +341,17 @@ pub(super) fn fairplay(
                     false,
                 )?;
                 keys += 1;
+            } else if !line.is_empty() && !line.starts_with('#') {
+                if keys != 1 {
+                    return Err(MISMATCH);
+                }
+                media += 1;
             }
             if format == OutputFormat::HlsTs && line.starts_with("#EXT-X-MAP:") {
                 return Err(MISMATCH);
             }
         }
-        if keys != 1 {
+        if keys != 1 || media == 0 {
             return Err(MISMATCH);
         }
     }
@@ -483,6 +508,12 @@ pub(super) fn unrequested(frozen: &super::super::FrozenSource) -> Result<(), Con
             let data = read_bounded(&path)?;
             let text = std::str::from_utf8(&data).map_err(|_| MISMATCH)?;
             let document = roxmltree::Document::parse(text).map_err(|_| MISMATCH)?;
+            if document
+                .descendants()
+                .any(|node| node.is_element() && matches!(node.tag_name().name(), "pssh" | "pro"))
+            {
+                return Err(MISMATCH);
+            }
             for node in document
                 .descendants()
                 .filter(|node| node.is_element() && node.tag_name().name() == "ContentProtection")
