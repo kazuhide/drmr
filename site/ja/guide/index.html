@@ -850,7 +850,7 @@ $result = Join-Path $outDir &#x27;protected.mp4&#x27;
 </code></pre></figure>
 <p>出力の親 <code>drmr-output</code> は先に用意し、<code>protected.mp4</code> 自体は存在しない名前を選びます。マニフェスト内の URI とオブジェクトキーには引き続き <code>/</code> を使います。Windows のネイティブパスとは別です。</p>
 <p>Ctrl+C と Ctrl+Break は協調停止に対応します。子孫の終了・ファイルロックの解放を確認してから終了値 130 を返します。終了確認失敗は成功した停止ではありません。長いパスを含め、外部ツールやファイルシステムの任意の構成での成功を保証するものではありません。</p>
-<p>出力先と一時領域のパスは深くしすぎないでください。セグメントを作成できても、外部ツールがマニフェスト用に作る、より長い一時ファイル名でパス長の制限に達する場合があります。複数出力では、drmr は子出力の作業領域を共通の作業領域と並べて元の出力先の親に作り、余分な階層を避けます。検証済みの子を同じファイルシステム上の非公開の共通領域へ移し、すべての確認後に一括公開します。この方式は一括公開を保ちますが、外部ツール自身のパス長制限をなくすものではありません。</p>
+<p>出力先と一時領域のパスは深くしすぎないでください。セグメントを作成できても、外部ツールがマニフェスト用に作る、より長い一時ファイル名でパス長の制限に達する場合があります。複数出力のうち HLS/DASH 形式では、drmr はメディア出力の作業領域を共通の作業領域と並べて元の出力先の親に作り、余分な階層を避けます。検証済みの HLS/DASH 出力を同じファイルシステム上の非公開の共通領域へ移します。MP4 は従来のファイルコピー用の公開前作業領域を使います。いずれもすべての確認後に一括公開します。この方式は一括公開を保ちますが、外部ツール自身のパス長制限をなくすものではありません。</p>
 <p>参照（英語）: <a href="https://github.com/kazuhide/drmr/blob/main/docs/windows.md">Windows の保護条件</a>。</p>
 </section>
 <section class="guide-chapter" id="web-console" data-guide-chapter="web-console" aria-labelledby="web-console-title"><h2 id="web-console-title">15. ローカル Web コンソール</h2><a class="guide-chapter-switch" href="../../guide/#web-console" lang="en" hreflang="en">English</a>

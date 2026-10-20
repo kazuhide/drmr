@@ -1107,7 +1107,7 @@ $result = Join-Path $outDir 'protected.mp4'
 
 Create `drmr-output` first and choose a nonexistent `protected.mp4`. Manifest URIs and object keys continue to use `/`, unlike native Windows paths. Ctrl+C/Ctrl+Break return 130 only after descendant and file-lock confirmation. Arbitrary filesystem/tool configurations, including long paths, are not guaranteed merely because native Windows CI passes.
 
-Keep output and temporary paths shallow: a media tool can create a longer temporary manifest filename even after its segments were written successfully. For multiple outputs, drmr places each child stage beside the private bundle stage under the original output parent, avoiding extra nesting. Verified children move into the bundle on the same filesystem; only the complete checked bundle is published. This preserves atomic publication but does not remove external tools' path-length limits.
+Keep output and temporary paths shallow: a media tool can create a longer temporary manifest filename even after its segments were written successfully. For HLS and DASH children of a multi-output request, drmr places media-output stages beside the private bundle stage under the original output parent, avoiding extra nesting. Verified HLS/DASH children move into the bundle on the same filesystem; MP4 retains its separate file-copy publication stage. Only the complete checked bundle is published. This preserves atomic publication but does not remove external tools' path-length limits.
 
 See [Windows conditions](https://github.com/kazuhide/drmr/blob/main/docs/windows.md).
 
