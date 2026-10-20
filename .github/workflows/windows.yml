@@ -60,6 +60,13 @@ jobs:
       - name: Check native platform warnings
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
+      - name: Run native manifest lint rules
+        run: |
+          cargo test -p drmr-manifest --locked -- --nocapture 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP/manifest-lint-tests.log"
+          if ($LASTEXITCODE -ne 0) { throw 'Native manifest lint tests failed' }
+          python .github/scripts/check-rust-test-skips.py --scope workspace --log "$env:RUNNER_TEMP/manifest-lint-tests.log"
+          if ($LASTEXITCODE -ne 0) { throw 'Native manifest lint tests were incomplete' }
+
       - name: Check elevated media execution is refused before payload creation
         run: cargo test -p drmr-core --test native media_workspace_checks_default_ownership_before_generating_payloads --locked -- --nocapture
 
@@ -72,6 +79,7 @@ jobs:
         with:
           name: windows-native-results-${{ matrix.rust }}
           path: |
+            ${{ runner.temp }}/manifest-lint-tests.log
             ${{ runner.temp }}/drmr-native-user/bbb-media-report.json
             ${{ runner.temp }}/drmr-native-user/conversion-report.json
             ${{ runner.temp }}/drmr-native-user/stdout.log

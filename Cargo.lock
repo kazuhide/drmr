@@ -1057,6 +1057,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "drmr-manifest"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "roxmltree",
+ "serde",
+ "sha2 0.10.9",
+ "unicode-normalization",
+]
+
+[[package]]
 name = "drmr-server"
 version = "0.1.0"
 dependencies = [
