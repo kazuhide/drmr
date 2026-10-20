@@ -13,6 +13,8 @@ use std::{
 };
 use zeroize::Zeroizing;
 
+mod common;
+
 const DASH: &str = "urn:mpeg:dash:schema:mpd:2011";
 const CENC: &str = "urn:mpeg:cenc:2013";
 const PR: &str = "urn:uuid:9a04f079-9840-4286-ab92-e65be0885f95";
@@ -492,12 +494,18 @@ pub(super) fn valid_fairplay_uri(value: &str) -> bool {
 }
 
 /// An empty DRM selection does not authorize provider records hidden in the output graph.
-pub(super) fn unrequested(frozen: &super::super::FrozenSource) -> Result<(), ConversionError> {
-    unrequested_at(frozen, frozen.entrypoint())
+pub(super) fn unrequested(
+    frozen: &super::super::FrozenSource,
+    target: TargetProtection,
+    key: Option<&OutputKey>,
+) -> Result<(), ConversionError> {
+    unrequested_at(frozen, frozen.entrypoint(), target, key)
 }
 fn unrequested_at(
     frozen: &super::super::FrozenSource,
     entrypoint: &Path,
+    target: TargetProtection,
+    key: Option<&OutputKey>,
 ) -> Result<(), ConversionError> {
     // Match resolver results, including Windows' canonical verbatim prefix, in one namespace.
     let entrypoint = entrypoint.canonicalize().map_err(|_| MISMATCH)?;
@@ -528,7 +536,7 @@ fn unrequested_at(
             encrypted.extend(resources.encrypted);
             pending.extend(resources.playlists);
         } else if path == entrypoint {
-            unrequested_dash(text)?;
+            common::dash(text, target, key)?;
         } else {
             return Err(MISMATCH);
         }
@@ -543,7 +551,7 @@ fn unrequested_at(
             return Err(MISMATCH);
         }
         if !manifests.contains(&path) {
-            no_provider_media(&path, encrypted.contains(&path))?;
+            no_provider_media(&path, encrypted.contains(&path), target, key)?;
         }
     }
     frozen.check_original().map_err(|_| MISMATCH)
@@ -615,23 +623,12 @@ fn unrequested_hls(path: &Path, text: &str) -> Result<HlsResources, ConversionEr
     }
     Ok(resources)
 }
-fn unrequested_dash(text: &str) -> Result<(), ConversionError> {
-    let document = roxmltree::Document::parse(text).map_err(|_| MISMATCH)?;
-    for node in document.descendants().filter(roxmltree::Node::is_element) {
-        if matches!(node.tag_name().name(), "pssh" | "pro") {
-            return Err(MISMATCH);
-        }
-        if node.tag_name().name() == "ContentProtection"
-            && (!node.has_tag_name((DASH, "ContentProtection"))
-                || node.attribute("schemeIdUri") != Some(COMMON)
-                || node.children().any(|child| child.is_element()))
-        {
-            return Err(MISMATCH);
-        }
-    }
-    Ok(())
-}
-fn no_provider_media(path: &Path, whole_encryption: bool) -> Result<(), ConversionError> {
+fn no_provider_media(
+    path: &Path,
+    whole_encryption: bool,
+    target: TargetProtection,
+    key: Option<&OutputKey>,
+) -> Result<(), ConversionError> {
     let mut file = File::open(path).map_err(|_| MISMATCH)?;
     let mut prefix = [0; 3 * 188];
     let length = file.read(&mut prefix).map_err(|_| MISMATCH)?;
@@ -640,7 +637,7 @@ fn no_provider_media(path: &Path, whole_encryption: bool) -> Result<(), Conversi
     // sequence is still checked, including readable boxes before an invalid trailer.
     if whole_encryption {
         return if readable_box_sequence(path)? {
-            no_provider_boxes(path)
+            no_provider_boxes(path, target, key)
         } else {
             Ok(())
         };
@@ -653,7 +650,7 @@ fn no_provider_media(path: &Path, whole_encryption: bool) -> Result<(), Conversi
     {
         return Ok(());
     }
-    no_provider_boxes(path)
+    no_provider_boxes(path, target, key)
 }
 fn readable_box_sequence(path: &Path) -> Result<bool, ConversionError> {
     let mut file = File::open(path).map_err(|_| MISMATCH)?;
@@ -697,7 +694,13 @@ fn readable_box_sequence(path: &Path) -> Result<bool, ConversionError> {
     }
     Ok(count != 0)
 }
-fn no_provider_boxes(path: &Path) -> Result<(), ConversionError> {
+fn no_provider_boxes(
+    path: &Path,
+    target: TargetProtection,
+    key: Option<&OutputKey>,
+) -> Result<(), ConversionError> {
+    let mut common_records = 0;
+    let mut encrypted_tracks = 0;
     let mut file = File::open(path).map_err(|_| MISMATCH)?;
     let length = file.metadata().map_err(|_| MISMATCH)?.len();
     let mut at = 0u64;
@@ -736,8 +739,25 @@ fn no_provider_boxes(path: &Path) -> Result<(), ConversionError> {
                     return Err(MISMATCH);
                 }
                 if node.kind() == *b"pssh" {
-                    let pssh = mp4::Pssh::parse(node.header.payload(&bytes)).ok_or(MISMATCH)?;
-                    if hex::encode(pssh.system_id) != "1077efecc0b24d02ace33c1e52e2fb4b" {
+                    common::payload(node.header.payload(&bytes), common::key(target, key)?)?;
+                    common_records += 1;
+                    if common_records > 1 {
+                        return Err(MISMATCH);
+                    }
+                } else if node.kind() == *b"tenc" {
+                    let expected = common::key(target, key)?;
+                    let track = mp4::Tenc::parse(node.header.payload(&bytes)).ok_or(MISMATCH)?;
+                    if track.default_is_protected != 1 || track.default_kid != expected.0.id {
+                        return Err(MISMATCH);
+                    }
+                    encrypted_tracks += 1;
+                } else if node.kind() == *b"schm" {
+                    common::key(target, key)?;
+                    let scheme = node.header.payload(&bytes);
+                    if scheme.len() != 12
+                        || scheme[..4] != [0; 4]
+                        || scheme.get(4..8) != Some(target.as_str().as_bytes())
+                    {
                         return Err(MISMATCH);
                     }
                 }
@@ -745,6 +765,9 @@ fn no_provider_boxes(path: &Path) -> Result<(), ConversionError> {
         }
         at += size;
         file.seek(SeekFrom::Start(at)).map_err(|_| MISMATCH)?;
+    }
+    if common_records != 0 && encrypted_tracks == 0 {
+        return Err(MISMATCH);
     }
     Ok(())
 }
@@ -779,10 +802,16 @@ mod tests {
         let frozen =
             super::super::super::FrozenSource::capture(&master, &crate::concurrency::Stop::new())
                 .unwrap();
-        unrequested(&frozen).unwrap();
+        unrequested(&frozen, TargetProtection::HlsAes128, None).unwrap();
         let alias = owner.path().join("snapshot-alias");
         std::os::unix::fs::symlink(frozen.entrypoint().parent().unwrap(), &alias).unwrap();
-        unrequested_at(&frozen, &alias.join(&frozen.inventory().entrypoint)).unwrap();
+        unrequested_at(
+            &frozen,
+            &alias.join(&frozen.inventory().entrypoint),
+            TargetProtection::HlsAes128,
+            None,
+        )
+        .unwrap();
         frozen.check_original().unwrap();
     }
 

@@ -178,7 +178,7 @@ pub enum BudgetError {
     Insufficient,
 }
 
-fn capacity(hardware: Hardware, tracks: usize) -> (usize, u64) {
+pub(crate) fn capacity(hardware: Hardware, tracks: usize) -> (usize, u64) {
     let cpus = hardware.effective_cpus.max(1);
     let cpu_tokens = if hardware.available_memory_bytes.is_none() {
         1

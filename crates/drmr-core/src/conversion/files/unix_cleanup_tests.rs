@@ -37,6 +37,46 @@ fn an_unpublished_guard_cleans_unchanged_constructor_failure() {
 }
 
 #[test]
+fn a_published_guard_removes_only_its_empty_container() {
+    let root = tempfile::tempdir().unwrap();
+    let stage = UnpublishedStage::new(Some(root.path())).unwrap();
+    let outer = stage.private_root().to_owned();
+    let result = root.path().join("result");
+    std::fs::write(stage.path().join("owned"), b"published bytes").unwrap();
+    std::fs::rename(stage.path(), &result).unwrap();
+
+    stage.finish_publication();
+
+    assert!(!outer.exists());
+    assert_eq!(
+        std::fs::read(result.join("owned")).unwrap(),
+        b"published bytes"
+    );
+}
+
+#[test]
+fn a_published_guard_retains_a_nonempty_container_without_walking_it() {
+    let root = tempfile::tempdir().unwrap();
+    let stage = UnpublishedStage::new(Some(root.path())).unwrap();
+    let outer = stage.private_root().to_owned();
+    let result = root.path().join("result");
+    std::fs::write(stage.path().join("owned"), b"published bytes").unwrap();
+    std::fs::rename(stage.path(), &result).unwrap();
+    std::fs::write(outer.join("foreign"), b"retained postcommit bytes").unwrap();
+
+    stage.finish_publication();
+
+    assert_eq!(
+        std::fs::read(result.join("owned")).unwrap(),
+        b"published bytes"
+    );
+    assert_eq!(
+        std::fs::read(outer.join("foreign")).unwrap(),
+        b"retained postcommit bytes"
+    );
+}
+
+#[test]
 fn an_unpublished_helper_can_preserve_a_replaced_payload_root() {
     let root = tempfile::tempdir().unwrap();
     let mut stage = Stage::new(Some(root.path())).unwrap();

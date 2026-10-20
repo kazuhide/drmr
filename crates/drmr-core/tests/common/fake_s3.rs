@@ -41,6 +41,10 @@ pub enum Fault {
     Delay(Duration),
     /// Answer with this listing page instead (raw XML).
     Xml(String),
+    /// Write an exact HTTP response, including its status and headers.
+    Raw(Vec<u8>),
+    /// Send one byte at a time, pausing before every byte.
+    SlowBody { pause: Duration, body: Vec<u8> },
 }
 
 type Hook = Box<dyn Fn(&Logged) -> Option<Fault> + Send>;
@@ -278,6 +282,25 @@ fn serve(mut stream: TcpStream, state: &Mutex<State>) {
         Some(Fault::Delay(pause)) => std::thread::sleep(pause),
         Some(Fault::Xml(xml)) => {
             respond(&mut stream, 200, &[], xml.as_bytes(), head_only);
+            return;
+        }
+        Some(Fault::Raw(response)) => {
+            let _ = stream.write_all(&response);
+            return;
+        }
+        Some(Fault::SlowBody { pause, body }) => {
+            let header = format!(
+                "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: {}\r\n\r\n",
+                body.len()
+            );
+            let _ = stream.write_all(header.as_bytes());
+            for byte in body {
+                std::thread::sleep(pause);
+                if stream.write_all(&[byte]).is_err() {
+                    break;
+                }
+                let _ = stream.flush();
+            }
             return;
         }
         None => {}

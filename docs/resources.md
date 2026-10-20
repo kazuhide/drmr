@@ -41,6 +41,68 @@ Structured `resource-budget` records show chosen workers, child thread allocatio
 CPU tokens, estimated memory tokens, and whether memory came from the host, the process
 control group, or the unknown fallback. They contain no source paths or machine IDs.
 
+## Native manifest work
+
+HLS and DASH manifest linting uses the same process capacity as media work.
+The adapter inventories manifest files before reserving memory for their retained
+bytes and the lint call. It checks the loaded bytes against that inventory and
+checks file identities and contents again before accepting the result.
+
+The library runs small inputs inline. Larger calls use one bounded pool: multiple
+documents can be parsed independently, while a single large DASH document shares
+one parsed tree across its independent checks. These pools do not nest. HLS graph
+checks reuse parsed child summaries; DASH checks reuse inherited templates and
+timelines. DASH timeline repetition is checked with arithmetic, rather than
+expanded into individual segments.
+
+`--max-workers` remains an upper bound for native work, including
+`verify --manifest-only`. The selected count also depends on input work, available
+CPU capacity and the conservative memory estimate. Byte, node, depth, reference
+and diagnostic limits bound work on untrusted manifests. An exhausted limit is
+reported as incomplete work, rather than a passing check or an assertion that the
+document violates the format specification. The allocation estimate is not a
+measurement of process resident memory or an operating-system memory cap.
+
+### Measured native manifest calls
+
+A synthetic library measurement on 2026-10-21 used source
+[`c1458e7d`](https://github.com/kazuhide/drmr/commit/c1458e7deea5b31118073c682d799f60c8f4e8b5), a macOS ARM64 host with 10 logical CPUs and 32 GiB of memory,
+and a Rust 1.99 release build. One master and 64 media playlists, each containing
+1,000 segments, supplied 1,924,687 manifest bytes. Whole lint calls took
+14.50 ms with one worker and 3.37 ms with automatic selection of 10 workers.
+These are medians of three rotating-order process medians, with input construction
+outside the timed call. Small inputs stayed inline. A 30,000-entry DASH timeline
+took 5.22 ms serially and 5.27 ms automatically: parallelism does not
+accelerate every input.
+
+All 144 timing runs across 12 workloads compared the complete report with serial
+execution, allowing only `workers_used` to differ. Another 24 runs measured
+allocations separately. For the 64-playlist automatic case, the peak additional
+live requested allocation was 885,302 bytes; a separate operating-system process
+peak was 8,142,848 bytes. The input buffers, allocator overhead and process state
+make those different measurements. A conservative admission estimate is neither
+number. Our media tests were paused for this measurement; other host processes
+were not isolated. These observations describe library checks, not conversion
+throughput or a performance guarantee on another machine.
+
+The DASH profile-URI scanner uses a fixed immutable state graph and fixed-size
+working sets, rather than allocating a graph or backtracking over the input.
+The graph occupies 57,360 bytes and the two explicit state-set arrays total
+128 bytes; these are not a total stack or resident-memory claim. Direct allocation
+controls, including first use and long valid and invalid values, observed no
+runtime scanner heap allocations. Parser, report and graph allocations remain
+part of the library's resource accounting.
+
+## S3 transfer timeouts
+
+The Rust S3 storage backend's `TransferPolicy.per_object_timeout_s` defaults to
+30 seconds. After name resolution, each connection has one cumulative budget for
+TCP setup and the TLS handshake, which establishes an authenticated encrypted
+connection. Receiving partial handshake bytes does not restart that budget.
+Once connected, the same value limits idle periods in socket reads and writes;
+a transfer that keeps making progress can take longer than this value. Retry
+counts and object byte budgets apply separately.
+
 ## Output and pending work
 
 Captured stdout defaults to 16 MiB and stderr to 1 MiB, independently. Rust callers can

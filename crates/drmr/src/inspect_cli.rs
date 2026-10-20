@@ -23,8 +23,8 @@ pub struct PlanArgs {
     /// Keep the original read-only catalog rendition listing.
     #[arg(long, required_unless_present = "input")]
     pub mpd: Option<PathBuf>,
-    /// Output protection: clear, cenc, cbcs, hls-aes128, or hls-sample-aes. Required with INPUT.
-    #[arg(long, requires = "input")]
+    /// Output protection for one result; use --outputs for several results.
+    #[arg(long, requires = "input", required_unless_present_any = ["outputs", "mpd"], conflicts_with = "outputs")]
     pub to: Option<TargetProtection>,
     /// Output packaging: mp4, dash, hls, hls-ts, or a comma-separated list.
     #[arg(long, value_delimiter = ',', requires = "input")]
@@ -32,9 +32,12 @@ pub struct PlanArgs {
     /// Print the versioned JSON plan without executing any conversion.
     #[arg(long, requires = "input")]
     pub json: bool,
-    /// New private execution-plan file; requires one output format and --output.
-    #[arg(long, requires_all = ["input", "to", "output"], conflicts_with = "mpd")]
+    /// New private execution-plan file; requires --output and one intent or --outputs.
+    #[arg(long, requires_all = ["input", "output"], conflicts_with = "mpd")]
     pub save: Option<PathBuf>,
+    /// JSON output list, with each result's format, protection, DRM systems and manifest checks.
+    #[arg(long, requires = "save", conflicts_with_all = ["to", "format", "mpd"])]
+    pub outputs: Option<PathBuf>,
     /// New result file or directory recorded in the saved execution plan.
     #[arg(long, requires = "save")]
     pub output: Option<PathBuf>,

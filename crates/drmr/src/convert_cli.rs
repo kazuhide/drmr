@@ -18,11 +18,11 @@ use std::sync::Arc;
 
 #[derive(Args)]
 pub struct ConvertArgs {
-    /// Local source media or a completed clear HLS URL. The source is never overwritten.
+    /// Local source media or a completed supported HLS URL. The source is never overwritten.
     #[arg(required_unless_present = "plan", conflicts_with = "plan")]
     pub input: Option<PathBuf>,
     /// Execute the exact source and media intent in a saved plan; keys stay separate.
-    #[arg(long, conflicts_with_all = ["input", "download_dir", "fetch_policy", "to", "format", "output"])]
+    #[arg(long, conflicts_with_all = ["input", "download_dir", "fetch_policy", "to", "format", "output", "outputs"])]
     pub plan: Option<PathBuf>,
     /// New directory retaining the original input; required for URL input.
     #[arg(long)]
@@ -31,11 +31,14 @@ pub struct ConvertArgs {
     #[arg(long)]
     pub fetch_policy: Option<PathBuf>,
     /// Target protection: clear, cenc, cbcs, hls-aes128, or hls-sample-aes.
-    #[arg(long, required_unless_present = "plan")]
+    #[arg(long, required_unless_present_any = ["plan", "outputs"], conflicts_with = "outputs")]
     pub to: Option<TargetProtection>,
     /// Output format: mp4, dash, hls (fragmented MP4), or hls-ts.
     #[arg(long)]
     pub format: Option<OutputFormat>,
+    /// JSON output list; publish all verified results together in one new directory.
+    #[arg(long, conflicts_with_all = ["plan", "to", "format"])]
+    pub outputs: Option<PathBuf>,
     /// A new output file or directory; existing destinations are refused.
     #[arg(long, required_unless_present = "plan")]
     pub output: Option<PathBuf>,
@@ -48,6 +51,12 @@ pub struct ConvertArgs {
     /// Upper bound for simultaneous media work (1-64); default adapts to CPU and memory.
     #[arg(long, value_parser = clap::value_parser!(u8).range(1..=64))]
     pub max_workers: Option<u8>,
+    /// Apple mediastreamvalidator executable for requested final HLS manifest checks.
+    #[arg(long, default_value = "mediastreamvalidator")]
+    pub hls_validator_bin: String,
+    /// PHP executable for requested local DASH-IF manifest checks.
+    #[arg(long, default_value = "php")]
+    pub dash_validator_bin: String,
     /// Print the versioned result as one JSON object.
     #[arg(long)]
     pub json: bool,
@@ -64,8 +73,10 @@ pub struct VerifyArgs {
     /// Verify saved-plan source fingerprints, output intent, and complete media correspondence.
     #[arg(long, conflicts_with_all = ["output", "source"])]
     pub plan: Option<PathBuf>,
+    #[command(flatten)]
+    pub manifest: ManifestArgs,
     /// Original source media. Required to verify content correspondence.
-    #[arg(long, required_unless_present = "plan")]
+    #[arg(long, required_unless_present_any = ["plan", "manifest_only"])]
     pub source: Option<PathBuf>,
     /// Protected JSON configuration: input keys for source, output keys for result.
     #[arg(long)]
@@ -73,7 +84,7 @@ pub struct VerifyArgs {
     /// Shaka Packager executable, selected by the operator.
     #[arg(long, default_value = "packager")]
     pub packager_bin: String,
-    /// Upper bound for simultaneous media work (1-64); default adapts to CPU and memory.
+    /// Upper bound for simultaneous media or native manifest work (1-64); default adapts to CPU and memory.
     #[arg(long, value_parser = clap::value_parser!(u8).range(1..=64))]
     pub max_workers: Option<u8>,
     /// Print the versioned verification result as one JSON object.
@@ -84,8 +95,34 @@ pub struct VerifyArgs {
     pub measure: bool,
 }
 
+#[derive(Args)]
+pub struct ManifestArgs {
+    /// Check final HLS/DASH manifests with native rules, without reading media or keys.
+    #[arg(long, conflicts_with_all = ["plan", "source", "keys_file"])]
+    pub manifest_only: bool,
+    /// Add the selected external validator to native manifest-only checks.
+    #[arg(long, requires = "manifest_only", conflicts_with_all = ["source", "keys_file", "plan"])]
+    pub external_validator: bool,
+    /// Native manifest profile (default: base); apple-vod adds HLS authoring-guide rules.
+    #[arg(long, value_enum, requires = "manifest_only", conflicts_with_all = ["source", "keys_file", "plan"])]
+    pub manifest_profile: Option<drmr_core::conversion::manifest_lint::ManifestProfile>,
+    /// External HLS executable; defaults to mediastreamvalidator when requested.
+    #[arg(long)]
+    pub hls_validator_bin: Option<String>,
+    /// External DASH PHP executable; defaults to php when requested.
+    #[arg(long)]
+    pub dash_validator_bin: Option<String>,
+}
+
 pub(crate) fn load(path: Option<&PathBuf>) -> Result<OperatorKeys, ConversionError> {
     path.map_or_else(|| Ok(OperatorKeys::default()), |path| key_file::read(path))
+}
+
+pub(crate) fn load_source(path: Option<&PathBuf>) -> Result<OperatorKeys, ConversionError> {
+    path.map_or_else(
+        || Ok(OperatorKeys::default()),
+        |path| key_file::read_source(path),
+    )
 }
 
 pub(crate) fn converter(
@@ -102,11 +139,26 @@ pub(crate) fn converter(
         .expect("clap validates the worker upper bound")
 }
 
+fn manifest_error_hint(code: &str) -> Option<&'static str> {
+    match code {
+        "external-validator-required" => Some(
+            "Use --external-validator with --manifest-only to request an external engine; executable paths only configure that request.",
+        ),
+        "manifest-lint-profile-unsupported" => Some(
+            "Use --manifest-profile base for DASH. The apple-vod profile applies only to HLS manifest-only checks.",
+        ),
+        "native-manifest-lint-failed" => Some(
+            "Review native_manifest diagnostics and incomplete coverage. Native checks establish only their named manifest scope; media and external checks remain separate.",
+        ),
+        _ => None,
+    }
+}
+
 fn error_hint(code: &str) -> Option<&'static str> {
     match code {
-        "key-file-invalid" => {
-            Some("Use a schema-version-1, owner-only regular JSON file with valid keys.")
-        }
+        "key-file-invalid" => Some(
+            "Use an owner-only regular JSON file: schema version 1 for one output, or version 2 for named outputs.",
+        ),
         "cancelled" => Some(
             "Check the destination and job status before retrying; cancellation is not a media verification result.",
         ),
@@ -120,7 +172,7 @@ fn error_hint(code: &str) -> Option<&'static str> {
             "Cleanup is unconfirmed. Resolve the owned process failure before retrying; no verified result is established.",
         ),
         "output-signaling-profile-not-supported" => Some(
-            "Explicit PlayReady signaling requires CBCS DASH from a qualified clear MP4 without existing or unknown initialization metadata. See docs/conversion-support.md.",
+            "Use the documented input, output and DRM-signaling combination. Unsupported existing or unknown metadata is refused. See docs/conversion-support.md.",
         ),
         "download-directory-required" => Some(
             "URL input requires --download-dir pointing to a new directory under an existing parent.",
@@ -144,7 +196,7 @@ fn error_hint(code: &str) -> Option<&'static str> {
             "Check network access, allowed origins, authentication, and fetch limits in --fetch-policy.",
         ),
         "download-source-not-supported" => Some(
-            "URL input requires completed clear HLS with supported TS or fragmented MP4 media. See docs/conversion-support.md.",
+            "URL input requires completed HLS with supported TS or fragmented MP4 media and encryption declarations. Supply input keys separately; key and license URIs are never fetched. See docs/conversion-support.md.",
         ),
         "download-source-changed" => Some(
             "The retained source changed or became unavailable. Inspect it and choose a new download directory before retrying the URL.",
@@ -166,7 +218,7 @@ fn error_hint(code: &str) -> Option<&'static str> {
         ),
         "output-key-required" => Some("Provide output.kid and output.key in --keys-file."),
         "output-key-role-mismatch" => Some(
-            "For cenc/cbcs, provide output.kid and output.key; for HLS AES-128, omit the KID and provide output.key plus output.hls_key_uri. For clear output, omit output.",
+            "For cenc/cbcs, provide output.kid and output.key. For HLS AES-128 or SAMPLE-AES, omit the KID and provide output.key plus output.hls_key_uri; SAMPLE-AES also needs output.iv. For clear output, omit output.",
         ),
         "hls-key-uri-required" => {
             Some("Provide output.hls_key_uri for CBCS HLS playlist signaling.")
@@ -193,7 +245,9 @@ fn error_hint(code: &str) -> Option<&'static str> {
         "packet-timing-unavailable" => Some(
             "Use an FFmpeg build that supplies complete packet timestamps and durations. See docs/media-processing.md.",
         ),
-        _ => crate::plan_cli::error_hint(code),
+        _ => manifest_error_hint(code)
+            .or_else(|| crate::bundle_cli::error_hint(code))
+            .or_else(|| crate::plan_cli::error_hint(code)),
     }
 }
 
@@ -232,6 +286,8 @@ pub(crate) fn error(
         if matches!(
             error.0,
             "key-file-invalid"
+                | "external-validator-required"
+                | "manifest-lint-profile-unsupported"
                 | "execution-plan-invalid"
                 | "execution-plan-exists"
                 | "execution-plan-destination-unsafe"
@@ -257,6 +313,9 @@ pub(crate) fn error(
                 | "single-track-mp4-required"
                 | "input-protection-not-supported"
                 | "output-signaling-profile-not-supported"
+                | "output-spec-invalid"
+                | "execution-plan-output-keys-mismatch"
+                | "execution-plan-drm-mismatch"
         ) {
             2
         } else {
@@ -264,9 +323,9 @@ pub(crate) fn error(
         }
     }))
 }
-struct ConfigurationError {
-    cause: ConversionError,
-    exit: Option<u8>,
+pub(crate) struct ConfigurationError {
+    pub(crate) cause: ConversionError,
+    pub(crate) exit: Option<u8>,
 }
 impl From<ConversionError> for ConfigurationError {
     fn from(cause: ConversionError) -> Self {
@@ -280,7 +339,7 @@ pub(crate) fn json(value: &serde_json::Value) -> std::io::Result<()> {
     writeln!(out)
 }
 
-fn configured_download(
+pub(crate) fn configured_download(
     args: &ConvertArgs,
     input: &crate::download_cli::Input,
 ) -> Result<Option<drmr_core::source::FetchPolicy>, ConfigurationError> {
@@ -440,6 +499,9 @@ pub fn convert(args: &ConvertArgs) -> ExitCode {
     if let Some(path) = &args.plan {
         return crate::plan_cli::convert(args, path);
     }
+    if args.outputs.is_some() {
+        return crate::bundle_cli::convert_direct(args);
+    }
     let progress = Arc::new(Progress::new(!args.json));
     progress.mark("configuration");
     let input = match crate::download_cli::Input::parse(
@@ -530,6 +592,9 @@ pub fn convert(args: &ConvertArgs) -> ExitCode {
 }
 
 pub fn verify(args: &VerifyArgs) -> ExitCode {
+    if args.manifest.manifest_only {
+        return crate::bundle_cli::verify_manifest(args);
+    }
     if let Some(path) = &args.plan {
         return crate::plan_cli::verify(args, path);
     }
@@ -548,14 +613,6 @@ pub fn verify(args: &VerifyArgs) -> ExitCode {
         Ok(keys) => keys,
         Err(cause) => return error("verify", cause, args.json, &progress, None),
     };
-    let output_keys = match keys.output_verification_keys() {
-        Ok(keys) => keys,
-        Err(cause) => return error("verify", cause, args.json, &progress, None),
-    };
-    let output_hls_keys = match keys.output_hls_verification_keys() {
-        Ok(keys) => keys,
-        Err(cause) => return error("verify", cause, args.json, &progress, None),
-    };
     progress.mark("input-preparation");
     let converter = converter(
         &args.packager_bin,
@@ -563,26 +620,8 @@ pub fn verify(args: &VerifyArgs) -> ExitCode {
         progress.clone(),
         cancellation.stop.clone(),
     );
-    let execute = |command: &Converter| {
-        command.verify(VerificationRequest {
-            source: VerificationSource {
-                input: args
-                    .source
-                    .as_deref()
-                    .expect("clap requires a direct source"),
-                input_keys: &keys.input,
-                hls_keys: &keys.hls_input,
-            },
-            output: VerificationSource {
-                input: args
-                    .output
-                    .as_deref()
-                    .expect("clap requires a direct output"),
-                input_keys: &output_keys,
-                hls_keys: &output_hls_keys,
-            },
-        })
-    };
+    let execute =
+        |command: &Converter| verify_current_output(command, args, &keys, &cancellation.stop);
     let (result, measurement) = if args.measure {
         let (result, measurement) = converter.measure(execute);
         (result, Some(measurement))
@@ -604,6 +643,67 @@ pub fn verify(args: &VerifyArgs) -> ExitCode {
     }
     progress.finish();
     verification_result(&report, args.json, measurement, &progress)
+}
+
+fn verify_current_output(
+    command: &Converter,
+    args: &VerifyArgs,
+    keys: &OperatorKeys,
+    stop: &drmr_core::concurrency::Stop,
+) -> Result<VerificationReport, ConversionError> {
+    let output_keys = keys.output_verification_keys()?;
+    let output_hls_keys = keys.output_hls_verification_keys()?;
+    let output = args
+        .output
+        .as_deref()
+        .expect("clap requires a direct output");
+    let frozen = keys
+        .signaling
+        .as_ref()
+        .map(|_| drmr_core::conversion::FrozenSource::capture(output, stop))
+        .transpose()?;
+    let checked_output = frozen
+        .as_ref()
+        .map_or(output, drmr_core::conversion::FrozenSource::entrypoint);
+    let report = command.verify(VerificationRequest {
+        source: VerificationSource {
+            input: args
+                .source
+                .as_deref()
+                .expect("clap requires a direct source"),
+            input_keys: &keys.input,
+            hls_keys: &keys.hls_input,
+        },
+        output: VerificationSource {
+            input: checked_output,
+            input_keys: &output_keys,
+            hls_keys: &output_hls_keys,
+        },
+    })?;
+    if let Some(frozen) = &frozen {
+        let format = if keys.hls_output.is_some() {
+            OutputFormat::HlsTs
+        } else {
+            inspection::inspect(checked_output)
+                .map_err(|_| ConversionError("invalid-input-media"))?
+                .format
+                .into()
+        };
+        let target = if format == OutputFormat::HlsTs {
+            TargetProtection::HlsSampleAes
+        } else {
+            TargetProtection::Cbcs
+        };
+        command.verify_output_signaling(checked_output, format, target, keys)?;
+        frozen.check_original().map_err(|cause| {
+            if cause.0 == "cancelled" {
+                cause
+            } else {
+                ConversionError("verification-output-changed")
+            }
+        })?;
+    }
+    Ok(report)
 }
 
 fn verification_result(

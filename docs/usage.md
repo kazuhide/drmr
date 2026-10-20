@@ -2,6 +2,11 @@
 
 The examples below assume `drmr` is installed and the external tools are on `PATH`. The [Docker guide](docker.md) provides an alternative with those tools included. Run `drmr doctor` first. Commands process existing media; they do not encode new video qualities. For PowerShell examples and Windows file permissions, see the [Windows guide](windows.md).
 
+Use the [multiple-output workflow](multiple-outputs.md) to produce HLS for FairPlay
+and CBCS DASH for Widevine/PlayReady from one qualified source. It uses the same
+`plan`, `convert`, and `verify` commands, with explicit per-output formats, DRM
+information, native manifest linting, and optional [external manifest checks](manifest-validation.md).
+
 ## Choose a workflow
 
 For qualified local MP4, DASH, or HLS media, start with the common commands:
@@ -59,7 +64,7 @@ drmr convert source.mpd --to hls-aes128 --format hls --output protected-hls --ke
 drmr verify protected-dash/manifest.mpd --source source.mpd --keys-file keys.json --json
 ```
 
-`convert` detects local MP4, DASH, and HLS inputs. It also accepts the completed clear HLS URLs described below. Choose one output format per invocation; omitting `--format` retains the input format. The output path is a new MP4 file or a new DASH/HLS directory. Existing destinations are refused. Input media is read into a private working area, and output is published only after content and timing checks pass. Nothing is re-encoded.
+`convert` detects local MP4, DASH, and HLS inputs. It also accepts the supported completed HLS URLs described below. For one output, choose `--to` and `--format`; omitting `--format` retains the input format. Use `--outputs FILE` for several named outputs. The output path is a new MP4 file or a new result directory. Existing destinations are refused. Input media is read into a private working area, and output is published only after content and timing checks pass. Nothing is re-encoded.
 
 `clear`, `cenc`, and `cbcs` can be written to DASH; `clear` and `cbcs` can be written to fragmented MP4 HLS. HLS `AES-128` encrypts complete HLS resources and requires `--format hls` or `hls-ts`. `hls-ts` also supports clear and SAMPLE-AES output from qualified local TS inputs. A single-track MP4 can also be written as `clear`, `cenc`, or `cbcs`.
 
@@ -73,7 +78,7 @@ For an operational failure after a valid `convert` or `verify` command with `--j
 
 ### Convert a URL
 
-For a completed clear HLS source, pass its URL directly to `convert` and choose
+For a supported completed HLS source, pass its URL directly to `convert` and choose
 where to retain the downloaded source:
 
 ```sh
@@ -88,8 +93,10 @@ replaced or silently reused. Local input needs neither `--download-dir` nor
 The command downloads the original playlists and resources, creates
 `source/input.m3u8` with local references, then converts and verifies the media
 against that saved source. Original playlist bytes remain separate; the local
-playlists change only resource references. No separate analysis or snapshot
-command is required.
+playlists localize media references and resolve relative key identifiers against
+the effective remote playlist address. Encrypted media and initialization bytes
+are retained without decryption during acquisition. No separate snapshot command
+is required.
 
 A completed download remains available even if conversion fails. Once the source
 is saved, the server is no longer needed. Retry with its local entrypoint, or
@@ -105,11 +112,22 @@ and media work before cleanup; a completed source is retained. Downloaded source
 files are private to their owner. Result media is published only after content,
 timing, and saved-source integrity checks pass.
 
-The initial URL profile covers clear, completed HLS with supported MPEG-TS or
-fragmented MP4 media. Existing local-media restrictions still apply. Remote DASH,
-standalone MP4, encrypted input, live playlists, and byte ranges are outside this
-URL profile; this is an implementation limit, not a limitation of those formats.
-No playlist key URI is retrieved.
+The URL profile covers supported completed HLS with clear, AES-128, or
+sample-encrypted media. The [input table](conversion-support.md#url-input) states
+the qualified container and encryption combinations. The same local codec,
+track, encryption, and timing restrictions still apply. Remote DASH, standalone
+MP4, live playlists, and byte ranges remain outside this acquisition profile.
+
+Supply known input keys through `--keys-file` for `analyze`, source checks when
+saving a plan, conversion, and independent verification. For AES-128 and
+SAMPLE-AES TS, `input.hls_keys[].uri` must exactly match the resolved absolute key
+identifier. For example, `keys/key.bin` in
+`https://example.com/vod/media.m3u8` becomes
+`https://example.com/vod/keys/key.bin`. Resolution uses the final playlist address
+after redirects, so the same relative name in different directories can select
+different keys. An absolute `skd:` identifier remains an identifier. For
+sample-encrypted fMP4, provide the existing KID-to-key mappings in `input.keys`.
+No key URI or license endpoint is fetched.
 
 #### Optional fetch settings
 
@@ -256,7 +274,7 @@ configuration also lets verification read a playlist that omits an explicit IV.
 
 The advertised HLS URI is written to output playlists, so choose a location suitable for publication. AES-128 output uses fresh per-resource IVs; SAMPLE-AES output uses the explicit associated IV supplied by you. drmr never publishes a key file. Input key URI mappings, raw keys, and initialization vectors are excluded from reports and diagnostics. The external packager accepts raw keys in child-process arguments; an operating-system process inspector with sufficient access can observe them.
 
-On macOS/Linux, use `chmod 600 keys.json`. Unknown fields, duplicate fields, unsupported schema versions, oversized configurations, links, and permissions readable by other users are refused. Legacy commands below retain their existing configuration interfaces.
+On macOS/Linux, use `chmod 600 keys.json`. Unknown fields, duplicate fields, unsupported schema versions, oversized configurations, links, and permissions readable by other users are refused. Multiple-output conversions use a schema-version-2 key file with shared `input` and output-ID-keyed `outputs`; see [multiple outputs](multiple-outputs.md). Legacy commands below retain their existing configuration interfaces.
 
 ## List a prepared DASH asset
 
@@ -356,6 +374,11 @@ drmr recognizes this platform difference. See [Windows socket errors](https://le
 Analysis supports only clear, completed on-demand presentations. Encrypted playlists, live input, discontinuities, unsupported tracks, and unsupported subtitle profiles are rejected.
 
 ## Package the HLS snapshot
+
+This is a legacy snapshot workflow that writes both DASH and HLS manifests.
+For new work, use [the common multiple-output commands](multiple-outputs.md).
+The existing command and its saved snapshot format remain available for
+compatibility.
 
 Save DRM signaling in `drm.json` using the values issued for your content. This template contains placeholders and is not ready to run:
 

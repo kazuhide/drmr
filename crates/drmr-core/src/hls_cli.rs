@@ -407,9 +407,9 @@ pub fn py_isspace(c: char) -> bool {
 // ------------------------------------------------------------------------------------------
 
 /// `analyze-hls`'s help line (`register_hls_commands`).
-pub const ANALYZE_ABOUT: &str = "Save and inspect an unencrypted, on-demand HLS stream";
+pub const ANALYZE_ABOUT: &str = "Legacy: save and inspect a clear on-demand HLS snapshot";
 /// `package-hls`'s help line.
-pub const PACKAGE_ABOUT: &str = "package clear HLS for Widevine, PlayReady and FairPlay";
+pub const PACKAGE_ABOUT: &str = "Legacy snapshot packaging for DASH and HLS";
 /// `--max-workers`' help text.
 pub const MAX_WORKERS_HELP: &str = "segments packaged at once across all tracks, 1-64 (default: \
                                     the CPUs the process may run on, at most 32; 1 = one at a \

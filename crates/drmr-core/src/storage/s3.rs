@@ -23,6 +23,8 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+mod transport;
+
 /// The only region the batch may use (the configured regional transfer boundary).
 pub const REGION: &str = "ap-northeast-1";
 /// How long a presigned request stays valid; requests are sent as soon as they are signed.
@@ -87,6 +89,8 @@ struct Client {
     bucket: Bucket,
     credentials: Option<Credentials>,
 }
+
+type Response = ureq::http::Response<ureq::Body>;
 
 /// What one request attempt ended with, as `_call` tells botocore's exceptions apart.
 enum CallError {
@@ -230,7 +234,7 @@ impl S3StorageBackend {
             let declared = content_length(&response);
             let mut temporary = transfer_file(parent).map_err(|_| CallError::Other)?;
             let used = stream_body(
-                response.into_reader(),
+                response.into_body().into_reader(),
                 temporary.as_file_mut(),
                 self.policy.object_cap(),
             )?;
@@ -407,12 +411,7 @@ impl Client {
             None => credentials().ok()?,
         };
         let timeout = Duration::try_from_secs_f64(policy.per_object_timeout_s).ok()?;
-        let agent = ureq::AgentBuilder::new()
-            .timeout_connect(timeout)
-            .timeout_read(timeout)
-            .timeout_write(timeout)
-            .redirects(0)
-            .build();
+        let agent = transport::agent(timeout);
         Some(Client {
             agent,
             bucket,
@@ -428,9 +427,10 @@ impl Client {
     fn bucket_location(&self) -> Result<Option<String>, CallError> {
         let mut action = self.bucket.get_object(Some(self.signed()?), "");
         action.query_mut().insert("location", "");
-        let response = send(
-            self.agent.get(action.sign(SIGNATURE_LIFETIME).as_str()),
-            None,
+        let response = checked_response(
+            self.agent
+                .get(action.sign(SIGNATURE_LIFETIME).as_str())
+                .call(),
         )?;
         let text = read_text(response, MAX_XML_BODY)?;
         let document = roxmltree::Document::parse(&text).map_err(|_| CallError::Other)?;
@@ -443,18 +443,20 @@ impl Client {
 
     fn head(&self, key: &str) -> Result<u64, CallError> {
         let action = self.bucket.head_object(Some(self.signed()?), key);
-        let response = send(
-            self.agent.head(action.sign(SIGNATURE_LIFETIME).as_str()),
-            None,
+        let response = checked_response(
+            self.agent
+                .head(action.sign(SIGNATURE_LIFETIME).as_str())
+                .call(),
         )?;
         content_length(&response).ok_or(CallError::Other)
     }
 
-    fn get(&self, key: &str) -> Result<ureq::Response, CallError> {
+    fn get(&self, key: &str) -> Result<Response, CallError> {
         let action = self.bucket.get_object(Some(self.signed()?), key);
-        send(
-            self.agent.get(action.sign(SIGNATURE_LIFETIME).as_str()),
-            None,
+        checked_response(
+            self.agent
+                .get(action.sign(SIGNATURE_LIFETIME).as_str())
+                .call(),
         )
     }
 
@@ -463,8 +465,8 @@ impl Client {
         let request = self
             .agent
             .put(action.sign(SIGNATURE_LIFETIME).as_str())
-            .set("Content-Length", &length.to_string());
-        send(request, Some(Body::File(file))).map(|_| ())
+            .header("Content-Length", length.to_string());
+        checked_response(request.send(file)).map(|_| ())
     }
 
     fn list(
@@ -479,9 +481,10 @@ impl Client {
         if let Some(token) = token {
             action.with_continuation_token(token);
         }
-        let response = send(
-            self.agent.get(action.sign(SIGNATURE_LIFETIME).as_str()),
-            None,
+        let response = checked_response(
+            self.agent
+                .get(action.sign(SIGNATURE_LIFETIME).as_str())
+                .call(),
         )?;
         let text = read_text(response, MAX_XML_BODY)?;
         parse_list(&text).ok_or(CallError::Other)
@@ -501,9 +504,9 @@ impl Client {
         let request = self
             .agent
             .post(url.as_str())
-            .set("Content-MD5", &md5)
-            .set("Content-Type", "application/xml");
-        let response = send(request, Some(Body::Text(body)))?;
+            .header("Content-MD5", &md5)
+            .header("Content-Type", "application/xml");
+        let response = checked_response(request.send(body.as_str()))?;
         let text = read_text(response, MAX_XML_BODY)?;
         let document = roxmltree::Document::parse(&text).map_err(|_| CallError::Other)?;
         Ok(document
@@ -513,27 +516,17 @@ impl Client {
     }
 }
 
-enum Body {
-    File(File),
-    Text(String),
-}
-
 /// Send a request; a status of 300 or more is an error response (botocore's `ClientError`).
-fn send(request: ureq::Request, body: Option<Body>) -> Result<ureq::Response, CallError> {
-    let result = match body {
-        None => request.call(),
-        Some(Body::File(file)) => request.send(file),
-        Some(Body::Text(text)) => request.send_string(&text),
-    };
+fn checked_response(result: Result<Response, ureq::Error>) -> Result<Response, CallError> {
     match result {
-        Ok(response) if response.status() < 300 => Ok(response),
-        Ok(response) | Err(ureq::Error::Status(_, response)) => Err(status_error(response)),
-        Err(ureq::Error::Transport(transport)) => Err(transport_error(&transport)),
+        Ok(response) if response.status().as_u16() < 300 => Ok(response),
+        Ok(response) => Err(status_error(response)),
+        Err(error) => Err(transport_error(&error)),
     }
 }
 
-fn status_error(response: ureq::Response) -> CallError {
-    let status = response.status();
+fn status_error(response: Response) -> CallError {
+    let status = response.status().as_u16();
     let code = read_text(response, MAX_ERROR_BODY)
         .ok()
         .and_then(|text| error_code(&text))
@@ -554,16 +547,14 @@ fn error_code(text: &str) -> Option<String> {
 /// botocore's view of a transport failure: endpoint and connect errors, read timeouts, closed
 /// connections, malformed responses and truncated bodies are retryable; an unusable URL, a TLS
 /// failure or a proxy failure is not.
-fn transport_error(transport: &ureq::Transport) -> CallError {
-    use ureq::ErrorKind;
-    let retryable = match transport.kind() {
-        ErrorKind::Dns
-        | ErrorKind::ConnectionFailed
-        | ErrorKind::BadStatus
-        | ErrorKind::BadHeader => true,
-        ErrorKind::Io => std::error::Error::source(transport)
-            .and_then(|source| source.downcast_ref::<io::Error>())
-            .is_none_or(|error| io_retryable(error.kind())),
+fn transport_error(error: &ureq::Error) -> CallError {
+    let retryable = match error {
+        ureq::Error::HostNotFound
+        | ureq::Error::ConnectionFailed
+        | ureq::Error::Protocol(_)
+        | ureq::Error::LargeResponseHeader(_, _)
+        | ureq::Error::Timeout(_) => true,
+        ureq::Error::Io(error) => io_retryable(error.kind()),
         _ => false,
     };
     CallError::Transport { retryable }
@@ -576,8 +567,15 @@ fn io_retryable(kind: io::ErrorKind) -> bool {
     kind != io::ErrorKind::InvalidData
 }
 
-fn content_length(response: &ureq::Response) -> Option<u64> {
-    response.header("Content-Length")?.trim().parse().ok()
+fn content_length(response: &Response) -> Option<u64> {
+    response
+        .headers()
+        .get("Content-Length")?
+        .to_str()
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
 }
 
 /// Stream a response body into `writer` in 1 MiB chunks; more than `cap` bytes is
@@ -608,9 +606,10 @@ fn stream_body(mut reader: impl Read, writer: &mut File, cap: u64) -> Result<u64
     Ok(used)
 }
 
-fn read_text(response: ureq::Response, limit: u64) -> Result<String, CallError> {
+fn read_text(response: Response, limit: u64) -> Result<String, CallError> {
     let mut text = String::new();
     response
+        .into_body()
         .into_reader()
         .take(limit)
         .read_to_string(&mut text)

@@ -185,7 +185,7 @@ class Page(HTMLParser):
 MATRIX_ROWS = (
     ("mp4", ("Clear", "cenc", "cbcs")),
     ("dash", ("Clear", "cenc", "cbcs")),
-    ("hls-fmp4", ("Clear", "cbcs", "AES-128")),
+    ("hls-fmp4", ("Clear", "cenc", "cbcs", "AES-128")),
     ("hls-ts-video", ("Clear", "AES-128", "SAMPLE-AES")),
     ("hls-ts-audio", ("Clear", "AES-128", "SAMPLE-AES")),
 )

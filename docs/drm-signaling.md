@@ -26,9 +26,10 @@ evidence. The qualified clear MP4 profile supports the fragmented-MP4 outputs.
 Other conversions remain available without these explicit DRM settings; see the
 [conversion support table](conversion-support.md).
 
-Each invocation creates one output directory. To deliver HLS and DASH, use separate
-invocations and destinations. The outputs are independently packaged; physical
-sharing of their fragmented-MP4 files is not guaranteed.
+The single-output options below create one output directory. For HLS and DASH
+from one source in one operation, use [named outputs](multiple-outputs.md) with
+the common `plan`, `convert`, and `verify` commands. Those outputs are independently
+packaged; physical sharing of their fragmented-MP4 files is not guaranteed.
 
 ## Supply private output settings
 
@@ -160,13 +161,25 @@ versions are rejected. An unspecified audio language is omitted from the HLS
 These signaling checks accompany complete encoded-content, timing, decoded-content,
 and supported selection-metadata comparisons. They do not replace those checks.
 
+CENC or CBCS output without selected provider signaling can still contain the
+[W3C Common SystemID initialization record](https://www.w3.org/TR/eme-initdata-cenc/).
+This record identifies encryption keys by identifier; it does not contain the
+content keys or provider-specific policy data. drmr accepts only its generated
+single-key form here: version 1, zero flags, the selected output KID and an empty
+data field. The MPD, initialization files and actual track protection must agree.
+This output check does not relax source admission or authorize arbitrary provider
+records. It does not mark service-specific signaling or license playback as verified.
+
 Library callers can independently reopen an existing result with
 `Converter::verify_output_signaling(input, format, target, &keys)`. This method
 reads a fresh, byte-bound output graph and verifies its current records against
 the operator settings. Call `Converter::verify` separately for full source/result
 media comparison. A prior conversion report does not authorize either check.
-The single-output CLI `verify` currently provides the media comparison; it does
-not expose this separate provider-signaling result.
+The single-output CLI `verify` repeats these signaling checks when its protected
+key file explicitly selects a signaling profile. It checks the same byte-bound
+output as its complete media comparison. A [multiple-output saved plan](multiple-outputs.md)
+also fixes the selected DRM systems and reports each output's media, DRM,
+native manifest linting, and optional external manifest checks separately.
 
 Whole-file AES-128 encryption can make resource bytes opaque. The native metadata
 check examines the final manifest and readable initialization and provider records;

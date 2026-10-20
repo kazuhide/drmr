@@ -124,7 +124,8 @@ test.afterEach(async ({ page }, info) => {
 });
 
 const focusSelector = 'a[href], pre[tabindex="0"], .matrix-scroll[tabindex="0"]';
-const focusTargetCount = 33;
+// Fixed inventories include the intentional documentation links in each locale.
+const focusTargetCounts = { en: 36, ja: 35 };
 
 function textWithoutNotes(node) {
   const text = value => value.nodeType === Node.TEXT_NODE ? value.textContent :
@@ -350,7 +351,7 @@ for (const locale of locales) for (const width of [320, 768, 1024, 1440]) {
     await page.goto('about:blank');
     await ready(page, locale);
     const focusable = page.locator(focusSelector);
-    await expect(focusable).toHaveCount(focusTargetCount);
+    await expect(focusable).toHaveCount(focusTargetCounts[locale.language]);
     const focusRecords = [];
     let matrixKeyboard;
     for (let i = 0; i < await focusable.count(); i++) {
@@ -462,7 +463,7 @@ test('native keyboard switches English to Japanese and back at each supported mo
       await expect(link).toHaveAttribute('href', from.switchHref);
       await expect(link).toHaveAttribute('hreflang', to.language);
       const focusable = page.locator(focusSelector);
-      await expect(focusable).toHaveCount(focusTargetCount);
+      await expect(focusable).toHaveCount(focusTargetCounts[from.language]);
       for (let index = 0; index < 8; index++) {
         await page.keyboard.press('Tab');
         await expect(focusable.nth(index)).toBeFocused();
@@ -573,9 +574,9 @@ test('native Tab keeps edge targets fully visible only with the production scrol
       const discovery = { width, viewportHeight: 900, route };
       discoveries.push(discovery);
       const candidates = page.locator(focusSelector);
-      await expect(candidates).toHaveCount(focusTargetCount);
+      await expect(candidates).toHaveCount(focusTargetCounts[english.language]);
       let selected;
-      for (let index = 0; index < focusTargetCount; index++) {
+      for (let index = 0; index < focusTargetCounts[english.language]; index++) {
         await page.keyboard.press('Tab');
         await expect(candidates.nth(index)).toBeFocused();
         const sample = await candidates.nth(index).evaluate(focusObservation);
@@ -599,7 +600,7 @@ test('native Tab keeps edge targets fully visible only with the production scrol
           await page.addStyleTag({ content: `${focusSelector} { scroll-margin-block: 0 !important; }` });
         }
         const focusable = page.locator(focusSelector);
-        await expect(focusable).toHaveCount(focusTargetCount);
+        await expect(focusable).toHaveCount(focusTargetCounts[english.language]);
         const expected = focusable.nth(ordinal - 1);
         expect(await expected.evaluate(element => getComputedStyle(element).scrollMarginBlockStart))
           .toBe(state === 'disabled-control' ? '0px' : '16px');

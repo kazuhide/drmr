@@ -1,5 +1,13 @@
 # Conversion support
 
+One qualified source can also produce [multiple named outputs](multiple-outputs.md)
+through the common CLI. Explicit multi-DRM output currently supports qualified
+clear HLS transport streams and the qualified clear MP4 profile: CBCS DASH with
+Widevine/PlayReady, CBCS fMP4 HLS with FairPlay, or SAMPLE-AES TS HLS with FairPlay.
+These use separate runtime DRM settings and independently checked final
+manifests. Requested [external manifest validation](manifest-validation.md) is
+additional to native Rust manifest linting and the complete internal media checks.
+
 `drmr convert` processes local, completed on-demand media with keys supplied by its operator. It preserves encoded video/audio and verifies the result against the original source. The tables distinguish supported input profiles from tested protection routes. DRM license and device playback support are separate.
 
 ## HLS inputs and containers
@@ -11,6 +19,7 @@ unencrypted media. The two containers have different conversion limits:
 | HLS input | Input container | DASH output protection | fMP4 HLS output protection | MPEG-TS HLS output protection |
 | --- | --- | --- | --- | --- |
 | Clear HLS | fMP4 | Clear, `cenc`, `cbcs` | Clear, `cbcs`, AES-128 | Not supported |
+| `cenc` HLS | fMP4 | Clear, `cenc`, `cbcs` | Clear, `cbcs`, AES-128 | Not supported |
 | `cbcs` HLS | fMP4 | Clear, `cenc`, `cbcs` | Clear, `cbcs`, AES-128 | Not supported |
 | AES-128 HLS | fMP4 | Clear, `cenc`, `cbcs` | Clear, `cbcs`, AES-128 | Not supported |
 | Clear HLS | MPEG-TS | Clear, `cenc`, `cbcs` | Clear, `cbcs`, AES-128 | Clear, AES-128, SAMPLE-AES |
@@ -37,7 +46,7 @@ the [narrower input profile below](#mpeg-transport-stream-input).
 
 ## URL input
 
-`analyze` can retain and fully check a completed clear HLS URL before you save
+`analyze` can retain and fully check a supported completed HLS URL before you save
 an execution plan. `convert` can also acquire the URL and convert directly. This URL
 profile supports the same qualified TS/fMP4 media profiles described above;
 it does not extend their codec, track, or output limits. URL input requires
@@ -45,10 +54,15 @@ it does not extend their codec, track, or output limits. URL input requires
 and independent verification. See the [four-stage saved-plan workflow](executable-plans.md)
 or [direct URL conversion and fetch settings](usage.md#convert-a-url).
 
-Remote DASH, standalone MP4, encrypted HLS, live playlists, and byte ranges are
-outside the initial acquisition profile. The local input rows above do not imply
-that every matching URL input is implemented. These restrictions describe drmr's
-current acquisition implementation.
+URL acquisition accepts clear TS/fMP4, AES-128 TS/fMP4, SAMPLE-AES TS, and CENC/CBCS
+fMP4 within the local profiles above. Supply input keys using `--keys-file`;
+encrypted media and initialization bytes are retained unchanged. Key URI
+resolution and input-key mapping are described in the [usage guide](usage.md#convert-a-url).
+The acquisition step does not fetch key or license URLs.
+
+Remote DASH, standalone MP4, live playlists, and byte ranges remain outside the
+current acquisition implementation. These exclusions describe drmr's current
+profile, not a technical impossibility of those formats.
 
 The URL regression uses ten seconds of Big Buck Bunny H.264 video: 240 encoded
 packets in five two-second segments. It checks both source containers:

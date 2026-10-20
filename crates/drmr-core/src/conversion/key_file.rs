@@ -230,7 +230,11 @@ impl Drop for RawKey {
 /// Read at most 64 KiB from a protected, regular, singly linked operator file.
 pub fn read(path: &Path) -> Result<OperatorKeys, ConversionError> {
     let bytes = read_bytes(path)?;
-    let raw: RawFile = serde_json::from_slice(&bytes).map_err(|_| INVALID)?;
+    parse_single(&bytes)
+}
+
+fn parse_single(bytes: &[u8]) -> Result<OperatorKeys, ConversionError> {
+    let raw: RawFile = serde_json::from_slice(bytes).map_err(|_| INVALID)?;
     if raw.schema_version != 1 {
         return Err(INVALID);
     }
@@ -244,7 +248,11 @@ pub fn read(path: &Path) -> Result<OperatorKeys, ConversionError> {
 /// Read a strict schema-version-2 file. Output identifiers carry no path authority.
 pub fn read_bundle(path: &Path) -> Result<BundleOperatorKeys, ConversionError> {
     let bytes = read_bytes(path)?;
-    let raw: RawBundle = serde_json::from_slice(&bytes).map_err(|_| INVALID)?;
+    parse_bundle(&bytes)
+}
+
+fn parse_bundle(bytes: &[u8]) -> Result<BundleOperatorKeys, ConversionError> {
+    let raw: RawBundle = serde_json::from_slice(bytes).map_err(|_| INVALID)?;
     if raw.schema_version != 2 {
         return Err(INVALID);
     }
@@ -258,6 +266,34 @@ pub fn read_bundle(path: &Path) -> Result<BundleOperatorKeys, ConversionError> {
         input,
         hls_input,
         outputs,
+    })
+}
+
+/// Read source decryption keys from either strict operator schema.
+/// The complete file is validated; output domains are discarded rather than inferred.
+/// Conversion and verification must still use the schema matching their output contract.
+pub fn read_source(path: &Path) -> Result<OperatorKeys, ConversionError> {
+    #[derive(Deserialize)]
+    struct Version {
+        schema_version: u32,
+    }
+    let bytes = read_bytes(path)?;
+    let version: Version = serde_json::from_slice(&bytes).map_err(|_| INVALID)?;
+    let (input, hls_input) = match version.schema_version {
+        1 => {
+            let keys = parse_single(&bytes)?;
+            (keys.input, keys.hls_input)
+        }
+        2 => {
+            let keys = parse_bundle(&bytes)?;
+            (keys.input, keys.hls_input)
+        }
+        _ => return Err(INVALID),
+    };
+    Ok(OperatorKeys {
+        input,
+        hls_input,
+        ..OperatorKeys::default()
     })
 }
 
@@ -423,6 +459,47 @@ fn private_file(path: &Path) -> Result<std::fs::File, ConversionError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_loader_validates_both_schemas_without_selecting_an_output_domain() {
+        use std::io::Write as _;
+        let root = crate::native::private_tempdir().unwrap();
+        for version in [1, 2] {
+            let path = root.path().join(format!("keys-{version}.json"));
+            let mut value = serde_json::json!({"schema_version":version,"input":{"hls_keys":[{"uri":"skd://fixture","key":"11111111111111111111111111111111"}]}});
+            let output = serde_json::json!({"kid":"22222222222222222222222222222222","key":"33333333333333333333333333333333"});
+            if version == 1 {
+                value["output"] = output;
+            } else {
+                value["outputs"] = serde_json::json!({"dash":output});
+            }
+            crate::native::create_private_new(&path)
+                .unwrap()
+                .write_all(value.to_string().as_bytes())
+                .unwrap();
+            let source = read_source(&path).unwrap();
+            assert_eq!(source.hls_input.0.len(), 1);
+            assert!(
+                source.output.is_none()
+                    && source.hls_output.is_none()
+                    && source.signaling.is_none()
+            );
+            if version == 2 {
+                assert_eq!(read(&path).unwrap_err(), INVALID);
+            }
+            let malformed = root.path().join(format!("invalid-{version}.json"));
+            if version == 1 {
+                value["output"]["key"] = "invalid".into();
+            } else {
+                value["outputs"]["dash"]["key"] = "invalid".into();
+            }
+            crate::native::create_private_new(&malformed)
+                .unwrap()
+                .write_all(value.to_string().as_bytes())
+                .unwrap();
+            assert_eq!(read_source(&malformed).unwrap_err(), INVALID);
+        }
+    }
 
     #[test]
     fn output_verification_keeps_its_own_associated_iv_for_the_same_uri() {

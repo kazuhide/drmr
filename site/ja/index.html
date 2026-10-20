@@ -69,7 +69,7 @@
               <td class="unavailable">対象外</td>
             </tr>
             <tr id="hls-fmp4">
-              <th scope="row"><strong class="input-format">HLS</strong><span class="input-profile">フラグメント化MP4（fMP4）</span><span class="input-protections"><span class="clear">Clear</span> / <code>cbcs</code> / <code>AES-128</code></span></th>
+              <th scope="row"><strong class="input-format">HLS</strong><span class="input-profile">フラグメント化MP4（fMP4）</span><span class="input-protections"><span class="clear">Clear</span> / <code>cenc</code> / <code>cbcs</code> / <code>AES-128</code></span></th>
               <td><span class="clear">Clear</span> / <code>cenc</code> / <code>cbcs</code><sup>1</sup></td>
               <td><span class="clear">Clear</span> / <code>cenc</code> / <code>cbcs</code></td>
               <td><span class="clear">Clear</span> / <code>cbcs</code> / <code>AES-128</code></td>
@@ -105,7 +105,7 @@
       </div>
       <aside class="url-note" aria-labelledby="url-title">
         <h3 id="url-title">HLSのURLから始める場合</h3>
-        <p>URLから取得できるのは、完結した<strong>非暗号化HLS</strong>だけです。<code>--download-dir</code>は必須です。原本を保存し、オフラインでの再実行や独立した検証に使います。リモートMP4/DASH・暗号化メディアのURL・ライブ入力・バイト範囲を指定したプレイリストは、この取得機能の対象外です。</p>
+        <p>URLから、完了済みHLSの対応するTS／fMP4プロファイルを取得できます。暗号化入力には<code>--keys-file</code>で入力鍵を渡し、<code>--download-dir</code>に原本を保持して、オフラインの変換や独立した検証に使います。鍵URIやライセンスの取得は行いません。対応する暗号方式は<a href="guide/">日本語ガイド</a>に記載しています。リモートMP4／DASH、ライブ、バイト範囲指定は、現在の取得プロファイルの対象外です。</p>
         <a href="https://github.com/kazuhide/drmr/blob/main/docs/usage.md#convert-a-url">URLから変換し、原本を残す（英語）</a>
       </aside>
     </section>
@@ -147,6 +147,7 @@
         </li>
       </ol>
       <p class="section-note">この例は、対応するClear HLSからCBCS DASHへの変換です。<a href="guide/">日本語ガイド</a>で手順を確認し、<a href="https://github.com/kazuhide/drmr/blob/main/docs/usage.md#separate-input-and-output-keys">所有者だけが読める鍵設定ファイルを用意してください（英語）</a>。ClearからClearへの変換では<code>--to clear</code>を指定し、鍵ファイルを省略できます。<code>inspect</code>はメタデータだけを素早く調べるコマンドとして引き続き使えます。</p>
+      <p class="section-note">対応する非暗号化HLSのTS入力から、FairPlay向けHLSとWidevine／PlayReady向けDASHをまとめて作る場合は、<code>plan --outputs outputs.json</code>を使います。<a href="guide/#inspect-plan">日本語ガイド</a>では、出力ごとの形式・鍵・検査条件と、すべての検査後に結果を確定する手順を説明しています。最終マニフェストはRustの内蔵検査で確認します。<code>verify OUTPUT --manifest-only</code>は保存済みの出力に対する内蔵検査です。<code>--external-validator</code>を追加すると、形式に応じてAppleまたはDASH-IFのツールでも検査します。マニフェストの検査結果は、原本全体とのメディア比較とは分けて表示します。</p>
     </section>
 
     <section id="verification" class="section" aria-labelledby="verification-title">

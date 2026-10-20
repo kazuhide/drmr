@@ -3,6 +3,7 @@
 //! command expects.
 
 mod analyze_cli;
+mod bundle_cli;
 mod cancellation;
 mod convert_cli;
 mod doctor;
@@ -92,7 +93,7 @@ enum Command {
     #[command(
         args_override_self = true,
         infer_long_args = true,
-        after_help = "With INPUT: describe a requested conversion without executing it.\nWith --save FILE and --output PATH: validate the complete source and save one format/protection intent with source fingerprints. Keys remain separate.\nWith --mpd: enumerate renditions only; writes nothing (read-only).\n\nExamples:\n  drmr plan source/input.m3u8 --to cbcs --format dash --output converted --save conversion.plan.json\n  drmr convert --plan conversion.plan.json --keys-file keys.json\n  drmr verify --plan conversion.plan.json --keys-file keys.json"
+        after_help = "With INPUT: describe a requested conversion without executing it.\nWith --save FILE and --output PATH: validate the complete source and save its fingerprints and output intent. Use --outputs FILE for several results with separate DRM and manifest-check policies. Keys remain separate.\nWith --mpd: enumerate renditions only; writes nothing (read-only).\n\nExamples:\n  drmr plan source/input.m3u8 --outputs outputs.json --output converted --save conversion.plan.json\n  drmr convert --plan conversion.plan.json --keys-file keys.json\n  drmr verify --plan conversion.plan.json --keys-file keys.json"
     )]
     Plan(inspect_cli::PlanArgs),
     /// Repackage multiple assets sequentially, with support for restarting.
@@ -109,6 +110,7 @@ enum Command {
     #[command(
         name = "package-hls",
         about = hls_cli::PACKAGE_ABOUT,
+        after_help = "Legacy snapshot command. For new workflows use analyze, plan --outputs, convert --plan, and verify --plan. The common output list names HLS and DASH results explicitly.",
         args_override_self = true,
         infer_long_args = true
     )]

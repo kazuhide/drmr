@@ -735,11 +735,7 @@ impl Converter {
         super::files::create_dir(&clear_hls)
             .map_err(|_| ConversionError("temporary-file-unavailable"))?;
         self.backend.package_hls(&clear, &clear_hls)?;
-        let staged = super::files::Stage::new(Some(
-            destination
-                .parent()
-                .ok_or(ConversionError("output-parent-unavailable"))?,
-        ))?;
+        let staged = self.output_stage(&destination)?;
         encrypt_presentation(&clear_hls, staged.path(), output_key)?;
         let verify_stage = workspace.path().join("verify");
         super::files::create_dir(&verify_stage)
@@ -754,7 +750,7 @@ impl Converter {
             &verification_keys,
             &self.backend,
         )?;
-        let verification = self.backend.verify_views(
+        let mut verification = self.backend.verify_views(
             super::verify::StreamView::new(
                 &source,
                 0,
@@ -768,7 +764,12 @@ impl Converter {
         }
         let output_report = inspection::inspect(&staged.path().join("media.m3u8"))
             .map_err(|_| ConversionError("hls-inspection-failed"))?;
-        self.publish_directory(&staged, &destination)?;
+        verification.native_manifest = Some(self.publish_manifest_output(
+            &staged,
+            &destination,
+            &staged.path().join("media.m3u8"),
+            crate::inspection::OutputFormat::Hls,
+        )?);
         Ok(ConversionReport {
             schema_version: 1,
             input: input_report,

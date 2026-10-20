@@ -60,12 +60,6 @@ fn presentation_processing(format: OutputFormat) -> inspection::ActualProcessing
         inspection::InputPreparation::LocalTrackFiles,
     )
 }
-fn presentation_stage(destination: &Path) -> Result<super::files::Stage, ConversionError> {
-    let parent = destination
-        .parent()
-        .ok_or(ConversionError("output-path-invalid"))?;
-    super::files::Stage::new(Some(parent))
-}
 impl Converter {
     pub fn convert_tracks(
         &self,
@@ -128,16 +122,12 @@ impl Converter {
             .transpose()?;
         let work = workspace()?;
         let (mut sources, clears) = self.normalize_tracks(&request, work.path())?;
-        if let Some(metadata) = metadata {
-            if metadata.len() != sources.len() {
-                return Err(ConversionError("presentation-track-count-mismatch"));
-            }
-            for (source, metadata) in sources.iter_mut().zip(metadata) {
-                source.metadata = metadata.clone();
-            }
-        }
+        metadata::apply(&mut sources, metadata)?;
         metadata::materialize(&mut sources, &self.backend, request.input_keys)?;
-        let owned_stage = destination.as_deref().map(presentation_stage).transpose()?;
+        let owned_stage = destination
+            .as_deref()
+            .map(|path| self.output_stage(path))
+            .transpose()?;
         let stage = transport_stage
             .or(owned_stage.as_ref())
             .ok_or(ConversionError("output-path-invalid"))?;
@@ -195,9 +185,11 @@ impl Converter {
             Vec::new(),
         );
         self.backend.checkpoint(&[&work, stage]);
-        if let Some(destination) = destination {
-            self.publish_directory(stage, &destination)?;
-        }
+        let native_manifest = if let Some(destination) = destination {
+            Some(self.publish_manifest_output(stage, &destination, &manifest, request.format)?)
+        } else {
+            None
+        };
         Ok(ConversionReport {
             schema_version: 1,
             input,
@@ -208,6 +200,7 @@ impl Converter {
                 media_verified: true,
                 checks,
                 license_playback_verified: false,
+                native_manifest,
             },
             processing: Some(presentation_processing(request.format)),
         })
@@ -1016,6 +1009,7 @@ impl Converter {
             &self.backend,
             SourceValidationPurpose::Verification,
         )?;
+        let checked = self.checked_output_manifest(request.output.input)?;
         let result = prepare_presentation(
             &request.output,
             &result_dir,
@@ -1023,16 +1017,19 @@ impl Converter {
             SourceValidationPurpose::Verification,
         )?;
         drop(preparation);
-        let report = self.compare_presentations(
+        let mut report = self.compare_presentations(
             source,
             result,
             request.source.input_keys,
             request.output.input_keys,
-        );
-        if report.is_ok() {
-            self.backend.checkpoint(&[&work]);
+        )?;
+        if let Some(checked) = checked {
+            checked.check(self)?;
+            report.passed &= checked.report.is_clean_for_scope();
+            report.native_manifest = Some(checked.report);
         }
-        report
+        self.backend.checkpoint(&[&work]);
+        Ok(report)
     }
     fn presentation_digest(
         &self,
@@ -1269,6 +1266,7 @@ impl Converter {
             media_verified: passed,
             checks,
             license_playback_verified: false,
+            native_manifest: None,
         })
     }
 }
@@ -1932,7 +1930,7 @@ impl Converter {
         let destination = transport.then(|| destination(request.output)).transpose()?;
         let stage = destination
             .as_ref()
-            .map(|path| super::files::Stage::new(path.parent()))
+            .map(|path| self.output_stage(path))
             .transpose()?;
         let candidate = stage.as_ref().map(|stage| stage.path().to_path_buf());
         let mut report = self.convert_tracks_inner(
@@ -1956,7 +1954,17 @@ impl Converter {
                 .as_ref()
                 .ok_or(ConversionError("output-staging-failed"))?;
             self.backend.checkpoint(&[&work, stage]);
-            self.publish_directory(stage, destination)?;
+            let manifest = candidate.join(if request.format == OutputFormat::Dash {
+                "manifest.mpd"
+            } else {
+                "master.m3u8"
+            });
+            report.verification.native_manifest = Some(self.publish_manifest_output(
+                stage,
+                destination,
+                &manifest,
+                request.format,
+            )?);
         }
         self.backend.checkpoint(&[&work]);
         report.input = input_report;

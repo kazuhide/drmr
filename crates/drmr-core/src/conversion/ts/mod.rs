@@ -501,6 +501,7 @@ impl Backend {
             passed,
             media_verified: passed,
             license_playback_verified: false,
+            native_manifest: None,
             checks: VerificationChecks {
                 stream_metadata: if metadata {
                     CheckOutcome::Pass

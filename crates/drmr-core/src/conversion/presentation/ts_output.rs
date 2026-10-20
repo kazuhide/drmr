@@ -71,7 +71,7 @@ impl Converter {
         }
         let sample_input = sources.iter().any(|source| source.transport_sample);
         let destination = destination(request.output)?;
-        let stage = super::super::files::Stage::new(destination.parent())?;
+        let stage = self.output_stage(&destination)?;
         let clear = work.path().join("clear-ts-output");
         let package_root = if request.target == TargetProtection::HlsAes128 {
             super::super::files::create_dir(&clear)?;
@@ -126,7 +126,7 @@ impl Converter {
             &self.backend,
             super::SourceValidationPurpose::Verification,
         )?;
-        let verification =
+        let mut verification =
             self.compare_presentations(sources, result, request.input_keys, &empty)?;
         if !verification.passed {
             return Err(ConversionError("round-trip-verification-failed"));
@@ -135,7 +135,12 @@ impl Converter {
             .map_err(|_| ConversionError("invalid-output-media"))?;
         secure_tree(stage.path())?;
         self.backend.checkpoint(&[work, &stage]);
-        self.publish_directory(&stage, &destination)?;
+        verification.native_manifest = Some(self.publish_manifest_output(
+            &stage,
+            &destination,
+            &stage.path().join("master.m3u8"),
+            request.format,
+        )?);
         Ok(ConversionReport {
             schema_version: 1,
             input,

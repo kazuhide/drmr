@@ -3,7 +3,11 @@
 Use this workflow when you want to check the complete input first, review one
 fixed conversion, and verify its result against the retained original. It
 supports the [qualified local media profiles](conversion-support.md), including
-clear HLS URLs within the documented acquisition profile.
+supported completed HLS URLs within the documented acquisition profile.
+
+For several outputs with separate DRM systems and final-manifest checks, use
+the [multiple-output workflow](multiple-outputs.md). The single-output examples
+below and their schema-version-1 plans remain supported.
 
 ## 1. Analyze and retain the input
 
@@ -38,13 +42,16 @@ markers. These notes do not waive packet, decoding, or timing checks. See
 for the accepted conditions and handling of the unchanged original.
 
 For a local input, use `drmr analyze original/manifest.mpd --json` or
-`drmr analyze original.mp4 --json`. Supply `--keys-file` for encrypted local input.
+`drmr analyze original.mp4 --json`. Supply `--keys-file` for encrypted local or URL input, including source checks when saving a plan.
 Local input does not accept download options. `inspect` remains the faster,
 metadata-only command and does not read or decode complete media.
 
-The URL acquisition profile currently accepts completed clear HLS using supported
-MPEG-TS or fragmented MP4 resources. It does not acquire remote DASH, standalone
-MP4, encrypted HLS, live playlists, or byte ranges. See
+The URL acquisition profile accepts the completed HLS container/encryption
+combinations in the [input table](conversion-support.md#url-input). Acquisition
+retains ciphertext; existing local admission uses the supplied source keys.
+Relative key identifiers are resolved against the effective playlist URL and
+matched to the protected key configuration without retrieving key URLs. It does
+not acquire remote DASH, standalone MP4, live playlists, or byte ranges. See
 [fetch settings](usage.md#optional-fetch-settings) for explicit additional
 origins, authentication, and transfer limits; the same options apply to `analyze`.
 

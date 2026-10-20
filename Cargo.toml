@@ -42,9 +42,9 @@ tempfile = "3.27.0"
 thiserror = "2.0.21"
 zeroize = "1.9.1"
 unicode-normalization = "0.1.26"
-ureq = { version = "2.12.1", default-features = false, features = ["tls"] }
+ureq = { version = "3.4.2", default-features = false, features = ["rustls"] }
 tokio = { version = "1.53.3", features = ["rt-multi-thread", "net", "sync", "time", "signal"] }
-webpki-roots = "1.0.9"
+webpki-roots = "1.0.10"
 zmij = "1.0.23"
 
 [profile.dev.package.sha2]

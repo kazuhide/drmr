@@ -43,6 +43,18 @@ docker run --rm --init --user "$(id -u):$(id -g)" \
 
 Paths passed to `drmr` are paths **inside the container**. `/input` and `/config` are read-only mounts. Matching the container's user and group IDs to your host user lets it read owner-only keys and create results you own. The image defaults to a non-root user; it does not change host file ownership or repair permissions.
 
+The common [multiple-output workflow](multiple-outputs.md) also runs in the image.
+Mount its output list and protected key file read-only; saved plan paths must
+refer to the same container paths when executed or verified later. Native Rust
+manifest linting is included. The image
+does not bundle the optional [external manifest validators](manifest-validation.md).
+Apple's HLS validator runs on a macOS host. A `conformance: "required"` output
+fails in a container without its configured validator; it is never reported as
+checked. To package in this image and validate on macOS afterward, choose
+`conformance: "none"` and explicitly run host `verify OUTPUT --manifest-only --external-validator` on
+the final manifests. That separate check does not retroactively change the
+saved plan or its conversion report.
+
 The output destination must be new. Use a qualified input from the [conversion support table](conversion-support.md); adding Docker does not broaden the supported media profiles. To compare the result independently:
 
 ```sh

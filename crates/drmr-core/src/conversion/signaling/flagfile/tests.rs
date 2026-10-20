@@ -207,6 +207,12 @@ fn timeout_and_cancellation_reap_the_tool_before_deleting_private_flags() {
         )
         .unwrap();
         let mut backend = backend(&program);
+        // Time the running fixture independently of unrelated admission queues.
+        backend.runner = Arc::new(
+            ToolRunner::new(Arc::new(Secrets::new()), Arc::new(NoSink)).with_limiter(Arc::new(
+                crate::resources::Limiter::new(1, 512 * 1024 * 1024),
+            )),
+        );
         backend.timeout = if cancel {
             Duration::from_secs(10)
         } else {

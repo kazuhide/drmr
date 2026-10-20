@@ -1,8 +1,95 @@
 # Final manifest validation
 
-The core API can check the final HLS playlists or DASH manifest after conversion. The check uses the actual encrypted manifest bytes. It does not create a decrypted copy of the presentation.
+The common `convert` and `verify` commands check final HLS playlists or DASH
+manifests with the built-in Rust linter. The check uses the actual encrypted manifest bytes. It does not create
+a decrypted copy of the presentation.
 
-This is a **manifest-only** check. It does not fetch media segments, initialization segments, content keys, or licenses. It does not establish that encrypted media conforms to a media format or plays on a device. Use media verification separately to check the converted samples and encryption signaling. Command-line integration of these checks is a separate change.
+This is a **manifest-only** check. It does not fetch media segments, initialization segments, content keys, or licenses. It does not establish that encrypted media conforms to a media format or plays on a device. Complete internal media verification and native DRM declaration checks remain separate results.
+
+## Native checks
+
+The independent `drmr-manifest` library accepts manifest bytes and an explicitly
+supplied playlist graph. It does not open manifest, media or key files, fetch
+resources or launch tools. Automatic worker selection queries available CPU
+capacity. drmr captures the local graph, binds the report to those bytes, and
+rechecks the files before accepting a result.
+
+HLS rules cover syntax, attribute types and duplicates, playlist and segment
+state, encryption and initialization declarations, feature-derived protocol
+versions, and linked rendition declarations. The base RFC 8216 profile and the
+Apple VOD profile are separate: an Apple recommendation does not become a general
+HLS requirement. DASH rules check the declared static-presentation profile,
+including namespaces, structure, inherited addressing, template expressions,
+timeline arithmetic, and manifest-visible protection declarations. These native
+rules are independently implemented; they are not a complete XML schema or
+Schematron engine.
+
+Each report names its profile and revision. Rule coverage records `passed`,
+`failed`, or `not-checked`, with specification references. Diagnostics use fixed
+rule identifiers and source positions rather than echoing input text, URLs,
+keys, or protection payloads. Unsupported in-scope features, missing linked
+manifests, exhausted limits, and truncated diagnostics cannot produce a clean
+result. Checks requiring media or delivery evidence are marked outside the
+manifest-only scope. Complete source-to-result verification supplies separate
+packet, decoding, metadata, and timing evidence.
+
+Small inputs run inline. Larger independent documents can run in parallel;
+available CPU capacity, `--max-workers`, and memory admission bound concurrency.
+The report order is deterministic. Memory admission estimates the parser's
+working allocation; it is separate from a measurement of total process memory.
+
+## Choose when to check
+
+To check an existing final output without a source or keys:
+
+```sh
+drmr verify ./result/hls/master.m3u8 --manifest-only --json
+drmr verify ./result/dash/manifest.mpd --manifest-only --json
+```
+
+These results explicitly contain `scope: "manifest-only"`, `media_verified: false`,
+and `license_playback_verified: false`. This mode cannot be combined with
+`--source`, `--keys-file`, or `--plan`. `--max-workers` sets an upper bound for
+native work; omitting it selects concurrency automatically. No external
+validator installation is needed for the native check.
+
+`--manifest-profile base` is the default: RFC 8216 manifest rules for HLS and
+the static-presentation profile for DASH. Select
+`--manifest-profile apple-vod` with `--manifest-only` to add the supported
+Apple VOD authoring rules to HLS. This selection is invalid for DASH. The chosen
+profile appears in `native_manifest.profile`; it does not change the external
+validator's mode or settings. Conversion and complete source/result verification
+use the base profile.
+
+For example, `drmr verify ./result/hls/master.m3u8 --manifest-only
+--manifest-profile apple-vod --json` checks the Apple profile. A single video
+bitrate can pass base HLS rules and fail Apple's multiple-bitrate requirement
+in [section 9.9](https://developer.apple.com/streaming/hls-authoring-specification-for-apple-devices.html).
+drmr preserves existing video qualities during conversion. It does not create
+additional bitrates to satisfy that requirement. Even a clean Apple manifest
+report does not establish the media, delivery or device requirements outside
+the report's declared scope.
+
+Add `--external-validator` to either command to run the native check and the
+corresponding Apple or DASH-IF adapter. The JSON result separates
+`native_manifest` and `external_manifest`.
+Apple's adapter uses parse-only mode. It does not have the same authoring-rule
+coverage as the native Apple profile; a successful parse is separate evidence.
+
+For conversion and full verification together, choose `conformance: "required"`
+for each applicable output in the [output list](multiple-outputs.md), then save
+and execute its plan. Every required check must pass before the result directory
+is published. A separate `verify --plan` runs the required checks again, together
+with complete source/result media comparison and the plan's DRM selections.
+`conformance: "none"` leaves the external check unrequested; it does not mark it
+as passed or disable native manifest or complete media verification. Saved
+version-2 plans retain this external-engine requirement: a native result does
+not substitute for `conformance: "required"`.
+
+`convert` and `verify` accept `--hls-validator-bin` (default
+`mediastreamvalidator`) and `--dash-validator-bin` (default `php`). These options
+select executables for requested checks; they do not enable a check on their
+own. Runtime executable locations are not saved in a plan.
 
 ## HLS
 
@@ -30,7 +117,30 @@ The supported profile covers local, finite video-on-demand playlists generated b
 
 These requirements follow [RFC 8216, section 7](https://www.rfc-editor.org/rfc/rfc8216.html#section-7) and [the `EXT-X-MAP` definition](https://www.rfc-editor.org/rfc/rfc8216.html#section-4.3.2.5). Missing, malformed, duplicate, or insufficient version declarations cannot satisfy a required higher level.
 
+### Shared target duration
+
+The native graph check also compares `EXT-X-TARGETDURATION` across linked media
+playlists, applying the VOD subtitle and I-frame exceptions in
+[RFC 8216 section 6.2.4](https://www.rfc-editor.org/rfc/rfc8216.html#section-6.2.4).
+Audio frame boundaries can produce a different per-track duration bound from
+video. RFC 8216 compares segment durations after nearest-integer rounding.
+Common conversion derives conservative bounds by rounding final segment durations
+upward, then applies their maximum to all its audio/video playlists. A two-second
+segmentation target can therefore produce a declaration of 3. Segment data and `EXTINF` durations stay
+unchanged. Fresh verification checks the captured final files before any
+normalization of the media.
+
 ## DASH
+
+Native typed rules use the pinned fifth-edition schema and XML Schema 1.0
+datatype rules. In particular, `xs:unsignedInt` and `xs:unsignedLong` collapse
+XML whitespace before lexical validation, so ` 1 ` has the same value as `1`.
+The qualification environment's PHP 8.5.7 / libxml 2.9.14 schema engine rejected
+eight such boundary cases. Those differences were resolved against
+[the fixed whitespace rule](https://www.w3.org/TR/2004/REC-xmlschema-2-20041028/#rf-whiteSpace),
+without changing the native rule or the recorded external verdicts. An external
+rejection still fails an explicitly required external check, even when the native
+check passes; drmr does not silently substitute one result for the other.
 
 The DASH adapter uses the official DASH-IF XML schema and Schematron rules. An XML schema checks element structure, attributes, and their order. Schematron checks additional rules expressed as assertions. Both checks must complete and pass. This is more than checking that the file is well-formed XML.
 
@@ -57,7 +167,9 @@ Only the fixed installed schema and its bundled XLink schema can be resolved. In
 
 ## Results and operational limits
 
-A successful report has `scope: "manifest-only"`, a manifest count, and a result for the selected engine. HLS results include the declared and required minimum version for every playlist. The observed Apple version or DASH-IF checkout revision is included only when it can be extracted in a restricted format; otherwise it is unknown. A checkout revision identifies the observed source checkout, rather than proving an unmodified installation.
+A native result includes rule coverage, error and warning counts, incomplete/truncated status, and the profile revision. `verification.native_manifest` accompanies complete HLS/DASH media verification. Standalone manifest-only results use the separate `native_manifest` field. MP4 files have no HLS/DASH manifest to lint.
+
+An external report has `scope: "manifest-only"`, a manifest count, and a result for the selected engine. HLS external results include the declared and required minimum version for every playlist. The observed Apple version or DASH-IF checkout revision is included only when it can be extracted in a restricted format; otherwise it is unknown. A checkout revision identifies the observed source checkout, rather than proving an unmodified installation.
 
 The public report and events omit executable paths, manifest URLs, license signaling, and raw external-tool diagnostics. Tools run with the existing process timeout and bounded output capture. Missing tools, cancellation, timeout, output overflow, malformed reports, and partial check coverage return an error. They never produce a passing report. The file identities and contents of private manifest copies and the embedded adapter are rechecked before success. Private copies and engine files are normally removed after process-tree cleanup is confirmed. If a workspace directory has been replaced, validation fails and cleanup preserves uncertain entries rather than deleting the replacement.
 

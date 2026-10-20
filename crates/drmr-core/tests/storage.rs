@@ -423,6 +423,111 @@ fn a_read_timeout_bounds_every_request() {
 }
 
 #[test]
+fn progressing_response_can_outlast_the_read_idle_timeout() {
+    let policy = TransferPolicy {
+        per_object_timeout_s: 0.3,
+        ..quick(1)
+    };
+    let (fake, backend) = tokyo(policy);
+    fake.put("tokyo-batch-test", "input/progress", b"abcdefgh");
+    fake.on(|request| {
+        (request.method == "GET").then(|| Fault::SlowBody {
+            pause: Duration::from_millis(100),
+            body: b"abcdefgh".to_vec(),
+        })
+    });
+    let temp = tempfile::tempdir().unwrap();
+    let started = Instant::now();
+    let staged = backend
+        .get_many(&refs(&["input/progress"]), temp.path())
+        .unwrap();
+    assert_eq!(std::fs::read(&staged[0]).unwrap(), b"abcdefgh");
+    assert!(started.elapsed() >= Duration::from_millis(600));
+    assert_eq!(fake.count_object("GET"), 1);
+}
+
+#[test]
+fn signed_requests_never_follow_redirects_or_expose_their_location() {
+    let (fake, backend) = tokyo(quick(3));
+    fake.put("tokyo-batch-test", "input/source", b"original");
+    fake.put("tokyo-batch-test", "input/redirected", b"redirected");
+    let response = format!(
+        "HTTP/1.1 307 Temporary Redirect\r\nLocation: {}/tokyo-batch-test/input/redirected?sentinel-private-token\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        fake.endpoint
+    )
+    .into_bytes();
+    fake.on(move |request| (request.method == "GET").then(|| Fault::Raw(response.clone())));
+    let error = backend
+        .get_many(
+            &refs(&["input/source"]),
+            tempfile::tempdir().unwrap().path(),
+        )
+        .unwrap_err();
+    assert_eq!(error.token(), "storage-failed");
+    assert!(!error.is_retryable());
+    assert_eq!(fake.count_object("GET"), 1);
+    assert!(!format!("{error} {error:?}").contains("sentinel"));
+    assert!(
+        fake.requests()
+            .iter()
+            .all(|request| request.key != "input/redirected")
+    );
+}
+
+#[test]
+fn malformed_responses_and_missing_lengths_never_publish_a_download() {
+    let cases: &[(&[u8], bool)] = &[
+        (
+            b"HTTP/1.1 sentinel-private-status\r\nConnection: close\r\n\r\n",
+            true,
+        ),
+        (
+            b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\npayload",
+            false,
+        ),
+    ];
+    for (response, retryable) in cases {
+        let (fake, backend) = tokyo(quick(2));
+        fake.put("tokyo-batch-test", "input/source", b"original");
+        let response = response.to_vec();
+        fake.on(move |request| (request.method == "GET").then(|| Fault::Raw(response.clone())));
+        let temp = tempfile::tempdir().unwrap();
+        let error = backend
+            .get_many(&refs(&["input/source"]), temp.path())
+            .unwrap_err();
+        assert_eq!(error.is_retryable(), *retryable);
+        assert_eq!(fake.count_object("GET"), if *retryable { 2 } else { 1 });
+        assert!(!temp.path().join("input/source").exists());
+        assert!(!format!("{error} {error:?}").contains("sentinel"));
+    }
+}
+
+#[test]
+fn retry_codes_beyond_the_error_body_budget_are_not_read() {
+    let (fake, backend) = tokyo(quick(3));
+    fake.put("tokyo-batch-test", "input/source", b"original");
+    let body = format!(
+        "<Error>{}<Code>Throttling</Code><Message>sentinel-private-message</Message></Error>",
+        " ".repeat(64 * 1024)
+    );
+    let response = format!(
+        "HTTP/1.1 400 Bad Request\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+    .into_bytes();
+    fake.on(move |request| (request.method == "GET").then(|| Fault::Raw(response.clone())));
+    let temp = tempfile::tempdir().unwrap();
+    let error = backend
+        .get_many(&refs(&["input/source"]), temp.path())
+        .unwrap_err();
+    assert_eq!(error.token(), "storage-failed");
+    assert!(!error.is_retryable());
+    assert_eq!(fake.count_object("GET"), 1);
+    assert!(!temp.path().join("input/source").exists());
+    assert!(!format!("{error} {error:?}").contains("sentinel"));
+}
+
+#[test]
 fn status_codes_are_classified_like_call() {
     let cases: [(u16, &str, bool); 7] = [
         (500, "InternalError", true),

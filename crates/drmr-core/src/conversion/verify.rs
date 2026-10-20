@@ -11,6 +11,9 @@ pub struct VerificationReport {
     pub media_verified: bool,
     pub checks: VerificationChecks,
     pub license_playback_verified: bool,
+    /// Native checks of the exact output manifest bytes, separate from media evidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_manifest: Option<super::manifest_lint::NativeManifestReport>,
 }
 /// An executed check's outcome, kept distinct from an unchecked metadata claim.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -240,6 +243,7 @@ impl Backend {
                 decoded_content_equal,
             },
             license_playback_verified: false,
+            native_manifest: None,
         })
     }
 }

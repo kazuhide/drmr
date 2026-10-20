@@ -9,6 +9,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+drmr-manifest = { path = "../drmr-manifest" }
 aes.workspace = true
 cbc.workspace = true
 getrandom.workspace = true

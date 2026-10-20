@@ -30,6 +30,10 @@ fn main() {
             "unusable_or_missing_credentials",
             unusable_or_missing_credentials,
         ),
+        (
+            "environment_proxies_are_not_used",
+            environment_proxies_are_not_used,
+        ),
     ];
     let filter = args.iter().find(|arg| !arg.starts_with('-'));
     let mut passed = 0;
@@ -152,6 +156,28 @@ fn environment_credentials_and_endpoint() {
             .iter()
             .all(|(_, token)| token.is_none())
     );
+}
+
+fn environment_proxies_are_not_used() {
+    let home = tempfile::tempdir().unwrap();
+    let fake = start_fake();
+    let proxy = start_fake();
+    let output = run_probe(
+        home.path(),
+        &[
+            ("AWS_ENDPOINT_URL_S3", fake.endpoint.clone()),
+            ("AWS_ACCESS_KEY_ID", "AKIDENVSYNTHETIC".to_string()),
+            ("AWS_SECRET_ACCESS_KEY", "synthetic-env-secret".to_string()),
+            ("HTTP_PROXY", proxy.endpoint.clone()),
+            ("http_proxy", proxy.endpoint.clone()),
+            ("HTTPS_PROXY", proxy.endpoint.clone()),
+            ("ALL_PROXY", proxy.endpoint.clone()),
+            ("NO_PROXY", String::new()),
+        ],
+    );
+    assert_eq!(output, "ok false");
+    assert_eq!(fake.requests().len(), 2);
+    assert!(proxy.requests().is_empty());
 }
 
 fn profile_file_credentials() {

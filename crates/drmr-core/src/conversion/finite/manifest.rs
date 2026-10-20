@@ -2,6 +2,7 @@
 use super::{BAD, ConversionError, Path, Stop, Write, window};
 use crate::inspection::OutputFormat;
 use std::{fmt::Write as _, path::PathBuf};
+mod targets;
 pub(in crate::conversion) fn seconds(ticks: u64, scale: u64) -> Result<String, ConversionError> {
     if scale == 0 {
         return Err(BAD);
@@ -76,7 +77,7 @@ fn hls(root: &Path, count: usize, stop: &Stop) -> Result<(), ConversionError> {
         }
         write(&path, &format!("{}\n", lines.join("\n")))?;
     }
-    Ok(())
+    targets::finish(root, count, stop)
 }
 fn dash(root: &Path, count: usize, stop: &Stop) -> Result<(), ConversionError> {
     let path = root.join("manifest.mpd");
