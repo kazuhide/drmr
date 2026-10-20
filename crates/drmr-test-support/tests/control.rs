@@ -80,6 +80,152 @@ fn controlled_response_waits_for_release_after_signalling_readiness() {
     assert_eq!(result.stdout, b"released");
 }
 
+#[cfg(unix)]
+#[test]
+fn overlapping_invocations_keep_independent_descendant_locks_and_pid_records() {
+    use std::os::unix::process::CommandExt as _;
+    use std::time::{Duration, Instant};
+
+    struct Worker(std::process::Child);
+    impl Drop for Worker {
+        fn drop(&mut self) {
+            // Both groups were created by this test; cleanup is separate from the
+            // production Stop/return oracle exercised by container qualification.
+            let _ = Command::new("/bin/sh")
+                .args([
+                    "-c",
+                    "kill -s KILL -- \"-$1\"",
+                    "fixture",
+                    &self.0.id().to_string(),
+                ])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    fn ready(worker: &mut Worker, root: &std::path::Path) -> std::path::PathBuf {
+        let entry = root.join(worker.0.id().to_string());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !entry.join("complete").is_file() {
+            assert!(
+                worker.0.try_wait().unwrap().is_none(),
+                "worker exited before its independent complete record"
+            );
+            assert!(Instant::now() < deadline, "invocation readiness deadline");
+            std::thread::yield_now();
+        }
+        entry
+    }
+    fn pid(path: &std::path::Path) -> u32 {
+        let value = std::fs::read_to_string(path).unwrap();
+        assert!(value.ends_with('\n'));
+        value.trim().parse().unwrap()
+    }
+
+    let directory = tempfile::tempdir().unwrap();
+    let registry = directory.path().join("invocations");
+    std::fs::create_dir(&registry).unwrap();
+    let tool = install(
+        &directory.path().join("worker"),
+        &ToolSpec::default()
+            .with("invocation_root", registry.to_str().unwrap())
+            .with(
+                "release_file",
+                directory.path().join("never-release").to_str().unwrap(),
+            ),
+    )
+    .unwrap();
+    let spawn = || {
+        Worker(
+            Command::new(&tool)
+                .process_group(0)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap(),
+        )
+    };
+    let mut first = spawn();
+    let first_entry = ready(&mut first, &registry);
+    let first_descendant = pid(&first_entry.join("descendant.pid"));
+    let first_lock = std::fs::File::open(first_entry.join("descendant.lock")).unwrap();
+    assert!(matches!(
+        first_lock.try_lock(),
+        Err(std::fs::TryLockError::WouldBlock)
+    ));
+
+    // Start B only after A holds its lock: this deterministically exercises the
+    // old shared-ready/shared-lock collision, rather than relying on a race.
+    let mut second = spawn();
+    let second_entry = ready(&mut second, &registry);
+    let second_descendant = pid(&second_entry.join("descendant.pid"));
+    let second_lock = std::fs::File::open(second_entry.join("descendant.lock")).unwrap();
+    assert_ne!(first_entry, second_entry);
+    assert_ne!(first_descendant, second_descendant);
+    assert_eq!(std::fs::read_dir(&registry).unwrap().count(), 2);
+    for lock in [&first_lock, &second_lock] {
+        assert!(matches!(
+            lock.try_lock(),
+            Err(std::fs::TryLockError::WouldBlock)
+        ));
+    }
+    assert_eq!(pid(&first_entry.join("descendant.pid")), first_descendant);
+    drop(second);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match second_lock.try_lock() {
+            Ok(()) => break,
+            Err(std::fs::TryLockError::WouldBlock) if Instant::now() < deadline => {
+                std::thread::yield_now();
+            }
+            other => panic!("owned fixture cleanup did not release its lock: {other:?}"),
+        }
+    }
+    second_lock.unlock().unwrap();
+    assert!(matches!(
+        first_lock.try_lock(),
+        Err(std::fs::TryLockError::WouldBlock)
+    ));
+}
+
+#[test]
+fn invocation_records_do_not_reinterpret_legacy_pid_controls() {
+    let directory = tempfile::tempdir().unwrap();
+    let registry = directory.path().join("invocations");
+    let legacy = directory.path().join("legacy.pid");
+    std::fs::create_dir(&registry).unwrap();
+    let tool = install(
+        &directory.path().join("worker"),
+        &ToolSpec::default()
+            .with("invocation_root", registry.to_str().unwrap())
+            .with("pid_file", legacy.to_str().unwrap()),
+    )
+    .unwrap();
+    let result = Command::new(tool).output().unwrap();
+    assert_eq!(result.status.code(), Some(125));
+    assert!(!legacy.exists());
+    assert_eq!(std::fs::read_dir(registry).unwrap().count(), 0);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_registry_fixture_refuses_to_borrow_its_parent_process_group() {
+    let directory = tempfile::tempdir().unwrap();
+    let registry = directory.path().join("invocations");
+    std::fs::create_dir(&registry).unwrap();
+    let tool = install(
+        &directory.path().join("worker"),
+        &ToolSpec::default().with("invocation_root", registry.to_str().unwrap()),
+    )
+    .unwrap();
+    let result = Command::new(tool).output().unwrap();
+    assert_eq!(result.status.code(), Some(125));
+    assert_eq!(std::fs::read_dir(registry).unwrap().count(), 0);
+}
+
 #[test]
 fn packager_proxy_forwards_demux_and_holds_only_ts_output() {
     let directory = tempfile::tempdir().unwrap();
