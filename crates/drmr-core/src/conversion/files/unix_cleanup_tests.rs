@@ -2,6 +2,47 @@ use super::*;
 use std::os::unix::fs::{PermissionsExt as _, symlink};
 
 #[test]
+fn an_unpublished_helper_can_preserve_a_replaced_payload_root() {
+    let root = tempfile::tempdir().unwrap();
+    let mut stage = Stage::new(Some(root.path())).unwrap();
+    let workspace = stage.path().to_path_buf();
+    let outer = stage.private_root().to_path_buf();
+    let original = root.path().join("original-payload");
+    std::fs::write(workspace.join("owned"), b"original helper bytes").unwrap();
+    std::fs::rename(&workspace, &original).unwrap();
+    std::fs::create_dir(&workspace).unwrap();
+    std::fs::set_permissions(&workspace, std::fs::Permissions::from_mode(0o700)).unwrap();
+    std::fs::write(workspace.join("foreign-sentinel"), b"must remain").unwrap();
+
+    stage.preserve_replaced_workspace();
+    drop(stage);
+
+    assert_eq!(
+        std::fs::read(workspace.join("foreign-sentinel")).unwrap(),
+        b"must remain"
+    );
+    assert_eq!(
+        std::fs::read(original.join("owned")).unwrap(),
+        b"original helper bytes"
+    );
+    assert!(outer.is_dir());
+}
+
+#[test]
+fn an_unpublished_helper_still_cleans_an_unchanged_payload_root() {
+    let root = tempfile::tempdir().unwrap();
+    let mut stage = Stage::new(Some(root.path())).unwrap();
+    let outer = stage.private_root().to_path_buf();
+    std::fs::write(stage.path().join("owned"), b"helper bytes").unwrap();
+
+    stage.preserve_replaced_workspace();
+    drop(stage);
+
+    assert!(!outer.exists());
+    assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
+}
+
+#[test]
 fn checked_cleanup_does_not_adopt_a_foreign_outer_replacement() {
     let root = tempfile::tempdir().unwrap();
     let directory = tempfile::Builder::new()

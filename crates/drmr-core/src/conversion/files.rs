@@ -107,6 +107,18 @@ impl Stage {
     pub(super) fn path(&self) -> &Path {
         &self.path
     }
+
+    /// Opt out of recursive cleanup when an unpublished helper's root was replaced.
+    /// Descriptors still close normally; uncertain filesystem entries are retained.
+    pub(super) fn preserve_replaced_workspace(&mut self) {
+        if self.directory_source().is_ok() {
+            return;
+        }
+        #[cfg(unix)]
+        self.outer.preserve();
+        #[cfg(windows)]
+        self.owned_child.preserve();
+    }
 }
 
 #[cfg(unix)]
@@ -185,6 +197,15 @@ impl UnixOuter {
     }
     fn cleanup(&self) -> Result<(), ConversionError> {
         self.cleanup_observed(|| {})
+    }
+    fn preserve(&self) {
+        let directory = match self.directory.lock() {
+            Ok(mut directory) => directory.take(),
+            Err(error) => error.into_inner().take(),
+        };
+        if let Some(directory) = directory {
+            let _ = directory.keep();
+        }
     }
     fn cleanup_observed(&self, after_check: impl FnOnce()) -> Result<(), ConversionError> {
         let (directory, poisoned) = match self.directory.lock() {
