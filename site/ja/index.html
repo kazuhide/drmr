@@ -147,7 +147,7 @@
         </li>
       </ol>
       <p class="section-note">この例は、対応するClear HLSからCBCS DASHへの変換です。<a href="guide/">日本語ガイド</a>で手順を確認し、<a href="https://github.com/kazuhide/drmr/blob/main/docs/usage.md#separate-input-and-output-keys">所有者だけが読める鍵設定ファイルを用意してください（英語）</a>。ClearからClearへの変換では<code>--to clear</code>を指定し、鍵ファイルを省略できます。<code>inspect</code>はメタデータだけを素早く調べるコマンドとして引き続き使えます。</p>
-      <p class="section-note">対応する非暗号化HLSのTS入力から、FairPlay向けHLSとWidevine／PlayReady向けDASHをまとめて作る場合は、<code>plan --outputs outputs.json</code>を使います。<a href="guide/#inspect-plan">日本語ガイド</a>では、出力ごとの形式・鍵・検査条件と、すべての検査後に結果を確定する手順を説明しています。AppleとDASH-IFのツールで最終マニフェストを検査する設定も指定できます。<code>verify OUTPUT --manifest-only</code>で、後からマニフェストだけを検査することもできます。マニフェストの検査結果は、原本全体とのメディア比較とは分けて表示します。</p>
+      <p class="section-note">対応する非暗号化HLSのTS入力から、FairPlay向けHLSとWidevine／PlayReady向けDASHをまとめて作る場合は、<code>plan --outputs outputs.json</code>を使います。<a href="guide/#inspect-plan">日本語ガイド</a>では、出力ごとの形式・鍵・検査条件と、すべての検査後に結果を確定する手順を説明しています。最終マニフェストはRustの内蔵検査で確認します。<code>verify OUTPUT --manifest-only</code>は保存済みの出力に対する内蔵検査です。<code>--external-validator</code>を追加すると、形式に応じてAppleまたはDASH-IFのツールでも検査します。マニフェストの検査結果は、原本全体とのメディア比較とは分けて表示します。</p>
     </section>
 
     <section id="verification" class="section" aria-labelledby="verification-title">
