@@ -23,6 +23,7 @@ pub use aes128::{
     Aes128Key, HlsInputKeys, HlsOutputKey, SegmentIv, decrypt_segment, encrypt_segment,
 };
 mod cenc;
+pub mod conformance;
 mod files;
 mod frozen;
 pub use frozen::{FrozenSource, SourceFile, SourceInventory};
