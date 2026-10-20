@@ -2,7 +2,8 @@
 mod common;
 use drmr_core::{
     conversion::{
-        ContentKey, Converter, HlsInputKeys, InputKeys, VerificationRequest, VerificationSource,
+        ContentKey, Converter, HlsInputKeys, InputKeys, SourceValidationPurpose,
+        VerificationRequest, VerificationSource,
     },
     events::Collector,
     toolrun::{Secrets, ToolRunner},
@@ -382,4 +383,30 @@ fn qualified_cbcs_audio_converts_but_still_requires_its_original_key() {
     assert!(!output.exists());
     assert_eq!(events.records().len(), 0);
     assert_eq!(std::fs::read(source).unwrap(), before);
+}
+
+#[test]
+fn deep_admission_keeps_conversion_and_verification_pssh_policies_distinct() {
+    let root = tempfile::tempdir().unwrap();
+    let clear = audio(root.path());
+    let protected = root.path().join("signaled.mp4");
+    cenc(&clear, &protected);
+    let original = std::fs::read(&protected).unwrap();
+    let keys = keys();
+    let hls = HlsInputKeys::default();
+    let source = VerificationSource {
+        input: &protected,
+        input_keys: &keys,
+        hls_keys: &hls,
+    };
+    let (c, _) = converter();
+    let result = c
+        .validate_source(source, SourceValidationPurpose::Verification)
+        .unwrap();
+    assert!(result.verification.passed);
+    assert!(
+        c.validate_source(source, SourceValidationPurpose::Conversion)
+            .is_err()
+    );
+    assert_eq!(std::fs::read(&protected).unwrap(), original);
 }

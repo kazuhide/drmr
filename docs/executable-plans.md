@@ -26,6 +26,11 @@ license acquisition, or device playback. An unsupported profile returns failure
 with a fixed error code; it is not a claim that the media formats cannot support
 the transformation.
 
+A track can report `mixed`, for example when supported local HLS switches
+between AES-128 and clear resources. This is a source fact, not another output
+target. Verification does not accept mixed protection as matching a plan for
+one uniform output protection scheme.
+
 For a local input, use `drmr analyze original/manifest.mpd --json` or
 `drmr analyze original.mp4 --json`. Supply `--keys-file` for encrypted local input.
 Local input does not accept download options. `inspect` remains the faster,

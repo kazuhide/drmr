@@ -3,7 +3,8 @@ mod common;
 use drmr_core::{
     conversion::{
         Aes128Key, ContentKey, ConversionRequest, Converter, HlsInputKeys, HlsOutputKey, InputKeys,
-        OutputKey, SegmentIv, SourceValidationPurpose, VerificationRequest, VerificationSource,
+        OutputKey, SegmentIv, SourceProtection, SourceValidationPurpose, VerificationRequest,
+        VerificationSource,
     },
     events::NoSink,
     inspection::{OutputFormat, TargetProtection},
@@ -18,6 +19,30 @@ use std::{
 const KID: &str = "000102030405060708090a0b0c0d0e0f";
 const KEY: &str = "42424242424242424242424242424242";
 const URI: &str = "https://operator.invalid/public-fixture";
+#[test]
+fn only_uniform_source_protection_matches_a_single_output_target() {
+    let targets = [
+        TargetProtection::Clear,
+        TargetProtection::Cenc,
+        TargetProtection::Cbcs,
+        TargetProtection::HlsAes128,
+        TargetProtection::HlsSampleAes,
+    ];
+    for target in targets {
+        let source = SourceProtection::from(target);
+        assert_eq!(source.as_str(), target.as_str());
+        assert_eq!(serde_json::to_value(source).unwrap(), target.as_str());
+        for expected in targets {
+            assert_eq!(source.matches_target(expected), target == expected);
+        }
+        assert!(!SourceProtection::Mixed.matches_target(target));
+    }
+    assert_eq!(SourceProtection::Mixed.as_str(), "mixed");
+    assert_eq!(
+        serde_json::to_value(SourceProtection::Mixed).unwrap(),
+        "mixed"
+    );
+}
 fn converter() -> Converter {
     Converter::new(
         Arc::new(ToolRunner::new(
@@ -220,7 +245,8 @@ fn four_video_renditions_and_named_english_audio_convert_and_verify_independentl
             )
             .unwrap();
         assert_eq!(qualified.actual_format, format);
-        assert_eq!(qualified.track_protection, vec![target; 5]);
+        let protection = vec![SourceProtection::from(target); 5];
+        assert_eq!(qualified.track_protection, protection);
         proof(&qualified.verification);
         println!(
             "DRMR_ABR_HLS_CELL {}",
@@ -248,7 +274,7 @@ fn deep_admission_reports_actual_ts_format_and_never_admits_missing_media() {
     assert_eq!(qualification.actual_format, OutputFormat::HlsTs);
     assert_eq!(
         qualification.track_protection,
-        vec![TargetProtection::Clear; 5]
+        vec![SourceProtection::Clear; 5]
     );
     assert_eq!(
         qualification.eligible_formats,
@@ -263,6 +289,159 @@ fn deep_admission_reports_actual_ts_format_and_never_admits_missing_media() {
             .validate_source(source, SourceValidationPurpose::Conversion)
             .is_err()
     );
+}
+
+fn encrypt_first_segment(playlist: &Path) {
+    let text = std::fs::read_to_string(playlist).unwrap();
+    assert!(!text.contains("#EXT-X-KEY:"));
+    let first = text
+        .lines()
+        .find(|l| !l.starts_with('#') && !l.is_empty())
+        .unwrap();
+    let segment = playlist.parent().unwrap().join(first);
+    let cipher = playlist
+        .parent()
+        .unwrap()
+        .join("encrypted-first-segment.tmp");
+    drmr_core::conversion::encrypt_segment(
+        &segment,
+        &cipher,
+        &Aes128Key::from_hex(KEY).unwrap(),
+        &SegmentIv::for_sequence(0),
+    )
+    .unwrap();
+    std::fs::rename(cipher, segment).unwrap();
+    let mut mixed = String::new();
+    let mut replaced = false;
+    for line in text.lines() {
+        if !replaced && line == first {
+            writeln!(mixed, "#EXT-X-KEY:METHOD=AES-128,URI=\"{URI}\",IV=0x00000000000000000000000000000000\n{line}\n#EXT-X-KEY:METHOD=NONE").unwrap();
+            replaced = true;
+        } else {
+            writeln!(mixed, "{line}").unwrap();
+        }
+    }
+    assert!(replaced);
+    std::fs::write(playlist, mixed).unwrap();
+}
+#[test]
+fn mixed_clear_and_aes_segments_remain_admitted_and_report_the_actual_outer_protection() {
+    let directory = tempfile::tempdir().unwrap();
+    let input_root = directory.path().join("input");
+    std::fs::create_dir(&input_root).unwrap();
+    let input = fixture(&input_root);
+    encrypt_first_segment(&input_root.join("video-0/media.m3u8"));
+    let keys = InputKeys::default();
+    let hls = HlsInputKeys::new(vec![(URI.into(), Aes128Key::from_hex(KEY).unwrap())]).unwrap();
+    let original = common::snapshot_tree(&input_root);
+    let source = VerificationSource {
+        input: &input,
+        input_keys: &keys,
+        hls_keys: &hls,
+    };
+    let qualification = converter()
+        .validate_source(source, SourceValidationPurpose::Conversion)
+        .unwrap();
+    assert_eq!(qualification.actual_format, OutputFormat::HlsTs);
+    assert_eq!(
+        qualification
+            .track_protection
+            .iter()
+            .filter(|p| **p == SourceProtection::Mixed)
+            .count(),
+        1
+    );
+    proof(&qualification.verification);
+    let output = directory.path().join("clear");
+    let (plan, mut operator) = execute_mixed_clear_plan(&input, &output);
+    proof(
+        &converter()
+            .verify(VerificationRequest {
+                source,
+                output: VerificationSource {
+                    input: &output.join("master.m3u8"),
+                    input_keys: &keys,
+                    hls_keys: &HlsInputKeys::default(),
+                },
+            })
+            .unwrap(),
+    );
+    let master = output.join("master.m3u8");
+    let master_text = std::fs::read_to_string(&master).unwrap();
+    let media = output.join(
+        master_text
+            .lines()
+            .find(|l| !l.starts_with('#') && !l.is_empty())
+            .unwrap(),
+    );
+    encrypt_first_segment(&media);
+    let mixed = VerificationSource {
+        input: &master,
+        input_keys: &keys,
+        hls_keys: &hls,
+    };
+    for purpose in [
+        SourceValidationPurpose::Conversion,
+        SourceValidationPurpose::Verification,
+    ] {
+        let result = converter().validate_source(mixed, purpose).unwrap();
+        assert_eq!(result.actual_format, OutputFormat::Hls);
+        assert_eq!(
+            result
+                .track_protection
+                .iter()
+                .filter(|p| **p == SourceProtection::Mixed)
+                .count(),
+            1
+        );
+        assert!(
+            !result
+                .track_protection
+                .iter()
+                .all(|p| p.matches_target(TargetProtection::Clear))
+        );
+        proof(&result.verification);
+    }
+    proof(
+        &converter()
+            .verify(VerificationRequest {
+                source,
+                output: mixed,
+            })
+            .unwrap(),
+    );
+    operator.hls_output = Some(HlsOutputKey::new(URI, Aes128Key::from_hex(KEY).unwrap()).unwrap());
+    let result = converter().verify_plan(&plan, &operator).unwrap();
+    assert!(result.source_unchanged && result.verification.passed);
+    assert!(!result.output_matches_plan);
+    assert_eq!(common::snapshot_tree(&input_root), original);
+}
+
+fn execute_mixed_clear_plan(
+    input: &Path,
+    output: &Path,
+) -> (
+    drmr_core::conversion::plan::ExecutionPlan,
+    drmr_core::conversion::key_file::OperatorKeys,
+) {
+    use drmr_core::conversion::{key_file::OperatorKeys, plan::ExecutionPlanRequest};
+    let mut keys = OperatorKeys::default();
+    keys.hls_input =
+        HlsInputKeys::new(vec![(URI.into(), Aes128Key::from_hex(KEY).unwrap())]).unwrap();
+    let plan = converter()
+        .create_execution_plan(ExecutionPlanRequest {
+            input: VerificationSource {
+                input,
+                input_keys: &keys.input,
+                hls_keys: &keys.hls_input,
+            },
+            output,
+            format: Some(OutputFormat::Hls),
+            target: TargetProtection::Clear,
+        })
+        .unwrap();
+    proof(&converter().execute_plan(&plan, &keys).unwrap().verification);
+    (plan, keys)
 }
 
 fn verify_clear(
@@ -463,5 +642,244 @@ fn sole_named_audio_with_omitted_selection_flags_is_retained_across_hls_and_dash
         }
         proof(&verify_clear(&input, &manifest).unwrap());
     }
+    assert_eq!(common::snapshot_tree(&root), before);
+}
+
+#[test]
+fn default_audio_keeps_an_omitted_autoselect_attribute() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("input");
+    std::fs::create_dir(&root).unwrap();
+    let input = fixture(&root);
+    let master = std::fs::read_to_string(&input)
+        .unwrap()
+        .replace(",AUTOSELECT=YES", "");
+    std::fs::write(&input, master).unwrap();
+    let output = directory.path().join("output");
+    clear_output(&input, &output);
+    let manifest = output.join("master.m3u8");
+    let declaration = std::fs::read_to_string(&manifest).unwrap();
+    assert!(declaration.contains("DEFAULT=YES") && !declaration.contains("AUTOSELECT="));
+    proof(&verify_clear(&input, &manifest).unwrap());
+    std::fs::write(
+        &manifest,
+        declaration.replace("DEFAULT=YES", "DEFAULT=YES,AUTOSELECT=YES"),
+    )
+    .unwrap();
+    assert_eq!(
+        verify_clear(&input, &manifest).unwrap_err().0,
+        "presentation-metadata-mismatch"
+    );
+}
+#[test]
+fn finite_joint_mp4_qualification_distinguishes_conversion_from_existing_output_verification() {
+    let directory = tempfile::tempdir().unwrap();
+    let clip = Path::new(env!("CARGO_MANIFEST_DIR")).join("../drmr/tests/fixtures/bbb/clip.mp4");
+    let keys = InputKeys::default();
+    let hls = HlsInputKeys::default();
+    let input = VerificationSource {
+        input: &clip,
+        input_keys: &keys,
+        hls_keys: &hls,
+    };
+    let qualification = converter()
+        .validate_source(input, SourceValidationPurpose::Conversion)
+        .unwrap();
+    assert!(qualification.eligible_formats.contains(&OutputFormat::Mp4));
+    proof(&qualification.verification);
+    let output = directory.path().join("encrypted.mp4");
+    let key = OutputKey::from_hex(KID, KEY).unwrap();
+    proof(
+        &converter()
+            .convert_mp4(&clip, &output, TargetProtection::Cenc, &keys, Some(&key))
+            .unwrap()
+            .verification,
+    );
+    let output_keys = InputKeys::new(vec![ContentKey::from_hex(KID, KEY).unwrap()]).unwrap();
+    let source = VerificationSource {
+        input: &output,
+        input_keys: &output_keys,
+        hls_keys: &hls,
+    };
+    for purpose in [
+        SourceValidationPurpose::Conversion,
+        SourceValidationPurpose::Verification,
+    ] {
+        let result = converter().validate_source(source, purpose).unwrap();
+        assert_eq!(result.actual_format, OutputFormat::Mp4);
+        assert_eq!(result.track_protection, vec![SourceProtection::Cenc; 2]);
+        assert!(!result.eligible_formats.contains(&OutputFormat::Mp4));
+        proof(&result.verification);
+    }
+    assert_eq!(
+        converter()
+            .convert(ConversionRequest {
+                input: &output,
+                output: &directory.path().join("refused.mp4"),
+                format: OutputFormat::Mp4,
+                target: TargetProtection::Clear,
+                input_keys: &output_keys,
+                hls_input_keys: &hls,
+                output_key: None,
+                hls_key_uri: None,
+                hls_output_key: None
+            })
+            .unwrap_err()
+            .0,
+        "single-track-mp4-required"
+    );
+}
+fn tfdt_range(bytes: &[u8]) -> std::ops::Range<usize> {
+    let boxes = drmr_core::mp4::parse_boxes(bytes).unwrap();
+    let moof = boxes.iter().find(|n| n.kind() == *b"moof").unwrap();
+    let traf = moof.children.iter().find(|n| n.kind() == *b"traf").unwrap();
+    let tfdt = traf.children.iter().find(|n| n.kind() == *b"tfdt").unwrap();
+    let payload = tfdt.header.payload(bytes);
+    let width = if payload[0] == 1 { 8 } else { 4 };
+    let start = tfdt.header.offset + tfdt.header.header_size + 4;
+    start..start + width
+}
+#[test]
+fn the_last_video_payload_audio_clock_and_segment_declarations_are_independent_evidence() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("input");
+    std::fs::create_dir(&root).unwrap();
+    let input = fixture(&root);
+    let source_before = common::snapshot_tree(&root);
+    let output = directory.path().join("output");
+    clear_output(&input, &output);
+    let manifest = output.join("master.m3u8");
+    let last = output.join("track-0004/seg_5.m4s");
+    let original = std::fs::read(&last).unwrap();
+    let mut other = std::fs::read(output.join("track-0004/seg_4.m4s")).unwrap();
+    let clock = original[tfdt_range(&original)].to_vec();
+    let at = tfdt_range(&other);
+    assert_eq!(at.len(), clock.len());
+    other[at].copy_from_slice(&clock);
+    assert_ne!(other, original);
+    std::fs::write(&last, other).unwrap();
+    assert_eq!(
+        verify_clear(&input, &manifest).unwrap_err().0,
+        "presentation-track-content-mismatch"
+    );
+    std::fs::write(&last, &original).unwrap();
+    let audio = output.join("track-0000/seg_5.m4s");
+    let original_audio = std::fs::read(&audio).unwrap();
+    let mut changed = original_audio.clone();
+    let range = tfdt_range(&changed);
+    changed[range.end - 1] ^= 1;
+    std::fs::write(&audio, changed).unwrap();
+    assert_eq!(
+        verify_clear(&input, &manifest).unwrap_err().0,
+        "fragment-timeline-gap-or-overlap"
+    );
+    std::fs::write(&audio, original_audio).unwrap();
+    let playlist = output.join("track-0004/media.m3u8");
+    let text = std::fs::read_to_string(&playlist).unwrap();
+    for (expected, changed) in [
+        (
+            "manifest-segment-duration-mismatch",
+            text.replacen("#EXTINF:2.000,", "#EXTINF:3.000,", 1),
+        ),
+        (
+            "fragment-timeline-gap-or-overlap",
+            text.replace("seg_5.m4s", "seg_4.m4s"),
+        ),
+        (
+            "hls-complete-vod-required",
+            text.replace("#EXT-X-ENDLIST", ""),
+        ),
+    ] {
+        assert_ne!(changed, text);
+        std::fs::write(&playlist, changed).unwrap();
+        assert_eq!(verify_clear(&input, &manifest).unwrap_err().0, expected);
+    }
+    std::fs::write(&playlist, text).unwrap();
+    proof(&verify_clear(&input, &manifest).unwrap());
+    assert_eq!(common::snapshot_tree(&root), source_before);
+}
+
+#[test]
+fn deep_admission_rejects_a_channel_declaration_that_disagrees_with_actual_audio() {
+    let directory = tempfile::tempdir().unwrap();
+    let input = fixture(directory.path());
+    let original = std::fs::read_to_string(&input).unwrap();
+    assert!(original.contains("CHANNELS=\"2\""));
+    std::fs::write(&input, original.replace("CHANNELS=\"2\"", "CHANNELS=\"1\"")).unwrap();
+    let keys = InputKeys::default();
+    let hls = HlsInputKeys::default();
+    assert_eq!(
+        converter()
+            .validate_source(
+                VerificationSource {
+                    input: &input,
+                    input_keys: &keys,
+                    hls_keys: &hls
+                },
+                SourceValidationPurpose::Conversion
+            )
+            .unwrap_err()
+            .0,
+        "presentation-metadata-mismatch"
+    );
+}
+
+#[test]
+fn dash_labels_language_priority_and_common_time_origin_are_independently_checked() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("input");
+    std::fs::create_dir(&root).unwrap();
+    let input = fixture(&root);
+    let before = common::snapshot_tree(&root);
+    let output = directory.path().join("dash");
+    let keys = InputKeys::default();
+    let hls = HlsInputKeys::default();
+    proof(
+        &converter()
+            .convert(ConversionRequest {
+                input: &input,
+                output: &output,
+                format: OutputFormat::Dash,
+                target: TargetProtection::Clear,
+                input_keys: &keys,
+                hls_input_keys: &hls,
+                output_key: None,
+                hls_key_uri: None,
+                hls_output_key: None,
+            })
+            .unwrap()
+            .verification,
+    );
+    let manifest = output.join("manifest.mpd");
+    let original = std::fs::read_to_string(&manifest).unwrap();
+    for changed in [
+        original.replace("<Label>English</Label>", "<Label>Commentary</Label>"),
+        original.replace("lang=\"en\"", "lang=\"ja\""),
+        original.replace("selectionPriority=\"2\"", "selectionPriority=\"1\""),
+    ] {
+        assert_ne!(changed, original);
+        std::fs::write(&manifest, changed).unwrap();
+        assert_eq!(
+            verify_clear(&input, &manifest).unwrap_err().0,
+            "presentation-metadata-mismatch"
+        );
+    }
+    let document = roxmltree::Document::parse(&original).unwrap();
+    let attribute = document
+        .descendants()
+        .find_map(|n| n.attribute_node("presentationTimeOffset"))
+        .unwrap();
+    let mut changed = original.clone();
+    changed.replace_range(
+        attribute.range_value(),
+        &(attribute.value().parse::<u64>().unwrap() + 1).to_string(),
+    );
+    std::fs::write(&manifest, changed).unwrap();
+    assert_eq!(
+        verify_clear(&input, &manifest).unwrap_err().0,
+        "dash-incoherent-presentation-offset"
+    );
+    std::fs::write(&manifest, original).unwrap();
+    proof(&verify_clear(&input, &manifest).unwrap());
     assert_eq!(common::snapshot_tree(&root), before);
 }

@@ -120,9 +120,22 @@ pub(super) fn validate_profile(
     backend: &super::super::backend::Backend,
     key: Option<&super::ContentKey>,
 ) -> Result<(), ConversionError> {
-    if let Some((width, height)) = track.metadata.resolution {
+    let channels = track
+        .metadata
+        .audio
+        .as_ref()
+        .and_then(|a| a.channels.as_ref());
+    if track.metadata.resolution.is_some() || channels.is_some() {
         let profile = backend.profile_stream(&track.media, track.index, key)?;
-        if profile["width"].as_u64() != Some(width) || profile["height"].as_u64() != Some(height) {
+        if let Some((width, height)) = track.metadata.resolution
+            && (profile["width"].as_u64() != Some(width)
+                || profile["height"].as_u64() != Some(height))
+        {
+            return Err(BAD);
+        }
+        if channels.is_some_and(|expected| {
+            profile["channels"].as_u64().map(|n| n.to_string()).as_ref() != Some(expected)
+        }) {
             return Err(BAD);
         }
     }
@@ -430,11 +443,14 @@ pub(super) fn materialize(
     backend: &super::super::backend::Backend,
     keys: &super::InputKeys,
 ) -> Result<(), ConversionError> {
-    if tracks
+    if !tracks
         .iter()
-        .filter(|t| t.report.tracks[0].kind == super::TrackKind::Audio)
-        .count()
-        != 1
+        .any(|t| t.report.tracks[0].kind == super::TrackKind::Video)
+        || tracks
+            .iter()
+            .filter(|t| t.report.tracks[0].kind == super::TrackKind::Audio)
+            .count()
+            != 1
     {
         return Ok(());
     }

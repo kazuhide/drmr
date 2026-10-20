@@ -33,7 +33,7 @@ pub struct TrackConversionRequest<'a> {
 #[derive(Clone)]
 struct Prepared {
     metadata: metadata::Metadata,
-    outer_protection: TargetProtection,
+    outer_protection: SourceProtection,
     source_dictionary: bool,
     source: PathBuf,
     media: PathBuf,
@@ -204,19 +204,13 @@ impl Converter {
         ),
         ConversionError,
     > {
-        let mut checks = VerificationChecks {
-            stream_metadata: super::CheckOutcome::Pass,
-            packet_payloads_equal: true,
-            packet_timing_equal: true,
-            decoded_content_equal: true,
-        };
         let mut output_tracks = Vec::new();
         let mut input_tracks = Vec::new();
         let verified_tracks = self.run_tracks(sources.len(), |ordinal| {
             let source = &sources[ordinal];
             let track_dir = stage.join(format!("track-{ordinal:04}"));
             let combined = work.join(format!("result-{ordinal}.mp4"));
-            let (reference, actual) = if let Some(key) = request.hls_output_key {
+            let actual = if let Some(key) = request.hls_output_key {
                 let keys = super::HlsInputKeys::new(vec![(
                     key.key_uri().to_string(),
                     super::Aes128Key(key.key.0.clone()),
@@ -231,18 +225,12 @@ impl Converter {
                     &self.backend,
                 )?;
                 copy_private(&localized.combined, &combined)?;
-                (
-                    localized.reference,
-                    inspection::inspect(&combined)
-                        .map_err(|_| ConversionError("invalid-output-media"))?,
-                )
+                inspection::inspect(&combined)
+                    .map_err(|_| ConversionError("invalid-output-media"))?
             } else {
                 combine_generated(&track_dir, &combined)?;
-                (
-                    combined.clone(),
-                    inspection::inspect(&combined)
-                        .map_err(|_| ConversionError("invalid-output-media"))?,
-                )
+                inspection::inspect(&combined)
+                    .map_err(|_| ConversionError("invalid-output-media"))?
             };
             let expected = match request.target {
                 TargetProtection::Clear | TargetProtection::HlsAes128 => Protection::Clear,
@@ -263,17 +251,6 @@ impl Converter {
             {
                 return Err(ConversionError("output-key-id-mismatch"));
             }
-            let verified = self.backend.verify_views(
-                StreamView::new(
-                    &source.source,
-                    source.index,
-                    key_for(source, request.input_keys),
-                )
-                .with_metadata(&source.media)
-                .with_original_keys(source.source_dictionary, request.input_keys),
-                StreamView::new(&reference, 0, request.output_key.map(|k| &k.0))
-                    .with_metadata(&combined),
-            )?;
             let mut output = actual.tracks[0].clone();
             output.id = format!("track-{ordinal:04}");
             if request.target == TargetProtection::HlsAes128 {
@@ -281,25 +258,55 @@ impl Converter {
             }
             let mut input = source.report.tracks[0].clone();
             input.id = format!("track-{ordinal:04}");
-            Ok((verified.checks, input, output))
+            Ok((input, output))
         })?;
-        for (verified, input, output) in verified_tracks {
-            checks.stream_metadata.include(verified.stream_metadata);
-            checks.packet_payloads_equal &= verified.packet_payloads_equal;
-            checks.packet_timing_equal &= verified.packet_timing_equal;
-            checks.decoded_content_equal &= verified.decoded_content_equal;
+        for (input, output) in verified_tracks {
             input_tracks.push(input);
             output_tracks.push(output);
         }
-        let passed = checks.stream_metadata.is_pass()
-            && checks.packet_payloads_equal
-            && checks.packet_timing_equal
-            && checks.decoded_content_equal;
-        if !passed {
+        let verification = self.verify_generated_presentation(sources, request, stage, work)?;
+        if !verification.passed {
             return Err(ConversionError("round-trip-verification-failed"));
         }
         self.verify_signaled_output(&sources[0].source, request, stage)?;
-        Ok((checks, output_tracks, input_tracks))
+        Ok((verification.checks, output_tracks, input_tracks))
+    }
+    fn verify_generated_presentation(
+        &self,
+        sources: &[Prepared],
+        request: &TrackConversionRequest<'_>,
+        stage: &Path,
+        work: &Path,
+    ) -> Result<VerificationReport, ConversionError> {
+        let keys = request
+            .output_key
+            .map(|key| {
+                InputKeys::new(vec![ContentKey::from_hex(
+                    &key.0.id_hex(),
+                    &key.0.key_hex(),
+                )?])
+            })
+            .transpose()?
+            .unwrap_or_default();
+        let hls_keys = output_hls_keys(request.hls_output_key)?;
+        let directory = work.join("manifest-verification");
+        super::files::create_dir(&directory)?;
+        let manifest = stage.join(if request.format == OutputFormat::Dash {
+            "manifest.mpd"
+        } else {
+            "master.m3u8"
+        });
+        let actual = prepare_presentation(
+            &VerificationSource {
+                input: &manifest,
+                input_keys: &keys,
+                hls_keys: &hls_keys,
+            },
+            &directory,
+            &self.backend,
+            SourceValidationPurpose::Verification,
+        )?;
+        self.compare_presentations(sources.to_vec(), actual, request.input_keys, &keys)
     }
     fn normalize_tracks(
         &self,
@@ -638,9 +645,9 @@ fn prepare_for(
     Ok(Prepared {
         metadata: metadata::Metadata::default(),
         outer_protection: match track.protection {
-            Protection::Clear => TargetProtection::Clear,
-            Protection::Cenc => TargetProtection::Cenc,
-            Protection::Cbcs => TargetProtection::Cbcs,
+            Protection::Clear => SourceProtection::Clear,
+            Protection::Cenc => SourceProtection::Cenc,
+            Protection::Cbcs => SourceProtection::Cbcs,
             _ => return Err(ConversionError("input-protection-not-supported")),
         },
         source_dictionary,
@@ -720,18 +727,63 @@ pub struct VerificationSource<'a> {
     pub input_keys: &'a InputKeys,
     pub hls_keys: &'a super::HlsInputKeys,
 }
-/// Compare all actual source and candidate tracks by media role and stable ordinal.
+/// Compare every actual source and candidate stream with independent media and selection evidence.
 #[derive(Clone, Copy)]
 pub struct VerificationRequest<'a> {
     pub source: VerificationSource<'a>,
     pub output: VerificationSource<'a>,
+}
+/// Actual admitted source protection, including changes between HLS media segments.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SourceProtection {
+    Clear,
+    Cenc,
+    Cbcs,
+    HlsAes128,
+    HlsSampleAes,
+    Mixed,
+}
+impl SourceProtection {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Clear => "clear",
+            Self::Cenc => "cenc",
+            Self::Cbcs => "cbcs",
+            Self::HlsAes128 => "hls-aes128",
+            Self::HlsSampleAes => "hls-sample-aes",
+            Self::Mixed => "mixed",
+        }
+    }
+    /// A mixed source never satisfies a single output protection requirement.
+    pub const fn matches_target(self, target: TargetProtection) -> bool {
+        matches!(
+            (self, target),
+            (Self::Clear, TargetProtection::Clear)
+                | (Self::Cenc, TargetProtection::Cenc)
+                | (Self::Cbcs, TargetProtection::Cbcs)
+                | (Self::HlsAes128, TargetProtection::HlsAes128)
+                | (Self::HlsSampleAes, TargetProtection::HlsSampleAes)
+        )
+    }
+}
+impl From<TargetProtection> for SourceProtection {
+    fn from(target: TargetProtection) -> Self {
+        match target {
+            TargetProtection::Clear => Self::Clear,
+            TargetProtection::Cenc => Self::Cenc,
+            TargetProtection::Cbcs => Self::Cbcs,
+            TargetProtection::HlsAes128 => Self::HlsAes128,
+            TargetProtection::HlsSampleAes => Self::HlsSampleAes,
+        }
+    }
 }
 /// Complete source admission facts. This receipt never authorizes future execution.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct SourceQualification {
     pub input: Inspection,
     pub actual_format: OutputFormat,
-    pub track_protection: Vec<TargetProtection>,
+    pub track_protection: Vec<SourceProtection>,
     pub eligible_formats: Vec<OutputFormat>,
     pub verification: VerificationReport,
 }
@@ -989,16 +1041,8 @@ impl Converter {
             let b_view = StreamView::new(&b.source, b.index, key_for(b, result_keys))
                 .with_metadata(&b.media);
             self.backend.verify_views(
-                if a.source_dictionary {
-                    a_view.with_all_keys(source_keys)
-                } else {
-                    a_view
-                },
-                if b.source_dictionary {
-                    b_view.with_all_keys(result_keys)
-                } else {
-                    b_view
-                },
+                a_view.with_original_keys(a.source_dictionary, source_keys),
+                b_view.with_original_keys(b.source_dictionary, result_keys),
             )
         })?;
         for check in verified_tracks {
@@ -1190,11 +1234,13 @@ fn prepare_hls_presentation(
             for track in &mut prepared {
                 track.metadata = media.metadata.clone();
                 track.outer_protection = if localized.sample_transport {
-                    TargetProtection::HlsSampleAes
-                } else if localized.report.protection == Protection::HlsAes128 {
-                    TargetProtection::HlsAes128
+                    SourceProtection::HlsSampleAes
                 } else {
-                    TargetProtection::Clear
+                    match localized.report.protection {
+                        Protection::HlsAes128 => SourceProtection::HlsAes128,
+                        Protection::Mixed => SourceProtection::Mixed,
+                        _ => SourceProtection::Clear,
+                    }
                 };
                 metadata::validate_profile(track, backend, key_for(track, input.input_keys))?;
             }
@@ -1217,8 +1263,10 @@ fn prepare_hls_presentation(
             purpose,
         )?;
         track.metadata = media.metadata.clone();
-        if localized.report.protection == Protection::HlsAes128 {
-            track.outer_protection = TargetProtection::HlsAes128;
+        match localized.report.protection {
+            Protection::HlsAes128 => track.outer_protection = SourceProtection::HlsAes128,
+            Protection::Mixed => track.outer_protection = SourceProtection::Mixed,
+            _ => {}
         }
         metadata::validate_profile(&track, backend, key_for(&track, input.input_keys))?;
         track.playlist_reference = if track.key_id.is_none() {

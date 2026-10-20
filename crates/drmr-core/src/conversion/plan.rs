@@ -4,8 +4,9 @@ pub(super) mod destination;
 mod tests;
 use super::{
     ConversionError, ConversionReport, ConversionRequest, Converter, FrozenSource, SourceInventory,
-    SourceQualification, SourceValidationPurpose, VerificationChecks, VerificationReport,
-    VerificationRequest, VerificationSource, files, frozen, key_file::OperatorKeys,
+    SourceProtection, SourceQualification, SourceValidationPurpose, VerificationChecks,
+    VerificationReport, VerificationRequest, VerificationSource, files, frozen,
+    key_file::OperatorKeys,
 };
 use crate::inspection::{Inspection, OutputFormat, TargetProtection};
 use serde::{Deserialize, Serialize};
@@ -73,7 +74,7 @@ pub struct InputAnalysis {
     pub input_checks: VerificationChecks,
     pub input: Inspection,
     pub actual_format: OutputFormat,
-    pub track_protection: Vec<TargetProtection>,
+    pub track_protection: Vec<SourceProtection>,
     pub eligible_formats: Vec<OutputFormat>,
     pub source: SourceInventory,
 }
@@ -229,7 +230,7 @@ impl Converter {
             && qualified
                 .track_protection
                 .iter()
-                .all(|target| *target == plan.intent.target);
+                .all(|protection| protection.matches_target(plan.intent.target));
         let verification = command.verify(VerificationRequest { source, output })?;
         original.check_original().map_err(source_error)?;
         result.check_original().map_err(|error| {
