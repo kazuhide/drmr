@@ -1,9 +1,11 @@
 //! Explicit operator signaling. No license service is contacted by this module.
+mod multi;
 use super::{ConversionError, OutputKey};
 use crate::{
     inspection::{InputFormat, OutputFormat, Protection, TargetProtection},
     mp4, playready,
 };
+pub use multi::DrmSystem;
 use std::{
     fs::File,
     io::{Read, Seek, SeekFrom},
@@ -33,11 +35,12 @@ const PR: &str = "urn:uuid:9a04f079-9840-4286-ab92-e65be0885f95";
 #[derive(Clone)]
 pub struct OutputSignaling {
     license_url: Zeroizing<String>,
+    multi: Option<multi::MultiDrm>,
 }
 impl std::fmt::Debug for OutputSignaling {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("OutputSignaling")
-            .field("system", &"playready")
+            .field("systems", &self.systems())
             .finish_non_exhaustive()
     }
 }
@@ -63,7 +66,35 @@ impl OutputSignaling {
         }
         Ok(Self {
             license_url: Zeroizing::new(license_url.into()),
+            multi: None,
         })
+    }
+    /// Select explicit DRM systems. Widevine data must be a complete hexadecimal or base64
+    /// PSSH box; the `FairPlay` key URI belongs to the separate HLS output-key configuration.
+    pub fn multi_drm(
+        widevine_pssh: Option<&str>,
+        playready_license_url: Option<&str>,
+        fairplay: bool,
+    ) -> Result<Self, ConversionError> {
+        let license_url = playready_license_url
+            .map(Self::playready)
+            .transpose()?
+            .map_or_else(
+                || Zeroizing::new(String::new()),
+                |value| value.license_url.clone(),
+            );
+        let multi = multi::MultiDrm::new(widevine_pssh, playready_license_url.is_some(), fairplay)?;
+        Ok(Self {
+            license_url,
+            multi: Some(multi),
+        })
+    }
+    /// Selected system identifiers are public; provider metadata remains private.
+    pub fn systems(&self) -> Vec<DrmSystem> {
+        self.multi.as_ref().map_or_else(
+            || vec![DrmSystem::PlayReady],
+            |value| value.systems(!self.license_url.is_empty()),
+        )
     }
     pub(super) fn profile(
         format: OutputFormat,
@@ -87,6 +118,9 @@ impl OutputSignaling {
         value
     }
     pub(super) fn objects(&self, key: &OutputKey) -> Result<Objects, ConversionError> {
+        if self.multi.is_some() {
+            return Err(UNSUPPORTED);
+        }
         let mut generated =
             playready::build_playready_v43(key.0.id_hex().as_str(), &self.license_url)
                 .map_err(|_| INVALID)?;
@@ -370,6 +404,27 @@ fn clear_metadata_tree(
 }
 
 impl super::Converter {
+    /// Independently check the current manifest and initialization records against operator
+    /// metadata. Media comparison and license playback are separate verification domains.
+    pub fn verify_output_signaling(
+        &self,
+        input: &Path,
+        format: OutputFormat,
+        target: TargetProtection,
+        keys: &super::key_file::OperatorKeys,
+    ) -> Result<(), ConversionError> {
+        self.backend.check_cancelled()?;
+        let Some(signaling) = &keys.signaling else {
+            return Ok(());
+        };
+        OutputSignaling::profile(format, target)?;
+        let key = keys.output.as_ref().ok_or(INVALID)?;
+        let actual = crate::inspection::inspect(input).map_err(|_| MISMATCH)?;
+        let root = input.parent().ok_or(MISMATCH)?;
+        signaling
+            .objects(key)?
+            .finish(root, actual.tracks.len(), key)
+    }
     pub(super) fn validate_signaling_codec(
         &self,
         profile: &serde_json::Value,

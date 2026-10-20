@@ -29,7 +29,7 @@ pub use frozen::{FrozenSource, SourceFile, SourceInventory};
 mod hls;
 mod keys;
 mod signaling;
-pub use signaling::OutputSignaling;
+pub use signaling::{DrmSystem, OutputSignaling};
 mod presentation;
 mod progressive;
 mod timing;
