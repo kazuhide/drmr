@@ -1,6 +1,8 @@
 //! Joint, codec-preserving presentations with independent evidence for every source stream.
 pub(in crate::conversion) mod metadata;
 #[cfg(test)]
+mod signaling_tests;
+#[cfg(test)]
 mod staging_tests;
 mod ts_output;
 use super::{
@@ -69,6 +71,41 @@ impl Converter {
         &self,
         request: TrackConversionRequest<'_>,
     ) -> Result<ConversionReport, ConversionError> {
+        if self
+            .output_signaling
+            .as_ref()
+            .is_some_and(|value| value.is_multi())
+        {
+            let first = request
+                .tracks
+                .first()
+                .ok_or(super::signaling::UNSUPPORTED)?;
+            if request
+                .tracks
+                .iter()
+                .any(|track| track.source != first.source)
+            {
+                return Err(super::signaling::UNSUPPORTED);
+            }
+            let frozen = super::FrozenSource::capture(&first.source, &self.backend.stop)?;
+            let tracks: Vec<_> = request
+                .tracks
+                .iter()
+                .map(|track| LocalTrack {
+                    source: frozen.entrypoint().to_path_buf(),
+                    kind: track.kind,
+                    index: track.index,
+                })
+                .collect();
+            return self.using_frozen_source(&frozen).convert_tracks_inner(
+                TrackConversionRequest {
+                    tracks: &tracks,
+                    ..request
+                },
+                None,
+                None,
+            );
+        }
         self.convert_tracks_inner(request, None, None)
     }
     fn convert_tracks_inner(
@@ -77,7 +114,7 @@ impl Converter {
         transport_stage: Option<&super::files::Stage>,
         metadata: Option<&[metadata::Metadata]>,
     ) -> Result<ConversionReport, ConversionError> {
-        self.validate_signaling_tracks(&request)?;
+        self.validate_signaling_tracks(&request, metadata.is_some())?;
         if request.format == OutputFormat::HlsTs {
             return Err(ConversionError("ts-original-evidence-required"));
         }
@@ -120,6 +157,14 @@ impl Converter {
         if let Some(key) = request.hls_output_key {
             encrypt_packaged_hls(package_root, stage.path(), clears.len(), key)?;
         }
+        self.finish_multi_signaling(
+            stage.path(),
+            request.format,
+            request.target,
+            request.output_key,
+            request.hls_key_uri,
+            request.hls_output_key,
+        )?;
         let (checks, output_tracks, input_tracks) =
             self.verify_joint(&sources, &request, stage.path(), work.path())?;
         secure_tree(stage.path())?;
@@ -128,11 +173,18 @@ impl Converter {
         } else {
             InputFormat::Hls
         };
+        let manifest = stage.path().join(if request.format == OutputFormat::Dash {
+            "manifest.mpd"
+        } else {
+            "master.m3u8"
+        });
+        let declared =
+            inspection::inspect(&manifest).map_err(|_| ConversionError("invalid-output-media"))?;
         let output = Inspection::new(
             format,
             Evidence::ContainerMetadata,
             output_tracks,
-            Vec::new(),
+            declared.drm_systems,
             Vec::new(),
         );
         let input = Inspection::new(
@@ -324,7 +376,11 @@ impl Converter {
             super::files::create_dir(&directory)?;
             let source = directory.join("source.mp4");
             copy_private(&track.source, &source)?;
-            if self.output_signaling.is_some() {
+            if self
+                .output_signaling
+                .as_ref()
+                .is_some_and(|value| !value.is_multi())
+            {
                 super::signaling::clear_mp4(&source, &self.backend.stop)?;
             }
             let prepared = prepare(&source, track.index, track.kind, request.input_keys)?;
@@ -421,44 +477,26 @@ impl Converter {
         request: &TrackConversionRequest<'_>,
     ) -> Result<(), ConversionError> {
         let _scope = self.backend.scope(super::measurement::Phase::Packaging);
-        let mut argv = Zeroizing::new(vec![
-            self.backend.packager.clone(),
-            "--mp4_reset_initial_composition_offset_to_zero=false".into(),
-        ]);
-        for (index, path) in clear.iter().enumerate() {
-            let name = format!("track-{index:04}");
-            let dir = root.join(&name);
-            super::files::create_dir(&dir).map_err(|_| ConversionError("output-staging-failed"))?;
-            let input = descriptor_path(path)?;
-            let output = descriptor_path(&dir)?;
-            argv.push(format!("input={input},stream=0,init_segment={output}/init.mp4,segment_template={output}/seg_$Number$.m4s,playlist_name={name}/media.m3u8"));
-        }
-        argv.extend([
-            "--segment_duration".into(),
-            "2".into(),
-            "--clear_lead".into(),
-            "0".into(),
-        ]);
-        if request.format == OutputFormat::Dash {
-            argv.extend([
-                "--generate_static_live_mpd".into(),
-                "--mpd_output".into(),
-                descriptor_path(&root.join("manifest.mpd"))?,
-            ]);
-        } else {
-            argv.extend([
-                "--hls_playlist_type".into(),
-                "VOD".into(),
-                "--hls_master_playlist_output".into(),
-                descriptor_path(&root.join("master.m3u8"))?,
-            ]);
-        }
+        let mut argv = joint_arguments(clear, root, request, &self.backend.packager)?;
         let secret = request.output_key.map(|k| k.0.key_hex());
         let signaling = self
             .output_signaling
             .as_ref()
+            .filter(|value| !value.is_multi())
             .map(|value| {
                 value.objects(
+                    request
+                        .output_key
+                        .ok_or(ConversionError("output-key-required"))?,
+                )
+            })
+            .transpose()?;
+        let multi_signaling = self
+            .output_signaling
+            .as_ref()
+            .filter(|value| value.is_multi() && request.format == OutputFormat::Dash)
+            .map(|value| {
+                value.multi_objects(
                     request
                         .output_key
                         .ok_or(ConversionError("output-key-required"))?,
@@ -474,6 +512,13 @@ impl Converter {
                 format!("label=:key_id={}:key={}", key.0.id_hex(), secret.as_str()),
             ]);
             if request.format == OutputFormat::Hls {
+                if self
+                    .output_signaling
+                    .as_ref()
+                    .is_some_and(|value| value.is_multi())
+                {
+                    argv.extend(["--protection_systems".into(), "FairPlay".into()]);
+                }
                 argv.extend([
                     "--hls_key_uri".into(),
                     request
@@ -483,9 +528,6 @@ impl Converter {
                 ]);
             }
         }
-        if let Some(signaling) = &signaling {
-            argv.extend(["--pssh".into(), signaling.hex.to_string()]);
-        }
         let mut secrets: Vec<&str> = secret
             .iter()
             .map(|s| s.as_str())
@@ -494,7 +536,18 @@ impl Converter {
         if let Some(signaling) = &signaling {
             secrets.extend(signaling.secrets());
         }
-        self.backend.run(&argv, "packager", &secrets)?;
+        if let Some(signaling) = &multi_signaling {
+            secrets.extend(signaling.secrets());
+        }
+        let pssh = signaling
+            .as_ref()
+            .map(|value| value.hex.as_str())
+            .or_else(|| multi_signaling.as_ref().map(|value| value.hex.as_str()));
+        if let Some(pssh) = pssh {
+            super::signaling::flagfile::run(&self.backend, &argv, pssh, &secrets)?;
+        } else {
+            self.backend.run(&argv, "packager", &secrets)?;
+        }
         for (index, source) in clear.iter().enumerate() {
             super::finite::restore(
                 source,
@@ -521,6 +574,46 @@ impl Converter {
         }
         Ok(())
     }
+}
+fn joint_arguments(
+    clear: &[PathBuf],
+    root: &Path,
+    request: &TrackConversionRequest<'_>,
+    packager: &str,
+) -> Result<Zeroizing<Vec<String>>, ConversionError> {
+    let mut argv = Zeroizing::new(vec![
+        packager.into(),
+        "--mp4_reset_initial_composition_offset_to_zero=false".into(),
+    ]);
+    for (index, path) in clear.iter().enumerate() {
+        let name = format!("track-{index:04}");
+        let dir = root.join(&name);
+        super::files::create_dir(&dir).map_err(|_| ConversionError("output-staging-failed"))?;
+        let input = descriptor_path(path)?;
+        let output = descriptor_path(&dir)?;
+        argv.push(format!("input={input},stream=0,init_segment={output}/init.mp4,segment_template={output}/seg_$Number$.m4s,playlist_name={name}/media.m3u8"));
+    }
+    argv.extend([
+        "--segment_duration".into(),
+        "2".into(),
+        "--clear_lead".into(),
+        "0".into(),
+    ]);
+    if request.format == OutputFormat::Dash {
+        argv.extend([
+            "--generate_static_live_mpd".into(),
+            "--mpd_output".into(),
+            descriptor_path(&root.join("manifest.mpd"))?,
+        ]);
+    } else {
+        argv.extend([
+            "--hls_playlist_type".into(),
+            "VOD".into(),
+            "--hls_master_playlist_output".into(),
+            descriptor_path(&root.join("master.m3u8"))?,
+        ]);
+    }
+    Ok(argv)
 }
 fn descriptor_path(path: &Path) -> Result<String, ConversionError> {
     let value = super::files::tool_path(path)?;
@@ -1782,6 +1875,26 @@ impl Converter {
         Ok(verification)
     }
     pub fn convert(
+        &self,
+        request: ConversionRequest<'_>,
+    ) -> Result<ConversionReport, ConversionError> {
+        if self
+            .output_signaling
+            .as_ref()
+            .is_some_and(|value| value.is_multi())
+        {
+            self.backend.check_cancelled()?;
+            let frozen = super::FrozenSource::capture(request.input, &self.backend.stop)?;
+            return self
+                .using_frozen_source(&frozen)
+                .convert_inner(ConversionRequest {
+                    input: frozen.entrypoint(),
+                    ..request
+                });
+        }
+        self.convert_inner(request)
+    }
+    fn convert_inner(
         &self,
         request: ConversionRequest<'_>,
     ) -> Result<ConversionReport, ConversionError> {

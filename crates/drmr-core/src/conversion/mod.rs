@@ -29,7 +29,7 @@ pub use frozen::{FrozenSource, SourceFile, SourceInventory};
 mod hls;
 mod keys;
 mod signaling;
-pub use signaling::OutputSignaling;
+pub use signaling::{DrmSystem, OutputSignaling};
 mod presentation;
 mod progressive;
 mod timing;
@@ -97,7 +97,7 @@ pub struct Converter {
     backend: Backend,
     maximum_workers: Option<usize>,
     downloaded: Option<Arc<download::Seal>>,
-    frozen_source: Option<Arc<frozen::OriginalGuard>>,
+    frozen_source: Vec<Arc<frozen::OriginalGuard>>,
     planned_destination: Option<Arc<plan::destination::OutputGuard>>,
     output_signaling: Option<Arc<OutputSignaling>>,
 }
@@ -110,7 +110,7 @@ impl Converter {
         Self {
             maximum_workers: None,
             downloaded: None,
-            frozen_source: None,
+            frozen_source: Vec::new(),
             planned_destination: None,
             output_signaling: None,
             backend: Backend {

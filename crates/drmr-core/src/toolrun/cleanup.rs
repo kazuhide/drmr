@@ -2,17 +2,62 @@
 
 use crate::native::ManagedChild;
 use std::io;
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 
 #[derive(Default)]
 struct Slot {
-    active: bool,
+    active: Option<Arc<()>>,
     retained: Option<Retained>,
 }
 
 struct Retained {
     child: ManagedChild,
     permit: Option<crate::resources::Permit>,
+    token: Arc<()>,
+}
+
+/// Authority to inspect and retry only the tree admitted for one invocation.
+pub(crate) struct CleanupReceipt {
+    owner: Arc<CleanupOwner>,
+    token: Arc<()>,
+}
+impl CleanupReceipt {
+    pub(crate) fn has_pending(&self) -> bool {
+        let slot = self
+            .owner
+            .slot
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        slot.active
+            .as_ref()
+            .is_some_and(|token| Arc::ptr_eq(token, &self.token))
+            || slot
+                .retained
+                .as_ref()
+                .is_some_and(|tree| Arc::ptr_eq(&tree.token, &self.token))
+    }
+
+    pub(crate) fn retry_finish(&self) -> io::Result<()> {
+        let mut slot = self
+            .owner
+            .slot
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if slot
+            .active
+            .as_ref()
+            .is_some_and(|token| Arc::ptr_eq(token, &self.token))
+        {
+            return Err(io::Error::other("tool-cleanup-still-active"));
+        }
+        if let Some(retained) = &mut slot.retained
+            && Arc::ptr_eq(&retained.token, &self.token)
+        {
+            retained.child.finish()?;
+            slot.retained = None;
+        }
+        Ok(())
+    }
 }
 
 /// Retain at most one active or unconfirmed tool tree for an explicit caller.
@@ -39,7 +84,7 @@ impl CleanupOwner {
     pub fn has_pending(&self) -> bool {
         {
             let slot = self.slot.lock().unwrap_or_else(PoisonError::into_inner);
-            slot.active || slot.retained.is_some()
+            slot.active.is_some() || slot.retained.is_some()
         }
     }
 
@@ -56,7 +101,7 @@ impl CleanupOwner {
         cleanup: impl FnOnce(&mut ManagedChild) -> io::Result<()>,
     ) -> io::Result<()> {
         let mut slot = self.slot.lock().unwrap_or_else(PoisonError::into_inner);
-        if slot.active {
+        if slot.active.is_some() {
             return Err(io::Error::other("tool-cleanup-still-active"));
         }
         if let Some(retained) = &mut slot.retained {
@@ -68,19 +113,27 @@ impl CleanupOwner {
 
     pub(super) fn claim(&self) -> io::Result<Lease<'_>> {
         let mut slot = self.slot.lock().unwrap_or_else(PoisonError::into_inner);
-        if slot.active || slot.retained.is_some() {
+        if slot.active.is_some() || slot.retained.is_some() {
             return Err(io::Error::other("tool-cleanup-owner-unavailable"));
         }
-        slot.active = true;
-        Ok(Lease { owner: self })
+        let token = Arc::new(());
+        slot.active = Some(token.clone());
+        Ok(Lease { owner: self, token })
     }
 }
 
 pub(super) struct Lease<'a> {
     owner: &'a CleanupOwner,
+    token: Arc<()>,
 }
 
 impl Lease<'_> {
+    pub(super) fn receipt(&self, owner: &Arc<CleanupOwner>) -> CleanupReceipt {
+        CleanupReceipt {
+            owner: owner.clone(),
+            token: self.token.clone(),
+        }
+    }
     pub(super) fn retain(&self, child: ManagedChild) {
         self.owner
             .slot
@@ -89,6 +142,7 @@ impl Lease<'_> {
             .retained = Some(Retained {
             child,
             permit: None,
+            token: self.token.clone(),
         });
     }
     pub(super) fn retain_permit(&self, permit: crate::resources::Permit) {
@@ -111,9 +165,18 @@ impl Drop for Lease<'_> {
             .slot
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        slot.active = false;
+        if slot
+            .active
+            .as_ref()
+            .is_some_and(|token| Arc::ptr_eq(token, &self.token))
+        {
+            slot.active = None;
+        }
     }
 }
+
+#[cfg(test)]
+mod receipt_tests;
 
 #[cfg(test)]
 mod tests {

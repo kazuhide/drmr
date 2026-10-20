@@ -278,6 +278,37 @@ fn representation_scopes<'a>(
     Ok((base, templates))
 }
 
+fn initialization_uri<'a>(
+    representation: Node<'a, 'a>,
+    templates: &[Node<'a, 'a>],
+    first: (u64, u64, u64),
+) -> Result<String, ConversionError> {
+    expand(
+        attribute(templates, "initialization").ok_or(error("dash-initialization-required"))?,
+        representation.attribute("id").unwrap_or(""),
+        representation.attribute("bandwidth").unwrap_or(""),
+        first.0,
+        first.1,
+    )
+}
+
+/// Resolve the initialization with the same inherited scopes and URI rules as the source graph.
+pub(super) fn initialization_reference(
+    root: &Path,
+    representation: Node<'_, '_>,
+) -> Result<PathBuf, ConversionError> {
+    let (base, templates) = representation_scopes(representation)?;
+    let values = sequence(&templates, MAX_SEGMENTS)?;
+    let root = root
+        .canonicalize()
+        .map_err(|_| error("dash-resource-unreadable"))?;
+    reference(
+        &root,
+        &base,
+        &initialization_uri(representation, &templates, values[0])?,
+    )
+}
+
 /// Enumerate the finite local resources from already-frozen manifest bytes.
 /// Media admission remains the responsibility of the ordinary snapshot handler.
 pub(super) fn source_references(bytes: &[u8]) -> Result<Vec<PathBuf>, ConversionError> {
@@ -320,17 +351,13 @@ pub(super) fn source_references(bytes: &[u8]) -> Result<Vec<PathBuf>, Conversion
         let (base, templates) = representation_scopes(representation)?;
         let values = sequence(&templates, remaining)?;
         remaining -= values.len();
-        let initialization =
-            attribute(&templates, "initialization").ok_or(error("dash-initialization-required"))?;
         let media = attribute(&templates, "media").ok_or(error("dash-media-template-required"))?;
         let id = representation.attribute("id").unwrap_or("");
         let bandwidth = representation.attribute("bandwidth").unwrap_or("");
-        add(base.join(relative(&expand(
-            initialization,
-            id,
-            bandwidth,
-            values[0].0,
-            values[0].1,
+        add(base.join(relative(&initialization_uri(
+            representation,
+            &templates,
+            values[0],
         )?)?))?;
         let mut seen = HashSet::new();
         for (number, time, _) in values {
@@ -361,8 +388,6 @@ fn snapshot_representation(
     let (base, templates) = representation_scopes(representation)?;
     let values = sequence(&templates, remaining)?;
     let used = values.len();
-    let initialization =
-        attribute(&templates, "initialization").ok_or(error("dash-initialization-required"))?;
     let media = attribute(&templates, "media").ok_or(error("dash-media-template-required"))?;
     let id = representation.attribute("id").unwrap_or("");
     let bandwidth = representation.attribute("bandwidth").unwrap_or("");
@@ -372,7 +397,7 @@ fn snapshot_representation(
     let initialization = reference(
         directory,
         &base,
-        &expand(initialization, id, bandwidth, values[0].0, values[0].1)?,
+        &initialization_uri(representation, &templates, values[0])?,
     )?;
     append(&initialization, stage, &mut combined, &mut total, None)?;
     let mut clock = super::timing::FragmentClock::read(&source)?;

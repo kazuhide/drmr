@@ -1,9 +1,13 @@
 //! Explicit operator signaling. No license service is contacted by this module.
+pub(in crate::conversion) mod flagfile;
+mod multi;
+mod records;
 use super::{ConversionError, OutputKey};
 use crate::{
     inspection::{InputFormat, OutputFormat, Protection, TargetProtection},
     mp4, playready,
 };
+pub use multi::DrmSystem;
 use std::{
     fs::File,
     io::{Read, Seek, SeekFrom},
@@ -33,11 +37,12 @@ const PR: &str = "urn:uuid:9a04f079-9840-4286-ab92-e65be0885f95";
 #[derive(Clone)]
 pub struct OutputSignaling {
     license_url: Zeroizing<String>,
+    multi: Option<multi::MultiDrm>,
 }
 impl std::fmt::Debug for OutputSignaling {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("OutputSignaling")
-            .field("system", &"playready")
+            .field("systems", &self.systems())
             .finish_non_exhaustive()
     }
 }
@@ -63,7 +68,60 @@ impl OutputSignaling {
         }
         Ok(Self {
             license_url: Zeroizing::new(license_url.into()),
+            multi: None,
         })
+    }
+    /// Select explicit DRM systems. Widevine data must be a complete hexadecimal or base64
+    /// PSSH box; the `FairPlay` key URI belongs to the separate HLS output-key configuration.
+    pub fn multi_drm(
+        widevine_pssh: Option<&str>,
+        playready_license_url: Option<&str>,
+        fairplay: bool,
+    ) -> Result<Self, ConversionError> {
+        let license_url = playready_license_url
+            .map(Self::playready)
+            .transpose()?
+            .map_or_else(
+                || Zeroizing::new(String::new()),
+                |value| value.license_url.clone(),
+            );
+        let multi = multi::MultiDrm::new(widevine_pssh, playready_license_url.is_some(), fairplay)?;
+        Ok(Self {
+            license_url,
+            multi: Some(multi),
+        })
+    }
+    /// Selected system identifiers are public; provider metadata remains private.
+    pub fn systems(&self) -> Vec<DrmSystem> {
+        self.multi.as_ref().map_or_else(
+            || vec![DrmSystem::PlayReady],
+            |value| value.systems(!self.license_url.is_empty()),
+        )
+    }
+    pub(in crate::conversion) fn is_multi(&self) -> bool {
+        self.multi.is_some()
+    }
+    pub(in crate::conversion) fn validate_uri(
+        &self,
+        uri: Option<&str>,
+    ) -> Result<(), ConversionError> {
+        if self.systems().contains(&DrmSystem::FairPlay)
+            && !uri.is_some_and(records::valid_fairplay_uri)
+        {
+            return Err(INVALID);
+        }
+        Ok(())
+    }
+    pub(in crate::conversion) fn validate_profile(
+        &self,
+        format: OutputFormat,
+        target: TargetProtection,
+    ) -> Result<(), ConversionError> {
+        if self.is_multi() {
+            multi::profile(&self.systems(), format, target)
+        } else {
+            Self::profile(format, target)
+        }
     }
     pub(super) fn profile(
         format: OutputFormat,
@@ -87,6 +145,9 @@ impl OutputSignaling {
         value
     }
     pub(super) fn objects(&self, key: &OutputKey) -> Result<Objects, ConversionError> {
+        if self.multi.is_some() {
+            return Err(UNSUPPORTED);
+        }
         let mut generated =
             playready::build_playready_v43(key.0.id_hex().as_str(), &self.license_url)
                 .map_err(|_| INVALID)?;
@@ -370,6 +431,60 @@ fn clear_metadata_tree(
 }
 
 impl super::Converter {
+    /// Independently check the current manifest and initialization records against operator
+    /// metadata. Media comparison and license playback are separate verification domains.
+    pub fn verify_output_signaling(
+        &self,
+        input: &Path,
+        format: OutputFormat,
+        target: TargetProtection,
+        keys: &super::key_file::OperatorKeys,
+    ) -> Result<(), ConversionError> {
+        self.backend.check_cancelled()?;
+        let frozen = super::FrozenSource::capture(input, &self.backend.stop).map_err(|error| {
+            if error.0 == "cancelled" {
+                error
+            } else {
+                MISMATCH
+            }
+        })?;
+        let input = frozen.entrypoint();
+        let Some(signaling) = &keys.signaling else {
+            return records::unrequested(&frozen);
+        };
+        signaling.validate_profile(format, target)?;
+        if signaling.is_multi() {
+            if format == OutputFormat::Dash {
+                let key = keys.output.as_ref().ok_or(INVALID)?;
+                signaling.multi_objects(key)?.finish(input, key)
+            } else {
+                records::fairplay(
+                    input,
+                    format,
+                    target,
+                    keys.hls_output_uri().ok_or(INVALID)?,
+                    keys.output.as_ref(),
+                    keys.hls_output.as_ref(),
+                )
+            }?;
+            return frozen.check_original().map_err(|error| {
+                if error.0 == "cancelled" {
+                    error
+                } else {
+                    MISMATCH
+                }
+            });
+        }
+        let key = keys.output.as_ref().ok_or(INVALID)?;
+        records::MultiObjects::legacy_playready(signaling.objects(key)?).finish(input, key)?;
+        frozen.check_original().map_err(|error| {
+            if error.0 == "cancelled" {
+                error
+            } else {
+                MISMATCH
+            }
+        })
+    }
     pub(super) fn validate_signaling_codec(
         &self,
         profile: &serde_json::Value,
@@ -390,9 +505,13 @@ impl super::Converter {
     pub(super) fn validate_signaling_tracks(
         &self,
         request: &super::TrackConversionRequest<'_>,
+        qualified_presentation: bool,
     ) -> Result<(), ConversionError> {
-        if self.output_signaling.is_some() {
-            OutputSignaling::profile(request.format, request.target)?;
+        if let Some(signaling) = &self.output_signaling {
+            signaling.validate_profile(request.format, request.target)?;
+            if signaling.is_multi() && qualified_presentation {
+                return Ok(());
+            }
             let first = request.tracks.first().ok_or(UNSUPPORTED)?;
             if request
                 .tracks
@@ -414,9 +533,32 @@ impl super::Converter {
         &self,
         request: &super::ConversionRequest<'_>,
     ) -> Result<(), ConversionError> {
-        if self.output_signaling.is_some() {
-            OutputSignaling::profile(request.format, request.target)?;
-            clear_mp4(request.input, &self.backend.stop)?;
+        if let Some(signaling) = &self.output_signaling {
+            signaling.validate_profile(request.format, request.target)?;
+            if signaling.is_multi() {
+                self.validate_drm_source_inner(
+                    super::VerificationSource {
+                        input: request.input,
+                        input_keys: request.input_keys,
+                        hls_keys: request.hls_input_keys,
+                    },
+                    &signaling.systems(),
+                    request.format,
+                    request.target,
+                )?;
+                if request.format != OutputFormat::Dash
+                    && !records::valid_fairplay_uri(
+                        request
+                            .hls_key_uri
+                            .or_else(|| request.hls_output_key.map(super::HlsOutputKey::key_uri))
+                            .ok_or(INVALID)?,
+                    )
+                {
+                    return Err(INVALID);
+                }
+            } else {
+                clear_mp4(request.input, &self.backend.stop)?;
+            }
         }
         Ok(())
     }
@@ -427,7 +569,11 @@ impl super::Converter {
         stage: &Path,
     ) -> Result<(), ConversionError> {
         use super::{ContentKey, InputKeys, VerificationRequest, VerificationSource};
-        if self.output_signaling.is_some() {
+        if self
+            .output_signaling
+            .as_ref()
+            .is_some_and(|value| !value.is_multi())
+        {
             // The published MPD is an independent input, including its declared window.
             // A per-track concatenation alone cannot prove the final presentation graph.
             let key = request
@@ -455,6 +601,39 @@ impl super::Converter {
             }
         }
         Ok(())
+    }
+    pub(in crate::conversion) fn finish_multi_signaling(
+        &self,
+        root: &Path,
+        format: OutputFormat,
+        target: TargetProtection,
+        key: Option<&OutputKey>,
+        uri: Option<&str>,
+        hls: Option<&super::HlsOutputKey>,
+    ) -> Result<(), ConversionError> {
+        let Some(signaling) = self
+            .output_signaling
+            .as_ref()
+            .filter(|value| value.is_multi())
+        else {
+            return Ok(());
+        };
+        if format == OutputFormat::Dash {
+            let key = key.ok_or(INVALID)?;
+            signaling
+                .multi_objects(key)?
+                .finish(&root.join("manifest.mpd"), key)
+        } else {
+            records::fairplay(
+                &root.join("master.m3u8"),
+                format,
+                target,
+                uri.or_else(|| hls.map(super::HlsOutputKey::key_uri))
+                    .ok_or(INVALID)?,
+                key,
+                hls,
+            )
+        }
     }
 }
 

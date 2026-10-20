@@ -50,6 +50,15 @@ impl Backend {
         tool: &str,
         secrets: &[&str],
     ) -> Result<Vec<u8>, ConversionError> {
+        self.run_with_cleanup_receipt(argv, tool, secrets, &mut None)
+    }
+    pub fn run_with_cleanup_receipt(
+        &self,
+        argv: &[String],
+        tool: &str,
+        secrets: &[&str],
+        receipt: &mut Option<crate::toolrun::CleanupReceipt>,
+    ) -> Result<Vec<u8>, ConversionError> {
         self.check_cancelled()?;
         let effective = Self::effective_argv(argv, tool);
         let shown = vec![tool.to_string(), "[arguments redacted]".into()];
@@ -64,7 +73,7 @@ impl Backend {
         };
         let completed = self
             .runner
-            .run_tool(&effective, tool, &options)
+            .run_tool_with_cleanup_receipt(&effective, tool, &options, receipt)
             .map_err(|error| tool_error(&error))?;
         self.check_cancelled()?;
         if completed.returncode != Some(0) {

@@ -361,6 +361,12 @@ impl PrivateTempDir {
         let path = std::mem::take(&mut self.path);
         std::fs::remove_dir_all(path)
     }
+
+    /// Retain uncertain entries without extending the lifetime of ancestor handles.
+    #[cfg(windows)]
+    pub(crate) fn preserve(&mut self) {
+        self.path.clear();
+    }
 }
 
 impl Drop for PrivateTempDir {

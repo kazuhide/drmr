@@ -78,14 +78,20 @@ pub const MAX_CAPTURE_BYTES: usize = 64 * 1024 * 1024;
 mod capture;
 mod cleanup;
 pub use cleanup::CleanupOwner;
+pub(crate) use cleanup::CleanupReceipt;
 /// Shorter strings would redact unrelated text; keys and IVs are 32 hex characters.
 const MIN_SECRET_CHARS: usize = 8;
 /// Between two bytes of a hex secret, as tools print them. Python's `\s` also matches
 /// U+001C–U+001F (`str.isspace`), which Rust's `\s` (Unicode `White_Space`) does not.
 const BYTE_SEPARATOR: &str = r"[\s\x1c-\x1f,:\-]*(?:0[xX])?";
+const MAX_EXACT_HEX_BYTES: usize = 1024;
+const HEX_EDGE_BYTES: usize = 64;
+const MAX_EXACT_LITERAL_CHARS: usize = 4096;
+const LITERAL_EDGE_CHARS: usize = 512;
 
 /// The patterns that match `secret` in every encoding (see the module documentation); empty
 /// for a secret shorter than eight characters.
+/// Large opaque values use bounded edges and also hide spans that share those edges.
 pub fn patterns_for(secret: &str) -> Vec<Regex> {
     let secret = py_strip(secret);
     if secret.chars().count() < MIN_SECRET_CHARS {
@@ -100,10 +106,18 @@ pub fn patterns_for(secret: &str) -> Vec<Regex> {
             .step_by(2)
             .map(|index| regex::escape(&secret[index..index + 2]))
             .collect();
-        patterns.push(compile(&format!(
-            "(?i)(?:0[xX])?{}",
+        let body = if pairs.len() <= MAX_EXACT_HEX_BYTES {
             pairs.join(BYTE_SEPARATOR)
-        )));
+        } else {
+            // Very large opaque metadata is identified by bounded edges. Ambiguous
+            // spans between the same edges are deliberately hidden as well.
+            format!(
+                "{}{BYTE_SEPARATOR}(?:[0-9a-f]{{2}}{BYTE_SEPARATOR})*{}",
+                pairs[..HEX_EDGE_BYTES].join(BYTE_SEPARATOR),
+                pairs[pairs.len() - HEX_EDGE_BYTES..].join(BYTE_SEPARATOR),
+            )
+        };
+        patterns.push(compile(&format!("(?i)(?:0[xX])?{body}")));
         vec![
             hex::decode(secret).expect("validated hex"),
             secret.as_bytes().to_vec(),
@@ -504,6 +518,25 @@ impl ToolRunner {
         }
     }
 
+    /// Fork without changing observers or an existing serial cleanup owner.
+    /// The caller keeps its workspace until an unconfirmed tree is reaped.
+    pub(crate) fn ensuring_cleanup_owner(&self) -> (Self, Arc<CleanupOwner>) {
+        let owner = self
+            .cleanup_owner
+            .clone()
+            .unwrap_or_else(|| Arc::new(CleanupOwner::new()));
+        let runner = Self {
+            secrets: Arc::clone(&self.secrets),
+            sink: Arc::clone(&self.sink),
+            observer: self.observer.clone(),
+            path: self.path.clone(),
+            limiter: Arc::clone(&self.limiter),
+            workload: RwLock::new(self.registered_workload()),
+            cleanup_owner: Some(Arc::clone(&owner)),
+        };
+        (runner, owner)
+    }
+
     /// Explicitly retain one unconfirmed child tree instead of dropping its owner.
     /// Keep the supplied owner alive and retry cleanup before permitting host exit.
     #[must_use]
@@ -640,9 +673,34 @@ impl ToolRunner {
         tool: &str,
         options: &RunOptions<'_>,
     ) -> Result<Completed, ToolError> {
-        self.run_tool_with(argv, tool, options, false, |bounded, lease| {
+        self.run_tool_with(argv, tool, options, false, None, |bounded, lease| {
             capture::execute(argv, bounded, self.path.as_deref(), lease)
         })
+    }
+
+    /// Publish invocation-specific cleanup authority immediately after admission.
+    /// The caller starts with an empty receipt and retains it through its workspace's Drop.
+    pub(crate) fn run_tool_with_cleanup_receipt(
+        &self,
+        argv: &[String],
+        tool: &str,
+        options: &RunOptions<'_>,
+        receipt: &mut Option<CleanupReceipt>,
+    ) -> Result<Completed, ToolError> {
+        if receipt.is_some() {
+            return Err(ToolError {
+                tool: tool.to_owned(),
+                kind: "cleanup-unconfirmed",
+            });
+        }
+        self.run_tool_with(
+            argv,
+            tool,
+            options,
+            false,
+            Some(receipt),
+            |bounded, lease| capture::execute(argv, bounded, self.path.as_deref(), lease),
+        )
     }
 
     #[cfg(test)]
@@ -652,9 +710,35 @@ impl ToolRunner {
         options: &RunOptions<'_>,
         cleanup: impl FnMut(&mut crate::native::ManagedChild) -> std::io::Result<()>,
     ) -> Result<Completed, ToolError> {
-        self.run_tool_with(argv, "fixture", options, false, |bounded, lease| {
+        self.run_tool_with(argv, "fixture", options, false, None, |bounded, lease| {
             capture::execute_injected_cleanup(argv, bounded, self.path.as_deref(), lease, cleanup)
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn run_tool_injected_cleanup_with_receipt(
+        &self,
+        argv: &[String],
+        options: &RunOptions<'_>,
+        receipt: &mut Option<CleanupReceipt>,
+        cleanup: impl FnMut(&mut crate::native::ManagedChild) -> std::io::Result<()>,
+    ) -> Result<Completed, ToolError> {
+        self.run_tool_with(
+            argv,
+            "fixture",
+            options,
+            false,
+            Some(receipt),
+            |bounded, lease| {
+                capture::execute_injected_cleanup(
+                    argv,
+                    bounded,
+                    self.path.as_deref(),
+                    lease,
+                    cleanup,
+                )
+            },
+        )
     }
 
     /// Stream stdout into a bounded parser without retaining or logging its payload.
@@ -666,7 +750,7 @@ impl ToolRunner {
         options: &RunOptions<'_>,
         consume: impl FnMut(&[u8]) -> Result<(), ()> + Send,
     ) -> Result<Completed, ToolError> {
-        self.run_tool_with(argv, tool, options, true, |bounded, lease| {
+        self.run_tool_with(argv, tool, options, true, None, |bounded, lease| {
             capture::execute_streamed(argv, bounded, self.path.as_deref(), lease, consume)
         })
     }
@@ -677,6 +761,7 @@ impl ToolRunner {
         tool: &str,
         options: &RunOptions<'_>,
         streamed: bool,
+        receipt: Option<&mut Option<CleanupReceipt>>,
         execute: impl FnOnce(&RunOptions<'_>, Option<&cleanup::Lease<'_>>) -> Result<Completed, Failure>,
     ) -> Result<Completed, ToolError> {
         let base = CallBase {
@@ -702,6 +787,11 @@ impl ToolRunner {
             .as_deref()
             .map(CleanupOwner::claim)
             .transpose();
+        if let (Some(receipt), Ok(Some(lease)), Some(owner)) =
+            (receipt, &lease, &self.cleanup_owner)
+        {
+            *receipt = Some(lease.receipt(owner));
+        }
         let reservation = if lease.is_ok() {
             self.reserve(tool, options)
         } else {
@@ -1010,15 +1100,27 @@ fn is_even_hex(text: &str) -> bool {
 }
 
 fn literal(text: &str, ignore_case: bool) -> Regex {
+    let length = text.chars().count();
+    let body = if length <= MAX_EXACT_LITERAL_CHARS {
+        regex::escape(text)
+    } else {
+        let head: String = text.chars().take(LITERAL_EDGE_CHARS).collect();
+        let tail: String = text.chars().skip(length - LITERAL_EDGE_CHARS).collect();
+        format!("{}(?s:.*){}", regex::escape(&head), regex::escape(&tail))
+    };
     compile(&format!(
         "{}{}",
         if ignore_case { "(?i)" } else { "" },
-        regex::escape(text)
+        body,
     ))
 }
 
 fn compile(pattern: &str) -> Regex {
-    Regex::new(pattern).expect("escaped literals and a fixed separator always compile")
+    Regex::new(pattern).unwrap_or_else(|_| {
+        // If a future regex implementation rejects a bounded escaped expression,
+        // suppress the diagnostic rather than expose secret-bearing text or panic.
+        Regex::new("(?s:.*)").expect("fixed redaction expression")
+    })
 }
 
 /// `xml.sax.saxutils.escape`.

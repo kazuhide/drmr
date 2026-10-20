@@ -80,6 +80,11 @@ Use `convert INPUT --to ... --format ... --output ...` with a protected key conf
 
 For a completed clear HLS URL, use `convert URL --download-dir ./source` with the target and output options below. The saved source can be reused offline. The existing `run` path processes prepared DASH assets; `analyze-hls` and `package-hls` retain the separate workflow for its supported DRM-signaling and subtitle profiles. See the [usage guide](docs/usage.md) for configuration examples, the expected local layout, key handling, and output.
 
+The common converter can also write explicit Widevine/PlayReady DASH and
+FairPlay HLS information for qualified clear transport-stream HLS and clear MP4.
+See [DRM signaling](docs/drm-signaling.md) for the input profiles, separate
+runtime settings, generated declarations, and independent library checks.
+
 ## Supported input
 
 The generic `convert` command accepts qualified local MP4, fragmented MP4 DASH/HLS, and MPEG transport stream HLS profiles, including encrypted input. Transport stream input can be clear, AES-128, or SAMPLE-AES with supplied keys and initialization vectors. See [conversion support](docs/conversion-support.md) for restrictions and tested routes. The older workflow commands have these separate input scopes:

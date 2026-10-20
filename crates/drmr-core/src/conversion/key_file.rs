@@ -5,6 +5,7 @@ use super::{
     SegmentIv,
 };
 use serde::Deserialize;
+use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::Path;
 use zeroize::{Zeroize, Zeroizing};
@@ -21,6 +22,14 @@ pub struct OperatorKeys {
     pub hls_output: Option<HlsOutputKey>,
     pub signaling: Option<super::OutputSignaling>,
     sample_hls_uri: Option<Zeroizing<String>>,
+}
+
+/// One shared source-key domain and separately named encryption/signaling domains.
+#[derive(Debug, Default)]
+pub struct BundleOperatorKeys {
+    pub input: InputKeys,
+    pub hls_input: HlsInputKeys,
+    pub outputs: BTreeMap<String, OperatorKeys>,
 }
 
 impl std::fmt::Debug for OperatorKeys {
@@ -80,6 +89,49 @@ struct RawFile {
     output: Option<RawOutput>,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawBundle {
+    schema_version: u32,
+    #[serde(default)]
+    input: RawInput,
+    #[serde(deserialize_with = "unique_outputs")]
+    outputs: BTreeMap<String, RawOutput>,
+}
+
+fn unique_outputs<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<BTreeMap<String, RawOutput>, D::Error> {
+    struct Outputs;
+    impl<'de> serde::de::Visitor<'de> for Outputs {
+        type Value = BTreeMap<String, RawOutput>;
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("unique bounded output identifiers")
+        }
+        fn visit_map<M: serde::de::MapAccess<'de>>(
+            self,
+            mut map: M,
+        ) -> Result<Self::Value, M::Error> {
+            let mut values = BTreeMap::new();
+            while let Some((name, output)) = map.next_entry::<String, RawOutput>()? {
+                if values.len() >= 16
+                    || name.is_empty()
+                    || name.len() > 64
+                    || !name
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+                    || !name.as_bytes()[0].is_ascii_alphanumeric()
+                    || values.insert(name, output).is_some()
+                {
+                    return Err(serde::de::Error::custom("invalid output identifiers"));
+                }
+            }
+            Ok(values)
+        }
+    }
+    deserializer.deserialize_map(Outputs)
+}
+
 #[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawInput {
@@ -118,14 +170,35 @@ struct RawOutput {
 }
 
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawSignaling {
-    system: String,
-    license_url: String,
+#[serde(tag = "system", deny_unknown_fields)]
+enum RawSignaling {
+    #[serde(rename = "playready")]
+    PlayReady { license_url: String },
+    #[serde(rename = "multi-drm")]
+    MultiDrm {
+        widevine_pssh: Option<String>,
+        playready_license_url: Option<String>,
+        #[serde(default)]
+        fairplay: bool,
+    },
 }
 impl Drop for RawSignaling {
     fn drop(&mut self) {
-        self.license_url.zeroize();
+        match self {
+            Self::PlayReady { license_url } => license_url.zeroize(),
+            Self::MultiDrm {
+                widevine_pssh,
+                playready_license_url,
+                ..
+            } => {
+                if let Some(value) = widevine_pssh {
+                    value.zeroize();
+                }
+                if let Some(value) = playready_license_url {
+                    value.zeroize();
+                }
+            }
+        }
     }
 }
 
@@ -156,6 +229,39 @@ impl Drop for RawKey {
 
 /// Read at most 64 KiB from a protected, regular, singly linked operator file.
 pub fn read(path: &Path) -> Result<OperatorKeys, ConversionError> {
+    let bytes = read_bytes(path)?;
+    let raw: RawFile = serde_json::from_slice(&bytes).map_err(|_| INVALID)?;
+    if raw.schema_version != 1 {
+        return Err(INVALID);
+    }
+    let (input, hls_input) = parse_input(&raw.input)?;
+    let mut output = parse_output(raw.output.as_ref())?;
+    output.input = input;
+    output.hls_input = hls_input;
+    Ok(output)
+}
+
+/// Read a strict schema-version-2 file. Output identifiers carry no path authority.
+pub fn read_bundle(path: &Path) -> Result<BundleOperatorKeys, ConversionError> {
+    let bytes = read_bytes(path)?;
+    let raw: RawBundle = serde_json::from_slice(&bytes).map_err(|_| INVALID)?;
+    if raw.schema_version != 2 {
+        return Err(INVALID);
+    }
+    let (input, hls_input) = parse_input(&raw.input)?;
+    let outputs = raw
+        .outputs
+        .iter()
+        .map(|(id, output)| Ok((id.clone(), parse_output(Some(output))?)))
+        .collect::<Result<_, ConversionError>>()?;
+    Ok(BundleOperatorKeys {
+        input,
+        hls_input,
+        outputs,
+    })
+}
+
+fn read_bytes(path: &Path) -> Result<Zeroizing<Vec<u8>>, ConversionError> {
     let file = private_file(path)?;
     let mut bytes = Zeroizing::new(Vec::new());
     file.take(LIMIT + 1)
@@ -164,12 +270,11 @@ pub fn read(path: &Path) -> Result<OperatorKeys, ConversionError> {
     if bytes.len() as u64 > LIMIT {
         return Err(INVALID);
     }
-    let raw: RawFile = serde_json::from_slice(&bytes).map_err(|_| INVALID)?;
-    if raw.schema_version != 1 {
-        return Err(INVALID);
-    }
+    Ok(bytes)
+}
+
+fn parse_input(raw: &RawInput) -> Result<(InputKeys, HlsInputKeys), ConversionError> {
     let input = raw
-        .input
         .keys
         .iter()
         .map(|key| ContentKey::from_hex(&key.kid, &key.key))
@@ -177,7 +282,6 @@ pub fn read(path: &Path) -> Result<OperatorKeys, ConversionError> {
         .map_err(|_| INVALID)?;
     let input = InputKeys::new(input).map_err(|_| INVALID)?;
     let hls_input = raw
-        .input
         .hls_keys
         .iter()
         .map(|key| {
@@ -193,7 +297,10 @@ pub fn read(path: &Path) -> Result<OperatorKeys, ConversionError> {
         })
         .collect::<Result<Vec<_>, ConversionError>>()?;
     let hls_input = HlsInputKeys::new_with_ivs(hls_input).map_err(|_| INVALID)?;
-    let (output, hls_output) = match &raw.output {
+    Ok((input, hls_input))
+}
+fn parse_output(raw: Option<&RawOutput>) -> Result<OperatorKeys, ConversionError> {
+    let (output, hls_output) = match raw {
         None => (None, None),
         Some(key) => match (&key.kid, &key.hls_key_uri) {
             (Some(_), _) if key.iv.is_some() => return Err(INVALID),
@@ -222,8 +329,6 @@ pub fn read(path: &Path) -> Result<OperatorKeys, ConversionError> {
         },
     };
     let sample_hls_uri = raw
-        .output
-        .as_ref()
         .filter(|key| key.kid.is_some())
         .and_then(|key| key.hls_key_uri.as_ref())
         .map(|uri| {
@@ -238,30 +343,71 @@ pub fn read(path: &Path) -> Result<OperatorKeys, ConversionError> {
             }
         })
         .transpose()?;
-    let signaling = read_signaling(&raw, output.is_some(), sample_hls_uri.is_some())?;
+    let signaling = read_signaling(
+        raw,
+        output.is_some(),
+        sample_hls_uri.is_some(),
+        hls_output.is_some(),
+    )?;
+    if let Some(value) = &signaling
+        && value.is_multi()
+    {
+        if let Some(key) = &output {
+            value.multi_objects(key).map_err(|_| INVALID)?;
+        }
+        value
+            .validate_uri(
+                sample_hls_uri
+                    .as_deref()
+                    .map(String::as_str)
+                    .or_else(|| hls_output.as_ref().map(HlsOutputKey::key_uri)),
+            )
+            .map_err(|_| INVALID)?;
+    }
     Ok(OperatorKeys {
-        input,
         output,
-        hls_input,
         hls_output,
         signaling,
         sample_hls_uri,
+        ..OperatorKeys::default()
     })
 }
 
 fn read_signaling(
-    raw: &RawFile,
+    raw: Option<&RawOutput>,
     has_output: bool,
     has_uri: bool,
+    has_hls: bool,
 ) -> Result<Option<super::OutputSignaling>, ConversionError> {
-    raw.output
-        .as_ref()
-        .and_then(|key| key.signaling.as_ref())
-        .map(|value| {
-            if value.system != "playready" || !has_output || has_uri {
-                return Err(INVALID);
+    raw.and_then(|key| key.signaling.as_ref())
+        .map(|value| match value {
+            RawSignaling::PlayReady { license_url } => {
+                if !has_output || has_uri {
+                    return Err(INVALID);
+                }
+                super::OutputSignaling::playready(license_url).map_err(|_| INVALID)
             }
-            super::OutputSignaling::playready(&value.license_url).map_err(|_| INVALID)
+            RawSignaling::MultiDrm {
+                widevine_pssh,
+                playready_license_url,
+                fairplay,
+            } => {
+                if !has_output
+                    && (!has_hls
+                        || !*fairplay
+                        || widevine_pssh.is_some()
+                        || playready_license_url.is_some())
+                    || *fairplay && !has_uri && !has_hls
+                {
+                    return Err(INVALID);
+                }
+                super::OutputSignaling::multi_drm(
+                    widevine_pssh.as_deref(),
+                    playready_license_url.as_deref(),
+                    *fairplay,
+                )
+                .map_err(|_| INVALID)
+            }
         })
         .transpose()
 }
