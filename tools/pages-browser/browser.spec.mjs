@@ -11,10 +11,10 @@ const origin = live ? publicOrigin : localOrigin;
 const fontFiles = ['ibm-plex-sans-latin-400-normal.woff2', 'ibm-plex-sans-latin-600-normal.woff2',
   'ibm-plex-mono-latin-400-normal.woff2'];
 const codeExamples = [
-  ['Inspect command', 'drmr inspect source.mpd'],
-  ['Plan command', 'drmr plan source.mpd \\ --to cbcs --format dash'],
-  ['Convert command', 'drmr convert source.mpd \\ --to cbcs --format dash \\ --output converted \\ --keys-file keys.json'],
-  ['Verify command', 'drmr verify converted/manifest.mpd \\ --source source.mpd \\ --keys-file keys.json --json'],
+  ['Analyze command', 'drmr analyze \\ "https://example.com/vod/master.m3u8" \\ --download-dir source --json'],
+  ['Plan command', 'drmr plan source/input.m3u8 \\ --to cbcs --format dash \\ --output converted \\ --save conversion.plan.json'],
+  ['Convert command', 'drmr convert \\ --plan conversion.plan.json \\ --keys-file keys.json'],
+  ['Verify command', 'drmr verify \\ --plan conversion.plan.json \\ --keys-file keys.json --json'],
   ['Build and check the CLI', 'cargo install --path crates/drmr --locked drmr --version drmr doctor --probe --route progressive-mp4'],
 ];
 const monitors = new WeakMap();
@@ -124,6 +124,7 @@ test.afterEach(async ({ page }, info) => {
 });
 
 const focusSelector = 'a[href], pre[tabindex="0"], .matrix-scroll[tabindex="0"]';
+const focusTargetCount = 33;
 
 function textWithoutNotes(node) {
   const text = value => value.nodeType === Node.TEXT_NODE ? value.textContent :
@@ -349,7 +350,7 @@ for (const locale of locales) for (const width of [320, 768, 1024, 1440]) {
     await page.goto('about:blank');
     await ready(page, locale);
     const focusable = page.locator(focusSelector);
-    await expect(focusable).toHaveCount(32);
+    await expect(focusable).toHaveCount(focusTargetCount);
     const focusRecords = [];
     let matrixKeyboard;
     for (let i = 0; i < await focusable.count(); i++) {
@@ -461,7 +462,7 @@ test('native keyboard switches English to Japanese and back at each supported mo
       await expect(link).toHaveAttribute('href', from.switchHref);
       await expect(link).toHaveAttribute('hreflang', to.language);
       const focusable = page.locator(focusSelector);
-      await expect(focusable).toHaveCount(32);
+      await expect(focusable).toHaveCount(focusTargetCount);
       for (let index = 0; index < 8; index++) {
         await page.keyboard.press('Tab');
         await expect(focusable.nth(index)).toBeFocused();
@@ -572,9 +573,9 @@ test('native Tab keeps edge targets fully visible only with the production scrol
       const discovery = { width, viewportHeight: 900, route };
       discoveries.push(discovery);
       const candidates = page.locator(focusSelector);
-      await expect(candidates).toHaveCount(32);
+      await expect(candidates).toHaveCount(focusTargetCount);
       let selected;
-      for (let index = 0; index < 32; index++) {
+      for (let index = 0; index < focusTargetCount; index++) {
         await page.keyboard.press('Tab');
         await expect(candidates.nth(index)).toBeFocused();
         const sample = await candidates.nth(index).evaluate(focusObservation);
@@ -598,7 +599,7 @@ test('native Tab keeps edge targets fully visible only with the production scrol
           await page.addStyleTag({ content: `${focusSelector} { scroll-margin-block: 0 !important; }` });
         }
         const focusable = page.locator(focusSelector);
-        await expect(focusable).toHaveCount(32);
+        await expect(focusable).toHaveCount(focusTargetCount);
         const expected = focusable.nth(ordinal - 1);
         expect(await expected.evaluate(element => getComputedStyle(element).scrollMarginBlockStart))
           .toBe(state === 'disabled-control' ? '0px' : '16px');
