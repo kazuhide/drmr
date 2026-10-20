@@ -161,6 +161,15 @@ versions are rejected. An unspecified audio language is omitted from the HLS
 These signaling checks accompany complete encoded-content, timing, decoded-content,
 and supported selection-metadata comparisons. They do not replace those checks.
 
+CENC or CBCS output without selected provider signaling can still contain the
+[W3C Common SystemID initialization record](https://www.w3.org/TR/eme-initdata-cenc/).
+This record identifies encryption keys by identifier; it does not contain the
+content keys or provider-specific policy data. drmr accepts only its generated
+single-key form here: version 1, zero flags, the selected output KID and an empty
+data field. The MPD, initialization files and actual track protection must agree.
+This output check does not relax source admission or authorize arbitrary provider
+records. It does not mark service-specific signaling or license playback as verified.
+
 Library callers can independently reopen an existing result with
 `Converter::verify_output_signaling(input, format, target, &keys)`. This method
 reads a fresh, byte-bound output graph and verifies its current records against

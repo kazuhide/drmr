@@ -31,7 +31,7 @@
       <p class="eyebrow">drmr / 0.1.0</p>
       <h1>User guide</h1>
       <p>A practical drmr guide: formats, keys, conversion, verification, Docker and local interfaces.</p>
-      <p class="guide-meta">Updated: <time datetime="2026-10-20">2026-10-20</time> · Version: 0.1.0</p>
+      <p class="guide-meta">Updated: <time datetime="2026-10-21">2026-10-21</time> · Version: 0.1.0</p>
     </div>
     <div class="guide-layout">
       <aside class="guide-toc" id="guide-toc">
@@ -61,7 +61,7 @@
       </aside>
       <article class="guide-content" id="guide-content"><section class="guide-chapter" id="introduction" data-guide-chapter="introduction" aria-labelledby="introduction-title"><h2 id="introduction-title">1. Introduction</h2><a class="guide-chapter-switch" href="../ja/guide/#introduction" lang="ja" hreflang="ja">日本語</a>
 <p>drmr changes media containers, delivery formats and encryption while retaining encoded video and audio. It is for engineers who control the media and already have the required decryption keys. It is not an encoder for creating a new quality ladder or a client for obtaining DRM licenses.</p>
-<p>This guide describes drmr 0.1.0 and was updated on 2026-10-20. Public source and command help define the behavior. For a different version, also read its accompanying documentation. A passing example does not qualify arbitrary media or playback devices.</p>
+<p>This guide describes drmr 0.1.0 and was updated on 2026-10-21. Public source and command help define the behavior. For a different version, also read its accompanying documentation. A passing example does not qualify arbitrary media or playback devices.</p>
 <h3>Choose an operation</h3>
 <div class="guide-table-scroll" role="region" aria-labelledby="table-1-title" tabindex="0"><table><caption id="table-1-title">Choose an operation — Table 1</caption><thead><tr><th scope="col">Goal</th><th scope="col">Command</th><th scope="col">What it establishes</th></tr></thead><tbody>
 <tr><th scope="row">Find external tools</th><td><code>doctor</code></td><td>Required executables can be found in the launch environment</td></tr>
@@ -548,6 +548,7 @@ drmr verify retry-hls/master.m3u8 --source saved-source/input.m3u8 \
 <tr><th scope="row"><code>conformance</code></th><td>Required external manifest checks passed, or no check was requested</td></tr>
 </tbody></table></div>
 <p>Changed PSSH, PlayReady data, KIDs or FairPlay declarations can fail even when media decryption succeeds. An empty <code>drms</code> list requests no service-specific DRM information and its signaling result is not marked verified. It still requires the complete ordinary media and protection checks.</p>
+<p>CENC or CBCS output with no selected DRM provider may still contain a W3C Common SystemID PSSH record. It names a key identifier without containing the content key or provider-specific policy. drmr checks its generated single-key, empty-data form against the output settings and actual track protection. This does not mark a DRM service or license playback as verified, or broaden the admitted input profiles.</p>
 <p>The native manifest linter runs during common HLS/DASH conversion and full verification. It checks the final manifest bytes without an external validator. HLS syntax, segment/key state, feature versions and rendition references are distinct from Apple-specific VOD rules. Native DASH rules check the named static-presentation profile, including structure, inheritance, addressing, timelines and protection declarations. This is independently implemented Rust linting, rather than a complete XML schema or Schematron engine.</p>
 <p>Native reports distinguish passed, failed and not-checked rules, and include specification references. In-scope unsupported features, missing linked playlists, resource limits and truncated diagnostics prevent a clean result. Media-dependent and delivery-dependent rules are outside this manifest scope; full verification supplies separate media evidence. Rule identifiers and source positions are reported without echoing manifest text, key addresses or protection payloads. Small inputs run inline; larger independent documents can run in parallel within CPU and memory admission.</p>
 <p>For <code>conformance: &quot;required&quot;</code>, HLS uses Apple&#x27;s <code>mediastreamvalidator</code> in playlist-checking mode. DASH uses the local DASH-IF Conformance Software XML schema and Schematron checks, which validate MPD structure and rules. These checks read the final encrypted output manifests, including reachable HLS child playlists. They are distinct from full media verification and do not prove encrypted-media conformance, license acquisition or device playback. Missing tools, interrupted checks, incomplete reports and validation errors cause failure. The policy <code>&quot;none&quot;</code> leaves the external check unrequested and is reported separately from a pass.</p>
@@ -686,6 +687,7 @@ drmr verify result/manifest.mpd --source source.mpd \
 <p>Unix process groups and Windows job objects retain descendant ownership. Sending a signal alone does not prove locks are released. Unix final group checks and Windows job notifications have their own 30-second budgets; total wall-clock shutdown also includes I/O, name lookup and scheduling.</p>
 <h3>Measurements</h3>
 <p>Use <code>--measure</code> with <code>--json</code>. It adds observations without changing verification. Nested/parallel phases overlap; their times cannot simply be summed into wall time. Short clips are dominated by startup and cache effects. Sampled memory is not an exact peak. Compare the same original, tools, build settings, worker bounds and host load only after verification passes.</p>
+<p>A synthetic native-library measurement on 2026-10-21 used source <a href="https://github.com/kazuhide/drmr/commit/c1458e7deea5b31118073c682d799f60c8f4e8b5"><code>c1458e7d</code></a>, Rust 1.99 release and a macOS ARM64 host with 10 logical CPUs and 32 GiB of memory. A master and 64 media playlists with 1,000 segments each took 14.50 ms serially and 3.37 ms with automatic selection of 10 workers. Complete reports matched. Small inputs stayed inline; a 30,000-entry DASH timeline took 5.22 ms serially and 5.27 ms automatically, so more workers do not always reduce time. These are whole-library-call observations from three rotating-order rounds, separate from conversion time. Our media tests were paused; other host processes were not isolated. See the linked resource guide for the separate allocation and process-memory observations.</p>
 <p>See <a href="https://github.com/kazuhide/drmr/blob/main/docs/resources.md">resources and measurements</a>.</p>
 </section>
 <section class="guide-chapter" id="docker" data-guide-chapter="docker" aria-labelledby="docker-title"><h2 id="docker-title">13. Docker with media tools</h2><a class="guide-chapter-switch" href="../ja/guide/#docker" lang="ja" hreflang="ja">日本語</a>
@@ -949,9 +951,19 @@ python tools/build_desktop.py --bundle
 <p>Read each revision&#x27;s CI logs and artifacts for source identity, compilers, tools and results. This guide does not certify every later moving-main revision or arbitrary device.</p>
 <p>The 54 finite combinations consist of audio27 plus joint27; CLI27 repeats the latter. The legacy16 use a prepared fragmented reference, whereas finite tests use the original progressive file&#x27;s own playback range. Do not mix sample counts across different references/decoding paths.</p>
 <p>Bento4 installation pins and observed build banners are different evidence. Docker HTTP tests do not qualify a browser UI; native bundle construction does not qualify playback. Known-key media checks do not establish license acquisition or device operation.</p>
+<h3>Recorded three-output manifest checks</h3>
+<p>A local run on 2026-10-21 (Japan time), using source <a href="https://github.com/kazuhide/drmr/commit/3f8a9a89d0fc84e9699939a193baf823cafb6127">3f8a9a89</a>, completed the chapter 6 workflow with the ten-second clear HLS/TS fixture and two-second segment targets. The CLI ran on macOS ARM64. Apple mediastreamvalidator 1.25.36 ran natively in playlist-only mode. DASH used the official DASH-IF v3.1.0 XML schema and Schematron rules at revision <code>bdf0c27a8f198da7a4bf81634bb01faf7c7c3c06</code>, in a Linux ARM64 container with network access disabled.</p>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-16-title" tabindex="0"><table><caption id="table-16-title">Recorded three-output manifest checks — Table 16</caption><thead><tr><th scope="col">Final output</th><th scope="col">Protection and DRM declaration</th><th scope="col">Observed manifest result</th></tr></thead><tbody>
+<tr><th scope="row">DASH fMP4</th><td>CBCS; Widevine and PlayReady</td><td>Native Rust manifest checks, MPD XML schema and Schematron checks passed</td></tr>
+<tr><th scope="row">HLS fMP4</th><td>CBCS; FairPlay</td><td>Native Rust checks passed; Apple checked all three playlists; media playlists declared version 6, meeting minimum 6</td></tr>
+<tr><th scope="row">HLS TS</th><td>SAMPLE-AES; FairPlay</td><td>Native Rust checks passed; Apple checked all three playlists; media playlists declared version 6, meeting minimum 5</td></tr>
+</tbody></table></div>
+<p>URL acquisition retained the original, and the local source server was stopped before saving the plan. Conversion and independent <code>verify --plan</code> both passed the complete metadata, encoded-packet, timing, decoded-content and current DRM checks. Separate manifest-only checks also passed for copies containing only MPD or M3U8 files, without media, initialization files or keys.</p>
+<p>The native checks used HLS base and static DASH profiles at revision <code>2026-10-21.1</code>. All three manifest-only inputs also passed with an empty executable search path, independently of external validators. Reports contained no errors, no truncated diagnostics and no unchecked rules within their declared scope. Media and delivery requirements outside that scope remain separate evidence; this is not a claim of full Apple authoring conformance.</p>
+<p>Changing an fMP4 media playlist to version 5 was refused; version 7 passed. These checks use the minimum required by the declared features, not equality with version 6. The retained source stayed unchanged, the version-test changes were restored, and no run-owned containers remained. This is one qualified fixture and tool environment; it does not establish license acquisition, DRM-device playback or arbitrary-input compatibility.</p>
 <h3>Recorded audio-only TS results</h3>
 <p>The following jobs completed on 20 October 2026 (Japan Standard Time) for source <a href="https://github.com/kazuhide/drmr/commit/f0096539e698d66cc77affcd7ea891c793aa87bf">f0096539</a>. Rust 1.95 or later is required; 1.99.1 is the stable compiler observed in this run, not a fixed requirement.</p>
-<div class="guide-table-scroll" role="region" aria-labelledby="table-16-title" tabindex="0"><table><caption id="table-16-title">Recorded audio-only TS results — Table 16</caption><thead><tr><th scope="col">Environment and job</th><th scope="col">Observed Rust</th><th scope="col">Audio HLS pairs</th><th scope="col">TS regression tests</th></tr></thead><tbody>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-17-title" tabindex="0"><table><caption id="table-17-title">Recorded audio-only TS results — Table 17</caption><thead><tr><th scope="col">Environment and job</th><th scope="col">Observed Rust</th><th scope="col">Audio HLS pairs</th><th scope="col">TS regression tests</th></tr></thead><tbody>
 <tr><th scope="row"><a href="https://github.com/kazuhide/drmr/actions/runs/39327394237/job/118317107508">Linux AMD64 / minimum</a></th><td><code>1.95.0</code></td><td>9/9</td><td>34/34</td></tr>
 <tr><th scope="row"><a href="https://github.com/kazuhide/drmr/actions/runs/39327394237/job/118317106710">Linux AMD64 / stable</a></th><td><code>1.99.1</code></td><td>9/9</td><td>34/34</td></tr>
 <tr><th scope="row"><a href="https://github.com/kazuhide/drmr/actions/runs/39327394237/job/118317107104">macOS ARM64 / minimum</a></th><td><code>1.95.0</code></td><td>9/9</td><td>34/34</td></tr>
@@ -987,19 +999,19 @@ cargo test --locked -p drmr-core --test conversion_bundle_encryption \
 <section class="guide-chapter" id="cli-reference" data-guide-chapter="cli-reference" aria-labelledby="cli-reference-title"><h2 id="cli-reference-title">19. CLI argument and option reference</h2><a class="guide-chapter-switch" href="../ja/guide/#cli-reference" lang="ja" hreflang="ja">日本語</a>
 <p>All public commands accept <code>-h</code> / <code>--help</code>; <code>drmr help COMMAND</code> also displays help. Use top-level <code>-V</code> / <code>--version</code> or <code>drmr version</code>. Private supervision bootstrap arguments are not a user interface.</p>
 <h3>doctor</h3>
-<div class="guide-table-scroll" role="region" aria-labelledby="table-17-title" tabindex="0"><table><caption id="table-17-title">doctor — Table 17</caption><thead><tr><th scope="col">Option</th><th scope="col">Meaning/default</th></tr></thead><tbody>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-18-title" tabindex="0"><table><caption id="table-18-title">doctor — Table 18</caption><thead><tr><th scope="col">Option</th><th scope="col">Meaning/default</th></tr></thead><tbody>
 <tr><th scope="row"><code>--json</code></th><td>One machine-readable diagnostic object</td></tr>
 <tr><th scope="row"><code>--probe</code></th><td>Bounded version/help/advertised-options checks; default is discovery only</td></tr>
 <tr><th scope="row"><code>--route PROFILE</code></th><td>Required tool set, default <code>all</code></td></tr>
 </tbody></table></div>
 <p>PROFILE is <code>all</code>, <code>prepared-dash</code>, <code>progressive-mp4</code>, <code>fragmented-mp4</code>, <code>dash-presentation</code>, <code>fmp4-hls-presentation</code>, <code>mpeg-ts-hls</code>, <code>mpeg-ts-sample-aes-hls</code> or <code>mpeg-ts-hls-ts</code>. Output route names are not automatically valid doctor values; use <code>all</code> to include the tool set for TS-DASH.</p>
 <h3>inspect</h3>
-<div class="guide-table-scroll" role="region" aria-labelledby="table-18-title" tabindex="0"><table><caption id="table-18-title">inspect — Table 18</caption><thead><tr><th scope="col">Argument/option</th><th scope="col">Meaning</th></tr></thead><tbody>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-19-title" tabindex="0"><table><caption id="table-19-title">inspect — Table 19</caption><thead><tr><th scope="col">Argument/option</th><th scope="col">Meaning</th></tr></thead><tbody>
 <tr><th scope="row"><code>INPUT</code></th><td>Local MP4, MPD or M3U8; remote resources are not acquired</td></tr>
 <tr><th scope="row"><code>--json</code></th><td>Versioned metadata report</td></tr>
 </tbody></table></div>
 <h3>analyze</h3>
-<div class="guide-table-scroll" role="region" aria-labelledby="table-19-title" tabindex="0"><table><caption id="table-19-title">analyze — Table 19</caption><thead><tr><th scope="col">Argument/option</th><th scope="col">Meaning</th></tr></thead><tbody>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-20-title" tabindex="0"><table><caption id="table-20-title">analyze — Table 20</caption><thead><tr><th scope="col">Argument/option</th><th scope="col">Meaning</th></tr></thead><tbody>
 <tr><th scope="row"><code>INPUT</code></th><td>Complete local MP4, DASH or HLS; supported completed HLS URL within the acquisition profile</td></tr>
 <tr><th scope="row"><code>--download-dir NEW_DIR</code></th><td>Required for a URL; retain the original privately</td></tr>
 <tr><th scope="row"><code>--fetch-policy FILE</code></th><td>Private origin/header/resource policy for URL input</td></tr>
@@ -1011,7 +1023,7 @@ cargo test --locked -p drmr-core --test conversion_bundle_encryption \
 </tbody></table></div>
 <p>Local input refuses download/fetch options. URL analysis always requires a new download directory.</p>
 <h3>plan</h3>
-<div class="guide-table-scroll" role="region" aria-labelledby="table-20-title" tabindex="0"><table><caption id="table-20-title">plan — Table 20</caption><thead><tr><th scope="col">Argument/option</th><th scope="col">Meaning</th></tr></thead><tbody>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-21-title" tabindex="0"><table><caption id="table-21-title">plan — Table 21</caption><thead><tr><th scope="col">Argument/option</th><th scope="col">Meaning</th></tr></thead><tbody>
 <tr><th scope="row"><code>INPUT</code></th><td>Local input for generic conversion intent</td></tr>
 <tr><th scope="row"><code>--to TARGET</code></th><td>Required for INPUT without --outputs: clear, cenc, cbcs, hls-aes128, hls-sample-aes</td></tr>
 <tr><th scope="row"><code>--format FORMAT</code></th><td>mp4, dash, hls, hls-ts; alternatives without --save, one resolved format in a single-output plan; omitted follows MP4/DASH/HLS, with HLS meaning fMP4; conflicts with --outputs</td></tr>
@@ -1027,7 +1039,7 @@ cargo test --locked -p drmr-core --test conversion_bundle_encryption \
 <tr><th scope="row"><code>--asset-id ID</code></th><td>Asset name in MPD mode</td></tr>
 </tbody></table></div>
 <h3>convert</h3>
-<div class="guide-table-scroll" role="region" aria-labelledby="table-21-title" tabindex="0"><table><caption id="table-21-title">convert — Table 21</caption><thead><tr><th scope="col">Argument/option</th><th scope="col">Meaning</th></tr></thead><tbody>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-22-title" tabindex="0"><table><caption id="table-22-title">convert — Table 22</caption><thead><tr><th scope="col">Argument/option</th><th scope="col">Meaning</th></tr></thead><tbody>
 <tr><th scope="row"><code>INPUT</code></th><td>Supported local original or completed HLS URL; encrypted input requires source keys; omitted with --plan</td></tr>
 <tr><th scope="row"><code>--to TARGET</code></th><td>Required output protection without --plan or --outputs</td></tr>
 <tr><th scope="row"><code>--format FORMAT</code></th><td>One output format; HLS defaults to fMP4 even for TS input</td></tr>
@@ -1047,7 +1059,7 @@ cargo test --locked -p drmr-core --test conversion_bundle_encryption \
 <p>There are no generic <code>ffmpeg-bin</code> or <code>ffprobe-bin</code> options. Those tools are found on the launch environment&#x27;s PATH.</p>
 <p><code>--plan</code> conflicts with INPUT, --to, --format, --outputs, --output, --download-dir and --fetch-policy. Runtime keys, validator/tool paths, worker limits and reporting options remain separate. Each output&#x27;s saved manifest-check policy cannot be overridden at execution.</p>
 <h3>verify</h3>
-<div class="guide-table-scroll" role="region" aria-labelledby="table-22-title" tabindex="0"><table><caption id="table-22-title">verify — Table 22</caption><thead><tr><th scope="col">Argument/option</th><th scope="col">Meaning</th></tr></thead><tbody>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-23-title" tabindex="0"><table><caption id="table-23-title">verify — Table 23</caption><thead><tr><th scope="col">Argument/option</th><th scope="col">Meaning</th></tr></thead><tbody>
 <tr><th scope="row"><code>OUTPUT</code></th><td>Candidate MP4, MPD or M3U8; omitted with --plan</td></tr>
 <tr><th scope="row"><code>--source INPUT</code></th><td>Required original without --plan or --manifest-only; never inferred from the result</td></tr>
 <tr><th scope="row"><code>--plan FILE</code></th><td>Check recorded source, output format/protection and independent media correspondence; conflicts with OUTPUT and --source</td></tr>
@@ -1065,7 +1077,7 @@ cargo test --locked -p drmr-core --test conversion_bundle_encryption \
 <p>Verification does not rebuild the result using a new target/format.</p>
 <p>Version-1 plan verification adds plan_id, source_unchanged and output_matches_plan, with complete comparisons under verification. Success requires source_unchanged, output_matches_plan and verification.passed all to be true. An explicitly supplied PlayReady configuration is also checked against the current result. Version-2 results list every output&#x27;s media, protection, signaling and conformance outcomes and include an overall passed flag. Matching media alone does not establish planned protection or DRM declarations. Neither mode proves license playback.</p>
 <h3>run</h3>
-<div class="guide-table-scroll" role="region" aria-labelledby="table-23-title" tabindex="0"><table><caption id="table-23-title">run — Table 23</caption><thead><tr><th scope="col">Option</th><th scope="col">Meaning/default</th></tr></thead><tbody>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-24-title" tabindex="0"><table><caption id="table-24-title">run — Table 24</caption><thead><tr><th scope="col">Option</th><th scope="col">Meaning/default</th></tr></thead><tbody>
 <tr><th scope="row"><code>--mpd MPD</code></th><td>Required supported prepared manifest</td></tr>
 <tr><th scope="row"><code>--output ROOT</code></th><td>Required; results under ROOT/asset-id</td></tr>
 <tr><th scope="row"><code>--asset-id ID</code></th><td>Asset name, otherwise original directory name</td></tr>
@@ -1079,12 +1091,12 @@ cargo test --locked -p drmr-core --test conversion_bundle_encryption \
 <tr><th scope="row"><code>--no-manifests</code></th><td>Diagnostic: omit playlist/manifest generation</td></tr>
 </tbody></table></div>
 <h3>analyze-hls / package-hls</h3>
-<div class="guide-table-scroll" role="region" aria-labelledby="table-24-title" tabindex="0"><table><caption id="table-24-title">analyze-hls / package-hls — Table 24</caption><thead><tr><th scope="col">analyze-hls option</th><th scope="col">Meaning</th></tr></thead><tbody>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-25-title" tabindex="0"><table><caption id="table-25-title">analyze-hls / package-hls — Table 25</caption><thead><tr><th scope="col">analyze-hls option</th><th scope="col">Meaning</th></tr></thead><tbody>
 <tr><th scope="row"><code>--source-config FILE</code></th><td>Required private source URL/path and permission configuration</td></tr>
 <tr><th scope="row"><code>--asset-id ID</code></th><td>Required saved asset name</td></tr>
 <tr><th scope="row"><code>--output ROOT</code></th><td>Required; save under ROOT/ID/clear/source</td></tr>
 </tbody></table></div>
-<div class="guide-table-scroll" role="region" aria-labelledby="table-25-title" tabindex="0"><table><caption id="table-25-title">analyze-hls / package-hls — Table 25</caption><thead><tr><th scope="col">package-hls option</th><th scope="col">Meaning</th></tr></thead><tbody>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-26-title" tabindex="0"><table><caption id="table-26-title">analyze-hls / package-hls — Table 26</caption><thead><tr><th scope="col">package-hls option</th><th scope="col">Meaning</th></tr></thead><tbody>
 <tr><th scope="row"><code>--analysis FILE</code></th><td>Required completed analysis.json</td></tr>
 <tr><th scope="row"><code>--drm-config FILE</code></th><td>Required private signaling configuration</td></tr>
 <tr><th scope="row"><code>--selection FILE</code></th><td>Private analyzed audio selection</td></tr>
@@ -1093,14 +1105,14 @@ cargo test --locked -p drmr-core --test conversion_bundle_encryption \
 </tbody></table></div>
 <p>Content keys for these workflows are <code>DRM_KID</code>/<code>DRM_KEY</code>/<code>DRM_IV</code>. Passing generic key JSON as drm-config is not supported.</p>
 <h3>verify-snapshot / canonical / version</h3>
-<div class="guide-table-scroll" role="region" aria-labelledby="table-26-title" tabindex="0"><table><caption id="table-26-title">verify-snapshot / canonical / version — Table 26</caption><thead><tr><th scope="col">Command/argument</th><th scope="col">Meaning</th></tr></thead><tbody>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-27-title" tabindex="0"><table><caption id="table-27-title">verify-snapshot / canonical / version — Table 27</caption><thead><tr><th scope="col">Command/argument</th><th scope="col">Meaning</th></tr></thead><tbody>
 <tr><th scope="row"><code>verify-snapshot PATH</code></th><td>Check recorded digest for snapshot directory or analysis.json</td></tr>
 <tr><th scope="row"><code>verify-snapshot --files PATH</code></th><td>Also rehash saved playlists/media</td></tr>
 <tr><th scope="row"><code>canonical PATH</code></th><td>Stable JSON output; no final LF or secret removal</td></tr>
 <tr><th scope="row"><code>version</code></th><td>Print version; no command-specific options</td></tr>
 </tbody></table></div>
 <h3>batch</h3>
-<div class="guide-table-scroll" role="region" aria-labelledby="table-27-title" tabindex="0"><table><caption id="table-27-title">batch — Table 27</caption><thead><tr><th scope="col">Option</th><th scope="col">Meaning/default</th></tr></thead><tbody>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-28-title" tabindex="0"><table><caption id="table-28-title">batch — Table 28</caption><thead><tr><th scope="col">Option</th><th scope="col">Meaning/default</th></tr></thead><tbody>
 <tr><th scope="row"><code>--work-list FILE</code></th><td>Required schema header and asset JSONL</td></tr>
 <tr><th scope="row"><code>--output ROOT</code></th><td>Required output root</td></tr>
 <tr><th scope="row"><code>--resume-log FILE</code></th><td>Required attempt-state record</td></tr>
@@ -1121,7 +1133,7 @@ cargo test --locked -p drmr-core --test conversion_bundle_encryption \
 <tr><th scope="row"><code>--heartbeat-s SEC</code></th><td>Status interval, default 60</td></tr>
 </tbody></table></div>
 <h3>serve</h3>
-<div class="guide-table-scroll" role="region" aria-labelledby="table-28-title" tabindex="0"><table><caption id="table-28-title">serve — Table 28</caption><thead><tr><th scope="col">Option/environment</th><th scope="col">Meaning/default</th></tr></thead><tbody>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-29-title" tabindex="0"><table><caption id="table-29-title">serve — Table 29</caption><thead><tr><th scope="col">Option/environment</th><th scope="col">Meaning/default</th></tr></thead><tbody>
 <tr><th scope="row"><code>--static-dir DIR</code></th><td>Trusted UI directory replacing embedded assets</td></tr>
 <tr><th scope="row"><code>--cli FILE</code></th><td>Same-version CLI for jobs</td></tr>
 <tr><th scope="row"><code>DRMR_CATALOG_ROOT</code></th><td>Required prepared catalog root</td></tr>

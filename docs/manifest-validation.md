@@ -132,6 +132,16 @@ normalization of the media.
 
 ## DASH
 
+Native typed rules use the pinned fifth-edition schema and XML Schema 1.0
+datatype rules. In particular, `xs:unsignedInt` and `xs:unsignedLong` collapse
+XML whitespace before lexical validation, so ` 1 ` has the same value as `1`.
+The qualification environment's PHP 8.5.7 / libxml 2.9.14 schema engine rejected
+eight such boundary cases. Those differences were resolved against
+[the fixed whitespace rule](https://www.w3.org/TR/2004/REC-xmlschema-2-20041028/#rf-whiteSpace),
+without changing the native rule or the recorded external verdicts. An external
+rejection still fails an explicitly required external check, even when the native
+check passes; drmr does not silently substitute one result for the other.
+
 The DASH adapter uses the official DASH-IF XML schema and Schematron rules. An XML schema checks element structure, attributes, and their order. Schematron checks additional rules expressed as assertions. Both checks must complete and pass. This is more than checking that the file is well-formed XML.
 
 The adapter invokes these installed assets directly, without running the DASH-IF web service, segment downloader, or media conformance checks. Nothing is uploaded to the public DASH-IF service.

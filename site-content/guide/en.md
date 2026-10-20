@@ -1,6 +1,6 @@
 ---
 title: User guide
-updated: 2026-10-20
+updated: 2026-10-21
 version: 0.1.0
 ---
 
@@ -8,7 +8,7 @@ version: 0.1.0
 
 drmr changes media containers, delivery formats and encryption while retaining encoded video and audio. It is for engineers who control the media and already have the required decryption keys. It is not an encoder for creating a new quality ladder or a client for obtaining DRM licenses.
 
-This guide describes drmr 0.1.0 and was updated on 2026-10-20. Public source and command help define the behavior. For a different version, also read its accompanying documentation. A passing example does not qualify arbitrary media or playback devices.
+This guide describes drmr 0.1.0 and was updated on 2026-10-21. Public source and command help define the behavior. For a different version, also read its accompanying documentation. A passing example does not qualify arbitrary media or playback devices.
 
 ## Choose an operation
 
@@ -727,6 +727,13 @@ Version-2 `verify --plan` reads all current result graphs again and compares eac
 
 Changed PSSH, PlayReady data, KIDs or FairPlay declarations can fail even when media decryption succeeds. An empty `drms` list requests no service-specific DRM information and its signaling result is not marked verified. It still requires the complete ordinary media and protection checks.
 
+CENC or CBCS output with no selected DRM provider may still contain a
+W3C Common SystemID PSSH record. It names a key identifier without containing
+the content key or provider-specific policy. drmr checks its generated single-key,
+empty-data form against the output settings and actual track protection. This
+does not mark a DRM service or license playback as verified, or broaden the
+admitted input profiles.
+
 The native manifest linter runs during common HLS/DASH conversion and full verification. It checks the final manifest bytes without an external validator. HLS syntax, segment/key state, feature versions and rendition references are distinct from Apple-specific VOD rules. Native DASH rules check the named static-presentation profile, including structure, inheritance, addressing, timelines and protection declarations. This is independently implemented Rust linting, rather than a complete XML schema or Schematron engine.
 
 Native reports distinguish passed, failed and not-checked rules, and include specification references. In-scope unsupported features, missing linked playlists, resource limits and truncated diagnostics prevent a clean result. Media-dependent and delivery-dependent rules are outside this manifest scope; full verification supplies separate media evidence. Rule identifiers and source positions are reported without echoing manifest text, key addresses or protection payloads. Small inputs run inline; larger independent documents can run in parallel within CPU and memory admission.
@@ -944,6 +951,17 @@ Unix process groups and Windows job objects retain descendant ownership. Sending
 ## Measurements
 
 Use `--measure` with `--json`. It adds observations without changing verification. Nested/parallel phases overlap; their times cannot simply be summed into wall time. Short clips are dominated by startup and cache effects. Sampled memory is not an exact peak. Compare the same original, tools, build settings, worker bounds and host load only after verification passes.
+
+A synthetic native-library measurement on 2026-10-21 used source
+[`c1458e7d`](https://github.com/kazuhide/drmr/commit/c1458e7deea5b31118073c682d799f60c8f4e8b5), Rust 1.99 release and a macOS ARM64 host with 10 logical CPUs
+and 32 GiB of memory. A master and 64 media playlists with 1,000 segments each
+took 14.50 ms serially and 3.37 ms with automatic selection of 10 workers.
+Complete reports matched. Small inputs stayed inline; a 30,000-entry DASH
+timeline took 5.22 ms serially and 5.27 ms automatically, so more workers
+do not always reduce time. These are whole-library-call observations from three
+rotating-order rounds, separate from conversion time. Our media tests were paused;
+other host processes were not isolated. See the linked resource guide for the
+separate allocation and process-memory observations.
 
 See [resources and measurements](https://github.com/kazuhide/drmr/blob/main/docs/resources.md).
 
@@ -1332,6 +1350,22 @@ Read each revision's CI logs and artifacts for source identity, compilers, tools
 The 54 finite combinations consist of audio27 plus joint27; CLI27 repeats the latter. The legacy16 use a prepared fragmented reference, whereas finite tests use the original progressive file's own playback range. Do not mix sample counts across different references/decoding paths.
 
 Bento4 installation pins and observed build banners are different evidence. Docker HTTP tests do not qualify a browser UI; native bundle construction does not qualify playback. Known-key media checks do not establish license acquisition or device operation.
+
+## Recorded three-output manifest checks
+
+A local run on 2026-10-21 (Japan time), using source [3f8a9a89](https://github.com/kazuhide/drmr/commit/3f8a9a89d0fc84e9699939a193baf823cafb6127), completed the chapter 6 workflow with the ten-second clear HLS/TS fixture and two-second segment targets. The CLI ran on macOS ARM64. Apple mediastreamvalidator 1.25.36 ran natively in playlist-only mode. DASH used the official DASH-IF v3.1.0 XML schema and Schematron rules at revision `bdf0c27a8f198da7a4bf81634bb01faf7c7c3c06`, in a Linux ARM64 container with network access disabled.
+
+| Final output | Protection and DRM declaration | Observed manifest result |
+| --- | --- | --- |
+| DASH fMP4 | CBCS; Widevine and PlayReady | Native Rust manifest checks, MPD XML schema and Schematron checks passed |
+| HLS fMP4 | CBCS; FairPlay | Native Rust checks passed; Apple checked all three playlists; media playlists declared version 6, meeting minimum 6 |
+| HLS TS | SAMPLE-AES; FairPlay | Native Rust checks passed; Apple checked all three playlists; media playlists declared version 6, meeting minimum 5 |
+
+URL acquisition retained the original, and the local source server was stopped before saving the plan. Conversion and independent `verify --plan` both passed the complete metadata, encoded-packet, timing, decoded-content and current DRM checks. Separate manifest-only checks also passed for copies containing only MPD or M3U8 files, without media, initialization files or keys.
+
+The native checks used HLS base and static DASH profiles at revision `2026-10-21.1`. All three manifest-only inputs also passed with an empty executable search path, independently of external validators. Reports contained no errors, no truncated diagnostics and no unchecked rules within their declared scope. Media and delivery requirements outside that scope remain separate evidence; this is not a claim of full Apple authoring conformance.
+
+Changing an fMP4 media playlist to version 5 was refused; version 7 passed. These checks use the minimum required by the declared features, not equality with version 6. The retained source stayed unchanged, the version-test changes were restored, and no run-owned containers remained. This is one qualified fixture and tool environment; it does not establish license acquisition, DRM-device playback or arbitrary-input compatibility.
 
 ## Recorded audio-only TS results
 
