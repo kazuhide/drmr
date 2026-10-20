@@ -269,6 +269,18 @@ fn clear_transport_has_independently_verified_dash_and_fairplay_outputs() {
         });
         if format == OutputFormat::Dash {
             assert_label_order(&entrypoint);
+        } else {
+            let text = std::fs::read_to_string(&entrypoint).unwrap();
+            for line in text
+                .lines()
+                .filter_map(|line| line.strip_prefix("#EXT-X-MEDIA:"))
+            {
+                let attrs = drmr_core::m3u8::parse_attributes(line).unwrap();
+                assert!(
+                    attrs.get("LANGUAGE").is_none(),
+                    "An unspecified source language must remain unspecified in HLS"
+                );
+            }
         }
         converter(&events)
             .verify_output_signaling(&entrypoint, format, target, &keys)

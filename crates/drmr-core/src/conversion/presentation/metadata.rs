@@ -38,6 +38,14 @@ fn text(value: &str) -> Result<String, ConversionError> {
     }
     Ok(value.into())
 }
+fn normalized_language(value: &str) -> Result<String, ConversionError> {
+    let value = text(value)?;
+    Ok(if value.eq_ignore_ascii_case("und") {
+        "und".into()
+    } else {
+        value
+    })
+}
 fn flag(attrs: &Attributes, name: &str) -> Result<bool, ConversionError> {
     match attrs.get(name) {
         None | Some("NO") => Ok(false),
@@ -72,7 +80,7 @@ impl Rendition {
         if is_default && autoselect == Some(false) {
             return Err(BAD);
         }
-        let language = text(attrs.get("LANGUAGE").unwrap_or("und"))?;
+        let language = normalized_language(attrs.get("LANGUAGE").unwrap_or("und"))?;
         if !language
             .split('-')
             .all(|p| !p.is_empty() && p.len() <= 8 && p.bytes().all(|b| b.is_ascii_alphanumeric()))
@@ -167,6 +175,26 @@ fn ordinal(uri: &str, count: usize) -> Result<usize, ConversionError> {
         .filter(|n| *n < count)
         .ok_or(BAD)
 }
+fn hls_declaration(a: &Rendition, uri: &str) -> Result<String, ConversionError> {
+    let name = a.name.as_deref().unwrap_or("Audio");
+    let mut declaration = format!(
+        "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID={},NAME={},DEFAULT={}",
+        quoted(&a.group)?,
+        quoted(name)?,
+        yes(a.is_default.unwrap_or(false)),
+    );
+    if !a.language.eq_ignore_ascii_case("und") {
+        write!(declaration, ",LANGUAGE={}", quoted(&a.language)?).map_err(|_| BAD)?;
+    }
+    if let Some(autoselect) = a.autoselect {
+        write!(declaration, ",AUTOSELECT={}", yes(autoselect)).map_err(|_| BAD)?;
+    }
+    write!(declaration, ",URI={}", quoted(uri)?).map_err(|_| BAD)?;
+    if let Some(channels) = &a.channels {
+        write!(declaration, ",CHANNELS={}", quoted(channels)?).map_err(|_| BAD)?;
+    }
+    Ok(declaration)
+}
 fn hls_finish(root: &Path, tracks: &[Prepared]) -> Result<(), ConversionError> {
     let path = root.join("master.m3u8");
     let bytes = super::super::files::read_manifest(&path)?;
@@ -188,27 +216,7 @@ fn hls_finish(root: &Path, tracks: &[Prepared]) -> Result<(), ConversionError> {
             let attrs = hls::attributes(value)?;
             let index = ordinal(attrs.get("URI").ok_or(BAD)?, tracks.len())?;
             let a = tracks[index].metadata.audio.as_ref().ok_or(BAD)?;
-            let name = a.name.as_deref().unwrap_or("Audio");
-            let mut declaration = format!(
-                "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID={},NAME={},LANGUAGE={},DEFAULT={}",
-                quoted(&a.group)?,
-                quoted(name)?,
-                quoted(&a.language)?,
-                yes(a.is_default.unwrap_or(false)),
-            );
-            if let Some(autoselect) = a.autoselect {
-                write!(declaration, ",AUTOSELECT={}", yes(autoselect)).map_err(|_| BAD)?;
-            }
-            write!(
-                declaration,
-                ",URI={}",
-                quoted(attrs.get("URI").ok_or(BAD)?)?
-            )
-            .map_err(|_| BAD)?;
-            if let Some(channels) = &a.channels {
-                write!(declaration, ",CHANNELS={}", quoted(channels)?).map_err(|_| BAD)?;
-            }
-            result.push(declaration);
+            result.push(hls_declaration(a, attrs.get("URI").ok_or(BAD)?)?);
         } else if let Some(value) = line.strip_prefix("#EXT-X-STREAM-INF:") {
             let attrs = hls::attributes(value)?;
             let mut values = Vec::new();
@@ -363,7 +371,7 @@ pub(super) fn dash(rep: roxmltree::Node<'_, '_>) -> Result<Metadata, ConversionE
             return Err(UNSUPPORTED);
         }
         if let Some(value) = scope.attribute("lang") {
-            language = Some(text(value)?);
+            language = Some(normalized_language(value)?);
         }
         if let Some(value) = scope.attribute("selectionPriority") {
             priority = Some(match value {
@@ -514,7 +522,7 @@ pub(super) fn materialize(
             track.metadata.audio = Some(Rendition {
                 group: "default-audio-group".into(),
                 name: Some(format!("stream_{index}")),
-                language: profile["language"].as_str().unwrap_or("und").into(),
+                language: normalized_language(profile["language"].as_str().unwrap_or("und"))?,
                 is_default: Some(false),
                 autoselect: Some(true),
                 channels: profile["channels"].as_u64().map(|n| n.to_string()),
@@ -527,6 +535,26 @@ pub(super) fn materialize(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn generated_hls_omits_undefined_language_and_preserves_named_languages() {
+        for language in [None, Some("und"), Some("UND"), Some("en"), Some("ja-JP")] {
+            let suffix =
+                language.map_or_else(String::new, |value| format!(",LANGUAGE=\"{value}\""));
+            let input = format!(
+                "TYPE=AUDIO,GROUP-ID=\"audio\",NAME=\"Main\",DEFAULT=YES,AUTOSELECT=YES,CHANNELS=\"2\"{suffix}"
+            );
+            let attrs = hls::attributes(&input).unwrap();
+            let rendition = Rendition::hls(&attrs).unwrap();
+            let output = hls_declaration(&rendition, "audio.m3u8").unwrap();
+            let output = hls::attributes(output.strip_prefix("#EXT-X-MEDIA:").unwrap()).unwrap();
+            assert_eq!(
+                output.get("LANGUAGE"),
+                language.filter(|value| !value.eq_ignore_ascii_case("und"))
+            );
+            assert_eq!(Rendition::hls(&output).unwrap(), rendition);
+        }
+    }
 
     fn audio_selection(namespace: &str) -> String {
         format!(
