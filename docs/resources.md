@@ -41,6 +41,28 @@ Structured `resource-budget` records show chosen workers, child thread allocatio
 CPU tokens, estimated memory tokens, and whether memory came from the host, the process
 control group, or the unknown fallback. They contain no source paths or machine IDs.
 
+## Native manifest work
+
+HLS and DASH manifest linting uses the same process capacity as media work.
+The adapter inventories manifest files before reserving memory for their retained
+bytes and the lint call. It checks the loaded bytes against that inventory and
+checks file identities and contents again before accepting the result.
+
+The library runs small inputs inline. Larger calls use one bounded pool: multiple
+documents can be parsed independently, while a single large DASH document shares
+one parsed tree across its independent checks. These pools do not nest. HLS graph
+checks reuse parsed child summaries; DASH checks reuse inherited templates and
+timelines. DASH timeline repetition is checked with arithmetic, rather than
+expanded into individual segments.
+
+`--max-workers` remains an upper bound for native work, including
+`verify --manifest-only`. The selected count also depends on input work, available
+CPU capacity and the conservative memory estimate. Byte, node, depth, reference
+and diagnostic limits bound work on untrusted manifests. An exhausted limit is
+reported as incomplete work, rather than a passing check or an assertion that the
+document violates the format specification. The allocation estimate is not a
+measurement of process resident memory or an operating-system memory cap.
+
 ## Output and pending work
 
 Captured stdout defaults to 16 MiB and stderr to 1 MiB, independently. Rust callers can

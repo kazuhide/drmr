@@ -26,9 +26,10 @@ evidence. The qualified clear MP4 profile supports the fragmented-MP4 outputs.
 Other conversions remain available without these explicit DRM settings; see the
 [conversion support table](conversion-support.md).
 
-Each invocation creates one output directory. To deliver HLS and DASH, use separate
-invocations and destinations. The outputs are independently packaged; physical
-sharing of their fragmented-MP4 files is not guaranteed.
+The single-output options below create one output directory. For HLS and DASH
+from one source in one operation, use [named outputs](multiple-outputs.md) with
+the common `plan`, `convert`, and `verify` commands. Those outputs are independently
+packaged; physical sharing of their fragmented-MP4 files is not guaranteed.
 
 ## Supply private output settings
 
@@ -165,8 +166,11 @@ Library callers can independently reopen an existing result with
 reads a fresh, byte-bound output graph and verifies its current records against
 the operator settings. Call `Converter::verify` separately for full source/result
 media comparison. A prior conversion report does not authorize either check.
-The single-output CLI `verify` currently provides the media comparison; it does
-not expose this separate provider-signaling result.
+The single-output CLI `verify` repeats these signaling checks when its protected
+key file explicitly selects a signaling profile. It checks the same byte-bound
+output as its complete media comparison. A [multiple-output saved plan](multiple-outputs.md)
+also fixes the selected DRM systems and reports each output's media, DRM,
+native manifest linting, and optional external manifest checks separately.
 
 Whole-file AES-128 encryption can make resource bytes opaque. The native metadata
 check examines the final manifest and readable initialization and provider records;

@@ -118,11 +118,11 @@ fn help_lists_both_commands_and_packaging_options() {
     let output = drmr(&["--help"], &[]);
     let text = String::from_utf8_lossy(&output.stdout);
     assert!(
-        text.contains("analyze-hls      Save and inspect an unencrypted, on-demand HLS stream"),
+        text.contains("analyze-hls      Legacy: save and inspect a clear on-demand HLS snapshot"),
         "{text}"
     );
     assert!(
-        text.contains("package-hls      package clear HLS for Widevine, PlayReady and FairPlay"),
+        text.contains("package-hls      Legacy snapshot packaging for DASH and HLS"),
         "{text}"
     );
     let output = drmr(&["package-hls", "--help"], &[]);

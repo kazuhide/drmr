@@ -350,7 +350,7 @@ class ConversionMatrix(unittest.TestCase):
         rows = [
             ("mp4", "MP4", "Clear/cenc/cbcs", standard),
             ("dash", "DASH", "Clear/cenc/cbcs", standard),
-            ("hls-fmp4", "HLS", "Clear/cbcs/AES-128", standard),
+            ("hls-fmp4", "HLS", "Clear/cenc/cbcs/AES-128", standard),
             ("hls-ts-video", "HLS / MPEG-TS", "Clear/AES-128/SAMPLE-AES", ["", "Clear/cenc/cbcs", "Clear/cbcs/AES-128", "Clear/AES-128/SAMPLE-AES"]),
             ("hls-ts-audio", "HLS / MPEG-TS", "Clear/AES-128/SAMPLE-AES", ["", "Clear/cenc/cbcs", "Clear/cbcs/AES-128", "Clear/AES-128/SAMPLE-AES"]),
         ]
@@ -379,6 +379,19 @@ class ConversionMatrix(unittest.TestCase):
             with self.subTest(language=language):
                 result = CHECK.validate_matrix(self.fixture(language), language)
                 self.assertEqual((result["rows"], result["output_columns"], result["cells"]), (5, 4, 20))
+
+    def test_cenc_input_cannot_be_omitted_from_either_hls_fmp4_row(self):
+        for language in ("en", "ja"):
+            original = self.fixture(language)
+            start = original.index('<tr id="hls-fmp4">')
+            end = original.index('</th>', start)
+            header = original[start:end]
+            self.assertIn(' / <code>cenc</code>', header)
+            changed = (original[:start] + header.replace(' / <code>cenc</code>', '', 1)
+                       + original[end:])
+            with self.subTest(language=language), self.assertRaisesRegex(
+                    CHECK.Failure, "site-matrix-protections"):
+                CHECK.validate_matrix(changed, language)
 
     def test_missing_duplicate_transposed_and_changed_cells_are_refused(self):
         original = self.fixture()

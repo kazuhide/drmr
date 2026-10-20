@@ -1,6 +1,6 @@
 # Understand a processing route
 
-`inspect` reports what local metadata says. Without `--save`, `plan` lists conditional ways to satisfy the requested output. `analyze` checks complete source media; `plan --save` additionally fixes its file fingerprints and one output intent for later execution. A successful `convert` reports the handler it actually used in `processing.route`, with a fixed reason and its input preparation. The identifiers below connect those reports to this guide. See [saved execution plans](executable-plans.md) for the four-stage workflow and fresh revalidation boundaries.
+`inspect` reports what local metadata says. Without `--save`, `plan` lists conditional ways to satisfy the requested output. `analyze` checks complete source media; `plan --save` additionally fixes its file fingerprints and output intent for later execution. Use `--outputs` for [several named outputs](multiple-outputs.md). A successful single conversion reports the handler it actually used in `processing.route`, with a fixed reason and its input preparation; a multiple-output report includes this information for each child conversion. The identifiers below connect those reports to this guide. See [saved execution plans](executable-plans.md) for the four-stage workflow and fresh revalidation boundaries.
 
 ```text
 Original local file or manifest resources
@@ -83,9 +83,35 @@ The packaging step disables an initial clear interval and timestamp shifting.
 This route is selected explicitly by `--format hls-ts`; the existing `hls`
 format continues to produce fragmented MP4.
 
-Metadata alone may not qualify a finite MP4 profile or distinguish supported fragmented MP4 HLS from transport-stream HLS. A plan can therefore contain several conditional candidates. Each has `revalidation_required: true` and fixed condition codes. Actual source validation selects a handler or refuses the input; a rejected progressive profile does not imply permission to fall back to another route. Multiple output formats still require separate conversion commands.
+Metadata alone may not qualify a finite MP4 profile or distinguish supported fragmented MP4 HLS from transport-stream HLS. A metadata-only plan can therefore contain several conditional candidates. Each has `revalidation_required: true` and fixed condition codes. Actual source validation selects a handler or refuses the input; a rejected progressive profile does not imply permission to fall back to another route. A saved plan with `--outputs` executes its named outputs together, using the appropriate route for each one.
 
-`compatible` requires a valid target intent and a candidate for every requested output format. A known text track has no conversion candidate and makes the plan unsupported: the media handlers support audio and video. A plan with a supported DASH candidate but no candidate for its requested MP4 output is also unsupported. `execution_available` additionally requires one output format; neither field establishes that the source, keys, or tools have passed execution checks. Unknown HLS roles retain conditional candidates until actual resource inspection establishes their roles.
+For metadata-only plans, `compatible` requires a valid target intent and a candidate for every requested output format. A known text track has no conversion candidate and makes the plan unsupported: the media handlers support audio and video. A plan with a supported DASH candidate but no candidate for its requested MP4 output is also unsupported. Its `execution_available` field additionally requires one output format; neither field establishes that the source, keys, or tools have passed execution checks. Unknown HLS roles retain conditional candidates until actual resource inspection establishes their roles.
+
+## Several final outputs
+
+The common saved-plan workflow can package a supported clear HLS transport-stream
+source into FairPlay HLS and Widevine/PlayReady DASH in one operation. It prepares
+and packages each output separately. DASH and fragmented MP4 HLS do not share
+physical media files in this workflow. Separate copies bind verification to
+the exact files about to be published, which increases temporary disk use;
+the checks do not load all media into memory.
+
+Each output must pass its complete media comparison, actual format and
+protection checks, and any explicitly requested DRM declaration checks. The
+DRM check compares the supplied runtime settings with the final MPD, MP4
+initialization data, and effective HLS key declarations. It also checks the
+minimum HLS protocol version required by those declarations.
+
+Native Rust linting checks the final HLS/DASH declarations and reports coverage
+separately from media correspondence. An output may additionally require
+[external manifest validation](manifest-validation.md).
+Apple's playlist-only validator checks the final HLS playlists, and the
+DASH-IF schema and rule checks inspect the final MPD. These checks operate on
+byte-identical copies of the encrypted output manifests. They do not substitute
+decrypted media, request keys, or prove license acquisition or device playback.
+The new result directory appears only after every output has passed all its
+required checks. A fresh `verify --plan` repeats those checks against the
+current original and final output files.
 
 ## Encryption facts and their limits
 

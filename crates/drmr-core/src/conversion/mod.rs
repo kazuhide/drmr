@@ -26,6 +26,7 @@ mod cenc;
 pub mod conformance;
 mod files;
 mod frozen;
+pub mod manifest_lint;
 pub use frozen::{FrozenSource, SourceFile, SourceInventory};
 mod hls;
 mod keys;
@@ -194,10 +195,19 @@ impl Converter {
             |source, destination| self.commit_publication(source, destination),
         )
     }
+    #[cfg(test)]
     fn publish_directory(
         &self,
         stage: &files::Stage,
         destination: &Path,
+    ) -> Result<(), ConversionError> {
+        self.publish_directory_checked(stage, destination, || Ok(()))
+    }
+    fn publish_directory_checked(
+        &self,
+        stage: &files::Stage,
+        destination: &Path,
+        check_output: impl FnOnce() -> Result<(), ConversionError>,
     ) -> Result<(), ConversionError> {
         let _scope = self.backend.scope(measurement::Phase::Publication);
         self.backend.check_cancelled()?;
@@ -209,7 +219,8 @@ impl Converter {
             Some(&self.backend.stop),
             || {
                 self.check_downloaded()?;
-                self.check_frozen_source()
+                self.check_frozen_source()?;
+                check_output()
             },
             |source, destination| self.commit_publication(source, destination),
         )

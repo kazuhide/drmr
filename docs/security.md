@@ -1,5 +1,22 @@
 # Keys and local security
 
+Multiple-output plans fix the output IDs, formats, protection schemes, DRM system
+selections and external manifest-check policies. Their runtime schema-version-2
+key file keeps each output's keys and DRM information separate. PSSH, license
+addresses, FairPlay key addresses and initialization vectors are not stored in
+the plan or printed in result summaries. Generated manifests intentionally
+publish their configured DRM declarations. See [multiple outputs](multiple-outputs.md).
+
+Native manifest linting accepts captured bytes without keys, network access,
+or external processes. Its diagnostics identify rules and source positions;
+they do not echo input text, key addresses, or protection payloads.
+
+External manifest checks inspect byte-identical private copies of final output
+manifests. They do not contact license or key services, decrypt media, or upload
+an asset to a hosted validation service. Their result scope is `manifest-only`;
+successful media correspondence is a separate internal check. Executable paths
+and raw validator diagnostics are excluded from retained result summaries.
+
 drmr processes media with keys supplied by the operator. It does not obtain DRM licenses or isolate keys in secure hardware. Use a trusted operating-system account, trusted media tools, and a trusted browser for local playback.
 
 ## Where supplied information goes
@@ -55,11 +72,23 @@ reads the original and current result rather than trusting saved success claims.
 
 FFmpeg and Shaka Packager require plaintext keys for some supported operations. drmr passes those keys to child processes, including through command arguments. The operating system, sufficiently privileged processes, and process-inspection tools may observe those arguments or the process environment while the tool runs. Diagnostic masking does not hide live operating-system process information.
 
+Explicit DRM initialization metadata is passed to Shaka Packager through a
+private flag file instead of a command-line argument. The file can contain
+configured license addresses and remains private working data. This transport
+does not remove content keys from other tool arguments or protect them from
+process-memory inspection.
+
 Keys also exist in ordinary process memory. Sensitive Rust key buffers and several temporary representations are wiped when their owners are dropped. This is a best-effort lifetime control, not a guarantee that every copy has been erased. Child processes, browser buffers, allocator copies, swap, crash dumps, and forced termination are outside that guarantee. drmr does not provide Secure Enclave storage or control the host's dump and swap policies.
 
 ## Temporary files and cleanup
 
 Some verification paths write decrypted media and plaintext key files into private temporary directories. Processing is therefore not memory-only. Raw key-file writes refuse unsafe existing destinations instead of following a symbolic link or repairing public permissions after opening a file.
+
+Temporary DRM flag files are created exclusively with private permissions.
+Their directory, file identity and contents are checked around tool execution.
+If child-process cleanup cannot be confirmed, the owning workspace remains
+alive until the child is reaped. A replaced workspace is preserved instead of
+recursively deleting the replacement through its pathname.
 
 On Unix, use trusted existing parent directories for output, plans and temporary
 work. A conversion staging parent must belong to the current user or the administrator

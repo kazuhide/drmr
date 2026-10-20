@@ -229,25 +229,51 @@ fn legacy_fmp4_declarations(
         originals.push((name, bytes));
     }
     assert_ne!(originals, []);
-    assert!(
+    let verify = || {
         c.verify(VerificationRequest {
             source: VerificationSource {
                 input: source,
                 input_keys: &InputKeys::default(),
-                hls_keys: keys
+                hls_keys: keys,
             },
             output: VerificationSource {
                 input: &output.join("master.m3u8"),
                 input_keys: result_keys,
-                hls_keys: result_hls
+                hls_keys: result_hls,
             },
         })
         .unwrap()
-        .passed
+    };
+    let proof = verify();
+    // Container IVs still establish complete legacy media proof; malformed manifest
+    // declarations independently fail the public verification's native rule scope.
+    assert!(proof.media_verified);
+    assert!(
+        proof.checks.packet_payloads_equal
+            && proof.checks.packet_timing_equal
+            && proof.checks.decoded_content_equal
+    );
+    assert_eq!(
+        serde_json::to_value(&proof.checks).unwrap()["stream_metadata"],
+        "pass"
+    );
+    assert!(!proof.passed);
+    let native = proof.native_manifest.as_ref().unwrap();
+    assert_eq!(native.errors, originals.len() * 2);
+    assert!(!native.is_clean_for_scope());
+    assert!(
+        native
+            .diagnostics
+            .iter()
+            .all(|issue| issue.rule_id == "HLS-KEY"
+                && issue.message_code == "hls-key-declaration-invalid")
     );
     for (name, bytes) in originals {
         std::fs::write(output.join(name), bytes).unwrap();
     }
+    let restored = verify();
+    assert!(restored.passed && restored.media_verified);
+    assert!(restored.native_manifest.unwrap().is_clean_for_scope());
 }
 #[test]
 fn independently_encrypted_video_including_the_final_sample_preserves_original_media() {

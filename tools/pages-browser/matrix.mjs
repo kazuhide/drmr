@@ -6,7 +6,7 @@ export const matrixColumns = ['MP4', 'DASH', 'HLS fMP4', 'HLS MPEG-TS'];
 export const matrixRows = [
   { id: 'mp4', format: 'MP4', input: ['Clear', 'cenc', 'cbcs'], output: standard },
   { id: 'dash', format: 'DASH', input: ['Clear', 'cenc', 'cbcs'], output: standard },
-  { id: 'hls-fmp4', format: 'HLS', input: ['Clear', 'cbcs', 'AES-128'], output: standard },
+  { id: 'hls-fmp4', format: 'HLS', input: ['Clear', 'cenc', 'cbcs', 'AES-128'], output: standard },
   { id: 'hls-ts-video', format: 'HLS / MPEG-TS', input: ['Clear', 'AES-128', 'SAMPLE-AES'],
     output: [[], ['Clear', 'cenc', 'cbcs'], ['Clear', 'cbcs', 'AES-128'], ['Clear', 'AES-128', 'SAMPLE-AES']] },
   { id: 'hls-ts-audio', format: 'HLS / MPEG-TS', input: ['Clear', 'AES-128', 'SAMPLE-AES'],

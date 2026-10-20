@@ -450,7 +450,7 @@ impl super::Converter {
         })?;
         let input = frozen.entrypoint();
         let Some(signaling) = &keys.signaling else {
-            return records::unrequested(&frozen);
+            return records::unrequested(&frozen, target, keys.output.as_ref());
         };
         signaling.validate_profile(format, target)?;
         if signaling.is_multi() {

@@ -13,10 +13,10 @@ use std::sync::Arc;
 
 #[derive(Args)]
 #[command(
-    after_help = "Analyze complete local MP4, DASH, or HLS media before choosing a conversion.\nURL input requires a new --download-dir and supports completed clear HLS within the documented profile.\nThe saved original is reused offline by plan, convert, and verify; keys and request headers stay separate.\nInput admission does not establish a converted result, DRM licensing, or device playback.\n\nExamples:\n  drmr analyze media.mp4 --json\n  drmr analyze https://example.com/vod/master.m3u8 --download-dir source --json\n  drmr plan source/input.m3u8 --to cbcs --format dash --output converted --save conversion.plan.json"
+    after_help = "Analyze complete local MP4, DASH, or HLS media before choosing a conversion.\nURL input requires a new --download-dir and supports completed HLS within the documented profile.\nCiphertext and encryption declarations are retained; key and license URIs are never fetched.\nSupply decryption keys separately with --keys-file. Relative playlist key URIs resolve against the effective remote playlist URL.\nThe saved original is reused offline by plan, convert, and verify; keys and request headers stay separate.\nInput admission does not establish a converted result, DRM licensing, or device playback.\n\nExamples:\n  drmr analyze media.mp4 --json\n  drmr analyze https://example.com/vod/master.m3u8 --download-dir source --json\n  drmr plan source/input.m3u8 --to cbcs --format dash --output converted --save conversion.plan.json"
 )]
 pub struct AnalyzeArgs {
-    /// Local source media, or a completed clear HLS URL to retain locally.
+    /// Local source media, or a completed supported HLS URL to retain locally.
     pub input: PathBuf,
     /// New private directory for the original URL input; required for URL input.
     #[arg(long)]
@@ -24,7 +24,7 @@ pub struct AnalyzeArgs {
     /// Private settings for allowed origins, authentication, and bounded retrieval.
     #[arg(long)]
     pub fetch_policy: Option<PathBuf>,
-    /// Protected JSON configuration with input decryption keys when required.
+    /// Protected schema-version-1 or 2 JSON input keys; output domains are not selected.
     #[arg(long)]
     pub keys_file: Option<PathBuf>,
     /// Shaka Packager executable, selected by the operator.
@@ -179,7 +179,7 @@ pub fn analyze(args: &AnalyzeArgs) -> ExitCode {
             None,
         );
     };
-    let keys = match convert_cli::load(args.keys_file.as_ref()) {
+    let keys = match convert_cli::load_source(args.keys_file.as_ref()) {
         Ok(value) => value,
         Err(cause) => return convert_cli::error("analyze", cause, args.json, &progress, None),
     };

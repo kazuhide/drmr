@@ -243,30 +243,193 @@ fn existing_destination_is_refused_without_a_network_request_or_changes() {
     );
 }
 #[test]
-fn encrypted_playlists_are_refused_before_any_key_or_media_request() {
-    let manifest=b"#EXTM3U\n#EXT-X-TARGETDURATION:3\n#EXT-X-KEY:METHOD=AES-128,URI=\"key.bin\"\n#EXTINF:2,\nsegment.ts\n#EXT-X-ENDLIST\n";
-    let server = Server::new(BTreeMap::from([("/source.m3u8", manifest.to_vec())]));
+fn encrypted_playlists_retain_ciphertext_without_requesting_the_key() {
+    let manifest=b"#EXTM3U\n#EXT-X-TARGETDURATION:3\n#EXT-X-MEDIA-SEQUENCE:37\n#EXT-X-KEY:METHOD=AES-128,URI=\"key.bin\"\n#EXTINF:2,\nsegment.ts\n#EXT-X-ENDLIST\n";
+    let ciphertext = vec![0x91; 192];
+    let server = Server::new(BTreeMap::from([
+        ("/source.m3u8", manifest.to_vec()),
+        ("/segment.ts", ciphertext.clone()),
+        ("/key.bin", vec![0x42; 16]),
+    ]));
     let parent = tempfile::tempdir().unwrap();
     let directory = parent.path().canonicalize().unwrap().join("download");
-    assert!(
-        converter(Stop::new())
-            .download_hls(
-                &server.url(),
-                &directory,
-                &parent.path().join("output"),
-                &policy()
-            )
-            .is_err()
+    let source = converter(Stop::new())
+        .download_hls(
+            &server.url(),
+            &directory,
+            &parent.path().join("output"),
+            &policy(),
+        )
+        .unwrap();
+    assert_eq!(
+        *server.calls.lock().unwrap(),
+        ["/source.m3u8", "/segment.ts"]
     );
-    assert_eq!(*server.calls.lock().unwrap(), ["/source.m3u8"]);
-    assert!(!directory.exists());
+    assert_eq!(
+        std::fs::read(directory.join("raw/r000000.m3u8")).unwrap(),
+        manifest
+    );
+    assert_eq!(
+        std::fs::read(directory.join("media/r000000.ts")).unwrap(),
+        ciphertext
+    );
+    assert_eq!(
+        std::fs::read_to_string(source.entrypoint()).unwrap(),
+        std::str::from_utf8(manifest)
+            .unwrap()
+            .replace(
+                "URI=\"key.bin\"",
+                &format!("URI=\"http://{}/key.bin\"", server.address)
+            )
+            .replace("segment.ts", "media/r000000.ts")
+    );
+    source.check(&Stop::new()).unwrap();
+}
+
+#[test]
+fn redirected_renditions_resolve_key_identifiers_in_their_own_effective_directory() {
+    let master = b"#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1000\na.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=2000\nb.m3u8\n";
+    let child = b"\xef\xbb\xbf#EXTM3U\r\n#EXT-X-TARGETDURATION:3\r\n#EXT-X-MEDIA-SEQUENCE:41\r\n#EXT-X-KEY:METHOD=AES-128,URI=\"key.bin?opaque=identifier\",IV=0x00000000000000000000000000000029,KEYFORMAT=\"identity\",KEYFORMATVERSIONS=\"1\"\r\n#EXTINF:2,\r\nsegment.ts\r\n#EXT-X-KEY:METHOD=AES-128,URI=\"https://keys.example.test/rotated\"\r\n#EXTINF:2,\r\nsecond.ts\r\n#EXT-X-KEY:METHOD=NONE\r\n#EXTINF:2,\r\nclear.ts\r\n#EXT-X-ENDLIST\r\n";
+    let resources = BTreeMap::from([
+        ("/source.m3u8", master.to_vec()),
+        ("/first/media.m3u8", child.to_vec()),
+        ("/second/media.m3u8", child.to_vec()),
+        ("/first/segment.ts", vec![0x91; 192]),
+        ("/first/second.ts", vec![0x92; 192]),
+        ("/first/clear.ts", vec![0x47; 188]),
+        ("/second/segment.ts", vec![0x93; 192]),
+        ("/second/second.ts", vec![0x94; 192]),
+        ("/second/clear.ts", vec![0x47; 188]),
+    ]);
+    let server = Server::redirecting(
+        resources,
+        BTreeMap::from([
+            ("/a.m3u8", "/first/media.m3u8"),
+            ("/b.m3u8", "/second/media.m3u8"),
+        ]),
+    );
+    let parent = tempfile::tempdir().unwrap();
+    let directory = parent.path().join("download");
+    converter(Stop::new())
+        .acquire_hls(&server.url(), &directory, &policy())
+        .unwrap();
+    for (id, directory_name, first_media) in [(1, "first", 0), (2, "second", 3)] {
+        let actual = std::fs::read_to_string(directory.join(format!("p{id:06}.m3u8"))).unwrap();
+        let expected = std::str::from_utf8(child)
+            .unwrap()
+            .replace(
+                "URI=\"key.bin?opaque=identifier\"",
+                &format!(
+                    "URI=\"http://{}/{directory_name}/key.bin?opaque=identifier\"",
+                    server.address
+                ),
+            )
+            .replace("segment.ts", &format!("media/r{first_media:06}.ts"))
+            .replace("second.ts", &format!("media/r{:06}.ts", first_media + 1))
+            .replace("clear.ts", &format!("media/r{:06}.ts", first_media + 2));
+        assert_eq!(actual, expected);
+        assert_eq!(
+            std::fs::read(directory.join(format!("raw/r{id:06}.m3u8"))).unwrap(),
+            child
+        );
+    }
+    assert!(
+        server
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|uri| !uri.contains("key.bin"))
+    );
+}
+
+#[test]
+fn fairplay_key_identifiers_stay_opaque_and_are_never_fetched() {
+    for mapped in [false, true] {
+        let initialization = if mapped {
+            "#EXT-X-MAP:URI=\"init.mp4\"\n"
+        } else {
+            ""
+        };
+        let manifest = format!(
+            "#EXTM3U\n#EXT-X-VERSION:6\n#EXT-X-TARGETDURATION:3\n#EXT-X-KEY:METHOD=SAMPLE-AES,URI=\"skd://asset/identifier\",IV=0x00000000000000000000000000000001,KEYFORMAT=\"com.apple.streamingkeydelivery\",KEYFORMATVERSIONS=\"1\"\n{initialization}#EXTINF:2,\nsegment\n#EXT-X-ENDLIST\n"
+        );
+        let server = Server::new(BTreeMap::from([
+            ("/source.m3u8", manifest.as_bytes().to_vec()),
+            ("/init.mp4", vec![0x10; 32]),
+            ("/segment", vec![0x91; 192]),
+        ]));
+        let parent = tempfile::tempdir().unwrap();
+        let directory = parent.path().join("download");
+        let source = converter(Stop::new())
+            .acquire_hls(&server.url(), &directory, &policy())
+            .unwrap();
+        let projected = std::fs::read_to_string(source.entrypoint()).unwrap();
+        assert!(projected.contains("URI=\"skd://asset/identifier\""));
+        assert_eq!(
+            server.calls.lock().unwrap().len(),
+            if mapped { 3 } else { 2 }
+        );
+        assert_eq!(
+            std::fs::read(directory.join("raw/r000000.m3u8")).unwrap(),
+            manifest.as_bytes()
+        );
+    }
+}
+
+#[test]
+fn unsupported_or_malformed_key_declarations_fail_before_media_requests() {
+    for key in [
+        "METHOD=unknown,URI=\"key.bin\"",
+        "METHOD=AES-128",
+        "METHOD=AES-128,METHOD=AES-128,URI=\"key.bin\"",
+        "METHOD=NONE,URI=\"key.bin\"",
+        "METHOD=AES-128,URI=\"key.bin\",IV=0x",
+        "METHOD=AES-128,URI=\"key.bin\",IV=0xinvalid",
+        "METHOD=AES-128,URI=\"key.bin\",IV=0x000000000000000000000000000000001",
+        "METHOD=AES-128,URI=\"key.bin\",KEYFORMAT=\"unsupported\"",
+        "METHOD=SAMPLE-AES,URI=\"key.bin\",KEYFORMATVERSIONS=\"2\"",
+        "METHOD=AES-128,URI=key.bin",
+        "METHOD=AES-128,URI=\"key\u{0001}.bin\"",
+    ] {
+        let manifest = format!(
+            "#EXTM3U\n#EXT-X-TARGETDURATION:3\n#EXT-X-KEY:{key}\n#EXTINF:2,\nsegment.ts\n#EXT-X-ENDLIST\n"
+        );
+        let server = Server::new(BTreeMap::from([("/source.m3u8", manifest.into_bytes())]));
+        let parent = tempfile::tempdir().unwrap();
+        let directory = parent.path().join("download");
+        assert_eq!(
+            converter(Stop::new())
+                .acquire_hls(&server.url(), &directory, &policy())
+                .unwrap_err()
+                .0,
+            "download-source-not-supported"
+        );
+        assert_eq!(*server.calls.lock().unwrap(), ["/source.m3u8"]);
+        assert!(!directory.exists());
+    }
 }
 
 #[test]
 fn cancellation_drains_a_real_held_http_body_and_removes_only_the_partial_download() {
-    let manifest = b"#EXTM3U\n#EXT-X-TARGETDURATION:3\n#EXTINF:2,\nheld.ts\n#EXT-X-ENDLIST\n";
+    cancelled_download(false);
+}
+
+#[test]
+fn encrypted_cancellation_drains_the_ciphertext_body_without_requesting_a_key() {
+    cancelled_download(true);
+}
+
+fn cancelled_download(encrypted: bool) {
+    let key = if encrypted {
+        "#EXT-X-KEY:METHOD=AES-128,URI=\"key.bin\"\n"
+    } else {
+        ""
+    };
+    let manifest =
+        format!("#EXTM3U\n#EXT-X-TARGETDURATION:3\n{key}#EXTINF:2,\nheld.ts\n#EXT-X-ENDLIST\n");
     let server = Server::new(BTreeMap::from([
-        ("/source.m3u8", manifest.to_vec()),
+        ("/source.m3u8", manifest.into_bytes()),
         ("/held.ts", vec![0x47; 188]),
     ]));
     let parent = tempfile::tempdir().unwrap();
@@ -289,6 +452,7 @@ fn cancellation_drains_a_real_held_http_body_and_removes_only_the_partial_downlo
     }
     stop.set();
     let result = receive.recv_timeout(Duration::from_secs(2));
+    assert_eq!(*server.calls.lock().unwrap(), ["/source.m3u8", "/held.ts"]);
     drop(server);
     worker.join().unwrap();
     assert_eq!(result.unwrap().unwrap_err().0, "cancelled");
@@ -417,11 +581,26 @@ fn existing_output_and_physical_overlap_are_refused_before_any_request() {
 
 #[test]
 fn changed_or_same_bytes_replaced_originals_are_rejected_without_losing_the_saved_source() {
+    changed_download(false);
+}
+
+#[test]
+fn changed_or_replaced_ciphertext_is_refused_before_decryption_or_publication() {
+    changed_download(true);
+}
+
+fn changed_download(encrypted: bool) {
     for replace in [false, true] {
-        let manifest =
-            b"#EXTM3U\n#EXT-X-TARGETDURATION:3\n#EXTINF:2,\nsegment.ts\n#EXT-X-ENDLIST\n";
+        let key = if encrypted {
+            "#EXT-X-KEY:METHOD=AES-128,URI=\"key.bin\"\n"
+        } else {
+            ""
+        };
+        let manifest = format!(
+            "#EXTM3U\n#EXT-X-TARGETDURATION:3\n{key}#EXTINF:2,\nsegment.ts\n#EXT-X-ENDLIST\n"
+        );
         let server = Server::new(BTreeMap::from([
-            ("/source.m3u8", manifest.to_vec()),
+            ("/source.m3u8", manifest.as_bytes().to_vec()),
             ("/segment.ts", vec![0x47; 188]),
         ]));
         let parent = tempfile::tempdir().unwrap();
@@ -464,7 +643,7 @@ fn changed_or_same_bytes_replaced_originals_are_rejected_without_losing_the_save
         assert!(!output.exists());
         assert_eq!(
             std::fs::read(directory.join("raw/r000000.m3u8")).unwrap(),
-            manifest
+            manifest.as_bytes()
         );
         assert!(directory.is_dir());
     }

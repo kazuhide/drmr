@@ -1007,6 +1007,7 @@ dependencies = [
  "base64 0.22.1",
  "cbc",
  "clap",
+ "drmr-manifest",
  "drmr-test-support",
  "fs4",
  "getrandom 0.4.3",

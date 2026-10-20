@@ -29,7 +29,7 @@ pub(crate) fn error_hint(code: &str) -> Option<&'static str> {
             "The actual source or output does not satisfy this plan. Review the supported media profile and create a new plan when changing intent.",
         ),
         "plan-requires-single-output" => {
-            Some("Save one output format per plan; use separate plans for different results.")
+            Some("Use one --format with --to, or select named outputs with --outputs instead.")
         }
         _ => None,
     }
@@ -91,6 +91,9 @@ impl Session {
 }
 
 pub fn save(args: &PlanArgs) -> ExitCode {
+    if args.outputs.is_some() {
+        return crate::bundle_cli::save(args);
+    }
     let mut formats = args.format.clone();
     formats.sort();
     formats.dedup();
@@ -178,6 +181,10 @@ pub fn save(args: &PlanArgs) -> ExitCode {
 }
 
 pub fn convert(args: &ConvertArgs, path: &Path) -> ExitCode {
+    match plan::read_saved(path) {
+        Ok(plan::SavedPlan::Bundle(plan)) => return crate::bundle_cli::convert(args, &plan),
+        Ok(plan::SavedPlan::Single(_)) | Err(_) => {}
+    }
     let session = match Session::start(
         "convert",
         args.json,
@@ -224,6 +231,10 @@ pub fn convert(args: &ConvertArgs, path: &Path) -> ExitCode {
 }
 
 pub fn verify(args: &VerifyArgs, path: &Path) -> ExitCode {
+    match plan::read_saved(path) {
+        Ok(plan::SavedPlan::Bundle(plan)) => return crate::bundle_cli::verify(args, &plan),
+        Ok(plan::SavedPlan::Single(_)) | Err(_) => {}
+    }
     let session = match Session::start(
         "verify",
         args.json,

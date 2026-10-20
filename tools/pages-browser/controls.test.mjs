@@ -334,6 +334,7 @@ test('conversion facts unify MP4 and distinguish TS video and TS audio-only rout
   assert.deepEqual(matrixRows.map(row => row.id), ['mp4', 'dash', 'hls-fmp4', 'hls-ts-video', 'hls-ts-audio']);
   assert.equal(matrixRows.flatMap(row => row.output).length, 20);
   assert.deepEqual(matrixRows[0].input, ['Clear', 'cenc', 'cbcs']);
+  assert.deepEqual(matrixRows[2].input, ['Clear', 'cenc', 'cbcs', 'AES-128']);
   assert.deepEqual(matrixRows[0].output, [['Clear', 'cenc', 'cbcs'], ['Clear', 'cenc', 'cbcs'], ['Clear', 'cbcs', 'AES-128'], []]);
   assert.deepEqual(matrixRows[3].output.slice(0, 2), [[], ['Clear', 'cenc', 'cbcs']]);
   assert.deepEqual(matrixRows[4].output, [[], ['Clear', 'cenc', 'cbcs'], ['Clear', 'cbcs', 'AES-128'], ['Clear', 'AES-128', 'SAMPLE-AES']]);

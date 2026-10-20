@@ -58,7 +58,7 @@ drmr verify --help
 
 `inspect` reads local MP4 metadata or DASH/HLS declarations without keys or external tools. `analyze` checks complete source media and identifies candidate output formats. Without `--save`, `plan INPUT --to ...` describes conditional intent from metadata. `plan --mpd` keeps the original prepared-DASH rendition listing.
 
-To retain a clear HLS URL, save fixed conversion conditions, execute them offline,
+To retain a supported completed HLS URL, save fixed conversion conditions, execute them offline,
 and verify against the retained original:
 
 ```sh
@@ -69,16 +69,28 @@ drmr verify --plan ./conversion.plan.json --keys-file ./keys.json --json
 ```
 
 Use a private [key configuration](docs/usage.md#separate-input-and-output-keys)
-with an output key for CBCS. A saved plan contains source fingerprints and one
-output intent, with runtime keys supplied separately. See the
+with an output key for CBCS. A saved plan contains source fingerprints and the
+requested output intent, with runtime keys supplied separately. See the
 [four-step guide](docs/executable-plans.md) for supported input, result checks,
 source retention, and the difference from metadata-only planning.
+
+For HLS FairPlay and DASH Widevine/PlayReady from the same supported clear
+transport-stream source, save an [output list](docs/multiple-outputs.md) and use
+`plan --outputs outputs.json --output result --save conversion.plan.json`.
+Each output has its own format, protection, DRM systems, and external
+manifest-check policy. `convert --plan` publishes the complete result directory
+after all outputs pass; `verify --plan` checks them again against the original.
+The built-in Rust linter checks final HLS/DASH manifests during conversion and
+full verification. Use `verify OUTPUT --manifest-only` to check manifests
+separately, and add `--external-validator` for Apple or DASH-IF checks.
+See [manifest validation](docs/manifest-validation.md) for rule coverage,
+report scopes, and optional tool setup.
 
 `doctor` discovers executable files without running them. Use `drmr doctor --probe --route progressive-mp4` to check versions and advertised options for a selected processing route. The report shows the actual resolved paths and distinguishes required tools from optional tools. These checks do not prove that a particular asset can be processed.
 
 Use `convert INPUT --to ... --format ... --output ...` with a protected key configuration, then `verify OUTPUT --source INPUT` for independent comparison. See [conversion support](docs/conversion-support.md) for the tested protection routes, TS output options, and precise input profiles.
 
-For a completed clear HLS URL, use `convert URL --download-dir ./source` with the target and output options below. The saved source can be reused offline. The existing `run` path processes prepared DASH assets; `analyze-hls` and `package-hls` retain the separate workflow for its supported DRM-signaling and subtitle profiles. See the [usage guide](docs/usage.md) for configuration examples, the expected local layout, key handling, and output.
+For a supported completed HLS URL, use `convert URL --download-dir ./source` with the target and output options below. The saved source can be reused offline. The existing `run` path processes prepared DASH assets; `analyze-hls` and `package-hls` remain as legacy commands for saved snapshots and their supported subtitle profiles. Use the common commands for new multi-output DRM workflows. See the [usage guide](docs/usage.md) for configuration examples, the expected local layout, key handling, and output.
 
 The common converter can also write explicit Widevine/PlayReady DASH and
 FairPlay HLS information for qualified clear transport-stream HLS and clear MP4.
@@ -101,13 +113,13 @@ drmr packages supplied media and signaling. It does not provide a DRM license se
 | --- | --- |
 | `doctor` | Discover tools; add `--probe` for version and option checks, or `--json` for scripts |
 | `inspect` | Read local MP4, DASH, or HLS metadata; use `--json` for scripts |
-| `analyze` | Check complete local media or retain and check a clear HLS URL with `--download-dir` |
-| `plan` | Describe conditional intent; add `--save` and `--output` for one executable plan; `--mpd` lists prepared DASH renditions |
-| `convert` | Convert media directly or execute a saved plan with `--plan` |
-| `verify` | Compare result media with its original source; `--plan` also checks saved source identity and output intent |
+| `analyze` | Check complete local media or retain and check a supported HLS URL with `--download-dir`; encrypted input uses `--keys-file` |
+| `plan` | Describe conditional intent; add `--save` and `--output` for an executable plan; `--outputs` selects named outputs; `--mpd` lists prepared DASH renditions |
+| `convert` | Convert media directly or execute a saved plan with `--plan`; `--outputs` selects several outputs without saving a plan |
+| `verify` | Compare result media with its original source; `--plan` also checks source identity and output intent; `--manifest-only` runs the native HLS/DASH linter; `--external-validator` adds external checks |
 | `run` | Repackage one local DASH asset and check its output |
-| `analyze-hls` | Download and analyze a clear HLS presentation into a saved snapshot |
-| `package-hls` | Package a verified HLS snapshot with DRM signaling |
+| `analyze-hls` | Legacy: download and analyze clear HLS into a saved snapshot |
+| `package-hls` | Legacy: package a verified snapshot into DASH and HLS |
 | `verify-snapshot` | Detect changes to a saved snapshot; `--files` also hashes its files |
 | `batch` | Process an asset work list with restart support; see the [Windows conditions](docs/windows.md) |
 | `serve` | Start the experimental local web console |

@@ -20,22 +20,30 @@ const PUBLISH_ERROR: ConversionError = ConversionError("output-exists-or-publish
 #[cfg(unix)]
 const CLEANUP_ERROR: ConversionError = ConversionError("temporary-cleanup-unconfirmed");
 
-/// Ownership protection from stage creation through every unpublished helper failure.
-pub(super) struct UnpublishedStage(Stage);
+/// Ownership protection from stage creation through every unpublished failure.
+pub(super) struct UnpublishedStage(Option<Stage>);
 impl UnpublishedStage {
     pub(super) fn new(parent: Option<&Path>) -> Result<Self, ConversionError> {
-        Ok(Self(Stage::new(parent)?))
+        Ok(Self(Some(Stage::new(parent)?)))
+    }
+    /// After a confirmed move, remove only the empty container, never its contents.
+    pub(super) fn finish_publication(mut self) {
+        if let Some(stage) = self.0.take() {
+            stage.cleanup_empty();
+        }
     }
 }
 impl std::ops::Deref for UnpublishedStage {
     type Target = Stage;
     fn deref(&self) -> &Stage {
-        &self.0
+        self.0.as_ref().expect("unpublished stage is retained")
     }
 }
 impl Drop for UnpublishedStage {
     fn drop(&mut self) {
-        self.0.preserve_replaced_workspace();
+        if let Some(stage) = self.0.as_mut() {
+            stage.preserve_replaced_workspace();
+        }
     }
 }
 
@@ -138,6 +146,31 @@ impl Stage {
         #[cfg(windows)]
         self.owned_child.preserve();
     }
+
+    fn cleanup_empty(self) {
+        #[cfg(unix)]
+        let _ = self.outer.cleanup_empty();
+        #[cfg(windows)]
+        {
+            let Self {
+                path: _,
+                media,
+                media_identity: _,
+                root,
+                mut owned_child,
+                _container: container,
+            } = self;
+            let path = owned_child.path().to_path_buf();
+            owned_child.preserve();
+            // The root must close before Windows permits removal. Ancestors
+            // stay pinned, and a nonempty replacement is never traversed.
+            drop(media);
+            drop(root);
+            let _ = std::fs::remove_dir(path);
+            drop(owned_child);
+            drop(container);
+        }
+    }
 }
 
 #[cfg(unix)]
@@ -217,6 +250,9 @@ impl UnixOuter {
     fn cleanup(&self) -> Result<(), ConversionError> {
         self.cleanup_observed(|| {})
     }
+    fn cleanup_empty(&self) -> Result<(), ConversionError> {
+        self.cleanup_with(|| Ok(()))
+    }
     fn preserve(&self) {
         let directory = match self.directory.lock() {
             Ok(mut directory) => directory.take(),
@@ -227,6 +263,15 @@ impl UnixOuter {
         }
     }
     fn cleanup_observed(&self, after_check: impl FnOnce()) -> Result<(), ConversionError> {
+        self.cleanup_with(|| {
+            after_check();
+            unix_cleanup::clear_owned(&self.held)
+        })
+    }
+    fn cleanup_with(
+        &self,
+        clear: impl FnOnce() -> Result<(), ConversionError>,
+    ) -> Result<(), ConversionError> {
         let (directory, poisoned) = match self.directory.lock() {
             Ok(mut directory) => (directory.take(), false),
             Err(error) => (error.into_inner().take(), true),
@@ -241,8 +286,7 @@ impl UnixOuter {
             return Err(CLEANUP_ERROR);
         }
         self.check()?;
-        after_check();
-        unix_cleanup::clear_owned(&self.held)?;
+        clear()?;
         self.check()?;
         self.parent.remove_owned(&self.name, &self.held)
     }

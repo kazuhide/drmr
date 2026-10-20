@@ -1,4 +1,6 @@
-//! Private, byte-preserving clear-VOD acquisition for the ordinary conversion pipeline.
+//! Private, byte-preserving VOD acquisition for the ordinary conversion pipeline.
+#[cfg(test)]
+mod bundle_tests;
 mod owned;
 mod stream;
 use owned::OwnedDownload;
@@ -131,7 +133,8 @@ pub fn preflight_download_output(output: &Path) -> Result<(), ConversionError> {
 }
 
 impl Converter {
-    /// Fetch a complete clear local HLS graph into a new directory, retaining original bytes.
+    /// Fetch a complete supported HLS graph into a new directory, retaining original ciphertext.
+    /// Key and license identifiers are retained, never fetched; conversion uses operator keys.
     pub fn download_hls(
         &self,
         url: &str,
@@ -141,7 +144,8 @@ impl Converter {
     ) -> Result<DownloadedSource, ConversionError> {
         self.acquire_hls_inner(url, directory, Some(output), policy)
     }
-    /// Retain a complete clear VOD source before a future output location is chosen.
+    /// Retain a complete supported VOD source before a future output location is chosen.
+    /// Acquisition is key-free; local admission separately validates encrypted media with keys.
     pub fn acquire_hls(
         &self,
         url: &str,
@@ -348,6 +352,58 @@ impl Converter {
             seal.check(&self.backend.stop)?;
         }
         Ok(())
+    }
+
+    /// Bind the copied graph to this acquisition's creation-time byte identities before tools run.
+    pub(super) fn check_downloaded_inventory(
+        &self,
+        inventory: &super::SourceInventory,
+    ) -> Result<(), ConversionError> {
+        if let Some(seal) = &self.downloaded {
+            seal.check(&self.backend.stop)?;
+            if inventory.root != seal.owned.path().canonicalize().map_err(|_| CHANGED)?
+                || inventory.entrypoint != Path::new("input.m3u8")
+                || inventory.files.iter().any(|file| {
+                    seal.files.get(&file.path).is_none_or(|(hash, size)| {
+                        *size != file.bytes || hex::encode(hash) != file.sha256
+                    })
+                })
+            {
+                return Err(CHANGED);
+            }
+        }
+        Ok(())
+    }
+
+    /// Retain the acquisition seal through source copies, every child, and atomic bundle publication.
+    pub fn convert_bundle_downloaded(
+        &self,
+        source: &DownloadedSource,
+        outputs: &[super::plan::bundle::BundleOutputIntent],
+        output_root: &Path,
+        keys: &super::key_file::BundleOperatorKeys,
+        tools: &super::conformance::ManifestValidationTools,
+    ) -> Result<super::plan::bundle::BundleConversionReport, ConversionError> {
+        source.seal.check(&self.backend.stop)?;
+        source.seal.owned.check_output(output_root)?;
+        let converter = Self {
+            backend: self.backend.clone(),
+            maximum_workers: self.maximum_workers,
+            downloaded: Some(source.seal.clone()),
+            frozen_source: self.frozen_source.clone(),
+            planned_destination: self.planned_destination.clone(),
+            output_signaling: self.output_signaling.clone(),
+        };
+        let plan = converter.create_bundle_plan(super::plan::bundle::BundlePlanRequest {
+            input: super::VerificationSource {
+                input: source.entrypoint(),
+                input_keys: &keys.input,
+                hls_keys: &keys.hls_input,
+            },
+            output_root,
+            outputs,
+        })?;
+        converter.execute_bundle_plan(&plan, keys, tools)
     }
 }
 fn write_private(path: &Path, bytes: &[u8]) -> Result<std::fs::File, ConversionError> {
@@ -569,18 +625,28 @@ impl Graph<'_> {
             return Err(INVALID);
         }
         let mut count = 0;
-        let plan = playlist::media_plan(lines, effective, self.policy, &mut || {
-            if self.fetcher.stop().is_set() {
-                return Err(source::Failure::Cancelled);
-            }
-            count += 1;
-            if count > 100_000 {
-                return Err(source::Failure::Source(source::SourceError::new(
-                    "resource-count-limit",
-                )));
-            }
-            Ok(PathBuf::from(format!("r{count:06}")))
-        })
+        let plan = playlist::retained_media_plan(
+            lines,
+            effective,
+            self.policy,
+            &mut || {
+                if self.fetcher.stop().is_set() {
+                    return Err(source::Failure::Cancelled);
+                }
+                count += 1;
+                if count > 100_000 {
+                    return Err(source::Failure::Source(source::SourceError::new(
+                        "resource-count-limit",
+                    )));
+                }
+                Ok(PathBuf::from(format!("r{count:06}")))
+            },
+            &mut |value| {
+                retained_key_uri(value, effective)
+                    .map(|_| ())
+                    .map_err(|_| source::Failure::source("encrypted-source-unsupported"))
+            },
+        )
         .map_err(|error| {
             if matches!(error, source::Failure::Cancelled) {
                 ConversionError("cancelled")
@@ -671,6 +737,17 @@ impl Graph<'_> {
                 raw
             };
             let line = content.trim();
+            if let Some(value) = line.strip_prefix("#EXT-X-KEY:") {
+                if let Some(target) = retained_key_uri(value, effective)? {
+                    let (start, length, _) = uri_span(raw)?;
+                    result.extend_from_slice(&raw.as_bytes()[..start]);
+                    result.extend_from_slice(target.as_bytes());
+                    result.extend_from_slice(&raw.as_bytes()[start + length..]);
+                } else {
+                    result.extend_from_slice(raw.as_bytes());
+                }
+                continue;
+            }
             let uri = if !line.is_empty() && !line.starts_with('#') {
                 Some((raw.find(line).ok_or(INVALID)?, line.len(), line.to_owned()))
             } else if line.starts_with("#EXT-X-MAP:") || line.starts_with("#EXT-X-MEDIA:") {
@@ -703,9 +780,7 @@ fn expanded_references(
 ) -> Result<usize, ConversionError> {
     let mut bytes = 0usize;
     let mut count = 0usize;
-    let mut add = |uri: &str| {
-        let resolved = source::child_url(effective, uri).map_err(|_| INVALID)?;
-        valid_url(&resolved)?;
+    let mut add = |resolved: &str| {
         count += 1;
         bytes = bytes
             .checked_add(resolved.len())
@@ -721,12 +796,20 @@ fn expanded_references(
             return Err(ConversionError("cancelled"));
         }
         if !line.is_empty() && !line.starts_with('#') {
-            add(line)?;
+            let resolved = source::child_url(effective, line).map_err(|_| INVALID)?;
+            valid_url(&resolved)?;
+            add(&resolved)?;
+        } else if let Some(value) = line.strip_prefix("#EXT-X-KEY:") {
+            if let Some(uri) = retained_key_uri(value, effective)? {
+                add(&uri)?;
+            }
         } else if line.starts_with("#EXT-X-MAP:") || line.starts_with("#EXT-X-MEDIA:") {
             let (_, attrs) = line.split_once(':').ok_or(INVALID)?;
             let attrs = crate::m3u8::parse_attributes(attrs).map_err(|_| INVALID)?;
             if let Some(uri) = attrs.get("URI") {
-                add(uri)?;
+                let resolved = source::child_url(effective, uri).map_err(|_| INVALID)?;
+                valid_url(&resolved)?;
+                add(&resolved)?;
             }
         }
     }
@@ -736,6 +819,15 @@ fn uri_span(raw: &str) -> Result<(usize, usize, String), ConversionError> {
     let line = raw.trim();
     let colon = line.find(':').ok_or(INVALID)?;
     let values = &line[colon + 1..];
+    let (start, length, uri, _) = uri_value_span(values)?;
+    Ok((
+        raw.find(line).ok_or(INVALID)? + colon + 1 + start,
+        length,
+        uri,
+    ))
+}
+
+fn uri_value_span(values: &str) -> Result<(usize, usize, String, bool), ConversionError> {
     let attrs = crate::m3u8::parse_attributes(values).map_err(|_| INVALID)?;
     let uri = attrs.get("URI").ok_or(INVALID)?;
     let mut at = 0;
@@ -749,15 +841,63 @@ fn uri_span(raw: &str) -> Result<(usize, usize, String), ConversionError> {
             .find(if quoted { '"' } else { ',' })
             .map_or(values.len(), |offset| start + offset);
         if key == "URI" {
-            return Ok((
-                raw.find(line).ok_or(INVALID)? + colon + 1 + start,
-                end - start,
-                uri.into(),
-            ));
+            return Ok((start, end - start, uri.into(), quoted));
         }
         at = end + usize::from(quoted) + 1;
     }
     Err(INVALID)
+}
+
+/// Validate a retained encryption declaration without granting a network or file capability.
+/// Absolute opaque identifiers stay byte-identical; relative identifiers use the effective
+/// playlist base so separate renditions cannot accidentally share a supplied relative key.
+fn retained_key_uri(value: &str, effective: &str) -> Result<Option<String>, ConversionError> {
+    let attrs = crate::m3u8::parse_attributes(value).map_err(|_| INVALID)?;
+    if attrs.get("METHOD") == Some("NONE") {
+        return if attrs.len() == 1 {
+            Ok(None)
+        } else {
+            Err(INVALID)
+        };
+    }
+    let method = attrs.get("METHOD").ok_or(INVALID)?;
+    if !matches!(method, "AES-128" | "SAMPLE-AES" | "SAMPLE-AES-CTR")
+        || attrs.iter().any(|(name, _)| {
+            !matches!(
+                name,
+                "METHOD" | "URI" | "IV" | "KEYFORMAT" | "KEYFORMATVERSIONS"
+            )
+        })
+        || attrs.get("KEYFORMAT").is_some_and(|format| {
+            format != "identity"
+                && (method != "SAMPLE-AES" || format != "com.apple.streamingkeydelivery")
+        })
+        || attrs
+            .get("KEYFORMATVERSIONS")
+            .is_some_and(|versions| versions != "1")
+        || attrs
+            .get("IV")
+            .is_some_and(|iv| super::SegmentIv::from_hex(iv).is_err())
+    {
+        return Err(INVALID);
+    }
+    let (_, _, uri, quoted) = uri_value_span(value)?;
+    let safe = |uri: &str| {
+        !uri.is_empty() && uri.len() <= 4096 && !uri.chars().any(|c| c.is_control() || c == '"')
+    };
+    if !quoted || !safe(&uri) {
+        return Err(INVALID);
+    }
+    let parts = source::pyurl::urlsplit(&uri, "").map_err(|_| INVALID)?;
+    let resolved = if parts.scheme.is_empty() {
+        source::child_url(effective, &uri).map_err(|_| INVALID)?
+    } else {
+        uri
+    };
+    if !safe(&resolved) {
+        return Err(INVALID);
+    }
+    Ok(Some(resolved))
 }
 
 #[cfg(test)]
@@ -864,6 +1004,45 @@ mod tests {
                 .unwrap_err()
                 .0,
             "download-graph-limit"
+        );
+        let keys = vec!["#EXT-X-KEY:METHOD=AES-128,URI=\"key.bin\"".to_owned(); 4000];
+        assert!(expanded_references(&keys, &base, &Stop::new()).unwrap() > 14_000_000);
+        let keys = vec!["#EXT-X-KEY:METHOD=AES-128,URI=\"key.bin\"".to_owned(); 5000];
+        assert_eq!(
+            expanded_references(&keys, &base, &Stop::new())
+                .unwrap_err()
+                .0,
+            "download-graph-limit"
+        );
+    }
+
+    #[test]
+    fn retained_key_identifiers_are_bounded_without_becoming_fetch_urls() {
+        let base = "https://media.example.test/path/media.m3u8";
+        for uri in [
+            "skd://opaque/identifier",
+            "data:application/octet-stream,opaque",
+        ] {
+            let value = format!("METHOD=SAMPLE-AES,URI=\"{uri}\",IV=0x1");
+            assert_eq!(
+                retained_key_uri(&value, base).unwrap().as_deref(),
+                Some(uri)
+            );
+        }
+        for uri in [
+            "a".repeat(4097),
+            "skd://a\u{007f}b".to_owned(),
+            "a\tb".to_owned(),
+        ] {
+            assert_eq!(
+                retained_key_uri(&format!("METHOD=AES-128,URI=\"{uri}\""), base).unwrap_err(),
+                INVALID
+            );
+        }
+        let base = format!("https://media.example.test/{}/media.m3u8", "a".repeat(4050));
+        assert_eq!(
+            retained_key_uri("METHOD=AES-128,URI=\"long-key-identifier.bin\"", &base).unwrap_err(),
+            INVALID
         );
     }
 

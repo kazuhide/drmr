@@ -22,6 +22,18 @@ The lower bounds describe the supported baseline, rather than the earliest versi
 
 Windows also needs the [Visual C++ runtime](windows.md#install-and-check-tools) used by its compiled executable. External media tools are installed separately from the CLI archive.
 
+## Final-manifest checks
+
+Native HLS/DASH manifest linting is included in the Rust executable and needs no
+additional tools. The media tools above perform the complete media comparison. External checks
+of final HLS playlists and DASH manifests are an additional, explicit choice.
+Use the [manifest validation guide](manifest-validation.md) for installation,
+supported tool versions, local DASH-IF assets, and runtime executable options.
+Apple's HLS validator runs on macOS. The DASH adapter uses PHP, Java and separately
+installed DASH-IF schema and rule assets. Missing tools cause failure when a
+saved output policy requires these checks. They are not silently replaced by
+native manifest linting or the internal media comparison.
+
 ## Rust library dependencies
 
 `Cargo.toml` gives each direct dependency a supported baseline and Cargo's compatible update range. For example, `1.2.3` admits compatible releases before `2.0.0`; before version `1.0`, those compatibility ranges are narrower. The baseline versions are the ones recorded in the qualified dependency set.

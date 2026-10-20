@@ -23,6 +23,17 @@ The [W3C MP4 encryption description](https://www.w3.org/TR/eme-stream-mp4/) expl
 
 A typical AAC-LC audio frame contains 1,024 samples. At 48,000 samples per second, one frame lasts about 21.333 milliseconds. Two seconds therefore contain 93.75 frames. A packager must place the boundary on a complete frame, so audio segment durations can alternate around a two-second video target.
 
+The segment target and the integer `EXT-X-TARGETDURATION` declaration have different
+roles. RFC 8216 compares each `EXTINF` duration after rounding it to the nearest
+integer. drmr derives a conservative track bound by rounding final segment
+durations upward. Common conversion applies the largest generated audio/video
+bound to each media playlist. For example, separate bounds of 2 and 3 become 3.
+The encoded segments and their `EXTINF` durations are preserved. Independent
+verification reads the final declarations and rejects inconsistent bounds. This
+follows [RFC 8216 section 6.2.4](https://www.rfc-editor.org/rfc/rfc8216.html#section-6.2.4),
+which separately allows target-duration exceptions for VOD subtitles and I-frame
+playlists.
+
 This arithmetic explains a boundary difference; it does not justify missing or duplicated frames, gaps, overlaps, or growing audio/video drift. Check the actual sample counts, timestamps, and complete presentation. An arbitrary tolerance of one audio frame could hide lost content.
 
 Audio can also carry encoder priming: samples decoded at the beginning that should not be presented. MP4 edit-list metadata can describe this trimming. Identical compressed audio packets alone do not establish identical presented audio if that metadata changes during repackaging.

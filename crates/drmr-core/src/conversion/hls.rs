@@ -754,7 +754,7 @@ impl Converter {
             &verification_keys,
             &self.backend,
         )?;
-        let verification = self.backend.verify_views(
+        let mut verification = self.backend.verify_views(
             super::verify::StreamView::new(
                 &source,
                 0,
@@ -768,7 +768,12 @@ impl Converter {
         }
         let output_report = inspection::inspect(&staged.path().join("media.m3u8"))
             .map_err(|_| ConversionError("hls-inspection-failed"))?;
-        self.publish_directory(&staged, &destination)?;
+        verification.native_manifest = Some(self.publish_manifest_output(
+            &staged,
+            &destination,
+            &staged.path().join("media.m3u8"),
+            crate::inspection::OutputFormat::Hls,
+        )?);
         Ok(ConversionReport {
             schema_version: 1,
             input: input_report,

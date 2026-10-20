@@ -604,6 +604,7 @@ impl Converter {
                 && combined.decoded_content_equal,
             checks: combined,
             license_playback_verified: false,
+            native_manifest: None,
         })
     }
     pub(super) fn progressive_codecs(

@@ -126,7 +126,7 @@ impl Converter {
             &self.backend,
             super::SourceValidationPurpose::Verification,
         )?;
-        let verification =
+        let mut verification =
             self.compare_presentations(sources, result, request.input_keys, &empty)?;
         if !verification.passed {
             return Err(ConversionError("round-trip-verification-failed"));
@@ -135,7 +135,12 @@ impl Converter {
             .map_err(|_| ConversionError("invalid-output-media"))?;
         secure_tree(stage.path())?;
         self.backend.checkpoint(&[work, &stage]);
-        self.publish_directory(&stage, &destination)?;
+        verification.native_manifest = Some(self.publish_manifest_output(
+            &stage,
+            &destination,
+            &stage.path().join("master.m3u8"),
+            request.format,
+        )?);
         Ok(ConversionReport {
             schema_version: 1,
             input,

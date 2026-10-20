@@ -1,8 +1,9 @@
-//! Clear-HLS playlist parsing and admission rules.
+//! Shared HLS resource planning with explicit encryption admission policies.
 //!
 //! Accept bounded VOD playlists with one target duration and supported initialization
-//! and byte-range forms. Reject encryption and discontinuities; harmless immediate
-//! zero-length cue pairs are handled explicitly.
+//! and byte-range forms. Legacy source admission rejects encryption; retained acquisition
+//! validates encryption declarations separately. Harmless immediate zero-length cue pairs
+//! are handled explicitly, while discontinuities remain unsupported.
 
 use super::fetch::ByteRange;
 use super::pytext::{all_digits, ascii_digits, cmp_decimal, decimal_digit, splitlines, strip};
@@ -317,6 +318,34 @@ pub fn media_plan(
     policy: &FetchPolicy,
     allocate: &mut dyn FnMut() -> Result<PathBuf, Failure>,
 ) -> Result<MediaPlan, Failure> {
+    media_plan_with_keys(lines, effective, policy, allocate, &mut |value| {
+        let a = parse_attributes(value).map_err(Failure::Source)?;
+        if a.len() != 1 || a.get("METHOD") != Some("NONE") {
+            return Err(fail("encrypted-source-unsupported"));
+        }
+        Ok(())
+    })
+}
+
+/// Plan ciphertext acquisition only after the caller validates each key declaration.
+/// Key identifiers never become planned resources. Local media admission remains separate.
+pub(crate) fn retained_media_plan(
+    lines: &[String],
+    effective: &str,
+    policy: &FetchPolicy,
+    allocate: &mut dyn FnMut() -> Result<PathBuf, Failure>,
+    validate_key: &mut dyn FnMut(&str) -> Result<(), Failure>,
+) -> Result<MediaPlan, Failure> {
+    media_plan_with_keys(lines, effective, policy, allocate, validate_key)
+}
+
+fn media_plan_with_keys(
+    lines: &[String],
+    effective: &str,
+    policy: &FetchPolicy,
+    allocate: &mut dyn FnMut() -> Result<PathBuf, Failure>,
+    validate_key: &mut dyn FnMut(&str) -> Result<(), Failure>,
+) -> Result<MediaPlan, Failure> {
     if lines.iter().any(|line| MASTER.contains(&tag_of(line))) {
         return Err(fail("ambiguous-playlist"));
     }
@@ -368,10 +397,7 @@ pub fn media_plan(
                 state.duration = Some(extinf_duration(value, &target)?);
             }
             "#EXT-X-KEY" => {
-                let a = parse_attributes(value).map_err(Failure::Source)?;
-                if a.len() != 1 || a.get("METHOD") != Some("NONE") {
-                    return Err(fail("encrypted-source-unsupported"));
-                }
+                validate_key(value)?;
             }
             "#EXT-X-PLAYLIST-TYPE" if value != "VOD" => return Err(fail("live-unsupported")),
             "#EXT-X-DISCONTINUITY-SEQUENCE" if value != "0" => {

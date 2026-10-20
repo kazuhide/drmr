@@ -1,4 +1,5 @@
 //! Executable local intent, with byte identities and independently supplied runtime secrets.
+pub mod bundle;
 pub(super) mod destination;
 #[cfg(test)]
 mod tests;
@@ -24,6 +25,52 @@ const UNSUPPORTED: ConversionError = ConversionError("execution-plan-not-support
 const CHANGED: ConversionError = ConversionError("execution-plan-source-changed");
 const EXISTS: ConversionError = ConversionError("execution-plan-exists");
 const LIMIT: u64 = 32 * 1024 * 1024;
+
+/// Both supported saved schemas retain their own strict fields and source identities.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SavedPlan {
+    Single(ExecutionPlan),
+    Bundle(bundle::BundlePlan),
+}
+
+/// Dispatch from a duplicate-safe header, then parse the original bytes into a strict schema.
+pub fn read_saved(path: &Path) -> Result<SavedPlan, ConversionError> {
+    #[derive(Deserialize)]
+    struct Header {
+        kind: String,
+        schema_version: u32,
+    }
+    let file = crate::native::open_private_read(path).map_err(|_| INVALID)?;
+    let mut bytes = zeroize::Zeroizing::new(Vec::new());
+    file.take(LIMIT + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| INVALID)?;
+    if bytes.len() as u64 > LIMIT {
+        return Err(INVALID);
+    }
+    let header: Header = serde_json::from_slice(&bytes).map_err(|_| INVALID)?;
+    if header.kind != KIND {
+        return Err(INVALID);
+    }
+    match header.schema_version {
+        1 => {
+            let plan = serde_json::from_slice(&bytes).map_err(|_| INVALID)?;
+            validate(&plan)?;
+            Ok(SavedPlan::Single(plan))
+        }
+        2 => {
+            let plan = serde_json::from_slice(&bytes).map_err(|_| INVALID)?;
+            bundle::validate(&plan)?;
+            Ok(SavedPlan::Bundle(plan))
+        }
+        _ => Err(INVALID),
+    }
+}
+
+/// Save a new private version-two plan without replacing another entry.
+pub fn write_bundle(path: &Path, plan: &bundle::BundlePlan) -> Result<(), ConversionError> {
+    bundle::write_new(path, plan)
+}
 
 /// The output location and media intent are fixed; keys and tool configuration are not saved.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -196,7 +243,7 @@ impl Converter {
                 input_keys: &keys.input,
                 hls_input_keys: &keys.hls_input,
                 output_key: keys.output.as_ref(),
-                hls_key_uri: keys.hls_output_uri(),
+                hls_key_uri: keys.output.as_ref().and_then(|_| keys.hls_output_uri()),
                 hls_output_key: keys.hls_output.as_ref(),
             })
             .map_err(source_error)
@@ -234,6 +281,14 @@ impl Converter {
                 .iter()
                 .all(|protection| protection.matches_target(plan.intent.target));
         let verification = command.verify(VerificationRequest { source, output })?;
+        if keys.signaling.is_some() {
+            command.verify_output_signaling(
+                result.entrypoint(),
+                plan.intent.format,
+                plan.intent.target,
+                keys,
+            )?;
+        }
         original.check_original().map_err(source_error)?;
         result.check_original().map_err(|error| {
             if error.0 == "cancelled" {

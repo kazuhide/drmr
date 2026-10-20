@@ -195,9 +195,11 @@ impl Converter {
             Vec::new(),
         );
         self.backend.checkpoint(&[&work, stage]);
-        if let Some(destination) = destination {
-            self.publish_directory(stage, &destination)?;
-        }
+        let native_manifest = if let Some(destination) = destination {
+            Some(self.publish_manifest_output(stage, &destination, &manifest, request.format)?)
+        } else {
+            None
+        };
         Ok(ConversionReport {
             schema_version: 1,
             input,
@@ -208,6 +210,7 @@ impl Converter {
                 media_verified: true,
                 checks,
                 license_playback_verified: false,
+                native_manifest,
             },
             processing: Some(presentation_processing(request.format)),
         })
@@ -1016,6 +1019,7 @@ impl Converter {
             &self.backend,
             SourceValidationPurpose::Verification,
         )?;
+        let checked = self.checked_output_manifest(request.output.input)?;
         let result = prepare_presentation(
             &request.output,
             &result_dir,
@@ -1023,16 +1027,19 @@ impl Converter {
             SourceValidationPurpose::Verification,
         )?;
         drop(preparation);
-        let report = self.compare_presentations(
+        let mut report = self.compare_presentations(
             source,
             result,
             request.source.input_keys,
             request.output.input_keys,
-        );
-        if report.is_ok() {
-            self.backend.checkpoint(&[&work]);
+        )?;
+        if let Some(checked) = checked {
+            checked.check(self)?;
+            report.passed &= checked.report.is_clean_for_scope();
+            report.native_manifest = Some(checked.report);
         }
-        report
+        self.backend.checkpoint(&[&work]);
+        Ok(report)
     }
     fn presentation_digest(
         &self,
@@ -1269,6 +1276,7 @@ impl Converter {
             media_verified: passed,
             checks,
             license_playback_verified: false,
+            native_manifest: None,
         })
     }
 }
@@ -1956,7 +1964,17 @@ impl Converter {
                 .as_ref()
                 .ok_or(ConversionError("output-staging-failed"))?;
             self.backend.checkpoint(&[&work, stage]);
-            self.publish_directory(stage, destination)?;
+            let manifest = candidate.join(if request.format == OutputFormat::Dash {
+                "manifest.mpd"
+            } else {
+                "master.m3u8"
+            });
+            report.verification.native_manifest = Some(self.publish_manifest_output(
+                stage,
+                destination,
+                &manifest,
+                request.format,
+            )?);
         }
         self.backend.checkpoint(&[&work]);
         report.input = input_report;
