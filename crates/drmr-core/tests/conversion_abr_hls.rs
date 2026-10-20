@@ -1111,3 +1111,122 @@ fn dash_labels_language_priority_and_common_time_origin_are_independently_checke
     proof(&verify_clear(&input, &manifest).unwrap());
     assert_eq!(common::snapshot_tree(&root), before);
 }
+
+fn video_dash_declaration(original: &str, scope: &str, name: &str, value: &str) -> String {
+    let document = roxmltree::Document::parse(original).unwrap();
+    let adaptation = document
+        .descendants()
+        .find(|node| {
+            node.has_tag_name("AdaptationSet") && node.attribute("contentType") == Some("video")
+        })
+        .unwrap();
+    let node = if scope == "AdaptationSet" {
+        adaptation
+    } else {
+        adaptation
+            .children()
+            .find(|node| node.has_tag_name("Representation"))
+            .unwrap()
+    };
+    let mut changed = original.to_owned();
+    if name == "Label" {
+        let end = original[node.range().start..].find('>').unwrap() + node.range().start + 1;
+        changed.insert_str(end, &format!("<Label>{value}</Label>"));
+    } else if let Some(attribute) = node.attribute_node(name) {
+        changed.replace_range(attribute.range_value(), value);
+    } else {
+        changed.insert_str(
+            node.range().start + scope.len() + 1,
+            &format!(" {name}=\"{value}\""),
+        );
+    }
+    assert_ne!(changed, original);
+    changed
+}
+
+fn reject_video_dash_declarations(input: &Path, manifest: &Path, original: &str) {
+    let keys = InputKeys::default();
+    let hls = HlsInputKeys::default();
+    for scope in ["AdaptationSet", "Representation"] {
+        for (name, value) in [
+            ("Label", "Commentary"),
+            ("lang", "ja"),
+            ("selectionPriority", "1"),
+            ("selectionPriority", "2"),
+        ] {
+            std::fs::write(
+                manifest,
+                video_dash_declaration(original, scope, name, value),
+            )
+            .unwrap();
+            let output = manifest
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .join(format!("refused-{scope}-{name}-{value}"));
+            let converted = converter().convert(ConversionRequest {
+                input: manifest,
+                output: &output,
+                format: OutputFormat::Hls,
+                target: TargetProtection::Clear,
+                input_keys: &keys,
+                hls_input_keys: &hls,
+                output_key: None,
+                hls_key_uri: None,
+                hls_output_key: None,
+            });
+            let verified = verify_clear(input, manifest);
+            assert!(
+                converted.is_err() && verified.is_err(),
+                "{scope}/{name}: conversion refused={}, fresh verification refused={}",
+                converted.is_err(),
+                verified.is_err()
+            );
+            assert_eq!(
+                converted.unwrap_err().0,
+                "presentation-selection-not-representable"
+            );
+            assert_eq!(
+                verified.unwrap_err().0,
+                "presentation-selection-not-representable"
+            );
+            assert!(!output.exists());
+        }
+    }
+}
+
+#[test]
+fn unsupported_video_dash_selection_is_refused_by_conversion_and_fresh_verification() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("input");
+    std::fs::create_dir(&root).unwrap();
+    let input = fixture(&root);
+    let before = common::snapshot_tree(&root);
+    let output = directory.path().join("dash");
+    let keys = InputKeys::default();
+    let hls = HlsInputKeys::default();
+    proof(
+        &converter()
+            .convert(ConversionRequest {
+                input: &input,
+                output: &output,
+                format: OutputFormat::Dash,
+                target: TargetProtection::Clear,
+                input_keys: &keys,
+                hls_input_keys: &hls,
+                output_key: None,
+                hls_key_uri: None,
+                hls_output_key: None,
+            })
+            .unwrap()
+            .verification,
+    );
+    let manifest = output.join("manifest.mpd");
+    let original = std::fs::read_to_string(&manifest).unwrap();
+    proof(&verify_clear(&input, &manifest).unwrap());
+    reject_video_dash_declarations(&input, &manifest, &original);
+    std::fs::write(&manifest, original).unwrap();
+    proof(&verify_clear(&input, &manifest).unwrap());
+    assert_eq!(common::snapshot_tree(&root), before);
+}

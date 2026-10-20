@@ -39,6 +39,10 @@ Silent audio has the same sample bytes at different sample rates, so decoded-byt
 
 Presentation times determine when content is displayed; decode times determine when a decoder must process it. Comparing absolute times across all tracks also detects changes to relative audio/video timing. Manifest timeline declarations are checked separately from media bytes. DASH compares times exactly in their declared clock units. HLS segment durations allow the greater of one media-clock tick or about one millisecond for decimal playlist rounding; this does not relax the exact packet timing comparison.
 
+For generated static DASH, the common presentation starts at the earliest presented sample and ends at the latest presented sample across all tracks. The final period and presentation durations round that exact interval upward to nine decimal places. This changes only its decimal representation; compressed payloads and packet clocks remain unchanged. An open-ended fragmented source can therefore produce a period slightly longer than its nominal ten-second duration. A source with a finite audio playback window has different presentation bounds, as described below.
+
+The [joint audio/video regression](https://github.com/kazuhide/drmr/blob/main/crates/drmr/tests/conversion_signaling.rs) independently decrypts the complete output tracks and checks all 240 video packets, 470 AAC packets, their clocks, and the complete decoded media, including 481,280 audio samples per channel. Fresh verification rejects shortening the manifest to ten seconds even when its media resources are unchanged.
+
 Video with reordered pictures can start with a composition offset: the difference between a picture's decode and presentation times. Shaka Packager 3.8.0 normally resets the initial offset. That changes presentation times even when packet content matches. drmr explicitly disables this reset and tests a source with reordered pictures against its original timestamps. See the [pinned packager source](https://github.com/shaka-project/shaka-packager/tree/v3.8.0/packager/media/formats/mp4).
 
 ## Finite audio presentation windows
@@ -111,6 +115,12 @@ while identical automatic player selection is not claimed. Cross-format media
 verification checks the documented mapping, complete media, and original clocks;
 it does not establish equivalent player preference handling. HLS-to-HLS
 verification also checks its native selection declarations.
+
+This selection mapping applies to audio. DASH video labels, a language other than
+`und` (undetermined), and explicit author selection priorities are refused with
+`presentation-selection-not-representable`, including inherited declarations.
+They are not silently removed during conversion or ignored by verification.
+The neutral `und` language and the standard `main` role remain supported.
 
 ### Saved source identities
 

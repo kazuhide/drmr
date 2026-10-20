@@ -365,9 +365,12 @@ pub(super) fn dash(rep: roxmltree::Node<'_, '_>) -> Result<Metadata, ConversionE
         origin: Origin::Dash,
         ..Default::default()
     };
-    if is_audio
-        && (name.is_some() || priority.is_some() || language.as_deref().is_some_and(|s| s != "und"))
-    {
+    let has_selection =
+        name.is_some() || priority.is_some() || language.as_deref().is_some_and(|s| s != "und");
+    if has_selection && !is_audio {
+        return Err(UNSUPPORTED);
+    }
+    if is_audio && has_selection {
         result.audio = Some(Rendition {
             group: "default-audio-group".into(),
             name,
@@ -477,4 +480,65 @@ pub(super) fn materialize(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn video_selection_declarations_are_rejected_in_every_inherited_scope() {
+        for scope in ["MPD", "Period", "AdaptationSet", "Representation"] {
+            for declaration in [
+                "lang=\"ja\"",
+                "selectionPriority=\"1\"",
+                "selectionPriority=\"2\"",
+            ] {
+                let source = "<MPD><Period><AdaptationSet contentType=\"video\"><Representation/></AdaptationSet></Period></MPD>"
+                    .replacen(&format!("<{scope}"), &format!("<{scope} {declaration}"), 1);
+                let doc = roxmltree::Document::parse(&source).unwrap();
+                let representation = doc
+                    .descendants()
+                    .find(|n| n.has_tag_name("Representation"))
+                    .unwrap();
+                assert_eq!(
+                    dash(representation).unwrap_err().0,
+                    UNSUPPORTED.0,
+                    "{scope}: {declaration}"
+                );
+            }
+            let source = "<MPD><Period><AdaptationSet contentType=\"video\"><Representation></Representation></AdaptationSet></Period></MPD>";
+            let at = source.find(&format!("<{scope}")).unwrap();
+            let end = source[at..].find('>').unwrap() + at + 1;
+            let mut labeled = source.to_owned();
+            labeled.insert_str(end, "<Label>Commentary</Label>");
+            let doc = roxmltree::Document::parse(&labeled).unwrap();
+            let representation = doc
+                .descendants()
+                .find(|n| n.has_tag_name("Representation"))
+                .unwrap();
+            assert_eq!(
+                dash(representation).unwrap_err().0,
+                UNSUPPORTED.0,
+                "{scope}: Label"
+            );
+        }
+    }
+
+    #[test]
+    fn neutral_video_language_and_standard_main_role_remain_supported() {
+        let source = "<MPD lang=\"und\"><Period><AdaptationSet contentType=\"video\" lang=\"und\"><Role schemeIdUri=\"urn:mpeg:dash:role:2011\" value=\"main\"/><Representation lang=\"und\"/></AdaptationSet></Period></MPD>";
+        let doc = roxmltree::Document::parse(source).unwrap();
+        let representation = doc
+            .descendants()
+            .find(|n| n.has_tag_name("Representation"))
+            .unwrap();
+        assert_eq!(
+            dash(representation).unwrap(),
+            Metadata {
+                origin: Origin::Dash,
+                ..Default::default()
+            }
+        );
+    }
 }
