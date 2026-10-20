@@ -1,9 +1,9 @@
 # Guide maintenance
 
 The English and Japanese Markdown files are the user-facing source for the
-twenty-chapter web guide. The Japanese source can also be used for a separately
-qualified PDF. Keep commands, key roles, format restrictions and links aligned
-across languages. Record the content update date in both frontmatter blocks.
+twenty-chapter web guide. Keep commands, key roles, format restrictions and links
+aligned across languages. Record the content update date in both frontmatter
+blocks.
 
 Generate the two committed static pages with Python 3.9 or later:
 

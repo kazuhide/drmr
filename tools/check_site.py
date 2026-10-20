@@ -349,7 +349,7 @@ def validate_guide(text, language):
         require(chapter.attrs.get("id") == name and matrix_text(chapter.one("h2", id=name + "-title"))
                 and len(matrix_text(chapter)) >= 40, "site-guide-chapters")
     toc = document.one("nav", **{"class": "guide-toc-nav"})
-    require(toc.attrs.get("aria-label") == ("Guide chapters" if language == "en" else "ガイドの章")
+    require(toc.attrs.get("aria-label") == ("Guide chapters" if language == "en" else "目次")
             and [node.attrs.get("href") for node in toc.descendants("a")] == ["#" + name for name in GUIDE_CHAPTERS],
             "site-guide-chapters")
     references = chapters[-1]

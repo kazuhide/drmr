@@ -24,11 +24,11 @@ LABELS = {
            "example": "Example", "table": "Table", "updated": "Updated", "version": "Version",
            "notice": "Font license", "docs": "Repository documentation (English)",
            "description": "A practical drmr guide: formats, keys, conversion, verification, Docker and local interfaces."},
-    "ja": {"title": "ユーザーガイド", "toc": "ガイドの章", "skip": "本文へ移動",
+    "ja": {"title": "ユーザーガイド", "toc": "目次", "skip": "本文へ移動",
            "home": "ホーム", "support": "対応表", "other": "English", "top": "目次へ戻る",
            "example": "例", "table": "表", "updated": "更新日", "version": "バージョン",
            "notice": "フォントのライセンス", "docs": "リポジトリの資料（英語）",
-           "description": "drmr の形式、鍵設定、変換、検証、Docker とローカル画面の操作ガイド。"},
+           "description": "drmr の対応形式、鍵の設定、変換・検証の手順、Docker・Web コンソール・デスクトップアプリの使い方を説明します。"},
 }
 TOKEN = re.compile(r"`([^`\n]+)`|\[([^\]\n]+)\]\(([^\s)]+)\)|\*\*([^*\n]+)\*\*")
 
