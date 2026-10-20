@@ -189,6 +189,11 @@ has not been qualified. Other input formats, encryption targets, and DRM systems
 are outside this profile; see [conversion support](conversion-support.md#explicit-playready-signaling).
 Omitting `signaling` retains the existing conversion behavior.
 
+For Widevine/PlayReady DASH or FairPlay HLS from supported clear transport-stream
+HLS or the qualified clear MP4 profile, use the distinct `multi-drm` setting.
+See [DRM signaling](drm-signaling.md) for complete settings and examples. The
+older `playready` setting above keeps its original input restrictions.
+
 The license URL must be an absolute HTTP(S) address without credentials,
 fragments, whitespace, or control characters, at most 4096 UTF-8 bytes. Its exact
 text is retained in the generated metadata; drmr does not canonicalize or request

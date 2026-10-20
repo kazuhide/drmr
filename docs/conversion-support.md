@@ -258,6 +258,15 @@ cargo test --locked -p drmr-core --test conversion_ts_output -- --nocapture
 Refer to the CI results for the exact revision, platforms, and tool versions.
 A passing short fixture does not qualify arbitrary broadcast streams or codecs.
 
+## Explicit DRM signaling
+
+The common converter supports a separate `multi-drm` profile for qualified clear
+MPEG-TS HLS and clear MP4 sources. Fragmented MP4 DASH can carry Widevine,
+PlayReady, or both with CBCS encryption; fragmented MP4 HLS and SAMPLE-AES TS HLS
+can carry FairPlay declarations. TS output requires a supported TS source.
+See [DRM signaling](drm-signaling.md) for exact source restrictions, protected
+runtime settings, native output checks, and license/playback boundaries.
+
 ## Explicit PlayReady signaling
 
 Generic `convert` supports an opt-in PlayReady profile: qualified clear MP4 with
