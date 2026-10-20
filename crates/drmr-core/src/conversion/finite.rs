@@ -454,7 +454,7 @@ impl super::Converter {
         {
             return Err(ConversionError("output-protection-mismatch"));
         }
-        self.publish(&candidate, output)?;
+        self.publish(&stage, &candidate, output)?;
         Ok(super::ConversionReport {
             schema_version: 1,
             input: input.clone(),

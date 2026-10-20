@@ -182,9 +182,9 @@ fn private_source_guard_survives_measurement_and_blocks_both_publication_forms()
         let output = root.path().join("output");
         let (result, _) = converter.measure(|command| {
             if directory {
-                command.publish_directory(stage.path(), &output)
+                command.publish_directory(&stage, &output)
             } else {
-                command.publish(&candidate, &output)
+                command.publish(&stage, &candidate, &output)
             }
         });
         assert_eq!(result.unwrap_err(), CHANGED);

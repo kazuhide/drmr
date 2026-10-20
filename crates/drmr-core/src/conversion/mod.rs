@@ -172,12 +172,18 @@ impl Converter {
         }
         Ok(())
     }
-    fn publish(&self, source: &Path, destination: &Path) -> Result<(), ConversionError> {
+    fn publish(
+        &self,
+        stage: &files::Stage,
+        source: &Path,
+        destination: &Path,
+    ) -> Result<(), ConversionError> {
         let _scope = self.backend.scope(measurement::Phase::Publication);
         self.backend.check_cancelled()?;
         self.check_plan_destination()?;
+        let source = stage.file_source(source)?;
         files::publish_file_committing(
-            source,
+            &source,
             destination,
             Some(&self.backend.stop),
             || {
@@ -187,12 +193,17 @@ impl Converter {
             |source, destination| self.commit_publication(source, destination),
         )
     }
-    fn publish_directory(&self, source: &Path, destination: &Path) -> Result<(), ConversionError> {
+    fn publish_directory(
+        &self,
+        stage: &files::Stage,
+        destination: &Path,
+    ) -> Result<(), ConversionError> {
         let _scope = self.backend.scope(measurement::Phase::Publication);
         self.backend.check_cancelled()?;
         self.check_plan_destination()?;
+        let source = stage.directory_source()?;
         files::publish_directory_committing(
-            source,
+            &source,
             destination,
             Some(&self.backend.stop),
             || {
@@ -359,7 +370,7 @@ impl Converter {
             return Err(ConversionError("round-trip-verification-failed"));
         }
         self.backend.checkpoint(&[&workspace]);
-        self.publish(&candidate, &destination)?;
+        self.publish(&workspace, &candidate, &destination)?;
         Ok(ConversionReport {
             schema_version: 1,
             input: input_report,

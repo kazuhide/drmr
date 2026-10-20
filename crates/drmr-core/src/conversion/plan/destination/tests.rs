@@ -26,11 +26,11 @@ fn planned_publication_keeps_no_replace_and_allows_private_intermediate_outputs(
         .write_all(b"verified result")
         .unwrap();
     let intermediate = stage.path().join("intermediate.mp4");
-    command.publish(&candidate, &intermediate).unwrap();
+    command.publish(&stage, &candidate, &intermediate).unwrap();
     assert!(!output.exists());
-    command.publish(&intermediate, &output).unwrap();
+    command.publish(&stage, &intermediate, &output).unwrap();
     assert_eq!(std::fs::read(&output).unwrap(), b"verified result");
-    assert!(command.publish(&candidate, &output).is_err());
+    assert!(command.publish(&stage, &candidate, &output).is_err());
     assert_eq!(std::fs::read(&output).unwrap(), b"verified result");
 }
 
@@ -50,7 +50,7 @@ fn measurement_clones_keep_the_original_destination_and_cancellation_guards() {
         .write_all(b"verified result")
         .unwrap();
     stop.set();
-    let (result, _) = command.measure(|measured| measured.publish(&candidate, &output));
+    let (result, _) = command.measure(|measured| measured.publish(&stage, &candidate, &output));
     assert_eq!(result.unwrap_err().0, "cancelled");
     assert!(!output.exists());
 }
@@ -79,7 +79,7 @@ fn redirected_final_destination_cannot_be_treated_as_a_private_intermediate() {
     std::fs::rename(&work, base.as_path().join("previous-work")).unwrap();
     symlink(&source, &work).unwrap();
     let redirected = source.join("out/result");
-    let (result, _) = command.measure(|measured| measured.publish(&candidate, &redirected));
+    let (result, _) = command.measure(|measured| measured.publish(&stage, &candidate, &redirected));
     assert_eq!(result.unwrap_err(), UNSAFE);
     assert!(!redirected.exists());
     assert_eq!(
@@ -109,7 +109,7 @@ fn late_parent_substitution_is_refused_after_directory_preparation() {
         .write_all(b"verified result")
         .unwrap();
     let result = files::publish_directory_committing(
-        stage.path(),
+        &stage.directory_source().unwrap(),
         &output,
         None,
         || {
@@ -122,6 +122,165 @@ fn late_parent_substitution_is_refused_after_directory_preparation() {
     assert_eq!(result.unwrap_err(), UNSAFE);
     assert!(!source.join("out/result").exists());
     assert!(stage.path().join("media").exists());
+}
+
+#[test]
+#[cfg(unix)]
+fn source_parent_alias_cannot_publish_a_foreign_file_after_the_final_destination_check() {
+    let root = crate::native::private_tempdir().unwrap();
+    let base = root.path().canonicalize().unwrap();
+    let work = base.join("work");
+    std::fs::create_dir(&work).unwrap();
+    std::fs::create_dir(work.join("out")).unwrap();
+    let output = work.join("out/result");
+    let guard = OutputGuard::new(&output).unwrap();
+    let stage = files::Stage::new(Some(&work)).unwrap();
+    let candidate = stage.path().join("verified-output");
+    let mut writer = files::create_new(&candidate).unwrap();
+    writer.write_all(b"verified owned bytes").unwrap();
+    let source = stage.created_file_source(&candidate, &writer).unwrap();
+    drop(writer);
+    let relative = candidate.strip_prefix(&work).unwrap().to_path_buf();
+    let displaced = base.join("displaced-work");
+    let foreign = base.join("foreign-work");
+    let result = guard.commit_observed(&source, || {
+        std::fs::rename(&work, &displaced).unwrap();
+        std::fs::create_dir(&work).unwrap();
+        std::fs::create_dir_all(candidate.parent().unwrap()).unwrap();
+        std::fs::write(&candidate, b"foreign bytes must remain").unwrap();
+    });
+    // Restore the original namespace before Stage cleanup, so a final pathname
+    // check cannot distinguish this substitution from an untouched candidate.
+    std::fs::rename(&work, &foreign).unwrap();
+    std::fs::rename(&displaced, &work).unwrap();
+    drop(source);
+    drop(stage);
+    result.unwrap();
+    assert_eq!(std::fs::read(&output).unwrap(), b"verified owned bytes");
+    assert_eq!(
+        std::fs::read(foreign.join(relative)).unwrap(),
+        b"foreign bytes must remain"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn source_parent_alias_cannot_publish_a_foreign_directory_after_the_final_destination_check() {
+    let root = crate::native::private_tempdir().unwrap();
+    let base = root.path().canonicalize().unwrap();
+    let work = base.join("work");
+    std::fs::create_dir(&work).unwrap();
+    std::fs::create_dir(work.join("out")).unwrap();
+    let output = work.join("out/result");
+    let guard = OutputGuard::new(&output).unwrap();
+    let stage = files::Stage::new(Some(&work)).unwrap();
+    files::create_new(&stage.path().join("verified"))
+        .unwrap()
+        .write_all(b"verified owned bytes")
+        .unwrap();
+    let relative = stage.path().strip_prefix(&work).unwrap().to_path_buf();
+    let displaced = base.join("displaced-work");
+    let foreign = base.join("foreign-work");
+    let source = stage.directory_source().unwrap();
+    let result = guard.commit_observed(&source, || {
+        std::fs::rename(&work, &displaced).unwrap();
+        std::fs::create_dir(&work).unwrap();
+        std::fs::create_dir_all(stage.path()).unwrap();
+        std::fs::write(
+            stage.path().join("foreign-sentinel"),
+            b"foreign bytes must remain",
+        )
+        .unwrap();
+    });
+    std::fs::rename(&work, &foreign).unwrap();
+    std::fs::rename(&displaced, &work).unwrap();
+    drop(source);
+    drop(stage);
+    result.unwrap();
+    assert_eq!(
+        std::fs::read(output.join("verified")).unwrap(),
+        b"verified owned bytes"
+    );
+    assert!(!output.join("foreign-sentinel").exists());
+    assert_eq!(
+        std::fs::read(foreign.join(relative).join("foreign-sentinel")).unwrap(),
+        b"foreign bytes must remain"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn a_directory_source_uses_the_media_identity_from_stage_creation() {
+    let root = crate::native::private_tempdir().unwrap();
+    let stage = files::Stage::new(Some(root.path())).unwrap();
+    let original = root.path().join("original-media");
+    let foreign = root.path().join("foreign-media");
+    std::fs::rename(stage.path(), &original).unwrap();
+    files::create_dir(stage.path()).unwrap();
+    std::fs::write(stage.path().join("sentinel"), b"foreign directory").unwrap();
+    let error = stage.directory_source().err().unwrap();
+    std::fs::rename(stage.path(), &foreign).unwrap();
+    std::fs::rename(&original, stage.path()).unwrap();
+    drop(stage);
+    assert_eq!(error.0, "output-exists-or-publish-failed");
+    assert_eq!(
+        std::fs::read(foreign.join("sentinel")).unwrap(),
+        b"foreign directory"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn a_created_file_source_uses_the_original_writer_identity() {
+    let root = crate::native::private_tempdir().unwrap();
+    let stage = files::Stage::new(Some(root.path())).unwrap();
+    let path = stage.path().join("verified-output");
+    let original = root.path().join("original-file");
+    let foreign = root.path().join("foreign-file");
+    let mut writer = stage.create_file(&path).unwrap();
+    writer.write_all(b"verified owned bytes").unwrap();
+    std::fs::rename(&path, &original).unwrap();
+    files::create_new(&path)
+        .unwrap()
+        .write_all(b"foreign bytes")
+        .unwrap();
+    let error = stage.created_file_source(&path, &writer).err().unwrap();
+    std::fs::rename(&path, &foreign).unwrap();
+    std::fs::rename(&original, &path).unwrap();
+    drop(writer);
+    drop(stage);
+    assert_eq!(error.0, "output-exists-or-publish-failed");
+    assert_eq!(std::fs::read(foreign).unwrap(), b"foreign bytes");
+}
+
+#[test]
+#[cfg(unix)]
+fn a_retained_file_receipt_refuses_a_replacement_entry_at_commit() {
+    let root = crate::native::private_tempdir().unwrap();
+    let base = root.path().canonicalize().unwrap();
+    let output = base.join("result");
+    let guard = OutputGuard::new(&output).unwrap();
+    let stage = files::Stage::new(Some(&base)).unwrap();
+    let path = stage.path().join("verified-output");
+    let original = base.join("original-file");
+    let foreign = base.join("foreign-file");
+    let mut writer = stage.create_file(&path).unwrap();
+    writer.write_all(b"verified owned bytes").unwrap();
+    let source = stage.created_file_source(&path, &writer).unwrap();
+    drop(writer);
+    std::fs::rename(&path, &original).unwrap();
+    files::create_new(&path)
+        .unwrap()
+        .write_all(b"foreign bytes")
+        .unwrap();
+    let error = guard.commit(&source).unwrap_err();
+    std::fs::rename(&path, &foreign).unwrap();
+    std::fs::rename(&original, &path).unwrap();
+    drop(source);
+    drop(stage);
+    assert_eq!(error.0, "output-exists-or-publish-failed");
+    assert!(!output.exists());
+    assert_eq!(std::fs::read(foreign).unwrap(), b"foreign bytes");
 }
 
 #[test]

@@ -547,7 +547,7 @@ impl Converter {
             return Err(ConversionError("round-trip-verification-failed"));
         }
         self.backend.checkpoint(&[&stage]);
-        self.publish(&candidate, destination)?;
+        self.publish(&stage, &candidate, destination)?;
         Ok(Some(ConversionReport {
             schema_version: 1,
             input: input.clone(),

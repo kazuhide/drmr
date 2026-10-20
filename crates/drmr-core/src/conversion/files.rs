@@ -8,6 +8,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
+mod publication;
+pub(super) use publication::PublicationSource;
+
 const IO_ERROR: ConversionError = ConversionError("temporary-file-unavailable");
 const PUBLISH_ERROR: ConversionError = ConversionError("output-exists-or-publish-failed");
 #[cfg(unix)]
@@ -15,6 +18,10 @@ const CLEANUP_ERROR: ConversionError = ConversionError("temporary-cleanup-unconf
 
 pub(super) struct Stage {
     path: PathBuf,
+    media: File,
+    media_identity: native::FileIdentity,
+    #[cfg(windows)]
+    root: File,
     #[cfg(unix)]
     outer: UnixOuter,
     // Fields drop in declaration order: remove only the exclusive child while
@@ -49,8 +56,14 @@ impl Stage {
             .map_err(|_| ConversionError("temporary-workspace-unavailable"))?;
             let outer = UnixOuter::new(outer)?;
             let path = outer.path().join("media");
-            create_dir(&path)?;
-            Ok(Self { path, outer })
+            let media = publication::create_media(&outer.held)?;
+            let media_identity = native::FileIdentity::read(&media).map_err(|_| IO_ERROR)?;
+            Ok(Self {
+                path,
+                media,
+                media_identity,
+                outer,
+            })
         }
     }
     #[cfg(windows)]
@@ -61,10 +74,16 @@ impl Stage {
     fn inside_container(container: Container) -> Result<Self, ConversionError> {
         let owned_child =
             native::private_tempdir_in(&container.path, "stage-").map_err(|_| IO_ERROR)?;
+        let root = publication::open_directory(owned_child.path(), false)?;
         let path = owned_child.path().join("media");
         create_dir(&path)?;
+        let media = publication::open_directory(&path, true)?;
+        let media_identity = native::FileIdentity::read(&media).map_err(|_| IO_ERROR)?;
         Ok(Self {
             path,
+            media,
+            media_identity,
+            root,
             owned_child,
             _container: container,
         })
@@ -366,37 +385,52 @@ pub(super) fn publish_file_observed(
     after_copy: impl FnOnce(&Path),
     check: impl FnOnce() -> Result<(), ConversionError>,
 ) -> Result<(), ConversionError> {
-    publish_file_with_commit(source, destination, stop, after_copy, check, atomic_move)
+    publish_file_with_commit(
+        || regular_input(source),
+        destination,
+        stop,
+        after_copy,
+        check,
+        commit_created_file,
+    )
+}
+
+fn commit_created_file(
+    source: &PublicationSource<'_>,
+    destination: &Path,
+) -> Result<(), ConversionError> {
+    source.commit_to_path(destination)
 }
 
 pub(super) fn publish_file_committing(
-    source: &Path,
+    source: &PublicationSource<'_>,
     destination: &Path,
     stop: Option<&crate::concurrency::Stop>,
     check: impl FnOnce() -> Result<(), ConversionError>,
-    commit: impl FnOnce(&Path, &Path) -> Result<(), ConversionError>,
+    commit: impl FnOnce(&PublicationSource<'_>, &Path) -> Result<(), ConversionError>,
 ) -> Result<(), ConversionError> {
-    publish_file_with_commit(source, destination, stop, |_| {}, check, commit)
+    publish_file_with_commit(|| source.reader(), destination, stop, |_| {}, check, commit)
 }
 
 fn publish_file_with_commit(
-    source: &Path,
+    input: impl FnOnce() -> Result<File, ConversionError>,
     destination: &Path,
     stop: Option<&crate::concurrency::Stop>,
     after_copy: impl FnOnce(&Path),
     check: impl FnOnce() -> Result<(), ConversionError>,
-    commit: impl FnOnce(&Path, &Path) -> Result<(), ConversionError>,
+    commit: impl FnOnce(&PublicationSource<'_>, &Path) -> Result<(), ConversionError>,
 ) -> Result<(), ConversionError> {
     check_cancelled(stop)?;
     let parent = destination.parent().ok_or(PUBLISH_ERROR)?;
     let stage = Stage::new(Some(parent))?;
     let result = (|| {
         let path = stage.path().join("verified-output");
-        let mut input = regular_input(source)?;
-        let mut output = create_new(&path)?;
+        let mut input = input()?;
+        let mut output = stage.create_file(&path)?;
         std::io::copy(&mut input, &mut output).map_err(|_| PUBLISH_ERROR)?;
         output.flush().map_err(|_| PUBLISH_ERROR)?;
         output.sync_all().map_err(|_| PUBLISH_ERROR)?;
+        let source = stage.created_file_source(&path, &output)?;
         drop(output);
         after_copy(&path);
         #[cfg(unix)]
@@ -404,7 +438,7 @@ fn publish_file_with_commit(
         seal(stage.path())?;
         check_cancelled(stop)?;
         check()?;
-        commit(&path, destination)
+        commit(&source, destination)
     })();
     #[cfg(unix)]
     stage.outer.cleanup()?;
@@ -439,13 +473,17 @@ pub(super) fn publish_directory_observed(
 }
 
 pub(super) fn publish_directory_committing(
-    source: &Path,
+    source: &PublicationSource<'_>,
     destination: &Path,
     stop: Option<&crate::concurrency::Stop>,
     check: impl FnOnce() -> Result<(), ConversionError>,
-    commit: impl FnOnce(&Path, &Path) -> Result<(), ConversionError>,
+    commit: impl FnOnce(&PublicationSource<'_>, &Path) -> Result<(), ConversionError>,
 ) -> Result<(), ConversionError> {
-    publish_directory_with_commit(source, destination, stop, |_| {}, check, commit)
+    check_cancelled(stop)?;
+    seal(source.path())?;
+    check_cancelled(stop)?;
+    check()?;
+    commit(source, destination)
 }
 
 fn publish_directory_with_commit(

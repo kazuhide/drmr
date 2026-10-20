@@ -754,7 +754,7 @@ impl Converter {
         }
         let output_report = inspection::inspect(&staged.path().join("media.m3u8"))
             .map_err(|_| ConversionError("hls-inspection-failed"))?;
-        self.publish_directory(staged.path(), &destination)?;
+        self.publish_directory(&staged, &destination)?;
         Ok(ConversionReport {
             schema_version: 1,
             input: input_report,
@@ -817,7 +817,7 @@ impl Converter {
         }
         report.input = localized.report;
         report.describe_preparation(inspection::InputPreparation::LocalHlsResources);
-        self.publish(&candidate, &destination)?;
+        self.publish(&workspace, &candidate, &destination)?;
         Ok(report)
     }
 }

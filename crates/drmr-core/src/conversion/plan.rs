@@ -401,14 +401,17 @@ pub fn write_new(path: &Path, plan: &ExecutionPlan) -> Result<(), ConversionErro
     let destination = destination::OutputGuard::new(&path)?;
     let stage = files::Stage::new(path.parent())?;
     let staged = stage.path().join("execution-plan.json");
-    let mut file = crate::native::create_private_new(&staged).map_err(|_| UNSAFE)?;
+    let mut file = stage.create_file(&staged).map_err(|_| UNSAFE)?;
     file.write_all(&bytes)
         .and_then(|()| file.write_all(b"\n"))
         .and_then(|()| file.flush())
         .and_then(|()| file.sync_all())
         .map_err(|_| UNSAFE)?;
+    let source = stage
+        .created_file_source(&staged, &file)
+        .map_err(|_| UNSAFE)?;
     drop(file);
-    destination.commit(&staged).map_err(|_| {
+    destination.commit(&source).map_err(|_| {
         if std::fs::symlink_metadata(&path).is_ok() {
             EXISTS
         } else {

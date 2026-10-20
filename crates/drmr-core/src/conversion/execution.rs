@@ -121,6 +121,7 @@ mod tests {
     fn cancellation_prevents_new_work_and_both_publication_forms() {
         let stop = crate::concurrency::Stop::new();
         let converter = converter(stop.clone());
+        let stage = super::super::workspace().unwrap();
         stop.set();
         assert_eq!(
             converter.run_tracks(1, |_| Ok(())).unwrap_err(),
@@ -135,13 +136,13 @@ mod tests {
         );
         assert_eq!(
             converter
-                .publish(Path::new("missing"), Path::new("unused"))
+                .publish(&stage, Path::new("missing"), Path::new("unused"))
                 .unwrap_err(),
             ConversionError("cancelled")
         );
         assert_eq!(
             converter
-                .publish_directory(Path::new("missing"), Path::new("unused"))
+                .publish_directory(&stage, Path::new("unused"))
                 .unwrap_err(),
             ConversionError("cancelled")
         );

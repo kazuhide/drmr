@@ -127,7 +127,7 @@ impl Converter {
             .map_err(|_| ConversionError("invalid-output-media"))?;
         secure_tree(stage.path())?;
         self.backend.checkpoint(&[work, &stage]);
-        self.publish_directory(stage.path(), &destination)?;
+        self.publish_directory(&stage, &destination)?;
         Ok(ConversionReport {
             schema_version: 1,
             input,

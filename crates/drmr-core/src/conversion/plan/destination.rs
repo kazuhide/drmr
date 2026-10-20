@@ -47,28 +47,20 @@ impl OutputGuard {
         }
         Ok(())
     }
-    pub(in crate::conversion) fn commit(&self, source: &Path) -> Result<(), ConversionError> {
+    pub(in crate::conversion) fn commit(
+        &self,
+        source: &files::PublicationSource<'_>,
+    ) -> Result<(), ConversionError> {
+        self.commit_observed(source, || {})
+    }
+    fn commit_observed(
+        &self,
+        source: &files::PublicationSource<'_>,
+        after_check: impl FnOnce(),
+    ) -> Result<(), ConversionError> {
         self.check()?;
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
-        {
-            rustix::fs::renameat_with(
-                rustix::fs::CWD,
-                source,
-                &self.parent,
-                self.output.file_name().ok_or(UNSAFE)?,
-                rustix::fs::RenameFlags::NOREPLACE,
-            )
-            .map_err(|_| ConversionError("output-exists-or-publish-failed"))
-        }
-        #[cfg(windows)]
-        {
-            files::atomic_move(source, &self.output)
-        }
-        #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
-        {
-            let _ = source;
-            Err(UNSAFE)
-        }
+        after_check();
+        source.commit(&self.parent, &self.output)
     }
 }
 impl Converter {
@@ -89,7 +81,7 @@ impl Converter {
     }
     pub(in crate::conversion) fn commit_publication(
         &self,
-        source: &Path,
+        source: &files::PublicationSource<'_>,
         destination: &Path,
     ) -> Result<(), ConversionError> {
         if let Some(guard) = &self.planned_destination {
@@ -100,7 +92,7 @@ impl Converter {
                 return guard.commit(source);
             }
         }
-        files::atomic_move(source, destination)
+        source.commit_to_path(destination)
     }
 }
 fn open_directory(path: &Path) -> Result<File, ConversionError> {

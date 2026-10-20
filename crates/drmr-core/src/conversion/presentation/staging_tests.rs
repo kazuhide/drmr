@@ -138,16 +138,14 @@ fn borrowed_native_candidate_waits_for_outer_publication_and_keeps_no_replace() 
         .unwrap();
     let existing = snapshot(&destination);
     assert_eq!(
-        c.publish_directory(stage.path(), &destination)
-            .unwrap_err()
-            .0,
+        c.publish_directory(&stage, &destination).unwrap_err().0,
         "output-exists-or-publish-failed"
     );
     assert_eq!(snapshot(&destination), existing);
     assert_eq!(snapshot(stage.path()), expected);
     fs::remove_file(destination.join("sentinel")).unwrap();
     fs::remove_dir(&destination).unwrap();
-    c.publish_directory(stage.path(), &destination).unwrap();
+    c.publish_directory(&stage, &destination).unwrap();
     drop(stage);
     assert!(!private_root.exists());
     assert_eq!(snapshot(&destination), expected);

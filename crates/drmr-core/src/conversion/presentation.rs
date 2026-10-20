@@ -142,7 +142,7 @@ impl Converter {
         );
         self.backend.checkpoint(&[&work, stage]);
         if let Some(destination) = destination {
-            self.publish_directory(stage.path(), &destination)?;
+            self.publish_directory(stage, &destination)?;
         }
         Ok(ConversionReport {
             schema_version: 1,
@@ -1699,10 +1699,11 @@ impl Converter {
         if let (Some(candidate), Some(destination)) = (&candidate, &destination) {
             report.verification =
                 self.verify_transport_output(&request, prepared, candidate, work.path())?;
-            if let Some(stage) = &stage {
-                self.backend.checkpoint(&[&work, stage]);
-            }
-            self.publish_directory(candidate, destination)?;
+            let stage = stage
+                .as_ref()
+                .ok_or(ConversionError("output-staging-failed"))?;
+            self.backend.checkpoint(&[&work, stage]);
+            self.publish_directory(stage, destination)?;
         }
         self.backend.checkpoint(&[&work]);
         report.input = input_report;
