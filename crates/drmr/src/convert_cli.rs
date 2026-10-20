@@ -187,6 +187,9 @@ fn error_hint(code: &str) -> Option<&'static str> {
         "output-exists-or-unsafe" | "output-exists-or-publish-failed" => {
             Some("Choose a new output path under an existing directory.")
         }
+        "temporary-workspace-parent-unsafe" => Some(
+            "Choose an output or temporary parent directory owned by your user that other users cannot modify. See docs/security.md.",
+        ),
         "packet-timing-unavailable" => Some(
             "Use an FFmpeg build that supplies complete packet timestamps and durations. See docs/media-processing.md.",
         ),
@@ -232,6 +235,7 @@ pub(crate) fn error(
                 | "execution-plan-invalid"
                 | "execution-plan-exists"
                 | "execution-plan-destination-unsafe"
+                | "temporary-workspace-parent-unsafe"
                 | "plan-requires-single-output"
                 | "download-directory-required"
                 | "download-options-require-url"

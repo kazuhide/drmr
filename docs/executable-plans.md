@@ -61,6 +61,10 @@ admitted again before saving. The plan itself is created privately and never
 overwrites an existing file. Keep the plan and result outside the saved source
 directory. For a single MP4, sibling plan and output files are allowed.
 
+On Unix, use a trusted output and plan parent owned by your user with no group
+or other-user write permission. Protected shared temporary directories have a
+separate supported rule. See [workspace permissions](security.md#temporary-files-and-cleanup).
+
 Use `--to clear` for unencrypted output. Other supported combinations include
 `cenc` DASH, `cbcs` fragmented MP4 HLS, and `hls-aes128` or `hls-sample-aes` with
 `--format hls-ts` for qualified TS sources. `--format hls` always means fragmented

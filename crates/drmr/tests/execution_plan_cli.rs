@@ -85,6 +85,37 @@ fn analyze_measurements_require_json() {
     usage(&invoke(&["analyze", "missing.mp4", "--measure"]));
 }
 
+#[cfg(unix)]
+#[test]
+fn saved_plan_refuses_a_shared_writable_parent_before_reading_media() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let root = drmr_core::native::private_tempdir().unwrap();
+    let shared = root.path().join("shared");
+    std::fs::create_dir(&shared).unwrap();
+    std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o777)).unwrap();
+    let input = root.path().join("not-present.mp4");
+    let output = shared.join("result");
+    let plan = root.path().join("plan.json");
+    let result = invoke(&[
+        "plan",
+        input.to_str().unwrap(),
+        "--to",
+        "clear",
+        "--format",
+        "dash",
+        "--output",
+        output.to_str().unwrap(),
+        "--save",
+        plan.to_str().unwrap(),
+        "--packager-bin",
+        "unused-tool-for-destination-preflight",
+        "--json",
+    ]);
+    failure(&result, "plan", "execution-plan-destination-unsafe", 2);
+    assert!(!input.exists() && !output.exists() && !plan.exists());
+    assert_eq!(std::fs::read_dir(&shared).unwrap().count(), 0);
+}
+
 #[test]
 fn source_analysis_and_saved_planning_keep_invalid_key_configuration_private() {
     let root = drmr_core::native::private_tempdir().unwrap();

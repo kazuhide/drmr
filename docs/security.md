@@ -61,6 +61,21 @@ Keys also exist in ordinary process memory. Sensitive Rust key buffers and sever
 
 Some verification paths write decrypted media and plaintext key files into private temporary directories. Processing is therefore not memory-only. Raw key-file writes refuse unsafe existing destinations instead of following a symbolic link or repairing public permissions after opening a file.
 
+On Unix, use trusted existing parent directories for output, plans and temporary
+work. A conversion staging parent must belong to the current user or the administrator
+(`root`), and its Unix permission bits must deny group and other users write access. A shared temporary
+directory with the sticky permission bit, such as a root-owned `/tmp`, is also
+accepted: that bit protects each user's entries from other unprivileged users.
+A writable shared parent without that protection is refused with
+`temporary-workspace-parent-unsafe`. Saving a plan rejects an unsafe output
+parent with `execution-plan-destination-unsafe` before media admission.
+
+Conversion staging cleanup follows retained directory handles rather than adopting a new tree
+through the original pathname. If ownership or the namespace cannot be
+confirmed, drmr leaves uncertain entries alone and reports unconfirmed cleanup.
+These controls do not protect against an administrator or a malicious process
+running as the same operating-system user.
+
 Confirmed normal cleanup removes owned temporary files. An interrupted process or unconfirmed child cleanup can leave private working files behind; inspect the reported job and workspace before reuse. Deleting a file does not guarantee secure erasure from the storage device, snapshots, or backups. Keep working directories, retained source material, and backups under the same access controls as the input keys.
 
 ## Local web and Desktop playback

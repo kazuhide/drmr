@@ -20,7 +20,7 @@ pub(crate) fn error_hint(code: &str) -> Option<&'static str> {
             Some("Choose a new plan file; existing entries are never replaced.")
         }
         "execution-plan-destination-unsafe" => Some(
-            "Keep the new plan file, retained source, and result at separate safe paths under existing parent directories.",
+            "Keep the new plan file, retained source, and result at separate safe paths under trusted existing parent directories. See docs/security.md.",
         ),
         "execution-plan-source-changed" => Some(
             "The saved source no longer matches the plan. Restore the original bytes or analyze the new source and create a new plan.",
