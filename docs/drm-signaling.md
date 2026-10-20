@@ -77,7 +77,8 @@ Explicit DASH PSSH data is passed to Shaka Packager through its
 using a separate owner-protected temporary file. This avoids command-line size
 limits for large metadata. The file is checked before and after packaging, is
 kept until child-process cleanup is confirmed, and is removed with its private
-workspace. It is never included in the output directory. The temporary directory
+workspace. Uncertain filesystem entries are retained if the workspace is replaced.
+The file is never included in the output directory. The temporary directory
 path must not contain a comma, because the flag-file option treats commas as
 file-name separators; such a path is refused before packaging.
 

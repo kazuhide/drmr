@@ -118,6 +118,7 @@ impl Drop for PrivatePssh {
     fn drop(&mut self) {
         // A retained child may still read the flags, including after cancellation.
         self.wait_for_cleanup();
+        self.stage.preserve_replaced_workspace();
     }
 }
 fn argument(path: &Path) -> Result<String, ConversionError> {

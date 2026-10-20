@@ -91,6 +91,47 @@ fn replacement_and_modified_flags_are_refused_or_blocked_by_the_read_guard() {
 }
 
 #[test]
+fn a_replaced_tool_visible_directory_cannot_delete_foreign_entries() {
+    let temp = native::private_tempdir().unwrap();
+    let foreign = temp.path().join("foreign");
+    native::create_private_dir_all(&foreign).unwrap();
+    native::create_private_new(&foreign.join("sentinel"))
+        .unwrap()
+        .write_all(b"foreign directory must survive")
+        .unwrap();
+    let flags = PrivatePssh::new("00aaff", Some(temp.path()), Arc::default(), None).unwrap();
+    let visible = flags.stage.path().to_owned();
+    let held = temp.path().join("held-media");
+    let moved = std::fs::rename(&visible, &held);
+    if cfg!(windows) && moved.is_err() {
+        // An OS sharing denial also prevents substitution of the tool-visible directory.
+        flags.check("00aaff").unwrap();
+        drop(flags);
+        assert_eq!(
+            std::fs::read(foreign.join("sentinel")).unwrap(),
+            b"foreign directory must survive"
+        );
+        return;
+    }
+    moved.unwrap();
+    std::fs::rename(&foreign, &visible).unwrap();
+    assert_eq!(
+        std::fs::read(visible.join("sentinel")).unwrap(),
+        b"foreign directory must survive"
+    );
+    assert_eq!(flags.check("00aaff"), Err(INVALID));
+    drop(flags);
+    assert_eq!(
+        std::fs::read(visible.join("sentinel")).unwrap(),
+        b"foreign directory must survive"
+    );
+    assert_eq!(
+        std::fs::read(held.join("protection.flags")).unwrap(),
+        b"--pssh=00aaff\n"
+    );
+}
+
+#[test]
 fn flagfile_separators_are_refused_without_changing_the_temporary_parent() {
     let temp = native::private_tempdir().unwrap();
     for name in ["comma,parent", "parent with spaces"] {
