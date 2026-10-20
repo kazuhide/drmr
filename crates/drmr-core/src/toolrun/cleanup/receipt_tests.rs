@@ -124,9 +124,11 @@ fn denied_and_stale_receipts_cannot_reap_a_later_retained_invocation() {
 struct PanicOnFailure;
 impl Sink for PanicOnFailure {
     fn emit(&self, record: &Record) {
-        if record.get("level").and_then(serde_json::Value::as_str) == Some("error") {
-            panic!("synthetic output sink failure");
-        }
+        assert_ne!(
+            record.get("level").and_then(serde_json::Value::as_str),
+            Some("error"),
+            "synthetic output sink failure"
+        );
     }
 }
 #[test]
