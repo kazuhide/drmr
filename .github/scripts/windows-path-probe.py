@@ -40,23 +40,54 @@ if config['mode'] == 'direct':
     result=call('fixture-video-copy', ['ffmpeg','-v','error','-i',str(fixture),'-map','0:v:0','-c','copy','-an','-map_metadata','-1','-bitexact','-movflags','delay_moov+default_base_moof+frag_keyframe',str(work/'source.mp4')])
     if result.returncode: raise SystemExit(1)
     fixture=work/'source.mp4'
-    for length in (91,157,200,223,235,245,260,280):
+    import xml.etree.ElementTree as ET
+    def encode(path, flavor, root):
+        if flavor == 'verbatim':
+            return '\\\\?\\' + str(path)
+        if flavor == 'relative':
+            return os.path.relpath(path, root).replace('\\', '/')
+        return path.as_posix()
+    for length in (157,223,235,245,260,280,320):
         for form in ('dash','hls'):
-            base=work/(form+str(length))
-            while len(str(base)) < length:
-                remaining=length-len(str(base))-1
-                if remaining == 0: base=base.with_name(base.name+'x')
-                else: base=base/('x'*min(remaining,60))
-            base.mkdir(parents=True)
-            track=base/'track-0000'
-            track.mkdir()
-            inp=fixture.as_posix(); out=track.as_posix()
-            args=['packager','--mp4_reset_initial_composition_offset_to_zero=false',f'input={inp},stream=0,init_segment={out}/init.mp4,segment_template={out}/seg_$Number$.m4s,playlist_name=track-0000/media.m3u8','--segment_duration','2','--clear_lead','0']
-            if form=='dash': args+=['--generate_static_live_mpd','--mpd_output',(base/'manifest.mpd').as_posix()]
-            else: args+=['--hls_playlist_type','VOD','--hls_master_playlist_output',(base/'master.m3u8').as_posix()]
-            args+=['--single_threaded','--io_cache_size=0']
-            result=call(f'direct-{form}-{length}',args)
-            emit({'probe':f'inventory-{form}-{length}','root_path_units':len(str(base)),'init_path_units':len(str(track/'init.mp4')),'segment_path_units':len(str(track/'seg_1.m4s')),'manifest_exists':(base/('manifest.mpd' if form=='dash' else 'master.m3u8')).is_file(),'init_exists':(track/'init.mp4').is_file(),'segment_exists':(track/'seg_1.m4s').is_file()})
+            for flavor in ('forward','verbatim','relative'):
+                base=work/(form+str(length)+flavor)
+                while len(str(base)) < length:
+                    remaining=length-len(str(base))-1
+                    if remaining == 0: base=base.with_name(base.name+'x')
+                    else: base=base/('x'*min(remaining,60))
+                base.mkdir(parents=True)
+                track=base/'track-0000'
+                track.mkdir()
+                inp=encode(fixture,flavor,base); out=encode(track,flavor,base)
+                manifest=base/('manifest.mpd' if form=='dash' else 'master.m3u8')
+                args=['packager','--mp4_reset_initial_composition_offset_to_zero=false',f'input={inp},stream=0,init_segment={out}/init.mp4,segment_template={out}/seg_$Number$.m4s,playlist_name=track-0000/media.m3u8','--segment_duration','2','--clear_lead','0']
+                # Keep native verbatim paths fully backslash-separated, including leaf suffixes.
+                if flavor == 'verbatim':
+                    args[2]=f'input={inp},stream=0,init_segment={out}\\init.mp4,segment_template={out}\\seg_$Number$.m4s,playlist_name=track-0000/media.m3u8'
+                if form=='dash': args+=['--generate_static_live_mpd','--mpd_output',encode(manifest,flavor,base)]
+                else: args+=['--hls_playlist_type','VOD','--hls_master_playlist_output',encode(manifest,flavor,base)]
+                args+=['--single_threaded','--io_cache_size=0']
+                label=f'direct-{form}-{length}-{flavor}'
+                options={'cwd': '\\\\?\\'+str(base)} if flavor == 'relative' else {}
+                result=call(label,args,**options)
+                record={'probe':f'inventory-{form}-{length}-{flavor}','root_path_units':len(str(base)),'init_path_units':len(str(track/'init.mp4')),'segment_path_units':len(str(track/'seg_1.m4s')),'manifest_exists':manifest.is_file(),'init_exists':(track/'init.mp4').is_file(),'segment_exists':(track/'seg_1.m4s').is_file()}
+                if result.returncode==0:
+                    # Check generated metadata without printing any raw manifest values.
+                    payloads=[x.read_bytes() for x in base.rglob('*') if x.suffix in ('.m3u8','.mpd')]
+                    record['raw_windows_paths_in_manifest']=any(b'\\\\?\\' in x or re.search(rb'(?<![A-Za-z])[A-Za-z]:[\\/]', x) is not None for x in payloads)
+                    record['manifest_count']=len(payloads)
+                    if form=='dash':
+                        parsed=ET.fromstring(manifest.read_bytes())
+                        values=[v for e in parsed.iter() for k,v in e.attrib.items() if k in ('initialization','media','sourceURL')]
+                        record['references_relative']=all(not v.startswith(('/', '\\')) and ':' not in v for v in values)
+                    else:
+                        text=manifest.read_text()
+                        refs=[line for line in text.splitlines() if line and not line.startswith('#')]
+                        record['master_references_exist']=bool(refs) and all((base/x).is_file() for x in refs)
+                    verified=call(f'readback-{form}-{length}-{flavor}',['ffprobe','-v','error','-show_entries','format=duration','-of','json',manifest.as_posix()])
+                    record['manifest_readback_passed']=verified.returncode==0
+                emit(record)
+
 else:
     wanted={
         'conversion_bundle_plan':'one_private_plan_publishes_and_independently_verifies_both_presentations',

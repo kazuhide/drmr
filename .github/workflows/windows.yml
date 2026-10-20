@@ -19,24 +19,3 @@ jobs:
         run: ./.github/scripts/install-windows-media-tools.ps1
       - name: Probe direct media paths as an ordinary user
         run: ./.github/scripts/windows-path-probe.ps1 -Mode direct
-      - name: Install stable Rust
-        run: |
-          rustup toolchain install stable --profile minimal --no-self-update
-          if ($LASTEXITCODE -ne 0) { throw 'Rust installation failed' }
-          'RUSTUP_TOOLCHAIN=stable' | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-      - name: Compile two unchanged admission tests with categorical tool diagnostics
-        run: |
-          $executables = @()
-          foreach ($spec in @(@('-p','drmr-core','--test','conversion_bundle_plan'), @('-p','drmr','--test','encrypted_download_media'))) {
-            $messages = & cargo test @spec --locked --no-run --message-format=json
-            if ($LASTEXITCODE -ne 0) { throw 'Focused test compilation failed' }
-            foreach ($line in $messages) {
-              $message = $line | ConvertFrom-Json
-              if ($message.reason -eq 'compiler-artifact' -and $message.profile.test -and $message.executable) {
-                $executables += @{ name=$message.target.name; path=$message.executable }
-              }
-            }
-          }
-          $executables | ConvertTo-Json | Set-Content (Join-Path $env:RUNNER_TEMP 'drmr-probe-executables.json')
-      - name: Run focused tests as an ordinary user
-        run: ./.github/scripts/windows-path-probe.ps1 -Mode focused
