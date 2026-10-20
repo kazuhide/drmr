@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
 exclude = ["vendor/process-wrap", "vendor/glib"]
-members = ["crates/drmr-core", "crates/drmr", "crates/drmr-server", "crates/drmr-test-support", "crates/drmr-desktop"]
+members = ["crates/drmr-core", "crates/drmr", "crates/drmr-server", "crates/drmr-test-support", "crates/drmr-desktop", "crates/drmr-manifest"]
 
 [workspace.package]
 version = "0.1.0"
