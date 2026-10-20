@@ -72,7 +72,9 @@ parent with `execution-plan-destination-unsafe` before media admission.
 
 Conversion staging cleanup follows retained directory handles rather than adopting a new tree
 through the original pathname. If ownership or the namespace cannot be
-confirmed, drmr leaves uncertain entries alone and reports unconfirmed cleanup.
+confirmed, drmr leaves uncertain entries alone. Explicit cleanup returns
+`temporary-cleanup-unconfirmed`; automatic fallback cleanup cannot always report
+this error.
 These controls do not protect against an administrator or a malicious process
 running as the same operating-system user.
 
