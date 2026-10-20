@@ -273,12 +273,29 @@ fn checked(output: &Output) -> Value {
     }
     serde_json::from_slice(&output.stdout).unwrap()
 }
-fn success(output: &Output) -> Value {
+#[track_caller]
+fn success(output: &Output, operation: &'static str) -> Value {
     let report = checked(output);
+    let activity = report["error"]["last_activity"]
+        .as_str()
+        .filter(|activity| {
+            matches!(
+                *activity,
+                "configuration"
+                    | "acquisition"
+                    | "input-preparation"
+                    | "inspection"
+                    | "normalization"
+                    | "packaging"
+                    | "verification"
+                    | "publication"
+            )
+        })
+        .unwrap_or("unavailable");
     assert!(
         output.status.success(),
-        "command failed with classification {}",
-        report["error"]["code"]
+        "{operation} failed with classification {}; last activity {activity}",
+        report["error"]["code"],
     );
     report
 }
@@ -352,6 +369,7 @@ fn encrypted_url_roundtrip(profile: Profile) {
         &invoke("analyze", &source, Some(&local_keys))
             .output()
             .unwrap(),
+        "local-analyze",
     );
     assert_eq!(local["input_admitted"], true);
     let responses = remote_files(&original);
@@ -382,6 +400,7 @@ fn encrypted_url_roundtrip(profile: Profile) {
             .arg(&policy)
             .output()
             .unwrap(),
+        "downloaded-analyze",
     );
     assert_eq!(report["input_admitted"], true);
     assert_eq!(report["download"]["retained"], true);
@@ -507,6 +526,7 @@ fn offline_plan(root: &Path, input: &Path, keys: &Path) {
             .arg(&plan)
             .output()
             .unwrap(),
+        "offline-plan",
     );
     assert!(!output.exists());
     let saved = std::fs::read(&plan).unwrap();
@@ -522,7 +542,14 @@ fn offline_plan(root: &Path, input: &Path, keys: &Path) {
             .args(["--max-workers", "1", "--json"])
             .output()
             .unwrap();
-        let result = success(&result);
+        let result = success(
+            &result,
+            if operation == "convert" {
+                "execute-plan"
+            } else {
+                "verify-plan"
+            },
+        );
         assert_eq!(result["plan_id"], planned["plan_id"]);
         if operation == "verify" {
             verified(&result["outputs"][0]["verification"]);
@@ -588,6 +615,7 @@ fn cenc_all_qualified_outputs(root: &Path, input: &Path) {
                 .arg(&plan)
                 .output()
                 .unwrap(),
+            "cenc-matrix-plan",
         );
         assert_eq!(planned["outputs"].as_array().unwrap().len(), routes.len());
         assert!(!output.exists());
@@ -609,7 +637,7 @@ fn cenc_all_qualified_outputs(root: &Path, input: &Path) {
                 "CENC matrix batch {batch} {operation} failed: {}",
                 checked(&result)["error"]["code"]
             );
-            let result = success(&result);
+            let result = success(&result, operation);
             assert_eq!(result["plan_id"], planned["plan_id"]);
             let outputs = result["outputs"].as_array().unwrap();
             assert_eq!(outputs.len(), routes.len());

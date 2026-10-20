@@ -49,9 +49,11 @@ impl Workspace {
         self.check_root()?;
         let path = self.path().join(relative);
         if let Some(parent) = path.parent() {
-            native::create_private_dir_all(parent).map_err(|_| FAILED)?;
+            native::create_media_dir_all(parent).map_err(|_| FAILED)?;
         }
-        let mut file = native::create_private_new(&path).map_err(|_| FAILED)?;
+        // The Stage root permits owner-only media inheritance on Windows.
+        // Media creation seals the new file's ACL before returning its handle.
+        let mut file = native::create_media_new(&path).map_err(|_| FAILED)?;
         let identity = FileIdentity::read(&file).map_err(|_| FAILED)?;
         file.write_all(bytes).map_err(|_| FAILED)?;
         self.copies.push(Copy {
@@ -114,11 +116,60 @@ impl Workspace {
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt as _;
 
+    #[test]
+    fn root_and_nested_copies_remain_strict_inside_the_media_workspace() {
+        let mut workspace = Workspace::new().unwrap();
+        let root = workspace.path().to_owned();
+        for (relative, bytes) in [
+            ("manifest.mpd", &b"<MPD/>"[..]),
+            ("variants/video/media.m3u8", &b"#EXTM3U\n"[..]),
+        ] {
+            let relative = Path::new(relative);
+            let path = workspace.write(relative, bytes).unwrap();
+            assert_eq!(path, root.join(relative));
+            let mut file = native::open_private_read(&path).unwrap();
+            let mut copied = Vec::new();
+            std::io::Read::read_to_end(&mut file, &mut copied).unwrap();
+            assert_eq!(copied, bytes);
+            drop(file);
+            workspace.check_file(relative).unwrap();
+        }
+        workspace.check().unwrap();
+        drop(workspace);
+        assert!(!root.exists());
+    }
+
+    #[test]
+    fn an_existing_copy_is_never_overwritten() {
+        let mut workspace = Workspace::new().unwrap();
+        let relative = Path::new("manifest.mpd");
+        let path = workspace.write(relative, b"original").unwrap();
+        assert_eq!(
+            workspace.write(relative, b"replacement").unwrap_err().0,
+            FAILED.0
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), b"original");
+        workspace.check().unwrap();
+    }
+
+    #[test]
+    fn a_changed_nested_copy_is_rejected_even_when_its_length_is_unchanged() {
+        let mut workspace = Workspace::new().unwrap();
+        let relative = Path::new("variants/video/media.m3u8");
+        let path = workspace.write(relative, b"original").unwrap();
+        workspace.check().unwrap();
+        std::fs::write(&path, b"modified").unwrap();
+        assert_eq!(workspace.check_file(relative).unwrap_err().0, CHANGED.0);
+        assert_eq!(workspace.check().unwrap_err().0, CHANGED.0);
+    }
+
+    #[cfg(unix)]
     #[test]
     fn first_copy_failure_preserves_a_replaced_private_root() {
         let temp = tempfile::tempdir().unwrap();
