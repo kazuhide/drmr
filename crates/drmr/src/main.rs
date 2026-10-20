@@ -2,11 +2,13 @@
 //! Exit codes: 0 success, 1 the check failed, 2 usage or an input that is not what the
 //! command expects.
 
+mod analyze_cli;
 mod cancellation;
 mod convert_cli;
 mod doctor;
 mod download_cli;
 mod inspect_cli;
+mod plan_cli;
 
 use clap::{Parser, Subcommand};
 use drmr_core::batch_cli::{self, BatchArgs};
@@ -32,7 +34,7 @@ const EXIT_INVALID: u8 = 2;
     name = "drmr",
     version,
     about = "Inspect and repackage streaming media with digital rights management (DRM)",
-    after_help = "Getting started:\n  drmr doctor                       Check external media tools\n  drmr inspect media.mp4             Read local media metadata without keys\n  drmr plan media.mp4 --to cbcs       Describe conversion intent\n  drmr convert input.mpd --to clear --output clear-media\n  drmr verify clear-media/manifest.mpd --source input.mpd\n\nURL input: use 'drmr convert URL --download-dir SOURCE_DIR' with target and output options.\nFor compatible prepared-asset workflows, see 'drmr run --help' and 'drmr analyze-hls --help'.\nUse 'drmr plan --mpd manifest.mpd' to list prepared DASH renditions.\nDASH and HLS describe streaming media using manifests or playlists.\nUse 'drmr help <COMMAND>' for detailed command help."
+    after_help = "Getting started:\n  drmr doctor                       Check external media tools\n  drmr inspect media.mp4             Read local media metadata without keys\n  drmr analyze media.mp4             Check the complete source media\n  drmr plan media.mp4 --to cbcs       Describe conversion intent\n  drmr convert input.mpd --to clear --output clear-media\n  drmr verify clear-media/manifest.mpd --source input.mpd\n\nSaved-plan workflow:\n  drmr analyze URL --download-dir SOURCE_DIR\n  drmr plan SOURCE_DIR/input.m3u8 --to cbcs --format dash --output RESULT_DIR --save PLAN.json\n  drmr convert --plan PLAN.json --keys-file KEYS.json\n  drmr verify --plan PLAN.json --keys-file KEYS.json\n\nURL input also works directly with 'drmr convert URL --download-dir SOURCE_DIR'.\nFor compatible prepared-asset workflows, see 'drmr run --help' and 'drmr analyze-hls --help'.\nUse 'drmr plan --mpd manifest.mpd' to list prepared DASH renditions.\nDASH and HLS describe streaming media using manifests or playlists.\nUse 'drmr help <COMMAND>' for detailed command help."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -80,15 +82,17 @@ enum Command {
     Run(cli::RunArgs),
     /// Inspect local MP4, DASH, or HLS metadata without keys or output files.
     Inspect(inspect_cli::InspectArgs),
+    /// Check complete MP4, DASH, or HLS input media; retain URL input locally.
+    Analyze(analyze_cli::AnalyzeArgs),
     /// Convert media with independent input/output keys and round-trip checks.
     Convert(convert_cli::ConvertArgs),
     /// Compare result media with its original source, including every packet timestamp.
     Verify(convert_cli::VerifyArgs),
-    /// Describe conversion intent, or list catalog renditions with --mpd.
+    /// Describe conversion intent, save an execution plan, or list renditions with --mpd.
     #[command(
         args_override_self = true,
         infer_long_args = true,
-        after_help = "With INPUT: describe a requested conversion without executing it.\nWith --mpd: enumerate renditions only; writes nothing (read-only)."
+        after_help = "With INPUT: describe a requested conversion without executing it.\nWith --save FILE and --output PATH: validate the complete source and save one format/protection intent with source fingerprints. Keys remain separate.\nWith --mpd: enumerate renditions only; writes nothing (read-only).\n\nExamples:\n  drmr plan source/input.m3u8 --to cbcs --format dash --output converted --save conversion.plan.json\n  drmr convert --plan conversion.plan.json --keys-file keys.json\n  drmr verify --plan conversion.plan.json --keys-file keys.json"
     )]
     Plan(inspect_cli::PlanArgs),
     /// Repackage multiple assets sequentially, with support for restarting.
@@ -153,6 +157,7 @@ fn main() -> ExitCode {
         Command::Canonical { path } => canonical(&path),
         Command::Run(args) => repackage(&cli::Commands::Run(args)),
         Command::Inspect(args) => inspect_cli::inspect(&args),
+        Command::Analyze(args) => analyze_cli::analyze(&args),
         Command::Convert(args) => convert_cli::convert(&args),
         Command::Verify(args) => convert_cli::verify(&args),
         Command::Plan(args) => match &args.mpd {

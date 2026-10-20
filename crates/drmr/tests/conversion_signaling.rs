@@ -20,6 +20,7 @@ fn path(value: &Path) -> String {
     drmr_core::manifest_support::path::fspath(value).unwrap()
 }
 fn verified(report: &serde_json::Value) {
+    assert_eq!(report["passed"], true);
     assert_eq!(report["media_verified"], true);
     assert_eq!(report["license_playback_verified"], false);
     assert_eq!(report["checks"]["stream_metadata"], "pass");
@@ -199,8 +200,243 @@ fn source(root: &Path, audio: bool, empty: bool) -> std::path::PathBuf {
     input
 }
 
+fn stream_packets(input: &Path, role: &str) -> serde_json::Value {
+    let result = Command::new("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            role,
+            "-show_streams",
+            "-show_packets",
+            "-show_data_hash",
+            "sha256",
+            "-show_entries",
+            "stream=time_base:packet=pts,dts,duration,data_hash",
+            "-of",
+            "json",
+        ])
+        .arg(input)
+        .output()
+        .unwrap();
+    assert!(result.status.success());
+    let mut value: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    for packet in value["packets"].as_array_mut().unwrap() {
+        packet
+            .as_object_mut()
+            .unwrap()
+            .retain(|name, _| ["pts", "dts", "duration", "data_hash"].contains(&name.as_str()));
+        assert_eq!(packet.as_object().unwrap().len(), 4);
+        assert!(packet["data_hash"].as_str().unwrap().starts_with("SHA256:"));
+        for clock in ["pts", "dts", "duration"] {
+            assert!(packet[clock].as_u64().is_some());
+        }
+    }
+    serde_json::json!({"time_base": value["streams"][0]["time_base"], "packets": value["packets"]})
+}
+
+fn complete_decode(input: &Path, role: &str) -> Vec<u8> {
+    let result = Command::new("ffmpeg")
+        .args(["-v", "error", "-nostdin", "-threads", "1", "-i"])
+        .arg(input)
+        .args([
+            "-map",
+            &format!("0:{role}"),
+            "-f",
+            "hash",
+            "-hash",
+            "sha256",
+            "-",
+        ])
+        .output()
+        .unwrap();
+    assert!(result.status.success());
+    assert!(result.stdout.starts_with(b"SHA256="));
+    result.stdout
+}
+
+fn decoded_audio_samples(input: &Path) -> u64 {
+    let result = Command::new("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "a:0",
+            "-show_frames",
+            "-show_entries",
+            "frame=nb_samples",
+            "-of",
+            "json",
+        ])
+        .arg(input)
+        .output()
+        .unwrap();
+    assert!(result.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    value["frames"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|frame| frame["nb_samples"].as_u64().unwrap())
+        .sum()
+}
+
+fn independently_decrypted_track(output: &Path, index: usize) -> std::path::PathBuf {
+    let directory = output.join(format!("track-{index:04}"));
+    let mut segments: Vec<_> = std::fs::read_dir(&directory)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|extension| extension == "m4s"))
+        .collect();
+    segments.sort_by_key(|path| {
+        path.file_stem()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .strip_prefix("seg_")
+            .unwrap()
+            .parse::<u64>()
+            .unwrap()
+    });
+    assert_ne!(segments.len(), 0);
+    let root = output.parent().unwrap();
+    let encrypted = root.join(format!("independent-encrypted-{index}.mp4"));
+    let mut joined = drmr_core::native::create_media_new(&encrypted).unwrap();
+    for resource in std::iter::once(directory.join("init.mp4")).chain(segments) {
+        std::io::copy(&mut std::fs::File::open(resource).unwrap(), &mut joined).unwrap();
+    }
+    drop(joined);
+    let clear = root.join(format!("independent-clear-{index}.mp4"));
+    let result = Command::new("packager")
+        .arg(format!(
+            "in={},stream=0,output={}",
+            path(&encrypted),
+            path(&clear)
+        ))
+        .args([
+            "--enable_raw_key_decryption",
+            "--keys",
+            &format!("key_id={KID}:key={KEY}"),
+            "--mp4_reset_initial_composition_offset_to_zero=false",
+        ])
+        .output()
+        .unwrap();
+    assert!(result.status.success(), "independent decryption failed");
+    clear
+}
+
+fn complete_track_proof(
+    input: &Path,
+    output: &Path,
+    index: usize,
+    role: &str,
+    count: usize,
+) -> serde_json::Value {
+    let source = stream_packets(input, role);
+    let clear = independently_decrypted_track(output, index);
+    assert_eq!(source["packets"].as_array().unwrap().len(), count);
+    assert_eq!(source, stream_packets(&clear, role));
+    assert_eq!(complete_decode(input, role), complete_decode(&clear, role));
+    if role == "a:0" {
+        assert_eq!(decoded_audio_samples(input), 481_280);
+        assert_eq!(decoded_audio_samples(&clear), 481_280);
+    } else {
+        assert_video_count(&clear);
+    }
+    source
+}
+
+fn expected_period_end(streams: &[serde_json::Value]) -> String {
+    let mut maximum = 0;
+    for stream in streams {
+        let (numerator, denominator) = stream["time_base"]
+            .as_str()
+            .unwrap()
+            .split_once('/')
+            .unwrap();
+        let (numerator, denominator) = (
+            numerator.parse::<u128>().unwrap(),
+            denominator.parse::<u128>().unwrap(),
+        );
+        let packets = stream["packets"].as_array().unwrap();
+        assert_eq!(
+            packets
+                .iter()
+                .map(|packet| packet["pts"].as_u64().unwrap())
+                .min(),
+            Some(0)
+        );
+        let last = packets
+            .iter()
+            .map(|packet| packet["pts"].as_u64().unwrap() + packet["duration"].as_u64().unwrap())
+            .max()
+            .unwrap();
+        maximum = maximum.max((u128::from(last) * numerator * 1_000_000_000).div_ceil(denominator));
+    }
+    assert!(maximum > 10_000_000_000);
+    format!(
+        "PT{}.{:09}S",
+        maximum / 1_000_000_000,
+        maximum % 1_000_000_000
+    )
+}
+
+fn fresh_verification(input: &Path, output: &Path, keys: &Path) -> Output {
+    cli(&[
+        "verify",
+        &path(&output.join("manifest.mpd")),
+        "--source",
+        &path(input),
+        "--keys-file",
+        &path(keys),
+        "--max-workers",
+        "1",
+        "--json",
+    ])
+}
+
+fn period_end_cannot_hide_the_original_tail(
+    input: &Path,
+    output: &Path,
+    keys: &Path,
+    expected: &str,
+) {
+    let manifest = output.join("manifest.mpd");
+    let original = std::fs::read_to_string(&manifest).unwrap();
+    assert_eq!(original.matches(expected).count(), 2);
+    assert!(original.contains(&format!("mediaPresentationDuration=\"{expected}\"")));
+    assert!(original.contains(&format!("duration=\"{expected}\"")));
+    let accepted = fresh_verification(input, output, keys);
+    assert!(accepted.status.success());
+    verified(&serde_json::from_slice::<serde_json::Value>(&accepted.stdout).unwrap());
+    std::fs::write(&manifest, original.replace(expected, "PT10S")).unwrap();
+    let rejected = fresh_verification(input, output, keys);
+    assert_eq!(rejected.status.code(), Some(1));
+    let report: serde_json::Value = serde_json::from_slice(&rejected.stdout).unwrap();
+    assert_eq!(
+        report["error"]["code"],
+        "dash-presentation-duration-mismatch"
+    );
+    std::fs::write(&manifest, original).unwrap();
+    let restored = fresh_verification(input, output, keys);
+    assert!(restored.status.success());
+    verified(&serde_json::from_slice::<serde_json::Value>(&restored.stdout).unwrap());
+    let objects = drmr_core::playready::build_playready_v43(KID, LICENSE).unwrap();
+    assert_private(
+        &[
+            &accepted.stdout,
+            &accepted.stderr,
+            &rejected.stdout,
+            &rejected.stderr,
+            &restored.stdout,
+            &restored.stderr,
+        ],
+        &objects,
+    );
+}
+
 #[test]
-fn unrepresentable_joint_dash_duration_is_refused_before_publication() {
+fn open_ended_joint_dash_preserves_complete_audio_tail_and_rejects_shortened_period() {
     let owner = drmr_core::native::private_tempdir().unwrap();
     let root = owner.path().join("media");
     drmr_core::native::create_media_dir_all(&root).unwrap();
@@ -215,7 +451,7 @@ fn unrepresentable_joint_dash_duration_is_refused_before_publication() {
         .write_all(body.to_string().as_bytes())
         .unwrap();
     assert!(drmr_core::native::open_private_read(&keys).is_ok());
-    let output = root.join("refused");
+    let output = root.join("complete");
     let result = cli(&[
         "convert",
         &path(&input),
@@ -227,13 +463,28 @@ fn unrepresentable_joint_dash_duration_is_refused_before_publication() {
         &path(&output),
         "--keys-file",
         &path(&keys),
+        "--max-workers",
+        "1",
         "--json",
     ]);
-    assert_eq!(result.status.code(), Some(1));
-    assert!(
-        String::from_utf8_lossy(&result.stderr).contains("dash-presentation-duration-mismatch")
+    assert!(result.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    verified(&report["verification"]);
+    let objects = assert_signaling(&output, true);
+    assert_private(&[&result.stdout, &result.stderr], &objects);
+    let streams = [
+        complete_track_proof(&input, &output, 0, "v:0", 240),
+        complete_track_proof(&input, &output, 1, "a:0", 470),
+    ];
+    let expected = expected_period_end(&streams);
+    period_end_cannot_hide_the_original_tail(&input, &output, &keys, &expected);
+    eprintln!(
+        "{}",
+        serde_json::json!({"fixture":"open-ended-fragmented-bbb", "video_packets":240,
+        "audio_packets":470,"decoded_audio_samples_per_channel":481_280,"expected_period_duration":expected,
+        "independent_packet_payloads_and_clocks":true,"complete_decode":true,"fresh_verification":true,
+        "shortened_period_refused":true})
     );
-    assert!(!output.exists());
     assert_eq!(std::fs::read(input).unwrap(), before);
 }
 

@@ -39,6 +39,10 @@ Silent audio has the same sample bytes at different sample rates, so decoded-byt
 
 Presentation times determine when content is displayed; decode times determine when a decoder must process it. Comparing absolute times across all tracks also detects changes to relative audio/video timing. Manifest timeline declarations are checked separately from media bytes. DASH compares times exactly in their declared clock units. HLS segment durations allow the greater of one media-clock tick or about one millisecond for decimal playlist rounding; this does not relax the exact packet timing comparison.
 
+For generated static DASH, the common presentation starts at the earliest presented sample and ends at the latest presented sample across all tracks. The final period and presentation durations round that exact interval upward to nine decimal places. This changes only its decimal representation; compressed payloads and packet clocks remain unchanged. An open-ended fragmented source can therefore produce a period slightly longer than its nominal ten-second duration. A source with a finite audio playback window has different presentation bounds, as described below.
+
+The [joint audio/video regression](https://github.com/kazuhide/drmr/blob/main/crates/drmr/tests/conversion_signaling.rs) independently decrypts the complete output tracks and checks all 240 video packets, 470 AAC packets, their clocks, and the complete decoded media, including 481,280 audio samples per channel. Fresh verification rejects shortening the manifest to ten seconds even when its media resources are unchanged.
+
 Video with reordered pictures can start with a composition offset: the difference between a picture's decode and presentation times. Shaka Packager 3.8.0 normally resets the initial offset. That changes presentation times even when packet content matches. drmr explicitly disables this reset and tests a source with reordered pictures against its original timestamps. See the [pinned packager source](https://github.com/shaka-project/shaka-packager/tree/v3.8.0/packager/media/formats/mp4).
 
 ## Finite audio presentation windows
@@ -82,6 +86,53 @@ The [finite-output regression](https://github.com/kazuhide/drmr/blob/main/crates
 
 Generic conversion is deliberately bounded: at most 16 GiB per staged track, 64 tracks, and 100,000 referenced DASH segments. Exceeding a limit fails rather than reporting partial verification. The first local DASH profile is a static, single-period presentation with finite, nonnegative, continuous `SegmentTimeline` entries, a shared presentation offset matching the earliest presented sample, and relative resources confined to the manifest directory. Live/dynamic input, multiple periods, byte ranges, alternate addressing, event declarations and presentation metadata that cannot be preserved are refused. The fragmented MP4 HLS profile uses completed, local playlists; unsupported rendition metadata and discontinuities are refused. An external audio group must apply consistently to every video variant; mixed associations are refused. Percent-encoded local resource paths are decoded once before confinement checks, so they select the URI target rather than a similarly named literal file. In-band MP4 event messages are also refused until their preservation is supported. These limits describe drmr's implementation, not limits of the formats.
 
+### Multiple qualities and audio declarations
+
+A supported HLS master can reference several video-only playlists and one
+separate audio playlist used by every video variant. The TS media restrictions
+below apply independently to each playlist. Conversion and fresh verification
+match all actual tracks by their media evidence, rather than assuming that the
+first source variant corresponds to the first result variant. Missing, extra,
+or changed tracks and conflicting alias declarations cannot pass simply by
+reordering the master playlist.
+
+Within HLS, the supported audio name, language, group association, channel
+declaration, `DEFAULT`, and `AUTOSELECT` behavior are retained and checked. An
+omitted selection flag is interpreted according to
+[RFC 8216 section 4.3.4.1](https://www.rfc-editor.org/rfc/rfc8216.html#section-4.3.4.1).
+Profiles with alternative audio groups, inconsistent video/audio associations,
+or unsupported selection declarations are refused.
+
+For a supported presentation with one audio rendition, DASH output maps its
+language to `lang`, its name to `Label`, and its default preference to the
+author's `selectionPriority` (2 for preferred, 1 otherwise). Every video quality
+shares that sole audio adaptation. HLS `AUTOSELECT` has no identical DASH flag
+in this mapping: DASH clients apply their own selection rules. For example,
+[dash.js track selection](https://dashif.org/dash.js/pages/usage/track-selection.html)
+can consider language, roles, author priority, and player settings. Thus an HLS
+audio rendition with omitted `DEFAULT` and `AUTOSELECT` can be converted to DASH,
+while identical automatic player selection is not claimed. Cross-format media
+verification checks the documented mapping, complete media, and original clocks;
+it does not establish equivalent player preference handling. HLS-to-HLS
+verification also checks its native selection declarations.
+
+This selection mapping applies to audio. DASH video labels, a language other than
+`und` (undetermined), and explicit author selection priorities are refused with
+`presentation-selection-not-representable`, including inherited declarations.
+They are not silently removed during conversion or ignored by verification.
+The neutral `und` language and the standard `main` role remain supported.
+
+### Saved source identities
+
+The [four-stage CLI workflow](executable-plans.md) captures only resources reached
+from the local entrypoint. A saved source inventory is limited to 16 GiB total,
+100,130 files, 16 MiB of path text, and 128 path components. Every file is copied
+into a private working area and its actual copied bytes are hashed before use.
+This avoids treating a pathname or an earlier successful analysis as evidence
+that the same bytes will be processed later. The retained originals are checked
+again before publication. Referenced files are not adopted as temporary cleanup
+targets; unrelated files in the source directory are not included in the graph.
+
 ## Acquiring URL input
 
 For a supported HLS URL, `convert` first retains the original playlists and
@@ -108,9 +159,9 @@ bodies stream to private files rather than being retained together in memory.
 
 ## MPEG transport stream input
 
-The fragmented MP4 output route accepts a completed local HLS media playlist, or one local variant pointing to it. Segments must use 188-byte packets and one fixed program. The profile accepts one progressive H.264 stream, one AAC-LC audio stream at 48,000 samples per second, or both. The route supports a fixed single SPS/PPS video configuration (the sequence and picture parameter sets required by a decoder) and ordinary AAC channel configurations. AAC uses seven-byte transport headers without a checksum and one raw data block per frame. Output is DASH with `clear`, `cenc`, or `cbcs`, or fragmented MP4 HLS with `clear`, `cbcs`, or whole-resource AES-128 protection. Input key URI mappings are supplied by the operator; drmr never retrieves a playlist key URI.
+The fragmented MP4 output route accepts a completed local HLS media playlist or a supported master with separate video qualities and one shared audio rendition. Segments in each playlist must use 188-byte packets and one fixed program. Each playlist accepts one progressive H.264 stream, one AAC-LC audio stream at 48,000 samples per second, or both; multiplexed audio/video is limited to the supported single-variant topology. The route supports a fixed single SPS/PPS video configuration (the sequence and picture parameter sets required by a decoder) and ordinary AAC channel configurations. AAC uses seven-byte transport headers without a checksum and one raw data block per frame. Output is DASH with `clear`, `cenc`, or `cbcs`, or fragmented MP4 HLS with `clear`, `cbcs`, or whole-resource AES-128 protection. Input key URI mappings are supplied by the operator; drmr never retrieves a playlist key URI.
 
-`plan` describes compatibility from metadata and reports `source-profile-validation-required`; it does not qualify the underlying HLS media container. Conversion independently admits the actual source and can refuse a profile that metadata alone could not distinguish.
+Without `--save`, `plan` describes compatibility from metadata and reports `source-profile-validation-required`; it does not qualify the underlying HLS media container. `analyze` and `plan --save` check complete source media, while execution independently admits the actual source again. Conversion can refuse a profile that metadata alone could not distinguish.
 
 Before demuxing, drmr checks program tables and their cyclic redundancy checks, packet continuity, declared streams, packet and elementary-stream lengths, and clock progression across every segment. Multiple programs, unknown streams, configuration changes, corrupted or scrambled packets, clock wrap, discontinuities, byte ranges, wall-clock metadata, interlaced or mixed video, and unsupported descriptors are refused. Segment durations must match the primary video's measured duration rounded only to the decimal precision written in each `EXTINF` declaration. Every absolute packet timestamp is still compared exactly.
 
@@ -240,3 +291,50 @@ Metadata inspection is evidence about declarations or initialization information
 The regression is qualified with FFmpeg 9.0.2 and Shaka Packager 3.8.0. FFmpeg 6.1.1 on Ubuntu 24.04 omits the first clear AAC packet's duration and all encrypted AAC packet durations on this fixture. drmr reports `unsupported-packet-timing` rather than guessing missing values or skipping timing checks. Use a build that provides complete packet timing. Linux CI pins a checksum-verified FFmpeg 9.0 build from the [BtbN build project](https://github.com/BtbN/FFmpeg-Builds); media tools are not bundled in the CLI archive.
 
 Use the same source media and tool versions when comparing processing time or memory. A short regression clip is useful for correctness and startup overhead; it cannot establish throughput or memory scaling for a long presentation.
+
+## Transport-stream compatibility
+
+`analyze` reports the following source facts in `compatibility_notes`. They
+describe limited compatibility handling, not general repair or a guarantee of
+transport-stream standards conformance. The retained original and the source
+fingerprints always refer to the original bytes.
+
+A packet identifier (PID) selects a TS stream. Packetized elementary stream
+(PES) packets carry its encoded media.
+
+| Code | Accepted source condition | Processing |
+| --- | --- | --- |
+| `ts-empty-payload-padding` | An established audio/video PID has a zero-body packet with adaptation-plus-payload control, adaptation length 183, no payload-unit start, zero flags and only `0xFF` stuffing; the native PES and continuity checks must still pass | Omit only these empty packets from a private demultiplexer input and adjust subsequent continuity counters for the same PID by the exact number removed |
+| `hls-empty-cue-pair` | A completed segment is followed by a zero-duration `EXT-X-CUE-OUT`, immediately paired with `EXT-X-CUE-IN` and then the next `EXTINF` | Accept the empty boundary; keep the original playlist, but do not carry an active advertisement interval into the result |
+
+The 183-byte adaptation field with the payload flag set is nonconforming:
+[ITU-T H.222.0, section 2.4.3.5](https://www.itu.int/rec/dologin_pub.asp?id=T-REC-H.222.0-201410-S%21%21PDF-E&lang=e&type=items)
+limits that form to 182 bytes. The
+[Shaka Packager 3.8 parser](https://github.com/shaka-project/shaka-packager/blob/v3.8.0/packager/media/formats/mp2t/ts_packet.cc#L110-L115)
+also rejects it. The private view lets the demultiplexer read an otherwise
+admitted source without inventing media bytes or timestamps. Original native
+packet validation, complete encoded payloads, original presentation/decode
+timestamps, and full decoded content remain the comparison reference. This view
+also feeds TS repackaging; it does not modify the retained source.
+
+Active or unbalanced cue markers, missing payload, invalid stuffing, continuity
+errors, unsupported packet flags, and incomplete PES data remain failures.
+
+### Decimal segment durations
+
+`EXTINF` is a decimal declaration of a segment's duration. The
+[HLS specification](https://www.rfc-editor.org/rfc/rfc8216.html#section-4.3.2.1)
+requires sufficient precision to avoid accumulated perceptible error; it does
+not impose a nine-digit fractional limit. Native TS timestamps use a 90 kHz
+clock: one tick is 1/90,000 second, which often has no finite decimal expansion.
+
+For zero through nine fractional digits, drmr compares the declared value at its
+stated decimal precision. For ten through seventeen digits, it also accepts a
+bounded decimal whose IEEE 754 double-precision value is exactly the same as
+the native tick duration divided by 90,000. This is an equality check, with no
+additional timing tolerance. Native duration must fit an unsigned 32-bit tick
+count for each segment, and the declaration is limited to 64 characters.
+Nonfinite numbers, exponents, excessive precision and trailing data fail this
+rule. A duration changed by one clock tick does not pass as decimal rounding.
+All media frame and absolute clock checks still apply; decimal acceptance
+cannot realign audio or video.

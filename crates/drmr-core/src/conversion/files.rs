@@ -8,13 +8,26 @@ use std::{
     path::{Path, PathBuf},
 };
 
+mod publication;
+pub(super) use publication::PublicationSource;
+#[cfg(unix)]
+mod unix_cleanup;
+#[cfg(unix)]
+pub(in crate::conversion) use unix_cleanup::check_workspace_parent;
+
 const IO_ERROR: ConversionError = ConversionError("temporary-file-unavailable");
 const PUBLISH_ERROR: ConversionError = ConversionError("output-exists-or-publish-failed");
+#[cfg(unix)]
+const CLEANUP_ERROR: ConversionError = ConversionError("temporary-cleanup-unconfirmed");
 
 pub(super) struct Stage {
     path: PathBuf,
+    media: File,
+    media_identity: native::FileIdentity,
+    #[cfg(windows)]
+    root: File,
     #[cfg(unix)]
-    outer: tempfile::TempDir,
+    outer: UnixOuter,
     // Fields drop in declaration order: remove only the exclusive child while
     // the strict container and all of its ancestors remain pinned.
     #[cfg(windows)]
@@ -40,14 +53,22 @@ impl Stage {
             builder
                 .prefix(".drmr-convert-")
                 .permissions(std::fs::Permissions::from_mode(0o700));
-            let outer = match parent {
-                Some(parent) => builder.tempdir_in(parent),
-                None => builder.tempdir(),
-            }
-            .map_err(|_| ConversionError("temporary-workspace-unavailable"))?;
+            let parent = unix_cleanup::Parent::open(
+                &parent.map_or_else(std::env::temp_dir, Path::to_path_buf),
+            )?;
+            let outer = builder
+                .tempdir_in(parent.path())
+                .map_err(|_| ConversionError("temporary-workspace-unavailable"))?;
+            let outer = UnixOuter::from_parent(outer, parent)?;
             let path = outer.path().join("media");
-            create_dir(&path)?;
-            Ok(Self { path, outer })
+            let media = publication::create_media(&outer.held)?;
+            let media_identity = native::FileIdentity::read(&media).map_err(|_| IO_ERROR)?;
+            Ok(Self {
+                path,
+                media,
+                media_identity,
+                outer,
+            })
         }
     }
     #[cfg(windows)]
@@ -58,15 +79,21 @@ impl Stage {
     fn inside_container(container: Container) -> Result<Self, ConversionError> {
         let owned_child =
             native::private_tempdir_in(&container.path, "stage-").map_err(|_| IO_ERROR)?;
+        let root = publication::open_directory(owned_child.path(), false)?;
         let path = owned_child.path().join("media");
         create_dir(&path)?;
+        let media = publication::open_directory(&path, true)?;
+        let media_identity = native::FileIdentity::read(&media).map_err(|_| IO_ERROR)?;
         Ok(Self {
             path,
+            media,
+            media_identity,
+            root,
             owned_child,
             _container: container,
         })
     }
-    /// The exclusively owned strict root; callers may move it before writing payloads.
+    /// The exclusively owned strict root for separately staged children.
     pub(super) fn private_root(&self) -> &Path {
         #[cfg(unix)]
         {
@@ -80,6 +107,145 @@ impl Stage {
     pub(super) fn path(&self) -> &Path {
         &self.path
     }
+}
+
+#[cfg(unix)]
+struct UnixOuter {
+    path: PathBuf,
+    name: std::ffi::OsString,
+    parent: unix_cleanup::Parent,
+    directory: std::sync::Mutex<Option<tempfile::TempDir>>,
+    held: File,
+    identity: native::FileIdentity,
+}
+#[cfg(unix)]
+impl UnixOuter {
+    #[cfg(test)]
+    fn new(directory: tempfile::TempDir) -> Result<Self, ConversionError> {
+        let parent = directory
+            .path()
+            .parent()
+            .ok_or(CLEANUP_ERROR)
+            .and_then(unix_cleanup::Parent::open);
+        match parent {
+            Ok(parent) => Self::from_parent(directory, parent),
+            Err(error) => {
+                let _ = directory.keep();
+                Err(error)
+            }
+        }
+    }
+    fn from_parent(
+        directory: tempfile::TempDir,
+        parent: unix_cleanup::Parent,
+    ) -> Result<Self, ConversionError> {
+        let acquired = (|| {
+            parent.check()?;
+            let name = directory
+                .path()
+                .file_name()
+                .ok_or(CLEANUP_ERROR)?
+                .to_owned();
+            let held = parent.open_owned(&name)?;
+            let identity = native::FileIdentity::read(&held).map_err(|_| CLEANUP_ERROR)?;
+            Ok((name, held, identity))
+        })();
+        let (name, held, identity) = match acquired {
+            Ok(acquired) => acquired,
+            Err(error) => {
+                let _ = directory.keep();
+                return Err(error);
+            }
+        };
+        let outer = Self {
+            path: parent.path().join(&name),
+            name,
+            parent,
+            directory: std::sync::Mutex::new(Some(directory)),
+            held,
+            identity,
+        };
+        outer.check()?;
+        Ok(outer)
+    }
+    fn path(&self) -> &Path {
+        &self.path
+    }
+    fn check(&self) -> Result<(), ConversionError> {
+        self.parent.check()?;
+        check_stage_directory(&self.held)?;
+        if native::FileIdentity::read(&self.held).map_err(|_| CLEANUP_ERROR)? != self.identity
+            || native::FileIdentity::read(&open_stage_directory(&self.path)?)
+                .map_err(|_| CLEANUP_ERROR)?
+                != self.identity
+        {
+            return Err(CLEANUP_ERROR);
+        }
+        Ok(())
+    }
+    fn cleanup(&self) -> Result<(), ConversionError> {
+        self.cleanup_observed(|| {})
+    }
+    fn cleanup_observed(&self, after_check: impl FnOnce()) -> Result<(), ConversionError> {
+        let (directory, poisoned) = match self.directory.lock() {
+            Ok(mut directory) => (directory.take(), false),
+            Err(error) => (error.into_inner().take(), true),
+        };
+        let Some(directory) = directory else {
+            return Ok(());
+        };
+        // Disable TempDir's pathname-based Drop before checking the current namespace.
+        // Only the retained root descriptor may be walked; uncertain names are kept.
+        let _ = directory.keep();
+        if poisoned {
+            return Err(CLEANUP_ERROR);
+        }
+        self.check()?;
+        after_check();
+        unix_cleanup::clear_owned(&self.held)?;
+        self.check()?;
+        self.parent.remove_owned(&self.name, &self.held)
+    }
+}
+
+#[cfg(all(test, unix))]
+#[path = "files/unix_cleanup_tests.rs"]
+mod unix_cleanup_tests;
+#[cfg(unix)]
+impl Drop for UnixOuter {
+    fn drop(&mut self) {
+        let _ = self.cleanup();
+    }
+}
+#[cfg(unix)]
+fn open_stage_directory(path: &Path) -> Result<File, ConversionError> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(
+            (rustix::fs::OFlags::DIRECTORY
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::NONBLOCK)
+                .bits()
+                .cast_signed(),
+        )
+        .open(path)
+        .map_err(|_| CLEANUP_ERROR)?;
+    check_stage_directory(&file)?;
+    Ok(file)
+}
+
+#[cfg(unix)]
+fn check_stage_directory(file: &File) -> Result<(), ConversionError> {
+    use std::os::unix::fs::MetadataExt as _;
+    let metadata = file.metadata().map_err(|_| CLEANUP_ERROR)?;
+    if !metadata.is_dir()
+        || metadata.uid() != rustix::process::geteuid().as_raw()
+        || metadata.mode() & 0o077 != 0
+    {
+        return Err(CLEANUP_ERROR);
+    }
+    Ok(())
 }
 
 #[cfg(windows)]
@@ -275,21 +441,64 @@ pub(super) fn publish_file_observed(
     after_copy: impl FnOnce(&Path),
     check: impl FnOnce() -> Result<(), ConversionError>,
 ) -> Result<(), ConversionError> {
+    publish_file_with_commit(
+        || regular_input(source),
+        destination,
+        stop,
+        after_copy,
+        check,
+        commit_created_file,
+    )
+}
+
+fn commit_created_file(
+    source: &PublicationSource<'_>,
+    destination: &Path,
+) -> Result<(), ConversionError> {
+    source.commit_to_path(destination)
+}
+
+pub(super) fn publish_file_committing(
+    source: &PublicationSource<'_>,
+    destination: &Path,
+    stop: Option<&crate::concurrency::Stop>,
+    check: impl FnOnce() -> Result<(), ConversionError>,
+    commit: impl FnOnce(&PublicationSource<'_>, &Path) -> Result<(), ConversionError>,
+) -> Result<(), ConversionError> {
+    publish_file_with_commit(|| source.reader(), destination, stop, |_| {}, check, commit)
+}
+
+fn publish_file_with_commit(
+    input: impl FnOnce() -> Result<File, ConversionError>,
+    destination: &Path,
+    stop: Option<&crate::concurrency::Stop>,
+    after_copy: impl FnOnce(&Path),
+    check: impl FnOnce() -> Result<(), ConversionError>,
+    commit: impl FnOnce(&PublicationSource<'_>, &Path) -> Result<(), ConversionError>,
+) -> Result<(), ConversionError> {
     check_cancelled(stop)?;
     let parent = destination.parent().ok_or(PUBLISH_ERROR)?;
     let stage = Stage::new(Some(parent))?;
-    let path = stage.path().join("verified-output");
-    let mut input = regular_input(source)?;
-    let mut output = create_new(&path)?;
-    std::io::copy(&mut input, &mut output).map_err(|_| PUBLISH_ERROR)?;
-    output.flush().map_err(|_| PUBLISH_ERROR)?;
-    output.sync_all().map_err(|_| PUBLISH_ERROR)?;
-    drop(output);
-    after_copy(&path);
-    seal(stage.path())?;
-    check_cancelled(stop)?;
-    check()?;
-    atomic_move(&path, destination)
+    let result = (|| {
+        let path = stage.path().join("verified-output");
+        let mut input = input()?;
+        let mut output = stage.create_file(&path)?;
+        std::io::copy(&mut input, &mut output).map_err(|_| PUBLISH_ERROR)?;
+        output.flush().map_err(|_| PUBLISH_ERROR)?;
+        output.sync_all().map_err(|_| PUBLISH_ERROR)?;
+        let source = stage.created_file_source(&path, &output)?;
+        drop(output);
+        after_copy(&path);
+        #[cfg(unix)]
+        stage.outer.check()?;
+        seal(stage.path())?;
+        check_cancelled(stop)?;
+        check()?;
+        commit(&source, destination)
+    })();
+    #[cfg(unix)]
+    stage.outer.cleanup()?;
+    result
 }
 
 pub(super) fn publish_directory(
@@ -316,18 +525,206 @@ pub(super) fn publish_directory_observed(
     before_seal: impl FnOnce(&Path),
     check: impl FnOnce() -> Result<(), ConversionError>,
 ) -> Result<(), ConversionError> {
+    publish_directory_with_commit(source, destination, stop, before_seal, check, atomic_move)
+}
+
+pub(super) fn publish_directory_committing(
+    source: &PublicationSource<'_>,
+    destination: &Path,
+    stop: Option<&crate::concurrency::Stop>,
+    check: impl FnOnce() -> Result<(), ConversionError>,
+    commit: impl FnOnce(&PublicationSource<'_>, &Path) -> Result<(), ConversionError>,
+) -> Result<(), ConversionError> {
+    check_cancelled(stop)?;
+    seal(source.path())?;
+    check_cancelled(stop)?;
+    check()?;
+    commit(source, destination)
+}
+
+fn publish_directory_with_commit(
+    source: &Path,
+    destination: &Path,
+    stop: Option<&crate::concurrency::Stop>,
+    before_seal: impl FnOnce(&Path),
+    check: impl FnOnce() -> Result<(), ConversionError>,
+    commit: impl FnOnce(&Path, &Path) -> Result<(), ConversionError>,
+) -> Result<(), ConversionError> {
     check_cancelled(stop)?;
     before_seal(source);
     seal(source)?;
     check_cancelled(stop)?;
     check()?;
-    atomic_move(source, destination)
+    commit(source, destination)
 }
 fn check_cancelled(stop: Option<&crate::concurrency::Stop>) -> Result<(), ConversionError> {
     if stop.is_some_and(crate::concurrency::Stop::is_set) {
         Err(ConversionError("cancelled"))
     } else {
         Ok(())
+    }
+}
+
+#[cfg(all(test, unix))]
+mod unix_stage_identity_tests {
+    use super::*;
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+
+    #[test]
+    fn unix_outer_refuses_a_writable_replacement_before_acquisition() {
+        let root = tempfile::tempdir().unwrap();
+        let parent = root.path().join("shared");
+        std::fs::create_dir(&parent).unwrap();
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o777)).unwrap();
+        let directory = tempfile::Builder::new()
+            .permissions(std::fs::Permissions::from_mode(0o700))
+            .tempdir_in(&parent)
+            .unwrap();
+        let path = directory.path().to_path_buf();
+        let original = root.path().join("original");
+        std::fs::write(path.join("owned"), b"owned stage bytes").unwrap();
+        std::fs::rename(&path, &original).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o777)).unwrap();
+        std::fs::write(path.join("foreign"), b"foreign bytes must remain").unwrap();
+        // A same-user test exercises the unsafe-mode branch without requiring
+        // privilege to create a directory owned by another user.
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().uid(),
+            rustix::process::geteuid().as_raw()
+        );
+        let result = UnixOuter::new(directory);
+        let rejected = result.is_err();
+        drop(result);
+        assert!(
+            rejected,
+            "a writable replacement was adopted; foreign preserved: {}",
+            path.join("foreign").exists()
+        );
+        assert_eq!(
+            std::fs::read(original.join("owned")).unwrap(),
+            b"owned stage bytes"
+        );
+        assert_eq!(
+            std::fs::read(path.join("foreign")).unwrap(),
+            b"foreign bytes must remain"
+        );
+        assert_eq!(
+            std::fs::metadata(&original).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o777
+        );
+    }
+
+    #[test]
+    fn unix_outer_refuses_privacy_changes_after_acquisition_without_repair_or_cleanup() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = tempfile::Builder::new()
+            .permissions(std::fs::Permissions::from_mode(0o700))
+            .tempdir_in(root.path())
+            .unwrap();
+        let outer = UnixOuter::new(directory).unwrap();
+        let path = outer.path().to_path_buf();
+        std::fs::write(path.join("owned"), b"retained after privacy change").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o777)).unwrap();
+        let result = outer.check();
+        drop(outer);
+        assert_eq!(result, Err(CLEANUP_ERROR));
+        assert_eq!(
+            std::fs::read(path.join("owned")).unwrap(),
+            b"retained after privacy change"
+        );
+        assert_eq!(
+            std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            0o777
+        );
+    }
+
+    #[test]
+    fn stage_drop_preserves_a_foreign_tree_after_its_parent_is_replaced() {
+        let root = tempfile::tempdir().unwrap();
+        let work = root.path().join("work");
+        std::fs::create_dir(&work).unwrap();
+        let stage = Stage::new(Some(&work)).unwrap();
+        let leaf = stage.private_root().file_name().unwrap().to_owned();
+        create_new(&stage.path().join("owned"))
+            .unwrap()
+            .write_all(b"owned stage")
+            .unwrap();
+        std::fs::rename(&work, root.path().join("moved-work")).unwrap();
+        std::fs::create_dir(&work).unwrap();
+        let foreign = work.join(&leaf);
+        std::fs::create_dir(&foreign).unwrap();
+        std::fs::write(foreign.join("foreign-sentinel"), b"must remain").unwrap();
+        drop(stage);
+        assert_eq!(
+            std::fs::read(foreign.join("foreign-sentinel")).unwrap(),
+            b"must remain"
+        );
+        assert_eq!(
+            std::fs::read(
+                root.path()
+                    .join("moved-work")
+                    .join(leaf)
+                    .join("media/owned")
+            )
+            .unwrap(),
+            b"owned stage"
+        );
+    }
+
+    #[test]
+    fn uncertain_stage_cleanup_overrides_cancellation_without_deleting_a_replacement() {
+        let root = tempfile::tempdir().unwrap();
+        let work = root.path().join("work");
+        std::fs::create_dir(&work).unwrap();
+        let original = root.path().join("candidate");
+        std::fs::write(&original, b"verified candidate").unwrap();
+        let stop = crate::concurrency::Stop::new();
+        let mut leaf = None;
+        let result = publish_file_observed(
+            &original,
+            &work.join("result"),
+            Some(&stop),
+            |path| {
+                let name = path
+                    .parent()
+                    .unwrap()
+                    .parent()
+                    .unwrap()
+                    .file_name()
+                    .unwrap()
+                    .to_owned();
+                std::fs::rename(&work, root.path().join("moved-work")).unwrap();
+                std::fs::create_dir(&work).unwrap();
+                std::fs::create_dir(work.join(&name)).unwrap();
+                std::fs::write(work.join(&name).join("foreign-sentinel"), b"must remain").unwrap();
+                leaf = Some(name);
+                stop.set();
+            },
+            || Ok(()),
+        );
+        assert_eq!(result.unwrap_err(), CLEANUP_ERROR);
+        let leaf = leaf.unwrap();
+        assert_eq!(
+            std::fs::read(work.join(&leaf).join("foreign-sentinel")).unwrap(),
+            b"must remain"
+        );
+        assert_eq!(
+            std::fs::read(
+                root.path()
+                    .join("moved-work")
+                    .join(leaf)
+                    .join("media/verified-output")
+            )
+            .unwrap(),
+            b"verified candidate"
+        );
+        assert!(!work.join("result").exists());
+        assert_eq!(std::fs::read(&original).unwrap(), b"verified candidate");
     }
 }
 
@@ -372,7 +769,10 @@ mod tests {
         const CHILD: &str = "DRMR_STAGE_UMASK_CHILD";
         if std::env::var_os(CHILD).as_deref() == Some(std::ffi::OsStr::new("1")) {
             rustix::process::umask(rustix::fs::Mode::empty());
-            let parent = tempfile::tempdir().unwrap();
+            let parent = tempfile::Builder::new()
+                .permissions(std::fs::Permissions::from_mode(0o700))
+                .tempdir()
+                .unwrap();
             for location in [Some(parent.path()), None] {
                 let stage = Stage::new(location).unwrap();
                 assert_eq!(

@@ -136,8 +136,8 @@ fn observed_window(
         values.len(),
     ))
 }
-/// Finalize only fresh TS DASH: use the earliest actual presented sample across all roles,
-/// correcting a video-selected Packager origin that could otherwise hide initial AAC frames.
+/// Finalize freshly generated DASH with the complete earliest/latest sample bounds of all roles,
+/// correcting a video-selected Packager origin or end that could otherwise hide AAC frames.
 /// No sample bytes, decode/composition timestamps, or `SegmentTimeline` entries are changed.
 pub(in crate::conversion) fn finish_transport(path: &Path) -> Result<(), ConversionError> {
     let bytes = crate::conversion::files::read_manifest(path)?;

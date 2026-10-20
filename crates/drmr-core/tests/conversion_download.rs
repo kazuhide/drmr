@@ -151,6 +151,38 @@ fn policy() -> FetchPolicy {
     }
 }
 #[test]
+fn analysis_acquisition_does_not_require_a_future_output_and_keeps_its_creation_seal() {
+    let manifest = b"#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXTINF:2,\nsegment.ts\n#EXT-X-ENDLIST\n";
+    let server = Server::new(BTreeMap::from([
+        ("/source.m3u8", manifest.to_vec()),
+        ("/segment.ts", vec![0x47; 188]),
+    ]));
+    let parent = tempfile::tempdir().unwrap();
+    let directory = parent.path().join("download");
+    let stop = Stop::new();
+    let source = converter(stop.clone())
+        .acquire_hls(&server.url(), &directory, &policy())
+        .unwrap();
+    source.check(&stop).unwrap();
+    assert_eq!(
+        source.entrypoint(),
+        directory.canonicalize().unwrap().join("input.m3u8")
+    );
+    std::fs::write(
+        directory.join("raw/r000000.m3u8"),
+        b"changed retained original",
+    )
+    .unwrap();
+    assert_eq!(
+        source.check(&stop).unwrap_err().0,
+        "download-source-changed"
+    );
+    drop(source);
+    assert!(directory.join("input.m3u8").exists());
+    assert!(directory.join("raw/r000000.m3u8").exists());
+}
+
+#[test]
 fn raw_manifest_and_media_are_retained_beside_a_distinct_playable_projection() {
     let manifest = b"#EXTM3U\r\n#EXT-X-TARGETDURATION:3\r\n#EXT-X-MEDIA-SEQUENCE:37\r\n#EXTINF:2.000000000,\r\nsegment.ts?public=value\r\n#EXT-X-ENDLIST\r\n";
     let media = vec![0x47; 188];

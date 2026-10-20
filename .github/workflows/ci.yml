@@ -133,69 +133,203 @@ jobs:
       - name: Check Clippy warnings
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
-      - name: Run all Rust tests
+      - name: Run workspace Rust tests
         id: rust-tests
         env:
           DRMR_MEDIA_REPORT: ${{ runner.temp }}/bbb-media-report.json
           DRMR_CONVERSION_REPORT: ${{ runner.temp }}/bbb-conversion-report.json
         run: |
           set -euo pipefail
-          cargo test --workspace --locked -- --nocapture 2>&1 | tee "$RUNNER_TEMP/rust-tests.log"
+          cargo test --workspace --exclude drmr-core --locked -- --nocapture 2>&1 | tee "$RUNNER_TEMP/rust-tests.log"
 
       - name: Reject unexpected test skips
         if: ${{ !cancelled() && steps.rust-tests.outcome != 'skipped' }}
         run: |
-          python3 - <<'PYTHON'
-          import os
-          from pathlib import Path
-          import re
-
-          log = Path(os.environ["RUNNER_TEMP"], "rust-tests.log")
-          if not log.is_file():
-              raise SystemExit("The Rust test log is missing; skip coverage cannot be checked.")
-          text = log.read_text(errors="replace")
-          notes = re.findall(r"skipped: [^\n]*", text)
-          allowed = (
-              r"skipped: ffmpeg [0-6] omits packet timing on this fixture(?: \(.*\))?",
-              r"skipped: host FFmpeg lacks TTML-in-MP4 muxing",
-          )
-          unexpected = [note for note in notes if not any(re.fullmatch(pattern, note) for pattern in allowed)]
-          for note in sorted(set(notes)):
-              print(note)
-          if unexpected:
-              raise SystemExit("Unexpected skipped tests detected: " + repr(unexpected))
-          # These helpers run in child processes with isolated environment or working directory.
-          expected_ignored = {
-              "child_reads_the_process_environment":
-                  "run by load_key_material_reads_the_process_environment in a child process",
-              "child_transcrypts_with_relative_paths":
-                  "run by transcrypt_relative_paths_are_spelled_as_pathlib_spells_them in a child",
-          }
-          pending = []
-          seen = set()
-          for line in text.splitlines():
-              ignored = re.search(r"\btest (\S+) \.\.\. ignored(?:, (.*))?", line)
-              if ignored:
-                  name, reason = ignored.groups()
-                  if expected_ignored.get(name) != reason or name in seen:
-                      raise SystemExit("Unexpected ignored test: " + line)
-                  pending.append(name)
-                  seen.add(name)
-              summary = re.search(r"test result:.*; ([0-9]+) ignored;", line)
-              if summary:
-                  if int(summary.group(1)) != len(pending):
-                      raise SystemExit("Ignored-test summary does not match named helpers: " + line)
-                  pending.clear()
-          if pending or seen != set(expected_ignored):
-              raise SystemExit("Missing ignored-test names or summary for the known child helpers.")
-          print("No unexpected test skips; both child-process helpers accounted for.")
-          PYTHON
+          python3 .github/scripts/check-rust-test-skips.py --scope workspace --log "$RUNNER_TEMP/rust-tests.log"
 
       - name: Run browser unit tests
         run: node --test crates/drmr-server/tests/js/*.test.cjs
 
       - name: Test measurement helpers
         run: python3 -W error::ResourceWarning -m unittest discover -s tools/tests -v
+
+      - name: Upload Rust test log
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: rust-tests-${{ runner.os }}-${{ runner.arch }}-${{ matrix.rust }}
+          path: ${{ runner.temp }}/rust-tests.log
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload real-media test results
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: bbb-media-${{ runner.os }}-${{ runner.arch }}-${{ matrix.rust }}
+          path: |
+            ${{ runner.temp }}/bbb-media-report.json
+            ${{ runner.temp }}/bbb-conversion-report.json
+          if-no-files-found: error
+          retention-days: 14
+
+  core-tests:
+    name: Rust core / ${{ matrix.os }} / ${{ matrix.rust }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14]
+        rust: [minimum, stable]
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install Linux test tools
+        if: runner.os == 'Linux'
+        env:
+          BENTO4_ZIP: Bento4-SDK-1-6-0-641.x86_64-unknown-linux.zip
+          BENTO4_SHA256: d48dc6b164941212e5614237b4d9aeff81d4d111ee8b1508892764078a0870e8
+          FFMPEG_ARCHIVE: ffmpeg-n9.0.2-17-g2a571b6068-linux64-gpl-9.0.tar.xz
+          FFMPEG_SHA256: 68ee646831adaae2495618346f3bba94ff207ff83bbd34d643e7004730d66269
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends python3 nodejs unzip xz-utils
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 \
+            -o "$RUNNER_TEMP/ffmpeg.tar.xz" \
+            "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-30-13-08/${FFMPEG_ARCHIVE}"
+          printf '%s  %s\n' "$FFMPEG_SHA256" "$RUNNER_TEMP/ffmpeg.tar.xz" | sha256sum --check --strict -
+          mkdir -p "$RUNNER_TEMP/ffmpeg"
+          tar -xJf "$RUNNER_TEMP/ffmpeg.tar.xz" -C "$RUNNER_TEMP/ffmpeg"
+          printf '%s\n' "$RUNNER_TEMP/ffmpeg/${FFMPEG_ARCHIVE%.tar.xz}/bin" >> "$GITHUB_PATH"
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 \
+            -o "$RUNNER_TEMP/bento4.zip" \
+            "https://www.bok.net/Bento4/binaries/${BENTO4_ZIP}"
+          printf '%s  %s\n' "$BENTO4_SHA256" "$RUNNER_TEMP/bento4.zip" | sha256sum --check --strict -
+          unzip -q "$RUNNER_TEMP/bento4.zip" -d "$RUNNER_TEMP/bento4"
+          printf '%s\n' "$RUNNER_TEMP/bento4/${BENTO4_ZIP%.zip}/bin" >> "$GITHUB_PATH"
+
+      - name: Install macOS test tools
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          brew install ffmpeg bento4 python@3.13 node@22
+          printf '%s\n' "$(brew --prefix python@3.13)/libexec/bin" >> "$GITHUB_PATH"
+          printf '%s\n' "$(brew --prefix node@22)/bin" >> "$GITHUB_PATH"
+
+      - name: Verify external test tools
+        run: |
+          set -euo pipefail
+          command -v ffmpeg ffprobe mp4dump python3 node
+          python3 --version
+          node --version
+          ffmpeg -hide_banner -version | sed -n '1p'
+          ffprobe -hide_banner -version | sed -n '1p'
+          ffmpeg -v error -f lavfi -i testsrc=duration=0.2:size=64x64:rate=5 \
+            -pix_fmt yuv420p "$RUNNER_TEMP/smoke.mp4"
+          mp4dump --format json "$RUNNER_TEMP/smoke.mp4" > /dev/null
+
+      - name: Install pinned media packager
+        run: |
+          set -euo pipefail
+          case "${RUNNER_OS}-${RUNNER_ARCH}" in
+            Linux-X64)
+              asset=packager-linux-x64
+              digest=225a33d1c3523dc1e80ead90b44266a4f545e8dbdb6ac30e553b8a7e4066096d ;;
+            macOS-ARM64)
+              asset=packager-osx-arm64
+              digest=c8a26c3639cf2ebfa542dd9b638a2ea3299090ed9b9485d47179d4aa1fdb96b7 ;;
+            macOS-X64)
+              asset=packager-osx-x64
+              digest=736d24def62d1f4944cc827fec728b830d6c619149ef0e5f9828ee2bd5a73ed7 ;;
+            *) exit 1 ;;
+          esac
+          mkdir -p "$RUNNER_TEMP/media-tools"
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 \
+            "https://github.com/shaka-project/shaka-packager/releases/download/v3.8.0/$asset" \
+            -o "$RUNNER_TEMP/media-tools/packager"
+          python3 - "$RUNNER_TEMP/media-tools/packager" "$digest" <<'PYTHON'
+          import hashlib
+          from pathlib import Path
+          import sys
+          if hashlib.sha256(Path(sys.argv[1]).read_bytes()).hexdigest() != sys.argv[2]:
+              raise SystemExit("Packager checksum mismatch")
+          PYTHON
+          chmod +x "$RUNNER_TEMP/media-tools/packager"
+          "$RUNNER_TEMP/media-tools/packager" --version
+          printf '%s\n' "$RUNNER_TEMP/media-tools" >> "$GITHUB_PATH"
+
+      - name: Install the qualification Python runtime
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13.12'
+
+      - name: Install the supported Rust toolchain
+        run: |
+          rust_channel="${{ matrix.rust }}"
+          if [[ "$rust_channel" == minimum ]]; then
+            rust_channel="$(python3 .github/scripts/minimum-rust.py)"
+          fi
+          rustup toolchain install "$rust_channel" --profile minimal --component clippy,rustfmt --no-self-update
+          printf 'RUSTUP_TOOLCHAIN=%s\n' "$rust_channel" >> "$GITHUB_ENV"
+          rustup run "$rust_channel" cargo --version
+          rustup run "$rust_channel" rustc --version
+
+      - name: Run core Rust tests
+        id: rust-tests
+        run: |
+          set -euo pipefail
+          cargo test -p drmr-core --locked -- --nocapture 2>&1 | tee "$RUNNER_TEMP/rust-core-tests.log"
+
+      - name: Reject unexpected test skips
+        if: ${{ !cancelled() && steps.rust-tests.outcome != 'skipped' }}
+        run: |
+          python3 .github/scripts/check-rust-test-skips.py --scope core --log "$RUNNER_TEMP/rust-core-tests.log"
+
+      - name: Upload core Rust test log
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: rust-core-tests-${{ runner.os }}-${{ runner.arch }}-${{ matrix.rust }}
+          path: ${{ runner.temp }}/rust-core-tests.log
+          if-no-files-found: warn
+          retention-days: 14
+
+  release:
+    name: CLI release / ${{ matrix.os }} / ${{ matrix.rust }}
+    needs: [verify, core-tests]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14]
+        rust: [minimum, stable]
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install the qualification Python runtime
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13.12'
+
+      - name: Install the supported Rust toolchain
+        run: |
+          rust_channel="${{ matrix.rust }}"
+          if [[ "$rust_channel" == minimum ]]; then
+            rust_channel="$(python3 .github/scripts/minimum-rust.py)"
+          fi
+          rustup toolchain install "$rust_channel" --profile minimal --component clippy,rustfmt --no-self-update
+          printf 'RUSTUP_TOOLCHAIN=%s\n' "$rust_channel" >> "$GITHUB_ENV"
+          rustup run "$rust_channel" cargo --version
+          rustup run "$rust_channel" rustc --version
 
       - name: Build release CLI
         run: cargo build --release --locked -p drmr
@@ -224,25 +358,5 @@ jobs:
           path: |
             ${{ runner.temp }}/drmr-${{ runner.os }}-${{ runner.arch }}.tar.gz
             ${{ runner.temp }}/cli-archive-verification.json
-          if-no-files-found: error
-          retention-days: 14
-
-      - name: Upload Rust test log
-        if: always()
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
-        with:
-          name: rust-tests-${{ runner.os }}-${{ runner.arch }}-${{ matrix.rust }}
-          path: ${{ runner.temp }}/rust-tests.log
-          if-no-files-found: warn
-          retention-days: 14
-
-      - name: Upload real-media test results
-        if: always()
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
-        with:
-          name: bbb-media-${{ runner.os }}-${{ runner.arch }}-${{ matrix.rust }}
-          path: |
-            ${{ runner.temp }}/bbb-media-report.json
-            ${{ runner.temp }}/bbb-conversion-report.json
           if-no-files-found: error
           retention-days: 14

@@ -1088,6 +1088,7 @@ dependencies = [
 name = "drmr-test-support"
 version = "0.1.0"
 dependencies = [
+ "rustix",
  "tempfile",
 ]
 

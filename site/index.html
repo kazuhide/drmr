@@ -112,38 +112,41 @@
 
     <section id="workflow" class="section" aria-labelledby="workflow-title">
       <div class="section-intro">
-        <h2 id="workflow-title">From declarations to checked media</h2>
-        <p>Inspect what is declared, plan a supported route, then process the actual media. Keep the source for a separate verification.</p>
+        <h2 id="workflow-title">Analyze, plan, convert, verify</h2>
+        <p>Retain and check the input, save one conversion, then execute it offline. Verify the current result against the retained original.</p>
       </div>
       <ol class="workflow">
         <li>
-          <div class="step-title"><span aria-hidden="true">1</span><h3>Inspect</h3></div>
-          <p>Read local MP4 metadata or DASH/HLS declarations. Media samples are checked during conversion and verification.</p>
-          <pre role="group" tabindex="0" aria-label="Inspect command"><code>drmr inspect source.mpd</code></pre>
+          <div class="step-title"><span aria-hidden="true">1</span><h3>Analyze</h3></div>
+          <p>Download a completed clear HLS presentation and check all admitted media tracks.</p>
+          <pre role="group" tabindex="0" aria-label="Analyze command"><code>drmr analyze \
+  "https://example.com/vod/master.m3u8" \
+  --download-dir source --json</code></pre>
         </li>
         <li>
           <div class="step-title"><span aria-hidden="true">2</span><h3>Plan</h3></div>
-          <p>Describe conversion choices and required tools. Conversion checks the actual media and keys.</p>
-          <pre role="group" tabindex="0" aria-label="Plan command"><code>drmr plan source.mpd \
-  --to cbcs --format dash</code></pre>
+          <p>Fix the source fingerprints, output format, protection, and new destination in a saved plan.</p>
+          <pre role="group" tabindex="0" aria-label="Plan command"><code>drmr plan source/input.m3u8 \
+  --to cbcs --format dash \
+  --output converted \
+  --save conversion.plan.json</code></pre>
         </li>
         <li>
           <div class="step-title"><span aria-hidden="true">3</span><h3>Convert</h3></div>
-          <p>Repackage qualified media and compare it with the original before publishing a new output.</p>
-          <pre role="group" tabindex="0" aria-label="Convert command"><code>drmr convert source.mpd \
-  --to cbcs --format dash \
-  --output converted \
+          <p>Execute that plan with separately supplied keys. Changed source bytes are refused.</p>
+          <pre role="group" tabindex="0" aria-label="Convert command"><code>drmr convert \
+  --plan conversion.plan.json \
   --keys-file keys.json</code></pre>
         </li>
         <li>
           <div class="step-title"><span aria-hidden="true">4</span><h3>Verify</h3></div>
-          <p>Run an independent comparison with the original source and the keys for each role.</p>
-          <pre role="group" tabindex="0" aria-label="Verify command"><code>drmr verify converted/manifest.mpd \
-  --source source.mpd \
+          <p>Check the actual output format and protection, plus complete media and timing correspondence.</p>
+          <pre role="group" tabindex="0" aria-label="Verify command"><code>drmr verify \
+  --plan conversion.plan.json \
   --keys-file keys.json --json</code></pre>
         </li>
       </ol>
-      <p class="section-note">These commands illustrate a qualified DASH-to-CBCS-DASH route. <a href="https://github.com/kazuhide/drmr/blob/main/docs/usage.md#separate-input-and-output-keys">Prepare an owner-only key configuration</a>; do not put raw keys in command arguments or version control.</p>
+      <p class="section-note">This example converts supported clear HLS to CBCS DASH. <a href="https://github.com/kazuhide/drmr/blob/main/docs/executable-plans.md">Read the four-step guide</a> and <a href="https://github.com/kazuhide/drmr/blob/main/docs/usage.md#separate-input-and-output-keys">prepare an owner-only key configuration</a>. For clear input and output, use <code>--to clear</code> and omit the key file. <code>inspect</code> remains the fast metadata-only command.</p>
     </section>
 
     <section id="verification" class="section" aria-labelledby="verification-title">

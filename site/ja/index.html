@@ -112,38 +112,41 @@
 
     <section id="workflow" class="section" aria-labelledby="workflow-title">
       <div class="section-intro">
-        <h2 id="workflow-title">記載内容を調べて、実データを確かめる</h2>
-        <p>まず記載された情報を調べ、対応する変換経路を計画してから実データを処理します。独立した検証のために原本を残してください。</p>
+        <h2 id="workflow-title">解析・計画・変換・検証</h2>
+        <p>URLの入力を取得・解析し、変換条件を保存します。保存した原本を使って変換し、現在の出力を原本と照合します。</p>
       </div>
       <ol class="workflow">
         <li>
-          <div class="step-title"><span aria-hidden="true">1</span><h3>調べる</h3></div>
-          <p>ローカルMP4のメタデータやDASH/HLSの記載内容を読みます。メディアサンプルの確認は、変換・検証時に行います。</p>
-          <pre role="group" tabindex="0" aria-label="入力を調べるコマンド"><code>drmr inspect source.mpd</code></pre>
+          <div class="step-title"><span aria-hidden="true">1</span><h3>解析する</h3></div>
+          <p>配信が完了したClear HLSを取得し、対応する全トラックのメディアを確認します。</p>
+          <pre role="group" tabindex="0" aria-label="入力を解析するコマンド"><code>drmr analyze \
+  "https://example.com/vod/master.m3u8" \
+  --download-dir source --json</code></pre>
         </li>
         <li>
           <div class="step-title"><span aria-hidden="true">2</span><h3>計画する</h3></div>
-          <p>変換の選択肢と必要なツールを確認します。実際のメディアと鍵は、変換時に確認します。</p>
-          <pre role="group" tabindex="0" aria-label="変換を計画するコマンド"><code>drmr plan source.mpd \
-  --to cbcs --format dash</code></pre>
+          <p>原本のハッシュ、出力形式、暗号化方式、新しい出力先をplanに保存します。</p>
+          <pre role="group" tabindex="0" aria-label="変換を計画するコマンド"><code>drmr plan source/input.m3u8 \
+  --to cbcs --format dash \
+  --output converted \
+  --save conversion.plan.json</code></pre>
         </li>
         <li>
           <div class="step-title"><span aria-hidden="true">3</span><h3>変換する</h3></div>
-          <p>入力条件を満たすメディアを再パッケージし、結果を出力として確定する前に原本と比較します。</p>
-          <pre role="group" tabindex="0" aria-label="変換するコマンド"><code>drmr convert source.mpd \
-  --to cbcs --format dash \
-  --output converted \
+          <p>鍵を別途渡してplanを実行します。原本のデータが変わっている場合は停止します。</p>
+          <pre role="group" tabindex="0" aria-label="変換するコマンド"><code>drmr convert \
+  --plan conversion.plan.json \
   --keys-file keys.json</code></pre>
         </li>
         <li>
           <div class="step-title"><span aria-hidden="true">4</span><h3>比較して検証する</h3></div>
-          <p>原本と、入力・出力それぞれの鍵を使って、独立した比較を行います。</p>
-          <pre role="group" tabindex="0" aria-label="原本と比較するコマンド"><code>drmr verify converted/manifest.mpd \
-  --source source.mpd \
+          <p>実際の出力形式・暗号化方式に加え、全体のメディアデータと時刻を原本と照合します。</p>
+          <pre role="group" tabindex="0" aria-label="原本と比較するコマンド"><code>drmr verify \
+  --plan conversion.plan.json \
   --keys-file keys.json --json</code></pre>
         </li>
       </ol>
-      <p class="section-note">この例は、対応するDASHからCBCS DASHへの変換です。<a href="https://github.com/kazuhide/drmr/blob/main/docs/usage.md#separate-input-and-output-keys">所有者だけが読める鍵設定ファイルを用意してください（英語）</a>。鍵の値をコマンド引数やバージョン管理に残さないでください。</p>
+      <p class="section-note">この例は、対応するClear HLSからCBCS DASHへの変換です。<a href="guide/">日本語ガイド</a>で手順を確認し、<a href="https://github.com/kazuhide/drmr/blob/main/docs/usage.md#separate-input-and-output-keys">所有者だけが読める鍵設定ファイルを用意してください（英語）</a>。ClearからClearへの変換では<code>--to clear</code>を指定し、鍵ファイルを省略できます。<code>inspect</code>はメタデータだけを素早く調べるコマンドとして引き続き使えます。</p>
     </section>
 
     <section id="verification" class="section" aria-labelledby="verification-title">

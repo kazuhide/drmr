@@ -19,7 +19,7 @@ Do not place confidential tokens in an output license URL or key URI unless publ
 
 ## Input and diagnostic handling
 
-For `convert` and `verify`, supply an owner-only JSON file with `--keys-file`. Input decryption keys and output encryption keys have separate roles. The file must be a regular, singly linked file with the required owner-only permissions; symbolic links and insecure files are refused. See [key configuration](usage.md#separate-input-and-output-keys) and [Windows file protection](windows.md#protect-configuration-files).
+For `analyze`, saved-plan creation, `convert`, and `verify`, supply an owner-only JSON file with `--keys-file` when keys are needed. Input decryption keys and output encryption keys have separate roles. The file must be a regular, singly linked file with the required owner-only permissions; symbolic links and insecure files are refused. See [key configuration](usage.md#separate-input-and-output-keys) and [Windows file protection](windows.md#protect-configuration-files).
 
 The older `run` and `package-hls` commands read `DRM_KID`, `DRM_KEY`, and `DRM_IV` from the environment. Batch processing can use a protected per-asset key file. drmr has no public command-line option for entering a content-key value. Avoid shell-history entries containing keys; use your local secret-management process to prepare the environment or file.
 
@@ -34,6 +34,25 @@ These controls cover recognized secret material. They do not classify every file
 
 ## External tools and memory
 
+### Saved plans and retained originals
+
+An [execution plan](executable-plans.md) stores local source filenames, sizes,
+SHA-256 fingerprints, and one output location and media intent. It contains no
+keys, initialization vectors, key or license addresses, request headers, source
+URLs, or executable commands. Keys and optional output signaling are read
+separately at runtime. Paths and fingerprints can identify an asset, so saved
+plans are private files too. The original downloaded playlists may contain
+signed URLs even though the plan does not.
+
+The plan digest detects edits, not a malicious author who can calculate another
+digest. Execute only plans you trust. Every use validates the strict schema,
+source references, actual copied bytes, and media profile again. A saved file
+inventory grants no permission to delete the original files. Conversion
+publishes only to a new destination after its independent checks, and verification
+reads the original and current result rather than trusting saved success claims.
+
+### Process arguments and plaintext memory
+
 FFmpeg and Shaka Packager require plaintext keys for some supported operations. drmr passes those keys to child processes, including through command arguments. The operating system, sufficiently privileged processes, and process-inspection tools may observe those arguments or the process environment while the tool runs. Diagnostic masking does not hide live operating-system process information.
 
 Keys also exist in ordinary process memory. Sensitive Rust key buffers and several temporary representations are wiped when their owners are dropped. This is a best-effort lifetime control, not a guarantee that every copy has been erased. Child processes, browser buffers, allocator copies, swap, crash dumps, and forced termination are outside that guarantee. drmr does not provide Secure Enclave storage or control the host's dump and swap policies.
@@ -41,6 +60,23 @@ Keys also exist in ordinary process memory. Sensitive Rust key buffers and sever
 ## Temporary files and cleanup
 
 Some verification paths write decrypted media and plaintext key files into private temporary directories. Processing is therefore not memory-only. Raw key-file writes refuse unsafe existing destinations instead of following a symbolic link or repairing public permissions after opening a file.
+
+On Unix, use trusted existing parent directories for output, plans and temporary
+work. A conversion staging parent must belong to the current user or the administrator
+(`root`), and its Unix permission bits must deny group and other users write access. A shared temporary
+directory with the sticky permission bit, such as a root-owned `/tmp`, is also
+accepted: that bit protects each user's entries from other unprivileged users.
+A writable shared parent without that protection is refused with
+`temporary-workspace-parent-unsafe`. Saving a plan rejects an unsafe output
+parent with `execution-plan-destination-unsafe` before media admission.
+
+Conversion staging cleanup follows retained directory handles rather than adopting a new tree
+through the original pathname. If ownership or the namespace cannot be
+confirmed, drmr leaves uncertain entries alone. Explicit cleanup returns
+`temporary-cleanup-unconfirmed`; automatic fallback cleanup cannot always report
+this error.
+These controls do not protect against an administrator or a malicious process
+running as the same operating-system user.
 
 Confirmed normal cleanup removes owned temporary files. An interrupted process or unconfirmed child cleanup can leave private working files behind; inspect the reported job and workspace before reuse. Deleting a file does not guarantee secure erasure from the storage device, snapshots, or backups. Keep working directories, retained source material, and backups under the same access controls as the input keys.
 

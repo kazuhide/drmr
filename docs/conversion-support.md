@@ -26,19 +26,24 @@ implementation, rather than an impossibility of the media formats.
 These are supported profiles for local, completed playlists, subject to the
 [media and verification restrictions](media-processing.md). Each fMP4 media
 playlist must contain one audio or video track; a master playlist can reference
-separate video and audio playlists. Rendition names, language and selection metadata
-that cannot be preserved are rejected rather than discarded. A single-track fMP4 HLS source can also
+several video qualities and one shared audio playlist, including its supported name,
+language and HLS selection declarations. DASH maps that sole audio rendition to
+standard language, label and author-priority fields; identical automatic player
+selection is not claimed. See [rendition metadata and its mapping](media-processing.md#multiple-qualities-and-audio-declarations).
+Metadata outside that mapping is rejected rather than discarded. A single-track fMP4 HLS source can also
 produce clear, `cenc`, or `cbcs` MP4. Combining an HLS presentation's separate
 audio and video tracks into one MP4 is outside the current profile. MPEG-TS has
 the [narrower input profile below](#mpeg-transport-stream-input).
 
 ## URL input
 
-`convert` can acquire a completed clear HLS URL before conversion. This URL
+`analyze` can retain and fully check a completed clear HLS URL before you save
+an execution plan. `convert` can also acquire the URL and convert directly. This URL
 profile supports the same qualified TS/fMP4 media profiles described above;
 it does not extend their codec, track, or output limits. URL input requires
 `--download-dir`, and the completed source is retained for offline conversion
-and independent verification. See [URL conversion and optional fetch settings](usage.md#convert-a-url).
+and independent verification. See the [four-stage saved-plan workflow](executable-plans.md)
+or [direct URL conversion and fetch settings](usage.md#convert-a-url).
 
 Remote DASH, standalone MP4, encrypted HLS, live playlists, and byte ranges are
 outside the initial acquisition profile. The local input rows above do not imply

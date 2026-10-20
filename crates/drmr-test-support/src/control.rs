@@ -13,6 +13,17 @@ pub fn child_entry(args: &[std::ffi::OsString]) -> io::Result<bool> {
         thread::sleep(Duration::from_secs(60));
         return Ok(true);
     }
+    if args.len() == 4 && args[0] == "--fixture-invocation-lock" {
+        // Publish the child's identity before it can hold a lock. If Stop cuts
+        // registration short, the observer also checks the complete tool group.
+        publish_new(Path::new(&args[3]), format!("{}\n", std::process::id()).as_bytes())?;
+        let held = private_new(Path::new(&args[1]))?;
+        held.lock()?;
+        publish_new(Path::new(&args[2]), b"ready\n")?;
+        thread::sleep(Duration::from_secs(60));
+        drop(held);
+        return Ok(true);
+    }
     if matches!(args.len(), 3 | 5) && args[0] == "--fixture-lock" {
         let ordinary = if args.len() == 5 {
             let requested = args[3]
@@ -43,6 +54,99 @@ pub fn child_entry(args: &[std::ffi::OsString]) -> io::Result<bool> {
         return Ok(true);
     }
     Ok(false)
+}
+
+fn private_new(path: &Path) -> io::Result<fs::File> {
+    let mut options = fs::OpenOptions::new();
+    options.create_new(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    options.open(path)
+}
+
+fn publish_new(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    use io::Write as _;
+    let mut pending = path.as_os_str().to_owned();
+    pending.push(".pending");
+    let pending = std::path::PathBuf::from(pending);
+    let mut file = private_new(&pending)?;
+    file.write_all(bytes)?;
+    drop(file);
+    match fs::symlink_metadata(path) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => fs::rename(pending, path),
+        _ => Err(io::Error::other("fixture publication already exists")),
+    }
+}
+
+fn register_invocation(spec: &ToolSpec, root: &Path) -> io::Result<()> {
+    if [
+        "pid_file",
+        "descendant_pid_file",
+        "descendant_lock_file",
+        "ready_file",
+        "descendant_detached_console",
+        "descendant_open_files",
+    ]
+    .iter()
+    .any(|key| spec.values.contains_key(*key))
+        || !fs::symlink_metadata(root)?.file_type().is_dir()
+    {
+        return Err(io::Error::other("invalid invocation fixture configuration"));
+    }
+    let pid = std::process::id();
+    #[cfg(target_os = "linux")]
+    {
+        let stat = fs::read_to_string("/proc/self/stat")?;
+        let group = stat
+            .rsplit_once(") ")
+            .and_then(|(_, fields)| fields.split_whitespace().nth(2))
+            .and_then(|value| value.parse::<u32>().ok());
+        if group != Some(pid) || pid <= 1 {
+            return Err(io::Error::other("fixture requires an independent tool group"));
+        }
+    }
+    // mkdir atomically records the tool/group identity before any descendant is
+    // spawned. Records remain available across both Web lifecycle jobs.
+    let entry = root.join(pid.to_string());
+    fs::create_dir(&entry)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(&entry, fs::Permissions::from_mode(0o700))?;
+    }
+    let child_pid = entry.join("descendant.pid");
+    let ready = entry.join("descendant.lock.ready");
+    let mut child = Command::new(env::current_exe()?)
+        .arg("--fixture-invocation-lock")
+        .arg(entry.join("descendant.lock"))
+        .arg(&ready)
+        .arg(&child_pid)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+    let result = (|| {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !ready.is_file() {
+            if child.try_wait()?.is_some() || Instant::now() >= deadline {
+                return Err(io::Error::other("fixture descendant did not become ready"));
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        if fs::read(&child_pid)? != format!("{}\n", child.id()).as_bytes() {
+            return Err(io::Error::other("fixture descendant identity changed"));
+        }
+        publish_new(&entry.join("complete"), b"ready\n")
+    })();
+    if result.is_err() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    // On success the production supervisor owns the inherited process group.
+    result
 }
 
 #[cfg(unix)]
@@ -122,6 +226,9 @@ fn spawn_descendant_with_console(
 }
 
 pub fn before_response(spec: &ToolSpec) -> io::Result<()> {
+    if let Some(root) = spec.values.get("invocation_root") {
+        register_invocation(spec, Path::new(root))?;
+    }
     if let Some(path) = spec.values.get("pid_file") {
         fs::write(path, format!("{}\n", std::process::id()))?;
     }

@@ -279,7 +279,7 @@ fn check_hls(converter: &Converter, output: &Path, target: TargetProtection) {
         .unwrap();
     assert!(checked.passed);
     if target == TargetProtection::Clear {
-        reject_custom_rendition(converter, output);
+        preserve_custom_rendition(converter, output);
         let media = output.join("track-0000/media.m3u8");
         let text = std::fs::read_to_string(&media).unwrap();
         let line = text.lines().find(|l| l.starts_with("#EXTINF:")).unwrap();
@@ -302,7 +302,7 @@ fn check_hls(converter: &Converter, output: &Path, target: TargetProtection) {
     }
 }
 
-fn reject_custom_rendition(converter: &Converter, output: &Path) {
+fn preserve_custom_rendition(converter: &Converter, output: &Path) {
     let manifest = output.join("master.m3u8");
     let text = std::fs::read_to_string(&manifest).unwrap();
     let name = text
@@ -316,7 +316,7 @@ fn reject_custom_rendition(converter: &Converter, output: &Path) {
     let denied = output.parent().unwrap().join("denied-label");
     let keys = InputKeys::default();
     let hls_keys = HlsInputKeys::default();
-    let error = converter
+    let result = converter
         .convert(ConversionRequest {
             input: &manifest,
             output: &denied,
@@ -328,9 +328,31 @@ fn reject_custom_rendition(converter: &Converter, output: &Path) {
             hls_key_uri: None,
             hls_output_key: None,
         })
-        .unwrap_err();
-    assert_eq!(error.0, "hls-rendition-metadata-not-supported");
-    assert!(!denied.exists());
+        .unwrap();
+    assert!(result.verification.passed);
+    let dash = denied.join("manifest.mpd");
+    assert!(
+        std::fs::read_to_string(&dash)
+            .unwrap()
+            .contains("<Label>Commentary</Label>")
+    );
+    assert!(
+        converter
+            .verify(VerificationRequest {
+                source: VerificationSource {
+                    input: &manifest,
+                    input_keys: &keys,
+                    hls_keys: &hls_keys
+                },
+                output: VerificationSource {
+                    input: &dash,
+                    input_keys: &keys,
+                    hls_keys: &hls_keys
+                },
+            })
+            .unwrap()
+            .passed
+    );
     std::fs::write(manifest, text).unwrap();
 }
 

@@ -8,6 +8,9 @@ publish.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix.workspace = true
+
 [dev-dependencies]
 tempfile.workspace = true
 

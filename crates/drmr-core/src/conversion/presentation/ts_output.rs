@@ -56,9 +56,8 @@ impl Converter {
         work: &super::super::files::Stage,
     ) -> Result<ConversionReport, ConversionError> {
         sources.sort_by_key(|source| kind_order(source.report.tracks[0].kind));
-        let mut kinds = std::collections::BTreeSet::new();
         if sources.is_empty()
-            || sources.len() > 2
+            || sources.len() > 64
             || sources.iter().any(|source| {
                 source.transport_index.is_none()
                     || source.transport_native.is_none()
@@ -66,7 +65,6 @@ impl Converter {
                         source.report.tracks[0].kind,
                         TrackKind::Video | TrackKind::Audio
                     )
-                    || !kinds.insert(kind_order(source.report.tracks[0].kind))
             })
         {
             return Err(ConversionError("ts-original-evidence-required"));
@@ -82,6 +80,11 @@ impl Converter {
             stage.path()
         };
         self.package_transport(&sources, package_root, request)?;
+        super::metadata::finish(
+            package_root,
+            crate::inspection::OutputFormat::HlsTs,
+            &sources,
+        )?;
         if sources.len() == 1 && sources[0].report.tracks[0].kind == TrackKind::Audio {
             single_audio_variant(package_root)?;
         }
@@ -113,6 +116,7 @@ impl Converter {
             },
             &verification_root,
             &self.backend,
+            super::SourceValidationPurpose::Verification,
         )?;
         let verification =
             self.compare_presentations(sources, result, request.input_keys, &empty)?;
@@ -123,7 +127,7 @@ impl Converter {
             .map_err(|_| ConversionError("invalid-output-media"))?;
         secure_tree(stage.path())?;
         self.backend.checkpoint(&[work, &stage]);
-        self.publish_directory(stage.path(), &destination)?;
+        self.publish_directory(&stage, &destination)?;
         Ok(ConversionReport {
             schema_version: 1,
             input,
@@ -153,7 +157,12 @@ impl Converter {
             let name = format!("track-{ordinal:04}");
             let directory = root.join(&name);
             super::super::files::create_dir(&directory)?;
-            let input = descriptor(&source.source)?;
+            let input = descriptor(
+                source
+                    .transport_demux_view
+                    .as_deref()
+                    .unwrap_or(&source.source),
+            )?;
             let output = descriptor(&directory)?;
             let index = source
                 .transport_index

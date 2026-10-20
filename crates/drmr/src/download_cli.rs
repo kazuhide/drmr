@@ -47,6 +47,15 @@ fn resolved(path: &Path) -> Result<PathBuf, ConversionError> {
     Ok(parent.join(name))
 }
 
+/// Check a new retained-source destination without creating it or requiring a future result.
+pub fn preflight_source(directory: &Path) -> Result<(), ConversionError> {
+    resolved(directory)?;
+    if exists(directory)? {
+        return Err(ConversionError("download-directory-exists"));
+    }
+    Ok(())
+}
+
 pub fn preflight(download: &Path, output: &Path) -> Result<(), ConversionError> {
     let source = resolved(download)?;
     let result = resolved(output)?;

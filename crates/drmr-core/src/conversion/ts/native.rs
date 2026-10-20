@@ -114,7 +114,12 @@ impl NativeScanner {
             } else {
                 5 + usize::from(packet[4])
             };
-            if at >= 188 {
+            // Admission recognized any empty-payload compatibility packet above;
+            // it contributes no PES bytes, access unit, sample, or clock.
+            if at == 188 {
+                continue;
+            }
+            if at > 188 {
                 return Err(BAD);
             }
             if packet[1] & 0x40 != 0 {
@@ -395,6 +400,52 @@ mod tests {
             vec![0, 0, 1, 0x65, 0x80],
         ]
         .concat()
+    }
+    #[test]
+    fn empty_payload_padding_cannot_add_frames_or_reset_the_original_audio_clock() {
+        let (_owner, root) = root();
+        let first = resource(&root, "padded.ts", 90_000, &[frame(1)], 0);
+        let mut padded = std::fs::read(&first).unwrap();
+        padded.extend(packet(256, false, 1, &[], false));
+        padded.extend(packet(256, false, 2, &[], false));
+        std::fs::write(&first, padded).unwrap();
+        let next = resource(&root, "next.ts", 91_920, &[frame(2)], 1);
+        let mut bytes = std::fs::read(&next).unwrap();
+        bytes[2 * 188 + 3] = 0x33;
+        std::fs::write(&next, bytes).unwrap();
+        let mut scanner = NativeScanner::new();
+        scanner.segment(&first, &Stop::new()).unwrap();
+        scanner.segment(&next, &Stop::new()).unwrap();
+        let (admission, native) = scanner.finish().unwrap();
+        assert!(admission.has_empty_payload_padding());
+        assert_eq!(native[&256].count, 2);
+        assert!(native[&256].matches(
+            &canonical::Config::Audio { channels: 2 },
+            &evidence(&[(frame(1), 90_000), (frame(2), 91_920)])
+        ));
+        let first_bytes = std::fs::read(&first).unwrap();
+        let next_bytes = std::fs::read(&next).unwrap();
+        let combined = [first_bytes.clone(), next_bytes.clone()].concat();
+        let source = root.join("combined.ts");
+        std::fs::write(&source, &combined).unwrap();
+        let view = root.join("demux.ts");
+        super::super::compatibility::demux_view(&source, &view, &admission, &Stop::new()).unwrap();
+        let mut adjusted_next = next_bytes;
+        adjusted_next[2 * 188 + 3] = 0x31;
+        assert_eq!(
+            std::fs::read(&view).unwrap(),
+            [&first_bytes[..first_bytes.len() - 2 * 188], &adjusted_next].concat()
+        );
+        let mut projected = NativeScanner::new();
+        projected.segment(&view, &Stop::new()).unwrap();
+        let (projected_admission, projected_native) = projected.finish().unwrap();
+        assert!(!projected_admission.has_empty_payload_padding());
+        assert_eq!(projected_native[&256].count, native[&256].count);
+        assert!(projected_native[&256].matches(
+            &canonical::Config::Audio { channels: 2 },
+            &evidence(&[(frame(1), 90_000), (frame(2), 91_920)])
+        ));
+        assert_eq!(std::fs::read(source).unwrap(), combined);
     }
     #[test]
     fn every_audio_frame_in_a_multi_packet_pes_is_counted_and_bound() {

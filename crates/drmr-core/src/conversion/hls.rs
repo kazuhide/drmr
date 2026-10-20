@@ -1,4 +1,5 @@
 //! Confined local fragmented-MP4 playlists, with operator-supplied segment keys only.
+mod cues;
 use super::{
     Aes128Key, ConversionError, ConversionReport, Converter, HlsInputKeys, HlsOutputKey, InputKeys,
     OutputKey, SegmentIv,
@@ -24,6 +25,7 @@ pub(super) struct Localized {
     pub transport_segments: Vec<(PathBuf, String)>,
     pub native: std::collections::BTreeMap<u16, std::sync::Arc<super::ts::NativeEvidence>>,
     pub sample_transport: bool,
+    pub empty_cue_pair: bool,
 }
 struct Playlist {
     combined: File,
@@ -332,6 +334,7 @@ struct Localizer<'a> {
     saw_aes: bool,
     ts_wall_clock: bool,
     key_formats: std::collections::BTreeSet<String>,
+    empty_cue: cues::EmptyCue,
 }
 impl Localizer<'_> {
     fn set_key(&mut self, value: &str) -> Result<(), ConversionError> {
@@ -460,6 +463,14 @@ impl Localizer<'_> {
         if line.contains('\0') {
             return Err(ConversionError("hls-invalid-line"));
         }
+        if self.empty_cue.line(
+            line,
+            self.playlist.count > 0,
+            self.playlist.pending_duration,
+        )? {
+            writeln!(self.playlist.reference, "{line}").expect("writing a string cannot fail");
+            return Ok(());
+        }
         let (name, value) = line.split_once(':').unwrap_or((line, ""));
         if matches!(
             name,
@@ -548,6 +559,7 @@ impl Localizer<'_> {
         Ok(())
     }
     fn finish(self, path: &Path, mut combined: PathBuf) -> Result<Localized, ConversionError> {
+        self.empty_cue.finish()?;
         let playlist = self.playlist;
         if !playlist.ended
             || playlist.pending_duration
@@ -622,6 +634,7 @@ impl Localizer<'_> {
             transport_segments: playlist.transport_segments,
             native,
             sample_transport,
+            empty_cue_pair: self.empty_cue.seen(),
         })
     }
 }
@@ -685,6 +698,7 @@ pub(super) fn localize(
         key_formats: std::collections::BTreeSet::new(),
         saw_aes: false,
         ts_wall_clock: false,
+        empty_cue: cues::EmptyCue::default(),
     };
     for line in lines {
         localizer.line(line)?;
@@ -754,7 +768,7 @@ impl Converter {
         }
         let output_report = inspection::inspect(&staged.path().join("media.m3u8"))
             .map_err(|_| ConversionError("hls-inspection-failed"))?;
-        self.publish_directory(staged.path(), &destination)?;
+        self.publish_directory(&staged, &destination)?;
         Ok(ConversionReport {
             schema_version: 1,
             input: input_report,
@@ -817,7 +831,7 @@ impl Converter {
         }
         report.input = localized.report;
         report.describe_preparation(inspection::InputPreparation::LocalHlsResources);
-        self.publish(&candidate, &destination)?;
+        self.publish(&workspace, &candidate, &destination)?;
         Ok(report)
     }
 }

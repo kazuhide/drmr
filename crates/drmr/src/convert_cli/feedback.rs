@@ -12,7 +12,7 @@ struct State {
     workers: Option<u64>,
     last_line: Option<Instant>,
 }
-pub(super) struct Progress {
+pub(crate) struct Progress {
     enabled: bool,
     began: Instant,
     state: Mutex<State>,

@@ -2,14 +2,15 @@
 
 use clap::Args;
 use drmr_core::conversion::{
-    ConversionError, ConversionReport, ConversionRequest, Converter, VerificationRequest,
-    VerificationSource,
+    ConversionError, ConversionReport, ConversionRequest, Converter, VerificationReport,
+    VerificationRequest, VerificationSource,
     key_file::{self, OperatorKeys},
+    measurement::MeasurementReport,
 };
-mod feedback;
+pub(crate) mod feedback;
 use drmr_core::inspection::{self, OutputFormat, TargetProtection};
 use drmr_core::toolrun::{Secrets, ToolRunner};
-use feedback::Progress;
+pub(crate) use feedback::Progress;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -18,7 +19,11 @@ use std::sync::Arc;
 #[derive(Args)]
 pub struct ConvertArgs {
     /// Local source media or a completed clear HLS URL. The source is never overwritten.
-    pub input: PathBuf,
+    #[arg(required_unless_present = "plan", conflicts_with = "plan")]
+    pub input: Option<PathBuf>,
+    /// Execute the exact source and media intent in a saved plan; keys stay separate.
+    #[arg(long, conflicts_with_all = ["input", "download_dir", "fetch_policy", "to", "format", "output"])]
+    pub plan: Option<PathBuf>,
     /// New directory retaining the original input; required for URL input.
     #[arg(long)]
     pub download_dir: Option<PathBuf>,
@@ -26,14 +31,14 @@ pub struct ConvertArgs {
     #[arg(long)]
     pub fetch_policy: Option<PathBuf>,
     /// Target protection: clear, cenc, cbcs, hls-aes128, or hls-sample-aes.
-    #[arg(long)]
-    pub to: TargetProtection,
+    #[arg(long, required_unless_present = "plan")]
+    pub to: Option<TargetProtection>,
     /// Output format: mp4, dash, hls (fragmented MP4), or hls-ts.
     #[arg(long)]
     pub format: Option<OutputFormat>,
     /// A new output file or directory; existing destinations are refused.
-    #[arg(long)]
-    pub output: PathBuf,
+    #[arg(long, required_unless_present = "plan")]
+    pub output: Option<PathBuf>,
     /// Protected JSON configuration with distinct input and output keys.
     #[arg(long)]
     pub keys_file: Option<PathBuf>,
@@ -54,10 +59,14 @@ pub struct ConvertArgs {
 #[derive(Args)]
 pub struct VerifyArgs {
     /// Result media to compare with the source.
-    pub output: PathBuf,
+    #[arg(required_unless_present = "plan", conflicts_with = "plan")]
+    pub output: Option<PathBuf>,
+    /// Verify saved-plan source fingerprints, output intent, and complete media correspondence.
+    #[arg(long, conflicts_with_all = ["output", "source"])]
+    pub plan: Option<PathBuf>,
     /// Original source media. Required to verify content correspondence.
-    #[arg(long)]
-    pub source: PathBuf,
+    #[arg(long, required_unless_present = "plan")]
+    pub source: Option<PathBuf>,
     /// Protected JSON configuration: input keys for source, output keys for result.
     #[arg(long)]
     pub keys_file: Option<PathBuf>,
@@ -75,11 +84,11 @@ pub struct VerifyArgs {
     pub measure: bool,
 }
 
-fn load(path: Option<&PathBuf>) -> Result<OperatorKeys, ConversionError> {
+pub(crate) fn load(path: Option<&PathBuf>) -> Result<OperatorKeys, ConversionError> {
     path.map_or_else(|| Ok(OperatorKeys::default()), |path| key_file::read(path))
 }
 
-fn converter(
+pub(crate) fn converter(
     packager: &str,
     maximum: Option<u8>,
     progress: Arc<Progress>,
@@ -178,21 +187,28 @@ fn error_hint(code: &str) -> Option<&'static str> {
         "output-exists-or-unsafe" | "output-exists-or-publish-failed" => {
             Some("Choose a new output path under an existing directory.")
         }
+        "temporary-workspace-parent-unsafe" => Some(
+            "Choose an output or temporary parent directory owned by your user that other users cannot modify. See docs/security.md.",
+        ),
         "packet-timing-unavailable" => Some(
             "Use an FFmpeg build that supplies complete packet timestamps and durations. See docs/media-processing.md.",
         ),
-        _ => None,
+        _ => crate::plan_cli::error_hint(code),
     }
 }
 
-fn error_value(command: &str, error: ConversionError, progress: &Progress) -> serde_json::Value {
+pub(crate) fn error_value(
+    command: &str,
+    error: ConversionError,
+    progress: &Progress,
+) -> serde_json::Value {
     serde_json::json!({
         "schema_version": 1, "command": command,
         "status": if error.0 == "cancelled" { "cancelled" } else { "failed" },
         "error": {"code": error.0, "hint": error_hint(error.0).unwrap_or("Review the error code and source profile before retrying with a new output destination."), "last_activity": progress.last_activity()}
     })
 }
-fn error(
+pub(crate) fn error(
     command: &str,
     error: ConversionError,
     as_json: bool,
@@ -216,6 +232,11 @@ fn error(
         if matches!(
             error.0,
             "key-file-invalid"
+                | "execution-plan-invalid"
+                | "execution-plan-exists"
+                | "execution-plan-destination-unsafe"
+                | "temporary-workspace-parent-unsafe"
+                | "plan-requires-single-output"
                 | "download-directory-required"
                 | "download-options-require-url"
                 | "download-output-overlap"
@@ -253,7 +274,7 @@ impl From<ConversionError> for ConfigurationError {
     }
 }
 
-fn json(value: &serde_json::Value) -> std::io::Result<()> {
+pub(crate) fn json(value: &serde_json::Value) -> std::io::Result<()> {
     let mut out = std::io::stdout().lock();
     serde_json::to_writer_pretty(&mut out, value)?;
     writeln!(out)
@@ -276,11 +297,15 @@ fn configured_download(
                 .download_dir
                 .as_ref()
                 .ok_or(ConversionError("download-directory-required"))?;
-            crate::download_cli::preflight(directory, &args.output).map_err(|cause| {
-                ConfigurationError {
-                    cause,
-                    exit: Some(2),
-                }
+            crate::download_cli::preflight(
+                directory,
+                args.output
+                    .as_deref()
+                    .expect("clap requires a direct output"),
+            )
+            .map_err(|cause| ConfigurationError {
+                cause,
+                exit: Some(2),
             })?;
             drmr_core::conversion::download_policy::read(url, args.fetch_policy.as_deref())
                 .map(Some)
@@ -306,7 +331,9 @@ fn execute_conversion(
                 args.download_dir
                     .as_deref()
                     .expect("URL download directory was checked"),
-                &args.output,
+                args.output
+                    .as_deref()
+                    .expect("clap requires a direct output"),
                 fetch_policy.expect("URL fetch policy was checked"),
             )?;
             eprintln!("Downloaded source retained in the requested download directory.");
@@ -314,9 +341,13 @@ fn execute_conversion(
         }
         crate::download_cli::Input::Local(_) => None,
     };
-    let source = downloaded
-        .as_ref()
-        .map_or(args.input.as_path(), |source| source.entrypoint());
+    let source = downloaded.as_ref().map_or_else(
+        || match input {
+            crate::download_cli::Input::Local(path) => path.as_path(),
+            crate::download_cli::Input::Url(_) => unreachable!("URL acquisition returned a source"),
+        },
+        |source| source.entrypoint(),
+    );
     let format = if let Some(format) = local_format {
         format
     } else {
@@ -329,9 +360,12 @@ fn execute_conversion(
     progress.mark("input-preparation");
     let request = ConversionRequest {
         input: source,
-        output: &args.output,
+        output: args
+            .output
+            .as_deref()
+            .expect("clap requires a direct output"),
         format,
-        target: args.to,
+        target: args.to.expect("clap requires a direct target"),
         input_keys: &keys.input,
         hls_input_keys: &keys.hls_input,
         output_key: keys.output.as_ref(),
@@ -351,7 +385,24 @@ fn execute_conversion(
     Ok((report, download))
 }
 
-fn conversion_text(report: &ConversionReport) -> std::io::Result<()> {
+fn configured_format(
+    args: &ConvertArgs,
+    input: &crate::download_cli::Input,
+    progress: &Progress,
+) -> Result<Option<OutputFormat>, ConversionError> {
+    match (input, args.format) {
+        (_, Some(format)) => Ok(Some(format)),
+        (crate::download_cli::Input::Local(path), None) => {
+            progress.mark("inspection");
+            inspection::inspect(path)
+                .map(|report| Some(report.format.into()))
+                .map_err(|_| ConversionError("invalid-input-media"))
+        }
+        (crate::download_cli::Input::Url(_), None) => Ok(None),
+    }
+}
+
+pub(crate) fn conversion_text(report: &ConversionReport) -> std::io::Result<()> {
     let mut out = std::io::stdout().lock();
     writeln!(
         out,
@@ -386,9 +437,17 @@ fn conversion_text(report: &ConversionReport) -> std::io::Result<()> {
 }
 
 pub fn convert(args: &ConvertArgs) -> ExitCode {
+    if let Some(path) = &args.plan {
+        return crate::plan_cli::convert(args, path);
+    }
     let progress = Arc::new(Progress::new(!args.json));
     progress.mark("configuration");
-    let input = match crate::download_cli::Input::parse(args.input.as_os_str()) {
+    let input = match crate::download_cli::Input::parse(
+        args.input
+            .as_deref()
+            .expect("clap requires a direct input")
+            .as_os_str(),
+    ) {
         Ok(input) => input,
         Err(cause) => return error("convert", cause, args.json, &progress, None),
     };
@@ -409,24 +468,9 @@ pub fn convert(args: &ConvertArgs) -> ExitCode {
         Ok(keys) => keys,
         Err(cause) => return error("convert", cause, args.json, &progress, None),
     };
-    let local_format = match (&input, args.format) {
-        (_, Some(format)) => Some(format),
-        (crate::download_cli::Input::Local(path), None) => {
-            progress.mark("inspection");
-            match inspection::inspect(path) {
-                Ok(report) => Some(report.format.into()),
-                Err(_) => {
-                    return error(
-                        "convert",
-                        ConversionError("invalid-input-media"),
-                        args.json,
-                        &progress,
-                        None,
-                    );
-                }
-            }
-        }
-        (crate::download_cli::Input::Url(_), None) => None,
+    let local_format = match configured_format(args, &input, &progress) {
+        Ok(value) => value,
+        Err(cause) => return error("convert", cause, args.json, &progress, None),
     };
     let converter = converter(
         &args.packager_bin,
@@ -486,6 +530,9 @@ pub fn convert(args: &ConvertArgs) -> ExitCode {
 }
 
 pub fn verify(args: &VerifyArgs) -> ExitCode {
+    if let Some(path) = &args.plan {
+        return crate::plan_cli::verify(args, path);
+    }
     let progress = Arc::new(Progress::new(!args.json));
     progress.mark("configuration");
     let Ok(cancellation) = crate::cancellation::Cancellation::install() else {
@@ -519,12 +566,18 @@ pub fn verify(args: &VerifyArgs) -> ExitCode {
     let execute = |command: &Converter| {
         command.verify(VerificationRequest {
             source: VerificationSource {
-                input: &args.source,
+                input: args
+                    .source
+                    .as_deref()
+                    .expect("clap requires a direct source"),
                 input_keys: &keys.input,
                 hls_keys: &keys.hls_input,
             },
             output: VerificationSource {
-                input: &args.output,
+                input: args
+                    .output
+                    .as_deref()
+                    .expect("clap requires a direct output"),
                 input_keys: &output_keys,
                 hls_keys: &output_hls_keys,
             },
@@ -550,17 +603,22 @@ pub fn verify(args: &VerifyArgs) -> ExitCode {
         );
     }
     progress.finish();
+    verification_result(&report, args.json, measurement, &progress)
+}
+
+fn verification_result(
+    report: &VerificationReport,
+    as_json: bool,
+    measurement: Option<MeasurementReport>,
+    progress: &Progress,
+) -> ExitCode {
     if !report.passed {
         eprintln!("verify: verification-mismatch");
     }
-    let result = if args.json {
-        let mut value = serde_json::to_value(&report).expect("verification report serializes");
+    let result = if as_json {
+        let mut value = serde_json::to_value(report).expect("verification report serializes");
         if !report.passed {
-            let failure = error_value(
-                "verify",
-                ConversionError("verification-mismatch"),
-                &progress,
-            );
+            let failure = error_value("verify", ConversionError("verification-mismatch"), progress);
             for key in ["command", "status", "error"] {
                 value[key] = failure[key].clone();
             }

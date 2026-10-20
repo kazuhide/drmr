@@ -1,5 +1,8 @@
 //! Test-only in-container observer. Never copied into the production runtime image.
 use std::{fs, io, path::PathBuf};
+#[cfg(any(target_os = "linux", test))]
+#[path = "container-qualification/registry.rs"]
+mod registry;
 #[cfg(target_os = "linux")]
 use std::{
     fs::File,
@@ -80,8 +83,15 @@ fn identity(pid: u32) -> io::Result<(u32, u32)> {
 #[cfg(target_os = "linux")]
 struct Owned {
     child: Child,
-    lock: Option<File>,
-    group: Option<i32>,
+    held: Vec<HeldInvocation>,
+}
+
+#[cfg(target_os = "linux")]
+struct HeldInvocation {
+    tool: u32,
+    descendant: u32,
+    group: i32,
+    lock: File,
 }
 
 #[cfg(target_os = "linux")]
@@ -96,11 +106,11 @@ impl Drop for Owned {
         }
         let _ = self.child.kill();
         let status = self.child.wait();
-        if let (Some(lock), Some(group)) = (&self.lock, self.group)
-            && matches!(lock.try_lock(), Err(fs::TryLockError::WouldBlock))
-        {
-            // The original still-held fixture lock pins this group's identity.
-            let _ = signal(-group, "KILL");
+        for held in &self.held {
+            if matches!(held.lock.try_lock(), Err(fs::TryLockError::WouldBlock)) {
+                // Only a validated, still-held invocation lock pins a fallback group.
+                let _ = signal(-held.group, "KILL");
+            }
         }
         if let Ok(status) = status {
             use std::os::unix::process::ExitStatusExt;
@@ -115,66 +125,92 @@ impl Drop for Owned {
 }
 
 #[cfg(target_os = "linux")]
-fn pid_file(path: &Path) -> Option<u32> {
-    let value = fs::read_to_string(path).ok()?;
-    value.ends_with('\n').then_some(())?;
-    value.trim().parse().ok().filter(|pid| *pid > 1)
+fn failed(check: &'static str) -> io::Error {
+    eprintln!("container-qualification: check={check}");
+    fail()
 }
 
 #[cfg(target_os = "linux")]
-fn wait_held(owned: &mut Owned, control: &Path) -> io::Result<(u32, u32)> {
-    let tool_pid = control.join("tool.pid");
-    let descendant_pid = control.join("descendant.pid");
-    let lock_path = control.join("descendant.lock");
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let (tool, descendant) = loop {
-        if let (Some(tool), Some(descendant)) = (pid_file(&tool_pid), pid_file(&descendant_pid)) {
-            break (tool, descendant);
+fn registry_records(root: &Path, partial: bool) -> io::Result<Vec<registry::Invocation>> {
+    registry::read(root, partial).map_err(|error| failed(error.check))
+}
+
+#[cfg(target_os = "linux")]
+fn admit_held(
+    owner: u32,
+    root: &Path,
+    record: &registry::Invocation,
+) -> io::Result<HeldInvocation> {
+    let tool = record.tool;
+    let descendant = record.descendant.ok_or_else(|| failed("registry-record"))?;
+    let lock = File::open(root.join(tool.to_string()).join("descendant.lock"))?;
+    let (parent, group) = identity(tool)?;
+    let (descendant_parent, descendant_group) = identity(descendant)?;
+    let (_, owner_group) = identity(owner)?;
+    for (valid, check) in [
+        (parent == owner, "tool-parent"),
+        (group == tool, "tool-group"),
+        (descendant_parent == tool, "descendant-parent"),
+        (descendant_group == group, "descendant-group"),
+        (owner_group != group, "owner-group"),
+    ] {
+        if !valid {
+            return Err(failed(check));
         }
-        if owned.child.try_wait()?.is_some() || Instant::now() >= deadline {
-            return Err(fail());
+    }
+    if !matches!(lock.try_lock(), Err(fs::TryLockError::WouldBlock)) {
+        return Err(failed("held-lock"));
+    }
+    // Never retain fallback signal authority before every live identity and the
+    // unique held lock have been validated together.
+    Ok(HeldInvocation {
+        tool,
+        descendant,
+        group: i32::try_from(group).map_err(|_| failed("tool-group"))?,
+        lock,
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn wait_held(owned: &mut Owned, root: &Path, previous: &[registry::Invocation]) -> io::Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let mut admitted = false;
+        for record in registry_records(root, false)? {
+            if !record.complete || previous.iter().any(|old| old.tool == record.tool) {
+                continue;
+            }
+            if !owned.held.iter().any(|held| held.tool == record.tool) {
+                let held = admit_held(owned.child.id(), root, &record)?;
+                owned.held.push(held);
+            }
+            admitted = true;
+        }
+        if admitted {
+            return Ok(());
+        }
+        if owned.child.try_wait()?.is_some() {
+            return Err(failed("owner-exit"));
+        }
+        if Instant::now() >= deadline {
+            return Err(failed("fixture-deadline"));
         }
         thread::sleep(Duration::from_millis(5));
-    };
-    let lock = File::open(&lock_path)?;
-    let (parent, group) = identity(tool)?;
-    let (_, descendant_group) = identity(descendant)?;
-    let (_, cli_group) = identity(owned.child.id())?;
-    owned.group = Some(i32::try_from(group).map_err(|_| fail())?);
-    owned.lock = Some(lock);
-    if parent != owned.child.id()
-        || group != tool
-        || descendant_group != group
-        || cli_group == group
-        || !matches!(
-            owned.lock.as_ref().ok_or_else(fail)?.try_lock(),
-            Err(fs::TryLockError::WouldBlock)
-        )
-    {
-        return Err(fail());
     }
-    Ok((tool, descendant))
 }
 
 #[cfg(target_os = "linux")]
 fn install_control(fixture: &Path, control: &Path) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+    let registry = control.join("invocations");
+    fs::create_dir(&registry)?;
+    fs::set_permissions(&registry, fs::Permissions::from_mode(0o700))?;
     let program = control.join("ffprobe");
     install(
         fixture,
         &program,
         &drmr_test_support::ToolSpec::default()
-            .with(
-                "pid_file",
-                control.join("tool.pid").to_str().ok_or_else(fail)?,
-            )
-            .with(
-                "descendant_pid_file",
-                control.join("descendant.pid").to_str().ok_or_else(fail)?,
-            )
-            .with(
-                "descendant_lock_file",
-                control.join("descendant.lock").to_str().ok_or_else(fail)?,
-            )
+            .with("invocation_root", registry.to_str().ok_or_else(fail)?)
             .with(
                 "release_file",
                 control.join("never-release").to_str().ok_or_else(fail)?,
@@ -184,16 +220,104 @@ fn install_control(fixture: &Path, control: &Path) -> io::Result<()> {
 }
 
 #[cfg(target_os = "linux")]
-fn assert_gone(owned: &Owned, tool: u32, descendant: u32) -> io::Result<()> {
-    // First observations after terminal state/return, before file/log reads. No eventual polling.
-    let released = owned.lock.as_ref().ok_or_else(fail)?.try_lock();
-    let tool_absent = !Path::new(&format!("/proc/{tool}")).exists();
-    let descendant_absent = !Path::new(&format!("/proc/{descendant}")).exists();
-    if released.is_err() || !tool_absent || !descendant_absent {
-        return Err(fail());
+fn group_absent(tool: u32) -> io::Result<()> {
+    let group = rustix::process::Pid::from_raw(i32::try_from(tool).map_err(|_| fail())?)
+        .ok_or_else(fail)?;
+    require_group_absent(rustix::process::test_kill_process_group(group))
+}
+
+#[cfg(target_os = "linux")]
+fn require_group_absent(result: Result<(), rustix::io::Errno>) -> io::Result<()> {
+    match result {
+        Err(rustix::io::Errno::SRCH) => Ok(()),
+        Err(error) => Err(error.into()),
+        Ok(()) => Err(fail()),
     }
-    owned.lock.as_ref().ok_or_else(fail)?.unlock()?;
-    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn assert_gone(
+    owned: &Owned,
+    root: &Path,
+    previous: &[registry::Invocation],
+) -> io::Result<Vec<registry::Invocation>> {
+    use std::os::unix::fs::MetadataExt as _;
+    // The first terminal observation inventories every entry, including arrivals
+    // after the ready barrier and registration cut short by Stop. No waits,
+    // eventual-absence polling, or log writes precede these observations.
+    let records = registry_records(root, true)?;
+    let mut failure = None;
+    let mut remember = |check, error| {
+        if failure.is_none() {
+            failure = Some((check, error));
+        }
+    };
+    for old in previous {
+        if !records.iter().any(|record| record == old) {
+            remember("registry-record", fail());
+        }
+    }
+    for held in &owned.held {
+        if !records.iter().any(|record| {
+            record.tool == held.tool
+                && record.descendant == Some(held.descendant)
+                && record.has_lock
+                && record.complete
+        }) {
+            remember("registry-record", fail());
+        }
+        let current =
+            fs::symlink_metadata(root.join(held.tool.to_string()).join("descendant.lock"));
+        match (held.lock.metadata(), current) {
+            (Ok(original), Ok(current))
+                if original.dev() == current.dev() && original.ino() == current.ino() => {}
+            _ => remember("registry-record", fail()),
+        }
+        match held.lock.try_lock() {
+            Ok(()) => {
+                if let Err(error) = held.lock.unlock() {
+                    remember("lock-released", error);
+                }
+            }
+            Err(error) => remember("lock-released", error.into()),
+        }
+    }
+    for record in &records {
+        if Path::new(&format!("/proc/{}", record.tool)).exists() {
+            remember("tool-absent", fail());
+        }
+        if let Some(descendant) = record.descendant
+            && Path::new(&format!("/proc/{descendant}")).exists()
+        {
+            remember("descendant-absent", fail());
+        }
+        // Even an empty, partial entry identifies the independently created tool
+        // group. ESRCH also covers a child killed before publishing its own PID.
+        if let Err(error) = group_absent(record.tool) {
+            remember("group-absent", error);
+        }
+        if record.has_lock && !owned.held.iter().any(|held| held.tool == record.tool) {
+            match File::open(root.join(record.tool.to_string()).join("descendant.lock")) {
+                Ok(lock) => match lock.try_lock() {
+                    Ok(()) => {
+                        if let Err(error) = lock.unlock() {
+                            remember("lock-released", error);
+                        }
+                    }
+                    Err(error) => remember("lock-released", error.into()),
+                },
+                Err(error) => remember("lock-released", error),
+            }
+        }
+    }
+    if records.is_empty() || owned.held.is_empty() {
+        remember("registry-record", fail());
+    }
+    if let Some((check, error)) = failure {
+        eprintln!("container-qualification: check={check}");
+        return Err(error);
+    }
+    Ok(records)
 }
 
 #[cfg(target_os = "linux")]
@@ -220,11 +344,11 @@ fn stop(cli: &Path, fixture: &Path, source: &Path, work: &Path) -> io::Result<()
         .spawn()?;
     let mut owned = Owned {
         child,
-        lock: None,
-        group: None,
+        held: Vec::new(),
     };
     eprintln!("container-qualification: phase=held-stop-barrier");
-    let (tool, descendant) = wait_held(&mut owned, &control)?;
+    let registry = control.join("invocations");
+    wait_held(&mut owned, &registry, &[])?;
     signal(i32::try_from(owned.child.id()).map_err(|_| fail())?, "TERM")?;
     let began = Instant::now();
     let status = loop {
@@ -236,12 +360,11 @@ fn stop(cli: &Path, fixture: &Path, source: &Path, work: &Path) -> io::Result<()
         }
         thread::sleep(Duration::from_millis(5));
     };
-    assert_gone(&owned, tool, descendant)?;
+    let _ = assert_gone(&owned, &registry, &[])?;
     eprintln!("container-qualification: phase=stop-return-state");
     if status.code() != Some(130) || output.exists() {
         return Err(fail());
     }
-    owned.group = None;
     for path in [&stdout_path, &stderr_path] {
         if path.metadata()?.len() > 1024 * 1024 {
             return Err(fail());
@@ -281,6 +404,19 @@ fn job_state(port: u16, id: &str) -> io::Result<String> {
         }
     }
     Err(fail())
+}
+
+#[cfg(target_os = "linux")]
+fn report_job_state(port: u16, id: &str) {
+    let state = job_state(port, id).ok();
+    let value = match state.as_deref() {
+        Some("running") => "running",
+        Some("interrupted") => "interrupted",
+        Some("failed") => "failed",
+        Some("succeeded") => "succeeded",
+        _ => "unavailable",
+    };
+    eprintln!("container-qualification: job-state={value}");
 }
 
 #[cfg(target_os = "linux")]
@@ -328,14 +464,14 @@ fn assert_loopback(pid: u32, port: u16) -> io::Result<()> {
                 && fields[1].ends_with(&format!(":{port:04X}"))
             {
                 if fields[1] != expected {
-                    return Err(fail());
+                    return Err(failed("loopback-listener"));
                 }
                 matched += 1;
             }
         }
     }
     if matched != 1 {
-        return Err(fail());
+        return Err(failed("loopback-listener"));
     }
     Ok(())
 }
@@ -373,40 +509,43 @@ fn web(cli: &Path, fixture: &Path, work: &Path, port: u16) -> io::Result<()> {
         .spawn()?;
     let mut owned = Owned {
         child,
-        lock: None,
-        group: None,
+        held: Vec::new(),
     };
     eprintln!("container-qualification: phase=web-await-stop-job");
     let id = wait_job(&control, "stop-job", &mut owned)?;
+    eprintln!("container-qualification: phase=web-check-stop-listener");
     assert_loopback(owned.child.id(), port)?;
-    let (tool, descendant) = wait_held(&mut owned, &control)?;
+    let registry = control.join("invocations");
+    eprintln!("container-qualification: phase=web-await-stop-fixture");
+    wait_held(&mut owned, &registry, &[]).inspect_err(|_| {
+        report_job_state(port, &id);
+    })?;
     fs::write(control.join("stop-ready"), b"ready")?;
+    eprintln!("container-qualification: phase=web-await-stop-terminal");
     let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
+    let stopped = loop {
         match job_state(port, &id)?.as_str() {
             "interrupted" => {
-                assert_gone(&owned, tool, descendant)?;
-                break;
+                let records = assert_gone(&owned, &registry, &[])?;
+                eprintln!("container-qualification: phase=web-check-stop-return");
+                break records;
             }
             "running" if Instant::now() < deadline => thread::sleep(Duration::from_millis(5)),
-            _ => return Err(fail()),
+            _ => {
+                report_job_state(port, &id);
+                return Err(failed("job-state"));
+            }
         }
-    }
-    owned.group = None;
-    owned.lock = None;
-    for name in [
-        "tool.pid",
-        "descendant.pid",
-        "descendant.lock",
-        "descendant.lock.ready",
-    ] {
-        let _ = fs::remove_file(control.join(name));
-    }
+    };
     fs::write(control.join("stop-confirmed"), b"confirmed")?;
     eprintln!("container-qualification: phase=web-await-shutdown-job");
-    let _ = wait_job(&control, "shutdown-job", &mut owned)?;
-    let (tool, descendant) = wait_held(&mut owned, &control)?;
+    let id = wait_job(&control, "shutdown-job", &mut owned)?;
+    eprintln!("container-qualification: phase=web-await-shutdown-fixture");
+    wait_held(&mut owned, &registry, &stopped).inspect_err(|_| {
+        report_job_state(port, &id);
+    })?;
     fs::write(control.join("shutdown-ready"), b"ready")?;
+    eprintln!("container-qualification: phase=web-await-shutdown-exit");
     signal(i32::try_from(owned.child.id()).map_err(|_| fail())?, "TERM")?;
     let began = Instant::now();
     let status = loop {
@@ -418,12 +557,12 @@ fn web(cli: &Path, fixture: &Path, work: &Path, port: u16) -> io::Result<()> {
         }
         thread::sleep(Duration::from_millis(5));
     };
-    assert_gone(&owned, tool, descendant)?;
+    let _ = assert_gone(&owned, &registry, &stopped)?;
+    eprintln!("container-qualification: phase=web-check-shutdown-return");
     eprintln!("container-qualification: phase=web-shutdown-return-state");
     if !status.success() || TcpStream::connect(("127.0.0.1", port)).is_ok() {
         return Err(fail());
     }
-    owned.group = None;
     println!(
         "{{\"schema_version\":1,\"success\":true,\"kind\":\"web-stop-and-orderly-shutdown\",\"driver_still_alive\":true,\"immediate_lock_released\":true,\"tool_absent\":true,\"descendant_absent\":true,\"listener_released\":true,\"elapsed_milliseconds\":{}}}",
         began.elapsed().as_millis()
@@ -467,5 +606,147 @@ fn main() -> std::process::ExitCode {
             );
             std::process::ExitCode::from(1)
         }
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+    use std::os::unix::process::CommandExt as _;
+
+    fn sleeping() -> Owned {
+        Owned {
+            child: Command::new("/bin/sh")
+                .args(["-c", "read value"])
+                .process_group(0)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap(),
+            held: Vec::new(),
+        }
+    }
+
+    fn exited() -> u32 {
+        let mut child = Command::new("/bin/sh")
+            .args(["-c", "exit 0"])
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        assert!(child.wait().unwrap().success());
+        pid
+    }
+
+    fn baseline(root: &Path) -> Owned {
+        let mut owner = sleeping();
+        let tool = exited();
+        let descendant = exited();
+        let entry = root.join(tool.to_string());
+        fs::create_dir(&entry).unwrap();
+        fs::write(entry.join("descendant.pid"), format!("{descendant}\n")).unwrap();
+        fs::write(entry.join("descendant.lock"), b"").unwrap();
+        fs::write(entry.join("descendant.lock.ready"), b"ready\n").unwrap();
+        fs::write(entry.join("complete"), b"ready\n").unwrap();
+        owner.held.push(HeldInvocation {
+            tool,
+            descendant,
+            group: i32::try_from(tool).unwrap(),
+            lock: File::open(entry.join("descendant.lock")).unwrap(),
+        });
+        owner
+    }
+
+    #[test]
+    fn only_esrch_proves_that_an_owned_group_is_absent() {
+        assert!(require_group_absent(Err(rustix::io::Errno::SRCH)).is_ok());
+        for result in [
+            Ok(()),
+            Err(rustix::io::Errno::PERM),
+            Err(rustix::io::Errno::INVAL),
+            Err(rustix::io::Errno::IO),
+        ] {
+            assert!(require_group_absent(result).is_err());
+        }
+    }
+
+    #[test]
+    fn a_partial_invocation_started_after_the_barrier_is_checked_at_first_return() {
+        let root = tempfile::tempdir().unwrap();
+        let owner = baseline(root.path());
+        let prior = assert_gone(&owner, root.path(), &[]).unwrap();
+
+        // This arrival is deliberately later than the admitted ready snapshot.
+        // It is not complete and must still prevent a successful terminal check.
+        let mut late = sleeping();
+        fs::create_dir(root.path().join(late.child.id().to_string())).unwrap();
+        assert!(assert_gone(&owner, root.path(), &prior).is_err());
+        late.child.kill().unwrap();
+        late.child.wait().unwrap();
+        let records = assert_gone(&owner, root.path(), &prior).unwrap();
+        assert_eq!(records.len(), 2);
+        assert!(records.iter().any(|record| !record.complete));
+    }
+
+    #[test]
+    fn an_unreported_descendant_cannot_hide_behind_its_exited_tool() {
+        let root = tempfile::tempdir().unwrap();
+        let owner = baseline(root.path());
+        let prior = assert_gone(&owner, root.path(), &[]).unwrap();
+        let controls = tempfile::tempdir().unwrap();
+        let pid_path = controls.path().join("child.pid");
+        let lock_path = controls.path().join("child.lock");
+        let release = controls.path().join("release");
+        let tool = drmr_test_support::install(
+            &controls.path().join("worker"),
+            &drmr_test_support::ToolSpec::default()
+                .with("descendant_pid_file", pid_path.to_str().unwrap())
+                .with("descendant_lock_file", lock_path.to_str().unwrap())
+                .with("release_file", release.to_str().unwrap()),
+        )
+        .unwrap();
+        let mut late = Owned {
+            child: Command::new(tool)
+                .process_group(0)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap(),
+            held: Vec::new(),
+        };
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let descendant = loop {
+            if let Ok(value) = fs::read_to_string(&pid_path)
+                && let Some(value) = value.strip_suffix('\n')
+                && let Ok(pid) = value.parse::<u32>()
+                && pid > 1
+            {
+                break pid;
+            }
+            assert!(late.child.try_wait().unwrap().is_none());
+            assert!(Instant::now() < deadline);
+            thread::yield_now();
+        };
+        let tool = late.child.id();
+        let (parent, group) = identity(tool).unwrap();
+        assert_eq!((parent, group), (std::process::id(), tool));
+        assert_eq!(identity(descendant).unwrap(), (tool, tool));
+        let lock = File::open(lock_path).unwrap();
+        assert!(matches!(lock.try_lock(), Err(fs::TryLockError::WouldBlock)));
+        late.held.push(HeldInvocation {
+            tool,
+            descendant,
+            group: i32::try_from(tool).unwrap(),
+            lock,
+        });
+        fs::create_dir(root.path().join(tool.to_string())).unwrap();
+        fs::write(release, b"release").unwrap();
+        assert!(late.child.wait().unwrap().success());
+        assert!(!Path::new(&format!("/proc/{tool}")).exists());
+        assert!(Path::new(&format!("/proc/{descendant}")).exists());
+        // The registry has no descendant PID, but the tool group remains live.
+        assert!(assert_gone(&owner, root.path(), &prior).is_err());
     }
 }

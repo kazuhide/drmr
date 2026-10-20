@@ -17,11 +17,13 @@ This guide describes drmr 0.1.0 and was updated on 2026-10-20. Public source and
 | Find external tools | `doctor` | Required executables can be found in the launch environment |
 | Check versions and options | `doctor --probe` | Version and help output advertise required features; no media is processed |
 | Read input declarations | `inspect` | Local MP4, DASH or HLS metadata; no decryption or complete sample proof |
+| Check complete source media | `analyze` | Actual input admission; URL input is retained in an explicit download directory |
 | Describe a conversion | `plan` | Requested formats and protection, candidate routes and runtime conditions |
+| Save a conversion request | `plan --save` | Source file fingerprints, one output format, protection and destination |
 | Convert media | `convert` | Actual input admission, conversion and comparison before publishing new output |
 | Compare independently | `verify` | Reads original and result independently and checks complete media and timing |
 
-Usually start with `inspect`, optionally use `plan`, then `convert` and `verify`. Generic HLS conversion does not require an earlier `analyze-hls` step.
+Use `analyze`, `plan --save`, `convert --plan` and `verify --plan` to check the source, save the conversion request, execute it and compare the result. `inspect` remains a quick metadata check. Direct `convert INPUT` also remains available; generic HLS conversion does not require an earlier `analyze-hls` step.
 
 ## First local example
 
@@ -31,13 +33,14 @@ Start with a supported unencrypted local MP4. Create the output parent directory
 drmr --version
 drmr doctor --probe --route progressive-mp4
 drmr inspect original.mp4 --json
-drmr plan original.mp4 --to clear --format mp4 --json
-drmr convert original.mp4 --to clear --format mp4 \
-  --output clear.mp4
-drmr verify clear.mp4 --source original.mp4 --json
+drmr analyze original.mp4 --json
+drmr plan original.mp4 --to clear --format mp4 \
+  --output clear.mp4 --save clear.plan.json --json
+drmr convert --plan clear.plan.json --json
+drmr verify --plan clear.plan.json --json
 ```
 
-Encrypted input or output requires the private key configuration described in chapter 5. Unsupported media is refused even in this simple example. Successful discovery or planning does not guarantee conversion will admit the actual input.
+Encrypted input or output requires the private key configuration described in chapter 5. Unsupported media is refused even in this simple example. Input checks and a saved plan do not guarantee a later conversion: source bytes, runtime keys, tools and the requested output are checked again when used.
 
 The CLI is the main interface. Docker provides an option with media tools included. The experimental local Web console and Desktop host serve specific prepared workflows; they are not general file-conversion screens exposing every CLI capability.
 
@@ -187,6 +190,8 @@ See [requirements](https://github.com/kazuhide/drmr/blob/main/docs/requirements.
 
 Store generic conversion keys in an owner-only JSON file outside output directories. On Unix, use an owner-only directory and mode 600. Do not commit real keys. Windows ACL preparation is in chapter 14.
 
+`analyze` and `plan --save` also accept `--keys-file` when source checks need input keys. Saving a plan does not require an output key; `convert --plan` and `verify --plan` receive runtime keys separately.
+
 ```sh
 umask 077
 mkdir config
@@ -299,6 +304,17 @@ drmr inspect source/master.m3u8 --json
 
 `inspect` reads local MP4, DASH and HLS declarations without keys, network acquisition or output media. It can identify a declared container, codec or protection scheme but does not establish complete sample validity. Unknown protection stays unknown; do not interpret missing evidence as clear.
 
+## Analyze complete media
+
+```sh
+drmr analyze source/master.m3u8 --json
+drmr analyze encrypted.mp4 --keys-file config/keys.json --json
+```
+
+`analyze` checks the actual complete source with the conversion engine, including encoded packets, decoded content and timestamps. Its `input_admitted` result applies to the checked input profile; candidate output formats still need a target-specific plan. It does not certify a converted result or DRM playback. Local MP4, DASH and HLS are accepted within their supported profiles. Chapter 8 shows URL input with mandatory source retention.
+
+When a documented source compatibility rule applies, `compatibility_notes` lists its fixed code. Examples include empty TS padding and adjacent HLS cue markers with no active interval. These rules retain the original bytes and all media and timing checks. See [transport-stream compatibility](https://github.com/kazuhide/drmr/blob/main/docs/media-processing.md#transport-stream-compatibility) for the exact accepted conditions.
+
 ## Plan a request
 
 ```sh
@@ -306,9 +322,24 @@ drmr plan media.mp4 --to cbcs --format dash --json
 drmr plan source/master.m3u8 --to clear --format dash,hls
 ```
 
-`plan` reports requested formats, key roles and candidate processing routes. Comma-separated formats describe alternatives in a plan, while conversion selects one. Every requested format must have a candidate. Unsupported or empty candidate sets are incompatible; source-profile admission remains a runtime condition. Even a compatible plan is not a trusted saved execution authorization.
+Without `--save`, `plan` reports requested formats, key roles and candidate processing routes. Comma-separated formats describe alternatives, while conversion selects one. Every requested format must have a candidate. Unsupported or empty candidate sets are incompatible; source-profile admission remains a runtime condition. This metadata-only JSON is not an execution plan and is refused by `convert --plan`.
 
-Use the actual original input again for conversion. A plan does not decrypt media, create an output or replace full verification. The `plan --mpd` mode lists renditions in the separate prepared-DASH workflow described in chapter 11.
+Use `--save` with a new result destination to check the complete source and save one resolved output format:
+
+```sh
+drmr plan source/input.m3u8 --to cbcs --format dash \
+  --output converted-dash --save conversion.plan.json --json
+drmr convert --plan conversion.plan.json --keys-file config/keys.json --json
+drmr verify --plan conversion.plan.json --keys-file config/keys.json --json
+```
+
+The saved plan records the local playlist/media files used by conversion, their sizes and SHA-256 content fingerprints, the output format/protection and an absolute destination. Paths are tied to that machine and location; keep the plan private and outside source/output trees. Unknown versions or fields, inconsistent plan identifiers, changed source bytes and unsafe destinations are refused. The identifier detects inconsistency; it is not a signature or authorization from another party.
+
+Keys, signed source URLs, authentication headers, license URLs, HLS key URIs and executable arguments are not stored in the plan. Supply keys at execution and verification with `--keys-file`. Output signaling also comes from that runtime configuration and is not fixed by the plan. `verify --plan` checks source fingerprints, actual output format/protection and independent complete media correspondence. It does not acquire a license or prove device playback.
+
+On Unix, use trusted output and plan parent directories owned by your user that other users cannot modify. Saving a plan refuses an unsafe output parent before media admission. See [workspace permissions](https://github.com/kazuhide/drmr/blob/main/docs/security.md#temporary-files-and-cleanup) for the supported shared temporary-directory rule and cleanup boundaries.
+
+Saving a plan creates no converted media. Encrypted source checks can decrypt with supplied input keys. Source admission is repeated when executing. The `plan --mpd` mode remains the separate prepared-DASH rendition listing described in chapter 11.
 
 # 7. Local conversion examples
 
@@ -440,15 +471,20 @@ The explicit signaling regression uses a derived fragmented clear MP4. It does n
 
 ## A retained download directory is mandatory
 
-Generic URL input supports its qualified completed clear HLS source profile. Every request needs a new `--download-dir`; it retains source bytes for later independent verification. The output destination is separately new.
+Generic URL input supports completed clear HLS with qualified TS or fragmented MP4 media. To analyze before conversion, use these four commands. Prepare the output key file using chapter 5's clear-input CBCS structure and keep it outside source/output trees.
 
 ```sh
-drmr convert "https://example.com/vod/master.m3u8" \
-  --download-dir ./saved-source --to cbcs --format hls \
-  --output ./converted --keys-file config/hls-output.json --json
+drmr analyze "https://example.com/vod/master.m3u8" \
+  --download-dir ./saved-source --json
+drmr plan ./saved-source/input.m3u8 --to cbcs --format dash \
+  --output ./converted-dash --save ./conversion.plan.json --json
+drmr convert --plan ./conversion.plan.json --keys-file config/keys.json --json
+drmr verify --plan ./conversion.plan.json --keys-file config/keys.json --json
 ```
 
-The completed retained entrypoint is `saved-source/input.m3u8`. Source URLs, playlists and downloaded media remain in the private folder. Do not describe this as an ephemeral URL-only operation. Private keys are operator-supplied; encrypted remote-key retrieval is not performed.
+URL input requires a new `--download-dir` under an existing parent. The plan file and result destination must also be new and separate from the source. `analyze` retains original playlist/resource bytes and creates the local entrypoint `saved-source/input.m3u8`; local playlists change resource references only. Private originals can contain signed URLs. No key URI is retrieved. Remote DASH, standalone MP4, encrypted URLs, live input and byte ranges remain outside this acquisition profile.
+
+Only the first command needs the server. The remaining commands use the retained local source. A completed download remains available after a later analysis or conversion failure; an incomplete acquisition is not admitted. Direct `convert URL --download-dir NEW_DIR` also remains available for a single invocation without a saved plan.
 
 ## Reuse offline
 
@@ -457,15 +493,15 @@ After a successful acquisition, the local retained input can be used without the
 ```sh
 drmr convert saved-source/input.m3u8 --to cbcs --format hls \
   --output retry-hls --keys-file config/hls-output.json
-drmr verify converted/master.m3u8 --source saved-source/input.m3u8 \
+drmr verify retry-hls/master.m3u8 --source saved-source/input.m3u8 \
   --keys-file config/hls-output.json --json
 ```
 
-Do not reuse an existing download directory for a new acquisition. Partial failed acquisition is not a complete saved source. Source byte identity and physical ownership are checked before final publication; cancellation or mutation prevents success.
+Do not reuse an existing download directory for a new acquisition. Partial failed acquisition is not a complete saved source. Source byte identity and physical ownership are checked before final publication; cancellation or mutation prevents success. `convert --plan` preserves its recorded destination and refuses intent overrides or an existing result. Choose a new plan for a different destination; use `verify --plan` to recheck an already published result.
 
 ## Fetch policy
 
-Default policy is HTTPS with same-origin references and bounded acquisition. Explicit origin/private-network/HTTP access requires the supported private policy configuration; it is not enabled by weakening Host or Origin checks.
+Default policy is HTTPS with same-origin references and bounded acquisition. `analyze URL` and direct `convert URL` both accept `--fetch-policy`. Explicit origin/private-network/HTTP access requires the supported private policy configuration; it is not enabled by weakening Host or Origin checks.
 
 ```json
 {
@@ -482,7 +518,7 @@ Protect this JSON file before use:
 
 ```sh
 drmr convert "https://example.com/vod/master.m3u8" \
-  --download-dir saved-source --fetch-policy config/fetch.json \
+  --download-dir authenticated-source --fetch-policy config/fetch.json \
   --to clear --format hls --output clear-result
 ```
 
@@ -533,7 +569,7 @@ See [processing and timing](https://github.com/kazuhide/drmr/blob/main/docs/medi
 
 ## Why separate commands exist
 
-`analyze-hls` captures a durable source snapshot for supported clear HLS. `package-hls` uses that analyzed source and a DRM-signaling configuration, including supported subtitles and audio selection. These are not aliases for generic conversion. Do not discard subtitle or signaling requirements when selecting a workflow.
+The generic `analyze` command checks input for `plan --save` and `convert --plan`. The separate `analyze-hls` command captures a durable source snapshot for supported clear HLS. `package-hls` uses that analyzed source and a DRM-signaling configuration, including supported subtitles and audio selection. These are not aliases for generic conversion. Do not discard subtitle or signaling requirements when selecting a workflow.
 
 ## Capture a local source
 
@@ -1142,14 +1178,35 @@ PROFILE is `all`, `prepared-dash`, `progressive-mp4`, `fragmented-mp4`, `dash-pr
 | `INPUT` | Local MP4, MPD or M3U8; remote resources are not acquired |
 | `--json` | Versioned metadata report |
 
+## analyze
+
+| Argument/option | Meaning |
+| --- | --- |
+| `INPUT` | Complete local MP4, DASH or HLS; completed clear HLS URL within the acquisition profile |
+| `--download-dir NEW_DIR` | Required for a URL; retain the original privately |
+| `--fetch-policy FILE` | Private origin/header/resource policy for URL input |
+| `--keys-file FILE` | Protected input keys when source checks require decryption |
+| `--packager-bin FILE` | Shaka executable; default packager |
+| `--max-workers N` | Upper bound 1-64; otherwise automatic CPU/memory choice |
+| `--json` | One input-analysis report; input_admitted does not verify a converted output |
+| `--measure` | Add numeric measurements; requires --json |
+
+Local input refuses download/fetch options. URL analysis always requires a new download directory.
+
 ## plan
 
 | Argument/option | Meaning |
 | --- | --- |
 | `INPUT` | Local input for generic conversion intent |
 | `--to TARGET` | Required in INPUT mode: clear, cenc, cbcs, hls-aes128, hls-sample-aes |
-| `--format FORMAT` | mp4, dash, hls, hls-ts; comma-separated alternatives allowed; omitted follows MP4/DASH/HLS, with HLS meaning fMP4 |
+| `--format FORMAT` | mp4, dash, hls, hls-ts; alternatives allowed without --save, one resolved format when saving; omitted follows MP4/DASH/HLS, with HLS meaning fMP4 |
 | `--json` | Versioned plan without execution |
+| `--save NEW_FILE` | Validate the source and save an execution plan; requires INPUT, --to and --output |
+| `--output NEW_PATH` | Result destination fixed by --save; refused without --save |
+| `--keys-file FILE` | Input keys for source checks; only with --save |
+| `--packager-bin FILE` | Shaka executable for source checks; only with --save, default packager |
+| `--max-workers N` | Upper bound 1-64 for source checks; only with --save |
+| `--measure` | Add measurements to stdout; requires --json and --save; saved file stays an execution plan |
 | `--mpd MPD` | Separate prepared-DASH rendition-listing mode |
 | `--asset-id ID` | Asset name in MPD mode |
 
@@ -1157,10 +1214,11 @@ PROFILE is `all`, `prepared-dash`, `progressive-mp4`, `fragmented-mp4`, `dash-pr
 
 | Argument/option | Meaning |
 | --- | --- |
-| `INPUT` | Supported local original or completed clear HLS URL |
-| `--to TARGET` | Required output protection |
+| `INPUT` | Supported local original or completed clear HLS URL; omitted with --plan |
+| `--to TARGET` | Required output protection without --plan |
 | `--format FORMAT` | One output format; HLS defaults to fMP4 even for TS input |
-| `--output NEW_PATH` | Required new file/directory |
+| `--output NEW_PATH` | Required new file/directory without --plan |
+| `--plan FILE` | Execute saved source, format, protection and output path; refuse media-intent overrides |
 | `--keys-file FILE` | Private JSON separating input/output key roles |
 | `--download-dir NEW_DIR` | Mandatory for URL input; retained original |
 | `--fetch-policy FILE` | Private URL-origin/header/resource policy JSON |
@@ -1171,12 +1229,15 @@ PROFILE is `all`, `prepared-dash`, `progressive-mp4`, `fragmented-mp4`, `dash-pr
 
 There are no generic `ffmpeg-bin` or `ffprobe-bin` options. Those tools are found on the launch environment's PATH.
 
+`--plan` conflicts with INPUT, --to, --format, --output, --download-dir and --fetch-policy. Runtime keys, tool selection, worker limits and reporting options remain separate.
+
 ## verify
 
 | Argument/option | Meaning |
 | --- | --- |
-| `OUTPUT` | Candidate MP4, MPD or M3U8 |
-| `--source INPUT` | Required original; never inferred from the result |
+| `OUTPUT` | Candidate MP4, MPD or M3U8; omitted with --plan |
+| `--source INPUT` | Required original without --plan; never inferred from the result |
+| `--plan FILE` | Check recorded source, output format/protection and independent media correspondence; conflicts with OUTPUT and --source |
 | `--keys-file FILE` | input keys for original, output keys for candidate |
 | `--packager-bin FILE` | Shaka executable; default packager |
 | `--max-workers N` | Upper bound 1-64; admission may reduce it |
@@ -1184,6 +1245,8 @@ There are no generic `ffmpeg-bin` or `ffprobe-bin` options. Those tools are foun
 | `--measure` | Add measurements; requires --json |
 
 Verification does not rebuild the result using a new target/format.
+
+Plan verification adds plan_id, source_unchanged and output_matches_plan, with complete comparison results under verification. Success requires source_unchanged, output_matches_plan and verification.passed all to be true. Matching media alone does not establish the planned encryption. Output signaling and license playback remain separate.
 
 ## run
 
