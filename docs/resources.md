@@ -93,6 +93,16 @@ controls, including first use and long valid and invalid values, observed no
 runtime scanner heap allocations. Parser, report and graph allocations remain
 part of the library's resource accounting.
 
+## S3 transfer timeouts
+
+The Rust S3 storage backend's `TransferPolicy.per_object_timeout_s` defaults to
+30 seconds. After name resolution, each connection has one cumulative budget for
+TCP setup and the TLS handshake, which establishes an authenticated encrypted
+connection. Receiving partial handshake bytes does not restart that budget.
+Once connected, the same value limits idle periods in socket reads and writes;
+a transfer that keeps making progress can take longer than this value. Retry
+counts and object byte budgets apply separately.
+
 ## Output and pending work
 
 Captured stdout defaults to 16 MiB and stderr to 1 MiB, independently. Rust callers can

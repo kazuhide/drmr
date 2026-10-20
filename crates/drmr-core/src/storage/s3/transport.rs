@@ -1,9 +1,12 @@
 //! Preserve S3's read/write idle limits across the HTTP client's transport boundary.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use ureq::unversioned::resolver::DefaultResolver;
+use ureq::unversioned::transport::time::{
+    Duration as TransportDuration, Instant as TransportInstant,
+};
 use ureq::unversioned::transport::{
-    Buffers, ConnectionDetails, Connector, DefaultConnector, NextTimeout, Transport,
+    Buffers, ConnectionDetails, Connector, NextTimeout, RustlsConnector, TcpConnector, Transport,
 };
 
 pub(super) fn agent(idle: Duration) -> ureq::Agent {
@@ -14,9 +17,15 @@ pub(super) fn agent(idle: Duration) -> ureq::Agent {
         // Signed requests must not start using environment proxies after an HTTP client update.
         .proxy(None)
         .build();
+    with_config(config, idle)
+}
+
+fn with_config(config: ureq::config::Config, idle: Duration) -> ureq::Agent {
     ureq::Agent::with_parts(
         config,
-        DefaultConnector::default().chain(IdleConnector(idle)),
+        ().chain(TcpConnector::default())
+            .chain(IdleConnector(idle))
+            .chain(RustlsConnector::default()),
         DefaultResolver::default(),
     )
 }
@@ -29,12 +38,14 @@ impl<T: Transport> Connector<T> for IdleConnector {
 
     fn connect(
         &self,
-        _: &ConnectionDetails,
+        details: &ConnectionDetails,
         chained: Option<T>,
     ) -> Result<Option<Self::Out>, ureq::Error> {
         Ok(chained.map(|inner| IdleTransport {
             inner,
             idle: self.0,
+            // Retain the start of TCP setup, including time spent before this connector.
+            connect_deadline: connection_deadline(details.now, details.timeout.after),
         }))
     }
 }
@@ -43,6 +54,37 @@ impl<T: Transport> Connector<T> for IdleConnector {
 struct IdleTransport<T> {
     inner: T,
     idle: Duration,
+    connect_deadline: Option<Instant>,
+}
+
+impl<T> IdleTransport<T> {
+    fn timeout(
+        &self,
+        timeout: NextTimeout,
+        reason: ureq::Timeout,
+    ) -> Result<NextTimeout, ureq::Error> {
+        // Later request/response phases must not reuse an expired handshake deadline.
+        let timeout = if timeout.reason == ureq::Timeout::Connect {
+            let remaining = self
+                .connect_deadline
+                .and_then(|deadline| deadline.checked_duration_since(Instant::now()))
+                .filter(|remaining| !remaining.is_zero())
+                .ok_or(ureq::Error::Timeout(ureq::Timeout::Connect))?;
+            bound(timeout, remaining, ureq::Timeout::Connect)
+        } else {
+            timeout
+        };
+        Ok(bound(timeout, self.idle, reason))
+    }
+}
+
+fn connection_deadline(start: TransportInstant, budget: TransportDuration) -> Option<Instant> {
+    match (start, budget) {
+        (TransportInstant::Exact(start), TransportDuration::Exact(budget)) => {
+            start.checked_add(budget)
+        }
+        _ => None,
+    }
 }
 
 impl<T: Transport> Transport for IdleTransport<T> {
@@ -51,13 +93,13 @@ impl<T: Transport> Transport for IdleTransport<T> {
     }
 
     fn transmit_output(&mut self, amount: usize, timeout: NextTimeout) -> Result<(), ureq::Error> {
-        self.inner
-            .transmit_output(amount, bound(timeout, self.idle, ureq::Timeout::SendBody))
+        let timeout = self.timeout(timeout, ureq::Timeout::SendBody)?;
+        self.inner.transmit_output(amount, timeout)
     }
 
     fn await_input(&mut self, timeout: NextTimeout) -> Result<bool, ureq::Error> {
-        self.inner
-            .await_input(bound(timeout, self.idle, ureq::Timeout::RecvBody))
+        let timeout = self.timeout(timeout, ureq::Timeout::RecvBody)?;
+        self.inner.await_input(timeout)
     }
 
     fn is_open(&mut self) -> bool {
@@ -79,6 +121,9 @@ fn bound(timeout: NextTimeout, idle: Duration, reason: ureq::Timeout) -> NextTim
         timeout
     }
 }
+
+#[cfg(test)]
+mod tls_tests;
 
 #[cfg(test)]
 mod tests {
@@ -149,6 +194,7 @@ mod tests {
         let mut transport = IdleTransport {
             inner: Probe::default(),
             idle: Duration::from_millis(300),
+            connect_deadline: None,
         };
         for budget in [Duration::from_millis(50), Duration::from_secs(2)] {
             let deadline = timeout(budget);
@@ -182,11 +228,47 @@ mod tests {
                 ..Probe::default()
             },
             idle: Duration::from_millis(300),
+            connect_deadline: None,
         };
         assert!(
             matches!(transport.await_input(timeout(Duration::from_secs(2))), Err(ureq::Error::Io(error)) if error.kind() == io::ErrorKind::Interrupted)
         );
         assert_eq!(transport.inner.reads.len(), 1);
         assert_eq!(transport.inner.writes.len(), 0);
+    }
+
+    #[test]
+    fn an_expired_connect_budget_cannot_be_restarted_by_another_tls_read() {
+        let before_tcp = Instant::now()
+            .checked_sub(Duration::from_millis(150))
+            .unwrap();
+        let connect_deadline = connection_deadline(
+            TransportInstant::Exact(before_tcp),
+            Duration::from_millis(100).into(),
+        );
+        assert_eq!(
+            connect_deadline,
+            before_tcp.checked_add(Duration::from_millis(100))
+        );
+        let mut transport = IdleTransport {
+            inner: Probe::default(),
+            idle: Duration::from_millis(300),
+            connect_deadline,
+        };
+        let deadline = NextTimeout {
+            after: Duration::from_secs(2).into(),
+            reason: ureq::Timeout::Connect,
+        };
+        assert!(matches!(
+            transport.await_input(deadline),
+            Err(ureq::Error::Timeout(ureq::Timeout::Connect))
+        ));
+        assert_eq!(transport.inner.reads.len(), 0);
+        assert!(
+            !transport
+                .await_input(timeout(Duration::from_secs(2)))
+                .unwrap()
+        );
+        assert_eq!(transport.inner.reads.len(), 1);
     }
 }
