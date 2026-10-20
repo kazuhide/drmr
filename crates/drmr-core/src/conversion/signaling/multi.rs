@@ -248,6 +248,30 @@ impl crate::conversion::Converter {
 mod tests {
     use super::*;
     #[test]
+    fn largest_provider_box_still_requires_every_output_key_identifier_to_match() {
+        let kid = "000102030405060708090a0b0c0d0e0f";
+        let mut payload = hex::decode(format!("1210{kid}1acaff03")).unwrap();
+        payload.resize(65_504, b'a');
+        let bytes =
+            crate::playready::build_pssh_box(&crate::playready::WIDEVINE_SYSTEM_ID, &payload)
+                .unwrap();
+        assert_eq!(bytes.len(), 65_536);
+        validate_widevine(&bytes, Some(kid)).unwrap();
+        assert_eq!(
+            validate_widevine(&bytes, Some("100102030405060708090a0b0c0d0e0f")),
+            Err(INVALID)
+        );
+        let signaling =
+            crate::conversion::OutputSignaling::multi_drm(Some(&hex::encode(bytes)), None, false)
+                .unwrap();
+        let wrong = crate::conversion::OutputKey::from_hex(
+            "100102030405060708090a0b0c0d0e0f",
+            "101112131415161718191a1b1c1d1e1f",
+        )
+        .unwrap();
+        assert_eq!(signaling.multi_objects(&wrong).err(), Some(INVALID));
+    }
+    #[test]
     fn drm_profiles_are_explicit_and_do_not_accept_duplicate_or_unordered_systems() {
         use DrmSystem::{FairPlay, PlayReady, Widevine};
         for systems in [vec![Widevine], vec![PlayReady], vec![Widevine, PlayReady]] {
