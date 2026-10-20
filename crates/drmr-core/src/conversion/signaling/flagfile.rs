@@ -3,7 +3,7 @@ use super::{ConversionError, LIMIT};
 use crate::{
     conversion::{backend::Backend, files::Stage},
     native::{self, FileIdentity},
-    toolrun::CleanupOwner,
+    toolrun::CleanupReceipt,
 };
 use std::{
     fs::File,
@@ -21,14 +21,13 @@ struct PrivatePssh {
     stage: Stage,
     path: PathBuf,
     identity: FileIdentity,
-    cleanup: Arc<CleanupOwner>,
+    cleanup: Option<CleanupReceipt>,
     activity: Option<Arc<dyn crate::events::Sink>>,
 }
 impl PrivatePssh {
     fn new(
         hex: &str,
         parent: Option<&Path>,
-        cleanup: Arc<CleanupOwner>,
         activity: Option<Arc<dyn crate::events::Sink>>,
     ) -> Result<Self, ConversionError> {
         if hex.is_empty()
@@ -64,7 +63,7 @@ impl PrivatePssh {
             stage,
             path,
             identity,
-            cleanup,
+            cleanup: None,
             activity,
         };
         flags.check(hex)?;
@@ -94,14 +93,17 @@ impl PrivatePssh {
         Ok(())
     }
     fn wait_for_cleanup(&self) {
+        let Some(cleanup) = &self.cleanup else { return };
         let mut notified = false;
-        while self.cleanup.has_pending() {
-            let _ = self.cleanup.retry_finish();
-            if !self.cleanup.has_pending() {
+        while cleanup.has_pending() {
+            let _ = cleanup.retry_finish();
+            if !cleanup.has_pending() {
                 break;
             }
             if !notified {
-                if let Some(activity) = &self.activity {
+                if !std::thread::panicking()
+                    && let Some(activity) = &self.activity
+                {
                     activity.emit(
                         serde_json::json!({"stage":"packaging", "event":"cleanup-pending"})
                             .as_object()
@@ -135,24 +137,28 @@ pub(in crate::conversion) fn run(
     hex: &str,
     secrets: &[&str],
 ) -> Result<Vec<u8>, ConversionError> {
-    run_with(backend, argv, hex, |backend, arguments| {
-        backend.run(arguments, "packager", secrets)
+    run_with(backend, argv, hex, |backend, arguments, receipt| {
+        backend.run_with_cleanup_receipt(arguments, "packager", secrets, receipt)
     })
 }
 fn run_with(
     backend: &Backend,
     argv: &[String],
     hex: &str,
-    operation: impl FnOnce(&Backend, &[String]) -> Result<Vec<u8>, ConversionError>,
+    operation: impl FnOnce(
+        &Backend,
+        &[String],
+        &mut Option<CleanupReceipt>,
+    ) -> Result<Vec<u8>, ConversionError>,
 ) -> Result<Vec<u8>, ConversionError> {
     backend.check_cancelled()?;
-    let (runner, cleanup) = backend.runner.ensuring_cleanup_owner();
-    let flags = PrivatePssh::new(hex, None, cleanup, backend.activity.clone())?;
+    let (runner, _) = backend.runner.ensuring_cleanup_owner();
+    let mut flags = PrivatePssh::new(hex, None, backend.activity.clone())?;
     let mut protected = backend.clone();
     protected.runner = Arc::new(runner);
     let mut arguments = Zeroizing::new(argv.to_vec());
     arguments.push(argument(&flags.path)?);
-    let result = operation(&protected, &arguments);
+    let result = operation(&protected, &arguments, &mut flags.cleanup);
     flags.wait_for_cleanup();
     flags.check(hex)?;
     result

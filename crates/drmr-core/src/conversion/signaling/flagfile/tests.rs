@@ -2,7 +2,7 @@ use super::*;
 use crate::{
     conversion::{Converter, backend::tool_error},
     events::{Collector, NoSink},
-    toolrun::{RunOptions, Secrets, ToolRunner},
+    toolrun::{CleanupOwner, RunOptions, Secrets, ToolRunner},
 };
 use std::time::{Duration, Instant};
 
@@ -32,7 +32,7 @@ fn private_flags_are_exact_bounded_and_cleaned_after_success_or_failure() {
     let program = temp.path().join("unused");
     for success in [true, false] {
         let mut observed = PathBuf::new();
-        let result = run_with(&backend(&program), &[], "00aaff", |_, argv| {
+        let result = run_with(&backend(&program), &[], "00aaff", |_, argv, _| {
             observed = flag_path(argv).to_owned();
             let mut private = native::open_private_read(&observed).unwrap();
             let mut bytes = Vec::new();
@@ -68,7 +68,7 @@ fn private_flags_are_exact_bounded_and_cleaned_after_success_or_failure() {
 #[test]
 fn replacement_and_modified_flags_are_refused_or_blocked_by_the_read_guard() {
     for replace in [true, false] {
-        let flags = PrivatePssh::new("00aaff", None, Arc::default(), None).unwrap();
+        let flags = PrivatePssh::new("00aaff", None, None).unwrap();
         let modified = if replace {
             let moved = flags.path.with_file_name("moved.flags");
             if std::fs::rename(&flags.path, moved).is_ok() {
@@ -99,7 +99,7 @@ fn a_replaced_tool_visible_directory_cannot_delete_foreign_entries() {
         .unwrap()
         .write_all(b"foreign directory must survive")
         .unwrap();
-    let flags = PrivatePssh::new("00aaff", Some(temp.path()), Arc::default(), None).unwrap();
+    let flags = PrivatePssh::new("00aaff", Some(temp.path()), None).unwrap();
     let visible = flags.stage.path().to_owned();
     let held = temp.path().join("held-media");
     let moved = std::fs::rename(&visible, &held);
@@ -137,7 +137,7 @@ fn flagfile_separators_are_refused_without_changing_the_temporary_parent() {
     for name in ["comma,parent", "parent with spaces"] {
         let parent = temp.path().join(name);
         native::create_private_dir_all(&parent).unwrap();
-        let result = PrivatePssh::new("00aaff", Some(&parent), Arc::default(), None);
+        let result = PrivatePssh::new("00aaff", Some(&parent), None);
         if name.contains(',') {
             assert_eq!(result.err(), Some(ConversionError("unsupported-path")));
         } else {
@@ -148,10 +148,7 @@ fn flagfile_separators_are_refused_without_changing_the_temporary_parent() {
         assert_eq!(std::fs::read_dir(parent).unwrap().count(), 0);
     }
     for value in ["00\n--flagfile=other", "gg", "0", ""] {
-        assert_eq!(
-            PrivatePssh::new(value, None, Arc::default(), None).err(),
-            Some(INVALID)
-        );
+        assert_eq!(PrivatePssh::new(value, None, None).err(), Some(INVALID));
     }
 }
 
@@ -234,17 +231,18 @@ fn unconfirmed_cleanup_retains_the_flags_and_preserves_the_callers_owner_and_sin
         &backend,
         &[program.to_str().unwrap().into()],
         "00aaff",
-        |protected, argv| {
+        |protected, argv, receipt| {
             path = flag_path(argv).to_owned();
             assert_eq!(protected.runner.path(), Some(temp.path().as_os_str()));
             let (_, actual_owner) = protected.runner.ensuring_cleanup_owner();
             assert!(Arc::ptr_eq(&owner, &actual_owner));
-            let failed = protected.runner.run_tool_injected_cleanup(
+            let failed = protected.runner.run_tool_injected_cleanup_with_receipt(
                 argv,
                 &RunOptions {
                     timeout: Some(Duration::from_millis(100)),
                     ..RunOptions::default()
                 },
+                receipt,
                 |_| {
                     let deadline = Instant::now() + Duration::from_secs(5);
                     while !ready.is_file() && Instant::now() < deadline {
@@ -270,4 +268,111 @@ fn unconfirmed_cleanup_retains_the_flags_and_preserves_the_callers_owner_and_sin
     assert_cleaned(&path);
     assert!(sink.records().len() >= 2);
     assert_eq!(sink.records(), observer.records());
+}
+
+#[test]
+fn denied_shared_admission_returns_without_waiting_for_an_unrelated_active_call() {
+    let temp = native::private_tempdir().unwrap();
+    let ready = temp.path().join("other-ready");
+    let release = temp.path().join("other-release");
+    let other = drmr_test_support::install(
+        &temp.path().join("other"),
+        &drmr_test_support::ToolSpec::default()
+            .with("ready_file", ready.to_str().unwrap())
+            .with("release_file", release.to_str().unwrap()),
+    )
+    .unwrap();
+    let marker = temp.path().join("must-not-start");
+    let denied = drmr_test_support::install(
+        &temp.path().join("denied"),
+        &drmr_test_support::ToolSpec::default().with("ready_file", marker.to_str().unwrap()),
+    )
+    .unwrap();
+    let owner = Arc::new(CleanupOwner::new());
+    let runner = Arc::new(
+        ToolRunner::new(Arc::new(Secrets::new()), Arc::new(NoSink))
+            .with_cleanup_owner(owner.clone()),
+    );
+    let other_runner = runner.clone();
+    let active = std::thread::spawn(move || {
+        other_runner.run_tool(
+            &[other.to_str().unwrap().into()],
+            "unrelated",
+            &RunOptions::default(),
+        )
+    });
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !ready.is_file() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(ready.is_file() && owner.has_pending());
+    let backend = Converter::new(runner, "unused", "unused").backend;
+    let (sent, received) = std::sync::mpsc::channel();
+    let operation = std::thread::spawn(move || {
+        let result = run(&backend, &[denied.to_str().unwrap().into()], "00aaff", &[]);
+        sent.send(result).unwrap();
+    });
+    let prompt = received.recv_timeout(Duration::from_secs(2));
+    let still_owned = owner.has_pending();
+    // Release the unrelated call before asserting, even on the deadlocking regression.
+    std::fs::write(release, b"release").unwrap();
+    active.join().unwrap().unwrap();
+    operation.join().unwrap();
+    assert_eq!(
+        prompt.ok(),
+        Some(Err(ConversionError("media-cleanup-unconfirmed"))),
+        "Denied admission must return while the unrelated caller is still waiting"
+    );
+    assert!(still_owned);
+    assert!(!marker.exists());
+}
+
+#[test]
+fn denied_shared_admission_does_not_reap_an_unrelated_retained_tree() {
+    let temp = native::private_tempdir().unwrap();
+    let ready = temp.path().join("ready");
+    let program = drmr_test_support::install(
+        &temp.path().join("response"),
+        &drmr_test_support::ToolSpec {
+            sleep_ms: 60_000,
+            ..drmr_test_support::ToolSpec::default()
+        }
+        .with("ready_file", ready.to_str().unwrap()),
+    )
+    .unwrap();
+    let owner = Arc::new(CleanupOwner::new());
+    let runner = Arc::new(
+        ToolRunner::new(Arc::new(Secrets::new()), Arc::new(NoSink))
+            .with_cleanup_owner(owner.clone()),
+    );
+    let mut started = false;
+    let failed = runner.run_tool_injected_cleanup(
+        &[program.to_str().unwrap().into()],
+        &RunOptions {
+            timeout: Some(Duration::from_millis(100)),
+            ..RunOptions::default()
+        },
+        |_| {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !ready.is_file() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            started = ready.is_file();
+            Err(std::io::Error::other("injected cleanup uncertainty"))
+        },
+    );
+    assert_eq!(failed.unwrap_err().kind, "cleanup-unconfirmed");
+    let backend = Converter::new(runner, "unused", "unused").backend;
+    let result = run(&backend, &[program.to_str().unwrap().into()], "00aaff", &[]);
+    let still_owned = owner.has_pending();
+    owner.retry_finish().unwrap();
+    assert!(started);
+    assert_eq!(
+        result.err(),
+        Some(ConversionError("media-cleanup-unconfirmed"))
+    );
+    assert!(
+        still_owned,
+        "A denied call must leave caller-owned cleanup unchanged"
+    );
 }
