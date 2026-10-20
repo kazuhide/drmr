@@ -178,14 +178,19 @@ fn ordinal(uri: &str, count: usize) -> Result<usize, ConversionError> {
 fn hls_declaration(a: &Rendition, uri: &str) -> Result<String, ConversionError> {
     let name = a.name.as_deref().unwrap_or("Audio");
     let mut declaration = format!(
-        "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID={},NAME={},DEFAULT={}",
+        "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID={},NAME={}",
         quoted(&a.group)?,
         quoted(name)?,
-        yes(a.is_default.unwrap_or(false)),
     );
     if !a.language.eq_ignore_ascii_case("und") {
         write!(declaration, ",LANGUAGE={}", quoted(&a.language)?).map_err(|_| BAD)?;
     }
+    write!(
+        declaration,
+        ",DEFAULT={}",
+        yes(a.is_default.unwrap_or(false))
+    )
+    .map_err(|_| BAD)?;
     if let Some(autoselect) = a.autoselect {
         write!(declaration, ",AUTOSELECT={}", yes(autoselect)).map_err(|_| BAD)?;
     }
@@ -547,6 +552,7 @@ mod tests {
             let attrs = hls::attributes(&input).unwrap();
             let rendition = Rendition::hls(&attrs).unwrap();
             let output = hls_declaration(&rendition, "audio.m3u8").unwrap();
+            assert!(output.contains("DEFAULT=YES,AUTOSELECT=YES"));
             let output = hls::attributes(output.strip_prefix("#EXT-X-MEDIA:").unwrap()).unwrap();
             assert_eq!(
                 output.get("LANGUAGE"),
