@@ -37,7 +37,7 @@ fn init(provider: bool) -> Vec<u8> {
 #[test]
 fn empty_selection_checks_aliased_standalone_mp4_contents() {
     let owner = drmr_core::native::private_tempdir().unwrap();
-    for name in ["movie.mp4", "movie.bin", "movie"] {
+    for name in ["movie.mp4", "movie.bin", "movie", "movie.MP4", "movie.M4S"] {
         let path = owner.path().join(name);
         std::fs::write(&path, init(false)).unwrap();
         check(&path, OutputFormat::Mp4).unwrap();
@@ -49,27 +49,41 @@ fn empty_selection_checks_aliased_standalone_mp4_contents() {
 #[test]
 fn empty_selection_checks_aliased_hls_children_and_initializations() {
     let owner = drmr_core::native::private_tempdir().unwrap();
-    let master = owner.path().join("master.txt");
-    let child = owner.path().join("child");
-    let init_path = owner.path().join("init.bin");
-    std::fs::write(&master, "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=100\nchild\n").unwrap();
-    std::fs::write(&init_path, init(false)).unwrap();
-    std::fs::write(owner.path().join("media.bin"), b"\x00\x00\x00\x08mdat").unwrap();
-    let clear = "#EXTM3U\n#EXT-X-MAP:URI=\"init.bin\"\n#EXTINF:2,\nmedia.bin\n#EXT-X-ENDLIST\n";
-    std::fs::write(&child, clear).unwrap();
-    check(&master, OutputFormat::Hls).unwrap();
-    std::fs::write(
-        &child,
-        clear.replace("#EXTINF:", "#EXT-X-KEY:METHOD=SAMPLE-AES,URI=\"skd://synthetic\",KEYFORMAT=\"com.apple.streamingkeydelivery\"\n#EXTINF:"),
-    )
-    .unwrap();
-    assert!(check(&master, OutputFormat::Hls).is_err(), "aliased child");
-    std::fs::write(&child, clear).unwrap();
-    std::fs::write(&init_path, init(true)).unwrap();
-    assert!(
-        check(&master, OutputFormat::Hls).is_err(),
-        "aliased initialization"
-    );
+    for (master_name, child_name, init_name) in [
+        ("master.txt", "child", "init.bin"),
+        ("MASTER.M3U8", "CHILD.M3U8", "INIT.MP4"),
+        ("master", "child.txt", "initialization"),
+    ] {
+        let master = owner.path().join(master_name);
+        let child = owner.path().join(child_name);
+        let init_path = owner.path().join(init_name);
+        std::fs::write(
+            &master,
+            format!("#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=100\n{child_name}\n"),
+        )
+        .unwrap();
+        std::fs::write(&init_path, init(false)).unwrap();
+        std::fs::write(owner.path().join("media.bin"), b"\x00\x00\x00\x08mdat").unwrap();
+        let clear = format!(
+            "#EXTM3U\n#EXT-X-MAP:URI=\"{init_name}\"\n#EXTINF:2,\nmedia.bin\n#EXT-X-ENDLIST\n"
+        );
+        std::fs::write(&child, &clear).unwrap();
+        check(&master, OutputFormat::Hls).unwrap();
+        std::fs::write(
+            &child,
+            clear.replace("#EXTINF:", "#EXT-X-KEY:METHOD=SAMPLE-AES,URI=\"skd://synthetic\",KEYFORMAT=\"com.apple.streamingkeydelivery\"\n#EXTINF:"),
+        ).unwrap();
+        assert!(
+            check(&master, OutputFormat::Hls).is_err(),
+            "aliased child: {child_name}"
+        );
+        std::fs::write(&child, &clear).unwrap();
+        std::fs::write(&init_path, init(true)).unwrap();
+        assert!(
+            check(&master, OutputFormat::Hls).is_err(),
+            "aliased initialization: {init_name}"
+        );
+    }
 }
 
 #[test]
@@ -102,13 +116,34 @@ fn whole_file_encryption_and_transport_resources_do_not_hide_clear_provider_boxe
     }
     std::fs::write(&segment, transport).unwrap();
     check(&playlist, OutputFormat::HlsTs).unwrap();
-    std::fs::write(&segment, [0x9a; 32]).unwrap();
     let encrypted = clear.replace(
         "#EXTINF:",
         "#EXT-X-KEY:METHOD=AES-128,URI=\"synthetic-key\"\n#EXTINF:",
     );
     std::fs::write(&playlist, encrypted).unwrap();
-    check(&playlist, OutputFormat::HlsTs).unwrap();
-    std::fs::write(&segment, init(true)).unwrap();
+    for leading in [0x9a, b'<', b'#', 0x47] {
+        let mut cipher = [0x9a; 32];
+        cipher[0] = leading;
+        std::fs::write(&segment, cipher).unwrap();
+        check(&playlist, OutputFormat::HlsTs).unwrap();
+    }
+    for kind in [b"skip", b"zzzz"] {
+        let mut prefix = 8u32.to_be_bytes().to_vec();
+        prefix.extend(kind);
+        let mut clear = prefix.clone();
+        clear.extend(init(false));
+        std::fs::write(&segment, clear).unwrap();
+        check(&playlist, OutputFormat::HlsTs).unwrap();
+        prefix.extend(init(true));
+        std::fs::write(&segment, &prefix).unwrap();
+        assert!(check(&playlist, OutputFormat::HlsTs).is_err());
+        prefix.extend(b"\x00\x00\x00\x07freeTRAILER!");
+        std::fs::write(&segment, prefix).unwrap();
+        assert!(check(&playlist, OutputFormat::HlsTs).is_err());
+    }
+    let mut provider = init(true);
+    provider.extend(b"\x00\x00\x00\x07freeTRAILER!");
+    assert!(provider.len().is_multiple_of(16));
+    std::fs::write(&segment, provider).unwrap();
     assert!(check(&playlist, OutputFormat::HlsTs).is_err());
 }

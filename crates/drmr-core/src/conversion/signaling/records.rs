@@ -484,19 +484,33 @@ pub(super) fn unrequested(frozen: &super::super::FrozenSource) -> Result<(), Con
     }
     let mut manifests = BTreeSet::new();
     let mut encrypted = BTreeSet::new();
-    for file in &frozen.inventory().files {
-        let path = root.join(&file.path);
-        if let Some(hls) = manifest_kind(&path)? {
-            let data = read_bounded(&path)?;
-            let text = std::str::from_utf8(&data)
-                .map_err(|_| MISMATCH)?
-                .trim_start_matches('\u{feff}');
-            if hls {
-                encrypted.extend(unrequested_hls(&path, text)?);
-            } else {
-                unrequested_dash(text)?;
+    let mut pending = vec![frozen.entrypoint().to_path_buf()];
+    while let Some(path) = pending.pop() {
+        if manifests.contains(&path) {
+            continue;
+        }
+        let Some(hls) = manifest_kind(&path)? else {
+            if path != frozen.entrypoint() {
+                return Err(MISMATCH);
             }
-            manifests.insert(path);
+            continue;
+        };
+        let data = read_bounded(&path)?;
+        let text = std::str::from_utf8(&data)
+            .map_err(|_| MISMATCH)?
+            .trim_start_matches('\u{feff}');
+        if hls {
+            let resources = unrequested_hls(&path, text)?;
+            encrypted.extend(resources.encrypted);
+            pending.extend(resources.playlists);
+        } else if path == frozen.entrypoint() {
+            unrequested_dash(text)?;
+        } else {
+            return Err(MISMATCH);
+        }
+        manifests.insert(path);
+        if manifests.len() > 65 {
+            return Err(MISMATCH);
         }
     }
     for file in &frozen.inventory().files {
@@ -523,8 +537,18 @@ fn manifest_kind(path: &Path) -> Result<Option<bool>, ConversionError> {
         None
     })
 }
-fn unrequested_hls(path: &Path, text: &str) -> Result<BTreeSet<PathBuf>, ConversionError> {
-    let mut encrypted = BTreeSet::new();
+#[derive(Default)]
+struct HlsResources {
+    encrypted: BTreeSet<PathBuf>,
+    playlists: BTreeSet<PathBuf>,
+}
+fn unrequested_hls(path: &Path, text: &str) -> Result<HlsResources, ConversionError> {
+    let root = path.parent().ok_or(MISMATCH)?;
+    let master = text
+        .lines()
+        .map(str::trim)
+        .any(|line| line.starts_with("#EXT-X-MEDIA:") || line.starts_with("#EXT-X-STREAM-INF:"));
+    let mut resources = HlsResources::default();
     let mut whole_encryption = false;
     for line in text.lines().map(str::trim) {
         if let Some(value) = line
@@ -541,6 +565,13 @@ fn unrequested_hls(path: &Path, text: &str) -> Result<BTreeSet<PathBuf>, Convers
             if line.starts_with("#EXT-X-KEY:") {
                 whole_encryption = attrs.get("METHOD") == Some("AES-128");
             }
+        } else if let Some(value) = line.strip_prefix("#EXT-X-MEDIA:") {
+            let attrs = super::super::hls::attributes(value).map_err(|_| MISMATCH)?;
+            if let Some(uri) = attrs.get("URI") {
+                resources.playlists.insert(resource(root, uri)?);
+            }
+        } else if master && !line.is_empty() && !line.starts_with('#') {
+            resources.playlists.insert(resource(root, line)?);
         } else if whole_encryption {
             let uri = if let Some(value) = line.strip_prefix("#EXT-X-MAP:") {
                 super::super::hls::attributes(value)
@@ -551,11 +582,11 @@ fn unrequested_hls(path: &Path, text: &str) -> Result<BTreeSet<PathBuf>, Convers
                 (!line.is_empty() && !line.starts_with('#')).then(|| line.to_owned())
             };
             if let Some(uri) = uri {
-                encrypted.insert(resource(path.parent().ok_or(MISMATCH)?, &uri)?);
+                resources.encrypted.insert(resource(root, &uri)?);
             }
         }
     }
-    Ok(encrypted)
+    Ok(resources)
 }
 fn unrequested_dash(text: &str) -> Result<(), ConversionError> {
     let document = roxmltree::Document::parse(text).map_err(|_| MISMATCH)?;
@@ -578,26 +609,66 @@ fn no_provider_media(path: &Path, whole_encryption: bool) -> Result<(), Conversi
     let mut prefix = [0; 3 * 188];
     let length = file.read(&mut prefix).map_err(|_| MISMATCH)?;
     let bytes = file.metadata().map_err(|_| MISMATCH)?.len();
-    let bmff = prefix[..length].get(4..8).is_some_and(|kind| {
-        matches!(
-            kind,
-            b"ftyp" | b"styp" | b"moov" | b"moof" | b"mdat" | b"sidx" | b"free" | b"pssh" | b"uuid"
-        )
-    });
-    // Opaque whole-file AES-128 bytes have no readable provider metadata. An actual
-    // BMFF header still receives the box checks, even under that manifest declaration.
-    if whole_encryption && !bmff {
-        return Ok(());
+    // Opaque whole-file AES-128 bytes have no readable provider metadata. A box
+    // sequence is still checked, including readable boxes before an invalid trailer.
+    if whole_encryption {
+        return if readable_box_sequence(path)? {
+            no_provider_boxes(path)
+        } else {
+            Ok(())
+        };
     }
     // Transport streams have no ISO BMFF provider boxes.
-    if !bmff
-        && bytes != 0
+    if bytes != 0
         && bytes.is_multiple_of(188)
         && prefix[..length].chunks(188).all(|packet| packet[0] == 0x47)
+        && !readable_box_sequence(path)?
     {
         return Ok(());
     }
     no_provider_boxes(path)
+}
+fn readable_box_sequence(path: &Path) -> Result<bool, ConversionError> {
+    let mut file = File::open(path).map_err(|_| MISMATCH)?;
+    let length = file.metadata().map_err(|_| MISMATCH)?.len();
+    let mut at = 0u64;
+    let mut readable = false;
+    let mut count = 0;
+    while at < length {
+        count += 1;
+        if count > 100_000 {
+            return Err(MISMATCH);
+        }
+        if length - at < 8 {
+            return Ok(readable);
+        }
+        let mut header = [0; 8];
+        file.read_exact(&mut header).map_err(|_| MISMATCH)?;
+        readable |= matches!(
+            &header[4..],
+            b"ftyp" | b"styp" | b"moov" | b"moof" | b"mdat" | b"sidx" | b"free" | b"pssh" | b"uuid"
+        );
+        let mut header_bytes = 8;
+        let size = match u32::from_be_bytes(header[..4].try_into().unwrap()) {
+            0 => length - at,
+            1 => {
+                if length - at < 16 {
+                    return Ok(readable);
+                }
+                let mut wide = [0; 8];
+                file.read_exact(&mut wide).map_err(|_| MISMATCH)?;
+                header_bytes = 16;
+                u64::from_be_bytes(wide)
+            }
+            value => u64::from(value),
+        };
+        if size < header_bytes || size > length - at {
+            return Ok(readable);
+        }
+        at += size;
+        file.seek(SeekFrom::Start(at)).map_err(|_| MISMATCH)?;
+    }
+    Ok(count != 0)
 }
 fn no_provider_boxes(path: &Path) -> Result<(), ConversionError> {
     let mut file = File::open(path).map_err(|_| MISMATCH)?;

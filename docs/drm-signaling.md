@@ -158,6 +158,11 @@ media comparison. A prior conversion report does not authorize either check.
 The single-output CLI `verify` currently provides the media comparison; it does
 not expose this separate provider-signaling result.
 
+Whole-file AES-128 encryption can make resource bytes opaque. The native metadata
+check examines the final manifest and readable initialization and provider records;
+it does not prove that provider data is absent inside ciphertext. Decryption and
+complete source/result media comparison remain separate checks.
+
 The existing `{"system":"playready","license_url":"..."}` setting retains its
 qualified clear-MP4-to-CBCS-DASH profile. It is not silently expanded to other inputs.
 
