@@ -202,11 +202,9 @@ impl Converter {
             }
             let path = child_output(stage.path(), output);
             let output_keys = keys.outputs.get(&output.id).unwrap_or(&empty);
+            let guard = destination::OutputGuard::for_bundle_child(&path, &destination)?;
             let child = command
-                .using_plan_destination(destination::OutputGuard::for_bundle_child(
-                    &path,
-                    &destination,
-                )?)
+                .using_plan_destination(guard)
                 .with_output_signaling(output_keys.signaling.clone());
             let mut conversion = child
                 .convert(ConversionRequest {

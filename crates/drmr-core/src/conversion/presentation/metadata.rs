@@ -28,6 +28,22 @@ pub(super) struct Rendition {
     pub autoselect: Option<bool>,
     pub channels: Option<String>,
 }
+
+pub(super) fn apply(
+    sources: &mut [Prepared],
+    descriptions: Option<&[Metadata]>,
+) -> Result<(), ConversionError> {
+    if let Some(descriptions) = descriptions {
+        if descriptions.len() != sources.len() {
+            return Err(ConversionError("presentation-track-count-mismatch"));
+        }
+        for (source, description) in sources.iter_mut().zip(descriptions) {
+            source.metadata = description.clone();
+        }
+    }
+    Ok(())
+}
+
 fn text(value: &str) -> Result<String, ConversionError> {
     if value.is_empty()
         || value.len() > 256

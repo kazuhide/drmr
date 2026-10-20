@@ -122,14 +122,7 @@ impl Converter {
             .transpose()?;
         let work = workspace()?;
         let (mut sources, clears) = self.normalize_tracks(&request, work.path())?;
-        if let Some(metadata) = metadata {
-            if metadata.len() != sources.len() {
-                return Err(ConversionError("presentation-track-count-mismatch"));
-            }
-            for (source, metadata) in sources.iter_mut().zip(metadata) {
-                source.metadata = metadata.clone();
-            }
-        }
+        metadata::apply(&mut sources, metadata)?;
         metadata::materialize(&mut sources, &self.backend, request.input_keys)?;
         let owned_stage = destination
             .as_deref()
