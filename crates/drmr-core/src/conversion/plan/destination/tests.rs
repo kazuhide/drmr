@@ -14,6 +14,122 @@ fn converter() -> Converter {
 }
 
 #[test]
+fn ordinary_output_stages_use_the_requested_destination_parent() {
+    let root = crate::native::private_tempdir().unwrap();
+    let base = root.path().canonicalize().unwrap();
+    let parent = base.join("ordinary");
+    files::create_dir(&parent).unwrap();
+    let output = parent.join("result");
+    let commands = [
+        converter(),
+        converter().using_plan_destination(OutputGuard::new(&output).unwrap()),
+    ];
+    for command in commands {
+        let stage = command.output_stage(&output).unwrap();
+        assert!(stage.path().starts_with(&parent));
+        assert!(!output.exists());
+        let private_root = stage.private_root().to_path_buf();
+        drop(stage);
+        assert!(!private_root.exists());
+    }
+    assert_eq!(std::fs::read_dir(parent).unwrap().count(), 0);
+}
+
+#[test]
+fn bundle_output_stages_are_siblings_and_intermediate_stages_keep_their_own_parent() {
+    let root = crate::native::private_tempdir().unwrap();
+    let base = root.path().canonicalize().unwrap();
+    let output = base.join("result");
+    let bundle = OutputGuard::new(&output).unwrap();
+    let outer = files::UnpublishedStage::new(Some(&base)).unwrap();
+    let child = outer.path().join("hls");
+    let guard = OutputGuard::for_bundle_child(&child, &bundle).unwrap();
+    let command = converter().using_plan_destination(guard);
+    let normalized_alias = outer.path().join(".").join("hls");
+    let stage = command.output_stage(&normalized_alias).unwrap();
+    assert!(stage.path().starts_with(&base));
+    assert!(
+        !stage.path().starts_with(outer.private_root()),
+        "a bundle child must not add another tool stage inside the outer bundle"
+    );
+    let intermediate = outer.path().join("intermediate.mp4");
+    let intermediate_stage = command.output_stage(&intermediate).unwrap();
+    assert!(intermediate_stage.path().starts_with(outer.path()));
+    assert!(!child.exists());
+    assert!(!output.exists());
+    bundle.check().unwrap();
+}
+
+#[test]
+fn sibling_stage_publication_waits_for_the_outer_bundle_commit() {
+    let root = crate::native::private_tempdir().unwrap();
+    let base = root.path().canonicalize().unwrap();
+    let output = base.join("result");
+    let bundle = OutputGuard::new(&output).unwrap();
+    let outer = files::UnpublishedStage::new(Some(&base)).unwrap();
+    let child = outer.path().join("hls");
+    let guard = OutputGuard::for_bundle_child(&child, &bundle).unwrap();
+    let command = converter().using_plan_destination(guard);
+    let stage = command.output_stage(&child).unwrap();
+    files::create_new(&stage.path().join("verified-media"))
+        .unwrap()
+        .write_all(b"verified owned bytes")
+        .unwrap();
+    command.publish_directory(&stage, &child).unwrap();
+    assert!(!output.exists());
+    assert_eq!(
+        std::fs::read(child.join("verified-media")).unwrap(),
+        b"verified owned bytes"
+    );
+    drop(stage);
+    // The child guard pins its parent until that child has completed. Release it
+    // before the outer directory itself is moved on Windows.
+    drop(command);
+    converter()
+        .using_plan_destination(bundle)
+        .publish_directory(&outer, &output)
+        .unwrap();
+    outer.finish_publication();
+    assert_eq!(
+        std::fs::read(output.join("hls/verified-media")).unwrap(),
+        b"verified owned bytes"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn sibling_stage_creation_refuses_a_replaced_child_parent_before_creating_anything() {
+    use std::os::unix::fs::symlink;
+    let root = crate::native::private_tempdir().unwrap();
+    let base = root.path().canonicalize().unwrap();
+    let work = base.join("work");
+    files::create_dir(&work).unwrap();
+    let bundle = OutputGuard::new(&work.join("result")).unwrap();
+    let outer = files::UnpublishedStage::new(Some(&work)).unwrap();
+    let child = outer.path().join("hls");
+    let guard = OutputGuard::for_bundle_child(&child, &bundle).unwrap();
+    let command = converter().using_plan_destination(guard);
+    let displaced = base.join("displaced-work");
+    let foreign = base.join("foreign-work");
+    let relative_parent = outer.path().strip_prefix(&work).unwrap();
+    std::fs::create_dir_all(foreign.join(relative_parent)).unwrap();
+    std::fs::rename(&work, &displaced).unwrap();
+    symlink(&foreign, &work).unwrap();
+    let error = command.output_stage(&child).err().unwrap();
+    std::fs::remove_file(&work).unwrap();
+    std::fs::rename(&displaced, &work).unwrap();
+    assert_eq!(error, UNSAFE);
+    assert_eq!(std::fs::read_dir(&foreign).unwrap().count(), 1);
+    assert_eq!(
+        std::fs::read_dir(foreign.join(relative_parent))
+            .unwrap()
+            .count(),
+        0
+    );
+    assert!(!child.exists());
+}
+
+#[test]
 fn planned_publication_keeps_no_replace_and_allows_private_intermediate_outputs() {
     let root = crate::native::private_tempdir().unwrap();
     let base = root.path().canonicalize().unwrap();

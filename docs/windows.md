@@ -64,7 +64,11 @@ New-Item -ItemType Directory -Path $outputDirectory -Force | Out-Null
 .\drmr.exe batch --help
 ```
 
-Use the [usage guide](usage.md) for prepared DASH, clear-HLS snapshots, batch work lists, and exit codes. Windows paths belong in command arguments and local configuration paths; manifest URLs and object keys continue to use `/`.
+Use the [usage guide](usage.md) for prepared DASH, downloaded HLS inputs, saved multi-output plans, batch work lists, and exit codes. Windows paths belong in command arguments and local configuration paths; manifest URLs and object keys continue to use `/`.
+
+Keep output and temporary-directory paths reasonably shallow. Media tools can create longer temporary names than the final media or manifest names: Shaka Packager, for example, [writes manifests through a temporary file in the same directory](https://github.com/shaka-project/shaka-packager/blob/v3.8.0/packager/file/file.cc#L75). A segment can therefore be written successfully while a later manifest write reaches a tool's path-length limit. Windows long-path settings do not make every external tool support long paths; see Microsoft's [path-length conditions](https://learn.microsoft.com/en-us/windows/win32/fileio/maximum-file-path-limitation).
+
+For a multi-output conversion, drmr creates child output stages beside the bundle stage under the original output parent, avoiding another level of temporary-directory nesting. A verified child is moved into the private bundle, and the complete bundle is published only after all requested outputs pass. The stages stay on the output filesystem, preserving atomic publication without a cross-volume copy fallback.
 
 The Windows qualification workflow runs the native CLI, batch supervision, access-control and descendant-process tests as a regular user with pinned media tools. Its artifacts retain real-media JSON reports and test logs. These checks establish only the tested media profiles; license acquisition and device playback require separate validation.
 

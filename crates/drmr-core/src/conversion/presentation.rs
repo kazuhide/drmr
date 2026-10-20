@@ -60,12 +60,6 @@ fn presentation_processing(format: OutputFormat) -> inspection::ActualProcessing
         inspection::InputPreparation::LocalTrackFiles,
     )
 }
-fn presentation_stage(destination: &Path) -> Result<super::files::Stage, ConversionError> {
-    let parent = destination
-        .parent()
-        .ok_or(ConversionError("output-path-invalid"))?;
-    super::files::Stage::new(Some(parent))
-}
 impl Converter {
     pub fn convert_tracks(
         &self,
@@ -137,7 +131,10 @@ impl Converter {
             }
         }
         metadata::materialize(&mut sources, &self.backend, request.input_keys)?;
-        let owned_stage = destination.as_deref().map(presentation_stage).transpose()?;
+        let owned_stage = destination
+            .as_deref()
+            .map(|path| self.output_stage(path))
+            .transpose()?;
         let stage = transport_stage
             .or(owned_stage.as_ref())
             .ok_or(ConversionError("output-path-invalid"))?;
@@ -1940,7 +1937,7 @@ impl Converter {
         let destination = transport.then(|| destination(request.output)).transpose()?;
         let stage = destination
             .as_ref()
-            .map(|path| super::files::Stage::new(path.parent()))
+            .map(|path| self.output_stage(path))
             .transpose()?;
         let candidate = stage.as_ref().map(|stage| stage.path().to_path_buf());
         let mut report = self.convert_tracks_inner(
