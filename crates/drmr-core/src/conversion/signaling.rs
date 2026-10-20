@@ -1,4 +1,5 @@
 //! Explicit operator signaling. No license service is contacted by this module.
+pub(in crate::conversion) mod flagfile;
 mod multi;
 mod records;
 use super::{ConversionError, OutputKey};

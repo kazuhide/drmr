@@ -72,6 +72,15 @@ are generated from `kid` and the license URL. The same generated PSSH and PlayRe
 Object (PRO) data are used in initialization files and the MPD. These operations do
 not generate provider-specific Widevine policy data or validate license responses.
 
+Explicit DASH PSSH data is passed to Shaka Packager through its
+[`--flagfile` facility](https://github.com/shaka-project/shaka-packager/blob/v3.8.0/packager/app/packager_main.cc),
+using a separate owner-protected temporary file. This avoids command-line size
+limits for large metadata. The file is checked before and after packaging, is
+kept until child-process cleanup is confirmed, and is removed with its private
+workspace. It is never included in the output directory. The temporary directory
+path must not contain a comma, because the flag-file option treats commas as
+file-name separators; such a path is refused before packaging.
+
 Omit `widevine_pssh` or `playready_license_url` to select only one system. At least
 one must remain. Do not select FairPlay for the DASH output.
 

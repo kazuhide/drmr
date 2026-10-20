@@ -1,6 +1,8 @@
 //! Joint, codec-preserving presentations with independent evidence for every source stream.
 pub(in crate::conversion) mod metadata;
 #[cfg(test)]
+mod signaling_tests;
+#[cfg(test)]
 mod staging_tests;
 mod ts_output;
 use super::{
@@ -526,12 +528,6 @@ impl Converter {
                 ]);
             }
         }
-        if let Some(signaling) = &signaling {
-            argv.extend(["--pssh".into(), signaling.hex.to_string()]);
-        }
-        if let Some(signaling) = &multi_signaling {
-            argv.extend(["--pssh".into(), signaling.hex.to_string()]);
-        }
         let mut secrets: Vec<&str> = secret
             .iter()
             .map(|s| s.as_str())
@@ -543,7 +539,15 @@ impl Converter {
         if let Some(signaling) = &multi_signaling {
             secrets.extend(signaling.secrets());
         }
-        self.backend.run(&argv, "packager", &secrets)?;
+        let pssh = signaling
+            .as_ref()
+            .map(|value| value.hex.as_str())
+            .or_else(|| multi_signaling.as_ref().map(|value| value.hex.as_str()));
+        if let Some(pssh) = pssh {
+            super::signaling::flagfile::run(&self.backend, &argv, pssh, &secrets)?;
+        } else {
+            self.backend.run(&argv, "packager", &secrets)?;
+        }
         for (index, source) in clear.iter().enumerate() {
             super::finite::restore(
                 source,

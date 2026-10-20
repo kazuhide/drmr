@@ -517,6 +517,25 @@ impl ToolRunner {
         }
     }
 
+    /// Fork without changing observers or an existing serial cleanup owner.
+    /// The caller keeps its workspace until an unconfirmed tree is reaped.
+    pub(crate) fn ensuring_cleanup_owner(&self) -> (Self, Arc<CleanupOwner>) {
+        let owner = self
+            .cleanup_owner
+            .clone()
+            .unwrap_or_else(|| Arc::new(CleanupOwner::new()));
+        let runner = Self {
+            secrets: Arc::clone(&self.secrets),
+            sink: Arc::clone(&self.sink),
+            observer: self.observer.clone(),
+            path: self.path.clone(),
+            limiter: Arc::clone(&self.limiter),
+            workload: RwLock::new(self.registered_workload()),
+            cleanup_owner: Some(Arc::clone(&owner)),
+        };
+        (runner, owner)
+    }
+
     /// Explicitly retain one unconfirmed child tree instead of dropping its owner.
     /// Keep the supplied owner alive and retry cleanup before permitting host exit.
     #[must_use]

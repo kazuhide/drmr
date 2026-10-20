@@ -1,0 +1,232 @@
+use super::*;
+use crate::{
+    conversion::{Converter, backend::tool_error},
+    events::{Collector, NoSink},
+    toolrun::{RunOptions, Secrets, ToolRunner},
+};
+use std::time::{Duration, Instant};
+
+fn backend(program: &Path) -> Backend {
+    Converter::new(
+        Arc::new(ToolRunner::new(Arc::new(Secrets::new()), Arc::new(NoSink))),
+        program.to_str().unwrap(),
+        "unused",
+    )
+    .backend
+}
+fn flag_path(argv: &[String]) -> &Path {
+    Path::new(
+        argv.iter()
+            .find_map(|value| value.strip_prefix("--flagfile="))
+            .unwrap(),
+    )
+}
+fn assert_cleaned(path: &Path) {
+    assert!(!path.exists());
+    assert!(!path.parent().unwrap().exists());
+}
+
+#[test]
+fn private_flags_are_exact_bounded_and_cleaned_after_success_or_failure() {
+    let temp = native::private_tempdir().unwrap();
+    let program = temp.path().join("unused");
+    for success in [true, false] {
+        let mut observed = PathBuf::new();
+        let result = run_with(&backend(&program), &[], "00aaff", |_, argv| {
+            observed = flag_path(argv).to_owned();
+            let mut private = native::open_private_read(&observed).unwrap();
+            let mut bytes = Vec::new();
+            private.read_to_end(&mut bytes).unwrap();
+            assert_eq!(bytes, b"--pssh=00aaff\n");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                assert_eq!(
+                    private.metadata().unwrap().permissions().mode() & 0o777,
+                    0o600
+                );
+                assert_eq!(
+                    std::fs::metadata(observed.parent().unwrap().parent().unwrap())
+                        .unwrap()
+                        .permissions()
+                        .mode()
+                        & 0o777,
+                    0o700
+                );
+            }
+            if success {
+                Ok(b"complete".to_vec())
+            } else {
+                Err(ConversionError("media-tool-failed"))
+            }
+        });
+        assert_eq!(result.is_ok(), success);
+        assert_cleaned(&observed);
+    }
+}
+
+#[test]
+fn replacement_and_modified_flags_are_refused_or_blocked_by_the_read_guard() {
+    for replace in [true, false] {
+        let flags = PrivatePssh::new("00aaff", None, Arc::default(), None).unwrap();
+        let modified = if replace {
+            let moved = flags.path.with_file_name("moved.flags");
+            if std::fs::rename(&flags.path, moved).is_ok() {
+                native::create_private_new(&flags.path)
+                    .unwrap()
+                    .write_all(b"--pssh=00aaff\n")
+                    .unwrap();
+                true
+            } else {
+                false
+            }
+        } else {
+            std::fs::write(&flags.path, b"--pssh=00aafe\n").is_ok()
+        };
+        assert_eq!(flags.check("00aaff").is_err(), modified);
+        let path = flags.path.clone();
+        drop(flags);
+        assert_cleaned(&path);
+    }
+}
+
+#[test]
+fn flagfile_separators_are_refused_without_changing_the_temporary_parent() {
+    let temp = native::private_tempdir().unwrap();
+    for name in ["comma,parent", "parent with spaces"] {
+        let parent = temp.path().join(name);
+        native::create_private_dir_all(&parent).unwrap();
+        let result = PrivatePssh::new("00aaff", Some(&parent), Arc::default(), None);
+        if name.contains(',') {
+            assert_eq!(result.err(), Some(ConversionError("unsupported-path")));
+        } else {
+            let flags = result.unwrap();
+            assert!(argument(&flags.path).unwrap().contains(name));
+            flags.check("00aaff").unwrap();
+        }
+        assert_eq!(std::fs::read_dir(parent).unwrap().count(), 0);
+    }
+    for value in ["00\n--flagfile=other", "gg", "0", ""] {
+        assert_eq!(
+            PrivatePssh::new(value, None, Arc::default(), None).err(),
+            Some(INVALID)
+        );
+    }
+}
+
+#[test]
+fn timeout_and_cancellation_reap_the_tool_before_deleting_private_flags() {
+    let temp = native::private_tempdir().unwrap();
+    for cancel in [false, true] {
+        let ready = temp.path().join(format!("ready-{cancel}"));
+        let audit = temp.path().join(format!("argv-{cancel}"));
+        let program = drmr_test_support::install(
+            &temp.path().join(format!("response-{cancel}")),
+            &drmr_test_support::ToolSpec {
+                sleep_ms: 60_000,
+                ..drmr_test_support::ToolSpec::default()
+            }
+            .with("ready_file", ready.to_str().unwrap())
+            .with("argv_file", audit.to_str().unwrap()),
+        )
+        .unwrap();
+        let mut backend = backend(&program);
+        backend.timeout = if cancel {
+            Duration::from_secs(10)
+        } else {
+            Duration::from_millis(300)
+        };
+        let stopped = backend.stop.clone();
+        let cancel_thread = cancel.then(|| {
+            let ready = ready.clone();
+            std::thread::spawn(move || {
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while !ready.is_file() && Instant::now() < deadline {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                assert!(ready.is_file(), "fixture must start before cancellation");
+                stopped.set();
+            })
+        });
+        let result = run(&backend, &[program.to_str().unwrap().into()], "00aaff", &[]);
+        if let Some(thread) = cancel_thread {
+            thread.join().unwrap();
+        }
+        assert_eq!(
+            result.err(),
+            Some(ConversionError(if cancel {
+                "cancelled"
+            } else {
+                "media-tool-timeout"
+            }))
+        );
+        assert!(ready.is_file());
+        let capture = std::fs::read_to_string(audit).unwrap();
+        let arguments = capture.lines().map(str::to_owned).collect::<Vec<_>>();
+        assert_cleaned(flag_path(&arguments));
+    }
+}
+
+#[test]
+fn unconfirmed_cleanup_retains_the_flags_and_preserves_the_callers_owner_and_sinks() {
+    let temp = native::private_tempdir().unwrap();
+    let ready = temp.path().join("ready");
+    let program = drmr_test_support::install(
+        &temp.path().join("response"),
+        &drmr_test_support::ToolSpec {
+            sleep_ms: 60_000,
+            ..drmr_test_support::ToolSpec::default()
+        }
+        .with("ready_file", ready.to_str().unwrap()),
+    )
+    .unwrap();
+    let owner = Arc::new(CleanupOwner::new());
+    let sink = Arc::new(Collector::default());
+    let observer = Arc::new(Collector::default());
+    let runner = ToolRunner::new(Arc::new(Secrets::new()), sink.clone())
+        .with_cleanup_owner(owner.clone())
+        .with_path(temp.path().as_os_str())
+        .observed(observer.clone());
+    let backend = Converter::new(Arc::new(runner), "unused", "unused").backend;
+    let mut path = PathBuf::new();
+    let result = run_with(
+        &backend,
+        &[program.to_str().unwrap().into()],
+        "00aaff",
+        |protected, argv| {
+            path = flag_path(argv).to_owned();
+            assert_eq!(protected.runner.path(), Some(temp.path().as_os_str()));
+            let (_, actual_owner) = protected.runner.ensuring_cleanup_owner();
+            assert!(Arc::ptr_eq(&owner, &actual_owner));
+            let failed = protected.runner.run_tool_injected_cleanup(
+                argv,
+                &RunOptions {
+                    timeout: Some(Duration::from_millis(100)),
+                    ..RunOptions::default()
+                },
+                |_| {
+                    let deadline = Instant::now() + Duration::from_secs(5);
+                    while !ready.is_file() && Instant::now() < deadline {
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                    assert!(ready.is_file());
+                    assert!(native::open_private_read(&path).is_ok());
+                    Err(std::io::Error::other("injected cleanup uncertainty"))
+                },
+            );
+            assert!(owner.has_pending());
+            assert!(path.exists());
+            failed
+                .map(|result| result.stdout)
+                .map_err(|error| tool_error(&error))
+        },
+    );
+    assert_eq!(
+        result.err(),
+        Some(ConversionError("media-cleanup-unconfirmed"))
+    );
+    assert!(!owner.has_pending());
+    assert_cleaned(&path);
+    assert!(sink.records().len() >= 2);
+    assert_eq!(sink.records(), observer.records());
+}
