@@ -73,7 +73,20 @@ fn source_output_overlap_and_output_path_edits_are_refused() {
     plan.intent.output = PathBuf::from("relative-result");
     plan.plan_id = identity(&plan).unwrap();
     assert_eq!(validate(&plan).unwrap_err(), INVALID);
-    plan.intent.output = root.path().canonicalize().unwrap().join("../escaped");
+    // Joining onto a Windows verbatim path would normalize away the parent component.
+    let mut escaped = root.path().canonicalize().unwrap().into_os_string();
+    escaped.push(std::path::MAIN_SEPARATOR_STR);
+    escaped.push("..");
+    escaped.push(std::path::MAIN_SEPARATOR_STR);
+    escaped.push("escaped");
+    plan.intent.output = PathBuf::from(escaped);
+    assert!(plan.intent.output.is_absolute());
+    assert!(
+        plan.intent
+            .output
+            .components()
+            .any(|part| matches!(part, Component::ParentDir))
+    );
     plan.plan_id = identity(&plan).unwrap();
     assert_eq!(validate(&plan).unwrap_err(), INVALID);
 }
