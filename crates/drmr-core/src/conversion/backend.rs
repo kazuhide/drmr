@@ -77,38 +77,6 @@ impl Backend {
             .map_err(|error| tool_error(&error))?;
         self.check_cancelled()?;
         if completed.returncode != Some(0) {
-            let stderr = String::from_utf8_lossy(&completed.stderr).to_ascii_lowercase();
-            let flags = [
-                ("path_too_long", "file name too long"),
-                ("access_denied", "permission denied"),
-                ("access_denied_windows", "access is denied"),
-                ("open_failed", "cannot open"),
-                ("file_failure", "file_failure"),
-                ("write_failed", "failed to write"),
-                ("create_failed", "failed to create"),
-                ("no_such_file", "no such file"),
-                ("invalid_argument", "invalid argument"),
-                ("sharing_violation", "sharing violation"),
-            ]
-            .into_iter()
-            .map(|(label, needle)| {
-                (
-                    label.to_string(),
-                    serde_json::Value::Bool(stderr.contains(needle)),
-                )
-            })
-            .collect::<serde_json::Map<String, serde_json::Value>>();
-            eprintln!(
-                "DRMR_PROBE {}",
-                serde_json::json!({
-                    "probe": "backend-failed",
-                    "tool": if tool == "packager" { "packager" } else if tool == "ffmpeg" { "ffmpeg" } else if tool == "ffprobe" { "ffprobe" } else { "other" },
-                    "returncode": completed.returncode,
-                    "is_manifest": effective.iter().any(|arg| arg == "--mpd_output" || arg == "--hls_master_playlist_output"),
-                    "max_argument_units": effective.iter().map(|arg| arg.encode_utf16().count()).max().unwrap_or(0),
-                    "stderr_flags": flags,
-                })
-            );
             return Err(ConversionError("media-tool-failed"));
         }
         Ok(completed.stdout)

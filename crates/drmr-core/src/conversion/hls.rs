@@ -735,11 +735,7 @@ impl Converter {
         super::files::create_dir(&clear_hls)
             .map_err(|_| ConversionError("temporary-file-unavailable"))?;
         self.backend.package_hls(&clear, &clear_hls)?;
-        let staged = super::files::Stage::new(Some(
-            destination
-                .parent()
-                .ok_or(ConversionError("output-parent-unavailable"))?,
-        ))?;
+        let staged = self.output_stage(&destination)?;
         encrypt_presentation(&clear_hls, staged.path(), output_key)?;
         let verify_stage = workspace.path().join("verify");
         super::files::create_dir(&verify_stage)

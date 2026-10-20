@@ -13,6 +13,7 @@ pub(in crate::conversion) struct OutputGuard {
     output: PathBuf,
     parent: File,
     identity: FileIdentity,
+    staging_parent: Option<PathBuf>,
     #[cfg(windows)]
     _ancestors: Vec<File>,
 }
@@ -32,10 +33,18 @@ impl OutputGuard {
             output: output.to_path_buf(),
             parent: held,
             identity,
+            staging_parent: None,
             #[cfg(windows)]
             _ancestors: ancestors,
         };
         guard.check()?;
+        Ok(guard)
+    }
+    pub(super) fn for_bundle_child(output: &Path, bundle: &Self) -> Result<Self, ConversionError> {
+        bundle.check()?;
+        let mut guard = Self::new(output)?;
+        // Keep tool workspaces beside the bundle rather than nesting them in it.
+        guard.staging_parent = Some(bundle.output.parent().ok_or(UNSAFE)?.to_path_buf());
         Ok(guard)
     }
     pub(in crate::conversion) fn check(&self) -> Result<(), ConversionError> {
@@ -82,6 +91,21 @@ impl Converter {
         self.planned_destination
             .as_ref()
             .map_or(Ok(()), |guard| guard.check())
+    }
+    pub(in crate::conversion) fn output_stage(
+        &self,
+        destination: &Path,
+    ) -> Result<files::Stage, ConversionError> {
+        self.check_plan_destination()?;
+        let destination = super::super::destination(destination)?;
+        let parent = self
+            .planned_destination
+            .as_ref()
+            .filter(|guard| guard.output == destination)
+            .and_then(|guard| guard.staging_parent.as_deref())
+            .or_else(|| destination.parent())
+            .ok_or(ConversionError("output-path-invalid"))?;
+        files::Stage::new(Some(parent))
     }
     pub(in crate::conversion) fn commit_publication(
         &self,

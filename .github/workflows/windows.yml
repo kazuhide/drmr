@@ -4,11 +4,22 @@ on:
 permissions:
   contents: read
 jobs:
-  diagnostic:
-    name: Isolated regular-user path diagnostic
+  qualification:
+    name: Frozen product regular-user qualification
     runs-on: windows-2022
     timeout-minutes: 35
+    env:
+      DRMR_PRODUCT_SOURCE_HEAD: 3d07778b45294b2ae6ac7dbc286d7337f7a5b3e0
+      DRMR_PRODUCT_SOURCE_TREE: db06247f3ff1cce24e4378030f5fd587f419ce7d
+      DRMR_PRODUCT_SOURCE_FINGERPRINT: c693d6cfb80a16e22008b8871f3eeebf5d12e7700b63affed0686091b4ecd0c1
+      DRMR_PRODUCT_RUNTIME_FINGERPRINT: 7e851de24e390e691f12900b48b9a18ba2d814abbf5058272bd19b193f6a1bc9
+      DRMR_PRODUCT_SOURCE_FILE_COUNT: 875
+      DRMR_PRODUCT_RUNTIME_FILE_COUNT: 493
+      DRMR_EXPECT_ENCRYPTED_TESTS: 5
+      DRMR_EXPECT_MANIFEST_TESTS: 10
     steps:
+      - name: Preserve the frozen source bytes during checkout
+        run: git config --global core.autocrlf false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
@@ -17,5 +28,36 @@ jobs:
           python-version: '3.13.12'
       - name: Install identical checksummed media tools
         run: ./.github/scripts/install-windows-media-tools.ps1
-      - name: Probe direct media paths as an ordinary user
-        run: ./.github/scripts/windows-path-probe.ps1 -Mode direct
+      - name: Install stable Rust
+        run: |
+          rustup toolchain install stable --profile minimal --no-self-update
+          if ($LASTEXITCODE -ne 0) { throw 'Rust installation failed' }
+          'RUSTUP_TOOLCHAIN=stable' | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Compile frozen product test executables
+        run: |
+          $executables = @()
+          foreach ($spec in @(@('-p','drmr-core','--lib','--test','conversion_bundle_plan'), @('-p','drmr','--test','encrypted_download_media','--test','native_manifest_cli'))) {
+            $messages = & cargo test @spec --locked --no-run --message-format=json
+            if ($LASTEXITCODE -ne 0) { throw 'Qualification compilation failed' }
+            foreach ($line in $messages) {
+              $message = $line | ConvertFrom-Json
+              if ($message.reason -eq 'compiler-artifact' -and $message.profile.test -and $message.executable) {
+                $executables += @{ name=$message.target.name; path=$message.executable }
+              }
+            }
+          }
+          $executables | ConvertTo-Json | Set-Content (Join-Path $env:RUNNER_TEMP 'drmr-green-executables.json')
+          & rustc -vV | Set-Content (Join-Path $env:RUNNER_TEMP 'drmr-green-rustc.txt')
+          if ($LASTEXITCODE -ne 0) { throw 'Compiler identity failed' }
+          & cargo -V | Set-Content (Join-Path $env:RUNNER_TEMP 'drmr-green-cargo.txt')
+          if ($LASTEXITCODE -ne 0) { throw 'Cargo identity failed' }
+      - name: Qualify frozen product as an ordinary user
+        run: ./.github/scripts/windows-green-probe.ps1
+      - name: Preserve source-bound categorical qualification report
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: windows-targeted-green-report
+          path: ${{ runner.temp }}/drmr-native-user/report.json
+          if-no-files-found: error
+          retention-days: 14

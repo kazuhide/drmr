@@ -71,7 +71,7 @@ impl Converter {
         }
         let sample_input = sources.iter().any(|source| source.transport_sample);
         let destination = destination(request.output)?;
-        let stage = super::super::files::Stage::new(destination.parent())?;
+        let stage = self.output_stage(&destination)?;
         let clear = work.path().join("clear-ts-output");
         let package_root = if request.target == TargetProtection::HlsAes128 {
             super::super::files::create_dir(&clear)?;
