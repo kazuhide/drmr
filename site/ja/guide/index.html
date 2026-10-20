@@ -156,7 +156,7 @@ drmr verify --plan clear.plan.json --json
 <p>clear MP4 出力はプログレッシブのサンプル表を保持します。暗号化 MP4 出力はフラグメント化され、この条件を満たす映像・音声を一つのファイルに保持できます。DASH/HLS 出力は役割ごとのトラックに分けます。入力暗号化には各トラックの鍵が必要です。</p>
 <p>複数の編集、先頭に空の編集を入れた遅延、速度変更、追加トラック、別ファイルの結合、鍵の切り替え、入力の DRM 初期化ヘッダーは、この変換プロファイルでは拒否します。cenc は検証済みの 8/16 バイトのサンプル IV、cbcs は検証済みの 16 バイト定数 IV とパターンなど、実装が確認できる配置に限ります。任意の暗号化 MP4 を受け入れるという意味ではありません。</p>
 <h3>TS の入力条件</h3>
-<p>TS 入力は、番組構成が一つに固定された配信内容が確定した HLS が対象です。プログレッシブ H.264 映像を一つ含み、48 kHz AAC-LC 音声も一つまで含められます。同じ一番組・48 kHz AAC-LC の条件なら、音声のみの入力から DASH、fMP4 HLS、TS を出力することもできます。</p>
+<p>TS 入力の対象は配信内容が確定した HLS です。番組構成が一つに固定されている必要があります。プログレッシブ H.264 映像を一つ含み、48 kHz AAC-LC 音声も一つまで含められます。同じ一番組・48 kHz AAC-LC の条件なら、音声のみの入力から DASH、fMP4 HLS、TS を出力することもできます。</p>
 <p>TS パケットは 188 バイトです。映像の復号設定を表す SPS/PPS は途中で変更できません。AAC は 7 バイトの ADTS ヘッダーを使い、チェックサムを持たず、一単位に音声フレームを一つ含む必要があります。複数番組、設定変更、壊れたパケット、時刻カウンターの周回、不連続、インターレース映像、44.1 kHz AAC、未対応の記述子などは拒否します。</p>
 <p>SAMPLE-AES 入力では暗号方式を途中で変更できません。鍵形式は <code>identity</code> または <code>com.apple.streamingkeydelivery</code> の一つで、指定する形式版は 1 です。異なる鍵形式の同時宣言は拒否します。非ゼロの音声初期遅延も対象外です。</p>
 <p>TS 出力で映像と音声がある場合は、それぞれ別の TS プレイリストと、それを関連付けるマスタープレイリストを作ります。一つの TS セグメント内に両方を多重化する出力は、現在の実装では作りません。</p>
@@ -508,7 +508,7 @@ drmr convert --plan ./conversion.plan.json --keys-file config/keys.json --json
 drmr verify --plan ./conversion.plan.json --keys-file config/keys.json --json
 </code></pre></figure>
 <p>URL 入力では、<code>--download-dir</code> に新しい保存先を指定します。親ディレクトリはあらかじめ作成してください。計画ファイルと出力先にも、原本とは別の新しい場所を選びます。取得済みのファイルを上書きしたり、既存のディレクトリを自動的に再取得先として使ったりすることはありません。ローカル入力では <code>--download-dir</code> や <code>--fetch-policy</code> を指定しません。</p>
-<p>取得できるのは、対応条件を満たす配信内容が確定した HLS の TS/fMP4 です。clear に加え、AES-128 の TS/fMP4、SAMPLE-AES の TS、CENC/CBCS の fMP4 に対応します。取得したデータには、ローカル入力と同じコーデック・トラック・暗号・時刻の条件を適用します。リモート DASH、単独 MP4、ライブ、バイト範囲による参照は現在の取得機能の対象外です。</p>
+<p>配信内容が確定し、対応条件を満たす HLS（TS/fMP4）を取得できます。clear に加え、AES-128 の TS/fMP4、SAMPLE-AES の TS、CENC/CBCS の fMP4 に対応します。取得したデータには、ローカル入力と同じコーデック・トラック・暗号・時刻の条件を適用します。リモート DASH、単独 MP4、ライブ、バイト範囲による参照は現在の取得機能の対象外です。</p>
 <p>AES-128 と SAMPLE-AES TS の <code>input.hls_keys[].uri</code> は、リダイレクト後のプレイリスト URL を基準に解決した絶対 URI と完全一致させます。例えば <code>https://example.com/vod/media.m3u8</code> 内の <code>keys/key.bin</code> は <code>https://example.com/vod/keys/key.bin</code> になります。別のディレクトリにある同じ相対名を、同じ鍵と決めつけません。絶対 URI の <code>skd:</code> はそのまま識別子として扱います。サンプル暗号化された fMP4 は、従来どおり <code>input.keys</code> に KID と鍵を指定します。鍵 URI やライセンスへのリクエストは行いません。clear 入力から clear を作る場合は鍵ファイルを省略できます。</p>
 <p>元のプレイリストとリソースを保存し、ローカル参照にした <code>saved-source/input.m3u8</code> を作ります。原本プレイリストのバイト列は別に保持し、ローカル版ではメディア参照と鍵識別 URI の解決だけを書き換えます。取得中は、暗号化済みのメディアや初期化ファイルを復号しません。時刻、シーケンス番号、音声の関連付けなどを解析結果から作り直す方式ではありません。</p>
 <p>配信元への接続が必要なのは最初の <code>analyze</code> だけです。その後は保存した原本で計画・変換・検証を進めます。後の解析や変換が失敗しても、取得が完了した原本は残ります。一回の操作で取得から変換まで進めたい場合は、従来どおり <code>convert URL --download-dir NEW_DIR</code> も使えます。</p>
@@ -631,7 +631,7 @@ drmr verify result/dash/manifest.mpd --manifest-only --json
 <h3>汎用 convert との違い</h3>
 <p>複数の DRM 出力を作る場合は、共通の <code>analyze</code>、<code>plan --outputs</code>、<code>convert --plan</code>、<code>verify --plan</code> を使います。<code>analyze-hls</code> と <code>package-hls</code> は、保存した HLS の解析結果を使う従来の操作との互換性のために残しています。<code>package-hls</code> という名前も以前からのもので、HLS に加えて DASH も出力できます。新しく複数出力の変換を始める場合は共通 CLI を推奨します。</p>
 <p><code>analyze-hls</code> は clear HLS を取得またはコピーし、メディアを調べ、ファイルと <code>analysis.json</code> を保存します。以下はこの経路固有の設定と使い方です。共通変換の別名ではありません。</p>
-<p>この経路では、対応条件を満たす WebVTT や MP4 内 TTML 字幕など、汎用 <code>convert</code> が扱わない入力も処理できます。ただし、解析元は clear の配信内容が確定した HLS に限ります。暗号化入力、ライブ、不連続、未対応のトラックや字幕は拒否します。汎用変換とは対応範囲が異なる点に注意してください。</p>
+<p>この経路では、対応条件を満たす WebVTT や MP4 内 TTML 字幕など、汎用 <code>convert</code> が扱わない入力も処理できます。ただし、解析元は配信内容が確定した clear HLS に限ります。暗号化入力、ライブ、不連続、未対応のトラックや字幕は拒否します。汎用変換とは対応範囲が異なる点に注意してください。</p>
 <h3>ローカル HLS の保存</h3>
 <p>所有者専用の <code>source.json</code> を用意します。次のパスは実際の絶対パスへ置き換えてください。</p>
 <figure class="guide-example" aria-labelledby="example-41-title" data-code-language="json"><figcaption id="example-41-title">例 41: json</figcaption><pre tabindex="0"><code>{
@@ -1084,7 +1084,7 @@ cargo test --locked -p drmr-core --test conversion_bundle_encryption \
 </tbody></table></div>
 <h3>analyze</h3>
 <div class="guide-table-scroll" role="region" aria-labelledby="table-22-title" tabindex="0"><table><caption id="table-22-title">analyze — 表 22</caption><thead><tr><th scope="col">引数・オプション</th><th scope="col">意味・既定値</th></tr></thead><tbody>
-<tr><th scope="row"><code>INPUT</code></th><td>必要なファイルがすべて揃ったローカル MP4・DASH・HLS、または取得条件を満たす配信内容が確定した HLS の URL</td></tr>
+<tr><th scope="row"><code>INPUT</code></th><td>必要なファイルがすべて揃ったローカル MP4・DASH・HLS、または配信内容が確定して取得条件を満たす HLS の URL</td></tr>
 <tr><th scope="row"><code>--download-dir NEW_DIR</code></th><td>URL に必須。原本を所有者専用で保存する新規ディレクトリ</td></tr>
 <tr><th scope="row"><code>--fetch-policy FILE</code></th><td>URL の追加 origin・認証ヘッダー・資源上限を記す、アクセス権を制限した JSON ファイル</td></tr>
 <tr><th scope="row"><code>--keys-file FILE</code></th><td>原本の復号に必要な入力鍵の保護された設定</td></tr>
