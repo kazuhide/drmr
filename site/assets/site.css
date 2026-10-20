@@ -16,6 +16,7 @@
 }
 html:lang(ja) { --sans: "IBM Plex Sans", "Hiragino Sans", "Yu Gothic", "Meiryo", "Noto Sans CJK JP", system-ui, sans-serif; }
 html:lang(ja) h1 { font-size: clamp(30px, 4vw, 44px); line-height: 1.35; letter-spacing: normal; }
+html:lang(ja) .hero-copy h1 { font-size: clamp(1.75rem, calc(1.5rem + 1vw), 2.25rem); word-break: keep-all; overflow-wrap: anywhere; }
 html:lang(ja) h2 { line-height: 1.4; letter-spacing: normal; }
 * { box-sizing: border-box; }
 html { scroll-padding-top: 24px; }
