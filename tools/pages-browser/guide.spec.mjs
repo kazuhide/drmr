@@ -138,42 +138,63 @@ async function content(page, locale) {
     .toEqual(guideChapters.map(id => '#' + id));
   await expect(page.locator('script')).toHaveCount(0);
   const groups = [];
-  for (const group of await page.locator('figure.guide-example').all()) {
-    expect(await group.getAttribute('role')).toBeNull();
-    await expect(group).toHaveRole('figure');
-    await expect(group).toHaveAttribute('data-code-language', /^(sh|bash|powershell|json|text)$/);
-    const caption = compact(await group.locator('figcaption').innerText());
-    await expect(group).toHaveAccessibleName(caption);
-    const pre = group.locator('pre');
-    await expect(pre).toHaveAttribute('tabindex', '0');
-    const code = await pre.locator('code').textContent();
-    const rendered = await pre.locator('code').innerText();
-    expect(code.trim()).not.toBe('');
-    expect(compact(rendered)).toBe(compact(code));
-    const aria = await group.ariaSnapshot();
-    await expect(pre.locator('code')).toMatchAriaSnapshot(codeAriaTemplate(code));
-    groups.push({ label: caption, language: await group.getAttribute('data-code-language'), role: 'figure', code, rendered, aria });
+  const groupLocators = await page.locator('figure.guide-example').all();
+  // The page is static: batch only independent readbacks, retaining DOM order.
+  for (let start = 0; start < groupLocators.length; start += 4) {
+    groups.push(...await Promise.all(groupLocators.slice(start, start + 4).map(async group => {
+      const pre = group.locator('pre');
+      const [role, captionText, code, rendered, aria, language] = await Promise.all([
+        group.getAttribute('role'), group.locator('figcaption').innerText(),
+        pre.locator('code').textContent(), pre.locator('code').innerText(),
+        group.ariaSnapshot(), group.getAttribute('data-code-language'),
+      ]);
+      expect(role).toBeNull();
+      const caption = compact(captionText);
+      expect(code.trim()).not.toBe('');
+      expect(compact(rendered)).toBe(compact(code));
+      await Promise.all([
+        expect(group).toHaveRole('figure'),
+        expect(group).toHaveAttribute('data-code-language', /^(sh|bash|powershell|json|text)$/),
+        expect(group).toHaveAccessibleName(caption),
+        expect(pre).toHaveAttribute('tabindex', '0'),
+        expect(pre.locator('code')).toMatchAriaSnapshot(codeAriaTemplate(code)),
+      ]);
+      return { label: caption, language, role: 'figure', code, rendered, aria };
+    })));
   }
   expect(groups.length).toBeGreaterThan(0);
   const tables = [];
-  for (const region of await page.locator('.guide-table-scroll').all()) {
-    await expect(region).toHaveAttribute('tabindex', '0');
-    await expect(region).toHaveAttribute('role', 'region');
-    const caption = compact(await region.locator('caption').innerText());
-    await expect(region).toHaveAccessibleName(caption);
-    for (const header of await region.locator('th').all()) {
-      expect(['row', 'col']).toContain(await header.getAttribute('scope'));
-    }
-    tables.push({ caption, aria: await region.ariaSnapshot() });
+  const regions = await page.locator('.guide-table-scroll').all();
+  for (let start = 0; start < regions.length; start += 4) {
+    tables.push(...await Promise.all(regions.slice(start, start + 4).map(async region => {
+      const [captionText, aria, scopes] = await Promise.all([
+        region.locator('caption').innerText(), region.ariaSnapshot(),
+        region.locator('th').evaluateAll(headers => headers.map(header => header.getAttribute('scope'))),
+      ]);
+      const caption = compact(captionText);
+      for (const scope of scopes) expect(['row', 'col']).toContain(scope);
+      await Promise.all([
+        expect(region).toHaveAttribute('tabindex', '0'),
+        expect(region).toHaveAttribute('role', 'region'),
+        expect(region).toHaveAccessibleName(caption),
+      ]);
+      return { caption, aria };
+    })));
   }
   expect(tables.length).toBeGreaterThan(0);
   const chapterLinks = page.locator('.guide-chapter-switch');
   await expect(chapterLinks).toHaveCount(20);
-  for (const [index, link] of (await chapterLinks.all()).entries()) {
-    await expect(link).toHaveAttribute('lang', locale.other);
-    await expect(link).toHaveAttribute('hreflang', locale.other);
-    expect(new URL(await link.getAttribute('href'), page.url()).href)
-      .toBe(origin + '/drmr/' + locale.switchRoute + '#' + guideChapters[index]);
+  const links = await chapterLinks.all();
+  for (let start = 0; start < links.length; start += 4) {
+    await Promise.all(links.slice(start, start + 4).map(async (link, offset) => {
+      const href = await link.getAttribute('href');
+      expect(new URL(href, page.url()).href)
+        .toBe(origin + '/drmr/' + locale.switchRoute + '#' + guideChapters[start + offset]);
+      await Promise.all([
+        expect(link).toHaveAttribute('lang', locale.other),
+        expect(link).toHaveAttribute('hreflang', locale.other),
+      ]);
+    }));
   }
   const missingAnchors = await page.locator('a[href^="#"]').evaluateAll(nodes => nodes
     .filter(node => !document.getElementById(node.getAttribute('href').slice(1))).map(node => node.getAttribute('href')));
