@@ -180,6 +180,7 @@ fn reject_mutations(
         }
         std::fs::write(entrypoint, original).unwrap();
         reject_provider_bytes(events, output, entrypoint, keys);
+        verify_referenced_initializations(events, output, entrypoint, keys);
     } else {
         let playlist = output.join("track-0000/media.m3u8");
         let original = std::fs::read_to_string(&playlist).unwrap();
@@ -223,6 +224,92 @@ fn reject_mutations(
         }
         verify_explicit_iv(events, output, entrypoint, format, target, keys);
     }
+}
+fn aliased_representation(id: &str, base: &str, init: &str, media: &str) -> String {
+    format!(
+        "<Representation id=\"{id}\">{base}<SegmentTemplate timescale=\"1\" startNumber=\"1\" initialization=\"{init}\" media=\"{media}\"><SegmentTimeline><S d=\"1\"/></SegmentTimeline></SegmentTemplate></Representation>"
+    )
+}
+fn verify_referenced_initializations(
+    events: &Arc<Collector>,
+    output: &Path,
+    entrypoint: &Path,
+    keys: &key_file::OperatorKeys,
+) {
+    let original = std::fs::read_to_string(entrypoint).unwrap();
+    let document = roxmltree::Document::parse(&original).unwrap();
+    let representation = document
+        .descendants()
+        .find(|node| node.is_element() && node.tag_name().name() == "Representation")
+        .unwrap();
+    let init = std::fs::read(output.join("track-0000/init.mp4")).unwrap();
+    let actual = output.join("actual");
+    assert!(!actual.exists());
+    drmr_core::native::create_media_dir_all(&actual).unwrap();
+    for path in [
+        actual.join("good.mp4"),
+        actual.join("good-A.mp4"),
+        actual.join("a-1.m4s"),
+        output.join("good.mp4"),
+        output.join("other.mp4"),
+        output.join("other-B.mp4"),
+    ] {
+        assert!(!path.exists());
+        std::fs::write(path, &init).unwrap();
+    }
+    let first = aliased_representation(
+        "A",
+        "<BaseURL>actual/</BaseURL>",
+        "good.mp4",
+        "a-$Number$.m4s",
+    );
+    let second = aliased_representation("B", "", "other.mp4", "good.mp4");
+    let mut changed = original.clone();
+    changed.replace_range(representation.range(), &format!("{first}{second}"));
+    std::fs::write(entrypoint, &changed).unwrap();
+    let mut checks = vec![
+        converter(events)
+            .verify_output_signaling(entrypoint, OutputFormat::Dash, TargetProtection::Cbcs, keys)
+            .is_ok(),
+    ];
+    let boxes = drmr_core::mp4::parse_boxes(&init).unwrap();
+    let provider = drmr_core::mp4::walk(&boxes)
+        .into_iter()
+        .find(|node| node.kind() == *b"pssh")
+        .unwrap();
+    let mut wrong = init.clone();
+    wrong[provider.header.offset + provider.header.size - 1] ^= 1;
+    std::fs::write(actual.join("good.mp4"), wrong).unwrap();
+    checks.push(
+        converter(events)
+            .verify_output_signaling(entrypoint, OutputFormat::Dash, TargetProtection::Cbcs, keys)
+            .is_err(),
+    );
+    std::fs::write(actual.join("good.mp4"), &init).unwrap();
+    changed = changed
+        .replace(
+            "initialization=\"good.mp4\"",
+            "initialization=\"good-$RepresentationID$.mp4\"",
+        )
+        .replace(
+            "initialization=\"other.mp4\"",
+            "initialization=\"other-$RepresentationID$.mp4\"",
+        );
+    std::fs::write(entrypoint, changed).unwrap();
+    checks.push(
+        converter(events)
+            .verify_output_signaling(entrypoint, OutputFormat::Dash, TargetProtection::Cbcs, keys)
+            .is_ok(),
+    );
+    std::fs::write(entrypoint, original).unwrap();
+    for name in ["good.mp4", "other.mp4", "other-B.mp4"] {
+        std::fs::remove_file(output.join(name)).unwrap();
+    }
+    std::fs::remove_dir_all(actual).unwrap();
+    assert_eq!(
+        checks, [true; 3],
+        "BaseURL and template expansion must select actual init bytes, including when a valid raw-path decoy is in the same graph"
+    );
 }
 fn reject_map_scope(
     events: &Arc<Collector>,

@@ -179,16 +179,8 @@ impl MultiObjects {
             }
             declarations += self.protection(set, key)?;
             for rep in reps {
-                let initialization = rep
-                    .ancestors()
-                    .find_map(|scope| {
-                        scope
-                            .children()
-                            .find(|node| node.has_tag_name((DASH, "SegmentTemplate")))
-                            .and_then(|node| node.attribute("initialization"))
-                    })
-                    .ok_or(MISMATCH)?;
-                let path = resource(root, initialization)?;
+                let path = super::super::dash::initialization_reference(root, rep)
+                    .map_err(|_| MISMATCH)?;
                 if !resources.insert(path.clone()) {
                     return Err(MISMATCH);
                 }
