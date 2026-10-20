@@ -4,6 +4,7 @@ use crate::{inspection::OutputFormat, m3u8::Attributes};
 use std::{fmt::Write as _, io::Write as _};
 const BAD: ConversionError = ConversionError("presentation-metadata-mismatch");
 const UNSUPPORTED: ConversionError = ConversionError("presentation-selection-not-representable");
+const DASH_NS: &str = "urn:mpeg:dash:schema:mpd:2011";
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum Origin {
     #[default]
@@ -314,6 +315,14 @@ pub(super) fn finish(
 }
 /// Supported DASH selection declarations use only standard language, labels and author priority.
 pub(super) fn dash(rep: roxmltree::Node<'_, '_>) -> Result<Metadata, ConversionError> {
+    let root = rep.document().root_element();
+    let namespace = root.tag_name().namespace();
+    if root.tag_name().name() != "MPD"
+        || !matches!(namespace, None | Some(DASH_NS))
+        || rep.tag_name().name() != "Representation"
+    {
+        return Err(UNSUPPORTED);
+    }
     let mut language = None;
     let mut name = None;
     let mut priority = None;
@@ -324,6 +333,14 @@ pub(super) fn dash(rep: roxmltree::Node<'_, '_>) -> Result<Metadata, ConversionE
         .into_iter()
         .rev()
     {
+        if scope.tag_name().namespace() != namespace
+            || !matches!(
+                scope.tag_name().name(),
+                "MPD" | "Period" | "AdaptationSet" | "Representation"
+            )
+        {
+            return Err(UNSUPPORTED);
+        }
         if let Some(value) = scope.attribute("lang") {
             language = Some(text(value)?);
         }
@@ -342,7 +359,10 @@ pub(super) fn dash(rep: roxmltree::Node<'_, '_>) -> Result<Metadata, ConversionE
             return Err(UNSUPPORTED);
         }
         if let Some(label) = labels.first() {
-            if label.attributes().len() > 0 || label.children().any(|n| n.is_element()) {
+            if label.tag_name().namespace() != namespace
+                || label.attributes().len() > 0
+                || label.children().any(|n| n.is_element())
+            {
                 return Err(UNSUPPORTED);
             }
             name = Some(text(label.text().ok_or(BAD)?)?);
@@ -351,7 +371,8 @@ pub(super) fn dash(rep: roxmltree::Node<'_, '_>) -> Result<Metadata, ConversionE
             .children()
             .filter(|n| n.is_element() && n.tag_name().name() == "Role")
         {
-            if role.attribute("schemeIdUri") != Some("urn:mpeg:dash:role:2011")
+            if role.tag_name().namespace() != namespace
+                || role.attribute("schemeIdUri") != Some("urn:mpeg:dash:role:2011")
                 || role.attribute("value") != Some("main")
             {
                 return Err(UNSUPPORTED);
@@ -485,6 +506,71 @@ pub(super) fn materialize(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn audio_selection(namespace: &str) -> String {
+        format!(
+            "<MPD{namespace}><Period><AdaptationSet contentType=\"audio\" lang=\"en\" selectionPriority=\"2\"><Label>English</Label><Role schemeIdUri=\"urn:mpeg:dash:role:2011\" value=\"main\"/><Representation/></AdaptationSet></Period></MPD>"
+        )
+    }
+
+    fn selection(source: &str) -> Result<Metadata, ConversionError> {
+        let document = roxmltree::Document::parse(source).unwrap();
+        let representation = document
+            .descendants()
+            .find(|n| n.has_tag_name("Representation"))
+            .unwrap();
+        dash(representation)
+    }
+
+    #[test]
+    fn standard_and_namespace_free_dash_selection_remain_equivalent() {
+        let expected = selection(&audio_selection("")).unwrap();
+        assert_eq!(
+            expected.audio.as_ref().unwrap().name.as_deref(),
+            Some("English")
+        );
+        let namespaced = audio_selection(" xmlns=\"urn:mpeg:dash:schema:mpd:2011\"");
+        assert_eq!(selection(&namespaced).unwrap(), expected);
+        let prefixed = namespaced.replace(
+            "<Label>English</Label>",
+            "<mpd:Label xmlns:mpd=\"urn:mpeg:dash:schema:mpd:2011\">English</mpd:Label>",
+        );
+        assert_eq!(selection(&prefixed).unwrap(), expected);
+    }
+
+    #[test]
+    fn foreign_selection_elements_and_inherited_scopes_are_refused() {
+        for namespace in ["", " xmlns=\"urn:mpeg:dash:schema:mpd:2011\""] {
+            let source = audio_selection(namespace);
+            for changed in [
+                source.replace("<Label>", "<Label xmlns=\"urn:foreign\">"),
+                source.replace("<Role ", "<Role xmlns=\"urn:foreign\" "),
+                source.replace("<Representation/>", "<Representation xmlns=\"urn:foreign\"/>"),
+                source.replace("<AdaptationSet ", "<AdaptationSet xmlns=\"urn:foreign\" "),
+                source.replace("<Period>", "<Period xmlns=\"urn:foreign\">"),
+                source.replace(
+                    "<Representation/>",
+                    "<foreign:Extension xmlns:foreign=\"urn:foreign\"><Representation/></foreign:Extension>",
+                ),
+                source.replace(
+                    "<Representation/>",
+                    "<Extension><Representation/></Extension>",
+                ),
+            ] {
+                assert_ne!(changed, source);
+                assert_eq!(selection(&changed).unwrap_err().0, UNSUPPORTED.0);
+            }
+        }
+        assert_eq!(
+            selection(&audio_selection(" xmlns=\"urn:foreign\""))
+                .unwrap_err()
+                .0,
+            UNSUPPORTED.0
+        );
+        let source = audio_selection(" xmlns=\"urn:mpeg:dash:schema:mpd:2011\"");
+        let reset = source.replace("<Label>", "<Label xmlns=\"\">");
+        assert_eq!(selection(&reset).unwrap_err().0, UNSUPPORTED.0);
+    }
 
     #[test]
     fn video_selection_declarations_are_rejected_in_every_inherited_scope() {

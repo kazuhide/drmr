@@ -1080,17 +1080,30 @@ fn dash_labels_language_priority_and_common_time_origin_are_independently_checke
     );
     let manifest = output.join("manifest.mpd");
     let original = std::fs::read_to_string(&manifest).unwrap();
-    for changed in [
-        original.replace("<Label>English</Label>", "<Label>Commentary</Label>"),
-        original.replace("lang=\"en\"", "lang=\"ja\""),
-        original.replace("selectionPriority=\"2\"", "selectionPriority=\"1\""),
+    for (expected, changed) in [
+        (
+            "presentation-metadata-mismatch",
+            original.replace("<Label>English</Label>", "<Label>Commentary</Label>"),
+        ),
+        (
+            "presentation-metadata-mismatch",
+            original.replace("lang=\"en\"", "lang=\"ja\""),
+        ),
+        (
+            "presentation-metadata-mismatch",
+            original.replace("selectionPriority=\"2\"", "selectionPriority=\"1\""),
+        ),
+        (
+            "presentation-selection-not-representable",
+            original.replace(
+                "<Label>English</Label>",
+                "<Label xmlns=\"urn:foreign\">English</Label>",
+            ),
+        ),
     ] {
         assert_ne!(changed, original);
         std::fs::write(&manifest, changed).unwrap();
-        assert_eq!(
-            verify_clear(&input, &manifest).unwrap_err().0,
-            "presentation-metadata-mismatch"
-        );
+        assert_eq!(verify_clear(&input, &manifest).unwrap_err().0, expected);
     }
     let document = roxmltree::Document::parse(&original).unwrap();
     let attribute = document
