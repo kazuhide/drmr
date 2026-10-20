@@ -284,6 +284,34 @@ fn a_retained_file_receipt_refuses_a_replacement_entry_at_commit() {
 }
 
 #[test]
+#[cfg(unix)]
+fn an_unsafe_parent_is_refused_before_a_plan_can_admit_work() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let root = crate::native::private_tempdir().unwrap();
+    let parent = root.path().canonicalize().unwrap().join("shared");
+    std::fs::create_dir(&parent).unwrap();
+    std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o777)).unwrap();
+    let error = OutputGuard::new(&parent.join("result")).err();
+    assert!(matches!(error, Some(UNSAFE)));
+    assert_eq!(std::fs::read_dir(parent).unwrap().count(), 0);
+}
+
+#[test]
+#[cfg(unix)]
+fn a_sticky_parent_is_accepted_and_later_loss_of_sticky_protection_is_refused() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let root = crate::native::private_tempdir().unwrap();
+    let parent = root.path().canonicalize().unwrap().join("sticky");
+    std::fs::create_dir(&parent).unwrap();
+    std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o1777)).unwrap();
+    let guard = OutputGuard::new(&parent.join("result")).unwrap();
+    guard.check().unwrap();
+    std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o777)).unwrap();
+    assert_eq!(guard.check(), Err(UNSAFE));
+    assert_eq!(std::fs::read_dir(parent).unwrap().count(), 0);
+}
+
+#[test]
 #[cfg(windows)]
 fn destination_ancestors_are_pinned_against_rename_until_the_guard_is_released() {
     let root = crate::native::private_tempdir().unwrap();

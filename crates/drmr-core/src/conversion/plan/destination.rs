@@ -25,6 +25,8 @@ impl OutputGuard {
         #[cfg(windows)]
         let ancestors = hold_ancestors(parent)?;
         let held = open_directory(parent)?;
+        #[cfg(unix)]
+        files::check_workspace_parent(&held).map_err(|_| UNSAFE)?;
         let identity = FileIdentity::read(&held).map_err(|_| UNSAFE)?;
         let guard = Self {
             output: output.to_path_buf(),
@@ -37,6 +39,8 @@ impl OutputGuard {
         Ok(guard)
     }
     pub(in crate::conversion) fn check(&self) -> Result<(), ConversionError> {
+        #[cfg(unix)]
+        files::check_workspace_parent(&self.parent).map_err(|_| UNSAFE)?;
         if super::super::destination(&self.output).map_err(|_| UNSAFE)? != self.output
             || FileIdentity::read(&self.parent).map_err(|_| UNSAFE)? != self.identity
             || FileIdentity::read(&open_directory(self.output.parent().ok_or(UNSAFE)?)?)

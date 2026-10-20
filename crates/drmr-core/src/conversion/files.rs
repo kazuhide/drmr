@@ -10,6 +10,10 @@ use std::{
 
 mod publication;
 pub(super) use publication::PublicationSource;
+#[cfg(unix)]
+mod unix_cleanup;
+#[cfg(unix)]
+pub(in crate::conversion) use unix_cleanup::check_workspace_parent;
 
 const IO_ERROR: ConversionError = ConversionError("temporary-file-unavailable");
 const PUBLISH_ERROR: ConversionError = ConversionError("output-exists-or-publish-failed");
@@ -49,12 +53,13 @@ impl Stage {
             builder
                 .prefix(".drmr-convert-")
                 .permissions(std::fs::Permissions::from_mode(0o700));
-            let outer = match parent {
-                Some(parent) => builder.tempdir_in(parent),
-                None => builder.tempdir(),
-            }
-            .map_err(|_| ConversionError("temporary-workspace-unavailable"))?;
-            let outer = UnixOuter::new(outer)?;
+            let parent = unix_cleanup::Parent::open(
+                &parent.map_or_else(std::env::temp_dir, Path::to_path_buf),
+            )?;
+            let outer = builder
+                .tempdir_in(parent.path())
+                .map_err(|_| ConversionError("temporary-workspace-unavailable"))?;
+            let outer = UnixOuter::from_parent(outer, parent)?;
             let path = outer.path().join("media");
             let media = publication::create_media(&outer.held)?;
             let media_identity = native::FileIdentity::read(&media).map_err(|_| IO_ERROR)?;
@@ -88,7 +93,7 @@ impl Stage {
             _container: container,
         })
     }
-    /// The exclusively owned strict root; callers may move it before writing payloads.
+    /// The exclusively owned strict root for separately staged children.
     pub(super) fn private_root(&self) -> &Path {
         #[cfg(unix)]
         {
@@ -107,27 +112,55 @@ impl Stage {
 #[cfg(unix)]
 struct UnixOuter {
     path: PathBuf,
+    name: std::ffi::OsString,
+    parent: unix_cleanup::Parent,
     directory: std::sync::Mutex<Option<tempfile::TempDir>>,
     held: File,
     identity: native::FileIdentity,
 }
 #[cfg(unix)]
 impl UnixOuter {
+    #[cfg(test)]
     fn new(directory: tempfile::TempDir) -> Result<Self, ConversionError> {
-        let path = directory.path().to_path_buf();
-        let held = match open_stage_directory(&path) {
-            Ok(held) => held,
+        let parent = directory
+            .path()
+            .parent()
+            .ok_or(CLEANUP_ERROR)
+            .and_then(unix_cleanup::Parent::open);
+        match parent {
+            Ok(parent) => Self::from_parent(directory, parent),
+            Err(error) => {
+                let _ = directory.keep();
+                Err(error)
+            }
+        }
+    }
+    fn from_parent(
+        directory: tempfile::TempDir,
+        parent: unix_cleanup::Parent,
+    ) -> Result<Self, ConversionError> {
+        let acquired = (|| {
+            parent.check()?;
+            let name = directory
+                .path()
+                .file_name()
+                .ok_or(CLEANUP_ERROR)?
+                .to_owned();
+            let held = parent.open_owned(&name)?;
+            let identity = native::FileIdentity::read(&held).map_err(|_| CLEANUP_ERROR)?;
+            Ok((name, held, identity))
+        })();
+        let (name, held, identity) = match acquired {
+            Ok(acquired) => acquired,
             Err(error) => {
                 let _ = directory.keep();
                 return Err(error);
             }
         };
-        let Ok(identity) = native::FileIdentity::read(&held) else {
-            let _ = directory.keep();
-            return Err(CLEANUP_ERROR);
-        };
         let outer = Self {
-            path,
+            path: parent.path().join(&name),
+            name,
+            parent,
             directory: std::sync::Mutex::new(Some(directory)),
             held,
             identity,
@@ -139,6 +172,7 @@ impl UnixOuter {
         &self.path
     }
     fn check(&self) -> Result<(), ConversionError> {
+        self.parent.check()?;
         check_stage_directory(&self.held)?;
         if native::FileIdentity::read(&self.held).map_err(|_| CLEANUP_ERROR)? != self.identity
             || native::FileIdentity::read(&open_stage_directory(&self.path)?)
@@ -150,6 +184,9 @@ impl UnixOuter {
         Ok(())
     }
     fn cleanup(&self) -> Result<(), ConversionError> {
+        self.cleanup_observed(|| {})
+    }
+    fn cleanup_observed(&self, after_check: impl FnOnce()) -> Result<(), ConversionError> {
         let (directory, poisoned) = match self.directory.lock() {
             Ok(mut directory) => (directory.take(), false),
             Err(error) => (error.into_inner().take(), true),
@@ -158,15 +195,22 @@ impl UnixOuter {
             return Ok(());
         };
         // Disable TempDir's pathname-based Drop before checking the current namespace.
-        // On uncertainty, leave the original strict directory and every replacement alone.
-        let path = directory.keep();
+        // Only the retained root descriptor may be walked; uncertain names are kept.
+        let _ = directory.keep();
         if poisoned {
             return Err(CLEANUP_ERROR);
         }
         self.check()?;
-        std::fs::remove_dir_all(path).map_err(|_| CLEANUP_ERROR)
+        after_check();
+        unix_cleanup::clear_owned(&self.held)?;
+        self.check()?;
+        self.parent.remove_owned(&self.name, &self.held)
     }
 }
+
+#[cfg(all(test, unix))]
+#[path = "files/unix_cleanup_tests.rs"]
+mod unix_cleanup_tests;
 #[cfg(unix)]
 impl Drop for UnixOuter {
     fn drop(&mut self) {
@@ -725,7 +769,10 @@ mod tests {
         const CHILD: &str = "DRMR_STAGE_UMASK_CHILD";
         if std::env::var_os(CHILD).as_deref() == Some(std::ffi::OsStr::new("1")) {
             rustix::process::umask(rustix::fs::Mode::empty());
-            let parent = tempfile::tempdir().unwrap();
+            let parent = tempfile::Builder::new()
+                .permissions(std::fs::Permissions::from_mode(0o700))
+                .tempdir()
+                .unwrap();
             for location in [Some(parent.path()), None] {
                 let stage = Stage::new(location).unwrap();
                 assert_eq!(
