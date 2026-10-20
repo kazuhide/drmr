@@ -157,7 +157,12 @@ impl Converter {
             let name = format!("track-{ordinal:04}");
             let directory = root.join(&name);
             super::super::files::create_dir(&directory)?;
-            let input = descriptor(&source.source)?;
+            let input = descriptor(
+                source
+                    .transport_demux_view
+                    .as_deref()
+                    .unwrap_or(&source.source),
+            )?;
             let output = descriptor(&directory)?;
             let index = source
                 .transport_index

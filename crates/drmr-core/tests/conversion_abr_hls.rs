@@ -3,8 +3,8 @@ mod common;
 use drmr_core::{
     conversion::{
         Aes128Key, ContentKey, ConversionRequest, Converter, HlsInputKeys, HlsOutputKey, InputKeys,
-        OutputKey, SegmentIv, SourceProtection, SourceValidationPurpose, VerificationRequest,
-        VerificationSource,
+        OutputKey, SegmentIv, SourceCompatibilityNote, SourceProtection, SourceValidationPurpose,
+        VerificationRequest, VerificationSource,
     },
     events::NoSink,
     inspection::{OutputFormat, TargetProtection},
@@ -282,6 +282,10 @@ fn deep_admission_reports_actual_ts_format_and_never_admits_missing_media() {
     );
     proof(&qualification.verification);
     assert!(!qualification.input.media_verified);
+    assert_eq!(
+        qualification.compatibility_notes,
+        Vec::<SourceCompatibilityNote>::new()
+    );
     assert_eq!(common::snapshot_tree(directory.path()), before);
     std::fs::remove_file(directory.path().join("video-3/segment-4.ts")).unwrap();
     assert!(
@@ -289,6 +293,230 @@ fn deep_admission_reports_actual_ts_format_and_never_admits_missing_media() {
             .validate_source(source, SourceValidationPurpose::Conversion)
             .is_err()
     );
+}
+
+fn append_empty_transport_padding(root: &Path) {
+    for entry in std::fs::read_dir(root).unwrap() {
+        let directory = entry.unwrap().path();
+        if !directory.is_dir() {
+            continue;
+        }
+        for entry in std::fs::read_dir(directory).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().and_then(|s| s.to_str()) != Some("ts") {
+                continue;
+            }
+            let mut bytes = std::fs::read(&path).unwrap();
+            let last = &bytes[bytes.len() - 188..];
+            let pid = [last[1] & 31, last[2]];
+            let counter = last[3] & 15;
+            for n in 1..=16 {
+                let mut padding = [0xff; 188];
+                padding[..6].copy_from_slice(&[
+                    0x47,
+                    pid[0],
+                    pid[1],
+                    0x30 | ((counter + n) & 15),
+                    183,
+                    0,
+                ]);
+                bytes.extend(padding);
+            }
+            std::fs::write(path, bytes).unwrap();
+        }
+    }
+}
+fn insert_empty_cue_pairs(root: &Path) {
+    for entry in std::fs::read_dir(root).unwrap() {
+        let playlist = entry.unwrap().path().join("media.m3u8");
+        if !playlist.is_file() {
+            continue;
+        }
+        let text = std::fs::read_to_string(&playlist).unwrap();
+        let first = text
+            .lines()
+            .find(|l| !l.starts_with('#') && !l.is_empty())
+            .unwrap();
+        std::fs::write(
+            &playlist,
+            text.replacen(
+                &format!("{first}\n"),
+                &format!("{first}\n#EXT-X-CUE-OUT:0.0\n#EXT-X-CUE-IN\n"),
+                1,
+            ),
+        )
+        .unwrap();
+    }
+}
+#[test]
+fn exact_empty_transport_padding_is_reported_and_keeps_complete_abr_media_evidence() {
+    let root = tempfile::tempdir().unwrap();
+    let input_root = root.path().join("input");
+    std::fs::create_dir(&input_root).unwrap();
+    let input = fixture(&input_root);
+    append_empty_transport_padding(&input_root);
+    insert_empty_cue_pairs(&input_root);
+    let original = common::snapshot_tree(&input_root);
+    let keys = InputKeys::default();
+    let hls = HlsInputKeys::default();
+    let source = VerificationSource {
+        input: &input,
+        input_keys: &keys,
+        hls_keys: &hls,
+    };
+    let qualification = converter()
+        .validate_source(source, SourceValidationPurpose::Conversion)
+        .unwrap();
+    assert_eq!(
+        qualification.compatibility_notes,
+        vec![
+            SourceCompatibilityNote::TsEmptyPayloadPadding,
+            SourceCompatibilityNote::HlsEmptyCuePair
+        ]
+    );
+    assert_eq!(
+        qualification.compatibility_notes[0].as_str(),
+        "ts-empty-payload-padding"
+    );
+    assert_eq!(
+        serde_json::to_value(&qualification.compatibility_notes).unwrap(),
+        serde_json::json!(["ts-empty-payload-padding", "hls-empty-cue-pair"])
+    );
+    proof(&qualification.verification);
+    let output = root.path().join("dash");
+    let key = OutputKey::from_hex(KID, KEY).unwrap();
+    proof(
+        &converter()
+            .convert(ConversionRequest {
+                input: &input,
+                output: &output,
+                format: OutputFormat::Dash,
+                target: TargetProtection::Cenc,
+                input_keys: &keys,
+                hls_input_keys: &hls,
+                output_key: Some(&key),
+                hls_key_uri: None,
+                hls_output_key: None,
+            })
+            .unwrap()
+            .verification,
+    );
+    let output_keys = InputKeys::new(vec![ContentKey::from_hex(KID, KEY).unwrap()]).unwrap();
+    proof(
+        &converter()
+            .verify(VerificationRequest {
+                source,
+                output: VerificationSource {
+                    input: &output.join("manifest.mpd"),
+                    input_keys: &output_keys,
+                    hls_keys: &hls,
+                },
+            })
+            .unwrap(),
+    );
+    assert_eq!(common::snapshot_tree(&input_root), original);
+    let segment = input_root.join("video-3/segment-4.ts");
+    let mut corrupt = std::fs::read(&segment).unwrap();
+    let last = corrupt.len() - 1;
+    corrupt[last] = 0;
+    std::fs::write(segment, corrupt).unwrap();
+    assert_eq!(
+        converter()
+            .validate_source(source, SourceValidationPurpose::Conversion)
+            .unwrap_err()
+            .0,
+        "ts-transport-not-supported"
+    );
+}
+#[test]
+fn transport_output_repackages_qualified_padding_through_the_same_private_view() {
+    let root = tempfile::tempdir().unwrap();
+    let input_root = root.path().join("input");
+    std::fs::create_dir(&input_root).unwrap();
+    let input = fixture(&input_root);
+    append_empty_transport_padding(&input_root);
+    insert_empty_cue_pairs(&input_root);
+    let original = common::snapshot_tree(&input_root);
+    let keys = InputKeys::default();
+    let hls = HlsInputKeys::default();
+    let aes = HlsOutputKey::new(URI, Aes128Key::from_hex(KEY).unwrap()).unwrap();
+    let sample = HlsOutputKey::new_with_iv(
+        URI,
+        Aes128Key::from_hex(KEY).unwrap(),
+        SegmentIv::from_hex("20202020202020202020202020202020").unwrap(),
+    )
+    .unwrap();
+    for target in [
+        TargetProtection::Clear,
+        TargetProtection::HlsAes128,
+        TargetProtection::HlsSampleAes,
+    ] {
+        let output = root.path().join(target.as_str());
+        let output_key = match target {
+            TargetProtection::HlsAes128 => Some(&aes),
+            TargetProtection::HlsSampleAes => Some(&sample),
+            _ => None,
+        };
+        proof(
+            &converter()
+                .convert(ConversionRequest {
+                    input: &input,
+                    output: &output,
+                    format: OutputFormat::HlsTs,
+                    target,
+                    input_keys: &keys,
+                    hls_input_keys: &hls,
+                    output_key: None,
+                    hls_key_uri: None,
+                    hls_output_key: output_key,
+                })
+                .unwrap()
+                .verification,
+        );
+        let output_hls = match target {
+            TargetProtection::HlsAes128 => {
+                HlsInputKeys::new(vec![(URI.into(), Aes128Key::from_hex(KEY).unwrap())]).unwrap()
+            }
+            TargetProtection::HlsSampleAes => HlsInputKeys::new_with_ivs(vec![(
+                URI.into(),
+                Aes128Key::from_hex(KEY).unwrap(),
+                Some(SegmentIv::from_hex("20202020202020202020202020202020").unwrap()),
+            )])
+            .unwrap(),
+            _ => HlsInputKeys::default(),
+        };
+        let manifest = output.join("master.m3u8");
+        let candidate = VerificationSource {
+            input: &manifest,
+            input_keys: &keys,
+            hls_keys: &output_hls,
+        };
+        let qualification = converter()
+            .validate_source(candidate, SourceValidationPurpose::Verification)
+            .unwrap();
+        assert_eq!(
+            qualification.compatibility_notes,
+            Vec::<SourceCompatibilityNote>::new()
+        );
+        assert_eq!(
+            qualification.track_protection,
+            vec![SourceProtection::from(target); 5]
+        );
+        proof(&qualification.verification);
+        proof(
+            &converter()
+                .verify(VerificationRequest {
+                    source: VerificationSource {
+                        input: &input,
+                        input_keys: &keys,
+                        hls_keys: &hls,
+                    },
+                    output: candidate,
+                })
+                .unwrap(),
+        );
+        assert_eq!(common::snapshot_tree(&input_root), original);
+    }
 }
 
 fn encrypt_first_segment(playlist: &Path) {

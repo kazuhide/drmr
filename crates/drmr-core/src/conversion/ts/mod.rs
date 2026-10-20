@@ -1,6 +1,7 @@
 //! A deliberately narrow MPEG-TS input profile with independent original-media evidence.
 mod admission;
 mod canonical;
+mod compatibility;
 mod frames;
 mod native;
 mod projection;
@@ -12,6 +13,7 @@ use super::{
 use crate::{inspection::TrackKind, toolrun::RunOptions};
 pub(super) use admission::Admission;
 pub(super) use canonical::Native as NativeEvidence;
+pub(super) use compatibility::demux_view;
 pub(super) use native::NativeScanner;
 pub(super) use projection::Projector;
 use std::{collections::BTreeMap, path::Path, sync::Arc};
@@ -517,7 +519,8 @@ fn check_duration(declared: &str, ticks: i64) -> Result<(), ConversionError> {
     let bad = ConversionError("ts-segment-duration-mismatch");
     let (whole, part) = declared.split_once('.').unwrap_or((declared, ""));
     if whole.is_empty()
-        || part.len() > 9
+        || declared.len() > 64
+        || part.len() > 17
         || !whole
             .bytes()
             .chain(part.bytes())
@@ -525,6 +528,20 @@ fn check_duration(declared: &str, ticks: i64) -> Result<(), ConversionError> {
         || ticks <= 0
     {
         return Err(bad);
+    }
+    if part.len() > 9 {
+        // Long decimals commonly serialize a binary64 segment duration. Require
+        // exact binary64 identity with native ticks, without a time tolerance.
+        // The bounded integer conversion is exact and keeps each ULP far below
+        // a microsecond; media clocks themselves remain integer evidence.
+        let ticks = u32::try_from(ticks).map_err(|_| bad)?;
+        let observed = declared.parse::<f64>().map_err(|_| bad)?;
+        let expected = f64::from(ticks) / 90000.0;
+        return if observed.to_bits() == expected.to_bits() {
+            Ok(())
+        } else {
+            Err(bad)
+        };
     }
     let scale = 10_u128.pow(u32::try_from(part.len()).map_err(|_| bad)?);
     let fraction = if part.is_empty() {
@@ -558,7 +575,6 @@ mod tests {
         for (text, ticks) in [
             ("2.000000", 180_001),
             ("2.041", 183_750),
-            ("2.0000000000", 180_000),
             ("NaN", 180_000),
             ("-2", 180_000),
             ("2", 0),
@@ -566,6 +582,40 @@ mod tests {
             assert_eq!(
                 check_duration(text, ticks).unwrap_err().0,
                 "ts-segment-duration-mismatch"
+            );
+        }
+    }
+    #[test]
+    fn long_decimal_durations_require_the_exact_binary64_value_of_the_original_clock() {
+        for text in [
+            "5.994666666666666",
+            "5.9946666666666664",
+            "5.99466666666666637",
+        ] {
+            check_duration(text, 539_520).unwrap();
+        }
+        check_duration("2.0000000000", 180_000).unwrap();
+        for (text, ticks) in [
+            ("5.994666666666667", 539_520),
+            ("5.994667666666666", 539_520),
+            ("5.994666666666666", 539_521),
+            ("2.0000000001", 180_000),
+            ("2.000000000000000000", 180_000),
+            ("2.00000000000000000junk", 180_000),
+            ("2.0000000000000000e0", 180_000),
+            ("NaN", 180_000),
+            ("inf", 180_000),
+            (
+                "340282366920938463463374607431768211455.00000000000000000",
+                180_000,
+            ),
+            ("100000000000000000000.00000000000000000", 180_000),
+            ("50000.00000000000000000", 4_500_000_000),
+        ] {
+            assert_eq!(
+                check_duration(text, ticks).unwrap_err().0,
+                "ts-segment-duration-mismatch",
+                "accepted {text}"
             );
         }
     }

@@ -8,6 +8,15 @@ const CONFIG: ConversionError = ConversionError("ts-program-or-configuration-cha
 const CLOCK: ConversionError = ConversionError("ts-clock-wrap-or-discontinuity-not-supported");
 const MAX_PES_BYTES: usize = 8 * 1024 * 1024;
 
+pub(super) fn empty_payload_padding_shape(bytes: &[u8; 188]) -> bool {
+    bytes[0] == 0x47
+        && bytes[1] & 0xe0 == 0
+        && bytes[3] & 0xf0 == 0x30
+        && bytes[4] == 183
+        && bytes[5] == 0
+        && bytes[6..].iter().all(|&b| b == 0xff)
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::conversion) struct Track {
     pub pid: u16,
@@ -286,6 +295,7 @@ fn sample_descriptors(kind: TrackKind, data: &[u8]) -> Result<Option<[u8; 2]>, C
 #[derive(Default)]
 pub(in crate::conversion) struct Admission {
     sample_aes: bool,
+    empty_payload_padding: usize,
     counters: BTreeMap<u16, u8>,
     sections: BTreeMap<u16, Section>,
     pat: Option<Vec<u8>>,
@@ -301,6 +311,9 @@ pub(in crate::conversion) struct Admission {
     segment_pmt: bool,
 }
 impl Admission {
+    pub(in crate::conversion) fn has_empty_payload_padding(&self) -> bool {
+        self.empty_payload_padding > 0
+    }
     pub(super) fn encrypted_samples() -> Self {
         Self {
             sample_aes: true,
@@ -381,6 +394,14 @@ impl Admission {
         }
         Ok(())
     }
+    fn allows_empty_payload_padding(&self, bytes: &[u8; 188], id: u16) -> bool {
+        !self.sample_aes
+            && empty_payload_padding_shape(bytes)
+            && self.tracks.iter().any(|t| t.pid == id)
+            && self.pes.get(&id).is_some_and(|p| {
+                p.active && p.seen && !p.waiting && p.declared.is_none_or(|n| p.consumed == n)
+            })
+    }
     fn packet(&mut self, bytes: &[u8; 188]) -> Result<(), ConversionError> {
         if bytes[0] != 0x47 || bytes[1] & 0xa0 != 0 || bytes[3] & 0xc0 != 0 {
             return Err(BAD);
@@ -450,7 +471,11 @@ impl Admission {
             }
             return Ok(());
         }
-        if at >= 188 {
+        let empty_payload = at == 188;
+        // Some segmenters mark a padding-only packet as adaptation-plus-payload.
+        // This is outside H.222.0's mode-3 length range. Accept only a known PES's
+        // exact empty stuffing shape; never infer a missing payload or timestamp.
+        if empty_payload && !self.allows_empty_payload_padding(bytes, id) {
             return Err(BAD);
         }
         let counter = bytes[3] & 15;
@@ -460,6 +485,10 @@ impl Admission {
             .is_some_and(|old| (old + 1) & 15 != counter)
         {
             return Err(ConversionError("ts-continuity-mismatch"));
+        }
+        if empty_payload {
+            self.empty_payload_padding = self.empty_payload_padding.checked_add(1).ok_or(BAD)?;
+            return Ok(());
         }
         let start = bytes[1] & 0x40 != 0;
         if id == 0 || id == 0x11 || self.pmt_pid == Some(id) {
@@ -588,6 +617,62 @@ impl Admission {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn empty_padding_state() -> Admission {
+        let mut pes = Pes::default();
+        pes.push(
+            &[0, 0, 1, 0xc0, 0, 9, 0x80, 0x80, 5, 0x21, 0, 1, 0, 1, 0x80],
+            true,
+            TrackKind::Audio,
+        )
+        .unwrap();
+        Admission {
+            tracks: vec![Track {
+                pid: 256,
+                kind: TrackKind::Audio,
+            }],
+            counters: BTreeMap::from([(256, 0)]),
+            pes: BTreeMap::from([(256, pes)]),
+            ..Default::default()
+        }
+    }
+    fn empty_padding_packet() -> [u8; 188] {
+        let mut packet = [0xff; 188];
+        packet[..6].copy_from_slice(&[0x47, 1, 0, 0x31, 183, 0]);
+        packet
+    }
+    #[test]
+    fn empty_payload_compatibility_requires_exact_stuffing_and_original_continuity() {
+        let valid = empty_padding_packet();
+        empty_padding_state().packet(&valid).unwrap();
+        for change in [
+            "start",
+            "flag",
+            "stuffing",
+            "pid",
+            "counter",
+            "payload",
+            "incomplete-pes",
+            "no-pes",
+            "encrypted",
+        ] {
+            let mut state = empty_padding_state();
+            let mut packet = valid;
+            match change {
+                "start" => packet[1] |= 0x40,
+                "flag" => packet[5] = 0x20,
+                "stuffing" => packet[187] = 0,
+                "pid" => packet[2] = 1,
+                "counter" => packet[3] = 0x33,
+                "payload" => packet[4] = 182,
+                "incomplete-pes" => state.pes.get_mut(&256).unwrap().declared = Some(16),
+                "no-pes" => state.pes.clear(),
+                "encrypted" => state.sample_aes = true,
+                _ => unreachable!(),
+            }
+            let result = state.packet(&packet);
+            assert!(result.is_err(), "accepted {change}");
+        }
+    }
     #[test]
     fn an_unbounded_video_pes_is_refused_before_a_foreign_demuxer_reads_it() {
         let header = [0, 0, 1, 0xe0, 0, 0, 0x80, 0x80, 5, 0x21, 0, 1, 0, 1];

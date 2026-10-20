@@ -34,6 +34,7 @@ pub struct TrackConversionRequest<'a> {
 struct Prepared {
     metadata: metadata::Metadata,
     outer_protection: SourceProtection,
+    compatibility: Vec<SourceCompatibilityNote>,
     source_dictionary: bool,
     source: PathBuf,
     media: PathBuf,
@@ -41,6 +42,7 @@ struct Prepared {
     report: Inspection,
     key_id: Option<String>,
     transport_index: Option<usize>,
+    transport_demux_view: Option<PathBuf>,
     transport_native: Option<std::sync::Arc<super::ts::NativeEvidence>>,
     transport_sample: bool,
     playlist_reference: Option<PathBuf>,
@@ -644,6 +646,7 @@ fn prepare_for(
     );
     Ok(Prepared {
         metadata: metadata::Metadata::default(),
+        compatibility: Vec::new(),
         outer_protection: match track.protection {
             Protection::Clear => SourceProtection::Clear,
             Protection::Cenc => SourceProtection::Cenc,
@@ -657,6 +660,7 @@ fn prepare_for(
         report: selected,
         key_id,
         transport_index: None,
+        transport_demux_view: None,
         transport_native: None,
         transport_sample: false,
         playlist_reference: None,
@@ -778,12 +782,28 @@ impl From<TargetProtection> for SourceProtection {
         }
     }
 }
+/// Explicit input compatibility exceptions; these do not assert standards conformance.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SourceCompatibilityNote {
+    TsEmptyPayloadPadding,
+    HlsEmptyCuePair,
+}
+impl SourceCompatibilityNote {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::TsEmptyPayloadPadding => "ts-empty-payload-padding",
+            Self::HlsEmptyCuePair => "hls-empty-cue-pair",
+        }
+    }
+}
 /// Complete source admission facts. This receipt never authorizes future execution.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct SourceQualification {
     pub input: Inspection,
     pub actual_format: OutputFormat,
     pub track_protection: Vec<SourceProtection>,
+    pub compatibility_notes: Vec<SourceCompatibilityNote>,
     pub eligible_formats: Vec<OutputFormat>,
     pub verification: VerificationReport,
 }
@@ -805,6 +825,12 @@ impl Converter {
             OutputFormat::from(original.format)
         };
         let track_protection = prepared.iter().map(|p| p.outer_protection).collect();
+        let compatibility_notes = prepared
+            .iter()
+            .flat_map(|p| p.compatibility.iter().copied())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
         let mut eligible_formats = Vec::new();
         if original.format == InputFormat::Mp4 {
             let first = &prepared[0];
@@ -870,6 +896,7 @@ impl Converter {
             input: original,
             actual_format,
             track_protection,
+            compatibility_notes,
             eligible_formats,
             verification,
         })
@@ -1117,6 +1144,13 @@ fn prepare_transport(
         .unwrap_or(&streams[0])
         .0;
     backend.transport_durations(&localized.transport_segments, clock_index)?;
+    let projection = directory.join("demux-view.ts");
+    let demux_source = if admission.has_empty_payload_padding() {
+        super::ts::demux_view(&localized.combined, &projection, admission, &backend.stop)?;
+        &projection
+    } else {
+        &localized.combined
+    };
     for (index, kind) in streams {
         let pid = admission
             .tracks
@@ -1138,10 +1172,18 @@ fn prepare_transport(
         let root = directory.join(format!("demux-{index}"));
         super::files::create_dir(&root)?;
         let media = root.join("track.mp4");
-        backend.demux_transport(&localized.combined, kind, &media)?;
+        backend.demux_transport(demux_source, kind, &media)?;
         let mut track = prepare(&media, 0, kind, keys)?;
         track.source.clone_from(&localized.combined);
         track.transport_index = Some(index);
+        track.transport_demux_view = admission
+            .has_empty_payload_padding()
+            .then(|| projection.clone());
+        if admission.has_empty_payload_padding() {
+            track
+                .compatibility
+                .push(SourceCompatibilityNote::TsEmptyPayloadPadding);
+        }
         track.transport_native = native;
         track.transport_sample = localized.sample_transport;
         prepared.push(track);
@@ -1233,6 +1275,11 @@ fn prepare_hls_presentation(
                 prepare_transport(&localized, admission, &directory, input.input_keys, backend)?;
             for track in &mut prepared {
                 track.metadata = media.metadata.clone();
+                if localized.empty_cue_pair {
+                    track
+                        .compatibility
+                        .push(SourceCompatibilityNote::HlsEmptyCuePair);
+                }
                 track.outer_protection = if localized.sample_transport {
                     SourceProtection::HlsSampleAes
                 } else {
@@ -1263,6 +1310,11 @@ fn prepare_hls_presentation(
             purpose,
         )?;
         track.metadata = media.metadata.clone();
+        if localized.empty_cue_pair {
+            track
+                .compatibility
+                .push(SourceCompatibilityNote::HlsEmptyCuePair);
+        }
         match localized.report.protection {
             Protection::HlsAes128 => track.outer_protection = SourceProtection::HlsAes128,
             Protection::Mixed => track.outer_protection = SourceProtection::Mixed,

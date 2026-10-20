@@ -35,8 +35,8 @@ mod progressive;
 mod timing;
 mod ts;
 pub use presentation::{
-    ConversionRequest, SourceProtection, SourceQualification, SourceValidationPurpose,
-    TrackConversionRequest, VerificationRequest, VerificationSource,
+    ConversionRequest, SourceCompatibilityNote, SourceProtection, SourceQualification,
+    SourceValidationPurpose, TrackConversionRequest, VerificationRequest, VerificationSource,
 };
 mod verify;
 use crate::{
