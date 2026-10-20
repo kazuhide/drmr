@@ -1,7 +1,10 @@
 //! Keep explicit PSSH metadata outside command-line size limits and published media.
 use super::{ConversionError, LIMIT};
 use crate::{
-    conversion::{backend::Backend, files::Stage},
+    conversion::{
+        backend::Backend,
+        files::{Stage, UnpublishedStage},
+    },
     native::{self, FileIdentity},
     toolrun::CleanupReceipt,
 };
@@ -18,7 +21,7 @@ const INVALID: ConversionError = ConversionError("output-signaling-private-file-
 struct PrivatePssh {
     // Close the Windows read-only guard before deleting the strictly owned stage.
     reader: File,
-    stage: Stage,
+    stage: UnpublishedStage,
     path: PathBuf,
     identity: FileIdentity,
     cleanup: Option<CleanupReceipt>,
@@ -30,6 +33,14 @@ impl PrivatePssh {
         parent: Option<&Path>,
         activity: Option<Arc<dyn crate::events::Sink>>,
     ) -> Result<Self, ConversionError> {
+        Self::new_observed(hex, parent, activity, |_| {})
+    }
+    fn new_observed(
+        hex: &str,
+        parent: Option<&Path>,
+        activity: Option<Arc<dyn crate::events::Sink>>,
+        created: impl FnOnce(&Stage),
+    ) -> Result<Self, ConversionError> {
         if hex.is_empty()
             || hex.len() > LIMIT - 8
             || !hex.len().is_multiple_of(2)
@@ -38,7 +49,7 @@ impl PrivatePssh {
             return Err(INVALID);
         }
         // This separate stage is never a publication source.
-        let stage = Stage::new(parent)?;
+        let stage = UnpublishedStage::new(parent)?;
         let path = stage.path().join("protection.flags");
         argument(&path)?;
         let mut writer = stage.create_file(&path).map_err(|_| INVALID)?;
@@ -47,6 +58,7 @@ impl PrivatePssh {
         writer.write_all(hex.as_bytes()).map_err(|_| INVALID)?;
         writer.write_all(b"\n").map_err(|_| INVALID)?;
         writer.sync_all().map_err(|_| INVALID)?;
+        created(&stage);
         drop(
             stage
                 .created_file_source(&path, &writer)
@@ -120,7 +132,6 @@ impl Drop for PrivatePssh {
     fn drop(&mut self) {
         // A retained child may still read the flags, including after cancellation.
         self.wait_for_cleanup();
-        self.stage.preserve_replaced_workspace();
     }
 }
 fn argument(path: &Path) -> Result<String, ConversionError> {

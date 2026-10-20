@@ -132,6 +132,44 @@ fn a_replaced_tool_visible_directory_cannot_delete_foreign_entries() {
 }
 
 #[test]
+fn constructor_failure_preserves_a_replaced_workspace_before_the_owner_exists() {
+    let temp = native::private_tempdir().unwrap();
+    let foreign = temp.path().join("foreign");
+    native::create_private_dir_all(&foreign).unwrap();
+    native::create_private_new(&foreign.join("sentinel"))
+        .unwrap()
+        .write_all(b"constructor must preserve foreign entries")
+        .unwrap();
+    let mut visible = PathBuf::new();
+    let mut blocked = false;
+    let result = PrivatePssh::new_observed("00aaff", Some(temp.path()), None, |stage| {
+        visible = stage.path().to_owned();
+        let moved = std::fs::rename(&visible, temp.path().join("held-media"));
+        if cfg!(windows) && moved.is_err() {
+            blocked = true;
+            return;
+        }
+        moved.unwrap();
+        std::fs::rename(&foreign, &visible).unwrap();
+        assert!(visible.join("sentinel").is_file());
+    });
+    if blocked {
+        drop(result.unwrap());
+        assert!(foreign.join("sentinel").is_file());
+    } else {
+        assert_eq!(result.err(), Some(INVALID));
+        assert_eq!(
+            std::fs::read(visible.join("sentinel")).ok().as_deref(),
+            Some(b"constructor must preserve foreign entries".as_slice())
+        );
+        assert_eq!(
+            std::fs::read(temp.path().join("held-media/protection.flags")).unwrap(),
+            b"--pssh=00aaff\n"
+        );
+    }
+}
+
+#[test]
 fn flagfile_separators_are_refused_without_changing_the_temporary_parent() {
     let temp = native::private_tempdir().unwrap();
     for name in ["comma,parent", "parent with spaces"] {
