@@ -30,7 +30,16 @@ def categories(data):
     }.items()}
 
 def call(label, args, **kwargs):
-    result=subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=90, check=False, **kwargs)
+    try:
+        result=subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=90, check=False, **kwargs)
+    except OSError as error:
+        emit({'probe':label, 'returncode':None, 'launch_errno':error.errno, 'launch_winerror':getattr(error,'winerror',None)})
+        from types import SimpleNamespace
+        return SimpleNamespace(returncode=None)
+    except subprocess.TimeoutExpired:
+        emit({'probe':label,'returncode':None,'timeout':True})
+        from types import SimpleNamespace
+        return SimpleNamespace(returncode=None)
     emit({'probe': label, 'returncode': result.returncode, 'diagnostic_flags':categories(result.stderr)})
     return result
 
@@ -42,14 +51,14 @@ if config['mode'] == 'direct':
     fixture=work/'source.mp4'
     import xml.etree.ElementTree as ET
     def encode(path, flavor, root):
-        if flavor == 'verbatim':
+        if flavor.startswith('verbatim'):
             return '\\\\?\\' + str(path)
         if flavor == 'relative':
             return os.path.relpath(path, root).replace('\\', '/')
         return path.as_posix()
-    for length in (157,223,235,245,260,280,320):
-        for form in ('dash','hls'):
-            for flavor in ('forward','verbatim','relative'):
+    for length in (157,223,280):
+        for form in ('hls',):
+            for flavor in ('forward','verbatim','verbatim-native-name','verbatim-basename'):
                 base=work/(form+str(length)+flavor)
                 while len(str(base)) < length:
                     remaining=length-len(str(base))-1
@@ -62,8 +71,12 @@ if config['mode'] == 'direct':
                 manifest=base/('manifest.mpd' if form=='dash' else 'master.m3u8')
                 args=['packager','--mp4_reset_initial_composition_offset_to_zero=false',f'input={inp},stream=0,init_segment={out}/init.mp4,segment_template={out}/seg_$Number$.m4s,playlist_name=track-0000/media.m3u8','--segment_duration','2','--clear_lead','0']
                 # Keep native verbatim paths fully backslash-separated, including leaf suffixes.
-                if flavor == 'verbatim':
+                if flavor.startswith('verbatim'):
                     args[2]=f'input={inp},stream=0,init_segment={out}\\init.mp4,segment_template={out}\\seg_$Number$.m4s,playlist_name=track-0000/media.m3u8'
+                    if flavor == 'verbatim-native-name':
+                        args[2]=args[2].replace('playlist_name=track-0000/media.m3u8','playlist_name=track-0000\\media.m3u8')
+                    elif flavor == 'verbatim-basename':
+                        args[2]=args[2].replace('playlist_name=track-0000/media.m3u8','playlist_name=track-0000.m3u8')
                 if form=='dash': args+=['--generate_static_live_mpd','--mpd_output',encode(manifest,flavor,base)]
                 else: args+=['--hls_playlist_type','VOD','--hls_master_playlist_output',encode(manifest,flavor,base)]
                 args+=['--single_threaded','--io_cache_size=0']
