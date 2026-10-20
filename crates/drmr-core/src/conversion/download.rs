@@ -335,6 +335,7 @@ impl Converter {
             maximum_workers: self.maximum_workers,
             downloaded: Some(source.seal.clone()),
             frozen_source: self.frozen_source.clone(),
+            planned_destination: self.planned_destination.clone(),
             output_signaling: self.output_signaling.clone(),
         };
         converter.convert(ConversionRequest {

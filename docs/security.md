@@ -19,7 +19,7 @@ Do not place confidential tokens in an output license URL or key URI unless publ
 
 ## Input and diagnostic handling
 
-For `convert` and `verify`, supply an owner-only JSON file with `--keys-file`. Input decryption keys and output encryption keys have separate roles. The file must be a regular, singly linked file with the required owner-only permissions; symbolic links and insecure files are refused. See [key configuration](usage.md#separate-input-and-output-keys) and [Windows file protection](windows.md#protect-configuration-files).
+For `analyze`, saved-plan creation, `convert`, and `verify`, supply an owner-only JSON file with `--keys-file` when keys are needed. Input decryption keys and output encryption keys have separate roles. The file must be a regular, singly linked file with the required owner-only permissions; symbolic links and insecure files are refused. See [key configuration](usage.md#separate-input-and-output-keys) and [Windows file protection](windows.md#protect-configuration-files).
 
 The older `run` and `package-hls` commands read `DRM_KID`, `DRM_KEY`, and `DRM_IV` from the environment. Batch processing can use a protected per-asset key file. drmr has no public command-line option for entering a content-key value. Avoid shell-history entries containing keys; use your local secret-management process to prepare the environment or file.
 
@@ -33,6 +33,25 @@ Diagnostic protection has several layers:
 These controls cover recognized secret material. They do not classify every filename, label, media tag, or arbitrary value as confidential. Public Rust APIs that return captured raw tool output return data for processing; their raw buffers are not a safe log format. Review exported reports and third-party diagnostics before sharing them.
 
 ## External tools and memory
+
+### Saved plans and retained originals
+
+An [execution plan](executable-plans.md) stores local source filenames, sizes,
+SHA-256 fingerprints, and one output location and media intent. It contains no
+keys, initialization vectors, key or license addresses, request headers, source
+URLs, or executable commands. Keys and optional output signaling are read
+separately at runtime. Paths and fingerprints can identify an asset, so saved
+plans are private files too. The original downloaded playlists may contain
+signed URLs even though the plan does not.
+
+The plan digest detects edits, not a malicious author who can calculate another
+digest. Execute only plans you trust. Every use validates the strict schema,
+source references, actual copied bytes, and media profile again. A saved file
+inventory grants no permission to delete the original files. Conversion
+publishes only to a new destination after its independent checks, and verification
+reads the original and current result rather than trusting saved success claims.
+
+### Process arguments and plaintext memory
 
 FFmpeg and Shaka Packager require plaintext keys for some supported operations. drmr passes those keys to child processes, including through command arguments. The operating system, sufficiently privileged processes, and process-inspection tools may observe those arguments or the process environment while the tool runs. Diagnostic masking does not hide live operating-system process information.
 

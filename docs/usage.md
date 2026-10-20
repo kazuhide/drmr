@@ -5,9 +5,17 @@ The examples below assume `drmr` is installed and the external tools are on `PAT
 ## Choose a workflow
 
 For qualified local MP4, DASH, or HLS media, start with the common commands:
-`inspect` reads metadata, `plan` describes intent, `convert` writes new media,
-and `verify` compares a result with its original source. HLS input does not
+`inspect` reads metadata, `analyze` checks complete source media, `plan` describes
+intent or saves one fixed conversion, `convert` writes new media, and `verify`
+compares a result with its original source. HLS input does not
 require `analyze-hls` first.
+
+For URL preflight, a saved executable plan, offline conversion, and independent
+verification, follow [analyze, save a plan, convert, and verify](executable-plans.md).
+Use `analyze URL --download-dir ./source`,
+`plan ./source/input.m3u8 --to cbcs --format dash --output ./result --save ./conversion.plan.json`,
+then `convert --plan ./conversion.plan.json` and
+`verify --plan ./conversion.plan.json`, with keys supplied separately when needed.
 
 The separate HLS snapshot workflow saves clear media from a local or HTTPS
 source under an explicit access policy. `analyze-hls` downloads or copies the
@@ -39,7 +47,7 @@ HLS inspection follows only local child playlists inside the input playlist's di
 
 A compatible plan has a valid format/protection combination and a conditional processing route for each requested output format. Known unsupported declarations, such as a text track that no media handler can retain, produce `compatible: false`, `execution_available: false`, and exit code `1`. A plan is also unsupported if only some requested formats have a route. This corrects older version-one reports that could advertise executable intent with an empty or incomplete candidate list; supported plans retain their existing JSON fields and values.
 
-`execution_available` additionally requires one output format. It never proves a qualified media profile, usable keys, installed tools, or a selected handler. Execution still checks the actual source profile, keys, and media. Multiple requested output formats are planned together but must be converted in separate invocations. Such a conditional plan can succeed with `execution_available: false`. Plans contain no secret key values and cannot be submitted as trusted execution artifacts.
+`execution_available` additionally requires one output format. It never proves a qualified media profile, usable keys, installed tools, or a selected handler. Execution still checks the actual source profile, keys, and media. Multiple requested output formats are planned together but must be converted in separate invocations. Such a conditional plan can succeed with `execution_available: false`. This metadata-only JSON cannot be passed to `convert --plan`. Use `plan --save` to create the separate strict execution-plan format after complete source admission. Both formats exclude secret keys; neither is a trusted authorization artifact.
 
 Optional `details` distinguish declared ciphers, encryption units, default patterns, and unknown sample coverage. Plans add conditional routes and required toolsets; successful conversion reports add the actual route and reason. See [processing routes](processing-routes.md) to compare the plan with the result. A tool requirement does not mean its availability was checked.
 

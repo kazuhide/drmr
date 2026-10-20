@@ -82,6 +82,47 @@ The [finite-output regression](https://github.com/kazuhide/drmr/blob/main/crates
 
 Generic conversion is deliberately bounded: at most 16 GiB per staged track, 64 tracks, and 100,000 referenced DASH segments. Exceeding a limit fails rather than reporting partial verification. The first local DASH profile is a static, single-period presentation with finite, nonnegative, continuous `SegmentTimeline` entries, a shared presentation offset matching the earliest presented sample, and relative resources confined to the manifest directory. Live/dynamic input, multiple periods, byte ranges, alternate addressing, event declarations and presentation metadata that cannot be preserved are refused. The fragmented MP4 HLS profile uses completed, local playlists; unsupported rendition metadata and discontinuities are refused. An external audio group must apply consistently to every video variant; mixed associations are refused. Percent-encoded local resource paths are decoded once before confinement checks, so they select the URI target rather than a similarly named literal file. In-band MP4 event messages are also refused until their preservation is supported. These limits describe drmr's implementation, not limits of the formats.
 
+### Multiple qualities and audio declarations
+
+A supported HLS master can reference several video-only playlists and one
+separate audio playlist used by every video variant. The TS media restrictions
+below apply independently to each playlist. Conversion and fresh verification
+match all actual tracks by their media evidence, rather than assuming that the
+first source variant corresponds to the first result variant. Missing, extra,
+or changed tracks and conflicting alias declarations cannot pass simply by
+reordering the master playlist.
+
+Within HLS, the supported audio name, language, group association, channel
+declaration, `DEFAULT`, and `AUTOSELECT` behavior are retained and checked. An
+omitted selection flag is interpreted according to
+[RFC 8216 section 4.3.4.1](https://www.rfc-editor.org/rfc/rfc8216.html#section-4.3.4.1).
+Profiles with alternative audio groups, inconsistent video/audio associations,
+or unsupported selection declarations are refused.
+
+For a supported presentation with one audio rendition, DASH output maps its
+language to `lang`, its name to `Label`, and its default preference to the
+author's `selectionPriority` (2 for preferred, 1 otherwise). Every video quality
+shares that sole audio adaptation. HLS `AUTOSELECT` has no identical DASH flag
+in this mapping: DASH clients apply their own selection rules. For example,
+[dash.js track selection](https://dashif.org/dash.js/pages/usage/track-selection.html)
+can consider language, roles, author priority, and player settings. Thus an HLS
+audio rendition with omitted `DEFAULT` and `AUTOSELECT` can be converted to DASH,
+while identical automatic player selection is not claimed. Cross-format media
+verification checks the documented mapping, complete media, and original clocks;
+it does not establish equivalent player preference handling. HLS-to-HLS
+verification also checks its native selection declarations.
+
+### Saved source identities
+
+The [four-stage CLI workflow](executable-plans.md) captures only resources reached
+from the local entrypoint. A saved source inventory is limited to 16 GiB total,
+100,130 files, 16 MiB of path text, and 128 path components. Every file is copied
+into a private working area and its actual copied bytes are hashed before use.
+This avoids treating a pathname or an earlier successful analysis as evidence
+that the same bytes will be processed later. The retained originals are checked
+again before publication. Referenced files are not adopted as temporary cleanup
+targets; unrelated files in the source directory are not included in the graph.
+
 ## Acquiring URL input
 
 For a supported HLS URL, `convert` first retains the original playlists and
@@ -108,9 +149,9 @@ bodies stream to private files rather than being retained together in memory.
 
 ## MPEG transport stream input
 
-The fragmented MP4 output route accepts a completed local HLS media playlist, or one local variant pointing to it. Segments must use 188-byte packets and one fixed program. The profile accepts one progressive H.264 stream, one AAC-LC audio stream at 48,000 samples per second, or both. The route supports a fixed single SPS/PPS video configuration (the sequence and picture parameter sets required by a decoder) and ordinary AAC channel configurations. AAC uses seven-byte transport headers without a checksum and one raw data block per frame. Output is DASH with `clear`, `cenc`, or `cbcs`, or fragmented MP4 HLS with `clear`, `cbcs`, or whole-resource AES-128 protection. Input key URI mappings are supplied by the operator; drmr never retrieves a playlist key URI.
+The fragmented MP4 output route accepts a completed local HLS media playlist or a supported master with separate video qualities and one shared audio rendition. Segments in each playlist must use 188-byte packets and one fixed program. Each playlist accepts one progressive H.264 stream, one AAC-LC audio stream at 48,000 samples per second, or both; multiplexed audio/video is limited to the supported single-variant topology. The route supports a fixed single SPS/PPS video configuration (the sequence and picture parameter sets required by a decoder) and ordinary AAC channel configurations. AAC uses seven-byte transport headers without a checksum and one raw data block per frame. Output is DASH with `clear`, `cenc`, or `cbcs`, or fragmented MP4 HLS with `clear`, `cbcs`, or whole-resource AES-128 protection. Input key URI mappings are supplied by the operator; drmr never retrieves a playlist key URI.
 
-`plan` describes compatibility from metadata and reports `source-profile-validation-required`; it does not qualify the underlying HLS media container. Conversion independently admits the actual source and can refuse a profile that metadata alone could not distinguish.
+Without `--save`, `plan` describes compatibility from metadata and reports `source-profile-validation-required`; it does not qualify the underlying HLS media container. `analyze` and `plan --save` check complete source media, while execution independently admits the actual source again. Conversion can refuse a profile that metadata alone could not distinguish.
 
 Before demuxing, drmr checks program tables and their cyclic redundancy checks, packet continuity, declared streams, packet and elementary-stream lengths, and clock progression across every segment. Multiple programs, unknown streams, configuration changes, corrupted or scrambled packets, clock wrap, discontinuities, byte ranges, wall-clock metadata, interlaced or mixed video, and unsupported descriptors are refused. Segment durations must match the primary video's measured duration rounded only to the decimal precision written in each `EXTINF` declaration. Every absolute packet timestamp is still compared exactly.
 

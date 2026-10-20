@@ -49,13 +49,30 @@ These are supported lower bounds. The [requirements table](docs/requirements.md#
 ```sh
 drmr doctor
 drmr inspect /path/to/media.mp4
+drmr analyze /path/to/media.mp4 --json
 drmr plan /path/to/manifest.mpd --to cbcs --format dash,hls
 drmr plan --mpd /path/to/asset/download/manifest.example.test/sample/dash/manifest.mpd
 drmr convert --help
 drmr verify --help
 ```
 
-`inspect` reads local MP4 metadata or DASH/HLS declarations without keys or external tools. `plan INPUT --to ...` describes conversion intent and separates input decryption keys from output encryption keys. Neither command verifies media samples or executes a conversion. `plan --mpd` keeps the original prepared-DASH rendition listing.
+`inspect` reads local MP4 metadata or DASH/HLS declarations without keys or external tools. `analyze` checks complete source media and identifies candidate output formats. Without `--save`, `plan INPUT --to ...` describes conditional intent from metadata. `plan --mpd` keeps the original prepared-DASH rendition listing.
+
+To retain a clear HLS URL, save fixed conversion conditions, execute them offline,
+and verify against the retained original:
+
+```sh
+drmr analyze "https://example.com/vod/master.m3u8" --download-dir ./source --json
+drmr plan ./source/input.m3u8 --to cbcs --format dash --output ./result --save ./conversion.plan.json --json
+drmr convert --plan ./conversion.plan.json --keys-file ./keys.json --json
+drmr verify --plan ./conversion.plan.json --keys-file ./keys.json --json
+```
+
+Use a private [key configuration](docs/usage.md#separate-input-and-output-keys)
+with an output key for CBCS. A saved plan contains source fingerprints and one
+output intent, with runtime keys supplied separately. See the
+[four-step guide](docs/executable-plans.md) for supported input, result checks,
+source retention, and the difference from metadata-only planning.
 
 `doctor` discovers executable files without running them. Use `drmr doctor --probe --route progressive-mp4` to check versions and advertised options for a selected processing route. The report shows the actual resolved paths and distinguishes required tools from optional tools. These checks do not prove that a particular asset can be processed.
 
@@ -79,9 +96,10 @@ drmr packages supplied media and signaling. It does not provide a DRM license se
 | --- | --- |
 | `doctor` | Discover tools; add `--probe` for version and option checks, or `--json` for scripts |
 | `inspect` | Read local MP4, DASH, or HLS metadata; use `--json` for scripts |
-| `plan` | Describe a target conversion; `--mpd` lists prepared DASH renditions |
-| `convert` | Convert qualified local media or acquire clear HLS URLs with `--download-dir`, then verify |
-| `verify` | Compare result media directly with its original source |
+| `analyze` | Check complete local media or retain and check a clear HLS URL with `--download-dir` |
+| `plan` | Describe conditional intent; add `--save` and `--output` for one executable plan; `--mpd` lists prepared DASH renditions |
+| `convert` | Convert media directly or execute a saved plan with `--plan` |
+| `verify` | Compare result media with its original source; `--plan` also checks saved source identity and output intent |
 | `run` | Repackage one local DASH asset and check its output |
 | `analyze-hls` | Download and analyze a clear HLS presentation into a saved snapshot |
 | `package-hls` | Package a verified HLS snapshot with DRM signaling |

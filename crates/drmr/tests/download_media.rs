@@ -222,6 +222,18 @@ fn verify(output: &Path, source: &Path, keys: &Path) {
     assert_verified(&json_success(&result));
 }
 
+fn saved_plan_command(operation: &str, plan: &Path, keys: Option<&Path>) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_drmr"));
+    command
+        .args([operation, "--plan"])
+        .arg(plan)
+        .args(["--max-workers", "1", "--json"]);
+    if let Some(keys) = keys {
+        command.arg("--keys-file").arg(keys);
+    }
+    command
+}
+
 fn preserves_raw(download: &Path, responses: &BTreeMap<String, Vec<u8>>) {
     let mut ledger =
         drmr_core::native::open_private_read(&download.join("raw/index.json")).unwrap();
@@ -427,4 +439,108 @@ fn completed_download_survives_a_later_media_tool_failure_without_published_outp
     let counts = server.stop();
     assert_eq!(counts.refused, 0);
     assert!(counts.served >= responses.len());
+}
+
+#[test]
+fn url_analysis_saved_plan_execution_and_verification_use_the_retained_original_offline() {
+    let owner = tempfile::tempdir().unwrap();
+    let root = owner.path();
+    let source = fixture(&root.join("source"), false);
+    let original = snapshot(source.parent().unwrap());
+    let responses = remote_files(&original);
+    let server = download_http::Server::start(responses.clone());
+    let policy = root.join("private/fetch.json");
+    private_json(
+        &policy,
+        &serde_json::json!({
+            "allowed_origins": [server.origin], "allow_http": true, "allow_private_network": true,
+            "headers_by_origin": { &server.origin: { "Authorization": download_http::AUTH } }
+        }),
+    );
+    let download = root.join("download");
+    let url = format!(
+        "{}/master.m3u8?token={}",
+        server.origin,
+        download_http::QUERY
+    );
+    let analysis = json_success(
+        &Command::new(env!("CARGO_BIN_EXE_drmr"))
+            .args(["analyze", &url, "--download-dir"])
+            .arg(&download)
+            .arg("--fetch-policy")
+            .arg(&policy)
+            .args(["--max-workers", "1", "--json", "--measure"])
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(analysis["kind"], "input-analysis");
+    assert_eq!(analysis["schema_version"], 1);
+    assert_eq!(analysis["input_admitted"], true);
+    assert_eq!(analysis["download"]["retained"], true);
+    assert_eq!(analysis["measurements"]["schema_version"], 1);
+    preserves_raw(&download, &responses);
+    let retained = snapshot(&download);
+    let counts = server.stop();
+    assert_eq!(counts.refused, 0);
+    assert!(counts.served >= responses.len());
+
+    let plan = root.join("conversion.plan.json");
+    let output = root.join("converted");
+    let planned = json_success(
+        &Command::new(env!("CARGO_BIN_EXE_drmr"))
+            .arg("plan")
+            .arg(download.join("input.m3u8"))
+            .args(["--to", "cbcs", "--format", "dash", "--output"])
+            .arg(&output)
+            .arg("--save")
+            .arg(&plan)
+            .args(["--max-workers", "1", "--json"])
+            .output()
+            .unwrap(),
+    );
+    let saved = std::fs::read(&plan).unwrap();
+    let on_disk: serde_json::Value = serde_json::from_slice(&saved).unwrap();
+    assert_eq!(planned, on_disk);
+    assert_eq!(planned["kind"], "execution-plan");
+    assert_eq!(planned["schema_version"], 1);
+    assert!(planned["plan_id"].as_str().is_some_and(|id| !id.is_empty()));
+    let text = std::str::from_utf8(&saved).unwrap();
+    for secret in [KEY, download_http::QUERY, download_http::AUTH] {
+        assert!(!text.contains(secret), "secret in saved execution plan");
+    }
+    assert!(!output.exists());
+
+    let missing_keys = saved_plan_command("convert", &plan, None).output().unwrap();
+    assert_private(&missing_keys);
+    assert_eq!(missing_keys.status.code(), Some(2));
+    let failure: serde_json::Value = serde_json::from_slice(&missing_keys.stdout).unwrap();
+    assert_eq!(failure["error"]["code"], "output-key-role-mismatch");
+    assert!(!output.exists());
+
+    let keys = root.join("private/keys.json");
+    private_json(
+        &keys,
+        &serde_json::json!({
+            "schema_version": 1, "output": {"kid": KID, "key": KEY}
+        }),
+    );
+    let converted = json_success(
+        &saved_plan_command("convert", &plan, Some(&keys))
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(converted["plan_id"], planned["plan_id"]);
+    assert_verified(&converted["verification"]);
+    let checked = json_success(
+        &saved_plan_command("verify", &plan, Some(&keys))
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(checked["plan_id"], planned["plan_id"]);
+    assert_eq!(checked["source_unchanged"], true);
+    assert_eq!(checked["output_matches_plan"], true);
+    assert_verified(&checked["verification"]);
+    assert_eq!(snapshot(&download), retained);
+    assert_eq!(snapshot(source.parent().unwrap()), original);
+    assert_eq!(std::fs::read(&plan).unwrap(), saved);
 }

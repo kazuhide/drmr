@@ -1,6 +1,6 @@
 # Understand a processing route
 
-`inspect` reports what local metadata says. `plan` lists conditional ways to satisfy the requested output. A successful `convert` reports the handler it actually used in `processing.route`, with a fixed reason and its input preparation. The identifiers below connect those reports to this guide.
+`inspect` reports what local metadata says. Without `--save`, `plan` lists conditional ways to satisfy the requested output. `analyze` checks complete source media; `plan --save` additionally fixes its file fingerprints and one output intent for later execution. A successful `convert` reports the handler it actually used in `processing.route`, with a fixed reason and its input preparation. The identifiers below connect those reports to this guide. See [saved execution plans](executable-plans.md) for the four-stage workflow and fresh revalidation boundaries.
 
 ```text
 Original local file or manifest resources
@@ -105,4 +105,4 @@ The fixed `sample_coverage_reason` explains unknown evidence: `sample-auxiliary-
 
 Inspection reads at most 16 MiB of MP4 movie metadata and skips media and fragment payloads. HLS inspection follows only bounded local child playlists, never media segments or keys. The additional facts do not widen those reads. DASH period counts describe direct, supported-namespace `Period` declarations, not verified durations or a complete media timeline. MP4 and HLS have no DASH period count.
 
-The version-one JSON additions are optional: `Inspection.details`, `ConversionPlan.processing`, and `ConversionReport.processing`. An absent field in an older report means the information was not supplied. It never means clear media, a selected route, or successful verification. Plans and saved reports are not executable instructions. License and device playback remain outside the media-identity checks.
+The version-one JSON additions are optional: `Inspection.details`, `ConversionPlan.processing`, and `ConversionReport.processing`. An absent field in an older report means the information was not supplied. It never means clear media, a selected route, or successful verification. Conditional plans and saved reports are not executable instructions. The separate `kind: "execution-plan"` format saves typed local intent and source identity; execution still revalidates the actual media and runtime configuration. License and device playback remain outside the media-identity checks.

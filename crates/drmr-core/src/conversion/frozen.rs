@@ -217,6 +217,7 @@ impl super::Converter {
             maximum_workers: self.maximum_workers,
             downloaded: self.downloaded.clone(),
             frozen_source: Some(source.guard()),
+            planned_destination: self.planned_destination.clone(),
             output_signaling: self.output_signaling.clone(),
         }
     }

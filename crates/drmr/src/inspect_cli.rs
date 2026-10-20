@@ -32,6 +32,24 @@ pub struct PlanArgs {
     /// Print the versioned JSON plan without executing any conversion.
     #[arg(long, requires = "input")]
     pub json: bool,
+    /// New private execution-plan file; requires one output format and --output.
+    #[arg(long, requires_all = ["input", "to", "output"], conflicts_with = "mpd")]
+    pub save: Option<PathBuf>,
+    /// New result file or directory recorded in the saved execution plan.
+    #[arg(long, requires = "save")]
+    pub output: Option<PathBuf>,
+    /// Protected input/output key configuration used for complete source checks.
+    #[arg(long, requires = "save")]
+    pub keys_file: Option<PathBuf>,
+    /// Shaka Packager executable used for complete source checks.
+    #[arg(long, requires = "save")]
+    pub packager_bin: Option<String>,
+    /// Upper bound for simultaneous media work (1-64); default adapts to CPU and memory.
+    #[arg(long, requires = "save", value_parser = clap::value_parser!(u8).range(1..=64))]
+    pub max_workers: Option<u8>,
+    /// Include numeric measurements in JSON; only available when saving a plan.
+    #[arg(long, requires_all = ["json", "save"])]
+    pub measure: bool,
     /// Override the asset name for the original --mpd catalog listing.
     #[arg(long, requires = "mpd")]
     pub asset_id: Option<String>,
@@ -129,6 +147,9 @@ pub fn inspect(args: &InspectArgs) -> ExitCode {
 }
 
 pub fn plan(args: &PlanArgs) -> ExitCode {
+    if args.save.is_some() {
+        return crate::plan_cli::save(args);
+    }
     let (Some(input), Some(target)) = (&args.input, args.to) else {
         eprintln!("plan: --to is required with INPUT");
         return ExitCode::from(2);

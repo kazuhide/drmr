@@ -10,11 +10,13 @@ use std::{
 
 const IO_ERROR: ConversionError = ConversionError("temporary-file-unavailable");
 const PUBLISH_ERROR: ConversionError = ConversionError("output-exists-or-publish-failed");
+#[cfg(unix)]
+const CLEANUP_ERROR: ConversionError = ConversionError("temporary-cleanup-unconfirmed");
 
 pub(super) struct Stage {
     path: PathBuf,
     #[cfg(unix)]
-    outer: tempfile::TempDir,
+    outer: UnixOuter,
     // Fields drop in declaration order: remove only the exclusive child while
     // the strict container and all of its ancestors remain pinned.
     #[cfg(windows)]
@@ -45,6 +47,7 @@ impl Stage {
                 None => builder.tempdir(),
             }
             .map_err(|_| ConversionError("temporary-workspace-unavailable"))?;
+            let outer = UnixOuter::new(outer)?;
             let path = outer.path().join("media");
             create_dir(&path)?;
             Ok(Self { path, outer })
@@ -80,6 +83,94 @@ impl Stage {
     pub(super) fn path(&self) -> &Path {
         &self.path
     }
+}
+
+#[cfg(unix)]
+struct UnixOuter {
+    path: PathBuf,
+    directory: std::sync::Mutex<Option<tempfile::TempDir>>,
+    held: File,
+    identity: native::FileIdentity,
+}
+#[cfg(unix)]
+impl UnixOuter {
+    fn new(directory: tempfile::TempDir) -> Result<Self, ConversionError> {
+        let path = directory.path().to_path_buf();
+        let held = match open_stage_directory(&path) {
+            Ok(held) => held,
+            Err(error) => {
+                let _ = directory.keep();
+                return Err(error);
+            }
+        };
+        let Ok(identity) = native::FileIdentity::read(&held) else {
+            let _ = directory.keep();
+            return Err(CLEANUP_ERROR);
+        };
+        let outer = Self {
+            path,
+            directory: std::sync::Mutex::new(Some(directory)),
+            held,
+            identity,
+        };
+        outer.check()?;
+        Ok(outer)
+    }
+    fn path(&self) -> &Path {
+        &self.path
+    }
+    fn check(&self) -> Result<(), ConversionError> {
+        if native::FileIdentity::read(&self.held).map_err(|_| CLEANUP_ERROR)? != self.identity
+            || native::FileIdentity::read(&open_stage_directory(&self.path)?)
+                .map_err(|_| CLEANUP_ERROR)?
+                != self.identity
+        {
+            return Err(CLEANUP_ERROR);
+        }
+        Ok(())
+    }
+    fn cleanup(&self) -> Result<(), ConversionError> {
+        let (directory, poisoned) = match self.directory.lock() {
+            Ok(mut directory) => (directory.take(), false),
+            Err(error) => (error.into_inner().take(), true),
+        };
+        let Some(directory) = directory else {
+            return Ok(());
+        };
+        // Disable TempDir's pathname-based Drop before checking the current namespace.
+        // On uncertainty, leave the original strict directory and every replacement alone.
+        let path = directory.keep();
+        if poisoned {
+            return Err(CLEANUP_ERROR);
+        }
+        self.check()?;
+        std::fs::remove_dir_all(path).map_err(|_| CLEANUP_ERROR)
+    }
+}
+#[cfg(unix)]
+impl Drop for UnixOuter {
+    fn drop(&mut self) {
+        let _ = self.cleanup();
+    }
+}
+#[cfg(unix)]
+fn open_stage_directory(path: &Path) -> Result<File, ConversionError> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(
+            (rustix::fs::OFlags::DIRECTORY
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::NONBLOCK)
+                .bits()
+                .cast_signed(),
+        )
+        .open(path)
+        .map_err(|_| CLEANUP_ERROR)?;
+    if !file.metadata().map_err(|_| CLEANUP_ERROR)?.is_dir() {
+        return Err(CLEANUP_ERROR);
+    }
+    Ok(file)
 }
 
 #[cfg(windows)]
@@ -275,21 +366,49 @@ pub(super) fn publish_file_observed(
     after_copy: impl FnOnce(&Path),
     check: impl FnOnce() -> Result<(), ConversionError>,
 ) -> Result<(), ConversionError> {
+    publish_file_with_commit(source, destination, stop, after_copy, check, atomic_move)
+}
+
+pub(super) fn publish_file_committing(
+    source: &Path,
+    destination: &Path,
+    stop: Option<&crate::concurrency::Stop>,
+    check: impl FnOnce() -> Result<(), ConversionError>,
+    commit: impl FnOnce(&Path, &Path) -> Result<(), ConversionError>,
+) -> Result<(), ConversionError> {
+    publish_file_with_commit(source, destination, stop, |_| {}, check, commit)
+}
+
+fn publish_file_with_commit(
+    source: &Path,
+    destination: &Path,
+    stop: Option<&crate::concurrency::Stop>,
+    after_copy: impl FnOnce(&Path),
+    check: impl FnOnce() -> Result<(), ConversionError>,
+    commit: impl FnOnce(&Path, &Path) -> Result<(), ConversionError>,
+) -> Result<(), ConversionError> {
     check_cancelled(stop)?;
     let parent = destination.parent().ok_or(PUBLISH_ERROR)?;
     let stage = Stage::new(Some(parent))?;
-    let path = stage.path().join("verified-output");
-    let mut input = regular_input(source)?;
-    let mut output = create_new(&path)?;
-    std::io::copy(&mut input, &mut output).map_err(|_| PUBLISH_ERROR)?;
-    output.flush().map_err(|_| PUBLISH_ERROR)?;
-    output.sync_all().map_err(|_| PUBLISH_ERROR)?;
-    drop(output);
-    after_copy(&path);
-    seal(stage.path())?;
-    check_cancelled(stop)?;
-    check()?;
-    atomic_move(&path, destination)
+    let result = (|| {
+        let path = stage.path().join("verified-output");
+        let mut input = regular_input(source)?;
+        let mut output = create_new(&path)?;
+        std::io::copy(&mut input, &mut output).map_err(|_| PUBLISH_ERROR)?;
+        output.flush().map_err(|_| PUBLISH_ERROR)?;
+        output.sync_all().map_err(|_| PUBLISH_ERROR)?;
+        drop(output);
+        after_copy(&path);
+        #[cfg(unix)]
+        stage.outer.check()?;
+        seal(stage.path())?;
+        check_cancelled(stop)?;
+        check()?;
+        commit(&path, destination)
+    })();
+    #[cfg(unix)]
+    stage.outer.cleanup()?;
+    result
 }
 
 pub(super) fn publish_directory(
@@ -316,18 +435,128 @@ pub(super) fn publish_directory_observed(
     before_seal: impl FnOnce(&Path),
     check: impl FnOnce() -> Result<(), ConversionError>,
 ) -> Result<(), ConversionError> {
+    publish_directory_with_commit(source, destination, stop, before_seal, check, atomic_move)
+}
+
+pub(super) fn publish_directory_committing(
+    source: &Path,
+    destination: &Path,
+    stop: Option<&crate::concurrency::Stop>,
+    check: impl FnOnce() -> Result<(), ConversionError>,
+    commit: impl FnOnce(&Path, &Path) -> Result<(), ConversionError>,
+) -> Result<(), ConversionError> {
+    publish_directory_with_commit(source, destination, stop, |_| {}, check, commit)
+}
+
+fn publish_directory_with_commit(
+    source: &Path,
+    destination: &Path,
+    stop: Option<&crate::concurrency::Stop>,
+    before_seal: impl FnOnce(&Path),
+    check: impl FnOnce() -> Result<(), ConversionError>,
+    commit: impl FnOnce(&Path, &Path) -> Result<(), ConversionError>,
+) -> Result<(), ConversionError> {
     check_cancelled(stop)?;
     before_seal(source);
     seal(source)?;
     check_cancelled(stop)?;
     check()?;
-    atomic_move(source, destination)
+    commit(source, destination)
 }
 fn check_cancelled(stop: Option<&crate::concurrency::Stop>) -> Result<(), ConversionError> {
     if stop.is_some_and(crate::concurrency::Stop::is_set) {
         Err(ConversionError("cancelled"))
     } else {
         Ok(())
+    }
+}
+
+#[cfg(all(test, unix))]
+mod unix_stage_identity_tests {
+    use super::*;
+
+    #[test]
+    fn stage_drop_preserves_a_foreign_tree_after_its_parent_is_replaced() {
+        let root = tempfile::tempdir().unwrap();
+        let work = root.path().join("work");
+        std::fs::create_dir(&work).unwrap();
+        let stage = Stage::new(Some(&work)).unwrap();
+        let leaf = stage.private_root().file_name().unwrap().to_owned();
+        create_new(&stage.path().join("owned"))
+            .unwrap()
+            .write_all(b"owned stage")
+            .unwrap();
+        std::fs::rename(&work, root.path().join("moved-work")).unwrap();
+        std::fs::create_dir(&work).unwrap();
+        let foreign = work.join(&leaf);
+        std::fs::create_dir(&foreign).unwrap();
+        std::fs::write(foreign.join("foreign-sentinel"), b"must remain").unwrap();
+        drop(stage);
+        assert_eq!(
+            std::fs::read(foreign.join("foreign-sentinel")).unwrap(),
+            b"must remain"
+        );
+        assert_eq!(
+            std::fs::read(
+                root.path()
+                    .join("moved-work")
+                    .join(leaf)
+                    .join("media/owned")
+            )
+            .unwrap(),
+            b"owned stage"
+        );
+    }
+
+    #[test]
+    fn uncertain_stage_cleanup_overrides_cancellation_without_deleting_a_replacement() {
+        let root = tempfile::tempdir().unwrap();
+        let work = root.path().join("work");
+        std::fs::create_dir(&work).unwrap();
+        let original = root.path().join("candidate");
+        std::fs::write(&original, b"verified candidate").unwrap();
+        let stop = crate::concurrency::Stop::new();
+        let mut leaf = None;
+        let result = publish_file_observed(
+            &original,
+            &work.join("result"),
+            Some(&stop),
+            |path| {
+                let name = path
+                    .parent()
+                    .unwrap()
+                    .parent()
+                    .unwrap()
+                    .file_name()
+                    .unwrap()
+                    .to_owned();
+                std::fs::rename(&work, root.path().join("moved-work")).unwrap();
+                std::fs::create_dir(&work).unwrap();
+                std::fs::create_dir(work.join(&name)).unwrap();
+                std::fs::write(work.join(&name).join("foreign-sentinel"), b"must remain").unwrap();
+                leaf = Some(name);
+                stop.set();
+            },
+            || Ok(()),
+        );
+        assert_eq!(result.unwrap_err(), CLEANUP_ERROR);
+        let leaf = leaf.unwrap();
+        assert_eq!(
+            std::fs::read(work.join(&leaf).join("foreign-sentinel")).unwrap(),
+            b"must remain"
+        );
+        assert_eq!(
+            std::fs::read(
+                root.path()
+                    .join("moved-work")
+                    .join(leaf)
+                    .join("media/verified-output")
+            )
+            .unwrap(),
+            b"verified candidate"
+        );
+        assert!(!work.join("result").exists());
+        assert_eq!(std::fs::read(&original).unwrap(), b"verified candidate");
     }
 }
 

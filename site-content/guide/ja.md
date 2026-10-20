@@ -17,11 +17,13 @@ drmr は、既存の映像・音声の符号化を保ったまま、メディア
 | 外部ツールを探す | `doctor` | 起動環境の PATH に必要な実行ファイルがあるか |
 | ツールの版と機能を確認する | `doctor --probe` | バージョンとヘルプに必要なオプションがあるか。メディア処理はしない |
 | 入力の種類と暗号宣言を見る | `inspect` | ローカル MP4・DASH・HLS のメタデータ。復号や実サンプルの検証はしない |
+| 実メディアの入力条件を確認する | `analyze` | 原本全体の解析と入力条件の確認。URL 入力は指定先に保存する |
 | 変換の意図と候補を確認する | `plan` | 指定した形式・暗号方式の組み合わせと、実行時に必要な条件 |
+| 変換の計画を保存する | `plan --save` | 原本ファイルのハッシュ、一つの出力形式、暗号方式、出力先を記録する |
 | メディアを変換する | `convert` | 実データの条件を確認し、変換・照合後に新しい出力を公開する |
 | 原本と結果を改めて比べる | `verify` | 原本を独立に読み直し、内容・復号結果・時刻などを照合する |
 
-通常は `inspect`、必要に応じて `plan`、続いて `convert`、最後に `verify` を使います。HLS でも、汎用変換の前に `analyze-hls` を実行する必要はありません。
+原本の確認から計画を保存して進める場合は、`analyze`、`plan --save`、`convert --plan`、`verify --plan` の順に使います。`inspect` は短時間でメタデータを確認する操作として使えます。計画を保存せず `convert INPUT` を実行する方法も引き続き使えます。HLS でも、汎用変換の前に `analyze-hls` を実行する必要はありません。
 
 ## 最短の実行例
 
@@ -31,13 +33,14 @@ drmr は、既存の映像・音声の符号化を保ったまま、メディア
 drmr --version
 drmr doctor --probe --route progressive-mp4
 drmr inspect original.mp4 --json
-drmr plan original.mp4 --to clear --format mp4 --json
-drmr convert original.mp4 --to clear --format mp4 \
-  --output clear.mp4
-drmr verify clear.mp4 --source original.mp4 --json
+drmr analyze original.mp4 --json
+drmr plan original.mp4 --to clear --format mp4 \
+  --output clear.mp4 --save clear.plan.json --json
+drmr convert --plan clear.plan.json --json
+drmr verify --plan clear.plan.json --json
 ```
 
-暗号化された入力や出力には、後述の保護された鍵設定ファイルを渡します。メディアが対応範囲外なら、最初の例でも処理は拒否されます。`doctor` や `plan` の成功だけでは、その入力の変換成功を保証しません。
+暗号化された入力や出力には、第5章の保護された鍵設定ファイルを渡します。メディアが対応範囲外なら、最初の例でも処理は拒否されます。入力確認や計画保存の成功だけでは、後の変換成功を保証しません。原本、実行時の鍵・ツール、要求した出力条件は、利用時に改めて確認します。
 
 CLI が主な操作手段です。Docker は依存ツールを含めて実行する選択肢です。ローカル Web コンソールと Desktop は実験的な操作画面で、CLI の全機能を備えた汎用ファイル変換画面ではありません。
 
@@ -199,6 +202,8 @@ drmr doctor --probe --route dash-presentation
 
 `convert` と `verify` は `--keys-file` で保護された JSON を読みます。環境変数への暗黙のフォールバックはありません。入力鍵は原本の復号、出力鍵は結果の暗号化・検証に使います。同じ暗号方式への変換でも、入力鍵と出力鍵は独立です。
 
+`analyze` と `plan --save` も、原本の確認に入力鍵が必要な場合は同じ `--keys-file` を使えます。計画を保存する段階では出力鍵は不要です。`convert --plan` と `verify --plan` に、実行時の鍵を別途渡します。
+
 鍵は 16 バイトを 32 桁の十六進数で表します。KID は key identifier、つまり鍵を選ぶための識別子で、暗号鍵そのものではありません。IV は initialization vector、暗号化の開始状態を指定する値です。KID やメディア内の IV は公開メタデータになる場合があります。
 
 macOS/Linux では、まず所有者だけが入れるディレクトリを作り、その中でエディターや秘密管理ツールから設定を作成してください。次の例の `keys.json` は、構造例を保存した後で権限も確認します。
@@ -333,6 +338,15 @@ HLS の子プレイリストは、入力ディレクトリ配下のローカル�
 
 解析の主な上限は、一マニフェスト 4 MiB、合計 16 MiB、32 プレイリスト、128 参照、トラックごとに 64 KID、MP4 の movie メタデータ 16 MiB です。変換本体や URL 取得の上限とは別です。
 
+## analyze は実メディアを確認する
+
+```sh
+drmr analyze source/master.m3u8 --json
+drmr analyze encrypted.mp4 --keys-file config/keys.json --json
+```
+
+`analyze` は変換と同じ処理エンジンで原本全体を読み、符号化済みパケット、復号後の内容、時刻を確認します。`input_admitted: true` は確認した入力プロファイルに適合したという意味です。出力形式の候補が表示されても、指定する暗号方式との組み合わせは計画時に確認します。変換結果や DRM の再生を証明するものではありません。ローカル MP4・DASH・HLS が対象で、URL 入力の保存手順は第8章に示します。
+
 ## plan は条件付きの実行候補を示す
 
 ```sh
@@ -340,13 +354,28 @@ drmr plan media.mp4 --to cbcs --format dash --json
 drmr plan source/master.m3u8 --to clear --format dash,hls
 ```
 
-`plan INPUT` には `--to` が必要です。`--format` を省略すると入力形式を引き継ぎます。複数形式はカンマ区切りで計画できますが、`convert` は一回につき一形式です。
+`--save` を付けない `plan INPUT` は、宣言に基づいて変換の意図と条件付きの候補を示す従来のモードです。`--to` が必要で、`--format` を省略すると入力形式を引き継ぎます。複数形式はカンマ区切りで計画できますが、`convert` は一回につき一形式です。
 
 `compatible` は宣言と指定の組み合わせが整い、すべての要求形式に候補経路があることを表します。`execution_available` には、出力形式が一つであることも必要です。複数形式の計画は成功しても `execution_available: false` になり得ます。
 
-どちらも実メディアの適合、鍵の正しさ、ツールの存在、実際の処理ハンドラーの確定を保証しません。`source-profile-validation-required` などの条件は実行時に確認します。SAMPLE-AES の宣言が整っていても、実際の TS 構成や IV の検証は残ります。計画結果をそのまま信用済み実行データとして投入することもできません。
+どちらも実メディアの適合、鍵の正しさ、ツールの存在、実際の処理ハンドラーの確定を保証しません。`source-profile-validation-required` などの条件は実行時に確認します。SAMPLE-AES の宣言が整っていても、実際の TS 構成や IV の検証は残ります。このメタデータ専用の JSON は実行用の計画ファイルではなく、`convert --plan` へ渡すと拒否されます。
 
 `details` がある場合は、宣言された暗号、暗号化単位、パターン、未確定の範囲を示します。変換成功レポートの `processing` は実際に選んだ経路です。計画の候補と区別してください。
+
+実行用の計画は、新規の出力先と `--save` を指定して保存します。原本全体を確認し、解決後の出力形式を一つ記録します。
+
+```sh
+drmr plan source/input.m3u8 --to cbcs --format dash \
+  --output converted-dash --save conversion.plan.json --json
+drmr convert --plan conversion.plan.json --keys-file config/keys.json --json
+drmr verify --plan conversion.plan.json --keys-file config/keys.json --json
+```
+
+計画には、変換が参照するローカルのプレイリスト・メディアファイル、そのサイズと SHA-256 ハッシュ、出力形式、暗号方式、絶対パスの出力先を記録します。SHA-256 は内容が変わったかを確認するための値です。パスは保存時のマシンと配置に依存するため、計画も所有者専用で、原本・出力ツリーの外に保管してください。未対応の版・不明なフィールド・計画識別子の不整合・原本の変更・安全でない保存先は拒否します。識別子は整合性確認用で、他者の署名や実行許可を表すものではありません。
+
+鍵、署名付き入力 URL、認証ヘッダー、ライセンス URL、HLS 鍵 URI、実行プログラムの引数は計画に保存しません。鍵は実行・検証時に `--keys-file` で渡します。出力のシグナリングも実行時の設定に属し、計画では固定しません。`verify --plan` は原本のハッシュ、実出力の形式・暗号方式、原本と結果の全メディア・時刻の一致を確認します。ライセンス取得や実機再生は別の検証です。
+
+計画保存では変換結果を作りません。暗号化された原本の確認には入力鍵を使った復号を伴う場合があり、実行時にも原本の条件を再確認します。
 
 互換の `plan --mpd MPD` は、準備済み DASH のレンディションとセグメント数を読む別モードです。汎用の `plan INPUT --to ...` とは入力配置が異なります。具体例は「準備済み DASH とバッチ処理」に示します。
 
@@ -494,24 +523,31 @@ drmr convert qualified-clear.mp4 --to cbcs --format dash \
 
 ## 保存先を指定して convert を実行する
 
+変換前に URL の原本を取得・解析し、変換条件を保存してから実行する場合は、次の四つのコマンドを使います。鍵設定 `config/keys.json` は、第5章の clear 入力から CBCS を作る構造を使い、原本・出力ツリーの外に準備してください。
+
 ```sh
-drmr convert "https://example.com/vod/master.m3u8" \
-  --download-dir ./saved-source --to cbcs --format hls \
-  --output ./converted --keys-file config/hls-output.json --json
+drmr analyze "https://example.com/vod/master.m3u8" \
+  --download-dir ./saved-source --json
+drmr plan ./saved-source/input.m3u8 --to cbcs --format dash \
+  --output ./converted-dash --save ./conversion.plan.json --json
+drmr convert --plan ./conversion.plan.json --keys-file config/keys.json --json
+drmr verify --plan ./conversion.plan.json --keys-file config/keys.json --json
 ```
 
-URL 入力では `--download-dir` が必須です。取得先と出力先はどちらも新規で、互いを包含せず、それぞれの親ディレクトリが存在する必要があります。既存ダウンロードを上書きしたり、自動的に再利用したりしません。ローカル入力に `--download-dir` や `--fetch-policy` は不要です。
+URL 入力では、新しい `--download-dir` と、その既存の親ディレクトリが必要です。計画ファイルと出力先も新規で、原本と別の場所を選びます。既存ダウンロードを上書きしたり、自動的に再取得先として使ったりしません。ローカル入力では `--download-dir` や `--fetch-policy` を指定しません。
 
 取得対象は clear、完了済み HLS の対応する TS/fMP4 プロファイルです。リモート DASH、単独 MP4、暗号化 HLS、ライブ、バイト範囲は取得対象外です。ローカルで読める暗号化 HLS があっても、その URL 取得まで対応したことにはなりません。鍵 URI も取得しません。
 
 元のプレイリストとリソースを保存し、ローカル参照にした `saved-source/input.m3u8` を作ります。原本プレイリストのバイト列は別に保持し、ローカル版では参照だけを書き換えます。時刻、シーケンス番号、音声の関連付けなどを解析結果から作り直す方式ではありません。
+
+配信元への接続が必要なのは最初の `analyze` だけです。その後は保存した原本で計画・変換・検証を進めます。後の解析や変換が失敗しても、取得が完了した原本は残ります。一回の操作で取得から変換まで進めたい場合は、従来どおり `convert URL --download-dir NEW_DIR` も使えます。
 
 ## 完成した取得結果をオフラインで使う
 
 ```sh
 drmr convert saved-source/input.m3u8 --to cbcs --format hls \
   --output retry-hls --keys-file config/hls-output.json
-drmr verify converted/master.m3u8 --source saved-source/input.m3u8 \
+drmr verify retry-hls/master.m3u8 --source saved-source/input.m3u8 \
   --keys-file config/hls-output.json --json
 ```
 
@@ -519,9 +555,11 @@ drmr verify converted/master.m3u8 --source saved-source/input.m3u8 \
 
 出力配置の直前にも保存した原本とローカル参照を確認します。取得後に原本が改変・削除されると出力を公開しません。取得済みのディレクトリを既存 URL 処理の resume オプションとして渡すこともできません。再実行はローカルのエントリーポイントを使ってください。
 
+`convert --plan` は保存済みの出力先を使い、入力・暗号方式・形式・出力先の上書きや、既存の結果への上書きを拒否します。別の出力先を選ぶ場合は新しい計画を作ります。完成済みの結果を改めて確認する場合は `verify --plan` を使います。
+
 ## 取得ポリシー
 
-既定は HTTPS と入力 URL と同じ origin だけです。origin はスキーム、ホスト、ポートの組み合わせです。別 origin の参照や認証には所有者専用の `--fetch-policy` JSON を使います。
+既定は HTTPS と入力 URL と同じ origin だけです。origin はスキーム、ホスト、ポートの組み合わせです。別 origin の参照や認証には所有者専用の `--fetch-policy` JSON を使います。`analyze URL` と直接の `convert URL` の両方で指定できます。
 
 ```json
 {
@@ -536,7 +574,7 @@ drmr verify converted/master.m3u8 --source saved-source/input.m3u8 \
 
 ```sh
 drmr convert "https://example.com/vod/master.m3u8" \
-  --download-dir saved-source --fetch-policy config/fetch.json \
+  --download-dir authenticated-source --fetch-policy config/fetch.json \
   --to clear --format hls --output clear-result
 ```
 
@@ -610,7 +648,7 @@ TS の時計はゼロ以外から始まることが多く、音声が最初の�
 
 ## 汎用 convert との違い
 
-`analyze-hls` は読み取り専用のメタデータ表示ではありません。clear HLS を取得またはコピーし、メディアを調べ、保存したファイルと `analysis.json` を含むスナップショットを作ります。`package-hls` はそれを確認して DRM シグナリング付きでパッケージします。名前に反して DASH と HLS の両方の出力を扱う別ワークフローです。
+汎用の `analyze` は `plan --save`・`convert --plan` で使う入力を確認するコマンドです。別の `analyze-hls` は clear HLS を取得またはコピーし、メディアを調べ、保存したファイルと `analysis.json` を含むスナップショットを作ります。`package-hls` はそれを確認して DRM シグナリング付きでパッケージします。名前に反して DASH と HLS の両方の出力を扱う別ワークフローです。
 
 対応する WebVTT や MP4 内 TTML の字幕プロファイルなど、汎用 `convert` と違う対象を持ちます。一方、解析元は clear、完了済み HLS に限定され、暗号化入力、ライブ、不連続、未対応トラック・字幕は拒否します。二つの経路の対応表を混ぜないでください。
 
@@ -1251,14 +1289,35 @@ PROFILE は `all`、`prepared-dash`、`progressive-mp4`、`fragmented-mp4`、`da
 | `INPUT` | ローカル MP4、MPD、M3U8。リモート参照は取得しない |
 | `--json` | バージョン付きメタデータレポート |
 
+## analyze
+
+| 引数・オプション | 意味・既定値 |
+| --- | --- |
+| `INPUT` | 完全なローカル MP4・DASH・HLS、または取得対応範囲の完了 clear HLS URL |
+| `--download-dir NEW_DIR` | URL に必須。原本を所有者専用で保存する新規ディレクトリ |
+| `--fetch-policy FILE` | URL の追加 origin・認証ヘッダー・資源上限を記す私有 JSON |
+| `--keys-file FILE` | 原本の復号に必要な入力鍵の保護された設定 |
+| `--packager-bin FILE` | Shaka 実行ファイル。既定 packager |
+| `--max-workers N` | 上限 1-64。既定は CPU・メモリから自動選択 |
+| `--json` | 一つの入力解析レポート。input_admitted は変換結果の検証を意味しない |
+| `--measure` | 数値計測を追加。--json が必要 |
+
+ローカル入力に取得用オプションを付けると拒否します。URL の解析には常に新規の取得先が必要です。
+
 ## plan
 
 | 引数・オプション | 意味 |
 | --- | --- |
 | `INPUT` | 汎用の変換意図を調べるローカル入力 |
 | `--to TARGET` | INPUT モードで必須。clear、cenc、cbcs、hls-aes128、hls-sample-aes |
-| `--format FORMAT` | mp4、dash、hls、hls-ts。計画ではカンマ区切り複数も可。省略時は MP4/DASH/HLS に従い、HLS は fMP4 |
+| `--format FORMAT` | mp4、dash、hls、hls-ts。--save なしでは複数可。保存時は解決後の一形式。省略時は MP4/DASH/HLS に従い、HLS は fMP4 |
 | `--json` | 実行せず、バージョン付き計画を JSON で表示 |
+| `--save NEW_FILE` | 原本を確認して実行用の計画を保存。INPUT、--to、--output が必要 |
+| `--output NEW_PATH` | 計画に記録する新規出力先。--save なしでは拒否 |
+| `--keys-file FILE` | 原本確認に使う入力鍵。--save 時のみ |
+| `--packager-bin FILE` | 原本確認の Shaka 実行ファイル。--save 時のみ。既定 packager |
+| `--max-workers N` | 原本確認の同時作業上限 1-64。--save 時のみ |
+| `--measure` | 標準出力に計測を追加。--json と --save が必要。保存ファイル自体は実行用の計画 |
 | `--mpd MPD` | 準備済み DASH のレンディションを列挙する別モード |
 | `--asset-id ID` | --mpd モードのアセット名を指定 |
 
@@ -1266,10 +1325,11 @@ PROFILE は `all`、`prepared-dash`、`progressive-mp4`、`fragmented-mp4`、`da
 
 | 引数・オプション | 意味・既定値 |
 | --- | --- |
-| `INPUT` | 対応するローカル原本、または完了 clear HLS URL |
-| `--to TARGET` | 必須。出力保護方式 |
+| `INPUT` | 対応するローカル原本、または完了 clear HLS URL。--plan 時は省略 |
+| `--to TARGET` | --plan がない場合に必須。出力保護方式 |
 | `--format FORMAT` | 一つの出力形式。省略時は MP4/DASH/HLS に従い、HLS は TS 入力でも fMP4 |
-| `--output NEW_PATH` | 必須。新規ファイルまたは新規ディレクトリ |
+| `--output NEW_PATH` | --plan がない場合に必須。新規ファイルまたは新規ディレクトリ |
+| `--plan FILE` | 計画の原本・形式・暗号方式・出力先を使用。変換条件の上書きは拒否 |
 | `--keys-file FILE` | 入力と出力の役割を分けた所有者専用 JSON |
 | `--download-dir NEW_DIR` | URL 入力に必須。取得原本を残す新規ディレクトリ |
 | `--fetch-policy FILE` | URL の追加 origin、認証、資源制限の私有 JSON |
@@ -1280,12 +1340,15 @@ PROFILE は `all`、`prepared-dash`、`progressive-mp4`、`fragmented-mp4`、`da
 
 汎用 CLI に ffmpeg-bin/ffprobe-bin の独自フラグはありません。FFmpeg/ffprobe は起動環境の PATH を用います。
 
+`--plan` は INPUT、--to、--format、--output、--download-dir、--fetch-policy と併用できません。鍵・ツールの選択・並列数・レポート指定は実行時の設定として渡せます。
+
 ## verify
 
 | 引数・オプション | 意味・既定値 |
 | --- | --- |
-| `OUTPUT` | 比較する結果の MP4、MPD、M3U8 |
-| `--source INPUT` | 必須。元の入力。結果から原本を推測しない |
+| `OUTPUT` | 比較する結果の MP4、MPD、M3U8。--plan 時は省略 |
+| `--source INPUT` | --plan がない場合に必須。元の入力。結果から原本を推測しない |
+| `--plan FILE` | 記録した原本、実出力の形式・暗号方式、全メディアの一致を確認。OUTPUT・--source とは併用不可 |
 | `--keys-file FILE` | input が原本、output が結果の鍵 |
 | `--packager-bin FILE` | Shaka 実行ファイル。既定 packager |
 | `--max-workers N` | 上限 1-64。受け入れ時に減る場合がある |
@@ -1293,6 +1356,8 @@ PROFILE は `all`、`prepared-dash`、`progressive-mp4`、`fragmented-mp4`、`da
 | `--measure` | 計測を追加。--json が必要 |
 
 verify は target や format を指定して作り直すコマンドではありません。
+
+計画を用いた検証結果は plan_id、source_unchanged、output_matches_plan を含み、全メディアの比較結果は verification の下に入ります。成功には source_unchanged、output_matches_plan、verification.passed の三つがすべて true である必要があります。内容が一致するだけでは、計画した暗号化が適用されたとは判断できません。出力シグナリングやライセンス再生は別の確認事項です。
 
 ## run
 

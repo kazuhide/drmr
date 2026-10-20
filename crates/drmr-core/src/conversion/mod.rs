@@ -18,6 +18,7 @@ mod execution;
 mod finite;
 pub mod key_file;
 mod packets;
+pub mod plan;
 pub use aes128::{
     Aes128Key, HlsInputKeys, HlsOutputKey, SegmentIv, decrypt_segment, encrypt_segment,
 };
@@ -97,6 +98,7 @@ pub struct Converter {
     maximum_workers: Option<usize>,
     downloaded: Option<Arc<download::Seal>>,
     frozen_source: Option<Arc<frozen::OriginalGuard>>,
+    planned_destination: Option<Arc<plan::destination::OutputGuard>>,
     output_signaling: Option<Arc<OutputSignaling>>,
 }
 impl Converter {
@@ -109,6 +111,7 @@ impl Converter {
             maximum_workers: None,
             downloaded: None,
             frozen_source: None,
+            planned_destination: None,
             output_signaling: None,
             backend: Backend {
                 stop: crate::concurrency::Stop::new(),
@@ -145,6 +148,7 @@ impl Converter {
             maximum_workers: self.maximum_workers,
             downloaded: self.downloaded.clone(),
             frozen_source: self.frozen_source.clone(),
+            planned_destination: self.planned_destination.clone(),
             output_signaling: self.output_signaling.clone(),
         };
         let result = execute(&command);
@@ -171,18 +175,32 @@ impl Converter {
     fn publish(&self, source: &Path, destination: &Path) -> Result<(), ConversionError> {
         let _scope = self.backend.scope(measurement::Phase::Publication);
         self.backend.check_cancelled()?;
-        files::publish_file_checked(source, destination, Some(&self.backend.stop), || {
-            self.check_downloaded()?;
-            self.check_frozen_source()
-        })
+        self.check_plan_destination()?;
+        files::publish_file_committing(
+            source,
+            destination,
+            Some(&self.backend.stop),
+            || {
+                self.check_downloaded()?;
+                self.check_frozen_source()
+            },
+            |source, destination| self.commit_publication(source, destination),
+        )
     }
     fn publish_directory(&self, source: &Path, destination: &Path) -> Result<(), ConversionError> {
         let _scope = self.backend.scope(measurement::Phase::Publication);
         self.backend.check_cancelled()?;
-        files::publish_directory_checked(source, destination, Some(&self.backend.stop), || {
-            self.check_downloaded()?;
-            self.check_frozen_source()
-        })
+        self.check_plan_destination()?;
+        files::publish_directory_committing(
+            source,
+            destination,
+            Some(&self.backend.stop),
+            || {
+                self.check_downloaded()?;
+                self.check_frozen_source()
+            },
+            |source, destination| self.commit_publication(source, destination),
+        )
     }
     #[must_use]
     pub fn with_ffprobe(mut self, binary: impl Into<String>) -> Self {

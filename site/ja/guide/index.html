@@ -67,22 +67,25 @@
 <tr><th scope="row">外部ツールを探す</th><td><code>doctor</code></td><td>起動環境の PATH に必要な実行ファイルがあるか</td></tr>
 <tr><th scope="row">ツールの版と機能を確認する</th><td><code>doctor --probe</code></td><td>バージョンとヘルプに必要なオプションがあるか。メディア処理はしない</td></tr>
 <tr><th scope="row">入力の種類と暗号宣言を見る</th><td><code>inspect</code></td><td>ローカル MP4・DASH・HLS のメタデータ。復号や実サンプルの検証はしない</td></tr>
+<tr><th scope="row">実メディアの入力条件を確認する</th><td><code>analyze</code></td><td>原本全体の解析と入力条件の確認。URL 入力は指定先に保存する</td></tr>
 <tr><th scope="row">変換の意図と候補を確認する</th><td><code>plan</code></td><td>指定した形式・暗号方式の組み合わせと、実行時に必要な条件</td></tr>
+<tr><th scope="row">変換の計画を保存する</th><td><code>plan --save</code></td><td>原本ファイルのハッシュ、一つの出力形式、暗号方式、出力先を記録する</td></tr>
 <tr><th scope="row">メディアを変換する</th><td><code>convert</code></td><td>実データの条件を確認し、変換・照合後に新しい出力を公開する</td></tr>
 <tr><th scope="row">原本と結果を改めて比べる</th><td><code>verify</code></td><td>原本を独立に読み直し、内容・復号結果・時刻などを照合する</td></tr>
 </tbody></table></div>
-<p>通常は <code>inspect</code>、必要に応じて <code>plan</code>、続いて <code>convert</code>、最後に <code>verify</code> を使います。HLS でも、汎用変換の前に <code>analyze-hls</code> を実行する必要はありません。</p>
+<p>原本の確認から計画を保存して進める場合は、<code>analyze</code>、<code>plan --save</code>、<code>convert --plan</code>、<code>verify --plan</code> の順に使います。<code>inspect</code> は短時間でメタデータを確認する操作として使えます。計画を保存せず <code>convert INPUT</code> を実行する方法も引き続き使えます。HLS でも、汎用変換の前に <code>analyze-hls</code> を実行する必要はありません。</p>
 <h3>最短の実行例</h3>
 <p>最初は、対応プロファイルの暗号化されていないローカル MP4 で動作を確認できます。出力の親ディレクトリは先に用意し、出力ファイル自体は存在しない名前にしてください。原本は変更されません。</p>
 <figure class="guide-example" aria-labelledby="example-1-title" data-code-language="sh"><figcaption id="example-1-title">例 1: sh</figcaption><pre tabindex="0"><code>drmr --version
 drmr doctor --probe --route progressive-mp4
 drmr inspect original.mp4 --json
-drmr plan original.mp4 --to clear --format mp4 --json
-drmr convert original.mp4 --to clear --format mp4 \
-  --output clear.mp4
-drmr verify clear.mp4 --source original.mp4 --json
+drmr analyze original.mp4 --json
+drmr plan original.mp4 --to clear --format mp4 \
+  --output clear.mp4 --save clear.plan.json --json
+drmr convert --plan clear.plan.json --json
+drmr verify --plan clear.plan.json --json
 </code></pre></figure>
-<p>暗号化された入力や出力には、後述の保護された鍵設定ファイルを渡します。メディアが対応範囲外なら、最初の例でも処理は拒否されます。<code>doctor</code> や <code>plan</code> の成功だけでは、その入力の変換成功を保証しません。</p>
+<p>暗号化された入力や出力には、第5章の保護された鍵設定ファイルを渡します。メディアが対応範囲外なら、最初の例でも処理は拒否されます。入力確認や計画保存の成功だけでは、後の変換成功を保証しません。原本、実行時の鍵・ツール、要求した出力条件は、利用時に改めて確認します。</p>
 <p>CLI が主な操作手段です。Docker は依存ツールを含めて実行する選択肢です。ローカル Web コンソールと Desktop は実験的な操作画面で、CLI の全機能を備えた汎用ファイル変換画面ではありません。</p>
 </section>
 <section class="guide-chapter" id="terminology" data-guide-chapter="terminology" aria-labelledby="terminology-title"><h2 id="terminology-title">2. 形式・暗号・DRM の読み方</h2><a class="guide-chapter-switch" href="../../guide/#terminology" lang="en" hreflang="en">English</a>
@@ -185,6 +188,7 @@ drmr doctor --probe --route dash-presentation
 <section class="guide-chapter" id="key-configuration" data-guide-chapter="key-configuration" aria-labelledby="key-configuration-title"><h2 id="key-configuration-title">5. 鍵設定と秘密情報の扱い</h2><a class="guide-chapter-switch" href="../../guide/#key-configuration" lang="en" hreflang="en">English</a>
 <h3>入力鍵と出力鍵を分ける</h3>
 <p><code>convert</code> と <code>verify</code> は <code>--keys-file</code> で保護された JSON を読みます。環境変数への暗黙のフォールバックはありません。入力鍵は原本の復号、出力鍵は結果の暗号化・検証に使います。同じ暗号方式への変換でも、入力鍵と出力鍵は独立です。</p>
+<p><code>analyze</code> と <code>plan --save</code> も、原本の確認に入力鍵が必要な場合は同じ <code>--keys-file</code> を使えます。計画を保存する段階では出力鍵は不要です。<code>convert --plan</code> と <code>verify --plan</code> に、実行時の鍵を別途渡します。</p>
 <p>鍵は 16 バイトを 32 桁の十六進数で表します。KID は key identifier、つまり鍵を選ぶための識別子で、暗号鍵そのものではありません。IV は initialization vector、暗号化の開始状態を指定する値です。KID やメディア内の IV は公開メタデータになる場合があります。</p>
 <p>macOS/Linux では、まず所有者だけが入れるディレクトリを作り、その中でエディターや秘密管理ツールから設定を作成してください。次の例の <code>keys.json</code> は、構造例を保存した後で権限も確認します。</p>
 <figure class="guide-example" aria-labelledby="example-5-title" data-code-language="sh"><figcaption id="example-5-title">例 5: sh</figcaption><pre tabindex="0"><code>umask 077
@@ -279,14 +283,28 @@ drmr inspect source/master.m3u8 --json
 <p>MP4 は初期化メタデータを読み、メディアの全ペイロードを走査しません。DASH/HLS は宣言を読みます。いずれも <code>media_verified: false</code> で、全サンプルの復号・デコード・再生は証明しません。未対応や不完全な暗号情報は <code>unknown</code> のままです。HLS の SAMPLE-AES 宣言だけから MP4 の暗号方式を断定しません。</p>
 <p>HLS の子プレイリストは、入力ディレクトリ配下のローカル参照だけをたどります。リモート、欠落、循環、ツリー外参照は解決しません。プレイリスト・メディア・鍵をネットワークから取得しません。</p>
 <p>解析の主な上限は、一マニフェスト 4 MiB、合計 16 MiB、32 プレイリスト、128 参照、トラックごとに 64 KID、MP4 の movie メタデータ 16 MiB です。変換本体や URL 取得の上限とは別です。</p>
+<h3>analyze は実メディアを確認する</h3>
+<figure class="guide-example" aria-labelledby="example-13-title" data-code-language="sh"><figcaption id="example-13-title">例 13: sh</figcaption><pre tabindex="0"><code>drmr analyze source/master.m3u8 --json
+drmr analyze encrypted.mp4 --keys-file config/keys.json --json
+</code></pre></figure>
+<p><code>analyze</code> は変換と同じ処理エンジンで原本全体を読み、符号化済みパケット、復号後の内容、時刻を確認します。<code>input_admitted: true</code> は確認した入力プロファイルに適合したという意味です。出力形式の候補が表示されても、指定する暗号方式との組み合わせは計画時に確認します。変換結果や DRM の再生を証明するものではありません。ローカル MP4・DASH・HLS が対象で、URL 入力の保存手順は第8章に示します。</p>
 <h3>plan は条件付きの実行候補を示す</h3>
-<figure class="guide-example" aria-labelledby="example-13-title" data-code-language="sh"><figcaption id="example-13-title">例 13: sh</figcaption><pre tabindex="0"><code>drmr plan media.mp4 --to cbcs --format dash --json
+<figure class="guide-example" aria-labelledby="example-14-title" data-code-language="sh"><figcaption id="example-14-title">例 14: sh</figcaption><pre tabindex="0"><code>drmr plan media.mp4 --to cbcs --format dash --json
 drmr plan source/master.m3u8 --to clear --format dash,hls
 </code></pre></figure>
-<p><code>plan INPUT</code> には <code>--to</code> が必要です。<code>--format</code> を省略すると入力形式を引き継ぎます。複数形式はカンマ区切りで計画できますが、<code>convert</code> は一回につき一形式です。</p>
+<p><code>--save</code> を付けない <code>plan INPUT</code> は、宣言に基づいて変換の意図と条件付きの候補を示す従来のモードです。<code>--to</code> が必要で、<code>--format</code> を省略すると入力形式を引き継ぎます。複数形式はカンマ区切りで計画できますが、<code>convert</code> は一回につき一形式です。</p>
 <p><code>compatible</code> は宣言と指定の組み合わせが整い、すべての要求形式に候補経路があることを表します。<code>execution_available</code> には、出力形式が一つであることも必要です。複数形式の計画は成功しても <code>execution_available: false</code> になり得ます。</p>
-<p>どちらも実メディアの適合、鍵の正しさ、ツールの存在、実際の処理ハンドラーの確定を保証しません。<code>source-profile-validation-required</code> などの条件は実行時に確認します。SAMPLE-AES の宣言が整っていても、実際の TS 構成や IV の検証は残ります。計画結果をそのまま信用済み実行データとして投入することもできません。</p>
+<p>どちらも実メディアの適合、鍵の正しさ、ツールの存在、実際の処理ハンドラーの確定を保証しません。<code>source-profile-validation-required</code> などの条件は実行時に確認します。SAMPLE-AES の宣言が整っていても、実際の TS 構成や IV の検証は残ります。このメタデータ専用の JSON は実行用の計画ファイルではなく、<code>convert --plan</code> へ渡すと拒否されます。</p>
 <p><code>details</code> がある場合は、宣言された暗号、暗号化単位、パターン、未確定の範囲を示します。変換成功レポートの <code>processing</code> は実際に選んだ経路です。計画の候補と区別してください。</p>
+<p>実行用の計画は、新規の出力先と <code>--save</code> を指定して保存します。原本全体を確認し、解決後の出力形式を一つ記録します。</p>
+<figure class="guide-example" aria-labelledby="example-15-title" data-code-language="sh"><figcaption id="example-15-title">例 15: sh</figcaption><pre tabindex="0"><code>drmr plan source/input.m3u8 --to cbcs --format dash \
+  --output converted-dash --save conversion.plan.json --json
+drmr convert --plan conversion.plan.json --keys-file config/keys.json --json
+drmr verify --plan conversion.plan.json --keys-file config/keys.json --json
+</code></pre></figure>
+<p>計画には、変換が参照するローカルのプレイリスト・メディアファイル、そのサイズと SHA-256 ハッシュ、出力形式、暗号方式、絶対パスの出力先を記録します。SHA-256 は内容が変わったかを確認するための値です。パスは保存時のマシンと配置に依存するため、計画も所有者専用で、原本・出力ツリーの外に保管してください。未対応の版・不明なフィールド・計画識別子の不整合・原本の変更・安全でない保存先は拒否します。識別子は整合性確認用で、他者の署名や実行許可を表すものではありません。</p>
+<p>鍵、署名付き入力 URL、認証ヘッダー、ライセンス URL、HLS 鍵 URI、実行プログラムの引数は計画に保存しません。鍵は実行・検証時に <code>--keys-file</code> で渡します。出力のシグナリングも実行時の設定に属し、計画では固定しません。<code>verify --plan</code> は原本のハッシュ、実出力の形式・暗号方式、原本と結果の全メディア・時刻の一致を確認します。ライセンス取得や実機再生は別の検証です。</p>
+<p>計画保存では変換結果を作りません。暗号化された原本の確認には入力鍵を使った復号を伴う場合があり、実行時にも原本の条件を再確認します。</p>
 <p>互換の <code>plan --mpd MPD</code> は、準備済み DASH のレンディションとセグメント数を読む別モードです。汎用の <code>plan INPUT --to ...</code> とは入力配置が異なります。具体例は「準備済み DASH とバッチ処理」に示します。</p>
 <p>参照（英語）: <a href="https://github.com/kazuhide/drmr/blob/main/docs/processing-routes.md">処理経路と解析の証拠</a>。</p>
 </section>
@@ -297,12 +315,12 @@ drmr plan source/master.m3u8 --to clear --format dash,hls
 <p>出力先は、新しい MP4 ファイル、または新しい DASH/HLS ディレクトリです。親は存在している必要があります。既存出力は上書きしません。入力を専用の作業領域に保存し、内容・時刻・原本の整合性と停止要求を確認してから完成結果を公開します。ここでの公開とは指定したローカル出力先に配置することで、インターネットへのアップロードではありません。</p>
 <p>以下の例は対応メディアと必要な鍵設定を準備済みとします。鍵設定名は例で、拡張子以外の決まりはありません。</p>
 <h3>MP4 を MP4 または DASH へ</h3>
-<figure class="guide-example" aria-labelledby="example-14-title" data-code-language="sh"><figcaption id="example-14-title">例 14: sh</figcaption><pre tabindex="0"><code>drmr convert original.mp4 --to cenc --format mp4 \
+<figure class="guide-example" aria-labelledby="example-16-title" data-code-language="sh"><figcaption id="example-16-title">例 16: sh</figcaption><pre tabindex="0"><code>drmr convert original.mp4 --to cenc --format mp4 \
   --output encrypted.mp4 --keys-file config/output.json
 drmr verify encrypted.mp4 --source original.mp4 \
   --keys-file config/output.json --json
 </code></pre></figure>
-<figure class="guide-example" aria-labelledby="example-15-title" data-code-language="sh"><figcaption id="example-15-title">例 15: sh</figcaption><pre tabindex="0"><code>drmr convert original.mp4 --to cbcs --format dash \
+<figure class="guide-example" aria-labelledby="example-17-title" data-code-language="sh"><figcaption id="example-17-title">例 17: sh</figcaption><pre tabindex="0"><code>drmr convert original.mp4 --to cbcs --format dash \
   --output result-dash --keys-file config/output.json
 drmr verify result-dash/manifest.mpd --source original.mp4 \
   --keys-file config/output.json --json
@@ -310,30 +328,30 @@ drmr verify result-dash/manifest.mpd --source original.mp4 \
 <p>音声の有限再生範囲を持つ対応 MP4 は、同じ <code>convert</code> で処理します。専用の「音声編集 MP4」入力コマンドはありません。開始・終了位置を処理に合わせて短くしたり、最後の音声パケットを捨てたりして成功にしません。</p>
 <h3>暗号化 DASH を clear または別の暗号へ</h3>
 <p>clear 出力には入力側の鍵だけを持つ設定を使います。</p>
-<figure class="guide-example" aria-labelledby="example-16-title" data-code-language="sh"><figcaption id="example-16-title">例 16: sh</figcaption><pre tabindex="0"><code>drmr convert protected/manifest.mpd --to clear --format dash \
+<figure class="guide-example" aria-labelledby="example-18-title" data-code-language="sh"><figcaption id="example-18-title">例 18: sh</figcaption><pre tabindex="0"><code>drmr convert protected/manifest.mpd --to clear --format dash \
   --output clear-dash --keys-file config/source.json
 drmr verify clear-dash/manifest.mpd \
   --source protected/manifest.mpd --keys-file config/source.json --json
 </code></pre></figure>
 <p>別の出力鍵を使って CBCS に変える場合は、入力・出力両方を持つ設定を使います。</p>
-<figure class="guide-example" aria-labelledby="example-17-title" data-code-language="sh"><figcaption id="example-17-title">例 17: sh</figcaption><pre tabindex="0"><code>drmr convert cenc-source/manifest.mpd --to cbcs --format dash \
+<figure class="guide-example" aria-labelledby="example-19-title" data-code-language="sh"><figcaption id="example-19-title">例 19: sh</figcaption><pre tabindex="0"><code>drmr convert cenc-source/manifest.mpd --to cbcs --format dash \
   --output cbcs-result --keys-file config/both.json
 drmr verify cbcs-result/manifest.mpd \
   --source cenc-source/manifest.mpd --keys-file config/both.json --json
 </code></pre></figure>
 <h3>clear HLS を fMP4 HLS へ</h3>
-<figure class="guide-example" aria-labelledby="example-18-title" data-code-language="sh"><figcaption id="example-18-title">例 18: sh</figcaption><pre tabindex="0"><code>drmr convert source/master.m3u8 --to cbcs --format hls \
+<figure class="guide-example" aria-labelledby="example-20-title" data-code-language="sh"><figcaption id="example-20-title">例 20: sh</figcaption><pre tabindex="0"><code>drmr convert source/master.m3u8 --to cbcs --format hls \
   --output cbcs-hls --keys-file config/hls-output.json
 drmr verify cbcs-hls/master.m3u8 --source source/master.m3u8 \
   --keys-file config/hls-output.json --json
 </code></pre></figure>
 <p>CBCS HLS には <code>output.hls_key_uri</code> が必要です。AES-128 にする場合は <code>--to hls-aes128</code> と対応する出力設定を使います。鍵 URI のサーバー運用や FairPlay のライセンス提供は drmr の外で行います。</p>
 <h3>TS HLS から、DRM 有無を選んだ DASH へ</h3>
-<figure class="guide-example" aria-labelledby="example-19-title" data-code-language="sh"><figcaption id="example-19-title">例 19: sh</figcaption><pre tabindex="0"><code>drmr convert ts-source/media.m3u8 --to clear --format dash \
+<figure class="guide-example" aria-labelledby="example-21-title" data-code-language="sh"><figcaption id="example-21-title">例 21: sh</figcaption><pre tabindex="0"><code>drmr convert ts-source/media.m3u8 --to clear --format dash \
   --output clear-dash
 drmr verify clear-dash/manifest.mpd --source ts-source/media.m3u8 --json
 </code></pre></figure>
-<figure class="guide-example" aria-labelledby="example-20-title" data-code-language="sh"><figcaption id="example-20-title">例 20: sh</figcaption><pre tabindex="0"><code>drmr convert ts-source/media.m3u8 --to cbcs --format dash \
+<figure class="guide-example" aria-labelledby="example-22-title" data-code-language="sh"><figcaption id="example-22-title">例 22: sh</figcaption><pre tabindex="0"><code>drmr convert ts-source/media.m3u8 --to cbcs --format dash \
   --output protected-dash --keys-file config/output.json
 drmr verify protected-dash/manifest.mpd \
   --source ts-source/media.m3u8 --keys-file config/output.json --json
@@ -341,20 +359,20 @@ drmr verify protected-dash/manifest.mpd \
 <p>上は clear TS 入力の例です。AES-128 / SAMPLE-AES 入力は、それぞれの入力鍵と必要な IV を <code>input.hls_keys</code> に追加します。<code>--to cenc</code> も対応する DASH 出力です。暗号化メディアを作ったことと、特定 DRM 用のライセンス情報を設定したことは別です。</p>
 <h3>音声のみの TS を fMP4 HLS へ</h3>
 <p>完了済みの音声のみの TS プレイリストから、clear、CBCS、AES-128 の fMP4 HLS を作れます。CBCS には <code>output.hls_key_uri</code> を持つ出力鍵設定を使います。暗号化入力には、それとは別に入力鍵 URI の対応付けも必要です。</p>
-<figure class="guide-example" aria-labelledby="example-21-title" data-code-language="sh"><figcaption id="example-21-title">例 21: sh</figcaption><pre tabindex="0"><code>drmr convert audio-ts/master.m3u8 --to cbcs --format hls \
+<figure class="guide-example" aria-labelledby="example-23-title" data-code-language="sh"><figcaption id="example-23-title">例 23: sh</figcaption><pre tabindex="0"><code>drmr convert audio-ts/master.m3u8 --to cbcs --format hls \
   --output audio-fmp4-hls --keys-file config/hls-output.json
 drmr verify audio-fmp4-hls/master.m3u8 \
   --source audio-ts/master.m3u8 --keys-file config/hls-output.json --json
 </code></pre></figure>
 <p>Shaka Packager で音声トラック全体を分離し、新しいセグメントを作ります。FFmpeg/FFprobe は解析、復号、ハッシュの照合に使います。原本の順序付き PES、全 AAC フレーム、絶対 PTS/DTS/継続時間を照合の基準に保ちます。二秒のセグメント目標に合わせて AAC フレームを切り落とすことはしません。470 フレームの TS 回帰入力は、一チャンネルあたり 481,280 サンプルを保持します。有限範囲で 480,000 サンプルを提示するプログレッシブ原本とは、再生範囲が異なります。</p>
 <h3>FairPlay 向け SAMPLE-AES TS を作る</h3>
-<figure class="guide-example" aria-labelledby="example-22-title" data-code-language="sh"><figcaption id="example-22-title">例 22: sh</figcaption><pre tabindex="0"><code>drmr convert clear-ts/media.m3u8 --to hls-sample-aes --format hls-ts \
+<figure class="guide-example" aria-labelledby="example-24-title" data-code-language="sh"><figcaption id="example-24-title">例 24: sh</figcaption><pre tabindex="0"><code>drmr convert clear-ts/media.m3u8 --to hls-sample-aes --format hls-ts \
   --output fairplay-ts --keys-file config/sample-aes-output.json
 drmr verify fairplay-ts/master.m3u8 --source clear-ts/media.m3u8 \
   --keys-file config/sample-aes-output.json --json
 </code></pre></figure>
 <p>反対に、対応する SAMPLE-AES TS を clear にする例です。</p>
-<figure class="guide-example" aria-labelledby="example-23-title" data-code-language="sh"><figcaption id="example-23-title">例 23: sh</figcaption><pre tabindex="0"><code>drmr convert encrypted-ts/media.m3u8 --to clear --format hls-ts \
+<figure class="guide-example" aria-labelledby="example-25-title" data-code-language="sh"><figcaption id="example-25-title">例 25: sh</figcaption><pre tabindex="0"><code>drmr convert encrypted-ts/media.m3u8 --to clear --format hls-ts \
   --output clear-ts --keys-file config/sample-aes-source.json
 drmr verify clear-ts/master.m3u8 --source encrypted-ts/media.m3u8 \
   --keys-file config/sample-aes-source.json --json
@@ -362,7 +380,7 @@ drmr verify clear-ts/master.m3u8 --source encrypted-ts/media.m3u8 \
 <p>SAMPLE-AES TS は入力・出力の両方に対応しています。これらは既知の鍵でのメディア変換で、FairPlay のライセンス取得を行いません。</p>
 <h3>PlayReady の明示シグナリング</h3>
 <p>対応する clear MP4 から CBCS DASH を作る場合に限り、次のように signaling を持つ出力設定を使えます。鍵はご自身の値へ置き換えてください。</p>
-<figure class="guide-example" aria-labelledby="example-24-title" data-code-language="json"><figcaption id="example-24-title">例 24: json</figcaption><pre tabindex="0"><code>{
+<figure class="guide-example" aria-labelledby="example-26-title" data-code-language="json"><figcaption id="example-26-title">例 26: json</figcaption><pre tabindex="0"><code>{
   &quot;schema_version&quot;: 1,
   &quot;output&quot;: {
     &quot;kid&quot;: &quot;&lt;32-hex-output-kid&gt;&quot;,
@@ -374,7 +392,7 @@ drmr verify clear-ts/master.m3u8 --source encrypted-ts/media.m3u8 \
   }
 }
 </code></pre></figure>
-<figure class="guide-example" aria-labelledby="example-25-title" data-code-language="sh"><figcaption id="example-25-title">例 25: sh</figcaption><pre tabindex="0"><code>drmr convert qualified-clear.mp4 --to cbcs --format dash \
+<figure class="guide-example" aria-labelledby="example-27-title" data-code-language="sh"><figcaption id="example-27-title">例 27: sh</figcaption><pre tabindex="0"><code>drmr convert qualified-clear.mp4 --to cbcs --format dash \
   --output playready-dash --keys-file config/playready.json
 </code></pre></figure>
 <p>この機能は、同じ完全なファイルからの H.264 映像と任意の AAC 音声を対象とする限定プロファイルです。一般の有限 AAC 変換表の全セルにシグナリングを追加できるわけではありません。既存 PSSH・保護情報や保持未検証の不透明なメタデータを拒否します。詳細な入力条件は公開の対応表を確認してください。</p>
@@ -382,24 +400,30 @@ drmr verify clear-ts/master.m3u8 --source encrypted-ts/media.m3u8 \
 </section>
 <section class="guide-chapter" id="url-input" data-guide-chapter="url-input" aria-labelledby="url-input-title"><h2 id="url-input-title">8. URL の取得を変換に含める</h2><a class="guide-chapter-switch" href="../../guide/#url-input" lang="en" hreflang="en">English</a>
 <h3>保存先を指定して convert を実行する</h3>
-<figure class="guide-example" aria-labelledby="example-26-title" data-code-language="sh"><figcaption id="example-26-title">例 26: sh</figcaption><pre tabindex="0"><code>drmr convert &quot;https://example.com/vod/master.m3u8&quot; \
-  --download-dir ./saved-source --to cbcs --format hls \
-  --output ./converted --keys-file config/hls-output.json --json
+<p>変換前に URL の原本を取得・解析し、変換条件を保存してから実行する場合は、次の四つのコマンドを使います。鍵設定 <code>config/keys.json</code> は、第5章の clear 入力から CBCS を作る構造を使い、原本・出力ツリーの外に準備してください。</p>
+<figure class="guide-example" aria-labelledby="example-28-title" data-code-language="sh"><figcaption id="example-28-title">例 28: sh</figcaption><pre tabindex="0"><code>drmr analyze &quot;https://example.com/vod/master.m3u8&quot; \
+  --download-dir ./saved-source --json
+drmr plan ./saved-source/input.m3u8 --to cbcs --format dash \
+  --output ./converted-dash --save ./conversion.plan.json --json
+drmr convert --plan ./conversion.plan.json --keys-file config/keys.json --json
+drmr verify --plan ./conversion.plan.json --keys-file config/keys.json --json
 </code></pre></figure>
-<p>URL 入力では <code>--download-dir</code> が必須です。取得先と出力先はどちらも新規で、互いを包含せず、それぞれの親ディレクトリが存在する必要があります。既存ダウンロードを上書きしたり、自動的に再利用したりしません。ローカル入力に <code>--download-dir</code> や <code>--fetch-policy</code> は不要です。</p>
+<p>URL 入力では、新しい <code>--download-dir</code> と、その既存の親ディレクトリが必要です。計画ファイルと出力先も新規で、原本と別の場所を選びます。既存ダウンロードを上書きしたり、自動的に再取得先として使ったりしません。ローカル入力では <code>--download-dir</code> や <code>--fetch-policy</code> を指定しません。</p>
 <p>取得対象は clear、完了済み HLS の対応する TS/fMP4 プロファイルです。リモート DASH、単独 MP4、暗号化 HLS、ライブ、バイト範囲は取得対象外です。ローカルで読める暗号化 HLS があっても、その URL 取得まで対応したことにはなりません。鍵 URI も取得しません。</p>
 <p>元のプレイリストとリソースを保存し、ローカル参照にした <code>saved-source/input.m3u8</code> を作ります。原本プレイリストのバイト列は別に保持し、ローカル版では参照だけを書き換えます。時刻、シーケンス番号、音声の関連付けなどを解析結果から作り直す方式ではありません。</p>
+<p>配信元への接続が必要なのは最初の <code>analyze</code> だけです。その後は保存した原本で計画・変換・検証を進めます。後の解析や変換が失敗しても、取得が完了した原本は残ります。一回の操作で取得から変換まで進めたい場合は、従来どおり <code>convert URL --download-dir NEW_DIR</code> も使えます。</p>
 <h3>完成した取得結果をオフラインで使う</h3>
-<figure class="guide-example" aria-labelledby="example-27-title" data-code-language="sh"><figcaption id="example-27-title">例 27: sh</figcaption><pre tabindex="0"><code>drmr convert saved-source/input.m3u8 --to cbcs --format hls \
+<figure class="guide-example" aria-labelledby="example-29-title" data-code-language="sh"><figcaption id="example-29-title">例 29: sh</figcaption><pre tabindex="0"><code>drmr convert saved-source/input.m3u8 --to cbcs --format hls \
   --output retry-hls --keys-file config/hls-output.json
-drmr verify converted/master.m3u8 --source saved-source/input.m3u8 \
+drmr verify retry-hls/master.m3u8 --source saved-source/input.m3u8 \
   --keys-file config/hls-output.json --json
 </code></pre></figure>
 <p>取得が完了した後は、配信元へ再接続せず保存した同じ原本で処理・検証できます。変換が失敗しても完成した取得結果は残ります。未完了のダウンロードを原本として採用しません。停止時は取得やメディア処理を止めてから後片付けします。</p>
 <p>出力配置の直前にも保存した原本とローカル参照を確認します。取得後に原本が改変・削除されると出力を公開しません。取得済みのディレクトリを既存 URL 処理の resume オプションとして渡すこともできません。再実行はローカルのエントリーポイントを使ってください。</p>
+<p><code>convert --plan</code> は保存済みの出力先を使い、入力・暗号方式・形式・出力先の上書きや、既存の結果への上書きを拒否します。別の出力先を選ぶ場合は新しい計画を作ります。完成済みの結果を改めて確認する場合は <code>verify --plan</code> を使います。</p>
 <h3>取得ポリシー</h3>
-<p>既定は HTTPS と入力 URL と同じ origin だけです。origin はスキーム、ホスト、ポートの組み合わせです。別 origin の参照や認証には所有者専用の <code>--fetch-policy</code> JSON を使います。</p>
-<figure class="guide-example" aria-labelledby="example-28-title" data-code-language="json"><figcaption id="example-28-title">例 28: json</figcaption><pre tabindex="0"><code>{
+<p>既定は HTTPS と入力 URL と同じ origin だけです。origin はスキーム、ホスト、ポートの組み合わせです。別 origin の参照や認証には所有者専用の <code>--fetch-policy</code> JSON を使います。<code>analyze URL</code> と直接の <code>convert URL</code> の両方で指定できます。</p>
+<figure class="guide-example" aria-labelledby="example-30-title" data-code-language="json"><figcaption id="example-30-title">例 30: json</figcaption><pre tabindex="0"><code>{
   &quot;allowed_origins&quot;: [&quot;https://media.example.com&quot;],
   &quot;headers_by_origin&quot;: {
     &quot;https://example.com&quot;: {&quot;Authorization&quot;: &quot;Bearer &lt;your-token&gt;&quot;}
@@ -408,8 +432,8 @@ drmr verify converted/master.m3u8 --source saved-source/input.m3u8 \
   &quot;connections&quot;: 4
 }
 </code></pre></figure>
-<figure class="guide-example" aria-labelledby="example-29-title" data-code-language="sh"><figcaption id="example-29-title">例 29: sh</figcaption><pre tabindex="0"><code>drmr convert &quot;https://example.com/vod/master.m3u8&quot; \
-  --download-dir saved-source --fetch-policy config/fetch.json \
+<figure class="guide-example" aria-labelledby="example-31-title" data-code-language="sh"><figcaption id="example-31-title">例 31: sh</figcaption><pre tabindex="0"><code>drmr convert &quot;https://example.com/vod/master.m3u8&quot; \
+  --download-dir authenticated-source --fetch-policy config/fetch.json \
   --to clear --format hls --output clear-result
 </code></pre></figure>
 <p>ヘッダーは設定した origin にだけ送ります。リダイレクト先と子参照にも許可が必要です。HTTP とプライベートネットワークへの接続は既定で無効で、必要な場合だけ <code>allow_http</code>、<code>allow_private_network</code> を明示します。JSON に認証情報がある場合は、鍵設定と同じく秘密として扱います。</p>
@@ -454,18 +478,18 @@ drmr verify converted/master.m3u8 --source saved-source/input.m3u8 \
 </section>
 <section class="guide-chapter" id="saved-hls" data-guide-chapter="saved-hls" aria-labelledby="saved-hls-title"><h2 id="saved-hls-title">10. HLS スナップショット経路</h2><a class="guide-chapter-switch" href="../../guide/#saved-hls" lang="en" hreflang="en">English</a>
 <h3>汎用 convert との違い</h3>
-<p><code>analyze-hls</code> は読み取り専用のメタデータ表示ではありません。clear HLS を取得またはコピーし、メディアを調べ、保存したファイルと <code>analysis.json</code> を含むスナップショットを作ります。<code>package-hls</code> はそれを確認して DRM シグナリング付きでパッケージします。名前に反して DASH と HLS の両方の出力を扱う別ワークフローです。</p>
+<p>汎用の <code>analyze</code> は <code>plan --save</code>・<code>convert --plan</code> で使う入力を確認するコマンドです。別の <code>analyze-hls</code> は clear HLS を取得またはコピーし、メディアを調べ、保存したファイルと <code>analysis.json</code> を含むスナップショットを作ります。<code>package-hls</code> はそれを確認して DRM シグナリング付きでパッケージします。名前に反して DASH と HLS の両方の出力を扱う別ワークフローです。</p>
 <p>対応する WebVTT や MP4 内 TTML の字幕プロファイルなど、汎用 <code>convert</code> と違う対象を持ちます。一方、解析元は clear、完了済み HLS に限定され、暗号化入力、ライブ、不連続、未対応トラック・字幕は拒否します。二つの経路の対応表を混ぜないでください。</p>
 <h3>ローカル HLS を保存する</h3>
 <p>所有者専用の <code>source.json</code> を用意します。次のパスは実際の絶対パスへ置き換えてください。</p>
-<figure class="guide-example" aria-labelledby="example-30-title" data-code-language="json"><figcaption id="example-30-title">例 30: json</figcaption><pre tabindex="0"><code>{
+<figure class="guide-example" aria-labelledby="example-32-title" data-code-language="json"><figcaption id="example-32-title">例 32: json</figcaption><pre tabindex="0"><code>{
   &quot;url&quot;: &quot;/absolute/path/media/master.m3u8&quot;,
   &quot;policy&quot;: {
     &quot;allowed_local_roots&quot;: [&quot;/absolute/path/media&quot;]
   }
 }
 </code></pre></figure>
-<figure class="guide-example" aria-labelledby="example-31-title" data-code-language="sh"><figcaption id="example-31-title">例 31: sh</figcaption><pre tabindex="0"><code>chmod 600 source.json
+<figure class="guide-example" aria-labelledby="example-33-title" data-code-language="sh"><figcaption id="example-33-title">例 33: sh</figcaption><pre tabindex="0"><code>chmod 600 source.json
 drmr analyze-hls --source-config source.json \
   --asset-id sample --output output
 drmr verify-snapshot --files output/sample/clear/source
@@ -474,13 +498,13 @@ drmr verify-snapshot --files output/sample/clear/source
 <h3>シグナリングを付けて package-hls</h3>
 <p><code>DRM_KID</code>、<code>DRM_KEY</code>、<code>DRM_IV</code> は秘密管理の手順から環境へ渡しておきます。どれも 16 バイト、32 桁の十六進数です。鍵値を含むシェルコマンドを履歴に残さないでください。この環境変数方式は汎用 <code>convert</code> の鍵設定と別です。</p>
 <p><code>drm.json</code> は暗号鍵ではなくシグナリングの設定です。</p>
-<figure class="guide-example" aria-labelledby="example-32-title" data-code-language="json"><figcaption id="example-32-title">例 32: json</figcaption><pre tabindex="0"><code>{
+<figure class="guide-example" aria-labelledby="example-34-title" data-code-language="json"><figcaption id="example-34-title">例 34: json</figcaption><pre tabindex="0"><code>{
   &quot;widevine_pssh&quot;: &quot;&lt;hex-or-base64-widevine-initialization-data&gt;&quot;,
   &quot;playready_la_url&quot;: &quot;https://license.example.invalid/acquire&quot;,
   &quot;fairplay_uri&quot;: &quot;skd://content-identifier&quot;
 }
 </code></pre></figure>
-<figure class="guide-example" aria-labelledby="example-33-title" data-code-language="sh"><figcaption id="example-33-title">例 33: sh</figcaption><pre tabindex="0"><code>chmod 600 drm.json
+<figure class="guide-example" aria-labelledby="example-35-title" data-code-language="sh"><figcaption id="example-35-title">例 35: sh</figcaption><pre tabindex="0"><code>chmod 600 drm.json
 drmr package-hls --analysis output/sample/clear/source/analysis.json \
   --drm-config drm.json
 </code></pre></figure>
@@ -492,7 +516,7 @@ drmr package-hls --analysis output/sample/clear/source/analysis.json \
 <section class="guide-chapter" id="prepared-dash-batch" data-guide-chapter="prepared-dash-batch" aria-labelledby="prepared-dash-batch-title"><h2 id="prepared-dash-batch-title">11. 準備済み DASH とバッチ処理</h2><a class="guide-chapter-switch" href="../../guide/#prepared-dash-batch" lang="en" hreflang="en">English</a>
 <h3>run 用の入力レイアウト</h3>
 <p><code>run</code> は、元の URL と対応するダウンロード済みの配置を使います。任意の MPD を単独で置けば使えるというインターフェースではありません。</p>
-<figure class="guide-example" aria-labelledby="example-34-title" data-code-language="text"><figcaption id="example-34-title">例 34: text</figcaption><pre tabindex="0"><code>sample/
+<figure class="guide-example" aria-labelledby="example-36-title" data-code-language="text"><figcaption id="example-36-title">例 36: text</figcaption><pre tabindex="0"><code>sample/
   download/
     manifest.example.test/sample/dash/manifest.mpd
     manifest.example.test/sample/hls/manifest.m3u8
@@ -502,7 +526,7 @@ drmr package-hls --analysis output/sample/clear/source/analysis.json \
 </code></pre></figure>
 <p>MPD には BaseURL、MP4 の adaptation set、representation ごとの SegmentTemplate が必要です。テンプレートは <code>initialization</code>、<code>media</code>、<code>timescale</code>、<code>duration</code> を持ち、メディア名は <code>$Number$</code> と数値セグメント名を使います。上の例では、BaseURL が <code>https://cdn.example.test/sample/</code> なら、<code>video/v0/init.mp4</code> は示した位置へ対応します。</p>
 <p><code>DRM_KID</code>、<code>DRM_KEY</code>、<code>DRM_IV</code> を環境へ準備したうえで実行します。</p>
-<figure class="guide-example" aria-labelledby="example-35-title" data-code-language="sh"><figcaption id="example-35-title">例 35: sh</figcaption><pre tabindex="0"><code>drmr plan --mpd sample/download/manifest.example.test/sample/dash/manifest.mpd
+<figure class="guide-example" aria-labelledby="example-37-title" data-code-language="sh"><figcaption id="example-37-title">例 37: sh</figcaption><pre tabindex="0"><code>drmr plan --mpd sample/download/manifest.example.test/sample/dash/manifest.mpd
 drmr run \
   --mpd sample/download/manifest.example.test/sample/dash/manifest.mpd \
   --hls-master \
@@ -520,7 +544,7 @@ drmr run \
 <tr><th scope="row"><code>hls_master</code></th><td>ストレージ基点からの相対オブジェクトキー。使わない場合は null</td></tr>
 </tbody></table></div>
 <p>例えば、次の内容を <code>asset.json</code> に保存します。これは一件のレコードを読みやすく書いたもので、作業リストへ入れる際は一行にします。</p>
-<figure class="guide-example" aria-labelledby="example-36-title" data-code-language="json"><figcaption id="example-36-title">例 36: json</figcaption><pre tabindex="0"><code>{
+<figure class="guide-example" aria-labelledby="example-38-title" data-code-language="json"><figcaption id="example-38-title">例 38: json</figcaption><pre tabindex="0"><code>{
   &quot;asset_id&quot;: &quot;sample&quot;,
   &quot;kind&quot;: &quot;dash-cenc&quot;,
   &quot;dash_manifest&quot;:
@@ -530,7 +554,7 @@ drmr run \
 }
 </code></pre></figure>
 <p><code>canonical</code> は JSON を安定したキー順・書式の一行にできるため、このレコードの整形にも使えます。次は新しい作業リストを作る例です。</p>
-<figure class="guide-example" aria-labelledby="example-37-title" data-code-language="sh"><figcaption id="example-37-title">例 37: sh</figcaption><pre tabindex="0"><code>printf &#x27;%s\n&#x27; &#x27;{&quot;schema_version&quot;:&quot;1&quot;}&#x27; &gt; work-list.jsonl
+<figure class="guide-example" aria-labelledby="example-39-title" data-code-language="sh"><figcaption id="example-39-title">例 39: sh</figcaption><pre tabindex="0"><code>printf &#x27;%s\n&#x27; &#x27;{&quot;schema_version&quot;:&quot;1&quot;}&#x27; &gt; work-list.jsonl
 {
   drmr canonical asset.json &amp;&amp; printf &#x27;\n&#x27;
 } &gt;&gt; work-list.jsonl
@@ -540,7 +564,7 @@ drmr batch --work-list work-list.jsonl --output output \
 <p><code>canonical</code> の出力自体には終端改行がないため、レコードを追加するごとに上の例のように改行も書きます。秘密情報の除去コマンドではなく、入力した JSON の値を出力します。鍵ファイルや認証情報をログへ表示する目的で使わないでください。</p>
 <h3>鍵と再開</h3>
 <p>既定の鍵提供元は環境変数です。アセットごとの保護された JSONL を使う場合は次の形式を指定します。鍵ファイルにはスキーマヘッダーはなく、各行が <code>asset_id</code>、<code>kid</code>、<code>key</code>、<code>iv</code> だけを持ちます。汎用 <code>--keys-file</code> の形式とは違います。</p>
-<figure class="guide-example" aria-labelledby="example-38-title" data-code-language="sh"><figcaption id="example-38-title">例 38: sh</figcaption><pre tabindex="0"><code>drmr batch --work-list work-list.jsonl --output output \
+<figure class="guide-example" aria-labelledby="example-40-title" data-code-language="sh"><figcaption id="example-40-title">例 40: sh</figcaption><pre tabindex="0"><code>drmr batch --work-list work-list.jsonl --output output \
   --resume-log resume.jsonl --storage local --storage-root ./catalog \
   --key-provider file --key-file ./private/keys.jsonl
 </code></pre></figure>
@@ -552,7 +576,7 @@ drmr batch --work-list work-list.jsonl --output output \
 <section class="guide-chapter" id="resources-stop" data-guide-chapter="resources-stop" aria-labelledby="resources-stop-title"><h2 id="resources-stop-title">12. 並列処理・メモリ・停止</h2><a class="guide-chapter-switch" href="../../guide/#resources-stop" lang="en" hreflang="en">English</a>
 <h3>--max-workers は上限</h3>
 <p><code>convert</code> と <code>verify</code> は、利用可能 CPU、メモリ、メディアの寸法・リソースサイズ・トラック数から並列度を選びます。指定しなくても自動調整します。手動指定は 1 から 64 の上限で、必要ならそれより少ないワーカーを使います。既定の推奨数は最大 32 です。</p>
-<figure class="guide-example" aria-labelledby="example-39-title" data-code-language="sh"><figcaption id="example-39-title">例 39: sh</figcaption><pre tabindex="0"><code>drmr convert source.mpd --to cbcs --format dash \
+<figure class="guide-example" aria-labelledby="example-41-title" data-code-language="sh"><figcaption id="example-41-title">例 41: sh</figcaption><pre tabindex="0"><code>drmr convert source.mpd --to cbcs --format dash \
   --output result --keys-file config/keys.json --max-workers 2
 drmr verify result/manifest.mpd --source source.mpd \
   --keys-file config/keys.json --max-workers 1 --json --measure
@@ -576,7 +600,7 @@ drmr verify result/manifest.mpd --source source.mpd \
 <h3>イメージを作る</h3>
 <p>Docker イメージは CLI、FFmpeg/ffprobe、Bento4 の mp4dump、Shaka Packager を含みます。ビルドには Git と BuildKit が使える Docker が必要です。ネイティブ Linux amd64 または arm64 が対象で、Docker Desktop は Linux コンテナを選びます。</p>
 <p>コミット済みのリポジトリルートから実行します。</p>
-<figure class="guide-example" aria-labelledby="example-40-title" data-code-language="sh"><figcaption id="example-40-title">例 40: sh</figcaption><pre tabindex="0"><code>revision=$(git rev-parse HEAD)
+<figure class="guide-example" aria-labelledby="example-42-title" data-code-language="sh"><figcaption id="example-42-title">例 42: sh</figcaption><pre tabindex="0"><code>revision=$(git rev-parse HEAD)
 tree=$(git rev-parse &quot;${revision}^{tree}&quot;)
 git archive --format=tar &quot;$revision&quot; | docker build \
   --build-arg DRMR_REVISION=&quot;$revision&quot; \
@@ -587,7 +611,7 @@ docker run --rm --init drmr:local doctor --probe --route all
 <p>イメージのコンパイラーやツールの固定版は、そのイメージを再現するための指定です。ソースビルドの最低要件 Rust 1.95 以上とは別です。</p>
 <h3>読み取り専用の入力と設定、書き込み用出力</h3>
 <p>ホストに <code>media</code>、<code>config</code>、<code>output</code> を用意します。設定と出力を所有者専用ディレクトリにし、鍵 JSON を 600 にします。以下は clear/DASH など、対応する原本と有効な鍵設定を用意済みの例です。</p>
-<figure class="guide-example" aria-labelledby="example-41-title" data-code-language="sh"><figcaption id="example-41-title">例 41: sh</figcaption><pre tabindex="0"><code>docker run --rm --init --user &quot;$(id -u):$(id -g)&quot; \
+<figure class="guide-example" aria-labelledby="example-43-title" data-code-language="sh"><figcaption id="example-43-title">例 43: sh</figcaption><pre tabindex="0"><code>docker run --rm --init --user &quot;$(id -u):$(id -g)&quot; \
   --mount &quot;type=bind,src=$PWD/media,dst=/input,readonly&quot; \
   --mount &quot;type=bind,src=$PWD/config,dst=/config,readonly&quot; \
   --mount &quot;type=bind,src=$PWD/output,dst=/output&quot; \
@@ -597,7 +621,7 @@ docker run --rm --init drmr:local doctor --probe --route all
 </code></pre></figure>
 <p>drmr に渡すのはコンテナ内のパスです。<code>/input</code> と <code>/config</code> は読み取り専用、<code>/output</code> は書き込み可能です。ユーザー・グループ ID をホストに合わせると、所有者専用の鍵を読み、結果を自分の所有物として作れます。イメージの既定ユーザーは root ではありません。ホストの不適切な所有者や権限を自動修復しません。</p>
 <p>結果を改めて読むときは、出力も読み取り専用にできます。</p>
-<figure class="guide-example" aria-labelledby="example-42-title" data-code-language="sh"><figcaption id="example-42-title">例 42: sh</figcaption><pre tabindex="0"><code>docker run --rm --init --user &quot;$(id -u):$(id -g)&quot; \
+<figure class="guide-example" aria-labelledby="example-44-title" data-code-language="sh"><figcaption id="example-44-title">例 44: sh</figcaption><pre tabindex="0"><code>docker run --rm --init --user &quot;$(id -u):$(id -g)&quot; \
   --mount &quot;type=bind,src=$PWD/media,dst=/input,readonly&quot; \
   --mount &quot;type=bind,src=$PWD/config,dst=/config,readonly&quot; \
   --mount &quot;type=bind,src=$PWD/output,dst=/output,readonly&quot; \
@@ -608,12 +632,12 @@ docker run --rm --init drmr:local doctor --probe --route all
 <h3>停止と後片付け</h3>
 <p><code>--init</code> は停止シグナルの転送と終了した子の回収を助けます。drmr 自身の停止・所有権確認は引き続き行います。接続した CLI は Ctrl+C、名前付きコンテナは <code>docker stop --timeout 60 NAME</code> で協調終了の時間を与えます。強制終了へ移った場合と、drmr が終了確認を完了した場合を区別してください。</p>
 <p><code>--rm</code> は終了したコンテナの一時ファイルシステムを消します。マウントした原本・設定・結果は残ります。利用が終わった自分のタグは、使用中のコンテナがなくなった後に削除できます。</p>
-<figure class="guide-example" aria-labelledby="example-43-title" data-code-language="sh"><figcaption id="example-43-title">例 43: sh</figcaption><pre tabindex="0"><code>docker image rm drmr:local
+<figure class="guide-example" aria-labelledby="example-45-title" data-code-language="sh"><figcaption id="example-45-title">例 45: sh</figcaption><pre tabindex="0"><code>docker image rm drmr:local
 </code></pre></figure>
 <p>ビルドキャッシュは別に残ります。専用 builder を使ったなら、その builder を不要時に削除します。共有キャッシュや無関係のイメージを一律に削除する必要はありません。</p>
 <h3>Docker の Web コンソール</h3>
 <p>Linux ホストでは host networking を使うと、既定の <code>127.0.0.1:8080</code> を保って接続できます。</p>
-<figure class="guide-example" aria-labelledby="example-44-title" data-code-language="sh"><figcaption id="example-44-title">例 44: sh</figcaption><pre tabindex="0"><code>docker run --rm --init --name drmr-console --network host \
+<figure class="guide-example" aria-labelledby="example-46-title" data-code-language="sh"><figcaption id="example-46-title">例 46: sh</figcaption><pre tabindex="0"><code>docker run --rm --init --name drmr-console --network host \
   --user &quot;$(id -u):$(id -g)&quot; \
   --mount &quot;type=bind,src=$PWD/catalog,dst=/catalog,readonly&quot; \
   --mount &quot;type=bind,src=$PWD/output,dst=/output&quot; \
@@ -630,13 +654,13 @@ docker run --rm --init drmr:local doctor --probe --route all
 <p>Windows x64 の通常ユーザーとして、ローカル NTFS 上で使います。管理者昇格により新規ファイルの所有者が Administrators になる実行、ネットワーク共有、私有パス内の directory junction、alternate data stream、不適切な既存作業権限は拒否します。</p>
 <p>CLI アーカイブを展開してユーザーの PATH に追加するか、完全パスで実行します。外部ツールは別途必要です。CI ビルドの CLI は VCRUNTIME140.dll を使うため、必要に応じて Microsoft Visual C++ x64 Redistributable をインストールしてください。</p>
 <p>ソースビルドの場合:</p>
-<figure class="guide-example" aria-labelledby="example-45-title" data-code-language="powershell"><figcaption id="example-45-title">例 45: powershell</figcaption><pre tabindex="0"><code>cargo build --release --locked -p drmr
+<figure class="guide-example" aria-labelledby="example-47-title" data-code-language="powershell"><figcaption id="example-47-title">例 47: powershell</figcaption><pre tabindex="0"><code>cargo build --release --locked -p drmr
 .\target\release\drmr.exe --help
 .\target\release\drmr.exe doctor --probe --route all
 </code></pre></figure>
 <h3>所有者専用の鍵ファイル</h3>
 <p>Windows は chmod の代わりに access control list、ACL を使います。所有者を現在のユーザーとし、継承を止め、現在のユーザーだけに完全アクセスを与える保護 ACL が必要です。次は新しい私有ディレクトリと空ファイルを作り、その後でエディターへ入力する例です。</p>
-<figure class="guide-example" aria-labelledby="example-46-title" data-code-language="powershell"><figcaption id="example-46-title">例 46: powershell</figcaption><pre tabindex="0"><code>$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+<figure class="guide-example" aria-labelledby="example-48-title" data-code-language="powershell"><figcaption id="example-48-title">例 48: powershell</figcaption><pre tabindex="0"><code>$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
 $private = Join-Path $env:LOCALAPPDATA &#x27;drmr-keys&#x27;
 if (Test-Path -LiteralPath $private) { throw &#x27;Choose a new directory&#x27; }
 New-Item -ItemType Directory -Path $private | Out-Null
@@ -652,7 +676,7 @@ function Set-OwnerOnlyAcl($path, $security) {
 
 </code></pre></figure>
 <p>続けてディレクトリとファイルへ ACL を適用し、鍵設定を入力します。</p>
-<figure class="guide-example" aria-labelledby="example-47-title" data-code-language="powershell"><figcaption id="example-47-title">例 47: powershell</figcaption><pre tabindex="0"><code>Set-OwnerOnlyAcl $private ([Security.AccessControl.DirectorySecurity]::new())
+<figure class="guide-example" aria-labelledby="example-49-title" data-code-language="powershell"><figcaption id="example-49-title">例 49: powershell</figcaption><pre tabindex="0"><code>Set-OwnerOnlyAcl $private ([Security.AccessControl.DirectorySecurity]::new())
 $keyFile = Join-Path $private &#x27;keys.json&#x27;
 New-Item -ItemType File -Path $keyFile | Out-Null
 Set-OwnerOnlyAcl $keyFile ([Security.AccessControl.FileSecurity]::new())
@@ -660,7 +684,7 @@ notepad $keyFile
 </code></pre></figure>
 <p>エディターがファイルを置き換えて ACL を変更した場合は、私有ディレクトリ内のまま所有者専用 ACL を再適用してください。不正な既存ファイルの権限を drmr が自動で直すことはありません。</p>
 <h3>PowerShell からの変換</h3>
-<figure class="guide-example" aria-labelledby="example-48-title" data-code-language="powershell"><figcaption id="example-48-title">例 48: powershell</figcaption><pre tabindex="0"><code>.\drmr.exe inspect &#x27;C:\media\source.mp4&#x27; --json
+<figure class="guide-example" aria-labelledby="example-50-title" data-code-language="powershell"><figcaption id="example-50-title">例 50: powershell</figcaption><pre tabindex="0"><code>.\drmr.exe inspect &#x27;C:\media\source.mp4&#x27; --json
 .\drmr.exe plan &#x27;C:\media\source.mp4&#x27; --to cbcs --format mp4
 $outDir = Join-Path $env:LOCALAPPDATA &#x27;drmr-output&#x27;
 New-Item -ItemType Directory -Path $outDir -Force | Out-Null
@@ -677,7 +701,7 @@ $result = Join-Path $outDir &#x27;protected.mp4&#x27;
 <section class="guide-chapter" id="web-console" data-guide-chapter="web-console" aria-labelledby="web-console-title"><h2 id="web-console-title">15. ローカル Web コンソール</h2><a class="guide-chapter-switch" href="../../guide/#web-console" lang="en" hreflang="en">English</a>
 <h3>起動と対象</h3>
 <p>Web コンソールは認証なしのローカル操作画面です。信頼できるマシン上の loopback で使い、リバースプロキシやポート転送で公開しないでください。Host と Origin の確認は、他のローカルプロセスを認証する機能ではありません。</p>
-<figure class="guide-example" aria-labelledby="example-49-title" data-code-language="sh"><figcaption id="example-49-title">例 49: sh</figcaption><pre tabindex="0"><code>DRMR_CATALOG_ROOT=/absolute/path/catalog \
+<figure class="guide-example" aria-labelledby="example-51-title" data-code-language="sh"><figcaption id="example-51-title">例 51: sh</figcaption><pre tabindex="0"><code>DRMR_CATALOG_ROOT=/absolute/path/catalog \
 DRMR_OUTPUT_ROOT=/absolute/path/output \
 drmr serve
 </code></pre></figure>
@@ -685,7 +709,7 @@ drmr serve
 <p>サーバーとジョブ CLI は同じ版を使います。<code>--cli</code> で差し替える場合は、その実行ファイルを直接指定します。別の CLI を起動するラッパーは、監督用の起動契約に適合せず拒否される場合があります。</p>
 <h3>HLS 入力の取得ポリシー</h3>
 <p>追加設定がなければ、default プロファイルは入力 URL 自身の HTTPS origin だけを許可します。別 origin の参照や認証が必要なら、所有者専用の profiles.json に名前付きポリシーを保存し、<code>DRMR_HLS_PROFILES</code> にそのファイルのパスを設定します。環境変数へ JSON 文字列自体を渡す指定ではありません。</p>
-<figure class="guide-example" aria-labelledby="example-50-title" data-code-language="json"><figcaption id="example-50-title">例 50: json</figcaption><pre tabindex="0"><code>{
+<figure class="guide-example" aria-labelledby="example-52-title" data-code-language="json"><figcaption id="example-52-title">例 52: json</figcaption><pre tabindex="0"><code>{
   &quot;default&quot;: {
     &quot;policy&quot;: {
       &quot;allowed_origins&quot;: [&quot;https://media.example.com&quot;],
@@ -696,7 +720,7 @@ drmr serve
   }
 }
 </code></pre></figure>
-<figure class="guide-example" aria-labelledby="example-51-title" data-code-language="sh"><figcaption id="example-51-title">例 51: sh</figcaption><pre tabindex="0"><code>chmod 600 profiles.json
+<figure class="guide-example" aria-labelledby="example-53-title" data-code-language="sh"><figcaption id="example-53-title">例 53: sh</figcaption><pre tabindex="0"><code>chmod 600 profiles.json
 DRMR_CATALOG_ROOT=/absolute/path/catalog \
 DRMR_OUTPUT_ROOT=/absolute/path/output \
 DRMR_HLS_PROFILES=/absolute/path/profiles.json \
@@ -729,17 +753,17 @@ drmr serve
 <p>Quit drmr は受付を止め、サーバーと子プロセスの終了確認を待ちます。未確認ならウィンドウと所有権を保持してエラーを表示します。原因を直し、Quit drmr を再度選んでください。OS の強制終了とは異なります。</p>
 <h3>起動環境とバンドル</h3>
 <p>Finder などから起動した PATH は、ターミナルと違う場合があります。アプリはシェルの起動ファイルを実行したり、推測したインストール先を追加したりしません。必要なら、外部ツールが見えるターミナルからバンドルを起動します。</p>
-<figure class="guide-example" aria-labelledby="example-52-title" data-code-language="sh"><figcaption id="example-52-title">例 52: sh</figcaption><pre tabindex="0"><code>&quot;/path/to/drmr.app/Contents/MacOS/drmr&quot; doctor
+<figure class="guide-example" aria-labelledby="example-54-title" data-code-language="sh"><figcaption id="example-54-title">例 54: sh</figcaption><pre tabindex="0"><code>&quot;/path/to/drmr.app/Contents/MacOS/drmr&quot; doctor
 &quot;/path/to/drmr.app/Contents/MacOS/drmr-desktop&quot;
 </code></pre></figure>
 <p>Check external tools は、実際のアプリ環境で doctor --probe と同じバージョン・機能検査を行います。メディア適合性は別です。診断プロセスの終了が未確認なら、アプリを正常終了したりコンソールを開いたりせず所有を保持します。</p>
 <p>CLI とホストは同じバンドル内に保持します。ホストは CLI の SHA-256 を確認します。外部ツール、鍵、ダウンロード、運用設定はバンドルに含みません。build-manifest.json はソース・ツリー・バイナリハッシュなどの記録で、署名付きの証明ではありません。</p>
 <h3>ソースから作る場合</h3>
 <p>Tauri の OS 別前提条件と外部ツールを先に用意します。Windows は WebView2、macOS は WKWebView、Linux は WebKitGTK を使います。</p>
-<figure class="guide-example" aria-labelledby="example-53-title" data-code-language="sh"><figcaption id="example-53-title">例 53: sh</figcaption><pre tabindex="0"><code>RUSTUP_TOOLCHAIN=1.95.0 python3 tools/build_desktop.py --bundle
+<figure class="guide-example" aria-labelledby="example-55-title" data-code-language="sh"><figcaption id="example-55-title">例 55: sh</figcaption><pre tabindex="0"><code>RUSTUP_TOOLCHAIN=1.95.0 python3 tools/build_desktop.py --bundle
 </code></pre></figure>
 <p>上は macOS/Linux シェルの例です。Windows の PowerShell は環境変数の指定方法も異なります。</p>
-<figure class="guide-example" aria-labelledby="example-54-title" data-code-language="powershell"><figcaption id="example-54-title">例 54: powershell</figcaption><pre tabindex="0"><code>$env:RUSTUP_TOOLCHAIN = &#x27;1.95.0&#x27;
+<figure class="guide-example" aria-labelledby="example-56-title" data-code-language="powershell"><figcaption id="example-56-title">例 56: powershell</figcaption><pre tabindex="0"><code>$env:RUSTUP_TOOLCHAIN = &#x27;1.95.0&#x27;
 python tools/build_desktop.py --bundle
 </code></pre></figure>
 <p><code>--release</code> は最適化ビルド、<code>CARGO_TARGET_DIR</code> は専用の出力先を選び、既定は target/desktop です。スクリプトは同じ版の CLI と通知文を準備し、未署名の macOS .app または Windows/Linux の可搬ディレクトリとアーカイブを作ります。既存バンドルは上書きしません。署名、公証、インストーラー作成はこの手順の対象外です。</p>
@@ -752,7 +776,7 @@ python tools/build_desktop.py --bundle
 <h3>JSON と進捗</h3>
 <p>機械処理には <code>convert --json</code>、<code>verify --json</code> を使います。正常な結果は一つのバージョン付き JSON オブジェクトです。<code>--measure</code> を付ける場合も <code>--json</code> が必要です。</p>
 <p>例えば、計測なしの <code>verify --json</code> による成功結果は次の形式です。</p>
-<figure class="guide-example" aria-labelledby="example-55-title" data-code-language="json"><figcaption id="example-55-title">例 55: json</figcaption><pre tabindex="0"><code>{
+<figure class="guide-example" aria-labelledby="example-57-title" data-code-language="json"><figcaption id="example-57-title">例 57: json</figcaption><pre tabindex="0"><code>{
   &quot;schema_version&quot;: 1,
   &quot;passed&quot;: true,
   &quot;media_verified&quot;: true,
@@ -767,7 +791,7 @@ python tools/build_desktop.py --bundle
 </code></pre></figure>
 <p>有効な引数で処理が始まった後の運用エラーは、<code>schema_version: 1</code>、<code>command</code>、<code>status</code>、<code>error</code> を返します。status は failed または cancelled で、error は固定の code、安全な hint、最後に観測した活動名 last_activity を持ちます。比較を終えて不一致となった検証は、既存の checks と比較情報も残します。</p>
 <p>動画のみの候補から有限の再生範囲を削除した比較では、符号化内容と復号画像が一致しても、次のように失敗します。この例の <code>packet_timing_equal: false</code> は再生範囲の不一致を示しています。hint と last_activity は実際の英語出力です。</p>
-<figure class="guide-example" aria-labelledby="example-56-title" data-code-language="json"><figcaption id="example-56-title">例 56: json</figcaption><pre tabindex="0"><code>{
+<figure class="guide-example" aria-labelledby="example-58-title" data-code-language="json"><figcaption id="example-58-title">例 58: json</figcaption><pre tabindex="0"><code>{
   &quot;schema_version&quot;: 1,
   &quot;passed&quot;: false,
   &quot;media_verified&quot;: false,
@@ -851,7 +875,7 @@ python tools/build_desktop.py --bundle
 <p>Bento4 の build 番号など、設定した配布物の版と実行バナーから観測できる情報は区別してください。Desktop のビルド成功は GUI・再生の認定ではなく、Docker の HTTP 試験もブラウザー画面の認定ではありません。既知の鍵による完全メディア比較は、DRM ライセンス取得や実機再生の証明ではありません。</p>
 <h3>代表的な再現コマンド</h3>
 <p>開発用ソースとメディアツールを揃えた環境で、リポジトリのルートから実行します。</p>
-<figure class="guide-example" aria-labelledby="example-57-title" data-code-language="sh"><figcaption id="example-57-title">例 57: sh</figcaption><pre tabindex="0"><code>cargo test --locked -p drmr --test bbb_media -- --nocapture
+<figure class="guide-example" aria-labelledby="example-59-title" data-code-language="sh"><figcaption id="example-59-title">例 59: sh</figcaption><pre tabindex="0"><code>cargo test --locked -p drmr --test bbb_media -- --nocapture
 cargo test --locked -p drmr-core --test conversion_ts_output -- --nocapture
 cargo test --locked -p drmr-core --test conversion_ts_output \
   audio_hls -- --nocapture
@@ -862,7 +886,7 @@ cargo test --locked -p drmr --test conversion_finite_outputs -- --nocapture
 </code></pre></figure>
 <p>16 経路を確認する bbb_media の回帰試験では、<code>DRMR_CONVERSION_REPORT</code> をリポジトリ外の新しいファイルへ設定すると JSON を保存できます。実際の fixture ハッシュ、経路、全比較、時間、サンプリングしたメモリ、ツール版、測定の限界を確認してください。他の TS・有限範囲試験がこの変数でレポートファイルを作るわけではありません。それぞれのテストログと CI 成果物を使います。</p>
 <p>長時間のパケット証明には、32×18 の小さな派生映像を 417 回繰り返し、4,170 秒・100,080 パケットを変換・独立検証する別試験もあります。</p>
-<figure class="guide-example" aria-labelledby="example-58-title" data-code-language="sh"><figcaption id="example-58-title">例 58: sh</figcaption><pre tabindex="0"><code>cargo test --locked -p drmr --test long_conversion
+<figure class="guide-example" aria-labelledby="example-60-title" data-code-language="sh"><figcaption id="example-60-title">例 60: sh</figcaption><pre tabindex="0"><code>cargo test --locked -p drmr --test long_conversion
 </code></pre></figure>
 <p>これは長い時刻列を省略せず読めるかの回帰試験で、高解像度・長尺の処理速度や常時メモリ量を認定するベンチマークではありません。十秒の試験も同様に、万能な対応や DRM 実機再生の認定を意味しません。</p>
 <p>参照（英語）: <a href="https://github.com/kazuhide/drmr/blob/main/crates/drmr/tests/fixtures/bbb/README.md">アセットの出典・ライセンス</a>、<a href="https://github.com/kazuhide/drmr/blob/main/crates/drmr/tests/fixtures/bbb/CENC.md">暗号化 fixture</a>、<a href="https://github.com/kazuhide/drmr/blob/main/docs/media-processing.md">処理と試験の詳細</a>。</p>
@@ -881,21 +905,40 @@ cargo test --locked -p drmr --test conversion_finite_outputs -- --nocapture
 <tr><th scope="row"><code>INPUT</code></th><td>ローカル MP4、MPD、M3U8。リモート参照は取得しない</td></tr>
 <tr><th scope="row"><code>--json</code></th><td>バージョン付きメタデータレポート</td></tr>
 </tbody></table></div>
+<h3>analyze</h3>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-18-title" tabindex="0"><table><caption id="table-18-title">analyze — 表 18</caption><thead><tr><th scope="col">引数・オプション</th><th scope="col">意味・既定値</th></tr></thead><tbody>
+<tr><th scope="row"><code>INPUT</code></th><td>完全なローカル MP4・DASH・HLS、または取得対応範囲の完了 clear HLS URL</td></tr>
+<tr><th scope="row"><code>--download-dir NEW_DIR</code></th><td>URL に必須。原本を所有者専用で保存する新規ディレクトリ</td></tr>
+<tr><th scope="row"><code>--fetch-policy FILE</code></th><td>URL の追加 origin・認証ヘッダー・資源上限を記す私有 JSON</td></tr>
+<tr><th scope="row"><code>--keys-file FILE</code></th><td>原本の復号に必要な入力鍵の保護された設定</td></tr>
+<tr><th scope="row"><code>--packager-bin FILE</code></th><td>Shaka 実行ファイル。既定 packager</td></tr>
+<tr><th scope="row"><code>--max-workers N</code></th><td>上限 1-64。既定は CPU・メモリから自動選択</td></tr>
+<tr><th scope="row"><code>--json</code></th><td>一つの入力解析レポート。input_admitted は変換結果の検証を意味しない</td></tr>
+<tr><th scope="row"><code>--measure</code></th><td>数値計測を追加。--json が必要</td></tr>
+</tbody></table></div>
+<p>ローカル入力に取得用オプションを付けると拒否します。URL の解析には常に新規の取得先が必要です。</p>
 <h3>plan</h3>
-<div class="guide-table-scroll" role="region" aria-labelledby="table-18-title" tabindex="0"><table><caption id="table-18-title">plan — 表 18</caption><thead><tr><th scope="col">引数・オプション</th><th scope="col">意味</th></tr></thead><tbody>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-19-title" tabindex="0"><table><caption id="table-19-title">plan — 表 19</caption><thead><tr><th scope="col">引数・オプション</th><th scope="col">意味</th></tr></thead><tbody>
 <tr><th scope="row"><code>INPUT</code></th><td>汎用の変換意図を調べるローカル入力</td></tr>
 <tr><th scope="row"><code>--to TARGET</code></th><td>INPUT モードで必須。clear、cenc、cbcs、hls-aes128、hls-sample-aes</td></tr>
-<tr><th scope="row"><code>--format FORMAT</code></th><td>mp4、dash、hls、hls-ts。計画ではカンマ区切り複数も可。省略時は MP4/DASH/HLS に従い、HLS は fMP4</td></tr>
+<tr><th scope="row"><code>--format FORMAT</code></th><td>mp4、dash、hls、hls-ts。--save なしでは複数可。保存時は解決後の一形式。省略時は MP4/DASH/HLS に従い、HLS は fMP4</td></tr>
 <tr><th scope="row"><code>--json</code></th><td>実行せず、バージョン付き計画を JSON で表示</td></tr>
+<tr><th scope="row"><code>--save NEW_FILE</code></th><td>原本を確認して実行用の計画を保存。INPUT、--to、--output が必要</td></tr>
+<tr><th scope="row"><code>--output NEW_PATH</code></th><td>計画に記録する新規出力先。--save なしでは拒否</td></tr>
+<tr><th scope="row"><code>--keys-file FILE</code></th><td>原本確認に使う入力鍵。--save 時のみ</td></tr>
+<tr><th scope="row"><code>--packager-bin FILE</code></th><td>原本確認の Shaka 実行ファイル。--save 時のみ。既定 packager</td></tr>
+<tr><th scope="row"><code>--max-workers N</code></th><td>原本確認の同時作業上限 1-64。--save 時のみ</td></tr>
+<tr><th scope="row"><code>--measure</code></th><td>標準出力に計測を追加。--json と --save が必要。保存ファイル自体は実行用の計画</td></tr>
 <tr><th scope="row"><code>--mpd MPD</code></th><td>準備済み DASH のレンディションを列挙する別モード</td></tr>
 <tr><th scope="row"><code>--asset-id ID</code></th><td>--mpd モードのアセット名を指定</td></tr>
 </tbody></table></div>
 <h3>convert</h3>
-<div class="guide-table-scroll" role="region" aria-labelledby="table-19-title" tabindex="0"><table><caption id="table-19-title">convert — 表 19</caption><thead><tr><th scope="col">引数・オプション</th><th scope="col">意味・既定値</th></tr></thead><tbody>
-<tr><th scope="row"><code>INPUT</code></th><td>対応するローカル原本、または完了 clear HLS URL</td></tr>
-<tr><th scope="row"><code>--to TARGET</code></th><td>必須。出力保護方式</td></tr>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-20-title" tabindex="0"><table><caption id="table-20-title">convert — 表 20</caption><thead><tr><th scope="col">引数・オプション</th><th scope="col">意味・既定値</th></tr></thead><tbody>
+<tr><th scope="row"><code>INPUT</code></th><td>対応するローカル原本、または完了 clear HLS URL。--plan 時は省略</td></tr>
+<tr><th scope="row"><code>--to TARGET</code></th><td>--plan がない場合に必須。出力保護方式</td></tr>
 <tr><th scope="row"><code>--format FORMAT</code></th><td>一つの出力形式。省略時は MP4/DASH/HLS に従い、HLS は TS 入力でも fMP4</td></tr>
-<tr><th scope="row"><code>--output NEW_PATH</code></th><td>必須。新規ファイルまたは新規ディレクトリ</td></tr>
+<tr><th scope="row"><code>--output NEW_PATH</code></th><td>--plan がない場合に必須。新規ファイルまたは新規ディレクトリ</td></tr>
+<tr><th scope="row"><code>--plan FILE</code></th><td>計画の原本・形式・暗号方式・出力先を使用。変換条件の上書きは拒否</td></tr>
 <tr><th scope="row"><code>--keys-file FILE</code></th><td>入力と出力の役割を分けた所有者専用 JSON</td></tr>
 <tr><th scope="row"><code>--download-dir NEW_DIR</code></th><td>URL 入力に必須。取得原本を残す新規ディレクトリ</td></tr>
 <tr><th scope="row"><code>--fetch-policy FILE</code></th><td>URL の追加 origin、認証、資源制限の私有 JSON</td></tr>
@@ -905,10 +948,12 @@ cargo test --locked -p drmr --test conversion_finite_outputs -- --nocapture
 <tr><th scope="row"><code>--measure</code></th><td>数値の計測情報を追加。--json が必要</td></tr>
 </tbody></table></div>
 <p>汎用 CLI に ffmpeg-bin/ffprobe-bin の独自フラグはありません。FFmpeg/ffprobe は起動環境の PATH を用います。</p>
+<p><code>--plan</code> は INPUT、--to、--format、--output、--download-dir、--fetch-policy と併用できません。鍵・ツールの選択・並列数・レポート指定は実行時の設定として渡せます。</p>
 <h3>verify</h3>
-<div class="guide-table-scroll" role="region" aria-labelledby="table-20-title" tabindex="0"><table><caption id="table-20-title">verify — 表 20</caption><thead><tr><th scope="col">引数・オプション</th><th scope="col">意味・既定値</th></tr></thead><tbody>
-<tr><th scope="row"><code>OUTPUT</code></th><td>比較する結果の MP4、MPD、M3U8</td></tr>
-<tr><th scope="row"><code>--source INPUT</code></th><td>必須。元の入力。結果から原本を推測しない</td></tr>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-21-title" tabindex="0"><table><caption id="table-21-title">verify — 表 21</caption><thead><tr><th scope="col">引数・オプション</th><th scope="col">意味・既定値</th></tr></thead><tbody>
+<tr><th scope="row"><code>OUTPUT</code></th><td>比較する結果の MP4、MPD、M3U8。--plan 時は省略</td></tr>
+<tr><th scope="row"><code>--source INPUT</code></th><td>--plan がない場合に必須。元の入力。結果から原本を推測しない</td></tr>
+<tr><th scope="row"><code>--plan FILE</code></th><td>記録した原本、実出力の形式・暗号方式、全メディアの一致を確認。OUTPUT・--source とは併用不可</td></tr>
 <tr><th scope="row"><code>--keys-file FILE</code></th><td>input が原本、output が結果の鍵</td></tr>
 <tr><th scope="row"><code>--packager-bin FILE</code></th><td>Shaka 実行ファイル。既定 packager</td></tr>
 <tr><th scope="row"><code>--max-workers N</code></th><td>上限 1-64。受け入れ時に減る場合がある</td></tr>
@@ -916,8 +961,9 @@ cargo test --locked -p drmr --test conversion_finite_outputs -- --nocapture
 <tr><th scope="row"><code>--measure</code></th><td>計測を追加。--json が必要</td></tr>
 </tbody></table></div>
 <p>verify は target や format を指定して作り直すコマンドではありません。</p>
+<p>計画を用いた検証結果は plan_id、source_unchanged、output_matches_plan を含み、全メディアの比較結果は verification の下に入ります。成功には source_unchanged、output_matches_plan、verification.passed の三つがすべて true である必要があります。内容が一致するだけでは、計画した暗号化が適用されたとは判断できません。出力シグナリングやライセンス再生は別の確認事項です。</p>
 <h3>run</h3>
-<div class="guide-table-scroll" role="region" aria-labelledby="table-21-title" tabindex="0"><table><caption id="table-21-title">run — 表 21</caption><thead><tr><th scope="col">オプション</th><th scope="col">意味・既定値</th></tr></thead><tbody>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-22-title" tabindex="0"><table><caption id="table-22-title">run — 表 22</caption><thead><tr><th scope="col">オプション</th><th scope="col">意味・既定値</th></tr></thead><tbody>
 <tr><th scope="row"><code>--mpd MPD</code></th><td>必須。対応する準備済み DASH マニフェスト</td></tr>
 <tr><th scope="row"><code>--output ROOT</code></th><td>必須。ROOT/asset-id の下に出力</td></tr>
 <tr><th scope="row"><code>--asset-id ID</code></th><td>アセット名。既定は原本ディレクトリ名</td></tr>
@@ -931,12 +977,12 @@ cargo test --locked -p drmr --test conversion_finite_outputs -- --nocapture
 <tr><th scope="row"><code>--no-manifests</code></th><td>デバッグ用。プレイリスト・マニフェストを生成しない</td></tr>
 </tbody></table></div>
 <h3>analyze-hls / package-hls</h3>
-<div class="guide-table-scroll" role="region" aria-labelledby="table-22-title" tabindex="0"><table><caption id="table-22-title">analyze-hls / package-hls — 表 22</caption><thead><tr><th scope="col">analyze-hls のオプション</th><th scope="col">意味</th></tr></thead><tbody>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-23-title" tabindex="0"><table><caption id="table-23-title">analyze-hls / package-hls — 表 23</caption><thead><tr><th scope="col">analyze-hls のオプション</th><th scope="col">意味</th></tr></thead><tbody>
 <tr><th scope="row"><code>--source-config FILE</code></th><td>必須。入力 URL/パスとアクセス許可を持つ私有 JSON</td></tr>
 <tr><th scope="row"><code>--asset-id ID</code></th><td>必須。保存アセット名</td></tr>
 <tr><th scope="row"><code>--output ROOT</code></th><td>必須。ROOT/ID/clear/source の下に保存</td></tr>
 </tbody></table></div>
-<div class="guide-table-scroll" role="region" aria-labelledby="table-23-title" tabindex="0"><table><caption id="table-23-title">analyze-hls / package-hls — 表 23</caption><thead><tr><th scope="col">package-hls のオプション</th><th scope="col">意味</th></tr></thead><tbody>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-24-title" tabindex="0"><table><caption id="table-24-title">analyze-hls / package-hls — 表 24</caption><thead><tr><th scope="col">package-hls のオプション</th><th scope="col">意味</th></tr></thead><tbody>
 <tr><th scope="row"><code>--analysis FILE</code></th><td>必須。完成した analysis.json</td></tr>
 <tr><th scope="row"><code>--drm-config FILE</code></th><td>必須。Widevine・PlayReady・FairPlay シグナリングの私有 JSON</td></tr>
 <tr><th scope="row"><code>--selection FILE</code></th><td>解析された音声トラックを選ぶ私有 JSON</td></tr>
@@ -945,14 +991,14 @@ cargo test --locked -p drmr --test conversion_finite_outputs -- --nocapture
 </tbody></table></div>
 <p>これらの暗号鍵は、DRM_KID/DRM_KEY/DRM_IV から受け取ります。汎用鍵 JSON を drm-config へ渡す方式ではありません。</p>
 <h3>verify-snapshot / canonical / version</h3>
-<div class="guide-table-scroll" role="region" aria-labelledby="table-24-title" tabindex="0"><table><caption id="table-24-title">verify-snapshot / canonical / version — 表 24</caption><thead><tr><th scope="col">コマンドと引数</th><th scope="col">意味</th></tr></thead><tbody>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-25-title" tabindex="0"><table><caption id="table-25-title">verify-snapshot / canonical / version — 表 25</caption><thead><tr><th scope="col">コマンドと引数</th><th scope="col">意味</th></tr></thead><tbody>
 <tr><th scope="row"><code>verify-snapshot PATH</code></th><td>スナップショットディレクトリまたは analysis.json の記録を確認</td></tr>
 <tr><th scope="row"><code>verify-snapshot --files PATH</code></th><td>保存プレイリスト・メディアも再ハッシュ</td></tr>
 <tr><th scope="row"><code>canonical PATH</code></th><td>任意 JSON を安定したキー順で表示。終端改行と秘密除去はない</td></tr>
 <tr><th scope="row"><code>version</code></th><td>版を表示。個別オプションなし</td></tr>
 </tbody></table></div>
 <h3>batch</h3>
-<div class="guide-table-scroll" role="region" aria-labelledby="table-25-title" tabindex="0"><table><caption id="table-25-title">batch — 表 25</caption><thead><tr><th scope="col">オプション</th><th scope="col">意味・既定値</th></tr></thead><tbody>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-26-title" tabindex="0"><table><caption id="table-26-title">batch — 表 26</caption><thead><tr><th scope="col">オプション</th><th scope="col">意味・既定値</th></tr></thead><tbody>
 <tr><th scope="row"><code>--work-list FILE</code></th><td>必須。schema ヘッダーとアセット行を持つ JSONL</td></tr>
 <tr><th scope="row"><code>--output ROOT</code></th><td>必須。出力ルート</td></tr>
 <tr><th scope="row"><code>--resume-log FILE</code></th><td>必須。再開状態の記録先</td></tr>
@@ -973,7 +1019,7 @@ cargo test --locked -p drmr --test conversion_finite_outputs -- --nocapture
 <tr><th scope="row"><code>--heartbeat-s SEC</code></th><td>状態通知の間隔。既定 60 秒</td></tr>
 </tbody></table></div>
 <h3>serve</h3>
-<div class="guide-table-scroll" role="region" aria-labelledby="table-26-title" tabindex="0"><table><caption id="table-26-title">serve — 表 26</caption><thead><tr><th scope="col">オプション・環境</th><th scope="col">意味・既定値</th></tr></thead><tbody>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-27-title" tabindex="0"><table><caption id="table-27-title">serve — 表 27</caption><thead><tr><th scope="col">オプション・環境</th><th scope="col">意味・既定値</th></tr></thead><tbody>
 <tr><th scope="row"><code>--static-dir DIR</code></th><td>組み込み画面の代わりに配信する信頼済み UI ディレクトリ</td></tr>
 <tr><th scope="row"><code>--cli FILE</code></th><td>ジョブを実行する同じ版の CLI</td></tr>
 <tr><th scope="row"><code>DRMR_CATALOG_ROOT</code></th><td>必須。準備済みメディアのカタログルート</td></tr>
