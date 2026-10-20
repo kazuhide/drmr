@@ -197,6 +197,58 @@ jobs:
       - name: Test measurement helpers
         run: python3 -W error::ResourceWarning -m unittest discover -s tools/tests -v
 
+      - name: Upload Rust test log
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: rust-tests-${{ runner.os }}-${{ runner.arch }}-${{ matrix.rust }}
+          path: ${{ runner.temp }}/rust-tests.log
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload real-media test results
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: bbb-media-${{ runner.os }}-${{ runner.arch }}-${{ matrix.rust }}
+          path: |
+            ${{ runner.temp }}/bbb-media-report.json
+            ${{ runner.temp }}/bbb-conversion-report.json
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: CLI release / ${{ matrix.os }} / ${{ matrix.rust }}
+    needs: verify
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14]
+        rust: [minimum, stable]
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install the qualification Python runtime
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13.12'
+
+      - name: Install the supported Rust toolchain
+        run: |
+          rust_channel="${{ matrix.rust }}"
+          if [[ "$rust_channel" == minimum ]]; then
+            rust_channel="$(python3 .github/scripts/minimum-rust.py)"
+          fi
+          rustup toolchain install "$rust_channel" --profile minimal --component clippy,rustfmt --no-self-update
+          printf 'RUSTUP_TOOLCHAIN=%s\n' "$rust_channel" >> "$GITHUB_ENV"
+          rustup run "$rust_channel" cargo --version
+          rustup run "$rust_channel" rustc --version
+
       - name: Build release CLI
         run: cargo build --release --locked -p drmr
 
@@ -224,25 +276,5 @@ jobs:
           path: |
             ${{ runner.temp }}/drmr-${{ runner.os }}-${{ runner.arch }}.tar.gz
             ${{ runner.temp }}/cli-archive-verification.json
-          if-no-files-found: error
-          retention-days: 14
-
-      - name: Upload Rust test log
-        if: always()
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
-        with:
-          name: rust-tests-${{ runner.os }}-${{ runner.arch }}-${{ matrix.rust }}
-          path: ${{ runner.temp }}/rust-tests.log
-          if-no-files-found: warn
-          retention-days: 14
-
-      - name: Upload real-media test results
-        if: always()
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
-        with:
-          name: bbb-media-${{ runner.os }}-${{ runner.arch }}-${{ matrix.rust }}
-          path: |
-            ${{ runner.temp }}/bbb-media-report.json
-            ${{ runner.temp }}/bbb-conversion-report.json
           if-no-files-found: error
           retention-days: 14
