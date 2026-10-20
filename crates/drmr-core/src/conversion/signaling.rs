@@ -1,5 +1,6 @@
 //! Explicit operator signaling. No license service is contacted by this module.
 mod multi;
+mod records;
 use super::{ConversionError, OutputKey};
 use crate::{
     inspection::{InputFormat, OutputFormat, Protection, TargetProtection},
@@ -95,6 +96,31 @@ impl OutputSignaling {
             || vec![DrmSystem::PlayReady],
             |value| value.systems(!self.license_url.is_empty()),
         )
+    }
+    pub(in crate::conversion) fn is_multi(&self) -> bool {
+        self.multi.is_some()
+    }
+    pub(in crate::conversion) fn validate_uri(
+        &self,
+        uri: Option<&str>,
+    ) -> Result<(), ConversionError> {
+        if self.systems().contains(&DrmSystem::FairPlay)
+            && !uri.is_some_and(records::valid_fairplay_uri)
+        {
+            return Err(INVALID);
+        }
+        Ok(())
+    }
+    pub(in crate::conversion) fn validate_profile(
+        &self,
+        format: OutputFormat,
+        target: TargetProtection,
+    ) -> Result<(), ConversionError> {
+        if self.is_multi() {
+            multi::profile(&self.systems(), format, target)
+        } else {
+            Self::profile(format, target)
+        }
     }
     pub(super) fn profile(
         format: OutputFormat,
@@ -414,16 +440,53 @@ impl super::Converter {
         keys: &super::key_file::OperatorKeys,
     ) -> Result<(), ConversionError> {
         self.backend.check_cancelled()?;
+        let frozen = super::FrozenSource::capture(input, &self.backend.stop).map_err(|error| {
+            if error.0 == "cancelled" {
+                error
+            } else {
+                MISMATCH
+            }
+        })?;
+        let input = frozen.entrypoint();
         let Some(signaling) = &keys.signaling else {
-            return Ok(());
+            return records::unrequested(&frozen);
         };
-        OutputSignaling::profile(format, target)?;
+        signaling.validate_profile(format, target)?;
+        if signaling.is_multi() {
+            if format == OutputFormat::Dash {
+                let key = keys.output.as_ref().ok_or(INVALID)?;
+                signaling.multi_objects(key)?.finish(input, key)
+            } else {
+                records::fairplay(
+                    input,
+                    format,
+                    target,
+                    keys.hls_output_uri().ok_or(INVALID)?,
+                    keys.output.as_ref(),
+                    keys.hls_output.as_ref(),
+                )
+            }?;
+            return frozen.check_original().map_err(|error| {
+                if error.0 == "cancelled" {
+                    error
+                } else {
+                    MISMATCH
+                }
+            });
+        }
         let key = keys.output.as_ref().ok_or(INVALID)?;
         let actual = crate::inspection::inspect(input).map_err(|_| MISMATCH)?;
         let root = input.parent().ok_or(MISMATCH)?;
         signaling
             .objects(key)?
-            .finish(root, actual.tracks.len(), key)
+            .finish(root, actual.tracks.len(), key)?;
+        frozen.check_original().map_err(|error| {
+            if error.0 == "cancelled" {
+                error
+            } else {
+                MISMATCH
+            }
+        })
     }
     pub(super) fn validate_signaling_codec(
         &self,
@@ -445,9 +508,13 @@ impl super::Converter {
     pub(super) fn validate_signaling_tracks(
         &self,
         request: &super::TrackConversionRequest<'_>,
+        qualified_presentation: bool,
     ) -> Result<(), ConversionError> {
-        if self.output_signaling.is_some() {
-            OutputSignaling::profile(request.format, request.target)?;
+        if let Some(signaling) = &self.output_signaling {
+            signaling.validate_profile(request.format, request.target)?;
+            if signaling.is_multi() && qualified_presentation {
+                return Ok(());
+            }
             let first = request.tracks.first().ok_or(UNSUPPORTED)?;
             if request
                 .tracks
@@ -469,9 +536,32 @@ impl super::Converter {
         &self,
         request: &super::ConversionRequest<'_>,
     ) -> Result<(), ConversionError> {
-        if self.output_signaling.is_some() {
-            OutputSignaling::profile(request.format, request.target)?;
-            clear_mp4(request.input, &self.backend.stop)?;
+        if let Some(signaling) = &self.output_signaling {
+            signaling.validate_profile(request.format, request.target)?;
+            if signaling.is_multi() {
+                self.validate_drm_source(
+                    super::VerificationSource {
+                        input: request.input,
+                        input_keys: request.input_keys,
+                        hls_keys: request.hls_input_keys,
+                    },
+                    &signaling.systems(),
+                    request.format,
+                    request.target,
+                )?;
+                if request.format != OutputFormat::Dash
+                    && !records::valid_fairplay_uri(
+                        request
+                            .hls_key_uri
+                            .or_else(|| request.hls_output_key.map(super::HlsOutputKey::key_uri))
+                            .ok_or(INVALID)?,
+                    )
+                {
+                    return Err(INVALID);
+                }
+            } else {
+                clear_mp4(request.input, &self.backend.stop)?;
+            }
         }
         Ok(())
     }
@@ -482,7 +572,11 @@ impl super::Converter {
         stage: &Path,
     ) -> Result<(), ConversionError> {
         use super::{ContentKey, InputKeys, VerificationRequest, VerificationSource};
-        if self.output_signaling.is_some() {
+        if self
+            .output_signaling
+            .as_ref()
+            .is_some_and(|value| !value.is_multi())
+        {
             // The published MPD is an independent input, including its declared window.
             // A per-track concatenation alone cannot prove the final presentation graph.
             let key = request
@@ -510,6 +604,39 @@ impl super::Converter {
             }
         }
         Ok(())
+    }
+    pub(in crate::conversion) fn finish_multi_signaling(
+        &self,
+        root: &Path,
+        format: OutputFormat,
+        target: TargetProtection,
+        key: Option<&OutputKey>,
+        uri: Option<&str>,
+        hls: Option<&super::HlsOutputKey>,
+    ) -> Result<(), ConversionError> {
+        let Some(signaling) = self
+            .output_signaling
+            .as_ref()
+            .filter(|value| value.is_multi())
+        else {
+            return Ok(());
+        };
+        if format == OutputFormat::Dash {
+            let key = key.ok_or(INVALID)?;
+            signaling
+                .multi_objects(key)?
+                .finish(&root.join("manifest.mpd"), key)
+        } else {
+            records::fairplay(
+                &root.join("master.m3u8"),
+                format,
+                target,
+                uri.or_else(|| hls.map(super::HlsOutputKey::key_uri))
+                    .ok_or(INVALID)?,
+                key,
+                hls,
+            )
+        }
     }
 }
 

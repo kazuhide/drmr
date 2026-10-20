@@ -291,7 +291,28 @@ fn dash_finish(root: &Path, tracks: &[Prepared]) -> Result<(), ConversionError> 
                 }
             }
             if let Some(name) = &a.name {
-                edits.push((at + 1..at + 1, format!("<Label>{}</Label>", xml(name))));
+                // Label follows the provider records inherited from RepresentationBaseType.
+                // Inserting it at the opening tag puts later ContentProtection out of order.
+                let label_at = adaptation
+                    .children()
+                    .filter(roxmltree::Node::is_element)
+                    .find(|node| {
+                        !matches!(
+                            node.tag_name().name(),
+                            "FramePacking"
+                                | "AudioChannelConfiguration"
+                                | "ContentProtection"
+                                | "OutputProtection"
+                                | "EssentialProperty"
+                                | "SupplementalProperty"
+                                | "InbandEventStream"
+                                | "Switching"
+                                | "RandomAccess"
+                                | "GroupLabel"
+                        )
+                    })
+                    .map_or(at + 1, |node| node.range().start);
+                edits.push((label_at..label_at, format!("<Label>{}</Label>", xml(name))));
             }
         }
     }

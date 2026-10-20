@@ -104,6 +104,14 @@ impl Converter {
             )?;
         }
         validate_playlists(stage.path(), sources.len(), request)?;
+        self.finish_multi_signaling(
+            stage.path(),
+            request.format,
+            request.target,
+            request.output_key,
+            request.hls_key_uri,
+            request.hls_output_key,
+        )?;
         let output_keys = super::output_hls_keys(request.hls_output_key)?;
         let verification_root = work.path().join("ts-output-verification");
         super::super::files::create_dir(&verification_root)?;

@@ -98,6 +98,7 @@ pub(super) fn validate_widevine(
     }
     let payload = &data[at..];
     let mut offset = 0;
+    let mut scheme = false;
     while offset < payload.len() {
         let tag = varint(payload, &mut offset)?;
         if tag >> 3 == 0 {
@@ -105,7 +106,13 @@ pub(super) fn validate_widevine(
         }
         match tag & 7 {
             0 => {
-                varint(payload, &mut offset)?;
+                let value = varint(payload, &mut offset)?;
+                if tag >> 3 == 9 {
+                    if scheme || value != u64::from(u32::from_be_bytes(*b"cbcs")) {
+                        return Err(INVALID);
+                    }
+                    scheme = true;
+                }
             }
             1 | 5 => {
                 offset = offset
@@ -124,6 +131,9 @@ pub(super) fn validate_widevine(
                 offset = end;
             }
             _ => return Err(INVALID),
+        }
+        if matches!(tag >> 3, 2 | 9) && tag & 7 != if tag >> 3 == 2 { 2 } else { 0 } {
+            return Err(INVALID);
         }
         if offset > payload.len() || kids.len() > 128 {
             return Err(INVALID);

@@ -349,6 +349,21 @@ fn parse_output(raw: Option<&RawOutput>) -> Result<OperatorKeys, ConversionError
         sample_hls_uri.is_some(),
         hls_output.is_some(),
     )?;
+    if let Some(value) = &signaling
+        && value.is_multi()
+    {
+        if let Some(key) = &output {
+            value.multi_objects(key).map_err(|_| INVALID)?;
+        }
+        value
+            .validate_uri(
+                sample_hls_uri
+                    .as_deref()
+                    .map(String::as_str)
+                    .or_else(|| hls_output.as_ref().map(HlsOutputKey::key_uri)),
+            )
+            .map_err(|_| INVALID)?;
+    }
     Ok(OperatorKeys {
         output,
         hls_output,
