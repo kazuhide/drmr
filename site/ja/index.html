@@ -44,7 +44,7 @@
     <section id="support" class="section support" aria-labelledby="support-title">
       <div class="section-intro">
         <h2 id="support-title">入力と出力の対応表</h2>
-        <p id="matrix-guide">配信内容が確定したコンテンツをローカルに保存して変換します。行は入力、列は出力を表します。各セルには選択できる出力の暗号化方式を示しています。</p>
+        <p id="matrix-guide">配信内容が確定したコンテンツをローカルに保存して変換します。行は入力、列は出力を表します。各セルの暗号化方式を選ぶと、その入力・出力に合ったコマンド例が開きます。例では、公開 URL からの取得、解析、計画保存、変換、検証までを説明しています。</p>
       </div>
       <p id="matrix-scroll-hint" class="matrix-hint">表は横にスクロールできます。キーボードで操作する場合は表にフォーカスを移し、左右の矢印キーを使ってください。</p>
       <div class="matrix-scroll" role="region" aria-label="変換対応表" aria-describedby="matrix-guide matrix-scroll-hint" tabindex="0">
@@ -56,38 +56,38 @@
           <tbody>
             <tr id="mp4">
               <th scope="row"><strong class="input-format">MP4</strong><span class="input-profile">プログレッシブ / フラグメント化<sup>2</sup></span><span class="input-protections"><span class="clear">Clear</span> / <code>cenc</code> / <code>cbcs</code></span></th>
-              <td><span class="clear">Clear</span> / <code>cenc</code> / <code>cbcs</code><sup>1</sup></td>
-              <td><span class="clear">Clear</span> / <code>cenc</code> / <code>cbcs</code></td>
-              <td><span class="clear">Clear</span> / <code>cbcs</code> / <code>AES-128</code></td>
+              <td><a href="guide/#recipe-mp4-mp4-clear" aria-label="MP4 → MP4 / Clear のコマンド例"><span class="clear">Clear</span></a> / <a href="guide/#recipe-mp4-mp4-cenc" aria-label="MP4 → MP4 / cenc のコマンド例"><code>cenc</code></a> / <a href="guide/#recipe-mp4-mp4-cbcs" aria-label="MP4 → MP4 / cbcs のコマンド例"><code>cbcs</code></a><sup>1</sup></td>
+              <td><a href="guide/#recipe-mp4-dash-clear" aria-label="MP4 → DASH / Clear のコマンド例"><span class="clear">Clear</span></a> / <a href="guide/#recipe-mp4-dash-cenc" aria-label="MP4 → DASH / cenc のコマンド例"><code>cenc</code></a> / <a href="guide/#recipe-mp4-dash-cbcs" aria-label="MP4 → DASH / cbcs のコマンド例"><code>cbcs</code></a></td>
+              <td><a href="guide/#recipe-mp4-hls-clear" aria-label="MP4 → HLS / fMP4 / Clear のコマンド例"><span class="clear">Clear</span></a> / <a href="guide/#recipe-mp4-hls-cbcs" aria-label="MP4 → HLS / fMP4 / cbcs のコマンド例"><code>cbcs</code></a> / <a href="guide/#recipe-mp4-hls-hls-aes128" aria-label="MP4 → HLS / fMP4 / AES-128 のコマンド例"><code>AES-128</code></a></td>
               <td class="unavailable">対象外</td>
             </tr>
             <tr id="dash">
               <th scope="row"><strong class="input-format">DASH</strong><span class="input-profile">フラグメント化MP4トラック</span><span class="input-protections"><span class="clear">Clear</span> / <code>cenc</code> / <code>cbcs</code></span></th>
-              <td><span class="clear">Clear</span> / <code>cenc</code> / <code>cbcs</code><sup>1</sup></td>
-              <td><span class="clear">Clear</span> / <code>cenc</code> / <code>cbcs</code></td>
-              <td><span class="clear">Clear</span> / <code>cbcs</code> / <code>AES-128</code></td>
+              <td><a href="guide/#recipe-dash-mp4-clear" aria-label="DASH → MP4 / Clear のコマンド例"><span class="clear">Clear</span></a> / <a href="guide/#recipe-dash-mp4-cenc" aria-label="DASH → MP4 / cenc のコマンド例"><code>cenc</code></a> / <a href="guide/#recipe-dash-mp4-cbcs" aria-label="DASH → MP4 / cbcs のコマンド例"><code>cbcs</code></a><sup>1</sup></td>
+              <td><a href="guide/#recipe-dash-dash-clear" aria-label="DASH → DASH / Clear のコマンド例"><span class="clear">Clear</span></a> / <a href="guide/#recipe-dash-dash-cenc" aria-label="DASH → DASH / cenc のコマンド例"><code>cenc</code></a> / <a href="guide/#recipe-dash-dash-cbcs" aria-label="DASH → DASH / cbcs のコマンド例"><code>cbcs</code></a></td>
+              <td><a href="guide/#recipe-dash-hls-clear" aria-label="DASH → HLS / fMP4 / Clear のコマンド例"><span class="clear">Clear</span></a> / <a href="guide/#recipe-dash-hls-cbcs" aria-label="DASH → HLS / fMP4 / cbcs のコマンド例"><code>cbcs</code></a> / <a href="guide/#recipe-dash-hls-hls-aes128" aria-label="DASH → HLS / fMP4 / AES-128 のコマンド例"><code>AES-128</code></a></td>
               <td class="unavailable">対象外</td>
             </tr>
             <tr id="hls-fmp4">
               <th scope="row"><strong class="input-format">HLS</strong><span class="input-profile">フラグメント化MP4（fMP4）</span><span class="input-protections"><span class="clear">Clear</span> / <code>cenc</code> / <code>cbcs</code> / <code>AES-128</code></span></th>
-              <td><span class="clear">Clear</span> / <code>cenc</code> / <code>cbcs</code><sup>1</sup></td>
-              <td><span class="clear">Clear</span> / <code>cenc</code> / <code>cbcs</code></td>
-              <td><span class="clear">Clear</span> / <code>cbcs</code> / <code>AES-128</code></td>
+              <td><a href="guide/#recipe-hls-fmp4-mp4-clear" aria-label="HLS / fMP4 → MP4 / Clear のコマンド例"><span class="clear">Clear</span></a> / <a href="guide/#recipe-hls-fmp4-mp4-cenc" aria-label="HLS / fMP4 → MP4 / cenc のコマンド例"><code>cenc</code></a> / <a href="guide/#recipe-hls-fmp4-mp4-cbcs" aria-label="HLS / fMP4 → MP4 / cbcs のコマンド例"><code>cbcs</code></a><sup>1</sup></td>
+              <td><a href="guide/#recipe-hls-fmp4-dash-clear" aria-label="HLS / fMP4 → DASH / Clear のコマンド例"><span class="clear">Clear</span></a> / <a href="guide/#recipe-hls-fmp4-dash-cenc" aria-label="HLS / fMP4 → DASH / cenc のコマンド例"><code>cenc</code></a> / <a href="guide/#recipe-hls-fmp4-dash-cbcs" aria-label="HLS / fMP4 → DASH / cbcs のコマンド例"><code>cbcs</code></a></td>
+              <td><a href="guide/#recipe-hls-fmp4-hls-clear" aria-label="HLS / fMP4 → HLS / fMP4 / Clear のコマンド例"><span class="clear">Clear</span></a> / <a href="guide/#recipe-hls-fmp4-hls-cbcs" aria-label="HLS / fMP4 → HLS / fMP4 / cbcs のコマンド例"><code>cbcs</code></a> / <a href="guide/#recipe-hls-fmp4-hls-hls-aes128" aria-label="HLS / fMP4 → HLS / fMP4 / AES-128 のコマンド例"><code>AES-128</code></a></td>
               <td class="unavailable">対象外</td>
             </tr>
             <tr id="hls-ts-video">
               <th scope="row"><strong class="input-format">HLS / MPEG-TS</strong><span class="input-profile">映像（音声は省略可）<sup>3</sup></span><span class="input-protections"><span class="clear">Clear</span> / <code>AES-128</code> / <code>SAMPLE-AES</code></span></th>
               <td class="unavailable">対象外</td>
-              <td><span class="clear">Clear</span> / <code>cenc</code> / <code>cbcs</code></td>
-              <td><span class="clear">Clear</span> / <code>cbcs</code> / <code>AES-128</code></td>
-              <td><span class="clear">Clear</span> / <code>AES-128</code> / <code>SAMPLE-AES</code></td>
+              <td><a href="guide/#recipe-hls-ts-video-dash-clear" aria-label="HLS / MPEG-TS（映像） → DASH / Clear のコマンド例"><span class="clear">Clear</span></a> / <a href="guide/#recipe-hls-ts-video-dash-cenc" aria-label="HLS / MPEG-TS（映像） → DASH / cenc のコマンド例"><code>cenc</code></a> / <a href="guide/#recipe-hls-ts-video-dash-cbcs" aria-label="HLS / MPEG-TS（映像） → DASH / cbcs のコマンド例"><code>cbcs</code></a></td>
+              <td><a href="guide/#recipe-hls-ts-video-hls-clear" aria-label="HLS / MPEG-TS（映像） → HLS / fMP4 / Clear のコマンド例"><span class="clear">Clear</span></a> / <a href="guide/#recipe-hls-ts-video-hls-cbcs" aria-label="HLS / MPEG-TS（映像） → HLS / fMP4 / cbcs のコマンド例"><code>cbcs</code></a> / <a href="guide/#recipe-hls-ts-video-hls-hls-aes128" aria-label="HLS / MPEG-TS（映像） → HLS / fMP4 / AES-128 のコマンド例"><code>AES-128</code></a></td>
+              <td><a href="guide/#recipe-hls-ts-video-hls-ts-clear" aria-label="HLS / MPEG-TS（映像） → HLS / MPEG-TS / Clear のコマンド例"><span class="clear">Clear</span></a> / <a href="guide/#recipe-hls-ts-video-hls-ts-hls-aes128" aria-label="HLS / MPEG-TS（映像） → HLS / MPEG-TS / AES-128 のコマンド例"><code>AES-128</code></a> / <a href="guide/#recipe-hls-ts-video-hls-ts-hls-sample-aes" aria-label="HLS / MPEG-TS（映像） → HLS / MPEG-TS / SAMPLE-AES のコマンド例"><code>SAMPLE-AES</code></a></td>
             </tr>
             <tr id="hls-ts-audio">
               <th scope="row"><strong class="input-format">HLS / MPEG-TS</strong><span class="input-profile">音声のみ<sup>3</sup></span><span class="input-protections"><span class="clear">Clear</span> / <code>AES-128</code> / <code>SAMPLE-AES</code></span></th>
               <td class="unavailable">対象外</td>
-              <td><span class="clear">Clear</span> / <code>cenc</code> / <code>cbcs</code></td>
-              <td><span class="clear">Clear</span> / <code>cbcs</code> / <code>AES-128</code></td>
-              <td><span class="clear">Clear</span> / <code>AES-128</code> / <code>SAMPLE-AES</code></td>
+              <td><a href="guide/#recipe-hls-ts-audio-dash-clear" aria-label="HLS / MPEG-TS（音声のみ） → DASH / Clear のコマンド例"><span class="clear">Clear</span></a> / <a href="guide/#recipe-hls-ts-audio-dash-cenc" aria-label="HLS / MPEG-TS（音声のみ） → DASH / cenc のコマンド例"><code>cenc</code></a> / <a href="guide/#recipe-hls-ts-audio-dash-cbcs" aria-label="HLS / MPEG-TS（音声のみ） → DASH / cbcs のコマンド例"><code>cbcs</code></a></td>
+              <td><a href="guide/#recipe-hls-ts-audio-hls-clear" aria-label="HLS / MPEG-TS（音声のみ） → HLS / fMP4 / Clear のコマンド例"><span class="clear">Clear</span></a> / <a href="guide/#recipe-hls-ts-audio-hls-cbcs" aria-label="HLS / MPEG-TS（音声のみ） → HLS / fMP4 / cbcs のコマンド例"><code>cbcs</code></a> / <a href="guide/#recipe-hls-ts-audio-hls-hls-aes128" aria-label="HLS / MPEG-TS（音声のみ） → HLS / fMP4 / AES-128 のコマンド例"><code>AES-128</code></a></td>
+              <td><a href="guide/#recipe-hls-ts-audio-hls-ts-clear" aria-label="HLS / MPEG-TS（音声のみ） → HLS / MPEG-TS / Clear のコマンド例"><span class="clear">Clear</span></a> / <a href="guide/#recipe-hls-ts-audio-hls-ts-hls-aes128" aria-label="HLS / MPEG-TS（音声のみ） → HLS / MPEG-TS / AES-128 のコマンド例"><code>AES-128</code></a> / <a href="guide/#recipe-hls-ts-audio-hls-ts-hls-sample-aes" aria-label="HLS / MPEG-TS（音声のみ） → HLS / MPEG-TS / SAMPLE-AES のコマンド例"><code>SAMPLE-AES</code></a></td>
             </tr>
           </tbody>
         </table>

@@ -27,13 +27,16 @@ position and time; failed checks retain these samples too. Persistent clipping
 still fails. The suite covers:
 
 - English and Japanese at 320, 768, 1024 and 1440 px (eight cases): document overflow and clipped layout boxes, locally
-  hosted fonts and images, exact served asset bytes, all 33 native Tab targets and
+  hosted fonts and images, exact served asset bytes, all 81 English / 80 Japanese native Tab targets and
   anchor navigation, rendered ARIA landmarks/headings/link names, and axe checks
   including color contrast. Both violations and incomplete checks must be empty.
   The five named code groups retain their full command text in both rendered
   accessibility trees. The first main section is a five-input-profile by four-output-format
   semantic table. Exact row/column headers, all 20 output cells, input protection
   qualifications and linked notes are checked independently of the HTML.
+  All 45 supported output-protection tokens link to their exact guide recipe;
+  unavailable cells have no recipe links. Focused matrix links also undergo
+  point hit-testing so sticky input headers cannot cover their rendered boxes.
   Each scrollable matrix is reached by native Tab and traversed to both
   horizontal edges with arrow keys. A listener is armed before each key, and
   its native `scrollend` must arrive before geometry is accepted or another key
@@ -51,7 +54,14 @@ still fails. The suite covers:
 - Core content and native anchor navigation with JavaScript disabled in each
   language (two cases). The
   loopback job checks both `/` and the project `/drmr/` mount; the published job
-  checks only `/drmr/`.
+  checks only `/drmr/`. Each language additionally activates all 45 matrix links
+  at the project mount with JavaScript disabled. Native Tab/Enter activates the
+  first recipe; the remaining links use actual link clicks. Each destination
+  must expose its exact focusable heading, setup link and complete four-step
+  command example with matching output format, protection and saved plan.
+  The served guide hash must match the workflow source. A 320px viewport image
+  records the first native recipe destination before further guide interaction,
+  with unchanged heading geometry and complete source metadata.
 - A native-keyboard language roundtrip visits English → Japanese → English at
   both loopback mounts, or at the published project mount. Each navigation must
   load the matching raw page hash and declared language without scripts,
@@ -104,10 +114,10 @@ Code examples use native named figures and captions, without overriding the
 figure role. Validated code-language metadata permits visual JSON wrapping while
 retaining complete original code text; shell continuations retain command tokens.
 Static validation requires exact regeneration of both committed guide pages
-from the standard-library builder, template and two Markdown sources. The
-payload remains bounded to 512 KiB, including all twelve files; Markdown,
+from the standard-library builder, recipe generator, template and two Markdown sources. The
+payload remains bounded to 640 KiB, including all twelve files; Markdown,
 templates, build code and test dependencies are outside the uploaded site.
-The source commit/tree, twelve payload hashes and four builder/input hashes
+The source commit/tree, twelve payload hashes and five builder/input hashes
 are retained in both browser suites. Generated output is checked again from
 that checkout before browser or published-byte inspection. No generator or
 JavaScript runs in the production page.

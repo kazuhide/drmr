@@ -5,6 +5,7 @@ import { assets, digest, liveMode, publicOrigin, localOrigin, allowedRequest, as
 import { requireFocus, requireImages, requireLayout, layoutObservation, focusObservation, pollFocus, requireClippedFocusTimeout, partialFocusCandidate, FocusConditionTimeout } from './checks.mjs';
 import { locales, english } from './locales.mjs';
 import { matrixColumns, matrixRows, matrixObservation, requireMatrixLayout, requireMatrixMovement, completeMatrixKey } from './matrix.mjs';
+import { matrixRecipes, recipeObservation, requireRecipe, matrixLinkExposure, requireMatrixLinkExposure } from './recipes.mjs';
 
 const live = liveMode(process.env.PAGES_LIVE);
 const origin = live ? publicOrigin : localOrigin;
@@ -95,6 +96,8 @@ async function requireTargetFocus(page, target, phase, ordinal) {
   try {
     await pollFocus(() => target.evaluate(focusObservation), check.samples);
     requireFocus(check.samples.at(-1));
+    check.matrixLinkExposure = await target.evaluate(matrixLinkExposure);
+    requireMatrixLinkExposure(check.matrixLinkExposure);
     check.passed = true;
     return check.samples.at(-1);
   } catch (error) {
@@ -125,7 +128,7 @@ test.afterEach(async ({ page }, info) => {
 
 const focusSelector = 'a[href], pre[tabindex="0"], .matrix-scroll[tabindex="0"]';
 // Fixed inventories include the intentional documentation links in each locale.
-const focusTargetCounts = { en: 36, ja: 35 };
+const focusTargetCounts = { en: 81, ja: 80 };
 
 function textWithoutNotes(node) {
   const text = value => value.nodeType === Node.TEXT_NODE ? value.textContent :
@@ -169,6 +172,14 @@ async function renderedMatrix(page, locale) {
       const cell = cells.nth(column);
       const text = await cell.evaluate(textWithoutNotes);
       await expect(cell.locator('code')).toHaveText(protections.slice(1));
+      const recipes = matrixRecipes.filter(recipe => recipe.row === expected.id && recipe.column === column);
+      await expect(cell.locator('a')).toHaveCount(recipes.length);
+      for (const [offset, recipe] of recipes.entries()) {
+        const link = cell.locator('a').nth(offset);
+        await expect(link).toHaveText(recipe.label);
+        expect(new URL(await link.getAttribute('href'), page.url()).href)
+          .toBe(origin + '/drmr/' + locale.route + 'guide/#' + recipe.id);
+      }
       expect(protections.length ? text.replace(/[\s/]/g, '') : text)
         .toBe(protections.length ? protections.join('') : locale.outside);
       values.push(text);
@@ -264,6 +275,75 @@ async function projectOnly(context) {
   // A page requiring a CDN, tracker or backend must fail, not reach the network.
   await context.route('**/*', route => allowedRequest(route.request().url(), live)
     ? route.continue() : route.abort('blockedbyclient'));
+}
+
+async function recipeNavigation(page, locale, info) {
+  // The same static anchors must work when production JavaScript is disabled.
+  // Only the first destination uses Tab/Enter; every remaining supported token
+  // is activated as an actual link, rather than navigating to an invented URL.
+  await page.goto('about:blank');
+  await ready(page, locale);
+  const links = page.locator('.conversion-matrix tbody td a[href]');
+  await expect(links).toHaveCount(matrixRecipes.length);
+  const guideAsset = locale.language === 'en' ? 'guide/index.html' : 'ja/guide/index.html';
+  const guideRoute = origin + '/drmr/' + locale.route + 'guide/';
+  const destinations = [];
+  for (const [index, recipe] of matrixRecipes.entries()) {
+    const link = links.nth(index);
+    await expect(link).toHaveText(recipe.label);
+    expect(new URL(await link.getAttribute('href'), page.url()).href).toBe(guideRoute + '#' + recipe.id);
+    if (index === 0) {
+      const inventory = page.locator(focusSelector);
+      await expect(inventory).toHaveCount(focusTargetCounts[locale.language]);
+      const ordinal = 12;
+      for (let count = 0; count < ordinal; count++) await page.keyboard.press('Tab');
+      await expect(link).toBeFocused();
+      await requireTargetFocus(page, link, 'native-recipe-link', ordinal);
+    }
+    const [response] = await Promise.all([
+      page.waitForResponse(value => value.request().isNavigationRequest() && value.url() === guideRoute),
+      index === 0 ? page.keyboard.press('Enter') : link.click(),
+    ]);
+    expect(response.status()).toBe(200);
+    const sha256 = digest(await response.body());
+    expect(sha256).toBe(info.config.metadata.assetHashes[guideAsset]);
+    await page.waitForLoadState('load');
+    await page.evaluate(async () => { await document.fonts.ready; });
+    await expect(page).toHaveURL(guideRoute + '#' + recipe.id);
+    await expect(page.locator('html')).toHaveAttribute('lang', locale.language);
+    await expect(page.locator('script')).toHaveCount(0);
+    const heading = page.locator('#' + recipe.id);
+    await expect(heading).toBeFocused();
+    const observed = await heading.evaluate(recipeObservation);
+    requireRecipe(observed, recipe);
+    expect(observed.rect.top).toBeGreaterThanOrEqual(0);
+    expect(observed.rect.bottom).toBeLessThanOrEqual(observed.viewport.height);
+    expect(observed.rect.left).toBeGreaterThanOrEqual(0);
+    expect(observed.rect.right).toBeLessThanOrEqual(observed.viewport.width);
+    const row = { recipe, navigation: index === 0 ? 'native-tab-enter' : 'link-click',
+      page_asset: guideAsset, page_sha256: sha256, observed };
+    destinations.push(row);
+    if (index === 0) {
+      const path = info.outputPath('recipe-viewport-' + locale.language + '-320.png');
+      await page.screenshot({ path, fullPage: false, animations: 'disabled' });
+      const after = await heading.evaluate(recipeObservation);
+      expect(after).toEqual(observed);
+      await info.attach('native-recipe-viewport', { path, contentType: 'image/png' });
+      row.visual_checkpoint = { phase: 'native-recipe-fragment-before-any-guide-interaction',
+        viewport: observed.viewport, before: observed, after, screenshot: path.split('/').at(-1) };
+    }
+    // Retain completed destinations before the next navigation can fail.
+    await writeFile(info.outputPath('recipe-navigation.json'), JSON.stringify({ schema_version: 1,
+      source_head: info.config.metadata.sourceHead, source_tree: info.config.metadata.sourceTree,
+      asset_hashes: info.config.metadata.assetHashes, builder_inputs: info.config.metadata.builderInputHashes,
+      mode: info.config.metadata.mode, language: locale.language, java_script_enabled: false,
+      expected_destinations: matrixRecipes.length, completed_destinations: destinations.length,
+      destinations }, null, 2) + '\n');
+    await page.goBack({ waitUntil: 'domcontentloaded' });
+    await expect(links).toHaveCount(matrixRecipes.length);
+  }
+  expect(destinations.map(row => row.recipe.id)).toEqual(matrixRecipes.map(recipe => recipe.id));
+  return destinations;
 }
 
 for (const locale of locales) for (const width of [320, 768, 1024, 1440]) {
@@ -417,6 +497,7 @@ for (const locale of locales) test(`${locale.language}: core content and anchor 
   try {
     await projectOnly(context);
     const page = await context.newPage();
+    const network = monitor(page);
     const mounts = live ? ['/drmr/'] : ['/', '/drmr/'];
     const pages = [];
     for (const mount of mounts) {
@@ -439,10 +520,17 @@ for (const locale of locales) test(`${locale.language}: core content and anchor 
       await expect(page).toHaveURL(origin + mount + locale.route + '#support');
       await expect(page.locator('#support')).toBeInViewport();
     }
+    const recipes = await recipeNavigation(page, locale, info);
+    await Promise.all(monitors.get(page).pending);
+    expect(network.console).toEqual([]);
+    expect(network.pageErrors).toEqual([]);
+    expect(network.failedRequests).toEqual([]);
+    expect(network.responses.every(row => allowedRequest(row.url, live) && row.status === 200 &&
+      !row.body_error && (!row.asset || row.sha256 === info.config.metadata.assetHashes[row.asset]))).toBe(true);
     await artifact(info, 'evidence.json', { schema_version: 1, source_head: info.config.metadata.sourceHead,
       source_tree: info.config.metadata.sourceTree, asset_hashes: info.config.metadata.assetHashes, builder_inputs: info.config.metadata.builderInputHashes,
       language: locale.language, page_asset: locale.asset, page_sha256: info.config.metadata.assetHashes[locale.asset],
-      java_script_enabled: false, mode: info.config.metadata.mode, pages, browser: browser.version() });
+      java_script_enabled: false, mode: info.config.metadata.mode, pages, recipes, network, browser: browser.version() });
   } finally {
     await context.close();
   }
@@ -519,7 +607,7 @@ test('browser guard controls detect real overflow, invisible focus, blocked matr
   await requireTargetFocus(page, wrapper, 'matrix-disabled-control', matrixTabOrdinal);
   const matrixBefore = await wrapper.evaluate(matrixObservation);
   expect(matrixBefore.scrollWidth).toBeGreaterThan(matrixBefore.clientWidth);
-  const hiddenContent = await page.addStyleTag({ content: '.conversion-matrix td > .clear { visibility: hidden !important; }' });
+  const hiddenContent = await page.addStyleTag({ content: '.conversion-matrix td a > .clear { visibility: hidden !important; }' });
   const matrixHidden = await wrapper.evaluate(matrixObservation);
   expect(matrixHidden.hiddenText.some(value => value.text === 'Clear' && value.hidden)).toBe(true);
   expect(() => requireMatrixLayout(matrixHidden)).toThrow('Rendered matrix text must remain visible');

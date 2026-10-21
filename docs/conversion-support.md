@@ -10,6 +10,12 @@ additional to native Rust manifest linting and the complete internal media check
 
 `drmr convert` processes local, completed on-demand media with keys supplied by its operator. It preserves encoded video/audio and verifies the result against the original source. The tables distinguish supported input profiles from tested protection routes. DRM license and device playback support are separate.
 
+For public-URL command examples, select an output protection in the
+[linked input/output matrix](https://kazuhide.github.io/drmr/#support). Each example
+covers acquisition, analysis, a saved execution plan, conversion and independent
+verification. HLS URLs are acquired by drmr; MP4 and DASH examples first save the
+source with an external download command.
+
 ## HLS inputs and containers
 
 Clear HLS input is supported. HLS describes playlists; their media can use either

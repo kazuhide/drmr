@@ -769,6 +769,34 @@ drmr convert "https://example.com/vod/master.m3u8" \
 
 成功 JSON の `download` には保存先の表示パス、エントリーポイントと相対パス、`retained: true` が入ります。入力 URL とリクエストヘッダーは含めません。一方、保存した原本には署名 URL などが残り得るため、保存先を保護してください。
 
+## 変換例の準備と鍵ファイル {#recipe-setup}
+
+対応表の各方式名から、以下の該当する例へ移動できます。コマンドは macOS/Linux などの POSIX シェル向けです。`https://media.example.com` 配下の URL は差し替え用の例で、実在する配信素材ではありません。各入力は[第3章の対応条件](#supported-profiles)を満たすものとします。
+
+HLS は `analyze URL --download-dir` で取得します。MP4 と DASH の URL は drmr が直接取得する対象ではないため、先に `curl` で保存します。DASH の例は、MPD が `video/init.mp4` と `video/segment-1.m4s` から `video/segment-5.m4s` までを参照する有限の構成です。別の構成では、全トラックの初期化ファイルとセグメントを漏れなく取得し、相対パスを保ってください。
+
+実行する場所に、[第5章の手順](#key-configuration)で所有者専用の `config/keys.json` を用意してください。各例は新しい作業ディレクトリを作り、その中から `../config/keys.json` を参照します。入力と出力の方式に合わせて、次の項目を設定します。
+
+| 対象 | 鍵ファイルの設定 |
+| --- | --- |
+| 暗号化されていない入力 | `input` を省略する |
+| MP4・DASH・fMP4 HLS の cenc/cbcs 入力 | `input.keys` に入力の `kid` と `key` を指定する |
+| HLS AES-128 入力 | `input.hls_keys` に入力プレイリストから解決した絶対 URI と `key` を指定する |
+| TS の SAMPLE-AES 入力 | `input.hls_keys` に URI、`key`、必要ならその鍵に対応する `iv` を指定する。プレイリストにも IV がある場合は一致が必要 |
+| Clear 出力 | `output` を省略する |
+| MP4・DASH の cenc/cbcs 出力 | `output.kid` と `output.key` を指定する |
+| fMP4 HLS の cbcs 出力 | `output.kid`、`output.key`、`output.hls_key_uri` を指定する |
+| HLS の AES-128 出力 | `output.key` と `output.hls_key_uri` を指定する。`kid` と `iv` は指定しない |
+| TS の SAMPLE-AES 出力 | `output.key`、`output.iv`、`output.hls_key_uri` を指定する。`kid` は指定しない |
+
+鍵ファイルは `schema_version: 1` を使います。鍵や IV は、各 16 バイトを 32 桁の 16 進数で記します。入力が暗号化されている場合は、解析と計画にも入力鍵が必要です。各例では鍵ファイルを全4操作に指定していますが、入力・出力が両方とも Clear なら、すべての `--keys-file ../config/keys.json` を省略できます。入力と出力の方式が同じでも、鍵はそれぞれ別に設定できます。drmr は入力の鍵 URI やライセンス URL を取得しません。
+
+例はそれぞれ元の実行場所から使ってください。括弧内は独立したシェルで実行するため、終了すると元の場所に戻ります。作業ディレクトリ、原本保存先、計画ファイル、出力先は新規作成します。同じ例をやり直す場合は、別の作業ディレクトリ名を選ぶか、保存済みの原本を使って新しい計画を作ってください。`curl` の取得には drmr の取得ポリシーや資源上限は適用されません。
+
+これらは暗号化方式の変換例です。DRM 提供者の情報を明示して FairPlay 向け HLS や Widevine/PlayReady 向け DASH を作る場合は、[第6章の複数出力の手順](#inspect-plan)を参照してください。対象入力や実行時の設定が異なります。
+
+{{conversion-examples}}
+
 # 9. 検証の意味と処理の単位
 
 ## 四つの照合

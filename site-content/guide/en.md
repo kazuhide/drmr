@@ -695,6 +695,34 @@ Unknown fields, duplicates, present null values and invalid ranges are refused. 
 
 See [URL conversion](https://github.com/kazuhide/drmr/blob/main/docs/usage.md).
 
+## Example prerequisites and key file {#recipe-setup}
+
+Select a protection choice in the matrix to open its example below. Commands use a POSIX shell, such as on macOS or Linux. URLs under `https://media.example.com` are placeholders to replace, not hosted sample assets. Inputs must satisfy the [supported profiles in chapter 3](#supported-profiles).
+
+HLS uses `analyze URL --download-dir`. drmr does not directly acquire MP4 or DASH URLs, so those examples first download the input with `curl`. The finite DASH example assumes an MPD referencing `video/init.mp4` and `video/segment-1.m4s` through `video/segment-5.m4s`. For another presentation, save every initialization and media resource for every track, preserving relative paths.
+
+Prepare an owner-only `config/keys.json` in your starting directory using [chapter 5](#key-configuration). Each example creates a new workspace and reads that configuration as `../config/keys.json`. Match its input and output roles to your media:
+
+| Role | Key configuration |
+| --- | --- |
+| Clear input | Omit `input` |
+| cenc/cbcs MP4, DASH or fMP4 HLS input | Supply the source `kid` and `key` in `input.keys` |
+| HLS AES-128 input | Supply the resolved absolute input key URI and `key` in `input.hls_keys` |
+| TS SAMPLE-AES input | Supply its URI, `key` and associated `iv` when needed in `input.hls_keys`. A playlist IV must agree with a supplied IV |
+| Clear output | Omit `output` |
+| cenc/cbcs MP4 or DASH output | Supply `output.kid` and `output.key` |
+| cbcs fMP4 HLS output | Supply `output.kid`, `output.key` and `output.hls_key_uri` |
+| HLS AES-128 output | Supply `output.key` and `output.hls_key_uri`; omit `kid` and `iv` |
+| TS SAMPLE-AES output | Supply `output.key`, `output.iv` and `output.hls_key_uri`; omit `kid` |
+
+Use `schema_version: 1`. Keys and IVs contain 16 bytes written as 32 hexadecimal characters. Encrypted input requires its keys during analysis and planning too. Every example supplies the key file to all four operations. If both input and output are clear, omit every `--keys-file ../config/keys.json`. Input and output keys can differ even when the protection scheme stays the same. drmr never fetches input key or license URLs.
+
+Run each example from your original starting directory. The parenthesized commands run in a subshell and return there afterward. Workspace, retained source, plan and output locations must be new. To repeat an example, choose a new workspace name or create a new plan using the retained local source. Downloads performed by `curl` do not use drmr's fetch policy or resource ceilings.
+
+These examples convert encryption schemes. For explicit FairPlay HLS or Widevine/PlayReady DASH information, use the [multiple-output workflow in chapter 6](#inspect-plan); its admitted inputs and runtime settings differ.
+
+{{conversion-examples}}
+
 # 9. What verification proves
 
 ## Four complete comparisons

@@ -1,6 +1,7 @@
 import { guideChapters, requireGuideLayout, requireGuideMovement, codeAriaTemplate, requireGuideCheckpoint } from './guide.mjs';
 import { locales } from './locales.mjs';
 import { matrixRows, matrixColumns, matrixObservation, requireMatrixLayout, requireMatrixMovement, completeMatrixKey, MatrixKeyDeadline } from './matrix.mjs';
+import { matrixRecipes, requireRecipe, requireMatrixLinkExposure } from './recipes.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { assets, assetRoute, assetPath, digest, liveMode, allowedRequest } from './source.mjs';
@@ -511,12 +512,64 @@ test('nested guide routes and generation inputs belong to the exact payload cont
     assert.equal(assetPath('http://127.0.0.1:4173' + path), expected);
   }
   assert.equal(resource('/drmr/assets/guide.css').type, 'text/css; charset=utf-8');
-  assert.deepEqual(identity.builderInputs, ['tools/build_guide_site.py', 'tools/templates/guide.html',
+  assert.deepEqual(identity.builderInputs, ['tools/build_guide_site.py', 'tools/conversion_examples.py', 'tools/templates/guide.html',
     'site-content/guide/en.md', 'site-content/guide/ja.md']);
   for (const path of ['/drmr/guide/keys.json', '/drmr/ja/guide/%2e%2e%2fprivate.json',
     '/drmr/site-content/guide/en.md', '/drmr/tools/build_guide_site.py']) {
     assert.equal(resource(path), null);
   }
+});
+
+test('each supported protection token has one stable recipe identity and unavailable cells have none', () => {
+  assert.equal(matrixRecipes.length, 45);
+  assert.equal(new Set(matrixRecipes.map(recipe => recipe.id)).size, 45);
+  assert.equal(matrixRecipes[0].id, 'recipe-mp4-mp4-clear');
+  assert.equal(matrixRecipes.at(-1).id, 'recipe-hls-ts-audio-hls-ts-hls-sample-aes');
+  for (const row of matrixRows) {
+    assert.equal(matrixRecipes.filter(recipe => recipe.row === row.id).length, 9);
+    for (const [column, labels] of row.output.entries()) {
+      assert.deepEqual(matrixRecipes.filter(recipe => recipe.row === row.id && recipe.column === column)
+        .map(recipe => recipe.label), labels);
+    }
+  }
+});
+
+function recipeSample(recipe = matrixRecipes.find(value => value.id === 'recipe-hls-ts-video-dash-cbcs')) {
+  const code = `(\n  set -eu\n  workspace="$(mktemp -d)"\n  cd "$workspace"\n  drmr analyze "https://example.com/vod/master.m3u8" --download-dir source --keys-file ../config/keys.json --json\n  drmr plan source/input.m3u8 --to ${recipe.target} --format ${recipe.format} --output output --save conversion.plan.json --keys-file ../config/keys.json\n  drmr convert --plan conversion.plan.json --keys-file ../config/keys.json\n  drmr verify --plan conversion.plan.json --keys-file ../config/keys.json --json\n)\n`;
+  return { id: recipe.id, tag: 'H3', tabindex: '-1', chapter: 'url-input', heading: 'HLS to DASH',
+    presented: true, setupTag: 'P', setupHrefs: ['#recipe-setup'], figureTag: 'FIGURE',
+    figureClass: true, language: 'sh', code, rendered: code };
+}
+
+test('recipe checks refuse wrong destinations, hidden code, incomplete steps and mismatched saved plans', () => {
+  const expected = matrixRecipes.find(value => value.id === 'recipe-hls-ts-video-dash-cbcs');
+  const good = recipeSample(expected);
+  requireRecipe(good, expected);
+  const changes = [
+    { id: 'recipe-hls-ts-video-dash-clear' }, { tag: 'H2' }, { tabindex: null }, { chapter: 'verification' },
+    { heading: '' }, { presented: false }, { setupTag: 'DIV' }, { setupHrefs: [] },
+    { setupHrefs: ['#recipe-setup', '#unrelated'] }, { figureTag: 'PRE' }, { figureClass: false },
+    { language: 'text' }, { rendered: '' },
+  ];
+  for (const change of changes) assert.throws(() => requireRecipe({ ...good, ...change }, expected));
+  for (const [before, after] of [
+    ['--to cbcs', '--to clear'], ['--format dash', '--format hls'], ['--output output', ''],
+    ['--save conversion.plan.json', ''], ['drmr convert --plan conversion.plan.json', 'drmr convert --plan stale.plan.json'],
+    ['--keys-file ../config/keys.json', '--keys-file keys.json'], ['https://example.com/', 'source/'],
+    ['--download-dir source', ''], ['drmr verify', 'printf verify'], ['set -eu', 'set -u'],
+  ]) {
+    const code = good.code.replace(before, after);
+    assert.throws(() => requireRecipe({ ...good, code, rendered: code }, expected), before);
+  }
+});
+
+test('matrix link checks refuse point occlusion by sticky headers without weakening ordinary focus', () => {
+  requireMatrixLinkExposure({ matrixLink: false });
+  const points = Array.from({ length: 5 }, () => ({ x: 200, y: 300, exposed: true }));
+  requireMatrixLinkExposure({ matrixLink: true, points });
+  assert.throws(() => requireMatrixLinkExposure({ matrixLink: true, points: [] }));
+  assert.throws(() => requireMatrixLinkExposure({ matrixLink: true, points: points.map((point, index) =>
+    index ? point : { ...point, exposed: false }) }));
 });
 
 

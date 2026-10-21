@@ -1,5 +1,6 @@
 """Check the actual Pages payload, including link and artifact escape refusals."""
 import importlib.util
+from html import escape
 import os
 import re
 from pathlib import Path
@@ -15,6 +16,53 @@ SPEC = importlib.util.spec_from_file_location("check_site", Path(__file__).resol
 CHECK = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(CHECK)
 SOURCE = Path(__file__).resolve().parents[2]
+
+
+def recipe_fixture(language="en", first_example=1):
+    """Independent complete command examples for the documented support cells."""
+    input_labels = {
+        "en": ("MP4", "DASH", "HLS / fMP4", "HLS / MPEG-TS (video)", "HLS / MPEG-TS (audio only)"),
+        "ja": ("MP4", "DASH", "HLS / fMP4", "HLS / MPEG-TS（映像）", "HLS / MPEG-TS（音声のみ）"),
+    }
+    formats = (("mp4", "MP4", ("clear", "cenc", "cbcs")),
+               ("dash", "DASH", ("clear", "cenc", "cbcs")),
+               ("hls", "HLS / fMP4", ("clear", "cbcs", "hls-aes128")),
+               ("hls-ts", "HLS / MPEG-TS", ("clear", "hls-aes128", "hls-sample-aes")))
+    rows = ("mp4", "dash", "hls-fmp4", "hls-ts-video", "hls-ts-audio")
+    protection_labels = {"clear": "Clear", "cenc": "cenc", "cbcs": "cbcs",
+                         "hls-aes128": "AES-128", "hls-sample-aes": "SAMPLE-AES"}
+    content = ['<h3 id="recipe-setup">Prepare a private key file</h3><p>Use separate input and output keys.</p>']
+    example = first_example
+    for index, row in enumerate(rows):
+        for output_format, output_label, targets in formats:
+            if (index < 3 and output_format == "hls-ts") or (index >= 3 and output_format == "mp4"):
+                continue
+            for target in targets:
+                identifier = "recipe-" + row + "-" + output_format + "-" + target
+                heading = input_labels[language][index] + " → " + output_label + " / " + protection_labels[target]
+                source = "./source.mp4" if row == "mp4" else "./source/manifest.mpd" if row == "dash" else "./source/input.m3u8"
+                acquisition = ""
+                if row == "mp4":
+                    acquisition = '  curl --fail --location --output ./source.mp4 "https://media.example.com/vod/mp4/clear/video.mp4"\n'
+                elif row == "dash":
+                    acquisition = ('  for resource in manifest.mpd video/init.mp4 \\\n'
+                                   '    video/segment-1.m4s video/segment-2.m4s video/segment-3.m4s \\\n'
+                                   '    video/segment-4.m4s video/segment-5.m4s; do\n'
+                                   '    curl --fail --location --output "source/$resource" "https://media.example.com/vod/dash/$resource"\n'
+                                   '  done\n')
+                analyzed = source if row in ("mp4", "dash") else '"https://media.example.com/vod/' + row + '/clear/media.m3u8" --download-dir ./source'
+                output = "./result.mp4" if output_format == "mp4" else "./result"
+                code = ('(\n' + acquisition + '  drmr analyze ' + analyzed + ' --keys-file ../config/keys.json --json\n'
+                        '  drmr plan ' + source + ' \\\n    --to ' + target + ' --format ' + output_format + ' \\\n    --output ' + output + ' --save ./conversion.plan.json \\\n    --keys-file ../config/keys.json --json\n'
+                        '  drmr convert --plan ./conversion.plan.json --keys-file ../config/keys.json --json\n'
+                        '  drmr verify --plan ./conversion.plan.json --keys-file ../config/keys.json --json\n)')
+                content.append('<h3 id="' + identifier + '" tabindex="-1">' + heading + '</h3>'
+                               '<p><a href="#recipe-setup">Prepare the key configuration</a></p>'
+                               '<figure class="guide-example" data-code-language="sh" aria-labelledby="example-' + str(example) + '-title">'
+                               '<figcaption id="example-' + str(example) + '-title">Complete URL conversion example</figcaption>'
+                               '<pre tabindex="0"><code>' + escape(code) + '</code></pre></figure>')
+                example += 1
+    return "".join(content)
 
 
 class Site(unittest.TestCase):
@@ -53,8 +101,8 @@ class Site(unittest.TestCase):
     def test_actual_site_is_small_self_contained_and_mount_independent(self):
         result = self.check()
         self.assertEqual(result["files"], 12)
-        self.assertLessEqual(result["bytes"], 512 * 1024)
-        self.assertEqual(result["byte_budget"], 512 * 1024)
+        self.assertLessEqual(result["bytes"], 640 * 1024)
+        self.assertEqual(result["byte_budget"], 640 * 1024)
         self.assertEqual(set(result["builder_inputs"]), set(CHECK.BUILDER_INPUTS))
         self.assertEqual({v["chapters"] for v in result["guides"].values()}, {20})
         self.assertEqual(result["mounts"], ["/", "/drmr/"])
@@ -118,6 +166,24 @@ class Site(unittest.TestCase):
         shutil.copyfile(source, external)
         source.unlink()
         os.link(external, source)
+        with self.assertRaisesRegex(CHECK.Failure, "site-guide-input"):
+            self.check()
+
+    def test_conversion_example_generator_is_provenance_bound(self):
+        helper = self.repo / "tools/conversion_examples.py"
+        original = helper.read_text(encoding="utf-8")
+        helper.write_text(original + '\n_original_markdown = markdown\n'
+                          'def markdown(locale):\n'
+                          '    return _original_markdown(locale).replace("drmr analyze", "drmr inspect")\n',
+                          encoding="utf-8")
+        with self.assertRaisesRegex(CHECK.Failure, "site-guide-generated"):
+            self.check()
+
+    def test_imported_conversion_example_generator_cannot_be_hardlinked(self):
+        helper = self.repo / "tools/conversion_examples.py"
+        external = self.root / "linked-conversion-examples.py"
+        helper.rename(external)
+        os.link(external, helper)
         with self.assertRaisesRegex(CHECK.Failure, "site-guide-input"):
             self.check()
 
@@ -419,15 +485,27 @@ class ConversionMatrix(unittest.TestCase):
             ("hls-ts-video", "HLS / MPEG-TS", "Clear/AES-128/SAMPLE-AES", ["", "Clear/cenc/cbcs", "Clear/cbcs/AES-128", "Clear/AES-128/SAMPLE-AES"]),
             ("hls-ts-audio", "HLS / MPEG-TS", "Clear/AES-128/SAMPLE-AES", ["", "Clear/cenc/cbcs", "Clear/cbcs/AES-128", "Clear/AES-128/SAMPLE-AES"]),
         ]
-        def protection(value):
-            return " / ".join('<span>Clear</span>' if token == "Clear" else '<code>' + token + '</code>' for token in value.split("/"))
+        def protection(value, row=None, column=None):
+            parts = []
+            for token in value.split("/"):
+                part = '<span>Clear</span>' if token == "Clear" else '<code>' + token + '</code>'
+                if row is not None:
+                    target = {"Clear": "clear", "AES-128": "hls-aes128", "SAMPLE-AES": "hls-sample-aes"}.get(token, token)
+                    output = ("mp4", "dash", "hls", "hls-ts")[column]
+                    input_label = (("MP4", "DASH", "HLS / fMP4", "HLS / MPEG-TS (video)", "HLS / MPEG-TS (audio only)") if language == "en" else
+                                   ("MP4", "DASH", "HLS / fMP4", "HLS / MPEG-TS（映像）", "HLS / MPEG-TS（音声のみ）"))[index]
+                    heading = input_label + " → " + ("MP4", "DASH", "HLS / fMP4", "HLS / MPEG-TS")[column] + " / " + token
+                    label = heading + (" command example" if language == "en" else "のコマンド例")
+                    part = '<a href="guide/#recipe-' + row + '-' + output + '-' + target + '" aria-label="' + label + '">' + part + '</a>'
+                parts.append(part)
+            return " / ".join(parts)
         body = []
         for index, (name, form, inputs, outputs) in enumerate(rows):
             note = "<sup>2</sup>" if index == 0 else "<sup>3</sup>" if index >= 3 else ""
             header = ('<th scope="row"><strong class="input-format">' + form + '</strong>'
                       '<span class="input-profile">' + profiles[index] + note + '</span>'
                       '<span class="input-protections">' + protection(inputs) + '</span></th>')
-            cells = ['<td>' + (protection(value) if value else outside) + ('<sup>1</sup>' if column == 0 and index in (0, 1, 2) else "") + '</td>' for column, value in enumerate(outputs)]
+            cells = ['<td>' + (protection(value, name, column) if value else outside) + ('<sup>1</sup>' if column == 0 and index in (0, 1, 2) else "") + '</td>' for column, value in enumerate(outputs)]
             body.append('<tr id="' + name + '">' + header + "".join(cells) + '</tr>')
         return ('<main><section class="hero"><h1>drmr</h1></section><section id="support"><h2>' + heading + '</h2>'
                 '<p id="matrix-guide">Qualified profiles only.</p><p id="matrix-scroll-hint">Scroll horizontally.</p>'
@@ -444,6 +522,34 @@ class ConversionMatrix(unittest.TestCase):
             with self.subTest(language=language):
                 result = CHECK.validate_matrix(self.fixture(language), language)
                 self.assertEqual((result["rows"], result["output_columns"], result["cells"]), (5, 4, 20))
+                self.assertEqual(result["recipe_links"], 45)
+
+    def test_each_output_protection_links_only_to_its_own_conversion_example(self):
+        for language in ("en", "ja"):
+            original = self.fixture(language)
+            for old, new in (
+                    ('href="guide/#recipe-mp4-dash-cbcs"', 'href="guide/#recipe-dash-dash-cbcs"'),
+                    ('href="guide/#recipe-mp4-dash-cbcs"', 'href="guide/#recipe-mp4-hls-cbcs"'),
+                    ('href="guide/#recipe-mp4-dash-cbcs"', 'href="guide/#recipe-mp4-dash-cenc"'),
+                    ('href="guide/#recipe-mp4-dash-cbcs"', 'href="guide/#recipe-mp4-dash-cbcs-extra"'),
+                    ('href="guide/#recipe-mp4-dash-cbcs"', 'href="../guide/#recipe-mp4-dash-cbcs"'),
+                    ('href="guide/#recipe-mp4-dash-cbcs"', ''),
+                    ('aria-label="MP4 → DASH / cbcs', 'aria-label="DASH → MP4 / cbcs')):
+                with self.subTest(language=language, changed=new), self.assertRaisesRegex(
+                        CHECK.Failure, "site-matrix-recipe-link"):
+                    CHECK.validate_matrix(original.replace(old, new, 1), language)
+
+    def test_missing_extra_nested_and_unavailable_cell_links_are_refused(self):
+        original = self.fixture()
+        link = '<a href="guide/#recipe-mp4-mp4-clear" aria-label="MP4 → MP4 / Clear command example"><span>Clear</span></a>'
+        self.assertIn(link, original)
+        for old, new in (
+                (link, '<span>Clear</span>'),
+                (link, link + '<a href="guide/#recipe-mp4-mp4-clear">Extra</a>'),
+                (link, link.replace('<span>Clear</span>', '<a href="#other"><span>Clear</span></a>')),
+                ('<td>Outside profile</td>', '<td><a href="guide/#recipe-mp4-hls-ts-clear">Outside profile</a></td>')):
+            with self.subTest(changed=new), self.assertRaisesRegex(CHECK.Failure, "site-matrix-recipe-link"):
+                CHECK.validate_matrix(original.replace(old, new, 1), "en")
 
     def test_cenc_input_cannot_be_omitted_from_either_hls_fmp4_row(self):
         for language in ("en", "ja"):
@@ -515,7 +621,7 @@ class GuideReferences(unittest.TestCase):
 
 
 class GuideMarkup(unittest.TestCase):
-    def fixture(self):
+    def fixture(self, language="en"):
         chapters = []
         for name in CHECK.GUIDE_CHAPTERS:
             body = "<p>Complete chapter content with a bounded, meaningful explanation.</p>"
@@ -526,6 +632,8 @@ class GuideMarkup(unittest.TestCase):
                          '<div class="guide-table-scroll" role="region" aria-labelledby="table-1-title" tabindex="0">'
                          '<table><caption id="table-1-title">Known profiles</caption><thead><tr><th scope="col">Input</th></tr></thead>'
                          '<tbody><tr><th scope="row">MP4</th></tr></tbody></table></div>')
+            if name == "url-input":
+                body += recipe_fixture(language, first_example=2)
             if name == "references":
                 for url in ("https://www.w3.org/TR/eme-stream-mp4/", "https://www.rfc-editor.org/rfc/rfc8216.html",
                             "https://developer.apple.com/library/archive/documentation/AudioVideo/Conceptual/HLS_Sample_Encryption/",
@@ -552,7 +660,8 @@ class GuideMarkup(unittest.TestCase):
 
     def test_missing_chapters_code_labels_and_table_scopes_remain_refused(self):
         original = self.fixture()
-        self.assertEqual(CHECK.validate_guide(original, "en"), {"chapters": 20, "code_examples": 1, "tables": 1})
+        self.assertEqual(CHECK.validate_guide(original, "en"),
+                         {"chapters": 20, "code_examples": 46, "tables": 1, "conversion_examples": 45})
         for old, new in [('data-guide-chapter="verification"', 'data-guide-chapter="missing"'),
                          ('href="#verification"', 'href="#missing"'), ('tabindex="0"', ''),
                          ('aria-labelledby="example-1-title"', ''), ('data-code-language="sh"', 'data-code-language="unknown"'), ('scope="row"', '')]:
@@ -563,7 +672,7 @@ class GuideMarkup(unittest.TestCase):
     def test_each_portable_chapter_reference_is_internal_only_for_its_language(self):
         for language, canonical in (("en", "https://kazuhide.github.io/drmr/guide/"),
                                     ("ja", "https://kazuhide.github.io/drmr/ja/guide/")):
-            original = self.fixture()
+            original = self.fixture(language)
             if language == "ja":
                 original = original.replace('aria-label="Guide chapters"', 'aria-label="目次"')
             for chapter in CHECK.GUIDE_CHAPTERS:
@@ -576,7 +685,7 @@ class GuideMarkup(unittest.TestCase):
         for language, canonical, other in (
                 ("en", "https://kazuhide.github.io/drmr/guide/", "https://kazuhide.github.io/drmr/ja/guide/"),
                 ("ja", "https://kazuhide.github.io/drmr/ja/guide/", "https://kazuhide.github.io/drmr/guide/")):
-            original = self.fixture()
+            original = self.fixture(language)
             if language == "ja":
                 original = original.replace('aria-label="Guide chapters"', 'aria-label="目次"')
             references = (
@@ -599,6 +708,77 @@ class GuideMarkup(unittest.TestCase):
                         '<a href="' + reference + '">Chapter details</a><h2 id="introduction-title">', 1)
                     with self.assertRaisesRegex(CHECK.Failure, "site-guide-reference"):
                         CHECK.validate_guide(value, language)
+
+
+class ConversionExamples(unittest.TestCase):
+    def check(self, text, language="en"):
+        return CHECK.validate_conversion_examples(CHECK.MatrixMarkup(text).root, language)
+
+    def test_all_supported_examples_have_complete_url_to_independent_verification_flow(self):
+        for language in ("en", "ja"):
+            with self.subTest(language=language):
+                self.assertEqual(self.check(recipe_fixture(language), language), 45)
+
+    def test_missing_extra_duplicate_or_unfocusable_recipe_heading_is_refused(self):
+        original = recipe_fixture()
+        for old, new in (
+                ('id="recipe-mp4-dash-cbcs"', 'id="recipe-mp4-dash-unknown"'),
+                ('id="recipe-mp4-dash-cbcs"', 'id="recipe-mp4-dash-cenc"'),
+                ('id="recipe-mp4-dash-cbcs" tabindex="-1"', 'id="recipe-mp4-dash-cbcs"'),
+                ('<h3 id="recipe-mp4-dash-cbcs"', '<h4 id="recipe-mp4-dash-cbcs"'),
+                ('MP4 → DASH / cbcs</h3>', 'DASH → MP4 / cbcs</h3>'),
+                ('MP4 → DASH / cbcs</h3>', 'MP4 → HLS / fMP4 / cbcs</h3>'),
+                ('MP4 → DASH / cbcs</h3>', 'MP4 → DASH / cenc</h3>')):
+            value = original.replace(old, new, 1)
+            if '<h4 id="recipe-' in value:
+                start = value.index('<h4 id="recipe-')
+                end = value.index('</h3>', start)
+                value = value[:end] + '</h4>' + value[end + 5:]
+            with self.subTest(changed=new), self.assertRaisesRegex(CHECK.Failure, "site-guide-recipe"):
+                self.check(value)
+        with self.assertRaisesRegex(CHECK.Failure, "site-guide-recipe"):
+            self.check(original + '<h3 id="recipe-mp4-hls-ts-clear" tabindex="-1">MP4 → HLS / MPEG-TS / Clear</h3>')
+
+    def test_setup_link_and_direct_shell_figure_are_required(self):
+        original = recipe_fixture()
+        for old, new in (
+                ('href="#recipe-setup"', 'href="#key-configuration"'),
+                ('<p><a href="#recipe-setup">Prepare the key configuration</a></p>', ''),
+                ('<p><a href="#recipe-setup">Prepare the key configuration</a></p>', '<div><p><a href="#recipe-setup">Prepare the key configuration</a></p></div>'),
+                ('data-code-language="sh"', 'data-code-language="text"'),
+                ('<h3 id="recipe-setup">', '<h3 id="missing-setup">')):
+            with self.subTest(changed=new), self.assertRaisesRegex(CHECK.Failure, "site-guide-recipe"):
+                self.check(original.replace(old, new, 1))
+
+    def test_swapped_plan_source_target_format_output_and_missing_flow_steps_are_refused(self):
+        original = recipe_fixture()
+        for old, new in (
+                ('drmr plan ./source.mp4', 'drmr plan ./source/manifest.mpd'),
+                ('--to clear --format mp4', '--to cbcs --format mp4'),
+                ('--to clear --format mp4', '--to clear --format dash'),
+                ('--output ./result.mp4', '--output ./result'),
+                ('--save ./conversion.plan.json', '--save ./other.plan.json'),
+                ('drmr convert --plan ./conversion.plan.json', 'drmr convert --plan ./other.plan.json'),
+                ('drmr verify --plan ./conversion.plan.json', 'drmr inspect ./result.mp4'),
+                ('drmr analyze ./source.mp4', 'drmr analyze ./result.mp4'),
+                ('--keys-file ../config/keys.json', '--keys-file ../config/other.json'),
+                ('drmr verify --plan', '# drmr verify --plan')):
+            with self.subTest(changed=new), self.assertRaisesRegex(CHECK.Failure, "site-guide-recipe-command"):
+                self.check(original.replace(old, new, 1))
+
+    def test_remote_local_formats_need_complete_explicit_downloads_and_hls_needs_retention(self):
+        original = recipe_fixture()
+        for old, new in (
+                ('--output ./source.mp4', '--output ./unrelated.mp4'),
+                ('https://media.example.com/vod/mp4/clear/video.mp4', 'file:///private/video.mp4'),
+                ('--output &quot;source/$resource&quot;', '--output &quot;wrong/$resource&quot;'),
+                ('video/init.mp4', 'video/unrelated.mp4'),
+                ('video/segment-4.m4s video/segment-5.m4s;', 'video/segment-4.m4s;'),
+                ('https://media.example.com/vod/dash/$resource', 'https://media.example.com/vod/dash/manifest.mpd'),
+                ('--download-dir ./source', '--download-dir ./different-source'),
+                ('https://media.example.com/vod/hls-fmp4/clear/media.m3u8', './remote.m3u8')):
+            with self.subTest(changed=new), self.assertRaisesRegex(CHECK.Failure, "site-guide-recipe-command"):
+                self.check(original.replace(old, new, 1))
 
 
 if __name__ == "__main__":

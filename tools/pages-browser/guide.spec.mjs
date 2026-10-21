@@ -6,6 +6,7 @@ import { focusObservation, pollFocus, requireFocus, requireImages } from './chec
 import { completeMatrixKey } from './matrix.mjs';
 import { guideChapters, guideLocales, guideObservation, requireGuideLayout,
   guideScrollObservation, requireGuideMovement, codeAriaTemplate, requireGuideCheckpoint } from './guide.mjs';
+import { matrixRecipes } from './recipes.mjs';
 
 const live = liveMode(process.env.PAGES_LIVE);
 const origin = live ? publicOrigin : localOrigin;
@@ -137,6 +138,9 @@ async function content(page, locale) {
   expect(await toc.locator('a').evaluateAll(nodes => nodes.map(node => node.getAttribute('href'))))
     .toEqual(guideChapters.map(id => '#' + id));
   await expect(page.locator('script')).toHaveCount(0);
+  expect(await page.locator('#url-input h3[id^="recipe-"]:not(#recipe-setup)')
+    .evaluateAll(nodes => nodes.map(node => ({ id: node.id, tabindex: node.getAttribute('tabindex') }))))
+    .toEqual(matrixRecipes.map(recipe => ({ id: recipe.id, tabindex: '-1' })));
   const groups = [];
   const groupLocators = await page.locator('figure.guide-example').all();
   // The page is static: batch only independent readbacks, retaining DOM order.
