@@ -967,7 +967,7 @@ fn directory_references_remain_bound_to_the_issuing_root_even_for_nested_public_
     let root = tempfile::tempdir().unwrap();
     let output = root.path().join("output");
     let catalog = output.join("input");
-    std::fs::create_dir_all(catalog.join("folder")).unwrap();
+    support::private_dir(catalog.join("folder")).unwrap();
     std::fs::write(catalog.join("folder/clip.mp4"), b"fixture").unwrap();
     let mut config = ServerConfig::new(&catalog, &output);
     config.bind_port = 0;
