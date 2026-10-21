@@ -3,6 +3,7 @@ use super::{
     CHANGED, ConversionError, Expected, Graph, INVALID, IO, bytes_digest, dash, failure, files,
     source, valid_url, write_private,
 };
+use crate::inspection::{self, InputFormat};
 use std::{
     io::{Read as _, Seek as _, SeekFrom},
     path::{Path, PathBuf},
@@ -72,20 +73,8 @@ impl Graph<'_> {
         }
         let mut prefix = [0; 64];
         let count = input.read(&mut prefix).map_err(|_| IO)?;
-        let prefix = &prefix[..count];
-        let text = prefix
-            .strip_prefix(b"\xef\xbb\xbf")
-            .unwrap_or(prefix)
-            .trim_ascii_start();
-        if !text.starts_with(b"#EXTM3U") && !text.starts_with(b"<") {
-            if !prefix.get(4..8).is_some_and(|kind| {
-                matches!(
-                    kind,
-                    b"ftyp" | b"moov" | b"styp" | b"free" | b"wide" | b"mdat" | b"sidx"
-                )
-            }) {
-                return Err(INVALID);
-            }
+        let format = inspection::format_hint(&prefix[..count]).ok_or(INVALID)?;
+        if format == InputFormat::Mp4 {
             self.text_charge(url.len().saturating_add(received.effective.len()))?;
             self.records.push(serde_json::json!({
                 "kind":"mp4", "requested":url, "effective":received.effective,
@@ -122,7 +111,7 @@ impl Graph<'_> {
         if size != received.size || hex::encode(hash) != received.sha256 {
             return Err(CHANGED);
         }
-        if text.starts_with(b"#EXTM3U") {
+        if format == InputFormat::Hls {
             self.playlist_loaded(url, true, Some((body, received.effective)))?;
             Ok((
                 "input.m3u8",

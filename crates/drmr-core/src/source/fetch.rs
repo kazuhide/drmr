@@ -9,7 +9,10 @@ use super::platform::{Platform, Stream, TlsContext};
 use super::pypath::{as_uri, is_relative_to, resolve};
 use super::pyurl::{SplitResult, digits_value, unquote, urlsplit, urlunsplit};
 use super::{Escaped, Failure, FetchPolicy, SourceError, child_url, netaddr, origin};
-use crate::concurrency::Stop;
+use crate::{
+    concurrency::Stop,
+    inspection::{self, InputFormat},
+};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fmt;
@@ -953,21 +956,28 @@ impl<'f> Sink<'f> {
             && prefix.len() < 64
         {
             prefix.extend_from_slice(&chunk[..chunk.len().min(64 - prefix.len())]);
-            // A BOM may arrive across separate network chunks. Once it is
-            // complete, only an ASCII whitespace prefix is skipped, as in inspect.
-            let bom = b"\xef\xbb\xbf";
-            if prefix.len() >= bom.len() || !bom.starts_with(prefix) {
-                let text = prefix
-                    .strip_prefix(bom)
-                    .unwrap_or(prefix)
-                    .trim_ascii_start();
-                if !text.is_empty() || prefix.len() == 64 {
-                    if text.is_empty() || matches!(text[0], b'<' | b'#') {
-                        self.cap = self.fetcher.policy.max_playlist_bytes;
-                        self.playlist = true;
+            // The first size byte can be '#' or '<' in a valid MP4. Wait for
+            // its complete box type before selecting either independent body cap.
+            if prefix.len() >= 8 {
+                let manifest = match inspection::format_hint(prefix) {
+                    Some(InputFormat::Mp4) => Some(false),
+                    Some(InputFormat::Hls | InputFormat::Dash) => Some(true),
+                    None if prefix.len() == 64 => Some(
+                        prefix
+                            .strip_prefix(b"\xef\xbb\xbf")
+                            .unwrap_or(prefix)
+                            .iter()
+                            .all(u8::is_ascii_whitespace),
+                    ),
+                    None => None,
+                };
+                if let Some(manifest) = manifest {
+                    self.playlist = manifest;
+                    self.cap = if manifest {
+                        self.fetcher.policy.max_playlist_bytes
                     } else {
-                        self.cap = self.fetcher.policy.max_resource_bytes;
-                    }
+                        self.fetcher.policy.max_resource_bytes
+                    };
                     // Keep the option to reset detection on a retried request.
                     prefix.resize(64, 0);
                 }
@@ -1097,6 +1107,80 @@ mod sink_ownership_tests {
         assert_eq!(std::fs::metadata(&path).unwrap().len(), sink.size);
         sink.discard();
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn entrypoint_binary_box_sizes_keep_the_media_cap_across_chunking() {
+        let root = crate::native::private_tempdir().unwrap();
+        let policy = FetchPolicy {
+            max_playlist_bytes: 16,
+            max_resource_bytes: 128,
+            ..FetchPolicy::default()
+        };
+        let fetcher = Fetcher::new(
+            &policy,
+            root.path(),
+            Arc::new(super::super::platform::SystemPlatform),
+        );
+        let path = root.path().join("resource");
+        for marker in *b"#<" {
+            for chunk_size in [1, 8, 64] {
+                // Only the prefix and a small streamed payload are needed to check
+                // budget selection; the declared free-box payload is not allocated.
+                let body = [[marker, 0, 0, 0].as_slice(), b"free", &[7; 72]].concat();
+                let mut sink = Sink::new(&fetcher, Some(path.clone()), 128, false);
+                sink.entrypoint_prefix = Some(Vec::new());
+                for chunk in body.chunks(chunk_size) {
+                    assert!(sink.write(chunk).is_ok(), "binary media uses its own cap");
+                }
+                assert_eq!(sink.cap, policy.max_resource_bytes);
+                assert!(!sink.playlist);
+                assert_eq!(sink.chunks, [] as [u8; 0]);
+                assert_eq!(sink.size, 80);
+                sink.reset();
+                assert!(!path.exists());
+            }
+        }
+    }
+
+    #[test]
+    fn entrypoint_text_and_media_caps_remain_independent_after_reset() {
+        let root = crate::native::private_tempdir().unwrap();
+        let policy = FetchPolicy {
+            max_playlist_bytes: 64,
+            max_resource_bytes: 16,
+            ..FetchPolicy::default()
+        };
+        let fetcher = Fetcher::new(
+            &policy,
+            root.path(),
+            Arc::new(super::super::platform::SystemPlatform),
+        );
+        let path = root.path().join("resource");
+        let mut sink = Sink::new(&fetcher, Some(path.clone()), 64, false);
+        sink.entrypoint_prefix = Some(Vec::new());
+        for byte in b"#EXTM3U\n#EXT-X-ENDLIST\n" {
+            assert!(sink.write(&[*byte]).is_ok());
+        }
+        assert_eq!(sink.cap, policy.max_playlist_bytes);
+        assert!(sink.playlist);
+        sink.reset();
+        for byte in b"<\0\0\0free" {
+            assert!(sink.write(&[*byte]).is_ok());
+        }
+        assert_eq!(sink.cap, policy.max_resource_bytes);
+        assert!(!sink.playlist);
+        assert!(matches!(
+            sink.write(&[0; 9]),
+            Err(Fault::Source(error)) if error.token() == "byte-budget-exceeded"
+        ));
+        sink.reset();
+        assert!(!path.exists());
+        for byte in b"\xef\xbb\xbf \n<MPD/>" {
+            assert!(sink.write(&[*byte]).is_ok());
+        }
+        assert_eq!(sink.cap, policy.max_playlist_bytes);
+        sink.reset();
     }
 
     #[test]

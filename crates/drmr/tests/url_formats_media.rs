@@ -245,9 +245,15 @@ fn authenticated_policy(root: &Path, origin: &str) -> PathBuf {
     path
 }
 
-fn offline_workflow(format: &str, scheme: &str) {
+fn offline_workflow(format: &str, scheme: &str, prefix: &[u8]) {
     let root = tempfile::tempdir().unwrap();
     let source = fixture(&root.path().join("source"), format, scheme);
+    if !prefix.is_empty() {
+        assert_eq!(format, "mp4");
+        let mut bytes = prefix.to_vec();
+        bytes.extend(std::fs::read(&source).unwrap());
+        std::fs::write(&source, bytes).unwrap();
+    }
     let original = snapshot(source.parent().unwrap());
     let responses = remote_files(&original);
     let server = download_http::Server::start(responses.clone());
@@ -323,14 +329,31 @@ fn offline_workflow(format: &str, scheme: &str) {
 #[test]
 fn mp4_urls_clear_cenc_and_cbcs_support_offline_plans_and_independent_verification() {
     for scheme in ["clear", "cenc", "cbcs"] {
-        offline_workflow("mp4", scheme);
+        offline_workflow("mp4", scheme, &[]);
     }
 }
 
 #[test]
 fn dash_urls_clear_cenc_and_cbcs_support_offline_plans_and_independent_verification() {
     for scheme in ["clear", "cenc", "cbcs"] {
-        offline_workflow("dash", scheme);
+        offline_workflow("dash", scheme, &[]);
+    }
+}
+
+#[test]
+fn mp4_urls_with_supported_leading_boxes_keep_the_complete_offline_workflow() {
+    for kind in [b"wide", b"mdat", b"sidx"] {
+        let size: u32 = if kind == b"sidx" { 32 } else { 8 };
+        let mut prefix = size.to_be_bytes().to_vec();
+        prefix.extend(kind);
+        if kind == b"sidx" {
+            // A version-zero index with no references; the following fragments
+            // retain their own relative offsets and complete media payload.
+            for value in [0_u32, 1, 90_000, 0, 0, 0] {
+                prefix.extend(value.to_be_bytes());
+            }
+        }
+        offline_workflow("mp4", "clear", &prefix);
     }
 }
 
