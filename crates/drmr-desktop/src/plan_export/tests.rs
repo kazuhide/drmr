@@ -953,6 +953,119 @@ fn native_export_cleanup_refuses_a_parent_that_lost_private_permissions() {
     assert!(!target.exists());
 }
 
+#[cfg(unix)]
+#[test]
+fn native_export_unlinked_writer_with_empty_quarantine_can_retry_cleanup() {
+    use std::os::unix::fs::MetadataExt;
+    let folders = Folders::new();
+    let target = folders.private.join("partial.json");
+    let mut partial = folders.owned(&target);
+    let result = partial.cleanup_with(|point| {
+        if point == files::CleanupPoint::BeforeMove {
+            std::fs::remove_file(&target)?;
+        }
+        Ok(())
+    });
+    assert_eq!(result.unwrap_err().kind(), io::ErrorKind::NotFound);
+    let quarantine = partial.quarantine_path().unwrap().to_path_buf();
+    assert!(quarantine.exists());
+    assert_eq!(std::fs::read_dir(&quarantine).unwrap().count(), 0);
+    assert_eq!(
+        partial.file.as_ref().unwrap().metadata().unwrap().nlink(),
+        0
+    );
+    partial.cleanup().unwrap();
+    assert!(partial.file.is_none());
+    assert!(partial.quarantine_path().is_none());
+    assert!(!quarantine.exists());
+    assert!(!target.exists());
+    assert_eq!(std::fs::read_dir(&folders.private).unwrap().count(), 0);
+    partial.cleanup().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn native_export_unlinked_writer_preserves_nonempty_quarantine_until_safe_retry() {
+    let folders = Folders::new();
+    let target = folders.private.join("partial.json");
+    let mut partial = folders.owned(&target);
+    assert!(
+        partial
+            .cleanup_with(|point| {
+                if point == files::CleanupPoint::BeforeMove {
+                    std::fs::remove_file(&target)?;
+                }
+                Ok(())
+            })
+            .is_err()
+    );
+    let quarantine = partial.quarantine_path().unwrap().to_path_buf();
+    let foreign = quarantine.join("foreign.json");
+    drmr_core::native::create_private_new(&foreign)
+        .unwrap()
+        .write_all(b"preserve foreign content")
+        .unwrap();
+    assert!(partial.cleanup().is_err());
+    assert!(partial.file.is_some());
+    assert_eq!(partial.quarantine_path().unwrap(), quarantine);
+    assert_eq!(
+        std::fs::read(&foreign).unwrap(),
+        b"preserve foreign content"
+    );
+    // The fixture's owner moves its sentinel; the exporter must not remove it.
+    let preserved = folders.private.join("preserved-foreign.json");
+    std::fs::rename(&foreign, &preserved).unwrap();
+    partial.cleanup().unwrap();
+    assert!(partial.file.is_none());
+    assert!(!quarantine.exists());
+    assert_eq!(
+        std::fs::read(&preserved).unwrap(),
+        b"preserve foreign content"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn native_export_unlinked_writer_does_not_adopt_a_replaced_quarantine() {
+    let folders = Folders::new();
+    let target = folders.private.join("partial.json");
+    let mut partial = folders.owned(&target);
+    assert!(
+        partial
+            .cleanup_with(|point| {
+                if point == files::CleanupPoint::BeforeMove {
+                    std::fs::remove_file(&target)?;
+                }
+                Ok(())
+            })
+            .is_err()
+    );
+    let quarantine = partial.quarantine_path().unwrap().to_path_buf();
+    let moved = folders.private.join("retained-owned-quarantine");
+    std::fs::rename(&quarantine, &moved).unwrap();
+    drmr_core::native::create_private_dir_new(&quarantine).unwrap();
+    let foreign = quarantine.join("sentinel");
+    drmr_core::native::create_private_new(&foreign)
+        .unwrap()
+        .write_all(b"unfamiliar folder")
+        .unwrap();
+    assert!(partial.cleanup().is_err());
+    assert!(partial.file.is_some());
+    assert!(moved.exists());
+    assert_eq!(std::fs::read(&foreign).unwrap(), b"unfamiliar folder");
+    // Restore only the fixture-owned namespace, then retry the same owner.
+    let preserved = folders.private.join("preserved-replacement");
+    std::fs::rename(&quarantine, &preserved).unwrap();
+    std::fs::rename(&moved, &quarantine).unwrap();
+    partial.cleanup().unwrap();
+    assert!(partial.file.is_none());
+    assert!(!quarantine.exists());
+    assert_eq!(
+        std::fs::read(preserved.join("sentinel")).unwrap(),
+        b"unfamiliar folder"
+    );
+}
+
 #[test]
 fn native_export_replaced_leaf_is_preserved_during_cleanup() {
     let folders = Folders::new();

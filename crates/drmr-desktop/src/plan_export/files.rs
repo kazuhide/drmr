@@ -272,9 +272,15 @@ impl OwnedFile {
         if self.cleanup_phase == CleanupPhase::Original {
             if let Err(error) = self.check_leaf() {
                 #[cfg(unix)]
-                if error.kind() == io::ErrorKind::NotFound && self.quarantine.is_none() {
+                if error.kind() == io::ErrorKind::NotFound {
                     use std::os::unix::fs::MetadataExt;
                     if self.file.as_ref().ok_or_else(refused)?.metadata()?.nlink() == 0 {
+                        // A pre-move unlink can leave an empty owned quarantine.
+                        // Retire only its verified empty directory before release.
+                        if let Some(quarantine) = self.quarantine.as_mut() {
+                            quarantine.retire(parent)?;
+                        }
+                        self.quarantine = None;
                         self.file = None;
                         self.cleanup_phase = CleanupPhase::Finished;
                         return Ok(());

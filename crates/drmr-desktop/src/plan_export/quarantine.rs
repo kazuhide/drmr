@@ -21,6 +21,7 @@ const ENTRY: &str = "entry";
 
 /// No Drop cleanup: an unconfirmed entry must remain intact for an owned retry.
 pub(super) struct Quarantine {
+    #[cfg(unix)]
     name: OsString,
     #[cfg(any(windows, test))]
     path: PathBuf,
@@ -43,6 +44,7 @@ impl Quarantine {
         Self {
             #[cfg(any(windows, test))]
             path: parent.path.join(&name),
+            #[cfg(unix)]
             name,
             created: false,
             file: None,
