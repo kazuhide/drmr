@@ -39,7 +39,8 @@ pub enum ChildSource {
     Local {
         input_file: PathBuf,
     },
-    HlsUrl {
+    #[serde(alias = "hls-url")]
+    Url {
         url: String,
         download_dir: PathBuf,
         #[serde(deserialize_with = "required_nullable")]
@@ -136,7 +137,7 @@ impl ChildRequest {
             } => absolute(input_file),
             ChildOperation::Analyze {
                 source:
-                    ChildSource::HlsUrl {
+                    ChildSource::Url {
                         url,
                         download_dir,
                         fetch_policy_file,
@@ -318,6 +319,23 @@ impl<'de> Deserialize<'de> for UniqueJson {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn source_urls_share_one_canonical_kind_and_accept_the_legacy_hls_alias() {
+        let directory = std::env::temp_dir().join("retained-source");
+        for file in ["master.m3u8", "manifest.mpd", "source.mp4"] {
+            for kind in ["url", "hls-url"] {
+                let source = serde_json::json!({"kind":kind,
+                    "url":format!("https://example.invalid/{file}"),
+                    "download_dir":directory,"fetch_policy_file":null});
+                let parsed: ChildSource =
+                    decode(&serde_json::to_vec(&source).unwrap(), REQUEST_LIMIT).unwrap();
+                assert!(matches!(parsed, ChildSource::Url { .. }));
+                let mut canonical = source;
+                canonical["kind"] = "url".into();
+                assert_eq!(serde_json::to_value(parsed).unwrap(), canonical);
+            }
+        }
+    }
     #[test]
     fn duplicate_decoded_keys_are_rejected_at_every_depth() {
         for raw in [r#"{"a":{"x":1,"x":2}}"#, r#"{"a":[{"x":1,"\u0078":2}]}"#] {

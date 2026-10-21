@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 #[derive(Args)]
 pub struct ConvertArgs {
-    /// Local source media or a completed supported HLS URL. The source is never overwritten.
+    /// Local source media or a supported HLS, static DASH, or MP4 URL. The source is never overwritten.
     #[arg(required_unless_present = "plan", conflicts_with = "plan")]
     pub input: Option<PathBuf>,
     /// Execute the exact source and media intent in a saved plan; keys stay separate.
@@ -183,9 +183,9 @@ fn error_hint(code: &str) -> Option<&'static str> {
         "download-output-overlap" => {
             Some("Choose separate download and output paths; neither may contain the other.")
         }
-        "download-directory-exists" => {
-            Some("Choose a new --download-dir, or convert its saved input.m3u8 as local input.")
-        }
+        "download-directory-exists" => Some(
+            "Choose a new --download-dir, or convert the retained input.m3u8, input.mpd, or input.mp4 as local input.",
+        ),
         "download-destination-unsafe" => Some(
             "Choose new download and output paths whose immediate parent directories already exist.",
         ),
@@ -196,13 +196,13 @@ fn error_hint(code: &str) -> Option<&'static str> {
             "Check network access, allowed origins, authentication, and fetch limits in --fetch-policy.",
         ),
         "download-source-not-supported" => Some(
-            "URL input requires completed HLS with supported TS or fragmented MP4 media and encryption declarations. Supply input keys separately; key and license URIs are never fetched. See docs/conversion-support.md.",
+            "URL input requires supported completed HLS, single-Period static DASH using SegmentTemplate with a finite SegmentTimeline, or self-contained MP4. Supply input keys separately; key and license URIs are never fetched. See docs/conversion-support.md.",
         ),
         "download-source-changed" => Some(
             "The retained source changed or became unavailable. Inspect it and choose a new download directory before retrying the URL.",
         ),
         "download-graph-limit" => Some(
-            "The playlist references exceed the bounded URL acquisition profile. See docs/media-processing.md.",
+            "The source references exceed the bounded URL acquisition profile. See docs/media-processing.md.",
         ),
         "download-cleanup-unconfirmed" => Some(
             "Partial source cleanup could not be confirmed. Inspect the chosen download directory before retrying.",
@@ -388,7 +388,7 @@ fn execute_conversion(
     let downloaded = match input {
         crate::download_cli::Input::Url(url) => {
             progress.mark("acquisition");
-            let source = command.download_hls(
+            let source = command.download_source(
                 url,
                 args.download_dir
                     .as_deref()
@@ -438,12 +438,14 @@ fn execute_conversion(
         Some(source) => command.convert_downloaded(source, request),
         None => command.convert(request),
     }?;
-    let download = downloaded.as_ref().map(|source| serde_json::json!({
-        "directory": source.entrypoint().parent().expect("downloaded entrypoint has a parent").to_string_lossy(),
-        "entrypoint": source.entrypoint().to_string_lossy(),
-        "entrypoint_relative": "input.m3u8",
-        "retained": true
-    }));
+    let download = downloaded.as_ref().map(|source| {
+        serde_json::json!({
+            "directory": source.directory().to_string_lossy(),
+            "entrypoint": source.entrypoint().to_string_lossy(),
+            "entrypoint_relative": source.entrypoint_relative().to_string_lossy(),
+            "retained": true
+        })
+    });
     Ok((report, download))
 }
 

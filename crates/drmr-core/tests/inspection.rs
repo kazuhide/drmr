@@ -97,6 +97,30 @@ fn mp4_sample_descriptions_keep_their_own_schemes_keys_and_patterns() {
 }
 
 #[test]
+fn every_inspected_mp4_prefix_remains_a_single_frozen_source() {
+    use drmr_core::{concurrency::Stop, conversion::FrozenSource};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("source-without-extension");
+    for kind in [
+        b"ftyp", b"moov", b"styp", b"free", b"wide", b"mdat", b"sidx",
+    ] {
+        let metadata = movie(&[entry(None, false)]);
+        let bytes = if kind == b"moov" {
+            metadata
+        } else {
+            [atom(kind, &[]), metadata].concat()
+        };
+        std::fs::write(&path, &bytes).unwrap();
+        assert_eq!(inspect(&path).unwrap().format, InputFormat::Mp4);
+        let frozen = FrozenSource::capture(&path, &Stop::new())
+            .expect("an inspected MP4 prefix must remain a complete-file graph");
+        assert_eq!(frozen.inventory().files.len(), 1);
+        assert_eq!(std::fs::read(frozen.entrypoint()).unwrap(), bytes);
+        FrozenSource::from_inventory(frozen.inventory(), &Stop::new()).unwrap();
+    }
+}
+
+#[test]
 fn malformed_protection_does_not_turn_into_clear() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("input.mp4");

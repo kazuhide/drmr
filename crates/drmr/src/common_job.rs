@@ -197,7 +197,7 @@ pub(crate) fn run(path: &Path) -> ExitCode {
         ChildOperation::Analyze { source } => {
             let (input, download_dir, fetch_policy) = match source {
                 ChildSource::Local { input_file } => (input_file, None, None),
-                ChildSource::HlsUrl {
+                ChildSource::Url {
                     url,
                     download_dir,
                     fetch_policy_file,

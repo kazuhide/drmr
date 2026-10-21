@@ -13,8 +13,8 @@ additional to native Rust manifest linting and the complete internal media check
 For public-URL command examples, select an output protection in the
 [linked input/output matrix](https://kazuhide.github.io/drmr/#support). Each example
 covers acquisition, analysis, a saved execution plan, conversion and independent
-verification. HLS URLs are acquired by drmr; MP4 and DASH examples first save the
-source with an external download command.
+verification. All examples use `analyze URL --download-dir` to retain the source
+before planning; no separate download command is needed.
 
 ## HLS inputs and containers
 
@@ -52,37 +52,68 @@ the [narrower input profile below](#mpeg-transport-stream-input).
 
 ## URL input
 
-`analyze` can retain and fully check a supported completed HLS URL before you save
-an execution plan. `convert` can also acquire the URL and convert directly. This URL
-profile supports the same qualified TS/fMP4 media profiles described above;
-it does not extend their codec, track, or output limits. URL input requires
+`analyze` can retain and fully check a supported HLS, DASH or MP4 URL before you save
+an execution plan. `convert` can also acquire the URL and convert directly. The
+response content determines the format; a filename extension is not required.
+This does not extend the local codec, track, or output limits. URL input requires
 `--download-dir`, and the completed source is retained for offline conversion
 and independent verification. See the [four-stage saved-plan workflow](executable-plans.md)
 or [direct URL conversion and fetch settings](usage.md#convert-a-url).
 
-URL acquisition accepts clear TS/fMP4, AES-128 TS/fMP4, SAMPLE-AES TS, and CENC/CBCS
-fMP4 within the local profiles above. Supply input keys using `--keys-file`;
+| URL input | Acquisition profile | Retained local entrypoint |
+| --- | --- | --- |
+| MP4 | One complete MP4 file within the local media profiles | `input.mp4` |
+| DASH | Static MPD with one `Period`, `SegmentTemplate` addressing and an explicit finite `SegmentTimeline`; all referenced initialization and media files are saved | `input.mpd` |
+| HLS | Completed TS/fMP4 playlists within the profiles above | `input.m3u8` |
+
+HLS acquisition accepts clear TS/fMP4, AES-128 TS/fMP4, SAMPLE-AES TS, and CENC/CBCS
+fMP4. MP4 and DASH retain clear or encrypted bytes for the same local source
+checks. Supply input keys using `--keys-file`;
 encrypted media and initialization bytes are retained unchanged. Key URI
 resolution and input-key mapping are described in the [usage guide](usage.md#convert-a-url).
 The acquisition step does not fetch key or license URLs.
 
-Remote DASH, standalone MP4, live playlists, and byte ranges remain outside the
-current acquisition implementation. These exclusions describe drmr's current
-profile, not a technical impossibility of those formats.
+For DASH, drmr retains the original MPD and creates a local MPD whose media
+references point at the saved resources. Protection declarations, PSSH DRM
+initialization data and the explicit timeline are retained. Downloading the MPD
+alone is insufficient. The same origin, authentication and resource policies
+apply to every fetched format and to redirects.
 
-The URL regression uses ten seconds of Big Buck Bunny H.264 video: 240 encoded
-packets in five two-second segments. It checks both source containers:
+Live input, byte ranges, multiple DASH periods, `SegmentList`, `SegmentBase`,
+duration-only DASH templates and negative timeline repeats remain outside the
+current acquisition profile. These are implementation limits, rather than
+technical impossibilities of those formats.
+
+The URL regressions use ten-second Big Buck Bunny fixtures. The HLS cases use
+240 H.264 video packets in five two-second segments; MP4 uses one video track,
+and DASH uses separate video and audio tracks with two-second segment targets.
 
 | Downloaded input | Output | Result |
 | --- | --- | --- |
 | Clear HLS with MPEG-TS segments | CBCS fragmented MP4 HLS | Content and timing verified; offline retry verified |
 | Clear HLS with fragmented MP4 segments | CBCS fragmented MP4 HLS | Content and timing verified; offline retry verified |
+| MP4: clear, `cenc`, `cbcs` | CBCS DASH from clear input; clear DASH from encrypted input | All three cases passed analysis, offline saved-plan conversion and independent verification |
+| Static DASH: clear, `cenc`, `cbcs` | CBCS DASH from clear input; clear DASH from encrypted input | All three cases passed analysis, offline saved-plan conversion and independent verification |
 
-The tests compare the original playlist and resource bytes, preserve sequence
+The HLS cases compare the original playlist and resource bytes, preserve sequence
 numbers and duration text, and independently verify the output. They stop the
 source server before converting the saved input again. A separate failure case
 checks that a completed download survives a missing packaging tool without
 publishing output. These results do not establish DRM license or device playback.
+
+The six MP4/DASH cases require authentication and a query string for their local
+HTTP source. Each case runs `analyze URL --download-dir`, stops the server, saves
+a plan from `input.mp4` or `input.mpd`, executes `convert --plan`, and runs
+`verify --plan`. Encoded packets, timing and complete decoded content match the
+source. Saved-source fingerprints and output intent also match; original media
+and raw manifests remain unchanged. The cases check that credentials and keys
+are absent from stdout, stderr and the saved plan. `license_playback_verified`
+remains `false`. These six cases do not claim execution of every placeholder
+recipe or support for other DASH addressing profiles.
+
+```sh
+cargo test --locked -p drmr --test url_formats_media -- --nocapture
+```
 
 ## Sixteen-route protection regression
 

@@ -43,6 +43,15 @@ fn analyze_help_explains_full_input_checks_separately_from_inspect() {
     ] {
         assert!(help.contains(option), "{help}");
     }
+    for profile in [
+        "MP4",
+        "HLS",
+        "static DASH",
+        "SegmentTemplate",
+        "SegmentTimeline",
+    ] {
+        assert!(help.contains(profile), "{help}");
+    }
     let result = invoke(&["inspect", "--help"]);
     assert!(result.status.success());
     assert!(
@@ -54,12 +63,11 @@ fn analyze_help_explains_full_input_checks_separately_from_inspect() {
 
 #[test]
 fn analyze_url_requires_a_new_download_directory_before_acquisition() {
-    let result = invoke(&[
-        "analyze",
-        "https://example.invalid/stream.m3u8?confidential-sentinel",
-        "--json",
-    ]);
-    failure(&result, "analyze", "download-directory-required", 2);
+    for file in ["stream.m3u8", "manifest.mpd", "input.mp4"] {
+        let url = format!("https://example.invalid/{file}?confidential-sentinel");
+        let result = invoke(&["analyze", &url, "--json"]);
+        failure(&result, "analyze", "download-directory-required", 2);
+    }
 }
 
 #[test]

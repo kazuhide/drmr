@@ -1,6 +1,9 @@
 //! Discover references only from the manifest bytes already copied into the private graph.
 use super::{ConversionError, INVALID, LIMIT, MAX_FILES, cancelled, relative};
-use crate::concurrency::Stop;
+use crate::{
+    concurrency::Stop,
+    inspection::{self, InputFormat},
+};
 use std::{
     collections::BTreeSet,
     io::Read as _,
@@ -18,24 +21,22 @@ pub(super) fn walk(
     let count = super::super::files::regular_input(&stage.join(entrypoint))?
         .read(&mut prefix)
         .map_err(|_| INVALID)?;
-    if count >= 8 && matches!(&prefix[4..8], b"ftyp" | b"styp" | b"moov" | b"free") {
-        return Ok(());
-    }
-    let bytes = super::super::files::read_manifest(&stage.join(entrypoint))?;
-    let text = std::str::from_utf8(&bytes)
-        .map_err(|_| INVALID)?
-        .trim_start_matches('\u{feff}')
-        .trim_start();
-    if text.starts_with("#EXTM3U") {
-        let mut seen = BTreeSet::new();
-        hls(stage, entrypoint, stop, &mut ready, &mut seen, 0)
-    } else {
-        for path in super::super::dash::source_references(&bytes)? {
-            cancelled(stop)?;
-            let path = normalize(&path)?;
-            ready(&path)?;
+    match inspection::format_hint(&prefix[..count]) {
+        Some(InputFormat::Mp4) => Ok(()),
+        Some(InputFormat::Hls) => {
+            let mut seen = BTreeSet::new();
+            hls(stage, entrypoint, stop, &mut ready, &mut seen, 0)
         }
-        Ok(())
+        Some(InputFormat::Dash) => {
+            let bytes = super::super::files::read_manifest(&stage.join(entrypoint))?;
+            for path in super::super::dash::source_references(&bytes)? {
+                cancelled(stop)?;
+                let path = normalize(&path)?;
+                ready(&path)?;
+            }
+            Ok(())
+        }
+        None => Err(INVALID),
     }
 }
 

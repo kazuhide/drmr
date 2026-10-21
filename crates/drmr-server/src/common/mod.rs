@@ -141,7 +141,7 @@ impl CommonService {
         let source = match &s.source {
             Source::Local { .. } => json!({"kind":"local","label":"Local input"}),
             Source::SavedPlan { .. } => json!({"kind":"saved-plan","label":"Saved plan"}),
-            Source::HlsUrl { .. } => json!({"kind":"hls-url","label":"HLS URL"}),
+            Source::Url { .. } => json!({"kind":"url","label":"Source URL"}),
         };
         self.envelope(json!({"session_id":s.id,"creation_request_id":s.creation,"source":source,"plan_refs":s.plans,"request_ids":s.requests.keys().collect::<Vec<_>>(),"requests_used":s.requests.len(),"active_request_id":s.active}))
     }
@@ -177,7 +177,7 @@ impl CommonService {
             Source::SavedPlan { plan_file_ref } => {
                 Some(s.files.file(plan_file_ref, wire::Role::SavedPlan)?)
             }
-            Source::HlsUrl {
+            Source::Url {
                 url,
                 fetch_policy_ref,
             } => {

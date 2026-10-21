@@ -29,7 +29,7 @@
   }
 
   function safeLabel(source) {
-    if (source.kind === 'hls-url') return t('commonUrl');
+    if (source.kind === 'url' || source.kind === 'hls-url') return t('commonUrl');
     return source.kind === 'local' && source.label === 'Local input' ? t('commonLocalInput') : source.label;
   }
   function validName(name) { return typeof name === 'string' && /^[a-z][a-z0-9-]{0,31}$/.test(name) && !/^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/.test(name); }
@@ -59,7 +59,7 @@
     var title = word('h1', 'commonTitle', { id: 'common-title', tabindex: '-1' });
     var errorMessage = h('span'), errorCode = h('code');
     var error = h('div', { className: 'notice notice-fail', role: 'alert', hidden: true }, errorMessage, errorCode);
-    var sourceKind = h('select', { id: 'common-source-kind', onchange: updateSource }, options([{ value: 'local', key: 'commonLocal' }, { value: 'hls-url', key: 'commonUrl' }, { value: 'saved-plan', key: 'commonSavedPlan' }])); sourceKind.value = 'local';
+    var sourceKind = h('select', { id: 'common-source-kind', onchange: updateSource }, options([{ value: 'local', key: 'commonLocal' }, { value: 'url', key: 'commonUrl' }, { value: 'saved-plan', key: 'commonSavedPlan' }])); sourceKind.value = 'local';
     var media = selectionField('commonMedia', 'media', function () { return source.media; }, function (v) { source.media = v; }, 'commonFileHelp');
     var saved = selectionField('commonPlanFile', 'saved-plan', function () { return source.plan; }, function (v) { source.plan = v; }, 'commonFileHelp');
     var fetch = selectionField('commonFetch', 'fetch-policy', function () { return source.fetch; }, function (v) { source.fetch = v; }, 'commonFetchHelp', true);
@@ -67,7 +67,7 @@
     var urlField = field('commonUrlLabel', url, 'commonUrlHelp');
     var open = button('common-open', 'commonOpen', function () {
       if (!validSource()) return;
-      var value = sourceKind.value === 'local' ? { kind: 'local', input_ref: source.media.ref } : sourceKind.value === 'saved-plan' ? { kind: 'saved-plan', plan_file_ref: source.plan.ref } : { kind: 'hls-url', url: url.value.trim(), fetch_policy_ref: source.fetch ? source.fetch.ref : null };
+      var value = sourceKind.value === 'local' ? { kind: 'local', input_ref: source.media.ref } : sourceKind.value === 'saved-plan' ? { kind: 'saved-plan', plan_file_ref: source.plan.ref } : { kind: 'url', url: url.value.trim(), fetch_policy_ref: source.fetch ? source.fetch.ref : null };
       url.value = ''; model.createSession(value); value = null; updateSource();
     }, true);
     var newInput = h('section', { className: 'common-section', 'aria-labelledby': 'common-input-title' },
@@ -132,8 +132,8 @@
     }
     function updateSource() {
       media.node.hidden = sourceKind.value !== 'local'; saved.node.hidden = sourceKind.value !== 'saved-plan';
-      urlField.hidden = sourceKind.value !== 'hls-url'; fetch.node.hidden = sourceKind.value !== 'hls-url';
-      if (sourceKind.value !== 'hls-url') url.value = '';
+      urlField.hidden = sourceKind.value !== 'url'; fetch.node.hidden = sourceKind.value !== 'url';
+      if (sourceKind.value !== 'url') url.value = '';
       open.disabled = !model.snapshot().capabilities || !!model.snapshot().creation || !validSource();
       media.update(); saved.update(); fetch.update();
     }

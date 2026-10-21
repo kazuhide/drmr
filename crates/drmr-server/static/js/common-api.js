@@ -18,7 +18,7 @@
   function error(v) { return object(v) && typeof v.code === 'string' && /^[a-z0-9][a-z0-9-]{0,127}$/.test(v.code) && nullable(v.last_activity, function (x) { return one(x, ACTIVITIES); }) && nullable(v.job_id, token); }
   function progress(v) { return object(v) && integer(v.sequence, Number.MAX_SAFE_INTEGER) && integer(v.elapsed_ms, Number.MAX_SAFE_INTEGER) && integer(v.scopes_started, Number.MAX_SAFE_INTEGER) && integer(v.scopes_closed, Number.MAX_SAFE_INTEGER) && nullable(v.last_activity, function (x) { return one(x, ACTIVITIES); }) && nullable(v.workers, function (x) { return integer(x, 64) && x > 0; }); }
   function session(v) {
-    if (!envelope(v) || !token(v.session_id) || !correlation(v.creation_request_id) || !object(v.source) || !one(v.source.kind, ['local', 'hls-url', 'saved-plan'])) return false;
+    if (!envelope(v) || !token(v.session_id) || !correlation(v.creation_request_id) || !object(v.source) || !one(v.source.kind, ['local', 'url', 'hls-url', 'saved-plan'])) return false;
     return label(v.source.label) && Array.isArray(v.plan_refs) && v.plan_refs.every(token) && Array.isArray(v.request_ids) && v.request_ids.every(correlation) && integer(v.requests_used, 32) && nullable(v.active_request_id, correlation);
   }
   function job(v) {

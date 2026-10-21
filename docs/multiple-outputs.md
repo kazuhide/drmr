@@ -138,6 +138,11 @@ drmr analyze "https://example.com/vod/master.m3u8" --download-dir ./source --jso
 drmr plan ./source/input.m3u8 --outputs ./outputs.json --output ./result --save ./conversion.plan.json --json
 ```
 
+The same acquisition command accepts a supported MP4 or static DASH URL; use
+`source/input.mp4` or `source/input.mpd` for the plan. Explicit multi-DRM output
+still requires its qualified clear TS HLS or clear MP4 source. Download support
+does not widen that media profile. See [URL input](conversion-support.md#url-input).
+
 The output list describes the requested outputs. The saved execution plan fixes
 the qualified original files, their sizes and SHA-256 fingerprints, the result
 directory, every output format and protection scheme, the DRM system selections,

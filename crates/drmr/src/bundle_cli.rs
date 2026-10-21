@@ -473,7 +473,7 @@ pub fn convert_direct(args: &ConvertArgs) -> ExitCode {
             }
             Input::Url(url) => {
                 session.progress.mark("acquisition");
-                let downloaded = converter.download_hls(
+                let downloaded = converter.download_source(
                     url,
                     args.download_dir
                         .as_deref()

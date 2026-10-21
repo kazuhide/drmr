@@ -58,7 +58,7 @@ drmr verify --help
 
 `inspect` reads local MP4 metadata or DASH/HLS declarations without keys or external tools. `analyze` checks complete source media and identifies candidate output formats. Without `--save`, `plan INPUT --to ...` describes conditional intent from metadata. `plan --mpd` keeps the original prepared-DASH rendition listing.
 
-To retain a supported completed HLS URL, save fixed conversion conditions, execute them offline,
+To retain a supported HLS, static DASH or MP4 URL, save fixed conversion conditions, execute them offline,
 and verify against the retained original:
 
 ```sh
@@ -72,7 +72,9 @@ Use a private [key configuration](docs/usage.md#separate-input-and-output-keys)
 with an output key for CBCS. A saved plan contains source fingerprints and the
 requested output intent, with runtime keys supplied separately. See the
 [four-step guide](docs/executable-plans.md) for supported input, result checks,
-source retention, and the difference from metadata-only planning.
+source retention, and the difference from metadata-only planning. Replace the
+example URL with a DASH MPD or MP4 URL and use `source/input.mpd` or
+`source/input.mp4` for the plan. URL format detection uses the response content.
 
 For HLS FairPlay and DASH Widevine/PlayReady from the same supported clear
 transport-stream source, save an [output list](docs/multiple-outputs.md) and use
@@ -90,7 +92,7 @@ report scopes, and optional tool setup.
 
 Use `convert INPUT --to ... --format ... --output ...` with a protected key configuration, then `verify OUTPUT --source INPUT` for independent comparison. See [conversion support](docs/conversion-support.md) for the tested protection routes, TS output options, and precise input profiles.
 
-For a supported completed HLS URL, use `convert URL --download-dir ./source` with the target and output options below. The saved source can be reused offline. The existing `run` path processes prepared DASH assets; `analyze-hls` and `package-hls` remain as legacy commands for saved snapshots and their supported subtitle profiles. Use the common commands for new multi-output DRM workflows. See the [usage guide](docs/usage.md) for configuration examples, the expected local layout, key handling, and output.
+For a supported HLS, static DASH or MP4 URL, use `convert URL --download-dir ./source` with the target and output options below. The saved source can be reused offline. DASH acquisition requires one static Period, SegmentTemplate addressing and an explicit finite SegmentTimeline; live input, byte ranges and other DASH addressing profiles are outside this acquisition profile. The existing `run` path processes prepared DASH assets; `analyze-hls` and `package-hls` remain as legacy commands for saved snapshots and their supported subtitle profiles. Use the common commands for new multi-output DRM workflows. See the [usage guide](docs/usage.md) for configuration examples, the expected local layout, key handling, and output.
 
 The common converter can also write explicit Widevine/PlayReady DASH and
 FairPlay HLS information for qualified clear transport-stream HLS and clear MP4.
@@ -113,7 +115,7 @@ drmr packages supplied media and signaling. It does not provide a DRM license se
 | --- | --- |
 | `doctor` | Discover tools; add `--probe` for version and option checks, or `--json` for scripts |
 | `inspect` | Read local MP4, DASH, or HLS metadata; use `--json` for scripts |
-| `analyze` | Check complete local media or retain and check a supported HLS URL with `--download-dir`; encrypted input uses `--keys-file` |
+| `analyze` | Check complete local media or retain and check a supported HLS, static DASH or MP4 URL with `--download-dir`; encrypted input uses `--keys-file` |
 | `plan` | Describe conditional intent; add `--save` and `--output` for an executable plan; `--outputs` selects named outputs; `--mpd` lists prepared DASH renditions |
 | `convert` | Convert media directly or execute a saved plan with `--plan`; `--outputs` selects several outputs without saving a plan |
 | `verify` | Compare result media with its original source; `--plan` also checks source identity and output intent; `--manifest-only` runs the native HLS/DASH linter; `--external-validator` adds external checks |

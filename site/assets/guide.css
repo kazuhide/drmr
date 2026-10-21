@@ -27,9 +27,9 @@
 .guide-example code { display: block; width: max-content; min-width: 100%; }
 .guide-example[data-code-language="json"] pre { white-space: pre-wrap; }
 .guide-example[data-code-language="json"] code { width: auto; min-width: 0; overflow-wrap: anywhere; }
-.guide-table-scroll { max-width: 100%; min-width: 0; max-block-size: min(65vh, 36rem); overflow: auto; margin: 24px 0; scroll-margin-block: 16px; }
+.guide-table-scroll { container-type: inline-size; max-width: 100%; min-width: 0; max-block-size: min(65vh, 36rem); overflow: auto; margin: 24px 0; scroll-margin-block: 16px; }
 .guide-table-scroll table { width: 100%; min-width: 34rem; border-collapse: collapse; font-size: 14px; line-height: 1.65; }
-.guide-table-scroll caption { padding: 8px 0; text-align: left; color: var(--secondary); font-size: 13px; }
+.guide-table-scroll caption { box-sizing: border-box; inline-size: 100cqw; padding: 8px 0; text-align: left; color: var(--secondary); font-size: 13px; overflow-wrap: anywhere; }
 .guide-table-scroll th, .guide-table-scroll td { padding: 10px 12px; border: 1px solid var(--rule); text-align: left; vertical-align: top; overflow-wrap: anywhere; }
 .guide-table-scroll th { font-weight: 600; background: var(--canvas); }
 .guide-table-scroll td { background: var(--canvas); }

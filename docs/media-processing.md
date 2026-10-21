@@ -146,11 +146,16 @@ targets; unrelated files in the source directory are not included in the graph.
 
 ## Acquiring URL input
 
-For a supported HLS URL, `convert` first retains the original playlists and
-resources in the chosen download directory. A separate local entrypoint rewrites
-resource references while preserving playlist declarations, duration text,
-sequence numbers, and rendition associations. The source is not reconstructed
-from a probe summary, which could lose those facts.
+For a supported HLS, static DASH or MP4 URL, `analyze` and direct `convert` retain
+the complete source in the chosen download directory. Content detection selects
+`input.m3u8`, `input.mpd` or `input.mp4` as the local entrypoint. HLS localization
+preserves playlist declarations, duration text, sequence numbers and rendition
+associations. DASH localization preserves protection declarations, PSSH and the
+explicit finite timeline while pointing at the downloaded initialization and
+media resources. Original manifest bytes are retained separately. MP4 bytes are
+saved unchanged. The source is not reconstructed from a probe summary, which
+could lose those facts. See the [URL input profile](conversion-support.md#url-input)
+for the accepted manifest addressing and media conditions.
 
 Conversion and verification then use those same local bytes. They do not fetch
 the URL again for comparison: a server can change between requests. The saved
@@ -162,7 +167,7 @@ acquisition is removed only after active work has stopped.
 Cancellation interrupts active response reads. Name resolution and connection
 setup may wait for the operating system or request timeout before stopping.
 
-Acquisition caps each playlist at 4 MiB, the combined playlist and media resource
+Acquisition caps each manifest at 4 MiB, the combined manifest and media resource
 count at 100,000, and planned text and URL metadata at 16 MiB. URI expansion is
 checked before constructing the reference graph. Fetch settings can impose
 additional lower limits; increasing a setting does not bypass the profile. Resource

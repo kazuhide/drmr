@@ -73,14 +73,19 @@ test('named output rows are capped at eight and keep editing values when another
   assert.equal(h.descendants(h.host).filter(node => node.dataset && node.dataset.outputRow).length, 8);
   assert.equal(first.value, 'keep-me'); assert.equal(h.find('common-output-1-id'), first);
 });
-test('a submitted source URL is cleared before its unresolved registration completes', () => {
-  const h = harness();
-  h.data.selectedId = null; h.view.newInput();
-  const kind = h.find('common-source-kind'); kind.value = 'hls-url'; kind.dispatch('change');
-  const url = h.find('common-url'); url.value = 'https://example.invalid/list.m3u8?secret=sentinel'; url.dispatch('input');
-  h.find('common-open').dispatch('click');
-  assert.equal(h.opened.length, 1); assert.equal(h.opened[0].kind, 'hls-url'); assert.equal(url.value, '');
-  assert.equal(h.descendants(h.host).some(node => String(node.textContent).includes('sentinel')), false);
+test('HLS, DASH and MP4 URLs use one source selection and clear before registration completes', () => {
+  for (const file of ['list.m3u8', 'manifest.mpd', 'source.mp4']) {
+    const h = harness();
+    h.data.selectedId = null; h.view.newInput();
+    const kind = h.find('common-source-kind'); kind.value = 'url'; kind.dispatch('change');
+    assert.ok(kind.children.some(node => node.value === 'url'));
+    const url = h.find('common-url'); url.value = 'https://example.invalid/' + file + '?secret=sentinel'; url.dispatch('input');
+    h.find('common-open').dispatch('click');
+    assert.equal(h.opened.length, 1); assert.equal(h.opened[0].kind, 'url');
+    assert.equal(h.opened[0].url, 'https://example.invalid/' + file + '?secret=sentinel');
+    assert.equal(url.value, '');
+    assert.equal(h.descendants(h.host).some(node => String(node.textContent).includes('sentinel')), false);
+  }
 });
 
 test('URL session navigation and ownership use a localized label without any source path', () => {
@@ -121,11 +126,13 @@ test('local label translation preserves custom labels and the fixed private URL 
       h.view.translate();
       assert.equal(sourceLabel(), source.label);
     }
-    h.record.session.source = { kind: 'hls-url', label: 'PRIVATE_LABEL', display_url: 'https://source.invalid/PRIVATE_SOURCE' };
-    h.view.translate();
-    assert.equal(sourceLabel(), language === 'ja' ? 'HLS VOD の URL' : 'HLS VOD URL');
-    const nodes = [h.host, h.nav, h.global].flatMap(h.descendants);
-    assert.equal(nodes.some(node => /PRIVATE_/.test(node.textContent)), false);
+    for (const kind of ['url', 'hls-url']) {
+      h.record.session.source = { kind, label: 'PRIVATE_LABEL', display_url: 'https://source.invalid/PRIVATE_SOURCE' };
+      h.view.translate();
+      assert.equal(sourceLabel(), language === 'ja' ? '入力 URL' : 'Source URL');
+      const nodes = [h.host, h.nav, h.global].flatMap(h.descendants);
+      assert.equal(nodes.some(node => /PRIVATE_/.test(node.textContent)), false);
+    }
   }
 });
 

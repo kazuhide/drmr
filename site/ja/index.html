@@ -107,9 +107,9 @@
         <a class="text-link" href="https://github.com/kazuhide/drmr/blob/main/docs/conversion-support.md">対応範囲と制約を読む（英語）</a>
       </div>
       <aside class="url-note" aria-labelledby="url-title">
-        <h3 id="url-title">HLS の URL を入力に使う場合</h3>
-        <p>配信内容が確定した HLS を URL から取得できます。TS と fMP4 の対応条件は<a href="guide/">日本語ガイド</a>に記載しています。入力が暗号化されている場合は <code>--keys-file</code> で入力鍵を指定します。原本は <code>--download-dir</code> に保存され、取得後はオフラインでの変換や再検証に使えます。鍵 URI の参照先やライセンスは取得しません。リモートの MP4・DASH、ライブ配信、バイト範囲指定を使った取得は現在の対応範囲に含まれません。</p>
-        <a href="https://github.com/kazuhide/drmr/blob/main/docs/usage.md#convert-a-url">HLS の取得・変換手順（英語）</a>
+        <h3 id="url-title">URL を入力に使う場合</h3>
+        <p><code>analyze URL --download-dir</code> で、対応条件を満たす MP4・static DASH・配信が完結した HLS を取得して解析できます。DASH は、一つの Period と SegmentTemplate、有限の SegmentTimeline を持つ構成が対象です。暗号化入力には <code>--keys-file</code> で入力鍵を指定します。鍵 URI やライセンスは取得しません。保存した原本はオフラインでの計画・変換・再検証に使えます。詳しい条件は<a href="guide/">日本語ガイド</a>に記載しています。ライブ、バイト範囲指定、その他の DASH 参照方式は現在の取得機能の対象外です。</p>
+        <a href="https://github.com/kazuhide/drmr/blob/main/docs/usage.md#convert-a-url">URL の取得・変換手順（英語）</a>
       </aside>
     </section>
 

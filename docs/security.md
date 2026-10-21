@@ -32,7 +32,14 @@ drmr processes media with keys supplied by the operator. It does not obtain DRM 
 
 A license URL can also be encoded inside a Protection System Specific Header (PSSH), which is DRM initialization metadata stored in a media file or manifest. Hexadecimal and Base64 are reversible encodings, not encryption. Masking a URL only in its readable form is insufficient. Known signaling values are removed from diagnostic records, while the intended signaling remains in the media output.
 
-Do not place confidential tokens in an output license URL or key URI unless publishing that address is intended. Keep signed input playlists and retained downloads private: their original contents can contain credentials or signed URLs.
+Do not place confidential tokens in an output license URL or key URI unless publishing that address is intended. Keep signed input manifests and retained downloads private: original HLS playlists and DASH MPDs can contain credentials or signed URLs.
+
+HLS, DASH and MP4 URL input use the same fetch policy. Request headers are sent
+only to their configured origin, and redirects and media references must pass
+the origin and resource checks. Acquisition does not fetch advertised keys or
+licenses and does not decrypt media. It streams resources into private files;
+decryption and media admission use separately supplied keys afterward. The
+download summary includes local paths, not the source URL or request headers.
 
 ## Input and diagnostic handling
 
@@ -58,7 +65,7 @@ SHA-256 fingerprints, and one output location and media intent. It contains no
 keys, initialization vectors, key or license addresses, request headers, source
 URLs, or executable commands. Keys and optional output signaling are read
 separately at runtime. Paths and fingerprints can identify an asset, so saved
-plans are private files too. The original downloaded playlists may contain
+plans are private files too. The original downloaded manifests may contain
 signed URLs even though the plan does not.
 
 The plan digest detects edits, not a malicious author who can calculate another

@@ -217,6 +217,42 @@ pub(crate) fn read_manifest(path: &Path) -> Result<Vec<u8>, InspectionError> {
     Ok(bytes)
 }
 
+/// Hint from at most 64 leading bytes; ordinary parsers still validate the complete source.
+/// XML-like text can contain incidental MP4 box names. XML-forbidden controls
+/// in the binary size field instead keep its MP4 interpretation; later payload
+/// bytes cannot change this choice. Streaming callers wait for eight bytes before
+/// choosing a format-specific body budget.
+pub(crate) fn format_hint(prefix: &[u8]) -> Option<InputFormat> {
+    let prefix = &prefix[..prefix.len().min(64)];
+    let text = prefix
+        .strip_prefix(b"\xef\xbb\xbf")
+        .unwrap_or(prefix)
+        .trim_ascii_start();
+    let size_field = &prefix[..prefix.len().min(4)];
+    if text.starts_with(b"<")
+        && !size_field
+            .iter()
+            .any(|byte| *byte < 0x20 && !matches!(byte, b'\t' | b'\n' | b'\r'))
+    {
+        return Some(InputFormat::Dash);
+    }
+    if prefix.get(4..8).is_some_and(|kind| {
+        matches!(
+            kind,
+            b"ftyp" | b"moov" | b"styp" | b"free" | b"wide" | b"mdat" | b"sidx"
+        )
+    }) {
+        return Some(InputFormat::Mp4);
+    }
+    if text.starts_with(b"#EXTM3U") {
+        Some(InputFormat::Hls)
+    } else if text.starts_with(b"<") {
+        Some(InputFormat::Dash)
+    } else {
+        None
+    }
+}
+
 /// Detect and inspect a local file by its contents, without keys or external processes.
 pub fn inspect(path: &Path) -> Result<Inspection, InspectionError> {
     if path.to_string_lossy().contains("://") {
@@ -231,21 +267,70 @@ pub fn inspect(path: &Path) -> Result<Inspection, InspectionError> {
     let count = file
         .read(&mut prefix)
         .map_err(|_| InspectionError("input-unreadable"))?;
-    let prefix = &prefix[..count];
-    let text = prefix.strip_prefix(b"\xef\xbb\xbf").unwrap_or(prefix);
-    let text = text.trim_ascii_start();
-    if text.starts_with(b"#EXTM3U") {
-        manifests::inspect_hls(path, &read_manifest(path)?)
-    } else if text.starts_with(b"<") {
-        manifests::inspect_dash(&read_manifest(path)?)
-    } else if prefix.get(4..8).is_some_and(|kind| {
-        matches!(
-            kind,
-            b"ftyp" | b"moov" | b"styp" | b"free" | b"wide" | b"mdat" | b"sidx"
-        )
-    }) {
-        container::inspect_mp4(path)
-    } else {
-        Err(InspectionError("unrecognized-input"))
+    match format_hint(&prefix[..count]) {
+        Some(InputFormat::Mp4) => container::inspect_mp4(path),
+        Some(InputFormat::Hls) => manifests::inspect_hls(path, &read_manifest(path)?),
+        Some(InputFormat::Dash) => manifests::inspect_dash(&read_manifest(path)?),
+        None => Err(InspectionError("unrecognized-input")),
+    }
+}
+
+#[cfg(test)]
+mod format_tests {
+    use super::{InputFormat, format_hint};
+
+    #[test]
+    fn binary_mp4_box_types_precede_text_like_size_bytes() {
+        for kind in [
+            b"ftyp", b"moov", b"styp", b"free", b"wide", b"mdat", b"sidx",
+        ] {
+            for first in [0, b'#', b'<'] {
+                let bytes = [[first, 0, 0, 8].as_slice(), kind].concat();
+                assert_eq!(format_hint(&bytes), Some(InputFormat::Mp4));
+            }
+        }
+        assert_eq!(format_hint(b"\0\0\0\x08junk"), None);
+    }
+
+    #[test]
+    fn xml_comments_and_qualified_names_are_not_mp4_box_headers() {
+        for kind in [
+            b"ftyp", b"moov", b"styp", b"free", b"wide", b"mdat", b"sidx",
+        ] {
+            let comment = [b"<!--".as_slice(), kind, b" information-->\n<MPD/>"].concat();
+            assert_eq!(format_hint(&comment), Some(InputFormat::Dash));
+            let name = std::str::from_utf8(kind).unwrap();
+            let qualified =
+                format!("<abc{name}:MPD xmlns:abc{name}='urn:mpeg:dash:schema:mpd:2011'/>");
+            assert_eq!(format_hint(qualified.as_bytes()), Some(InputFormat::Dash));
+        }
+    }
+
+    #[test]
+    fn xml_like_headers_do_not_change_hint_when_later_payload_is_invalid_xml() {
+        let header = b"<!--wide";
+        let body = [header.as_slice(), b"\0 invalid XML payload"].concat();
+        assert_eq!(format_hint(header), Some(InputFormat::Dash));
+        assert_eq!(format_hint(&body), Some(InputFormat::Dash));
+        assert!(super::manifests::inspect_dash(&body).is_err());
+    }
+
+    #[test]
+    fn tiny_text_and_bom_prefixes_remain_valid_without_reading_past_the_bound() {
+        assert_eq!(format_hint(b"#EXTM3U"), Some(InputFormat::Hls));
+        assert_eq!(format_hint(b"<MPD/>"), Some(InputFormat::Dash));
+        assert_eq!(
+            format_hint(b"\xef\xbb\xbf \n#EXTM3U"),
+            Some(InputFormat::Hls)
+        );
+        assert_eq!(
+            format_hint(b"\xef\xbb\xbf \n<MPD/>"),
+            Some(InputFormat::Dash)
+        );
+        assert_eq!(format_hint(b"\xef\xbb"), None);
+        assert_eq!(
+            format_hint(&[vec![b' '; 64], b"<MPD/>".to_vec()].concat()),
+            None
+        );
     }
 }

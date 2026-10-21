@@ -1,6 +1,9 @@
 //! Private, byte-preserving VOD acquisition for the ordinary conversion pipeline.
 #[cfg(test)]
 mod bundle_tests;
+mod dash;
+mod input;
+use input::{Acquired, Entrypoint};
 mod owned;
 mod stream;
 use owned::OwnedDownload;
@@ -36,9 +39,17 @@ impl fmt::Debug for DownloadedSource {
     }
 }
 impl DownloadedSource {
+    /// The new private directory containing every retained original and local projection.
+    pub fn directory(&self) -> &Path {
+        self.seal.owned.path()
+    }
     /// The local projection; downloaded manifests remain unchanged in the private raw directory.
     pub fn entrypoint(&self) -> &Path {
         &self.entrypoint
+    }
+    /// The content-selected entrypoint name, relative to the retained directory.
+    pub fn entrypoint_relative(&self) -> &Path {
+        Path::new(self.seal.entrypoint)
     }
     /// Revalidate creation identities and every retained original without modifying them.
     pub fn check(&self, stop: &Stop) -> Result<(), ConversionError> {
@@ -49,6 +60,7 @@ impl DownloadedSource {
 pub(super) struct Seal {
     owned: OwnedDownload,
     files: BTreeMap<PathBuf, ([u8; 32], u64)>,
+    entrypoint: &'static str,
 }
 impl Seal {
     fn check(&self, stop: &Stop) -> Result<(), ConversionError> {
@@ -133,6 +145,25 @@ pub fn preflight_download_output(output: &Path) -> Result<(), ConversionError> {
 }
 
 impl Converter {
+    /// Retain a complete supported MP4, DASH, or HLS source for local analysis.
+    pub fn acquire_source(
+        &self,
+        url: &str,
+        directory: &Path,
+        policy: &FetchPolicy,
+    ) -> Result<DownloadedSource, ConversionError> {
+        self.acquire_source_inner(url, directory, None, policy, false)
+    }
+    /// Retain a supported URL source before converting into a distinct new output.
+    pub fn download_source(
+        &self,
+        url: &str,
+        directory: &Path,
+        output: &Path,
+        policy: &FetchPolicy,
+    ) -> Result<DownloadedSource, ConversionError> {
+        self.acquire_source_inner(url, directory, Some(output), policy, false)
+    }
     /// Fetch a complete supported HLS graph into a new directory, retaining original ciphertext.
     /// Key and license identifiers are retained, never fetched; conversion uses operator keys.
     pub fn download_hls(
@@ -142,7 +173,7 @@ impl Converter {
         output: &Path,
         policy: &FetchPolicy,
     ) -> Result<DownloadedSource, ConversionError> {
-        self.acquire_hls_inner(url, directory, Some(output), policy)
+        self.acquire_source_inner(url, directory, Some(output), policy, true)
     }
     /// Retain a complete supported VOD source before a future output location is chosen.
     /// Acquisition is key-free; local admission separately validates encrypted media with keys.
@@ -152,14 +183,15 @@ impl Converter {
         directory: &Path,
         policy: &FetchPolicy,
     ) -> Result<DownloadedSource, ConversionError> {
-        self.acquire_hls_inner(url, directory, None, policy)
+        self.acquire_source_inner(url, directory, None, policy, true)
     }
-    fn acquire_hls_inner(
+    fn acquire_source_inner(
         &self,
         url: &str,
         directory: &Path,
         output: Option<&Path>,
         policy: &FetchPolicy,
+        hls_only: bool,
     ) -> Result<DownloadedSource, ConversionError> {
         let _scope = self
             .backend
@@ -205,38 +237,36 @@ impl Converter {
             Some(output) => OwnedDownload::reserve(directory, output)?,
             None => OwnedDownload::reserve_source(directory)?,
         };
-        let result = self.acquire(url, &policy, budget.workers, &owned);
+        let result = self.acquire(url, &policy, budget.workers, &owned, hls_only);
         match result {
-            Ok(mut expected) => {
+            Ok(acquired) => {
                 // Publish the admission entrypoint only after all workers have joined.
-                let (projected, files) = (&mut expected.0, &mut expected.1);
-                let pending = (|| {
-                    let stage = files::Stage::new(owned.path().parent())?;
-                    let pending = stage.private_root().join("entrypoint");
-                    let writer = write_private(&pending, projected)?;
-                    let created = crate::native::FileIdentity::read(&writer).map_err(|_| IO)?;
-                    Ok((stage, pending, writer, created))
-                })();
-                let (stage, pending, writer, created) = match pending {
+                let mut pending = match acquired.contents.prepare(owned.path().parent()) {
                     Ok(pending) => pending,
                     Err(error) => {
                         owned.cleanup()?;
                         return Err(error);
                     }
                 };
-                let _stage = stage;
                 let mut seal = Seal {
                     owned,
-                    files: std::mem::take(files),
+                    files: acquired.files,
+                    entrypoint: acquired.entrypoint,
                 };
                 let commit = (|| {
                     seal.check(&self.backend.stop)?;
                     // Immutable validation denies WRITE/DELETE sharing on Windows.
                     // Keep the writer's identity, then close it before reopening the name.
-                    drop(writer);
-                    publish_entrypoint(&seal.owned, &pending, created, |_| {})?;
+                    drop(pending.writer.take());
+                    publish_entrypoint(
+                        &seal.owned,
+                        Path::new(seal.entrypoint),
+                        &pending.path,
+                        pending.created,
+                        |_| {},
+                    )?;
                     seal.files
-                        .insert(PathBuf::from("input.m3u8"), bytes_digest(projected));
+                        .insert(PathBuf::from(seal.entrypoint), pending.digest);
                     seal.check(&self.backend.stop)?;
                     Ok(())
                 })();
@@ -246,7 +276,7 @@ impl Converter {
                 }
                 seal.owned.retain();
                 Ok(DownloadedSource {
-                    entrypoint: seal.owned.path().join("input.m3u8"),
+                    entrypoint: seal.owned.path().join(seal.entrypoint),
                     seal: Arc::new(seal),
                 })
             }
@@ -278,6 +308,7 @@ impl Converter {
         policy: &FetchPolicy,
         workers: usize,
         owned: &OwnedDownload,
+        hls_only: bool,
     ) -> Result<Acquired, ConversionError> {
         for name in ["raw", "media"] {
             owned.create_dir(Path::new(name))?;
@@ -308,14 +339,23 @@ impl Converter {
             playlist_count: 0,
         };
         let result = (|| {
-            graph.playlist(url, true)?;
+            let (entrypoint, contents) = if hls_only {
+                graph.playlist(url, true)?;
+                (
+                    "input.m3u8",
+                    Entrypoint::Projection(std::mem::take(&mut graph.root_projection)),
+                )
+            } else {
+                graph.entrypoint(url)?
+            };
             graph.fetch_media(workers, &abort)?;
             let index = serde_json::to_vec(&graph.records).map_err(|_| IO)?;
             graph.save("raw/index.json", &index)?;
-            Ok((
-                std::mem::take(&mut graph.root_projection),
-                std::mem::take(&mut graph.expected),
-            ))
+            Ok(Acquired {
+                entrypoint,
+                contents,
+                files: std::mem::take(&mut graph.expected),
+            })
         })();
         // fetch_media's scoped pool has joined before this point, including failures.
         fetcher.close_all();
@@ -362,7 +402,7 @@ impl Converter {
         if let Some(seal) = &self.downloaded {
             seal.check(&self.backend.stop)?;
             if inventory.root != seal.owned.path().canonicalize().map_err(|_| CHANGED)?
-                || inventory.entrypoint != Path::new("input.m3u8")
+                || inventory.entrypoint != Path::new(seal.entrypoint)
                 || inventory.files.iter().any(|file| {
                     seal.files.get(&file.path).is_none_or(|(hash, size)| {
                         *size != file.bytes || hex::encode(hash) != file.sha256
@@ -428,14 +468,21 @@ fn write_registered(
 }
 fn publish_entrypoint(
     owned: &OwnedDownload,
+    name: &Path,
     pending: &Path,
     created: crate::native::FileIdentity,
     before_register: impl FnOnce(&Path),
 ) -> Result<(), ConversionError> {
-    let destination = owned.path().join("input.m3u8");
+    if !matches!(
+        name.to_str(),
+        Some("input.m3u8" | "input.mpd" | "input.mp4")
+    ) {
+        return Err(INVALID);
+    }
+    let destination = owned.path().join(name);
     files::atomic_move(pending, &destination)?;
     before_register(&destination);
-    owned.register_file(Path::new("input.m3u8"), created)
+    owned.register_file(name, created)
 }
 
 fn failure(error: &source::Failure) -> ConversionError {
@@ -446,7 +493,6 @@ fn failure(error: &source::Failure) -> ConversionError {
     }
 }
 type Expected = BTreeMap<PathBuf, ([u8; 32], u64)>;
-type Acquired = (Vec<u8>, Expected);
 fn bytes_digest(bytes: &[u8]) -> ([u8; 32], u64) {
     (Sha256::digest(bytes).into(), bytes.len() as u64)
 }
@@ -539,6 +585,14 @@ impl Graph<'_> {
         Ok(())
     }
     fn playlist(&mut self, url: &str, root: bool) -> Result<String, ConversionError> {
+        self.playlist_loaded(url, root, None)
+    }
+    fn playlist_loaded(
+        &mut self,
+        url: &str,
+        root: bool,
+        loaded: Option<(Vec<u8>, String)>,
+    ) -> Result<String, ConversionError> {
         valid_url(url)?;
         if let Some(node) = self.playlists.get(url) {
             if !root && node.master {
@@ -550,13 +604,15 @@ impl Graph<'_> {
         if self.playlist_count as u64 >= self.policy.max_playlists || self.playlist_count >= 65 {
             return Err(INVALID);
         }
-        let (body, effective) = self.fetcher.read(url, true, None).map_err(|error| {
-            if self.fetcher.stop().is_set() {
-                ConversionError("cancelled")
-            } else {
-                failure(&error)
-            }
-        })?;
+        let (body, effective) = loaded
+            .map_or_else(|| self.fetcher.read(url, true, None), Ok)
+            .map_err(|error| {
+                if self.fetcher.stop().is_set() {
+                    ConversionError("cancelled")
+                } else {
+                    failure(&error)
+                }
+            })?;
         valid_url(&effective)?;
         self.text_charge(
             body.len()
@@ -915,7 +971,13 @@ mod tests {
 
     #[test]
     fn saved_and_published_files_keep_their_writer_identity_until_registration() {
-        for name in ["raw/playlist.m3u8", "projection.m3u8", "input.m3u8"] {
+        for name in [
+            "raw/playlist.m3u8",
+            "projection.m3u8",
+            "input.m3u8",
+            "input.mpd",
+            "input.mp4",
+        ] {
             let parent = crate::native::private_tempdir().unwrap();
             let mut owned = OwnedDownload::reserve(
                 &parent.path().join("download"),
@@ -924,12 +986,12 @@ mod tests {
             .unwrap();
             owned.create_dir(Path::new("raw")).unwrap();
             let original = parent.path().join("original");
-            let result = if name == "input.m3u8" {
+            let result = if name.starts_with("input.") {
                 let pending = parent.path().join("pending");
                 let writer = write_private(&pending, b"original").unwrap();
                 let created = crate::native::FileIdentity::read(&writer).unwrap();
                 drop(writer);
-                publish_entrypoint(&owned, &pending, created, |path| {
+                publish_entrypoint(&owned, Path::new(name), &pending, created, |path| {
                     replace_before_registration(path, &original);
                 })
             } else {
@@ -1061,6 +1123,7 @@ mod tests {
             owned.retain();
             let seal = Arc::new(Seal {
                 owned,
+                entrypoint: "input.m3u8",
                 files: BTreeMap::from([(
                     PathBuf::from("original"),
                     bytes_digest(b"immutable source"),

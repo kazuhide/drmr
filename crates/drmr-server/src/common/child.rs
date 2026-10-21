@@ -230,12 +230,11 @@ fn prepare_operation(
             }
         }
         ChildOperation::Analyze {
-            source:
-                protocol::ChildSource::HlsUrl {
-                    url, download_dir, ..
-                },
+            source: protocol::ChildSource::Url {
+                url, download_dir, ..
+            },
         } => ChildOperation::Analyze {
-            source: protocol::ChildSource::HlsUrl {
+            source: protocol::ChildSource::Url {
                 url,
                 download_dir,
                 fetch_policy_file: fetch_policy,

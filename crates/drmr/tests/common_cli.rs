@@ -1,8 +1,12 @@
 //! The private bridge executes ordinary handlers without exposing their result on stdout.
+#[path = "support/download_http.rs"]
+mod download_http;
+
 use drmr_core::native::{self, PrivateTempDir};
 use drmr_server::common_protocol::{self, ChildProgress, ChildResult, OperationName};
 use serde_json::{Value, json};
 use std::{
+    collections::BTreeMap,
     io::Write as _,
     path::{Path, PathBuf},
     process::{Command, Output},
@@ -246,4 +250,169 @@ fn all_four_handlers_share_one_saved_bundle_plan_and_fresh_media_evidence() {
     std::fs::write(&manifest, bytes).unwrap();
     assert_eq!(std::fs::read(&source).unwrap(), original_source);
     assert_eq!(std::fs::read(&plan).unwrap(), saved_bytes);
+}
+
+fn bridge_url_fixture(root: &Path, dash: bool) -> BTreeMap<String, Vec<u8>> {
+    let source = root.join("source.mp4");
+    prepare_fragmented_video(&source);
+    if !dash {
+        return BTreeMap::from([("/source.mp4".into(), std::fs::read(source).unwrap())]);
+    }
+    let packaged = root.join("packaged");
+    native::create_private_dir_new(&packaged).unwrap();
+    let manifest = packaged.join("manifest.mpd");
+    let prepared = Command::new("packager")
+        .arg(format!(
+            "in={},stream=video,init_segment={},segment_template={}",
+            source.display(),
+            packaged.join("init.mp4").display(),
+            packaged.join("segment-$Number$.m4s").display()
+        ))
+        .args([
+            "--segment_duration",
+            "2",
+            "--fragment_duration",
+            "2",
+            "--generate_static_live_mpd",
+            "--mp4_reset_initial_composition_offset_to_zero=false",
+            "--mpd_output",
+        ])
+        .arg(&manifest)
+        .output()
+        .unwrap();
+    assert!(
+        prepared.status.success(),
+        "DASH bridge fixture generation failed"
+    );
+    let original = std::fs::read_to_string(&manifest).unwrap();
+    let mut projected = original.clone();
+    for attribute in ["initialization=\"init.mp4", "media=\"segment-$Number$.m4s"] {
+        let original = format!("{attribute}\"");
+        assert!(projected.contains(&original));
+        projected = projected.replace(
+            &original,
+            &format!("{attribute}?token={}\"", download_http::QUERY),
+        );
+    }
+    let mut files = BTreeMap::new();
+    for entry in std::fs::read_dir(&packaged).unwrap() {
+        let entry = entry.unwrap();
+        assert!(entry.file_type().unwrap().is_file());
+        let name = entry.file_name().to_str().unwrap().to_owned();
+        let bytes = if name == "manifest.mpd" {
+            projected.as_bytes().to_vec()
+        } else {
+            std::fs::read(entry.path()).unwrap()
+        };
+        files.insert(format!("/{name}"), bytes);
+    }
+    assert_eq!(
+        files.len(),
+        7,
+        "one MPD, one initialization, five media segments"
+    );
+    files
+}
+
+fn common_bridge_url_analysis(dash: bool) {
+    let (root, request) = setup();
+    let files = bridge_url_fixture(root.path(), dash);
+    let expected_requests = files.len();
+    let server = download_http::Server::start(files.clone());
+    let origin = server.origin.clone();
+    let name = if dash { "manifest.mpd" } else { "source.mp4" };
+    let url = format!("{}/{name}?token={}", server.origin, download_http::QUERY);
+    let policy = root.path().join("fetch.json");
+    native::create_private_new(&policy)
+        .unwrap()
+        .write_all(
+            json!({"allow_http":true,"allow_private_network":true,"attempts":1,
+            "headers_by_origin":{&server.origin:{"Authorization":download_http::AUTH}}})
+            .to_string()
+            .as_bytes(),
+        )
+        .unwrap();
+    let retained = root.path().join("retained");
+    let mut value: Value = serde_json::from_slice(&std::fs::read(&request).unwrap()).unwrap();
+    value["operation"] = json!({"kind":"analyze","source":{"kind":"url",
+        "url":url,"download_dir":retained,"fetch_policy_file":policy}});
+    native::create_private_or_truncate(&request)
+        .unwrap()
+        .write_all(value.to_string().as_bytes())
+        .unwrap();
+    let output = launch(&request);
+    let counts = server.stop();
+    assert_private_stdout(&output);
+    for bytes in [&output.stdout, &output.stderr] {
+        let text = String::from_utf8_lossy(bytes);
+        for secret in [
+            url.as_str(),
+            origin.as_str(),
+            download_http::AUTH,
+            download_http::QUERY,
+        ] {
+            assert!(
+                !text.contains(secret),
+                "source request secret in bridge output"
+            );
+        }
+    }
+    assert_eq!(output.status.code(), Some(0), "bridge URL analysis failed");
+    assert_eq!(counts.refused, 0);
+    assert_eq!(counts.served, expected_requests);
+    let result: ChildResult = common_protocol::decode(
+        &std::fs::read(root.path().join("result.json")).unwrap(),
+        common_protocol::RESULT_LIMIT,
+    )
+    .unwrap();
+    let payload = result.payload.to_string();
+    for secret in [
+        url.as_str(),
+        origin.as_str(),
+        download_http::AUTH,
+        download_http::QUERY,
+    ] {
+        assert!(
+            !payload.contains(secret),
+            "source request secret in bridge report"
+        );
+    }
+    assert_eq!(result.nonce, "a".repeat(32));
+    assert_eq!(result.operation, OperationName::Analyze);
+    assert_eq!(result.payload["input_admitted"], true);
+    assert_eq!(
+        result.payload["actual_format"],
+        if dash { "dash" } else { "mp4" }
+    );
+    let entrypoint = if dash { "input.mpd" } else { "input.mp4" };
+    let directory = retained.canonicalize().unwrap();
+    assert_eq!(result.payload["download"]["retained"], true);
+    assert_eq!(result.payload["download"]["directory"], json!(directory));
+    assert_eq!(
+        result.payload["download"]["entrypoint_relative"],
+        entrypoint
+    );
+    assert_eq!(
+        result.payload["download"]["entrypoint"],
+        json!(directory.join(entrypoint))
+    );
+    assert_eq!(result.payload["source"]["root"], json!(directory));
+    assert_eq!(result.payload["source"]["entrypoint"], entrypoint);
+    assert!(directory.join(entrypoint).is_file());
+    if !dash {
+        assert_eq!(
+            std::fs::read(directory.join(entrypoint)).unwrap(),
+            files["/source.mp4"]
+        );
+    }
+}
+
+#[test]
+fn common_bridge_mp4_url_retains_actual_media_without_exposing_request_secrets() {
+    common_bridge_url_analysis(false);
+}
+
+#[test]
+fn common_bridge_dash_url_retains_actual_media_without_exposing_request_secrets() {
+    common_bridge_url_analysis(true);
 }

@@ -150,6 +150,217 @@ fn policy() -> FetchPolicy {
         ..FetchPolicy::default()
     }
 }
+
+#[test]
+fn mp4_url_without_a_media_suffix_is_retained_byte_for_byte() {
+    let bytes = b"\0\0\0\x18ftypisom\0\0\0\0isomiso2\0\0\0\x10mdatcontent!";
+    let server = Server::new(BTreeMap::from([("/source.m3u8", bytes.to_vec())]));
+    let parent = tempfile::tempdir().unwrap();
+    let directory = parent.path().join("download");
+    let source = converter(Stop::new())
+        .acquire_source(&server.url(), &directory, &policy())
+        .expect("content, rather than the URL suffix, identifies an MP4");
+    assert_eq!(source.entrypoint().file_name().unwrap(), "input.mp4");
+    assert_eq!(std::fs::read(source.entrypoint()).unwrap(), bytes);
+    source.check(&Stop::new()).unwrap();
+    assert_eq!(*server.calls.lock().unwrap(), ["/source.m3u8"]);
+}
+
+#[test]
+fn dash_url_localizes_all_resources_and_preserves_the_raw_manifest() {
+    let xml = b"<MPD xmlns='urn:mpeg:dash:schema:mpd:2011' type='static' mediaPresentationDuration='PT4S'><Period><AdaptationSet><Representation id='v' bandwidth='10'><SegmentTemplate initialization='init.mp4' media='s$Number$.m4s' timescale='1'><SegmentTimeline><S d='2' r='1'/></SegmentTimeline></SegmentTemplate></Representation></AdaptationSet></Period></MPD>";
+    let server = Server::new(BTreeMap::from([
+        ("/source.m3u8", xml.to_vec()),
+        ("/init.mp4", vec![1; 16]),
+        ("/s1.m4s", vec![2; 16]),
+        ("/s2.m4s", vec![3; 16]),
+    ]));
+    let parent = tempfile::tempdir().unwrap();
+    let directory = parent.path().join("download");
+    let source = converter(Stop::new())
+        .acquire_source(&server.url(), &directory, &policy())
+        .expect("a static finite DASH graph can be retained");
+    assert_eq!(source.entrypoint().file_name().unwrap(), "input.mpd");
+    let raw: Vec<_> = std::fs::read_dir(directory.join("raw"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "mpd"))
+        .collect();
+    assert_eq!(raw.len(), 1);
+    assert_eq!(std::fs::read(&raw[0]).unwrap(), xml);
+    let localized = std::fs::read_to_string(source.entrypoint()).unwrap();
+    assert!(localized.contains("media/"));
+    assert!(!localized.contains("http://"));
+    assert_eq!(
+        std::fs::read_dir(directory.join("media")).unwrap().count(),
+        3
+    );
+    source.check(&Stop::new()).unwrap();
+    let mut calls = server.calls.lock().unwrap().clone();
+    calls.sort();
+    assert_eq!(calls, ["/init.mp4", "/s1.m4s", "/s2.m4s", "/source.m3u8"]);
+}
+
+#[test]
+fn generic_url_resource_and_text_caps_remove_only_the_incomplete_owned_download() {
+    let binary = b"\0\0\0\x18ftypisom\0\0\0\0isomiso2\0\0\0\x10mdatcontent!";
+    let text = b"#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXTINF:2,\nsegment.ts\n#EXT-X-ENDLIST\n";
+    for (body, media_cap, manifest_cap, succeeds) in [
+        (binary.as_slice(), 1024, 16, true),
+        (binary.as_slice(), 16, 1024, false),
+        (text.as_slice(), 1024, 16, false),
+    ] {
+        let server = Server::new(BTreeMap::from([("/source.m3u8", body.to_vec())]));
+        let parent = tempfile::tempdir().unwrap();
+        let directory = parent.path().join("download");
+        let policy = FetchPolicy {
+            max_resource_bytes: media_cap,
+            max_playlist_bytes: manifest_cap,
+            ..policy()
+        };
+        let result = converter(Stop::new()).acquire_source(&server.url(), &directory, &policy);
+        assert_eq!(result.is_ok(), succeeds);
+        assert_eq!(directory.exists(), succeeds);
+        assert_eq!(*server.calls.lock().unwrap(), ["/source.m3u8"]);
+        if let Ok(source) = result {
+            source.check(&Stop::new()).unwrap();
+        }
+    }
+}
+
+#[test]
+fn root_manifest_and_binary_resource_size_limits_remain_independent() {
+    let xml = "<MPD mediaPresentationDuration='PT2S'><Period><AdaptationSet><Representation><SegmentTemplate initialization='init.mp4' media='s$Number$.m4s'><SegmentTimeline><S d='2'/></SegmentTimeline></SegmentTemplate></Representation></AdaptationSet></Period></MPD>";
+    let hls = "#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXTINF:2,\ns1.m4s\n#EXT-X-ENDLIST\n";
+    for body in [xml, hls] {
+        let server = Server::new(BTreeMap::from([
+            ("/source.m3u8", body.as_bytes().to_vec()),
+            ("/init.mp4", vec![1; 16]),
+            ("/s1.m4s", vec![2; 16]),
+        ]));
+        let parent = tempfile::tempdir().unwrap();
+        let directory = parent.path().join("download");
+        let settings = FetchPolicy {
+            max_resource_bytes: 16,
+            max_playlist_bytes: 1024,
+            ..policy()
+        };
+        let source = converter(Stop::new())
+            .acquire_source(&server.url(), &directory, &settings)
+            .expect("a small media-resource cap must not lower the separate manifest cap");
+        source.check(&Stop::new()).unwrap();
+    }
+}
+
+#[test]
+fn dash_resource_budget_and_cross_origin_references_fail_without_fetching_forbidden_media() {
+    let outside = Server::new(BTreeMap::from([("/init.mp4", vec![1; 16])]));
+    for initialization in [
+        "init.mp4".to_owned(),
+        format!("http://{}/init.mp4", outside.address),
+    ] {
+        let xml = format!(
+            "<MPD mediaPresentationDuration='PT4S'><Period><AdaptationSet><Representation><SegmentTemplate initialization='{initialization}' media='s$Number$.m4s'><SegmentTimeline><S d='2' r='1'/></SegmentTimeline></SegmentTemplate></Representation></AdaptationSet></Period></MPD>"
+        );
+        let server = Server::new(BTreeMap::from([("/source.m3u8", xml.into_bytes())]));
+        let parent = tempfile::tempdir().unwrap();
+        let directory = parent.path().join("download");
+        let mut settings = policy();
+        if initialization == "init.mp4" {
+            settings.max_total_resources = Some(3);
+        }
+        let error = converter(Stop::new())
+            .acquire_source(&server.url(), &directory, &settings)
+            .unwrap_err();
+        assert!(!format!("{error:?}").contains("http"));
+        assert!(!directory.exists());
+        assert_eq!(*server.calls.lock().unwrap(), ["/source.m3u8"]);
+        assert!(outside.calls.lock().unwrap().is_empty());
+    }
+}
+
+#[test]
+fn dash_ciphertext_declarations_are_retained_without_fetching_license_identifiers() {
+    let declaration = "<ContentProtection schemeIdUri='urn:mpeg:dash:mp4protection:2011' value='cbcs'/><ContentProtection schemeIdUri='urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed'><c:pssh>cHJlc2VydmVk</c:pssh><license xmlns='urn:operator:license' url='license.key?private=sentinel'/></ContentProtection>";
+    let xml = format!(
+        "<MPD xmlns:c='urn:mpeg:cenc:2013' mediaPresentationDuration='PT2S'><Period><AdaptationSet>{declaration}<Representation><SegmentTemplate initialization='init.mp4' media='s$Number$.m4s'><SegmentTimeline><S d='2'/></SegmentTimeline></SegmentTemplate></Representation></AdaptationSet></Period></MPD>"
+    );
+    let server = Server::new(BTreeMap::from([
+        ("/source.m3u8", xml.clone().into_bytes()),
+        ("/init.mp4", vec![1; 16]),
+        ("/s1.m4s", vec![2; 16]),
+        ("/license.key?private=sentinel", vec![9; 16]),
+    ]));
+    let parent = tempfile::tempdir().unwrap();
+    let directory = parent.path().join("download");
+    let source = converter(Stop::new())
+        .acquire_source(&server.url(), &directory, &policy())
+        .unwrap();
+    assert!(
+        std::fs::read_to_string(source.entrypoint())
+            .unwrap()
+            .contains(declaration)
+    );
+    assert_eq!(
+        std::fs::read(directory.join("raw/r000000.mpd")).unwrap(),
+        xml.as_bytes()
+    );
+    let calls = server.calls.lock().unwrap();
+    assert_eq!(calls.len(), 3);
+    assert!(!calls.iter().any(|call| call.contains("license")));
+}
+
+#[test]
+fn streamed_mp4_creation_seal_refuses_same_bytes_replaced_after_retention() {
+    let bytes = b"\0\0\0\x18ftypisom\0\0\0\0isomiso2";
+    let server = Server::new(BTreeMap::from([("/source.m3u8", bytes.to_vec())]));
+    let parent = tempfile::tempdir().unwrap();
+    let directory = parent.path().join("download");
+    let source = converter(Stop::new())
+        .acquire_source(&server.url(), &directory, &policy())
+        .unwrap();
+    let original = parent.path().join("original.mp4");
+    std::fs::rename(source.entrypoint(), &original).unwrap();
+    drmr_core::native::create_private_new(source.entrypoint())
+        .unwrap()
+        .write_all(bytes)
+        .unwrap();
+    assert_eq!(
+        source.check(&Stop::new()).unwrap_err().0,
+        "download-source-changed"
+    );
+    drop(source);
+    assert_eq!(std::fs::read(directory.join("input.mp4")).unwrap(), bytes);
+    assert_eq!(std::fs::read(original).unwrap(), bytes);
+}
+
+#[test]
+fn unknown_format_root_cancellation_drains_the_body_and_removes_owned_staging() {
+    let server = Server::new(BTreeMap::from([("/held.ts", vec![1; 1024])]));
+    let parent = tempfile::tempdir().unwrap();
+    let directory = parent.path().canonicalize().unwrap().join("download");
+    let stop = Stop::new();
+    let c = converter(stop.clone());
+    let url = format!("http://{}/held.ts", server.address);
+    let target = directory.clone();
+    let (send, receive) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        send.send(c.acquire_source(&url, &target, &policy()).map(|_| ()))
+            .unwrap();
+    });
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !server.held.load(Ordering::Acquire) {
+        assert!(std::time::Instant::now() < deadline, "HTTP body readiness");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    stop.set();
+    let result = receive.recv_timeout(Duration::from_secs(2));
+    drop(server);
+    worker.join().unwrap();
+    assert_eq!(result.unwrap().unwrap_err().0, "cancelled");
+    assert!(!directory.exists());
+    assert_eq!(std::fs::read_dir(parent.path()).unwrap().count(), 0);
+}
 #[test]
 fn analysis_acquisition_does_not_require_a_future_output_and_keeps_its_creation_seal() {
     let manifest = b"#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXTINF:2,\nsegment.ts\n#EXT-X-ENDLIST\n";
