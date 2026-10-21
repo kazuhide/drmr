@@ -84,6 +84,14 @@ still fails. The suite covers:
   remain in the evidence. Wrong recipe/source identity and observation errors
   fail immediately; persistent displacement remains a failure. Existing strict
   geometry assertions and before/after capture comparisons still apply.
+  The first English batch also holds the three real guide font requests for at
+  least 250ms after its stylesheets apply. Within one fatal five-second gate,
+  the native fragment must be focused and fully visible before those responses
+  are released. The same rectangle and viewport must remain after the real font
+  bytes finish loading. Each response must match its source hash. No scrolling,
+  refocusing, substitute bytes or extra browser-test retry can complete this
+  fixture. Raw request timings, stylesheet observations and both geometry phases
+  are retained in `cold-font-protocol.json`.
 - A native-keyboard language roundtrip visits English → Japanese → English at
   both loopback mounts, or at the published project mount. Each navigation must
   load the matching raw page hash and declared language without scripts,
@@ -119,11 +127,14 @@ before deployment. The guide suite separately covers:
   after capture (`viewport-native-v1`). Each capture remains bounded to five
   seconds. These are visual checkpoints, not full-guide pixel coverage; all
   twenty chapters and complete code/table content retain automated checks.
-  Independent figure assertions run in batches of sixteen. Each figure's DOM
-  attributes and rendered text use one read-only measurement, while the full
-  figure and code ARIA assertions remain separate. Phase timings identify
-  content, accessibility-tree, native-interaction and axe costs without changing
-  the case or suite deadlines.
+  One complete body accessibility snapshot supplies all 116 actual figure
+  subtrees. A single read-only DOM measurement supplies every figure's attributes,
+  caption and complete rendered code. Each unique figure is paired in source
+  order with its own raw subtree; role, accessible name, full code, language and
+  keyboard metadata checks remain mandatory. Missing, duplicate or unfamiliar
+  structures fail. The same complete body snapshot supplies the existing body
+  guard and artifact. Phase timings identify content, accessibility-tree,
+  native-interaction and axe costs without changing the case or suite deadlines.
 - Native Tab/Enter reaches the contents and selected chapter, then the widest
   code block and table. Each overflowing target is pinned to one ElementHandle,
   traversed to both edges and returned to zero using the existing shared absolute
@@ -197,7 +208,10 @@ The pure Node controls are separate from the 19 landing and 12 guide browser cas
 the applicable workflow checks, which depend on changed paths. Publish/live
 jobs are intentionally skipped on pull requests. Production HTML still contains zero scripts; CI-only
 axe injection does not change that source contract.
-The hosted IBM Plex font files and their OFL notice remain part of the website.
+All four pages preload the three hosted IBM Plex faces with `font-display:
+optional`. A font that arrives after the initial display window leaves the
+fallback in use for that document, keeping fragment destinations stable. The
+font bytes and OFL notice remain part of the website.
 
 ## Common console checks
 

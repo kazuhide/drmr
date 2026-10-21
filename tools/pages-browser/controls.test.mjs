@@ -1,4 +1,5 @@
-import { guideChapters, requireGuideLayout, requireGuideMovement, codeAriaTemplate, requireGuideCheckpoint } from './guide.mjs';
+import { guideChapters, requireGuideLayout, requireGuideMovement, codeAriaTemplate, requireGuideCheckpoint,
+  guideFiguresObservation, requireGuideFigures } from './guide.mjs';
 import { locales } from './locales.mjs';
 import { matrixRows, matrixColumns, matrixObservation, requireMatrixLayout, requireMatrixMovement, completeMatrixKey, MatrixKeyDeadline } from './matrix.mjs';
 import { matrixRecipes, recipeObservation, requireRecipe, requireRecipeIdentity, requireRecipePosition, requireMatrixLinkExposure } from './recipes.mjs';
@@ -750,4 +751,82 @@ test('guide viewport checkpoints reject wrong sources, phases, native owners, cl
     const invalid = structuredClone(record); mutate(invalid);
     assert.throws(() => requireGuideCheckpoint(invalid, expected));
   }
+});
+
+function guideFigureFixture() {
+  const facts = [
+    { tag: 'FIGURE', role: null, language: 'sh', labelledBy: 'example-1-title',
+      captionCount: 1, captionId: 'example-1-title', captionText: 'Example 1: sh',
+      preCount: 1, codeCount: 1, tabindex: '0', code: 'drmr --version\n', rendered: 'drmr --version\n' },
+    { tag: 'FIGURE', role: null, language: 'json', labelledBy: 'example-2-title',
+      captionCount: 1, captionId: 'example-2-title', captionText: 'Example 2: json',
+      preCount: 1, codeCount: 1, tabindex: '0', code: '{\n  "key": "value"\n}\n', rendered: '{\n  "key": "value"\n}\n' },
+  ];
+  const aria = String.raw`- banner:
+  - link "Home"
+- main:
+  - 'figure "Example 1: sh"':
+    - text: "Example 1: sh"
+    - code: drmr --version
+  - heading "Next section" [level=2]
+  - 'figure "Example 2: json"':
+    - text: "Example 2: json"
+    - code: "{ \"key\": \"value\" }"
+- contentinfo:
+  - text: End`;
+  return { facts, aria };
+}
+
+test('guide figures retain every actual ARIA subtree, accessible name and complete code in DOM order', () => {
+  const { facts, aria } = guideFigureFixture();
+  const groups = requireGuideFigures(facts, aria);
+  assert.deepEqual(groups.map(group => group.label), ['Example 1: sh', 'Example 2: json']);
+  assert.deepEqual(groups.map(group => group.code), facts.map(figure => figure.code));
+  assert.equal(groups[0].aria, '- \'figure "Example 1: sh"\':\n  - text: "Example 1: sh"\n  - code: drmr --version');
+  assert.equal(groups[1].language, 'json');
+  assert.equal(groups[1].rendered, facts[1].rendered);
+});
+
+test('guide figure validation rejects missing, duplicate, reordered, truncated or unknown ARIA observations', () => {
+  const { facts, aria } = guideFigureFixture();
+  for (const mutate of [
+    value => value.replace("  - 'figure \"Example 1: sh\"':\n    - text: \"Example 1: sh\"\n    - code: drmr --version\n", ''),
+    value => value.replace('figure "Example 2: json"', 'figure "Example 1: sh"'),
+    value => value.replace('figure "Example 1: sh"', 'img "Example 1: sh"'),
+    value => value.replace('drmr --version', 'drmr'),
+    value => value.replace('    - code: drmr --version', '    - code: drmr --version\n    - link "Unrelated"'),
+    value => value.replace('    - text: "Example 1: sh"', '    - text: "Wrong caption"'),
+    value => value.replace('    - code: drmr --version', '    - code: "unterminated'),
+    value => value + '\n- figure "Unexpected empty figure"',
+  ]) assert.throws(() => requireGuideFigures(facts, mutate(aria)));
+  assert.throws(() => requireGuideFigures([...facts].reverse(), aria));
+  assert.throws(() => requireGuideFigures(facts.slice(1), aria));
+  assert.throws(() => requireGuideFigures([], '- main:'));
+});
+
+test('guide figure validation still rejects hidden rendered code and incorrect DOM metadata or focusability', () => {
+  const { facts, aria } = guideFigureFixture();
+  for (const changed of [{ tag: 'PRE' }, { role: 'group' }, { language: 'html' },
+    { labelledBy: 'wrong-caption' }, { captionCount: 0 }, { captionId: '' }, { preCount: 2 },
+    { codeCount: 2 }, { tabindex: null }, { code: '' }, { rendered: '' }]) {
+    assert.throws(() => requireGuideFigures([{ ...facts[0], ...changed }, facts[1]], aria));
+  }
+});
+
+test('the actual guide DOM readback preserves metadata and full code through transport', () => {
+  const { facts, aria } = guideFigureFixture();
+  const figures = facts.map(fact => ({ tagName: fact.tag,
+    getAttribute: name => ({ role: fact.role, 'data-code-language': fact.language,
+      'aria-labelledby': fact.labelledBy })[name] ?? null,
+    querySelectorAll: selector => ({
+      figcaption: [{ id: fact.captionId, innerText: fact.captionText }],
+      pre: [{ getAttribute: name => name === 'tabindex' ? fact.tabindex : null }],
+      'pre code': [{ textContent: fact.code, innerText: fact.rendered }],
+    })[selector] || [] }));
+  const raw = runInNewContext(`(${guideFiguresObservation.toString()})()`, {
+    document: { querySelectorAll: selector => selector === 'figure.guide-example' ? figures : [] },
+  }, { timeout: 1000 });
+  const observed = JSON.parse(JSON.stringify(raw));
+  assert.deepEqual(observed, facts);
+  assert.equal(requireGuideFigures(observed, aria).length, 2);
 });

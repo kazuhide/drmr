@@ -5,7 +5,8 @@ import { assets, assetPath, assetRoute, allowedRequest, digest, liveMode, public
 import { focusObservation, pollFocus, requireFocus, requireImages } from './checks.mjs';
 import { completeMatrixKey } from './matrix.mjs';
 import { guideChapters, guideLocales, guideObservation, requireGuideLayout,
-  guideScrollObservation, requireGuideMovement, codeAriaTemplate, requireGuideCheckpoint } from './guide.mjs';
+  guideScrollObservation, requireGuideMovement, guideFiguresObservation, requireGuideFigures,
+  requireGuideCheckpoint } from './guide.mjs';
 import { matrixRecipes } from './recipes.mjs';
 
 const live = liveMode(process.env.PAGES_LIVE);
@@ -153,37 +154,14 @@ async function content(page, locale) {
   expect(await page.locator('#url-input h3[id^="recipe-"]:not(#recipe-setup)')
     .evaluateAll(nodes => nodes.map(node => ({ id: node.id, tabindex: node.getAttribute('tabindex') }))))
     .toEqual(matrixRecipes.map(recipe => ({ id: recipe.id, tabindex: '-1' })));
-  const groups = [];
-  const groupLocators = await page.locator('figure.guide-example').all();
-  // The page is static. Read each figure's DOM facts in one protocol call and
-  // batch independent figures; retain every rendered/ARIA assertion and order.
-  for (let start = 0; start < groupLocators.length; start += 16) {
-    groups.push(...await Promise.all(groupLocators.slice(start, start + 16).map(async group => {
-      const pre = group.locator('pre');
-      const [facts, aria] = await Promise.all([
-        group.evaluate(node => ({ role: node.getAttribute('role'),
-          captionText: node.querySelector('figcaption').innerText,
-          code: node.querySelector('pre code').textContent,
-          rendered: node.querySelector('pre code').innerText,
-          language: node.getAttribute('data-code-language') })),
-        group.ariaSnapshot(),
-      ]);
-      const { role, captionText, code, rendered, language } = facts;
-      expect(role).toBeNull();
-      const caption = compact(captionText);
-      expect(code.trim()).not.toBe('');
-      expect(compact(rendered)).toBe(compact(code));
-      await Promise.all([
-        expect(group).toHaveRole('figure'),
-        expect(group).toHaveAttribute('data-code-language', /^(sh|bash|powershell|json|text)$/),
-        expect(group).toHaveAccessibleName(caption),
-        expect(pre).toHaveAttribute('tabindex', '0'),
-        expect(pre.locator('code')).toMatchAriaSnapshot(codeAriaTemplate(code)),
-      ]);
-      return { label: caption, language, role: 'figure', code, rendered, aria };
-    })));
-  }
-  expect(groups.length).toBeGreaterThan(0);
+  // Pair every actual figure subtree in the full accessibility tree with the
+  // same figure's complete rendered/DOM facts, without repeating protocol reads.
+  const [facts, aria] = await Promise.all([
+    page.evaluate(guideFiguresObservation),
+    timed(records.get(page).value, 'complete-body-aria', () => page.locator('body').ariaSnapshot()),
+  ]);
+  expect(facts).toHaveLength(116);
+  const groups = requireGuideFigures(facts, aria);
   const tables = [];
   const regions = await page.locator('.guide-table-scroll').all();
   for (let start = 0; start < regions.length; start += 16) {
@@ -220,7 +198,7 @@ async function content(page, locale) {
   const missingAnchors = await page.locator('a[href^="#"]').evaluateAll(nodes => nodes
     .filter(node => !document.getElementById(node.getAttribute('href').slice(1))).map(node => node.getAttribute('href')));
   expect(missingAnchors).toEqual([]);
-  return { layout: observed, code_groups: groups, tables };
+  return { contents: { layout: observed, code_groups: groups, tables }, aria };
 }
 test.afterEach(async ({ page }, info) => {
   if (records.has(page)) {
@@ -252,8 +230,7 @@ for (const locale of guideLocales) for (const width of [320, 768, 1024, 1440]) {
       const restored = await page.evaluate(guideObservation); requireGuideLayout(restored);
       await attach(info, 'guide-negative-controls.json', { ...identity(info), hidden, restored });
     }
-    const contents = await timed(network, 'complete-content-and-figure-aria', () => content(page, locale));
-    const aria = await timed(network, 'complete-body-aria', () => page.locator('body').ariaSnapshot());
+    const { contents, aria } = await timed(network, 'complete-content-and-figure-aria', () => content(page, locale));
     await attach(info, 'rendered-aria.yml', aria, 'text/yaml');
     expect(aria).toContain('main:');
     const fonts = await page.evaluate(() => [...document.fonts].map(font => ({ family: font.family, weight: font.weight, status: font.status })));
