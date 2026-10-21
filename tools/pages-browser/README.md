@@ -37,10 +37,10 @@ still fails. The suite covers:
   All 45 supported output-protection tokens link to their exact guide recipe;
   unavailable cells have no recipe links. Focused matrix links also undergo
   point hit-testing so sticky input headers cannot cover their rendered boxes.
-  Output links have atomic layout boxes. While a cell contains focus, it stays
-  inside the horizontal scrollport beside the sticky input label; this also
-  exposes partially clipped links that native horizontal focus scrolling leaves
-  in place.
+  Output links have atomic layout boxes. Only keyboard-focused links define a
+  horizontal snap position; scrollport padding keeps them beside the sticky
+  input label. Pointer clicks retain the cell layout, including when switching
+  from keyboard navigation after returning from a guide example.
   Each scrollable matrix is reached by native Tab and traversed to both
   horizontal edges with arrow keys. A listener is armed before each key, and
   its native `scrollend` must arrive before geometry is accepted or another key
