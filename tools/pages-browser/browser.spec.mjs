@@ -5,7 +5,8 @@ import { assets, digest, liveMode, publicOrigin, localOrigin, allowedRequest, as
 import { requireFocus, requireImages, requireLayout, layoutObservation, focusObservation, pollFocus, requireClippedFocusTimeout, partialFocusCandidate, FocusConditionTimeout } from './checks.mjs';
 import { locales, english } from './locales.mjs';
 import { matrixColumns, matrixRows, matrixObservation, requireMatrixLayout, requireMatrixMovement, completeMatrixKey } from './matrix.mjs';
-import { matrixRecipes, recipeObservation, requireRecipe, matrixLinkExposure, requireMatrixLinkExposure } from './recipes.mjs';
+import { matrixRecipes, recipeObservation, requireRecipe, requireRecipeIdentity, requireRecipePosition,
+  matrixLinkExposure, requireMatrixLinkExposure } from './recipes.mjs';
 
 const live = liveMode(process.env.PAGES_LIVE);
 const origin = live ? publicOrigin : localOrigin;
@@ -271,6 +272,86 @@ async function nativeMatrixScroll(page, wrapper, width) {
   }
 }
 
+async function nativeMatrixOrigin(page, target) {
+  const initial = await target.evaluate(matrixObservation);
+  requireMatrixLayout(initial);
+  expect(initial.focused).toBe(true);
+  const samples = [initial];
+  const deadline = performance.now() + 5000;
+  for (let count = 0; samples.at(-1).scrollLeft > 0 && count < 64; count++) {
+    samples.push(await settledMatrixKey(page, target, 'ArrowLeft', samples.at(-1), deadline));
+  }
+  expect(samples.at(-1).scrollLeft).toBe(0);
+  return { scrollNeeded: initial.scrollLeft > 0, samples };
+}
+
+async function nativeMatrixReturn(page, focusable, wrapper) {
+  const target = await wrapper.elementHandle();
+  expect(target).not.toBeNull();
+  const record = { phase: 'complete-keyboard-workflow', reverse: [] };
+  monitors.get(page).evidence.matrixReturn = record;
+  const info = test.info();
+  try {
+    record.postForward = await target.evaluate(matrixObservation);
+    // The original complete forward traversal ends on the final inventory item.
+    // Reverse real Tab events to this same matrix, never refocusing by script.
+    const matrixIndex = 10;
+    await expect(focusable.nth(matrixIndex)).toHaveAttribute('class', 'matrix-scroll');
+    const count = await focusable.count();
+    await expect(focusable.nth(count - 1)).toBeFocused();
+    if (record.postForward.scrollLeft === 0) {
+      record.origin = { scrollNeeded: false, samples: [record.postForward] };
+      record.passed = true;
+      return record;
+    }
+    for (let index = count - 2; index >= matrixIndex; index--) {
+      await page.keyboard.press('Shift+Tab');
+      const item = focusable.nth(index);
+      await expect(item).toBeFocused();
+      record.reverse.push({ ordinal: index + 1, observed: await item.evaluate(focusObservation) });
+    }
+    await requireTargetFocus(page, target, 'return-to-matrix', matrixIndex + 1);
+    record.origin = await nativeMatrixOrigin(page, target);
+    record.passed = true;
+    return record;
+  } finally {
+    record.passed ??= false;
+    try {
+      await artifact(info, 'matrix-keyboard-return.json', { schema_version: 1,
+        source_head: info.config.metadata.sourceHead, source_tree: info.config.metadata.sourceTree,
+        mode: info.config.metadata.mode, asset_hashes: info.config.metadata.assetHashes,
+        builder_inputs: info.config.metadata.builderInputHashes, record });
+    } finally { await target.dispose(); }
+  }
+}
+
+async function settledRecipe(page, heading, recipe, source, info) {
+  const record = { recipe: recipe.id, page_asset: source.asset, page_sha256: source.sha256, samples: [] };
+  const evidence = monitors.get(page).evidence;
+  evidence.recipeFocusChecks ??= [];
+  evidence.recipeFocusChecks.push(record);
+  try {
+    const observed = await pollFocus(async () => {
+      const value = await heading.evaluate(recipeObservation);
+      try { requireRecipeIdentity(value, recipe, source); }
+      catch (error) { record.terminalObservation = value; throw error; }
+      return value;
+    }, record.samples, { validate: requireRecipePosition });
+    record.passed = true;
+    return observed;
+  } catch (error) {
+    record.failureKind = error instanceof FocusConditionTimeout ? 'condition-timeout' : 'observation-error';
+    if (Number.isFinite(error.elapsedMs)) record.failureElapsedMs = error.elapsedMs;
+    throw error;
+  } finally {
+    record.passed ??= false;
+    await writeFile(info.outputPath('recipe-focus.json'), JSON.stringify({ schema_version: 1,
+      source_head: info.config.metadata.sourceHead, source_tree: info.config.metadata.sourceTree,
+      mode: info.config.metadata.mode, asset_hashes: info.config.metadata.assetHashes,
+      builder_inputs: info.config.metadata.builderInputHashes, checks: evidence.recipeFocusChecks }, null, 2) + '\n');
+  }
+}
+
 async function projectOnly(context) {
   // A page requiring a CDN, tracker or backend must fail, not reach the network.
   await context.route('**/*', route => allowedRequest(route.request().url(), live)
@@ -307,14 +388,19 @@ async function recipeNavigation(page, locale, info, batch, offset) {
     expect(response.status()).toBe(200);
     const sha256 = digest(await response.body());
     expect(sha256).toBe(info.config.metadata.assetHashes[guideAsset]);
+    const url = guideRoute + '#' + recipe.id;
+    await expect(page).toHaveURL(url);
+    await expect(page.locator('html')).toHaveAttribute('lang', locale.language);
+    const heading = page.locator('#' + recipe.id);
+    await expect(heading).toHaveCount(1);
+    // Native Enter does not await navigation. Bind this document before asking
+    // for its load/font state, so an already-loaded landing page cannot satisfy it.
     await page.waitForLoadState('load');
     await page.evaluate(async () => { await document.fonts.ready; });
-    await expect(page).toHaveURL(guideRoute + '#' + recipe.id);
-    await expect(page.locator('html')).toHaveAttribute('lang', locale.language);
     await expect(page.locator('script')).toHaveCount(0);
-    const heading = page.locator('#' + recipe.id);
+    const observed = await settledRecipe(page, heading, recipe,
+      { url, language: locale.language, asset: guideAsset, sha256 }, info);
     await expect(heading).toBeFocused();
-    const observed = await heading.evaluate(recipeObservation);
     requireRecipe(observed, recipe);
     expect(observed.rect.top).toBeGreaterThanOrEqual(0);
     expect(observed.rect.bottom).toBeLessThanOrEqual(observed.viewport.height);
@@ -446,6 +532,7 @@ for (const locale of locales) for (const width of [320, 768, 1024, 1440]) {
         page_sha256: info.config.metadata.assetHashes[locale.asset], ...observed });
     }
     expect(matrixKeyboard).toBeDefined();
+    const matrixReturn = await nativeMatrixReturn(page, focusable, matrix.wrapper);
     for (const [name, id] of locale.anchors.map((name, index) => [name, ['support', 'workflow', 'get-started'][index]])) {
       const link = page.getByRole('navigation', { name: locale.navigation, exact: true }).getByRole('link', { name, exact: true });
       await link.focus();
@@ -469,6 +556,11 @@ for (const locale of locales) for (const width of [320, 768, 1024, 1440]) {
     expect(new URL(await license.getAttribute('href'), page.url()).href)
       .toBe(origin + '/drmr/assets/fonts/LICENSE-ibm-plex.txt');
     const platformFonts = await renderedFonts(page, context);
+    // Audit the state reached by completing the keyboard workflow, with every
+    // column returned to the origin through native keys rather than a DOM reset.
+    matrixReturn.beforeAxe = await matrix.wrapper.evaluate(matrixObservation);
+    expect(matrixReturn.beforeAxe.scrollLeft).toBe(0);
+    requireMatrixLayout(matrixReturn.beforeAxe);
     const accessibility = await new AxeBuilder({ page }).analyze();
     await artifact(info, 'axe.json', accessibility);
     expect(accessibility.violations).toEqual([]);
@@ -486,7 +578,8 @@ for (const locale of locales) for (const width of [320, 768, 1024, 1440]) {
       source_tree: info.config.metadata.sourceTree, mode: info.config.metadata.mode,
       language: locale.language, page_asset: locale.asset, page_sha256: info.config.metadata.assetHashes[locale.asset],
       asset_hashes: info.config.metadata.assetHashes, builder_inputs: info.config.metadata.builderInputHashes, servedAssets, chromium: browser.version(), viewport: { width, height: 900 }, production_scripts: 0,
-      initial_viewport: initialViewport, matrix: matrix.evidence, matrix_keyboard: matrixKeyboard, layout, fonts, platform_fonts: platformFonts, images, headings, code_groups: renderedCodeGroups, keyboard: focusRecords, network,
+      initial_viewport: initialViewport, matrix: matrix.evidence, matrix_keyboard: matrixKeyboard,
+      matrix_return: matrixReturn, layout, fonts, platform_fonts: platformFonts, images, headings, code_groups: renderedCodeGroups, keyboard: focusRecords, network,
       axe: { version: accessibility.testEngine.version, violations: 0, incomplete: accessibility.incomplete.length },
       limitations: ['automated Chromium only; no manual screen-reader or other-browser qualification',
         'external repository links checked by source validator; no external browser navigation'] });

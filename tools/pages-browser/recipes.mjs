@@ -57,6 +57,8 @@ export function recipeObservation(element) {
   const box = element.getBoundingClientRect();
   const style = getComputedStyle(element);
   return { id: element.id, tag: element.tagName, tabindex: element.getAttribute('tabindex'),
+    url: location.href, language: document.documentElement.lang,
+    readyState: document.readyState, fontsStatus: document.fonts.status,
     chapter: element.closest('[data-guide-chapter]')?.id, heading: element.textContent.trim(),
     presented: box.width > 0 && box.height > 0 && style.display !== 'none' && style.visibility === 'visible',
     setupTag: setup?.tagName, setupHrefs: [...(setup?.querySelectorAll('a') ?? [])].map(link => link.getAttribute('href')),
@@ -65,6 +67,26 @@ export function recipeObservation(element) {
     rendered: code?.innerText ?? '',
     rect: { left: box.left, right: box.right, top: box.top, bottom: box.bottom },
     viewport: { width: innerWidth, height: innerHeight }, focused: document.activeElement === element };
+}
+
+// Identity failures are terminal measurement errors, not a settling condition.
+export function requireRecipeIdentity(value, recipe, source) {
+  assert.equal(value.id, recipe.id);
+  assert.equal(value.tag, 'H3');
+  assert.equal(value.tabindex, '-1');
+  assert.equal(value.chapter, 'url-input');
+  assert.equal(value.url, source.url);
+  assert.equal(value.language, source.language);
+}
+
+// Pointer navigation need not draw a keyboard outline. Its actual focused
+// heading must still fit completely inside the viewport, without any epsilon.
+export function requireRecipePosition(value) {
+  assert.equal(value.focused, true);
+  const { rect, viewport } = value;
+  assert.ok([rect.left, rect.right, rect.top, rect.bottom, viewport.width, viewport.height].every(Number.isFinite));
+  assert.ok(viewport.width > 0 && viewport.height > 0 && rect.left < rect.right && rect.top < rect.bottom);
+  assert.ok(0 <= rect.left && rect.right <= viewport.width && 0 <= rect.top && rect.bottom <= viewport.height);
 }
 
 export function matrixLinkExposure(element) {

@@ -55,6 +55,15 @@ still fails. The suite covers:
   interaction, alongside the existing full-page captures. Chromium CDP records actual glyph-producing platform
   fonts for the heading, lead and code, including Japanese fallback; it does
   not establish manual readability or glyph coverage for other text.
+  After the complete forward Tab inventory, a matrix already at its origin
+  requires no return keys. Otherwise native Shift+Tab returns to the same
+  matrix owner. Each reverse ordinal and actual focus observation is retained.
+  If its horizontal position is still nonzero, native ArrowLeft returns it to
+  zero under one five-second key-completion deadline; an already-zero matrix
+  needs no additional arrow keys. The original full arrow roundtrip remains
+  unchanged. Post-forward, reverse and origin observations are retained, and
+  zero horizontal position is asserted immediately before the unchanged full
+  page axe audit. Both axe violations and incomplete checks must remain empty.
 - Core content and native anchor navigation with JavaScript disabled in each
   language (two cases). The
   loopback job checks both `/` and the project `/drmr/` mount; the published job
@@ -68,6 +77,13 @@ still fails. The suite covers:
   The served guide hash must match the workflow source. A 320px viewport image
   records each batch's first native recipe destination before further guide interaction,
   with unchanged heading geometry and complete source metadata.
+  The exact destination URL, language and heading bind the new document before
+  awaiting its load and fonts. Read-only position polling then requires the
+  correct focused heading and complete, finite viewport geometry within one
+  absolute five-second budget. Raw samples, including initial displacement,
+  remain in the evidence. Wrong recipe/source identity and observation errors
+  fail immediately; persistent displacement remains a failure. Existing strict
+  geometry assertions and before/after capture comparisons still apply.
 - A native-keyboard language roundtrip visits English → Japanese → English at
   both loopback mounts, or at the published project mount. Each navigation must
   load the matching raw page hash and declared language without scripts,

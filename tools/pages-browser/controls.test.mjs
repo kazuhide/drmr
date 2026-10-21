@@ -1,7 +1,7 @@
 import { guideChapters, requireGuideLayout, requireGuideMovement, codeAriaTemplate, requireGuideCheckpoint } from './guide.mjs';
 import { locales } from './locales.mjs';
 import { matrixRows, matrixColumns, matrixObservation, requireMatrixLayout, requireMatrixMovement, completeMatrixKey, MatrixKeyDeadline } from './matrix.mjs';
-import { matrixRecipes, requireRecipe, requireMatrixLinkExposure } from './recipes.mjs';
+import { matrixRecipes, requireRecipe, requireRecipeIdentity, requireRecipePosition, requireMatrixLinkExposure } from './recipes.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { assets, assetRoute, assetPath, digest, liveMode, allowedRequest } from './source.mjs';
@@ -561,6 +561,72 @@ test('recipe checks refuse wrong destinations, hidden code, incomplete steps and
     const code = good.code.replace(before, after);
     assert.throws(() => requireRecipe({ ...good, code, rendered: code }, expected), before);
   }
+});
+
+function recipePositionSample() {
+  return { ...recipeSample(), focused: true,
+    url: 'http://127.0.0.1:4173/drmr/guide/#recipe-hls-ts-video-dash-cbcs', language: 'en',
+    rect: { left: 16, right: 304, top: 24, bottom: 84 }, viewport: { width: 320, height: 900 } };
+}
+
+test('recipe identity is immutable and position rejects unfocused, nonfinite or clipped headings', () => {
+  const good = recipePositionSample();
+  const recipe = matrixRecipes.find(value => value.id === good.id);
+  const source = { url: good.url, language: 'en' };
+  requireRecipeIdentity(good, recipe, source);
+  requireRecipePosition(good);
+  for (const changed of [{ id: 'recipe-mp4-mp4-clear' }, { tag: 'H2' }, { tabindex: null },
+    { chapter: 'verification' }, { url: source.url + '-stale' }, { language: 'ja' }]) {
+    assert.throws(() => requireRecipeIdentity({ ...good, ...changed }, recipe, source));
+  }
+  assert.throws(() => requireRecipePosition({ ...good, focused: false }));
+  for (const changed of [{ left: -1 }, { right: 321 }, { top: -3288.53125 }, { bottom: 901 },
+    { right: 16 }, { bottom: 24 }, { top: NaN }, { left: Infinity }]) {
+    assert.throws(() => requireRecipePosition({ ...good, rect: { ...good.rect, ...changed } }));
+  }
+  for (const changed of [{ width: 0 }, { height: Infinity }]) {
+    assert.throws(() => requireRecipePosition({ ...good, viewport: { ...good.viewport, ...changed } }));
+  }
+});
+
+test('a recipe validator retains raw displaced samples and accepts only the actual focused viewport result', async () => {
+  const good = recipePositionSample();
+  const displaced = { ...good, rect: { ...good.rect, top: -3288.53125, bottom: -3228.53125 } };
+  const samples = [];
+  let calls = 0;
+  const result = await pollFocus(async () => calls++ ? good : displaced, samples,
+    { ...virtualDeadline(), validate: requireRecipePosition });
+  assert.equal(result, good);
+  assert.deepEqual(samples, [displaced, good]);
+  assert.equal(samples[0].rect.top, -3288.53125);
+  // The original default still requires a real keyboard outline; recipe
+  // positions never invent outline fields for a pointer-focused heading.
+  assert.throws(() => requireFocus(good));
+});
+
+test('custom focus validators retain the same absolute deadline and propagate source or validator errors', async () => {
+  const good = recipePositionSample();
+  const recipe = matrixRecipes.find(value => value.id === good.id);
+  const source = { url: good.url, language: 'en' };
+  const invalid = { ...good, url: good.url + '-stale' };
+  const samples = [];
+  await assert.rejects(pollFocus(async () => {
+    requireRecipeIdentity(invalid, recipe, source);
+    return invalid;
+  }, samples, { ...virtualDeadline(), validate: requireRecipePosition }), /Expected values/);
+  assert.deepEqual(samples, []);
+  const failure = new TypeError('recipe-validator-failure');
+  await assert.rejects(pollFocus(async () => good, [], { ...virtualDeadline(), validate: () => { throw failure; } }),
+    error => error === failure);
+  let clock = 0, validated = false;
+  const late = [];
+  await assert.rejects(pollFocus(async () => { clock = 5001; return good; }, late,
+    { now: () => clock, validate: () => { validated = true; } }), error => error instanceof FocusObservationDeadline);
+  assert.deepEqual(late, []);
+  assert.equal(validated, false);
+  const displaced = { ...good, rect: { ...good.rect, top: -1 } };
+  await assert.rejects(pollFocus(async () => displaced, [], { ...virtualDeadline(), validate: requireRecipePosition }),
+    error => error instanceof FocusConditionTimeout && error.elapsedMs >= 5000);
 });
 
 test('matrix link checks refuse point occlusion by sticky headers without weakening ordinary focus', () => {
