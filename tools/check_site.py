@@ -389,59 +389,20 @@ def recipe_https_url(value):
             and not any(ord(character) <= 32 for character in value))
 
 
-def recipe_download(arguments):
-    """Read the example's explicit curl mapping without executing shell content."""
-    token = "site-guide-recipe-command"
-    flags = {"--fail", "--location", "--silent", "--show-error"}
-    options, values, urls = set(), {}, []
-    position = 1
-    while position < len(arguments):
-        argument = arguments[position]
-        if argument in flags:
-            require(argument not in options, token)
-            options.add(argument)
-        elif argument in {"--output", "--proto", "--proto-redir"}:
-            require(argument not in values and position + 1 < len(arguments), token)
-            position += 1
-            values[argument] = arguments[position]
-        else:
-            require(recipe_https_url(argument), token)
-            urls.append(argument)
-        position += 1
-    require({"--fail", "--location"} <= options and "--output" in values and len(urls) == 1
-            and all(values.get(name, "=https") == "=https" for name in ("--proto", "--proto-redir")), token)
-    return values["--output"], urls[0]
-
-
 def validate_recipe_commands(code, row, output_format, target):
     token = "site-guide-recipe-command"
     logical = re.sub(r"\\\r?\n[ \t]*", " ", code).splitlines()
     try:
         commands = [shlex.split(line.strip()) for line in logical if re.match(r"\s*drmr(?:\s|$)", line)]
-        downloads = [recipe_download(shlex.split(line.strip())) for line in logical
-                     if re.match(r"\s*curl(?:\s|$)", line)]
     except ValueError:
         raise Failure(token) from None
-    require(len(commands) == 4, token)
-    source = "./source.mp4" if row == "mp4" else "./source/manifest.mpd" if row == "dash" else "./source/input.m3u8"
+    require(len(commands) == 4 and not any(re.match(r"\s*curl(?:\s|$)", line) for line in logical), token)
+    suffix = ".mp4" if row == "mp4" else ".mpd" if row == "dash" else ".m3u8"
+    source = "./source/input" + suffix
     runtime = ["--keys-file", "../config/keys.json", "--json"]
-    if row in ("mp4", "dash"):
-        require(commands[0] == ["drmr", "analyze", source] + runtime, token)
-        expected_paths = ["./source.mp4"] if row == "mp4" else ["source/$resource"]
-        require([path for path, _ in downloads] == expected_paths, token)
-        if row == "mp4":
-            require(urlsplit(downloads[0][1]).path.endswith(".mp4"), token)
-        else:
-            loops = [shlex.split(line.strip()) for line in logical if re.match(r"\s*for(?:\s|$)", line)]
-            resources = ["manifest.mpd", "video/init.mp4", "video/segment-1.m4s", "video/segment-2.m4s",
-                         "video/segment-3.m4s", "video/segment-4.m4s", "video/segment-5.m4s;"]
-            require(urlsplit(downloads[0][1]).path.endswith("/$resource")
-                    and loops == [["for", "resource", "in"] + resources + ["do"]], token)
-    else:
-        require(len(commands[0]) >= 3 and recipe_https_url(commands[0][2])
-                and urlsplit(commands[0][2]).path.endswith(".m3u8")
-                and commands[0] == ["drmr", "analyze", commands[0][2], "--download-dir", "./source"] + runtime
-                and not downloads, token)
+    require(len(commands[0]) >= 3 and recipe_https_url(commands[0][2])
+            and urlsplit(commands[0][2]).path.endswith(suffix)
+            and commands[0] == ["drmr", "analyze", commands[0][2], "--download-dir", "./source"] + runtime, token)
     output = "./result.mp4" if output_format == "mp4" else "./result"
     require(commands[1] == ["drmr", "plan", source, "--to", target, "--format", output_format,
                             "--output", output, "--save", "./conversion.plan.json"] + runtime

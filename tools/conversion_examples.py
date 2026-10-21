@@ -3,14 +3,14 @@
 
 INPUTS = {
     "mp4": {
-        "en": "MP4", "ja": "MP4", "source": "./source.mp4",
+        "en": "MP4", "ja": "MP4", "source": "./source/input.mp4",
         "note_en": "This example uses one video track in an MP4 file.",
         "note_ja": "この例では、映像 1 トラックの MP4 を使います。",
     },
     "dash": {
-        "en": "DASH", "ja": "DASH", "source": "./source/manifest.mpd",
-        "note_en": "The download list assumes one video representation, one initialization file and five two-second segments. For another MPD, save every referenced resource with its relative path; downloading only the MPD is insufficient.",
-        "note_ja": "この取得一覧は、映像 1 トラック、初期化ファイル 1 個、2 秒のセグメント 5 個という構成の例です。別の MPD を使う場合は、その参照先をすべて相対パスどおりに保存してください。MPD だけでは変換できません。",
+        "en": "DASH", "ja": "DASH", "source": "./source/input.mpd",
+        "note_en": "Use one video representation in a static MPD with one Period and a SegmentTemplate with an explicit finite SegmentTimeline. drmr saves the manifest and all referenced initialization and media resources. MP4 output requires a single track.",
+        "note_ja": "一つの Period に映像 1 トラックを持つ static MPD を使います。SegmentTemplate と有限の SegmentTimeline の明示が必要です。drmr がマニフェストと、参照する初期化ファイル・セグメントをまとめて保存します。MP4 出力は 1 トラックが対象です。",
     },
     "hls-fmp4": {
         "en": "HLS / fMP4", "ja": "HLS / fMP4", "source": "./source/input.m3u8",
@@ -56,24 +56,11 @@ def identifier(source, output, target):
 def commands(source, output, target):
     workspace = identifier(source, output, target).removeprefix("recipe-")
     lines = ["(", "  set -eu", "  umask 077", f"  mkdir {workspace}", f"  cd {workspace}", ""]
-    curl = "curl --fail --location --proto '=https' --proto-redir '=https'"
-    if source == "mp4":
-        lines += [f"  {curl} \\", "    --output ./source.mp4 \\",
-                  '    "https://media.example.com/vod/mp4/video.mp4"', ""]
-    elif source == "dash":
-        lines += ["  mkdir -p source/video", "  for resource in manifest.mpd video/init.mp4 \\",
-                  "    video/segment-1.m4s video/segment-2.m4s video/segment-3.m4s \\",
-                  "    video/segment-4.m4s video/segment-5.m4s; do",
-                  f"    {curl} \\", '      --output "source/$resource" \\',
-                  '      "https://media.example.com/vod/dash/$resource"', "  done", ""]
-    if source.startswith("hls-"):
-        path = {"hls-fmp4": "hls-fmp4/video.m3u8", "hls-ts-video": "hls-ts/video.m3u8",
-                "hls-ts-audio": "hls-ts-audio/audio.m3u8"}[source]
-        lines += [f'  drmr analyze "https://media.example.com/vod/{path}" \\',
-                  "    --download-dir ./source \\", "    --keys-file ../config/keys.json --json"]
-    else:
-        lines += [f"  drmr analyze {INPUTS[source]['source']} \\",
-                  "    --keys-file ../config/keys.json --json"]
+    path = {"mp4": "mp4/video.mp4", "dash": "dash/manifest.mpd",
+            "hls-fmp4": "hls-fmp4/video.m3u8", "hls-ts-video": "hls-ts/video.m3u8",
+            "hls-ts-audio": "hls-ts-audio/audio.m3u8"}[source]
+    lines += [f'  drmr analyze "https://media.example.com/vod/{path}" \\',
+              "    --download-dir ./source \\", "    --keys-file ../config/keys.json --json"]
     destination = "./result.mp4" if output == "mp4" else "./result"
     lines += ["", f"  drmr plan {INPUTS[source]['source']} \\",
               f"    --to {target} --format {output} \\",

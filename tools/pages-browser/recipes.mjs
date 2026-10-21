@@ -40,13 +40,12 @@ export function requireRecipe(value, expected) {
   for (const command of commands.slice(2)) {
     assert.equal(flag(command[2], 'plan'), plan, 'Conversion and verification must use the saved plan');
   }
-  if (expected.row.startsWith('hls-')) {
-    assert.match(commands[0][2], /https:\/\//, 'HLS recipes must acquire the public URL');
-    assert.ok(flag(commands[0][2], 'download-dir'));
-  } else {
-    assert.match(code, /\bcurl\s/);
-    assert.match(code, /https:\/\//, 'MP4 and DASH recipes must download their public input');
-  }
+  assert.match(commands[0][2], /^\s+"?https:\/\//, 'Every format must acquire its public URL with analyze');
+  assert.equal(flag(commands[0][2], 'download-dir').replace(/^\.\//, ''), 'source');
+  const extension = expected.row === 'mp4' ? 'mp4' : expected.row === 'dash' ? 'mpd' : 'm3u8';
+  assert.match(commands[1][2], new RegExp(`^\\s+(?:\\./)?source/input\\.${extension}(?:\\s|$)`),
+    'Planning must use the actual retained entrypoint for this format');
+  assert.doesNotMatch(code, /\bcurl\s/, 'Recipes must use native analyze acquisition');
 }
 
 // This readback does not scroll or focus the fragment on behalf of the browser.

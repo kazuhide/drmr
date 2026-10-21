@@ -537,7 +537,8 @@ test('each supported protection token has one stable recipe identity and unavail
 });
 
 function recipeSample(recipe = matrixRecipes.find(value => value.id === 'recipe-hls-ts-video-dash-cbcs')) {
-  const code = `(\n  set -eu\n  workspace="$(mktemp -d)"\n  cd "$workspace"\n  drmr analyze "https://example.com/vod/master.m3u8" --download-dir source --keys-file ../config/keys.json --json\n  drmr plan source/input.m3u8 --to ${recipe.target} --format ${recipe.format} --output output --save conversion.plan.json --keys-file ../config/keys.json\n  drmr convert --plan conversion.plan.json --keys-file ../config/keys.json\n  drmr verify --plan conversion.plan.json --keys-file ../config/keys.json --json\n)\n`;
+  const extension = recipe.row === 'mp4' ? 'mp4' : recipe.row === 'dash' ? 'mpd' : 'm3u8';
+  const code = `(\n  set -eu\n  workspace="$(mktemp -d)"\n  cd "$workspace"\n  drmr analyze "https://example.com/vod/master.${extension}" --download-dir source --keys-file ../config/keys.json --json\n  drmr plan source/input.${extension} --to ${recipe.target} --format ${recipe.format} --output output --save conversion.plan.json --keys-file ../config/keys.json\n  drmr convert --plan conversion.plan.json --keys-file ../config/keys.json\n  drmr verify --plan conversion.plan.json --keys-file ../config/keys.json --json\n)\n`;
   return { id: recipe.id, tag: 'H3', tabindex: '-1', chapter: 'url-input', heading: 'HLS to DASH',
     presented: true, setupTag: 'P', setupHrefs: ['#recipe-setup'], figureTag: 'FIGURE',
     figureClass: true, language: 'sh', code, rendered: code };
@@ -562,6 +563,18 @@ test('recipe checks refuse wrong destinations, hidden code, incomplete steps and
   ]) {
     const code = good.code.replace(before, after);
     assert.throws(() => requireRecipe({ ...good, code, rendered: code }, expected), before);
+  }
+});
+
+test('all format recipes require native acquisition and the matching retained entrypoint', () => {
+  for (const expected of matrixRecipes) {
+    const good = recipeSample(expected);
+    requireRecipe(good, expected);
+    for (const code of [
+      good.code.replace('--download-dir source', '--download-dir other'),
+      good.code.replace(/source\/input\.(mp4|mpd|m3u8)/, 'source/download.bin'),
+      good.code.replace('  drmr analyze', '  curl https://example.com/other\n  drmr analyze'),
+    ]) assert.throws(() => requireRecipe({ ...good, code, rendered: code }, expected));
   }
 });
 

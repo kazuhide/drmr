@@ -43,14 +43,11 @@ class ConversionExamples(unittest.TestCase):
                 for command in commands[2:]:
                     self.assertEqual(command[command.index("--plan") + 1], "./conversion.plan.json")
                     self.assertNotIn("--to", command)
-                if source.startswith("hls-"):
-                    self.assertTrue(commands[0][2].startswith("https://media.example.com/vod/"))
-                    self.assertIn("--download-dir", commands[0])
-                    self.assertEqual(plan[2], "./source/input.m3u8")
-                else:
-                    self.assertFalse(commands[0][2].startswith("https://"))
-                    self.assertNotIn("--download-dir", commands[0])
-                    self.assertIn("curl --fail --location", code)
+                self.assertTrue(commands[0][2].startswith("https://media.example.com/vod/"))
+                self.assertEqual(commands[0][commands[0].index("--download-dir") + 1], "./source")
+                entrypoint = "input.mp4" if source == "mp4" else "input.mpd" if source == "dash" else "input.m3u8"
+                self.assertEqual(plan[2], "./source/" + entrypoint)
+                self.assertNotIn("curl", code)
 
     def test_locales_retain_identical_commands_and_recipe_identifiers(self):
         en, ja = (EXAMPLES.markdown(locale) for locale in ("en", "ja"))

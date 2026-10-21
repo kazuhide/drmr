@@ -40,19 +40,11 @@ def recipe_fixture(language="en", first_example=1):
             for target in targets:
                 identifier = "recipe-" + row + "-" + output_format + "-" + target
                 heading = input_labels[language][index] + " → " + output_label + " / " + protection_labels[target]
-                source = "./source.mp4" if row == "mp4" else "./source/manifest.mpd" if row == "dash" else "./source/input.m3u8"
-                acquisition = ""
-                if row == "mp4":
-                    acquisition = '  curl --fail --location --output ./source.mp4 "https://media.example.com/vod/mp4/clear/video.mp4"\n'
-                elif row == "dash":
-                    acquisition = ('  for resource in manifest.mpd video/init.mp4 \\\n'
-                                   '    video/segment-1.m4s video/segment-2.m4s video/segment-3.m4s \\\n'
-                                   '    video/segment-4.m4s video/segment-5.m4s; do\n'
-                                   '    curl --fail --location --output "source/$resource" "https://media.example.com/vod/dash/$resource"\n'
-                                   '  done\n')
-                analyzed = source if row in ("mp4", "dash") else '"https://media.example.com/vod/' + row + '/clear/media.m3u8" --download-dir ./source'
+                suffix = "mp4" if row == "mp4" else "mpd" if row == "dash" else "m3u8"
+                source = "./source/input." + suffix
+                analyzed = '"https://media.example.com/vod/' + row + '/clear/media.' + suffix + '" --download-dir ./source'
                 output = "./result.mp4" if output_format == "mp4" else "./result"
-                code = ('(\n' + acquisition + '  drmr analyze ' + analyzed + ' --keys-file ../config/keys.json --json\n'
+                code = ('(\n  drmr analyze ' + analyzed + ' --keys-file ../config/keys.json --json\n'
                         '  drmr plan ' + source + ' \\\n    --to ' + target + ' --format ' + output_format + ' \\\n    --output ' + output + ' --save ./conversion.plan.json \\\n    --keys-file ../config/keys.json --json\n'
                         '  drmr convert --plan ./conversion.plan.json --keys-file ../config/keys.json --json\n'
                         '  drmr verify --plan ./conversion.plan.json --keys-file ../config/keys.json --json\n)')
@@ -753,29 +745,31 @@ class ConversionExamples(unittest.TestCase):
     def test_swapped_plan_source_target_format_output_and_missing_flow_steps_are_refused(self):
         original = recipe_fixture()
         for old, new in (
-                ('drmr plan ./source.mp4', 'drmr plan ./source/manifest.mpd'),
+                ('drmr plan ./source/input.mp4', 'drmr plan ./source/input.mpd'),
                 ('--to clear --format mp4', '--to cbcs --format mp4'),
                 ('--to clear --format mp4', '--to clear --format dash'),
                 ('--output ./result.mp4', '--output ./result'),
                 ('--save ./conversion.plan.json', '--save ./other.plan.json'),
                 ('drmr convert --plan ./conversion.plan.json', 'drmr convert --plan ./other.plan.json'),
                 ('drmr verify --plan ./conversion.plan.json', 'drmr inspect ./result.mp4'),
-                ('drmr analyze ./source.mp4', 'drmr analyze ./result.mp4'),
+                ('drmr analyze &quot;https://media.example.com/vod/mp4/clear/media.mp4&quot;', 'drmr analyze ./result.mp4'),
                 ('--keys-file ../config/keys.json', '--keys-file ../config/other.json'),
                 ('drmr verify --plan', '# drmr verify --plan')):
             with self.subTest(changed=new), self.assertRaisesRegex(CHECK.Failure, "site-guide-recipe-command"):
                 self.check(original.replace(old, new, 1))
 
-    def test_remote_local_formats_need_complete_explicit_downloads_and_hls_needs_retention(self):
+    def test_every_remote_format_requires_native_acquisition_and_matching_local_entrypoint(self):
         original = recipe_fixture()
         for old, new in (
-                ('--output ./source.mp4', '--output ./unrelated.mp4'),
-                ('https://media.example.com/vod/mp4/clear/video.mp4', 'file:///private/video.mp4'),
-                ('--output &quot;source/$resource&quot;', '--output &quot;wrong/$resource&quot;'),
-                ('video/init.mp4', 'video/unrelated.mp4'),
-                ('video/segment-4.m4s video/segment-5.m4s;', 'video/segment-4.m4s;'),
-                ('https://media.example.com/vod/dash/$resource', 'https://media.example.com/vod/dash/manifest.mpd'),
+                ('https://media.example.com/vod/mp4/clear/media.mp4', 'file:///private/video.mp4'),
+                ('https://media.example.com/vod/mp4/clear/media.mp4', 'https://media.example.com/vod/dash/manifest.mpd'),
+                ('https://media.example.com/vod/dash/clear/media.mpd', './remote.mpd'),
+                ('https://media.example.com/vod/dash/clear/media.mpd', 'http://media.example.com/vod/dash/clear/media.mpd'),
+                ('drmr plan ./source/input.mpd', 'drmr plan ./source/manifest.mpd'),
+                ('drmr plan ./source/input.mp4', 'drmr plan ./source.mp4'),
                 ('--download-dir ./source', '--download-dir ./different-source'),
+                ('--download-dir ./source', ''),
+                ('drmr analyze', 'curl --fail --location https://media.example.com/source.mp4\ndrmr analyze'),
                 ('https://media.example.com/vod/hls-fmp4/clear/media.m3u8', './remote.m3u8')):
             with self.subTest(changed=new), self.assertRaisesRegex(CHECK.Failure, "site-guide-recipe-command"):
                 self.check(original.replace(old, new, 1))

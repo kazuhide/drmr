@@ -107,8 +107,8 @@
         <a class="text-link" href="https://github.com/kazuhide/drmr/blob/main/docs/conversion-support.md">Read the full support matrix and restrictions</a>
       </div>
       <aside class="url-note" aria-labelledby="url-title">
-        <h3 id="url-title">Starting with an HLS URL?</h3>
-        <p>Acquire supported completed HLS from a URL, including encrypted TS and fMP4 profiles. Use <code>--keys-file</code> for encrypted input and <code>--download-dir</code> to retain the original for offline conversion and independent verification. Key and license addresses are not fetched. See the <a href="guide/">guide</a> for supported encryption profiles. Remote MP4/DASH, live input, and byte ranges remain outside the current acquisition profile.</p>
+        <h3 id="url-title">Starting with a media URL?</h3>
+        <p>Use <code>analyze URL --download-dir</code> to retain and check supported MP4, static DASH or completed HLS. DASH requires one Period, SegmentTemplate addressing and an explicit finite SegmentTimeline. For encrypted input, supply <code>--keys-file</code>; key and license addresses are not fetched. The retained source supports offline planning, conversion and independent verification. See the <a href="guide/">guide</a> for the media and acquisition profiles. Live input, byte ranges and other DASH addressing profiles remain outside this acquisition profile.</p>
         <a href="https://github.com/kazuhide/drmr/blob/main/docs/usage.md#convert-a-url">Convert a URL and keep its source</a>
       </aside>
     </section>

@@ -3,7 +3,7 @@
 Use this workflow when you want to check the complete input first, review one
 fixed conversion, and verify its result against the retained original. It
 supports the [qualified local media profiles](conversion-support.md), including
-supported completed HLS URLs within the documented acquisition profile.
+supported HLS, static DASH and MP4 URLs within the documented acquisition profile.
 
 For several outputs with separate DRM systems and final-manifest checks, use
 the [multiple-output workflow](multiple-outputs.md). The single-output examples
@@ -16,8 +16,11 @@ drmr analyze "https://example.com/vod/master.m3u8" --download-dir ./source --jso
 ```
 
 `source` must be a new directory under an existing parent. The command downloads
-the complete presentation, retains its original playlists and media, and creates
-`source/input.m3u8` with local references. It checks all admitted tracks, source
+the complete presentation, retains its original manifests and media, and creates
+`source/input.m3u8` with local references. For a DASH URL, the local entrypoint is
+`source/input.mpd`; for an MP4 URL it is `source/input.mp4`. Pass that local path
+to the subsequent `plan` command. Format detection uses the response content,
+including for URLs without a filename extension. It checks all admitted tracks, source
 decryption when needed, encoded content, complete decoding, and timing evidence.
 This can take as much work as reading and decoding the whole asset; it is not a
 quick check of the master playlist. A completed download survives a later media
@@ -46,12 +49,13 @@ For a local input, use `drmr analyze original/manifest.mpd --json` or
 Local input does not accept download options. `inspect` remains the faster,
 metadata-only command and does not read or decode complete media.
 
-The URL acquisition profile accepts the completed HLS container/encryption
-combinations in the [input table](conversion-support.md#url-input). Acquisition
-retains ciphertext; existing local admission uses the supplied source keys.
+The URL acquisition profile accepts the HLS, static DASH and MP4 profiles in the
+[input table](conversion-support.md#url-input). DASH needs one Period,
+`SegmentTemplate` and an explicit finite `SegmentTimeline`. Acquisition retains
+ciphertext; existing local admission uses the supplied source keys.
 Relative key identifiers are resolved against the effective playlist URL and
-matched to the protected key configuration without retrieving key URLs. It does
-not acquire remote DASH, standalone MP4, live playlists, or byte ranges. See
+matched to the protected key configuration without retrieving key URLs. Live
+input, byte ranges and other DASH addressing profiles are not acquired. See
 [fetch settings](usage.md#optional-fetch-settings) for explicit additional
 origins, authentication, and transfer limits; the same options apply to `analyze`.
 

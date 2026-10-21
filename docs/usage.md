@@ -21,6 +21,8 @@ Use `analyze URL --download-dir ./source`,
 `plan ./source/input.m3u8 --to cbcs --format dash --output ./result --save ./conversion.plan.json`,
 then `convert --plan ./conversion.plan.json` and
 `verify --plan ./conversion.plan.json`, with keys supplied separately when needed.
+For DASH and MP4 URLs, plan from `./source/input.mpd` and `./source/input.mp4`
+respectively. The [URL input table](#convert-a-url) lists the acquisition limits.
 
 The separate HLS snapshot workflow saves clear media from a local or HTTPS
 source under an explicit access policy. `analyze-hls` downloads or copies the
@@ -64,7 +66,7 @@ drmr convert source.mpd --to hls-aes128 --format hls --output protected-hls --ke
 drmr verify protected-dash/manifest.mpd --source source.mpd --keys-file keys.json --json
 ```
 
-`convert` detects local MP4, DASH, and HLS inputs. It also accepts the supported completed HLS URLs described below. For one output, choose `--to` and `--format`; omitting `--format` retains the input format. Use `--outputs FILE` for several named outputs. The output path is a new MP4 file or a new result directory. Existing destinations are refused. Input media is read into a private working area, and output is published only after content and timing checks pass. Nothing is re-encoded.
+`convert` detects local MP4, DASH, and HLS inputs. It also accepts the supported MP4, static DASH and completed HLS URLs described below. For one output, choose `--to` and `--format`; omitting `--format` retains the input format. Use `--outputs FILE` for several named outputs. The output path is a new MP4 file or a new result directory. Existing destinations are refused. Input media is read into a private working area, and output is published only after content and timing checks pass. Nothing is re-encoded.
 
 `clear`, `cenc`, and `cbcs` can be written to DASH; `clear` and `cbcs` can be written to fragmented MP4 HLS. HLS `AES-128` encrypts complete HLS resources and requires `--format hls` or `hls-ts`. `hls-ts` also supports clear and SAMPLE-AES output from qualified local TS inputs. A single-track MP4 can also be written as `clear`, `cenc`, or `cbcs`.
 
@@ -78,7 +80,7 @@ For an operational failure after a valid `convert` or `verify` command with `--j
 
 ### Convert a URL
 
-For a supported completed HLS source, pass its URL directly to `convert` and choose
+For a supported HLS, static DASH or MP4 source, pass its URL directly to `convert` and choose
 where to retain the downloaded source:
 
 ```sh
@@ -90,13 +92,27 @@ separate paths under existing parent directories. Existing downloads are never
 replaced or silently reused. Local input needs neither `--download-dir` nor
 `--fetch-policy`.
 
-The command downloads the original playlists and resources, creates
-`source/input.m3u8` with local references, then converts and verifies the media
-against that saved source. Original playlist bytes remain separate; the local
-playlists localize media references and resolve relative key identifiers against
-the effective remote playlist address. Encrypted media and initialization bytes
-are retained without decryption during acquisition. No separate snapshot command
-is required.
+The command identifies the format from the response content, saves the original
+resources and creates a local entrypoint before conversion and verification:
+
+| URL input | Retained entrypoint | Acquisition conditions |
+| --- | --- | --- |
+| MP4 | `source/input.mp4` | One complete MP4 within the local media profiles |
+| DASH | `source/input.mpd` | Static MPD with one `Period`, `SegmentTemplate` and an explicit finite `SegmentTimeline` |
+| HLS | `source/input.m3u8` | Completed TS/fMP4 playlists within the supported input profiles |
+
+The same URL input and `--download-dir` options work with `analyze` when you want
+to check the source before [saving a plan](executable-plans.md). URLs need no
+filename extension; queries and allowed redirects do not select the format.
+Use the corresponding local entrypoint for `plan` and offline reuse.
+
+For DASH, drmr saves every referenced initialization and media file and creates a
+local MPD. Only resource addressing is localized; protection declarations,
+PSSH DRM initialization data and the explicit timeline are preserved. Original
+manifest bytes remain separate. Local HLS playlists localize media references
+and resolve relative key identifiers against the effective remote playlist
+address. Encrypted media and initialization bytes are retained without
+decryption during acquisition. No separate snapshot command is required.
 
 A completed download remains available even if conversion fails. Once the source
 is saved, the server is no longer needed. Retry with its local entrypoint, or
@@ -112,11 +128,12 @@ and media work before cleanup; a completed source is retained. Downloaded source
 files are private to their owner. Result media is published only after content,
 timing, and saved-source integrity checks pass.
 
-The URL profile covers supported completed HLS with clear, AES-128, or
-sample-encrypted media. The [input table](conversion-support.md#url-input) states
-the qualified container and encryption combinations. The same local codec,
-track, encryption, and timing restrictions still apply. Remote DASH, standalone
-MP4, live playlists, and byte ranges remain outside this acquisition profile.
+The [input table](conversion-support.md#url-input) states the qualified container
+and encryption combinations, including encrypted MP4/DASH and completed HLS
+with clear, AES-128 or sample-encrypted media. The same local codec, track,
+encryption and timing restrictions still apply. Live input, byte ranges,
+multiple DASH periods, `SegmentList`, `SegmentBase`, duration-only DASH templates
+and negative timeline repeats remain outside this acquisition profile.
 
 Supply known input keys through `--keys-file` for `analyze`, source checks when
 saving a plan, conversion, and independent verification. For AES-128 and
@@ -132,7 +149,7 @@ No key URI or license endpoint is fetched.
 #### Optional fetch settings
 
 By default, retrieval uses HTTPS and the input URL's origin: its scheme, host,
-and port. A playlist that references another origin needs explicit permission.
+and port. A manifest that references another origin needs explicit permission.
 Use an owner-only JSON file with `--fetch-policy` for additional origins,
 authentication, or resource limits. The input URL stays on the command line;
 it does not need to be repeated in the file.
@@ -164,6 +181,9 @@ Optional limits also include `max_playlist_bytes`, `max_playlists`,
 unknown fields, duplicate fields, incorrect types, and invalid limits are refused.
 `connections` is a fetch upper bound; `--max-workers` and CPU/memory admission
 can reduce actual concurrency.
+
+`max_playlist_bytes` bounds each HLS playlist or DASH MPD. MP4 and media resource
+sizes use `max_resource_bytes`; `max_total_bytes` applies to the whole download.
 
 URL conversions add a `download` object to the JSON result, containing local
 `directory` and `entrypoint` display paths, the relative `entrypoint_relative`,
@@ -435,7 +455,7 @@ Open `http://127.0.0.1:8080`. Both root directories are required. `DRMR_BIND_POR
 
 Choose **New conversion** to use the same saved plans as the CLI:
 
-1. Select **Local media**, **HLS VOD URL** or **Saved CLI plan**, then **Open input**. The picker lists only server/native allowed folders; it does not upload files or accept arbitrary filesystem paths.
+1. Select **Local media**, **Source URL** or **Saved CLI plan**, then **Open input**. URL input accepts the supported MP4, static DASH and completed HLS profiles. The picker lists only server/native allowed folders; it does not upload files or accept arbitrary filesystem paths.
 2. For new media, select a **Key file** if needed and choose **Analyze**. URL input can select a **Fetch policy file** from the private configuration folder. The browser never retrieves either file's contents.
 3. Add 1–8 named outputs, selecting format, encryption, DRM signaling and optional required manifest checks separately. Choose the output parent and a new folder name, then **Save plan**.
 4. **Download original plan** preserves the original bytes and absolute paths. Keep the file private; it can contain paths and signed URLs. **Convert** creates new output and refuses an existing destination. Editing output settings requires another saved plan.
@@ -445,7 +465,7 @@ The server operator can set `DRMR_COMMON_CONFIG_ROOT` to a private configuration
 
 The private configuration picker replaces file and folder names with numbered labels. Each page follows filename order; check the corresponding local folder before choosing a file. Configuration contents and original names are not shown in the console.
 
-URL sessions use a generic **HLS VOD URL** label. The server does not return the submitted URL to the page; credentials can occur in the path as well as in query parameters. The input field is cleared when submitted.
+URL sessions use a generic **Source URL** label. The server does not return the submitted URL to the page; credentials can occur in the path as well as in query parameters. The input field is cleared when submitted.
 
 Every newly saved plan is v2, including a one-output list. When supplying a key file, analyze accepts either schema; new plan creation and v2 plan conversion/verification use v2 keys. Imported v1 plans use v1 keys. See [multiple outputs](multiple-outputs.md) and the [key-file reference](https://kazuhide.github.io/drmr/guide/#cli-reference).
 
