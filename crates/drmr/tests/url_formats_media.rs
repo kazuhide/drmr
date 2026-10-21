@@ -246,7 +246,7 @@ fn authenticated_policy(root: &Path, origin: &str) -> PathBuf {
 }
 
 fn offline_workflow(format: &str, scheme: &str, prefix: &[u8]) {
-    let root = tempfile::tempdir().unwrap();
+    let root = drmr_core::native::private_tempdir().unwrap();
     let source = fixture(&root.path().join("source"), format, scheme);
     if !prefix.is_empty() {
         let mut body = std::fs::read(&source).unwrap();
@@ -371,7 +371,7 @@ fn mp4_urls_with_supported_leading_boxes_keep_the_complete_offline_workflow() {
 #[test]
 fn mp4_and_dash_urls_share_direct_single_and_multiple_output_conversion() {
     for format in ["mp4", "dash"] {
-        let root = tempfile::tempdir().unwrap();
+        let root = drmr_core::native::private_tempdir().unwrap();
         let source = fixture(&root.path().join("source"), format, "clear");
         let original = snapshot(source.parent().unwrap());
         let responses = remote_files(&original);
