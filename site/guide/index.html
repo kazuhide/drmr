@@ -87,7 +87,7 @@ drmr convert --plan clear.plan.json --json
 drmr verify --plan clear.plan.json --json
 </code></pre></figure>
 <p>Encrypted input or output requires the private key configuration described in chapter 5. Unsupported media is refused even in this simple example. Input checks and a saved plan do not guarantee a later conversion: source bytes, runtime keys, tools and the requested output are checked again when used.</p>
-<p>The CLI is the main interface. Docker provides an option with media tools included. The experimental local Web console and Desktop host serve specific prepared workflows; they are not general file-conversion screens exposing every CLI capability.</p>
+<p>The CLI is the main interface. Docker provides an option with media tools included. The experimental local Web console and Desktop host support analysis, plan saving, conversion and verification using the same saved plans, alongside prepared-content workflows. They do not expose every CLI command.</p>
 </section>
 <section class="guide-chapter" id="terminology" data-guide-chapter="terminology" aria-labelledby="terminology-title"><h2 id="terminology-title">2. Formats, encryption and DRM</h2><a class="guide-chapter-switch" href="../ja/guide/#terminology" lang="ja" hreflang="ja">日本語</a>
 <h3>Containers and delivery</h3>
@@ -809,9 +809,24 @@ $result = Join-Path $outDir &#x27;protected.mp4&#x27;
 DRMR_OUTPUT_ROOT=/absolute/path/output \
 drmr serve
 </code></pre></figure>
-<p>Open <code>http://127.0.0.1:8080</code>. Both roots are required. <code>DRMR_BIND_PORT</code> changes the port; <code>DRMR_MAX_WORKERS</code> bounds HLS packaging workers. Catalog entries need supported prepared layouts. The console is not a general file picker or complete generic-conversion UI.</p>
+<p>Open <code>http://127.0.0.1:8080</code>. Both roots are required. <code>DRMR_BIND_PORT</code> changes the port; <code>DRMR_MAX_WORKERS</code> caps workers for saved-plan operations and prepared HLS packaging. Automatic allocation stays within that cap. New conversions select from allowed input folders. Prepared catalog entries still need their supported layouts.</p>
 <p>Use the same-version server and CLI. <code>--cli</code> selects the actual executable; a wrapper launching a different CLI can be refused by the supervision contract.</p>
-<h3>HLS connection policy</h3>
+<p>For keys or fetch settings, set <code>DRMR_COMMON_CONFIG_ROOT</code> before startup to a private configuration folder separate from input, output and custom static folders.</p>
+<p>The private configuration picker replaces file and folder names with numbered labels. Each page follows filename order; check the corresponding local folder before choosing a file. Configuration contents and original names are not shown in the console.</p>
+<h3>Convert with a saved plan</h3>
+<p><strong>New conversion</strong> runs the same saved-plan operations as the CLI, one action at a time:</p>
+<ol>
+<li>Choose <strong>Local media</strong>, <strong>HLS VOD URL</strong> or <strong>Saved CLI plan</strong>, then <strong>Open input</strong>. Files come from folders allowed by the server or Desktop; the page does not upload files or accept arbitrary host paths.</li>
+<li>For new media, select a <strong>Key file</strong> when needed, set <strong>Workers</strong>, then choose <strong>Analyze</strong>. A URL can use a <strong>Fetch policy file</strong>. Keep keys and fetch policies in the private configuration folder; do not enter their contents into the page.</li>
+<li>Add 1–8 named outputs. Choose format, encryption, DRM signaling and external manifest checks, then select a parent folder and a new output folder name. <strong>Save plan</strong> validates the input profile and supported combinations.</li>
+<li>Use <strong>Download original plan</strong> to retain a private copy, then <strong>Convert</strong>. Existing destinations are refused. Editing output settings requires saving a new plan.</li>
+<li>Choose <strong>Verify again</strong> to compare the saved plan with existing output without reconverting it. Later, open the same file as a <strong>Saved CLI plan</strong> to verify without repeating analysis or conversion.</li>
+</ol>
+<p>New plans use the named-output v2 format, even with one output. When supplying a key file, analyze accepts v1 or v2; new plans and their conversion/verification use v2. An imported CLI v1 plan uses v1 keys. Chapter 19 documents the file formats.</p>
+<p>Plan downloads preserve the original bytes and absolute paths. Keep them private: they can contain local paths and signed URLs. Do not rewrite paths to move a plan between environments. The page sends references rather than raw keys, configuration contents or executable paths, and never retrieves key-file contents.</p>
+<p>A session admits at most 32 operations. At the limit, download the plan, choose <strong>Close this conversion</strong>, then reopen the saved plan to verify existing output. If a launch outcome is unknown, <strong>Check status</strong> looks up that same operation without resubmitting it. A running or cleanup-unconfirmed session cannot close. Changing the selection or language does not release its execution slot.</p>
+<p><strong>Prepared content</strong> retains catalog conversion, HLS snapshots, queues and local playback. The named HLS profiles and key-entry form described below belong to that workflow; they are separate from the new workflow&#x27;s fetch-policy file.</p>
+<h3>Prepared-HLS connection policy</h3>
 <p>Without extra configuration, the default profile allows only the input URL&#x27;s own HTTPS origin. Additional origins/credentials require a private named-profile file. <code>DRMR_HLS_PROFILES</code> is that file path, not inline JSON:</p>
 <figure class="guide-example" aria-labelledby="example-62-title" data-code-language="json"><figcaption id="example-62-title">Example 62: json</figcaption><pre tabindex="0"><code>{
   &quot;default&quot;: {
@@ -838,7 +853,7 @@ drmr serve
 <p>Unconfirmed cleanup retains the job slot and private configuration ownership. Status/log/Stop diagnosis remains available while new work is refused. Fix the cause and retry orderly shutdown; force-exit skips this assurance.</p>
 <h3>Retention and keys</h3>
 <p>Adding clear HLS retains URLs, original playlists and downloaded media under <code>OUTPUT_ROOT/&lt;asset-id&gt;/clear/source/</code>. Removing history does not delete saved originals/results/logs.</p>
-<p>Key inputs are visually masked by default, can be revealed explicitly and clear after submission. The application does not persist content keys to localStorage/sessionStorage. That does not isolate keys from browser memory, developer tools, extensions or page/network inspection.</p>
+<p>Prepared-workflow key inputs are visually masked by default, can be revealed explicitly and clear after submission. The application does not persist content keys to localStorage/sessionStorage. That does not isolate keys from browser memory, developer tools, extensions or page/network inspection.</p>
 <p>Local ClearKey playback intentionally supplies keys as JWK JSON or player configuration. Even <code>no-store</code> responses remain observable in developer tools/HAR. It is not an operational DRM license service or hardware-protected playback.</p>
 <p>HLS playback authorization context can remain in memory for 30 minutes of inactivity, checked on related access and a 30-second sweep. Clearing a form is not immediate revocation. The final playback-session revocation or server shutdown destroys owned context.</p>
 <p>Player setup has a 20-second local budget including prior-player destruction, key lookup, media loading and actual <code>playing</code>. Failure restores controls; unconfirmed destruction prevents overlapping players and may require reloading the page. Playback recovery does not alter conversion verification.</p>
@@ -848,11 +863,13 @@ drmr serve
 <h3>Open the same local console</h3>
 <p>The experimental native host wraps the local Web console. Catalog, jobs, media tools and restrictions are shared.</p>
 <ol>
-<li>Choose File &gt; Choose catalog folder.</li>
-<li>Choose File &gt; Choose output location. A private <code>drmr-output</code> child is created or reopened there.</li>
+<li>Choose <strong>File &gt; Choose input folder…</strong> for allowed media and saved plans. Existing prepared catalog layouts remain usable.</li>
+<li>Choose <strong>File &gt; Choose output location…</strong>. A private <code>drmr-output</code> child is created or reopened there.</li>
+<li>Optionally choose <strong>File &gt; Choose private configuration folder…</strong> for keys and fetch policies, separate from input/output. Clear private configuration selection removes this selection before console startup.</li>
 <li>Choose File &gt; Check external tools in the actual application environment.</li>
 <li>Choose File &gt; Open console.</li>
 </ol>
+<p>Use <strong>New conversion</strong> for the saved-plan steps in chapter 15. Without a configuration folder, clear flows without keys or fetch settings remain available. Key-file contents are not uploaded through the browser.</p>
 <p>Restart the application to change roots after opening. Navigation stays inside the owned loopback origin; external origins and new windows are denied. Reports open in the same window, and Open console returns home. The page receives no native shell/filesystem bridge.</p>
 <p>Quit drmr stops admission and waits for server/tool confirmation. If cleanup is unconfirmed, the app keeps the window and owners, displays the error and permits another Quit attempt after the cause is fixed. This differs from OS force-quit.</p>
 <h3>Launch environment and bundle</h3>

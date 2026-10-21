@@ -22,6 +22,14 @@ const UNCONFIRMED: u8 = 4;
 struct Roots {
     catalog: Option<PathBuf>,
     output_parent: Option<PathBuf>,
+    private_config: Option<PathBuf>,
+}
+
+#[derive(Clone, Copy)]
+enum FolderRole {
+    Input,
+    Output,
+    PrivateConfig,
 }
 
 #[derive(Default)]
@@ -167,7 +175,7 @@ fn retry_diagnostic_cleanup(state: &Desktop) {
     }
 }
 
-fn pick(app: &AppHandle, output: bool) {
+fn pick(app: &AppHandle, role: FolderRole) {
     let state = app.state::<Arc<Desktop>>();
     if state.phase.load(Ordering::Acquire) != IDLE {
         error(
@@ -180,10 +188,10 @@ fn pick(app: &AppHandle, output: bool) {
         return;
     }
     let handle = app.clone();
-    let caption = if output {
-        "Choose the parent folder for private drmr output"
-    } else {
-        "Choose the catalog folder"
+    let caption = match role {
+        FolderRole::Input => "Choose the input folder",
+        FolderRole::Output => "Choose the parent folder for private drmr output",
+        FolderRole::PrivateConfig => "Choose a separate folder for private keys and fetch settings",
     };
     let dialog = app.dialog().file().set_title(caption);
     let dialog = if let Some(window) = app.get_webview_window("console") {
@@ -196,10 +204,10 @@ fn pick(app: &AppHandle, output: bool) {
         if let Some(selection) = selection {
             match (selection.into_path(), state.roots.lock()) {
                 (Ok(path), Ok(mut roots)) if state.phase.load(Ordering::Acquire) == IDLE => {
-                    if output {
-                        roots.output_parent = Some(path);
-                    } else {
-                        roots.catalog = Some(path);
+                    match role {
+                        FolderRole::Input => roots.catalog = Some(path),
+                        FolderRole::Output => roots.output_parent = Some(path),
+                        FolderRole::PrivateConfig => roots.private_config = Some(path),
                     }
                     title(
                         &handle,
@@ -215,6 +223,20 @@ fn pick(app: &AppHandle, output: bool) {
         }
         state.picking.store(false, Ordering::Release);
     });
+}
+
+fn clear_private_config(app: &AppHandle) {
+    let state = app.state::<Arc<Desktop>>();
+    if state.phase.load(Ordering::Acquire) != IDLE || state.picking.load(Ordering::Acquire) {
+        error(
+            app,
+            "Folders cannot change while the server or a folder dialog is active.",
+        );
+        return;
+    }
+    if let Ok(mut roots) = state.roots.lock() {
+        roots.private_config = None;
+    }
 }
 
 fn checked_cli() -> std::io::Result<PathBuf> {
@@ -348,16 +370,18 @@ fn open_console(app: &AppHandle) {
     {
         return;
     }
-    let roots = state
-        .roots
-        .lock()
-        .ok()
-        .and_then(|roots| Some((roots.catalog.clone()?, roots.output_parent.clone()?)));
-    let Some((catalog, output_parent)) = roots else {
+    let roots = state.roots.lock().ok().and_then(|roots| {
+        Some((
+            roots.catalog.clone()?,
+            roots.output_parent.clone()?,
+            roots.private_config.clone(),
+        ))
+    });
+    let Some((catalog, output_parent, private_config)) = roots else {
         state.phase.store(IDLE, Ordering::Release);
         error(
             app,
-            "Choose both a catalog folder and an output location from the File menu.",
+            "Choose both an input folder and an output location from the File menu.",
         );
         return;
     };
@@ -368,6 +392,7 @@ fn open_console(app: &AppHandle) {
         let result = (|| {
             let cli = checked_cli().map_err(|_| ())?;
             let mut config = ServerConfig::new(catalog, output_parent.join("drmr-output"));
+            config.common_config_root = private_config;
             "127.0.0.1".clone_into(&mut config.bind_host);
             config.bind_port = 0;
             config.cli_argv = vec![cli.into_os_string()];
@@ -412,8 +437,22 @@ fn open_console(app: &AppHandle) {
 }
 
 fn menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
-    let catalog = MenuItem::with_id(app, "catalog", "Choose catalog folder…", true, None::<&str>)?;
+    let catalog = MenuItem::with_id(app, "catalog", "Choose input folder…", true, None::<&str>)?;
     let output = MenuItem::with_id(app, "output", "Choose output location…", true, None::<&str>)?;
+    let private_config = MenuItem::with_id(
+        app,
+        "private-config",
+        "Choose private configuration folder…",
+        true,
+        None::<&str>,
+    )?;
+    let clear_config = MenuItem::with_id(
+        app,
+        "clear-config",
+        "Clear private configuration selection",
+        true,
+        None::<&str>,
+    )?;
     let open = MenuItem::with_id(app, "open", "Open console", true, Some("CmdOrCtrl+O"))?;
     let tools = MenuItem::with_id(app, "tools", "Check external tools…", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit drmr", true, Some("CmdOrCtrl+Q"))?;
@@ -423,7 +462,19 @@ fn menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         true,
         &[&PredefinedMenuItem::about(app, None, None)?, &quit],
     )?;
-    let file = Submenu::with_items(app, "File", true, &[&catalog, &output, &open, &tools])?;
+    let file = Submenu::with_items(
+        app,
+        "File",
+        true,
+        &[
+            &catalog,
+            &output,
+            &private_config,
+            &clear_config,
+            &open,
+            &tools,
+        ],
+    )?;
     let edit = Submenu::with_items(
         app,
         "Edit",
@@ -457,7 +508,7 @@ fn main() -> std::process::ExitCode {
     }
     if arguments.len() == 1 && arguments[0] == "--help" {
         println!(
-            "drmr-desktop [--help | --version | --verify-bundle]\n\nOpen the native drmr console. Use the File menu to choose catalog and output folders."
+            "drmr-desktop [--help | --version | --verify-bundle]\n\nOpen the native drmr console. Use the File menu to choose input and output folders. A separate private configuration folder for keys and fetch settings is optional."
         );
         return std::process::ExitCode::SUCCESS;
     }
@@ -472,8 +523,10 @@ fn main() -> std::process::ExitCode {
         .manage(state)
         .menu(menu)
         .on_menu_event(|app, event| match event.id().as_ref() {
-            "catalog" => pick(app, false),
-            "output" => pick(app, true),
+            "catalog" => pick(app, FolderRole::Input),
+            "output" => pick(app, FolderRole::Output),
+            "private-config" => pick(app, FolderRole::PrivateConfig),
+            "clear-config" => clear_private_config(app),
             "open" => open_console(app),
             "quit" => request_close(app),
             "tools" => diagnose_tools(app),

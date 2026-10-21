@@ -291,3 +291,53 @@ details.disclosure > .disclosure-body { margin-top: 10px; }
   .run-row { grid-template-columns: 1fr auto; }
   .log-line { grid-template-columns: 1fr; gap: 0; }
 }
+
+/* Common saved-plan workflow: one workbench with sections, beside the existing list. */
+.common-navigation { display: flex; flex-direction: column; gap: 10px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.common-navigation h2 { font-size: 13px; color: var(--ink-3); font-weight: 500; }
+.common-session-row { grid-template-columns: minmax(0, 1fr); }
+.common-session-row .row-main { grid-template-columns: minmax(0, 1fr); grid-template-areas: "id" "label"; padding: 8px; }
+.common-workbench { min-width: 0; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 0 18px; box-shadow: var(--shadow); }
+.common-head { display: flex; flex-direction: column; gap: 8px; padding: 18px 0; }
+.common-steps { font-size: 13px; font-weight: 500; color: var(--accent); }
+.common-guide { align-self: flex-start; font-size: 13px; }
+.common-section { min-width: 0; display: flex; flex-direction: column; gap: 12px; padding: 20px 0; border-top: 1px solid var(--line); }
+.common-section > .field { max-width: 640px; }
+.common-source-label, .common-picker-path { overflow-wrap: anywhere; }
+.common-output-wrap { max-width: 100%; }
+table.common-outputs { table-layout: fixed; }
+table.common-outputs th, table.common-outputs td { padding: 6px 4px; white-space: normal; }
+table.common-outputs th:first-child { width: 18%; }
+table.common-outputs th:last-child { width: 14%; }
+table.common-outputs input, table.common-outputs select { min-width: 0; width: 100%; padding: 0 6px; }
+table.common-outputs .btn { padding: 4px 6px; min-height: 36px; height: auto; font-size: 12px; overflow-wrap: anywhere; }
+.common-cell-label { font-size: 12px; color: var(--ink-3); }
+.common-outputs .common-cell-label { display: none; }
+.common-drm-choices { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+.common-drm-choices label { display: inline-flex; align-items: center; gap: 4px; }
+.common-drm-choices input[type="checkbox"] { width: auto; min-height: auto; margin: 0; }
+.common-plan-outputs { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.common-plan-outputs li { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; overflow-wrap: anywhere; }
+.common-result-block { display: flex; min-width: 0; flex-direction: column; gap: 10px; }
+.common-result-block + .common-result-block { padding-top: 14px; margin-top: 14px; border-top: 1px solid var(--line-2); }
+.common-result-block .checks li { justify-content: space-between; gap: 8px; }
+.common-picker { width: min(640px, calc(100% - 32px)); max-height: calc(100dvh - 32px); padding: 18px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); color: var(--ink); }
+.common-picker[open] { display: flex; flex-direction: column; gap: 12px; }
+.common-picker::backdrop { background: rgba(20, 24, 28, 0.28); }
+.common-files { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; min-height: 40px; overflow: auto; }
+.common-files li { display: flex; align-items: baseline; gap: 8px; }
+.common-file-kind { color: var(--ink-3); }
+.common-file { flex: 1; min-width: 0; text-align: left; border: 0; background: none; padding: 8px; border-radius: var(--radius-sm); overflow-wrap: anywhere; }
+.common-file:hover { background: var(--surface-2); }
+@media (max-width: 600px) {
+  .common-workbench { padding: 0 12px; }
+  .common-outputs, .common-outputs tbody { display: block; width: 100%; }
+  .common-outputs thead { display: none; }
+  .common-outputs tr { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px 10px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+  .common-outputs tr:first-child { padding-top: 0; }
+  table.common-outputs td { display: block; padding: 0; border: 0; min-width: 0; }
+  .common-outputs td:nth-child(4) { grid-column: 1 / -1; }
+  .common-outputs .common-cell-label { display: block; }
+  .common-drm-choices { flex-direction: row; flex-wrap: wrap; gap: 8px; }
+  .common-result-block .kv { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+}

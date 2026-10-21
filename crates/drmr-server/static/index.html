@@ -20,9 +20,16 @@
 </header>
 <div id="request-recovery" class="notice notice-warn request-recovery" role="status" aria-live="polite" hidden><span id="request-recovery-text"></span><button type="button" class="btn btn-sm" id="reconcile-btn" data-i18n="checkJobStatus">Check job status</button></div>
 
+<div id="common-owner" class="notice notice-warn request-recovery" role="status" aria-live="polite" hidden></div>
+
 <div class="console">
   <aside class="list-pane" aria-labelledby="list-title">
-    <div class="list-head"><h2 id="list-title" data-i18n="contents">Contents</h2><span class="muted" id="list-count"></span><button type="button" class="btn-link" id="list-refresh" data-i18n="refresh">Refresh</button></div>
+    <section class="common-navigation" aria-labelledby="common-sessions-title">
+      <button type="button" class="btn btn-primary" id="common-new" data-common-action="new" data-i18n="commonNew">New conversion</button>
+      <h2 id="common-sessions-title" data-i18n="commonWorkflows">Conversions and saved plans</h2>
+      <ul class="contents" id="common-sessions"></ul>
+    </section>
+    <div class="list-head"><h2 id="list-title" data-i18n="commonLegacy">Prepared content</h2><span class="muted" id="list-count"></span><button type="button" class="btn-link" id="list-refresh" data-i18n="refresh">Refresh</button></div>
     <input type="search" class="filter" id="list-filter" autocomplete="off" aria-label="Filter contents" data-i18n-aria="filterAria" placeholder="Filter by ID or label" data-i18n-placeholder="filterPlaceholder">
     <p class="notice notice-fail" id="list-error" role="alert" hidden></p>
     <p class="help" id="list-truncated" hidden data-i18n="listTruncated">Older runs were not loaded (latest 500 only).</p>
@@ -41,6 +48,7 @@
   </aside>
 
   <main class="detail-pane" id="detail">
+    <article id="common-workflow" aria-labelledby="common-title" hidden></article>
     <section class="empty-state" id="detail-empty">
       <h1 data-i18n="emptyTitle">Select a content</h1>
     </section>
@@ -205,6 +213,12 @@
 <script src="/static/js/model.js"></script>
 <script src="/static/js/reportview.js"></script>
 <script src="/static/js/playback.js"></script>
+<script src="/static/js/common-api.js"></script>
+<script src="/static/js/common-report.js"></script>
+<script src="/static/js/common-state.js"></script>
+<script src="/static/js/common-files.js"></script>
+<script src="/static/js/common-view.js"></script>
 <script src="/static/js/console.js"></script>
+<script src="/static/js/common-console.js"></script>
 </body>
 </html>

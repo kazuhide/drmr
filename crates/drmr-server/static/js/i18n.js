@@ -6,6 +6,256 @@
   var App = (window.App = window.App || {});
 
   var ja = {
+    "commonVersion": "確認したバージョン",
+
+    "commonWarnings": "警告数",
+
+    "commonCheckedManifests": "検査したマニフェスト数",
+
+    "commonNo": "なし",
+
+    "commonYes": "あり",
+
+    "commonQualifiedProtection": "解析で確認した暗号化方式",
+
+    "commonDeclaredProtection": "宣言された暗号化方式",
+
+    "commonActualFormat": "実際のメディア形式",
+
+    "commonStopSending": "停止を要求しています…",
+    "commonStopRejected": "停止要求を受け付けられませんでした。状態を確認してください。",
+
+    commonOwnerLabel: '{source} · {status}',
+    "commonLastActivity": "最後に確認した処理: ",
+
+    "commonFailedOperation": "操作: {operation}",
+
+    "commonResourceBudget": "リソースまたはサイズの上限に達しました。入力サイズとサーバーの上限を確認してください。",
+
+    "commonFetchInvalid": "取得ポリシー JSON の書式と非公開ファイルの権限を確認してください。",
+
+    "commonFetchFailed": "入力を取得できません。取得ポリシーの許可元、認証、上限、およびネットワーク接続を確認してください。",
+
+    "commonUnsupported": "この入力または出力条件は対応範囲外です。別の計画を作る前にガイドを確認してください。",
+
+    "commonPlanInvalid": "保存計画が不正、または変更されています。元の計画を開き直してください。絶対パスを書き換えないでください。",
+
+    "commonVerificationFailed": "独立したメディア比較が不合格になりました。出力ごとの検査を確認してください。この操作は合格していません。",
+
+    "commonMediaToolUnavailable": "メディアツールを利用できないか、実行時間の上限に達しました。管理者にツールと実行上限の確認を依頼してください。",
+
+    "commonConformanceFailed": "指定した外部マニフェスト検査が不合格になりました。検査結果と、保存した出力設定を確認してください。",
+
+    "commonValidatorUnavailable": "必要なマニフェスト検査ツールを利用できません。管理者にサーバー側のツール設定の確認を依頼してください。",
+
+    "commonDecryptionFailed": "暗号化されたメディアを正しく復号できません。入力の鍵、IV、メディアファイルを確認してください。",
+
+    "commonDrmMismatch": "DRM 情報と出力用の鍵設定が、計画で選んだ DRM に対応しているか確認してください。",
+
+    "commonOutputKeysMismatch": "出力の鍵を、保存した計画と出力名に合わせてください。未使用の鍵や Clear 出力用の鍵は指定しません。",
+
+    "commonOutputKeysRequired": "暗号化する出力の鍵を含む鍵ファイルを選択してください。",
+
+    "commonInputKeysRequired": "入力に必要な鍵と IV を含む鍵ファイルを選択してください。",
+
+    "commonKeyFileInvalid": "鍵ファイルの書式、バージョン、非公開ファイルの権限を確認してください。",
+
+    "commonSourceChanged": "元の入力が変更された、または利用できなくなりました。入力を確認し、変更後の入力を使う場合は新しく解析して計画を保存してください。",
+
+    "commonReasonBase": "参照先を解決するための基準 URL がありません",
+
+    "commonReasonPrerequisite": "前提条件を満たしていません",
+
+    "commonReasonLimit": "リソースの上限に達しました",
+
+    "commonReasonDelivery": "配信の検証が必要です",
+
+    "commonReasonMedia": "メディアの検証が必要です",
+
+    "commonReasonUnsupported": "未対応の機能です",
+
+    "commonReasonLinked": "参照先のマニフェストがありません",
+
+    "commonCoverageCounts": "合格 {passed}・不合格 {failed}・未検査 {notChecked}",
+
+    "commonReason": "理由",
+
+    "commonOutsideScope": "検査の対象外",
+
+    "commonInScope": "検査の対象",
+
+    "commonScope": "範囲",
+
+    "commonDocument": "文書",
+
+    "commonCompleteness": "未完了の検査",
+
+    "commonTruncated": "診断の省略",
+
+    "commonEngineRevision": "検査エンジンの版",
+
+    "commonProfileRevision": "プロファイルの版",
+
+    "commonProfile": "検査プロファイル",
+
+    "commonManifestScope": "表示したマニフェストの検査範囲に限る結果です。メディアや配信の検証とは別です。",
+
+    "commonRowsOmitted": "{total} 件のうち {shown} 件を表示しています。残りの行は表示していません。",
+
+    "commonFormatMp4": "MP4",
+    "commonFormatDash": "DASH",
+    "commonFormatHls": "HLS fragmented MP4",
+    "commonFormatHlsTs": "HLS MPEG-TS",
+    "commonActions": "操作",
+    "commonTrackNumber": "トラック",
+
+    // Common saved-plan workflow.
+    "commonNew": "新しい変換",
+    "commonWorkflows": "変換と保存した計画",
+    "commonLegacy": "準備済みコンテンツ",
+    "commonTitle": "変換",
+    "commonSteps": "解析 → 計画保存 → 変換 → 検証",
+    "commonIntro": "CLI と同じ保存計画を使います。各操作は個別に実行します。",
+    "commonUnavailable": "このワークフローを利用できません。サーバーの設定を確認してください。",
+    "commonInput": "入力",
+    "commonSourceKind": "入力の種類",
+    "commonLocal": "ローカルメディア",
+    "commonUrl": "HLS VOD の URL",
+    "commonSavedPlan": "CLI の保存計画",
+    "commonMedia": "メディアファイル",
+    "commonPlanFile": "保存計画ファイル",
+    "commonPick": "選択…",
+    "commonNotSelected": "未選択",
+    "commonConfigured": "設定済み",
+    "commonClear": "選択を解除",
+    "commonUrlLabel": "HLS プレイリスト URL",
+    "commonUrlHelp": "送信後は入力欄を空にします。取得に必要な情報はサーバー側に非公開で保存され、一覧には認証情報やクエリーを除いた URL を表示します。",
+    "commonFileHelp": "サーバーまたは Desktop で許可したフォルダーから選びます。ブラウザーからファイルをアップロードする操作ではありません。",
+    "commonFetch": "取得ポリシーファイル（任意）",
+    "commonFetchHelp": "非公開の設定フォルダーに置いた取得ポリシー JSON を使います。準備済み HLS のアクセスプロファイルとは別の設定です。",
+    "commonOpen": "入力を開く",
+    "commonOpening": "入力を開いています…",
+    "commonCreationUnknown": "入力の登録結果を確認できていません。再送せずに状態を確認してください。",
+    "commonSessionsEmpty": "開いている変換はありません。メディアまたは保存計画を開いてください。",
+    "commonSessionClose": "この変換を閉じる",
+    "commonSessionCloseHelp": "この変換を閉じると、このセッションへの遅延した要求も受け付けなくなります。メディアと取得済みの計画ファイルは残ります。実行中は閉じられません。",
+    "commonRuntime": "次の操作に使う設定",
+    "commonKeys": "鍵ファイル（Clear のメディアでは任意）",
+    "commonKeysHelp": "参照だけを送信し、ブラウザーではファイルの内容を取得しません。鍵ファイルを使う場合、解析には v1・v2 のどちらも指定できます。新しい計画とその変換・検証は、出力が一つでも v2 を使います。読込み済みの v1 計画には v1 を使います。",
+    "commonWorkers": "並列処理数（空欄は自動）",
+    "commonWorkersHelp": "1〜{max} を指定するか、空欄にするとサーバーの上限内で自動設定します。",
+    "commonAnalyze": "解析する",
+    "commonAnalysis": "解析結果",
+    "commonAnalyzeFirst": "新しい計画を保存する前に入力を解析してください。",
+    "commonOutputs": "出力",
+    "commonOutputsHelp": "出力を 1〜8 件設定します。出力ごとに形式、暗号化方式、DRM 情報、外部マニフェスト検査を指定します。対応する組み合わせは計画の保存時に確認します。",
+    "commonOutputId": "出力名",
+    "commonFormat": "形式",
+    "commonProtection": "暗号化方式",
+    "commonDrms": "DRM 情報",
+    "commonConformance": "外部マニフェスト検査",
+    "commonNone": "なし",
+    "commonRequired": "必須",
+    "commonAddOutput": "出力を追加",
+    "commonRemoveOutput": "出力 {n} を削除",
+    "commonRowField": "出力 {n}: {field}",
+    "commonOutputNameHelp": "英小文字で始まる 1〜32 文字の英小文字・数字・ハイフンを使います。名前の重複や Windows の予約名は使えません。",
+    "commonOutputParent": "新しい出力の親フォルダー",
+    "commonDestination": "新しい出力フォルダー名",
+    "commonDestinationHelp": "新しいフォルダー名を指定します。既存の出力は置き換えません。",
+    "commonSavePlan": "計画を保存",
+    "commonPlan": "保存した計画",
+    "commonPlanHelp": "保存した計画では入力と出力条件が固定されます。鍵とツールの設定は別に渡します。計画の識別子は変更の検出に使い、作成者の信頼性を保証するものではありません。",
+    "commonPlanNone": "保存した計画を選択していません。",
+    "commonPlanId": "計画 ID",
+    "commonPlanVersion": "計画の形式",
+    "commonSingleOutput": "単一出力（v1）",
+    "commonPlanSelect": "保存した計画を選ぶ",
+    "commonPlanDirty": "出力の設定が変わりました。変換する前に新しい計画を保存してください。",
+    "commonExport": "元の計画ファイルを取得",
+    "commonExportHelp": "元のバイト列と絶対パスを保持します。取得したファイルにはローカルパスや署名付き URL が含まれる場合があるため、非公開で保管してください。",
+    "commonDestinationAbsent": "出力はまだありません",
+    "commonDestinationPresent": "出力は作成済みです。再変換せずに検証できます",
+    "commonDestinationMixed": "作成済みの出力があります。保存した計画を検証してください。変換で置き換えることはできません。",
+    "commonDestinationUnavailable": "出力の有無を確認できません",
+    "commonConvert": "変換する",
+    "commonConversion": "変換結果",
+    "commonVerify": "改めて検証する",
+    "commonVerification": "検証結果",
+    "commonVerifyHelp": "保存した計画と既存の出力を再変換せずに検証します。メディアの検証は、本番ライセンスの発行や端末再生を確認するものではありません。",
+    "commonNoResult": "この操作の結果はまだありません。",
+    "commonCollecting": "この操作の結果を取得しています…",
+    "commonSucceeded": "完了",
+    "commonFailed": "失敗",
+    "commonInterrupted": "中断",
+    "commonRejected": "要求を受け付けられませんでした",
+    "commonRunning": "実行中: {operation}",
+    "commonPending": "実行の受付を確認しています",
+    "commonUnknown": "不明",
+    "commonUnknownOwner": "結果が不明です。再送せずに状態を確認してください。実行枠は保持しています。",
+    "commonCleanup": "後処理を確認できていません。まだ次の操作を開始できません。",
+    "commonStop": "停止",
+    "commonStopping": "停止要求済み・後処理の確認待ち",
+    "commonCheckStatus": "状態を確認",
+    "commonOwnerElsewhere": "別の変換を実行中です。表示を切り替えても停止しません。",
+    "commonGlobalBusy": "別の操作が実行枠を使用しています。",
+    "commonGlobalClosing": "サーバーを終了しています。新しい操作は開始できません。",
+    "commonProgress": "経過 {seconds} 秒・処理区間 {closed}/{started}・並列数 {workers}",
+    "commonCapacity": "使用した要求数: {used}/32",
+    "commonCapacityFull": "このセッションでは要求を 32 回使用しました。計画を取得してセッションを閉じ、保存した計画を開き直すと既存の出力を検証できます。",
+    "commonError": "操作を完了できませんでした。選択したファイルとガイドの説明を確認してください。",
+    "commonInvalid": "必須項目と出力名を確認してください。",
+    "commonArtifactUnavailable": "この操作に対応する結果を取得できません。状態を再確認してください。以前の結果は、この操作の証拠にはなりません。",
+    "commonServerChanged": "サーバーの起動が切り替わりました。以前の参照は使えません。ページを再読込みして新しいセッションを開いてください。以前の処理の後処理を確認できたわけではありません。",
+    "commonPrivateConfig": "選択した非公開の設定ファイルを利用できません。管理者に設定フォルダーと権限の確認を依頼してください。",
+    "commonDestinationExists": "その出力は作成済みです。保存した計画を開いて検証するか、新しいフォルダー名を使ってください。",
+    "commonGuide": "ファイルの書式と CLI オプション",
+    "commonPicker": "ファイルまたはフォルダーを選択",
+    "commonRoot": "許可されたフォルダー",
+    "commonUp": "一つ上へ",
+    "commonChooseFolder": "このフォルダーを使う",
+    "commonMore": "次のページを表示",
+    "commonNoRoots": "この種類のファイルを選べるフォルダーがありません。管理者にフォルダーの設定を依頼してください。",
+    "commonFolderEmpty": "このフォルダーに選択できるファイルはありません。",
+    "commonPickerLoading": "フォルダーを読み込んでいます…",
+    "commonPickerError": "フォルダーを読み込めません。再度確認してください。",
+    "commonPass": "合格",
+    "commonFail": "不合格",
+    "commonNotChecked": "未検査",
+    "commonNotRequested": "未指定",
+    "commonIncomplete": "未完了",
+    "commonWarning": "注意",
+    "commonInputAdmitted": "入力の検査",
+    "commonSourceUnchanged": "入力に変更なし",
+    "commonMatchesPlan": "出力と計画の一致",
+    "commonMetadata": "ストリームのメタデータ",
+    "commonPayload": "圧縮ペイロード",
+    "commonTiming": "パケットの時刻",
+    "commonDecoded": "デコードした内容",
+    "commonMediaVerified": "メディアの検証",
+    "commonLicensePlayback": "DRM のライセンス取得と再生",
+    "commonNativeManifest": "drmr のマニフェスト検査",
+    "commonNativeCounts": "エラー {errors} 件・警告 {warnings} 件・文書 {documents} 件",
+    "commonCoverage": "検査の範囲",
+    "commonDetails": "詳細",
+    "commonTrack": "トラック {n}",
+    "commonTrackKind": "種別",
+    "commonCodec": "コーデック",
+    "commonEvidence": "根拠",
+    "commonEligible": "出力候補（各形式の条件確認が必要）",
+    "commonInspectionNotes": "互換性に関する注意: {n} 件",
+    "commonProcessing": "処理経路",
+    "commonRule": "検査項目",
+    "commonStatus": "状態",
+    "commonActivity_configuration": "設定の確認",
+    "commonActivity_acquisition": "入力の取得",
+    "commonActivity_input-preparation": "入力の準備",
+    "commonActivity_inspection": "入力の検査",
+    "commonActivity_normalization": "形式の調整",
+    "commonActivity_packaging": "パッケージの作成",
+    "commonActivity_verification": "検証",
+    "commonActivity_publication": "出力の確定",
+
     // chrome
     skipToContent: '本文へ移動', brandName: 'DRM Packaging Console', language: '言語', close: '閉じる', refresh: '更新',
     contents: 'コンテンツ', listCount: '{n} 件', listCountOne: '1 件', filterPlaceholder: 'ID・ラベルで絞り込み', filterAria: 'コンテンツを絞り込む',
@@ -191,6 +441,256 @@
   };
 
   var en = {
+    "commonVersion": "Observed version",
+
+    "commonWarnings": "Warnings",
+
+    "commonCheckedManifests": "Checked manifests",
+
+    "commonNo": "No",
+
+    "commonYes": "Yes",
+
+    "commonQualifiedProtection": "Validated encryption",
+
+    "commonDeclaredProtection": "Declared encryption",
+
+    "commonActualFormat": "Actual media format",
+
+    "commonStopSending": "Sending Stop request…",
+    "commonStopRejected": "Stop was refused. Check status before retrying.",
+
+    commonOwnerLabel: '{source} · {status}',
+    "commonLastActivity": "Last observed activity: ",
+
+    "commonFailedOperation": "Operation: {operation}",
+
+    "commonResourceBudget": "A resource or size limit was reached. Check the input size and server limits.",
+
+    "commonFetchInvalid": "Check the fetch-policy JSON format and private-file permissions.",
+
+    "commonFetchFailed": "Input acquisition failed. Check network access, allowed origins, authentication and limits in the fetch policy.",
+
+    "commonUnsupported": "This input or output profile is outside the supported scope. Check the guide before choosing another plan.",
+
+    "commonPlanInvalid": "The saved plan is invalid or has changed. Reopen the original plan; do not edit its absolute paths.",
+
+    "commonVerificationFailed": "The independent media comparison failed. Review the per-output checks; this operation did not pass.",
+
+    "commonMediaToolUnavailable": "A media tool was unavailable or timed out. Ask the operator to check the tool installation and execution limits.",
+
+    "commonConformanceFailed": "The requested external manifest check failed. Check its result and the saved output settings.",
+
+    "commonValidatorUnavailable": "The required manifest validator is unavailable. Ask the operator to check the server-side tool configuration.",
+
+    "commonDecryptionFailed": "Encrypted media could not be decoded correctly. Check the input key, IV and media files.",
+
+    "commonDrmMismatch": "Check that DRM signaling and output keys match the systems selected in the saved plan.",
+
+    "commonOutputKeysMismatch": "Match the output key entries to the saved plan and its output names. Omit unused or clear-output key entries.",
+
+    "commonOutputKeysRequired": "Select a key file containing keys for the encrypted outputs.",
+
+    "commonInputKeysRequired": "Select a key file containing all required input keys and IVs.",
+
+    "commonKeyFileInvalid": "Check the key file format, version and private-file permissions.",
+
+    "commonSourceChanged": "The original input changed or became unavailable. Check it; analyze and save a new plan if you intend to use changed input.",
+
+    "commonReasonBase": "Reference base unavailable",
+
+    "commonReasonPrerequisite": "Prerequisite not satisfied",
+
+    "commonReasonLimit": "Resource limit",
+
+    "commonReasonDelivery": "Requires delivery evidence",
+
+    "commonReasonMedia": "Requires media evidence",
+
+    "commonReasonUnsupported": "Unsupported feature",
+
+    "commonReasonLinked": "Linked manifest unavailable",
+
+    "commonCoverageCounts": "Pass {passed} · fail {failed} · not checked {notChecked}",
+
+    "commonReason": "Reason",
+
+    "commonOutsideScope": "Outside scope",
+
+    "commonInScope": "In scope",
+
+    "commonScope": "Scope",
+
+    "commonDocument": "Document",
+
+    "commonCompleteness": "Incomplete checks",
+
+    "commonTruncated": "Diagnostics omitted",
+
+    "commonEngineRevision": "Engine revision",
+
+    "commonProfileRevision": "Profile revision",
+
+    "commonProfile": "Profile",
+
+    "commonManifestScope": "This result covers the named manifest profile only. Media and delivery checks are separate.",
+
+    "commonRowsOmitted": "Showing {shown} of {total} rows. The remaining rows are not displayed.",
+
+    "commonFormatMp4": "MP4",
+    "commonFormatDash": "DASH",
+    "commonFormatHls": "HLS fragmented MP4",
+    "commonFormatHlsTs": "HLS MPEG-TS",
+    "commonActions": "Actions",
+    "commonTrackNumber": "Track",
+
+    // Common saved-plan workflow.
+    "commonNew": "New conversion",
+    "commonWorkflows": "Conversions and saved plans",
+    "commonLegacy": "Prepared content",
+    "commonTitle": "Conversion",
+    "commonSteps": "Analyze → Save plan → Convert → Verify",
+    "commonIntro": "Use the same saved plans as the CLI. Choose each operation separately.",
+    "commonUnavailable": "The common workflow is unavailable. Check the server configuration.",
+    "commonInput": "Input",
+    "commonSourceKind": "Input type",
+    "commonLocal": "Local media",
+    "commonUrl": "HLS VOD URL",
+    "commonSavedPlan": "Saved CLI plan",
+    "commonMedia": "Media file",
+    "commonPlanFile": "Saved plan file",
+    "commonPick": "Choose…",
+    "commonNotSelected": "Not selected",
+    "commonConfigured": "Selected",
+    "commonClear": "Clear selection",
+    "commonUrlLabel": "HLS playlist URL",
+    "commonUrlHelp": "The URL is cleared after submission. The server keeps acquisition details privately; the list shows a URL without credentials or query parameters.",
+    "commonFileHelp": "Choose from folders allowed by the server or Desktop. Files are not uploaded through the browser.",
+    "commonFetch": "Fetch policy file (optional)",
+    "commonFetchHelp": "Use a fetch-policy JSON file in the private configuration folder. This is separate from the prepared-HLS access profile.",
+    "commonOpen": "Open input",
+    "commonOpening": "Opening input…",
+    "commonCreationUnknown": "Input registration is not confirmed. Check its status without submitting again.",
+    "commonSessionsEmpty": "No open conversions. Open media or a saved plan.",
+    "commonSessionClose": "Close this conversion",
+    "commonSessionCloseHelp": "Closing ends this session, including any delayed request for it. Saved media and exported plans are kept. A busy session cannot close.",
+    "commonRuntime": "Settings for the next operation",
+    "commonKeys": "Key file (optional for clear media)",
+    "commonKeysHelp": "Only a reference is sent. The browser never retrieves the file contents. When keys are needed, Analyze accepts v1 or v2; a new plan and its conversion or verification use v2, even with one output. Imported v1 plans use v1 keys.",
+    "commonWorkers": "Workers (blank: automatic)",
+    "commonWorkersHelp": "Set 1–{max}, or leave blank for the engine default within the server limit.",
+    "commonAnalyze": "Analyze",
+    "commonAnalysis": "Analysis result",
+    "commonAnalyzeFirst": "Analyze the input before saving a new plan.",
+    "commonOutputs": "Outputs",
+    "commonOutputsHelp": "Create 1–8 named outputs. Format, encryption, DRM signaling and external manifest checks are separate choices. The plan validates supported combinations.",
+    "commonOutputId": "Output name",
+    "commonFormat": "Format",
+    "commonProtection": "Encryption",
+    "commonDrms": "DRM signaling",
+    "commonConformance": "External manifest check",
+    "commonNone": "None",
+    "commonRequired": "Required",
+    "commonAddOutput": "Add output",
+    "commonRemoveOutput": "Remove output {n}",
+    "commonRowField": "Output {n}: {field}",
+    "commonOutputNameHelp": "Use 1–32 lowercase letters, digits or hyphens, starting with a letter. Names must be unique; Windows reserved names are excluded.",
+    "commonOutputParent": "Parent folder for the new output",
+    "commonDestination": "New output folder name",
+    "commonDestinationHelp": "Choose a new folder name. Existing outputs are not replaced.",
+    "commonSavePlan": "Save plan",
+    "commonPlan": "Saved plan",
+    "commonPlanHelp": "The saved plan fixes the input and output conditions. Keys and tool settings are supplied separately. Its identifier detects changes; it does not establish trusted authorship.",
+    "commonPlanNone": "No saved plan selected.",
+    "commonPlanId": "Plan ID",
+    "commonPlanVersion": "Plan format",
+    "commonSingleOutput": "Single output (v1)",
+    "commonPlanSelect": "Choose a saved plan",
+    "commonPlanDirty": "Output settings changed. Save a new plan before conversion.",
+    "commonExport": "Download original plan",
+    "commonExportHelp": "The original bytes and absolute paths are preserved. Store the downloaded file privately; it can contain local paths and signed URLs.",
+    "commonDestinationAbsent": "Output does not exist yet",
+    "commonDestinationPresent": "Output already exists: verify it without reconverting",
+    "commonDestinationMixed": "Some outputs already exist. Verify the saved plan; conversion cannot replace them.",
+    "commonDestinationUnavailable": "Output availability could not be checked",
+    "commonConvert": "Convert",
+    "commonConversion": "Conversion result",
+    "commonVerify": "Verify again",
+    "commonVerification": "Verification result",
+    "commonVerifyHelp": "Verify the saved plan and existing output without conversion. Media checks do not establish production license service or device playback.",
+    "commonNoResult": "No result for this operation yet.",
+    "commonCollecting": "Fetching the bound result…",
+    "commonSucceeded": "Completed",
+    "commonFailed": "Failed",
+    "commonInterrupted": "Interrupted",
+    "commonRejected": "Request refused",
+    "commonRunning": "Running: {operation}",
+    "commonPending": "Waiting for admission",
+    "commonUnknown": "Unknown",
+    "commonUnknownOwner": "The outcome is unknown. Check status without resending. The execution slot remains reserved.",
+    "commonCleanup": "Cleanup is not confirmed. Another operation cannot start yet.",
+    "commonStop": "Stop",
+    "commonStopping": "Stop requested; awaiting cleanup",
+    "commonCheckStatus": "Check status",
+    "commonOwnerElsewhere": "Another conversion is running. Selecting a different item does not stop it.",
+    "commonGlobalBusy": "Another operation owns the execution slot.",
+    "commonGlobalClosing": "The server is closing. New operations are unavailable.",
+    "commonProgress": "Elapsed {seconds}s · scopes {closed}/{started} · workers {workers}",
+    "commonCapacity": "Requests used: {used}/32",
+    "commonCapacityFull": "This session has used 32 requests. Download its plan, close the session, then reopen the saved plan to verify existing output.",
+    "commonError": "The operation could not be completed. Check the selected files and the guide.",
+    "commonInvalid": "Check the required fields and output names.",
+    "commonArtifactUnavailable": "The matching result is unavailable. Check status again; previous results are not evidence for this operation.",
+    "commonServerChanged": "The server instance changed. Previous references are no longer usable. Reload to open a new session; this does not confirm cleanup of the previous instance.",
+    "commonPrivateConfig": "The selected private configuration file is unavailable or not permitted. Ask the server operator to check the configuration folder and permissions.",
+    "commonDestinationExists": "That output already exists. Open its saved plan and verify it, or use a new folder name.",
+    "commonGuide": "File formats and CLI options",
+    "commonPicker": "Choose a file or folder",
+    "commonRoot": "Allowed folder",
+    "commonUp": "Parent folder",
+    "commonChooseFolder": "Use this folder",
+    "commonMore": "Load next page",
+    "commonNoRoots": "No folder is configured for this file type. Ask the operator to configure an allowed folder.",
+    "commonFolderEmpty": "No matching files in this folder.",
+    "commonPickerLoading": "Loading folder…",
+    "commonPickerError": "Could not load this folder. Try again.",
+    "commonPass": "Pass",
+    "commonFail": "Fail",
+    "commonNotChecked": "Not checked",
+    "commonNotRequested": "Not requested",
+    "commonIncomplete": "Incomplete",
+    "commonWarning": "Warning",
+    "commonInputAdmitted": "Input admission",
+    "commonSourceUnchanged": "Source unchanged",
+    "commonMatchesPlan": "Output matches plan",
+    "commonMetadata": "Stream metadata",
+    "commonPayload": "Compressed payloads",
+    "commonTiming": "Packet timing",
+    "commonDecoded": "Decoded content",
+    "commonMediaVerified": "Media verification",
+    "commonLicensePlayback": "DRM licensing and playback",
+    "commonNativeManifest": "drmr manifest check",
+    "commonNativeCounts": "Errors {errors} · warnings {warnings} · documents {documents}",
+    "commonCoverage": "Check coverage",
+    "commonDetails": "Details",
+    "commonTrack": "Track {n}",
+    "commonTrackKind": "Type",
+    "commonCodec": "Codec",
+    "commonEvidence": "Evidence",
+    "commonEligible": "Eligible output formats (profile checks still apply)",
+    "commonInspectionNotes": "Compatibility notes: {n}",
+    "commonProcessing": "Processing route",
+    "commonRule": "Rule",
+    "commonStatus": "Status",
+    "commonActivity_configuration": "Configuration",
+    "commonActivity_acquisition": "Acquisition",
+    "commonActivity_input-preparation": "Input preparation",
+    "commonActivity_inspection": "Inspection",
+    "commonActivity_normalization": "Normalization",
+    "commonActivity_packaging": "Packaging",
+    "commonActivity_verification": "Verification",
+    "commonActivity_publication": "Publication",
+
     skipToContent: 'Skip to content', brandName: 'DRM Packaging Console', language: 'Language', close: 'Close', refresh: 'Refresh',
     contents: 'Contents', listCount: '{n} items', listCountOne: '1 item', filterPlaceholder: 'Filter by ID or label', filterAria: 'Filter contents',
     listEmpty: 'No contents yet. Start from "Add content".', listNone: 'No content matches the filter.', listLoadFailed: 'Could not load the list.', listTruncated: 'Older runs were not loaded (latest 500 only).',

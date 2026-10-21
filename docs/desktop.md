@@ -1,18 +1,29 @@
 # Desktop console
 
-The experimental Desktop host opens the existing local Web console in a native window. It uses the same catalog, jobs and media tools as `drmr serve`. It does not expose every generic CLI command as a desktop form.
+The experimental Desktop host opens the existing local Web console in a native window. It uses the same catalog, jobs and media tools as `drmr serve`. The common workflow runs analyze, saved-plan creation, conversion and independent verification. Other CLI commands remain available through the CLI.
 
 ## Choose folders
 
-1. Open **File → Choose catalog folder** and select your media catalog.
-2. Open **File → Choose output location**. drmr creates or opens a private `drmr-output` child folder there.
-3. Select **File → Open console**.
+1. Open **File → Choose input folder…** and select the allowed media/saved-plan folder. Prepared catalog entries can still use their existing layout.
+2. Open **File → Choose output location…**. drmr creates or opens a private `drmr-output` child folder there.
+3. Optionally choose **File → Choose private configuration folder…** for key and fetch-policy files. Keep it separate from input and output folders. **Clear private configuration selection** removes this selection before starting the console. Clear-media flows without fetch settings need no configuration folder.
+4. Select **File → Open console**.
 
 The macOS bundle permits plain HTTP only for the loopback IP `127.0.0.1`; window navigation still requires the exact owned port. The native menus handle folder selection. The console receives no native shell or filesystem permissions. Links cannot navigate the window to another origin or open another window. An owned report link opens in the existing window; **File → Open console** returns to the console.
 
 To change folders after opening the console, quit and reopen the application. Source URLs and downloaded media can remain in private analysis folders; closing the window does not delete them. See [usage](usage.md) for saved-source and history retention.
 
 **Quit drmr** stops admission and waits for the local server to confirm cleanup. If cleanup cannot be confirmed, the application stays open, retains its running work and shows an error. Correct the reported cause, then select **Quit drmr** again to retry orderly cleanup. An operating-system force quit is separate from this orderly shutdown.
+
+## Saved-plan conversion and later verification
+
+Choose **New conversion** in the console. Select local media or an HLS VOD URL, open the input, and analyze it. Add 1–8 named outputs, choose a new output folder, then **Save plan**. **Download original plan** preserves the original bytes and absolute paths; keep that file private because it can contain paths and signed URLs.
+
+Choose **Convert** to create the output, then **Verify again** for an independent comparison. To verify later, open the same file as **Saved CLI plan** and verify the existing output without analysis or reconversion. When a key file is needed, new plans use v2 even with one output; an imported v1 plan uses v1. The page selects private configuration references and never uploads or retrieves key-file contents.
+
+All common and prepared workflows share one execution slot. A lost response remains unknown until status lookup resolves it; the page does not repeat a launch. Stop acknowledgment does not establish process cleanup. A pending, running or cleanup-unconfirmed session remains owned. See [the Web workflow](usage.md#saved-plan-workflow) for session limits and recovery.
+
+These controls do not extend the native runtime results in the table below. Each native WebView still needs its own workflow, attachment-download and keyboard qualification.
 
 ## Local playback
 
