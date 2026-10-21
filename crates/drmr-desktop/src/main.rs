@@ -385,7 +385,7 @@ fn export_notice(app: &AppHandle, notice: Notice) {
         ),
         Notice::CleanupUnconfirmed => error(
             app,
-            "The partial plan copy could not be removed safely. drmr retains its file owner. Restore the selected private folder and select Quit drmr to retry cleanup.",
+            "The partial plan copy could not be removed safely. drmr retains its file owner. Inspect the selected private folder, including hidden .drmr-plan-cleanup- folders, and preserve unfamiliar files. Restore the original private folder and select Quit drmr to retry cleanup.",
         ),
     }
 }

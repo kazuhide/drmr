@@ -107,6 +107,16 @@ this error.
 These controls do not protect against an administrator or a malicious process
 running as the same operating-system user.
 
+For a partial Desktop plan copy, cleanup first moves the selected entry into a
+new owner-only `.drmr-plan-cleanup-*` folder beside the selected file. It checks
+the moved entry's identity before deleting it, so a concurrent replacement at
+the original filename is not deleted. An unfamiliar entry is restored only if
+its original name is free; an occupied name is never overwritten. Unconfirmed
+cleanup retains its file owner and recovery state. Inspect the selected private
+folder, including hidden cleanup folders, and preserve unfamiliar files. Restore
+the original private folder before selecting **Quit drmr** to retry cleanup.
+These checks have the same operating-system account boundary described above.
+
 Confirmed normal cleanup removes owned temporary files. An interrupted process or unconfirmed child cleanup can leave private working files behind; inspect the reported job and workspace before reuse. Deleting a file does not guarantee secure erasure from the storage device, snapshots, or backups. Keep working directories, retained source material, and backups under the same access controls as the input keys.
 
 ## Local web and Desktop playback
