@@ -1,9 +1,10 @@
 import { guideChapters, requireGuideLayout, requireGuideMovement, codeAriaTemplate, requireGuideCheckpoint } from './guide.mjs';
 import { locales } from './locales.mjs';
 import { matrixRows, matrixColumns, matrixObservation, requireMatrixLayout, requireMatrixMovement, completeMatrixKey, MatrixKeyDeadline } from './matrix.mjs';
-import { matrixRecipes, requireRecipe, requireRecipeIdentity, requireRecipePosition, requireMatrixLinkExposure } from './recipes.mjs';
+import { matrixRecipes, recipeObservation, requireRecipe, requireRecipeIdentity, requireRecipePosition, requireMatrixLinkExposure } from './recipes.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { runInNewContext } from 'node:vm';
 import { assets, assetRoute, assetPath, digest, liveMode, allowedRequest } from './source.mjs';
 import * as identity from './source.mjs';
 import { matchesPublication } from './wait-published.mjs';
@@ -565,7 +566,7 @@ test('recipe checks refuse wrong destinations, hidden code, incomplete steps and
 
 function recipePositionSample() {
   return { ...recipeSample(), focused: true,
-    url: 'http://127.0.0.1:4173/drmr/guide/#recipe-hls-ts-video-dash-cbcs', language: 'en',
+    url: 'http://127.0.0.1:4173/drmr/guide/#recipe-hls-ts-video-dash-cbcs', pageLanguage: 'en',
     rect: { left: 16, right: 304, top: 24, bottom: 84 }, viewport: { width: 320, height: 900 } };
 }
 
@@ -576,7 +577,7 @@ test('recipe identity is immutable and position rejects unfocused, nonfinite or 
   requireRecipeIdentity(good, recipe, source);
   requireRecipePosition(good);
   for (const changed of [{ id: 'recipe-mp4-mp4-clear' }, { tag: 'H2' }, { tabindex: null },
-    { chapter: 'verification' }, { url: source.url + '-stale' }, { language: 'ja' }]) {
+    { chapter: 'verification' }, { url: source.url + '-stale' }, { pageLanguage: 'ja' }]) {
     assert.throws(() => requireRecipeIdentity({ ...good, ...changed }, recipe, source));
   }
   assert.throws(() => requireRecipePosition({ ...good, focused: false }));
@@ -586,6 +587,44 @@ test('recipe identity is immutable and position rejects unfocused, nonfinite or 
   }
   for (const changed of [{ width: 0 }, { height: Infinity }]) {
     assert.throws(() => requireRecipePosition({ ...good, viewport: { ...good.viewport, ...changed } }));
+  }
+});
+
+test('the actual recipe observer preserves independent EN/JA page locale and shell metadata through transport', () => {
+  const recipe = matrixRecipes.find(value => value.id === 'recipe-hls-ts-video-dash-cbcs');
+  const codeText = recipeSample(recipe).code;
+  for (const language of ['en', 'ja']) {
+    const url = 'http://127.0.0.1:4173/drmr/' + (language === 'ja' ? 'ja/' : '') + 'guide/#' + recipe.id;
+    const code = Object.freeze({ textContent: codeText, innerText: codeText });
+    const figure = Object.freeze({ tagName: 'FIGURE',
+      classList: Object.freeze({ contains: name => name === 'guide-example' }),
+      getAttribute: name => name === 'data-code-language' ? 'sh' : null,
+      querySelector: selector => selector === 'pre code' ? code : null });
+    const link = Object.freeze({ getAttribute: name => name === 'href' ? '#recipe-setup' : null });
+    const setup = Object.freeze({ tagName: 'P', nextElementSibling: figure,
+      querySelectorAll: selector => selector === 'a' ? Object.freeze([link]) : Object.freeze([]) });
+    const box = Object.freeze({ left: 16, right: 304, top: 24, bottom: 84, width: 288, height: 60 });
+    const element = Object.freeze({ id: recipe.id, tagName: 'H3', textContent: 'HLS → DASH / cbcs',
+      nextElementSibling: setup, getAttribute: name => name === 'tabindex' ? '-1' : null,
+      closest: selector => selector === '[data-guide-chapter]' ? Object.freeze({ id: 'url-input' }) : null,
+      getBoundingClientRect: () => box });
+    const sandbox = { element, innerWidth: 320, innerHeight: 900,
+      location: Object.freeze({ href: url }), document: Object.freeze({ activeElement: element,
+        documentElement: Object.freeze({ lang: language }), readyState: 'complete',
+        fonts: Object.freeze({ status: 'loaded' }) }),
+      getComputedStyle: () => Object.freeze({ display: 'block', visibility: 'visible' }) };
+    const raw = runInNewContext(`(${recipeObservation.toString()})(element)`, sandbox, { timeout: 1000 });
+    // Playwright returns serialized values across its browser/runner boundary.
+    // This fixture checks that shape; it does not establish browser behavior.
+    const observed = JSON.parse(JSON.stringify(raw));
+    assert.equal(observed.pageLanguage, language);
+    assert.equal(observed.language, 'sh');
+    assert.equal(observed.url, url);
+    requireRecipeIdentity(observed, recipe, { url, language });
+    requireRecipe(observed, recipe);
+    requireRecipePosition(observed);
+    assert.throws(() => requireRecipeIdentity({ ...observed, pageLanguage: 'sh' }, recipe, { url, language }));
+    assert.throws(() => requireRecipe({ ...observed, language }, recipe));
   }
 });
 

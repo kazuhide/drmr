@@ -57,7 +57,7 @@ export function recipeObservation(element) {
   const box = element.getBoundingClientRect();
   const style = getComputedStyle(element);
   return { id: element.id, tag: element.tagName, tabindex: element.getAttribute('tabindex'),
-    url: location.href, language: document.documentElement.lang,
+    url: location.href, pageLanguage: document.documentElement.lang,
     readyState: document.readyState, fontsStatus: document.fonts.status,
     chapter: element.closest('[data-guide-chapter]')?.id, heading: element.textContent.trim(),
     presented: box.width > 0 && box.height > 0 && style.display !== 'none' && style.visibility === 'visible',
@@ -76,7 +76,7 @@ export function requireRecipeIdentity(value, recipe, source) {
   assert.equal(value.tabindex, '-1');
   assert.equal(value.chapter, 'url-input');
   assert.equal(value.url, source.url);
-  assert.equal(value.language, source.language);
+  assert.equal(value.pageLanguage, source.language);
 }
 
 // Pointer navigation need not draw a keyboard outline. Its actual focused
