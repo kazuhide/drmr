@@ -163,7 +163,7 @@ async function pick(page, role, filename) {
 async function openSession(page, kind = 'local', filename = 'source.mp4') {
   await page.locator('#common-new').click();
   await page.locator('#common-source-kind').selectOption(kind);
-  if (kind === 'hls-url') {
+  if (kind === 'url') {
     await page.locator('#common-url').fill(fixtureOrigin + '/private-browser-marker/media.m3u8?private-browser-auth-marker');
     await pick(page, 'fetch-policy', 'fetch.json');
   } else await pick(page, kind === 'local' ? 'media' : 'saved-plan', filename);
@@ -259,7 +259,7 @@ test.beforeEach(async ({ page, context }) => {
     }
     if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/common/sessions') {
       const body = request.postDataJSON();
-      if (body.source.kind === 'hls-url') expect(body.source.fetch_policy_ref).toBe(record.selections['fetch-policy'] || null);
+      if (body.source.kind === 'url') expect(body.source.fetch_policy_ref).toBe(record.selections['fetch-policy'] || null);
     }
   });
   page.on('response', response => {
@@ -348,7 +348,7 @@ for (const language of ['en', 'ja']) {
   test('actual four-step media workflow and exact plan export / ' + language, async ({ page }, info) => {
     const encrypted = language === 'en';
     await page.locator('#language-select').selectOption(language);
-    await openSession(page, encrypted ? 'hls-url' : 'local');
+    await openSession(page, encrypted ? 'url' : 'local');
     if (encrypted) await pick(page, 'keys', 'keys.json');
     const analysis = await observedJob(page, '#common-analyze', 'analyze');
     expect(analysis.observedReport.report.input_admitted).toBe(true);

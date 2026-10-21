@@ -93,13 +93,15 @@ test('a failed independent verification retains its negative report and cannot b
   assert.equal(record.report.report.passed, false);
 });
 test('lost session creation uses its original correlation ID and never retains a secret URL', async () => {
-  let posts = 0;
-  const h = await harness({ createSession: async body => { posts++; assert.equal(body.creation_request_id, rid); throw unknown(); },
-    creation: async () => { throw refused(404, 'session-request-not-found'); } });
-  await h.state.createSession({ kind: 'hls-url', url: 'https://example.invalid/list?secret=sentinel', fetch_policy_ref: null });
-  await h.state.recoverCreation();
-  assert.equal(posts, 1); assert.equal(h.state.snapshot().creation.phase, 'unknown');
-  assert.doesNotMatch(JSON.stringify(h.state.snapshot().creation), /sentinel|https:/);
+  for (const kind of ['url', 'hls-url']) {
+    let posts = 0;
+    const h = await harness({ createSession: async body => { posts++; assert.equal(body.creation_request_id, rid); throw unknown(); },
+      creation: async () => { throw refused(404, 'session-request-not-found'); } });
+    await h.state.createSession({ kind, url: 'https://example.invalid/list?secret=sentinel', fetch_policy_ref: null });
+    await h.state.recoverCreation();
+    assert.equal(posts, 1); assert.equal(h.state.snapshot().creation.phase, 'unknown');
+    assert.doesNotMatch(JSON.stringify(h.state.snapshot().creation), /sentinel|https:/);
+  }
 });
 test('a full 32-request session permits export and verify-only reimport guidance, but no new POST', async () => {
   const h = await harness({ sessions: async () => env({ sessions: [session({ requests_used: 32 })] }) });

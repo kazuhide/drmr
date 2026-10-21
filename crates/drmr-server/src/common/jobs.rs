@@ -464,12 +464,12 @@ impl CommonService {
                 intent.input = Some(input);
                 Ok(intent)
             }
-            Source::HlsUrl {
+            Source::Url {
                 url,
                 fetch_policy_ref,
             } => {
                 let mut intent = Intent::new(ChildOperation::Analyze {
-                    source: ChildSource::HlsUrl {
+                    source: ChildSource::Url {
                         url: url.clone(),
                         download_dir: self.retained.join("downloads").join(nonce),
                         fetch_policy_file: None,
@@ -731,7 +731,7 @@ impl CommonService {
                 source: ChildSource::Local { input_file },
             } if &path == input_file => {}
             ChildOperation::Analyze {
-                source: ChildSource::HlsUrl { download_dir, .. },
+                source: ChildSource::Url { download_dir, .. },
             } if path.starts_with(download_dir) => {}
             _ => return Err(Error::new(503, "result-invalid")),
         }

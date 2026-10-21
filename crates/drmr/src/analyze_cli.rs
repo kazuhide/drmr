@@ -13,10 +13,10 @@ use std::sync::Arc;
 
 #[derive(Args)]
 #[command(
-    after_help = "Analyze complete local MP4, DASH, or HLS media before choosing a conversion.\nURL input requires a new --download-dir and supports completed HLS within the documented profile.\nCiphertext and encryption declarations are retained; key and license URIs are never fetched.\nSupply decryption keys separately with --keys-file. Relative playlist key URIs resolve against the effective remote playlist URL.\nThe saved original is reused offline by plan, convert, and verify; keys and request headers stay separate.\nInput admission does not establish a converted result, DRM licensing, or device playback.\n\nExamples:\n  drmr analyze media.mp4 --json\n  drmr analyze https://example.com/vod/master.m3u8 --download-dir source --json\n  drmr plan source/input.m3u8 --to cbcs --format dash --output converted --save conversion.plan.json"
+    after_help = "Analyze complete local MP4, DASH, or HLS media before choosing a conversion.\nURL input requires a new --download-dir. Supported profiles: completed HLS; single-Period static DASH using SegmentTemplate with a finite SegmentTimeline; self-contained MP4.\nMP4 and DASH support clear, cenc, and cbcs within the ordinary input profile. Ciphertext and encryption declarations are retained; key and license URIs are never fetched.\nSupply decryption keys separately with --keys-file. Relative playlist key URIs resolve against the effective remote playlist URL.\nThe retained entrypoint is input.m3u8, input.mpd, or input.mp4; --json reports the actual local path.\nThe saved original is reused offline by plan, convert, and verify; keys and request headers stay separate.\nInput admission does not establish a converted result, DRM licensing, or device playback.\n\nExamples:\n  drmr analyze media.mp4 --json\n  drmr analyze https://example.com/vod/master.m3u8 --download-dir source --json\n  drmr analyze https://example.com/vod/manifest.mpd --download-dir dash-source --json\n  drmr analyze https://example.com/media.mp4 --download-dir mp4-source --json\n  drmr plan dash-source/input.mpd --to cbcs --format dash --output converted --save conversion.plan.json"
 )]
 pub struct AnalyzeArgs {
-    /// Local source media, or a completed supported HLS URL to retain locally.
+    /// Local source media, or a supported HLS, static DASH, or MP4 URL to retain locally.
     pub input: PathBuf,
     /// New private directory for the original URL input; required for URL input.
     #[arg(long)]
@@ -123,7 +123,7 @@ fn execute_analysis(
         crate::download_cli::Input::Url(url) => {
             progress.mark("acquisition");
             Some(
-                command.acquire_hls(
+                command.acquire_source(
                     url,
                     args.download_dir
                         .as_deref()
@@ -150,9 +150,9 @@ fn execute_analysis(
     }
     let download = downloaded.as_ref().map(|source| {
         serde_json::json!({
-            "directory": source.entrypoint().parent().expect("downloaded entrypoint has a parent").to_string_lossy(),
+            "directory": source.directory().to_string_lossy(),
             "entrypoint": source.entrypoint().to_string_lossy(),
-            "entrypoint_relative": "input.m3u8",
+            "entrypoint_relative": source.entrypoint_relative().to_string_lossy(),
             "retained": true,
         })
     });

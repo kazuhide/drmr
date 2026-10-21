@@ -109,27 +109,40 @@ fn url_sessions_never_return_credentials_or_unbounded_source_labels() {
         "https://source.example.invalid/{}/master.m3u8",
         "x".repeat(7000)
     );
-    for (index, url) in [sensitive, &long].into_iter().enumerate() {
-        let body = serde_json::json!({"schema_version":1,"server_id":run,"creation_request_id":format!("{index:032x}"),"source":{"kind":"hls-url","url":url,"fetch_policy_ref":null}});
+    let cases = [
+        ("url", sensitive),
+        ("hls-url", long.as_str()),
+        (
+            "url",
+            "https://source.example.invalid/PRIVATE_PATH/manifest.mpd?auth=PRIVATE_QUERY",
+        ),
+        (
+            "url",
+            "https://source.example.invalid/PRIVATE_PATH/source.mp4?auth=PRIVATE_QUERY",
+        ),
+    ];
+    for (index, (kind, url)) in cases.into_iter().enumerate() {
+        let mut body = serde_json::json!({"schema_version":1,"server_id":run,"creation_request_id":format!("{index:032x}"),"source":{"kind":kind,"url":url,"fetch_policy_ref":null}});
         let created = client.post_json("/api/common/sessions", &body);
         assert_eq!(created.status, 201);
         let value = created.json();
         assert_eq!(
             value["source"],
-            serde_json::json!({"kind":"hls-url","label":"HLS URL"})
+            serde_json::json!({"kind":"url","label":"Source URL"})
         );
         let id = value["session_id"].as_str().unwrap();
         assert_eq!(
             client.get(&format!("/api/common/sessions/{id}")).json(),
             value
         );
+        body["source"]["kind"] = if kind == "url" { "hls-url" } else { "url" }.into();
         let replay = client.post_json("/api/common/sessions", &body);
         assert_eq!(replay.status, 200);
         assert_eq!(replay.json(), value);
     }
     let listed = client.get("/api/common/sessions");
     assert_eq!(listed.status, 200);
-    assert_eq!(listed.json()["sessions"].as_array().unwrap().len(), 2);
+    assert_eq!(listed.json()["sessions"].as_array().unwrap().len(), 4);
     for private in [
         "PRIVATE_USER",
         "PRIVATE_PASSWORD",
