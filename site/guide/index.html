@@ -502,6 +502,13 @@ drmr verify retry-hls/master.m3u8 --source saved-source/input.m3u8 \
 <p>Do not reuse an existing download directory for a new acquisition. Partial failed acquisition is not a complete saved source. Source byte identity and physical ownership are checked before final publication; cancellation or mutation prevents success. <code>convert --plan</code> preserves its recorded destination and refuses intent overrides or an existing result. Choose a new plan for a different destination; use <code>verify --plan</code> to recheck an already published result.</p>
 <h3>Fetch policy</h3>
 <p>Default policy is HTTPS with same-origin references and bounded acquisition. <code>analyze URL</code> and direct <code>convert URL</code> both accept <code>--fetch-policy</code>. Explicit origin/private-network/HTTP access requires the supported private policy configuration; it is not enabled by weakening Host or Origin checks.</p>
+<p><code>--fetch-policy FILE</code> reads an owner-only UTF-8 JSON object saved as, for example, <code>config/fetch.json</code>. It contains the policy fields directly, without a <code>schema_version</code> field; the input URL stays on the command line. The file is optional, and its fields are optional: omit <code>headers_by_origin</code> when authentication is not needed. The example fields mean:</p>
+<ul>
+<li><code>allowed_origins</code>: an array of additional exact origins (scheme, host and port), without a path. The input URL&#x27;s own origin is already allowed.</li>
+<li><code>headers_by_origin</code>: an object mapping an allowed origin to its request-header object, such as <code>Authorization</code>. This field does not itself grant access to another origin.</li>
+<li><code>max_total_bytes</code>: the total acquisition byte budget; <code>1073741824</code> is 1 GiB.</li>
+<li><code>connections</code>: the fetch concurrency upper bound; worker and CPU/memory admission can reduce actual concurrency.</li>
+</ul>
 <figure class="guide-example" aria-labelledby="example-38-title" data-code-language="json"><figcaption id="example-38-title">Example 38: json</figcaption><pre tabindex="0"><code>{
   &quot;allowed_origins&quot;: [&quot;https://media.example.com&quot;],
   &quot;headers_by_origin&quot;: {
@@ -511,8 +518,13 @@ drmr verify retry-hls/master.m3u8 --source saved-source/input.m3u8 \
   &quot;connections&quot;: 4
 }
 </code></pre></figure>
-<p>Protect this JSON file before use:</p>
-<figure class="guide-example" aria-labelledby="example-39-title" data-code-language="sh"><figcaption id="example-39-title">Example 39: sh</figcaption><pre tabindex="0"><code>drmr convert &quot;https://example.com/vod/master.m3u8&quot; \
+<p>Prepare a protected configuration directory as described in chapter 5 and save the JSON as <code>config/fetch.json</code>. Replace the token placeholder with your own token if authentication is needed. For macOS/Linux, set owner-only file permissions before analyzing the URL; use the current-user-only ACL procedure in chapter 14 on Windows.</p>
+<figure class="guide-example" aria-labelledby="example-39-title" data-code-language="sh"><figcaption id="example-39-title">Example 39: sh</figcaption><pre tabindex="0"><code>chmod 600 config/fetch.json
+drmr analyze &quot;https://example.com/vod/master.m3u8&quot; \
+  --download-dir analyzed-source --fetch-policy config/fetch.json --json
+</code></pre></figure>
+<p>The same file can be used for direct conversion:</p>
+<figure class="guide-example" aria-labelledby="example-40-title" data-code-language="sh"><figcaption id="example-40-title">Example 40: sh</figcaption><pre tabindex="0"><code>drmr convert &quot;https://example.com/vod/master.m3u8&quot; \
   --download-dir authenticated-source --fetch-policy config/fetch.json \
   --to clear --format hls --output clear-result
 </code></pre></figure>
@@ -562,7 +574,7 @@ drmr verify retry-hls/master.m3u8 --source saved-source/input.m3u8 \
 <p>A sufficient version alone does not establish that all other playlist declarations are valid. An omitted playlist IV may be supported by the associated TS IV or fMP4 track-encryption metadata described in chapter 5; any explicit inconsistency is refused.</p>
 <h3>Check existing manifests without comparing media</h3>
 <p>Use this distinct mode when only the final HLS/DASH manifest check is needed:</p>
-<figure class="guide-example" aria-labelledby="example-40-title" data-code-language="sh"><figcaption id="example-40-title">Example 40: sh</figcaption><pre tabindex="0"><code>drmr verify result/hls/master.m3u8 --manifest-only --json
+<figure class="guide-example" aria-labelledby="example-41-title" data-code-language="sh"><figcaption id="example-41-title">Example 41: sh</figcaption><pre tabindex="0"><code>drmr verify result/hls/master.m3u8 --manifest-only --json
 drmr verify result/dash/manifest.mpd --manifest-only --json
 </code></pre></figure>
 <p>These commands run the native Rust linter and need no external validator. Add <code>--external-validator</code> to run Apple or DASH-IF checks as well. The JSON result separates <code>native_manifest</code> and <code>external_manifest</code>. <code>--max-workers</code> sets an upper bound; omitting it selects concurrency automatically. Apple&#x27;s adapter uses parse-only mode; its rule coverage differs from the native Apple authoring profile.</p>
@@ -580,27 +592,27 @@ drmr verify result/dash/manifest.mpd --manifest-only --json
 <p>The examples below retain that workflow&#x27;s source snapshot and configuration conventions. These commands are not aliases for common conversion, and its specific subtitle or selection features should be checked before migrating an existing job.</p>
 <h3>Capture a local source</h3>
 <p>Create a private source JSON with explicit local-read permission:</p>
-<figure class="guide-example" aria-labelledby="example-41-title" data-code-language="json"><figcaption id="example-41-title">Example 41: json</figcaption><pre tabindex="0"><code>{
+<figure class="guide-example" aria-labelledby="example-42-title" data-code-language="json"><figcaption id="example-42-title">Example 42: json</figcaption><pre tabindex="0"><code>{
   &quot;url&quot;: &quot;/absolute/path/media/master.m3u8&quot;,
   &quot;policy&quot;: {
     &quot;allowed_local_roots&quot;: [&quot;/absolute/path/media&quot;]
   }
 }
 </code></pre></figure>
-<figure class="guide-example" aria-labelledby="example-42-title" data-code-language="sh"><figcaption id="example-42-title">Example 42: sh</figcaption><pre tabindex="0"><code>chmod 600 source.json
+<figure class="guide-example" aria-labelledby="example-43-title" data-code-language="sh"><figcaption id="example-43-title">Example 43: sh</figcaption><pre tabindex="0"><code>chmod 600 source.json
 drmr analyze-hls --source-config source.json \
   --asset-id sample --output output
 drmr verify-snapshot --files output/sample/clear/source
 </code></pre></figure>
 <p>Remote inputs instead need the supported fetch policy and origin permissions. The private analysis directory retains the source URLs and downloaded resources. <code>analysis.json</code> binds the saved snapshot; an arbitrary edited JSON file is not a new valid source.</p>
 <h3>Package with signaling</h3>
-<figure class="guide-example" aria-labelledby="example-43-title" data-code-language="json"><figcaption id="example-43-title">Example 43: json</figcaption><pre tabindex="0"><code>{
+<figure class="guide-example" aria-labelledby="example-44-title" data-code-language="json"><figcaption id="example-44-title">Example 44: json</figcaption><pre tabindex="0"><code>{
   &quot;widevine_pssh&quot;: &quot;&lt;hex-or-base64-widevine-initialization-data&gt;&quot;,
   &quot;playready_la_url&quot;: &quot;https://license.example.invalid/acquire&quot;,
   &quot;fairplay_uri&quot;: &quot;skd://content-identifier&quot;
 }
 </code></pre></figure>
-<figure class="guide-example" aria-labelledby="example-44-title" data-code-language="sh"><figcaption id="example-44-title">Example 44: sh</figcaption><pre tabindex="0"><code>chmod 600 drm.json
+<figure class="guide-example" aria-labelledby="example-45-title" data-code-language="sh"><figcaption id="example-45-title">Example 45: sh</figcaption><pre tabindex="0"><code>chmod 600 drm.json
 drmr package-hls --analysis output/sample/clear/source/analysis.json \
   --drm-config drm.json
 </code></pre></figure>
@@ -612,7 +624,7 @@ drmr package-hls --analysis output/sample/clear/source/analysis.json \
 <section class="guide-chapter" id="prepared-dash-batch" data-guide-chapter="prepared-dash-batch" aria-labelledby="prepared-dash-batch-title"><h2 id="prepared-dash-batch-title">11. Prepared DASH and batch processing</h2><a class="guide-chapter-switch" href="../ja/guide/#prepared-dash-batch" lang="ja" hreflang="ja">日本語</a>
 <h3>Prepared input layout</h3>
 <p><code>run</code> uses a downloaded layout corresponding to original URLs. It does not accept any isolated MPD as a general-purpose conversion request.</p>
-<figure class="guide-example" aria-labelledby="example-45-title" data-code-language="text"><figcaption id="example-45-title">Example 45: text</figcaption><pre tabindex="0"><code>sample/
+<figure class="guide-example" aria-labelledby="example-46-title" data-code-language="text"><figcaption id="example-46-title">Example 46: text</figcaption><pre tabindex="0"><code>sample/
   download/
     manifest.example.test/sample/dash/manifest.mpd
     manifest.example.test/sample/hls/manifest.m3u8
@@ -622,7 +634,7 @@ drmr package-hls --analysis output/sample/clear/source/analysis.json \
 </code></pre></figure>
 <p>The MPD needs BaseURL, MP4 adaptation sets, and a supported SegmentTemplate for each representation with <code>initialization</code>, <code>media</code>, <code>timescale</code> and <code>duration</code>. Media names use <code>$Number$</code> and numeric segments. BaseURL <code>https://cdn.example.test/sample/</code> maps <code>video/v0/init.mp4</code> to the illustrated downloaded path.</p>
 <p>Prepare <code>DRM_KID</code>, <code>DRM_KEY</code> and <code>DRM_IV</code>, then run:</p>
-<figure class="guide-example" aria-labelledby="example-46-title" data-code-language="sh"><figcaption id="example-46-title">Example 46: sh</figcaption><pre tabindex="0"><code>drmr plan --mpd sample/download/manifest.example.test/sample/dash/manifest.mpd
+<figure class="guide-example" aria-labelledby="example-47-title" data-code-language="sh"><figcaption id="example-47-title">Example 47: sh</figcaption><pre tabindex="0"><code>drmr plan --mpd sample/download/manifest.example.test/sample/dash/manifest.mpd
 drmr run \
   --mpd sample/download/manifest.example.test/sample/dash/manifest.mpd \
   --hls-master \
@@ -640,7 +652,7 @@ drmr run \
 <tr><th scope="row"><code>hls_master</code></th><td>Relative object key from the storage root, or null when unused</td></tr>
 </tbody></table></div>
 <p>Save this readable asset record as <code>asset.json</code>; the actual work list uses one line per record:</p>
-<figure class="guide-example" aria-labelledby="example-47-title" data-code-language="json"><figcaption id="example-47-title">Example 47: json</figcaption><pre tabindex="0"><code>{
+<figure class="guide-example" aria-labelledby="example-48-title" data-code-language="json"><figcaption id="example-48-title">Example 48: json</figcaption><pre tabindex="0"><code>{
   &quot;asset_id&quot;: &quot;sample&quot;,
   &quot;kind&quot;: &quot;dash-cenc&quot;,
   &quot;dash_manifest&quot;:
@@ -649,7 +661,7 @@ drmr run \
     &quot;sample/download/manifest.example.test/sample/hls/manifest.m3u8&quot;
 }
 </code></pre></figure>
-<figure class="guide-example" aria-labelledby="example-48-title" data-code-language="sh"><figcaption id="example-48-title">Example 48: sh</figcaption><pre tabindex="0"><code>printf &#x27;%s\n&#x27; &#x27;{&quot;schema_version&quot;:&quot;1&quot;}&#x27; &gt; work-list.jsonl
+<figure class="guide-example" aria-labelledby="example-49-title" data-code-language="sh"><figcaption id="example-49-title">Example 49: sh</figcaption><pre tabindex="0"><code>printf &#x27;%s\n&#x27; &#x27;{&quot;schema_version&quot;:&quot;1&quot;}&#x27; &gt; work-list.jsonl
 {
   drmr canonical asset.json &amp;&amp; printf &#x27;\n&#x27;
 } &gt;&gt; work-list.jsonl
@@ -659,18 +671,19 @@ drmr batch --work-list work-list.jsonl --output output \
 <p><code>canonical</code> emits stable one-line JSON without a terminating newline. The guarded append above adds LF only after success. It prints input values and is not a secret-removal command; do not use it to display key files or credentials.</p>
 <h3>Keys and resumption</h3>
 <p>Default key provider is environment variables. The private file provider uses one JSONL record per asset with <code>asset_id</code>, <code>kid</code>, <code>key</code>, <code>iv</code>, without a schema header. This differs from generic <code>--keys-file</code> JSON.</p>
-<figure class="guide-example" aria-labelledby="example-49-title" data-code-language="sh"><figcaption id="example-49-title">Example 49: sh</figcaption><pre tabindex="0"><code>drmr batch --work-list work-list.jsonl --output output \
+<figure class="guide-example" aria-labelledby="example-50-title" data-code-language="sh"><figcaption id="example-50-title">Example 50: sh</figcaption><pre tabindex="0"><code>drmr batch --work-list work-list.jsonl --output output \
   --resume-log resume.jsonl --storage local --storage-root ./catalog \
   --key-provider file --key-file ./private/keys.jsonl
 </code></pre></figure>
 <p>Keep the key file outside output. HLS configuration can come from <code>--hls-config-dir</code>. <code>--retry-failed</code> selects failed items; default <code>--max-attempts</code> is 3. <code>--per-asset-timeout-s</code> defaults to 3600 and <code>--heartbeat-s</code> to 60. Resumption is not rollback: inspect existing output and logs first.</p>
+<p>For <code>hls-clear</code>, <code>--hls-config-dir DIR</code> contains an owner-only <code>ASSET_ID.json</code> object with <code>source_config</code> and <code>drm_config</code> paths and optional <code>selection</code>; those referenced files use the <a href="https://kazuhide.github.io/drmr/guide/#saved-hls">saved HLS JSON formats in chapter 10</a>. Relative references resolve from that configuration directory. <code>--packager-bin</code> is passed to <code>run</code> for <code>dash-cenc</code>, which accepts an executable or its directory, and to <code>package-hls</code> for <code>hls-clear</code>, which requires the executable. Use an executable path for mixed or HLS batches.</p>
 <p>S3 storage is implemented with current supported region <code>ap-northeast-1</code>. It uses AWS environment/default-profile credentials. <code>--bucket</code>, <code>--region</code> and <code>--output-prefix</code> configure storage. Native local-media CI results do not qualify a real S3 account.</p>
 <p>See <a href="https://github.com/kazuhide/drmr/blob/main/docs/usage.md">batch usage</a>.</p>
 </section>
 <section class="guide-chapter" id="resources-stop" data-guide-chapter="resources-stop" aria-labelledby="resources-stop-title"><h2 id="resources-stop-title">12. Workers, memory and Stop</h2><a class="guide-chapter-switch" href="../ja/guide/#resources-stop" lang="ja" hreflang="ja">日本語</a>
 <h3>Worker limits</h3>
 <p><code>convert</code> and <code>verify</code> select workers from available CPU, memory, media dimensions, resource sizes and track count. <code>--max-workers</code> is an upper bound from 1 to 64; the actual worker count can be lower. Automatic recommendations cap at 32.</p>
-<figure class="guide-example" aria-labelledby="example-50-title" data-code-language="sh"><figcaption id="example-50-title">Example 50: sh</figcaption><pre tabindex="0"><code>drmr convert source.mpd --to cbcs --format dash \
+<figure class="guide-example" aria-labelledby="example-51-title" data-code-language="sh"><figcaption id="example-51-title">Example 51: sh</figcaption><pre tabindex="0"><code>drmr convert source.mpd --to cbcs --format dash \
   --output result --keys-file config/keys.json --max-workers 2
 drmr verify result/manifest.mpd --source source.mpd \
   --keys-file config/keys.json --max-workers 1 --json --measure
@@ -693,7 +706,7 @@ drmr verify result/manifest.mpd --source source.mpd \
 <section class="guide-chapter" id="docker" data-guide-chapter="docker" aria-labelledby="docker-title"><h2 id="docker-title">13. Docker with media tools</h2><a class="guide-chapter-switch" href="../ja/guide/#docker" lang="ja" hreflang="ja">日本語</a>
 <h3>Build an image from committed source</h3>
 <p>The image includes drmr, FFmpeg/ffprobe, Bento4 mp4dump and Shaka Packager. Build requires Git and BuildKit-capable Docker. Native Linux amd64/arm64 are supported build targets; select Linux containers in Docker Desktop.</p>
-<figure class="guide-example" aria-labelledby="example-51-title" data-code-language="sh"><figcaption id="example-51-title">Example 51: sh</figcaption><pre tabindex="0"><code>revision=$(git rev-parse HEAD)
+<figure class="guide-example" aria-labelledby="example-52-title" data-code-language="sh"><figcaption id="example-52-title">Example 52: sh</figcaption><pre tabindex="0"><code>revision=$(git rev-parse HEAD)
 tree=$(git rev-parse &quot;${revision}^{tree}&quot;)
 git archive --format=tar &quot;$revision&quot; | docker build \
   --build-arg DRMR_REVISION=&quot;$revision&quot; \
@@ -703,7 +716,7 @@ docker run --rm --init drmr:local doctor --probe --route all
 <p>This captures committed files and the lockfile, excluding uncommitted changes. Keep keys, input, downloads and output outside the repository and bind-mount them at runtime. Initial compilation uses time and disk; Docker retains caches. Image compiler pins are separate from the CLI&#x27;s supported minimum Rust version.</p>
 <h3>Read-only input and private configuration</h3>
 <p>Prepare host <code>media</code>, <code>config</code> and <code>output</code> directories. Protect configuration/output for your user and key JSON with mode 600. This example assumes supported DASH and valid keys already exist:</p>
-<figure class="guide-example" aria-labelledby="example-52-title" data-code-language="sh"><figcaption id="example-52-title">Example 52: sh</figcaption><pre tabindex="0"><code>docker run --rm --init --user &quot;$(id -u):$(id -g)&quot; \
+<figure class="guide-example" aria-labelledby="example-53-title" data-code-language="sh"><figcaption id="example-53-title">Example 53: sh</figcaption><pre tabindex="0"><code>docker run --rm --init --user &quot;$(id -u):$(id -g)&quot; \
   --mount &quot;type=bind,src=$PWD/media,dst=/input,readonly&quot; \
   --mount &quot;type=bind,src=$PWD/config,dst=/config,readonly&quot; \
   --mount &quot;type=bind,src=$PWD/output,dst=/output&quot; \
@@ -713,7 +726,7 @@ docker run --rm --init drmr:local doctor --probe --route all
 </code></pre></figure>
 <p>Paths passed to drmr are container paths. <code>/input</code> and <code>/config</code> are read-only; <code>/output</code> is writable. Matching host UID/GID allows owner-only key reading and output ownership. The default image user is not root. drmr does not repair unsafe host ownership or permissions.</p>
 <p>Fresh verification can mount the result read-only:</p>
-<figure class="guide-example" aria-labelledby="example-53-title" data-code-language="sh"><figcaption id="example-53-title">Example 53: sh</figcaption><pre tabindex="0"><code>docker run --rm --init --user &quot;$(id -u):$(id -g)&quot; \
+<figure class="guide-example" aria-labelledby="example-54-title" data-code-language="sh"><figcaption id="example-54-title">Example 54: sh</figcaption><pre tabindex="0"><code>docker run --rm --init --user &quot;$(id -u):$(id -g)&quot; \
   --mount &quot;type=bind,src=$PWD/media,dst=/input,readonly&quot; \
   --mount &quot;type=bind,src=$PWD/config,dst=/config,readonly&quot; \
   --mount &quot;type=bind,src=$PWD/output,dst=/output,readonly&quot; \
@@ -724,12 +737,12 @@ docker run --rm --init drmr:local doctor --probe --route all
 <h3>Stop and reclaim owned resources</h3>
 <p><code>--init</code> forwards termination signals and reaps exited children. drmr still confirms its owned tools. Use Ctrl+C when attached, or allow cooperative shutdown time with <code>docker stop --timeout 60 NAME</code>. Forced termination is not confirmed cleanup.</p>
 <p><code>--rm</code> removes the container&#x27;s temporary filesystem after exit; bind-mounted originals/configuration/results remain. After no container uses your own image tag, it can be removed:</p>
-<figure class="guide-example" aria-labelledby="example-54-title" data-code-language="sh"><figcaption id="example-54-title">Example 54: sh</figcaption><pre tabindex="0"><code>docker image rm drmr:local
+<figure class="guide-example" aria-labelledby="example-55-title" data-code-language="sh"><figcaption id="example-55-title">Example 55: sh</figcaption><pre tabindex="0"><code>docker image rm drmr:local
 </code></pre></figure>
 <p>Build cache remains separately. Remove only your unused dedicated builder/cache as appropriate; do not globally prune unrelated resources.</p>
 <h3>Web console networking</h3>
 <p>On Linux, host networking preserves the default loopback address <code>127.0.0.1:8080</code>:</p>
-<figure class="guide-example" aria-labelledby="example-55-title" data-code-language="sh"><figcaption id="example-55-title">Example 55: sh</figcaption><pre tabindex="0"><code>docker run --rm --init --name drmr-console --network host \
+<figure class="guide-example" aria-labelledby="example-56-title" data-code-language="sh"><figcaption id="example-56-title">Example 56: sh</figcaption><pre tabindex="0"><code>docker run --rm --init --name drmr-console --network host \
   --user &quot;$(id -u):$(id -g)&quot; \
   --mount &quot;type=bind,src=$PWD/catalog,dst=/catalog,readonly&quot; \
   --mount &quot;type=bind,src=$PWD/output,dst=/output&quot; \
@@ -745,13 +758,13 @@ docker run --rm --init drmr:local doctor --probe --route all
 <h3>Environment</h3>
 <p>Use a normal Windows x64 user on local NTFS. Elevated runs creating Administrators-owned media, network shares, junctions in private paths, alternate data streams and unsafe existing permissions are refused.</p>
 <p>Extract the CLI archive and add it to your user PATH or invoke the absolute executable. Media tools remain separate. Builds use VCRUNTIME140.dll; install the Microsoft Visual C++ x64 Redistributable when required.</p>
-<figure class="guide-example" aria-labelledby="example-56-title" data-code-language="powershell"><figcaption id="example-56-title">Example 56: powershell</figcaption><pre tabindex="0"><code>cargo build --release --locked -p drmr
+<figure class="guide-example" aria-labelledby="example-57-title" data-code-language="powershell"><figcaption id="example-57-title">Example 57: powershell</figcaption><pre tabindex="0"><code>cargo build --release --locked -p drmr
 .\target\release\drmr.exe --help
 .\target\release\drmr.exe doctor --probe --route all
 </code></pre></figure>
 <h3>Owner-only key files</h3>
 <p>Windows uses an access-control list (ACL), not chmod. The protected ACL must disable inheritance, retain the current user as owner and grant that user full control. The following creates a new private directory and empty key file before editing secret content:</p>
-<figure class="guide-example" aria-labelledby="example-57-title" data-code-language="powershell"><figcaption id="example-57-title">Example 57: powershell</figcaption><pre tabindex="0"><code>$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+<figure class="guide-example" aria-labelledby="example-58-title" data-code-language="powershell"><figcaption id="example-58-title">Example 58: powershell</figcaption><pre tabindex="0"><code>$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
 $private = Join-Path $env:LOCALAPPDATA &#x27;drmr-keys&#x27;
 if (Test-Path -LiteralPath $private) { throw &#x27;Choose a new directory&#x27; }
 New-Item -ItemType Directory -Path $private | Out-Null
@@ -767,7 +780,7 @@ function Set-OwnerOnlyAcl($path, $security) {
 
 </code></pre></figure>
 <p>Apply the ACL to the directory and file, then enter keys:</p>
-<figure class="guide-example" aria-labelledby="example-58-title" data-code-language="powershell"><figcaption id="example-58-title">Example 58: powershell</figcaption><pre tabindex="0"><code>Set-OwnerOnlyAcl $private ([Security.AccessControl.DirectorySecurity]::new())
+<figure class="guide-example" aria-labelledby="example-59-title" data-code-language="powershell"><figcaption id="example-59-title">Example 59: powershell</figcaption><pre tabindex="0"><code>Set-OwnerOnlyAcl $private ([Security.AccessControl.DirectorySecurity]::new())
 $keyFile = Join-Path $private &#x27;keys.json&#x27;
 New-Item -ItemType File -Path $keyFile | Out-Null
 Set-OwnerOnlyAcl $keyFile ([Security.AccessControl.FileSecurity]::new())
@@ -775,7 +788,7 @@ notepad $keyFile
 </code></pre></figure>
 <p>If an editor replaces the file and changes its ACL, reapply the owner-only ACL while keeping it inside the private directory. drmr does not silently fix an unsafe existing key file.</p>
 <h3>PowerShell conversion</h3>
-<figure class="guide-example" aria-labelledby="example-59-title" data-code-language="powershell"><figcaption id="example-59-title">Example 59: powershell</figcaption><pre tabindex="0"><code>.\drmr.exe inspect &#x27;C:\media\source.mp4&#x27; --json
+<figure class="guide-example" aria-labelledby="example-60-title" data-code-language="powershell"><figcaption id="example-60-title">Example 60: powershell</figcaption><pre tabindex="0"><code>.\drmr.exe inspect &#x27;C:\media\source.mp4&#x27; --json
 .\drmr.exe plan &#x27;C:\media\source.mp4&#x27; --to cbcs --format mp4
 $outDir = Join-Path $env:LOCALAPPDATA &#x27;drmr-output&#x27;
 New-Item -ItemType Directory -Path $outDir -Force | Out-Null
@@ -792,7 +805,7 @@ $result = Join-Path $outDir &#x27;protected.mp4&#x27;
 <section class="guide-chapter" id="web-console" data-guide-chapter="web-console" aria-labelledby="web-console-title"><h2 id="web-console-title">15. Local Web console</h2><a class="guide-chapter-switch" href="../ja/guide/#web-console" lang="ja" hreflang="ja">日本語</a>
 <h3>Start with prepared roots</h3>
 <p>The console is an unauthenticated local operator interface. Use trusted loopback only; do not expose it with a reverse proxy or port forwarding. Host/Origin validation does not authenticate another local process.</p>
-<figure class="guide-example" aria-labelledby="example-60-title" data-code-language="sh"><figcaption id="example-60-title">Example 60: sh</figcaption><pre tabindex="0"><code>DRMR_CATALOG_ROOT=/absolute/path/catalog \
+<figure class="guide-example" aria-labelledby="example-61-title" data-code-language="sh"><figcaption id="example-61-title">Example 61: sh</figcaption><pre tabindex="0"><code>DRMR_CATALOG_ROOT=/absolute/path/catalog \
 DRMR_OUTPUT_ROOT=/absolute/path/output \
 drmr serve
 </code></pre></figure>
@@ -800,7 +813,7 @@ drmr serve
 <p>Use the same-version server and CLI. <code>--cli</code> selects the actual executable; a wrapper launching a different CLI can be refused by the supervision contract.</p>
 <h3>HLS connection policy</h3>
 <p>Without extra configuration, the default profile allows only the input URL&#x27;s own HTTPS origin. Additional origins/credentials require a private named-profile file. <code>DRMR_HLS_PROFILES</code> is that file path, not inline JSON:</p>
-<figure class="guide-example" aria-labelledby="example-61-title" data-code-language="json"><figcaption id="example-61-title">Example 61: json</figcaption><pre tabindex="0"><code>{
+<figure class="guide-example" aria-labelledby="example-62-title" data-code-language="json"><figcaption id="example-62-title">Example 62: json</figcaption><pre tabindex="0"><code>{
   &quot;default&quot;: {
     &quot;policy&quot;: {
       &quot;allowed_origins&quot;: [&quot;https://media.example.com&quot;],
@@ -811,7 +824,7 @@ drmr serve
   }
 }
 </code></pre></figure>
-<figure class="guide-example" aria-labelledby="example-62-title" data-code-language="sh"><figcaption id="example-62-title">Example 62: sh</figcaption><pre tabindex="0"><code>chmod 600 profiles.json
+<figure class="guide-example" aria-labelledby="example-63-title" data-code-language="sh"><figcaption id="example-63-title">Example 63: sh</figcaption><pre tabindex="0"><code>chmod 600 profiles.json
 DRMR_CATALOG_ROOT=/absolute/path/catalog \
 DRMR_OUTPUT_ROOT=/absolute/path/output \
 DRMR_HLS_PROFILES=/absolute/path/profiles.json \
@@ -844,17 +857,17 @@ drmr serve
 <p>Quit drmr stops admission and waits for server/tool confirmation. If cleanup is unconfirmed, the app keeps the window and owners, displays the error and permits another Quit attempt after the cause is fixed. This differs from OS force-quit.</p>
 <h3>Launch environment and bundle</h3>
 <p>Finder&#x27;s PATH may differ from a terminal. The app does not run shell startup files or guess installation paths. Launch from a terminal that can find your tools when needed:</p>
-<figure class="guide-example" aria-labelledby="example-63-title" data-code-language="sh"><figcaption id="example-63-title">Example 63: sh</figcaption><pre tabindex="0"><code>&quot;/path/to/drmr.app/Contents/MacOS/drmr&quot; doctor
+<figure class="guide-example" aria-labelledby="example-64-title" data-code-language="sh"><figcaption id="example-64-title">Example 64: sh</figcaption><pre tabindex="0"><code>&quot;/path/to/drmr.app/Contents/MacOS/drmr&quot; doctor
 &quot;/path/to/drmr.app/Contents/MacOS/drmr-desktop&quot;
 </code></pre></figure>
 <p>Check external tools performs doctor-style version/help diagnostics, not media validation. An unconfirmed diagnostic process retains ownership and prevents normal exit or opening the console.</p>
 <p>CLI and host are paired inside one bundle; the host checks the CLI SHA-256. Media tools, keys, downloads and deployment configuration are not bundled. <code>build-manifest.json</code> records source/tree and binary identity; it is not a signed build-origin certificate.</p>
 <h3>Build a native bundle</h3>
 <p>Install Tauri&#x27;s OS prerequisites and media tools. Windows uses WebView2, macOS WKWebView and Linux WebKitGTK.</p>
-<figure class="guide-example" aria-labelledby="example-64-title" data-code-language="sh"><figcaption id="example-64-title">Example 64: sh</figcaption><pre tabindex="0"><code>RUSTUP_TOOLCHAIN=1.95.0 python3 tools/build_desktop.py --bundle
+<figure class="guide-example" aria-labelledby="example-65-title" data-code-language="sh"><figcaption id="example-65-title">Example 65: sh</figcaption><pre tabindex="0"><code>RUSTUP_TOOLCHAIN=1.95.0 python3 tools/build_desktop.py --bundle
 </code></pre></figure>
 <p>The preceding is a POSIX shell example. PowerShell uses a separate environment assignment:</p>
-<figure class="guide-example" aria-labelledby="example-65-title" data-code-language="powershell"><figcaption id="example-65-title">Example 65: powershell</figcaption><pre tabindex="0"><code>$env:RUSTUP_TOOLCHAIN = &#x27;1.95.0&#x27;
+<figure class="guide-example" aria-labelledby="example-66-title" data-code-language="powershell"><figcaption id="example-66-title">Example 66: powershell</figcaption><pre tabindex="0"><code>$env:RUSTUP_TOOLCHAIN = &#x27;1.95.0&#x27;
 python tools/build_desktop.py --bundle
 </code></pre></figure>
 <p><code>--release</code> selects optimization. Use a dedicated <code>CARGO_TARGET_DIR</code>; the default is <code>target/desktop</code>. The helper stages matching CLI/notices and produces an unsigned macOS app or Windows/Linux portable directory/archive. Existing bundles are refused. Signing, notarization and installers are outside this workflow.</p>
@@ -866,7 +879,7 @@ python tools/build_desktop.py --bundle
 <section class="guide-chapter" id="results-errors" data-guide-chapter="results-errors" aria-labelledby="results-errors-title"><h2 id="results-errors-title">17. Results, exit values and troubleshooting</h2><a class="guide-chapter-switch" href="../ja/guide/#results-errors" lang="ja" hreflang="ja">日本語</a>
 <h3>JSON and progress</h3>
 <p>Use <code>convert --json</code> or <code>verify --json</code> for machine-readable output. A successful unmeasured verification produces one versioned JSON object:</p>
-<figure class="guide-example" aria-labelledby="example-66-title" data-code-language="json"><figcaption id="example-66-title">Example 66: json</figcaption><pre tabindex="0"><code>{
+<figure class="guide-example" aria-labelledby="example-67-title" data-code-language="json"><figcaption id="example-67-title">Example 67: json</figcaption><pre tabindex="0"><code>{
   &quot;schema_version&quot;: 1,
   &quot;passed&quot;: true,
   &quot;media_verified&quot;: true,
@@ -880,7 +893,7 @@ python tools/build_desktop.py --bundle
 }
 </code></pre></figure>
 <p>Operational failure after a valid command returns <code>schema_version: 1</code>, <code>command</code>, <code>status</code> (<code>failed</code> or <code>cancelled</code>) and a fixed safe <code>error</code> containing <code>code</code>, <code>hint</code>, <code>last_activity</code>. A completed mismatch also retains comparison fields. For example, removing a finite video window can retain payload/decoded equality but fail timing:</p>
-<figure class="guide-example" aria-labelledby="example-67-title" data-code-language="json"><figcaption id="example-67-title">Example 67: json</figcaption><pre tabindex="0"><code>{
+<figure class="guide-example" aria-labelledby="example-68-title" data-code-language="json"><figcaption id="example-68-title">Example 68: json</figcaption><pre tabindex="0"><code>{
   &quot;schema_version&quot;: 1,
   &quot;passed&quot;: false,
   &quot;media_verified&quot;: false,
@@ -977,7 +990,7 @@ python tools/build_desktop.py --bundle
 <p>The <a href="https://github.com/kazuhide/drmr/actions/runs/39327394297/job/118317216488">Linux AMD64 Docker job</a> separately passed one representative clear audio TS → CBCS fMP4 HLS route and fresh original-TS verification. It does not exercise all nine audio-HLS pairs. These results do not cover DRM license acquisition or device playback.</p>
 <h3>Reproduce selected suites</h3>
 <p>With source and media tools installed, run from the repository root:</p>
-<figure class="guide-example" aria-labelledby="example-68-title" data-code-language="sh"><figcaption id="example-68-title">Example 68: sh</figcaption><pre tabindex="0"><code>cargo test --locked -p drmr --test bbb_media -- --nocapture
+<figure class="guide-example" aria-labelledby="example-69-title" data-code-language="sh"><figcaption id="example-69-title">Example 69: sh</figcaption><pre tabindex="0"><code>cargo test --locked -p drmr --test bbb_media -- --nocapture
 cargo test --locked -p drmr-core --test conversion_ts_output -- --nocapture
 cargo test --locked -p drmr-core --test conversion_ts_output \
   audio_hls -- --nocapture
@@ -992,13 +1005,22 @@ cargo test --locked -p drmr-core --test conversion_bundle_encryption \
 </code></pre></figure>
 <p><code>DRMR_CONVERSION_REPORT</code> saves the legacy16 <code>bbb_media</code> matrix&#x27;s JSON to a new path outside the repository. It does not configure every TS/finite suite&#x27;s report. Use their test logs and CI artifacts. Reports include actual fixture hashes, four comparisons, tool versions, elapsed/sampled-memory observations and measurement limits.</p>
 <p>A separate long-clock regression repeats a tiny derived 32x18 source 417 times for 4,170 seconds and 100,080 packets:</p>
-<figure class="guide-example" aria-labelledby="example-69-title" data-code-language="sh"><figcaption id="example-69-title">Example 69: sh</figcaption><pre tabindex="0"><code>cargo test --locked -p drmr --test long_conversion
+<figure class="guide-example" aria-labelledby="example-70-title" data-code-language="sh"><figcaption id="example-70-title">Example 70: sh</figcaption><pre tabindex="0"><code>cargo test --locked -p drmr --test long_conversion
 </code></pre></figure>
 <p>This checks complete long packet evidence, not a benchmark for high-resolution throughput or an exact memory maximum. Neither this nor the short fixture establishes universal input or DRM-device compatibility.</p>
 <p>See <a href="https://github.com/kazuhide/drmr/blob/main/crates/drmr/tests/fixtures/bbb/README.md">fixture attribution</a>, <a href="https://github.com/kazuhide/drmr/blob/main/crates/drmr/tests/fixtures/bbb/CENC.md">encrypted fixtures</a> and <a href="https://github.com/kazuhide/drmr/blob/main/docs/media-processing.md">processing</a>.</p>
 </section>
 <section class="guide-chapter" id="cli-reference" data-guide-chapter="cli-reference" aria-labelledby="cli-reference-title"><h2 id="cli-reference-title">19. CLI argument and option reference</h2><a class="guide-chapter-switch" href="../ja/guide/#cli-reference" lang="ja" hreflang="ja">日本語</a>
 <p>All public commands accept <code>-h</code> / <code>--help</code>; <code>drmr help COMMAND</code> also displays help. Use top-level <code>-V</code> / <code>--version</code> or <code>drmr version</code>. Private supervision bootstrap arguments are not a user interface.</p>
+<h3>File and path values</h3>
+<p><code>FILE</code> is a local filename supplied after the option, not inline JSON. <code>PATH</code> can name a file or directory as the row specifies. Relative option paths are resolved from the directory where you run the command. <code>NEW_FILE</code>, <code>NEW_PATH</code> and <code>NEW_DIR</code> name destinations that must be new; the workflow determines when they are written. Replace these placeholders with your paths; a <code>.json</code> extension does not make different configuration schemas interchangeable.</p>
+<p>For example, <code>--fetch-policy config/fetch.json</code> reads the <a href="https://kazuhide.github.io/drmr/guide/#url-input">Fetch policy JSON in chapter 8</a>. <code>--keys-file config/keys.json</code> reads the <a href="https://kazuhide.github.io/drmr/guide/#key-configuration">private key JSON examples in chapter 5</a>: version 1 uses <code>input</code> and one <code>output</code>, while version 2 shares <code>input</code> and names each result under <code>outputs</code>. <code>analyze</code> validates either schema and uses only its source keys. <code>--outputs</code> and version-2 saved plans require version-2 key JSON even when the output list has one entry; the older single-result mode uses version 1.</p>
+<p>For common commands, <code>--packager-bin &quot;./tools/packager&quot;</code> selects one installed executable. A Windows example is <code>--packager-bin &quot;C:\Media Tools\packager.exe&quot;</code>. Quote paths containing spaces and supply only the program name/path, without a shell command or appended arguments. The default <code>packager</code> is found on the launch environment&#x27;s PATH; CLI archives and Desktop bundles do not include it. See <a href="https://kazuhide.github.io/drmr/guide/#installation">Media tools in chapter 4</a>. The prepared-DASH <code>run</code> workflow also accepts a containing directory; the legacy tables below distinguish that case.</p>
+<p>For example, prepare the version-1 output key configuration from chapter 5 and select the installed executable for a conversion. Replace the input, new output, configuration and executable paths with the ones in your environment:</p>
+<figure class="guide-example" aria-labelledby="example-71-title" data-code-language="sh"><figcaption id="example-71-title">Example 71: sh</figcaption><pre tabindex="0"><code>drmr convert original.mp4 --to cbcs --format mp4 \
+  --output protected.mp4 --keys-file config/keys.json \
+  --packager-bin &quot;/opt/media-tools/packager&quot;
+</code></pre></figure>
 <h3>doctor</h3>
 <div class="guide-table-scroll" role="region" aria-labelledby="table-18-title" tabindex="0"><table><caption id="table-18-title">doctor — Table 18</caption><thead><tr><th scope="col">Option</th><th scope="col">Meaning/default</th></tr></thead><tbody>
 <tr><th scope="row"><code>--json</code></th><td>One machine-readable diagnostic object</td></tr>
@@ -1014,10 +1036,10 @@ cargo test --locked -p drmr-core --test conversion_bundle_encryption \
 <h3>analyze</h3>
 <div class="guide-table-scroll" role="region" aria-labelledby="table-20-title" tabindex="0"><table><caption id="table-20-title">analyze — Table 20</caption><thead><tr><th scope="col">Argument/option</th><th scope="col">Meaning</th></tr></thead><tbody>
 <tr><th scope="row"><code>INPUT</code></th><td>Complete local MP4, DASH or HLS; supported completed HLS URL within the acquisition profile</td></tr>
-<tr><th scope="row"><code>--download-dir NEW_DIR</code></th><td>Required for a URL; retain the original privately</td></tr>
-<tr><th scope="row"><code>--fetch-policy FILE</code></th><td>Private origin/header/resource policy for URL input</td></tr>
-<tr><th scope="row"><code>--keys-file FILE</code></th><td>Protected input keys when source checks require decryption</td></tr>
-<tr><th scope="row"><code>--packager-bin FILE</code></th><td>Shaka executable; default packager</td></tr>
+<tr><th scope="row"><code>--download-dir NEW_DIR</code></th><td>Required new directory for URL input; retain the original privately; <a href="https://kazuhide.github.io/drmr/guide/#url-input">acquisition example</a></td></tr>
+<tr><th scope="row"><code>--fetch-policy FILE</code></th><td>Owner-only fetch policy JSON, e.g. config/fetch.json; <a href="https://kazuhide.github.io/drmr/guide/#url-input">origin/header/limit fields and example</a></td></tr>
+<tr><th scope="row"><code>--keys-file FILE</code></th><td>Owner-only version-1 or version-2 JSON input keys when source checks need decryption; <a href="https://kazuhide.github.io/drmr/guide/#key-configuration">input key fields and examples</a></td></tr>
+<tr><th scope="row"><code>--packager-bin FILE</code></th><td>Shaka Packager executable name/path; default packager on PATH; <a href="https://kazuhide.github.io/drmr/guide/#installation">installation and discovery</a></td></tr>
 <tr><th scope="row"><code>--max-workers N</code></th><td>Upper bound 1-64; otherwise automatic CPU/memory choice</td></tr>
 <tr><th scope="row"><code>--json</code></th><td>One input-analysis report; input_admitted does not verify a converted output</td></tr>
 <tr><th scope="row"><code>--measure</code></th><td>Add numeric measurements; requires --json</td></tr>
@@ -1028,15 +1050,15 @@ cargo test --locked -p drmr-core --test conversion_bundle_encryption \
 <tr><th scope="row"><code>INPUT</code></th><td>Local input for generic conversion intent</td></tr>
 <tr><th scope="row"><code>--to TARGET</code></th><td>Required for INPUT without --outputs: clear, cenc, cbcs, hls-aes128, hls-sample-aes</td></tr>
 <tr><th scope="row"><code>--format FORMAT</code></th><td>mp4, dash, hls, hls-ts; alternatives without --save, one resolved format in a single-output plan; omitted follows MP4/DASH/HLS, with HLS meaning fMP4; conflicts with --outputs</td></tr>
-<tr><th scope="row"><code>--outputs FILE</code></th><td>Schema-version-1 output recipe; requires --save and replaces --to/--format; produces a version-2 execution plan</td></tr>
+<tr><th scope="row"><code>--outputs FILE</code></th><td>Schema-version-1 output recipe JSON, e.g. outputs.json; requires --save and replaces --to/--format; produces a version-2 execution plan; <a href="https://kazuhide.github.io/drmr/guide/#inspect-plan">output recipe example</a></td></tr>
 <tr><th scope="row"><code>--json</code></th><td>Versioned plan without execution</td></tr>
-<tr><th scope="row"><code>--save NEW_FILE</code></th><td>Validate the source and save a plan; requires INPUT, --output and either --to or --outputs</td></tr>
-<tr><th scope="row"><code>--output NEW_PATH</code></th><td>Result destination fixed by --save; refused without --save</td></tr>
-<tr><th scope="row"><code>--keys-file FILE</code></th><td>Source-check keys; version 1 for one output, version 2 with --outputs; only with --save</td></tr>
-<tr><th scope="row"><code>--packager-bin FILE</code></th><td>Shaka executable for source checks; only with --save, default packager</td></tr>
+<tr><th scope="row"><code>--save NEW_FILE</code></th><td>New execution-plan JSON written by drmr, e.g. conversion.plan.json; requires INPUT, --output and either --to or --outputs; <a href="https://kazuhide.github.io/drmr/guide/#inspect-plan">saving and reusing a plan</a></td></tr>
+<tr><th scope="row"><code>--output NEW_PATH</code></th><td>New result file/directory fixed by --save; refused without --save; <a href="https://kazuhide.github.io/drmr/guide/#inspect-plan">plan destinations</a></td></tr>
+<tr><th scope="row"><code>--keys-file FILE</code></th><td>Owner-only source-check key JSON; version 2 with --outputs, otherwise version 1; only with --save; <a href="https://kazuhide.github.io/drmr/guide/#key-configuration">key fields and examples</a></td></tr>
+<tr><th scope="row"><code>--packager-bin FILE</code></th><td>Shaka Packager executable name/path for source checks; only with --save, default packager; <a href="https://kazuhide.github.io/drmr/guide/#installation">tool installation</a></td></tr>
 <tr><th scope="row"><code>--max-workers N</code></th><td>Upper bound 1-64 for source checks; only with --save</td></tr>
 <tr><th scope="row"><code>--measure</code></th><td>Add measurements to stdout; requires --json and --save; saved file stays an execution plan</td></tr>
-<tr><th scope="row"><code>--mpd MPD</code></th><td>Separate prepared-DASH rendition-listing mode</td></tr>
+<tr><th scope="row"><code>--mpd MPD</code></th><td>Local MPD file for the separate prepared-DASH rendition-listing mode; <a href="https://kazuhide.github.io/drmr/guide/#prepared-dash-batch">prepared layout and example</a></td></tr>
 <tr><th scope="row"><code>--asset-id ID</code></th><td>Asset name in MPD mode</td></tr>
 </tbody></table></div>
 <h3>convert</h3>
@@ -1044,15 +1066,15 @@ cargo test --locked -p drmr-core --test conversion_bundle_encryption \
 <tr><th scope="row"><code>INPUT</code></th><td>Supported local original or completed HLS URL; encrypted input requires source keys; omitted with --plan</td></tr>
 <tr><th scope="row"><code>--to TARGET</code></th><td>Required output protection without --plan or --outputs</td></tr>
 <tr><th scope="row"><code>--format FORMAT</code></th><td>One output format; HLS defaults to fMP4 even for TS input</td></tr>
-<tr><th scope="row"><code>--outputs FILE</code></th><td>Explicit output recipe; all listed results use one new result root; conflicts with --to/--format/--plan</td></tr>
-<tr><th scope="row"><code>--output NEW_PATH</code></th><td>Required new file/directory without --plan</td></tr>
-<tr><th scope="row"><code>--plan FILE</code></th><td>Execute a version-1 or version-2 plan; refuse source/output-intent overrides</td></tr>
-<tr><th scope="row"><code>--keys-file FILE</code></th><td>Private version-1 single-output or version-2 per-output key configuration</td></tr>
-<tr><th scope="row"><code>--download-dir NEW_DIR</code></th><td>Mandatory for URL input; retained original</td></tr>
-<tr><th scope="row"><code>--fetch-policy FILE</code></th><td>Private URL-origin/header/resource policy JSON</td></tr>
-<tr><th scope="row"><code>--packager-bin FILE</code></th><td>Shaka executable; default packager</td></tr>
-<tr><th scope="row"><code>--hls-validator-bin FILE</code></th><td>Apple executable for requested HLS manifest checks; default mediastreamvalidator</td></tr>
-<tr><th scope="row"><code>--dash-validator-bin FILE</code></th><td>PHP interpreter for the local DASH-IF manifest adapter; default php</td></tr>
+<tr><th scope="row"><code>--outputs FILE</code></th><td>Schema-version-1 output recipe JSON; all listed results use one new result root; conflicts with --to/--format/--plan; <a href="https://kazuhide.github.io/drmr/guide/#inspect-plan">output recipe example</a></td></tr>
+<tr><th scope="row"><code>--output NEW_PATH</code></th><td>Required new result file/directory without --plan; <a href="https://kazuhide.github.io/drmr/guide/#local-conversion">destination rules and examples</a></td></tr>
+<tr><th scope="row"><code>--plan FILE</code></th><td>Execution-plan JSON generated by plan --save, version 1 or 2; refuse source/output-intent overrides; <a href="https://kazuhide.github.io/drmr/guide/#inspect-plan">saved-plan workflow</a></td></tr>
+<tr><th scope="row"><code>--keys-file FILE</code></th><td>Owner-only key JSON; version 2 with --outputs or a version-2 plan, otherwise version 1; <a href="https://kazuhide.github.io/drmr/guide/#key-configuration">complete key JSON examples</a></td></tr>
+<tr><th scope="row"><code>--download-dir NEW_DIR</code></th><td>Mandatory new directory for URL input; retained original; <a href="https://kazuhide.github.io/drmr/guide/#url-input">acquisition example</a></td></tr>
+<tr><th scope="row"><code>--fetch-policy FILE</code></th><td>Owner-only URL fetch policy JSON, e.g. config/fetch.json; <a href="https://kazuhide.github.io/drmr/guide/#url-input">origin/header/limit fields and example</a></td></tr>
+<tr><th scope="row"><code>--packager-bin FILE</code></th><td>Shaka Packager executable name/path; default packager on PATH; <a href="https://kazuhide.github.io/drmr/guide/#installation">installation and discovery</a></td></tr>
+<tr><th scope="row"><code>--hls-validator-bin FILE</code></th><td>Apple executable name/path for requested HLS manifest checks; default mediastreamvalidator; <a href="https://kazuhide.github.io/drmr/guide/#verification">external validator setup</a></td></tr>
+<tr><th scope="row"><code>--dash-validator-bin FILE</code></th><td>PHP executable name/path for the local DASH-IF manifest adapter; default php; <a href="https://kazuhide.github.io/drmr/guide/#verification">external validator setup</a></td></tr>
 <tr><th scope="row"><code>--max-workers N</code></th><td>Upper bound 1-64; otherwise automatic CPU/memory choice</td></tr>
 <tr><th scope="row"><code>--json</code></th><td>One versioned result; suppress ordinary progress lines</td></tr>
 <tr><th scope="row"><code>--measure</code></th><td>Add measurement fields; requires --json</td></tr>
@@ -1062,15 +1084,15 @@ cargo test --locked -p drmr-core --test conversion_bundle_encryption \
 <h3>verify</h3>
 <div class="guide-table-scroll" role="region" aria-labelledby="table-23-title" tabindex="0"><table><caption id="table-23-title">verify — Table 23</caption><thead><tr><th scope="col">Argument/option</th><th scope="col">Meaning</th></tr></thead><tbody>
 <tr><th scope="row"><code>OUTPUT</code></th><td>Candidate MP4, MPD or M3U8; omitted with --plan</td></tr>
-<tr><th scope="row"><code>--source INPUT</code></th><td>Required original without --plan or --manifest-only; never inferred from the result</td></tr>
-<tr><th scope="row"><code>--plan FILE</code></th><td>Check recorded source, output format/protection and independent media correspondence; conflicts with OUTPUT and --source</td></tr>
+<tr><th scope="row"><code>--source INPUT</code></th><td>Required original media/manifest file without --plan or --manifest-only; never inferred from the result; <a href="https://kazuhide.github.io/drmr/guide/#verification">complete comparisons</a></td></tr>
+<tr><th scope="row"><code>--plan FILE</code></th><td>Generated execution-plan JSON, version 1 or 2; check recorded source, output format/protection and independent media correspondence; conflicts with OUTPUT and --source; <a href="https://kazuhide.github.io/drmr/guide/#inspect-plan">saved-plan workflow</a></td></tr>
 <tr><th scope="row"><code>--manifest-only</code></th><td>Native HLS/DASH manifest linting with media_verified false; conflicts with --plan/--source/--keys-file</td></tr>
 <tr><th scope="row"><code>--external-validator</code></th><td>Add Apple/DASH-IF checks; requires --manifest-only</td></tr>
 <tr><th scope="row"><code>--manifest-profile PROFILE</code></th><td>Native manifest profile; requires --manifest-only. Default base; apple-vod accepts HLS only</td></tr>
-<tr><th scope="row"><code>--keys-file FILE</code></th><td>Original/result keys; version 2 for a multi-output plan, otherwise version 1</td></tr>
-<tr><th scope="row"><code>--packager-bin FILE</code></th><td>Shaka executable; default packager</td></tr>
-<tr><th scope="row"><code>--hls-validator-bin FILE</code></th><td>Apple executable; default mediastreamvalidator</td></tr>
-<tr><th scope="row"><code>--dash-validator-bin FILE</code></th><td>PHP interpreter for the local DASH-IF adapter; default php</td></tr>
+<tr><th scope="row"><code>--keys-file FILE</code></th><td>Owner-only original/result key JSON; version 2 for a version-2 plan, otherwise version 1; <a href="https://kazuhide.github.io/drmr/guide/#key-configuration">input/output key roles and examples</a></td></tr>
+<tr><th scope="row"><code>--packager-bin FILE</code></th><td>Shaka Packager executable name/path; default packager on PATH; <a href="https://kazuhide.github.io/drmr/guide/#installation">installation and discovery</a></td></tr>
+<tr><th scope="row"><code>--hls-validator-bin FILE</code></th><td>Apple executable name/path; default mediastreamvalidator; <a href="https://kazuhide.github.io/drmr/guide/#verification">external validator setup</a></td></tr>
+<tr><th scope="row"><code>--dash-validator-bin FILE</code></th><td>PHP executable name/path for the local DASH-IF adapter; default php; <a href="https://kazuhide.github.io/drmr/guide/#verification">external validator setup</a></td></tr>
 <tr><th scope="row"><code>--max-workers N</code></th><td>Upper bound 1-64; admission may reduce it</td></tr>
 <tr><th scope="row"><code>--json</code></th><td>One independent verification report</td></tr>
 <tr><th scope="row"><code>--measure</code></th><td>Add measurements; requires --json</td></tr>
@@ -1079,11 +1101,11 @@ cargo test --locked -p drmr-core --test conversion_bundle_encryption \
 <p>Version-1 plan verification adds plan_id, source_unchanged and output_matches_plan, with complete comparisons under verification. Success requires source_unchanged, output_matches_plan and verification.passed all to be true. An explicitly supplied PlayReady configuration is also checked against the current result. Version-2 results list every output&#x27;s media, protection, signaling and conformance outcomes and include an overall passed flag. Matching media alone does not establish planned protection or DRM declarations. Neither mode proves license playback.</p>
 <h3>run</h3>
 <div class="guide-table-scroll" role="region" aria-labelledby="table-24-title" tabindex="0"><table><caption id="table-24-title">run — Table 24</caption><thead><tr><th scope="col">Option</th><th scope="col">Meaning/default</th></tr></thead><tbody>
-<tr><th scope="row"><code>--mpd MPD</code></th><td>Required supported prepared manifest</td></tr>
+<tr><th scope="row"><code>--mpd MPD</code></th><td>Required local prepared DASH MPD file; <a href="https://kazuhide.github.io/drmr/guide/#prepared-dash-batch">Prepared input layout</a></td></tr>
 <tr><th scope="row"><code>--output ROOT</code></th><td>Required; results under ROOT/asset-id</td></tr>
 <tr><th scope="row"><code>--asset-id ID</code></th><td>Asset name, otherwise original directory name</td></tr>
-<tr><th scope="row"><code>--hls-master M3U8</code></th><td>Original HLS master; needed unless --no-manifests</td></tr>
-<tr><th scope="row"><code>--packager-bin PATH</code></th><td>Executable or its containing directory</td></tr>
+<tr><th scope="row"><code>--hls-master M3U8</code></th><td>Local original HLS master playlist file; needed unless --no-manifests; <a href="https://kazuhide.github.io/drmr/guide/#prepared-dash-batch">prepared layout example</a></td></tr>
+<tr><th scope="row"><code>--packager-bin PATH</code></th><td>Executable named packager (packager.exe on Windows), or its containing directory; <a href="https://kazuhide.github.io/drmr/guide/#prepared-dash-batch">prepared-DASH tool override</a></td></tr>
 <tr><th scope="row"><code>--max-workers N</code></th><td>Rendition parallelism upper bound</td></tr>
 <tr><th scope="row"><code>--manifest-local-url-base URL</code></th><td>Also generate manifests for local HTTP serving</td></tr>
 <tr><th scope="row"><code>--log-format FORMAT</code></th><td>text or jsonl; default text</td></tr>
@@ -1093,39 +1115,39 @@ cargo test --locked -p drmr-core --test conversion_bundle_encryption \
 </tbody></table></div>
 <h3>analyze-hls / package-hls</h3>
 <div class="guide-table-scroll" role="region" aria-labelledby="table-25-title" tabindex="0"><table><caption id="table-25-title">analyze-hls / package-hls — Table 25</caption><thead><tr><th scope="col">analyze-hls option</th><th scope="col">Meaning</th></tr></thead><tbody>
-<tr><th scope="row"><code>--source-config FILE</code></th><td>Required private source URL/path and permission configuration</td></tr>
+<tr><th scope="row"><code>--source-config FILE</code></th><td>Required owner-only JSON with url and nested policy; <a href="https://kazuhide.github.io/drmr/guide/#saved-hls">Capture a local source example</a></td></tr>
 <tr><th scope="row"><code>--asset-id ID</code></th><td>Required saved asset name</td></tr>
 <tr><th scope="row"><code>--output ROOT</code></th><td>Required; save under ROOT/ID/clear/source</td></tr>
 </tbody></table></div>
 <div class="guide-table-scroll" role="region" aria-labelledby="table-26-title" tabindex="0"><table><caption id="table-26-title">analyze-hls / package-hls — Table 26</caption><thead><tr><th scope="col">package-hls option</th><th scope="col">Meaning</th></tr></thead><tbody>
-<tr><th scope="row"><code>--analysis FILE</code></th><td>Required completed analysis.json</td></tr>
-<tr><th scope="row"><code>--drm-config FILE</code></th><td>Required private signaling configuration</td></tr>
-<tr><th scope="row"><code>--selection FILE</code></th><td>Private analyzed audio selection</td></tr>
-<tr><th scope="row"><code>--packager-bin FILE</code></th><td>Shaka executable, default packager</td></tr>
+<tr><th scope="row"><code>--analysis FILE</code></th><td>Required analysis.json generated by a completed analyze-hls; <a href="https://kazuhide.github.io/drmr/guide/#saved-hls">snapshot capture and packaging</a></td></tr>
+<tr><th scope="row"><code>--drm-config FILE</code></th><td>Required owner-only signaling JSON; fields include widevine_pssh, playready_la_url and fairplay_uri; <a href="https://kazuhide.github.io/drmr/guide/#saved-hls">Package with signaling example</a></td></tr>
+<tr><th scope="row"><code>--selection FILE</code></th><td>Owner-only JSON with analyzed audio_source_id and optional analysis_id/snapshot_digest bindings; <a href="https://github.com/kazuhide/drmr/blob/main/docs/usage.md#package-the-hls-snapshot">audio selection details</a></td></tr>
+<tr><th scope="row"><code>--packager-bin FILE</code></th><td>Shaka Packager executable name/path, default packager on PATH; <a href="https://kazuhide.github.io/drmr/guide/#installation">tool installation</a></td></tr>
 <tr><th scope="row"><code>--max-workers N</code></th><td>Shared track/segment bound 1-64</td></tr>
 </tbody></table></div>
 <p>Content keys for these workflows are <code>DRM_KID</code>/<code>DRM_KEY</code>/<code>DRM_IV</code>. Passing generic key JSON as drm-config is not supported.</p>
 <h3>verify-snapshot / canonical / version</h3>
 <div class="guide-table-scroll" role="region" aria-labelledby="table-27-title" tabindex="0"><table><caption id="table-27-title">verify-snapshot / canonical / version — Table 27</caption><thead><tr><th scope="col">Command/argument</th><th scope="col">Meaning</th></tr></thead><tbody>
-<tr><th scope="row"><code>verify-snapshot PATH</code></th><td>Check recorded digest for snapshot directory or analysis.json</td></tr>
-<tr><th scope="row"><code>verify-snapshot --files PATH</code></th><td>Also rehash saved playlists/media</td></tr>
-<tr><th scope="row"><code>canonical PATH</code></th><td>Stable JSON output; no final LF or secret removal</td></tr>
+<tr><th scope="row"><code>verify-snapshot PATH</code></th><td>Check recorded digest for the generated snapshot directory or analysis.json; <a href="https://kazuhide.github.io/drmr/guide/#saved-hls">snapshot example</a></td></tr>
+<tr><th scope="row"><code>verify-snapshot --files PATH</code></th><td>Also rehash saved playlists/media in that snapshot; <a href="https://kazuhide.github.io/drmr/guide/#saved-hls">snapshot example</a></td></tr>
+<tr><th scope="row"><code>canonical PATH</code></th><td>Read a JSON file and print stable JSON; no final LF or secret removal; <a href="https://kazuhide.github.io/drmr/guide/#prepared-dash-batch">JSONL construction example</a></td></tr>
 <tr><th scope="row"><code>version</code></th><td>Print version; no command-specific options</td></tr>
 </tbody></table></div>
 <h3>batch</h3>
 <div class="guide-table-scroll" role="region" aria-labelledby="table-28-title" tabindex="0"><table><caption id="table-28-title">batch — Table 28</caption><thead><tr><th scope="col">Option</th><th scope="col">Meaning/default</th></tr></thead><tbody>
-<tr><th scope="row"><code>--work-list FILE</code></th><td>Required schema header and asset JSONL</td></tr>
+<tr><th scope="row"><code>--work-list FILE</code></th><td>Required JSONL with a schema header and one asset per line; <a href="https://kazuhide.github.io/drmr/guide/#prepared-dash-batch">Work-list JSON Lines example</a></td></tr>
 <tr><th scope="row"><code>--output ROOT</code></th><td>Required output root</td></tr>
-<tr><th scope="row"><code>--resume-log FILE</code></th><td>Required attempt-state record</td></tr>
+<tr><th scope="row"><code>--resume-log FILE</code></th><td>Required JSONL attempt-state log written/reused by batch, e.g. resume.jsonl; <a href="https://kazuhide.github.io/drmr/guide/#prepared-dash-batch">Keys and resumption</a></td></tr>
 <tr><th scope="row"><code>--storage STORAGE</code></th><td>local or s3; default local</td></tr>
 <tr><th scope="row"><code>--storage-root DIR</code></th><td>Local object-key root</td></tr>
 <tr><th scope="row"><code>--bucket NAME</code></th><td>S3 bucket</td></tr>
 <tr><th scope="row"><code>--region REGION</code></th><td>Default and currently supported S3 region ap-northeast-1</td></tr>
 <tr><th scope="row"><code>--output-prefix PREFIX</code></th><td>Storage result prefix, default output</td></tr>
 <tr><th scope="row"><code>--key-provider PROVIDER</code></th><td>env or file; default env</td></tr>
-<tr><th scope="row"><code>--key-file FILE</code></th><td>Private per-asset JSONL for file provider</td></tr>
-<tr><th scope="row"><code>--hls-config-dir DIR</code></th><td>HLS workflow configurations</td></tr>
-<tr><th scope="row"><code>--packager-bin PATH</code></th><td>Packager location</td></tr>
+<tr><th scope="row"><code>--key-file FILE</code></th><td>Owner-only per-asset JSONL with asset_id/kid/key/iv, no schema header; file provider only; <a href="https://kazuhide.github.io/drmr/guide/#prepared-dash-batch">Keys and resumption example</a></td></tr>
+<tr><th scope="row"><code>--hls-config-dir DIR</code></th><td>Directory of per-asset HLS JSON configuration references; <a href="https://kazuhide.github.io/drmr/guide/#prepared-dash-batch">HLS batch configuration</a></td></tr>
+<tr><th scope="row"><code>--packager-bin PATH</code></th><td>Packager executable path; prepared-DASH batches also accept its directory; <a href="https://kazuhide.github.io/drmr/guide/#prepared-dash-batch">workflow-specific override</a></td></tr>
 <tr><th scope="row"><code>--max-workers N</code></th><td>Per-asset processing bound; assets remain serial</td></tr>
 <tr><th scope="row"><code>--retry-failed</code></th><td>Select failed attempts</td></tr>
 <tr><th scope="row"><code>--plan</code></th><td>Show intended work without executing</td></tr>
@@ -1135,14 +1157,14 @@ cargo test --locked -p drmr-core --test conversion_bundle_encryption \
 </tbody></table></div>
 <h3>serve</h3>
 <div class="guide-table-scroll" role="region" aria-labelledby="table-29-title" tabindex="0"><table><caption id="table-29-title">serve — Table 29</caption><thead><tr><th scope="col">Option/environment</th><th scope="col">Meaning/default</th></tr></thead><tbody>
-<tr><th scope="row"><code>--static-dir DIR</code></th><td>Trusted UI directory replacing embedded assets</td></tr>
-<tr><th scope="row"><code>--cli FILE</code></th><td>Same-version CLI for jobs</td></tr>
+<tr><th scope="row"><code>--static-dir DIR</code></th><td>Trusted directory of UI files replacing embedded assets; <a href="https://kazuhide.github.io/drmr/guide/#web-console">local console setup</a></td></tr>
+<tr><th scope="row"><code>--cli FILE</code></th><td>Same-version drmr executable file for jobs (drmr.exe on Windows); <a href="https://kazuhide.github.io/drmr/guide/#web-console">console CLI selection</a></td></tr>
 <tr><th scope="row"><code>DRMR_CATALOG_ROOT</code></th><td>Required prepared catalog root</td></tr>
 <tr><th scope="row"><code>DRMR_OUTPUT_ROOT</code></th><td>Required results/saved-HLS/log root</td></tr>
 <tr><th scope="row"><code>DRMR_BIND_HOST</code></th><td>Default loopback; remote exposure is not intended</td></tr>
 <tr><th scope="row"><code>DRMR_BIND_PORT</code></th><td>Default 8080</td></tr>
 <tr><th scope="row"><code>DRMR_MAX_WORKERS</code></th><td>HLS packaging worker upper bound</td></tr>
-<tr><th scope="row"><code>DRMR_HLS_PROFILES</code></th><td>Owner-only named HLS acquisition policy file path</td></tr>
+<tr><th scope="row"><code>DRMR_HLS_PROFILES</code></th><td>Owner-only named-profile JSON file path; <a href="https://kazuhide.github.io/drmr/guide/#web-console">HLS connection policy JSON example</a></td></tr>
 </tbody></table></div>
 </section>
 <section class="guide-chapter" id="references" data-guide-chapter="references" aria-labelledby="references-title"><h2 id="references-title">20. References and maintenance</h2><a class="guide-chapter-switch" href="../ja/guide/#references" lang="ja" hreflang="ja">日本語</a>

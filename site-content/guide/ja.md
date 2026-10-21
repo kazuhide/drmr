@@ -727,6 +727,8 @@ drmr verify retry-hls/master.m3u8 --source saved-source/input.m3u8 \
 
 既定では、HTTPS かつ入力 URL と同じ origin への接続だけを許可します。origin はスキーム、ホスト、ポートの組み合わせです。別 origin の参照や認証が必要な場合は、所有者だけがアクセスできる JSON ファイルに設定し、`--fetch-policy` で指定します。`analyze URL` と直接の `convert URL` の両方で使えます。
 
+次の内容を、例えば `config/fetch.json` という UTF-8 のテキストファイルに保存します。ファイル名は任意です。入力 URL はコマンドで指定するため、この JSON に書く必要はありません。取得ポリシーには `schema_version` を付けません。認証が不要な場合は `headers_by_origin` を省けます。追加の設定が不要なら `--fetch-policy` 自体を省略できます。
+
 ```json
 {
   "allowed_origins": ["https://media.example.com"],
@@ -736,6 +738,21 @@ drmr verify retry-hls/master.m3u8 --source saved-source/input.m3u8 \
   "max_total_bytes": 1073741824,
   "connections": 4
 }
+```
+
+| 項目 | この例の意味 |
+| --- | --- |
+| `allowed_origins` | 入力 URL の origin に加え、`https://media.example.com` への参照を許可する。プレイリストのファイルパスではなく origin を指定する |
+| `headers_by_origin` | `https://example.com` へのリクエストだけに認証ヘッダーを付ける。`<your-token>` は実際のトークンに置き換える |
+| `max_total_bytes` | 取得量の合計を 1,073,741,824 バイト（1 GiB）までに制限する |
+| `connections` | 同時取得数を最大 4 にする。CPU・メモリや `--max-workers` によっては、実際の同時取得数はさらに少なくなる |
+
+第5章と同様に `config` ディレクトリを保護し、JSON を保存した後にファイルの権限を設定します。macOS/Linux の指定例です。Windows では第14章の所有者専用 ACL を使います。
+
+```sh
+chmod 600 config/fetch.json
+drmr analyze "https://example.com/vod/master.m3u8" \
+  --download-dir analyzed-source --fetch-policy config/fetch.json --json
 ```
 
 ```sh
@@ -1532,6 +1549,36 @@ cargo test --locked -p drmr --test long_conversion
 
 この章に公開 CLI の引数とオプションをまとめます。すべてのコマンドで `-h` / `--help` を使えるほか、`drmr help COMMAND` でもヘルプを確認できます。CLI のバージョンは `-V` / `--version` または `drmr version` で表示します。子プロセスの管理に使う内部用の起動引数は、利用者向けのインターフェースに含めません。
 
+## FILE・PATH に指定するもの
+
+`FILE` や `PATH` は、その文字列をそのまま入力する指定ではありません。使うファイルのパスに置き換えます。相対パスはコマンドを実行するディレクトリを基準にします。パスに空白がある場合は引用符で囲んでください。JSON の中身をオプションの直後に直接書く方式ではありません。
+
+同じ `FILE` 表記でも、設定 JSON、生成済みの計画、実行プログラムでは渡すものが異なります。代表的な指定例と、内容の説明は次のとおりです。
+
+| 指定例 | 用意するもの・詳しい説明 |
+| --- | --- |
+| `--fetch-policy config/fetch.json` | URL の取得条件を書く JSON。第8章の[取得ポリシーの書式と使用例](https://kazuhide.github.io/drmr/ja/guide/#url-input)を参照。追加 origin・認証ヘッダー・取得量などを設定する |
+| `--keys-file config/keys.json` | 鍵を読み込む JSON。第5章の[入力鍵・出力鍵の構造例と保護方法](https://kazuhide.github.io/drmr/ja/guide/#key-configuration)を参照。通常の単一出力は version 1。--outputs または version 2 の計画を使う場合は、出力が一つでも version 2。出力一覧や取得ポリシーとは別ファイル |
+| `--outputs config/outputs.json` | 利用者が作る version 1 の出力一覧 JSON。第6章の[複数出力の設定例](https://kazuhide.github.io/drmr/ja/guide/#inspect-plan)を参照。出力 ID・形式・暗号方式などを指定し、鍵は含めない |
+| `--plan conversion.plan.json` | `plan --save conversion.plan.json` で生成した実行計画 JSON。第6章の[計画の保存と実行](https://kazuhide.github.io/drmr/ja/guide/#inspect-plan)を参照。鍵 JSON や出力一覧を代わりに指定することはできない |
+| `--packager-bin /opt/media-tools/packager` | インストール済みの Shaka Packager 実行ファイル。設定 JSON やインストーラーではない。第4章の[依存ツールの準備](https://kazuhide.github.io/drmr/ja/guide/#installation)を参照 |
+| `--hls-validator-bin /opt/media-tools/mediastreamvalidator` | macOS に用意した Apple の検証プログラム。第9章の[外部マニフェスト検査の準備](https://kazuhide.github.io/drmr/ja/guide/#verification)を参照 |
+| `--dash-validator-bin /opt/media-tools/php` | ローカルの DASH-IF アダプターを動かす PHP 実行ファイル。MPD や DASH-IF のディレクトリではない。第9章の[検査ツールと DRMR_DASH_IF_ROOT](https://kazuhide.github.io/drmr/ja/guide/#verification)を参照 |
+
+`analyze` は、どちらの版の鍵 JSON からも入力鍵を読み込めます。鍵ファイルに出力設定がある場合も、解析には入力鍵だけを使います。
+
+`--packager-bin` の既定値 `packager` は、起動環境の PATH から実行ファイルを探す指定です。別の場所に配置した場合は、その実行ファイルのパスを渡します。例えば macOS/Linux では次のように指定します。入力ファイル、出力先、鍵設定、実行ファイルの場所は自身の環境に合わせて置き換えてください。
+
+```sh
+drmr convert original.mp4 --to cbcs --format mp4 \
+  --output protected.mp4 --keys-file config/keys.json \
+  --packager-bin "/opt/media-tools/packager"
+```
+
+Windows では、例えば `--packager-bin 'C:\media-tools\packager.exe'` と指定します。汎用 `analyze`・`plan`・`convert`・`verify` と `package-hls` は実行ファイルを受け取ります。`run` と準備済み DASH の `batch` は、`packager`（Windows は `packager.exe`）という名前の実行ファイルを含むディレクトリも指定できます。HLS を含む `batch` では実行ファイルのパスを指定してください。オプションの値にシェルコマンド全体や追加引数は含めません。CLI アーカイブには Shaka Packager は同梱されていません。
+
+`NEW_FILE`・`NEW_PATH`・`NEW_DIR` は、これから作る保存先です。読み込む `FILE` とは異なり、既存の出力先を上書きするための指定ではありません。秘密情報を含むファイルは、鍵設定の保護手順に従って作成してください。
+
 ## doctor
 
 | オプション | 意味・既定値 |
@@ -1555,9 +1602,9 @@ PROFILE に指定できるのは `all`、`prepared-dash`、`progressive-mp4`、`
 | --- | --- |
 | `INPUT` | 必要なファイルがすべて揃ったローカル MP4・DASH・HLS、または配信内容が確定して取得条件を満たす HLS の URL |
 | `--download-dir NEW_DIR` | URL に必須。原本を所有者専用で保存する新規ディレクトリ |
-| `--fetch-policy FILE` | URL の追加 origin・認証ヘッダー・資源上限を記す、アクセス権を制限した JSON ファイル |
-| `--keys-file FILE` | 原本の復号に必要な入力鍵の保護された設定 |
-| `--packager-bin FILE` | Shaka 実行ファイル。既定 packager |
+| `--fetch-policy FILE` | 例 `config/fetch.json`。URL 取得用の JSON。[書式・各項目・権限の例](https://kazuhide.github.io/drmr/ja/guide/#url-input) |
+| `--keys-file FILE` | 例 `config/keys.json`。原本の復号に必要な入力鍵の JSON。[構造例と保護方法](https://kazuhide.github.io/drmr/ja/guide/#key-configuration) |
+| `--packager-bin FILE` | Shaka Packager の実行ファイル。既定 packager。[配置と最低要件](https://kazuhide.github.io/drmr/ja/guide/#installation) |
 | `--max-workers N` | 上限 1-64。既定は CPU・メモリから自動選択 |
 | `--json` | 一つの入力解析レポート。input_admitted は変換結果の検証を意味しない |
 | `--measure` | 数値計測を追加。--json が必要 |
@@ -1571,12 +1618,12 @@ PROFILE に指定できるのは `all`、`prepared-dash`、`progressive-mp4`、`
 | `INPUT` | 変換先の候補と条件を確認するローカル入力 |
 | `--to TARGET` | INPUT を使い --outputs がない場合に必須。clear、cenc、cbcs、hls-aes128、hls-sample-aes |
 | `--format FORMAT` | mp4、dash、hls、hls-ts。--save なしでは複数候補、単一出力の保存計画では一形式。省略時は MP4/DASH/HLS に従い、HLS は fMP4。--outputs とは併用不可 |
-| `--outputs FILE` | version 1 の出力一覧 JSON。--save が必要。--to・--format を置き換え、version 2 の実行計画を作る |
+| `--outputs FILE` | version 1 の[出力一覧 JSON の構造例](https://kazuhide.github.io/drmr/ja/guide/#inspect-plan)。--save が必要。--to・--format を置き換え、version 2 の実行計画を作る |
 | `--json` | 実行せず、バージョン付き計画を JSON で表示 |
-| `--save NEW_FILE` | 原本を確認して計画を保存。INPUT と --output に加え、--to または --outputs が必要 |
+| `--save NEW_FILE` | 原本を確認して計画 JSON を新規保存。例 `conversion.plan.json`。INPUT と --output に加え、--to または --outputs が必要。[保存例](https://kazuhide.github.io/drmr/ja/guide/#inspect-plan) |
 | `--output NEW_PATH` | 計画に記録する新規出力先。--save なしでは拒否 |
-| `--keys-file FILE` | 原本確認の入力鍵。単一出力は version 1、--outputs は version 2。--save 時のみ |
-| `--packager-bin FILE` | 原本確認の Shaka 実行ファイル。--save 時のみ。既定 packager |
+| `--keys-file FILE` | 原本確認の入力鍵 JSON。単一出力は version 1、--outputs は version 2。--save 時のみ。[鍵の構造例](https://kazuhide.github.io/drmr/ja/guide/#key-configuration) |
+| `--packager-bin FILE` | 原本確認の Shaka Packager 実行ファイル。--save 時のみ。既定 packager。[準備方法](https://kazuhide.github.io/drmr/ja/guide/#installation) |
 | `--max-workers N` | 原本確認の同時作業上限 1-64。--save 時のみ |
 | `--measure` | 標準出力に計測を追加。--json と --save が必要。保存ファイル自体は実行用の計画 |
 | `--mpd MPD` | 準備済み DASH のレンディションを列挙する別モード |
@@ -1589,15 +1636,15 @@ PROFILE に指定できるのは `all`、`prepared-dash`、`progressive-mp4`、`
 | `INPUT` | 対応するローカル原本、または配信内容が確定した HLS の URL。暗号化入力には入力鍵が必要。--plan 時は省略 |
 | `--to TARGET` | --plan・--outputs がない場合に必須。出力保護方式 |
 | `--format FORMAT` | 一つの出力形式。省略時は MP4/DASH/HLS に従い、HLS は TS 入力でも fMP4 |
-| `--outputs FILE` | すべての結果を一つの新規出力ルートに作るための出力一覧。--to・--format・--plan とは併用不可 |
+| `--outputs FILE` | version 1 の[出力一覧 JSON](https://kazuhide.github.io/drmr/ja/guide/#inspect-plan)。すべての結果を一つの新規出力ルートに作る。--to・--format・--plan とは併用不可 |
 | `--output NEW_PATH` | --plan がない場合に必須。新規ファイルまたは新規ディレクトリ |
-| `--plan FILE` | version 1 または 2 の計画を実行。原本・出力条件の上書きは拒否 |
-| `--keys-file FILE` | 単一出力は version 1、出力ごとの設定は version 2 の所有者専用 JSON |
+| `--plan FILE` | version 1 または 2 の[生成済み計画 JSON](https://kazuhide.github.io/drmr/ja/guide/#inspect-plan)を実行。原本・出力条件の上書きは拒否 |
+| `--keys-file FILE` | 所有者専用の鍵 JSON。通常は version 1。--outputs または version 2 の計画では、出力が一つでも version 2。[鍵と DRM 情報の構造例](https://kazuhide.github.io/drmr/ja/guide/#key-configuration) |
 | `--download-dir NEW_DIR` | URL 入力に必須。取得した原本の保存用に新しく作るディレクトリ |
-| `--fetch-policy FILE` | URL の追加 origin・認証・資源制限を記す、アクセス権を制限した JSON ファイル |
-| `--packager-bin FILE` | Shaka 実行ファイル。既定 packager |
-| `--hls-validator-bin FILE` | 要求した HLS マニフェスト検査の Apple 実行ファイル。既定 mediastreamvalidator |
-| `--dash-validator-bin FILE` | ローカル DASH-IF 検査アダプターを実行する PHP。既定 php |
+| `--fetch-policy FILE` | 例 `config/fetch.json`。アクセス権を制限した URL 取得用 JSON。[設定項目と例](https://kazuhide.github.io/drmr/ja/guide/#url-input) |
+| `--packager-bin FILE` | Shaka Packager の実行ファイル。既定 packager。[準備方法](https://kazuhide.github.io/drmr/ja/guide/#installation) |
+| `--hls-validator-bin FILE` | 要求した HLS 検査用の Apple 実行ファイル。既定 mediastreamvalidator。[検査ツールの準備](https://kazuhide.github.io/drmr/ja/guide/#verification) |
+| `--dash-validator-bin FILE` | ローカル DASH-IF アダプターを実行する PHP 実行ファイル。既定 php。[配置先と設定](https://kazuhide.github.io/drmr/ja/guide/#verification) |
 | `--max-workers N` | メディアの同時処理数の上限 1-64。既定は CPU・メモリから自動選択 |
 | `--json` | スキーマのバージョンを含む一つの結果を表示。通常の進捗表示は省略 |
 | `--measure` | 数値の計測情報を追加。--json が必要 |
@@ -1612,14 +1659,14 @@ PROFILE に指定できるのは `all`、`prepared-dash`、`progressive-mp4`、`
 | --- | --- |
 | `OUTPUT` | 比較する結果の MP4、MPD、M3U8。--plan 時は省略 |
 | `--source INPUT` | --plan・--manifest-only がない場合に必須。元の入力。結果から原本を推測しない |
-| `--plan FILE` | 記録した原本と出力の形式・暗号方式を照合し、コンテンツ全体の一致を確認。OUTPUT・--source とは併用不可 |
+| `--plan FILE` | [生成済み計画 JSON](https://kazuhide.github.io/drmr/ja/guide/#inspect-plan)に記録した原本と出力条件を照合し、コンテンツ全体の一致を確認。OUTPUT・--source とは併用不可 |
 | `--manifest-only` | Rust の内蔵 Linter による HLS/DASH 検査。media_verified は false。--plan・--source・--keys-file とは併用不可 |
 | `--external-validator` | Apple／DASH-IF の検査も追加する。--manifest-only が必要 |
 | `--manifest-profile PROFILE` | 内蔵検査のプロファイル。--manifest-only が必要。既定 base、apple-vod は HLS のみ |
-| `--keys-file FILE` | 原本と結果の鍵。複数出力計画は version 2、それ以外は version 1 |
-| `--packager-bin FILE` | Shaka 実行ファイル。既定 packager |
-| `--hls-validator-bin FILE` | Apple の実行ファイル。既定 mediastreamvalidator |
-| `--dash-validator-bin FILE` | ローカル DASH-IF 検査アダプターを実行する PHP。既定 php |
+| `--keys-file FILE` | 原本と結果の鍵 JSON。version 2 の計画では、出力が一つでも version 2。それ以外は version 1。[鍵の構造例](https://kazuhide.github.io/drmr/ja/guide/#key-configuration) |
+| `--packager-bin FILE` | Shaka Packager の実行ファイル。既定 packager。[準備方法](https://kazuhide.github.io/drmr/ja/guide/#installation) |
+| `--hls-validator-bin FILE` | Apple の実行ファイル。既定 mediastreamvalidator。[検査ツールの準備](https://kazuhide.github.io/drmr/ja/guide/#verification) |
+| `--dash-validator-bin FILE` | ローカル DASH-IF アダプターを実行する PHP 実行ファイル。既定 php。[配置先と設定](https://kazuhide.github.io/drmr/ja/guide/#verification) |
 | `--max-workers N` | 上限 1-64。利用可能な資源に応じて実際の並列数は減る場合がある |
 | `--json` | 一つの独立検証レポート |
 | `--measure` | 計測を追加。--json が必要 |
@@ -1636,7 +1683,7 @@ version 1 の計画検証では plan_id、source_unchanged、output_matches_plan
 | `--output ROOT` | 必須。ROOT/asset-id の下に出力 |
 | `--asset-id ID` | アセット名。既定は原本ディレクトリ名 |
 | `--hls-master M3U8` | 原本 HLS master。--no-manifests を使わなければ必要 |
-| `--packager-bin PATH` | packager 実行ファイル、またはそれを含むディレクトリ |
+| `--packager-bin PATH` | packager 実行ファイル、またはそれを含むディレクトリ。[準備済み DASH の実行例](https://kazuhide.github.io/drmr/ja/guide/#prepared-dash-batch) |
 | `--max-workers N` | レンディション並列度の上限 |
 | `--manifest-local-url-base URL` | ローカル HTTP 配信用ベース URL のマニフェストも生成 |
 | `--log-format FORMAT` | text または jsonl。概要表示または一行に一つの JSON。既定は text |
@@ -1648,16 +1695,16 @@ version 1 の計画検証では plan_id、source_unchanged、output_matches_plan
 
 | analyze-hls のオプション | 意味 |
 | --- | --- |
-| `--source-config FILE` | 必須。入力 URL/パスとアクセス許可を記す、所有者だけがアクセスできる JSON ファイル |
+| `--source-config FILE` | 必須。入力 URL/パスとアクセス許可を記す、所有者専用 JSON。[source.json の構造例](https://kazuhide.github.io/drmr/ja/guide/#saved-hls) |
 | `--asset-id ID` | 必須。保存アセット名 |
 | `--output ROOT` | 必須。ROOT/ID/clear/source の下に保存 |
 
 | package-hls のオプション | 意味 |
 | --- | --- |
-| `--analysis FILE` | 必須。完成した analysis.json |
-| `--drm-config FILE` | 必須。Widevine・PlayReady・FairPlay のシグナリングを記す、所有者だけがアクセスできる JSON ファイル |
-| `--selection FILE` | 解析済みの音声トラックを選択する、所有者だけがアクセスできる JSON ファイル |
-| `--packager-bin FILE` | Shaka 実行ファイル。既定 packager |
+| `--analysis FILE` | 必須。analyze-hls が生成した analysis.json。[生成手順](https://kazuhide.github.io/drmr/ja/guide/#saved-hls) |
+| `--drm-config FILE` | 必須。DRM シグナリング用の所有者専用 JSON。汎用の鍵 JSON とは別の書式。[drm.json の構造例](https://kazuhide.github.io/drmr/ja/guide/#saved-hls) |
+| `--selection FILE` | 解析済み音声トラックの選択用 JSON。所有者専用。[選択ファイルの書式（英語）](https://github.com/kazuhide/drmr/blob/main/docs/usage.md#package-the-hls-snapshot) |
+| `--packager-bin FILE` | Shaka Packager の実行ファイル。既定 packager。[準備方法](https://kazuhide.github.io/drmr/ja/guide/#installation) |
 | `--max-workers N` | 全トラック間のセグメント処理上限 1-64 |
 
 これらの暗号鍵は、DRM_KID/DRM_KEY/DRM_IV から受け取ります。汎用鍵 JSON を drm-config へ渡す方式ではありません。
@@ -1675,18 +1722,18 @@ version 1 の計画検証では plan_id、source_unchanged、output_matches_plan
 
 | オプション | 意味・既定値 |
 | --- | --- |
-| `--work-list FILE` | 必須。schema ヘッダーとアセット行を持つ JSONL |
+| `--work-list FILE` | 必須。schema ヘッダーとアセット行を持つ JSONL。一行ごとに JSON を書く。[作業リスト例](https://kazuhide.github.io/drmr/ja/guide/#prepared-dash-batch) |
 | `--output ROOT` | 必須。出力ルート |
-| `--resume-log FILE` | 必須。再開状態の記録先 |
+| `--resume-log FILE` | 必須。batch が再開状態を記録するファイル。鍵ファイルではない。[再開手順](https://kazuhide.github.io/drmr/ja/guide/#prepared-dash-batch) |
 | `--storage STORAGE` | local または s3。既定 local |
 | `--storage-root DIR` | ローカルオブジェクトキーの基点 |
 | `--bucket NAME` | S3 bucket |
 | `--region REGION` | 既定 ap-northeast-1。この版の S3 対応 region も同じ |
 | `--output-prefix PREFIX` | ストレージの結果 prefix。既定 output |
 | `--key-provider PROVIDER` | env または file。既定 env |
-| `--key-file FILE` | file 方式の所有者専用アセット別 JSONL |
+| `--key-file FILE` | file 方式の所有者専用アセット別 JSONL。汎用 --keys-file の JSON とは異なる。[一行ごとの鍵設定例](https://kazuhide.github.io/drmr/ja/guide/#prepared-dash-batch) |
 | `--hls-config-dir DIR` | HLS ワークフロー用設定群 |
-| `--packager-bin PATH` | packager の指定 |
+| `--packager-bin PATH` | packager 実行ファイル。準備済み DASH の batch では、それを含むディレクトリも指定可能。HLS を含む場合は実行ファイルを指定する。[準備方法](https://kazuhide.github.io/drmr/ja/guide/#prepared-dash-batch) |
 | `--max-workers N` | 各アセット内の同時処理数の上限。アセット自体は一つずつ処理 |
 | `--retry-failed` | 失敗項目の再試行を選択 |
 | `--plan` | 実処理せず予定を表示 |
@@ -1699,13 +1746,13 @@ version 1 の計画検証では plan_id、source_unchanged、output_matches_plan
 | オプション・環境 | 意味・既定値 |
 | --- | --- |
 | `--static-dir DIR` | 組み込み画面の代わりに配信する信頼済み UI ディレクトリ |
-| `--cli FILE` | ジョブを実行する同じ版の CLI |
+| `--cli FILE` | ジョブを実行する同じ版の drmr 実行ファイル。設定 JSON ではない。[Web の起動方法](https://kazuhide.github.io/drmr/ja/guide/#web-console) |
 | `DRMR_CATALOG_ROOT` | 必須。準備済みメディアのカタログルート |
 | `DRMR_OUTPUT_ROOT` | 必須。結果・保存 HLS・ログのルート |
 | `DRMR_BIND_HOST` | 既定は loopback。リモート公開を想定しない |
 | `DRMR_BIND_PORT` | 既定 8080 |
 | `DRMR_MAX_WORKERS` | HLS パッケージの並列度上限 |
-| `DRMR_HLS_PROFILES` | HLS 入力取得の接続許可・認証ヘッダー等を持つ、所有者専用ポリシー JSON ファイルのパス |
+| `DRMR_HLS_PROFILES` | Web 用取得プロファイルの所有者専用 JSON ファイルへのパス。汎用 --fetch-policy とは別の書式。[プロファイルの構造例](https://kazuhide.github.io/drmr/ja/guide/#web-console) |
 
 # 20. 資料とこのガイドの更新
 
