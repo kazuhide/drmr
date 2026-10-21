@@ -1233,6 +1233,10 @@ The experimental native host wraps the local Web console. Catalog, jobs, media t
 
 Use **New conversion** for the saved-plan steps in chapter 15. Without a configuration folder, clear flows without keys or fetch settings remain available. Key-file contents are not uploaded through the browser.
 
+**Download original plan** opens a native save dialog for a new private JSON file. Choose a folder outside the input folder and `drmr-output`: the unchanged plan can contain absolute paths and signed URLs. The default is the private configuration folder, or an owner-only `drmr-plans` sibling of `drmr-output`. Unsafe existing folders and existing files are refused without changing them. To reopen the copy later, select its folder as **Private configuration folder** before console startup, then choose **Saved CLI plan**. Select `drmr-plans` in the later session if the copy was saved there; the private folder must remain separate from input/output media. CLI verification with `drmr verify --plan /path/to/private/drmr-plan.json` is also available, with runtime keys if needed. Other attachment downloads are unavailable in the Desktop window.
+
+Canceling the save dialog creates no file. If Quit drmr is waiting for an open save dialog, cancel the dialog to finish closing. A late selection is discarded, active transfer and owned partial-file cleanup are awaited, and a replaced file or parent folder is preserved.
+
 Restart the application to change roots after opening. Navigation stays inside the owned loopback origin; external origins and new windows are denied. Reports open in the same window, and Open console returns home. The page receives no native shell/filesystem bridge.
 
 Quit drmr stops admission and waits for server/tool confirmation. If cleanup is unconfirmed, the app keeps the window and owners, displays the error and permits another Quit attempt after the cause is fixed. This differs from OS force-quit.

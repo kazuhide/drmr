@@ -1051,10 +1051,12 @@ version = "0.1.0"
 dependencies = [
  "drmr-core",
  "drmr-server",
+ "rustix",
  "sha2 0.10.9",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
+ "ureq",
  "url",
 ]
 
