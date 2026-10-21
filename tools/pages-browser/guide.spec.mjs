@@ -24,7 +24,7 @@ async function attach(info, name, value, type = 'application/json') {
   await info.attach(name, { path, contentType: type });
 }
 function watch(page) {
-  const value = { console: [], pageErrors: [], failedRequests: [], responses: [], focus: [], scrolls: [], checkpoints: [] };
+  const value = { console: [], pageErrors: [], failedRequests: [], responses: [], focus: [], scrolls: [], checkpoints: [], phases: [] };
   const pending = [];
   page.on('console', message => {
     if (['error', 'warning'].includes(message.type())) value.console.push(message.text());
@@ -44,6 +44,18 @@ function watch(page) {
 async function confined(context) {
   await context.route('**/*', route => allowedRequest(route.request().url(), live)
     ? route.continue() : route.abort('blockedbyclient'));
+}
+async function timed(record, name, action) {
+  const phase = { name, started_ms: performance.now() };
+  record.phases.push(phase);
+  try {
+    const value = await action();
+    phase.passed = true;
+    return value;
+  } finally {
+    phase.elapsed_ms = performance.now() - phase.started_ms;
+    phase.passed ??= false;
+  }
 }
 async function ready(page, locale, mount = '/drmr/', fragment = '') {
   await page.goto('about:blank');
@@ -143,15 +155,20 @@ async function content(page, locale) {
     .toEqual(matrixRecipes.map(recipe => ({ id: recipe.id, tabindex: '-1' })));
   const groups = [];
   const groupLocators = await page.locator('figure.guide-example').all();
-  // The page is static: batch only independent readbacks, retaining DOM order.
-  for (let start = 0; start < groupLocators.length; start += 4) {
-    groups.push(...await Promise.all(groupLocators.slice(start, start + 4).map(async group => {
+  // The page is static. Read each figure's DOM facts in one protocol call and
+  // batch independent figures; retain every rendered/ARIA assertion and order.
+  for (let start = 0; start < groupLocators.length; start += 16) {
+    groups.push(...await Promise.all(groupLocators.slice(start, start + 16).map(async group => {
       const pre = group.locator('pre');
-      const [role, captionText, code, rendered, aria, language] = await Promise.all([
-        group.getAttribute('role'), group.locator('figcaption').innerText(),
-        pre.locator('code').textContent(), pre.locator('code').innerText(),
-        group.ariaSnapshot(), group.getAttribute('data-code-language'),
+      const [facts, aria] = await Promise.all([
+        group.evaluate(node => ({ role: node.getAttribute('role'),
+          captionText: node.querySelector('figcaption').innerText,
+          code: node.querySelector('pre code').textContent,
+          rendered: node.querySelector('pre code').innerText,
+          language: node.getAttribute('data-code-language') })),
+        group.ariaSnapshot(),
       ]);
+      const { role, captionText, code, rendered, language } = facts;
       expect(role).toBeNull();
       const caption = compact(captionText);
       expect(code.trim()).not.toBe('');
@@ -169,8 +186,8 @@ async function content(page, locale) {
   expect(groups.length).toBeGreaterThan(0);
   const tables = [];
   const regions = await page.locator('.guide-table-scroll').all();
-  for (let start = 0; start < regions.length; start += 4) {
-    tables.push(...await Promise.all(regions.slice(start, start + 4).map(async region => {
+  for (let start = 0; start < regions.length; start += 16) {
+    tables.push(...await Promise.all(regions.slice(start, start + 16).map(async region => {
       const [captionText, aria, scopes] = await Promise.all([
         region.locator('caption').innerText(), region.ariaSnapshot(),
         region.locator('th').evaluateAll(headers => headers.map(header => header.getAttribute('scope'))),
@@ -189,8 +206,8 @@ async function content(page, locale) {
   const chapterLinks = page.locator('.guide-chapter-switch');
   await expect(chapterLinks).toHaveCount(20);
   const links = await chapterLinks.all();
-  for (let start = 0; start < links.length; start += 4) {
-    await Promise.all(links.slice(start, start + 4).map(async (link, offset) => {
+  for (let start = 0; start < links.length; start += 16) {
+    await Promise.all(links.slice(start, start + 16).map(async (link, offset) => {
       const href = await link.getAttribute('href');
       expect(new URL(href, page.url()).href)
         .toBe(origin + '/drmr/' + locale.switchRoute + '#' + guideChapters[start + offset]);
@@ -216,7 +233,8 @@ test.afterEach(async ({ page }, info) => {
 for (const locale of guideLocales) for (const width of [320, 768, 1024, 1440]) {
   test(`${locale.language} guide / ${width}px: complete chapters, keyboard, assets and accessibility`, async ({ page, context, browser }, info) => {
     await confined(context); const network = watch(page);
-    await page.setViewportSize({ width, height: 900 }); await ready(page, locale);
+    await page.setViewportSize({ width, height: 900 });
+    await timed(network, 'initial-navigation', () => ready(page, locale));
     const initial = await page.evaluate(() => ({ scrollX, scrollY, focusedTag: document.activeElement.tagName }));
     expect(initial).toEqual({ scrollX: 0, scrollY: 0, focusedTag: 'BODY' });
     const initialPath = info.outputPath('initial-viewport-before-interaction.png');
@@ -234,8 +252,9 @@ for (const locale of guideLocales) for (const width of [320, 768, 1024, 1440]) {
       const restored = await page.evaluate(guideObservation); requireGuideLayout(restored);
       await attach(info, 'guide-negative-controls.json', { ...identity(info), hidden, restored });
     }
-    const contents = await content(page, locale);
-    const aria = await page.locator('body').ariaSnapshot(); await attach(info, 'rendered-aria.yml', aria, 'text/yaml');
+    const contents = await timed(network, 'complete-content-and-figure-aria', () => content(page, locale));
+    const aria = await timed(network, 'complete-body-aria', () => page.locator('body').ariaSnapshot());
+    await attach(info, 'rendered-aria.yml', aria, 'text/yaml');
     expect(aria).toContain('main:');
     const fonts = await page.evaluate(() => [...document.fonts].map(font => ({ family: font.family, weight: font.weight, status: font.status })));
     expect(fonts).toHaveLength(3); expect(fonts.every(font => font.status === 'loaded')).toBe(true);
@@ -247,6 +266,7 @@ for (const locale of guideLocales) for (const width of [320, 768, 1024, 1440]) {
     await page.keyboard.press('Enter'); await expect(page.getByRole('main')).toBeFocused();
     const native = [];
     for (const selector of ['pre[tabindex="0"]', '.guide-table-scroll']) {
+      const started = performance.now();
       await ready(page, locale);
       const candidates = await page.locator(selector).evaluateAll(nodes => nodes.map((node, index) => ({ index,
         extent: node.scrollWidth - node.clientWidth, chapter: node.closest('[data-guide-chapter]').id,
@@ -275,6 +295,7 @@ for (const locale of guideLocales) for (const width of [320, 768, 1024, 1440]) {
         } finally { record.passed ??= false; }
       };
       native.push({ selector, selected, ordinal, traversal: await scrollTarget(page, target, checkpoint) });
+      network.phases.push({ name: phase, started_ms: started, elapsed_ms: performance.now() - started, passed: true });
     }
     const served = [];
     for (const path of assets) {
@@ -282,7 +303,8 @@ for (const locale of guideLocales) for (const width of [320, 768, 1024, 1440]) {
       expect(response.status()).toBe(200); const sha256 = digest(await response.body());
       expect(sha256).toBe(info.config.metadata.assetHashes[path]); served.push({ path, sha256, headers: response.headers() });
     }
-    const axe = await new AxeBuilder({ page }).analyze(); await attach(info, 'axe.json', axe);
+    const axe = await timed(network, 'complete-axe', () => new AxeBuilder({ page }).analyze());
+    await attach(info, 'axe.json', axe);
     expect(axe.violations).toEqual([]); expect(axe.incomplete).toEqual([]);
     expect(network.console).toEqual([]); expect(network.pageErrors).toEqual([]); expect(network.failedRequests).toEqual([]);
     await Promise.all(records.get(page).pending);

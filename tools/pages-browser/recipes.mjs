@@ -69,16 +69,23 @@ export function recipeObservation(element) {
 
 export function matrixLinkExposure(element) {
   if (!element.matches('.conversion-matrix td a[href]')) return { matrixLink: false };
-  const points = [...element.getClientRects()].filter(rect => rect.width > 0 && rect.height > 0).flatMap(rect => {
+  const rectangles = [...element.getClientRects()].filter(rect => rect.width > 0 && rect.height > 0);
+  const points = rectangles.flatMap(rect => {
     const inset = Math.min(2, rect.width / 4, rect.height / 4);
     return [[rect.left + inset, rect.top + inset], [rect.right - inset, rect.top + inset],
       [rect.left + inset, rect.bottom - inset], [rect.right - inset, rect.bottom - inset],
       [(rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2]].map(([x, y]) => {
       const hit = document.elementFromPoint(x, y);
-      return { x, y, exposed: Boolean(hit && (hit === element || element.contains(hit))) };
+      return { x, y, exposed: Boolean(hit && (hit === element || element.contains(hit))),
+        hit: hit ? { tag: hit.tagName, id: hit.id, class: hit.className } : null };
     });
   });
-  return { matrixLink: true, points };
+  const wrapper = element.closest('.matrix-scroll');
+  const box = wrapper.getBoundingClientRect();
+  return { matrixLink: true, points,
+    rectangles: rectangles.map(rect => ({ left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom })),
+    scroller: { left: box.left, right: box.right, top: box.top, bottom: box.bottom,
+      scrollLeft: wrapper.scrollLeft, clientWidth: wrapper.clientWidth, scrollWidth: wrapper.scrollWidth } };
 }
 
 export function requireMatrixLinkExposure(value) {

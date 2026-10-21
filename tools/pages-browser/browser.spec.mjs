@@ -277,7 +277,7 @@ async function projectOnly(context) {
     ? route.continue() : route.abort('blockedbyclient'));
 }
 
-async function recipeNavigation(page, locale, info) {
+async function recipeNavigation(page, locale, info, batch, offset) {
   // The same static anchors must work when production JavaScript is disabled.
   // Only the first destination uses Tab/Enter; every remaining supported token
   // is activated as an actual link, rather than navigating to an invented URL.
@@ -288,14 +288,14 @@ async function recipeNavigation(page, locale, info) {
   const guideAsset = locale.language === 'en' ? 'guide/index.html' : 'ja/guide/index.html';
   const guideRoute = origin + '/drmr/' + locale.route + 'guide/';
   const destinations = [];
-  for (const [index, recipe] of matrixRecipes.entries()) {
-    const link = links.nth(index);
+  for (const [index, recipe] of batch.entries()) {
+    const link = links.nth(offset + index);
     await expect(link).toHaveText(recipe.label);
     expect(new URL(await link.getAttribute('href'), page.url()).href).toBe(guideRoute + '#' + recipe.id);
     if (index === 0) {
       const inventory = page.locator(focusSelector);
       await expect(inventory).toHaveCount(focusTargetCounts[locale.language]);
-      const ordinal = 12;
+      const ordinal = 12 + offset;
       for (let count = 0; count < ordinal; count++) await page.keyboard.press('Tab');
       await expect(link).toBeFocused();
       await requireTargetFocus(page, link, 'native-recipe-link', ordinal);
@@ -337,12 +337,13 @@ async function recipeNavigation(page, locale, info) {
       source_head: info.config.metadata.sourceHead, source_tree: info.config.metadata.sourceTree,
       asset_hashes: info.config.metadata.assetHashes, builder_inputs: info.config.metadata.builderInputHashes,
       mode: info.config.metadata.mode, language: locale.language, java_script_enabled: false,
-      expected_destinations: matrixRecipes.length, completed_destinations: destinations.length,
+      matrix_destinations: matrixRecipes.length, batch_offset: offset,
+      expected_destinations: batch.length, completed_destinations: destinations.length,
       destinations }, null, 2) + '\n');
     await page.goBack({ waitUntil: 'domcontentloaded' });
     await expect(links).toHaveCount(matrixRecipes.length);
   }
-  expect(destinations.map(row => row.recipe.id)).toEqual(matrixRecipes.map(recipe => recipe.id));
+  expect(destinations.map(row => row.recipe.id)).toEqual(batch.map(recipe => recipe.id));
   return destinations;
 }
 
@@ -520,7 +521,6 @@ for (const locale of locales) test(`${locale.language}: core content and anchor 
       await expect(page).toHaveURL(origin + mount + locale.route + '#support');
       await expect(page.locator('#support')).toBeInViewport();
     }
-    const recipes = await recipeNavigation(page, locale, info);
     await Promise.all(monitors.get(page).pending);
     expect(network.console).toEqual([]);
     expect(network.pageErrors).toEqual([]);
@@ -530,11 +530,39 @@ for (const locale of locales) test(`${locale.language}: core content and anchor 
     await artifact(info, 'evidence.json', { schema_version: 1, source_head: info.config.metadata.sourceHead,
       source_tree: info.config.metadata.sourceTree, asset_hashes: info.config.metadata.assetHashes, builder_inputs: info.config.metadata.builderInputHashes,
       language: locale.language, page_asset: locale.asset, page_sha256: info.config.metadata.assetHashes[locale.asset],
-      java_script_enabled: false, mode: info.config.metadata.mode, pages, recipes, network, browser: browser.version() });
+      java_script_enabled: false, mode: info.config.metadata.mode, pages, network, browser: browser.version() });
   } finally {
     await context.close();
   }
 });
+
+for (const locale of locales) for (const offset of [0, 15, 30]) {
+  test(`${locale.language}: matrix recipes ${offset + 1}–${offset + 15} navigate without JavaScript`, async ({ browser }, info) => {
+    const context = await browser.newContext({ javaScriptEnabled: false, viewport: { width: 320, height: 900 } });
+    try {
+      await projectOnly(context);
+      const page = await context.newPage();
+      const network = monitor(page);
+      const batch = matrixRecipes.slice(offset, offset + 15);
+      expect(batch).toHaveLength(15);
+      const recipes = await recipeNavigation(page, locale, info, batch, offset);
+      await Promise.all(monitors.get(page).pending);
+      expect(network.console).toEqual([]);
+      expect(network.pageErrors).toEqual([]);
+      expect(network.failedRequests).toEqual([]);
+      expect(network.responses.every(row => allowedRequest(row.url, live) && row.status === 200 &&
+        !row.body_error && (!row.asset || row.sha256 === info.config.metadata.assetHashes[row.asset]))).toBe(true);
+      await artifact(info, 'evidence.json', { schema_version: 1, source_head: info.config.metadata.sourceHead,
+        source_tree: info.config.metadata.sourceTree, asset_hashes: info.config.metadata.assetHashes,
+        builder_inputs: info.config.metadata.builderInputHashes, language: locale.language,
+        java_script_enabled: false, mode: info.config.metadata.mode, matrix_destinations: matrixRecipes.length,
+        batch_offset: offset, expected_destinations: batch.length, completed_destinations: recipes.length,
+        recipes, network, browser: browser.version() });
+    } finally {
+      await context.close();
+    }
+  });
+}
 
 test('native keyboard switches English to Japanese and back at each supported mount', async ({ page, context }, info) => {
   await projectOnly(context);

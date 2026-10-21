@@ -33,7 +33,7 @@ export default defineConfig({
     mode: live ? 'published' : 'loopback',
     languages: ['en', 'ja'],
     suite: 'landing',
-    browserCases: 13,
+    browserCases: 19,
     node: process.version,
     packages: Object.fromEntries(Object.entries(lock.packages).filter(([name]) => name.startsWith('node_modules/'))
       .map(([name, value]) => [name.slice('node_modules/'.length), value.version])),

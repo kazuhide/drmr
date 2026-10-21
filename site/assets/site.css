@@ -81,7 +81,9 @@ nav a { padding-block: 4px; font-size: 15px; }
 .conversion-matrix tr > th:first-child { width: 224px; }
 .conversion-matrix tbody th { position: sticky; left: 0; z-index: 1; background: var(--surface); font-weight: 400; }
 .conversion-matrix code { font-size: 13px; color: var(--action-hover); white-space: nowrap; }
-.conversion-matrix a { scroll-margin-inline: 240px 16px; }
+.conversion-matrix a { display: inline-block; scroll-margin-inline: 240px 16px; }
+/* Keep the focused output cell beside the input label and inside the scroller. */
+.conversion-matrix td:focus-within { position: sticky; inset-inline: 224px 0; z-index: 1; background: var(--surface); }
 .conversion-matrix sup { padding-left: 2px; color: var(--secondary); font-size: 10px; }
 .input-format, .input-profile, .input-protections { display: block; }
 .input-format { font-size: 15px; font-weight: 600; }
@@ -136,6 +138,7 @@ nav a { padding-block: 4px; font-size: 15px; }
   .conversion-matrix { min-width: 648px; }
   .conversion-matrix tr > th:first-child { width: 136px; }
   .conversion-matrix a { scroll-margin-inline-start: 152px; }
+  .conversion-matrix td:focus-within { inset-inline-start: 136px; }
   .workflow, .evidence-list, .other-interfaces { grid-template-columns: 1fr; }
   .actions { gap: 16px; }
   .url-note { padding: 16px; }

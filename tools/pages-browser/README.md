@@ -9,7 +9,7 @@ then uses the official Playwright command to install its pinned Chromium and
 system dependencies. Node 24.22.0 is pinned by the workflow. Browser installation
 and execution are confined to CI; pure controls use `npm run test:controls`.
 
-Two single-worker suites have thirteen landing tests and twelve guide tests.
+Two single-worker suites have nineteen landing tests and twelve guide tests.
 Each retains a separate 180-second total budget and zero whole-test retries. Element-state
 assertions can wait for at most five seconds. After each native Tab, read-only
 observations require the same target, complete viewport containment and the
@@ -37,6 +37,10 @@ still fails. The suite covers:
   All 45 supported output-protection tokens link to their exact guide recipe;
   unavailable cells have no recipe links. Focused matrix links also undergo
   point hit-testing so sticky input headers cannot cover their rendered boxes.
+  Output links have atomic layout boxes. While a cell contains focus, it stays
+  inside the horizontal scrollport beside the sticky input label; this also
+  exposes partially clipped links that native horizontal focus scrolling leaves
+  in place.
   Each scrollable matrix is reached by native Tab and traversed to both
   horizontal edges with arrow keys. A listener is armed before each key, and
   its native `scrollend` must arrive before geometry is accepted or another key
@@ -54,13 +58,15 @@ still fails. The suite covers:
 - Core content and native anchor navigation with JavaScript disabled in each
   language (two cases). The
   loopback job checks both `/` and the project `/drmr/` mount; the published job
-  checks only `/drmr/`. Each language additionally activates all 45 matrix links
-  at the project mount with JavaScript disabled. Native Tab/Enter activates the
-  first recipe; the remaining links use actual link clicks. Each destination
+  checks only `/drmr/`.
+- Six separate cases activate all 45 matrix links in each language at the project
+  mount with JavaScript disabled. Each case covers fifteen distinct recipes,
+  retaining the same thirty-second case budget. Native Tab/Enter activates the
+  first recipe of each batch; the remaining links use actual link clicks. Each destination
   must expose its exact focusable heading, setup link and complete four-step
   command example with matching output format, protection and saved plan.
   The served guide hash must match the workflow source. A 320px viewport image
-  records the first native recipe destination before further guide interaction,
+  records each batch's first native recipe destination before further guide interaction,
   with unchanged heading geometry and complete source metadata.
 - A native-keyboard language roundtrip visits English → Japanese → English at
   both loopback mounts, or at the published project mount. Each navigation must
@@ -97,6 +103,11 @@ before deployment. The guide suite separately covers:
   after capture (`viewport-native-v1`). Each capture remains bounded to five
   seconds. These are visual checkpoints, not full-guide pixel coverage; all
   twenty chapters and complete code/table content retain automated checks.
+  Independent figure assertions run in batches of sixteen. Each figure's DOM
+  attributes and rendered text use one read-only measurement, while the full
+  figure and code ARIA assertions remain separate. Phase timings identify
+  content, accessibility-tree, native-interaction and axe costs without changing
+  the case or suite deadlines.
 - Native Tab/Enter reaches the contents and selected chapter, then the widest
   code block and table. Each overflowing target is pinned to one ElementHandle,
   traversed to both edges and returned to zero using the existing shared absolute
@@ -166,7 +177,7 @@ The lockfile has five exact development packages: `@playwright/test`,
 `@axe-core/playwright` and `axe-core` 4.14.0 (MPL-2.0). They are CI-only and are not
 redistributed in the twelve-file Pages artifact. The npm audit gate is a current
 advisory check, not a claim that these dependencies can never have a defect.
-The pure Node controls are separate from the 13 landing and 12 guide browser cases and
+The pure Node controls are separate from the 19 landing and 12 guide browser cases and
 the applicable workflow checks, which depend on changed paths. Publish/live
 jobs are intentionally skipped on pull requests. Production HTML still contains zero scripts; CI-only
 axe injection does not change that source contract.
