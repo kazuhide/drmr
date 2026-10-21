@@ -1,12 +1,14 @@
 //! A single native owner for private copies of saved execution plans.
 
 mod files;
+mod quarantine;
 
 use crate::ConsoleOrigin;
 use files::{Destination, MediaFolders, OwnedFile};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::thread::JoinHandle;
 use std::time::Duration;
 use url::Url;
@@ -53,7 +55,6 @@ struct Attempt {
 
 #[derive(Default)]
 struct State {
-    stopping: bool,
     generation: u64,
     current: Option<Attempt>,
     pending_dialog: Option<Selection>,
@@ -63,7 +64,10 @@ struct State {
 
 struct Shared {
     state: Mutex<State>,
-    changed: Condvar,
+    stopping: AtomicBool,
+    service_thread: OnceLock<std::thread::Thread>,
+    #[cfg(test)]
+    before_park: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     origin: ConsoleOrigin,
     media: MediaFolders,
     directory: PathBuf,
@@ -79,8 +83,8 @@ impl Shared {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    fn active(state: &State, id: u64) -> bool {
-        !state.stopping
+    fn active(&self, state: &State, id: u64) -> bool {
+        !self.stopping.load(Ordering::Acquire)
             && state
                 .current
                 .as_ref()
@@ -88,7 +92,13 @@ impl Shared {
     }
 
     fn cancelled(&self, id: u64) -> bool {
-        !Self::active(&self.lock(), id)
+        !self.active(&self.lock(), id)
+    }
+
+    fn wake(&self) {
+        if let Some(worker) = self.service_thread.get() {
+            worker.unpark();
+        }
     }
 }
 
@@ -132,7 +142,10 @@ impl PlanExports {
         let directory = media.prepare_directory(directory)?;
         let shared = Arc::new(Shared {
             state: Mutex::new(State::default()),
-            changed: Condvar::new(),
+            stopping: AtomicBool::new(false),
+            service_thread: OnceLock::new(),
+            #[cfg(test)]
+            before_park: Mutex::new(None),
             origin,
             media,
             directory,
@@ -144,19 +157,18 @@ impl PlanExports {
         let worker = std::thread::Builder::new()
             .name("drmr-plan-export".into())
             .spawn(move || run(&service))?;
+        let _ = shared.service_thread.set(worker.thread().clone());
         Ok(Self {
             shared,
             worker: Mutex::new(Some(worker)),
         })
     }
 
-    /// Reserve one native chooser. A second click cannot replace its owner.
-    pub fn reserve(&self, url: &Url) -> Option<Selection> {
-        if !self.shared.origin.permits_plan_export(url) {
-            return None;
-        }
-        let mut state = self.shared.lock();
-        if state.stopping || state.current.is_some() || state.worker_failed {
+    fn reserve_in(&self, state: &mut State, url: &Url) -> Option<Selection> {
+        if self.shared.stopping.load(Ordering::Acquire)
+            || state.current.is_some()
+            || state.worker_failed
+        {
             return None;
         }
         state.generation = state.generation.checked_add(1)?;
@@ -172,32 +184,34 @@ impl PlanExports {
         })
     }
 
-    /// Queue the chooser on the owned service thread, keeping native panel
-    /// initialization out of the platform download callback.
+    #[cfg(test)]
+    fn reserve(&self, url: &Url) -> Option<Selection> {
+        if !self.shared.origin.permits_plan_export(url) {
+            return None;
+        }
+        self.reserve_in(&mut self.shared.lock(), url)
+    }
+
+    /// Reserve and queue together without waiting for the file I/O owner.
+    /// Native panel initialization runs on the owned service thread.
     pub fn request(&self, url: &Url) -> bool {
-        let Some(selection) = self.reserve(url) else {
-            return false;
-        };
-        let mut state = self.shared.lock();
-        if !Shared::active(&state, selection.id) {
-            if state
-                .current
-                .as_ref()
-                .is_some_and(|attempt| attempt.id == selection.id)
-            {
-                state.current = None;
-            }
-            self.shared.changed.notify_all();
+        if !self.shared.origin.permits_plan_export(url) {
             return false;
         }
+        let Ok(mut state) = self.shared.state.try_lock() else {
+            return false;
+        };
+        let Some(selection) = self.reserve_in(&mut state, url) else {
+            return false;
+        };
         state.pending_dialog = Some(selection);
-        self.shared.changed.notify_all();
+        self.shared.wake();
         true
     }
 
     pub fn chooser_is_current(&self, selection: &Selection) -> bool {
         let state = self.shared.lock();
-        Shared::active(&state, selection.id)
+        self.shared.active(&state, selection.id)
             && state
                 .current
                 .as_ref()
@@ -215,33 +229,35 @@ impl PlanExports {
         {
             return;
         }
-        if state.stopping || path.is_none() {
+        if self.shared.stopping.load(Ordering::Acquire) || path.is_none() {
             state.current = None;
         } else if let Some(path) = path
             && let Some(attempt) = state.current.as_mut()
         {
             attempt.phase = Phase::Ready(path);
         }
-        self.shared.changed.notify_all();
+        self.shared.wake();
     }
 
-    /// Close admission under the same fence used for creation and every write.
+    /// Close admission immediately, without waiting for filesystem I/O.
+    /// The shutdown worker still owns callbacks, cleanup and the actual join.
     pub fn request_stop(&self) -> bool {
-        let mut state = self.shared.lock();
-        state.stopping = true;
-        if state.pending_dialog.take().is_some()
-            || state
+        self.shared.stopping.store(true, Ordering::Release);
+        let choosing = self.shared.state.try_lock().is_ok_and(|mut state| {
+            if state.pending_dialog.take().is_some()
+                || state
+                    .current
+                    .as_ref()
+                    .is_some_and(|attempt| matches!(attempt.phase, Phase::Ready(_)))
+            {
+                state.current = None;
+            }
+            state
                 .current
                 .as_ref()
-                .is_some_and(|attempt| matches!(attempt.phase, Phase::Ready(_)))
-        {
-            state.current = None;
-        }
-        let choosing = state
-            .current
-            .as_ref()
-            .is_some_and(|attempt| matches!(attempt.phase, Phase::Choosing));
-        self.shared.changed.notify_all();
+                .is_some_and(|attempt| matches!(attempt.phase, Phase::Choosing))
+        });
+        self.shared.wake();
         choosing
     }
 
@@ -262,7 +278,7 @@ impl PlanExports {
             self.shared.lock().worker_failed = true;
         }
         let mut state = self.shared.lock();
-        if let Some(partial) = state.partial.as_ref() {
+        if let Some(partial) = state.partial.as_mut() {
             if partial.cleanup().is_err() {
                 return false;
             }
@@ -278,13 +294,22 @@ fn run(shared: &Shared) {
         let (id, url, path) = {
             let mut state = shared.lock();
             loop {
-                if state.stopping
-                    && !state
+                if shared.stopping.load(Ordering::Acquire) {
+                    if state.pending_dialog.take().is_some()
+                        || state
+                            .current
+                            .as_ref()
+                            .is_some_and(|attempt| matches!(attempt.phase, Phase::Ready(_)))
+                    {
+                        state.current = None;
+                    }
+                    if !state
                         .current
                         .as_ref()
                         .is_some_and(|attempt| matches!(attempt.phase, Phase::Choosing))
-                {
-                    return;
+                    {
+                        return;
+                    }
                 }
                 if let Some(selection) = state.pending_dialog.take() {
                     drop(state);
@@ -298,10 +323,18 @@ fn run(shared: &Shared) {
                     attempt.phase = Phase::Working;
                     break pending;
                 }
-                state = shared
-                    .changed
-                    .wait(state)
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                drop(state);
+                // The unpark token persists if a callback or stop happens before
+                // this park, so an unlocked stop cannot lose its wakeup.
+                #[cfg(test)]
+                {
+                    let hook = shared.before_park.lock().unwrap().take();
+                    if let Some(hook) = hook {
+                        hook();
+                    }
+                }
+                std::thread::park();
+                state = shared.lock();
             }
         };
         let result = export(shared, id, &url, &path);
@@ -323,7 +356,7 @@ fn complete(shared: &Shared, id: u64, result: Result<(), ExportError>) -> Option
     }
     let notice = if state
         .partial
-        .as_ref()
+        .as_mut()
         .is_some_and(|partial| partial.cleanup().is_err())
     {
         if let Some(attempt) = state.current.as_mut() {
@@ -339,8 +372,8 @@ fn complete(shared: &Shared, id: u64, result: Result<(), ExportError>) -> Option
             Err(ExportError::Failed | ExportError::Cancelled) => Notice::Failed,
         }
     };
-    shared.changed.notify_all();
-    (!state.stopping).then_some(notice)
+    shared.wake();
+    (!shared.stopping.load(Ordering::Acquire)).then_some(notice)
 }
 
 #[derive(Clone, Copy)]
@@ -424,7 +457,7 @@ fn export(shared: &Shared, id: u64, url: &Url, path: &Path) -> Result<(), Export
         Destination::capture(path, &shared.media).map_err(|_| ExportError::PrivateDestination)?;
     let bytes = fetch(shared, id, url)?;
     let mut state = shared.lock();
-    if !Shared::active(&state, id) {
+    if !shared.active(&state, id) {
         return Err(ExportError::Cancelled);
     }
     state.partial = Some(
@@ -437,9 +470,18 @@ fn export(shared: &Shared, id: u64, url: &Url, path: &Path) -> Result<(), Export
 }
 
 fn write_plan(shared: &Shared, id: u64, bytes: &[u8]) -> Result<(), ExportError> {
+    write_plan_with(shared, id, bytes, || {})
+}
+
+fn write_plan_with(
+    shared: &Shared,
+    id: u64,
+    bytes: &[u8],
+    before_publish: impl FnOnce(),
+) -> Result<(), ExportError> {
     for chunk in bytes.chunks(16 * 1024) {
         let mut state = shared.lock();
-        if !Shared::active(&state, id) {
+        if !shared.active(&state, id) {
             return Err(ExportError::Cancelled);
         }
         let partial = state.partial.as_mut().ok_or(ExportError::Failed)?;
@@ -448,22 +490,33 @@ fn write_plan(shared: &Shared, id: u64, bytes: &[u8]) -> Result<(), ExportError>
             .map_err(|_| ExportError::Failed)?;
         partial
             .file
+            .as_mut()
+            .ok_or(ExportError::Failed)?
             .write_all(chunk)
             .map_err(|_| ExportError::Failed)?;
     }
     let mut state = shared.lock();
-    if !Shared::active(&state, id) {
+    if !shared.active(&state, id) {
         return Err(ExportError::Cancelled);
     }
     let partial = state.partial.as_mut().ok_or(ExportError::Failed)?;
     partial
         .check(&shared.media)
         .map_err(|_| ExportError::Failed)?;
-    partial.file.sync_all().map_err(|_| ExportError::Failed)?;
+    partial
+        .file
+        .as_ref()
+        .ok_or(ExportError::Failed)?
+        .sync_all()
+        .map_err(|_| ExportError::Failed)?;
     partial
         .check(&shared.media)
         .map_err(|_| ExportError::Failed)?;
-    // Publishing the completed copy and closing admission use the same mutex.
+    before_publish();
+    // A stop may arrive while sync or an identity check holds the I/O guard.
+    if !shared.active(&state, id) {
+        return Err(ExportError::Cancelled);
+    }
     state.partial = None;
     Ok(())
 }

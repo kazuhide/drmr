@@ -71,7 +71,14 @@ impl Folders {
 
 impl Drop for Folders {
     fn drop(&mut self) {
-        std::fs::remove_dir_all(&self.root).unwrap();
+        let cleanup = std::fs::remove_dir_all(&self.root);
+        if std::thread::panicking() {
+            if cleanup.is_err() {
+                eprintln!("fixture cleanup failed during an earlier test panic");
+            }
+        } else {
+            cleanup.unwrap();
+        }
     }
 }
 
@@ -145,6 +152,67 @@ fn native_export_refuses_input_and_served_output_destinations() {
 }
 
 #[test]
+fn native_export_refuses_ancestor_parent_for_a_selected_file() {
+    let folders = Folders::new();
+    let media = MediaFolders::capture(&folders.input, &folders.output).unwrap();
+    let target = folders.root.join("ancestor.plan.json");
+    assert!(Destination::capture(&target, &media).is_err());
+    assert!(!target.exists());
+}
+
+#[test]
+fn native_export_refuses_ancestor_directory_for_private_plan_preparation() {
+    let folders = Folders::new();
+    let media = MediaFolders::capture(&folders.input, &folders.output).unwrap();
+    assert!(media.prepare_directory(&folders.root).is_err());
+}
+
+#[test]
+fn native_export_checks_and_cleanup_share_the_actual_private_writer() {
+    let folders = Folders::new();
+    let media = MediaFolders::capture(&folders.input, &folders.output).unwrap();
+    let target = folders.private.join("held-writer.plan.json");
+    let mut owned = Destination::capture(&target, &media)
+        .unwrap()
+        .create(&media)
+        .unwrap();
+    let identity = drmr_core::native::FileIdentity::read(owned.file.as_ref().unwrap()).unwrap();
+    #[cfg(windows)]
+    assert_eq!(
+        drmr_core::native::open_private_read(&target)
+            .unwrap_err()
+            .raw_os_error(),
+        Some(32),
+        "an immutable reader cannot share the actual writable creation handle"
+    );
+    owned.check(&media).unwrap();
+    owned
+        .file
+        .as_mut()
+        .unwrap()
+        .write_all(b"original plan bytes")
+        .unwrap();
+    owned.file.as_ref().unwrap().sync_all().unwrap();
+    owned.check(&media).unwrap();
+    let mut copied = Vec::new();
+    drmr_core::native::open_private_shared_read(&target)
+        .unwrap()
+        .read_to_end(&mut copied)
+        .unwrap();
+    assert_eq!(copied, b"original plan bytes");
+    assert!(
+        drmr_core::native::FileIdentity::read(owned.file.as_ref().unwrap()).unwrap() == identity
+    );
+    owned.cleanup().unwrap();
+    assert!(!target.exists());
+    // Cleanup starts with the actual writer held, then closes it only after
+    // admitting deletion of the matching object inside the private quarantine.
+    assert!(owned.file.is_none());
+    drop(owned);
+    assert!(!target.try_exists().unwrap());
+}
+
+#[test]
 fn native_export_close_fence_refuses_new_choosers() {
     let folders = Folders::new();
     let origin = origin();
@@ -157,6 +225,134 @@ fn native_export_close_fence_refuses_new_choosers() {
     }
     assert!(service.shutdown());
     assert!(!incorrectly_admitted);
+}
+
+#[test]
+fn native_export_admission_and_stop_do_not_wait_for_an_io_owner() {
+    let folders = Folders::new();
+    let origin = origin();
+    let (service, _) = folders.service(origin.clone());
+    let selection = service
+        .reserve(&origin.url().join(ENDPOINT).unwrap())
+        .unwrap();
+    let target = folders.private.join("stalled-owner.json");
+    let partial = folders.owned(&target);
+    let mut state = service.shared.lock();
+    state.current.as_mut().unwrap().phase = Phase::Working;
+    state.partial = Some(partial);
+    // Retain the actual writer and its I/O guard while both GUI entry points run.
+    let (started, starts) = mpsc::channel();
+    let (returned, returns) = mpsc::channel();
+    let requester = service.clone();
+    let url = origin.url().join(ENDPOINT).unwrap();
+    let request_started = started.clone();
+    let request_returned = returned.clone();
+    let request = std::thread::spawn(move || {
+        request_started.send(()).unwrap();
+        request_returned
+            .send((false, requester.request(&url)))
+            .unwrap();
+    });
+    let stopper = service.clone();
+    let stop = std::thread::spawn(move || {
+        started.send(()).unwrap();
+        returned.send((true, stopper.request_stop())).unwrap();
+    });
+    for _ in 0..2 {
+        starts.recv_timeout(Duration::from_secs(2)).unwrap();
+    }
+    let mut immediate = Vec::new();
+    for _ in 0..2 {
+        if let Ok(result) = returns.recv_timeout(Duration::from_millis(200)) {
+            immediate.push(result);
+        }
+    }
+    assert!(state.partial.is_some(), "the stalled writer remains owned");
+    drop(state);
+    request.join().unwrap();
+    stop.join().unwrap();
+    assert_eq!(
+        complete(&service.shared, selection.id, Err(ExportError::Cancelled)),
+        None
+    );
+    assert!(service.shutdown());
+    assert!(!target.exists());
+    assert_eq!(immediate.len(), 2, "GUI entry points waited for file I/O");
+    assert!(immediate.iter().all(|(_, admitted)| !admitted));
+}
+
+#[test]
+fn native_export_stop_during_final_sync_guard_cannot_publish_the_copy() {
+    let folders = Folders::new();
+    let origin = origin();
+    let (service, _) = folders.service(origin.clone());
+    let selection = service
+        .reserve(&origin.url().join(ENDPOINT).unwrap())
+        .unwrap();
+    let target = folders.private.join("stop-after-sync.json");
+    {
+        let mut state = service.shared.lock();
+        state.current.as_mut().unwrap().phase = Phase::Working;
+        state.partial = Some(folders.owned(&target));
+    }
+    let (start, started) = mpsc::channel();
+    let (done, completed) = mpsc::channel();
+    let stopper = service.clone();
+    let stop = std::thread::spawn(move || {
+        started.recv_timeout(Duration::from_secs(2)).unwrap();
+        stopper.request_stop();
+        done.send(()).unwrap();
+    });
+    let mut stopped_inside_guard = false;
+    let result = write_plan_with(
+        &service.shared,
+        selection.id,
+        b"actual synced bytes",
+        || {
+            start.send(()).unwrap();
+            stopped_inside_guard = completed.recv_timeout(Duration::from_millis(200)).is_ok();
+        },
+    );
+    stop.join().unwrap();
+    assert!(service.shared.lock().partial.is_some());
+    assert_eq!(std::fs::read(&target).unwrap(), b"actual synced bytes");
+    assert_eq!(complete(&service.shared, selection.id, result), None);
+    assert!(service.shutdown());
+    assert!(!target.exists());
+    assert!(stopped_inside_guard);
+    assert!(matches!(result, Err(ExportError::Cancelled)));
+}
+
+#[test]
+fn native_export_stop_token_survives_the_idle_wait_gap_until_actual_join() {
+    let folders = Folders::new();
+    let (service, _) = folders.service(origin());
+    let (entered, ready) = mpsc::channel();
+    let release = Arc::new(AtomicBool::new(false));
+    let released = release.clone();
+    *service.shared.before_park.lock().unwrap() = Some(Box::new(move || {
+        entered.send(()).unwrap();
+        // Blocking channel receives may consume this thread's park token.
+        // Pause exactly the production gap without introducing another park.
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !released.load(Ordering::Acquire) {
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+    }));
+    service.shared.wake();
+    ready.recv_timeout(Duration::from_secs(2)).unwrap();
+    service.request_stop();
+    let (done, completed) = mpsc::channel();
+    let closer = service.clone();
+    let shutdown = std::thread::spawn(move || {
+        done.send(closer.shutdown()).unwrap();
+    });
+    assert!(completed.recv_timeout(Duration::from_millis(30)).is_err());
+    release.store(true, Ordering::Release);
+    assert!(completed.recv_timeout(Duration::from_secs(2)).unwrap());
+    shutdown.join().unwrap();
+    assert!(service.worker.lock().unwrap().is_none());
 }
 
 #[test]
@@ -309,7 +505,7 @@ fn native_export_partial_io_failure_removes_only_its_created_file() {
         .unwrap();
     let target = folders.private.join("partial.json");
     let mut partial = folders.owned(&target);
-    partial.file = drmr_core::native::open_private_read(&target).unwrap();
+    partial.file = Some(drmr_core::native::open_private_shared_read(&target).unwrap());
     {
         let mut state = service.shared.lock();
         state.current.as_mut().unwrap().phase = Phase::Working;
@@ -500,10 +696,268 @@ fn native_export_existing_windows_directory_is_not_hardened_on_failure() {
 }
 
 #[test]
+fn native_export_cleanup_gap_leaf_replacement_is_preserved() {
+    let folders = Folders::new();
+    let target = folders.private.join("partial.json");
+    let moved = folders.private.join("owned-moved.json");
+    let mut partial = folders.owned(&target);
+    let result = partial.cleanup_with(|point| {
+        if point == files::CleanupPoint::BeforeMove {
+            std::fs::rename(&target, &moved)?;
+            drmr_core::native::create_private_new(&target)?.write_all(b"gap replacement")?;
+        }
+        Ok(())
+    });
+    assert!(
+        result.is_err(),
+        "a replaced entry is never confirmed as owned cleanup"
+    );
+    assert_eq!(std::fs::read(&target).unwrap(), b"gap replacement");
+    assert!(moved.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn native_export_cleanup_gap_parent_replacement_is_preserved() {
+    let folders = Folders::new();
+    let target = folders.private.join("partial.json");
+    let moved = folders.root.join("moved-private");
+    let mut partial = folders.owned(&target);
+    let result = partial.cleanup_with(|point| {
+        if point == files::CleanupPoint::BeforeMove {
+            std::fs::rename(&folders.private, &moved)?;
+            drmr_core::native::create_private_dir_new(&folders.private)?;
+            drmr_core::native::create_private_new(&target)?.write_all(b"new parent")?;
+        }
+        Ok(())
+    });
+    assert!(result.is_err(), "a replaced parent remains unconfirmed");
+    assert_eq!(std::fs::read(&target).unwrap(), b"new parent");
+    let quarantine_name = partial.quarantine_path().unwrap().file_name().unwrap();
+    assert!(moved.join(quarantine_name).join("entry").exists());
+    let displaced = folders.root.join("preserved-new-parent");
+    std::fs::rename(&folders.private, &displaced).unwrap();
+    std::fs::rename(&moved, &folders.private).unwrap();
+    partial.cleanup().unwrap();
+    assert_eq!(
+        std::fs::read(displaced.join("partial.json")).unwrap(),
+        b"new parent"
+    );
+}
+
+#[test]
+fn native_export_new_original_name_after_move_is_not_deleted() {
+    let folders = Folders::new();
+    let target = folders.private.join("partial.json");
+    let mut partial = folders.owned(&target);
+    partial
+        .cleanup_with(|point| {
+            if point == files::CleanupPoint::AfterMove {
+                drmr_core::native::create_private_new(&target)?.write_all(b"new original slot")?;
+            }
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(std::fs::read(&target).unwrap(), b"new original slot");
+    assert!(partial.file.is_none());
+    assert!(partial.quarantine_path().is_none());
+    assert_eq!(std::fs::read_dir(&folders.private).unwrap().count(), 1);
+}
+
+#[test]
+fn native_export_unknown_moved_entry_and_occupied_restore_remain_owned() {
+    let folders = Folders::new();
+    let target = folders.private.join("partial.json");
+    let mut partial = folders.owned(&target);
+    let result = partial.cleanup_with(|point| {
+        match point {
+            files::CleanupPoint::AfterMove => {
+                drmr_core::native::create_private_new(&target)?.write_all(b"occupied original")?;
+            }
+            files::CleanupPoint::Inspect => return Err(io::ErrorKind::Interrupted.into()),
+            _ => {}
+        }
+        Ok(())
+    });
+    assert!(result.is_err());
+    let quarantine = partial.quarantine_path().unwrap().to_path_buf();
+    assert!(quarantine.join("entry").exists());
+    assert!(partial.file.is_some());
+    assert_eq!(std::fs::read(&target).unwrap(), b"occupied original");
+    // Retry inspects the retained moved entry, never the new original slot.
+    partial.cleanup().unwrap();
+    assert_eq!(std::fs::read(&target).unwrap(), b"occupied original");
+    assert!(!quarantine.exists());
+    assert!(partial.file.is_none());
+}
+
+#[test]
+fn native_export_failed_restore_preserves_foreign_quarantine_entry() {
+    let folders = Folders::new();
+    let target = folders.private.join("partial.json");
+    let moved = folders.private.join("actual-writer.json");
+    let mut partial = folders.owned(&target);
+    let result = partial.cleanup_with(|point| {
+        if point == files::CleanupPoint::AfterMove {
+            let quarantine = std::fs::read_dir(&folders.private)?
+                .map(|entry| entry.unwrap().path())
+                .find(|path| {
+                    path.file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .starts_with(".drmr-plan-cleanup-")
+                })
+                .unwrap();
+            std::fs::rename(quarantine.join("entry"), &moved)?;
+            drmr_core::native::create_private_new(&quarantine.join("entry"))?
+                .write_all(b"foreign quarantine entry")?;
+        }
+        if point == files::CleanupPoint::Restore {
+            return Err(io::ErrorKind::Interrupted.into());
+        }
+        Ok(())
+    });
+    assert!(result.is_err());
+    let quarantine = partial.quarantine_path().unwrap().to_path_buf();
+    assert_eq!(
+        std::fs::read(quarantine.join("entry")).unwrap(),
+        b"foreign quarantine entry"
+    );
+    assert!(moved.exists());
+    assert!(partial.file.is_some());
+    drmr_core::native::create_private_new(&target)
+        .unwrap()
+        .write_all(b"occupied slot")
+        .unwrap();
+    assert!(partial.cleanup().is_err());
+    assert_eq!(std::fs::read(&target).unwrap(), b"occupied slot");
+    assert_eq!(
+        std::fs::read(quarantine.join("entry")).unwrap(),
+        b"foreign quarantine entry"
+    );
+    assert!(moved.exists());
+}
+
+#[test]
+fn native_export_missing_original_does_not_discard_a_linked_writer() {
+    let folders = Folders::new();
+    let target = folders.private.join("partial.json");
+    let moved = folders.private.join("moved-writer.json");
+    let mut partial = folders.owned(&target);
+    std::fs::rename(&target, &moved).unwrap();
+    assert!(partial.cleanup().is_err());
+    assert!(partial.file.is_some());
+    assert!(moved.exists());
+    std::fs::rename(&moved, &target).unwrap();
+    partial.cleanup().unwrap();
+    assert!(!target.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn native_export_cleanup_gap_symlink_is_restored_without_following_it() {
+    use std::os::unix::fs::symlink;
+    let folders = Folders::new();
+    let target = folders.private.join("partial.json");
+    let moved = folders.private.join("actual-writer.json");
+    let foreign = folders.private.join("foreign.json");
+    drmr_core::native::create_private_new(&foreign)
+        .unwrap()
+        .write_all(b"foreign content")
+        .unwrap();
+    let mut partial = folders.owned(&target);
+    assert!(
+        partial
+            .cleanup_with(|point| {
+                if point == files::CleanupPoint::BeforeMove {
+                    std::fs::rename(&target, &moved)?;
+                    symlink(&foreign, &target)?;
+                }
+                Ok(())
+            })
+            .is_err()
+    );
+    assert_eq!(std::fs::read_link(&target).unwrap(), foreign);
+    assert_eq!(std::fs::read(&foreign).unwrap(), b"foreign content");
+    assert!(moved.exists());
+    assert!(partial.file.is_some());
+}
+
+#[test]
+fn native_export_quarantine_creation_never_adopts_an_existing_folder() {
+    let folders = Folders::new();
+    let parent = files::Directory::capture(&folders.private).unwrap();
+    let mut quarantine = quarantine::Quarantine::planned(&parent);
+    let collision = quarantine.path().to_path_buf();
+    drmr_core::native::create_private_dir_new(&collision).unwrap();
+    drmr_core::native::create_private_new(&collision.join("sentinel"))
+        .unwrap()
+        .write_all(b"keep existing folder")
+        .unwrap();
+    assert_eq!(
+        quarantine.initialize(&parent).unwrap_err().kind(),
+        io::ErrorKind::AlreadyExists
+    );
+    assert!(!quarantine.created());
+    drop(quarantine);
+    assert_eq!(
+        std::fs::read(collision.join("sentinel")).unwrap(),
+        b"keep existing folder"
+    );
+}
+
+// rustix exposes mkfifoat on Linux; the macOS check covers no-follow symlinks.
+#[cfg(target_os = "linux")]
+#[test]
+fn native_export_cleanup_gap_fifo_is_restored_without_blocking_or_deleting_it() {
+    use std::os::unix::fs::FileTypeExt;
+    let folders = Folders::new();
+    let target = folders.private.join("partial.json");
+    let moved = folders.private.join("actual-writer.json");
+    let mut partial = folders.owned(&target);
+    let result = partial.cleanup_with(|point| {
+        if point == files::CleanupPoint::BeforeMove {
+            std::fs::rename(&target, &moved)?;
+            rustix::fs::mkfifoat(
+                rustix::fs::CWD,
+                &target,
+                rustix::fs::Mode::from_raw_mode(0o600),
+            )?;
+        }
+        Ok(())
+    });
+    assert!(result.is_err());
+    assert!(
+        std::fs::symlink_metadata(&target)
+            .unwrap()
+            .file_type()
+            .is_fifo()
+    );
+    assert!(moved.exists());
+    assert!(partial.file.is_some());
+}
+
+#[cfg(unix)]
+#[test]
+fn native_export_cleanup_refuses_a_parent_that_lost_private_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+    let folders = Folders::new();
+    let target = folders.private.join("partial.json");
+    let mut partial = folders.owned(&target);
+    std::fs::set_permissions(&folders.private, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(partial.cleanup().is_err());
+    assert!(target.exists());
+    assert_eq!(std::fs::read_dir(&folders.private).unwrap().count(), 1);
+    std::fs::set_permissions(&folders.private, std::fs::Permissions::from_mode(0o700)).unwrap();
+    partial.cleanup().unwrap();
+    assert!(!target.exists());
+}
+
+#[test]
 fn native_export_replaced_leaf_is_preserved_during_cleanup() {
     let folders = Folders::new();
     let target = folders.private.join("partial.json");
-    let partial = folders.owned(&target);
+    let mut partial = folders.owned(&target);
     std::fs::rename(&target, folders.private.join("owned-moved.json")).unwrap();
     let mut foreign = drmr_core::native::create_private_new(&target).unwrap();
     foreign.write_all(b"foreign leaf").unwrap();
@@ -515,7 +969,7 @@ fn native_export_replaced_leaf_is_preserved_during_cleanup() {
 fn native_export_replaced_parent_is_preserved_or_pinned_against_rename() {
     let folders = Folders::new();
     let target = folders.private.join("partial.json");
-    let partial = folders.owned(&target);
+    let mut partial = folders.owned(&target);
     let moved = folders.root.join("moved-private");
     #[cfg(windows)]
     {

@@ -7,14 +7,14 @@ use std::fs::OpenOptions;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
-fn refused() -> io::Error {
+pub(super) fn refused() -> io::Error {
     io::Error::new(
         io::ErrorKind::PermissionDenied,
         "private plan destination required",
     )
 }
 
-fn open_directory(path: &Path) -> io::Result<File> {
+pub(super) fn open_directory(path: &Path) -> io::Result<File> {
     let metadata = std::fs::symlink_metadata(path)?;
     if !metadata.is_dir() || metadata.file_type().is_symlink() {
         return Err(refused());
@@ -47,14 +47,14 @@ fn open_directory(path: &Path) -> io::Result<File> {
     Ok(file)
 }
 
-struct Directory {
+pub(super) struct Directory {
     requested: PathBuf,
-    path: PathBuf,
+    pub(super) path: PathBuf,
     ancestors: Vec<(PathBuf, FileIdentity, File)>,
 }
 
 impl Directory {
-    fn capture(path: &Path) -> io::Result<Self> {
+    pub(super) fn capture(path: &Path) -> io::Result<Self> {
         if !path.is_absolute()
             || path
                 .components()
@@ -85,6 +85,14 @@ impl Directory {
         Ok(directory)
     }
 
+    #[cfg(unix)]
+    pub(super) fn held(&self) -> io::Result<&File> {
+        self.ancestors
+            .last()
+            .map(|(_, _, file)| file)
+            .ok_or_else(refused)
+    }
+
     fn check(&self) -> io::Result<()> {
         if std::fs::canonicalize(&self.requested)? != self.path || self.ancestors.is_empty() {
             return Err(refused());
@@ -113,10 +121,14 @@ impl MediaFolders {
         })
     }
 
-    fn check_destination(&self, path: &Path) -> io::Result<()> {
+    fn check_directory(&self, path: &Path) -> io::Result<()> {
         self.input.check()?;
         self.output.check()?;
-        if path.starts_with(&self.input.path) || path.starts_with(&self.output.path) {
+        if path.starts_with(&self.input.path)
+            || path.starts_with(&self.output.path)
+            || self.input.path.starts_with(path)
+            || self.output.path.starts_with(path)
+        {
             Err(refused())
         } else {
             Ok(())
@@ -128,17 +140,17 @@ impl MediaFolders {
         let resolved = parent.path.join(path.file_name().ok_or_else(refused)?);
         // Resolve an existing alias before considering creation or permissions.
         let resolved = native::resolve_path(&resolved)?;
-        self.check_destination(&resolved)?;
+        self.check_directory(&resolved)?;
         native::create_private_dir_all(&resolved)?;
         parent.check()?;
         let directory = Directory::capture(&resolved)?;
         private_directory(&directory.path)?;
-        self.check_destination(&directory.path)?;
+        self.check_directory(&directory.path)?;
         Ok(directory.path)
     }
 }
 
-fn private_directory(path: &Path) -> io::Result<()> {
+pub(super) fn private_directory(path: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -165,7 +177,7 @@ impl Destination {
         let name = path.file_name().ok_or_else(refused)?;
         let parent = Directory::capture(path.parent().ok_or_else(refused)?)?;
         let path = parent.path.join(name);
-        media.check_destination(&path)?;
+        media.check_directory(&parent.path)?;
         private_directory(&parent.path)?;
         #[cfg(windows)]
         let private_parent = native::pin_private_directory(&parent.path)?;
@@ -179,7 +191,7 @@ impl Destination {
 
     pub fn check(&self, media: &MediaFolders) -> io::Result<()> {
         self.parent.check()?;
-        media.check_destination(&self.path)
+        media.check_directory(&self.parent.path)
     }
 
     pub fn create(self, media: &MediaFolders) -> io::Result<OwnedFile> {
@@ -188,14 +200,35 @@ impl Destination {
         // Keep the actual created handle even if a later identity read fails.
         Ok(OwnedFile {
             destination: self,
-            file,
+            file: Some(file),
+            quarantine: None,
+            cleanup_phase: CleanupPhase::Original,
         })
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum CleanupPoint {
+    BeforeMove,
+    AfterMove,
+    Inspect,
+    Restore,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CleanupPhase {
+    Original,
+    Moved,
+    Restored,
+    Unlinked,
+    Finished,
+}
+
 pub(super) struct OwnedFile {
     destination: Destination,
-    pub file: File,
+    pub file: Option<File>,
+    quarantine: Option<super::quarantine::Quarantine>,
+    cleanup_phase: CleanupPhase,
 }
 
 impl OwnedFile {
@@ -205,22 +238,114 @@ impl OwnedFile {
     }
 
     fn check_leaf(&self) -> io::Result<()> {
-        let current = native::open_private_read(&self.destination.path)?;
-        if FileIdentity::read(&current)? != FileIdentity::read(&self.file)? {
+        let current = native::open_private_shared_read(&self.destination.path)?;
+        if FileIdentity::read(&current)?
+            != FileIdentity::read(self.file.as_ref().ok_or_else(refused)?)?
+        {
             return Err(refused());
         }
         Ok(())
     }
 
-    pub fn cleanup(&self) -> io::Result<()> {
-        self.destination.parent.check()?;
-        match self.check_leaf() {
-            Ok(()) => {
-                self.destination.parent.check()?;
-                std::fs::remove_file(&self.destination.path)
-            }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(error),
+    pub fn cleanup(&mut self) -> io::Result<()> {
+        self.cleanup_with(|_| Ok(()))
+    }
+
+    pub fn cleanup_with(
+        &mut self,
+        mut hook: impl FnMut(CleanupPoint) -> io::Result<()>,
+    ) -> io::Result<()> {
+        if self.cleanup_phase == CleanupPhase::Finished {
+            return Ok(());
         }
+        let parent = &self.destination.parent;
+        parent.check()?;
+        let name = Path::new(self.destination.path.file_name().ok_or_else(refused)?);
+        if self.cleanup_phase == CleanupPhase::Restored {
+            self.quarantine
+                .as_mut()
+                .ok_or_else(refused)?
+                .retire(parent)?;
+            self.quarantine = None;
+            self.cleanup_phase = CleanupPhase::Original;
+        }
+        if self.cleanup_phase == CleanupPhase::Original {
+            if let Err(error) = self.check_leaf() {
+                #[cfg(unix)]
+                if error.kind() == io::ErrorKind::NotFound && self.quarantine.is_none() {
+                    use std::os::unix::fs::MetadataExt;
+                    if self.file.as_ref().ok_or_else(refused)?.metadata()?.nlink() == 0 {
+                        self.file = None;
+                        self.cleanup_phase = CleanupPhase::Finished;
+                        return Ok(());
+                    }
+                }
+                // Missing names do not prove that a held writer was unlinked.
+                return Err(error);
+            }
+            parent.check()?;
+            for _ in 0..8 {
+                if self.quarantine.is_none() {
+                    self.quarantine = Some(super::quarantine::Quarantine::planned(parent));
+                }
+                let quarantine = self.quarantine.as_mut().ok_or_else(refused)?;
+                match quarantine.initialize(parent) {
+                    Ok(()) => break,
+                    Err(error)
+                        if error.kind() == io::ErrorKind::AlreadyExists
+                            && !quarantine.created() =>
+                    {
+                        self.quarantine = None;
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            let quarantine = self.quarantine.as_ref().ok_or_else(refused)?;
+            hook(CleanupPoint::BeforeMove)?;
+            quarantine.move_in(parent, name)?;
+            // Retain the moved entry before any fallible inspection or callback.
+            self.cleanup_phase = CleanupPhase::Moved;
+            hook(CleanupPoint::AfterMove)?;
+        }
+        if self.cleanup_phase == CleanupPhase::Moved {
+            parent.check()?;
+            let quarantine = self.quarantine.as_ref().ok_or_else(refused)?;
+            let inspected = hook(CleanupPoint::Inspect).and_then(|()| {
+                quarantine.verify_entry(parent, self.file.as_ref().ok_or_else(refused)?)
+            });
+            if let Err(error) = inspected {
+                if hook(CleanupPoint::Restore)
+                    .and_then(|()| quarantine.restore(parent, name))
+                    .is_ok()
+                {
+                    self.cleanup_phase = CleanupPhase::Restored;
+                }
+                return Err(error);
+            }
+            parent.check()?;
+            quarantine.remove_entry(parent)?;
+            self.cleanup_phase = CleanupPhase::Unlinked;
+            // Windows completes deletion only after the last writer closes.
+            // Retain the quarantine and phase if an external reader delays it.
+            self.file = None;
+        }
+        if self.cleanup_phase == CleanupPhase::Unlinked {
+            parent.check()?;
+            self.quarantine
+                .as_mut()
+                .ok_or_else(refused)?
+                .retire(parent)?;
+            self.quarantine = None;
+            self.cleanup_phase = CleanupPhase::Finished;
+            return Ok(());
+        }
+        Err(refused())
+    }
+
+    #[cfg(test)]
+    pub fn quarantine_path(&self) -> Option<&Path> {
+        self.quarantine
+            .as_ref()
+            .map(super::quarantine::Quarantine::path)
     }
 }

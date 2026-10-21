@@ -10,7 +10,7 @@ repository.workspace = true
 
 [features]
 default = []
-desktop = ["dep:tauri", "dep:tauri-build", "dep:tauri-plugin-dialog", "dep:drmr-server", "dep:drmr-core", "dep:sha2", "dep:ureq", "dep:rustix", "tauri/custom-protocol"]
+desktop = ["dep:tauri", "dep:tauri-build", "dep:tauri-plugin-dialog", "dep:drmr-server", "dep:drmr-core", "dep:sha2", "dep:ureq", "dep:rustix", "dep:winsafe", "tauri/custom-protocol"]
 
 [[bin]]
 name = "drmr-desktop"
@@ -32,6 +32,9 @@ tauri-plugin-dialog = { version = "2.8.3", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 rustix = { workspace = true, optional = true }
+
+[target.'cfg(windows)'.dependencies]
+winsafe = { version = "0.0.29", optional = true, default-features = false, features = ["kernel"] }
 
 [build-dependencies]
 sha2 = { workspace = true, optional = true }

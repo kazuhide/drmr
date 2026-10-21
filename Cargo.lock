@@ -1058,6 +1058,7 @@ dependencies = [
  "tauri-plugin-dialog",
  "ureq",
  "url",
+ "winsafe",
 ]
 
 [[package]]
