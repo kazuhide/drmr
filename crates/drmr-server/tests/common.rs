@@ -1,5 +1,8 @@
 mod support;
 
+#[path = "common/private_plans.rs"]
+mod private_plans;
+
 use drmr_server::{ServerConfig, spawn};
 use serde_json::Value;
 use support::{Client, stage};

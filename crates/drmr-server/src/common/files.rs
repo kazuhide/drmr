@@ -203,7 +203,7 @@ impl Files {
             this.add_root(
                 &path,
                 "Private configuration folder",
-                vec![Role::Keys, Role::FetchPolicy],
+                vec![Role::Keys, Role::FetchPolicy, Role::SavedPlan],
             );
         }
         Ok(this)
@@ -243,6 +243,27 @@ impl Files {
                 .as_ref()
                 .is_some_and(|root| path.starts_with(root))
             || path.components().any(|c| c.as_os_str() == "_jobs")
+    }
+    fn private_config_selection(&self, root: &Root, role: Role, path: &Path) -> bool {
+        matches!(role, Role::Keys | Role::FetchPolicy | Role::SavedPlan)
+            && root.roles.contains(&role)
+            && self
+                .config
+                .as_ref()
+                .is_some_and(|private| root.binding.path == *private && path.starts_with(private))
+    }
+    fn selection_denied(&self, root: &Root, role: Role, path: &Path) -> bool {
+        let Ok(path) = native::resolve_path(path) else {
+            return true;
+        };
+        path.starts_with(&self.jobs)
+            || path.starts_with(&self.retained_base)
+            || path.components().any(|c| c.as_os_str() == "_jobs")
+            || self
+                .config
+                .as_ref()
+                .is_some_and(|private| path.starts_with(private))
+                && !self.private_config_selection(root, role, &path)
     }
     pub fn allowed_media(&self, path: &Path) -> Result<BoundPath> {
         if self.denied(path) {
@@ -294,7 +315,7 @@ impl Files {
         root.binding.check()?;
         r.binding.check()?;
         if !r.binding.path.starts_with(&root.binding.path)
-            || (role != Role::Keys && role != Role::FetchPolicy && self.denied(&r.binding.path))
+            || self.selection_denied(root, role, &r.binding.path)
         {
             return Err(unavailable());
         }
@@ -392,7 +413,7 @@ impl Files {
                 .filter(|n| (1..=100).contains(n))
                 .ok_or_else(invalid)?,
         };
-        let selected = self.scan(&directory, role, last.as_ref(), limit)?;
+        let selected = self.scan(&root, &directory, role, last.as_ref(), limit)?;
         directory.check()?;
         let more = selected.len() > limit;
         let (entries, last_name) = self.entries(&root, role, selected, limit)?;
@@ -426,6 +447,7 @@ impl Files {
     }
     fn scan(
         &self,
+        root: &Root,
         directory: &BoundPath,
         role: Role,
         last: Option<&OsString>,
@@ -441,9 +463,7 @@ impl Files {
                 continue;
             }
             let path = e.path();
-            if name.to_string_lossy().starts_with('.')
-                || self.denied(&path) && role != Role::Keys && role != Role::FetchPolicy
-            {
+            if name.to_string_lossy().starts_with('.') || self.selection_denied(root, role, &path) {
                 continue;
             }
             let Ok(meta) = e.metadata() else {
@@ -481,7 +501,7 @@ impl Files {
                 if is_dir { Kind::Directory } else { Kind::File },
                 binding,
             )?;
-            let label = if matches!(role, Role::Keys | Role::FetchPolicy) {
+            let label = if self.private_config_selection(root, role, &path) {
                 format!(
                     "{} {}",
                     if is_dir { "Folder" } else { "Configuration" },
