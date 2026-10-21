@@ -67,22 +67,7 @@ mod tests {
             .args(["--exact", name, "--nocapture"])
             .env(MARKER, name)
             .stdin(std::process::Stdio::null());
-        let mut child = crate::native::ManagedChild::spawn(command, true).unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        let status = loop {
-            if let Some(status) = child.try_wait().unwrap() {
-                break Some(status);
-            }
-            if std::time::Instant::now() >= deadline {
-                break None;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(1));
-        };
-        child.finish().unwrap();
-        assert!(
-            status.is_some_and(|status| status.success()),
-            "pipe-mode harness failed or blocked"
-        );
+        crate::test_harness::run(command, name, std::time::Duration::from_secs(10));
         true
     }
 
