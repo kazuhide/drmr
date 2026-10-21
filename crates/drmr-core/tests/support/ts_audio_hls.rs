@@ -303,6 +303,7 @@ fn audio_fmp4_hls_keeps_absolute_packet_end_and_all_481280_decoded_samples() {
     assert_eq!(common::snapshot_tree(source.parent().unwrap()), before);
 }
 
+#[track_caller]
 fn expected_error(error: drmr_core::conversion::ConversionError, expected: &str) {
     assert_eq!(
         error.0, expected,
@@ -310,6 +311,7 @@ fn expected_error(error: drmr_core::conversion::ConversionError, expected: &str)
     );
 }
 
+#[track_caller]
 fn refused(
     result: Result<
         drmr_core::conversion::VerificationReport,
@@ -342,6 +344,7 @@ fn audio_fmp4_hls_negative_oracle_rejects_operational_and_unknown_failures() {
         "fragment-timeline-gap-or-overlap",
         "media-tool-failed",
         "invalid-encrypted-segment",
+        "fragment-timing-not-supported",
         "ts-aac-sample-rate-not-supported",
         "ts-clock-wrap-or-discontinuity-not-supported",
     ];
@@ -372,6 +375,13 @@ fn audio_fmp4_hls_negative_oracle_rejects_operational_and_unknown_failures() {
         );
         refused(Err(ConversionError(expected)), expected);
     }
+    assert!(
+        std::panic::catch_unwind(|| refused(
+            Err(ConversionError("fragment-timing-not-supported")),
+            "invalid-encrypted-segment"
+        ))
+        .is_err()
+    );
 }
 
 #[test]
@@ -474,40 +484,15 @@ fn audio_fmp4_hls_rejects_changed_duration_end_resources_payload_and_decode_cloc
     assert_eq!(common::snapshot_tree(&output), output_before);
 }
 
-#[test]
-fn audio_fmp4_hls_rejects_wrong_key_domains_and_noncontiguous_original_sample_aes_before_publication()
- {
+fn assert_wrong_output_keys_are_rejected(source: &Path, root: &Path) {
     use drmr_core::conversion::{ContentKey, OutputKey};
-    let root = drmr_core::native::private_tempdir().unwrap();
-    let (source, sample) = audio_sources(root.path());
-    let source_before = common::snapshot_tree(source.parent().unwrap());
-    let aes = aes_source(&source, &root.path().join("aes"));
     let empty = InputKeys::default();
     let no_hls = HlsInputKeys::default();
-    let wrong = HlsInputKeys::new_with_ivs(vec![(
-        KEY_URI.into(),
-        Aes128Key::from_hex(OUTPUT_KEY).unwrap(),
-        Some(SegmentIv::from_hex(INPUT_IV).unwrap()),
-    )])
-    .unwrap();
-    for (label, protected, expected) in [
-        ("aes", &aes, "invalid-encrypted-segment"),
-        ("sample", &sample, "ts-aac-sample-rate-not-supported"),
-    ] {
-        let before = common::snapshot_tree(protected.parent().unwrap());
-        let output = root.path().join(format!("refused-{label}"));
-        let error = converter()
-            .convert(clear_request(protected, &output, &empty, &wrong))
-            .unwrap_err();
-        expected_error(error, expected);
-        assert!(!output.exists());
-        assert_eq!(common::snapshot_tree(protected.parent().unwrap()), before);
-    }
     let key = OutputKey::from_hex("909192939495969798999a9b9c9d9e9f", OUTPUT_KEY).unwrap();
     for target in [TargetProtection::Cbcs, TargetProtection::HlsAes128] {
-        let output = root.path().join(format!("key-domain-{}", target.as_str()));
+        let output = root.join(format!("key-domain-{}", target.as_str()));
         let aes_key = HlsOutputKey::new(KEY_URI, Aes128Key::from_hex(OUTPUT_KEY).unwrap()).unwrap();
-        let mut request = clear_request(&source, &output, &empty, &no_hls);
+        let mut request = clear_request(source, &output, &empty, &no_hls);
         request.target = target;
         request.output_key = (target == TargetProtection::Cbcs).then_some(&key);
         request.hls_key_uri = (target == TargetProtection::Cbcs).then_some(KEY_URI);
@@ -517,9 +502,19 @@ fn audio_fmp4_hls_rejects_wrong_key_domains_and_noncontiguous_original_sample_ae
             ContentKey::from_hex("909192939495969798999a9b9c9d9e9f", INPUT_KEY).unwrap(),
         ])
         .unwrap();
+        let wrong_aes = if target == TargetProtection::HlsAes128 {
+            invalid_padding_key(
+                &output.join("track-0000/media.m3u8"),
+                OUTPUT_KEY,
+                INPUT_KEY,
+                "aes-output",
+            )
+        } else {
+            INPUT_KEY.into()
+        };
         let wrong_hls = HlsInputKeys::new(vec![(
             KEY_URI.into(),
-            Aes128Key::from_hex(INPUT_KEY).unwrap(),
+            Aes128Key::from_hex(&wrong_aes).unwrap(),
         )])
         .unwrap();
         let output_before = common::snapshot_tree(&output);
@@ -534,7 +529,7 @@ fn audio_fmp4_hls_rejects_wrong_key_domains_and_noncontiguous_original_sample_ae
         .unwrap();
         let candidate = output.join("master.m3u8");
         all_checks(
-            &verify_with_result_keys(&source, &candidate, &correct_content, &correct_hls).unwrap(),
+            &verify_with_result_keys(source, &candidate, &correct_content, &correct_hls).unwrap(),
         );
         // Wrong CBCS bytes can fail the decoder. Only this observed failure code is accepted;
         // timeouts, cleanup/resource failures and missing tools are never media refusals.
@@ -544,14 +539,61 @@ fn audio_fmp4_hls_rejects_wrong_key_domains_and_noncontiguous_original_sample_ae
             "invalid-encrypted-segment"
         };
         refused(
-            verify_with_result_keys(&source, &candidate, &wrong_content, &wrong_hls),
+            verify_with_result_keys(source, &candidate, &wrong_content, &wrong_hls),
             expected,
         );
         all_checks(
-            &verify_with_result_keys(&source, &candidate, &correct_content, &correct_hls).unwrap(),
+            &verify_with_result_keys(source, &candidate, &correct_content, &correct_hls).unwrap(),
         );
         assert_eq!(common::snapshot_tree(&output), output_before);
     }
+}
+
+#[test]
+fn audio_fmp4_hls_rejects_wrong_key_domains_and_noncontiguous_original_sample_aes_before_publication()
+ {
+    let root = drmr_core::native::private_tempdir().unwrap();
+    let (source, sample) = audio_sources(root.path());
+    let source_before = common::snapshot_tree(source.parent().unwrap());
+    let aes = aes_source(&source, &root.path().join("aes"));
+    let empty = InputKeys::default();
+    let wrong_aes = HlsInputKeys::new_with_ivs(vec![(
+        KEY_URI.into(),
+        Aes128Key::from_hex(&invalid_padding_key(
+            &aes,
+            INPUT_KEY,
+            OUTPUT_KEY,
+            "aes-input",
+        ))
+        .unwrap(),
+        Some(SegmentIv::from_hex(INPUT_IV).unwrap()),
+    )])
+    .unwrap();
+    let wrong = HlsInputKeys::new_with_ivs(vec![(
+        KEY_URI.into(),
+        Aes128Key::from_hex(OUTPUT_KEY).unwrap(),
+        Some(SegmentIv::from_hex(INPUT_IV).unwrap()),
+    )])
+    .unwrap();
+    for (label, protected, keys, expected) in [
+        ("aes", &aes, &wrong_aes, "invalid-encrypted-segment"),
+        (
+            "sample",
+            &sample,
+            &wrong,
+            "ts-aac-sample-rate-not-supported",
+        ),
+    ] {
+        let before = common::snapshot_tree(protected.parent().unwrap());
+        let output = root.path().join(format!("refused-{label}"));
+        let error = converter()
+            .convert(clear_request(protected, &output, &empty, keys))
+            .unwrap_err();
+        expected_error(error, expected);
+        assert!(!output.exists());
+        assert_eq!(common::snapshot_tree(protected.parent().unwrap()), before);
+    }
+    assert_wrong_output_keys_are_rejected(&source, root.path());
     assert_eq!(
         common::snapshot_tree(source.parent().unwrap()),
         source_before
@@ -632,4 +674,253 @@ fn assert_private_report(
             "operator material entered reports/events"
         );
     }
+}
+
+// Independent test-only CBC block evidence; selection never invokes drmr's decryptor.
+struct CbcResource {
+    first: [u8; 16],
+    previous: [u8; 16],
+    last: [u8; 16],
+    iv: [u8; 16],
+    bytes: u64,
+    is_init: bool,
+}
+
+fn cbc_plain_block(block: &[u8; 16], previous: &[u8; 16], key: &[u8; 16]) -> [u8; 16] {
+    use aes::cipher::{BlockDecrypt as _, KeyInit as _};
+    let cipher = aes::Aes128::new_from_slice(key).unwrap();
+    let mut plaintext = aes::cipher::Block::<aes::Aes128>::from(*block);
+    cipher.decrypt_block(&mut plaintext);
+    std::array::from_fn(|i| plaintext[i] ^ previous[i])
+}
+
+#[test]
+fn audio_fmp4_hls_cbc_tail_oracle_checks_entire_padding_and_chaining() {
+    use aes::cipher::{BlockEncrypt as _, KeyInit as _};
+    let key: [u8; 16] = hex::decode("2b7e151628aed2a6abf7158809cf4f3c")
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let iv: [u8; 16] = hex::decode("000102030405060708090a0b0c0d0e0f")
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let block: [u8; 16] = hex::decode("7649abac8119b246cee98e9b12e9197d")
+        .unwrap()
+        .try_into()
+        .unwrap();
+    // NIST SP 800-38A F.2.1 anchors both AES decryption and CBC XOR independently.
+    assert_eq!(
+        hex::encode(cbc_plain_block(&block, &iv, &key)),
+        "6bc1bee22e409f96e93d7e117393172a"
+    );
+    let cipher = aes::Aes128::new_from_slice(&key).unwrap();
+    let mut one = [0x41; 16];
+    one[15] = 1;
+    let mut nonuniform = [0x41; 16];
+    nonuniform[15] = 2;
+    for (plain, expected) in [
+        (one, Some(1)),
+        ([16; 16], Some(16)),
+        ([0; 16], None),
+        ([17; 16], None),
+        (nonuniform, None),
+    ] {
+        let mut block =
+            aes::cipher::Block::<aes::Aes128>::from(std::array::from_fn(|i| plain[i] ^ iv[i]));
+        cipher.encrypt_block(&mut block);
+        let resource = CbcResource {
+            first: block.into(),
+            previous: iv,
+            last: block.into(),
+            iv,
+            bytes: 16,
+            is_init: true,
+        };
+        assert_eq!(resource.padding(&key), expected);
+    }
+}
+
+impl CbcResource {
+    fn padding(&self, key: &[u8; 16]) -> Option<u8> {
+        let last = cbc_plain_block(&self.last, &self.previous, key);
+        let padding = last[15];
+        ((1..=16).contains(&padding)
+            && last[16 - usize::from(padding)..]
+                .iter()
+                .all(|byte| *byte == padding))
+        .then_some(padding)
+    }
+
+    fn invalid_first_box(&self, key: &[u8; 16]) -> bool {
+        let Some(padding) = self.padding(key) else {
+            return false;
+        };
+        let first = cbc_plain_block(&self.first, &self.iv, key);
+        u64::from(u32::from_be_bytes(first[..4].try_into().unwrap()))
+            > self.bytes - u64::from(padding)
+    }
+}
+
+fn cbc_resources(playlist: &Path) -> Vec<CbcResource> {
+    use std::io::{Read as _, Seek as _, SeekFrom};
+    let text = std::fs::read_to_string(playlist).unwrap();
+    assert!(text.len() <= 64 * 1024);
+    let key_prefix = format!("#EXT-X-KEY:METHOD=AES-128,URI=\"{KEY_URI}\",IV=0x");
+    let mut iv = None;
+    let mut resources = Vec::new();
+    for line in text.lines() {
+        if line.starts_with("#EXT-X-KEY:") {
+            let value = line.strip_prefix(&key_prefix).expect("fixture key mapping");
+            iv = Some(hex::decode(value).unwrap().try_into().unwrap());
+            continue;
+        }
+        let (name, is_init) = if line.starts_with("#EXT-X-MAP:") {
+            let value = line.strip_prefix("#EXT-X-MAP:URI=\"").unwrap();
+            (value.strip_suffix('"').unwrap(), true)
+        } else if !line.is_empty() && !line.starts_with('#') {
+            (line, false)
+        } else {
+            continue;
+        };
+        assert!(!name.is_empty() && !name.contains(['/', '\\', ':']));
+        assert!(resources.len() < 16, "bounded fixture resource inventory");
+        let iv: [u8; 16] = iv.expect("encrypted resource must have an explicit fixture IV");
+        let mut file = std::fs::File::open(playlist.parent().unwrap().join(name)).unwrap();
+        let bytes = file.metadata().unwrap().len();
+        assert!((16..=8 * 1024 * 1024).contains(&bytes) && bytes.is_multiple_of(16));
+        let mut first = [0; 16];
+        file.read_exact(&mut first).unwrap();
+        let mut previous = iv;
+        let mut last = first;
+        if bytes >= 32 {
+            file.seek(SeekFrom::End(-32)).unwrap();
+            file.read_exact(&mut previous).unwrap();
+            file.read_exact(&mut last).unwrap();
+        }
+        resources.push(CbcResource {
+            first,
+            previous,
+            last,
+            iv,
+            bytes,
+            is_init,
+        });
+    }
+    assert!(
+        !resources.is_empty(),
+        "padding evidence needs actual resources"
+    );
+    resources
+}
+
+fn select_cbc_key(
+    correct: &str,
+    preferred: &str,
+    predicate: impl Fn(&[u8; 16]) -> bool,
+) -> ([u8; 16], u32) {
+    let correct: [u8; 16] = hex::decode(correct).unwrap().try_into().unwrap();
+    for attempt in 0_u32..65_536 {
+        let candidate: [u8; 16] = if attempt == 0 {
+            hex::decode(preferred).unwrap().try_into().unwrap()
+        } else {
+            let mut key = [0xa5; 16];
+            key[12..].copy_from_slice(&attempt.to_be_bytes());
+            key
+        };
+        if candidate != correct && predicate(&candidate) {
+            return (candidate, attempt);
+        }
+    }
+    panic!("no fixture key satisfies independent padding evidence within the bound");
+}
+
+fn invalid_padding_key(playlist: &Path, correct: &str, preferred: &str, stage: &str) -> String {
+    let resources = cbc_resources(playlist);
+    let correct_key: [u8; 16] = hex::decode(correct).unwrap().try_into().unwrap();
+    assert!(
+        resources
+            .iter()
+            .all(|resource| resource.padding(&correct_key).is_some())
+    );
+    // CBC has no authentication: a wrong key can have valid PKCS#7 padding. Keep the
+    // swapped-domain key when possible, otherwise select a demonstrably invalid key
+    // for every actual init and segment. No production verification is retried.
+    let (wrong, attempt) = select_cbc_key(correct, preferred, |key| {
+        resources
+            .iter()
+            .all(|resource| resource.padding(key).is_none())
+    });
+    assert!(
+        resources
+            .iter()
+            .all(|resource| resource.padding(&wrong).is_none())
+    );
+    println!(
+        "DRMR_AUDIO_CBC_INVALID_PADDING {}",
+        serde_json::json!({
+            "stage": stage, "resource_count": resources.len(), "selected_attempt": attempt,
+            "all_correct_padding_valid": true, "all_wrong_padding_invalid": true,
+        })
+    );
+    hex::encode(wrong)
+}
+
+#[test]
+fn audio_fmp4_hls_wrong_aes_key_with_valid_padding_is_rejected_by_fragment_structure() {
+    let root = drmr_core::native::private_tempdir().unwrap();
+    let (source, _) = audio_sources(root.path());
+    let source_before = common::snapshot_tree(source.parent().unwrap());
+    let output = root.path().join("valid-padding-control");
+    let empty = InputKeys::default();
+    let no_hls = HlsInputKeys::default();
+    let output_key = HlsOutputKey::new(KEY_URI, Aes128Key::from_hex(OUTPUT_KEY).unwrap()).unwrap();
+    let mut request = clear_request(&source, &output, &empty, &no_hls);
+    request.target = TargetProtection::HlsAes128;
+    request.hls_output_key = Some(&output_key);
+    all_checks(&converter().convert(request).unwrap().verification);
+    let output_before = common::snapshot_tree(&output);
+    let resources = cbc_resources(&output.join("track-0000/media.m3u8"));
+    assert!(resources[0].is_init);
+    let correct: [u8; 16] = hex::decode(OUTPUT_KEY).unwrap().try_into().unwrap();
+    assert!(
+        resources
+            .iter()
+            .all(|resource| resource.padding(&correct).is_some())
+    );
+    let (wrong, attempt) = select_cbc_key(OUTPUT_KEY, INPUT_KEY, |key| {
+        resources[0].padding(key).is_some() && resources[0].invalid_first_box(key)
+    });
+    let correct_hls = HlsInputKeys::new(vec![(
+        KEY_URI.into(),
+        Aes128Key::from_hex(OUTPUT_KEY).unwrap(),
+    )])
+    .unwrap();
+    let wrong_hls = HlsInputKeys::new(vec![(
+        KEY_URI.into(),
+        Aes128Key::from_hex(&hex::encode(wrong)).unwrap(),
+    )])
+    .unwrap();
+    let candidate = output.join("master.m3u8");
+    all_checks(&verify_with_result_keys(&source, &candidate, &empty, &correct_hls).unwrap());
+    let result = verify_with_result_keys(&source, &candidate, &empty, &wrong_hls);
+    println!(
+        "DRMR_AUDIO_CBC_VALID_PADDING_CONTROL {}",
+        serde_json::json!({
+            "stage": "aes-output-first-init",
+            "resource_count": resources.len(),
+            "selected_attempt": attempt,
+            "wrong_init_padding": resources[0].padding(&wrong),
+            "wrong_init_first_box_out_of_bounds": resources[0].invalid_first_box(&wrong),
+            "actual_error": result.as_ref().err().map(|error| error.0),
+            "expected_error": "fragment-timing-not-supported",
+        })
+    );
+    expected_error(result.unwrap_err(), "fragment-timing-not-supported");
+    all_checks(&verify_with_result_keys(&source, &candidate, &empty, &correct_hls).unwrap());
+    assert_eq!(
+        common::snapshot_tree(source.parent().unwrap()),
+        source_before
+    );
+    assert_eq!(common::snapshot_tree(&output), output_before);
 }
