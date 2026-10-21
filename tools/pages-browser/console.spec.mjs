@@ -9,7 +9,7 @@ import { allowedConsoleRequest, consoleOrigin, fixtureOrigin, digest, consoleAss
 const id = () => randomBytes(16).toString('hex');
 const privateValues = ['00112233445566778899aabbccddeeff', 'ffeeddccbbaa99887766554433221100',
   '102132435465768798a9bacbdcedfe0f', 'private-browser-marker', 'private-browser-auth-marker'];
-let fixture, caps;
+let fixture, caps, importedPlans;
 const pages = new WeakMap();
 async function api(request, path, { method = 'GET', data, expected = 200 } = {}) {
   const response = await request.fetch(consoleOrigin + path, { method, data,
@@ -164,7 +164,7 @@ async function openSession(page, kind = 'local', filename = 'source.mp4') {
   await page.locator('#common-new').click();
   await page.locator('#common-source-kind').selectOption(kind);
   if (kind === 'hls-url') {
-    await page.locator('#common-url').fill(fixtureOrigin + '/media.m3u8?private-browser-auth-marker');
+    await page.locator('#common-url').fill(fixtureOrigin + '/private-browser-marker/media.m3u8?private-browser-auth-marker');
     await pick(page, 'fetch-policy', 'fetch.json');
   } else await pick(page, kind === 'local' ? 'media' : 'saved-plan', filename);
   await page.locator('#common-open').click();
@@ -219,26 +219,28 @@ async function retainedPlanBytes(planId, expectedBytes) {
   await walk(fixture.output, 0); expect(matches.length).toBeGreaterThan(0);
   return matches;
 }
-test.beforeAll(async ({ request }) => {
+test.beforeAll(async ({ request }, info) => {
   fixture = JSON.parse(await readFile(join(process.env.PW_REPORT_ROOT, 'fixture.json'), 'utf8'));
   caps = await api(request, '/api/common/capabilities');
   expect(caps.schema_version).toBe(1); expect(caps.worker_policy).toEqual({ maximum: 4, automatic: true });
-  const saved = join(fixture.input, 'cli-v1.plan.json'), destination = join(fixture.output, 'cli-v1.mp4');
+  const worker = 'worker-' + info.workerIndex;
+  importedPlans = { v1: 'cli-v1-' + worker + '.plan.json', v2: 'cli-v2-' + worker + '.plan.json' };
+  const saved = join(fixture.input, importedPlans.v1), destination = join(fixture.output, 'cli-v1-' + worker + '.mp4');
   const planned = await cli(['plan', fixture.progressive, '--to', 'clear', '--format', 'mp4', '--output', destination, '--save', saved, '--json']);
   expect(planned.report.schema_version).toBe(1);
   const converted = await cli(['convert', '--plan', saved, '--json']); checks(converted.report.verification);
-  const named = join(fixture.root, 'cli-v2.outputs.json'), savedV2 = join(fixture.input, 'cli-v2.plan.json');
+  const named = join(fixture.root, 'cli-v2-' + worker + '.outputs.json'), savedV2 = join(fixture.input, importedPlans.v2);
   await writeFile(named, JSON.stringify({ schema_version: 1, outputs: [
     { id: 'dash', format: 'dash', target: 'cbcs', drms: ['widevine', 'playready'], conformance: 'none' },
     { id: 'hls', format: 'hls', target: 'cbcs', drms: ['fairplay'], conformance: 'none' },
   ] }), { flag: 'wx', mode: 0o600 });
   const keys = join(fixture.config, 'keys.json');
   const plannedV2 = await cli(['plan', join(fixture.source, 'media.m3u8'), '--outputs', named,
-    '--output', join(fixture.output, 'cli-v2'), '--save', savedV2, '--keys-file', keys, '--json']);
+    '--output', join(fixture.output, 'cli-v2-' + worker), '--save', savedV2, '--keys-file', keys, '--json']);
   expect(plannedV2.report.schema_version).toBe(2);
   const convertedV2 = await cli(['convert', '--plan', savedV2, '--keys-file', keys, '--json']);
   for (const output of convertedV2.report.outputs) checks(output.conversion.verification);
-  await writeFile(join(process.env.PW_REPORT_ROOT, 'cli-import-setup.json'), JSON.stringify({
+  await writeFile(join(process.env.PW_REPORT_ROOT, 'cli-import-setup-' + worker + '.json'), JSON.stringify({
     sourceHead: fixture.sourceHead, binarySha256: fixture.binarySha256, planId: planned.report.plan_id,
     plannedSha256: planned.sha256, convertedSha256: converted.sha256, checks: converted.report.verification.checks,
     v2: { planId: plannedV2.report.plan_id, plannedSha256: plannedV2.sha256, convertedSha256: convertedV2.sha256 } }, null, 2));
@@ -274,6 +276,12 @@ test.beforeEach(async ({ page, context }) => {
   await context.route('**/*', route => allowedConsoleRequest(route.request().url()) ? route.continue() : route.abort('blockedbyclient'));
   await page.goto('/'); await expect(page.locator('#common-title')).toBeVisible();
   await expect(page.locator('#common-open')).toBeDisabled();
+  // Verify the separate report page's asset bytes without executing its page-specific code here.
+  await page.evaluate(async () => {
+    const response = await fetch('/static/js/report.js');
+    if (response.status !== 200) throw new Error('Separate report-page asset is unavailable');
+    await response.arrayBuffer();
+  });
 });
 test.afterEach(async ({ page }, info) => {
   const record = pages.get(page);
@@ -323,6 +331,9 @@ for (const language of ['en', 'ja']) for (const width of [320, 599, 600, 601, 76
     await expect(input).toHaveValue('draft-in-progress-kept');
     await page.keyboard.press('Enter'); expect(pages.get(page).submitted).toEqual([]);
     expect(await input.evaluate(element => element === window.__commonFocusedInput && document.activeElement === element)).toBe(true);
+    await page.locator('#language-select').selectOption(language);
+    await expect(page.locator('html')).toHaveAttribute('lang', language);
+    await input.focus();
     const layout = await page.evaluate(() => ({ viewport: innerWidth, document: document.documentElement.scrollWidth,
       width: document.documentElement.clientWidth, input: document.querySelector('#common-destination').getBoundingClientRect().toJSON() }));
     expect(layout.document).toBeLessThanOrEqual(layout.width + 1); expect(layout.input.width).toBeGreaterThan(100);
@@ -368,7 +379,7 @@ for (const language of ['en', 'ja']) {
 }
 
 test('CLI version-one saved plan can be independently verified without conversion', async ({ page }) => {
-  await openSession(page, 'saved-plan', 'cli-v1.plan.json');
+  await openSession(page, 'saved-plan', importedPlans.v1);
   await expect(page.locator('#common-analyze')).not.toBeVisible();
   await expect(page.locator('#common-convert')).toBeDisabled();
   const verified = await observedJob(page, '#common-verify', 'verify');
@@ -454,7 +465,7 @@ test('changed analyzed source is refused before a new plan can be used', async (
 });
 
 test('an imported version-two plan verifies current media and refuses a wrong key', async ({ page }) => {
-  await openSession(page, 'saved-plan', 'cli-v2.plan.json');
+  await openSession(page, 'saved-plan', importedPlans.v2);
   await expect(page.locator('#common-convert')).toBeDisabled();
   await pick(page, 'keys', 'wrong-keys.json');
   const failed = await observedJob(page, '#common-verify', 'verify', { expected: 'failed' });
@@ -492,14 +503,14 @@ test('a full finished session closes before a fresh verify-only import', async (
   await page.reload(); await page.locator('#common-sessions .row-main').click();
   await expect(page.locator('#common-analyze')).toBeDisabled();
   await page.locator('#common-close').click(); await expect(page.locator('#common-open')).toBeVisible();
-  await openSession(page, 'saved-plan', 'cli-v1.plan.json');
+  await openSession(page, 'saved-plan', importedPlans.v1);
   const verified = await observedJob(page, '#common-verify', 'verify'); checks(verified.observedReport.report.verification);
   expect(pages.get(page).submitted.filter(item => item.operation === 'convert')).toEqual([]);
 });
 
 for (const operation of ['analyze', 'plan', 'convert', 'verify']) {
   test('Stop retains ownership until actual cleanup / ' + operation, async ({ page }, info) => {
-    if (operation === 'verify') await openSession(page, 'saved-plan', 'cli-v1.plan.json');
+    if (operation === 'verify') await openSession(page, 'saved-plan', importedPlans.v1);
     else {
       await openSession(page);
       if (operation !== 'analyze') {

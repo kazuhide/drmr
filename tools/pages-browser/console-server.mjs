@@ -92,7 +92,7 @@ await privateJson(join(config, 'wrong-keys.json'), { schema_version: 2, outputs:
 fixtureServer = createServer(async (request, response) => {
   try {
     const url = new URL(request.url, fixtureOrigin);
-    const name = url.pathname.slice(1);
+    const name = url.pathname.replace(/^\/private-browser-marker\//, '/').slice(1);
     if (request.method !== 'GET' || !/^(media\.m3u8|segment-[0-9]{3}\.ts)$/.test(name)) {
       response.writeHead(404).end(); return;
     }

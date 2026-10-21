@@ -1,8 +1,8 @@
 # Pages browser checks
 
 These test-only files run in GitHub Actions. They are not uploaded as part of the
-website, which contains no production JavaScript. No media, keys or conversion
-jobs are submitted by these checks.
+website, which contains no production JavaScript. The landing and guide checks
+submit no media, keys or conversion jobs.
 
 `npm ci --ignore-scripts` installs the exact lockfile. The workflow audits it,
 then uses the official Playwright command to install its pinned Chromium and
@@ -161,6 +161,23 @@ the applicable workflow checks, which depend on changed paths. Publish/live
 jobs are intentionally skipped on pull requests. Production HTML still contains zero scripts; CI-only
 axe injection does not change that source contract.
 The hosted IBM Plex font files and their OFL notice remain part of the website.
+
+## Common console checks
+
+The separate `test:console` suite builds and serves the actual CLI and embedded
+Web/Desktop console. It has 34 cases, one worker, a ten-minute total budget and
+zero whole-test retries. It uses a short Big Buck Bunny fixture and synthetic
+keys in runner-owned private directories. Tests cover local input and authenticated
+HLS acquisition, saved plans shared with the CLI, multiple encrypted outputs,
+fresh independent verification, failed checks, interrupted requests and stopping
+each operation. The suite also checks English/Japanese forms, keyboard use,
+layout and accessibility at ten widths.
+
+Evidence binds the source tree, CLI build, served assets, jobs and displayed
+results. The lifecycle gate requires authenticated fixture requests, confirmed
+server exit and removal of the owned temporary directory. These checks qualify
+Linux Chromium and real media tools; native WebView interaction, other browsers,
+device playback and DRM license services require separate qualification.
 
 Official references:
 
