@@ -610,7 +610,24 @@ fn native_export_shutdown_waits_for_the_actual_service_join() {
         )
         .unwrap(),
     );
-    assert!(service.request(&origin.url().join(ENDPOINT).unwrap()));
+    let (idle_entered, idle_ready) = mpsc::channel();
+    let resume_idle = Arc::new(AtomicBool::new(false));
+    let idle_resumed = resume_idle.clone();
+    *service.shared.before_park.lock().unwrap() = Some(Box::new(move || {
+        idle_entered.send(()).unwrap();
+        // Pause after the worker releases the state lock. A blocking channel
+        // receive here could consume the request's unpark token before park().
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !idle_resumed.load(Ordering::Acquire) {
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+    }));
+    service.shared.wake();
+    idle_ready.recv_timeout(Duration::from_secs(2)).unwrap();
+    let admitted = service.request(&origin.url().join(ENDPOINT).unwrap());
+    resume_idle.store(true, Ordering::Release);
+    assert!(admitted);
     let selection = chooser.recv_timeout(Duration::from_secs(2)).unwrap();
     service.selected(selection, None);
     let (done, completed) = mpsc::channel();
