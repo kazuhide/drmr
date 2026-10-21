@@ -270,8 +270,8 @@ impl OwnedFile {
             self.cleanup_phase = CleanupPhase::Original;
         }
         if self.cleanup_phase == CleanupPhase::Original {
+            #[cfg(unix)]
             if let Err(error) = self.check_leaf() {
-                #[cfg(unix)]
                 if error.kind() == io::ErrorKind::NotFound {
                     use std::os::unix::fs::MetadataExt;
                     if self.file.as_ref().ok_or_else(refused)?.metadata()?.nlink() == 0 {
@@ -289,6 +289,8 @@ impl OwnedFile {
                 // Missing names do not prove that a held writer was unlinked.
                 return Err(error);
             }
+            #[cfg(windows)]
+            self.check_leaf()?;
             parent.check()?;
             for _ in 0..8 {
                 if self.quarantine.is_none() {
