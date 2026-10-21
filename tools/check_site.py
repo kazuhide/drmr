@@ -40,6 +40,10 @@ GUIDE_PRIMARY_REFERENCES = frozenset((
     "https://developer.apple.com/library/archive/documentation/AudioVideo/Conceptual/HLS_Sample_Encryption/",
     "https://www.w3.org/TR/mse-byte-stream-format-isobmff/",
 ))
+GUIDE_CHAPTER_REFERENCES = {
+    language: frozenset(canonical + "#" + chapter for chapter in GUIDE_CHAPTERS)
+    for origin, (language, canonical) in PAGES.items() if origin not in LANDING_PAGES
+}
 BUILDER_INPUTS = ("tools/build_guide_site.py", "tools/templates/guide.html",
                   "site-content/guide/en.md", "site-content/guide/ja.md")
 
@@ -349,13 +353,14 @@ def validate_guide(text, language):
         require(chapter.attrs.get("id") == name and matrix_text(chapter.one("h2", id=name + "-title"))
                 and len(matrix_text(chapter)) >= 40, "site-guide-chapters")
     toc = document.one("nav", **{"class": "guide-toc-nav"})
-    require(toc.attrs.get("aria-label") == ("Guide chapters" if language == "en" else "ガイドの章")
+    require(toc.attrs.get("aria-label") == ("Guide chapters" if language == "en" else "目次")
             and [node.attrs.get("href") for node in toc.descendants("a")] == ["#" + name for name in GUIDE_CHAPTERS],
             "site-guide-chapters")
     references = chapters[-1]
     primary = [node for node in document.descendants("a")
                if urlsplit(node.attrs.get("href", "")).scheme
-               and urlsplit(node.attrs["href"]).netloc != "github.com"]
+               and urlsplit(node.attrs["href"]).netloc != "github.com"
+               and node.attrs["href"] not in GUIDE_CHAPTER_REFERENCES[language]]
     require(len(primary) == len(GUIDE_PRIMARY_REFERENCES)
             and {node.attrs.get("href") for node in primary} == GUIDE_PRIMARY_REFERENCES
             and all(node in list(references.descendants("a")) for node in primary), "site-guide-reference")
@@ -464,7 +469,9 @@ def validate(root, repository, pending_docs=()):
             require(isinstance(reference, str) and not any(ord(c) <= 32 or c == "\\" for c in reference), "site-reference")
             if urlsplit(reference).scheme:
                 require(tag == "a" and attribute == "href", "site-reference")
-                if origin not in LANDING_PAGES and reference in GUIDE_PRIMARY_REFERENCES:
+                if origin not in LANDING_PAGES and (
+                        reference in GUIDE_PRIMARY_REFERENCES
+                        or reference in GUIDE_CHAPTER_REFERENCES[page.language]):
                     continue
                 missing = document(reference, repository, pending_docs)
                 if missing:

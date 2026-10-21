@@ -16,7 +16,7 @@ export const locales = [
     language: 'ja', route: 'ja/', asset: 'ja/index.html', skip: '本文へ移動',
     navigation: 'メインナビゲーション', footer: 'ドキュメントとソース', languageNavigation: '言語',
     switchName: 'English', switchLanguage: 'en', switchHref: '../',
-    headings: ['入力と出力の対応表', '解析・計画・変換・検証', '原本と比べる4つの確認', 'CLIから始める'],
+    headings: ['入力と出力の対応表', '解析・計画・変換・検証', '原本との比較項目', 'CLI のインストール'],
     groups: ['入力を解析するコマンド', '変換を計画するコマンド', '変換するコマンド', '原本と比較するコマンド', 'CLIのビルドとツール確認'],
     anchors: ['対応範囲', '使い方', '始める'],
     matrixRegion: '変換対応表', matrixCaption: '対応する変換プロファイル',

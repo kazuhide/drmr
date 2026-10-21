@@ -337,6 +337,71 @@ class Site(unittest.TestCase):
                 path.write_bytes(original)
 
 
+    def regenerate_guide_fixture(self):
+        spec = importlib.util.spec_from_file_location("chapter_link_builder_fixture", self.repo / "tools/build_guide_site.py")
+        builder = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(builder)
+        for relative, content in builder.render(self.repo).items():
+            (self.site / relative).write_bytes(content)
+
+    def test_portable_same_language_chapter_links_pass_after_source_and_output_regeneration(self):
+        for language, canonical, output in (
+                ("en", "https://kazuhide.github.io/drmr/guide/", "guide/index.html"),
+                ("ja", "https://kazuhide.github.io/drmr/ja/guide/", "ja/guide/index.html")):
+            with self.subTest(language=language):
+                source = self.repo / ("site-content/guide/" + language + ".md")
+                reference = canonical + "#cli-reference"
+                source.write_text(source.read_text(encoding="utf-8") +
+                                  "\n[CLI chapter details](" + reference + ")\n", encoding="utf-8")
+                self.regenerate_guide_fixture()
+                self.assertIn('href="' + reference + '"', (self.site / output).read_text(encoding="utf-8"))
+                self.assertEqual(self.check()["guides"][output]["chapters"], 20)
+
+    def test_regeneration_does_not_waive_portable_chapter_url_boundaries(self):
+        cases = (
+            "{canonical}#unknown", "{canonical}", "{canonical}#", "{canonical}?#cli-reference",
+            "{canonical}#%63li-reference", "{canonical}#CLI-reference", "{other}#cli-reference",
+            "https://example.com/drmr/guide/#cli-reference",
+            "https://kazuhide.github.io/drmr/guide/index.html#cli-reference",
+            "https://kazuhide.github.io:443/drmr/guide/#cli-reference",
+        )
+        for language, canonical, other, output in (
+                ("en", "https://kazuhide.github.io/drmr/guide/", "https://kazuhide.github.io/drmr/ja/guide/", "guide/index.html"),
+                ("ja", "https://kazuhide.github.io/drmr/ja/guide/", "https://kazuhide.github.io/drmr/guide/", "ja/guide/index.html")):
+            source = self.repo / ("site-content/guide/" + language + ".md")
+            original = source.read_text(encoding="utf-8")
+            for pattern in cases:
+                reference = pattern.format(canonical=canonical, other=other)
+                with self.subTest(language=language, reference=reference):
+                    source.write_text(original + "\n[Chapter details](" + reference + ")\n", encoding="utf-8")
+                    self.regenerate_guide_fixture()
+                    self.assertIn('href="' + reference + '"', (self.site / output).read_text(encoding="utf-8"))
+                    with self.assertRaisesRegex(CHECK.Failure, "site-guide-reference"):
+                        self.check()
+            source.write_text(original, encoding="utf-8")
+            self.regenerate_guide_fixture()
+
+    def test_regeneration_keeps_primary_reference_count_set_and_location_strict(self):
+        primary = "https://www.w3.org/TR/eme-stream-mp4/"
+        source = self.repo / "site-content/guide/en.md"
+        original = source.read_text(encoding="utf-8")
+        primary_line = next(line for line in original.splitlines(keepends=True) if primary in line)
+        moved = original.replace(primary_line, "", 1).replace(
+            "## Choose an operation", "[Moved reference](" + primary + ")\n\n## Choose an operation", 1)
+        mutations = (
+            original.replace(primary, "https://kazuhide.github.io/drmr/guide/#references", 1),
+            original + "\n[Duplicate reference](" + primary + ")\n",
+            original.replace(primary, "https://example.com/normative-reference", 1),
+            moved,
+        )
+        for changed in mutations:
+            with self.subTest(changed=changed[-100:]):
+                source.write_text(changed, encoding="utf-8")
+                self.regenerate_guide_fixture()
+                with self.assertRaisesRegex(CHECK.Failure, "site-guide-reference"):
+                    self.check()
+
+
 class ConversionMatrix(unittest.TestCase):
     def fixture(self, language="en"):
         labels = {
@@ -493,6 +558,47 @@ class GuideMarkup(unittest.TestCase):
                          ('aria-labelledby="example-1-title"', ''), ('data-code-language="sh"', 'data-code-language="unknown"'), ('scope="row"', '')]:
             with self.subTest(old=old), self.assertRaises(CHECK.Failure):
                 CHECK.validate_guide(original.replace(old, new, 1), "en")
+
+
+    def test_each_portable_chapter_reference_is_internal_only_for_its_language(self):
+        for language, canonical in (("en", "https://kazuhide.github.io/drmr/guide/"),
+                                    ("ja", "https://kazuhide.github.io/drmr/ja/guide/")):
+            original = self.fixture()
+            if language == "ja":
+                original = original.replace('aria-label="Guide chapters"', 'aria-label="目次"')
+            for chapter in CHECK.GUIDE_CHAPTERS:
+                with self.subTest(language=language, chapter=chapter):
+                    value = original.replace('<h2 id="introduction-title">',
+                        '<a href="' + canonical + '#' + chapter + '">Chapter details</a><h2 id="introduction-title">', 1)
+                    self.assertEqual(CHECK.validate_guide(value, language)["chapters"], 20)
+
+    def test_chapter_reference_variants_cannot_bypass_the_primary_reference_contract(self):
+        for language, canonical, other in (
+                ("en", "https://kazuhide.github.io/drmr/guide/", "https://kazuhide.github.io/drmr/ja/guide/"),
+                ("ja", "https://kazuhide.github.io/drmr/ja/guide/", "https://kazuhide.github.io/drmr/guide/")):
+            original = self.fixture()
+            if language == "ja":
+                original = original.replace('aria-label="Guide chapters"', 'aria-label="目次"')
+            references = (
+                canonical, canonical + '#', canonical + '#missing', canonical + '#%63li-reference',
+                canonical + '#CLI-reference', canonical + '?raw=1#cli-reference',
+                canonical + '?#cli-reference', other + '#cli-reference',
+                canonical.replace('https://', 'http://') + '#cli-reference',
+                canonical.replace('https://', 'https://user@') + '#cli-reference',
+                canonical.replace('https://', 'https://user:password@') + '#cli-reference',
+                canonical.replace('kazuhide.github.io', 'KAZUHIDE.github.io') + '#cli-reference',
+                canonical.replace('kazuhide.github.io', 'kazuhide.github.io:443') + '#cli-reference',
+                canonical.replace('kazuhide.github.io', 'example.com') + '#cli-reference',
+                canonical.replace('/drmr/', '/other/') + '#cli-reference',
+                canonical + 'index.html#cli-reference', canonical + './#cli-reference',
+                canonical.rstrip('/') + '#cli-reference',
+            )
+            for reference in references:
+                with self.subTest(language=language, reference=reference):
+                    value = original.replace('<h2 id="introduction-title">',
+                        '<a href="' + reference + '">Chapter details</a><h2 id="introduction-title">', 1)
+                    with self.assertRaisesRegex(CHECK.Failure, "site-guide-reference"):
+                        CHECK.validate_guide(value, language)
 
 
 if __name__ == "__main__":

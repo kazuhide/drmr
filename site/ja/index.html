@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="MP4・DASH・HLSの対応する暗号化方式間や、Clear（暗号化なし）との変換を行います。必要な鍵は利用者が用意し、映像・音声のデータと時刻を原本全体と照合してから出力を確定します。">
+  <meta name="description" content="MP4・DASH・HLSの暗号化方式を相互に変換するツールです。Clear（暗号化なし）の入出力にも対応しています。変換に必要な鍵は利用者が用意します。出力を確定する前に、映像・音声のデータと時刻を原本全体と照合します。">
   <meta name="color-scheme" content="light">
   <title>drmr — コンテンツ暗号化方式の相互変換</title>
   <link rel="canonical" href="https://kazuhide.github.io/drmr/ja/">
@@ -32,21 +32,21 @@
     <section class="hero" aria-labelledby="title">
       <div class="hero-copy">
         <h1 id="title">コンテンツ<wbr>暗号化方式の相互変換</h1>
-        <p class="lead">MP4・DASH・HLS の対応する暗号化方式間や、Clear（暗号化なし）との変換を行うコマンドラインツールです。必要な鍵は利用者が用意します。出力の確定前に、映像・音声のデータと時刻を原本全体と照合します。</p>
+        <p class="lead">MP4・DASH・HLS の暗号化方式を相互に変換するコマンドラインツールです。Clear（暗号化なし）の入出力にも対応しています。変換に必要な鍵は利用者が用意します。出力を確定する前に、映像・音声のデータと時刻を原本全体と照合します。</p>
         <div class="actions">
           <a class="button" href="#get-started">CLIから始める</a>
           <a class="text-link" href="https://github.com/kazuhide/drmr">ソースを見る（英語）</a>
         </div>
-        <p class="hero-note">Windows・macOS・Linux対応。ローカルWeb・Desktopは実験的な機能です。</p>
+        <p class="hero-note">Windows・macOS・Linux に対応しています。ローカル Web コンソールとデスクトップアプリは実験的な機能です。</p>
       </div>
     </section>
 
     <section id="support" class="section support" aria-labelledby="support-title">
       <div class="section-intro">
         <h2 id="support-title">入力と出力の対応表</h2>
-        <p id="matrix-guide">完結したローカルメディアが対象です。行が入力、列が出力で、セル内は選べる出力の暗号化方式です。</p>
+        <p id="matrix-guide">配信内容が確定したコンテンツをローカルに保存して変換します。行は入力、列は出力を表します。各セルには選択できる出力の暗号化方式を示しています。</p>
       </div>
-      <p id="matrix-scroll-hint" class="matrix-hint">横にスクロールできます。キーボードでは表に移動し、左右矢印キーで操作します。</p>
+      <p id="matrix-scroll-hint" class="matrix-hint">表は横にスクロールできます。キーボードで操作する場合は表にフォーカスを移し、左右の矢印キーを使ってください。</p>
       <div class="matrix-scroll" role="region" aria-label="変換対応表" aria-describedby="matrix-guide matrix-scroll-hint" tabindex="0">
         <table class="conversion-matrix" aria-describedby="matrix-limits matrix-definitions">
           <caption class="visually-hidden">対応する変換プロファイル</caption>
@@ -92,86 +92,87 @@
           </tbody>
         </table>
       </div>
-      <p class="matrix-scope">Clear は暗号化なし。「対象外」は現在の drmr の実装範囲を示し、形式の仕様として変換できないという意味ではありません。</p>
+      <p class="matrix-scope">Clear は暗号化されていない状態を指します。「対象外」は現在の drmr が対応していない組み合わせであり、形式の仕様上変換できないという意味ではありません。</p>
       <ol id="matrix-limits" class="matrix-limits">
-        <li>MP4 出力は1トラック、または次の条件を満たす同じ元ファイルの映像と音声です。DASH/HLS の別々の音声・映像を、1つの MP4 に結合する出力には対応していません。</li>
-        <li>MP4 には、音声の開始位置と再生時間を指定する再生情報（編集リスト）があります。エンコード時に生じる余分な音声を再生から除く場合などに使われます。同じ元ファイル内の AAC-LC 音声1本と、任意の H.264 映像1本を持つ対応範囲内のプログレッシブ MP4 は、Clear・<code>cenc</code>・<code>cbcs</code> 入力から表内の MP4・DASH・fMP4 HLS に変換する際も、その再生範囲を保ちます。複雑な編集や、入力の DRM 初期化情報は対象外です。暗号化情報の構造と検証条件の詳細は、対応範囲のドキュメントに記載しています。</li>
-        <li>TS 入力は、プログレッシブ H.264 映像と 48 kHz AAC-LC 音声の限定的な構成が対象です。音声のみの場合も DASH・fMP4 HLS・TS を出力できます。映像と音声がある TS 出力は、別々のプレイリストになります。</li>
+        <li>MP4 出力は 1 トラックのみの構成か、次項の条件を満たす同一ファイル内の映像・音声の組み合わせに対応しています。DASH/HLS で別々に配信される音声と映像を 1 つの MP4 に結合する出力には対応していません。</li>
+        <li>MP4 の編集リストは音声の開始位置と再生時間を指定する情報で、エンコード時に生じる余分な音声を再生から除く場合などに使われます。対応条件を満たすプログレッシブ MP4 では、同一ファイル内の AAC-LC 音声 1 本、またはそれに H.264 映像 1 本を組み合わせた構成で編集リストを保持します。Clear・<code>cenc</code>・<code>cbcs</code> の各入力から表内の MP4・DASH・fMP4 HLS に変換する際も再生範囲を保ちます。複雑な編集や入力の DRM 初期化情報は対象外です。暗号化情報の構造と検証条件の詳細は、対応範囲のドキュメントに記載しています。</li>
+        <li>TS 入力はプログレッシブ H.264 映像と 48 kHz AAC-LC 音声を使った限定的な構成が対象です。音声のみの入力からも DASH・fMP4 HLS・TS を出力できます。映像と音声を TS で出力する場合は、それぞれ別のプレイリストになります。</li>
       </ol>
       <div id="matrix-definitions" class="support-detail">
-        <p>MP4 はメディアを格納する形式です。DASH（Dynamic Adaptive Streaming over HTTP）と HLS（HTTP Live Streaming）は、メディアの区間をマニフェストやプレイリストで記述します。fMP4 はフラグメント化 MP4、MPEG-TS はトランスポートストリームです。</p>
-        <p><code>cenc</code> はカウンターモードによるサンプル暗号化、<code>cbcs</code> は CBC（暗号ブロック連鎖）によるパターン暗号化です。<code>AES-128</code> は HLS リソース全体を、<code>SAMPLE-AES</code> は TS 内の指定部分を暗号化します。DRMライセンスの取得や端末での再生可否は、別途確認が必要です。</p>
+        <p>MP4 は映像や音声を格納する形式です。DASH（Dynamic Adaptive Streaming over HTTP）と HLS（HTTP Live Streaming）では、コンテンツを区間に分け、その構成をマニフェストやプレイリストに記述します。fMP4 はフラグメント化 MP4、MPEG-TS はトランスポートストリームです。</p>
+        <p><code>cenc</code> はカウンターモードによるサンプル暗号化、<code>cbcs</code> は CBC（暗号ブロック連鎖）によるパターン暗号化です。<code>AES-128</code> は HLS リソース全体を、<code>SAMPLE-AES</code> は TS 内の指定部分を暗号化します。DRM ライセンスの取得や端末での再生可否は別途確認が必要です。</p>
         <a class="text-link" href="https://github.com/kazuhide/drmr/blob/main/docs/conversion-support.md">対応範囲と制約を読む（英語）</a>
       </div>
       <aside class="url-note" aria-labelledby="url-title">
-        <h3 id="url-title">HLSのURLから始める場合</h3>
-        <p>URLから、完了済みHLSの対応するTS／fMP4プロファイルを取得できます。暗号化入力には<code>--keys-file</code>で入力鍵を渡し、<code>--download-dir</code>に原本を保持して、オフラインの変換や独立した検証に使います。鍵URIやライセンスの取得は行いません。対応する暗号方式は<a href="guide/">日本語ガイド</a>に記載しています。リモートMP4／DASH、ライブ、バイト範囲指定は、現在の取得プロファイルの対象外です。</p>
-        <a href="https://github.com/kazuhide/drmr/blob/main/docs/usage.md#convert-a-url">URLから変換し、原本を残す（英語）</a>
+        <h3 id="url-title">HLS の URL を入力に使う場合</h3>
+        <p>配信内容が確定した HLS を URL から取得できます。TS と fMP4 の対応条件は<a href="guide/">日本語ガイド</a>に記載しています。入力が暗号化されている場合は <code>--keys-file</code> で入力鍵を指定します。原本は <code>--download-dir</code> に保存され、取得後はオフラインでの変換や再検証に使えます。鍵 URI の参照先やライセンスは取得しません。リモートの MP4・DASH、ライブ配信、バイト範囲指定を使った取得は現在の対応範囲に含まれません。</p>
+        <a href="https://github.com/kazuhide/drmr/blob/main/docs/usage.md#convert-a-url">HLS の取得・変換手順（英語）</a>
       </aside>
     </section>
 
     <section id="workflow" class="section" aria-labelledby="workflow-title">
       <div class="section-intro">
         <h2 id="workflow-title">解析・計画・変換・検証</h2>
-        <p>URLの入力を取得・解析し、変換条件を保存します。保存した原本を使って変換し、現在の出力を原本と照合します。</p>
+        <p>URL から取得したデータを解析し、変換条件を計画ファイルに保存します。そのファイルを使って変換を実行し、保存した原本と変換結果を照合します。</p>
       </div>
       <ol class="workflow">
         <li>
-          <div class="step-title"><span aria-hidden="true">1</span><h3>解析する</h3></div>
-          <p>配信が完了したClear HLSを取得し、対応する全トラックのメディアを確認します。</p>
+          <div class="step-title"><span aria-hidden="true">1</span><h3>入力の解析</h3></div>
+          <p>配信内容が確定した Clear HLS を取得し、対応するすべてのトラックの映像・音声データを確認します。</p>
           <pre role="group" tabindex="0" aria-label="入力を解析するコマンド"><code>drmr analyze \
   "https://example.com/vod/master.m3u8" \
   --download-dir source --json</code></pre>
         </li>
         <li>
-          <div class="step-title"><span aria-hidden="true">2</span><h3>計画する</h3></div>
-          <p>原本のハッシュ、出力形式、暗号化方式、新しい出力先をplanに保存します。</p>
+          <div class="step-title"><span aria-hidden="true">2</span><h3>変換条件の保存</h3></div>
+          <p>原本のハッシュ値と変換条件を計画ファイル（plan）に保存します。変換条件には出力形式・暗号化方式・新しい出力先を含みます。</p>
           <pre role="group" tabindex="0" aria-label="変換を計画するコマンド"><code>drmr plan source/input.m3u8 \
   --to cbcs --format dash \
   --output converted \
   --save conversion.plan.json</code></pre>
         </li>
         <li>
-          <div class="step-title"><span aria-hidden="true">3</span><h3>変換する</h3></div>
-          <p>鍵を別途渡してplanを実行します。原本のデータが変わっている場合は停止します。</p>
+          <div class="step-title"><span aria-hidden="true">3</span><h3>変換の実行</h3></div>
+          <p>計画ファイルに従って変換を実行します。鍵はこの段階で別途指定します。計画の保存後に原本のデータが変わっている場合は処理を停止します。</p>
           <pre role="group" tabindex="0" aria-label="変換するコマンド"><code>drmr convert \
   --plan conversion.plan.json \
   --keys-file keys.json</code></pre>
         </li>
         <li>
-          <div class="step-title"><span aria-hidden="true">4</span><h3>比較して検証する</h3></div>
-          <p>実際の出力形式・暗号化方式に加え、全体のメディアデータと時刻を原本と照合します。</p>
+          <div class="step-title"><span aria-hidden="true">4</span><h3>変換結果の検証</h3></div>
+          <p>出力の形式・暗号化方式を確認し、映像・音声の全データと時刻を原本と照合します。</p>
           <pre role="group" tabindex="0" aria-label="原本と比較するコマンド"><code>drmr verify \
   --plan conversion.plan.json \
   --keys-file keys.json --json</code></pre>
         </li>
       </ol>
-      <p class="section-note">この例は、対応するClear HLSからCBCS DASHへの変換です。<a href="guide/">日本語ガイド</a>で手順を確認し、<a href="https://github.com/kazuhide/drmr/blob/main/docs/usage.md#separate-input-and-output-keys">所有者だけが読める鍵設定ファイルを用意してください（英語）</a>。ClearからClearへの変換では<code>--to clear</code>を指定し、鍵ファイルを省略できます。<code>inspect</code>はメタデータだけを素早く調べるコマンドとして引き続き使えます。</p>
-      <p class="section-note">対応する非暗号化HLSのTS入力から、FairPlay向けHLSとWidevine／PlayReady向けDASHをまとめて作る場合は、<code>plan --outputs outputs.json</code>を使います。<a href="guide/#inspect-plan">日本語ガイド</a>では、出力ごとの形式・鍵・検査条件と、すべての検査後に結果を確定する手順を説明しています。最終マニフェストはRustの内蔵検査で確認します。<code>verify OUTPUT --manifest-only</code>は保存済みの出力に対する内蔵検査です。<code>--external-validator</code>を追加すると、形式に応じてAppleまたはDASH-IFのツールでも検査します。マニフェストの検査結果は、原本全体とのメディア比較とは分けて表示します。</p>
+      <p class="section-note">この例では、対応範囲内の Clear HLS を CBCS DASH に変換します。<a href="guide/">日本語ガイド</a>で手順を確認し、<a href="https://github.com/kazuhide/drmr/blob/main/docs/usage.md#separate-input-and-output-keys">所有者だけが読める鍵の設定ファイルを用意してください（英語）</a>。Clear から Clear への変換では <code>--to clear</code> を指定し、鍵ファイルを省略できます。メタデータだけを調べる場合は <code>inspect</code> を使います。</p>
+      <p class="section-note">対応範囲内の非暗号化 HLS（TS）から FairPlay 向け HLS と Widevine／PlayReady 向け DASH をまとめて作るには、<code>plan --outputs outputs.json</code> を使います。<a href="guide/#inspect-plan">日本語ガイド</a>では出力ごとの形式・鍵・検査条件の指定方法を説明しています。結果はすべての検査に通った後で確定します。</p>
+      <p class="section-note">最終マニフェストは内蔵の検査機能（Linter）で確認します。保存済みの出力も <code>verify OUTPUT --manifest-only</code> で検査できます。<code>--external-validator</code> を追加すると、形式に応じて Apple または DASH-IF のツールでも検査します。マニフェストの検査結果と原本全体とのメディア比較結果は分けて表示します。</p>
     </section>
 
     <section id="verification" class="section" aria-labelledby="verification-title">
       <div class="section-intro">
-        <h2 id="verification-title">原本と比べる4つの確認</h2>
-        <p>実際のメディアについて、ストリームの設定情報、エンコード済みパケット、時刻、デコード結果の4項目を原本と比較します。</p>
+        <h2 id="verification-title">原本との比較項目</h2>
+        <p>ストリームの設定情報、エンコード済みパケットの内容、時刻、デコード結果の 4 項目で原本と変換結果を比較します。</p>
       </div>
       <dl class="evidence-list">
         <div><dt>ストリームの設定情報</dt><dd>コーデック、トラック構成、対応範囲内の再生設定を比較します。</dd></div>
         <div><dt>エンコード済みパケットの内容</dt><dd>配信形式や暗号化方式による差を処理したうえで、パケット内のエンコード済み映像・音声データを比較します。</dd></div>
-        <div><dt>各パケットの時刻</dt><dd>各パケットの絶対的な表示時刻・デコード時刻・継続時間を、許容誤差を設けずに比較します。</dd></div>
+        <div><dt>各パケットの時刻</dt><dd>各パケットの絶対的な表示時刻・デコード時刻・継続時間を許容誤差なしで比較します。</dd></div>
         <div><dt>全体をデコードした映像・音声</dt><dd>対象のメディアを最初から最後までデコードし、得られた映像と音声を比較します。</dd></div>
       </dl>
       <div class="verification-boundary">
         <h3>メディアの検証で分かる範囲</h3>
-        <p>メディアの検証は、用意した鍵で内容と時刻を確認するものです。DRM（デジタル著作権管理）ライセンスの取得や端末での再生は、別途テストが必要です。</p>
+        <p>メディアの検証では利用者が用意した鍵で内容と時刻を確認します。DRM（デジタル著作権管理）ライセンスの取得や端末での再生は別途テストが必要です。</p>
         <p><a href="https://github.com/kazuhide/drmr/blob/main/docs/media-processing.md">処理と検証の仕組みを読む（英語）</a></p>
       </div>
     </section>
 
     <section id="get-started" class="section getting-started" aria-labelledby="start-title">
       <div class="section-intro">
-        <h2 id="start-title">CLIから始める</h2>
-        <p>Rust 1.95以降を使ってソースからビルドします。WindowsもネイティブCLIに対応しています。PowerShell・パス・保護ファイルの扱いはWindowsガイドを参照してください。</p>
+        <h2 id="start-title">CLI のインストール</h2>
+        <p>Rust 1.95 以降を使ってソースからビルドします。Windows でも CLI を直接実行できます。PowerShell の使い方、パスや保護されたファイルの扱いは Windows ガイドを参照してください。</p>
       </div>
       <div class="install-layout">
         <div class="install-commands">
@@ -179,7 +180,7 @@
           <pre role="group" tabindex="0" aria-label="CLIのビルドとツール確認"><code>cargo install --path crates/drmr --locked
 drmr --version
 drmr doctor --probe --route progressive-mp4</code></pre>
-          <p class="section-note">probeはツールのバージョンと対応オプションを確認します。メディア自体を検証するものではありません。</p>
+          <p class="section-note"><code>doctor --probe</code> は外部ツールのバージョンと対応オプションを確認します。メディア自体の検証は行いません。</p>
           <a href="https://github.com/kazuhide/drmr#install">ソースからのインストール手順（英語）</a>
         </div>
         <div class="requirements">
@@ -194,8 +195,8 @@ drmr doctor --probe --route progressive-mp4</code></pre>
         </div>
       </div>
       <div class="other-interfaces">
-        <div><h3>Docker</h3><p>CLIとメディア処理ツールをコンテナで使えます。自分のメディアと保護された設定ファイルをマウントする手順は、ガイドを参照してください。</p><a href="https://github.com/kazuhide/drmr/blob/main/docs/docker.md">Dockerガイド（英語）</a></div>
-        <div><h3>実験的なローカルインターフェース</h3><p>WebコンソールとオプションのDesktopアプリは、汎用CLIより対応する操作が限られます。GUIや再生の動作確認には別の制約があります。</p><a href="https://github.com/kazuhide/drmr/blob/main/docs/desktop.md">Desktopの対応範囲と制約（英語）</a></div>
+        <div><h3>Docker</h3><p>CLI とメディア処理ツールをコンテナで使えます。利用するコンテンツと保護された設定ファイルをマウントする手順はガイドを参照してください。</p><a href="https://github.com/kazuhide/drmr/blob/main/docs/docker.md">Docker ガイド（英語）</a></div>
+        <div><h3>Web コンソール・デスクトップアプリ</h3><p>ローカルで利用する実験的な画面です。CLI に比べて実行できる操作が限られます。画面や再生機能の動作確認にも制約があります。</p><a href="https://github.com/kazuhide/drmr/blob/main/docs/desktop.md">デスクトップアプリの対応範囲と制約（英語）</a></div>
       </div>
     </section>
   </main>
@@ -204,12 +205,12 @@ drmr doctor --probe --route progressive-mp4</code></pre>
     <nav aria-label="ドキュメントとソース">
       <a href="https://github.com/kazuhide/drmr/blob/main/docs/usage.md">使い方（英語）</a>
       <a href="https://github.com/kazuhide/drmr/blob/main/docs/conversion-support.md">対応範囲（英語）</a>
-      <a href="https://github.com/kazuhide/drmr/blob/main/docs/resources.md">実行資源の管理（英語）</a>
+      <a href="https://github.com/kazuhide/drmr/blob/main/docs/resources.md">CPU・メモリの管理（英語）</a>
       <a href="https://github.com/kazuhide/drmr">GitHubのソース（英語）</a>
       <a href="https://github.com/kazuhide/drmr/blob/main/LICENSE">MITライセンス（英語）</a>
       <a href="../assets/fonts/LICENSE-ibm-plex.txt">フォントライセンス（英語）</a>
     </nav>
-    <p>プロジェクトを紹介する静的なページです。このページからメディア・鍵・変換ジョブを送信することはありません。</p>
+    <p>このサイトはプロジェクトの紹介ページです。コンテンツや鍵のアップロード、変換処理の実行は行いません。</p>
   </footer>
 </body>
 </html>

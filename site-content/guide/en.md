@@ -657,6 +657,13 @@ Do not reuse an existing download directory for a new acquisition. Partial faile
 
 Default policy is HTTPS with same-origin references and bounded acquisition. `analyze URL` and direct `convert URL` both accept `--fetch-policy`. Explicit origin/private-network/HTTP access requires the supported private policy configuration; it is not enabled by weakening Host or Origin checks.
 
+`--fetch-policy FILE` reads an owner-only UTF-8 JSON object saved as, for example, `config/fetch.json`. It contains the policy fields directly, without a `schema_version` field; the input URL stays on the command line. The file is optional, and its fields are optional: omit `headers_by_origin` when authentication is not needed. The example fields mean:
+
+- `allowed_origins`: an array of additional exact origins (scheme, host and port), without a path. The input URL's own origin is already allowed.
+- `headers_by_origin`: an object mapping an allowed origin to its request-header object, such as `Authorization`. This field does not itself grant access to another origin.
+- `max_total_bytes`: the total acquisition byte budget; `1073741824` is 1 GiB.
+- `connections`: the fetch concurrency upper bound; worker and CPU/memory admission can reduce actual concurrency.
+
 ```json
 {
   "allowed_origins": ["https://media.example.com"],
@@ -668,7 +675,15 @@ Default policy is HTTPS with same-origin references and bounded acquisition. `an
 }
 ```
 
-Protect this JSON file before use:
+Prepare a protected configuration directory as described in chapter 5 and save the JSON as `config/fetch.json`. Replace the token placeholder with your own token if authentication is needed. For macOS/Linux, set owner-only file permissions before analyzing the URL; use the current-user-only ACL procedure in chapter 14 on Windows.
+
+```sh
+chmod 600 config/fetch.json
+drmr analyze "https://example.com/vod/master.m3u8" \
+  --download-dir analyzed-source --fetch-policy config/fetch.json --json
+```
+
+The same file can be used for direct conversion:
 
 ```sh
 drmr convert "https://example.com/vod/master.m3u8" \
@@ -910,6 +925,8 @@ drmr batch --work-list work-list.jsonl --output output \
 ```
 
 Keep the key file outside output. HLS configuration can come from `--hls-config-dir`. `--retry-failed` selects failed items; default `--max-attempts` is 3. `--per-asset-timeout-s` defaults to 3600 and `--heartbeat-s` to 60. Resumption is not rollback: inspect existing output and logs first.
+
+For `hls-clear`, `--hls-config-dir DIR` contains an owner-only `ASSET_ID.json` object with `source_config` and `drm_config` paths and optional `selection`; those referenced files use the [saved HLS JSON formats in chapter 10](https://kazuhide.github.io/drmr/guide/#saved-hls). Relative references resolve from that configuration directory. `--packager-bin` is passed to `run` for `dash-cenc`, which accepts an executable or its directory, and to `package-hls` for `hls-clear`, which requires the executable. Use an executable path for mixed or HLS batches.
 
 S3 storage is implemented with current supported region `ap-northeast-1`. It uses AWS environment/default-profile credentials. `--bucket`, `--region` and `--output-prefix` configure storage. Native local-media CI results do not qualify a real S3 account.
 
@@ -1423,6 +1440,22 @@ See [fixture attribution](https://github.com/kazuhide/drmr/blob/main/crates/drmr
 
 All public commands accept `-h` / `--help`; `drmr help COMMAND` also displays help. Use top-level `-V` / `--version` or `drmr version`. Private supervision bootstrap arguments are not a user interface.
 
+## File and path values
+
+`FILE` is a local filename supplied after the option, not inline JSON. `PATH` can name a file or directory as the row specifies. Relative option paths are resolved from the directory where you run the command. `NEW_FILE`, `NEW_PATH` and `NEW_DIR` name destinations that must be new; the workflow determines when they are written. Replace these placeholders with your paths; a `.json` extension does not make different configuration schemas interchangeable.
+
+For example, `--fetch-policy config/fetch.json` reads the [Fetch policy JSON in chapter 8](https://kazuhide.github.io/drmr/guide/#url-input). `--keys-file config/keys.json` reads the [private key JSON examples in chapter 5](https://kazuhide.github.io/drmr/guide/#key-configuration): version 1 uses `input` and one `output`, while version 2 shares `input` and names each result under `outputs`. `analyze` validates either schema and uses only its source keys. `--outputs` and version-2 saved plans require version-2 key JSON even when the output list has one entry; the older single-result mode uses version 1.
+
+For common commands, `--packager-bin "./tools/packager"` selects one installed executable. A Windows example is `--packager-bin "C:\Media Tools\packager.exe"`. Quote paths containing spaces and supply only the program name/path, without a shell command or appended arguments. The default `packager` is found on the launch environment's PATH; CLI archives and Desktop bundles do not include it. See [Media tools in chapter 4](https://kazuhide.github.io/drmr/guide/#installation). The prepared-DASH `run` workflow also accepts a containing directory; the legacy tables below distinguish that case.
+
+For example, prepare the version-1 output key configuration from chapter 5 and select the installed executable for a conversion. Replace the input, new output, configuration and executable paths with the ones in your environment:
+
+```sh
+drmr convert original.mp4 --to cbcs --format mp4 \
+  --output protected.mp4 --keys-file config/keys.json \
+  --packager-bin "/opt/media-tools/packager"
+```
+
 ## doctor
 
 | Option | Meaning/default |
@@ -1445,10 +1478,10 @@ PROFILE is `all`, `prepared-dash`, `progressive-mp4`, `fragmented-mp4`, `dash-pr
 | Argument/option | Meaning |
 | --- | --- |
 | `INPUT` | Complete local MP4, DASH or HLS; supported completed HLS URL within the acquisition profile |
-| `--download-dir NEW_DIR` | Required for a URL; retain the original privately |
-| `--fetch-policy FILE` | Private origin/header/resource policy for URL input |
-| `--keys-file FILE` | Protected input keys when source checks require decryption |
-| `--packager-bin FILE` | Shaka executable; default packager |
+| `--download-dir NEW_DIR` | Required new directory for URL input; retain the original privately; [acquisition example](https://kazuhide.github.io/drmr/guide/#url-input) |
+| `--fetch-policy FILE` | Owner-only fetch policy JSON, e.g. config/fetch.json; [origin/header/limit fields and example](https://kazuhide.github.io/drmr/guide/#url-input) |
+| `--keys-file FILE` | Owner-only version-1 or version-2 JSON input keys when source checks need decryption; [input key fields and examples](https://kazuhide.github.io/drmr/guide/#key-configuration) |
+| `--packager-bin FILE` | Shaka Packager executable name/path; default packager on PATH; [installation and discovery](https://kazuhide.github.io/drmr/guide/#installation) |
 | `--max-workers N` | Upper bound 1-64; otherwise automatic CPU/memory choice |
 | `--json` | One input-analysis report; input_admitted does not verify a converted output |
 | `--measure` | Add numeric measurements; requires --json |
@@ -1462,15 +1495,15 @@ Local input refuses download/fetch options. URL analysis always requires a new d
 | `INPUT` | Local input for generic conversion intent |
 | `--to TARGET` | Required for INPUT without --outputs: clear, cenc, cbcs, hls-aes128, hls-sample-aes |
 | `--format FORMAT` | mp4, dash, hls, hls-ts; alternatives without --save, one resolved format in a single-output plan; omitted follows MP4/DASH/HLS, with HLS meaning fMP4; conflicts with --outputs |
-| `--outputs FILE` | Schema-version-1 output recipe; requires --save and replaces --to/--format; produces a version-2 execution plan |
+| `--outputs FILE` | Schema-version-1 output recipe JSON, e.g. outputs.json; requires --save and replaces --to/--format; produces a version-2 execution plan; [output recipe example](https://kazuhide.github.io/drmr/guide/#inspect-plan) |
 | `--json` | Versioned plan without execution |
-| `--save NEW_FILE` | Validate the source and save a plan; requires INPUT, --output and either --to or --outputs |
-| `--output NEW_PATH` | Result destination fixed by --save; refused without --save |
-| `--keys-file FILE` | Source-check keys; version 1 for one output, version 2 with --outputs; only with --save |
-| `--packager-bin FILE` | Shaka executable for source checks; only with --save, default packager |
+| `--save NEW_FILE` | New execution-plan JSON written by drmr, e.g. conversion.plan.json; requires INPUT, --output and either --to or --outputs; [saving and reusing a plan](https://kazuhide.github.io/drmr/guide/#inspect-plan) |
+| `--output NEW_PATH` | New result file/directory fixed by --save; refused without --save; [plan destinations](https://kazuhide.github.io/drmr/guide/#inspect-plan) |
+| `--keys-file FILE` | Owner-only source-check key JSON; version 2 with --outputs, otherwise version 1; only with --save; [key fields and examples](https://kazuhide.github.io/drmr/guide/#key-configuration) |
+| `--packager-bin FILE` | Shaka Packager executable name/path for source checks; only with --save, default packager; [tool installation](https://kazuhide.github.io/drmr/guide/#installation) |
 | `--max-workers N` | Upper bound 1-64 for source checks; only with --save |
 | `--measure` | Add measurements to stdout; requires --json and --save; saved file stays an execution plan |
-| `--mpd MPD` | Separate prepared-DASH rendition-listing mode |
+| `--mpd MPD` | Local MPD file for the separate prepared-DASH rendition-listing mode; [prepared layout and example](https://kazuhide.github.io/drmr/guide/#prepared-dash-batch) |
 | `--asset-id ID` | Asset name in MPD mode |
 
 ## convert
@@ -1480,15 +1513,15 @@ Local input refuses download/fetch options. URL analysis always requires a new d
 | `INPUT` | Supported local original or completed HLS URL; encrypted input requires source keys; omitted with --plan |
 | `--to TARGET` | Required output protection without --plan or --outputs |
 | `--format FORMAT` | One output format; HLS defaults to fMP4 even for TS input |
-| `--outputs FILE` | Explicit output recipe; all listed results use one new result root; conflicts with --to/--format/--plan |
-| `--output NEW_PATH` | Required new file/directory without --plan |
-| `--plan FILE` | Execute a version-1 or version-2 plan; refuse source/output-intent overrides |
-| `--keys-file FILE` | Private version-1 single-output or version-2 per-output key configuration |
-| `--download-dir NEW_DIR` | Mandatory for URL input; retained original |
-| `--fetch-policy FILE` | Private URL-origin/header/resource policy JSON |
-| `--packager-bin FILE` | Shaka executable; default packager |
-| `--hls-validator-bin FILE` | Apple executable for requested HLS manifest checks; default mediastreamvalidator |
-| `--dash-validator-bin FILE` | PHP interpreter for the local DASH-IF manifest adapter; default php |
+| `--outputs FILE` | Schema-version-1 output recipe JSON; all listed results use one new result root; conflicts with --to/--format/--plan; [output recipe example](https://kazuhide.github.io/drmr/guide/#inspect-plan) |
+| `--output NEW_PATH` | Required new result file/directory without --plan; [destination rules and examples](https://kazuhide.github.io/drmr/guide/#local-conversion) |
+| `--plan FILE` | Execution-plan JSON generated by plan --save, version 1 or 2; refuse source/output-intent overrides; [saved-plan workflow](https://kazuhide.github.io/drmr/guide/#inspect-plan) |
+| `--keys-file FILE` | Owner-only key JSON; version 2 with --outputs or a version-2 plan, otherwise version 1; [complete key JSON examples](https://kazuhide.github.io/drmr/guide/#key-configuration) |
+| `--download-dir NEW_DIR` | Mandatory new directory for URL input; retained original; [acquisition example](https://kazuhide.github.io/drmr/guide/#url-input) |
+| `--fetch-policy FILE` | Owner-only URL fetch policy JSON, e.g. config/fetch.json; [origin/header/limit fields and example](https://kazuhide.github.io/drmr/guide/#url-input) |
+| `--packager-bin FILE` | Shaka Packager executable name/path; default packager on PATH; [installation and discovery](https://kazuhide.github.io/drmr/guide/#installation) |
+| `--hls-validator-bin FILE` | Apple executable name/path for requested HLS manifest checks; default mediastreamvalidator; [external validator setup](https://kazuhide.github.io/drmr/guide/#verification) |
+| `--dash-validator-bin FILE` | PHP executable name/path for the local DASH-IF manifest adapter; default php; [external validator setup](https://kazuhide.github.io/drmr/guide/#verification) |
 | `--max-workers N` | Upper bound 1-64; otherwise automatic CPU/memory choice |
 | `--json` | One versioned result; suppress ordinary progress lines |
 | `--measure` | Add measurement fields; requires --json |
@@ -1502,15 +1535,15 @@ There are no generic `ffmpeg-bin` or `ffprobe-bin` options. Those tools are foun
 | Argument/option | Meaning |
 | --- | --- |
 | `OUTPUT` | Candidate MP4, MPD or M3U8; omitted with --plan |
-| `--source INPUT` | Required original without --plan or --manifest-only; never inferred from the result |
-| `--plan FILE` | Check recorded source, output format/protection and independent media correspondence; conflicts with OUTPUT and --source |
+| `--source INPUT` | Required original media/manifest file without --plan or --manifest-only; never inferred from the result; [complete comparisons](https://kazuhide.github.io/drmr/guide/#verification) |
+| `--plan FILE` | Generated execution-plan JSON, version 1 or 2; check recorded source, output format/protection and independent media correspondence; conflicts with OUTPUT and --source; [saved-plan workflow](https://kazuhide.github.io/drmr/guide/#inspect-plan) |
 | `--manifest-only` | Native HLS/DASH manifest linting with media_verified false; conflicts with --plan/--source/--keys-file |
 | `--external-validator` | Add Apple/DASH-IF checks; requires --manifest-only |
 | `--manifest-profile PROFILE` | Native manifest profile; requires --manifest-only. Default base; apple-vod accepts HLS only |
-| `--keys-file FILE` | Original/result keys; version 2 for a multi-output plan, otherwise version 1 |
-| `--packager-bin FILE` | Shaka executable; default packager |
-| `--hls-validator-bin FILE` | Apple executable; default mediastreamvalidator |
-| `--dash-validator-bin FILE` | PHP interpreter for the local DASH-IF adapter; default php |
+| `--keys-file FILE` | Owner-only original/result key JSON; version 2 for a version-2 plan, otherwise version 1; [input/output key roles and examples](https://kazuhide.github.io/drmr/guide/#key-configuration) |
+| `--packager-bin FILE` | Shaka Packager executable name/path; default packager on PATH; [installation and discovery](https://kazuhide.github.io/drmr/guide/#installation) |
+| `--hls-validator-bin FILE` | Apple executable name/path; default mediastreamvalidator; [external validator setup](https://kazuhide.github.io/drmr/guide/#verification) |
+| `--dash-validator-bin FILE` | PHP executable name/path for the local DASH-IF adapter; default php; [external validator setup](https://kazuhide.github.io/drmr/guide/#verification) |
 | `--max-workers N` | Upper bound 1-64; admission may reduce it |
 | `--json` | One independent verification report |
 | `--measure` | Add measurements; requires --json |
@@ -1523,11 +1556,11 @@ Version-1 plan verification adds plan_id, source_unchanged and output_matches_pl
 
 | Option | Meaning/default |
 | --- | --- |
-| `--mpd MPD` | Required supported prepared manifest |
+| `--mpd MPD` | Required local prepared DASH MPD file; [Prepared input layout](https://kazuhide.github.io/drmr/guide/#prepared-dash-batch) |
 | `--output ROOT` | Required; results under ROOT/asset-id |
 | `--asset-id ID` | Asset name, otherwise original directory name |
-| `--hls-master M3U8` | Original HLS master; needed unless --no-manifests |
-| `--packager-bin PATH` | Executable or its containing directory |
+| `--hls-master M3U8` | Local original HLS master playlist file; needed unless --no-manifests; [prepared layout example](https://kazuhide.github.io/drmr/guide/#prepared-dash-batch) |
+| `--packager-bin PATH` | Executable named packager (packager.exe on Windows), or its containing directory; [prepared-DASH tool override](https://kazuhide.github.io/drmr/guide/#prepared-dash-batch) |
 | `--max-workers N` | Rendition parallelism upper bound |
 | `--manifest-local-url-base URL` | Also generate manifests for local HTTP serving |
 | `--log-format FORMAT` | text or jsonl; default text |
@@ -1539,16 +1572,16 @@ Version-1 plan verification adds plan_id, source_unchanged and output_matches_pl
 
 | analyze-hls option | Meaning |
 | --- | --- |
-| `--source-config FILE` | Required private source URL/path and permission configuration |
+| `--source-config FILE` | Required owner-only JSON with url and nested policy; [Capture a local source example](https://kazuhide.github.io/drmr/guide/#saved-hls) |
 | `--asset-id ID` | Required saved asset name |
 | `--output ROOT` | Required; save under ROOT/ID/clear/source |
 
 | package-hls option | Meaning |
 | --- | --- |
-| `--analysis FILE` | Required completed analysis.json |
-| `--drm-config FILE` | Required private signaling configuration |
-| `--selection FILE` | Private analyzed audio selection |
-| `--packager-bin FILE` | Shaka executable, default packager |
+| `--analysis FILE` | Required analysis.json generated by a completed analyze-hls; [snapshot capture and packaging](https://kazuhide.github.io/drmr/guide/#saved-hls) |
+| `--drm-config FILE` | Required owner-only signaling JSON; fields include widevine_pssh, playready_la_url and fairplay_uri; [Package with signaling example](https://kazuhide.github.io/drmr/guide/#saved-hls) |
+| `--selection FILE` | Owner-only JSON with analyzed audio_source_id and optional analysis_id/snapshot_digest bindings; [audio selection details](https://github.com/kazuhide/drmr/blob/main/docs/usage.md#package-the-hls-snapshot) |
+| `--packager-bin FILE` | Shaka Packager executable name/path, default packager on PATH; [tool installation](https://kazuhide.github.io/drmr/guide/#installation) |
 | `--max-workers N` | Shared track/segment bound 1-64 |
 
 Content keys for these workflows are `DRM_KID`/`DRM_KEY`/`DRM_IV`. Passing generic key JSON as drm-config is not supported.
@@ -1557,27 +1590,27 @@ Content keys for these workflows are `DRM_KID`/`DRM_KEY`/`DRM_IV`. Passing gener
 
 | Command/argument | Meaning |
 | --- | --- |
-| `verify-snapshot PATH` | Check recorded digest for snapshot directory or analysis.json |
-| `verify-snapshot --files PATH` | Also rehash saved playlists/media |
-| `canonical PATH` | Stable JSON output; no final LF or secret removal |
+| `verify-snapshot PATH` | Check recorded digest for the generated snapshot directory or analysis.json; [snapshot example](https://kazuhide.github.io/drmr/guide/#saved-hls) |
+| `verify-snapshot --files PATH` | Also rehash saved playlists/media in that snapshot; [snapshot example](https://kazuhide.github.io/drmr/guide/#saved-hls) |
+| `canonical PATH` | Read a JSON file and print stable JSON; no final LF or secret removal; [JSONL construction example](https://kazuhide.github.io/drmr/guide/#prepared-dash-batch) |
 | `version` | Print version; no command-specific options |
 
 ## batch
 
 | Option | Meaning/default |
 | --- | --- |
-| `--work-list FILE` | Required schema header and asset JSONL |
+| `--work-list FILE` | Required JSONL with a schema header and one asset per line; [Work-list JSON Lines example](https://kazuhide.github.io/drmr/guide/#prepared-dash-batch) |
 | `--output ROOT` | Required output root |
-| `--resume-log FILE` | Required attempt-state record |
+| `--resume-log FILE` | Required JSONL attempt-state log written/reused by batch, e.g. resume.jsonl; [Keys and resumption](https://kazuhide.github.io/drmr/guide/#prepared-dash-batch) |
 | `--storage STORAGE` | local or s3; default local |
 | `--storage-root DIR` | Local object-key root |
 | `--bucket NAME` | S3 bucket |
 | `--region REGION` | Default and currently supported S3 region ap-northeast-1 |
 | `--output-prefix PREFIX` | Storage result prefix, default output |
 | `--key-provider PROVIDER` | env or file; default env |
-| `--key-file FILE` | Private per-asset JSONL for file provider |
-| `--hls-config-dir DIR` | HLS workflow configurations |
-| `--packager-bin PATH` | Packager location |
+| `--key-file FILE` | Owner-only per-asset JSONL with asset_id/kid/key/iv, no schema header; file provider only; [Keys and resumption example](https://kazuhide.github.io/drmr/guide/#prepared-dash-batch) |
+| `--hls-config-dir DIR` | Directory of per-asset HLS JSON configuration references; [HLS batch configuration](https://kazuhide.github.io/drmr/guide/#prepared-dash-batch) |
+| `--packager-bin PATH` | Packager executable path; prepared-DASH batches also accept its directory; [workflow-specific override](https://kazuhide.github.io/drmr/guide/#prepared-dash-batch) |
 | `--max-workers N` | Per-asset processing bound; assets remain serial |
 | `--retry-failed` | Select failed attempts |
 | `--plan` | Show intended work without executing |
@@ -1589,14 +1622,14 @@ Content keys for these workflows are `DRM_KID`/`DRM_KEY`/`DRM_IV`. Passing gener
 
 | Option/environment | Meaning/default |
 | --- | --- |
-| `--static-dir DIR` | Trusted UI directory replacing embedded assets |
-| `--cli FILE` | Same-version CLI for jobs |
+| `--static-dir DIR` | Trusted directory of UI files replacing embedded assets; [local console setup](https://kazuhide.github.io/drmr/guide/#web-console) |
+| `--cli FILE` | Same-version drmr executable file for jobs (drmr.exe on Windows); [console CLI selection](https://kazuhide.github.io/drmr/guide/#web-console) |
 | `DRMR_CATALOG_ROOT` | Required prepared catalog root |
 | `DRMR_OUTPUT_ROOT` | Required results/saved-HLS/log root |
 | `DRMR_BIND_HOST` | Default loopback; remote exposure is not intended |
 | `DRMR_BIND_PORT` | Default 8080 |
 | `DRMR_MAX_WORKERS` | HLS packaging worker upper bound |
-| `DRMR_HLS_PROFILES` | Owner-only named HLS acquisition policy file path |
+| `DRMR_HLS_PROFILES` | Owner-only named-profile JSON file path; [HLS connection policy JSON example](https://kazuhide.github.io/drmr/guide/#web-console) |
 
 # 20. References and maintenance
 
@@ -1628,4 +1661,4 @@ General format rules are separate from drmr's implemented/verified profiles. Do 
 - [Apple: HLS Sample Encryption](https://developer.apple.com/library/archive/documentation/AudioVideo/Conceptual/HLS_Sample_Encryption/)
 - [W3C: MP4 initialization and edit lists](https://www.w3.org/TR/mse-byte-stream-format-isobmff/)
 
-This guide summarizes public source, help, documentation and stated qualification limits. Example paths/domains and angle-bracket key placeholders must be replaced with your own authorized media and configuration before executing commands. A saved PDF also has its own stated target version.
+This guide summarizes public source, help, documentation and stated qualification limits. Example paths/domains and angle-bracket key placeholders must be replaced with your own authorized media and configuration before executing commands.

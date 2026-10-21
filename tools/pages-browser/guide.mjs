@@ -8,7 +8,7 @@ export const guideLocales = [
     skip: 'Skip to content', toc: 'Guide chapters', switchName: '日本語', other: 'ja',
     switchRoute: 'ja/guide/' },
   { language: 'ja', route: 'ja/guide/', asset: 'ja/guide/index.html', title: 'ユーザーガイド',
-    skip: '本文へ移動', toc: 'ガイドの章', switchName: 'English', other: 'en',
+    skip: '本文へ移動', toc: '目次', switchName: 'English', other: 'en',
     switchRoute: 'guide/' },
 ];
 
