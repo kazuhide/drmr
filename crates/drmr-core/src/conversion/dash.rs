@@ -10,16 +10,16 @@ use std::fs::{self, File};
 use std::path::{Component, Path, PathBuf};
 pub(super) use window::finish_transport;
 
-const DASH_NS: &str = "urn:mpeg:dash:schema:mpd:2011";
-const MAX_SEGMENTS: usize = 100_000;
-const MAX_TRACKS: usize = 64;
+pub(super) const DASH_NS: &str = "urn:mpeg:dash:schema:mpd:2011";
+pub(super) const MAX_SEGMENTS: usize = 100_000;
+pub(super) const MAX_TRACKS: usize = 64;
 const MAX_BYTES: u64 = 16 * 1024 * 1024 * 1024;
 
 fn error(code: &'static str) -> ConversionError {
     ConversionError(code)
 }
 
-fn children<'a>(node: Node<'a, 'a>, name: &str) -> Vec<Node<'a, 'a>> {
+pub(super) fn children<'a>(node: Node<'a, 'a>, name: &str) -> Vec<Node<'a, 'a>> {
     node.children()
         .filter(|child| {
             child.is_element()
@@ -29,7 +29,10 @@ fn children<'a>(node: Node<'a, 'a>, name: &str) -> Vec<Node<'a, 'a>> {
         .collect()
 }
 
-fn one<'a>(node: Node<'a, 'a>, name: &str) -> Result<Option<Node<'a, 'a>>, ConversionError> {
+pub(super) fn one<'a>(
+    node: Node<'a, 'a>,
+    name: &str,
+) -> Result<Option<Node<'a, 'a>>, ConversionError> {
     let mut values = children(node, name).into_iter();
     let first = values.next();
     if values.next().is_some() {
@@ -81,7 +84,7 @@ fn reference(root: &Path, base: &Path, value: &str) -> Result<PathBuf, Conversio
     Ok(canonical)
 }
 
-fn expand(
+pub(super) fn expand(
     template: &str,
     id: &str,
     bandwidth: &str,
@@ -136,15 +139,27 @@ fn expand(
     Ok(out)
 }
 
-fn attribute<'a>(templates: &[Node<'a, 'a>], name: &str) -> Option<&'a str> {
+pub(super) fn attribute<'a>(templates: &[Node<'a, 'a>], name: &str) -> Option<&'a str> {
     templates.iter().rev().find_map(|node| node.attribute(name))
 }
 
-fn integer(text: Option<&str>, default: u64) -> Result<u64, ConversionError> {
+pub(super) fn integer(text: Option<&str>, default: u64) -> Result<u64, ConversionError> {
     text.map_or(Ok(default), |text| {
         text.parse()
             .map_err(|_| error("dash-invalid-template-number"))
     })
+}
+
+pub(super) fn timeline<'a>(templates: &[Node<'a, 'a>]) -> Result<Node<'a, 'a>, ConversionError> {
+    templates
+        .iter()
+        .rev()
+        .find_map(|template| match one(*template, "SegmentTimeline") {
+            Ok(Some(node)) => Some(Ok(node)),
+            Ok(None) => None,
+            Err(error) => Some(Err(error)),
+        })
+        .ok_or(error("dash-finite-segment-timeline-required"))?
 }
 
 pub(super) fn sequence(
@@ -154,15 +169,7 @@ pub(super) fn sequence(
     if integer(attribute(templates, "timescale"), 1)? == 0 {
         return Err(error("dash-presentation-offset-or-timescale-not-supported"));
     }
-    let timeline = templates
-        .iter()
-        .rev()
-        .find_map(|template| match one(*template, "SegmentTimeline") {
-            Ok(Some(node)) => Some(Ok(node)),
-            Ok(None) => None,
-            Err(error) => Some(Err(error)),
-        })
-        .ok_or(error("dash-finite-segment-timeline-required"))??;
+    let timeline = timeline(templates)?;
     let start = integer(attribute(templates, "startNumber"), 1)?;
     let mut end = 0_u64;
     let mut values = Vec::new();
@@ -234,18 +241,17 @@ fn append(
     Ok(())
 }
 
-fn representation_scopes<'a>(
+/// Apply the same presentation and addressing admission before local or remote resolution.
+pub(super) fn validated_scopes<'a>(
     representation: Node<'a, 'a>,
-) -> Result<(PathBuf, Vec<Node<'a, 'a>>), ConversionError> {
+) -> Result<Vec<Node<'a, 'a>>, ConversionError> {
     let mut scopes: Vec<_> = representation
         .ancestors()
         .filter(Node::is_element)
         .collect();
     scopes.reverse();
     super::presentation::metadata::validate_dash(representation)?;
-    let mut base = PathBuf::new();
-    let mut templates = Vec::new();
-    for scope in scopes {
+    for &scope in &scopes {
         if scope.attributes().any(|attribute| {
             attribute.namespace().is_some_and(|namespace| {
                 !(namespace == "http://www.w3.org/2001/XMLSchema-instance"
@@ -268,6 +274,16 @@ fn representation_scopes<'a>(
         if one(scope, "SegmentList")?.is_some() || one(scope, "SegmentBase")?.is_some() {
             return Err(error("dash-addressing-not-supported"));
         }
+    }
+    Ok(scopes)
+}
+
+fn representation_scopes<'a>(
+    representation: Node<'a, 'a>,
+) -> Result<(PathBuf, Vec<Node<'a, 'a>>), ConversionError> {
+    let mut base = PathBuf::new();
+    let mut templates = Vec::new();
+    for scope in validated_scopes(representation)? {
         if let Some(url) = one(scope, "BaseURL")? {
             base.push(relative(url.text().unwrap_or("").trim())?);
         }
@@ -278,7 +294,7 @@ fn representation_scopes<'a>(
     Ok((base, templates))
 }
 
-fn initialization_uri<'a>(
+pub(super) fn initialization_uri<'a>(
     representation: Node<'a, 'a>,
     templates: &[Node<'a, 'a>],
     first: (u64, u64, u64),
@@ -532,7 +548,7 @@ pub(crate) fn snapshot_dash(path: &Path, stage: &Path) -> Result<Vec<LocalTrack>
     Ok(tracks)
 }
 
-fn decimal_duration(value: &str) -> Result<(u64, u64), ConversionError> {
+pub(super) fn decimal_duration(value: &str) -> Result<(u64, u64), ConversionError> {
     let text = value
         .strip_prefix("PT")
         .and_then(|v| v.strip_suffix('S'))

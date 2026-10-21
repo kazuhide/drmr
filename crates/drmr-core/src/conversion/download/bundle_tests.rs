@@ -32,6 +32,7 @@ fn sealed_source(parent: &Path) -> (Converter, PathBuf, PathBuf, Vec<u8>) {
     converter.downloaded = Some(Arc::new(Seal {
         owned,
         files: expected,
+        entrypoint: "input.m3u8",
     }));
     (converter, entrypoint, segment, media)
 }
