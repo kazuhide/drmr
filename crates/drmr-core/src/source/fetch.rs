@@ -1144,6 +1144,60 @@ mod sink_ownership_tests {
     }
 
     #[test]
+    fn entrypoint_xml_box_type_collisions_keep_both_text_cap_orderings() {
+        let root = crate::native::private_tempdir().unwrap();
+        let path = root.path().join("resource");
+        for (text_cap, media_cap) in [(24, 128), (128, 16)] {
+            let policy = FetchPolicy {
+                max_playlist_bytes: text_cap,
+                max_resource_bytes: media_cap,
+                ..FetchPolicy::default()
+            };
+            let fetcher = Fetcher::new(
+                &policy,
+                root.path(),
+                Arc::new(super::super::platform::SystemPlatform),
+            );
+            for kind in [
+                b"ftyp", b"moov", b"styp", b"free", b"wide", b"mdat", b"sidx",
+            ] {
+                let bodies = [
+                    [b"<!--".as_slice(), kind, b" information-->\n<MPD/>"].concat(),
+                    [
+                        b"<!--".as_slice(),
+                        kind,
+                        b"\0 invalid XML payload----------",
+                    ]
+                    .concat(),
+                ];
+                for body in bodies {
+                    for chunk_size in [1, 8, 64] {
+                        let mut sink =
+                            Sink::new(&fetcher, Some(path.clone()), text_cap.max(media_cap), false);
+                        sink.entrypoint_prefix = Some(Vec::new());
+                        let result = body
+                            .chunks(chunk_size)
+                            .try_for_each(|chunk| sink.write(chunk));
+                        assert_eq!(sink.cap, text_cap);
+                        assert!(sink.playlist);
+                        if text_cap == 24 {
+                            assert!(matches!(
+                                result,
+                                Err(Fault::Source(error)) if error.token() == "playlist-too-large"
+                            ));
+                        } else {
+                            assert!(result.is_ok());
+                            assert_eq!(sink.size, u64::try_from(body.len()).unwrap());
+                        }
+                        sink.reset();
+                        assert!(!path.exists());
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn entrypoint_text_and_media_caps_remain_independent_after_reset() {
         let root = crate::native::private_tempdir().unwrap();
         let policy = FetchPolicy {

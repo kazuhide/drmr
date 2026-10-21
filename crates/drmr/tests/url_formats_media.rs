@@ -249,9 +249,15 @@ fn offline_workflow(format: &str, scheme: &str, prefix: &[u8]) {
     let root = tempfile::tempdir().unwrap();
     let source = fixture(&root.path().join("source"), format, scheme);
     if !prefix.is_empty() {
-        assert_eq!(format, "mp4");
+        let mut body = std::fs::read(&source).unwrap();
+        if format == "dash" && body.starts_with(b"<?xml") {
+            // An XML declaration must precede comments when present. Removing
+            // the optional declaration lets the fixture begin with its comment.
+            let end = body.windows(2).position(|pair| pair == b"?>").unwrap() + 2;
+            body.drain(..end);
+        }
         let mut bytes = prefix.to_vec();
-        bytes.extend(std::fs::read(&source).unwrap());
+        bytes.extend(body);
         std::fs::write(&source, bytes).unwrap();
     }
     let original = snapshot(source.parent().unwrap());
@@ -338,6 +344,11 @@ fn dash_urls_clear_cenc_and_cbcs_support_offline_plans_and_independent_verificat
     for scheme in ["clear", "cenc", "cbcs"] {
         offline_workflow("dash", scheme, &[]);
     }
+}
+
+#[test]
+fn dash_urls_with_a_leading_xml_comment_keep_the_complete_offline_workflow() {
+    offline_workflow("dash", "clear", b"<!--widevine information-->\n");
 }
 
 #[test]

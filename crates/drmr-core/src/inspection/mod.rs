@@ -218,10 +218,24 @@ pub(crate) fn read_manifest(path: &Path) -> Result<Vec<u8>, InspectionError> {
 }
 
 /// Hint from at most 64 leading bytes; ordinary parsers still validate the complete source.
-/// Streaming callers wait for eight bytes before choosing a format-specific body budget,
-/// because the MP4 box type takes precedence over text-like bytes in its size field.
+/// XML-like text can contain incidental MP4 box names. XML-forbidden controls
+/// in the binary size field instead keep its MP4 interpretation; later payload
+/// bytes cannot change this choice. Streaming callers wait for eight bytes before
+/// choosing a format-specific body budget.
 pub(crate) fn format_hint(prefix: &[u8]) -> Option<InputFormat> {
     let prefix = &prefix[..prefix.len().min(64)];
+    let text = prefix
+        .strip_prefix(b"\xef\xbb\xbf")
+        .unwrap_or(prefix)
+        .trim_ascii_start();
+    let size_field = &prefix[..prefix.len().min(4)];
+    if text.starts_with(b"<")
+        && !size_field
+            .iter()
+            .any(|byte| *byte < 0x20 && !matches!(byte, b'\t' | b'\n' | b'\r'))
+    {
+        return Some(InputFormat::Dash);
+    }
     if prefix.get(4..8).is_some_and(|kind| {
         matches!(
             kind,
@@ -230,10 +244,6 @@ pub(crate) fn format_hint(prefix: &[u8]) -> Option<InputFormat> {
     }) {
         return Some(InputFormat::Mp4);
     }
-    let text = prefix
-        .strip_prefix(b"\xef\xbb\xbf")
-        .unwrap_or(prefix)
-        .trim_ascii_start();
     if text.starts_with(b"#EXTM3U") {
         Some(InputFormat::Hls)
     } else if text.starts_with(b"<") {
@@ -270,7 +280,7 @@ mod format_tests {
     use super::{InputFormat, format_hint};
 
     #[test]
-    fn all_admitted_mp4_box_types_precede_text_like_size_bytes() {
+    fn binary_mp4_box_types_precede_text_like_size_bytes() {
         for kind in [
             b"ftyp", b"moov", b"styp", b"free", b"wide", b"mdat", b"sidx",
         ] {
@@ -280,6 +290,29 @@ mod format_tests {
             }
         }
         assert_eq!(format_hint(b"\0\0\0\x08junk"), None);
+    }
+
+    #[test]
+    fn xml_comments_and_qualified_names_are_not_mp4_box_headers() {
+        for kind in [
+            b"ftyp", b"moov", b"styp", b"free", b"wide", b"mdat", b"sidx",
+        ] {
+            let comment = [b"<!--".as_slice(), kind, b" information-->\n<MPD/>"].concat();
+            assert_eq!(format_hint(&comment), Some(InputFormat::Dash));
+            let name = std::str::from_utf8(kind).unwrap();
+            let qualified =
+                format!("<abc{name}:MPD xmlns:abc{name}='urn:mpeg:dash:schema:mpd:2011'/>");
+            assert_eq!(format_hint(qualified.as_bytes()), Some(InputFormat::Dash));
+        }
+    }
+
+    #[test]
+    fn xml_like_headers_do_not_change_hint_when_later_payload_is_invalid_xml() {
+        let header = b"<!--wide";
+        let body = [header.as_slice(), b"\0 invalid XML payload"].concat();
+        assert_eq!(format_hint(header), Some(InputFormat::Dash));
+        assert_eq!(format_hint(&body), Some(InputFormat::Dash));
+        assert!(super::manifests::inspect_dash(&body).is_err());
     }
 
     #[test]
