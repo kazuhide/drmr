@@ -57,22 +57,30 @@ impl Progress {
             .last_activity
     }
     fn line(&self, state: &mut State, force: bool) {
-        if !self.enabled
-            || (!force
-                && state
-                    .last_line
-                    .is_some_and(|last| last.elapsed() < Duration::from_millis(250)))
+        if !force
+            && state
+                .last_line
+                .is_some_and(|last| last.elapsed() < Duration::from_millis(250))
         {
             return;
         }
         if let Some(activity) = state.last_activity {
-            let _ = writeln!(
-                std::io::stderr().lock(),
-                "Activity: {activity}; scopes started: {}; scopes closed: {}; elapsed: {:.1}s.",
-                state.started,
-                state.closed,
-                self.began.elapsed().as_secs_f64()
-            );
+            crate::common_job::progress(crate::common_job::Observation {
+                elapsed_ms: u64::try_from(self.began.elapsed().as_millis()).unwrap_or(u64::MAX),
+                last_activity: state.last_activity,
+                scopes_started: state.started,
+                scopes_closed: state.closed,
+                workers: state.workers,
+            });
+            if self.enabled {
+                let _ = writeln!(
+                    std::io::stderr().lock(),
+                    "Activity: {activity}; scopes started: {}; scopes closed: {}; elapsed: {:.1}s.",
+                    state.started,
+                    state.closed,
+                    self.began.elapsed().as_secs_f64()
+                );
+            }
             state.last_line = Some(Instant::now());
         }
     }
@@ -101,6 +109,7 @@ impl Sink for Progress {
                 );
             }
             state.workers = Some(workers);
+            self.line(&mut state, true);
             return;
         }
         if record.get("stage").and_then(serde_json::Value::as_str) != Some("conversion") {

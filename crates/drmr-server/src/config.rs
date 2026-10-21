@@ -89,6 +89,8 @@ pub struct ServerConfig {
     pub bind_host: String,
     /// `DRMR_BIND_PORT`.
     pub bind_port: u16,
+    /// Optional private keys/fetch-policy folder, isolated from all HTTP roots.
+    pub common_config_root: Option<PathBuf>,
     /// `DRMR_HLS_PROFILES`.
     pub hls_profiles: Option<PathBuf>,
     /// `DRMR_MAX_WORKERS` (`package-hls --max-workers`; `None` = the CPU default).
@@ -111,6 +113,7 @@ impl ServerConfig {
             bind_host: "127.0.0.1".to_string(),
             bind_port: 8080,
             hls_profiles: None,
+            common_config_root: None,
             max_workers: None,
             cli_argv: default_cli_argv(),
             static_dir: None,
@@ -277,6 +280,9 @@ where
             exit_code: 1,
             message: "OverflowError: bind(): port must be 0-65535.".to_string(),
         })?;
+    }
+    if let Some(root) = non_empty("DRMR_COMMON_CONFIG_ROOT") {
+        config.common_config_root = Some(PathBuf::from(root));
     }
     if let Some(profiles) = non_empty("DRMR_HLS_PROFILES") {
         config.hls_profiles = Some(PathBuf::from(profiles));
