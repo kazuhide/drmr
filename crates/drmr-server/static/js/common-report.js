@@ -79,6 +79,7 @@
     "manifest-validator-unavailable": "commonValidatorUnavailable",
     "manifest-conformance-failed": "commonConformanceFailed",
     "media-tool-unavailable-or-timeout": "commonMediaToolUnavailable",
+    "media-tool-failed": "commonMediaToolFailed",
     "round-trip-verification-failed": "commonVerificationFailed",
     "source-media-verification-failed": "commonVerificationFailed",
     "output-signaling-verification-failed": "commonDrmMismatch",

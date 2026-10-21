@@ -307,3 +307,56 @@ fn real_http_flow_saves_exports_executes_and_independently_verifies_the_same_cli
     assert_eq!(std::fs::read(&source).unwrap(), original_source);
     assert_eq!(std::fs::read(saved).unwrap(), exported);
 }
+
+#[test]
+fn a_valid_source_changed_after_analysis_cannot_publish_a_new_plan() {
+    let root = native::private_tempdir().unwrap();
+    let input = root.path().join("input");
+    let output = root.path().join("output");
+    native::create_private_dir_new(&input).unwrap();
+    native::create_private_dir_new(&output).unwrap();
+    let source = input.join("source.mp4");
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bbb/clip.mp4");
+    std::fs::copy(fixture, &source).unwrap();
+    let mut config = ServerConfig::new(&input, &output);
+    config.bind_port = 0;
+    config.cli_argv = vec![env!("CARGO_BIN_EXE_drmr").into()];
+    config.max_workers = Some(2);
+    let mut server = drmr_server::spawn(config).unwrap();
+    let client = Client::new(&server);
+    let capabilities = client.get("/api/common/capabilities");
+    let source_ref = client.selection(&capabilities, "media", Some("source.mp4"));
+    let parent_ref = client.selection(&capabilities, "output-parent", None);
+    let server_id = capabilities["server_id"].clone();
+    let session = client.post("/api/common/sessions", &json!({"schema_version":1,"server_id":server_id,"creation_request_id":"c".repeat(32),"source":{"kind":"local","input_ref":source_ref}}), 201);
+    let session_id = session["session_id"].clone();
+    let submit = |ordinal: u32, operation: Value| json!({"schema_version":1,"server_id":server_id,"session_id":session_id,"request_id":format!("{ordinal:032x}"),"operation":operation,"runtime":{"keys_ref":null,"max_workers":null}});
+    let analyzed = client.job(&submit(1, json!({"kind":"analyze"})), "succeeded");
+
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&source)
+        .unwrap()
+        .write_all(&[0, 0, 0, 8, b'f', b'r', b'e', b'e'])
+        .unwrap();
+    let changed = Command::new(env!("CARGO_BIN_EXE_drmr"))
+        .arg("analyze")
+        .arg(&source)
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(changed.status.success());
+    let qualified: Value = serde_json::from_slice(&changed.stdout).unwrap();
+    assert_eq!(qualified["input_admitted"], true);
+
+    let rejected = client.job(&submit(2, json!({"kind":"plan","analysis_ref":analyzed["analysis_ref"],"output_parent_ref":parent_ref,"destination_name":"rejected","outputs":[{"id":"clear","format":"mp4","target":"clear","drms":[],"conformance":"none"}]})), "failed");
+    assert_eq!(rejected["error"]["code"], "analysis-source-changed");
+    assert_eq!(rejected["plan_ref"], Value::Null);
+    let current = client.get(&format!(
+        "/api/common/sessions/{}",
+        session_id.as_str().unwrap()
+    ));
+    assert_eq!(current["plan_refs"], json!([]));
+    assert!(!output.join("rejected").exists());
+    server.shutdown().unwrap();
+}

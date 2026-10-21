@@ -44,6 +44,8 @@
 
     "commonMediaToolUnavailable": "メディアツールを利用できないか、実行時間の上限に達しました。管理者にツールと実行上限の確認を依頼してください。",
 
+    "commonMediaToolFailed": "メディアツールの実行に失敗しました。選択した鍵ファイルとツールの実行環境を確認してください。",
+
     "commonConformanceFailed": "指定した外部マニフェスト検査が不合格になりました。検査結果と、保存した出力設定を確認してください。",
 
     "commonValidatorUnavailable": "必要なマニフェスト検査ツールを利用できません。管理者にサーバー側のツール設定の確認を依頼してください。",
@@ -478,6 +480,8 @@
     "commonVerificationFailed": "The independent media comparison failed. Review the per-output checks; this operation did not pass.",
 
     "commonMediaToolUnavailable": "A media tool was unavailable or timed out. Ask the operator to check the tool installation and execution limits.",
+
+    "commonMediaToolFailed": "A media tool failed. Check the selected key file and the tool's execution environment.",
 
     "commonConformanceFailed": "The requested external manifest check failed. Check its result and the saved output settings.",
 

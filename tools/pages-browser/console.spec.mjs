@@ -443,12 +443,16 @@ for (const failure of ['delayed', 'refused']) {
   });
 }
 
-test('changed analyzed source is refused before a new plan can be used', async ({ page }) => {
+test('changed analyzed source is refused before a new plan can be used', async ({ page }, info) => {
   await openSession(page); await observedJob(page, '#common-analyze', 'analyze');
   await configure(page, 'changed-source');
   const original = await readFile(fixture.progressive);
   try {
-    await writeFile(fixture.progressive, Buffer.concat([original, Buffer.from([0])]));
+    // A valid empty free box changes source bytes without corrupting the MP4 profile.
+    await writeFile(fixture.progressive, Buffer.concat([original, Buffer.from([0, 0, 0, 8, 0x66, 0x72, 0x65, 0x65])]));
+    const changed = await cli(['analyze', fixture.progressive, '--json']);
+    expect(changed.report.input_admitted).toBe(true);
+    await reportAttachment(info, 'changed-source-valid-media', { inputAdmitted: true, analysisSha256: changed.sha256 });
     const pending = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/common/jobs');
     await page.locator('#common-save-plan').click(); const response = await pending;
     if (response.status() === 202) {
@@ -456,6 +460,8 @@ test('changed analyzed source is refused before a new plan can be used', async (
       await expect.poll(async () => { job = await api(page.request, '/api/common/jobs/' + job.job_id); return job.state; }, { timeout: 30_000 }).not.toBe('running');
       expect(job.state).toBe('failed'); expect(job.cleanup_confirmed).toBe(true);
       expect(job.plan_ref).toBeNull(); expect(job.error.code).toBe('analysis-source-changed');
+      expect(job.supervision_confirmed).toBe(true);
+      pages.get(page).jobs.push(job); await renderedJob(page, job);
     } else {
       expect(response.status()).toBe(409); expect((await response.json()).error.code).toBe('analysis-source-changed');
     }

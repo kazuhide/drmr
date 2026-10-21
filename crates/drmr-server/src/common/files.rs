@@ -47,6 +47,9 @@ impl BoundPath {
                 FileIdentity::read(&file).map_err(|_| unavailable())?,
             ));
         }
+        if identities.is_empty() {
+            return Err(unavailable());
+        }
         Ok(Self {
             path: path.to_path_buf(),
             identities,
@@ -584,5 +587,16 @@ mod tests {
         let file = extended.join("source.mp4");
         std::fs::write(&file, b"original").unwrap();
         BoundPath::capture(&file).unwrap().check().unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn prefix_only_windows_roots_cannot_create_empty_identity_bindings() {
+        for text in [r"\\?\C:", r"\\?\UNC\example.invalid\share"] {
+            let path = std::path::Path::new(text);
+            assert!(path.is_absolute());
+            assert_eq!(path.components().count(), 1);
+            assert!(BoundPath::capture(path).is_err());
+        }
     }
 }

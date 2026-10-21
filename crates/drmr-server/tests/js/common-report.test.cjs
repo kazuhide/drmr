@@ -73,6 +73,14 @@ function renderer() {
 function renderResult(report) {
   const r = renderer(); r.render(report); return r.text();
 }
+test('a media-tool failure retains its safe code without exposing private tool output', () => {
+  const text = renderResult({ report_kind: 'failure', operation: 'verify', report: {
+    schema_version: 1, status: 'failed', error: { code: 'media-tool-failed', hint: 'PRIVATE_TOOL_OUTPUT', last_activity: 'verification' },
+  } });
+  assert.match(text, /media-tool-failed/);
+  assert.match(text, /commonMediaToolFailed/);
+  assert.doesNotMatch(text, /PRIVATE_TOOL_OUTPUT/);
+});
 test('native tagged coverage retains status, reason, counts and profile revision', () => {
   const native = { errors: 0, warnings: 0, truncated: false, incomplete: false, document_count: 1, profile: 'dash-static-manifest', profile_revision: '2026-10-21.1', engine_revision: '2026-10-21.1', diagnostics: [],
     coverage: [{ document: 0, rule_id: 'dash.rule', scope: 'in-scope', status: { status: 'not-checked', reason: 'requires-media-evidence' }, passed_checks: 0, failed_checks: 0, not_checked_checks: 1, not_checked_reasons: ['requires-media-evidence'] }] };
