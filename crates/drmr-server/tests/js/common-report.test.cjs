@@ -139,6 +139,25 @@ test('analysis admission and v1 output bindings describe only the displayed evid
   assert.equal(r.all(r.host).some(node => node.getAttribute?.('data-common-check') === 'output_matches_plan'), false);
 });
 
+test('eligible format items remain readable and keep untrusted values out of the DOM', () => {
+  const r = renderer();
+  const text = node => node.textContent + node.children.map(text).join('');
+  for (const [formats, expected] of [
+    [['mp4', 'dash', 'hls'], 'mp4, dash, hls'],
+    [['hls-ts'], 'hls-ts'],
+    [[], ''],
+    [['mp4', 'https://source.invalid/PRIVATE_FORMAT?key=secret', 'hls'], 'mp4, commonUnknown, hls'],
+  ]) {
+    r.render({ report_kind: 'analysis', report: { input_admitted: true, actual_format: 'hls-ts', eligible_formats: formats } });
+    const fields = r.all(r.host).find(node => node.tagName === 'dl' && node.children.some(child => child.textContent === 'commonEligible'));
+    const index = fields.children.findIndex(node => node.textContent === 'commonEligible');
+    const value = fields.children[index + 1];
+    assert.equal(text(value), expected);
+    assert.equal(r.all(value).filter(node => node.tagName === 'code').length, formats.length);
+    assert.doesNotMatch(r.text(), /PRIVATE_FORMAT|key=secret/);
+  }
+});
+
 test('report bindings clear on null evidence and reject path-like metadata', () => {
   const r = renderer(), attrs = ['job-id', 'request-id', 'operation', 'report-kind', 'plan-id', 'plan-ref'];
   const envelope = { job_id: 'job_one', request_id: 'request_one', operation: 'verify', report_kind: 'verification', plan_id: 'd'.repeat(64), plan_ref: 'plan_one', report: { source_unchanged: true, verification: verification(), output_matches_plan: true } };

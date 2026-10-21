@@ -243,7 +243,7 @@
     if (!report) content.push(word('p', 'commonNoResult', { className: 'help' }));
     else if (envelope.report_kind === 'analysis') {
       content.push(h('ul', { className: 'checks' }, check('commonInputAdmitted', report.input_admitted, 'input_admitted')), inspection(report.input, report.track_protection),
-        h('dl', { className: 'kv' }, word('dt', 'commonActualFormat'), h('dd', null, code(report.actual_format)), word('dt', 'commonEligible'), h('dd', null, (report.eligible_formats || []).map(code))));
+        h('dl', { className: 'kv' }, word('dt', 'commonActualFormat'), h('dd', null, code(report.actual_format)), word('dt', 'commonEligible'), h('dd', null, (report.eligible_formats || []).map(function (format, index) { return [index ? ', ' : null, code(format)]; }))));
       if (Array.isArray(report.compatibility_notes) && report.compatibility_notes.length) content.push(dynamic('p', 'commonInspectionNotes', { n: report.compatibility_notes.length }, { className: 'help' }));
     } else if (envelope.report_kind === 'conversion' || envelope.report_kind === 'verification') {
       if (envelope.report_kind === 'verification') content.push(h('ul', { className: 'checks' }, check('commonSourceUnchanged', report.source_unchanged, 'source_unchanged')));

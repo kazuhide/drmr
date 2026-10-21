@@ -4,8 +4,13 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
-function harness(imported = false) {
+function harness(imported = false, localized = false) {
   let document, language = 'en', view;
+  const translations = localized && Object.fromEntries(['en', 'ja'].map(lang => {
+    const box = { window: {}, localStorage: { getItem: () => lang } };
+    vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../../static/js/i18n.js'), 'utf8'), box);
+    return [lang, box.window.App.I18n];
+  }));
   class Element {
     constructor(tag) { this.tagName = tag; this.nodeType = 1; this.children = []; this.dataset = {}; this.attrs = new Map(); this.listeners = new Map(); this.textContent = ''; this.value = ''; this.disabled = false; this.hidden = false; }
     appendChild(node) { node.parentNode = this; this.children.push(node); return node; }
@@ -32,12 +37,12 @@ function harness(imported = false) {
     select: async sid => { data.selectedId = sid; }, submit: async (operation, runtime) => { sent.push({ operation, runtime }); },
     createSession: source => { opened.push(source); return new Promise(() => {}); }, recover() {}, recoverCreation() {}, stop() {}, close() {},
     usePlan() {}, invalidatePlan() { record.plan = null; } };
-  const sandbox = { document, URL, Map, window: { App: { I18n: { t: (key, values) => language + ':' + key + (values ? JSON.stringify(values) : ''), getLanguage: () => language }, CommonApi: { files: async () => {} } } } };
+  const sandbox = { document, URL, Map, window: { App: { I18n: { t: (key, values) => translations ? translations[language].t(key, values) : language + ':' + key + (values ? JSON.stringify(values) : ''), getLanguage: () => language }, CommonApi: { files: async () => {} } } } };
   for (const file of ['ui.js', 'common-files.js', 'common-report.js', 'common-view.js']) vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../../static/js', file), 'utf8'), sandbox);
   view = sandbox.window.App.CommonView.create(host, nav, global, model);
   view.update();
   const find = id => descendants(host).find(node => node.getAttribute && node.getAttribute('id') === id || node.id === id);
-  return { view, data, record, sent, opened, document, host, global, find, descendants, setLanguage: value => { language = value; } };
+  return { view, data, record, sent, opened, document, host, nav, global, find, descendants, setLanguage: value => { language = value; } };
 }
 test('polling and locale changes retain the exact editing nodes, draft values and focus', () => {
   const h = harness();
@@ -88,6 +93,40 @@ test('URL session navigation and ownership use a localized label without any sou
   assert.doesNotMatch(h.global.children[0].textContent, /PRIVATE_PATH/);
   h.setLanguage('ja'); h.view.translate();
   assert.match(h.global.children[0].textContent, /ja:commonUrl/);
+});
+
+test('generic local input labels translate in the selected source, navigation and owner status', () => {
+  const h = harness(false, true);
+  h.record.session.source = { kind: 'local', label: 'Local input', input_ref: 'PRIVATE_REF', display_url: 'https://source.invalid/PRIVATE_SOURCE' };
+  h.data.owner = { sessionId: 'session_1', kind: 'analyze', phase: 'running', stop: 'none', jobId: 'job_1' };
+  for (const [language, expected] of [['en', 'Local input'], ['ja', 'ローカル入力']]) {
+    h.setLanguage(language); h.view.translate();
+    assert.equal(h.descendants(h.host).find(node => node.className === 'common-source-label').textContent, expected);
+    assert.equal(h.descendants(h.nav).find(node => node.className === 'row-id').textContent, expected);
+    assert.ok(h.global.children[0].textContent.includes(expected));
+    assert.ok(h.find('common-selected-status').textContent.includes(expected));
+    const nodes = [h.host, h.nav, h.global].flatMap(h.descendants);
+    assert.equal(nodes.some(node => /PRIVATE_/.test(node.textContent)), false);
+    assert.equal(nodes.some(node => [...(node.attrs || [])].some(([, value]) => /PRIVATE_/.test(value))), false);
+  }
+});
+
+test('local label translation preserves custom labels and the fixed private URL label', () => {
+  const h = harness(false, true);
+  const sourceLabel = () => h.descendants(h.host).find(node => node.className === 'common-source-label').textContent;
+  for (const language of ['en', 'ja']) {
+    h.setLanguage(language);
+    for (const source of [{ kind: 'local', label: 'custom input.mp4' }, { kind: 'local', label: 'Local input custom' }, { kind: 'saved-plan', label: 'Local input' }]) {
+      h.record.session.source = { ...source, input_ref: 'PRIVATE_REF', display_url: 'https://source.invalid/PRIVATE_SOURCE' };
+      h.view.translate();
+      assert.equal(sourceLabel(), source.label);
+    }
+    h.record.session.source = { kind: 'hls-url', label: 'PRIVATE_LABEL', display_url: 'https://source.invalid/PRIVATE_SOURCE' };
+    h.view.translate();
+    assert.equal(sourceLabel(), language === 'ja' ? 'HLS VOD の URL' : 'HLS VOD URL');
+    const nodes = [h.host, h.nav, h.global].flatMap(h.descendants);
+    assert.equal(nodes.some(node => /PRIVATE_/.test(node.textContent)), false);
+  }
 });
 
 test('an unknown Stop response is not labeled as an acknowledged stop', () => {
