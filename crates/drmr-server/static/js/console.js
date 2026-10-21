@@ -19,14 +19,15 @@
     detail: { catalogInfo: null, analysis: null, analysisError: null, result: null, resultError: null, report: null, reportError: null },
     run: null, lastRun: null, logView: null, stopRequests: Object.create(null),
     sessionId: null, previewBusy: false, previewOwner: null, previewNeedsCredentials: false,
-    addOpen: false, platform: null, pollTimer: null, loading: null,
+    addOpen: false, commonOpen: false, platform: null, pollTimer: null, loading: null,
   };
   var els = {};
   var playback = null;
   var elapsedTimer = null;
 
   function byId(id) { return document.getElementById(id); }
-  function isJobRunning() { return state.run !== null; }
+  function commonBusy() { return !!(App.CommonConsole && App.CommonConsole.isBusy()); }
+  function isJobRunning() { return state.run !== null || commonBusy(); }
   function selected() { return state.contents.filter(function (c) { return c.asset_id === state.selectedId; })[0] || null; }
   function newLogView(jobId, assetId, kind, live) {
     return { jobId: jobId, assetId: assetId, kind: kind, live: live, lines: [], watcher: null, interrupted: false, outcome: null, notice: '',
@@ -232,6 +233,7 @@
   function renderBulkBar() {
     var n = Object.keys(state.checked).length;
     els.bulkBar.hidden = n === 0;
+    els.bulkQueueBtn.disabled = commonBusy();
     UI.setText(els.bulkCount, t('bulkSelected', { n: n }));
   }
   function renderQueue() {
@@ -252,6 +254,7 @@
     restoreFocus(els.queuePane, focused);
   }
   function enqueue(assetIds) {
+    if (commonBusy()) { UI.setText(els.queueNotice, t('commonGlobalBusy')); return Promise.resolve(); }
     return App.Api.postQueue(assetIds).then(function () {
       UI.setText(els.queueNotice, t('queueAdded', { n: assetIds.length }));
       state.checked = Object.create(null);
@@ -267,9 +270,11 @@
   // ========================================================================================
   function renderDetailVisibility() {
     var content = selected();
-    els.detailEmpty.hidden = !!content || state.addOpen;
-    els.addSection.hidden = !state.addOpen;
-    els.content.hidden = !content || state.addOpen;
+    els.detailEmpty.hidden = !!content || state.addOpen || state.commonOpen;
+    els.addSection.hidden = !state.addOpen || state.commonOpen;
+    els.content.hidden = !content || state.addOpen || state.commonOpen;
+    var common = byId('common-workflow');
+    if (common) common.hidden = !state.commonOpen;
     Array.prototype.forEach.call(els.contentList.children, function (row) {
       if (row.dataset && row.dataset.assetId) row.setAttribute('aria-current', row.dataset.assetId === state.selectedId ? 'true' : 'false');
     });
@@ -277,7 +282,8 @@
   // Everything derived from the previous selection is dropped: analysis, result, report,
   // secrets, the playback session and both players. The log panel follows the selection.
   function selectContent(assetId) {
-    if (assetId === state.selectedId && !state.addOpen) return;
+    if (assetId === state.selectedId && !state.addOpen && !state.commonOpen) return;
+    state.commonOpen = false; if (App.CommonConsole) App.CommonConsole.hide();
     state.selectToken += 1;
     resetPreviewRequest();
     state.selectedId = assetId;
@@ -988,6 +994,10 @@
   function stopElapsedTimer() { if (elapsedTimer) { clearInterval(elapsedTimer); elapsedTimer = null; } }
   function renderLease() {
     var run = state.run;
+    if (!run && commonBusy()) {
+      els.requestRecovery.hidden = true; els.lease.dataset.running = 'true';
+      UI.setText(els.leaseText, App.CommonConsole.leaseText()); UI.setText(els.leaseElapsed, ''); return;
+    }
     var unknown = !!(run && (run.launchUnknown || run.observationUnknown));
     els.requestRecovery.hidden = !unknown;
     els.reconcileBtn.hidden = !unknown;
@@ -1219,6 +1229,7 @@
     return ['<catalog_root>/', '  <entry>/', '    asset.json        {asset_id, label, mpd_path, hls_master_path, keys_file}', '    keys.env          DRM_KID= / DRM_KEY= / DRM_IV=', '    download/<host>/<path>/...   ' + t('convTreeMirror')].join('\n');
   }
   function openAdd() {
+    state.commonOpen = false; if (App.CommonConsole) App.CommonConsole.hide();
     state.addOpen = true;
     state.nameEdited = false;
     els.hlsUrl.value = ''; els.hlsAssetId.value = '';
@@ -1410,5 +1421,15 @@
       if (asset && state.contents.some(function (c) { return c.asset_id === asset; })) selectContent(asset);
     });
   }
+  // The common controller owns its attempts independently; only this narrow bridge touches
+  // legacy selection and the shared execution controls.
+  App.ConsoleBridge = {
+    ownsExecution: function () { return !!state.run || !!state.queue.running || (state.queue.pending || []).length > 0; },
+    showCommon: function () {
+      if (!state.commonOpen) { state.addOpen = false; deselect(); state.commonOpen = true; }
+      renderDetailVisibility();
+    },
+    commonChanged: function () { refreshControls(); renderBulkBar(); renderLease(); },
+  };
   document.addEventListener('DOMContentLoaded', boot);
 })();

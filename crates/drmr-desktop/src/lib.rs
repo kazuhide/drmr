@@ -4,6 +4,9 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use url::Url;
 
+#[cfg(feature = "desktop")]
+pub mod plan_export;
+
 /// The exact listener owned by this application instance.
 #[derive(Clone, Debug)]
 pub struct ConsoleOrigin(Url);
@@ -25,6 +28,24 @@ impl ConsoleOrigin {
             && url.username().is_empty()
             && url.password().is_none()
             && url.origin() == self.0.origin()
+    }
+
+    /// Permit only an original plan attachment from this console instance.
+    pub fn permits_plan_export(&self, url: &Url) -> bool {
+        let Some(id) = url
+            .path()
+            .strip_prefix("/api/common/plans/")
+            .and_then(|path| path.strip_suffix("/export"))
+        else {
+            return false;
+        };
+        self.permits_navigation(url)
+            && url.query().is_none()
+            && url.fragment().is_none()
+            && id.len() == 32
+            && id
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     }
 }
 

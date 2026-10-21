@@ -2,9 +2,10 @@
 use std::{fs::File, io};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) struct FileIdentity(u64, u64);
+pub struct FileIdentity(u64, u64);
 impl FileIdentity {
-    pub(crate) fn read(file: &File) -> io::Result<Self> {
+    /// Identify the opened object without retaining one descriptor per resource.
+    pub fn read(file: &File) -> io::Result<Self> {
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt as _;

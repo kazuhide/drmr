@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use drmr_desktop::plan_export::{Notice, PlanExports, Selection};
 use drmr_desktop::{ConsoleOrigin, bundled_cli, permits_startup_navigation};
 use drmr_server::{RunningServer, ServerConfig};
 use sha2::{Digest, Sha256};
@@ -8,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
-use tauri::webview::NewWindowResponse;
+use tauri::webview::{DownloadEvent, NewWindowResponse};
 use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
@@ -22,6 +23,14 @@ const UNCONFIRMED: u8 = 4;
 struct Roots {
     catalog: Option<PathBuf>,
     output_parent: Option<PathBuf>,
+    private_config: Option<PathBuf>,
+}
+
+#[derive(Clone, Copy)]
+enum FolderRole {
+    Input,
+    Output,
+    PrivateConfig,
 }
 
 #[derive(Default)]
@@ -29,6 +38,7 @@ struct Desktop {
     roots: Mutex<Roots>,
     origin: Mutex<Option<ConsoleOrigin>>,
     server: Mutex<Option<RunningServer>>,
+    exports: Mutex<Option<Arc<PlanExports>>>,
     diagnostics: Mutex<Option<Arc<drmr_core::tool_diagnostics::DiagnosticSession>>>,
     phase: AtomicU8,
     picking: AtomicBool,
@@ -167,7 +177,7 @@ fn retry_diagnostic_cleanup(state: &Desktop) {
     }
 }
 
-fn pick(app: &AppHandle, output: bool) {
+fn pick(app: &AppHandle, role: FolderRole) {
     let state = app.state::<Arc<Desktop>>();
     if state.phase.load(Ordering::Acquire) != IDLE {
         error(
@@ -180,10 +190,10 @@ fn pick(app: &AppHandle, output: bool) {
         return;
     }
     let handle = app.clone();
-    let caption = if output {
-        "Choose the parent folder for private drmr output"
-    } else {
-        "Choose the catalog folder"
+    let caption = match role {
+        FolderRole::Input => "Choose the input folder",
+        FolderRole::Output => "Choose the parent folder for private drmr output",
+        FolderRole::PrivateConfig => "Choose a separate folder for private keys and fetch settings",
     };
     let dialog = app.dialog().file().set_title(caption);
     let dialog = if let Some(window) = app.get_webview_window("console") {
@@ -196,10 +206,10 @@ fn pick(app: &AppHandle, output: bool) {
         if let Some(selection) = selection {
             match (selection.into_path(), state.roots.lock()) {
                 (Ok(path), Ok(mut roots)) if state.phase.load(Ordering::Acquire) == IDLE => {
-                    if output {
-                        roots.output_parent = Some(path);
-                    } else {
-                        roots.catalog = Some(path);
+                    match role {
+                        FolderRole::Input => roots.catalog = Some(path),
+                        FolderRole::Output => roots.output_parent = Some(path),
+                        FolderRole::PrivateConfig => roots.private_config = Some(path),
                     }
                     title(
                         &handle,
@@ -215,6 +225,20 @@ fn pick(app: &AppHandle, output: bool) {
         }
         state.picking.store(false, Ordering::Release);
     });
+}
+
+fn clear_private_config(app: &AppHandle) {
+    let state = app.state::<Arc<Desktop>>();
+    if state.phase.load(Ordering::Acquire) != IDLE || state.picking.load(Ordering::Acquire) {
+        error(
+            app,
+            "Folders cannot change while the server or a folder dialog is active.",
+        );
+        return;
+    }
+    if let Ok(mut roots) = state.roots.lock() {
+        roots.private_config = None;
+    }
 }
 
 fn checked_cli() -> std::io::Result<PathBuf> {
@@ -238,6 +262,12 @@ fn checked_cli() -> std::io::Result<PathBuf> {
 }
 
 fn finish(app: &AppHandle, state: &Desktop) {
+    let exports_confirmed = state
+        .exports
+        .lock()
+        .ok()
+        .map(|exports| exports.clone())
+        .is_some_and(|exports| exports.is_none_or(|exports| exports.shutdown()));
     let confirmed = match state.server.lock() {
         Ok(mut server) => match server.as_mut() {
             Some(server) => server.shutdown().is_ok(),
@@ -245,7 +275,7 @@ fn finish(app: &AppHandle, state: &Desktop) {
         },
         Err(_) => false,
     };
-    if confirmed && diagnostic_cleanup_confirmed(state) {
+    if confirmed && exports_confirmed && diagnostic_cleanup_confirmed(state) {
         state.exit_allowed.store(true, Ordering::Release);
         app.exit(0);
     } else {
@@ -286,6 +316,13 @@ fn claim_close(phase: &AtomicU8) -> Option<CloseAction> {
 
 fn request_close(app: &AppHandle) {
     let state = app.state::<Arc<Desktop>>().inner().clone();
+    // Fence chooser callbacks and file writes before changing the host phase.
+    let choosing = state
+        .exports
+        .lock()
+        .ok()
+        .and_then(|exports| exports.clone())
+        .is_some_and(|exports| exports.request_stop());
     match claim_close(&state.phase) {
         Some(CloseAction::Exit) => {
             state.exit_allowed.store(true, Ordering::Release);
@@ -301,7 +338,14 @@ fn request_close(app: &AppHandle) {
             title(app, "drmr — closing");
         }
         Some(CloseAction::Shutdown { previous }) => {
-            title(app, "drmr — closing");
+            title(
+                app,
+                if choosing {
+                    "drmr — cancel the save dialog to finish closing"
+                } else {
+                    "drmr — closing"
+                },
+            );
             let handle = app.clone();
             let worker_state = state.clone();
             if std::thread::Builder::new()
@@ -322,6 +366,114 @@ fn request_close(app: &AppHandle) {
             }
         }
         None => {}
+    }
+}
+
+fn export_notice(app: &AppHandle, notice: Notice) {
+    if app.state::<Arc<Desktop>>().phase.load(Ordering::Acquire) != RUNNING {
+        return;
+    }
+    match notice {
+        Notice::Saved => title(app, "drmr — private plan copy saved"),
+        Notice::Failed => error(
+            app,
+            "The plan copy could not be saved. Choose a new file in a private folder and try again. Existing files are never overwritten.",
+        ),
+        Notice::ChoosePrivateFile => error(
+            app,
+            "Choose a new JSON file in a private folder outside the input folder and drmr-output. Existing files are never overwritten.",
+        ),
+        Notice::CleanupUnconfirmed => error(
+            app,
+            "The partial plan copy could not be removed safely. drmr retains its file owner. Inspect the selected private folder, including hidden .drmr-plan-cleanup- folders, and preserve unfamiliar files. Restore the original private folder and select Quit drmr to retry cleanup.",
+        ),
+    }
+}
+
+fn download_plan(app: &AppHandle, url: &url::Url) {
+    let state = app.state::<Arc<Desktop>>();
+    if state.phase.load(Ordering::Acquire) != RUNNING {
+        return;
+    }
+    let exports = state
+        .exports
+        .lock()
+        .ok()
+        .and_then(|exports| exports.clone());
+    let Some(exports) = exports else {
+        return;
+    };
+    if !exports.request(url) {
+        title(app, "drmr — download unavailable");
+    }
+}
+
+fn native_download(app: &AppHandle, event: DownloadEvent<'_>) -> bool {
+    if let DownloadEvent::Requested { url, .. } = event {
+        download_plan(app, &url);
+    }
+    // Do not hand a destination to the platform download delegate.
+    false
+}
+
+fn choose_plan_file(app: &AppHandle, selection: Selection) {
+    let state = app.state::<Arc<Desktop>>();
+    let exports = state
+        .exports
+        .lock()
+        .ok()
+        .and_then(|exports| exports.clone());
+    let Some(exports) = exports else {
+        return;
+    };
+    if state.phase.load(Ordering::Acquire) != RUNNING || !exports.chooser_is_current(&selection) {
+        exports.selected(selection, None);
+        return;
+    }
+    let mut dialog = app
+        .dialog()
+        .file()
+        .set_title("Save a private plan copy outside the media folders")
+        .set_directory(selection.directory())
+        .set_file_name("drmr-plan.json")
+        .add_filter("JSON", &["json"]);
+    if let Some(window) = app.get_webview_window("console") {
+        dialog = dialog.set_parent(&window);
+    }
+    dialog.save_file(move |path| {
+        exports.selected(selection, path.and_then(|path| path.into_path().ok()));
+    });
+}
+
+fn failed_plan_start(app: &AppHandle, state: &Desktop) {
+    let confirmed = state.server.lock().is_ok_and(|mut server| {
+        let confirmed = server
+            .as_mut()
+            .is_none_or(|server| server.shutdown().is_ok());
+        if confirmed {
+            *server = None;
+        }
+        confirmed
+    });
+    if !confirmed {
+        state.phase.store(UNCONFIRMED, Ordering::Release);
+        title(app, "drmr — cleanup unconfirmed");
+        error(
+            app,
+            "The private plan folder could not be prepared, and server cleanup could not be confirmed. Select Quit drmr to retry cleanup.",
+        );
+    } else if state
+        .phase
+        .compare_exchange(STARTING, IDLE, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok()
+    {
+        title(app, "drmr — choose a separate private folder");
+        error(
+            app,
+            "The private plan folder could not be prepared outside the media folders. Choose a separate private configuration folder or another output location, then open the console again. Existing folder permissions have not been changed.",
+        );
+    } else {
+        finish(app, state);
     }
 }
 
@@ -348,16 +500,18 @@ fn open_console(app: &AppHandle) {
     {
         return;
     }
-    let roots = state
-        .roots
-        .lock()
-        .ok()
-        .and_then(|roots| Some((roots.catalog.clone()?, roots.output_parent.clone()?)));
-    let Some((catalog, output_parent)) = roots else {
+    let roots = state.roots.lock().ok().and_then(|roots| {
+        Some((
+            roots.catalog.clone()?,
+            roots.output_parent.clone()?,
+            roots.private_config.clone(),
+        ))
+    });
+    let Some((catalog, output_parent, private_config)) = roots else {
         state.phase.store(IDLE, Ordering::Release);
         error(
             app,
-            "Choose both a catalog folder and an output location from the File menu.",
+            "Choose both an input folder and an output location from the File menu.",
         );
         return;
     };
@@ -367,7 +521,8 @@ fn open_console(app: &AppHandle) {
     if std::thread::Builder::new().name("drmr-desktop-startup".into()).spawn(move || {
         let result = (|| {
             let cli = checked_cli().map_err(|_| ())?;
-            let mut config = ServerConfig::new(catalog, output_parent.join("drmr-output"));
+            let mut config = ServerConfig::new(catalog.clone(), output_parent.join("drmr-output"));
+            config.common_config_root.clone_from(&private_config);
             "127.0.0.1".clone_into(&mut config.bind_host);
             config.bind_port = 0;
             config.cli_argv = vec![cli.into_os_string()];
@@ -384,6 +539,15 @@ fn open_console(app: &AppHandle) {
                     return;
                 };
                 *worker_state.server.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(server);
+                let notices = handle.clone();
+                let chooser = handle.clone();
+                let directory = private_config.unwrap_or_else(|| output_parent.join("drmr-plans"));
+                let exports = PlanExports::start(origin.clone(), &catalog, &output_parent.join("drmr-output"), &directory, move |notice| export_notice(&notices, notice), move |selection| choose_plan_file(&chooser, selection));
+                let Ok(exports) = exports else {
+                    failed_plan_start(&handle, &worker_state);
+                    return;
+                };
+                *worker_state.exports.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::new(exports));
                 if let Ok(mut allowed) = worker_state.origin.lock() { *allowed = Some(origin.clone()); }
                 if worker_state.phase.compare_exchange(STARTING, RUNNING, Ordering::AcqRel, Ordering::Acquire).is_err() {
                     finish(&handle, &worker_state);
@@ -412,8 +576,22 @@ fn open_console(app: &AppHandle) {
 }
 
 fn menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
-    let catalog = MenuItem::with_id(app, "catalog", "Choose catalog folder…", true, None::<&str>)?;
+    let catalog = MenuItem::with_id(app, "catalog", "Choose input folder…", true, None::<&str>)?;
     let output = MenuItem::with_id(app, "output", "Choose output location…", true, None::<&str>)?;
+    let private_config = MenuItem::with_id(
+        app,
+        "private-config",
+        "Choose private configuration folder…",
+        true,
+        None::<&str>,
+    )?;
+    let clear_config = MenuItem::with_id(
+        app,
+        "clear-config",
+        "Clear private configuration selection",
+        true,
+        None::<&str>,
+    )?;
     let open = MenuItem::with_id(app, "open", "Open console", true, Some("CmdOrCtrl+O"))?;
     let tools = MenuItem::with_id(app, "tools", "Check external tools…", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit drmr", true, Some("CmdOrCtrl+Q"))?;
@@ -423,7 +601,19 @@ fn menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         true,
         &[&PredefinedMenuItem::about(app, None, None)?, &quit],
     )?;
-    let file = Submenu::with_items(app, "File", true, &[&catalog, &output, &open, &tools])?;
+    let file = Submenu::with_items(
+        app,
+        "File",
+        true,
+        &[
+            &catalog,
+            &output,
+            &private_config,
+            &clear_config,
+            &open,
+            &tools,
+        ],
+    )?;
     let edit = Submenu::with_items(
         app,
         "Edit",
@@ -457,7 +647,7 @@ fn main() -> std::process::ExitCode {
     }
     if arguments.len() == 1 && arguments[0] == "--help" {
         println!(
-            "drmr-desktop [--help | --version | --verify-bundle]\n\nOpen the native drmr console. Use the File menu to choose catalog and output folders."
+            "drmr-desktop [--help | --version | --verify-bundle]\n\nOpen the native drmr console. Use the File menu to choose input and output folders. A separate private configuration folder for keys and fetch settings is optional."
         );
         return std::process::ExitCode::SUCCESS;
     }
@@ -472,8 +662,10 @@ fn main() -> std::process::ExitCode {
         .manage(state)
         .menu(menu)
         .on_menu_event(|app, event| match event.id().as_ref() {
-            "catalog" => pick(app, false),
-            "output" => pick(app, true),
+            "catalog" => pick(app, FolderRole::Input),
+            "output" => pick(app, FolderRole::Output),
+            "private-config" => pick(app, FolderRole::PrivateConfig),
+            "clear-config" => clear_private_config(app),
             "open" => open_console(app),
             "quit" => request_close(app),
             "tools" => diagnose_tools(app),
@@ -481,6 +673,7 @@ fn main() -> std::process::ExitCode {
         })
         .setup(move |app| {
             let links = app.handle().clone();
+            let downloads = app.handle().clone();
             WebviewWindowBuilder::new(app, "console", WebviewUrl::App("index.html".into()))
                 .title("drmr — choose folders")
                 .inner_size(1100.0, 760.0)
@@ -508,6 +701,7 @@ fn main() -> std::process::ExitCode {
                     }
                     NewWindowResponse::Deny
                 })
+                .on_download(move |_, event| native_download(&downloads, event))
                 .build()?;
             Ok(())
         })

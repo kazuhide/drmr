@@ -28,6 +28,23 @@ pub struct JobHandle {
     pub log_path: PathBuf,
 }
 
+/// Native ownership observations, without interpreting a common CLI result.
+#[derive(Clone, Debug)]
+pub struct JobObservation {
+    pub handle: JobHandle,
+    pub supervision_confirmed: bool,
+    pub cleanup_confirmed: bool,
+}
+/// The same single lease used by catalog, HLS, queue and common operations.
+#[derive(Clone, Debug)]
+pub struct ExecutionObservation {
+    pub job_id: Option<String>,
+    pub busy: bool,
+    pub closing: bool,
+    pub cleanup_unconfirmed: bool,
+    pub owner: Option<&'static str>,
+}
+
 /// The job runner's errors.
 #[derive(Debug, thiserror::Error)]
 pub enum JobError {
@@ -90,6 +107,13 @@ struct Finished {
     supervision: SupervisionState,
 }
 
+enum CommonOwner {
+    Preparation {
+        token: String,
+        cleanup_unconfirmed: bool,
+    },
+    Job(String),
+}
 struct State {
     current_job_id: Option<String>,
     process: Option<Arc<Mutex<ManagedChild>>>,
@@ -100,6 +124,7 @@ struct State {
     supervision: SupervisionState,
     closing: bool,
     cleanup_unconfirmed: bool,
+    common_owner: Option<CommonOwner>,
     /// Outcomes of jobs that finished and were replaced as the current job.
     finished: HashMap<String, Finished>,
 }
@@ -211,7 +236,7 @@ impl State {
     }
 
     fn busy(&self) -> bool {
-        self.process.is_some() && self.exit_code.is_none()
+        self.common_owner.is_some() || (self.process.is_some() && self.exit_code.is_none())
     }
 
     fn handle(&self, job_id: &str, jobs_dir: &Path) -> Result<JobHandle, JobError> {
@@ -321,6 +346,7 @@ impl ConversionJobManager {
                 log_file: None,
                 exit_code: None,
                 cleanup_unconfirmed: false,
+                common_owner: None,
                 finished: HashMap::new(),
             }),
             #[cfg(windows)]
@@ -390,6 +416,7 @@ impl ConversionJobManager {
             &argv,
             &env,
             Some((&entry.asset_id, &output_root.join(&entry.asset_id))),
+            false,
         )
     }
 
@@ -410,7 +437,159 @@ impl ConversionJobManager {
         }
         let mut argv = self.cli_argv.clone();
         argv.extend(arguments.iter().cloned());
-        self.launch(&mut state, &argv, env, None)
+        self.launch(&mut state, &argv, env, None, false)
+    }
+
+    /// Reserve the shared lease before a common attempt creates private copies.
+    pub(crate) fn reserve_common(&self, token: &str) -> Result<(), JobError> {
+        let mut state = self.lock();
+        state.refresh()?;
+        if state.closing {
+            return Err(JobError::ShuttingDown);
+        }
+        if state.busy() {
+            return Err(JobError::AlreadyRunning);
+        }
+        if !crate::common_protocol::correlation_id(token) {
+            return Err(JobError::CleanupUnconfirmed);
+        }
+        state.common_owner = Some(CommonOwner::Preparation {
+            token: token.into(),
+            cleanup_unconfirmed: false,
+        });
+        Ok(())
+    }
+    /// A reserved common attempt uses only private typed result/progress channels.
+    pub(crate) fn submit_common(
+        &self,
+        token: &str,
+        request_file: &Path,
+    ) -> Result<JobHandle, JobError> {
+        let mut state = self.lock();
+        state.refresh()?;
+        if !matches!(&state.common_owner, Some(CommonOwner::Preparation { token: owner, .. }) if owner == token)
+        {
+            return Err(JobError::CleanupUnconfirmed);
+        }
+        if state.closing {
+            return Err(JobError::ShuttingDown);
+        }
+        let mut argv = self.cli_argv.clone();
+        argv.push(crate::common_protocol::JOB_ARGUMENT.into());
+        argv.push(request_file.as_os_str().to_owned());
+        let result = self.launch(&mut state, &argv, &self.fresh_env(), None, true);
+        match &result {
+            Ok(handle) | Err(JobError::SupervisionFailed(handle)) => {
+                state.common_owner = Some(CommonOwner::Job(handle.job_id.clone()));
+            }
+            _ => {}
+        }
+        result
+    }
+    pub(crate) fn retain_common_preparation(&self, token: &str) -> Result<(), JobError> {
+        let mut state = self.lock();
+        match &mut state.common_owner {
+            Some(CommonOwner::Preparation {
+                token: owner,
+                cleanup_unconfirmed,
+            }) if owner == token => {
+                *cleanup_unconfirmed = true;
+                Ok(())
+            }
+            _ => Err(JobError::CleanupUnconfirmed),
+        }
+    }
+    /// Only the exact unlaunched reservation may be released after its copies are gone.
+    pub(crate) fn release_common_preparation(&self, token: &str) -> Result<(), JobError> {
+        let mut state = self.lock();
+        if !matches!(&state.common_owner, Some(CommonOwner::Preparation { token: owner, .. }) if owner == token)
+        {
+            return Err(JobError::CleanupUnconfirmed);
+        }
+        state.common_owner = None;
+        Ok(())
+    }
+    /// Release common admission only after its native tree and private-copy cleanup.
+    pub fn release_common(&self, job_id: &str) -> Result<(), JobError> {
+        let mut state = self.lock();
+        state.refresh()?;
+        if !matches!(&state.common_owner, Some(CommonOwner::Job(owner)) if owner == job_id)
+            || state.exit_code.is_none()
+        {
+            return Err(JobError::CleanupUnconfirmed);
+        }
+        state.common_owner = None;
+        Ok(())
+    }
+
+    /// Forget only a common service's terminal receipt when its session is removed.
+    pub(crate) fn forget_common(&self, job_id: &str) -> Result<(), JobError> {
+        let mut state = self.lock();
+        state.refresh()?;
+        if matches!(&state.common_owner, Some(CommonOwner::Job(owner)) if owner == job_id) {
+            return Err(JobError::CleanupUnconfirmed);
+        }
+        if state.current_job_id.as_deref() == Some(job_id) {
+            if state.process.is_some() || state.exit_code.is_none() {
+                return Err(JobError::CleanupUnconfirmed);
+            }
+            state.current_job_id = None;
+            state.exit_code = None;
+        } else {
+            state.finished.remove(job_id);
+        }
+        Ok(())
+    }
+
+    pub fn observation(&self, job_id: &str) -> Result<JobObservation, JobError> {
+        let mut state = self.lock();
+        if state.current_job_id.as_deref() == Some(job_id) {
+            state.refresh()?;
+        }
+        let handle = state.handle(job_id, &self.jobs_dir)?;
+        let supervision = if state.current_job_id.as_deref() == Some(job_id) {
+            state.supervision
+        } else {
+            state
+                .finished
+                .get(job_id)
+                .ok_or_else(|| JobError::NotFound(job_id.into()))?
+                .supervision
+        };
+        Ok(JobObservation {
+            cleanup_confirmed: handle.exit_code.is_some(),
+            handle,
+            supervision_confirmed: supervision == SupervisionState::Established,
+        })
+    }
+
+    pub fn execution(&self) -> ExecutionObservation {
+        let mut state = self.lock();
+        let _ = state.refresh();
+        ExecutionObservation {
+            job_id: if matches!(state.common_owner, Some(CommonOwner::Preparation { .. })) {
+                None
+            } else {
+                state.busy().then(|| state.current_job_id.clone()).flatten()
+            },
+            busy: state.busy(),
+            closing: state.closing,
+            cleanup_unconfirmed: state.cleanup_unconfirmed
+                || matches!(
+                    state.common_owner,
+                    Some(CommonOwner::Preparation {
+                        cleanup_unconfirmed: true,
+                        ..
+                    })
+                ),
+            owner: if state.common_owner.is_some() {
+                Some("common")
+            } else if state.busy() {
+                Some("legacy")
+            } else {
+                None
+            },
+        }
     }
 
     fn launch(
@@ -419,12 +598,21 @@ impl ConversionJobManager {
         argv: &[OsString],
         env: &[(OsString, OsString)],
         catalog: Option<(&str, &Path)>,
+        private_channels: bool,
     ) -> Result<JobHandle, JobError> {
         let job_id = pyutil::uuid4_hex();
         let log_path = self.jobs_dir.join(format!("{job_id}.jsonl"));
         let log_file = native::create_private_new(&log_path).map_err(JobError::Launch)?;
-        let stdout = log_file.try_clone().map_err(JobError::Launch)?;
-        let stderr = log_file.try_clone().map_err(JobError::Launch)?;
+        let stdout = if private_channels {
+            Stdio::null()
+        } else {
+            Stdio::from(log_file.try_clone().map_err(JobError::Launch)?)
+        };
+        let stderr = if private_channels {
+            Stdio::null()
+        } else {
+            Stdio::from(log_file.try_clone().map_err(JobError::Launch)?)
+        };
         let program = argv.first().cloned().unwrap_or_default();
         let mut command = Command::new(&program);
         #[cfg(unix)]
@@ -433,8 +621,11 @@ impl ConversionJobManager {
             .args(&argv[1..])
             .env_clear()
             .envs(env.iter().map(|(name, value)| (name, value)))
-            .stdout(Stdio::from(stdout))
-            .stderr(Stdio::from(stderr));
+            .stdout(stdout)
+            .stderr(stderr);
+        if private_channels {
+            command.stdin(Stdio::null());
+        }
         command.env_remove(drmr_core::catalog_receipt::REQUEST_ENV);
         if let Some((asset, root)) = catalog {
             let request = self
@@ -528,7 +719,11 @@ impl ConversionJobManager {
         let job_id = {
             let mut state = self.lock();
             state.closing = true;
-            state.current_job_id.clone()
+            if matches!(state.common_owner, Some(CommonOwner::Preparation { .. })) {
+                None
+            } else {
+                state.current_job_id.clone()
+            }
         };
         if let Some(job_id) = job_id {
             self.request_stop(&job_id)?;
@@ -845,6 +1040,68 @@ impl Iterator for TailLog<'_> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn common_reservation_rejects_wrong_and_old_tokens_and_never_exposes_a_previous_job() {
+        let root = native::private_tempdir().unwrap();
+        let jobs = root.path().join("jobs");
+        native::create_private_dir_all(&jobs).unwrap();
+        let manager = ConversionJobManager::new(
+            &jobs,
+            vec![root.path().join("absent-cli").into_os_string()],
+            Arc::new(Vec::new),
+        )
+        .unwrap();
+        let old = "a".repeat(32);
+        {
+            let mut state = manager.lock();
+            state.current_job_id = Some(old.clone());
+            state.exit_code = Some(0);
+            state.supervision = SupervisionState::Established;
+        }
+        let token = "b".repeat(32);
+        manager.reserve_common(&token).unwrap();
+        let observed = manager.execution();
+        assert!(observed.busy);
+        assert_eq!(observed.owner, Some("common"));
+        assert!(observed.job_id.is_none());
+        assert!(matches!(
+            manager.submit_command(&[], &[]),
+            Err(JobError::AlreadyRunning)
+        ));
+        assert!(manager.release_common(&old).is_err());
+        assert!(manager.release_common_preparation(&old).is_err());
+        assert!(
+            manager
+                .submit_common(&old, &jobs.join("unused.json"))
+                .is_err()
+        );
+        assert_eq!(std::fs::read_dir(&jobs).unwrap().count(), 0);
+        let request = jobs.join("request.json");
+        drop(native::create_private_new(&request).unwrap());
+        assert!(matches!(
+            manager.submit_common(&token, &request),
+            Err(JobError::Launch(_))
+        ));
+        assert!(manager.execution().busy);
+        manager.request_stop(&old).unwrap();
+        assert!(manager.execution().busy);
+        manager.retain_common_preparation(&token).unwrap();
+        assert!(manager.execution().cleanup_unconfirmed);
+        manager.shutdown().unwrap();
+        assert!(manager.execution().job_id.is_none());
+        assert!(matches!(
+            manager.submit_common(&token, &request),
+            Err(JobError::ShuttingDown)
+        ));
+        assert!(manager.execution().busy);
+        manager.release_common_preparation(&token).unwrap();
+        assert!(!manager.execution().busy);
+        assert!(manager.release_common_preparation(&token).is_err());
+        assert!(matches!(
+            manager.reserve_common(&"c".repeat(32)),
+            Err(JobError::ShuttingDown)
+        ));
+    }
     #[cfg(unix)]
     #[test]
     fn a_cli_without_the_handshake_fails_even_if_its_actual_exit_code_is_zero() {
@@ -907,6 +1164,7 @@ mod tests {
             log_file: Some(File::create(root.join("job.jsonl")).unwrap()),
             exit_code: None,
             cleanup_unconfirmed: false,
+            common_owner: None,
             finished: HashMap::new(),
         }
     }

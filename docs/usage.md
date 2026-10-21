@@ -429,7 +429,33 @@ DRMR_OUTPUT_ROOT=/absolute/path/output \
 drmr serve
 ```
 
-Open `http://127.0.0.1:8080`. Both root directories are required. `DRMR_BIND_PORT` changes the port; `DRMR_MAX_WORKERS` limits HLS packaging workers. The console requires catalog entries prepared for it; it is not a general file browser. See `drmr serve --help` for options. The optional [Desktop host](desktop.md) opens this same console in a native window.
+Open `http://127.0.0.1:8080`. Both root directories are required. `DRMR_BIND_PORT` changes the port; `DRMR_MAX_WORKERS` caps workers for the saved-plan workflow and prepared HLS packaging. Automatic allocation stays within that cap. The new workflow selects from allowed input folders; prepared catalog entries still require the documented layout. See `drmr serve --help` for options. The optional [Desktop host](desktop.md) opens this same console in a native window.
+
+### Saved-plan workflow
+
+Choose **New conversion** to use the same saved plans as the CLI:
+
+1. Select **Local media**, **HLS VOD URL** or **Saved CLI plan**, then **Open input**. The picker lists only server/native allowed folders; it does not upload files or accept arbitrary filesystem paths.
+2. For new media, select a **Key file** if needed and choose **Analyze**. URL input can select a **Fetch policy file** from the private configuration folder. The browser never retrieves either file's contents.
+3. Add 1–8 named outputs, selecting format, encryption, DRM signaling and optional required manifest checks separately. Choose the output parent and a new folder name, then **Save plan**.
+4. **Download original plan** preserves the original bytes and absolute paths. Keep the file private; it can contain paths and signed URLs. **Convert** creates new output and refuses an existing destination. Editing output settings requires another saved plan.
+5. **Verify again** independently compares the plan and existing output without conversion. To verify later, open the exported CLI plan through **Saved CLI plan**; no new analysis or conversion is needed.
+
+The server operator can set `DRMR_COMMON_CONFIG_ROOT` to a private configuration folder separate from input, output and custom static folders. The picker sends role-bound references; keys, configuration contents and executable paths are not HTTP inputs. No configuration folder is required for a clear flow without fetch settings.
+
+The private configuration picker replaces file and folder names with numbered labels. Each page follows filename order; check the corresponding local folder before choosing a file. Configuration contents and original names are not shown in the console.
+
+URL sessions use a generic **HLS VOD URL** label. The server does not return the submitted URL to the page; credentials can occur in the path as well as in query parameters. The input field is cleared when submitted.
+
+Every newly saved plan is v2, including a one-output list. When supplying a key file, analyze accepts either schema; new plan creation and v2 plan conversion/verification use v2 keys. Imported v1 plans use v1 keys. See [multiple outputs](multiple-outputs.md) and the [key-file reference](https://kazuhide.github.io/drmr/guide/#cli-reference).
+
+The common workflow fixes a request identifier before submitting an operation. A lost reply is recovered by GET lookup of that exact request and job; a missing live receipt remains unknown. **Check status** never repeats the POST. Stop acknowledgment is separate from confirmed process cleanup, and unconfirmed cleanup retains the global execution slot shared with prepared workflows. Selection and language changes do not release it.
+
+Each session admits at most 32 requests, including claimed requests later refused. At the limit, download the plan, explicitly **Close this conversion**, and open the saved plan in a new session for verification. Closing uses an admission fence: delayed requests for the old session cannot start work. A pending, running or cleanup-unconfirmed session cannot close. Closing the page alone is not this explicit action.
+
+### Prepared workflows
+
+The existing catalog conversion, clear-HLS analysis/packaging, queue and before/after player remain under **Prepared content**. These use their existing API and prepared-input restrictions. Their HLS access profiles are separate from the common workflow's fetch-policy file.
 
 The console gives each JSON request a 15-second response budget, including response headers and body. This is a page recovery limit, not a deadline for media processing. If a launch response is lost, the page does not repeat the launch: it checks newly recorded jobs against the pre-submit list, content and job kind. An ambiguous or missing match remains unknown and keeps another launch blocked. Use **Check job status** to repeat only the status lookup. Lost job observation also keeps its owner until status can be checked again. A lost Stop response does not establish cleanup; its status action checks the same job without resending Stop. A known HTTP refusal keeps its normal error classification.
 
@@ -439,7 +465,7 @@ Use **Stop** beside a running job to terminate that job and its child processes.
 
 On macOS and Linux, media tools use separate process groups: operating-system groups that can be stopped together. This lets a timed-out tool and its descendants be cleaned up independently. The console server owns these tool processes directly, as well as the job CLI, so cleanup still includes the tools if the CLI exits first. Windows uses nested job objects for this ownership. Completion requires confirmation of both the CLI and its managed tools. A pause or resume notification is not an exit: a paused tool remains owned and can still be terminated with Stop. Cleanup waits for an actual exit and confirmation that the owned process group is gone.
 
-Use the same version of `drmr` for the server's job CLI. If you set `--cli`, point it to that executable. On macOS and Linux, console jobs establish supervision before media work starts; an incompatible executable or a wrapper that launches another CLI process is refused. Use the standalone CLI for batch processing and other commands; the console's supervised job profile covers catalog conversion, HLS analysis and HLS packaging.
+Use the same version of `drmr` for the server's job CLI. If you set `--cli`, point it to that executable. On macOS and Linux, console jobs establish supervision before media work starts; an incompatible executable or a wrapper that launches another CLI process is refused. Use the standalone CLI for batch processing and other commands; the console's supervised job profile covers analyze, saved-plan creation/conversion/verification, catalog conversion, HLS analysis and HLS packaging.
 
 If cleanup cannot be confirmed, the job keeps its execution slot and temporary configuration files; check the server log. Job status, stop and log endpoints remain available while shutdown waits or reports an error; new work is refused. A stop response only acknowledges the request. The job status and final log event establish completion. The local API accepts `POST /api/jobs/<job-id>/stop` with an empty JSON object (`{}`): `202` while running, `200` after completion, `404` for an unknown job, and `503` when cleanup is unconfirmed. Repeating a request is safe; an old job ID cannot stop a newer job.
 

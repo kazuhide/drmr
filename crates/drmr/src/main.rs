@@ -5,6 +5,7 @@
 mod analyze_cli;
 mod bundle_cli;
 mod cancellation;
+mod common_job;
 mod convert_cli;
 mod doctor;
 mod download_cli;
@@ -127,7 +128,12 @@ fn main() -> ExitCode {
         && !std::env::args_os().nth(2).is_some_and(|command| {
             matches!(
                 command.to_str(),
-                Some("run" | "analyze-hls" | "package-hls")
+                Some(
+                    "run"
+                        | "analyze-hls"
+                        | "package-hls"
+                        | drmr_server::common_protocol::JOB_ARGUMENT
+                )
             )
         })
     {
@@ -138,6 +144,20 @@ fn main() -> ExitCode {
     // argument, reads its private configuration from stdin and never parses a command line.
     if invoked_as_worker() {
         return process_exit(drmr_core::batch::worker_main());
+    }
+    let job_arguments: Vec<_> = std::env::args_os()
+        .skip(if supervised { 2 } else { 1 })
+        .collect();
+    if job_arguments
+        .first()
+        .is_some_and(|value| value == drmr_server::common_protocol::JOB_ARGUMENT)
+    {
+        return if let [_, path] = job_arguments.as_slice() {
+            common_job::run(Path::new(path))
+        } else {
+            eprintln!("drmr: invalid common job request");
+            ExitCode::from(EXIT_INVALID)
+        };
     }
     let command = if supervised {
         Cli::parse_from(

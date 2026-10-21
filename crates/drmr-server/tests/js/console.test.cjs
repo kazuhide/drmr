@@ -44,6 +44,7 @@ function harness(options = {}) {
   const queued = [];
   const sandbox = {
     window: { addEventListener() {}, App: {
+      CommonConsole: options.commonConsole,
       Jobs: options.observer || { watch() { return { stop() {} }; }, resume() { return { stop() {} }; } },
       I18n: { t: (key, values) => key + (values?.n == null ? '' : ':' + values.n), has: () => false, getLanguage: () => 'en', error: () => 'fixed-error' },
       Api: {
@@ -98,7 +99,7 @@ function harness(options = {}) {
     for (const id of ids) assert.equal(checkbox(id).checked, false, id + ' starts unchecked');
     assert.equal(element('bulk-bar').hidden, true);
   };
-  return { controller, element, checkbox, toggle, unchecked, queued, i18n: sandbox.window.App.I18n };
+  return { bridge: sandbox.window.App.ConsoleBridge, controller, element, checkbox, toggle, unchecked, queued, i18n: sandbox.window.App.I18n };
 }
 
 test('special catalog IDs render unchecked and toggle independently', () => {
@@ -589,3 +590,15 @@ for (const phase of ['post-timeout', 'status-timeout', 'post-accepted', 'status-
     assert.equal(statusGets, phase.startsWith('post') ? 0 : 1);
   });
 }
+
+test('a common owner blocks legacy conversion, analysis and queue admission', async () => {
+  let posts = 0;
+  const h = harness({ catalog: [{ asset_id: 'asset' }], commonConsole: { isBusy: () => true, leaseText: () => 'common-running' },
+    postConvert: async () => { posts++; return { job_id: 'wrong' }; }, analyzeHls: async () => { posts++; return { job_id: 'wrong' }; } });
+  h.controller.startConvert(h.controller.state.contents[0]);
+  h.element('hls-url').value = 'https://example.invalid/master.m3u8'; h.element('hls-asset-id').value = 'new-asset';
+  h.controller.startAnalysis();
+  h.toggle('asset', true); h.element('bulk-queue-btn').dispatch('click');
+  await flush();
+  assert.equal(posts, 0); assert.deepEqual(h.queued, []); assert.equal(h.controller.state.run, null);
+});

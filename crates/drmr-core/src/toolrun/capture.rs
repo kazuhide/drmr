@@ -425,24 +425,9 @@ mod lifecycle_tests {
                 .args(["--exact", name, "--nocapture"])
                 .env(HARNESS, name)
                 .stdin(Stdio::null());
-            let mut child = ManagedChild::spawn(command, true).unwrap();
-            let deadline = Instant::now() + Duration::from_secs(20);
-            let status = loop {
-                if let Some(status) = child.try_wait().unwrap() {
-                    break Some(status);
-                }
-                if Instant::now() >= deadline {
-                    break None;
-                }
-                std::thread::sleep(POLL);
-            };
             // A blocking-reader regression must fail the parent test, never hang
             // the entire suite or abandon its child harness and fixture process.
-            child.finish().unwrap();
-            assert!(
-                status.is_some_and(|status| status.success()),
-                "captured-reader join harness failed or remained blocked"
-            );
+            crate::test_harness::run(command, name, Duration::from_secs(20));
             return true;
         }
         false

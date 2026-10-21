@@ -54,6 +54,32 @@ fn navigation_cannot_change_port_host_scheme_or_add_credentials() {
 }
 
 #[test]
+fn plan_exports_require_the_exact_owned_endpoint_without_url_extras() {
+    let origin = ConsoleOrigin::new("127.0.0.1:4000".parse().unwrap()).unwrap();
+    let path = "/api/common/plans/0123456789abcdef0123456789abcdef/export";
+    assert!(origin.permits_plan_export(&origin.url().join(path).unwrap()));
+    for value in [
+        format!("http://127.0.0.1:4001{path}"),
+        format!("http://localhost:4000{path}"),
+        format!("https://127.0.0.1:4000{path}"),
+        format!("http://user@127.0.0.1:4000{path}"),
+        format!("http://127.0.0.1:4000{path}?token=private"),
+        format!("http://127.0.0.1:4000{path}#fragment"),
+        format!("http://127.0.0.1:4000{path}/"),
+        "http://127.0.0.1:4000/api/common/plans/0123456789ABCDEF0123456789ABCDEF/export".into(),
+        "http://127.0.0.1:4000/api/common/plans/0123456789abcdef/export".into(),
+        "http://127.0.0.1:4000/api/common/plans/%30123456789abcdef0123456789abcdef/export".into(),
+        "http://127.0.0.1:4000/api//common/plans/0123456789abcdef0123456789abcdef/export".into(),
+        "http://127.0.0.1:4000/assets/drmr-plan.json".into(),
+    ] {
+        assert!(
+            !origin.permits_plan_export(&Url::parse(&value).unwrap()),
+            "unexpected export admission: {value}"
+        );
+    }
+}
+
+#[test]
 fn the_cli_is_an_absolute_sibling_without_search_path_fallback() {
     assert!(bundled_cli(Path::new("drmr-desktop")).is_none());
     let executable = std::env::current_exe().unwrap();

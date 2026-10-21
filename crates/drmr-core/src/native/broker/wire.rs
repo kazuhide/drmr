@@ -219,18 +219,15 @@ mod tests {
     fn excess_rights_are_rejected_and_every_received_descriptor_is_closed() {
         const WORKER: &str = "DRMR_TEST_EXCESS_RIGHTS_WORKER";
         if std::env::var_os(WORKER).is_none() {
+            const NAME: &str = "native::broker::wire::tests::excess_rights_are_rejected_and_every_received_descriptor_is_closed";
             // This raw recvmsg boundary deliberately observes descriptors before
             // CLOEXEC validation. Isolate its FD table from unrelated test fixture
             // installers that use std::Command rather than the production gate.
             let mut command = std::process::Command::new(std::env::current_exe().unwrap());
-            command.args(["--exact","native::broker::wire::tests::excess_rights_are_rejected_and_every_received_descriptor_is_closed","--nocapture"]).env(WORKER,"1");
-            let mut child = crate::native::ManagedChild::spawn(command, true).unwrap();
-            let status = child.wait().unwrap();
-            child.finish().unwrap();
-            assert!(
-                status.success(),
-                "isolated malformed-rights ownership control failed"
-            );
+            command
+                .args(["--exact", NAME, "--nocapture"])
+                .env(WORKER, "1");
+            crate::test_harness::run(command, NAME, std::time::Duration::from_secs(10));
             return;
         }
         let (a, b) = UnixStream::pair().unwrap();

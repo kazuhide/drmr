@@ -1,6 +1,8 @@
 //! HTTP API and embedded browser console for drmr.
 
 pub mod catalog;
+pub mod common;
+pub mod common_protocol;
 pub mod config;
 pub mod hls;
 pub mod http;
@@ -37,6 +39,8 @@ pub struct App {
     pub config: Arc<ServerConfig>,
     /// The job runner (`<output_root>/_jobs`).
     pub manager: Arc<jobs::ConversionJobManager>,
+    /// The common CLI console service.
+    pub common: Arc<common::CommonService>,
     /// The record machinery and the clear-HLS service.
     pub service: Arc<hls::HlsService>,
     /// The conversion queue.
@@ -74,6 +78,8 @@ impl App {
             .map_err(AppError::Jobs)?,
         );
         let service = hls::HlsService::new(config.clone(), manager.clone())?;
+        let common =
+            common::CommonService::new(config.clone(), manager.clone()).map_err(AppError::Jobs)?;
         let queue = queue::ConversionQueue::new(config.clone(), manager.clone(), service.clone());
         let static_root = match &config.static_dir {
             Some(directory) => static_files::StaticRoot::Dir(directory.clone()),
@@ -82,6 +88,7 @@ impl App {
         Ok(Arc::new(App {
             config,
             manager,
+            common,
             service,
             queue,
             static_root,
@@ -99,6 +106,7 @@ impl App {
             .shutdown_lock
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.common.begin_shutdown();
         self.manager.begin_shutdown();
         self.closing
             .store(true, std::sync::atomic::Ordering::SeqCst);
@@ -111,13 +119,16 @@ impl App {
         self.requests.close();
         let streams_ok = self.streams.shutdown().is_ok();
         self.requests.drain();
+        let common_ok = self.common.shutdown().is_ok();
         let service_ok = self.service.shutdown().is_ok();
-        if !queue_ok || !streams_ok || !service_ok {
+        if !queue_ok || !streams_ok || !service_ok || !common_ok {
             // A failed embedding host still owns the server. Permit only its
             // diagnostic routes, with fresh owned streams for logs.
             self.streams.reopen_after_drain();
             self.requests.reopen();
-            return Err(if !queue_ok || !streams_ok {
+            return Err(if !common_ok {
+                ShutdownError::CleanupUnconfirmed
+            } else if !queue_ok || !streams_ok {
                 ShutdownError::WorkerUnconfirmed
             } else {
                 ShutdownError::RecordsUnconfirmed
@@ -165,9 +176,15 @@ fn host_guard(req: &Req, config: &ServerConfig) -> Option<Reply> {
 /// `Sec-Fetch-Site` other than `same-origin` / `none`) is `403`; a `POST` without JSON (but the
 /// license route) is `415`.
 fn hls_guard(req: &Req) -> Option<Reply> {
-    if !["/api/hls/", "/api/jobs/", "/api/queue", "/api/convert"]
-        .iter()
-        .any(|prefix| req.path.starts_with(prefix))
+    if ![
+        "/api/hls/",
+        "/api/jobs/",
+        "/api/queue",
+        "/api/convert",
+        "/api/common/",
+    ]
+    .iter()
+    .any(|prefix| req.path.starts_with(prefix))
     {
         return None;
     }
@@ -238,6 +255,7 @@ fn host_url(req: &Req) -> String {
 /// `hls_no_store`: no caching of the API, report and platform answers.
 fn no_store(path: &str, reply: &mut Reply) {
     if [
+        "/api/common/",
         "/api/hls/",
         "/api/reports/",
         "/reports/",
@@ -348,6 +366,11 @@ async fn handle(
     let (mut reply, timed) =
         if let Some(reply) = host_guard(&req, &app.config).or_else(|| hls_guard(&req)) {
             // The guard runs before the request timer starts (`before_request` order).
+            let reply = if req.path.starts_with("/api/common/") {
+                app.common.guard_reply(reply.status)
+            } else {
+                reply
+            };
             (reply, false)
         } else {
             (respond(&app, &mut req, body).await, true)
@@ -381,7 +404,8 @@ async fn respond(app: &Arc<App>, req: &mut Req, body: axum::body::Body) -> Reply
         Match::Found(endpoint, values) => {
             let observation = matches!(
                 endpoint,
-                router::Endpoint::Index
+                router::Endpoint::Common
+                    | router::Endpoint::Index
                     | router::Endpoint::Static
                     | router::Endpoint::JobStatus
                     | router::Endpoint::JobStop
@@ -398,15 +422,29 @@ async fn respond(app: &Arc<App>, req: &mut Req, body: axum::body::Body) -> Reply
                     .content_length()
                     .is_some_and(|length| length > MAX_CONTENT_LENGTH)
                 {
-                    return http::html_error(413);
+                    return if endpoint == router::Endpoint::Common {
+                        app.common.guard_reply(413)
+                    } else {
+                        http::html_error(413)
+                    };
                 }
                 match read_body(body).await {
                     Ok(bytes) => req.body = bytes,
-                    Err(status) => return http::html_error(status),
+                    Err(status) => {
+                        return if endpoint == router::Endpoint::Common {
+                            app.common.guard_reply(status)
+                        } else {
+                            http::html_error(status)
+                        };
+                    }
                 }
             }
             let Some(permit) = app.requests.enter() else {
-                return Reply::json_error(503, "server-shutting-down");
+                return if endpoint == router::Endpoint::Common {
+                    app.common.guard_reply(503)
+                } else {
+                    Reply::json_error(503, "server-shutting-down")
+                };
             };
             let app = app.clone();
             let request = req.clone();

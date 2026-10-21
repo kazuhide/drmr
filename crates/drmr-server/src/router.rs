@@ -3,6 +3,8 @@
 /// Every endpoint of the application.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Endpoint {
+    /// The common CLI console resources.
+    Common,
     /// `GET /`
     Index,
     /// `GET /static/<path:filename>`
@@ -81,6 +83,81 @@ struct Rule {
 use Part::{Path as P, Static as S, Var as V};
 
 const RULES: &[Rule] = &[
+    Rule {
+        parts: &[S("api"), S("common"), S("capabilities")],
+        method: "GET",
+        endpoint: Endpoint::Common,
+    },
+    Rule {
+        parts: &[S("api"), S("common"), S("files")],
+        method: "GET",
+        endpoint: Endpoint::Common,
+    },
+    Rule {
+        parts: &[S("api"), S("common"), S("sessions")],
+        method: "GET",
+        endpoint: Endpoint::Common,
+    },
+    Rule {
+        parts: &[S("api"), S("common"), S("sessions")],
+        method: "POST",
+        endpoint: Endpoint::Common,
+    },
+    Rule {
+        parts: &[S("api"), S("common"), S("session-requests"), V],
+        method: "GET",
+        endpoint: Endpoint::Common,
+    },
+    Rule {
+        parts: &[S("api"), S("common"), S("sessions"), V],
+        method: "GET",
+        endpoint: Endpoint::Common,
+    },
+    Rule {
+        parts: &[S("api"), S("common"), S("sessions"), V],
+        method: "DELETE",
+        endpoint: Endpoint::Common,
+    },
+    Rule {
+        parts: &[S("api"), S("common"), S("jobs")],
+        method: "POST",
+        endpoint: Endpoint::Common,
+    },
+    Rule {
+        parts: &[S("api"), S("common"), S("sessions"), V, S("requests"), V],
+        method: "GET",
+        endpoint: Endpoint::Common,
+    },
+    Rule {
+        parts: &[S("api"), S("common"), S("jobs"), V],
+        method: "GET",
+        endpoint: Endpoint::Common,
+    },
+    Rule {
+        parts: &[S("api"), S("common"), S("jobs"), V, S("stop")],
+        method: "POST",
+        endpoint: Endpoint::Common,
+    },
+    Rule {
+        parts: &[S("api"), S("common"), S("analyses"), V],
+        method: "GET",
+        endpoint: Endpoint::Common,
+    },
+    Rule {
+        parts: &[S("api"), S("common"), S("plans"), V],
+        method: "GET",
+        endpoint: Endpoint::Common,
+    },
+    Rule {
+        parts: &[S("api"), S("common"), S("plans"), V, S("export")],
+        method: "GET",
+        endpoint: Endpoint::Common,
+    },
+    Rule {
+        parts: &[S("api"), S("common"), S("reports"), V],
+        method: "GET",
+        endpoint: Endpoint::Common,
+    },
     Rule {
         parts: &[S("")],
         method: "GET",

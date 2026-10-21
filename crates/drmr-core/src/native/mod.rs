@@ -6,7 +6,7 @@
 mod pipe;
 pub(crate) use pipe::{CapturedStderr, CapturedStdout, prepare_stderr, prepare_stdout};
 mod identity;
-pub(crate) use identity::FileIdentity;
+pub use identity::FileIdentity;
 mod files;
 #[cfg(windows)]
 pub use files::{PrivateDirectoryGuard, pin_private_directory};

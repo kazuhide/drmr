@@ -67,20 +67,25 @@ impl RouteError {
 type Answer = Result<Reply, RouteError>;
 
 pub fn reads_body(endpoint: Endpoint, method: &str) -> bool {
-    matches!(
-        endpoint,
-        Endpoint::Convert
-            | Endpoint::JobStop
-            | Endpoint::HlsAnalyze
-            | Endpoint::HlsPackage
-            | Endpoint::PlaybackSessions
-            | Endpoint::QueueAdd
-            | Endpoint::PlaybackLicense
-    ) || (endpoint == Endpoint::ClearkeyLicense && method == "POST")
+    (endpoint == Endpoint::Common && matches!(method, "POST" | "DELETE"))
+        || matches!(
+            endpoint,
+            Endpoint::Convert
+                | Endpoint::JobStop
+                | Endpoint::HlsAnalyze
+                | Endpoint::HlsPackage
+                | Endpoint::PlaybackSessions
+                | Endpoint::QueueAdd
+                | Endpoint::PlaybackLicense
+        )
+        || (endpoint == Endpoint::ClearkeyLicense && method == "POST")
 }
 
 /// Run one endpoint.
 pub fn dispatch(app: &Arc<App>, endpoint: Endpoint, values: &[String], req: &Req) -> Reply {
+    if endpoint == Endpoint::Common {
+        return app.common.dispatch(req);
+    }
     let value = |index: usize| values.get(index).map_or("", String::as_str);
     let answer = match endpoint {
         Endpoint::Index => page(app, req, "index.html", false),
@@ -244,6 +249,9 @@ fn page(app: &Arc<App>, req: &Req, name: &str, no_store: bool) -> Answer {
         std::io::ErrorKind::NotFound => RouteError::NotFound,
         _ => RouteError::Internal,
     })?;
+    if matches!(&facts.source, crate::http::FileSource::Disk(path) if app.common.denied(path)) {
+        return Err(RouteError::NotFound);
+    }
     let mimetype = static_files::guess_type(name).unwrap_or("application/octet-stream");
     let mut reply = http::send_file(req, &facts, mimetype);
     if no_store {
@@ -254,6 +262,9 @@ fn page(app: &Arc<App>, req: &Req, name: &str, no_store: bool) -> Answer {
 
 fn static_file(app: &Arc<App>, req: &Req, filename: &str) -> Answer {
     let facts = static_files::lookup(&app.static_root, filename).ok_or(RouteError::Http(404))?;
+    if matches!(&facts.source, crate::http::FileSource::Disk(path) if app.common.denied(path)) {
+        return Err(RouteError::NotFound);
+    }
     let name = facts
         .path
         .file_name()
@@ -1047,6 +1058,9 @@ fn source(app: &Arc<App>, req: &Req, asset_id: &str, rel: &str) -> Answer {
         .ok_or(RouteError::NotFound)?;
     // Rooted at the entry's discovered directory, never `catalog_root / asset_id`.
     let full = resolve_within_root(rel, &entry.entry_dir.join("download"))?;
+    if app.common.denied(&full) {
+        return Err(RouteError::NotFound);
+    }
     send_disk_file(req, &full, mime_for(&full))
 }
 
@@ -1098,6 +1112,9 @@ fn output(app: &Arc<App>, req: &Req, asset_id: &str, rel: &str) -> Answer {
     let root = pyutil::resolve(&app.config.output_root).map_err(|_| RouteError::Internal)?;
     let asset_root = pyutil::resolve(&root.join(asset_id)).map_err(|_| RouteError::Internal)?;
     let full = resolve_within_root(rel, &asset_root)?;
+    if app.common.denied(&full) {
+        return Err(RouteError::NotFound);
+    }
     // The subtree is checked on the resolved path: neither `cbcs/../clear/…` nor a symlink
     // from `cbcs/` into `clear/` reaches the decrypted copies.
     let subtree = full

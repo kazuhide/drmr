@@ -334,6 +334,9 @@ impl From<ConversionError> for ConfigurationError {
 }
 
 pub(crate) fn json(value: &serde_json::Value) -> std::io::Result<()> {
+    if let Some(result) = crate::common_job::result(value) {
+        return result;
+    }
     let mut out = std::io::stdout().lock();
     serde_json::to_writer_pretty(&mut out, value)?;
     writeln!(out)
