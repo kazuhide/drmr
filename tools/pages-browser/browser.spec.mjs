@@ -5,6 +5,8 @@ import { assets, digest, liveMode, publicOrigin, localOrigin, allowedRequest, as
 import { requireFocus, requireImages, requireLayout, layoutObservation, focusObservation, pollFocus, requireClippedFocusTimeout, partialFocusCandidate, FocusConditionTimeout } from './checks.mjs';
 import { locales, english } from './locales.mjs';
 import { matrixColumns, matrixRows, matrixObservation, requireMatrixLayout, requireMatrixMovement, completeMatrixKey } from './matrix.mjs';
+import { matrixRecipes, recipeObservation, requireRecipe, requireRecipeIdentity, requireRecipePosition,
+  matrixLinkExposure, requireMatrixLinkExposure } from './recipes.mjs';
 
 const live = liveMode(process.env.PAGES_LIVE);
 const origin = live ? publicOrigin : localOrigin;
@@ -65,7 +67,7 @@ async function renderedFonts(page, context) {
   }
 }
 
-function monitor(page) {
+function monitor(page, coldFonts) {
   const evidence = { console: [], pageErrors: [], failedRequests: [], responses: [], focusChecks: [], pages: [] };
   const pending = [];
   page.on('console', value => {
@@ -77,6 +79,7 @@ function monitor(page) {
     const row = { url: response.url(), status: response.status(), content_type: response.headers()['content-type'],
       cache_control: response.headers()['cache-control'], asset: assetPath(response.url()) };
     evidence.responses.push(row);
+    coldFonts?.bindResponse(response, row);
     if (row.asset) pending.push(response.body().then(bytes => { row.sha256 = digest(bytes); })
       .catch(() => { row.body_error = 'response-body-unavailable'; }));
   });
@@ -95,6 +98,8 @@ async function requireTargetFocus(page, target, phase, ordinal) {
   try {
     await pollFocus(() => target.evaluate(focusObservation), check.samples);
     requireFocus(check.samples.at(-1));
+    check.matrixLinkExposure = await target.evaluate(matrixLinkExposure);
+    requireMatrixLinkExposure(check.matrixLinkExposure);
     check.passed = true;
     return check.samples.at(-1);
   } catch (error) {
@@ -125,7 +130,7 @@ test.afterEach(async ({ page }, info) => {
 
 const focusSelector = 'a[href], pre[tabindex="0"], .matrix-scroll[tabindex="0"]';
 // Fixed inventories include the intentional documentation links in each locale.
-const focusTargetCounts = { en: 36, ja: 35 };
+const focusTargetCounts = { en: 81, ja: 80 };
 
 function textWithoutNotes(node) {
   const text = value => value.nodeType === Node.TEXT_NODE ? value.textContent :
@@ -169,6 +174,14 @@ async function renderedMatrix(page, locale) {
       const cell = cells.nth(column);
       const text = await cell.evaluate(textWithoutNotes);
       await expect(cell.locator('code')).toHaveText(protections.slice(1));
+      const recipes = matrixRecipes.filter(recipe => recipe.row === expected.id && recipe.column === column);
+      await expect(cell.locator('a')).toHaveCount(recipes.length);
+      for (const [offset, recipe] of recipes.entries()) {
+        const link = cell.locator('a').nth(offset);
+        await expect(link).toHaveText(recipe.label);
+        expect(new URL(await link.getAttribute('href'), page.url()).href)
+          .toBe(origin + '/drmr/' + locale.route + 'guide/#' + recipe.id);
+      }
       expect(protections.length ? text.replace(/[\s/]/g, '') : text)
         .toBe(protections.length ? protections.join('') : locale.outside);
       values.push(text);
@@ -260,10 +273,315 @@ async function nativeMatrixScroll(page, wrapper, width) {
   }
 }
 
-async function projectOnly(context) {
+async function nativeMatrixOrigin(page, target) {
+  const initial = await target.evaluate(matrixObservation);
+  requireMatrixLayout(initial);
+  expect(initial.focused).toBe(true);
+  const samples = [initial];
+  const deadline = performance.now() + 5000;
+  for (let count = 0; samples.at(-1).scrollLeft > 0 && count < 64; count++) {
+    samples.push(await settledMatrixKey(page, target, 'ArrowLeft', samples.at(-1), deadline));
+  }
+  expect(samples.at(-1).scrollLeft).toBe(0);
+  return { scrollNeeded: initial.scrollLeft > 0, samples };
+}
+
+async function nativeMatrixReturn(page, focusable, wrapper) {
+  const target = await wrapper.elementHandle();
+  expect(target).not.toBeNull();
+  const record = { phase: 'complete-keyboard-workflow', reverse: [] };
+  monitors.get(page).evidence.matrixReturn = record;
+  const info = test.info();
+  try {
+    record.postForward = await target.evaluate(matrixObservation);
+    // The original complete forward traversal ends on the final inventory item.
+    // Reverse real Tab events to this same matrix, never refocusing by script.
+    const matrixIndex = 10;
+    await expect(focusable.nth(matrixIndex)).toHaveAttribute('class', 'matrix-scroll');
+    const count = await focusable.count();
+    await expect(focusable.nth(count - 1)).toBeFocused();
+    if (record.postForward.scrollLeft === 0) {
+      record.origin = { scrollNeeded: false, samples: [record.postForward] };
+      record.passed = true;
+      return record;
+    }
+    for (let index = count - 2; index >= matrixIndex; index--) {
+      await page.keyboard.press('Shift+Tab');
+      const item = focusable.nth(index);
+      await expect(item).toBeFocused();
+      record.reverse.push({ ordinal: index + 1, observed: await item.evaluate(focusObservation) });
+    }
+    await requireTargetFocus(page, target, 'return-to-matrix', matrixIndex + 1);
+    record.origin = await nativeMatrixOrigin(page, target);
+    record.passed = true;
+    return record;
+  } finally {
+    record.passed ??= false;
+    try {
+      await artifact(info, 'matrix-keyboard-return.json', { schema_version: 1,
+        source_head: info.config.metadata.sourceHead, source_tree: info.config.metadata.sourceTree,
+        mode: info.config.metadata.mode, asset_hashes: info.config.metadata.assetHashes,
+        builder_inputs: info.config.metadata.builderInputHashes, record });
+    } finally { await target.dispose(); }
+  }
+}
+
+async function settledRecipe(page, heading, recipe, source, info, phase = 'fonts-ready') {
+  const record = { recipe: recipe.id, phase, page_asset: source.asset, page_sha256: source.sha256, samples: [] };
+  const evidence = monitors.get(page).evidence;
+  evidence.recipeFocusChecks ??= [];
+  evidence.recipeFocusChecks.push(record);
+  try {
+    const observed = await pollFocus(async () => {
+      const value = await heading.evaluate(recipeObservation);
+      try { requireRecipeIdentity(value, recipe, source); }
+      catch (error) { record.terminalObservation = value; throw error; }
+      return value;
+    }, record.samples, { validate: requireRecipePosition });
+    record.passed = true;
+    return observed;
+  } catch (error) {
+    record.failureKind = error instanceof FocusConditionTimeout ? 'condition-timeout' : 'observation-error';
+    if (Number.isFinite(error.elapsedMs)) record.failureElapsedMs = error.elapsedMs;
+    throw error;
+  } finally {
+    record.passed ??= false;
+    await writeFile(info.outputPath('recipe-focus.json'), JSON.stringify({ schema_version: 1,
+      source_head: info.config.metadata.sourceHead, source_tree: info.config.metadata.sourceTree,
+      mode: info.config.metadata.mode, asset_hashes: info.config.metadata.assetHashes,
+      builder_inputs: info.config.metadata.builderInputHashes, checks: evidence.recipeFocusChecks }, null, 2) + '\n');
+  }
+}
+
+function coldFontFixture(guideUrl, hashes) {
+  const expected = fontFiles.map(file => 'assets/fonts/' + file);
+  const record = { guide_url: guideUrl, minimum_hold_ms: 250, deadline_ms: 5000,
+    expected_assets: expected, expected_hashes: Object.fromEntries(expected.map(asset => [asset, hashes[asset]])),
+    requests: [], stylesheet_samples: [], timed_out: false };
+  const heldRequests = new WeakMap();
+  let gate, release, timer, armed = false, finished = false;
+  let glyphSession, glyphNodeId;
+  return { record,
+    arm() {
+      expect(armed).toBe(false);
+      armed = true;
+      record.started_ms = performance.now();
+      gate = new Promise(resolve => { release = resolve; });
+      timer = setTimeout(() => {
+        record.timed_out = true;
+        finished = true;
+        release(false);
+      }, record.deadline_ms);
+    },
+    async handle(route) {
+      const request = route.request();
+      const asset = assetPath(request.url());
+      if (!armed || finished || request.resourceType() !== 'font' || !expected.includes(asset) ||
+          request.frame().url().split('#')[0] !== guideUrl) return false;
+      const held = { asset, url: request.url(), held_ms: performance.now() };
+      record.requests.push(held);
+      heldRequests.set(request, held);
+      if (!await gate) { held.aborted = true; await route.abort('timedout'); return true; }
+      held.continued_ms = performance.now();
+      held.hold_duration_ms = held.continued_ms - held.held_ms;
+      await route.continue();
+      held.continued = true;
+      return true;
+    },
+    bindResponse(response, row) {
+      const held = heldRequests.get(response.request());
+      if (held) held.response = row;
+    },
+    async glyphs(page, recipe, source) {
+      if (!glyphSession) {
+        glyphSession = await page.context().newCDPSession(page);
+        await glyphSession.send('DOM.enable');
+        await glyphSession.send('CSS.enable');
+        const { root } = await glyphSession.send('DOM.getDocument', { depth: 0 });
+        const { nodeId } = await glyphSession.send('DOM.querySelector', { nodeId: root.nodeId, selector: '#' + recipe.id });
+        expect(nodeId).toBeGreaterThan(0);
+        glyphNodeId = nodeId;
+      }
+      const { node } = await glyphSession.send('DOM.describeNode', { nodeId: glyphNodeId });
+      const attributes = Object.fromEntries(Array.from({ length: node.attributes.length / 2 },
+        (_, index) => [node.attributes[index * 2], node.attributes[index * 2 + 1]]));
+      expect(node.nodeName).toBe('H3');
+      expect(node.backendNodeId).toBeGreaterThan(0);
+      expect(attributes.id).toBe(recipe.id);
+      expect(attributes.tabindex).toBe('-1');
+      expect(page.url()).toBe(source.url);
+      const target = { id: attributes.id, tag: node.nodeName, node_id: glyphNodeId,
+        backend_node_id: node.backendNodeId, url: source.url, page_asset: source.asset, page_sha256: source.sha256 };
+      if (record.glyph_target) expect(target).toEqual(record.glyph_target);
+      else record.glyph_target = target;
+      const { fonts } = await glyphSession.send('CSS.getPlatformFontsForNode', { nodeId: glyphNodeId });
+      expect(fonts.some(font => font.glyphCount > 0)).toBe(true);
+      return { target, fonts };
+    },
+    async dispose() {
+      if (!glyphSession) return;
+      const session = glyphSession;
+      glyphSession = undefined;
+      await session.detach();
+    },
+    async minimumHold() {
+      const until = Math.max(record.stylesheet_applied_ms,
+        ...record.requests.map(request => request.held_ms)) + record.minimum_hold_ms;
+      while (performance.now() < until) {
+        expect(record.timed_out).toBe(false);
+        await new Promise(resolve => setTimeout(resolve, Math.ceil(until - performance.now())));
+      }
+      expect(record.timed_out).toBe(false);
+    },
+    finish(continueRequests) {
+      if (!armed || finished) return;
+      finished = true;
+      clearTimeout(timer);
+      record.released_ms = performance.now();
+      release(continueRequests);
+    },
+  };
+}
+
+async function projectOnly(context, coldFonts) {
   // A page requiring a CDN, tracker or backend must fail, not reach the network.
-  await context.route('**/*', route => allowedRequest(route.request().url(), live)
-    ? route.continue() : route.abort('blockedbyclient'));
+  await context.route('**/*', async route => {
+    if (!allowedRequest(route.request().url(), live)) return route.abort('blockedbyclient');
+    if (coldFonts && await coldFonts.handle(route)) return;
+    await route.continue();
+  });
+}
+
+async function recipeNavigation(page, locale, info, batch, offset, coldFonts) {
+  // The same static anchors must work when production JavaScript is disabled.
+  // Only the first destination uses Tab/Enter; every remaining supported token
+  // is activated as an actual link, rather than navigating to an invented URL.
+  await page.goto('about:blank');
+  await ready(page, locale);
+  const links = page.locator('.conversion-matrix tbody td a[href]');
+  await expect(links).toHaveCount(matrixRecipes.length);
+  const guideAsset = locale.language === 'en' ? 'guide/index.html' : 'ja/guide/index.html';
+  const guideRoute = origin + '/drmr/' + locale.route + 'guide/';
+  const destinations = [];
+  for (const [index, recipe] of batch.entries()) {
+    const link = links.nth(offset + index);
+    await expect(link).toHaveText(recipe.label);
+    expect(new URL(await link.getAttribute('href'), page.url()).href).toBe(guideRoute + '#' + recipe.id);
+    if (index === 0) {
+      const inventory = page.locator(focusSelector);
+      await expect(inventory).toHaveCount(focusTargetCounts[locale.language]);
+      const ordinal = 12 + offset;
+      for (let count = 0; count < ordinal; count++) await page.keyboard.press('Tab');
+      await expect(link).toBeFocused();
+      await requireTargetFocus(page, link, 'native-recipe-link', ordinal);
+      coldFonts?.arm();
+    }
+    const [response] = await Promise.all([
+      page.waitForResponse(value => value.request().isNavigationRequest() && value.url() === guideRoute),
+      index === 0 ? page.keyboard.press('Enter') : link.click(),
+    ]);
+    expect(response.status()).toBe(200);
+    const sha256 = digest(await response.body());
+    expect(sha256).toBe(info.config.metadata.assetHashes[guideAsset]);
+    const url = guideRoute + '#' + recipe.id;
+    await expect(page).toHaveURL(url);
+    await expect(page.locator('html')).toHaveAttribute('lang', locale.language);
+    const heading = page.locator('#' + recipe.id);
+    await expect(heading).toHaveCount(1);
+    const source = { url, language: locale.language, asset: guideAsset, sha256 };
+    if (coldFonts && index === 0) {
+      const remaining = () => {
+        const value = coldFonts.record.started_ms + coldFonts.record.deadline_ms - performance.now();
+        expect(value).toBeGreaterThan(0);
+        return value;
+      };
+      await expect.poll(() => coldFonts.record.requests.length, { timeout: remaining() }).toBe(3);
+      const stylesheets = ['assets/site.css', 'assets/guide.css'].map(asset => origin + '/drmr/' + asset);
+      await expect.poll(async () => {
+        const styles = await page.locator('link[rel="stylesheet"]').evaluateAll(nodes => nodes.map(node => ({
+          href: node.href, applied: Boolean(node.sheet && !node.sheet.disabled),
+          rules: node.sheet?.cssRules.length ?? 0,
+        })));
+        coldFonts.record.stylesheet_samples.push(styles);
+        return styles.length === 2 && styles.every((style, ordinal) =>
+          style.href === stylesheets[ordinal] && style.applied && style.rules > 0);
+      }, { timeout: remaining() }).toBe(true);
+      coldFonts.record.stylesheet_applied_ms = performance.now();
+      await coldFonts.minimumHold();
+      coldFonts.record.beforeGlyphs = await coldFonts.glyphs(page, recipe, source);
+      expect(coldFonts.record.beforeGlyphs.fonts.filter(font => font.glyphCount > 0)
+        .every(font => font.isCustomFont === false)).toBe(true);
+      coldFonts.record.beforeFonts = await settledRecipe(page, heading, recipe, source, info, 'fonts-pending');
+      expect(coldFonts.record.timed_out).toBe(false);
+      expect(performance.now() - coldFonts.record.started_ms).toBeLessThan(5000);
+      expect(coldFonts.record.requests.every(request => request.continued_ms === undefined)).toBe(true);
+      coldFonts.finish(true);
+    }
+    // Native Enter does not await navigation. Bind this document before asking
+    // for its load/font state, so an already-loaded landing page cannot satisfy it.
+    await page.waitForLoadState('load');
+    await page.evaluate(async () => { await document.fonts.ready; });
+    await expect(page.locator('script')).toHaveCount(0);
+    if (coldFonts && index === 0) {
+      expect(coldFonts.record.timed_out).toBe(false);
+      expect(coldFonts.record.requests.map(request => request.asset).sort())
+        .toEqual([...coldFonts.record.expected_assets].sort());
+      for (const request of coldFonts.record.requests) {
+        expect(request.continued).toBe(true);
+        expect(request.hold_duration_ms).toBeGreaterThanOrEqual(250);
+        expect(request.continued_ms - coldFonts.record.started_ms).toBeLessThanOrEqual(5000);
+      }
+      await expect.poll(() => coldFonts.record.requests.every(request => request.response?.status === 200 &&
+        request.response.sha256 === coldFonts.record.expected_hashes[request.asset]), { timeout: 5000 }).toBe(true);
+      coldFonts.record.fonts_completed_ms = performance.now();
+      coldFonts.record.afterGlyphs = await coldFonts.glyphs(page, recipe, source);
+      const glyphEvidence = capture => capture.fonts.filter(font => font.glyphCount > 0).map(font => ({
+        family: font.familyName, custom: font.isCustomFont, glyphs: font.glyphCount,
+      })).sort((left, right) => left.family.localeCompare(right.family));
+      expect(glyphEvidence(coldFonts.record.afterGlyphs)).toEqual(glyphEvidence(coldFonts.record.beforeGlyphs));
+      await coldFonts.dispose();
+    }
+    const observed = await settledRecipe(page, heading, recipe, source, info);
+    if (coldFonts && index === 0) {
+      coldFonts.record.afterFonts = observed;
+      expect(observed.fontsStatus).toBe('loaded');
+      expect({ rect: observed.rect, viewport: observed.viewport }).toEqual({
+        rect: coldFonts.record.beforeFonts.rect, viewport: coldFonts.record.beforeFonts.viewport,
+      });
+      coldFonts.record.geometry_unchanged = true;
+      coldFonts.record.protocol_passed = true;
+    }
+    await expect(heading).toBeFocused();
+    requireRecipe(observed, recipe);
+    expect(observed.rect.top).toBeGreaterThanOrEqual(0);
+    expect(observed.rect.bottom).toBeLessThanOrEqual(observed.viewport.height);
+    expect(observed.rect.left).toBeGreaterThanOrEqual(0);
+    expect(observed.rect.right).toBeLessThanOrEqual(observed.viewport.width);
+    const row = { recipe, navigation: index === 0 ? 'native-tab-enter' : 'link-click',
+      page_asset: guideAsset, page_sha256: sha256, observed };
+    destinations.push(row);
+    if (index === 0) {
+      const path = info.outputPath('recipe-viewport-' + locale.language + '-320.png');
+      await page.screenshot({ path, fullPage: false, animations: 'disabled' });
+      const after = await heading.evaluate(recipeObservation);
+      expect(after).toEqual(observed);
+      await info.attach('native-recipe-viewport', { path, contentType: 'image/png' });
+      row.visual_checkpoint = { phase: 'native-recipe-fragment-before-any-guide-interaction',
+        viewport: observed.viewport, before: observed, after, screenshot: path.split('/').at(-1) };
+    }
+    // Retain completed destinations before the next navigation can fail.
+    await writeFile(info.outputPath('recipe-navigation.json'), JSON.stringify({ schema_version: 1,
+      source_head: info.config.metadata.sourceHead, source_tree: info.config.metadata.sourceTree,
+      asset_hashes: info.config.metadata.assetHashes, builder_inputs: info.config.metadata.builderInputHashes,
+      mode: info.config.metadata.mode, language: locale.language, java_script_enabled: false,
+      matrix_destinations: matrixRecipes.length, batch_offset: offset,
+      expected_destinations: batch.length, completed_destinations: destinations.length,
+      destinations }, null, 2) + '\n');
+    await page.goBack({ waitUntil: 'domcontentloaded' });
+    await expect(links).toHaveCount(matrixRecipes.length);
+  }
+  expect(destinations.map(row => row.recipe.id)).toEqual(batch.map(recipe => recipe.id));
+  return destinations;
 }
 
 for (const locale of locales) for (const width of [320, 768, 1024, 1440]) {
@@ -365,6 +683,7 @@ for (const locale of locales) for (const width of [320, 768, 1024, 1440]) {
         page_sha256: info.config.metadata.assetHashes[locale.asset], ...observed });
     }
     expect(matrixKeyboard).toBeDefined();
+    const matrixReturn = await nativeMatrixReturn(page, focusable, matrix.wrapper);
     for (const [name, id] of locale.anchors.map((name, index) => [name, ['support', 'workflow', 'get-started'][index]])) {
       const link = page.getByRole('navigation', { name: locale.navigation, exact: true }).getByRole('link', { name, exact: true });
       await link.focus();
@@ -388,6 +707,11 @@ for (const locale of locales) for (const width of [320, 768, 1024, 1440]) {
     expect(new URL(await license.getAttribute('href'), page.url()).href)
       .toBe(origin + '/drmr/assets/fonts/LICENSE-ibm-plex.txt');
     const platformFonts = await renderedFonts(page, context);
+    // Audit the state reached by completing the keyboard workflow, with every
+    // column returned to the origin through native keys rather than a DOM reset.
+    matrixReturn.beforeAxe = await matrix.wrapper.evaluate(matrixObservation);
+    expect(matrixReturn.beforeAxe.scrollLeft).toBe(0);
+    requireMatrixLayout(matrixReturn.beforeAxe);
     const accessibility = await new AxeBuilder({ page }).analyze();
     await artifact(info, 'axe.json', accessibility);
     expect(accessibility.violations).toEqual([]);
@@ -405,7 +729,8 @@ for (const locale of locales) for (const width of [320, 768, 1024, 1440]) {
       source_tree: info.config.metadata.sourceTree, mode: info.config.metadata.mode,
       language: locale.language, page_asset: locale.asset, page_sha256: info.config.metadata.assetHashes[locale.asset],
       asset_hashes: info.config.metadata.assetHashes, builder_inputs: info.config.metadata.builderInputHashes, servedAssets, chromium: browser.version(), viewport: { width, height: 900 }, production_scripts: 0,
-      initial_viewport: initialViewport, matrix: matrix.evidence, matrix_keyboard: matrixKeyboard, layout, fonts, platform_fonts: platformFonts, images, headings, code_groups: renderedCodeGroups, keyboard: focusRecords, network,
+      initial_viewport: initialViewport, matrix: matrix.evidence, matrix_keyboard: matrixKeyboard,
+      matrix_return: matrixReturn, layout, fonts, platform_fonts: platformFonts, images, headings, code_groups: renderedCodeGroups, keyboard: focusRecords, network,
       axe: { version: accessibility.testEngine.version, violations: 0, incomplete: accessibility.incomplete.length },
       limitations: ['automated Chromium only; no manual screen-reader or other-browser qualification',
         'external repository links checked by source validator; no external browser navigation'] });
@@ -417,6 +742,7 @@ for (const locale of locales) test(`${locale.language}: core content and anchor 
   try {
     await projectOnly(context);
     const page = await context.newPage();
+    const network = monitor(page);
     const mounts = live ? ['/drmr/'] : ['/', '/drmr/'];
     const pages = [];
     for (const mount of mounts) {
@@ -439,14 +765,60 @@ for (const locale of locales) test(`${locale.language}: core content and anchor 
       await expect(page).toHaveURL(origin + mount + locale.route + '#support');
       await expect(page.locator('#support')).toBeInViewport();
     }
+    await Promise.all(monitors.get(page).pending);
+    expect(network.console).toEqual([]);
+    expect(network.pageErrors).toEqual([]);
+    expect(network.failedRequests).toEqual([]);
+    expect(network.responses.every(row => allowedRequest(row.url, live) && row.status === 200 &&
+      !row.body_error && (!row.asset || row.sha256 === info.config.metadata.assetHashes[row.asset]))).toBe(true);
     await artifact(info, 'evidence.json', { schema_version: 1, source_head: info.config.metadata.sourceHead,
       source_tree: info.config.metadata.sourceTree, asset_hashes: info.config.metadata.assetHashes, builder_inputs: info.config.metadata.builderInputHashes,
       language: locale.language, page_asset: locale.asset, page_sha256: info.config.metadata.assetHashes[locale.asset],
-      java_script_enabled: false, mode: info.config.metadata.mode, pages, browser: browser.version() });
+      java_script_enabled: false, mode: info.config.metadata.mode, pages, network, browser: browser.version() });
   } finally {
     await context.close();
   }
 });
+
+for (const locale of locales) for (const offset of [0, 15, 30]) {
+  test(`${locale.language}: matrix recipes ${offset + 1}–${offset + 15} navigate without JavaScript`, async ({ browser }, info) => {
+    const context = await browser.newContext({ javaScriptEnabled: false, viewport: { width: 320, height: 900 } });
+    const coldFonts = locale.language === 'en' && offset === 0
+      ? coldFontFixture(origin + '/drmr/guide/', info.config.metadata.assetHashes) : undefined;
+    try {
+      await projectOnly(context, coldFonts);
+      const page = await context.newPage();
+      const network = monitor(page, coldFonts);
+      if (coldFonts) network.coldFonts = coldFonts.record;
+      const batch = matrixRecipes.slice(offset, offset + 15);
+      expect(batch).toHaveLength(15);
+      const recipes = await recipeNavigation(page, locale, info, batch, offset, coldFonts);
+      await Promise.all(monitors.get(page).pending);
+      expect(network.console).toEqual([]);
+      expect(network.pageErrors).toEqual([]);
+      expect(network.failedRequests).toEqual([]);
+      expect(network.responses.every(row => allowedRequest(row.url, live) && row.status === 200 &&
+        !row.body_error && (!row.asset || row.sha256 === info.config.metadata.assetHashes[row.asset]))).toBe(true);
+      await artifact(info, 'evidence.json', { schema_version: 1, source_head: info.config.metadata.sourceHead,
+        source_tree: info.config.metadata.sourceTree, asset_hashes: info.config.metadata.assetHashes,
+        builder_inputs: info.config.metadata.builderInputHashes, language: locale.language,
+        java_script_enabled: false, mode: info.config.metadata.mode, matrix_destinations: matrixRecipes.length,
+        batch_offset: offset, expected_destinations: batch.length, completed_destinations: recipes.length,
+        recipes, network, browser: browser.version() });
+    } finally {
+      coldFonts?.finish(false);
+      try {
+        if (coldFonts) await artifact(info, 'cold-font-protocol.json', { schema_version: 1,
+          source_head: info.config.metadata.sourceHead, source_tree: info.config.metadata.sourceTree,
+          mode: info.config.metadata.mode, asset_hashes: info.config.metadata.assetHashes,
+          builder_inputs: info.config.metadata.builderInputHashes, record: coldFonts.record });
+      } finally {
+        try { await coldFonts?.dispose(); }
+        finally { await context.close(); }
+      }
+    }
+  });
+}
 
 test('native keyboard switches English to Japanese and back at each supported mount', async ({ page, context }, info) => {
   await projectOnly(context);
@@ -519,7 +891,7 @@ test('browser guard controls detect real overflow, invisible focus, blocked matr
   await requireTargetFocus(page, wrapper, 'matrix-disabled-control', matrixTabOrdinal);
   const matrixBefore = await wrapper.evaluate(matrixObservation);
   expect(matrixBefore.scrollWidth).toBeGreaterThan(matrixBefore.clientWidth);
-  const hiddenContent = await page.addStyleTag({ content: '.conversion-matrix td > .clear { visibility: hidden !important; }' });
+  const hiddenContent = await page.addStyleTag({ content: '.conversion-matrix td a > .clear { visibility: hidden !important; }' });
   const matrixHidden = await wrapper.evaluate(matrixObservation);
   expect(matrixHidden.hiddenText.some(value => value.text === 'Clear' && value.hidden)).toBe(true);
   expect(() => requireMatrixLayout(matrixHidden)).toThrow('Rendered matrix text must remain visible');

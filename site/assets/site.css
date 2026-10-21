@@ -1,6 +1,7 @@
-@font-face { font-family: "IBM Plex Sans"; font-style: normal; font-weight: 400; font-display: swap; src: url("./fonts/ibm-plex-sans-latin-400-normal.woff2") format("woff2"); }
-@font-face { font-family: "IBM Plex Sans"; font-style: normal; font-weight: 600; font-display: swap; src: url("./fonts/ibm-plex-sans-latin-600-normal.woff2") format("woff2"); }
-@font-face { font-family: "IBM Plex Mono"; font-style: normal; font-weight: 400; font-display: swap; src: url("./fonts/ibm-plex-mono-latin-400-normal.woff2") format("woff2"); }
+/* Keep fragment targets stable when fonts arrive after the first render. */
+@font-face { font-family: "IBM Plex Sans"; font-style: normal; font-weight: 400; font-display: optional; src: url("./fonts/ibm-plex-sans-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Sans"; font-style: normal; font-weight: 600; font-display: optional; src: url("./fonts/ibm-plex-sans-latin-600-normal.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Mono"; font-style: normal; font-weight: 400; font-display: optional; src: url("./fonts/ibm-plex-mono-latin-400-normal.woff2") format("woff2"); }
 
 :root {
   color-scheme: light;
@@ -72,7 +73,7 @@ nav a { padding-block: 4px; font-size: 15px; }
 .support .section-intro { display: block; margin-bottom: 12px; }
 .support .section-intro p { max-width: none; margin-top: 8px; }
 .matrix-hint { max-width: none; margin-bottom: 12px; color: var(--secondary); font-size: 14px; }
-.matrix-scroll { position: relative; overflow-x: auto; border: 1px solid var(--rule); border-radius: 4px; background: var(--surface); }
+.matrix-scroll { position: relative; overflow-x: auto; scroll-snap-type: x mandatory; scroll-padding-inline: 240px 16px; border: 1px solid var(--rule); border-radius: 4px; background: var(--surface); }
 .conversion-matrix { width: 100%; min-width: 900px; border-collapse: separate; border-spacing: 0; table-layout: fixed; font-size: 14px; line-height: 1.5; }
 .conversion-matrix th, .conversion-matrix td { padding: 12px; text-align: left; vertical-align: middle; border-right: 1px solid var(--rule); border-bottom: 1px solid var(--rule); }
 .conversion-matrix th:last-child, .conversion-matrix td:last-child { border-right: 0; }
@@ -81,6 +82,9 @@ nav a { padding-block: 4px; font-size: 15px; }
 .conversion-matrix tr > th:first-child { width: 224px; }
 .conversion-matrix tbody th { position: sticky; left: 0; z-index: 1; background: var(--surface); font-weight: 400; }
 .conversion-matrix code { font-size: 13px; color: var(--action-hover); white-space: nowrap; }
+.conversion-matrix a { display: inline-block; scroll-margin-inline: 16px; }
+/* Snap only keyboard-focused links; pointer clicks keep their layout position. */
+.conversion-matrix a:focus-visible { scroll-snap-align: center; }
 .conversion-matrix sup { padding-left: 2px; color: var(--secondary); font-size: 10px; }
 .input-format, .input-profile, .input-protections { display: block; }
 .input-format { font-size: 15px; font-weight: 600; }
@@ -134,6 +138,7 @@ nav a { padding-block: 4px; font-size: 15px; }
   .hero-copy .lead { font-size: 18px; }
   .conversion-matrix { min-width: 648px; }
   .conversion-matrix tr > th:first-child { width: 136px; }
+  .matrix-scroll { scroll-padding-inline-start: 152px; }
   .workflow, .evidence-list, .other-interfaces { grid-template-columns: 1fr; }
   .actions { gap: 16px; }
   .url-note { padding: 16px; }

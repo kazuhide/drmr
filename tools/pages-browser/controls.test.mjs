@@ -1,8 +1,11 @@
-import { guideChapters, requireGuideLayout, requireGuideMovement, codeAriaTemplate, requireGuideCheckpoint } from './guide.mjs';
+import { guideChapters, requireGuideLayout, requireGuideMovement, codeAriaTemplate, requireGuideCheckpoint,
+  guideFiguresObservation, requireGuideFigures } from './guide.mjs';
 import { locales } from './locales.mjs';
 import { matrixRows, matrixColumns, matrixObservation, requireMatrixLayout, requireMatrixMovement, completeMatrixKey, MatrixKeyDeadline } from './matrix.mjs';
+import { matrixRecipes, recipeObservation, requireRecipe, requireRecipeIdentity, requireRecipePosition, requireMatrixLinkExposure } from './recipes.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { runInNewContext } from 'node:vm';
 import { assets, assetRoute, assetPath, digest, liveMode, allowedRequest } from './source.mjs';
 import * as identity from './source.mjs';
 import { matchesPublication } from './wait-published.mjs';
@@ -511,12 +514,168 @@ test('nested guide routes and generation inputs belong to the exact payload cont
     assert.equal(assetPath('http://127.0.0.1:4173' + path), expected);
   }
   assert.equal(resource('/drmr/assets/guide.css').type, 'text/css; charset=utf-8');
-  assert.deepEqual(identity.builderInputs, ['tools/build_guide_site.py', 'tools/templates/guide.html',
+  assert.deepEqual(identity.builderInputs, ['tools/build_guide_site.py', 'tools/conversion_examples.py', 'tools/templates/guide.html',
     'site-content/guide/en.md', 'site-content/guide/ja.md']);
   for (const path of ['/drmr/guide/keys.json', '/drmr/ja/guide/%2e%2e%2fprivate.json',
     '/drmr/site-content/guide/en.md', '/drmr/tools/build_guide_site.py']) {
     assert.equal(resource(path), null);
   }
+});
+
+test('each supported protection token has one stable recipe identity and unavailable cells have none', () => {
+  assert.equal(matrixRecipes.length, 45);
+  assert.equal(new Set(matrixRecipes.map(recipe => recipe.id)).size, 45);
+  assert.equal(matrixRecipes[0].id, 'recipe-mp4-mp4-clear');
+  assert.equal(matrixRecipes.at(-1).id, 'recipe-hls-ts-audio-hls-ts-hls-sample-aes');
+  for (const row of matrixRows) {
+    assert.equal(matrixRecipes.filter(recipe => recipe.row === row.id).length, 9);
+    for (const [column, labels] of row.output.entries()) {
+      assert.deepEqual(matrixRecipes.filter(recipe => recipe.row === row.id && recipe.column === column)
+        .map(recipe => recipe.label), labels);
+    }
+  }
+});
+
+function recipeSample(recipe = matrixRecipes.find(value => value.id === 'recipe-hls-ts-video-dash-cbcs')) {
+  const code = `(\n  set -eu\n  workspace="$(mktemp -d)"\n  cd "$workspace"\n  drmr analyze "https://example.com/vod/master.m3u8" --download-dir source --keys-file ../config/keys.json --json\n  drmr plan source/input.m3u8 --to ${recipe.target} --format ${recipe.format} --output output --save conversion.plan.json --keys-file ../config/keys.json\n  drmr convert --plan conversion.plan.json --keys-file ../config/keys.json\n  drmr verify --plan conversion.plan.json --keys-file ../config/keys.json --json\n)\n`;
+  return { id: recipe.id, tag: 'H3', tabindex: '-1', chapter: 'url-input', heading: 'HLS to DASH',
+    presented: true, setupTag: 'P', setupHrefs: ['#recipe-setup'], figureTag: 'FIGURE',
+    figureClass: true, language: 'sh', code, rendered: code };
+}
+
+test('recipe checks refuse wrong destinations, hidden code, incomplete steps and mismatched saved plans', () => {
+  const expected = matrixRecipes.find(value => value.id === 'recipe-hls-ts-video-dash-cbcs');
+  const good = recipeSample(expected);
+  requireRecipe(good, expected);
+  const changes = [
+    { id: 'recipe-hls-ts-video-dash-clear' }, { tag: 'H2' }, { tabindex: null }, { chapter: 'verification' },
+    { heading: '' }, { presented: false }, { setupTag: 'DIV' }, { setupHrefs: [] },
+    { setupHrefs: ['#recipe-setup', '#unrelated'] }, { figureTag: 'PRE' }, { figureClass: false },
+    { language: 'text' }, { rendered: '' },
+  ];
+  for (const change of changes) assert.throws(() => requireRecipe({ ...good, ...change }, expected));
+  for (const [before, after] of [
+    ['--to cbcs', '--to clear'], ['--format dash', '--format hls'], ['--output output', ''],
+    ['--save conversion.plan.json', ''], ['drmr convert --plan conversion.plan.json', 'drmr convert --plan stale.plan.json'],
+    ['--keys-file ../config/keys.json', '--keys-file keys.json'], ['https://example.com/', 'source/'],
+    ['--download-dir source', ''], ['drmr verify', 'printf verify'], ['set -eu', 'set -u'],
+  ]) {
+    const code = good.code.replace(before, after);
+    assert.throws(() => requireRecipe({ ...good, code, rendered: code }, expected), before);
+  }
+});
+
+function recipePositionSample() {
+  return { ...recipeSample(), focused: true,
+    url: 'http://127.0.0.1:4173/drmr/guide/#recipe-hls-ts-video-dash-cbcs', pageLanguage: 'en',
+    rect: { left: 16, right: 304, top: 24, bottom: 84 }, viewport: { width: 320, height: 900 } };
+}
+
+test('recipe identity is immutable and position rejects unfocused, nonfinite or clipped headings', () => {
+  const good = recipePositionSample();
+  const recipe = matrixRecipes.find(value => value.id === good.id);
+  const source = { url: good.url, language: 'en' };
+  requireRecipeIdentity(good, recipe, source);
+  requireRecipePosition(good);
+  for (const changed of [{ id: 'recipe-mp4-mp4-clear' }, { tag: 'H2' }, { tabindex: null },
+    { chapter: 'verification' }, { url: source.url + '-stale' }, { pageLanguage: 'ja' }]) {
+    assert.throws(() => requireRecipeIdentity({ ...good, ...changed }, recipe, source));
+  }
+  assert.throws(() => requireRecipePosition({ ...good, focused: false }));
+  for (const changed of [{ left: -1 }, { right: 321 }, { top: -3288.53125 }, { bottom: 901 },
+    { right: 16 }, { bottom: 24 }, { top: NaN }, { left: Infinity }]) {
+    assert.throws(() => requireRecipePosition({ ...good, rect: { ...good.rect, ...changed } }));
+  }
+  for (const changed of [{ width: 0 }, { height: Infinity }]) {
+    assert.throws(() => requireRecipePosition({ ...good, viewport: { ...good.viewport, ...changed } }));
+  }
+});
+
+test('the actual recipe observer preserves independent EN/JA page locale and shell metadata through transport', () => {
+  const recipe = matrixRecipes.find(value => value.id === 'recipe-hls-ts-video-dash-cbcs');
+  const codeText = recipeSample(recipe).code;
+  for (const language of ['en', 'ja']) {
+    const url = 'http://127.0.0.1:4173/drmr/' + (language === 'ja' ? 'ja/' : '') + 'guide/#' + recipe.id;
+    const code = Object.freeze({ textContent: codeText, innerText: codeText });
+    const figure = Object.freeze({ tagName: 'FIGURE',
+      classList: Object.freeze({ contains: name => name === 'guide-example' }),
+      getAttribute: name => name === 'data-code-language' ? 'sh' : null,
+      querySelector: selector => selector === 'pre code' ? code : null });
+    const link = Object.freeze({ getAttribute: name => name === 'href' ? '#recipe-setup' : null });
+    const setup = Object.freeze({ tagName: 'P', nextElementSibling: figure,
+      querySelectorAll: selector => selector === 'a' ? Object.freeze([link]) : Object.freeze([]) });
+    const box = Object.freeze({ left: 16, right: 304, top: 24, bottom: 84, width: 288, height: 60 });
+    const element = Object.freeze({ id: recipe.id, tagName: 'H3', textContent: 'HLS → DASH / cbcs',
+      nextElementSibling: setup, getAttribute: name => name === 'tabindex' ? '-1' : null,
+      closest: selector => selector === '[data-guide-chapter]' ? Object.freeze({ id: 'url-input' }) : null,
+      getBoundingClientRect: () => box });
+    const sandbox = { element, innerWidth: 320, innerHeight: 900,
+      location: Object.freeze({ href: url }), document: Object.freeze({ activeElement: element,
+        documentElement: Object.freeze({ lang: language }), readyState: 'complete',
+        fonts: Object.freeze({ status: 'loaded' }) }),
+      getComputedStyle: () => Object.freeze({ display: 'block', visibility: 'visible' }) };
+    const raw = runInNewContext(`(${recipeObservation.toString()})(element)`, sandbox, { timeout: 1000 });
+    // Playwright returns serialized values across its browser/runner boundary.
+    // This fixture checks that shape; it does not establish browser behavior.
+    const observed = JSON.parse(JSON.stringify(raw));
+    assert.equal(observed.pageLanguage, language);
+    assert.equal(observed.language, 'sh');
+    assert.equal(observed.url, url);
+    requireRecipeIdentity(observed, recipe, { url, language });
+    requireRecipe(observed, recipe);
+    requireRecipePosition(observed);
+    assert.throws(() => requireRecipeIdentity({ ...observed, pageLanguage: 'sh' }, recipe, { url, language }));
+    assert.throws(() => requireRecipe({ ...observed, language }, recipe));
+  }
+});
+
+test('a recipe validator retains raw displaced samples and accepts only the actual focused viewport result', async () => {
+  const good = recipePositionSample();
+  const displaced = { ...good, rect: { ...good.rect, top: -3288.53125, bottom: -3228.53125 } };
+  const samples = [];
+  let calls = 0;
+  const result = await pollFocus(async () => calls++ ? good : displaced, samples,
+    { ...virtualDeadline(), validate: requireRecipePosition });
+  assert.equal(result, good);
+  assert.deepEqual(samples, [displaced, good]);
+  assert.equal(samples[0].rect.top, -3288.53125);
+  // The original default still requires a real keyboard outline; recipe
+  // positions never invent outline fields for a pointer-focused heading.
+  assert.throws(() => requireFocus(good));
+});
+
+test('custom focus validators retain the same absolute deadline and propagate source or validator errors', async () => {
+  const good = recipePositionSample();
+  const recipe = matrixRecipes.find(value => value.id === good.id);
+  const source = { url: good.url, language: 'en' };
+  const invalid = { ...good, url: good.url + '-stale' };
+  const samples = [];
+  await assert.rejects(pollFocus(async () => {
+    requireRecipeIdentity(invalid, recipe, source);
+    return invalid;
+  }, samples, { ...virtualDeadline(), validate: requireRecipePosition }), /Expected values/);
+  assert.deepEqual(samples, []);
+  const failure = new TypeError('recipe-validator-failure');
+  await assert.rejects(pollFocus(async () => good, [], { ...virtualDeadline(), validate: () => { throw failure; } }),
+    error => error === failure);
+  let clock = 0, validated = false;
+  const late = [];
+  await assert.rejects(pollFocus(async () => { clock = 5001; return good; }, late,
+    { now: () => clock, validate: () => { validated = true; } }), error => error instanceof FocusObservationDeadline);
+  assert.deepEqual(late, []);
+  assert.equal(validated, false);
+  const displaced = { ...good, rect: { ...good.rect, top: -1 } };
+  await assert.rejects(pollFocus(async () => displaced, [], { ...virtualDeadline(), validate: requireRecipePosition }),
+    error => error instanceof FocusConditionTimeout && error.elapsedMs >= 5000);
+});
+
+test('matrix link checks refuse point occlusion by sticky headers without weakening ordinary focus', () => {
+  requireMatrixLinkExposure({ matrixLink: false });
+  const points = Array.from({ length: 5 }, () => ({ x: 200, y: 300, exposed: true }));
+  requireMatrixLinkExposure({ matrixLink: true, points });
+  assert.throws(() => requireMatrixLinkExposure({ matrixLink: true, points: [] }));
+  assert.throws(() => requireMatrixLinkExposure({ matrixLink: true, points: points.map((point, index) =>
+    index ? point : { ...point, exposed: false }) }));
 });
 
 
@@ -592,4 +751,82 @@ test('guide viewport checkpoints reject wrong sources, phases, native owners, cl
     const invalid = structuredClone(record); mutate(invalid);
     assert.throws(() => requireGuideCheckpoint(invalid, expected));
   }
+});
+
+function guideFigureFixture() {
+  const facts = [
+    { tag: 'FIGURE', role: null, language: 'sh', labelledBy: 'example-1-title',
+      captionCount: 1, captionId: 'example-1-title', captionText: 'Example 1: sh',
+      preCount: 1, codeCount: 1, tabindex: '0', code: 'drmr --version\n', rendered: 'drmr --version\n' },
+    { tag: 'FIGURE', role: null, language: 'json', labelledBy: 'example-2-title',
+      captionCount: 1, captionId: 'example-2-title', captionText: 'Example 2: json',
+      preCount: 1, codeCount: 1, tabindex: '0', code: '{\n  "key": "value"\n}\n', rendered: '{\n  "key": "value"\n}\n' },
+  ];
+  const aria = String.raw`- banner:
+  - link "Home"
+- main:
+  - 'figure "Example 1: sh"':
+    - text: "Example 1: sh"
+    - code: drmr --version
+  - heading "Next section" [level=2]
+  - 'figure "Example 2: json"':
+    - text: "Example 2: json"
+    - code: "{ \"key\": \"value\" }"
+- contentinfo:
+  - text: End`;
+  return { facts, aria };
+}
+
+test('guide figures retain every actual ARIA subtree, accessible name and complete code in DOM order', () => {
+  const { facts, aria } = guideFigureFixture();
+  const groups = requireGuideFigures(facts, aria);
+  assert.deepEqual(groups.map(group => group.label), ['Example 1: sh', 'Example 2: json']);
+  assert.deepEqual(groups.map(group => group.code), facts.map(figure => figure.code));
+  assert.equal(groups[0].aria, '- \'figure "Example 1: sh"\':\n  - text: "Example 1: sh"\n  - code: drmr --version');
+  assert.equal(groups[1].language, 'json');
+  assert.equal(groups[1].rendered, facts[1].rendered);
+});
+
+test('guide figure validation rejects missing, duplicate, reordered, truncated or unknown ARIA observations', () => {
+  const { facts, aria } = guideFigureFixture();
+  for (const mutate of [
+    value => value.replace("  - 'figure \"Example 1: sh\"':\n    - text: \"Example 1: sh\"\n    - code: drmr --version\n", ''),
+    value => value.replace('figure "Example 2: json"', 'figure "Example 1: sh"'),
+    value => value.replace('figure "Example 1: sh"', 'img "Example 1: sh"'),
+    value => value.replace('drmr --version', 'drmr'),
+    value => value.replace('    - code: drmr --version', '    - code: drmr --version\n    - link "Unrelated"'),
+    value => value.replace('    - text: "Example 1: sh"', '    - text: "Wrong caption"'),
+    value => value.replace('    - code: drmr --version', '    - code: "unterminated'),
+    value => value + '\n- figure "Unexpected empty figure"',
+  ]) assert.throws(() => requireGuideFigures(facts, mutate(aria)));
+  assert.throws(() => requireGuideFigures([...facts].reverse(), aria));
+  assert.throws(() => requireGuideFigures(facts.slice(1), aria));
+  assert.throws(() => requireGuideFigures([], '- main:'));
+});
+
+test('guide figure validation still rejects hidden rendered code and incorrect DOM metadata or focusability', () => {
+  const { facts, aria } = guideFigureFixture();
+  for (const changed of [{ tag: 'PRE' }, { role: 'group' }, { language: 'html' },
+    { labelledBy: 'wrong-caption' }, { captionCount: 0 }, { captionId: '' }, { preCount: 2 },
+    { codeCount: 2 }, { tabindex: null }, { code: '' }, { rendered: '' }]) {
+    assert.throws(() => requireGuideFigures([{ ...facts[0], ...changed }, facts[1]], aria));
+  }
+});
+
+test('the actual guide DOM readback preserves metadata and full code through transport', () => {
+  const { facts, aria } = guideFigureFixture();
+  const figures = facts.map(fact => ({ tagName: fact.tag,
+    getAttribute: name => ({ role: fact.role, 'data-code-language': fact.language,
+      'aria-labelledby': fact.labelledBy })[name] ?? null,
+    querySelectorAll: selector => ({
+      figcaption: [{ id: fact.captionId, innerText: fact.captionText }],
+      pre: [{ getAttribute: name => name === 'tabindex' ? fact.tabindex : null }],
+      'pre code': [{ textContent: fact.code, innerText: fact.rendered }],
+    })[selector] || [] }));
+  const raw = runInNewContext(`(${guideFiguresObservation.toString()})()`, {
+    document: { querySelectorAll: selector => selector === 'figure.guide-example' ? figures : [] },
+  }, { timeout: 1000 });
+  const observed = JSON.parse(JSON.stringify(raw));
+  assert.deepEqual(observed, facts);
+  assert.equal(requireGuideFigures(observed, aria).length, 2);
 });

@@ -10,7 +10,7 @@ export const assets = [
   'assets/fonts/ibm-plex-sans-latin-600-normal.woff2',
   'assets/fonts/ibm-plex-mono-latin-400-normal.woff2',
 ];
-export const builderInputs = ['tools/build_guide_site.py', 'tools/templates/guide.html',
+export const builderInputs = ['tools/build_guide_site.py', 'tools/conversion_examples.py', 'tools/templates/guide.html',
   'site-content/guide/en.md', 'site-content/guide/ja.md'];
 export const publicOrigin = 'https://kazuhide.github.io';
 export const publicBase = publicOrigin + '/drmr/';

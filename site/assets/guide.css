@@ -16,6 +16,7 @@
 .guide-chapter > h2 { margin: 0 0 10px; font-size: 28px; line-height: 1.35; overflow-wrap: anywhere; }
 .guide-chapter-switch { display: inline-block; margin: 0 0 14px; font-size: 14px; }
 .guide-chapter h3 { margin: 28px 0 12px; font-size: 20px; line-height: 1.5; }
+.guide-chapter h3[id] { scroll-margin-block: 24px; }
 .guide-chapter p, .guide-chapter li { line-height: 1.8; overflow-wrap: anywhere; }
 .guide-chapter p { margin: 14px 0; }
 .guide-chapter li + li { margin-top: 8px; }

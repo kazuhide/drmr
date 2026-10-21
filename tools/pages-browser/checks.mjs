@@ -72,6 +72,7 @@ export class FocusObservationDeadline extends Error {
 }
 
 export async function pollFocus(measure, samples, {
+  validate = requireFocus,
   now = () => performance.now(),
   pause = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds)),
   schedule = (callback, milliseconds) => {
@@ -118,7 +119,7 @@ export async function pollFocus(measure, samples, {
       samples.push(sample);
       let complete = false;
       try {
-        requireFocus(sample);
+        validate(sample);
         complete = true;
       } catch (error) {
         if (!(error instanceof AssertionError)) throw error;

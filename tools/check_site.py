@@ -11,6 +11,7 @@ from html.parser import HTMLParser
 import json
 from pathlib import Path, PurePosixPath
 import re
+import shlex
 import stat
 from urllib.parse import unquote, urljoin, urlsplit
 
@@ -23,7 +24,7 @@ FILES = frozenset((
     "assets/fonts/LICENSE-ibm-plex.txt", "assets/fonts/README.txt",
 ))
 DIRECTORIES = frozenset(("ja", "guide", "ja/guide", "assets", "assets/fonts"))
-MAX_BYTES = 512 * 1024
+MAX_BYTES = 640 * 1024
 PAGES = {"index.html": ("en", "https://kazuhide.github.io/drmr/"),
          "ja/index.html": ("ja", "https://kazuhide.github.io/drmr/ja/"),
          "guide/index.html": ("en", "https://kazuhide.github.io/drmr/guide/"),
@@ -44,7 +45,7 @@ GUIDE_CHAPTER_REFERENCES = {
     language: frozenset(canonical + "#" + chapter for chapter in GUIDE_CHAPTERS)
     for origin, (language, canonical) in PAGES.items() if origin not in LANDING_PAGES
 }
-BUILDER_INPUTS = ("tools/build_guide_site.py", "tools/templates/guide.html",
+BUILDER_INPUTS = ("tools/build_guide_site.py", "tools/conversion_examples.py", "tools/templates/guide.html",
                   "site-content/guide/en.md", "site-content/guide/ja.md")
 
 
@@ -199,19 +200,40 @@ MATRIX_CELLS = (STANDARD_OUTPUTS, STANDARD_OUTPUTS,
                 STANDARD_OUTPUTS, ((), ("Clear", "cenc", "cbcs"), ("Clear", "cbcs", "AES-128"),
                                   ("Clear", "AES-128", "SAMPLE-AES")),
                 ((), ("Clear", "cenc", "cbcs"), ("Clear", "cbcs", "AES-128"), ("Clear", "AES-128", "SAMPLE-AES")))
+MATRIX_FORMATS = ("mp4", "dash", "hls", "hls-ts")
+MATRIX_DESTINATIONS = ("MP4", "DASH", "HLS / fMP4", "HLS / MPEG-TS")
+MATRIX_TARGETS = {"Clear": "clear", "cenc": "cenc", "cbcs": "cbcs",
+                  "AES-128": "hls-aes128", "SAMPLE-AES": "hls-sample-aes"}
 MATRIX_LOCALES = {
     "en": {"heading": "Input and output support", "region": "Conversion support matrix",
            "caption": "Supported conversion profiles", "corner": "Input ↓ / Output →",
            "outside": "Outside profile",
            "profiles": ("Progressive or fragmented", "Fragmented MP4 tracks",
-                        "Fragmented MP4 (fMP4)", "Video with optional audio", "Audio only")},
+                        "Fragmented MP4 (fMP4)", "Video with optional audio", "Audio only"),
+           "recipe_inputs": ("MP4", "DASH", "HLS / fMP4", "HLS / MPEG-TS (video)", "HLS / MPEG-TS (audio only)"),
+           "recipe_link": "command example"},
     "ja": {"heading": "入力と出力の対応表", "region": "変換対応表",
            "caption": "対応する変換プロファイル", "corner": "入力 ↓ / 出力 →",
            "outside": "対象外",
            "profiles": ("プログレッシブ / フラグメント化",
                         "フラグメント化MP4トラック", "フラグメント化MP4（fMP4）",
-                        "映像（音声は省略可）", "音声のみ")},
+                        "映像（音声は省略可）", "音声のみ"),
+           "recipe_inputs": ("MP4", "DASH", "HLS / fMP4", "HLS / MPEG-TS（映像）", "HLS / MPEG-TS（音声のみ）"),
+           "recipe_link": "コマンド例"},
 }
+
+
+def conversion_examples(language):
+    """Derive supported links independently from the guide's code generator."""
+    for index, ((row, _), outputs) in enumerate(zip(MATRIX_ROWS, MATRIX_CELLS)):
+        for column, protections in enumerate(outputs):
+            for protection in protections:
+                target = MATRIX_TARGETS[protection]
+                output_format = MATRIX_FORMATS[column]
+                identifier = "recipe-" + row + "-" + output_format + "-" + target
+                heading = (MATRIX_LOCALES[language]["recipe_inputs"][index] + " → "
+                           + MATRIX_DESTINATIONS[column] + " / " + protection)
+                yield identifier, heading, row, output_format, target
 
 
 class Element:
@@ -279,6 +301,23 @@ def matrix_protections(node, expected):
     require(re.sub(r"[\s/]", "", actual) == "".join(expected), "site-matrix-protections")
 
 
+def matrix_recipe_links(cell, row_index, column, protections, language):
+    links = list(cell.descendants("a"))
+    require(len(links) == len(protections), "site-matrix-recipe-link")
+    row = MATRIX_ROWS[row_index][0]
+    for link, protection in zip(links, protections):
+        identifier = "recipe-" + row + "-" + MATRIX_FORMATS[column] + "-" + MATRIX_TARGETS[protection]
+        heading = (MATRIX_LOCALES[language]["recipe_inputs"][row_index] + " → "
+                   + MATRIX_DESTINATIONS[column] + " / " + protection)
+        label = link.attrs.get("aria-label", "")
+        children = [child for child in link.children if isinstance(child, Element)]
+        require(link.attrs.get("href") == "guide/#" + identifier
+                and heading in label and MATRIX_LOCALES[language]["recipe_link"] in label
+                and matrix_text(link) == protection and len(children) == 1
+                and children[0].tag == ("span" if protection == "Clear" else "code")
+                and not list(children[0].descendants()), "site-matrix-recipe-link")
+
+
 def validate_matrix(text, language):
     document = MatrixMarkup(text).root
     locale = MATRIX_LOCALES[language]
@@ -330,6 +369,7 @@ def validate_matrix(text, language):
                 == (["2"] if index == 0 else ["3"] if index >= 3 else []), "site-matrix-notes")
         matrix_protections(header.one("span", **{"class": "input-protections"}), inputs)
         for column, (cell, protections) in enumerate(zip(cells[1:], outputs)):
+            matrix_recipe_links(cell, index, column, protections, language)
             if protections:
                 matrix_protections(cell, protections)
             else:
@@ -338,7 +378,101 @@ def validate_matrix(text, language):
             require([matrix_text(node) for node in cell.descendants("sup")]
                     == (["1"] if column == 0 and index in (0, 1, 2) else []), "site-matrix-notes")
     require(len(list(section.one(id="matrix-limits").descendants("li"))) == 3, "site-matrix-notes")
-    return {"rows": 5, "output_columns": 4, "cells": 20, "caption": locale["caption"]}
+    require(len(list(table.descendants("a"))) == 45, "site-matrix-recipe-link")
+    return {"rows": 5, "output_columns": 4, "cells": 20, "caption": locale["caption"], "recipe_links": 45}
+
+
+def recipe_https_url(value):
+    parsed = urlsplit(value)
+    return (parsed.scheme == "https" and bool(parsed.hostname) and parsed.username is None
+            and parsed.password is None and not parsed.fragment and not parsed.query
+            and not any(ord(character) <= 32 for character in value))
+
+
+def recipe_download(arguments):
+    """Read the example's explicit curl mapping without executing shell content."""
+    token = "site-guide-recipe-command"
+    flags = {"--fail", "--location", "--silent", "--show-error"}
+    options, values, urls = set(), {}, []
+    position = 1
+    while position < len(arguments):
+        argument = arguments[position]
+        if argument in flags:
+            require(argument not in options, token)
+            options.add(argument)
+        elif argument in {"--output", "--proto", "--proto-redir"}:
+            require(argument not in values and position + 1 < len(arguments), token)
+            position += 1
+            values[argument] = arguments[position]
+        else:
+            require(recipe_https_url(argument), token)
+            urls.append(argument)
+        position += 1
+    require({"--fail", "--location"} <= options and "--output" in values and len(urls) == 1
+            and all(values.get(name, "=https") == "=https" for name in ("--proto", "--proto-redir")), token)
+    return values["--output"], urls[0]
+
+
+def validate_recipe_commands(code, row, output_format, target):
+    token = "site-guide-recipe-command"
+    logical = re.sub(r"\\\r?\n[ \t]*", " ", code).splitlines()
+    try:
+        commands = [shlex.split(line.strip()) for line in logical if re.match(r"\s*drmr(?:\s|$)", line)]
+        downloads = [recipe_download(shlex.split(line.strip())) for line in logical
+                     if re.match(r"\s*curl(?:\s|$)", line)]
+    except ValueError:
+        raise Failure(token) from None
+    require(len(commands) == 4, token)
+    source = "./source.mp4" if row == "mp4" else "./source/manifest.mpd" if row == "dash" else "./source/input.m3u8"
+    runtime = ["--keys-file", "../config/keys.json", "--json"]
+    if row in ("mp4", "dash"):
+        require(commands[0] == ["drmr", "analyze", source] + runtime, token)
+        expected_paths = ["./source.mp4"] if row == "mp4" else ["source/$resource"]
+        require([path for path, _ in downloads] == expected_paths, token)
+        if row == "mp4":
+            require(urlsplit(downloads[0][1]).path.endswith(".mp4"), token)
+        else:
+            loops = [shlex.split(line.strip()) for line in logical if re.match(r"\s*for(?:\s|$)", line)]
+            resources = ["manifest.mpd", "video/init.mp4", "video/segment-1.m4s", "video/segment-2.m4s",
+                         "video/segment-3.m4s", "video/segment-4.m4s", "video/segment-5.m4s;"]
+            require(urlsplit(downloads[0][1]).path.endswith("/$resource")
+                    and loops == [["for", "resource", "in"] + resources + ["do"]], token)
+    else:
+        require(len(commands[0]) >= 3 and recipe_https_url(commands[0][2])
+                and urlsplit(commands[0][2]).path.endswith(".m3u8")
+                and commands[0] == ["drmr", "analyze", commands[0][2], "--download-dir", "./source"] + runtime
+                and not downloads, token)
+    output = "./result.mp4" if output_format == "mp4" else "./result"
+    require(commands[1] == ["drmr", "plan", source, "--to", target, "--format", output_format,
+                            "--output", output, "--save", "./conversion.plan.json"] + runtime
+            and commands[2] == ["drmr", "convert", "--plan", "./conversion.plan.json"] + runtime
+            and commands[3] == ["drmr", "verify", "--plan", "./conversion.plan.json"] + runtime, token)
+
+
+def validate_conversion_examples(chapter, language):
+    token = "site-guide-recipe"
+    expected = list(conversion_examples(language))
+    setup = [node for node in chapter.descendants() if node.attrs.get("id") == "recipe-setup"]
+    require(len(setup) == 1 and setup[0].tag == "h3", token)
+    headings = [node for node in chapter.descendants()
+                if node.attrs.get("id", "").startswith("recipe-") and node.attrs["id"] != "recipe-setup"]
+    require(len(headings) == 45 and [node.attrs.get("id") for node in headings]
+            == [example[0] for example in expected], token)
+    children = [node for node in chapter.children if isinstance(node, Element)]
+    for heading, (identifier, label, row, output_format, target) in zip(headings, expected):
+        require(heading.tag == "h3" and heading.attrs.get("id") == identifier
+                and heading.attrs.get("tabindex") == "-1" and matrix_text(heading) == label
+                and heading in children, token)
+        position = children.index(heading)
+        require(position + 2 < len(children), token)
+        paragraph, example = children[position + 1:position + 3]
+        links = list(paragraph.descendants("a"))
+        require(paragraph.tag == "p" and len(links) == 1 and links[0].attrs.get("href") == "#recipe-setup"
+                and example.tag == "figure" and example.attrs.get("data-code-language") == "sh", token)
+        codes = list(example.descendants("code"))
+        require(len(codes) == 1, token)
+        validate_recipe_commands(codes[0].text(), row, output_format, target)
+    return len(headings)
 
 
 
@@ -352,6 +486,7 @@ def validate_guide(text, language):
     for chapter, name in zip(chapters, GUIDE_CHAPTERS):
         require(chapter.attrs.get("id") == name and matrix_text(chapter.one("h2", id=name + "-title"))
                 and len(matrix_text(chapter)) >= 40, "site-guide-chapters")
+    recipes = validate_conversion_examples(chapters[GUIDE_CHAPTERS.index("url-input")], language)
     toc = document.one("nav", **{"class": "guide-toc-nav"})
     require(toc.attrs.get("aria-label") == ("Guide chapters" if language == "en" else "目次")
             and [node.attrs.get("href") for node in toc.descendants("a")] == ["#" + name for name in GUIDE_CHAPTERS],
@@ -385,7 +520,8 @@ def validate_guide(text, language):
                 and list(wrappers[0].descendants("table")) == [table], "site-guide-table")
         require(all(node.attrs.get("scope") in ("col", "row") for node in table.descendants("th")),
                 "site-guide-table")
-    return {"chapters": len(chapters), "code_examples": len(examples), "tables": len(tables)}
+    return {"chapters": len(chapters), "code_examples": len(examples), "tables": len(tables),
+            "conversion_examples": recipes}
 
 
 def generated_guides(root, repository):

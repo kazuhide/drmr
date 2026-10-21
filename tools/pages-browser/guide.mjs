@@ -1,3 +1,5 @@
+import assert from 'node:assert/strict';
+
 // Fixed guide routes and chapter identity; the committed builder owns the copy.
 export const guideChapters = ['introduction', 'terminology', 'supported-profiles', 'installation',
   'key-configuration', 'inspect-plan', 'local-conversion', 'url-input', 'verification',
@@ -68,6 +70,92 @@ export function codeAriaTemplate(text) {
   const code = text.trim().replace(/\s+/g, ' ');
   if (!code) throw new Error('Guide code must not be empty');
   return '- code: ' + JSON.stringify(code);
+}
+
+// Read all figures once; the static page has no code that can replace them.
+export function guideFiguresObservation() {
+  return [...document.querySelectorAll('figure.guide-example')].map(node => {
+    const captions = node.querySelectorAll('figcaption');
+    const pres = node.querySelectorAll('pre');
+    const codes = node.querySelectorAll('pre code');
+    return { tag: node.tagName, role: node.getAttribute('role'),
+      language: node.getAttribute('data-code-language'), labelledBy: node.getAttribute('aria-labelledby'),
+      captionCount: captions.length, captionId: captions[0]?.id, captionText: captions[0]?.innerText,
+      preCount: pres.length, codeCount: codes.length, tabindex: pres[0]?.getAttribute('tabindex'),
+      code: codes[0]?.textContent, rendered: codes[0]?.innerText };
+  });
+}
+
+// Playwright emits plain, JSON-quoted or YAML single-quoted scalars here.
+// Reject an unfamiliar structure rather than silently dropping figure content.
+function snapshotScalar(value) {
+  if (value.startsWith('"')) return JSON.parse(value);
+  if (value.startsWith("'")) {
+    assert.match(value, /^'(?:[^']|'')*'$/);
+    return value.slice(1, -1).replace(/''/g, "'");
+  }
+  assert.ok(value && !/[\r\n]/.test(value));
+  assert.ok(!/^[\[\]{},&*!|>%@`]/.test(value));
+  return value;
+}
+
+function figureSubtrees(snapshot) {
+  const lines = snapshot.split('\n');
+  const figures = [];
+  for (let index = 0; index < lines.length; index++) {
+    const start = /^( *)- ((?:figure\b|'figure\b|"figure\b).*)$/.exec(lines[index]);
+    if (!start) continue;
+    assert.ok(start[2].endsWith(':'), 'Every actual ARIA figure needs its complete subtree');
+    const key = snapshotScalar(start[2].slice(0, -1));
+    assert.match(key, /^figure ".*"$/, 'Each actual ARIA figure needs its accessible name');
+    const label = JSON.parse(key.slice('figure '.length));
+    const indent = start[1].length;
+    let end = index + 1;
+    while (end < lines.length && lines[end].trim() && /^ */.exec(lines[end])[0].length > indent) end++;
+    const subtree = lines.slice(index, end).map(line => line.slice(indent));
+    assert.equal(subtree.length, 3, 'Actual figure ARIA must retain its caption and complete code');
+    const caption = /^  - text: (.+)$/.exec(subtree[1]);
+    const code = /^  - code: (.+)$/.exec(subtree[2]);
+    assert.ok(caption && code, 'Actual figure ARIA needs caption text and the code role');
+    figures.push({ label, caption: snapshotScalar(caption[1]), code: snapshotScalar(code[1]),
+      aria: subtree.join('\n') });
+    index = end - 1;
+  }
+  return figures;
+}
+
+// Every DOM figure is paired with its own actual subtree from the complete
+// accessibility snapshot, retaining full raw evidence and source order.
+export function requireGuideFigures(facts, snapshot) {
+  const figures = figureSubtrees(snapshot);
+  assert.ok(facts.length > 0, 'Guide figures must not be empty');
+  assert.equal(figures.length, facts.length, 'Every DOM figure needs exactly one actual ARIA figure');
+  const labels = new Set();
+  const captions = new Set();
+  const compact = text => text.trim().replace(/\s+/g, ' ');
+  return facts.map((fact, index) => {
+    const actual = figures[index];
+    assert.equal(fact.tag, 'FIGURE');
+    assert.equal(fact.role, null);
+    assert.match(fact.language, /^(sh|bash|powershell|json|text)$/);
+    assert.equal(fact.captionCount, 1);
+    assert.equal(fact.preCount, 1);
+    assert.equal(fact.codeCount, 1);
+    assert.equal(fact.tabindex, '0');
+    assert.ok(fact.captionId && !captions.has(fact.captionId));
+    captions.add(fact.captionId);
+    assert.equal(fact.labelledBy, fact.captionId);
+    const label = compact(fact.captionText);
+    assert.ok(label && !labels.has(label), 'Guide figure accessible names must be unique');
+    labels.add(label);
+    assert.ok(fact.code.trim(), 'Guide code must not be empty');
+    assert.equal(compact(fact.rendered), compact(fact.code), 'Complete guide code must remain rendered');
+    assert.equal(actual.label, label, 'Actual figure role and accessible name must match its caption');
+    assert.equal(actual.caption, label);
+    assert.equal(actual.code, compact(fact.code), 'Actual code ARIA must retain the complete source text');
+    return { label, language: fact.language, role: 'figure', code: fact.code,
+      rendered: fact.rendered, aria: actual.aria };
+  });
 }
 
 // Screenshots observe the same native owner after a completed traversal; they

@@ -9,7 +9,7 @@ then uses the official Playwright command to install its pinned Chromium and
 system dependencies. Node 24.22.0 is pinned by the workflow. Browser installation
 and execution are confined to CI; pure controls use `npm run test:controls`.
 
-Two single-worker suites have thirteen landing tests and twelve guide tests.
+Two single-worker suites have nineteen landing tests and twelve guide tests.
 Each retains a separate 180-second total budget and zero whole-test retries. Element-state
 assertions can wait for at most five seconds. After each native Tab, read-only
 observations require the same target, complete viewport containment and the
@@ -27,13 +27,20 @@ position and time; failed checks retain these samples too. Persistent clipping
 still fails. The suite covers:
 
 - English and Japanese at 320, 768, 1024 and 1440 px (eight cases): document overflow and clipped layout boxes, locally
-  hosted fonts and images, exact served asset bytes, all 33 native Tab targets and
+  hosted fonts and images, exact served asset bytes, all 81 English / 80 Japanese native Tab targets and
   anchor navigation, rendered ARIA landmarks/headings/link names, and axe checks
   including color contrast. Both violations and incomplete checks must be empty.
   The five named code groups retain their full command text in both rendered
   accessibility trees. The first main section is a five-input-profile by four-output-format
   semantic table. Exact row/column headers, all 20 output cells, input protection
   qualifications and linked notes are checked independently of the HTML.
+  All 45 supported output-protection tokens link to their exact guide recipe;
+  unavailable cells have no recipe links. Focused matrix links also undergo
+  point hit-testing so sticky input headers cannot cover their rendered boxes.
+  Output links have atomic layout boxes. Only keyboard-focused links define a
+  horizontal snap position; scrollport padding keeps them beside the sticky
+  input label. Pointer clicks retain the cell layout, including when switching
+  from keyboard navigation after returning from a guide example.
   Each scrollable matrix is reached by native Tab and traversed to both
   horizontal edges with arrow keys. A listener is armed before each key, and
   its native `scrollend` must arrive before geometry is accepted or another key
@@ -48,10 +55,43 @@ still fails. The suite covers:
   interaction, alongside the existing full-page captures. Chromium CDP records actual glyph-producing platform
   fonts for the heading, lead and code, including Japanese fallback; it does
   not establish manual readability or glyph coverage for other text.
+  After the complete forward Tab inventory, a matrix already at its origin
+  requires no return keys. Otherwise native Shift+Tab returns to the same
+  matrix owner. Each reverse ordinal and actual focus observation is retained.
+  If its horizontal position is still nonzero, native ArrowLeft returns it to
+  zero under one five-second key-completion deadline; an already-zero matrix
+  needs no additional arrow keys. The original full arrow roundtrip remains
+  unchanged. Post-forward, reverse and origin observations are retained, and
+  zero horizontal position is asserted immediately before the unchanged full
+  page axe audit. Both axe violations and incomplete checks must remain empty.
 - Core content and native anchor navigation with JavaScript disabled in each
   language (two cases). The
   loopback job checks both `/` and the project `/drmr/` mount; the published job
   checks only `/drmr/`.
+- Six separate cases activate all 45 matrix links in each language at the project
+  mount with JavaScript disabled. Each case covers fifteen distinct recipes,
+  retaining the same thirty-second case budget. Native Tab/Enter activates the
+  first recipe of each batch; the remaining links use actual link clicks. Each destination
+  must expose its exact focusable heading, setup link and complete four-step
+  command example with matching output format, protection and saved plan.
+  The served guide hash must match the workflow source. A 320px viewport image
+  records each batch's first native recipe destination before further guide interaction,
+  with unchanged heading geometry and complete source metadata.
+  The exact destination URL, language and heading bind the new document before
+  awaiting its load and fonts. Read-only position polling then requires the
+  correct focused heading and complete, finite viewport geometry within one
+  absolute five-second budget. Raw samples, including initial displacement,
+  remain in the evidence. Wrong recipe/source identity and observation errors
+  fail immediately; persistent displacement remains a failure. Existing strict
+  geometry assertions and before/after capture comparisons still apply.
+  The first English batch also holds the three real guide font requests for at
+  least 250ms after its stylesheets apply. Within one fatal five-second gate,
+  the native fragment must be focused and fully visible before those responses
+  are released. The same rectangle and viewport must remain after the real font
+  bytes finish loading. Each response must match its source hash. No scrolling,
+  refocusing, substitute bytes or extra browser-test retry can complete this
+  fixture. Raw request timings, stylesheet observations and both geometry phases
+  are retained in `cold-font-protocol.json`.
 - A native-keyboard language roundtrip visits English → Japanese → English at
   both loopback mounts, or at the published project mount. Each navigation must
   load the matching raw page hash and declared language without scripts,
@@ -87,6 +127,14 @@ before deployment. The guide suite separately covers:
   after capture (`viewport-native-v1`). Each capture remains bounded to five
   seconds. These are visual checkpoints, not full-guide pixel coverage; all
   twenty chapters and complete code/table content retain automated checks.
+  One complete body accessibility snapshot supplies all 116 actual figure
+  subtrees. A single read-only DOM measurement supplies every figure's attributes,
+  caption and complete rendered code. Each unique figure is paired in source
+  order with its own raw subtree; role, accessible name, full code, language and
+  keyboard metadata checks remain mandatory. Missing, duplicate or unfamiliar
+  structures fail. The same complete body snapshot supplies the existing body
+  guard and artifact. Phase timings identify content, accessibility-tree,
+  native-interaction and axe costs without changing the case or suite deadlines.
 - Native Tab/Enter reaches the contents and selected chapter, then the widest
   code block and table. Each overflowing target is pinned to one ElementHandle,
   traversed to both edges and returned to zero using the existing shared absolute
@@ -104,10 +152,10 @@ Code examples use native named figures and captions, without overriding the
 figure role. Validated code-language metadata permits visual JSON wrapping while
 retaining complete original code text; shell continuations retain command tokens.
 Static validation requires exact regeneration of both committed guide pages
-from the standard-library builder, template and two Markdown sources. The
-payload remains bounded to 512 KiB, including all twelve files; Markdown,
+from the standard-library builder, recipe generator, template and two Markdown sources. The
+payload remains bounded to 640 KiB, including all twelve files; Markdown,
 templates, build code and test dependencies are outside the uploaded site.
-The source commit/tree, twelve payload hashes and four builder/input hashes
+The source commit/tree, twelve payload hashes and five builder/input hashes
 are retained in both browser suites. Generated output is checked again from
 that checkout before browser or published-byte inspection. No generator or
 JavaScript runs in the production page.
@@ -156,11 +204,14 @@ The lockfile has five exact development packages: `@playwright/test`,
 `@axe-core/playwright` and `axe-core` 4.14.0 (MPL-2.0). They are CI-only and are not
 redistributed in the twelve-file Pages artifact. The npm audit gate is a current
 advisory check, not a claim that these dependencies can never have a defect.
-The pure Node controls are separate from the 13 landing and 12 guide browser cases and
+The pure Node controls are separate from the 19 landing and 12 guide browser cases and
 the applicable workflow checks, which depend on changed paths. Publish/live
 jobs are intentionally skipped on pull requests. Production HTML still contains zero scripts; CI-only
 axe injection does not change that source contract.
-The hosted IBM Plex font files and their OFL notice remain part of the website.
+All four pages preload the three hosted IBM Plex faces with `font-display:
+optional`. A font that arrives after the initial display window leaves the
+fallback in use for that document, keeping fragment destinations stable. The
+font bytes and OFL notice remain part of the website.
 
 ## Common console checks
 

@@ -1,7 +1,9 @@
 """Behavioral checks for the deliberately bounded guide publisher."""
 import importlib.util
 from html.parser import HTMLParser
+import os
 from pathlib import Path
+import py_compile
 import tempfile
 import unittest
 
@@ -61,11 +63,44 @@ class GuideBuilderTests(unittest.TestCase):
         for route, page in builder.render(TOOLS.parent).items():
             locale = 'ja' if route.startswith('ja/') else 'en'
             source = (TOOLS.parent / f'site-content/guide/{locale}.md').read_text(encoding='utf-8')
+            source = builder.expand_examples(source, locale, TOOLS.parent)
             expected = [[language, code] for language, code in
                         re.findall(r'^```([^\n]*)\n(.*?)^```', source, re.M | re.S)]
             parser = Examples()
             parser.feed(page.decode())
             self.assertEqual(parser.examples, expected)
+
+    def test_recipe_fragment_links_and_headings_are_bounded(self):
+        self.assertEqual(builder.inline('[Setup](#recipe-setup)'), '<a href="#recipe-setup">Setup</a>')
+        for target in ('#../escape', '#recipe-setup?key=secret', '#recipe%2dsetup', '#bad"id'):
+            with self.subTest(target=target), self.assertRaises(ValueError):
+                builder.inline('[Bad](' + target + ')')
+        output = builder.body('## MP4 → DASH / cbcs {#recipe-mp4-dash-cbcs}', 'en')
+        self.assertEqual(output, '<h3 id="recipe-mp4-dash-cbcs" tabindex="-1">MP4 → DASH / cbcs</h3>')
+
+    def test_example_generation_reads_source_even_when_an_old_bytecode_cache_looks_current(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / 'tools').mkdir()
+            helper = root / 'tools/conversion_examples.py'
+            helper.write_text("def markdown(locale): return 'old'\n")
+            before = helper.stat()
+            py_compile.compile(str(helper), doraise=True)
+            helper.write_text("def markdown(locale): return 'new'\n")
+            os.utime(helper, ns=(before.st_atime_ns, before.st_mtime_ns))
+            self.assertEqual(builder.expand_examples('# 8. URL\n\n{{conversion-examples}}', 'en', root),
+                             '# 8. URL\n\nnew')
+
+    def test_recipe_marker_cannot_be_missing_duplicated_in_code_or_in_another_chapter(self):
+        _, source = builder.metadata((TOOLS.parent / 'site-content/guide/en.md').read_text())
+        marker = '{{conversion-examples}}'
+        variants = [source.replace(marker, ''), source.replace(marker, marker + '\n' + marker),
+                    source.replace(marker, '```text\n' + marker + '\n```'),
+                    source.replace(marker, '').replace('# 10. ', marker + '\n\n# 10. ', 1),
+                    source.replace(marker, 'Prefix ' + marker)]
+        for variant in variants:
+            with self.subTest(variant=variants.index(variant)), self.assertRaises(ValueError):
+                builder.expand_examples(variant, 'en', TOOLS.parent)
 
     def test_markup_is_escaped_and_unsafe_links_are_refused(self):
         self.assertEqual(builder.inline('`<key>&value`'), '<code>&lt;key&gt;&amp;value</code>')

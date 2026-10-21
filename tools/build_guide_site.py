@@ -45,8 +45,9 @@ def inline(text):
             result.append("<code>" + escape(code) + "</code>")
         elif label is not None:
             parsed = urlsplit(target)
-            if not (parsed.scheme == "https" and parsed.netloc and not parsed.username
-                    and not parsed.password and not parsed.query and "\\" not in target):
+            fragment = re.fullmatch(r"#[a-z][a-z0-9-]{0,100}", target)
+            if not (fragment or (parsed.scheme == "https" and parsed.netloc and not parsed.username
+                    and not parsed.password and not parsed.query and "\\" not in target)):
                 raise ValueError("guide-link")
             result.append('<a href="' + escape(target, quote=True) + '">' + inline(label) + "</a>")
         else:
@@ -119,8 +120,10 @@ def body(source, locale):
             i += 1
             continue
         if line.startswith("## "):
-            heading = line[3:]
-            output.append("<h3>" + inline(heading) + "</h3>")
+            anchored = re.fullmatch(r"## (.+) \{#(recipe-[a-z0-9-]{1,80})\}", line)
+            heading = anchored[1] if anchored else line[3:]
+            attributes = f' id="{anchored[2]}" tabindex="-1"' if anchored else ""
+            output.append("<h3" + attributes + ">" + inline(heading) + "</h3>")
             i += 1
             continue
         if line.startswith("|"):
@@ -172,6 +175,20 @@ def body(source, locale):
     return "\n".join(output)
 
 
+def expand_examples(source, locale, repository_root):
+    marker = "{{conversion-examples}}"
+    ordinary = re.sub(r"^```[^\n]*\n.*?^```\s*$", "", source, flags=re.M | re.S)
+    if (source.count(marker) != 1 or ordinary.count(marker) != 1
+            or re.findall(r"^# (\d+)\. ", ordinary.split(marker)[0], re.M)[-1:] != ["8"]
+            or not re.search(r"^\{\{conversion-examples\}\}$", source, re.M)):
+        raise ValueError("guide-conversion-examples")
+    path = Path(repository_root) / "tools/conversion_examples.py"
+    # Generate from the recorded source bytes, without using a stale bytecode cache.
+    examples = {"__name__": "guide_conversion_examples", "__file__": str(path)}
+    exec(compile(path.read_bytes(), str(path), "exec"), examples)
+    return source.replace(marker, examples["markdown"](locale))
+
+
 def render(repository_root):
     root = Path(repository_root)
     template = (root / "tools/templates/guide.html").read_text(encoding="utf-8")
@@ -183,6 +200,7 @@ def render(repository_root):
         if any(ord(char) < 32 and char not in "\n\t" for char in text):
             raise ValueError("guide-control-character")
         info, source = metadata(text)
+        source = expand_examples(source, locale, root)
         labels = LABELS[locale]
         if info["title"] != labels["title"]:
             raise ValueError("guide-title")
