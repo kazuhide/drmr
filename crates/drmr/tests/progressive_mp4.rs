@@ -3,6 +3,8 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, Output},
 };
+#[path = "support/mux_observation.rs"]
+mod mux_observation;
 
 fn command(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_drmr"))
@@ -344,11 +346,17 @@ fn an_empty_offset_edit_is_not_silently_zeroed_or_trimmed() {
 }
 
 fn converter(ffmpeg: &str) -> drmr_core::conversion::Converter {
+    converter_with_sink(ffmpeg, std::sync::Arc::new(drmr_core::events::NoSink))
+}
+fn converter_with_sink(
+    ffmpeg: &str,
+    sink: std::sync::Arc<dyn drmr_core::events::Sink>,
+) -> drmr_core::conversion::Converter {
     use std::sync::Arc;
     drmr_core::conversion::Converter::new(
         Arc::new(drmr_core::toolrun::ToolRunner::new(
             Arc::new(drmr_core::toolrun::Secrets::new()),
-            Arc::new(drmr_core::events::NoSink),
+            sink,
         )),
         "packager",
         ffmpeg,
@@ -551,10 +559,7 @@ fn only_complete_selectors_from_one_original_presentation_are_admitted() {
 #[test]
 fn mux_failure_timeout_and_active_cancellation_cannot_publish() {
     use drmr_core::{conversion::InputKeys, inspection::TargetProtection};
-    use std::{
-        sync::Arc,
-        time::{Duration, Instant},
-    };
+    use std::{sync::Arc, time::Duration};
     let root = tempfile::tempdir().unwrap();
     let original = root.path().join("source.mp4");
     source(&original, false);
@@ -595,35 +600,54 @@ fn mux_failure_timeout_and_active_cancellation_cannot_publish() {
         "media-tool-timeout"
     );
     assert!(!output.exists());
-    let started = root.path().join("started");
+    let ready = root.path().join("ready");
+    let release = root.path().join("release");
     let child = drmr_test_support::install(
         &root.path().join("cancel"),
-        &drmr_test_support::ToolSpec {
-            sleep_ms: 30000,
-            ..Default::default()
-        }
-        .with("argv_file", started.to_str().unwrap()),
+        &drmr_test_support::ToolSpec::default()
+            .with("ready_file", ready.to_str().unwrap())
+            .with("release_file", release.to_str().unwrap()),
     )
     .unwrap();
     let stop = drmr_core::concurrency::Stop::new();
-    let signal = Arc::new(started);
+    let observation = Arc::new(mux_observation::MuxObservation::default());
+    let sink = Arc::new(mux_observation::DelayedPreflight::new(
+        observation.clone(),
+        Duration::from_secs(11),
+    ));
+    assert!(!ready.exists());
     std::thread::scope(|scope| {
-        let observer = scope.spawn(|| {
-            let deadline = Instant::now() + Duration::from_secs(10);
-            while !signal.is_file() {
-                assert!(Instant::now() < deadline, "mux did not start");
-                std::thread::yield_now();
-            }
-            stop.set();
+        let watcher = scope.spawn(|| {
+            observation.cancel_when_ready(
+                &ready,
+                &stop,
+                Duration::from_secs(30),
+                Duration::from_secs(10),
+            )
         });
         let output = root.path().join("cancelled.mp4");
-        let error = converter(child.to_str().unwrap())
+        let result = converter_with_sink(child.to_str().unwrap(), sink)
+            .with_timeout(Duration::from_secs(10))
             .with_stop(stop.clone())
-            .convert_mp4(&original, &output, TargetProtection::Clear, &keys, None)
-            .unwrap_err();
-        observer.join().unwrap();
-        assert_eq!(error.0, "cancelled");
+            .convert_mp4(&original, &output, TargetProtection::Clear, &keys, None);
+        let code = result
+            .as_ref()
+            .err()
+            .map_or("unexpected-success", |error| error.0);
+        observation.complete(code);
+        let readiness = watcher
+            .join()
+            .unwrap_or_else(|_| panic!("mux observer panicked; conversion outcome={code}"));
         assert!(!output.exists());
+        assert_eq!(std::fs::read(&original).unwrap(), before);
+        assert!(
+            readiness.is_ok(),
+            "mux readiness failed: {readiness:?}; conversion outcome={code}"
+        );
+        assert!(std::fs::read(&ready).is_ok_and(|marker| marker == b"ready"));
+        assert!(stop.is_set());
+        assert!(!release.exists());
+        assert_eq!(code, "cancelled");
     });
     assert_eq!(std::fs::read(original).unwrap(), before);
 }
