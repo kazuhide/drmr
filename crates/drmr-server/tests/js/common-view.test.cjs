@@ -78,6 +78,18 @@ test('a submitted source URL is cleared before its unresolved registration compl
   assert.equal(h.descendants(h.host).some(node => String(node.textContent).includes('sentinel')), false);
 });
 
+test('URL session navigation and ownership use a localized label without any source path', () => {
+  const h = harness();
+  h.record.session.source = { kind: 'hls-url', label: 'HLS URL', display_url: 'https://source.example.invalid/PRIVATE_PATH/master.m3u8' };
+  h.data.owner = { sessionId: 'session_1', kind: 'analyze', phase: 'running', stop: 'none', jobId: 'job_1' };
+  h.view.update();
+  assert.equal(h.descendants(h.host).some(node => String(node.textContent).includes('PRIVATE_PATH')), false);
+  assert.match(h.global.children[0].textContent, /en:commonUrl/);
+  assert.doesNotMatch(h.global.children[0].textContent, /PRIVATE_PATH/);
+  h.setLanguage('ja'); h.view.translate();
+  assert.match(h.global.children[0].textContent, /ja:commonUrl/);
+});
+
 test('an unknown Stop response is not labeled as an acknowledged stop', () => {
   const h = harness();
   h.data.owner = { sessionId: 'session_1', kind: 'convert', phase: 'running', stop: 'unknown', jobId: 'job_1' };

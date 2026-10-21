@@ -141,7 +141,7 @@ impl CommonService {
         let source = match &s.source {
             Source::Local { .. } => json!({"kind":"local","label":"Local input"}),
             Source::SavedPlan { .. } => json!({"kind":"saved-plan","label":"Saved plan"}),
-            Source::HlsUrl { url, .. } => json!({"kind":"hls-url","display_url":display_url(url)}),
+            Source::HlsUrl { .. } => json!({"kind":"hls-url","label":"HLS URL"}),
         };
         self.envelope(json!({"session_id":s.id,"creation_request_id":s.creation,"source":source,"plan_refs":s.plans,"request_ids":s.requests.keys().collect::<Vec<_>>(),"requests_used":s.requests.len(),"active_request_id":s.active}))
     }
@@ -262,17 +262,4 @@ impl CommonService {
         self.dispatch_inner(req)
             .unwrap_or_else(|e| self.error_reply(e))
     }
-}
-fn display_url(url: &str) -> String {
-    pyutil::urlparse(url).map_or_else(
-        |_| String::new(),
-        |p| {
-            format!(
-                "{}://{}{}",
-                p.scheme,
-                p.netloc.rsplit('@').next().unwrap_or_default(),
-                p.path
-            )
-        },
-    )
 }

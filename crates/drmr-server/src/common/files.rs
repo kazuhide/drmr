@@ -26,6 +26,10 @@ impl BoundPath {
         let mut identities = Vec::new();
         for part in path.components() {
             current.push(part);
+            // A Windows drive prefix becomes an absolute directory at RootDir.
+            if matches!(part, Component::Prefix(_)) {
+                continue;
+            }
             let metadata = std::fs::symlink_metadata(&current).map_err(|_| unavailable())?;
             if unsafe_link(&metadata) {
                 return Err(unavailable());
@@ -533,4 +537,52 @@ pub fn read_private(binding: &BoundPath, limit: usize) -> Result<Vec<u8>> {
         return Err(unavailable());
     }
     Ok(bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BoundPath;
+
+    #[test]
+    fn absolute_roots_and_children_bind_every_filesystem_component() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        let volume = root.ancestors().last().unwrap();
+        BoundPath::capture(volume).unwrap().check().unwrap();
+        BoundPath::capture(&root).unwrap().check().unwrap();
+        let parent = root.join("media");
+        std::fs::create_dir(&parent).unwrap();
+        let media = parent.join("source.mp4");
+        std::fs::write(&media, b"original").unwrap();
+        let child = BoundPath::capture(&media).unwrap();
+        child.check().unwrap();
+
+        std::fs::rename(&media, parent.join("original.mp4")).unwrap();
+        std::fs::write(&media, b"original").unwrap();
+        assert!(child.check().is_err());
+
+        let replacement = BoundPath::capture(&media).unwrap();
+        std::fs::rename(&parent, root.join("original-directory")).unwrap();
+        std::fs::create_dir(&parent).unwrap();
+        std::fs::write(&media, b"original").unwrap();
+        assert!(replacement.check().is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn ordinary_and_extended_windows_drive_paths_are_both_admitted() {
+        let temporary = tempfile::tempdir().unwrap();
+        let extended = temporary.path().canonicalize().unwrap();
+        let text = extended.to_str().unwrap();
+        let ordinary = text.strip_prefix(r"\\?\").unwrap();
+        assert!(std::path::Path::new(ordinary).is_absolute());
+        BoundPath::capture(std::path::Path::new(ordinary))
+            .unwrap()
+            .check()
+            .unwrap();
+        BoundPath::capture(&extended).unwrap().check().unwrap();
+        let file = extended.join("source.mp4");
+        std::fs::write(&file, b"original").unwrap();
+        BoundPath::capture(&file).unwrap().check().unwrap();
+    }
 }

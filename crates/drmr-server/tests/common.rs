@@ -88,6 +88,58 @@ fn common_control_bodies_are_strict_at_every_depth() {
     server.stop().unwrap();
 }
 
+#[test]
+fn url_sessions_never_return_credentials_or_unbounded_source_labels() {
+    let root = tempfile::tempdir().unwrap();
+    let catalog = root.path().join("catalog");
+    std::fs::create_dir(&catalog).unwrap();
+    let mut config = ServerConfig::new(&catalog, root.path().join("output"));
+    config.bind_port = 0;
+    let server = spawn(config).unwrap();
+    let client = Client::new(&server.url());
+    let run = client.get("/api/common/capabilities").json()["server_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let sensitive = "https://PRIVATE_USER:PRIVATE_PASSWORD@source.example.invalid/PRIVATE_PATH/master.m3u8?auth=PRIVATE_QUERY#PRIVATE_FRAGMENT";
+    let long = format!(
+        "https://source.example.invalid/{}/master.m3u8",
+        "x".repeat(7000)
+    );
+    for (index, url) in [sensitive, &long].into_iter().enumerate() {
+        let body = serde_json::json!({"schema_version":1,"server_id":run,"creation_request_id":format!("{index:032x}"),"source":{"kind":"hls-url","url":url,"fetch_policy_ref":null}});
+        let created = client.post_json("/api/common/sessions", &body);
+        assert_eq!(created.status, 201);
+        let value = created.json();
+        assert_eq!(
+            value["source"],
+            serde_json::json!({"kind":"hls-url","label":"HLS URL"})
+        );
+        let id = value["session_id"].as_str().unwrap();
+        assert_eq!(
+            client.get(&format!("/api/common/sessions/{id}")).json(),
+            value
+        );
+        let replay = client.post_json("/api/common/sessions", &body);
+        assert_eq!(replay.status, 200);
+        assert_eq!(replay.json(), value);
+    }
+    let listed = client.get("/api/common/sessions");
+    assert_eq!(listed.status, 200);
+    assert_eq!(listed.json()["sessions"].as_array().unwrap().len(), 2);
+    for private in [
+        "PRIVATE_USER",
+        "PRIVATE_PASSWORD",
+        "PRIVATE_PATH",
+        "PRIVATE_QUERY",
+        "PRIVATE_FRAGMENT",
+        &long,
+    ] {
+        assert!(!listed.text().contains(private));
+    }
+    server.stop().unwrap();
+}
+
 fn media_ref(client: &Client) -> (String, String) {
     let cap = client.get("/api/common/capabilities").json();
     let root = cap["roots"]

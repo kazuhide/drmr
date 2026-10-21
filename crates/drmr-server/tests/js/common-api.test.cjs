@@ -29,6 +29,13 @@ test('a malformed successful mutation keeps the request outcome unknown', async 
   const api = load(() => Promise.resolve(envelope({ session_id: 'session_1' })));
   await assert.rejects(api.createSession({}), error => error.code === 'request-response-invalid' && error.uncertain === true);
 });
+test('URL sessions use a fixed label for creation recovery and every listing', async () => {
+  const session = envelope({ session_id: 'session_1', creation_request_id: 'a'.repeat(32),
+    source: { kind: 'hls-url', label: 'HLS URL' }, plan_refs: [], request_ids: [], requests_used: 0, active_request_id: null });
+  const api = load(url => Promise.resolve(url === '/api/common/sessions' ? envelope({ sessions: [session] }) : session));
+  assert.equal((await api.session('session_1')).session_id, 'session_1');
+  assert.equal((await api.sessions()).sessions[0].source.label, 'HLS URL');
+});
 test('common references are encoded opaque tokens and never arbitrary URLs or paths', async () => {
   let calls = 0;
   const api = load(() => { calls++; return Promise.resolve(null); });

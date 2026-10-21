@@ -445,6 +445,8 @@ The server operator can set `DRMR_COMMON_CONFIG_ROOT` to a private configuration
 
 The private configuration picker replaces file and folder names with numbered labels. Each page follows filename order; check the corresponding local folder before choosing a file. Configuration contents and original names are not shown in the console.
 
+URL sessions use a generic **HLS VOD URL** label. The server does not return the submitted URL to the page; credentials can occur in the path as well as in query parameters. The input field is cleared when submitted.
+
 Every newly saved plan is v2, including a one-output list. When supplying a key file, analyze accepts either schema; new plan creation and v2 plan conversion/verification use v2 keys. Imported v1 plans use v1 keys. See [multiple outputs](multiple-outputs.md) and the [key-file reference](https://kazuhide.github.io/drmr/guide/#cli-reference).
 
 The common workflow fixes a request identifier before submitting an operation. A lost reply is recovered by GET lookup of that exact request and job; a missing live receipt remains unknown. **Check status** never repeats the POST. Stop acknowledgment is separate from confirmed process cleanup, and unconfirmed cleanup retains the global execution slot shared with prepared workflows. Selection and language changes do not release it.

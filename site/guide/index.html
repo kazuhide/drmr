@@ -824,6 +824,7 @@ drmr serve
 </ol>
 <p>New plans use the named-output v2 format, even with one output. When supplying a key file, analyze accepts v1 or v2; new plans and their conversion/verification use v2. An imported CLI v1 plan uses v1 keys. Chapter 19 documents the file formats.</p>
 <p>Plan downloads preserve the original bytes and absolute paths. Keep them private: they can contain local paths and signed URLs. Do not rewrite paths to move a plan between environments. The page sends references rather than raw keys, configuration contents or executable paths, and never retrieves key-file contents.</p>
+<p>URL sessions use a generic <strong>HLS VOD URL</strong> label. The server does not return the submitted URL to the page; credentials can occur in the path as well as in query parameters. The input field is cleared when submitted.</p>
 <p>A session admits at most 32 operations. At the limit, download the plan, choose <strong>Close this conversion</strong>, then reopen the saved plan to verify existing output. If a launch outcome is unknown, <strong>Check status</strong> looks up that same operation without resubmitting it. A running or cleanup-unconfirmed session cannot close. Changing the selection or language does not release its execution slot.</p>
 <p><strong>Prepared content</strong> retains catalog conversion, HLS snapshots, queues and local playback. The named HLS profiles and key-entry form described below belong to that workflow; they are separate from the new workflow&#x27;s fetch-policy file.</p>
 <h3>Prepared-HLS connection policy</h3>

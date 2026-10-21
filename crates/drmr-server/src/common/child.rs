@@ -34,7 +34,7 @@ pub struct Prepared {
     pub copies: Vec<(PathBuf, FileIdentity)>,
     channels: Vec<(PathBuf, FileIdentity)>,
     #[cfg(windows)]
-    _pin: Option<native::PrivateDirectoryGuard>,
+    directory_pin: Option<native::PrivateDirectoryGuard>,
     owner: Option<native::PrivateTempDir>,
     cleanup_confirmed: AtomicBool,
 }
@@ -66,14 +66,14 @@ impl Prepared {
             owner: Some(owner),
             cleanup_confirmed: AtomicBool::new(false),
             #[cfg(windows)]
-            _pin: None,
+            directory_pin: None,
         })
     }
     pub fn configure(&mut self, settings: Preparation<'_>) -> Result<()> {
         self.directory.binding = Some(BoundPath::capture(&self.directory.path)?);
         #[cfg(windows)]
         {
-            self._pin = Some(
+            self.directory_pin = Some(
                 native::pin_private_directory(&self.directory.path).map_err(|_| unavailable())?,
             );
         }

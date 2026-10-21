@@ -29,12 +29,7 @@
   }
 
   function safeLabel(source) {
-    if (source.kind !== 'hls-url') return source.label;
-    try {
-      var url = new URL(source.display_url);
-      if (!/^https?:$/.test(url.protocol)) return t('commonUrl');
-      url.username = ''; url.password = ''; url.search = ''; url.hash = ''; return url.toString();
-    } catch (_error) { return t('commonUrl'); }
+    return source.kind === 'hls-url' ? t('commonUrl') : source.label;
   }
   function validName(name) { return typeof name === 'string' && /^[a-z][a-z0-9-]{0,31}$/.test(name) && !/^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/.test(name); }
   function create(host, nav, global, model, hooks) {

@@ -19,6 +19,8 @@ To change folders after opening the console, quit and reopen the application. So
 
 Choose **New conversion** in the console. Select local media or an HLS VOD URL, open the input, and analyze it. Add 1–8 named outputs, choose a new output folder, then **Save plan**. **Download original plan** preserves the original bytes and absolute paths; keep that file private because it can contain paths and signed URLs.
 
+After submission, URL input is cleared and shown only as a generic **HLS VOD URL** label. The full URL is not returned to the console because credentials can also occur in path segments.
+
 Choose **Convert** to create the output, then **Verify again** for an independent comparison. To verify later, open the same file as **Saved CLI plan** and verify the existing output without analysis or reconversion. When a key file is needed, new plans use v2 even with one output; an imported v1 plan uses v1. The page selects private configuration references and never uploads or retrieves key-file contents.
 
 All common and prepared workflows share one execution slot. A lost response remains unknown until status lookup resolves it; the page does not repeat a launch. Stop acknowledgment does not establish process cleanup. A pending, running or cleanup-unconfirmed session remains owned. See [the Web workflow](usage.md#saved-plan-workflow) for session limits and recovery.

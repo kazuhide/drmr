@@ -1162,6 +1162,8 @@ New plans use the named-output v2 format, even with one output. When supplying a
 
 Plan downloads preserve the original bytes and absolute paths. Keep them private: they can contain local paths and signed URLs. Do not rewrite paths to move a plan between environments. The page sends references rather than raw keys, configuration contents or executable paths, and never retrieves key-file contents.
 
+URL sessions use a generic **HLS VOD URL** label. The server does not return the submitted URL to the page; credentials can occur in the path as well as in query parameters. The input field is cleared when submitted.
+
 A session admits at most 32 operations. At the limit, download the plan, choose **Close this conversion**, then reopen the saved plan to verify existing output. If a launch outcome is unknown, **Check status** looks up that same operation without resubmitting it. A running or cleanup-unconfirmed session cannot close. Changing the selection or language does not release its execution slot.
 
 **Prepared content** retains catalog conversion, HLS snapshots, queues and local playback. The named HLS profiles and key-entry form described below belong to that workflow; they are separate from the new workflow's fetch-policy file.
