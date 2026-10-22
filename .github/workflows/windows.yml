@@ -1,4 +1,4 @@
-name: Windows archive DWORD regression
+name: Windows owner ACL research
 
 on:
   workflow_dispatch:
@@ -7,12 +7,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: windows-archive-dword-diagnostic-${{ github.ref }}
+  group: windows-archive-owner-research-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   diagnostic:
-    name: Archive DWORD regression / RED then GREEN
+    name: Ordinary owner / protected Modify parent
     runs-on: windows-2022
     timeout-minutes: 20
     steps:
@@ -28,7 +28,7 @@ jobs:
 
       - name: Parse the diagnostic PowerShell scripts
         run: |
-          foreach ($file in @('.github/scripts/test-windows-cli-archive-cleanup.ps1', '.github/scripts/windows-cli-archive-cleanup.ps1')) {
+          foreach ($file in @('.github/scripts/test-windows-cli-archive-cleanup.ps1', '.github/scripts/windows-cli-archive-cleanup.ps1', '.github/scripts/test-windows-archive-acl-owner.ps1')) {
             $tokens = $null
             $parseErrors = $null
             [Management.Automation.Language.Parser]::ParseFile((Join-Path $pwd $file), [ref]$tokens, [ref]$parseErrors) | Out-Null
@@ -38,35 +38,13 @@ jobs:
       - name: Check the embedded Python observer
         run: python -B -m unittest discover -s tools/tests -p test_windows_archive_cleanup_observer.py
 
-      - name: Prove the old reader fails and the restored reader passes
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $script = Join-Path $pwd '.github/scripts/test-windows-cli-archive-cleanup.ps1'
-          $original = [IO.File]::ReadAllBytes($script)
-          $text = [Text.UTF8Encoding]::new($false, $true).GetString($original)
-          $needle = '$call.exit_code -gt 4294967295'
-          if ([regex]::Matches($text, [regex]::Escape($needle)).Count -ne 1) { throw 'The DWORD regression mutation target is ambiguous' }
-          Write-Output ('DRMR_DWORD_SOURCE_SHA256 ' + [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($original)).ToLowerInvariant())
-          $before = @(Get-ChildItem -LiteralPath $env:RUNNER_TEMP -Directory -Force | Where-Object Name -Like 'drmr-archive-observer-*' | Select-Object -ExpandProperty FullName)
-          $redConfirmed = $false
-          try {
-            [IO.File]::WriteAllText($script, $text.Replace($needle, '$call.exit_code -gt 2147483647'), [Text.UTF8Encoding]::new($false))
-            try { & $script } catch {
-              if ($_.Exception.Message -ne 'The diagnostic reader changed or refused a valid exit code') { throw 'The RED check failed at an unexpected stage' }
-              $redConfirmed = $true
-            }
-          } finally {
-            [IO.File]::WriteAllBytes($script, $original)
-          }
-          if (-not $redConfirmed) { throw 'The old signed reader did not fail its real regression check' }
-          if ([Convert]::ToBase64String([IO.File]::ReadAllBytes($script)) -ne [Convert]::ToBase64String($original)) { throw 'The GREEN source was not restored byte for byte' }
-          $after = @(Get-ChildItem -LiteralPath $env:RUNNER_TEMP -Directory -Force | Where-Object Name -Like 'drmr-archive-observer-*' | Select-Object -ExpandProperty FullName)
-          if ($after.Count -ne $before.Count -or @($after | Where-Object { $_ -notin $before }).Count -ne 0) { throw 'The RED observer directory was not removed' }
-          Write-Output 'DRMR_DWORD_RED_CONFIRMED'
-          Write-Output 'DRMR_DWORD_RED_OWNED_CLEANUP_CONFIRMED'
-          & $script
-          $after = @(Get-ChildItem -LiteralPath $env:RUNNER_TEMP -Directory -Force | Where-Object Name -Like 'drmr-archive-observer-*' | Select-Object -ExpandProperty FullName)
-          if ($after.Count -ne $before.Count -or @($after | Where-Object { $_ -notin $before }).Count -ne 0) { throw 'The GREEN observer directory was not removed' }
-          if ([Convert]::ToBase64String([IO.File]::ReadAllBytes($script)) -ne [Convert]::ToBase64String($original)) { throw 'The GREEN check changed its source' }
-          Write-Output 'DRMR_DWORD_GREEN_CONFIRMED'
-          Write-Output 'DRMR_DWORD_GREEN_OWNED_CLEANUP_CONFIRMED'
+      - name: Check the separate bounded research capture
+        run: python -B -m unittest discover -s tools/tests -p test_windows_archive_acl_research.py
+
+      - name: Probe the unchanged ACL helper under a protected Modify parent
+        id: owner
+        run: .github/scripts/test-windows-archive-acl-owner.ps1
+
+      - name: Preserve the seven ordinary-user cleanup gates when the focused probe is unclassified
+        if: steps.owner.outputs.classified_failure != 'true'
+        run: .github/scripts/test-windows-cli-archive-cleanup.ps1
