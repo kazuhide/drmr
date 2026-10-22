@@ -88,6 +88,18 @@ try {
     $acl = Get-Acl -LiteralPath $directory
     $researchStage = 'check-parent-rules'
     $rules = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))
+    # A newly created directory can contain an explicit administrator-group ACE.
+    # Remove only extra principals from this owned synthetic parent, then re-read.
+    $researchStage = 'remove-extra-parent-ace'
+    foreach ($rule in $rules) {
+        if ($rule.IdentityReference.Value -notin @($adminSid.Value, $userSid.Value, 'S-1-5-18')) {
+            $null = & icacls $directory /remove "*$($rule.IdentityReference.Value)" /Q 2>&1
+            Assert-OwnerResearch ($LASTEXITCODE -eq 0)
+        }
+    }
+    $acl = Get-Acl -LiteralPath $directory
+    $rules = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))
+    $researchStage = 'check-parent-rules'
     $safeRules = @()
     foreach ($rule in $rules) {
         $role = if ($rule.IdentityReference.Value -eq $userSid.Value) { 'ordinary' }
