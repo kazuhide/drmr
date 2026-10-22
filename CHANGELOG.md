@@ -5,14 +5,16 @@ for installation, stable interfaces and versioning.
 
 ## [Unreleased]
 
-Corrections on `main` are not included in the published 1.0.0 archives.
-Those immutable archives remain pre-release candidates with the original
-48 kHz-only TS audio profile. Build from current source to use these corrections.
+## [1.0.1] - 2026-10-23
+
+Pre-release patch for AAC in MPEG transport streams. The published v1.0.0
+archives remain unchanged.
 
 ### Fixed
 
-- Preserve a uniquely declared partial final AAC playback range from HLS/TS in HLS and DASH, while retaining every coded frame, raw timestamp and decoded sample. Verify the result's own edit list and manifest boundaries independently.
-
+- Preserve a uniquely declared partial final AAC playback range from HLS/TS in
+  HLS and DASH, while retaining every coded frame, raw timestamp and decoded
+  sample. Verify the result's own edit list and manifest boundaries independently.
 - Accept AAC-LC at 44.1 kHz alongside 48 kHz in supported clear, AES-128 and
   SAMPLE-AES HLS transport streams, including audio-only input.
 - Preserve every original AAC frame, decoded sample and absolute presentation
