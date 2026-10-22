@@ -1077,7 +1077,7 @@ cargo build --release --locked -p drmr
 
 ## 所有者専用の鍵ファイル
 
-Windows では chmod の代わりに access control list（アクセス制御リスト、ACL）を使います。所有者を現在のユーザーに設定し、権限の継承を止めて、そのユーザーだけに完全アクセスを許可する ACL が必要です。次の設定は、管理者として起動していない Windows PowerShell 5.1（`powershell.exe`）で実行します。所有者専用の新しいディレクトリと空ファイルを作成してから、エディターで設定を入力します。
+Windows では chmod の代わりに access control list（アクセス制御リスト、ACL）を使います。鍵ファイルは現在のユーザーが所有し、継承を無効にした ACL でそのユーザーだけに完全アクセスを許可する必要があります。次の設定は、管理者として起動していない Windows PowerShell 5.1（`powershell.exe`）で実行します。所有者専用の新しいディレクトリと空ファイルを作成してから、エディターで設定を入力します。
 
 ```powershell
 $ErrorActionPreference = 'Stop'
@@ -1087,15 +1087,40 @@ if (Test-Path -LiteralPath $private) { throw 'Choose a new directory' }
 New-Item -ItemType Directory -Path $private | Out-Null
 
 function Set-OwnerOnlyAcl($path, $security) {
-    $security.SetOwner($sid)
+    $directory = $security -is [System.Security.AccessControl.DirectorySecurity]
+    $sections = [System.Security.AccessControl.AccessControlSections]'Owner, Access'
+    $current = if ($directory) {
+        [System.IO.Directory]::GetAccessControl($path, $sections)
+    } else {
+        [System.IO.File]::GetAccessControl($path, $sections)
+    }
+    if (-not $current.GetOwner([System.Security.Principal.SecurityIdentifier]).Equals($sid)) {
+        throw 'The current user must own the path'
+    }
     $security.SetAccessRuleProtection($true, $false)
     $rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
         $sid, 'FullControl', 'Allow')
     $security.AddAccessRule($rule)
-    if ($security -is [System.Security.AccessControl.DirectorySecurity]) {
+    $checked = if ($directory) {
         [System.IO.Directory]::SetAccessControl($path, $security)
+        [System.IO.Directory]::GetAccessControl($path, $sections)
     } else {
         [System.IO.File]::SetAccessControl($path, $security)
+        [System.IO.File]::GetAccessControl($path, $sections)
+    }
+    $rules = @($checked.GetAccessRules($true, $true,
+        [System.Security.Principal.SecurityIdentifier]))
+    if (-not $checked.AreAccessRulesProtected -or $rules.Count -ne 1 -or
+        -not $checked.GetOwner([System.Security.Principal.SecurityIdentifier]).Equals($sid)) {
+        throw 'Private ACL verification failed'
+    }
+    $actual = $rules[0]
+    if (-not $actual.IdentityReference.Equals($sid) -or $actual.IsInherited -or
+        $actual.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow -or
+        $actual.FileSystemRights -ne [System.Security.AccessControl.FileSystemRights]::FullControl -or
+        $actual.InheritanceFlags -ne [System.Security.AccessControl.InheritanceFlags]::None -or
+        $actual.PropagationFlags -ne [System.Security.AccessControl.PropagationFlags]::None) {
+        throw 'Private ACL verification failed'
     }
 }
 
@@ -1111,7 +1136,7 @@ Set-OwnerOnlyAcl $keyFile ([Security.AccessControl.FileSecurity]::new())
 notepad $keyFile
 ```
 
-エディターによるファイルの置き換えで ACL が変わった場合は、ファイルを所有者専用ディレクトリ内に置いたまま ACL を再適用してください。既存ファイルの不適切な権限を drmr が自動で修正することはありません。
+この関数は、パスの所有者が現在のユーザーであることを確認してから、アクセス権だけを設定します。設定後も所有者と ACL を検査します。所有者の変更には別の権限が必要ですが、自分で作成したパスでは変更する必要はありません。エディターによるファイルの置き換えで ACL が変わった場合は、ファイルを所有者専用ディレクトリ内に置いたまま ACL を再適用してください。既存ファイルの不適切な権限を drmr が自動で修正することはありません。
 
 ## PowerShell からの変換
 

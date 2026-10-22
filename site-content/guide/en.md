@@ -988,15 +988,40 @@ if (Test-Path -LiteralPath $private) { throw 'Choose a new directory' }
 New-Item -ItemType Directory -Path $private | Out-Null
 
 function Set-OwnerOnlyAcl($path, $security) {
-    $security.SetOwner($sid)
+    $directory = $security -is [System.Security.AccessControl.DirectorySecurity]
+    $sections = [System.Security.AccessControl.AccessControlSections]'Owner, Access'
+    $current = if ($directory) {
+        [System.IO.Directory]::GetAccessControl($path, $sections)
+    } else {
+        [System.IO.File]::GetAccessControl($path, $sections)
+    }
+    if (-not $current.GetOwner([System.Security.Principal.SecurityIdentifier]).Equals($sid)) {
+        throw 'The current user must own the path'
+    }
     $security.SetAccessRuleProtection($true, $false)
     $rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
         $sid, 'FullControl', 'Allow')
     $security.AddAccessRule($rule)
-    if ($security -is [System.Security.AccessControl.DirectorySecurity]) {
+    $checked = if ($directory) {
         [System.IO.Directory]::SetAccessControl($path, $security)
+        [System.IO.Directory]::GetAccessControl($path, $sections)
     } else {
         [System.IO.File]::SetAccessControl($path, $security)
+        [System.IO.File]::GetAccessControl($path, $sections)
+    }
+    $rules = @($checked.GetAccessRules($true, $true,
+        [System.Security.Principal.SecurityIdentifier]))
+    if (-not $checked.AreAccessRulesProtected -or $rules.Count -ne 1 -or
+        -not $checked.GetOwner([System.Security.Principal.SecurityIdentifier]).Equals($sid)) {
+        throw 'Private ACL verification failed'
+    }
+    $actual = $rules[0]
+    if (-not $actual.IdentityReference.Equals($sid) -or $actual.IsInherited -or
+        $actual.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow -or
+        $actual.FileSystemRights -ne [System.Security.AccessControl.FileSystemRights]::FullControl -or
+        $actual.InheritanceFlags -ne [System.Security.AccessControl.InheritanceFlags]::None -or
+        $actual.PropagationFlags -ne [System.Security.AccessControl.PropagationFlags]::None) {
+        throw 'Private ACL verification failed'
     }
 }
 
@@ -1012,7 +1037,7 @@ Set-OwnerOnlyAcl $keyFile ([Security.AccessControl.FileSecurity]::new())
 notepad $keyFile
 ```
 
-If an editor replaces the file and changes its ACL, reapply the owner-only ACL while keeping it inside the private directory. drmr does not silently fix an unsafe existing key file.
+The function verifies that you already own each path and changes only its access rules, then checks the resulting owner and ACL. Assigning an owner requires a separate permission and is unnecessary for these new paths. If an editor replaces the file and changes its ACL, reapply the owner-only ACL while keeping it inside the private directory. drmr does not silently fix an unsafe existing key file.
 
 ## PowerShell conversion
 

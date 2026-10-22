@@ -78,6 +78,10 @@ try {
         $null = & icacls $path /grant "*$($userSid.Value):(OI)(CI)RX" /T /Q 2>&1
         Assert-OwnerResearch ($LASTEXITCODE -eq 0)
     }
+    foreach ($path in @('docs', 'site-content', 'site-content/guide', 'docs/windows.md', 'site-content/guide/en.md', 'site-content/guide/ja.md')) {
+        $null = & icacls (Join-Path $checkout $path) /grant "*$($userSid.Value):RX" /Q 2>&1
+        Assert-OwnerResearch ($LASTEXITCODE -eq 0)
+    }
     $adminSid = [Security.Principal.WindowsIdentity]::GetCurrent().User
     $researchStage = 'protect-parent'
     Assert-OwnerResearch ($adminSid.Value -ne 'S-1-5-18' -and $adminSid.Value -ne $userSid.Value)
@@ -124,10 +128,17 @@ try {
     $allowed = $modify -bor [Security.AccessControl.FileSystemRights]::Synchronize
     Assert-OwnerResearch (($rights -band $modify) -eq $modify -and ($rights -band (-bnot $allowed)) -eq 0)
     Assert-OwnerResearch (($rights -band ([Security.AccessControl.FileSystemRights]::TakeOwnership -bor [Security.AccessControl.FileSystemRights]::ChangePermissions)) -eq 0)
+    $researchStage = 'prepare-native-regression'
+    $nativeFixture = Join-Path $PSScriptRoot 'windows-cli-private-acl-tests.ps1'
+    . $nativeFixture -Directory $directory -Checkout $checkout -Python $python
+    Initialize-PrivateAclRegression $directory $userSid
+    $temporaryIdentity = Get-DrmrArchiveDirectoryIdentity (Join-Path $directory 'temp') $python
     $context = @{
         python = $python; helper = (Join-Path $checkout 'tools/qualify_cli_archive.py')
         worker = (Join-Path $PSScriptRoot 'windows_archive_acl_owner_worker.py')
         research = (Join-Path $PSScriptRoot 'windows_archive_acl_research.py')
+        native_fixture = $nativeFixture; checkout = $checkout; parent = $parent
+        identity = $directoryIdentity; temporary_identity = $temporaryIdentity
     }
     $researchStage = 'write-fixture'
     $context | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $directory 'context.json')
@@ -139,6 +150,8 @@ try {
     $principal = [Security.Principal.WindowsPrincipal]::new($identity)
     if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { exit 4 }
     $context = Get-Content -Raw (Join-Path $PSScriptRoot 'context.json') | ConvertFrom-Json
+    & powershell.exe -NoLogo -NoProfile -NonInteractive -File $context.native_fixture -Ordinary -Directory $PSScriptRoot -Checkout $context.checkout -Python $context.python -ExpectedParent $context.parent -ExpectedIdentity $context.identity -ExpectedTempIdentity $context.temporary_identity
+    if ($LASTEXITCODE -ne 0) { exit 7 }
     [IO.File]::WriteAllText((Join-Path $PSScriptRoot 'qualification.json'), '{}')
     New-Item -ItemType Directory -Path (Join-Path $PSScriptRoot 'temp') | Out-Null
     foreach ($name in @('qualification.json', 'temp')) {
@@ -157,8 +170,35 @@ try {
     $process = Start-Process -FilePath $shell -Credential $credential -LoadUserProfile -WorkingDirectory $directory -ArgumentList $arguments -Wait -PassThru
     $executionExited = $true
     Write-Output ('DRMR_ACL_OWNER_CHILD_EXIT ' + $process.ExitCode)
+    if (Test-Path -LiteralPath (Join-Path $directory 'private-acl-failure.json')) {
+        $nativeFailure = Read-OwnedResearchJson 'private-acl-failure.json'
+        Assert-ExactKeys $nativeFailure @('schema_version', 'stage', 'category', 'hresult')
+        Assert-ResearchInteger $nativeFailure.schema_version 1 1
+        Assert-ResearchInteger $nativeFailure.hresult -2147483648 4294967295
+        Assert-OwnerResearch ($nativeFailure.stage -cin @('entered', 'root-premise', 'foreign-permission', 'helper-run', 'helper-positive', 'helper-negative-snapshot', 'document-extraction', 'document-positive', 'document-negative', 'owned-cleanup'))
+        Assert-OwnerResearch ($nativeFailure.category -cin @('RuntimeException', 'MethodInvocationException', 'UnauthorizedAccessException', 'ItemNotFoundException', 'Win32Exception', 'UnclassifiedException'))
+        Write-Output ('DRMR_PRIVATE_ACL_FAILURE ' + ($nativeFailure | ConvertTo-Json -Compress))
+    }
     $researchStage = 'check-child-exit'
     Assert-OwnerResearch ($process.ExitCode -eq 0)
+    $nativeProof = Read-OwnedResearchJson 'private-acl-proof.json'
+    Assert-ExactKeys $nativeProof @('schema_version', 'ordinary_user', 'modify_parent', 'helper_positive', 'helper_foreign_owner_refusals',
+        'document_positive', 'document_foreign_owner_refusals', 'foreign_owner_full_control', 'foreign_owner_descriptor_identity_payload_unchanged', 'documents')
+    Assert-ResearchInteger $nativeProof.schema_version 1 1
+    Assert-ResearchInteger $nativeProof.helper_positive 2 2
+    Assert-ResearchInteger $nativeProof.helper_foreign_owner_refusals 2 2
+    Assert-ResearchInteger $nativeProof.document_positive 6 6
+    Assert-ResearchInteger $nativeProof.document_foreign_owner_refusals 6 6
+    foreach ($key in @('ordinary_user', 'modify_parent', 'foreign_owner_full_control', 'foreign_owner_descriptor_identity_payload_unchanged')) {
+        Assert-OwnerResearch ($nativeProof[$key] -is [bool] -and $nativeProof[$key])
+    }
+    Assert-OwnerResearch ($nativeProof.documents -is [array] -and $nativeProof.documents.Count -eq 3)
+    foreach ($document in $nativeProof.documents) {
+        Assert-ExactKeys $document @('document', 'source_sha256', 'function_sha256')
+        Assert-OwnerResearch ($document.document -cin @('docs/windows.md', 'site-content/guide/en.md', 'site-content/guide/ja.md'))
+        Assert-OwnerResearch ($document.source_sha256 -cmatch '^[0-9a-f]{64}$' -and $document.function_sha256 -cmatch '^[0-9a-f]{64}$')
+    }
+    Write-Output ('DRMR_PRIVATE_ACL_PROOF ' + ($nativeProof | ConvertTo-Json -Depth 6 -Compress))
     $premises = Read-OwnedResearchJson 'preconditions.json'
     $researchStage = 'check-preconditions'
     Assert-ExactKeys $premises @('schema_version', 'ordinary_user', 'file_owner_matches', 'directory_owner_matches')

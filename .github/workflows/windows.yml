@@ -28,7 +28,7 @@ jobs:
 
       - name: Parse the diagnostic PowerShell scripts
         run: |
-          foreach ($file in @('.github/scripts/test-windows-cli-archive-cleanup.ps1', '.github/scripts/windows-cli-archive-cleanup.ps1', '.github/scripts/test-windows-archive-acl-owner.ps1')) {
+          foreach ($file in @('.github/scripts/test-windows-cli-archive-cleanup.ps1', '.github/scripts/windows-cli-archive-cleanup.ps1', '.github/scripts/test-windows-archive-acl-owner.ps1', '.github/scripts/windows-cli-private-acl-tests.ps1')) {
             $tokens = $null
             $parseErrors = $null
             [Management.Automation.Language.Parser]::ParseFile((Join-Path $pwd $file), [ref]$tokens, [ref]$parseErrors) | Out-Null
