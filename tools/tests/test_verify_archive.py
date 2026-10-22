@@ -55,10 +55,37 @@ class Archives(unittest.TestCase):
     def check(self, path):
         return VERIFY.qualify(path, self.source, self.expected)
 
+    def zip_archive(self, compression):
+        files = dict(self.files)
+        files["build-manifest.json"] = json.dumps(self.manifest).encode()
+        path = self.root / ("candidate-" + str(compression) + ".zip")
+        with zipfile.ZipFile(path, "w") as stream:
+            for name, data in files.items():
+                member = zipfile.ZipInfo("package/" + name)
+                member.create_system = 3
+                mode = 0o755 if name == "drmr" else 0o644
+                member.external_attr = (stat.S_IFREG | mode) << 16
+                stream.writestr(member, data, compress_type=compression)
+        return path
+
     def test_exact_archive_and_build_binding(self):
         result = self.check(self.archive())
         self.assertTrue(result["success"])
         self.assertEqual(result["binaries"]["drmr"]["sha256"], VERIFY.sha(elf()))
+
+    def test_stored_and_deflated_zip_archives_retain_full_source_and_binary_checks(self):
+        for compression in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED):
+            with self.subTest(compression=compression):
+                result = self.check(self.zip_archive(compression))
+                self.assertTrue(result["success"])
+                self.assertEqual(result["binaries"]["drmr"]["sha256"], VERIFY.sha(elf()))
+
+    def test_other_zip_compression_is_refused_during_member_admission(self):
+        for compression in (zipfile.ZIP_BZIP2, zipfile.ZIP_LZMA):
+            with self.subTest(compression=compression), self.assertRaisesRegex(
+                    VERIFY.Failure, "^archive-compression-method$"):
+                archive = VERIFY.Archive(self.zip_archive(compression))
+                archive.close()
 
     def test_raw_publisher_bytes_do_not_accept_equivalent_crlf(self):
         files = dict(self.files, LICENSE=self.payload.replace(b"\n", b"\r\n"))

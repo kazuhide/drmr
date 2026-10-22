@@ -72,9 +72,9 @@ class FakeGitHub:
         self.extra_artifacts = []
         self.on_json = None
 
-    def rebuild(self, name):
+    def rebuild(self, name, compression=zipfile.ZIP_STORED):
         stream = io.BytesIO()
-        with zipfile.ZipFile(stream, "w") as archive:
+        with zipfile.ZipFile(stream, "w", compression=compression) as archive:
             for filename, data in self.entries[name]:
                 archive.writestr(filename, data)
         self.outer[name] = stream.getvalue()
@@ -190,6 +190,30 @@ class ReleasePacket(unittest.TestCase):
         self.assertEqual((self.output / "release-notes.md").read_text(), "Curated release notes.\n\n### Changes\n\n- Stable CLI.\n")
         self.assertEqual(self.git("status", "--porcelain"), "")
         self.assertEqual(list(self.home.glob(".drmr-release-*")), [])
+
+    def test_deflated_artifacts_preserve_archive_and_report_bindings(self):
+        for _, name, _, _ in PREPARE.TARGETS:
+            self.client.rebuild(name, zipfile.ZIP_DEFLATED)
+        result = self.prepare()
+        self.assertTrue(result["success"])
+        self.assertEqual(result["archives"], 3)
+        self.assertEqual(list(self.home.glob(".drmr-release-*")), [])
+
+    def test_valid_lzma_artifact_is_refused_before_publication(self):
+        self.client.rebuild("drmr-Linux-X64", zipfile.ZIP_LZMA)
+        self.refuse("artifact-archive-invalid")
+
+    def test_corrupt_lzma_artifact_has_only_a_fixed_diagnostic(self):
+        name = "drmr-Linux-X64"
+        self.client.rebuild(name, zipfile.ZIP_LZMA)
+        damaged = bytearray(self.client.outer[name])
+        payload_at = 30 + int.from_bytes(damaged[26:28], "little") + int.from_bytes(damaged[28:30], "little")
+        self.assertEqual(int.from_bytes(damaged[8:10], "little"), zipfile.ZIP_LZMA)
+        self.assertEqual(damaged[payload_at + 2:payload_at + 4], b"\x05\x00")
+        damaged[payload_at + 4] = 0xff
+        self.client.outer[name] = bytes(damaged)
+        self.client.artifacts[name].update(size_in_bytes=len(damaged), digest="sha256:" + hashlib.sha256(damaged).hexdigest())
+        self.refuse("artifact-archive-invalid")
 
     def test_media_producer_projection_and_versioned_ci_names_are_accepted(self):
         # Invoke the real producer result assembly with command/native execution

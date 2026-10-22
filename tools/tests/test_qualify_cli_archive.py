@@ -7,6 +7,7 @@ import io
 import json
 import os
 from pathlib import Path
+import stat
 import subprocess
 import sys
 import tarfile
@@ -154,6 +155,43 @@ class OwnedFilesTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
+
+    def cli_zip(self, compression, corrupt=False):
+        payload = bytearray(64)
+        payload[:7] = b"\x7fELF\x02\x01\x01"
+        payload[16:20] = b"\x02\x00\x3e\x00"
+        archive = self.root / ("private-marker-" + str(compression) + "-" + str(corrupt) + ".zip")
+        with zipfile.ZipFile(archive, "w") as output:
+            member = zipfile.ZipInfo("package/drmr")
+            member.create_system = 3
+            member.external_attr = (stat.S_IFREG | 0o755) << 16
+            output.writestr(member, payload, compress_type=compression)
+        if corrupt:
+            damaged = bytearray(archive.read_bytes())
+            payload_at = 30 + int.from_bytes(damaged[26:28], "little") + int.from_bytes(damaged[28:30], "little")
+            self.assertEqual(int.from_bytes(damaged[8:10], "little"), zipfile.ZIP_LZMA)
+            self.assertEqual(damaged[payload_at + 2:payload_at + 4], b"\x05\x00")
+            damaged[payload_at + 4] = 0xff
+            archive.write_bytes(damaged)
+        return archive, payload
+
+    def test_stored_and_deflated_zip_binaries_are_extracted_with_the_verified_hash(self):
+        for compression in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED):
+            archive, payload = self.cli_zip(compression)
+            destination = self.root / ("drmr-" + str(compression))
+            with self.subTest(compression=compression):
+                module.extract_cli(archive, "x86_64-unknown-linux-gnu", module.VERIFY.sha(payload), destination)
+                self.assertEqual(destination.read_bytes(), payload)
+
+    def test_valid_and_corrupt_lzma_zip_members_have_only_a_fixed_diagnostic(self):
+        for corrupt in (False, True):
+            archive, payload = self.cli_zip(zipfile.ZIP_LZMA, corrupt)
+            destination = self.root / ("drmr-" + str(corrupt))
+            with self.subTest(corrupt=corrupt):
+                with self.assertRaisesRegex(module.Refusal, "^archive-extraction-invalid$") as denied:
+                    module.extract_cli(archive, "x86_64-unknown-linux-gnu", module.VERIFY.sha(payload), destination)
+                self.assertNotIn("private-marker", str(denied.exception))
+                self.assertFalse(destination.exists())
 
     def test_source_archive_is_a_bounded_regular_file_and_symlinks_are_refused(self):
         original = self.root / "archive.tar.gz"
