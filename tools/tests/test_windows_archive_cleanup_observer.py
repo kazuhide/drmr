@@ -57,7 +57,7 @@ class ArchiveAclObserverTests(unittest.TestCase):
             if call["exit_code"] is not None:
                 self.assertIs(type(call["exit_code"]), int)
                 self.assertGreaterEqual(call["exit_code"], -(2**31))
-                self.assertLess(call["exit_code"], 2**31)
+                self.assertLess(call["exit_code"], 2**32)
         return record
 
     def test_success_preserves_arguments_environment_deadline_and_result(self):
@@ -81,11 +81,13 @@ class ArchiveAclObserverTests(unittest.TestCase):
         self.assertEqual(self.fixed_record(["ok"])["acl_calls"][0]["exit_code"], 0)
 
     def test_nonzero_result_is_returned_without_replacement(self):
-        result = subprocess.CompletedProcess(["powershell.exe"], -1073741502,
-                                             stdout=SENTINEL, stderr=SENTINEL)
-        observe, _, _ = self.observer(lambda *args, **kwargs: result)
-        self.assertIs(observe(["powershell.exe"], timeout=20), result)
-        self.assertEqual(self.fixed_record(["nonzero"])["acl_calls"][0]["exit_code"], result.returncode)
+        for code in (-1073741502, 3221225794):
+            with self.subTest(returncode=code):
+                result = subprocess.CompletedProcess(["powershell.exe"], code,
+                                                     stdout=SENTINEL, stderr=SENTINEL)
+                observe, _, _ = self.observer(lambda *args, **kwargs: result)
+                self.assertIs(observe(["powershell.exe"], timeout=20), result)
+                self.assertEqual(self.fixed_record(["nonzero"])["acl_calls"][0]["exit_code"], code)
 
     def test_timeout_and_os_error_rethrow_the_same_exception_without_details(self):
         for error, status in ((subprocess.TimeoutExpired([SENTINEL], 20, output=SENTINEL,
