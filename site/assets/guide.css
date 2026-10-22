@@ -23,7 +23,7 @@
 .guide-chapter :not(pre) > code { overflow-wrap: anywhere; font-size: .875em; }
 .guide-example { min-width: 0; margin: 24px 0; }
 .guide-example figcaption { padding: 8px 14px; color: var(--secondary); background: var(--canvas); border: 1px solid var(--rule); border-bottom: 0; font-family: var(--mono); font-size: 13px; }
-.guide-example pre { box-sizing: border-box; max-width: 100%; margin: 0; border-radius: 0; border: 1px solid var(--rule); overflow-x: auto; scroll-margin-block: 16px; }
+.guide-example pre { box-sizing: border-box; max-width: 100%; max-block-size: min(65vh, 36rem); margin: 0; border-radius: 0; border: 1px solid var(--rule); overflow: auto; scroll-margin-block: 16px; }
 .guide-example code { display: block; width: max-content; min-width: 100%; }
 .guide-example[data-code-language="json"] pre { white-space: pre-wrap; }
 .guide-example[data-code-language="json"] code { width: auto; min-width: 0; overflow-wrap: anywhere; }
@@ -57,7 +57,7 @@
   .guide-content { max-width: none; }
   .guide-chapter { padding: 16px 0; }
   .guide-chapter > h2, .guide-chapter h3, .guide-example figcaption, .guide-table-scroll caption { break-after: avoid; }
-  .guide-example pre { overflow: visible; white-space: pre-wrap; }
+  .guide-example pre { max-block-size: none; overflow: visible; white-space: pre-wrap; }
   .guide-example code { width: auto; min-width: 0; overflow-wrap: anywhere; }
   .guide-table-scroll { max-block-size: none; overflow: visible; }
   .guide-table-scroll table { min-width: 0; table-layout: fixed; }

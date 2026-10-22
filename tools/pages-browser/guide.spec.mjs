@@ -6,7 +6,7 @@ import { focusObservation, pollFocus, requireFocus, requireImages } from './chec
 import { completeMatrixKey } from './matrix.mjs';
 import { guideChapters, guideLocales, guideObservation, requireGuideLayout,
   guideScrollObservation, requireGuideMovement, guideFiguresObservation, requireGuideFigures,
-  requireGuideCheckpoint } from './guide.mjs';
+  requireGuideCheckpoint, requireGuideCodeEdge, requireGuidePrintCode } from './guide.mjs';
 import { matrixRecipes } from './recipes.mjs';
 
 const live = liveMode(process.env.PAGES_LIVE);
@@ -107,13 +107,14 @@ async function scrollTarget(page, locator, checkpoint) {
     const initial = await target.evaluate(guideScrollObservation);
     expect(initial.focused).toBe(true);
     expect(initial.scrollLeft).toBe(0);
+    expect(initial.scrollTop).toBe(0);
     record.samples.push(initial);
     record.scrollNeeded = initial.scrollWidth > initial.clientWidth;
-    if (!record.scrollNeeded) { record.passed = true; await checkpoint(target); return record; }
+    if (!record.scrollNeeded && initial.tag !== 'PRE') { record.passed = true; await checkpoint(target); return record; }
     const deadline = performance.now() + 5000;
-    const move = async key => {
+    const move = async (key, direction = key === 'ArrowRight' ? 'right' : 'left', keyDeadline = deadline) => {
       const after = await completeMatrixKey({ before: record.samples.at(-1),
-        direction: key === 'ArrowRight' ? 'right' : 'left', deadline, validateMovement: requireGuideMovement,
+        direction, deadline: keyDeadline, validateMovement: requireGuideMovement,
         arm: async () => {
           const handle = await target.evaluateHandle(element => {
             const signal = { element };
@@ -138,6 +139,20 @@ async function scrollTarget(page, locator, checkpoint) {
     expect(record.samples.at(-1).scrollLeft).toBe(initial.scrollWidth - initial.clientWidth);
     for (let count = 0; record.samples.at(-1).scrollLeft > 0 && count < 64; count++) await move('ArrowLeft');
     expect(record.samples.at(-1).scrollLeft).toBe(0);
+    if (initial.tag === 'PRE') {
+      record.vertical = { scrollNeeded: initial.scrollHeight > initial.clientHeight, budget_ms: 5000,
+        start_sample: record.samples.length - 1 };
+      expect(record.vertical.scrollNeeded).toBe(true);
+      requireGuideCodeEdge(record.samples.at(-1), 'top');
+      const verticalDeadline = performance.now() + 5000;
+      await move('End', 'down', verticalDeadline);
+      requireGuideCodeEdge(record.samples.at(-1), 'bottom');
+      record.vertical.bottom_sample = record.samples.length - 1;
+      await move('Home', 'up', verticalDeadline);
+      requireGuideCodeEdge(record.samples.at(-1), 'top');
+      record.vertical.top_sample = record.samples.length - 1;
+      record.vertical.passed = true;
+    }
     record.passed = true;
     await checkpoint(target);
     return record;
@@ -336,7 +351,10 @@ test('guide native language links retain the selected chapter in both directions
 test('both guides retain all chapters, code and tables in print media', async ({ page, context }, info) => {
   await confined(context); watch(page); const pages = [];
   for (const locale of guideLocales) {
-    await ready(page, locale); await page.emulateMedia({ media: 'print' });
+    await ready(page, locale);
+    const sourceCode = await page.locator('pre code').allTextContents();
+    expect(sourceCode).toHaveLength(105);
+    await page.emulateMedia({ media: 'print' });
     const layout = await page.evaluate(guideObservation); requireGuideLayout(layout);
     const styles = await page.locator('.guide-toc,.guide-chapter-switch,.language-switch,.guide-header-nav,.guide-toplink')
       .evaluateAll(nodes => nodes.map(node => ({ class: node.className, display: getComputedStyle(node).display })));
@@ -346,7 +364,25 @@ test('both guides retain all chapters, code and tables in print media', async ({
       text: node.textContent.trim(), shown: node.getClientRects().length > 0 })));
     expect(contentStyles.length).toBeGreaterThan(0);
     expect(contentStyles.every(row => row.shown && row.text && row.overflow === 'visible' && (row.tag !== 'PRE' || row.whiteSpace === 'pre-wrap'))).toBe(true);
-    pages.push({ language: locale.language, page_asset: locale.asset, page_sha256: info.config.metadata.assetHashes[locale.asset], layout, hidden_navigation: styles, content: contentStyles });
+    const printedCode = await page.locator('pre').evaluateAll(nodes => {
+      const shown = element => {
+        if (!element.getClientRects().length) return false;
+        for (let current = element; current; current = current.parentElement) {
+          const style = getComputedStyle(current);
+          if (style.display === 'none' || style.visibility !== 'visible' || Number(style.opacity) === 0) return false;
+        }
+        return true;
+      };
+      return nodes.map(node => {
+        const style = getComputedStyle(node), code = node.querySelector('code');
+        return { code: code.textContent, rendered: code.innerText, shown: shown(node) && shown(code),
+          maxBlockSize: style.maxBlockSize, overflowX: style.overflowX, overflowY: style.overflowY, whiteSpace: style.whiteSpace,
+          clientWidth: node.clientWidth, scrollWidth: node.scrollWidth,
+          clientHeight: node.clientHeight, scrollHeight: node.scrollHeight };
+      });
+    });
+    requireGuidePrintCode(printedCode, sourceCode);
+    pages.push({ language: locale.language, page_asset: locale.asset, page_sha256: info.config.metadata.assetHashes[locale.asset], layout, hidden_navigation: styles, content: contentStyles, code_viewports: printedCode });
     await page.emulateMedia({ media: 'screen' });
   }
   await attach(info, 'print-media.json', { ...identity(info), pages,

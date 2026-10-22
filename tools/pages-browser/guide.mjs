@@ -46,23 +46,69 @@ export function requireGuideLayout(value) {
 
 export function guideScrollObservation(element) {
   const r = element.getBoundingClientRect();
+  const code = element.tagName === 'PRE' ? element.querySelector('code').getBoundingClientRect() : null;
+  const style = getComputedStyle(element);
   return { focused: document.activeElement === element, tag: element.tagName,
     chapter: element.closest('[data-guide-chapter]').id,
     identity: element.getAttribute('aria-labelledby') || element.parentElement.getAttribute('aria-labelledby'),
     scrollLeft: element.scrollLeft, scrollWidth: element.scrollWidth, clientWidth: element.clientWidth,
+    scrollTop: element.scrollTop, scrollHeight: element.scrollHeight, clientHeight: element.clientHeight,
     pageX: scrollX, pageY: scrollY, documentWidth: document.documentElement.clientWidth,
-    rect: { left: r.left, right: r.right, width: r.width }, overflowX: getComputedStyle(element).overflowX };
+    documentHeight: document.documentElement.clientHeight,
+    rect: { left: r.left, right: r.right, width: r.width, top: r.top, bottom: r.bottom, height: r.height },
+    client: { top: r.top + element.clientTop, bottom: r.top + element.clientTop + element.clientHeight },
+    code: code ? { top: code.top, bottom: code.bottom, height: code.height } : null,
+    overflowX: style.overflowX, overflowY: style.overflowY };
 }
 
 export function requireGuideMovement(before, after, direction) {
-  if (!(after.focused === true && before.tag === after.tag && before.chapter === after.chapter &&
+  const horizontal = direction === 'right' || direction === 'left';
+  const vertical = direction === 'down' || direction === 'up';
+  const moved = horizontal ? after.scrollTop === before.scrollTop &&
+    (direction === 'right' ? after.scrollLeft > before.scrollLeft : after.scrollLeft < before.scrollLeft) :
+    vertical && after.tag === 'PRE' && after.scrollLeft === 0 && before.scrollLeft === 0 &&
+    (direction === 'down' ? after.scrollTop > before.scrollTop : after.scrollTop < before.scrollTop);
+  if (!(before.focused === true && after.focused === true && before.tag === after.tag && before.chapter === after.chapter &&
     before.identity === after.identity && after.identity && after.pageX === before.pageX && after.pageY === before.pageY &&
     after.clientWidth > 0 && after.scrollWidth === before.scrollWidth && after.clientWidth === before.clientWidth &&
-    after.overflowX === 'auto' && 0 <= after.rect.left && after.rect.left < after.rect.right &&
-    after.rect.right <= after.documentWidth &&
-    (direction === 'right' ? after.scrollLeft > before.scrollLeft : after.scrollLeft < before.scrollLeft))) {
+    after.clientHeight > 0 && after.scrollHeight === before.scrollHeight && after.clientHeight === before.clientHeight &&
+    after.documentWidth === before.documentWidth && after.documentHeight === before.documentHeight &&
+    JSON.stringify(after.rect) === JSON.stringify(before.rect) &&
+    after.overflowX === 'auto' && after.overflowY === 'auto' &&
+    0 <= after.rect.left && after.rect.left < after.rect.right && after.rect.right <= after.documentWidth &&
+    0 <= after.rect.top && after.rect.top < after.rect.bottom && after.rect.bottom <= after.documentHeight && moved)) {
     throw new Error('Native guide scrolling must retain its target and leave document scrolling unchanged');
   }
+}
+
+export function requireGuideCodeEdge(value, edge) {
+  const { client, code } = value;
+  // scrollTop is fractional; CSSOM scrollHeight and clientHeight are integers.
+  const reached = edge === 'bottom' ? value.scrollTop > 0 &&
+    Math.abs(value.scrollHeight - value.clientHeight - value.scrollTop) < 1 &&
+    code?.bottom > client.top && code.bottom <= client.bottom :
+    edge === 'top' && value.scrollTop === 0 && code?.top >= client.top && code.top < client.bottom;
+  if (!(value.focused === true && value.tag === 'PRE' && value.scrollLeft === 0 &&
+    value.scrollHeight > value.clientHeight && client.top < client.bottom && code?.height > 0 && reached)) {
+    throw new Error('The native code viewport must expose its complete requested edge');
+  }
+}
+
+export function requireGuidePrintCode(values, source) {
+  assert.ok(source.length > 0);
+  assert.equal(values.length, source.length, 'Print must retain every code example');
+  const compact = text => text.trim().replace(/\s+/g, ' ');
+  values.forEach((value, index) => {
+    assert.ok(value.shown && source[index].trim(), 'Printed code must remain visible and nonempty');
+    assert.equal(value.code, source[index], 'Print must retain the complete source code');
+    assert.equal(compact(value.rendered), compact(source[index]), 'Print must render the complete code');
+    assert.equal(value.maxBlockSize, 'none', 'Print must remove the code viewport height limit');
+    assert.equal(value.overflowX, 'visible');
+    assert.equal(value.overflowY, 'visible');
+    assert.equal(value.whiteSpace, 'pre-wrap');
+    assert.ok(value.clientWidth > 0 && value.scrollWidth <= value.clientWidth &&
+      value.clientHeight > 0 && value.scrollHeight <= value.clientHeight, 'Printed code must not be clipped');
+  });
 }
 
 // A JSON-quoted scalar is also valid YAML; preserve full code through ARIA snapshot escaping.
@@ -173,7 +219,7 @@ export function requireGuideCheckpoint(record, expected) {
   for (const value of [record.before, record.after]) {
     const f = value.focus, r = f.rect, v = f.viewport, s = value.scroll;
     if (!(s.focused === true && s.tag === tag && s.chapter === owner.chapter && s.identity === owner.identity &&
-      s.scrollLeft === 0 && v.width === expected.viewport.width && v.height === expected.viewport.height && f.matchesTarget === true && JSON.stringify(f.target) === JSON.stringify(f.active) &&
+      s.scrollLeft === 0 && s.scrollTop === 0 && v.width === expected.viewport.width && v.height === expected.viewport.height && f.matchesTarget === true && JSON.stringify(f.target) === JSON.stringify(f.active) &&
       f.target.tag === tag && f.inViewport === true && 0 <= r.left && r.left < r.right && r.right <= v.width &&
       0 <= r.top && r.top < r.bottom && r.bottom <= v.height && r.width > 0 && r.height > 0 &&
       f.outlineWidth >= 2 && f.outlineStyle !== 'none')) {
