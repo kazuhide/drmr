@@ -25,6 +25,13 @@ SPEC.loader.exec_module(module)
 
 
 class EvidenceTests(unittest.TestCase):
+    def audio_probe(self):
+        return {"streams": [{"codec_name": "aac", "profile": "LC", "sample_rate": "44100",
+                             "channels": 2, "time_base": "1/90000", "nb_read_frames": "432"}],
+                "packets": [{"pts": 126000 + index * 1024 * 90000 // 44100,
+                             "dts": 126000 + index * 1024 * 90000 // 44100,
+                             "duration": 2089} for index in range(432)]}
+
     def proof(self):
         return {"schema_version": 1, "passed": True, "media_verified": True,
                 "license_playback_verified": False,
@@ -148,6 +155,170 @@ class EvidenceTests(unittest.TestCase):
             change(altered)
             with self.assertRaisesRegex(module.Refusal, "^video-proof-invalid$"):
                 module.video_evidence(altered)
+
+    def test_aac44100_probe_proves_every_frame_and_exact_original_clock(self):
+        raw = self.audio_probe()
+        result = module.audio_evidence(raw)
+        self.assertEqual(result["sample_rate"], 44100)
+        self.assertEqual(result["frame_count"], 432)
+        self.assertEqual(result["packet_count"], 432)
+        self.assertEqual(result["expected_decoded_samples_per_channel"], 432 * 1024)
+        self.assertEqual(result["first_pts"], raw["packets"][0]["pts"])
+        self.assertEqual(result["last_pts"], raw["packets"][-1]["pts"])
+        changed = copy.deepcopy(raw)
+        changed["packets"][-1]["pts"] += 1
+        changed["packets"][-1]["dts"] += 1
+        self.assertNotEqual(result["packet_clock_sha256"], module.audio_evidence(changed)["packet_clock_sha256"])
+        raw["streams"][0]["private_path"] = "private-marker"
+        raw["packets"][0]["private_key"] = "private-marker"
+        self.assertNotIn("private-marker", json.dumps(module.audio_evidence(raw)))
+
+    def test_aac44100_probe_refuses_missing_frames_and_wrong_configuration(self):
+        for change in (lambda r: r["streams"][0].update(sample_rate="48000"),
+                       lambda r: r["streams"][0].update(profile="HE-AAC"),
+                       lambda r: r["streams"][0].update(channels=1),
+                       lambda r: r["streams"][0].update(channels=True),
+                       lambda r: r["streams"][0].update(time_base="1/44100"),
+                       lambda r: r["streams"][0].update(nb_read_frames="431"),
+                       lambda r: r["packets"].pop(),
+                       lambda r: r["packets"][-1].update(duration=0),
+                       lambda r: r["packets"][-1].update(pts=True),
+                       lambda r: r["packets"][-1].update(dts=-1)):
+            raw = self.audio_probe()
+            change(raw)
+            with self.subTest(change=change), self.assertRaisesRegex(module.Refusal, "^aac44100-proof-invalid$"):
+                module.audio_evidence(raw)
+
+    def test_aac44100_conversion_requires_the_saved_plan_and_actual_ts_input(self):
+        report = {"plan_id": "a" * 64, "input": {"format": "hls", "protection": "clear"},
+                  "output": {"format": "dash", "protection": "cbcs"}, "verification": self.proof()}
+        module.audio_conversion_proof(report, "a" * 64)
+        for change in (lambda r: r.update(plan_id="b" * 64),
+                       lambda r: r["input"].update(format="dash"),
+                       lambda r: r["input"].update(protection="hls-aes128"),
+                       lambda r: r["output"].update(format="hls"),
+                       lambda r: r["output"].update(protection="clear")):
+            altered = copy.deepcopy(report)
+            change(altered)
+            with self.assertRaisesRegex(module.Refusal, "^aac44100-conversion-proof-invalid$"):
+                module.audio_conversion_proof(altered, "a" * 64)
+        report["verification"]["checks"]["packet_timing_equal"] = False
+        with self.assertRaisesRegex(module.Refusal, "^media-proof-invalid$"):
+            module.audio_conversion_proof(report, "a" * 64)
+
+
+class AudioMediaFlowTests(unittest.TestCase):
+    """Exercise producer orchestration with tools stubbed, not native-media proof."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.cases = 0
+
+    def run_case(self, mutation=None):
+        self.cases += 1
+        root = self.root / str(self.cases)
+        root.mkdir()
+        clip = (module.ROOT / module.CLIP).read_bytes()
+        (root / "clip.mp4").write_bytes(clip)
+        source = SimpleNamespace(read=lambda _: clip)
+        fixture = EvidenceTests()
+        source_inventory = {"graph_digest": "a" * 64, "private_path": "private-marker"}
+        plan_id = "b" * 64
+        cli = root / ("extracted-drmr.exe" if os.name == "nt" else "extracted-drmr")
+
+        class StubRunner:
+            def __init__(self):
+                self.workspace = root
+                self.secrets = (b"previous-secret-marker",)
+                self.calls = []
+
+            def run(self, arguments, stage):
+                self.calls.append((arguments, stage))
+                assert stage == "fixture-aac44100"
+                directory = root / "aac44100-input"
+                (directory / "media.m3u8").write_text(
+                    "#EXTM3U\n#EXTINF:2,\nsegment-000.ts\n#EXTINF:2,\nsegment-001.ts\n#EXT-X-ENDLIST\n",
+                    encoding="utf-8")
+                (directory / "segment-000.ts").write_bytes(b"first fake segment")
+                (directory / "segment-001.ts").write_bytes(b"last fake segment")
+                return b""
+
+            def json(self, arguments, stage):
+                self.calls.append((arguments, stage))
+                if stage == "fixture-aac44100-probe":
+                    return fixture.audio_probe()
+                if stage == "aac44100-analyze":
+                    return {"kind": "input-analysis", "schema_version": 1, "input_admitted": True,
+                            "actual_format": "hls" if mutation == "analysis-format" else "hls-ts",
+                            "track_protection": ["clear"], "source": source_inventory,
+                            "input_checks": {"stream_metadata": "pass", "packet_payloads_equal": True,
+                                             "packet_timing_equal": True, "decoded_content_equal": True}}
+                if stage == "aac44100-plan":
+                    plan = {"kind": "execution-plan", "schema_version": 1, "plan_id": plan_id,
+                            "source": {"graph_digest": "c" * 64} if mutation == "plan-source" else source_inventory,
+                            "source_format": "hls-ts", "intent": {
+                                "format": "dash", "target": "cbcs", "output": str(root / "aac44100-converted")}}
+                    (root / "aac44100.plan.json").write_text(json.dumps(plan), encoding="utf-8")
+                    return plan
+                if stage == "aac44100-convert":
+                    output = root / "aac44100-converted"
+                    output.mkdir()
+                    (output / "manifest.mpd").write_bytes(b"fake manifest")
+                    return {"plan_id": "c" * 64 if mutation == "conversion-plan" else plan_id,
+                            "input": {"format": "hls", "protection": "clear"},
+                            "output": {"format": "dash", "protection": "cbcs"}, "verification": fixture.proof()}
+                assert stage == "aac44100-independent-verify"
+                if mutation == "changed-source":
+                    (root / "aac44100-input/segment-001.ts").write_bytes(b"changed fake segment")
+                if mutation == "changed-plan":
+                    with (root / "aac44100.plan.json").open("ab") as output:
+                        output.write(b"\n")
+                return {"plan_id": plan_id, "source_unchanged": mutation != "verification-binding",
+                        "output_matches_plan": True, "verification": fixture.proof()}
+
+        runner = StubRunner()
+        return module.audio_media(cli, runner, source), runner, cli
+
+    def test_audio_route_uses_the_extracted_cli_for_all_four_saved_plan_steps(self):
+        result, runner, cli = self.run_case()
+        self.assertEqual([stage for _, stage in runner.calls], [
+            "fixture-aac44100", "fixture-aac44100-probe", "aac44100-analyze", "aac44100-plan",
+            "aac44100-convert", "aac44100-independent-verify"])
+        for arguments, _ in runner.calls[2:]:
+            self.assertEqual(arguments[0], cli)
+        self.assertEqual(result["input_format"], "hls-ts")
+        self.assertEqual(result["source_audio"]["frame_count"], 432)
+        self.assertTrue(result["saved_original_and_plan_unchanged"])
+        key = json.loads((runner.workspace / "aac44100-keys.json").read_text())["output"]["key"]
+        self.assertIn(key.encode("ascii"), runner.secrets)
+        self.assertIn(b"previous-secret-marker", runner.secrets)
+        shown = json.dumps(result)
+        for private in (str(runner.workspace), key, "private-marker", "previous-secret-marker"):
+            self.assertNotIn(private, shown)
+
+    def test_audio_route_refuses_mismatched_analysis_plan_or_fresh_verification(self):
+        for mutation, code in (
+                ("analysis-format", "aac44100-analysis-proof-invalid"),
+                ("plan-source", "aac44100-plan-proof-invalid"),
+                ("conversion-plan", "aac44100-conversion-proof-invalid"),
+                ("verification-binding", "aac44100-saved-plan-proof-invalid"),
+                ("changed-source", "aac44100-saved-original-or-plan-changed"),
+                ("changed-plan", "aac44100-saved-original-or-plan-changed")):
+            with self.subTest(mutation=mutation), self.assertRaisesRegex(module.Refusal, "^" + code + "$"):
+                self.run_case(mutation)
+
+    def test_audio_packet_probe_reads_all_original_transport_bytes_in_playlist_order(self):
+        _, runner, _ = self.run_case()
+        arguments, stage = runner.calls[1]
+        self.assertEqual(stage, "fixture-aac44100-probe")
+        probed = Path(arguments[-1])
+        self.assertEqual(probed.suffix, ".ts")
+        self.assertEqual(probed.read_bytes(), b"first fake segmentlast fake segment")
+        original = runner.workspace / "aac44100-input"
+        self.assertEqual((original / "segment-000.ts").read_bytes(), b"first fake segment")
+        self.assertEqual((original / "segment-001.ts").read_bytes(), b"last fake segment")
 
 
 class OwnedFilesTests(unittest.TestCase):

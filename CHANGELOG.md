@@ -5,10 +5,29 @@ for installation, stable interfaces and versioning.
 
 ## [Unreleased]
 
+Corrections on `main` are not included in the published 1.0.0 archives.
+Those immutable archives remain pre-release candidates with the original
+48 kHz-only TS audio profile. Build from current source to use these corrections.
+
+### Fixed
+
+- Accept AAC-LC at 44.1 kHz alongside 48 kHz in supported clear, AES-128 and
+  SAMPLE-AES HLS transport streams, including audio-only input.
+- Preserve every original AAC frame, decoded sample and absolute presentation
+  and decoding timestamp when producing fragmented MP4 HLS, DASH or TS HLS.
+  Native audio demuxing avoids accumulated timestamp rounding without
+  re-encoding or changing the source sample rate.
+- Validate audio segment durations using actual segment boundaries and explicit
+  final-frame representations, rather than assuming that every audio frame
+  occupies an integral number of transport-clock ticks.
+- Retain exact 48 kHz checks and add 44.1 kHz configuration, clock, protection,
+  complete-content and independent verification regressions.
+
 ## [1.0.0] - 2026-10-22
 
-First stable CLI release. The local Web console and Desktop host remain
-experimental.
+Initial CLI release, subsequently reclassified as a pre-release candidate.
+Its TS AAC input is limited to 48 kHz. The local Web console and Desktop host
+remain experimental.
 
 See [installation and compatibility](https://github.com/kazuhide/drmr/blob/v1.0.0/docs/releases.md)
 and [runtime requirements](https://github.com/kazuhide/drmr/blob/v1.0.0/docs/requirements.md).

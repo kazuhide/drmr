@@ -1,9 +1,19 @@
 # Releases and compatibility
 
-The CLI is the stable interface from drmr 1.0.0. The local Web console and
-Desktop host remain experimental. This distinction applies to their interfaces
-and native runtime qualification; it does not change the media checks performed
-by the shared CLI workflow.
+The documented CLI has the 1.x compatibility contract described below. Release
+maturity is separate: check the **Pre-release** label on each
+[GitHub release](https://github.com/kazuhide/drmr/releases) before choosing a
+version. A 1.x version number alone does not establish complete media or platform
+qualification. The local Web console and Desktop host remain experimental.
+
+The published v1.0.0 is classified as a pre-release after a 44.1 kHz AAC limitation was
+found in its TS input path. Its immutable archives retain the original
+48 kHz-only TS audio profile. The correction is an **Unreleased** change on `main`;
+the product version remains 1.0.0, and the existing release tag and assets are
+unchanged. No replacement archive or new release is provided for this correction.
+[Build from the current source](../README.md#install) to use 44.1 kHz TS audio. Refer to each release's
+notes and status; the correction does not qualify arbitrary codecs, broadcast
+streams or playback devices.
 
 ## Install a released CLI
 
@@ -17,10 +27,12 @@ system and processor in the release notes:
 | macOS | Apple Silicon | `aarch64-apple-darwin` |
 | Windows | x86-64 | `x86_64-pc-windows-msvc` |
 
-For 1.0.0, the archives are named
+The existing v1.0.0 archives are named
 `drmr-1.0.0-x86_64-unknown-linux-gnu.tar.gz`,
 `drmr-1.0.0-aarch64-apple-darwin.tar.gz` and
-`drmr-1.0.0-x86_64-pc-windows-msvc.zip`, respectively.
+`drmr-1.0.0-x86_64-pc-windows-msvc.zip`, respectively. Download documentation and
+verification reports from that same release rather than assuming that the
+current repository documentation describes an older archive.
 
 These are the native CLI distribution targets. They do not establish support
 for other processor architectures or native Desktop operation. See
@@ -138,3 +150,10 @@ on their matching native targets. The release notes identify supported targets,
 requirements and remaining scope limits. These checks supplement the existing
 unit, media, manifest and archive-content tests; they do not claim universal
 media or DRM-device compatibility.
+
+The current source's archive qualifier defines 17 stages: the original 11-stage
+video workflow plus six stages that create and probe a 44.1 kHz AAC TS fixture,
+then analyze it, save a plan, convert it to CBCS DASH, and independently verify it.
+The existing v1.0.0 assets and their original 11-stage reports are unchanged.
+These additional checks apply to newly built CI archives; they do not qualify the
+old release archives for 44.1 kHz input.

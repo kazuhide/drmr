@@ -1,6 +1,8 @@
 //! A deliberately narrow MPEG-TS input profile with independent original-media evidence.
+mod aac_mp4;
 mod admission;
 mod canonical;
+mod clock;
 mod compatibility;
 mod frames;
 mod native;
@@ -18,6 +20,18 @@ pub(super) use native::NativeScanner;
 pub(super) use projection::Projector;
 use std::{collections::BTreeMap, path::Path, sync::Arc};
 use zeroize::Zeroizing;
+
+pub(super) fn requires_native_audio_mp4(native: Option<&NativeEvidence>) -> bool {
+    native.is_some_and(|anchor| {
+        matches!(
+            anchor.config,
+            canonical::Config::Audio {
+                sample_rate: 44_100,
+                ..
+            }
+        )
+    })
+}
 
 #[derive(Clone, Copy)]
 pub(super) struct View<'a> {
@@ -54,7 +68,7 @@ impl Backend {
         if !native.matches(&config, &units) {
             return Err(ConversionError("ts-original-evidence-mismatch"));
         }
-        if let canonical::Config::Audio { channels } = config {
+        if let canonical::Config::Audio { channels, .. } = config {
             self.native_audio_samples(view, channels, native.count)?;
         }
         Ok(())
@@ -221,6 +235,7 @@ impl Backend {
         segments: &[(std::path::PathBuf, String)],
         index: usize,
     ) -> Result<(), ConversionError> {
+        let mut previous_audio: Option<(&str, canonical::Evidence)> = None;
         for (path, declared) in segments {
             let view = View {
                 input: path,
@@ -232,13 +247,60 @@ impl Backend {
             };
             let profile = self.profile_stream(path, index, None)?;
             let config = self.transport_config(view, &profile)?;
-            let units = self.access_units(view, &profile, config)?;
-            check_duration(
+            let units = self.access_units(view, &profile, config.clone())?;
+            if let Some((previous_declared, previous)) = previous_audio.take() {
+                // A non-final audio segment ends at the following segment's
+                // first frame, not at FFprobe's independently truncated duration.
+                let boundary = check_duration(
+                    previous_declared,
+                    units
+                        .first_pts
+                        .checked_sub(previous.first_pts)
+                        .ok_or(ConversionError("ts-segment-duration-mismatch"))?,
+                );
+                if boundary.is_err()
+                    && check_duration(
+                        previous_declared,
+                        previous
+                            .end_pts
+                            .checked_sub(previous.first_pts)
+                            .ok_or(ConversionError("ts-segment-duration-mismatch"))?,
+                    )
+                    .is_err()
+                {
+                    check_duration_ratio(
+                        previous_declared,
+                        u128::from(previous.count) * 1024,
+                        44_100,
+                    )?;
+                }
+            }
+            if matches!(
+                config,
+                canonical::Config::Audio {
+                    sample_rate: 44_100,
+                    ..
+                }
+            ) {
+                previous_audio = Some((declared, units));
+            } else {
+                check_duration(
+                    declared,
+                    units
+                        .end_pts
+                        .checked_sub(units.first_pts)
+                        .ok_or(ConversionError("ts-segment-duration-mismatch"))?,
+                )?;
+            }
+        }
+        if let Some((declared, units)) = previous_audio {
+            check_final_audio_duration(
                 declared,
                 units
                     .end_pts
                     .checked_sub(units.first_pts)
                     .ok_or(ConversionError("ts-segment-duration-mismatch"))?,
+                units.count,
             )?;
         }
         Ok(())
@@ -248,11 +310,40 @@ impl Backend {
         input: &Path,
         kind: TrackKind,
         output: &Path,
+        native: Option<&NativeEvidence>,
     ) -> Result<(), ConversionError> {
         let input = super::files::tool_path(input)?;
         let output = super::files::tool_path(output)?;
         if input.contains([',', '\n', '\r']) || output.contains([',', '\n', '\r']) {
             return Err(ConversionError("unsupported-path"));
+        }
+        if kind == TrackKind::Audio && requires_native_audio_mp4(native) {
+            let _permit = self
+                .runner
+                .native_permit(
+                    crate::resources::Claim {
+                        cpu_threads: 1,
+                        memory_bytes: 128 * 1024 * 1024,
+                    },
+                    &self.stop,
+                    self.timeout,
+                )
+                .map_err(|error| match error {
+                    crate::resources::ReservationError::Insufficient => {
+                        ConversionError("resource-budget")
+                    }
+                    crate::resources::ReservationError::Cancelled => ConversionError("cancelled"),
+                    crate::resources::ReservationError::Timeout => {
+                        ConversionError("media-tool-timeout")
+                    }
+                })?;
+            aac_mp4::write(
+                Path::new(&input),
+                Path::new(&output),
+                native.ok_or(ConversionError("ts-original-evidence-required"))?,
+                &self.stop,
+            )?;
+            return self.check_cancelled();
         }
         let kind = match kind {
             TrackKind::Video => "video",
@@ -282,16 +373,21 @@ impl Backend {
         }
         match profile["codec_name"].as_str() {
             Some("aac") if view.transport => {
-                if profile["sample_rate"] != "48000" {
-                    return Err(ConversionError("ts-aac-sample-rate-not-supported"));
-                }
+                let sample_rate = match profile["sample_rate"].as_str() {
+                    Some("44100") => 44_100,
+                    Some("48000") => 48_000,
+                    _ => return Err(ConversionError("ts-aac-sample-rate-not-supported")),
+                };
                 let channels = match profile["channels"].as_u64() {
                     Some(n @ 1..=6) => u8::try_from(n)
                         .map_err(|_| ConversionError("ts-codec-configuration-not-supported"))?,
                     Some(8) => 7,
                     _ => return Err(ConversionError("ts-codec-configuration-not-supported")),
                 };
-                Ok(canonical::Config::Audio { channels })
+                Ok(canonical::Config::Audio {
+                    channels,
+                    sample_rate,
+                })
             }
             Some("h264" | "aac") => {
                 let argv = vec![
@@ -470,7 +566,7 @@ impl Backend {
             if !native.matches(&config_a, &units_a) {
                 return Err(ConversionError("ts-original-evidence-mismatch"));
             }
-            if let canonical::Config::Audio { channels } = config_a {
+            if let canonical::Config::Audio { channels, .. } = config_a {
                 self.native_audio_samples(source, channels, native.count)?;
                 self.native_audio_samples(result, channels, native.count)?;
             }
@@ -489,8 +585,21 @@ impl Backend {
             result_frames.resolve_field_order(&mut b);
         }
         let metadata = a == b && config_a == config_b;
-        let timing = self.packets_stream(source.input, source.index, source.key)?
-            == self.packets_stream(result.input, result.index, result.key)?;
+        let timing = if matches!(
+            config_a,
+            canonical::Config::Audio {
+                sample_rate: 44_100,
+                ..
+            }
+        ) {
+            // TS probes report a nominal, independently rounded AAC duration.
+            // MP4 stores the actual next-DTS difference. Compare every original
+            // absolute PTS/DTS and the final end, without a time tolerance.
+            units_a.timing_equal(&units_b)
+        } else {
+            self.packets_stream(source.input, source.index, source.key)?
+                == self.packets_stream(result.input, result.index, result.key)?
+        };
         let payload = units_a.payload_equal(&units_b);
         let decoded = self.hash_stream(source.input, source.index, false, source.key)?
             == self.hash_stream(result.input, result.index, false, result.key)?;
@@ -517,16 +626,49 @@ impl Backend {
 }
 
 fn check_duration(declared: &str, ticks: i64) -> Result<(), ConversionError> {
+    let ticks =
+        u128::try_from(ticks).map_err(|_| ConversionError("ts-segment-duration-mismatch"))?;
+    check_duration_ratio(declared, ticks, 90_000)
+}
+
+fn check_final_audio_duration(
+    declared: &str,
+    ticks: i64,
+    frames: u64,
+) -> Result<(), ConversionError> {
+    // A final 44.1 kHz frame has no following PES timestamp. A publisher can
+    // express its nominal duration in truncated or nearest 90 kHz ticks, or
+    // express the complete AAC sample span directly. Match only those exact
+    // representations at the precision actually written in EXTINF.
+    if check_duration(declared, ticks).is_ok()
+        || check_duration(
+            declared,
+            ticks
+                .checked_add(1)
+                .ok_or(ConversionError("ts-segment-duration-mismatch"))?,
+        )
+        .is_ok()
+    {
+        return Ok(());
+    }
+    check_duration_ratio(declared, u128::from(frames) * 1024, 44_100)
+}
+
+fn check_duration_ratio(
+    declared: &str,
+    numerator: u128,
+    denominator: u32,
+) -> Result<(), ConversionError> {
     let bad = ConversionError("ts-segment-duration-mismatch");
     let (whole, part) = declared.split_once('.').unwrap_or((declared, ""));
     if whole.is_empty()
         || declared.len() > 64
-        || part.len() > 17
         || !whole
             .bytes()
             .chain(part.bytes())
             .all(|b| b.is_ascii_digit())
-        || ticks <= 0
+        || numerator == 0
+        || denominator == 0
     {
         return Err(bad);
     }
@@ -535,9 +677,9 @@ fn check_duration(declared: &str, ticks: i64) -> Result<(), ConversionError> {
         // exact binary64 identity with native ticks, without a time tolerance.
         // The bounded integer conversion is exact and keeps each ULP far below
         // a microsecond; media clocks themselves remain integer evidence.
-        let ticks = u32::try_from(ticks).map_err(|_| bad)?;
+        let numerator = u32::try_from(numerator).map_err(|_| bad)?;
         let observed = declared.parse::<f64>().map_err(|_| bad)?;
-        let expected = f64::from(ticks) / 90000.0;
+        let expected = f64::from(numerator) / f64::from(denominator);
         return if observed.to_bits() == expected.to_bits() {
             Ok(())
         } else {
@@ -557,7 +699,12 @@ fn check_duration(declared: &str, ticks: i64) -> Result<(), ConversionError> {
         .and_then(|n| n.checked_add(fraction))
         .ok_or(bad)?;
     // Round only to the exact precision declared by EXTINF, with no fixed time tolerance.
-    let measured = (u128::try_from(ticks).map_err(|_| bad)? * scale + 45000) / 90000;
+    let denominator = u128::from(denominator);
+    let measured = numerator
+        .checked_mul(scale)
+        .and_then(|value| value.checked_add(denominator / 2))
+        .ok_or(bad)?
+        / denominator;
     if measured != value {
         return Err(bad);
     }
@@ -567,6 +714,23 @@ fn check_duration(declared: &str, ticks: i64) -> Result<(), ConversionError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fractional_aac_duration_uses_the_complete_sample_span() {
+        check_duration_ratio("0.023219954648526078", 1024, 44_100).unwrap();
+        for (text, frames) in [("0.023220", 1_u64), ("1.996916", 86), ("5.967528", 257)] {
+            check_duration_ratio(text, u128::from(frames) * 1024, 44_100).unwrap();
+        }
+        for text in ["0.023211", "0.023220", "0.023222"] {
+            check_final_audio_duration(text, 2089, 1).unwrap();
+        }
+        for text in ["0.023200", "0.023233", "0.046440"] {
+            assert!(check_final_audio_duration(text, 2089, 1).is_err());
+        }
+        for text in ["1.996917", "1.996915", "2.000000", "NaN", "0"] {
+            assert!(check_duration_ratio(text, 86 * 1024, 44_100).is_err());
+        }
+    }
 
     #[test]
     fn duration_uses_only_the_declared_decimal_precision() {
@@ -596,12 +760,13 @@ mod tests {
             check_duration(text, 539_520).unwrap();
         }
         check_duration("2.0000000000", 180_000).unwrap();
+        check_duration("2.000000000000000000", 180_000).unwrap();
+        assert!(check_duration(&format!("2.{}", "0".repeat(63)), 180_000).is_err());
         for (text, ticks) in [
             ("5.994666666666667", 539_520),
             ("5.994667666666666", 539_520),
             ("5.994666666666666", 539_521),
             ("2.0000000001", 180_000),
-            ("2.000000000000000000", 180_000),
             ("2.00000000000000000junk", 180_000),
             ("2.0000000000000000e0", 180_000),
             ("NaN", 180_000),

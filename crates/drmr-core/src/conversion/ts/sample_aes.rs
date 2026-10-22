@@ -134,7 +134,7 @@ pub(super) fn decrypt_h264_annex_b(
     }
     Ok(out)
 }
-/// Decrypt complete seven-byte, no-CRC AAC-LC/48-kHz ADTS frames, resetting the IV each time.
+/// Decrypt complete seven-byte, no-CRC AAC-LC ADTS frames, resetting the IV each time.
 pub(super) fn decrypt_aac_adts(
     bytes: &[u8],
     key: &Aes128Key,
@@ -143,23 +143,19 @@ pub(super) fn decrypt_aac_adts(
     let mut out = output(bytes)?;
     out.extend_from_slice(bytes);
     let mut at = 0;
-    let mut channels = None;
+    let mut configuration = None;
     while at < out.len() {
         let h = out
             .get(at..at.checked_add(7).ok_or(INVALID)?)
             .ok_or(INVALID)?;
-        let channel = ((h[2] & 1) << 2) | (h[3] >> 6);
-        if h[0] != 0xff
-            || h[1] != 0xf1
-            || h[2] >> 6 != 1
-            || (h[2] >> 2) & 15 != 3
-            || !(1..=7).contains(&channel)
-            || h[6] & 3 != 0
-            || channels.is_some_and(|previous| previous != channel)
+        let current = super::canonical::Config::audio_adts(h).map_err(|_| INVALID)?;
+        if configuration
+            .as_ref()
+            .is_some_and(|previous| previous != &current)
         {
             return Err(INVALID);
         }
-        channels = Some(channel);
+        configuration = Some(current);
         let length =
             (usize::from(h[3] & 3) << 11) | (usize::from(h[4]) << 3) | usize::from(h[5] >> 5);
         if length <= 7 {
@@ -226,10 +222,16 @@ mod tests {
         let mut cipher = vec![0x55; 16];
         cipher.extend(hex::decode(CIPHER).unwrap());
         cipher.extend([0x66; 9]);
-        let expected = [adts(&plain), adts(&plain)].concat();
-        let encrypted = [adts(&cipher), adts(&cipher)].concat();
-        let actual = decrypt_aac_adts(&encrypted, &key, &iv).unwrap();
-        assert_eq!(actual.as_slice(), expected);
+        for index in [3, 4] {
+            let mut expected_frame = adts(&plain);
+            let mut encrypted_frame = adts(&cipher);
+            expected_frame[2] = (expected_frame[2] & !0x3c) | (index << 2);
+            encrypted_frame[2] = (encrypted_frame[2] & !0x3c) | (index << 2);
+            let expected = [expected_frame.clone(), expected_frame].concat();
+            let encrypted = [encrypted_frame.clone(), encrypted_frame].concat();
+            let actual = decrypt_aac_adts(&encrypted, &key, &iv).unwrap();
+            assert_eq!(actual.as_slice(), expected);
+        }
     }
     #[test]
     fn avc_uses_independent_cbc_vector_across_skips_and_resets_every_nal() {
@@ -338,7 +340,7 @@ mod tests {
         }
         for (at, mask, replacement) in [
             (1, 255, 0xf0),
-            (2, 0x3c, 4 << 2),
+            (2, 0x3c, 5 << 2),
             (2, 0xc0, 0x80),
             (6, 3, 1),
         ] {
@@ -347,6 +349,12 @@ mod tests {
             assert_eq!(decrypt_aac_adts(&frame, &key, &iv).unwrap_err(), INVALID);
         }
         let first = adts(&[0x55; 32]);
+        let mut other_rate = first.clone();
+        other_rate[2] = (other_rate[2] & !0x3c) | (4 << 2);
+        assert_eq!(
+            decrypt_aac_adts(&[first.clone(), other_rate].concat(), &key, &iv).unwrap_err(),
+            INVALID
+        );
         let mut second = first.clone();
         second[3] ^= 0x40;
         assert_eq!(

@@ -45,12 +45,22 @@ Complete local tracks → Shaka segmentation and HLS playlists → optional whol
 
 ### mpeg-ts-hls
 
-Original local HLS transport-stream resources → native structure admission and complete-track demultiplexing with Shaka Packager → fragmented MP4 HLS packaging → actual final playlist checks against the original streams. FFmpeg and FFprobe supply probing, decoding, and comparison evidence. The intermediate MP4 is not used as the final reference.
+Original local HLS transport-stream resources → native structure admission and complete-track demultiplexing → fragmented MP4 HLS packaging with Shaka Packager → actual final playlist checks against the original streams. FFmpeg and FFprobe supply probing, decoding, and comparison evidence. The intermediate MP4 is not used as the final reference.
 
-This includes audio-only 48 kHz AAC-LC: original PES clocks and ADTS frame evidence
+This includes audio-only 44.1 or 48 kHz AAC-LC: original PES clocks and ADTS frame evidence
 anchor all content, sample counts, and timing checks. Complete frames determine
 audio segment boundaries; a two-second target does not permit trimming samples.
 See [audio-only fMP4 HLS](media-processing.md#audio-only-fmp4-hls-from-transport-streams).
+
+In the **Unreleased** `main` source, Rust prepares 44.1 kHz AAC as private fragmented MP4 directly from validated
+ADTS frames, with the original 90 kHz timestamps and the actual audio rate of
+44,100 samples per second. Shaka Packager then segments that track. Video and 48 kHz audio retain their
+Shaka demultiplexing path. The same 44.1 kHz preparation feeds DASH and TS output.
+All routes retain every original PTS and DTS exactly; source timestamp rounding
+is never reused as an output error allowance. See
+[AAC clock handling](media-processing.md#aac-sample-rates-and-transport-clocks).
+This correction is not included in the unchanged published v1.0.0 archives,
+whose TS audio profile accepts only 48 kHz; see [release status](releases.md).
 
 ### mpeg-ts-sample-aes-hls
 

@@ -1,7 +1,7 @@
 //! Audio-only transport to fragmented HLS retains the complete original presentation.
 use super::*;
 
-fn fmp4_hls_audio_row(
+pub(super) fn fmp4_hls_audio_row(
     layout: &str,
     input_label: &str,
     source: &Path,
@@ -12,7 +12,9 @@ fn fmp4_hls_audio_row(
 ) {
     use drmr_core::conversion::{ContentKey, OutputKey, VerificationRequest, VerificationSource};
     assert_eq!(layout, "audio");
-    assert_eq!(counts, (None, Some(470)));
+    assert_eq!(counts.0, None);
+    let audio_frames = counts.1.unwrap();
+    assert!(audio_frames > 0);
     let empty = InputKeys::default();
     let empty_hls = HlsInputKeys::default();
     let events = Arc::new(drmr_core::events::Collector::default());
@@ -99,7 +101,7 @@ fn fmp4_hls_audio_row(
         println!(
             "DRMR_TS_AUDIO_FMP4_HLS_CELL {}",
             serde_json::json!({
-                "input": input_label, "target": target.as_str(), "native_bound_audio_frames": 470,
+                "input": input_label, "target": target.as_str(), "native_bound_audio_frames": audio_frames,
                 "stream_metadata": true, "packet_payloads_equal": true, "packet_timing_equal": true,
                 "decoded_content_equal": true, "fresh_verification": true, "source_immutable": true,
                 "license_playback_verified": false
@@ -167,7 +169,7 @@ fn verify_with_result_keys(
     })
 }
 
-fn join_resources(playlist: &Path, destination: &Path, init: bool) {
+pub(super) fn join_resources(playlist: &Path, destination: &Path, init: bool) {
     use std::io::Write as _;
     let mut file = drmr_core::native::create_private_new(destination).unwrap();
     if init {
@@ -185,7 +187,7 @@ fn join_resources(playlist: &Path, destination: &Path, init: bool) {
     }
 }
 
-fn packet_clocks(path: &Path) -> Vec<[num_rational::Ratio<i64>; 3]> {
+pub(super) fn packet_clocks(path: &Path) -> Vec<[num_rational::Ratio<i64>; 3]> {
     let output = std::process::Command::new("ffprobe")
         .args([
             "-v",
@@ -216,7 +218,7 @@ fn packet_clocks(path: &Path) -> Vec<[num_rational::Ratio<i64>; 3]> {
         .collect()
 }
 
-fn decoded_audio(path: &Path) -> (u64, String) {
+pub(super) fn decoded_audio(path: &Path) -> (u64, String) {
     use sha2::{Digest as _, Sha256};
     let argv = vec![
         "ffmpeg".into(),

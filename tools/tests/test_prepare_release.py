@@ -64,6 +64,18 @@ class FakeGitHub:
                                "prepared_source_against_original_video": copy.deepcopy(proof), "conversion": copy.deepcopy(proof),
                                "independent_verification": copy.deepcopy(proof), "output_graph": copy.deepcopy(graph)},
                      "stages": [{"stage": stage, "elapsed_milliseconds": 1, "exit_code": 0} for stage in PREPARE.STAGES]}
+            audio = {**copy.deepcopy(media["media"]),
+                     "scope": "all generated 44.1 kHz AAC frames; fixture audio resampled from the attributed clip",
+                     "input_format": "hls-ts", "input_segments": 6,
+                     "cli_source_graph_sha256": "1" * 64, "plan_id": "2" * 64, "plan_sha256": "3" * 64,
+                     "source_audio": QUALIFY.audio_evidence({
+                         "streams": [{"codec_name": "aac", "profile": "LC", "sample_rate": "44100", "channels": 2,
+                                      "time_base": "1/90000", "nb_read_frames": "432"}],
+                         "packets": [{"pts": 126000 + packet * 1024 * 90000 // 44100,
+                                      "dts": 126000 + packet * 1024 * 90000 // 44100,
+                                      "duration": 2089} for packet in range(432)]})}
+            audio.pop("prepared_source_against_original_video")
+            media["aac_44100"] = audio
             self.entries[name] = [("drmr-1.0.0-" + target + suffix, archive), ("cli-archive-verification.json", json.dumps(archive_report).encode()),
                                   ("cli-media-qualification.json", json.dumps(media).encode())]
             self.artifacts[name] = {"id": 200 + index, "name": name, "expired": False, "created_at": "2026-10-22T00:10:00Z",
@@ -237,7 +249,8 @@ class ReleasePacket(unittest.TestCase):
             with patch.object(QUALIFY, "require_native"), patch.object(QUALIFY.VERIFY, "Source", return_value=source), \
                     patch.object(QUALIFY.VERIFY, "metadata", return_value={}), patch.object(QUALIFY.VERIFY, "build_expectation", return_value={}), \
                     patch.object(QUALIFY.VERIFY, "qualify", return_value=archive_proof), patch.object(QUALIFY, "extract_cli", side_effect=extract), \
-                    patch.object(QUALIFY, "Runner", return_value=runner), patch.object(QUALIFY, "media", return_value=previous["media"]):
+                    patch.object(QUALIFY, "Runner", return_value=runner), patch.object(QUALIFY, "media", return_value=previous["media"]), \
+                    patch.object(QUALIFY, "audio_media", return_value=previous["aac_44100"]):
                 result = QUALIFY.qualify(candidate, target, "1.0.0", self.root)
             self.client.report(artifact, "cli-media-qualification.json", lambda report: (report.clear(), report.update(result)))
         self.assertTrue(self.prepare()["success"])
@@ -245,6 +258,58 @@ class ReleasePacket(unittest.TestCase):
             self.assertEqual(self.client.entries[artifact][0][0], "drmr-1.0.0-" + target + suffix)
             media = json.loads((self.output / ("cli-media-qualification-" + target + ".json")).read_text())
             self.assertEqual({tool["name"] for tool in media["doctor"]["tools"]}, {"ffmpeg", "ffprobe", "packager"})
+            self.assertEqual(media["aac_44100"]["source_audio"]["sample_rate"], 44100)
+            self.assertEqual(len(media["stages"]), 17)
+
+    def test_aac44100_route_is_mandatory_and_every_source_frame_is_bound(self):
+        entries = dict(self.client.entries["drmr-Linux-X64"])
+        archive = json.loads(entries["cli-archive-verification.json"])
+        media = json.loads(entries["cli-media-qualification.json"])
+        def validate(report):
+            PREPARE.reports(archive, report, self.head, self.tree, "x86_64-unknown-linux-gnu",
+                            "1.0.0", archive["archive_sha256"])
+        validate(media)
+        changes = [lambda r: r.pop("aac_44100"),
+                   lambda r: r["aac_44100"].update(input_format="hls"),
+                   lambda r: r["aac_44100"].update(input_protection="hls-aes128"),
+                   lambda r: r["aac_44100"].update(output_protection="clear"),
+                   lambda r: r["aac_44100"].update(saved_original_and_plan_unchanged=False),
+                   lambda r: r["aac_44100"].update(plan_id="invalid"),
+                   lambda r: r["aac_44100"].update(cli_source_graph_sha256="invalid"),
+                   lambda r: r["aac_44100"]["source_audio"].update(sample_rate=48000),
+                   lambda r: r["aac_44100"]["source_audio"].update(packet_count=431),
+                   lambda r: r["aac_44100"]["source_audio"].update(frame_count=True),
+                   lambda r: r["aac_44100"]["source_audio"].update(expected_decoded_samples_per_channel=431 * 1024),
+                   lambda r: r["aac_44100"]["source_audio"].update(packet_clock_sha256="invalid"),
+                   lambda r: r["aac_44100"]["source_audio"].update(last_pts=False),
+                   lambda r: r["aac_44100"]["source_audio"].update(last_duration=2090),
+                   lambda r: r["aac_44100"]["conversion"]["checks"].update(packet_payloads_equal=1),
+                   lambda r: r["aac_44100"]["independent_verification"]["checks"].update(packet_timing_equal=False),
+                   lambda r: r["aac_44100"]["independent_verification"]["native_manifest"].update(incomplete=True),
+                   lambda r: r["aac_44100"].update(private_key="private-marker"),
+                   lambda r: r["aac_44100"]["source_audio"].update(private_path="private-marker")]
+        for change in changes:
+            altered = copy.deepcopy(media)
+            change(altered)
+            with self.subTest(change=change), self.assertRaises(PREPARE.CHECK.Failure):
+                validate(altered)
+
+    def test_aac44100_all_six_stages_are_required_in_order(self):
+        entries = dict(self.client.entries["drmr-Linux-X64"])
+        archive = json.loads(entries["cli-archive-verification.json"])
+        media = json.loads(entries["cli-media-qualification.json"])
+        self.assertEqual(len(PREPARE.STAGES), 17)
+        self.assertEqual(PREPARE.MEDIA_LIMITS, QUALIFY.MEDIA_LIMITS)
+        for index in range(11, 17):
+            altered = copy.deepcopy(media)
+            altered["stages"].pop(index)
+            with self.subTest(stage=index), self.assertRaisesRegex(PREPARE.CHECK.Failure, "^media-stages-invalid$"):
+                PREPARE.reports(archive, altered, self.head, self.tree, "x86_64-unknown-linux-gnu",
+                                "1.0.0", archive["archive_sha256"])
+        media["stages"][-1], media["stages"][-2] = media["stages"][-2], media["stages"][-1]
+        with self.assertRaisesRegex(PREPARE.CHECK.Failure, "^media-stages-invalid$"):
+            PREPARE.reports(archive, media, self.head, self.tree, "x86_64-unknown-linux-gnu",
+                            "1.0.0", archive["archive_sha256"])
 
     def test_doctor_inventory_and_each_tool_proof_are_required(self):
         entries = dict(self.client.entries["drmr-Linux-X64"])

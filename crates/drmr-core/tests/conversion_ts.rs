@@ -577,27 +577,71 @@ fn assert_profile_omission(audit: &Path, selected_role: &str) {
     );
 }
 #[test]
-fn unsupported_audio_and_interlaced_video_fail_before_publication() {
-    for (profile, expected) in [
-        ("44100", "ts-aac-sample-rate-not-supported"),
-        ("interlaced", "ts-progressive-frame-evidence-required"),
+fn aac_44100_transport_to_hls_and_dash_preserves_original_media() {
+    let root = common::private_tempdir().unwrap();
+    let input = source_profile(root.path(), "44100");
+    let before = common::snapshot_tree(root.path());
+    let keys = InputKeys::default();
+    let hls = HlsInputKeys::default();
+    let c = converter();
+    for (format, name, manifest) in [
+        (OutputFormat::Hls, "hls", "master.m3u8"),
+        (OutputFormat::Dash, "dash", "manifest.mpd"),
     ] {
-        let root = common::private_tempdir().unwrap();
-        let input = source_profile(root.path(), profile);
-        let output = root.path().join("result");
-        let before = common::snapshot_tree(root.path());
-        let error = converter()
-            .convert(clear_request(
-                &input,
-                &output,
-                &InputKeys::default(),
-                &HlsInputKeys::default(),
-            ))
-            .unwrap_err();
-        assert_eq!(error.0, expected, "{profile}");
-        assert!(!output.exists());
-        assert_eq!(common::snapshot_tree(root.path()), before);
+        let output = root.path().join(name);
+        let mut request = clear_request(&input, &output, &keys, &hls);
+        request.format = format;
+        let converted = c
+            .convert(request)
+            .unwrap_or_else(|error| panic!("44.1 kHz AAC {name} conversion: {}", error.0));
+        assert!(converted.verification.passed && converted.verification.media_verified);
+        assert!(converted.verification.checks.stream_metadata.is_pass());
+        assert!(converted.verification.checks.packet_payloads_equal);
+        assert!(converted.verification.checks.packet_timing_equal);
+        assert!(converted.verification.checks.decoded_content_equal);
+        let verified = c
+            .verify(VerificationRequest {
+                source: VerificationSource {
+                    input: &input,
+                    input_keys: &keys,
+                    hls_keys: &hls,
+                },
+                output: VerificationSource {
+                    input: &output.join(manifest),
+                    input_keys: &keys,
+                    hls_keys: &hls,
+                },
+            })
+            .unwrap_or_else(|error| panic!("44.1 kHz AAC {name} fresh verify: {}", error.0));
+        assert!(verified.passed && verified.media_verified);
+        assert!(verified.checks.stream_metadata.is_pass());
+        assert!(verified.checks.packet_payloads_equal);
+        assert!(verified.checks.packet_timing_equal);
+        assert!(verified.checks.decoded_content_equal);
+        assert!(!verified.license_playback_verified);
     }
+    for (name, bytes) in before {
+        assert_eq!(std::fs::read(root.path().join(name)).unwrap(), bytes);
+    }
+}
+
+#[test]
+fn interlaced_video_fails_before_publication() {
+    let root = common::private_tempdir().unwrap();
+    let input = source_profile(root.path(), "interlaced");
+    let output = root.path().join("result");
+    let before = common::snapshot_tree(root.path());
+    let error = converter()
+        .convert(clear_request(
+            &input,
+            &output,
+            &InputKeys::default(),
+            &HlsInputKeys::default(),
+        ))
+        .unwrap_err();
+    assert_eq!(error.0, "ts-progressive-frame-evidence-required");
+    assert!(!output.exists());
+    assert_eq!(common::snapshot_tree(root.path()), before);
 }
 #[test]
 fn segment_durations_and_output_profile_are_not_silently_normalized() {
