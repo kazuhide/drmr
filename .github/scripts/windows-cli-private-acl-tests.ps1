@@ -1,5 +1,6 @@
 param([switch]$Ordinary, [string]$Directory, [string]$Checkout, [string]$Python,
-    [string]$ExpectedParent, [string]$ExpectedIdentity, [string]$ExpectedTempIdentity)
+    [string]$ExpectedParent, [string]$ExpectedIdentity, [string]$ExpectedTempIdentity,
+    [string]$ExpectedCollectorSid)
 
 $ErrorActionPreference = 'Stop'
 $script:PrivateAclRegressionStage = 'entered'
@@ -17,7 +18,28 @@ function Get-PrivateAclSha256 {
 }
 
 function Initialize-PrivateAclRegression {
-    param([string]$Root, [Security.Principal.SecurityIdentifier]$UserSid)
+    param([string]$Root, [Security.Principal.SecurityIdentifier]$UserSid, [string]$ExpectedParent,
+        [string]$ExpectedRootIdentity, [string]$Python, [string]$Checkout)
+    Assert-DrmrArchiveDirectory $Root $ExpectedParent $ExpectedRootIdentity $Python
+    $collector = [Security.Principal.WindowsIdentity]::GetCurrent().User
+    Assert-PrivateAclRegression ($collector.Value -ne $UserSid.Value -and $collector.Value -ne 'S-1-5-18')
+    $null = & icacls $Root /grant:r "*$($collector.Value):(OI)(CI)F" '*S-1-5-18:(OI)(CI)F' "*$($UserSid.Value):(OI)(CI)M" /Q 2>&1
+    Assert-PrivateAclRegression ($LASTEXITCODE -eq 0)
+    $null = & icacls $Root /inheritance:r /Q 2>&1
+    Assert-PrivateAclRegression ($LASTEXITCODE -eq 0)
+    $acl = Get-Acl -LiteralPath $Root
+    foreach ($rule in $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
+        if ($rule.IdentityReference.Value -notin @($collector.Value, $UserSid.Value, 'S-1-5-18')) {
+            $null = & icacls $Root /remove "*$($rule.IdentityReference.Value)" /Q 2>&1
+            Assert-PrivateAclRegression ($LASTEXITCODE -eq 0)
+        }
+    }
+    Assert-ControlledPrivateAclParent $Root $UserSid $collector.Value
+    foreach ($relative in @('docs', 'site-content', 'site-content/guide', 'docs/windows.md', 'site-content/guide/en.md', 'site-content/guide/ja.md')) {
+        $null = & icacls (Join-Path $Checkout $relative) /grant "*$($UserSid.Value):RX" /Q 2>&1
+        Assert-PrivateAclRegression ($LASTEXITCODE -eq 0)
+    }
+    Assert-DrmrArchiveDirectory $Root $ExpectedParent $ExpectedRootIdentity $Python
     $temporary = Join-Path $Root 'temp'
     Assert-PrivateAclRegression (-not (Test-Path -LiteralPath $temporary))
     New-Item -ItemType Directory -Path $temporary | Out-Null
@@ -38,12 +60,40 @@ function Initialize-PrivateAclRegression {
     }
 }
 
+function Assert-ControlledPrivateAclParent {
+    param([string]$Root, [Security.Principal.SecurityIdentifier]$UserSid, [string]$CollectorSid)
+    Assert-PrivateAclRegression ($CollectorSid -ne $UserSid.Value -and $CollectorSid -ne 'S-1-5-18')
+    $acl = Get-Acl -LiteralPath $Root
+    $rules = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))
+    Assert-PrivateAclRegression ($acl.AreAccessRulesProtected -and $rules.Count -eq 3)
+    foreach ($rule in $rules) {
+        Assert-PrivateAclRegression (-not $rule.IsInherited -and
+            $rule.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and
+            $rule.IdentityReference.Value -in @($UserSid.Value, $CollectorSid, 'S-1-5-18') -and
+            [int]$rule.InheritanceFlags -eq 3 -and [int]$rule.PropagationFlags -eq 0)
+        if ($rule.IdentityReference.Equals($UserSid)) {
+            $modify = [Security.AccessControl.FileSystemRights]::Modify
+            $allowed = $modify -bor [Security.AccessControl.FileSystemRights]::Synchronize
+            Assert-PrivateAclRegression (($rule.FileSystemRights -band $modify) -eq $modify -and
+                ($rule.FileSystemRights -band (-bnot $allowed)) -eq 0)
+        } else {
+            Assert-PrivateAclRegression ($rule.FileSystemRights -eq [Security.AccessControl.FileSystemRights]::FullControl)
+        }
+    }
+    Assert-PrivateAclRegression (@($rules | Where-Object { $_.IdentityReference.Equals($UserSid) }).Count -eq 1)
+}
+
 function Get-PrivateAclSnapshot {
     param([string]$Path, [bool]$IsDirectory, [string]$Python)
     $sections = [Security.AccessControl.AccessControlSections]'Owner, Access'
     $acl = if ($IsDirectory) { [IO.Directory]::GetAccessControl($Path, $sections) }
         else { [IO.File]::GetAccessControl($Path, $sections) }
-    $code = 'import os,sys; s=os.lstat(sys.argv[1]); assert not getattr(s,"st_file_attributes",0)&0x400; print(str(s.st_dev)+":"+str(s.st_ino))'
+    $code = @'
+import os, sys
+s = os.lstat(sys.argv[1])
+assert not getattr(s, 'st_file_attributes', 0) & 0x400
+print(str(s.st_dev) + ':' + str(s.st_ino))
+'@
     $identity = & $Python -B -c $code $Path
     Assert-PrivateAclRegression ($LASTEXITCODE -eq 0 -and $identity -is [string] -and $identity -match '^[0-9]+:[0-9]+$')
     $payload = if ($IsDirectory) { Join-Path $Path 'keep.txt' } else { $Path }
@@ -75,19 +125,24 @@ function Assert-PrivateAclProfile {
 
 function Test-PrivateAclRegression {
     param([string]$Root, [string]$Checkout, [string]$Python,
-        [string]$ExpectedParent, [string]$ExpectedRootIdentity, [string]$ExpectedTempIdentity)
+        [string]$ExpectedParent, [string]$ExpectedRootIdentity, [string]$ExpectedTempIdentity, [string]$ExpectedCollectorSid)
     . (Join-Path $PSScriptRoot 'windows-cli-archive-cleanup.ps1') -Directory $Root -ExpectedParent $ExpectedParent -ExpectedIdentity $ExpectedRootIdentity -Python $Python
-    $script:PrivateAclRegressionStage = 'root-premise'
+    $script:PrivateAclRegressionStage = 'root-identity'
     Assert-DrmrArchiveDirectory $Root $ExpectedParent $ExpectedRootIdentity $Python
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = [Security.Principal.WindowsPrincipal]::new($identity)
+    $script:PrivateAclRegressionStage = 'ordinary-user'
     Assert-PrivateAclRegression (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))
     $sid = $identity.User
+    $script:PrivateAclRegressionStage = 'parent-profile'
+    Assert-ControlledPrivateAclParent $Root $sid $ExpectedCollectorSid
     $temporary = Join-Path $Root 'temp'
+    $script:PrivateAclRegressionStage = 'temporary-identity'
     Assert-PrivateAclRegression ((Get-DrmrArchiveDirectoryIdentity $temporary $Python) -ceq $ExpectedTempIdentity)
     $acl = [IO.Directory]::GetAccessControl($temporary, [Security.AccessControl.AccessControlSections]'Owner, Access')
     $rules = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))
     $ownRules = @($rules | Where-Object { $_.IdentityReference.Equals($sid) })
+    $script:PrivateAclRegressionStage = 'temporary-profile'
     Assert-PrivateAclRegression ($ownRules.Count -eq 1 -and
         ($ownRules[0].FileSystemRights -band [Security.AccessControl.FileSystemRights]::Modify) -eq [Security.AccessControl.FileSystemRights]::Modify -and
         ($ownRules[0].FileSystemRights -band ([Security.AccessControl.FileSystemRights]::TakeOwnership -bor [Security.AccessControl.FileSystemRights]::ChangePermissions)) -eq 0 -and
@@ -213,7 +268,7 @@ except Exception:
 }
 
 if ($Ordinary) {
-    try { Test-PrivateAclRegression $Directory $Checkout $Python $ExpectedParent $ExpectedIdentity $ExpectedTempIdentity; exit 0 }
+    try { Test-PrivateAclRegression $Directory $Checkout $Python $ExpectedParent $ExpectedIdentity $ExpectedTempIdentity $ExpectedCollectorSid; exit 0 }
     catch {
         $category = $_.Exception.GetType().Name
         if ($category -cnotin @('RuntimeException', 'MethodInvocationException', 'UnauthorizedAccessException', 'ItemNotFoundException', 'Win32Exception')) { $category = 'UnclassifiedException' }

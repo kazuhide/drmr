@@ -15,9 +15,9 @@ function Get-DrmrArchiveDirectoryIdentity {
 import os, stat, sys
 try:
     value = os.lstat(sys.argv[1])
-    if not stat.S_ISDIR(value.st_mode) or getattr(value, "st_file_attributes", 0) & 0x400:
+    if not stat.S_ISDIR(value.st_mode) or getattr(value, 'st_file_attributes', 0) & 0x400:
         sys.exit(1)
-    print(str(value.st_dev) + ":" + str(value.st_ino))
+    print(str(value.st_dev) + ':' + str(value.st_ino))
 except OSError:
     sys.exit(1)
 '@
