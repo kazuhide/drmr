@@ -219,25 +219,66 @@ fn streamed_decoding_uses_the_same_admission_pool_as_captured_tools() {
 }
 
 #[test]
-fn a_cancelled_tool_does_not_start_an_unavailable_executable() {
+fn already_cancelled_tools_record_the_admission_failure_without_spawning() {
     use drmr_core::events::Collector;
     use drmr_core::toolrun::{RunOptions, Secrets, ToolRunner};
-    let records = Arc::new(Collector::default());
+    let directory = drmr_core::native::private_tempdir().unwrap();
+    let marker = directory.path().join("started");
+    let fixture = drmr_test_support::install(
+        &directory.path().join("probe"),
+        &drmr_test_support::ToolSpec::default().with("ready_file", marker.to_str().unwrap()),
+    )
+    .unwrap();
     let stop = Stop::new();
     stop.set();
-    let runner = ToolRunner::new(Arc::new(Secrets::new()), records.clone());
-    let error = runner
-        .run_tool(
-            &["not-a-real-ffprobe-resource-test".into()],
-            "probe",
-            &RunOptions {
-                stop: Some(&stop),
-                ..RunOptions::default()
-            },
-        )
-        .unwrap_err();
-    assert_eq!(error.kind, "cancelled");
-    assert!(records.records().is_empty());
+    for program in [
+        "not-a-real-ffprobe-resource-test",
+        fixture.to_str().unwrap(),
+    ] {
+        let records = Arc::new(Collector::default());
+        let runner = ToolRunner::new(Arc::new(Secrets::new()), records.clone());
+        let error = runner
+            .run_tool(
+                &[program.into()],
+                "probe",
+                &RunOptions {
+                    stop: Some(&stop),
+                    ..RunOptions::default()
+                },
+            )
+            .unwrap_err();
+        assert_eq!(error.kind, "cancelled");
+        // A command record describes intent; a denied admission has no child status.
+        let events = records.records();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0]["event"], "command");
+        assert_eq!(events[1]["event"], "tool-output");
+        assert_eq!(events[0]["call_id"], events[1]["call_id"]);
+        assert_eq!(events[1]["returncode"], serde_json::Value::Null);
+        assert_eq!(events[1]["stdout"], "");
+        assert_eq!(events[1]["stderr"], "tool admission failed: cancelled");
+        assert!(
+            !marker.exists(),
+            "a cancelled call must not start its executable"
+        );
+    }
+    // The same native executable must publish its marker when it is admitted.
+    let runner = ToolRunner::new(
+        Arc::new(Secrets::new()),
+        Arc::new(drmr_core::events::NoSink),
+    );
+    assert_eq!(
+        runner
+            .run_tool(
+                &[fixture.to_str().unwrap().into()],
+                "probe",
+                &RunOptions::default(),
+            )
+            .unwrap()
+            .returncode,
+        Some(0)
+    );
+    assert_eq!(std::fs::read(marker).unwrap(), b"ready");
 }
 
 #[test]
