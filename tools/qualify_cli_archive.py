@@ -621,11 +621,19 @@ def audio_media(cli, runner, source):
             and all(re.fullmatch(r"segment-[0-9]{3}\.ts", name) is not None for name in resources),
             "aac44100-source-segments-invalid")
     before = graph_identity(presentation)
+    # FFprobe's HLS demuxer can omit the first AAC packet's duration while
+    # discovering its decoder configuration. Probe the unchanged transport
+    # bytes in playlist order instead; do not invent a missing packet clock.
+    transport = bytearray()
+    for name in resources:
+        transport.extend(read_regular(presentation / name, MAX_GRAPH_BYTES - len(transport)))
+    probe_source = root / "aac44100-original.ts"
+    private_write(probe_source, transport)
     audio = audio_evidence(runner.json([
         "ffprobe", "-v", "error", "-protocol_whitelist", "file,crypto", "-select_streams", "a:0",
         "-count_frames", "-show_packets", "-show_streams", "-show_entries",
         "stream=codec_name,profile,sample_rate,channels,time_base,nb_read_frames:packet=pts,dts,duration",
-        "-of", "json", source_path], "fixture-aac44100-probe"))
+        "-of", "json", probe_source], "fixture-aac44100-probe"))
     analyzed = runner.json([cli, "analyze", source_path, "--max-workers", "1", "--json"], "aac44100-analyze")
     require(isinstance(analyzed, dict) and type(analyzed.get("schema_version")) is int
             and analyzed.get("schema_version") == 1 and analyzed.get("kind") == "input-analysis"

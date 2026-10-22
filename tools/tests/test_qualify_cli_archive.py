@@ -309,6 +309,17 @@ class AudioMediaFlowTests(unittest.TestCase):
             with self.subTest(mutation=mutation), self.assertRaisesRegex(module.Refusal, "^" + code + "$"):
                 self.run_case(mutation)
 
+    def test_audio_packet_probe_reads_all_original_transport_bytes_in_playlist_order(self):
+        _, runner, _ = self.run_case()
+        arguments, stage = runner.calls[1]
+        self.assertEqual(stage, "fixture-aac44100-probe")
+        probed = Path(arguments[-1])
+        self.assertEqual(probed.suffix, ".ts")
+        self.assertEqual(probed.read_bytes(), b"first fake segmentlast fake segment")
+        original = runner.workspace / "aac44100-input"
+        self.assertEqual((original / "segment-000.ts").read_bytes(), b"first fake segment")
+        self.assertEqual((original / "segment-001.ts").read_bytes(), b"last fake segment")
+
 
 class OwnedFilesTests(unittest.TestCase):
     def setUp(self):
