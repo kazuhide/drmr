@@ -129,15 +129,22 @@ def secure_windows(path, directory):
 $ErrorActionPreference = 'Stop'
 $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
 $directory = $env:DRMR_QUALIFY_DIRECTORY -eq '1'
+$sections = [System.Security.AccessControl.AccessControlSections]'Owner, Access'
+$current = if ($directory) {
+    [System.IO.Directory]::GetAccessControl($env:DRMR_QUALIFY_PATH, $sections)
+} else {
+    [System.IO.File]::GetAccessControl($env:DRMR_QUALIFY_PATH, $sections)
+}
+if (-not $current.GetOwner([System.Security.Principal.SecurityIdentifier]).Equals($identity)) {
+    throw 'The current user must own the path'
+}
 $acl = if ($directory) { [System.Security.AccessControl.DirectorySecurity]::new() } else { [System.Security.AccessControl.FileSecurity]::new() }
-$acl.SetOwner($identity)
 $acl.SetAccessRuleProtection($true, $false)
 $inheritance = if ($directory) { [System.Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit' } else { [System.Security.AccessControl.InheritanceFlags]::None }
 $rule = [System.Security.AccessControl.FileSystemAccessRule]::new($identity, [System.Security.AccessControl.FileSystemRights]::FullControl, $inheritance, [System.Security.AccessControl.PropagationFlags]::None, [System.Security.AccessControl.AccessControlType]::Allow)
 $acl.AddAccessRule($rule)
-# Persist only the owner and DACL we modified. Set-Acl copies unrelated audit
-# and group sections too, which can require privileges an ordinary user lacks.
-$sections = [System.Security.AccessControl.AccessControlSections]'Owner, Access'
+# Persist only the modified DACL. Owning the path grants WRITE_DAC, but does
+# not grant WRITE_OWNER; an already-correct owner must not be reassigned.
 $checked = if ($directory) {
     [System.IO.Directory]::SetAccessControl($env:DRMR_QUALIFY_PATH, $acl)
     [System.IO.Directory]::GetAccessControl($env:DRMR_QUALIFY_PATH, $sections)
