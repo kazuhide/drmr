@@ -488,7 +488,7 @@ impl Backend {
             unedited,
         )
     }
-    fn hash_stream_keys_options(
+    pub(super) fn hash_stream_keys_options(
         &self,
         path: &Path,
         index: usize,

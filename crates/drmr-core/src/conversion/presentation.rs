@@ -1094,7 +1094,7 @@ impl Converter {
         track: &Prepared,
         keys: &InputKeys,
     ) -> Result<String, ConversionError> {
-        self.backend.hash_stream_keys(
+        self.backend.hash_stream_keys_options(
             &track.source,
             track.transport_index.unwrap_or(track.index),
             false,
@@ -1103,6 +1103,7 @@ impl Converter {
             } else {
                 key_for(track, keys).map(super::keys::ProbeKeys::One)
             },
+            track.audio_presentation.is_some() && track.transport_index.is_none(),
         )
     }
     fn presentation_payload_digest(

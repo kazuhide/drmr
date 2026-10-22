@@ -32,6 +32,10 @@ pub(super) fn read_claim(path: &Path) -> Result<Option<AudioClaim>, ConversionEr
     let mut source = Source::open(path, false, None)?;
     let boxes = mp4::parse_boxes(&source.movie).map_err(|_| BAD)?;
     let movie = only_movie(&boxes)?;
+    if !single_fragmented_audio(movie, &source.movie)? {
+        // Other track layouts keep their existing edit parser and refusal policy.
+        return Ok(None);
+    }
     let Some(edit) = special_edit(movie, &source.movie)? else {
         // Ordinary progressive edits and no-edit tracks retain their existing
         // dispatch before any requirements of this new fragmented profile apply.
@@ -42,6 +46,21 @@ pub(super) fn read_claim(path: &Path) -> Result<Option<AudioClaim>, ConversionEr
     let claim = declaration(edit, &source.movie, layout)?;
     source.check_identity(path, false)?;
     Ok(Some(claim))
+}
+
+fn single_fragmented_audio(movie: &Mp4Box, bytes: &[u8]) -> Result<bool, ConversionError> {
+    let mut tracks = movie
+        .children
+        .iter()
+        .filter(|child| child.kind() == *b"trak");
+    let Some(track) = tracks.next() else {
+        return Ok(false);
+    };
+    if tracks.next().is_some() || !movie.children.iter().any(|child| child.kind() == *b"mvex") {
+        return Ok(false);
+    }
+    let media = one(track, *b"mdia")?;
+    Ok(one(media, *b"hdlr")?.header.payload(bytes).get(8..12) == Some(b"soun"))
 }
 
 pub(super) fn restore(
@@ -867,12 +886,12 @@ fn rewrite(
     output.sync_all().map_err(|_| BAD)?;
     verify_source(path, &source, digest.finalize().into(), stop)?;
     let bound = stage.created_file_source(&temporary, &output)?;
+    drop(output);
     drop(bound.reader()?);
     if FileIdentity::read(&files::regular_input(&temporary)?).map_err(|_| BAD)? != created {
         return Err(CHANGED);
     }
     check_stop(stop)?;
-    drop(output);
     drop(source);
     // Both entries are exclusively owned private files. Close read handles for
     // Windows, then replace atomically; an interrupted copy never changes input.
@@ -1131,6 +1150,41 @@ mod tests {
         // The old dispatcher, not this new profile, validates progressive headers.
         write_private(&path, &boxed(*b"moov", &track).unwrap());
         assert_eq!(read_claim(&path).unwrap(), None);
+    }
+
+    #[test]
+    fn video_and_multiple_tracks_keep_legacy_complex_edit_refusals() {
+        let owner = files::Stage::new(None).unwrap();
+        let path = owner.path().join("legacy.mp4");
+        write_private(&path, &initialization(44_100));
+        let expected = presentation(44_100, 126_000);
+        restore(&path, expected, &Stop::new()).unwrap();
+        let original = std::fs::read(&path).unwrap();
+        let mut video = original.clone();
+        let handler = payload_offset(&video, *b"hdlr") + 8;
+        video[handler..handler + 4].copy_from_slice(b"vide");
+        let boxes = mp4::parse_boxes(&original).unwrap();
+        let mut multiple = Vec::new();
+        for node in &boxes {
+            if node.kind() == *b"moov" {
+                let mut payload = node.header.payload(&original).to_vec();
+                payload.extend(one(node, *b"trak").unwrap().header.bytes(&original));
+                multiple.extend(boxed(*b"moov", &payload).unwrap());
+            } else {
+                multiple.extend(node.header.bytes(&original));
+            }
+        }
+        for candidate in [video, multiple] {
+            std::fs::write(&path, &candidate).unwrap();
+            assert_eq!(read_claim(&path).unwrap(), None);
+            assert_eq!(
+                finite::window(&path, 0).unwrap_err().0,
+                "presentation-window-not-supported"
+            );
+            assert!(restore(&path, expected, &Stop::new()).is_err());
+            assert!(strip(&path, expected, &Stop::new()).is_err());
+            assert_eq!(std::fs::read(&path).unwrap(), candidate);
+        }
     }
 
     #[test]

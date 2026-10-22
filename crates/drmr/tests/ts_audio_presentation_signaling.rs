@@ -150,7 +150,7 @@ fn source(root: &Path, clip: &Path) -> (PathBuf, u64) {
     for (index, (_, segment)) in resources.iter().enumerate() {
         let observed = packets(segment);
         let rows = observed.as_array().unwrap();
-        assert!(!rows.is_empty());
+        assert_ne!(rows.as_slice(), &[] as &[Value]);
         if index == resources.len() - 1 {
             assert_eq!(
                 rows.len(),

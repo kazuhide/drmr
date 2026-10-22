@@ -1865,3 +1865,433 @@ fn dash_uses_the_longer_role_without_widening_shorter_partial_audio_or_losing_vi
         av_dash_case(video_longer);
     }
 }
+
+#[derive(Debug, PartialEq, Eq)]
+struct RawVideo {
+    packets: Vec<[Ratio<i64>; 3]>,
+    coded_picture_units: usize,
+    coded_picture_sha256: String,
+    decoded_frame_sha256: Vec<String>,
+}
+
+fn video_oracle_output(path: &Path, mp4: bool, decode: bool) -> Vec<u8> {
+    let mut argv = vec![
+        "ffmpeg".into(),
+        "-v".into(),
+        "error".into(),
+        "-nostdin".into(),
+        "-threads".into(),
+        "1".into(),
+    ];
+    if mp4 {
+        argv.extend(["-ignore_editlist".into(), "1".into()]);
+    }
+    argv.extend([
+        "-i".into(),
+        drmr_core::manifest_support::path::fspath(path).unwrap(),
+        "-map".into(),
+        "0:v:0".into(),
+    ]);
+    if decode {
+        argv.extend([
+            "-c:v".into(),
+            "rawvideo".into(),
+            "-threads".into(),
+            "1".into(),
+            "-pix_fmt".into(),
+            "yuv420p".into(),
+            "-fps_mode".into(),
+            "passthrough".into(),
+            "-f".into(),
+            "framehash".into(),
+            "-hash".into(),
+            "sha256".into(),
+        ]);
+    } else {
+        argv.extend([
+            "-c:v".into(),
+            "copy".into(),
+            "-bsf:v".into(),
+            "h264_mp4toannexb".into(),
+            "-f".into(),
+            "h264".into(),
+        ]);
+    }
+    argv.push("-".into());
+    let result = ToolRunner::new(Arc::new(Secrets::default()), Arc::new(NoSink))
+        .run_tool(
+            &argv,
+            "ffmpeg",
+            &drmr_core::toolrun::RunOptions {
+                timeout: Some(std::time::Duration::from_secs(30)),
+                max_stdout_bytes: 16 * 1024 * 1024,
+                max_output_chars: 0,
+                log_stdout: false,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(result.returncode, Some(0));
+    result.stdout
+}
+
+fn coded_picture_digest(annex_b: &[u8]) -> (usize, String) {
+    let starts: Vec<_> = annex_b
+        .windows(3)
+        .enumerate()
+        .filter_map(|(index, bytes)| (bytes == [0, 0, 1]).then_some(index))
+        .collect();
+    assert_ne!(starts.len(), 0);
+    let mut count = 0;
+    let mut digest = Sha256::new();
+    for (index, start) in starts.iter().enumerate() {
+        let begin = start + 3;
+        let mut end = starts.get(index + 1).copied().unwrap_or(annex_b.len());
+        while end > begin && annex_b[end - 1] == 0 {
+            end -= 1;
+        }
+        assert!(end > begin);
+        // Container remuxing may add delimiters and repeat parameter sets.
+        // Compare every coded picture unit independently of those framing bytes.
+        if (1..=5).contains(&(annex_b[begin] & 31)) {
+            digest.update(u64::try_from(end - begin).unwrap().to_be_bytes());
+            digest.update(&annex_b[begin..end]);
+            count += 1;
+        }
+    }
+    assert_ne!(count, 0);
+    (count, hex::encode(digest.finalize()))
+}
+
+fn raw_video(path: &Path, mp4: bool) -> RawVideo {
+    let packets = observed_packet_clocks(path, "v:0", mp4);
+    let (coded_picture_units, coded_picture_sha256) =
+        coded_picture_digest(&video_oracle_output(path, mp4, false));
+    let decoded = video_oracle_output(path, mp4, true);
+    let decoded_frame_sha256: Vec<_> = std::str::from_utf8(&decoded)
+        .unwrap()
+        .lines()
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .map(|line| {
+            let fields: Vec<_> = line.split(',').map(str::trim).collect();
+            assert_eq!(fields.len(), 6);
+            assert!(fields[4].parse::<usize>().unwrap() > 0);
+            assert_eq!(hex::decode(fields[5]).unwrap().len(), 32);
+            fields[5].to_owned()
+        })
+        .collect();
+    assert_eq!(decoded_frame_sha256.len(), packets.len());
+    RawVideo {
+        packets,
+        coded_picture_units,
+        coded_picture_sha256,
+        decoded_frame_sha256,
+    }
+}
+
+struct MultiVideoFixture {
+    source: std::path::PathBuf,
+    audio_packets: Vec<[Ratio<i64>; 3]>,
+    audio: RawAudio,
+    videos: Vec<RawVideo>,
+}
+
+fn multi_video_fixture(root: &Path) -> MultiVideoFixture {
+    use std::io::Write as _;
+    let input = root.join("input");
+    let (audio, _) = audio_sources_at_rate(&input, Some(44_100));
+    let audio_packets = shorten_final_declaration(&audio, AAC_44100);
+    let raw_audio_path = root.join("original-audio.ts");
+    join_resources(&audio, &raw_audio_path, false);
+    let audio = raw_audio(&raw_audio_path, false, AAC_44100);
+    assert_eq!(audio.aac_frames, RAW_FRAMES);
+    assert_eq!(audio.pcm_samples_per_channel, RAW_SAMPLES);
+    let videos: Vec<_> = [false, true]
+        .into_iter()
+        .enumerate()
+        .map(|(index, longer)| {
+            let video = video_rendition(&input.join(format!("video-{index}")), longer);
+            let raw = root.join(format!("original-video-{index}.ts"));
+            join_resources(&video, &raw, false);
+            let observed = raw_video(&raw, false);
+            assert_eq!(observed.packets.len(), if longer { 243 } else { 240 });
+            assert_eq!(observed.packets[0][0], audio_packets[0][0]);
+            observed
+        })
+        .collect();
+    assert_ne!(
+        videos[0].decoded_frame_sha256,
+        videos[1].decoded_frame_sha256
+    );
+    let source = input.join("master.m3u8");
+    drmr_core::native::create_media_new(&source)
+        .unwrap()
+        .write_all(concat!(
+            "#EXTM3U\n#EXT-X-VERSION:5\n",
+            "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"audio\",NAME=\"Main\",DEFAULT=YES,AUTOSELECT=YES,URI=\"clear/media.m3u8\"\n",
+            "#EXT-X-STREAM-INF:BANDWIDTH=2000000,AUDIO=\"audio\"\nvideo-0/media.m3u8\n",
+            "#EXT-X-STREAM-INF:BANDWIDTH=3000000,AUDIO=\"audio\"\nvideo-1/media.m3u8\n",
+        ).as_bytes())
+        .unwrap();
+    MultiVideoFixture {
+        source,
+        audio_packets,
+        audio,
+        videos,
+    }
+}
+
+fn multi_video_keys(
+    root: &Path,
+    target: TargetProtection,
+) -> drmr_core::conversion::key_file::OperatorKeys {
+    use drmr_core::conversion::key_file::{self, OperatorKeys};
+    use std::io::Write as _;
+    if target == TargetProtection::Clear {
+        return OperatorKeys::default();
+    }
+    assert_eq!(target, TargetProtection::Cbcs);
+    let file = root.join("output.keys.json");
+    drmr_core::native::create_private_new(&file)
+        .unwrap()
+        .write_all(
+            &serde_json::to_vec(&serde_json::json!({
+                "schema_version": 1,
+                "output": {
+                    "kid": "909192939495969798999a9b9c9d9e9f",
+                    "key": OUTPUT_KEY,
+                    "hls_key_uri": KEY_URI,
+                },
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    key_file::read(&file).unwrap()
+}
+
+fn assert_multi_audio(fixture: &MultiVideoFixture, directory: &Path, track: &str, evidence: &Path) {
+    let audio = evidence.join("audio.mp4");
+    join_dash_track_named(directory, track, &audio);
+    assert_eq!(raw_audio(&audio, true, AAC_44100), fixture.audio);
+    let packets = raw_mp4_packet_clocks(&audio);
+    assert_eq!(packets.len(), fixture.audio_packets.len());
+    for (index, (before, after)) in fixture.audio_packets.iter().zip(&packets).enumerate() {
+        assert_eq!(before[0], after[0]);
+        assert_eq!(before[1], after[1]);
+        let duration = fixture
+            .audio_packets
+            .get(index + 1)
+            .map_or(before[2], |next| next[1] - before[1]);
+        assert_eq!(duration, after[2]);
+    }
+    assert_eq!(
+        packets.last().unwrap()[0] + packets.last().unwrap()[2],
+        fixture.audio_packets.last().unwrap()[0] + fixture.audio_packets.last().unwrap()[2]
+    );
+    assert_two_standard_edits(
+        &directory.join(track).join("init.mp4"),
+        AAC_44100,
+        fixture.audio_packets[0][0],
+    );
+}
+
+fn assert_multi_clear_output(
+    fixture: &MultiVideoFixture,
+    directory: &Path,
+    report: &drmr_core::conversion::ConversionReport,
+    evidence: &Path,
+) {
+    use drmr_core::inspection::TrackKind;
+    drmr_core::native::create_media_dir_all(evidence).unwrap();
+    assert_eq!(report.output.tracks.len(), 3);
+    let audio: Vec<_> = report
+        .output
+        .tracks
+        .iter()
+        .filter(|track| track.kind == TrackKind::Audio)
+        .collect();
+    assert_eq!(audio.len(), 1);
+    assert_multi_audio(fixture, directory, &audio[0].id, evidence);
+    let mut expected: Vec<_> = fixture.videos.iter().collect();
+    for track in report
+        .output
+        .tracks
+        .iter()
+        .filter(|track| track.kind == TrackKind::Video)
+    {
+        let raw = evidence.join(format!("{}.mp4", track.id));
+        join_dash_track_named(directory, &track.id, &raw);
+        let observed = raw_video(&raw, true);
+        let at = expected
+            .iter()
+            .position(|expected| **expected == observed)
+            .expect("each complete coded and decoded video must match a distinct source rendition");
+        expected.remove(at);
+    }
+    assert_eq!(expected.len(), 0);
+    let longest = fixture
+        .videos
+        .iter()
+        .map(|video| {
+            let packets = &video.packets;
+            packets.last().unwrap()[0] + packets.last().unwrap()[2] - packets[0][0]
+        })
+        .max()
+        .unwrap();
+    assert_dash_span(
+        &directory.join("manifest.mpd"),
+        longest.max(Ratio::new(
+            i64::try_from(PRESENTED_SAMPLES).unwrap(),
+            44_100,
+        )),
+    );
+}
+
+fn assert_multi_hls_audio_declaration(
+    output: &Path,
+    report: &drmr_core::conversion::ConversionReport,
+) {
+    use drmr_core::inspection::TrackKind;
+    let audio: Vec<_> = report
+        .output
+        .tracks
+        .iter()
+        .filter(|track| track.kind == TrackKind::Audio)
+        .collect();
+    assert_eq!(audio.len(), 1);
+    let text = std::fs::read_to_string(output.join(&audio[0].id).join("media.m3u8")).unwrap();
+    let durations: Vec<_> = text
+        .lines()
+        .filter_map(|line| line.strip_prefix("#EXTINF:"))
+        .map(|value| decimal(value.trim_end_matches(',')))
+        .collect();
+    assert_ne!(durations.len(), 0);
+    let declared: Ratio<i128> = durations.iter().copied().sum();
+    let expected = Ratio::new(i128::try_from(PRESENTED_SAMPLES).unwrap(), 44_100);
+    assert!(declared >= expected);
+    assert!(
+        declared - expected < Ratio::new(i128::try_from(durations.len()).unwrap(), 1_000_000_000)
+    );
+}
+
+fn prove_multi_output(
+    fixture: &MultiVideoFixture,
+    root: &Path,
+    output: &Path,
+    format: OutputFormat,
+    keys: &drmr_core::conversion::key_file::OperatorKeys,
+    report: &drmr_core::conversion::ConversionReport,
+) {
+    use drmr_core::conversion::{VerificationRequest, VerificationSource};
+    let candidate = result_manifest(output, format);
+    let output_keys = keys.output_verification_keys().unwrap();
+    let hls_keys = keys.output_hls_verification_keys().unwrap();
+    all_checks(
+        &converter()
+            .verify(VerificationRequest {
+                source: VerificationSource {
+                    input: &fixture.source,
+                    input_keys: &keys.input,
+                    hls_keys: &keys.hls_input,
+                },
+                output: VerificationSource {
+                    input: &candidate,
+                    input_keys: &output_keys,
+                    hls_keys: &hls_keys,
+                },
+            })
+            .unwrap(),
+    );
+    let evidence = root.join(format!("{}-evidence", format.as_str()));
+    if format == OutputFormat::Dash {
+        assert_multi_clear_output(fixture, output, report, &evidence);
+    } else {
+        assert_multi_hls_audio_declaration(output, report);
+        let clear = root.join("hls-clear-reconversion");
+        let reconverted = converter()
+            .convert(ConversionRequest {
+                input: &candidate,
+                output: &clear,
+                format: OutputFormat::Dash,
+                target: TargetProtection::Clear,
+                input_keys: &output_keys,
+                hls_input_keys: &hls_keys,
+                output_key: None,
+                hls_key_uri: None,
+                hls_output_key: None,
+            })
+            .unwrap();
+        all_checks(&reconverted.verification);
+        all_checks(&verify_clear_range(&fixture.source, &clear, OutputFormat::Dash).unwrap());
+        assert_multi_clear_output(fixture, &clear, &reconverted, &evidence);
+    }
+}
+
+#[test]
+fn multiple_video_renditions_preserve_partial_aac_in_saved_dash_and_hls_conversions() {
+    use drmr_core::conversion::{
+        VerificationSource,
+        plan::{self, ExecutionPlanRequest},
+    };
+    let root = drmr_core::native::private_tempdir().unwrap();
+    let fixture = multi_video_fixture(root.path());
+    let source_before = common::snapshot_tree(fixture.source.parent().unwrap());
+    for (format, target) in [
+        (OutputFormat::Dash, TargetProtection::Clear),
+        (OutputFormat::Hls, TargetProtection::Cbcs),
+    ] {
+        let keys = multi_video_keys(root.path(), target);
+        let analysis = converter()
+            .analyze_source(VerificationSource {
+                input: &fixture.source,
+                input_keys: &keys.input,
+                hls_keys: &keys.hls_input,
+            })
+            .unwrap();
+        assert!(analysis.input_admitted);
+        assert_eq!(analysis.input.tracks.len(), 3);
+        assert_eq!(analysis.actual_format, OutputFormat::HlsTs);
+        let output = root.path().join(format.as_str());
+        let planned = converter()
+            .create_execution_plan(ExecutionPlanRequest {
+                input: VerificationSource {
+                    input: &fixture.source,
+                    input_keys: &keys.input,
+                    hls_keys: &keys.hls_input,
+                },
+                output: &output,
+                format: Some(format),
+                target,
+            })
+            .unwrap();
+        assert_eq!(planned.source, analysis.source);
+        let file = root.path().join(format!("{}.plan.json", format.as_str()));
+        plan::write_new(&file, &planned).unwrap();
+        let plan_before = std::fs::read(&file).unwrap();
+        let loaded = plan::read(&file).unwrap();
+        println!(
+            "partial-audio-multiple-video-check: format={} target={}",
+            format.as_str(),
+            target.as_str()
+        );
+        let converted = converter()
+            .execute_plan(&loaded, &keys)
+            .unwrap_or_else(|error| {
+                panic!(
+                    "three-track conversion after successful admission: {}",
+                    error.0,
+                )
+            });
+        all_checks(&converted.verification);
+        let fresh = converter().verify_plan(&loaded, &keys).unwrap();
+        assert!(fresh.source_unchanged && fresh.output_matches_plan);
+        assert_eq!(fresh.plan_id, planned.plan_id);
+        all_checks(&fresh.verification);
+        prove_multi_output(&fixture, root.path(), &output, format, &keys, &converted);
+        assert_eq!(std::fs::read(&file).unwrap(), plan_before);
+        assert_eq!(
+            common::snapshot_tree(fixture.source.parent().unwrap()),
+            source_before
+        );
+    }
+}
