@@ -824,6 +824,10 @@ class ConversionExamples(unittest.TestCase):
     def test_each_four_command_group_stops_on_failure_without_shell_boilerplate(self):
         code = next(CHECK.MatrixMarkup(recipe_fixture()).root.descendants("code")).text()
         for changed in (code.replace(" \\\n", "\n", 1), code.replace(" \\\n", " \\ \n", 1),
+                        code.replace(" \\\n", " \\\u2028", 1),
+                        code.replace(" \\\n", " \\\n\n", 1), code.replace(" \\\n", " \\\n \n", 1),
+                        code.replace("--format mp4 \\\n", "--format mp4 \\\n\n", 1),
+                        code.replace("--format mp4 \\\n", "--format mp4 \\\n \n", 1),
                         code.replace(" &&\n", "\n", 1), code.replace(" &&\n", " ;\n", 1),
                         code.replace(" &&\n", " ||\n", 1), code + " &&", "set -eu\n" + code,
                         "umask 077\n" + code, "mkdir work\n" + code, "(\n" + code + "\n)"):

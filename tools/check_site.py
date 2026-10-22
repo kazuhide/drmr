@@ -385,13 +385,15 @@ def validate_matrix(text, language):
 def validate_recipe_commands(code, row, output_format, target):
     token = "site-guide-recipe-command"
     profiles = dict(MATRIX_ROWS).get(row)
-    lines = [line.lstrip() for line in code.splitlines() if line.strip()]
-    require(profiles and len(lines) == len(profiles) * 7, token)
+    # Blank lines separate complete groups; they must not hide broken continuations.
+    groups = re.split(r"\n[ \t]*\n", code.replace("\r\n", "\n").strip("\n"))
+    require(profiles and len(groups) == len(profiles), token)
     extension = "mp4" if row == "mp4" else "mpd" if row == "dash" else "m3u8"
     output = "result.mp4" if output_format == "mp4" else "result"
     for index, profile in enumerate(profiles):
-        require(lines[index * 7] == f"# {profile} input", token)
-        physical = lines[index * 7 + 1:index * 7 + 7]
+        lines = groups[index].split("\n")
+        require(len(lines) == 7 and lines[0] == f"# {profile} input", token)
+        physical = [line.lstrip() for line in lines[1:]]
         require(physical[0].endswith(" \\") and physical[2].endswith(" \\"), token)
         steps = [physical[0][:-2] + " " + physical[1], physical[2][:-2] + " " + physical[3],
                  physical[4], physical[5]]

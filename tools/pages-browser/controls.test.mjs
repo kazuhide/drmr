@@ -677,6 +677,25 @@ test('every input group retains literal continuations, stops on failure and veri
   }
 });
 
+test('recipe continuations cannot cross empty or whitespace-only physical lines', () => {
+  for (const expected of matrixRecipes) {
+    const good = recipeSample(expected);
+    requireRecipe(good, expected);
+    const groups = good.code.trimEnd().split('\n\n');
+    for (let index = 0; index < groups.length; index++) {
+      for (const continuation of [1, 3]) {
+        for (const blank of ['', ' \t ']) {
+          const lines = groups[index].split('\n');
+          lines.splice(continuation + 1, 0, blank);
+          const code = groups.map((group, current) => current === index ? lines.join('\n') : group).join('\n\n') + '\n';
+          assert.throws(() => requireRecipe({ ...good, code, rendered: code }, expected),
+            `${expected.id}: group ${index}, continuation ${continuation}, blank ${JSON.stringify(blank)}`);
+        }
+      }
+    }
+  }
+});
+
 function recipePositionSample() {
   return { ...recipeSample(), focused: true,
     url: 'http://127.0.0.1:4173/drmr/guide/#recipe-hls-ts-video-dash-cbcs', pageLanguage: 'en',

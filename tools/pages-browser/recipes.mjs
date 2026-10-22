@@ -32,13 +32,14 @@ export function requireRecipe(value, expected) {
   const extension = expected.row === 'mp4' ? 'mp4' : expected.row === 'dash' ? 'mpd' : 'm3u8';
   const profiles = inputProfiles[expected.row];
   assert.ok(profiles, 'Recipe input must have an independently supported protection profile');
-  // Preserve trailing spaces: a continuation backslash must immediately precede the newline.
-  const lines = value.code.split(/\r?\n/).filter(line => line.trim());
-  assert.equal(lines.length, profiles.length * 7,
-    'Every supported input protection needs one comment and four commands with two wrapped lines');
+  // Preserve interior blank lines and trailing spaces so shell continuations stay adjacent.
+  const groups = value.code.replace(/\r\n/g, '\n').replace(/^\n+|\n+$/g, '').split(/\n[ \t]*\n/);
+  assert.equal(groups.length, profiles.length, 'Every supported input protection needs one complete command group');
   for (const [index, profile] of profiles.entries()) {
-    assert.equal(lines[index * 7], `# ${profile} input`, 'Input protection groups must be complete and ordered');
-    const physical = lines.slice(index * 7 + 1, index * 7 + 7);
+    const lines = groups[index].split('\n');
+    assert.equal(lines.length, 7, 'Each group needs one comment and six adjacent physical command lines');
+    assert.equal(lines[0], `# ${profile} input`, 'Input protection groups must be complete and ordered');
+    const physical = lines.slice(1);
     for (const start of [0, 2]) assert.match(physical[start], / \\$/,
       'Analyze and plan must use literal shell continuations for their second line');
     assert.match(physical[1], /^  --download-dir /);
