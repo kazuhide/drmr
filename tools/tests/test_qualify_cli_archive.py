@@ -1,5 +1,6 @@
 """Qualification controls are tested independently of real packaged-media proof."""
 
+import base64
 import copy
 import importlib.util
 import io
@@ -10,6 +11,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 import zipfile
@@ -256,6 +258,40 @@ class OwnedFilesTests(unittest.TestCase):
             workspace.close()
         self.assertEqual(marker.read_bytes(), b"keep")
 
+    def test_private_workspace_and_file_permissions_are_applied_on_the_native_host(self):
+        # On Windows these are genuine ordinary-user ACL operations, including
+        # the helper's owner, protected-DACL, and exact-access-rule readback.
+        workspace = module.Workspace(self.root)
+        try:
+            private = workspace.path / "private.json"
+            module.private_write(private, b'{"private":"test-value"}')
+            self.assertEqual(private.read_bytes(), b'{"private":"test-value"}')
+            if os.name != "nt":
+                self.assertEqual(workspace.path.stat().st_mode & 0o777, 0o700)
+                self.assertEqual(private.stat().st_mode & 0o777, 0o600)
+        finally:
+            workspace.close()
+        self.assertFalse(workspace.path.exists())
+
+    def test_acl_failure_removes_only_the_newly_owned_empty_workspace(self):
+        with patch.object(module, "secure_windows", side_effect=module.Refusal("private-acl-unavailable")):
+            with self.assertRaisesRegex(module.Refusal, "^private-acl-unavailable$"):
+                module.Workspace(self.root)
+        self.assertEqual(list(self.root.iterdir()), [])
+
+    def test_acl_failure_prevents_any_private_payload_write(self):
+        private = self.root / "private.json"
+
+        def unavailable(path, directory):
+            self.assertEqual((path, directory), (private, False))
+            self.assertEqual(path.read_bytes(), b"")
+            raise module.Refusal("private-acl-unavailable")
+
+        with patch.object(module, "secure_windows", side_effect=unavailable):
+            with self.assertRaisesRegex(module.Refusal, "^private-acl-unavailable$"):
+                module.private_write(private, b"private-marker")
+        self.assertEqual(private.read_bytes(), b"")
+
     def test_graph_identity_detects_last_segment_changes(self):
         graph = self.root / "source"
         graph.mkdir()
@@ -271,8 +307,13 @@ class OwnedFilesTests(unittest.TestCase):
         module.planned_intent(intent, output)
         if os.name == "nt":
             module.planned_intent({**intent, "output": "\\\\?\\" + str(output.resolve())}, output)
-        with self.assertRaisesRegex(module.Refusal, "^plan-proof-invalid$"):
-            module.planned_intent({**intent, "output": str(self.root / "other")}, output)
+        nested = self.root / "nested"
+        nested.mkdir()
+        module.planned_intent({**intent, "output": str(nested / ".." / "converted")}, output)
+        for other in (self.root / "other", nested / "converted", self.root / "missing" / "converted",
+                      Path("converted")):
+            with self.subTest(other=other), self.assertRaisesRegex(module.Refusal, "^plan-proof-invalid$"):
+                module.planned_intent({**intent, "output": str(other)}, output)
 
     def test_graph_symlinks_and_resource_limits_are_refused(self):
         graph = self.root / "source"
@@ -333,6 +374,56 @@ class ProcessTests(unittest.TestCase):
         result = json.loads(report.read_text())
         self.assertIs(result["success"], False)
         self.assertEqual(result["failure_code"], "owned-cleanup-unconfirmed")
+
+    def test_failed_report_acl_cannot_publish_a_successful_receipt(self):
+        report = self.root / "report.json"
+        stdout = io.StringIO()
+        with patch.object(module, "qualify", return_value={"success": True, "private": "private-marker"}), \
+                patch.object(module, "secure_windows", side_effect=module.Refusal("private-acl-unavailable")), \
+                patch.object(sys, "stdout", stdout):
+            self.assertEqual(module.main(["--archive", "unused", "--target", "x86_64-unknown-linux-gnu",
+                                          "--expected-version", "1.0.0", "--report", str(report)]), 1)
+        self.assertEqual(report.read_bytes(), b"")
+        self.assertEqual(json.loads(stdout.getvalue()),
+                         {"schema_version": 1, "success": False, "failure_code": "report-unavailable"})
+        self.assertNotIn("private-marker", stdout.getvalue())
+
+
+class WindowsAclTransportTests(unittest.TestCase):
+    def test_private_paths_cross_the_powershell_boundary_only_as_environment_values(self):
+        private = Path("private-marker & 'quote' $value; [file]")
+        # Replace this module's OS view rather than mutating os.name globally;
+        # pathlib must keep using the actual host's path implementation.
+        windows = SimpleNamespace(name="nt", environ={"BASE_ENVIRONMENT": "preserved"})
+        for directory in (False, True):
+            with self.subTest(directory=directory), patch.object(module, "os", windows), \
+                    patch.object(module.subprocess, "run", return_value=SimpleNamespace(returncode=0)) as run:
+                module.secure_windows(private, directory)
+            arguments = run.call_args.args[0]
+            self.assertEqual(arguments[:5], ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive",
+                                             "-EncodedCommand"])
+            self.assertEqual(len(arguments), 6)
+            script = base64.b64decode(arguments[-1], validate=True).decode("utf-16le")
+            self.assertNotIn("private-marker", script)
+            self.assertEqual(run.call_args.kwargs["env"],
+                             {"BASE_ENVIRONMENT": "preserved", "DRMR_QUALIFY_PATH": str(private),
+                              "DRMR_QUALIFY_DIRECTORY": "1" if directory else "0"})
+            self.assertIs(run.call_args.kwargs["stdin"], subprocess.DEVNULL)
+            self.assertIs(run.call_args.kwargs["stdout"], subprocess.DEVNULL)
+            self.assertIs(run.call_args.kwargs["stderr"], subprocess.DEVNULL)
+            self.assertEqual(run.call_args.kwargs["timeout"], 20)
+
+    def test_acl_transport_failures_have_only_fixed_diagnostics(self):
+        private = Path("private-marker")
+        windows = SimpleNamespace(name="nt", environ={})
+        failures = (SimpleNamespace(returncode=1), OSError("private-marker"),
+                    subprocess.TimeoutExpired("private-marker", 20, output=b"private-marker"))
+        for failure in failures:
+            response = {"side_effect": failure} if isinstance(failure, Exception) else {"return_value": failure}
+            with self.subTest(failure=type(failure).__name__), patch.object(module, "os", windows), \
+                    patch.object(module.subprocess, "run", **response):
+                with self.assertRaisesRegex(module.Refusal, "^private-acl-unavailable$"):
+                    module.secure_windows(private, True)
 
 
 if __name__ == "__main__":

@@ -22,6 +22,10 @@ foreach ($build in $builds) {
 }
 if ($executables.Count -lt 4) { throw 'Native test binaries are missing' }
 $executables = @($executables | Sort-Object -Unique)
+$cargo = (& rustup which cargo).Trim()
+if ($LASTEXITCODE -ne 0) { throw 'The selected native Cargo is unavailable' }
+$rustc = (& rustup which rustc).Trim()
+if ($LASTEXITCODE -ne 0) { throw 'The selected native Rust compiler is unavailable' }
 
 $username = 'drmr_native_test'
 $password = [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(36)) + '!aA1'
@@ -41,8 +45,15 @@ if ($LASTEXITCODE -ne 0) { throw 'Could not grant the test workspace' }
 if ($LASTEXITCODE -ne 0) { throw 'Could not grant public test artifact access' }
 & icacls $env:DRMR_WINDOWS_MEDIA_TOOLS /grant "${username}:(OI)(CI)RX" /T /Q
 if ($LASTEXITCODE -ne 0) { throw 'Could not grant media tool access' }
+$rustToolDirectories = @((Split-Path $cargo), (Split-Path $rustc)) | Sort-Object -Unique
+foreach ($path in $rustToolDirectories) {
+    & icacls $path /grant "${username}:(OI)(CI)RX" /T /Q
+    if ($LASTEXITCODE -ne 0) { throw 'Could not grant read-only Rust tool access' }
+}
 $env:DRMR_WINDOWS_MEDIA_TOOLS | Set-Content (Join-Path $directory 'media-tools.txt')
 (Get-Command python).Source | Set-Content (Join-Path $directory 'python.txt')
+$cargo | Set-Content (Join-Path $directory 'cargo.txt')
+$rustc | Set-Content (Join-Path $directory 'rustc.txt')
 $executables | ConvertTo-Json | Set-Content (Join-Path $directory 'executables.json')
 $script = Join-Path $directory 'run.ps1'
 @'
@@ -56,11 +67,16 @@ $env:TEMP = Join-Path $PSScriptRoot 'temp'
 $env:TMP = $env:TEMP
 $tools = (Get-Content (Join-Path $PSScriptRoot 'media-tools.txt')).Trim()
 $python = (Get-Content (Join-Path $PSScriptRoot 'python.txt')).Trim()
-$env:PATH = "$(Split-Path $python);$tools;$env:PATH"
+$cargo = (Get-Content (Join-Path $PSScriptRoot 'cargo.txt')).Trim()
+$rustc = (Get-Content (Join-Path $PSScriptRoot 'rustc.txt')).Trim()
+# Use the selected binaries directly: the ordinary user has no rustup installation.
+$env:CARGO_HOME = Join-Path $PSScriptRoot 'cargo-home'
+$env:RUSTC = $rustc
+$env:PATH = "$(Split-Path $python);$(Split-Path $cargo);$(Split-Path $rustc);$tools;$env:PATH"
 $env:DRMR_MEDIA_REPORT = Join-Path $PSScriptRoot 'bbb-media-report.json'
 $env:DRMR_CONVERSION_REPORT = Join-Path $PSScriptRoot 'conversion-report.json'
-foreach ($tool in @('ffmpeg', 'ffprobe', 'mp4dump', 'mp4encrypt', 'packager', 'python')) {
-    if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) { throw "Required media tool unavailable: $tool" }
+foreach ($tool in @('ffmpeg', 'ffprobe', 'mp4dump', 'mp4encrypt', 'packager', 'python', 'cargo', 'rustc')) {
+    if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) { throw "Required native test tool unavailable: $tool" }
 }
 & ffmpeg -hide_banner -version
 if ($LASTEXITCODE -ne 0) { throw 'FFmpeg could not run as a regular user' }
@@ -68,7 +84,17 @@ if ($LASTEXITCODE -ne 0) { throw 'FFmpeg could not run as a regular user' }
 if ($LASTEXITCODE -ne 0) { throw 'Packager could not run as a regular user' }
 & python --version
 if ($LASTEXITCODE -ne 0) { throw 'Python could not run as a regular user' }
+& $cargo --version
+if ($LASTEXITCODE -ne 0) { throw 'The selected Cargo could not run as a regular user' }
+& $rustc --version
+if ($LASTEXITCODE -ne 0) { throw 'The selected Rust compiler could not run as a regular user' }
 New-Item -ItemType Directory -Path $env:TEMP | Out-Null
+New-Item -ItemType Directory -Path $env:CARGO_HOME | Out-Null
+# Check release identity and real private-file ACLs before long native media runs.
+foreach ($pattern in @('test_check_release.py', 'test_prepare_release.py', 'test_qualify_cli_archive.py')) {
+    & python -W error::ResourceWarning -m unittest discover -s tools/tests -p $pattern -v
+    if ($LASTEXITCODE -ne 0) { throw 'Ordinary-user release helper checks failed' }
+}
 $executables = Get-Content (Join-Path $PSScriptRoot 'executables.json') | ConvertFrom-Json
 $failed = $false
 foreach ($executable in $executables) {

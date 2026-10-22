@@ -128,7 +128,24 @@ $acl.SetAccessRuleProtection($true, $false)
 $inheritance = if ($directory) { [System.Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit' } else { [System.Security.AccessControl.InheritanceFlags]::None }
 $rule = [System.Security.AccessControl.FileSystemAccessRule]::new($identity, [System.Security.AccessControl.FileSystemRights]::FullControl, $inheritance, [System.Security.AccessControl.PropagationFlags]::None, [System.Security.AccessControl.AccessControlType]::Allow)
 $acl.AddAccessRule($rule)
-Set-Acl -LiteralPath $env:DRMR_QUALIFY_PATH -AclObject $acl
+# Persist only the owner and DACL we modified. Set-Acl copies unrelated audit
+# and group sections too, which can require privileges an ordinary user lacks.
+$sections = [System.Security.AccessControl.AccessControlSections]'Owner, Access'
+$checked = if ($directory) {
+    [System.IO.Directory]::SetAccessControl($env:DRMR_QUALIFY_PATH, $acl)
+    [System.IO.Directory]::GetAccessControl($env:DRMR_QUALIFY_PATH, $sections)
+} else {
+    [System.IO.File]::SetAccessControl($env:DRMR_QUALIFY_PATH, $acl)
+    [System.IO.File]::GetAccessControl($env:DRMR_QUALIFY_PATH, $sections)
+}
+$rules = @($checked.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
+if (-not $checked.AreAccessRulesProtected -or -not $checked.GetOwner([System.Security.Principal.SecurityIdentifier]).Equals($identity) -or $rules.Count -ne 1) {
+    throw 'Private ACL verification failed'
+}
+$actual = $rules[0]
+if (-not $actual.IdentityReference.Equals($identity) -or $actual.IsInherited -or $actual.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow -or $actual.FileSystemRights -ne [System.Security.AccessControl.FileSystemRights]::FullControl -or $actual.InheritanceFlags -ne $inheritance -or $actual.PropagationFlags -ne [System.Security.AccessControl.PropagationFlags]::None) {
+    throw 'Private ACL verification failed'
+}
 """
     environment = dict(os.environ, DRMR_QUALIFY_PATH=str(path), DRMR_QUALIFY_DIRECTORY="1" if directory else "0")
     encoded = base64.b64encode(script.encode("utf-16le")).decode("ascii")
@@ -453,9 +470,15 @@ def planned_intent(intent, output):
     require(isinstance(intent, dict) and set(intent) == {"format", "target", "output"}
             and intent.get("format") == "dash" and intent.get("target") == "cbcs"
             and isinstance(intent.get("output"), str), "plan-proof-invalid")
-    # Rust canonicalization retains the Windows extended-path prefix; Python
-    # usually removes it. Compare the actual local location, not its spelling.
-    require(Path(intent["output"]).resolve() == output.resolve(), "plan-proof-invalid")
+    # The destination does not exist yet. Rust and Python may retain different
+    # Windows extended-path prefixes, so compare its existing parent's identity
+    # and exact leaf name instead of the full path's spelling.
+    try:
+        planned_output = Path(intent["output"])
+        require(planned_output.is_absolute() and planned_output.name == output.name
+                and planned_output.parent.samefile(output.parent), "plan-proof-invalid")
+    except (OSError, ValueError):
+        raise Refusal("plan-proof-invalid") from None
 
 
 def media(cli, runner, source):
