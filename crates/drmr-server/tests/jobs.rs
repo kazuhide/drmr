@@ -110,7 +110,7 @@ fn windows_environment_names_cannot_bypass_key_isolation() {
                 ("dRm_Iv".into(), "ambient".into()),
                 ("AMBIENT_MARKER".into(), "retained".into()),
             ]
-        })
+        });
     });
     assert_eq!(
         h.app().manager.fresh_env(),
