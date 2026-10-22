@@ -45,6 +45,13 @@ MAX_OUTPUT = 8 * 1024 * 1024
 MAX_GRAPH_BYTES = 64 * 1024 * 1024
 SEMVER = r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?"
 CHECKS = ("packet_payloads_equal", "packet_timing_equal", "decoded_content_equal")
+AAC44100_FRAMES = 432
+MEDIA_LIMITS = (
+    "One native packaged CLI, one ten-second video-only Clear DASH to CBCS DASH saved-plan route "
+    "and one generated ten-second 44.1 kHz stereo AAC Clear HLS/TS to CBCS DASH saved-plan route. "
+    "Full original video comparison, complete generated audio frame/clock evidence and CLI media comparisons, "
+    "and native manifest linting; no independent external audio PCM comparison, DRM license/device playback, "
+    "GUI, installer, signature, or build-origin certification.")
 ARCHIVE_ERRORS = (VERIFY.Failure, OSError, ValueError, TypeError, KeyError, EOFError, NotImplementedError,
                   tarfile.TarError, zipfile.BadZipFile, zlib.error)
 
@@ -414,6 +421,34 @@ def video_evidence(report):
     return report
 
 
+def audio_evidence(report):
+    require(isinstance(report, dict), "aac44100-proof-invalid")
+    streams, packets = report.get("streams"), report.get("packets")
+    require(isinstance(streams, list) and len(streams) == 1 and isinstance(streams[0], dict)
+            and isinstance(packets, list) and len(packets) == AAC44100_FRAMES,
+            "aac44100-proof-invalid")
+    stream = streams[0]
+    require(stream.get("codec_name") == "aac" and stream.get("profile") == "LC"
+            and stream.get("sample_rate") == "44100" and type(stream.get("channels")) is int
+            and stream["channels"] == 2 and stream.get("time_base") == "1/90000"
+            and stream.get("nb_read_frames") == str(AAC44100_FRAMES), "aac44100-proof-invalid")
+    clock = hashlib.sha256()
+    previous = -1
+    for packet in packets:
+        require(isinstance(packet, dict)
+                and all(type(packet.get(name)) is int for name in ("pts", "dts", "duration"))
+                and previous < packet["pts"] < 1 << 33 and packet["dts"] == packet["pts"]
+                and packet["duration"] == 2089, "aac44100-proof-invalid")
+        clock.update(struct.pack(">qqq", packet["pts"], packet["dts"], packet["duration"]))
+        previous = packet["pts"]
+    return {"codec_name": "aac", "profile": "LC", "sample_rate": 44100, "channels": 2,
+            "time_base": "1/90000", "frame_count": AAC44100_FRAMES, "packet_count": len(packets),
+            "expected_decoded_samples_per_channel": len(packets) * 1024,
+            "first_pts": packets[0]["pts"], "first_dts": packets[0]["dts"],
+            "last_pts": packets[-1]["pts"], "last_dts": packets[-1]["dts"],
+            "last_duration": packets[-1]["duration"], "packet_clock_sha256": clock.hexdigest()}
+
+
 def verification(report):
     require(isinstance(report, dict) and type(report.get("schema_version")) is int and report.get("schema_version") == 1
             and report.get("passed") is True and report.get("media_verified") is True
@@ -463,6 +498,15 @@ def conversion_proof(report, plan_id):
             and report["input"].get("protection") == "clear"
             and isinstance(report.get("output"), dict) and report["output"].get("format") == "dash"
             and report["output"].get("protection") == "cbcs", "conversion-proof-invalid")
+    return verification(report.get("verification"))
+
+
+def audio_conversion_proof(report, plan_id):
+    require(isinstance(report, dict) and report.get("plan_id") == plan_id
+            and isinstance(report.get("input"), dict) and report["input"].get("format") == "hls"
+            and report["input"].get("protection") == "clear"
+            and isinstance(report.get("output"), dict) and report["output"].get("format") == "dash"
+            and report["output"].get("protection") == "cbcs", "aac44100-conversion-proof-invalid")
     return verification(report.get("verification"))
 
 
@@ -559,6 +603,81 @@ def media(cli, runner, source):
             "independent_verification": verified_proof, "output_graph": graph_identity(output)}
 
 
+def audio_media(cli, runner, source):
+    root = runner.workspace
+    clip = source.read(CLIP)
+    require(len(clip) == CLIP_BYTES and hashlib.sha256(clip).hexdigest() == CLIP_SHA256
+            and read_regular(root / "clip.mp4", CLIP_BYTES) == clip, "fixture-identity-mismatch")
+    presentation = root / "aac44100-input"
+    presentation.mkdir(mode=0o700)
+    runner.run(["ffmpeg", "-v", "error", "-nostdin", "-threads", "1", "-i", "clip.mp4",
+                "-map", "0:a:0", "-vn", "-c:a", "aac", "-threads", "1", "-ar", "44100", "-ac", "2",
+                "-hls_time", "2", "-hls_playlist_type", "vod", "-hls_segment_filename",
+                "aac44100-input/segment-%03d.ts", "aac44100-input/media.m3u8"], "fixture-aac44100")
+    source_path = presentation / "media.m3u8"
+    text = read_regular(source_path, 65536).decode("utf-8")
+    resources = [line for line in text.splitlines() if line and not line.startswith("#")]
+    require(2 <= len(resources) <= 8
+            and all(re.fullmatch(r"segment-[0-9]{3}\.ts", name) is not None for name in resources),
+            "aac44100-source-segments-invalid")
+    before = graph_identity(presentation)
+    audio = audio_evidence(runner.json([
+        "ffprobe", "-v", "error", "-protocol_whitelist", "file,crypto", "-select_streams", "a:0",
+        "-count_frames", "-show_packets", "-show_streams", "-show_entries",
+        "stream=codec_name,profile,sample_rate,channels,time_base,nb_read_frames:packet=pts,dts,duration",
+        "-of", "json", source_path], "fixture-aac44100-probe"))
+    analyzed = runner.json([cli, "analyze", source_path, "--max-workers", "1", "--json"], "aac44100-analyze")
+    require(isinstance(analyzed, dict) and type(analyzed.get("schema_version")) is int
+            and analyzed.get("schema_version") == 1 and analyzed.get("kind") == "input-analysis"
+            and analyzed.get("input_admitted") is True and analyzed.get("actual_format") == "hls-ts"
+            and analyzed.get("track_protection") == ["clear"], "aac44100-analysis-proof-invalid")
+    input_checks = analyzed.get("input_checks")
+    require(isinstance(input_checks, dict) and input_checks.get("stream_metadata") == "pass"
+            and all(input_checks.get(name) is True for name in CHECKS), "aac44100-analysis-proof-invalid")
+    source_inventory = analyzed.get("source")
+    require(isinstance(source_inventory, dict)
+            and re.fullmatch(r"[0-9a-f]{64}", source_inventory.get("graph_digest", "")) is not None,
+            "aac44100-analysis-proof-invalid")
+    plan_path = root / "aac44100.plan.json"
+    output = root / "aac44100-converted"
+    planned = runner.json([cli, "plan", source_path, "--to", "cbcs", "--format", "dash", "--output", output,
+                           "--save", plan_path, "--max-workers", "1", "--json"], "aac44100-plan")
+    plan_bytes = read_regular(plan_path, 1024 * 1024)
+    require(isinstance(planned, dict) and planned == load_json(plan_bytes)
+            and type(planned.get("schema_version")) is int and planned.get("schema_version") == 1
+            and planned.get("kind") == "execution-plan"
+            and re.fullmatch(r"[0-9a-f]{64}", planned.get("plan_id", "")) is not None
+            and planned.get("source") == source_inventory and planned.get("source_format") == "hls-ts",
+            "aac44100-plan-proof-invalid")
+    planned_intent(planned.get("intent"), output)
+    key = secrets.token_hex(16)
+    runner.secrets += (key.encode("ascii"),)
+    key_path = root / "aac44100-keys.json"
+    private_write(key_path, json.dumps({"schema_version": 1, "output": {
+        "kid": secrets.token_hex(16), "key": key}}).encode("utf-8"))
+    converted = runner.json([cli, "convert", "--plan", plan_path, "--keys-file", key_path,
+                             "--max-workers", "1", "--json"], "aac44100-convert")
+    converted_proof = audio_conversion_proof(converted, planned["plan_id"])
+    verified = runner.json([cli, "verify", "--plan", plan_path, "--keys-file", key_path,
+                            "--max-workers", "1", "--json"], "aac44100-independent-verify")
+    require(isinstance(verified, dict) and verified.get("plan_id") == planned["plan_id"]
+            and verified.get("source_unchanged") is True and verified.get("output_matches_plan") is True,
+            "aac44100-saved-plan-proof-invalid")
+    verified_proof = verification(verified.get("verification"))
+    require(before == graph_identity(presentation) and read_regular(plan_path, 1024 * 1024) == plan_bytes,
+            "aac44100-saved-original-or-plan-changed")
+    require((output / "manifest.mpd").is_file(), "output-manifest-missing")
+    return {"fixture_sha256": CLIP_SHA256, "fixture_duration_seconds": 10,
+            "scope": "all generated 44.1 kHz AAC frames; fixture audio resampled from the attributed clip",
+            "input_format": "hls-ts", "input_protection": "clear", "output_format": "dash", "output_protection": "cbcs",
+            "segment_target_seconds": 2, "input_segments": len(resources), "source_audio": audio,
+            "source_graph": before, "cli_source_graph_sha256": source_inventory["graph_digest"],
+            "plan_schema_version": 1, "plan_id": planned["plan_id"],
+            "plan_sha256": hashlib.sha256(plan_bytes).hexdigest(), "saved_original_and_plan_unchanged": True,
+            "conversion": converted_proof, "independent_verification": verified_proof,
+            "output_graph": graph_identity(output)}
+
+
 def qualify(archive_path, target, version, source_path):
     require_native(target)
     source = VERIFY.Source(source_path)
@@ -580,6 +699,7 @@ def qualify(archive_path, target, version, source_path):
                 "binary-version-mismatch")
         tools = doctor(runner.json([cli, "doctor", "--probe", "--route", "all", "--json"], "doctor", 120))
         proof = media(cli, runner, source)
+        audio = audio_media(cli, runner, source)
         require(VERIFY.file_digest(snapshot) == archive_proof["archive_sha256"]
                 and VERIFY.file_digest(cli) == archive_proof["binaries"]["drmr"]["sha256"], "qualified-artifact-changed")
         return {"schema_version": 1, "success": True, "kind": "native-cli-archive-media",
@@ -588,9 +708,10 @@ def qualify(archive_path, target, version, source_path):
                 "archive_sha256": archive_proof["archive_sha256"],
                 "binary_sha256": archive_proof["binaries"]["drmr"]["sha256"],
                 "archive_files": archive_proof["files"], "dependency_packages": archive_proof["packages"],
-                "native_ordinary_user": True, "doctor": tools, "media": proof, "stages": runner.stages,
+                "native_ordinary_user": True, "doctor": tools, "media": proof, "aac_44100": audio,
+                "stages": runner.stages,
                 "owned_workspace_cleanup": "confirmed",
-                "limits": "One native packaged CLI, one ten-second video-only Clear DASH to CBCS DASH saved-plan route. Full original video comparison and native manifest linting; no audio-route, DRM license/device playback, GUI, installer, signature, or build-origin certification."}
+                "limits": MEDIA_LIMITS}
     finally:
         workspace.close()
 

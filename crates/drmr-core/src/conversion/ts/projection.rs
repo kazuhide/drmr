@@ -1,6 +1,6 @@
 //! Bounded, same-slot transport projection; timestamps and PCR bytes are never regenerated.
 use super::super::ConversionError;
-use super::{admission, canonical};
+use super::{admission, canonical, clock};
 use crate::{concurrency::Stop, inspection::TrackKind};
 use std::{
     collections::BTreeMap,
@@ -23,6 +23,7 @@ pub(in crate::conversion) struct Projector {
     encrypted: admission::Admission,
     pub clear: admission::Admission,
     pub native: BTreeMap<u16, canonical::Native>,
+    audio_clocks: BTreeMap<u16, clock::Audio>,
 }
 impl Projector {
     pub fn new() -> Self {
@@ -30,6 +31,7 @@ impl Projector {
             encrypted: admission::Admission::encrypted_samples(),
             clear: admission::Admission::default(),
             native: BTreeMap::new(),
+            audio_clocks: BTreeMap::new(),
         }
     }
     pub fn encrypted_segment(
@@ -185,8 +187,16 @@ impl Projector {
         match kind {
             TrackKind::Video => anchor.record(&plaintext, pts, dts)?,
             TrackKind::Audio => {
+                let canonical::Config::Audio { sample_rate, .. } = anchor.config else {
+                    return Err(BAD);
+                };
+                let audio = self
+                    .audio_clocks
+                    .entry(id)
+                    .or_insert(clock::Audio::new(sample_rate)?);
+                audio.begin(pts, dts)?;
                 let mut position = 0;
-                let mut tick = 0_i64;
+                let mut frame_clock = (pts, dts);
                 while position < plaintext.len() {
                     let head = plaintext.get(position..position + 7).ok_or(BAD)?;
                     let length = (usize::from(head[3] & 3) << 11)
@@ -196,12 +206,8 @@ impl Projector {
                         return Err(BAD);
                     }
                     let frame = plaintext.get(position..position + length).ok_or(BAD)?;
-                    anchor.record(
-                        frame,
-                        pts.checked_add(tick).ok_or(BAD)?,
-                        dts.checked_add(tick).ok_or(BAD)?,
-                    )?;
-                    tick = tick.checked_add(1920).ok_or(BAD)?;
+                    anchor.record(frame, frame_clock.0, frame_clock.1)?;
+                    frame_clock = audio.frame(frame_clock.0, frame_clock.1)?;
                     position += length;
                 }
             }

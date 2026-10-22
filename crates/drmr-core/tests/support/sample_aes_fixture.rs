@@ -198,7 +198,7 @@ fn crc(bytes: &[u8]) -> u32 {
     }
     value
 }
-fn program_map(packet: &mut [u8; 188]) {
+fn program_map(packet: &mut [u8; 188], audio_config: [u8; 2]) {
     let at = payload(packet);
     if packet[1] & 0x40 == 0 || at == 188 {
         return;
@@ -224,7 +224,22 @@ fn program_map(packet: &mut [u8; 188]) {
             0x0f => {
                 descriptors.extend_from_slice(&[15, 4, b'a', b'a', b'c', b'd']);
                 descriptors.extend_from_slice(&[
-                    5, 14, b'a', b'p', b'a', b'd', b'z', b'a', b'a', b'c', 0, 0, 1, 2, 0x11, 0x90,
+                    5,
+                    14,
+                    b'a',
+                    b'p',
+                    b'a',
+                    b'd',
+                    b'z',
+                    b'a',
+                    b'a',
+                    b'c',
+                    0,
+                    0,
+                    1,
+                    2,
+                    audio_config[0],
+                    audio_config[1],
                 ]);
                 0xcf
             }
@@ -318,11 +333,22 @@ fn video(bytes: &[u8], key: &[u8; 16], iv: &[u8; 16]) -> Vec<u8> {
     }
     out
 }
-fn audio(bytes: &[u8], key: &[u8; 16], iv: &[u8; 16]) -> Vec<u8> {
+fn audio(bytes: &[u8], key: &[u8; 16], iv: &[u8; 16], config: [u8; 2]) -> Vec<u8> {
     let mut out = bytes.to_vec();
     let mut pos = 0;
     while pos < out.len() {
         assert!(out.len() - pos >= 7 && out[pos] == 0xff && out[pos + 1] == 0xf1);
+        let object_type = (out[pos + 2] >> 6) + 1;
+        let frequency = (out[pos + 2] >> 2) & 15;
+        let channels = ((out[pos + 2] & 1) << 2) | (out[pos + 3] >> 6);
+        assert_eq!(
+            [
+                (object_type << 3) | (frequency >> 1),
+                ((frequency & 1) << 7) | (channels << 3),
+            ],
+            config,
+            "the fixture PMT must describe every actual ADTS frame"
+        );
         let length = (usize::from(out[pos + 3] & 3) << 11)
             | (usize::from(out[pos + 4]) << 3)
             | usize::from(out[pos + 5] >> 5);
@@ -367,13 +393,14 @@ fn replace(
     insert: &mut BTreeMap<usize, Vec<[u8; 188]>>,
     key: &[u8; 16],
     iv: &[u8; 16],
+    audio_config: [u8; 2],
 ) {
     assert!(pes.bytes.len() <= MAX_BYTES && pes.bytes.starts_with(&[0, 0, 1]));
     let header = 9 + usize::from(pes.bytes[8]);
     let coded = if pes.video {
         video(&pes.bytes[header..], key, iv)
     } else {
-        audio(&pes.bytes[header..], key, iv)
+        audio(&pes.bytes[header..], key, iv, audio_config)
     };
     let mut bytes = pes.bytes[..header].to_vec();
     bytes.extend_from_slice(&coded);
@@ -402,6 +429,17 @@ fn replace(
 
 /// Encrypt an owned, bounded clear TS segment without changing PES clocks or PCR bytes.
 pub fn encrypt_segment(source: &Path, dest: &Path, key: &[u8; 16], iv: &[u8; 16]) {
+    encrypt_segment_with_audio_config(source, dest, key, iv, [0x11, 0x90]);
+}
+
+/// Use an explicit fixture configuration, checked against every original ADTS header.
+pub fn encrypt_segment_with_audio_config(
+    source: &Path,
+    dest: &Path,
+    key: &[u8; 16],
+    iv: &[u8; 16],
+    audio_config: [u8; 2],
+) {
     assert!(std::fs::metadata(source).unwrap().len() <= MAX_BYTES as u64);
     let original = std::fs::read(source).unwrap();
     assert_eq!(original.len() % 188, 0);
@@ -409,7 +447,7 @@ pub fn encrypt_segment(source: &Path, dest: &Path, key: &[u8; 16], iv: &[u8; 16]
     let mut pending = BTreeMap::<u16, Pes>::new();
     let mut insert = BTreeMap::new();
     for index in 0..packets.len() {
-        program_map(&mut packets[index]);
+        program_map(&mut packets[index], audio_config);
         let at = payload(&packets[index]);
         if at == 188 {
             continue;
@@ -419,7 +457,7 @@ pub fn encrypt_segment(source: &Path, dest: &Path, key: &[u8; 16], iv: &[u8; 16]
         let begin = packets[index][1] & 0x40 != 0 && bytes.starts_with(&[0, 0, 1]);
         if begin {
             if let Some(previous) = pending.remove(&id) {
-                replace(&previous, &mut packets, &mut insert, key, iv);
+                replace(&previous, &mut packets, &mut insert, key, iv, audio_config);
             }
             let stream = packets[index][at + 3];
             assert!((0xc0..=0xef).contains(&stream));
@@ -439,7 +477,7 @@ pub fn encrypt_segment(source: &Path, dest: &Path, key: &[u8; 16], iv: &[u8; 16]
         }
     }
     for pes in pending.into_values() {
-        replace(&pes, &mut packets, &mut insert, key, iv);
+        replace(&pes, &mut packets, &mut insert, key, iv, audio_config);
     }
     let mut out = Vec::with_capacity(original.len() * 2);
     let mut counters = BTreeMap::<u16, (u8, bool)>::new();
@@ -555,10 +593,22 @@ mod tests {
         frame.extend_from_slice(&plain);
         frame.push(0x77);
         assert_eq!(frame.len(), 88);
-        let encrypted = audio(&frame, &key, &iv);
-        assert_eq!(&encrypted[..23], &frame[..23]);
-        assert_eq!(&encrypted[23..87], expected);
-        assert_eq!(encrypted[87], 0x77);
+        for (header, config) in [(0x4c, [0x11, 0x90]), (0x50, [0x12, 0x10])] {
+            frame[2] = header;
+            let encrypted = audio(&frame, &key, &iv, config);
+            assert_eq!(&encrypted[..23], &frame[..23]);
+            assert_eq!(&encrypted[23..87], expected);
+            assert_eq!(encrypted[87], 0x77);
+        }
+    }
+    #[test]
+    fn fixture_refuses_pmt_and_adts_sampling_configuration_mismatches() {
+        let key = [0; 16];
+        let iv = [0; 16];
+        for (header, config) in [(0x4c, [0x12, 0x10]), (0x50, [0x11, 0x90])] {
+            let frame = [0xff, 0xf1, header, 0x80, 0x01, 0x1f, 0xfc, 0x12];
+            assert!(std::panic::catch_unwind(|| audio(&frame, &key, &iv, config)).is_err());
+        }
     }
     fn shaka(root: &Path, input: &Path, role: &str, encrypted: bool) {
         drmr_core::native::create_media_dir_all(root).unwrap();

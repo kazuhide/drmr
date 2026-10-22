@@ -170,16 +170,27 @@ impl Converter {
             let name = format!("track-{ordinal:04}");
             let directory = root.join(&name);
             super::super::files::create_dir(&directory)?;
-            let input = descriptor(
+            // Feeding original multi-frame AAC PES into a foreign TS parser can
+            // round 44.1 kHz clocks again. The native MP4 keeps every original
+            // 90 kHz frame timestamp and avoids that extra interpolation.
+            let exact_audio =
+                super::super::ts::requires_native_audio_mp4(source.transport_native.as_deref());
+            let input = descriptor(if exact_audio {
+                &source.media
+            } else {
                 source
                     .transport_demux_view
                     .as_deref()
-                    .unwrap_or(&source.source),
-            )?;
+                    .unwrap_or(&source.source)
+            })?;
             let output = descriptor(&directory)?;
-            let index = source
-                .transport_index
-                .ok_or(ConversionError("ts-original-evidence-required"))?;
+            let index = if exact_audio {
+                source.index
+            } else {
+                source
+                    .transport_index
+                    .ok_or(ConversionError("ts-original-evidence-required"))?
+            };
             argv.push(format!("input={input},stream={index},segment_template={output}/segment-$Number$.ts,playlist_name={name}/media.m3u8"));
         }
         argv.extend([

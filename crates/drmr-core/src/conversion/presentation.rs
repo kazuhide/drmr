@@ -1351,7 +1351,7 @@ fn prepare_transport(
         let root = directory.join(format!("demux-{index}"));
         super::files::create_dir(&root)?;
         let media = root.join("track.mp4");
-        backend.demux_transport(demux_source, kind, &media)?;
+        backend.demux_transport(demux_source, kind, &media, native.as_deref())?;
         let mut track = prepare(&media, 0, kind, keys)?;
         track.source.clone_from(&localized.combined);
         track.transport_index = Some(index);

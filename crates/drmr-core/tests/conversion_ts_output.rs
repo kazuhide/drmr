@@ -1,4 +1,6 @@
 //! MPEG-TS outputs retain original access units, absolute clocks and complete decode evidence.
+#[path = "support/ts_audio_44100.rs"]
+mod audio_44100;
 #[path = "support/ts_audio_hls.rs"]
 mod audio_hls;
 mod common;
@@ -217,6 +219,13 @@ fn shaka_source(root: &Path, kind: &str, encrypted: bool) -> std::path::PathBuf 
 }
 
 fn audio_sources(root: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
+    audio_sources_at_rate(root, None)
+}
+
+fn audio_sources_at_rate(
+    root: &Path,
+    sample_rate: Option<u32>,
+) -> (std::path::PathBuf, std::path::PathBuf) {
     use std::io::Write as _;
     let clear = root.join("clear");
     let sample = root.join("sample");
@@ -224,7 +233,7 @@ fn audio_sources(root: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
     drmr_core::native::create_media_dir_all(&sample).unwrap();
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../drmr/tests/fixtures/bbb/clip.mp4");
     let path = |p: &Path| drmr_core::manifest_support::path::fspath(p).unwrap();
-    let argv = vec![
+    let mut argv = vec![
         "ffmpeg".into(),
         "-v".into(),
         "error".into(),
@@ -235,8 +244,18 @@ fn audio_sources(root: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
         path(&fixture),
         "-map".into(),
         "0:a:0".into(),
-        "-c".into(),
-        "copy".into(),
+    ];
+    if let Some(sample_rate) = sample_rate {
+        argv.extend([
+            "-c:a".into(),
+            "aac".into(),
+            "-ar".into(),
+            sample_rate.to_string(),
+        ]);
+    } else {
+        argv.extend(["-c".into(), "copy".into()]);
+    }
+    argv.extend([
         "-hls_time".into(),
         "2".into(),
         "-hls_playlist_type".into(),
@@ -244,7 +263,7 @@ fn audio_sources(root: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
         "-hls_segment_filename".into(),
         path(&clear.join("segment-%d.ts")),
         path(&clear.join("media.m3u8")),
-    ];
+    ]);
     let runner = ToolRunner::new(Arc::new(Secrets::default()), Arc::new(NoSink));
     let shown = ["ffmpeg".into(), "[fixture arguments redacted]".into()];
     let result = runner
@@ -264,6 +283,11 @@ fn audio_sources(root: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
     let text = std::fs::read_to_string(clear.join("media.m3u8")).unwrap();
     let key: [u8; 16] = hex::decode(INPUT_KEY).unwrap().try_into().unwrap();
     let iv: [u8; 16] = hex::decode(INPUT_IV).unwrap().try_into().unwrap();
+    let audio_config = match sample_rate {
+        None | Some(48_000) => [0x11, 0x90],
+        Some(44_100) => [0x12, 0x10],
+        _ => panic!("unsupported test audio configuration"),
+    };
     let mut resources = Vec::new();
     for name in text
         .lines()
@@ -271,7 +295,13 @@ fn audio_sources(root: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
     {
         assert!(!name.contains(['/', '\\']));
         let destination = sample.join(name);
-        sample_aes_fixture::encrypt_segment(&clear.join(name), &destination, &key, &iv);
+        sample_aes_fixture::encrypt_segment_with_audio_config(
+            &clear.join(name),
+            &destination,
+            &key,
+            &iv,
+            audio_config,
+        );
         resources.push(destination);
     }
     sample_aes_fixture::normalize_continuity(&resources);

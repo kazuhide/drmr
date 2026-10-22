@@ -10,7 +10,7 @@ pub(super) const MEMORY: usize = 64 * 1024 * 1024;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Config {
     Video { sps: Vec<u8>, pps: Vec<u8> },
-    Audio { channels: u8 },
+    Audio { channels: u8, sample_rate: u32 },
 }
 impl Config {
     pub(super) fn video_access_unit(data: &[u8]) -> Result<Self, ConversionError> {
@@ -66,18 +66,41 @@ impl Config {
         })
     }
     pub fn audio(data: &[u8]) -> Result<Self, ConversionError> {
-        if data.len() != 2
-            || data[0] >> 3 != 2
-            || ((data[0] & 7) << 1) | (data[1] >> 7) != 3
-            || data[1] & 7 != 0
-        {
+        if data.len() != 2 || data[0] >> 3 != 2 || data[1] & 7 != 0 {
             return Err(CONFIG);
         }
+        let index = ((data[0] & 7) << 1) | (data[1] >> 7);
+        let sample_rate = Self::audio_rate(index)?;
         let channels = (data[1] >> 3) & 15;
         if !(1..=7).contains(&channels) {
             return Err(CONFIG);
         }
-        Ok(Self::Audio { channels })
+        Ok(Self::Audio {
+            channels,
+            sample_rate,
+        })
+    }
+    fn audio_rate(index: u8) -> Result<u32, ConversionError> {
+        match index {
+            3 => Ok(48_000),
+            4 => Ok(44_100),
+            _ => Err(ConversionError("ts-aac-sample-rate-not-supported")),
+        }
+    }
+    pub(super) fn audio_adts(data: &[u8]) -> Result<Self, ConversionError> {
+        let head = data.get(..7).ok_or(CONFIG)?;
+        if head[0] != 0xff || head[1] != 0xf1 || head[2] >> 6 != 1 || head[6] & 3 != 0 {
+            return Err(CONFIG);
+        }
+        let sample_rate = Self::audio_rate((head[2] >> 2) & 15)?;
+        let channels = ((head[2] & 1) << 2) | (head[3] >> 6);
+        if !(1..=7).contains(&channels) {
+            return Err(CONFIG);
+        }
+        Ok(Self::Audio {
+            channels,
+            sample_rate,
+        })
     }
     fn units(
         &self,
@@ -130,16 +153,9 @@ impl Config {
                 }
                 hash.update(count.to_be_bytes());
             }
-            Self::Audio { channels } => {
+            Self::Audio { .. } => {
                 let raw = if transport {
-                    if data.len() < 7
-                        || data[0] != 0xff
-                        || data[1] != 0xf1
-                        || data[2] >> 6 != 1
-                        || (data[2] >> 2) & 15 != 3
-                        || ((data[2] & 1) << 2) | (data[3] >> 6) != *channels
-                        || data[6] & 3 != 0
-                    {
+                    if Self::audio_adts(data)? != *self {
                         return Err(CONFIG);
                     }
                     let length = (usize::from(data[3] & 3) << 11)
@@ -277,7 +293,7 @@ fn hex_line(line: &[u8], output: &mut Vec<u8>) -> Result<(), ConversionError> {
 
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct Evidence {
-    count: u64,
+    pub(super) count: u64,
     digest: [u8; 32],
     clocks: [u8; 32],
     pub first_pts: i64,
@@ -286,6 +302,12 @@ pub(super) struct Evidence {
 impl Evidence {
     pub fn payload_equal(&self, other: &Self) -> bool {
         self.count == other.count && self.digest == other.digest
+    }
+    pub fn timing_equal(&self, other: &Self) -> bool {
+        self.count == other.count
+            && self.clocks == other.clocks
+            && self.first_pts == other.first_pts
+            && self.end_pts == other.end_pts
     }
 }
 /// Derived directly from decrypted original PES bytes, before transport repacking.
@@ -320,6 +342,13 @@ impl Native {
         self.count = self.count.checked_add(1).ok_or(BAD)?;
         Ok(())
     }
+    pub(super) fn same_as(&self, other: &Self) -> bool {
+        self.count != 0
+            && self.config == other.config
+            && self.count == other.count
+            && self.hash.clone().finalize() == other.hash.clone().finalize()
+            && self.clocks.clone().finalize() == other.clocks.clone().finalize()
+    }
     pub(super) fn matches(&self, config: &Config, evidence: &Evidence) -> bool {
         self.count != 0
             && self.config == *config
@@ -338,6 +367,7 @@ pub(super) struct Parser {
     clocks: Sha256,
     count: u64,
     next_dts: Option<i64>,
+    audio_clock: Option<super::clock::Audio>,
     first_pts: Option<i64>,
     end_pts: i64,
     error: Option<ConversionError>,
@@ -345,6 +375,18 @@ pub(super) struct Parser {
 
 impl Parser {
     pub fn new(index: usize, expected: u64, transport: bool, config: Config) -> Self {
+        let audio_clock = if transport
+            && matches!(
+                config,
+                Config::Audio {
+                    sample_rate: 44_100,
+                    ..
+                }
+            ) {
+            Some(super::clock::Audio::new(44_100).expect("supported AAC sample rate"))
+        } else {
+            None
+        };
         Self {
             index,
             expected,
@@ -355,6 +397,7 @@ impl Parser {
             clocks: Sha256::new(),
             count: 0,
             next_dts: None,
+            audio_clock,
             first_pts: None,
             end_pts: i64::MIN,
             error: None,
@@ -412,13 +455,24 @@ impl Parser {
         let pts = read(2, "pts=")?;
         let dts = read(3, "dts=")?;
         let duration = read(4, "duration=")?;
-        if duration <= 0 || dts < 0 || pts < dts || self.next_dts.is_some_and(|next| next != dts) {
+        if duration <= 0
+            || dts < 0
+            || pts < dts
+            || (self.audio_clock.is_none() && self.next_dts.is_some_and(|next| next != dts))
+        {
             return Err(ConversionError(
                 "ts-clock-wrap-or-discontinuity-not-supported",
             ));
         }
-        if matches!(self.config, Config::Audio { .. }) && duration != 1920 {
+        if let Config::Audio { sample_rate, .. } = self.config
+            && self.transport
+            && duration != 1024 * 90_000 / i64::from(sample_rate)
+        {
             return Err(CONFIG);
+        }
+        if let Some(clock) = &mut self.audio_clock {
+            clock.begin(pts, dts)?;
+            clock.frame(pts, dts)?;
         }
         self.next_dts = Some(dts.checked_add(duration).ok_or(BAD)?);
         self.first_pts = Some(self.first_pts.map_or(pts, |old| old.min(pts)));
@@ -498,7 +552,7 @@ mod tests {
         );
     }
     #[test]
-    fn aac_framing_requires_one_lc_48khz_block_with_the_same_configuration() {
+    fn aac_framing_requires_one_lc_block_with_the_same_configuration() {
         let config = Config::audio(&[0x11, 0x90]).unwrap();
         let adts = [0xff, 0xf1, 0x4c, 0x80, 1, 0x5f, 0xfc, 0x12, 0x34, 0x80];
         let raw = &adts[7..];
@@ -517,9 +571,116 @@ mod tests {
             digest(&config, &adts, true).unwrap(),
             digest(&config, &changed, true).unwrap()
         );
-        assert!(Config::audio(&[0x12, 0x10]).is_err());
+        assert_eq!(
+            Config::audio(&[0x12, 0x10]).unwrap(),
+            Config::Audio {
+                channels: 2,
+                sample_rate: 44_100
+            }
+        );
         assert!(Config::audio(&[0x11, 0x94]).is_err());
     }
+    #[test]
+    fn aac_rate_is_part_of_both_decoder_configuration_and_each_adts_frame() {
+        let audio = Config::audio(&[0x12, 0x10]).unwrap();
+        let adts = [0xff, 0xf1, 0x50, 0x80, 1, 0x5f, 0xfc, 0x12, 0x34, 0x80];
+        assert_eq!(Config::audio_adts(&adts).unwrap(), audio);
+        assert_eq!(
+            digest(&audio, &adts, true).unwrap(),
+            digest(&audio, &adts[7..], false).unwrap()
+        );
+        let mut changed = adts;
+        changed[2] = 0x4c;
+        assert_eq!(digest(&audio, &changed, true).unwrap_err(), CONFIG);
+        let mut changed = adts;
+        changed[3] = 0xc0;
+        assert_eq!(digest(&audio, &changed, true).unwrap_err(), CONFIG);
+        let mut changed = adts;
+        changed[6] |= 1;
+        assert_eq!(digest(&audio, &changed, true).unwrap_err(), CONFIG);
+        for asc in [[0x13, 0x10], [0x12, 0x14], [0x12, 0x00], [0x0a, 0x10]] {
+            assert!(Config::audio(&asc).is_err());
+        }
+    }
+
+    fn audio_row(pts: i64, duration: i64, transport: bool) -> String {
+        let data = if transport {
+            "fff1 5080 015f fc12 3480"
+        } else {
+            "1234 80"
+        };
+        format!(
+            "packet|stream_index=0|pts={pts}|dts={pts}|duration={duration}|data=\\n00000000: {data}  ignored\\n|\n"
+        )
+    }
+    fn audio_evidence(rows: &[(i64, i64)], transport: bool) -> Evidence {
+        let mut parser = Parser::new(
+            0,
+            rows.len() as u64,
+            transport,
+            Config::audio(&[0x12, 0x10]).unwrap(),
+        );
+        for &(pts, duration) in rows {
+            parser
+                .push(audio_row(pts, duration, transport).as_bytes())
+                .unwrap();
+        }
+        parser.finish().unwrap()
+    }
+
+    #[test]
+    fn exact_frame_clocks_match_even_when_transport_packet_duration_is_truncated() {
+        let source = audio_evidence(
+            &[
+                (900_000, 2089),
+                (902_090, 2089),
+                (904_180, 2089),
+                (906_269, 2089),
+            ],
+            true,
+        );
+        let result = audio_evidence(
+            &[
+                (900_000, 2090),
+                (902_090, 2090),
+                (904_180, 2089),
+                (906_269, 2089),
+            ],
+            false,
+        );
+        assert!(source.payload_equal(&result));
+        assert!(source.timing_equal(&result));
+        // Altering a single output timestamp still fails exact equality even
+        // when the adjacent sample duration is changed to remain contiguous.
+        let shifted = audio_evidence(
+            &[
+                (900_000, 2090),
+                (902_090, 2090),
+                (904_180, 2090),
+                (906_270, 2089),
+            ],
+            false,
+        );
+        assert!(source.payload_equal(&shifted));
+        assert!(!source.timing_equal(&shifted));
+        let extended = audio_evidence(
+            &[
+                (900_000, 2090),
+                (902_090, 2090),
+                (904_180, 2089),
+                (906_269, 2090),
+            ],
+            false,
+        );
+        assert!(!source.timing_equal(&extended));
+        let mut parser = Parser::new(0, 1, true, Config::audio(&[0x12, 0x10]).unwrap());
+        assert!(
+            parser
+                .push(audio_row(900_000, 2090, true).as_bytes())
+                .is_err()
+        );
+    }
+
     #[test]
     fn hex_evidence_cannot_skip_or_repeat_offsets_or_invent_bytes() {
         assert_eq!(

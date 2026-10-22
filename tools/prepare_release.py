@@ -53,9 +53,16 @@ MAX_REPORT = 2 * 1024 * 1024
 MAX_ARTIFACT = 512 * 1024 * 1024
 MAX_ROWS = 1000
 STAGES = ("version", "doctor", "fixture-probe", "fixture-video", "prepared-video-probe", "fixture-segments",
-          "prepared-source-verification", "analyze", "plan", "convert", "independent-verify")
+          "prepared-source-verification", "analyze", "plan", "convert", "independent-verify",
+          "fixture-aac44100", "fixture-aac44100-probe", "aac44100-analyze", "aac44100-plan",
+          "aac44100-convert", "aac44100-independent-verify")
 ARCHIVE_LIMITS = "Archive/source and optional native CLI-pair checks only; no GUI, media, signature, build-origin or legal certification."
-MEDIA_LIMITS = "One native packaged CLI, one ten-second video-only Clear DASH to CBCS DASH saved-plan route. Full original video comparison and native manifest linting; no audio-route, DRM license/device playback, GUI, installer, signature, or build-origin certification."
+MEDIA_LIMITS = (
+    "One native packaged CLI, one ten-second video-only Clear DASH to CBCS DASH saved-plan route "
+    "and one generated ten-second 44.1 kHz stereo AAC Clear HLS/TS to CBCS DASH saved-plan route. "
+    "Full original video comparison, complete generated audio frame/clock evidence and CLI media comparisons, "
+    "and native manifest linting; no independent external audio PCM comparison, DRM license/device playback, "
+    "GUI, installer, signature, or build-origin certification.")
 FIXTURE_SHA256 = "a0ef6d20f2319c57af35d9c3165e46b669c67b951268cf882dbfff14b5b26e71"
 
 
@@ -258,6 +265,42 @@ def graph(value):
             and positive(value["bytes"]) and value["bytes"] <= 64 * 1024 * 1024, "media-proof-invalid")
 
 
+def aac44100(value):
+    exact_keys(value, ("fixture_sha256", "fixture_duration_seconds", "scope", "input_format", "input_protection",
+                       "output_format", "output_protection", "segment_target_seconds", "input_segments", "source_audio",
+                       "source_graph", "cli_source_graph_sha256", "plan_schema_version", "plan_id", "plan_sha256",
+                       "saved_original_and_plan_unchanged", "conversion", "independent_verification", "output_graph"))
+    require(value["fixture_sha256"] == FIXTURE_SHA256 and type(value["fixture_duration_seconds"]) is int
+            and value["fixture_duration_seconds"] == 10
+            and value["scope"] == "all generated 44.1 kHz AAC frames; fixture audio resampled from the attributed clip"
+            and value["input_format"] == "hls-ts" and value["input_protection"] == "clear"
+            and value["output_format"] == "dash" and value["output_protection"] == "cbcs"
+            and type(value["segment_target_seconds"]) is int and value["segment_target_seconds"] == 2
+            and type(value["input_segments"]) is int and 2 <= value["input_segments"] <= 8
+            and type(value["plan_schema_version"]) is int and value["plan_schema_version"] == 1
+            and all(hexadecimal(value[name]) for name in ("cli_source_graph_sha256", "plan_id", "plan_sha256"))
+            and value["saved_original_and_plan_unchanged"] is True, "aac44100-proof-invalid")
+    audio = value["source_audio"]
+    exact_keys(audio, ("codec_name", "profile", "sample_rate", "channels", "time_base", "frame_count", "packet_count",
+                       "expected_decoded_samples_per_channel", "first_pts", "first_dts", "last_pts", "last_dts",
+                       "last_duration", "packet_clock_sha256"))
+    require(audio["codec_name"] == "aac" and audio["profile"] == "LC"
+            and type(audio["sample_rate"]) is int and audio["sample_rate"] == 44100
+            and type(audio["channels"]) is int and audio["channels"] == 2 and audio["time_base"] == "1/90000"
+            and all(type(audio[name]) is int and audio[name] == 432 for name in ("frame_count", "packet_count"))
+            and type(audio["expected_decoded_samples_per_channel"]) is int
+            and audio["expected_decoded_samples_per_channel"] == 432 * 1024
+            and all(type(audio[name]) is int and 0 <= audio[name] < 1 << 33
+                    for name in ("first_pts", "first_dts", "last_pts", "last_dts"))
+            and audio["first_pts"] == audio["first_dts"] < audio["last_pts"] == audio["last_dts"]
+            and type(audio["last_duration"]) is int and audio["last_duration"] == 2089
+            and hexadecimal(audio["packet_clock_sha256"]), "aac44100-proof-invalid")
+    graph(value["source_graph"])
+    graph(value["output_graph"])
+    proof(value["conversion"])
+    proof(value["independent_verification"])
+
+
 def reports(archive_proof, media, head, tree, target, version, archive_hash):
     exact_keys(archive_proof, ("success", "source_head", "source_tree", "target", "kind", "archive_sha256", "files", "packages",
                                "binaries", "pair_check", "raw_notice_files", "limits"))
@@ -277,7 +320,7 @@ def reports(archive_proof, media, head, tree, target, version, archive_hash):
             and binary["header_target"] == target and isinstance(binary["mode"], str)
             and re.fullmatch(r"0o[0-7]{1,3}", binary["mode"]) is not None, "archive-proof-invalid")
     exact_keys(media, ("schema_version", "success", "kind", "source_head", "source_tree", "target", "version", "binary_reported_version",
-                       "archive_sha256", "binary_sha256", "archive_files", "dependency_packages", "native_ordinary_user", "doctor", "media",
+                       "archive_sha256", "binary_sha256", "archive_files", "dependency_packages", "native_ordinary_user", "doctor", "media", "aac_44100",
                        "stages", "owned_workspace_cleanup", "limits"))
     require(type(media["schema_version"]) is int and media["schema_version"] == 1 and media["kind"] == "native-cli-archive-media"
             and media["version"] == version and media["binary_reported_version"] == version and media["binary_sha256"] == binary["sha256"]
@@ -315,6 +358,7 @@ def reports(archive_proof, media, head, tree, target, version, archive_hash):
     graph(value["output_graph"])
     for name in ("prepared_source_against_original_video", "conversion", "independent_verification"):
         proof(value[name])
+    aac44100(media["aac_44100"])
     require(isinstance(media["stages"], list) and len(media["stages"]) == len(STAGES), "media-stages-invalid")
     for stage, expected in zip(media["stages"], STAGES):
         exact_keys(stage, ("stage", "elapsed_milliseconds", "exit_code"))

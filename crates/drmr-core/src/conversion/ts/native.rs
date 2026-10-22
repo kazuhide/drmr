@@ -5,7 +5,7 @@
 use super::super::ConversionError;
 use super::{
     admission::{self, Admission},
-    canonical,
+    canonical, clock,
 };
 use crate::{concurrency::Stop, inspection::TrackKind};
 use std::{collections::BTreeMap, io::Read as _, path::Path};
@@ -13,6 +13,7 @@ use zeroize::Zeroizing;
 
 const BAD: ConversionError = ConversionError("ts-original-evidence-invalid");
 const LIMIT: ConversionError = ConversionError("ts-original-pending-limit");
+#[cfg(test)]
 const CLOCK: ConversionError = ConversionError("ts-clock-wrap-or-discontinuity-not-supported");
 const MAX_PES: usize = 8 * 1024 * 1024;
 struct Pending {
@@ -54,7 +55,7 @@ impl Pending {
 pub(in crate::conversion) struct NativeScanner {
     admission: Admission,
     native: BTreeMap<u16, canonical::Native>,
-    next_audio: BTreeMap<u16, (i64, i64)>,
+    audio_clocks: BTreeMap<u16, clock::Audio>,
     failed: Option<ConversionError>,
 }
 impl NativeScanner {
@@ -62,21 +63,35 @@ impl NativeScanner {
         Self {
             admission: Admission::default(),
             native: BTreeMap::new(),
-            next_audio: BTreeMap::new(),
+            audio_clocks: BTreeMap::new(),
             failed: None,
         }
     }
     pub fn segment(&mut self, path: &Path, stop: &Stop) -> Result<(), ConversionError> {
+        self.segment_with(path, stop, &mut |_, _, _, _, _| Ok(()))
+    }
+    pub fn segment_with<F>(
+        &mut self,
+        path: &Path,
+        stop: &Stop,
+        observer: &mut F,
+    ) -> Result<(), ConversionError>
+    where
+        F: FnMut(u16, TrackKind, &[u8], i64, i64) -> Result<(), ConversionError>,
+    {
         if let Some(error) = self.failed {
             return Err(error);
         }
-        let result = self.scan(path, stop);
+        let result = self.scan(path, stop, observer);
         if let Err(error) = result {
             self.failed = Some(error);
         }
         result
     }
-    fn scan(&mut self, path: &Path, stop: &Stop) -> Result<(), ConversionError> {
+    fn scan<F>(&mut self, path: &Path, stop: &Stop, observer: &mut F) -> Result<(), ConversionError>
+    where
+        F: FnMut(u16, TrackKind, &[u8], i64, i64) -> Result<(), ConversionError>,
+    {
         if stop.is_set() {
             return Err(ConversionError("cancelled"));
         }
@@ -124,7 +139,7 @@ impl NativeScanner {
             }
             if packet[1] & 0x40 != 0 {
                 if let Some(previous) = pending.remove(&id) {
-                    self.record(id, kind, &previous.bytes, stop)?;
+                    self.record(id, kind, &previous.bytes, stop, observer)?;
                 }
                 pending.insert(
                     id,
@@ -153,17 +168,21 @@ impl NativeScanner {
                 .find(|t| t.pid == id)
                 .ok_or(BAD)?
                 .kind;
-            self.record(id, kind, &pes.bytes, stop)?;
+            self.record(id, kind, &pes.bytes, stop, observer)?;
         }
         Ok(())
     }
-    fn record(
+    fn record<F>(
         &mut self,
         id: u16,
         kind: TrackKind,
         bytes: &[u8],
         stop: &Stop,
-    ) -> Result<(), ConversionError> {
+        observer: &mut F,
+    ) -> Result<(), ConversionError>
+    where
+        F: FnMut(u16, TrackKind, &[u8], i64, i64) -> Result<(), ConversionError>,
+    {
         if stop.is_set() {
             return Err(ConversionError("cancelled"));
         }
@@ -172,39 +191,33 @@ impl NativeScanner {
         if let std::collections::btree_map::Entry::Vacant(entry) = self.native.entry(id) {
             let config = match kind {
                 TrackKind::Video => canonical::Config::video_access_unit(payload)?,
-                TrackKind::Audio => {
-                    let head = payload.get(..7).ok_or(BAD)?;
-                    if (head[2] >> 2) & 15 != 3 {
-                        return Err(ConversionError("ts-aac-sample-rate-not-supported"));
-                    }
-                    let channels = ((head[2] & 1) << 2) | (head[3] >> 6);
-                    canonical::Config::audio(&[0x11, 0x80 | (channels << 3)])?
-                }
+                TrackKind::Audio => canonical::Config::audio_adts(payload)?,
                 _ => return Err(BAD),
             };
             entry.insert(canonical::Native::new(config));
         }
         let anchor = self.native.get_mut(&id).ok_or(BAD)?;
         match kind {
-            TrackKind::Video => anchor.record(payload, pts, dts)?,
+            TrackKind::Video => {
+                anchor.record(payload, pts, dts)?;
+                observer(id, kind, payload, pts, dts)?;
+            }
             TrackKind::Audio => {
-                if self
-                    .next_audio
-                    .get(&id)
-                    .is_some_and(|expected| *expected != (pts, dts))
-                {
-                    return Err(CLOCK);
-                }
+                let canonical::Config::Audio { sample_rate, .. } = anchor.config else {
+                    return Err(BAD);
+                };
+                let audio = self
+                    .audio_clocks
+                    .entry(id)
+                    .or_insert(clock::Audio::new(sample_rate)?);
+                audio.begin(pts, dts)?;
                 let mut position = 0;
-                let mut tick = 0_i64;
+                let mut frame_clock = (pts, dts);
                 while position < payload.len() {
                     if stop.is_set() {
                         return Err(ConversionError("cancelled"));
                     }
                     let head = payload.get(position..position + 7).ok_or(BAD)?;
-                    if (head[2] >> 2) & 15 != 3 {
-                        return Err(ConversionError("ts-aac-sample-rate-not-supported"));
-                    }
                     let length = (usize::from(head[3] & 3) << 11)
                         | (usize::from(head[4]) << 3)
                         | usize::from(head[5] >> 5);
@@ -214,21 +227,11 @@ impl NativeScanner {
                     let frame = payload
                         .get(position..position.checked_add(length).ok_or(BAD)?)
                         .ok_or(BAD)?;
-                    anchor.record(
-                        frame,
-                        pts.checked_add(tick).ok_or(CLOCK)?,
-                        dts.checked_add(tick).ok_or(CLOCK)?,
-                    )?;
-                    tick = tick.checked_add(1920).ok_or(CLOCK)?;
+                    anchor.record(frame, frame_clock.0, frame_clock.1)?;
+                    observer(id, kind, frame, frame_clock.0, frame_clock.1)?;
+                    frame_clock = audio.frame(frame_clock.0, frame_clock.1)?;
                     position += length;
                 }
-                self.next_audio.insert(
-                    id,
-                    (
-                        pts.checked_add(tick).ok_or(CLOCK)?,
-                        dts.checked_add(tick).ok_or(CLOCK)?,
-                    ),
-                );
             }
             _ => return Err(BAD),
         }
@@ -371,7 +374,14 @@ mod tests {
         (owner, path)
     }
     fn evidence(frames: &[(Vec<u8>, i64)]) -> canonical::Evidence {
-        evidence_with(frames, canonical::Config::Audio { channels: 2 }, 1920)
+        evidence_with(
+            frames,
+            canonical::Config::Audio {
+                channels: 2,
+                sample_rate: 48_000,
+            },
+            1920,
+        )
     }
     fn evidence_with(
         frames: &[(Vec<u8>, i64)],
@@ -402,6 +412,80 @@ mod tests {
         .concat()
     }
     #[test]
+    fn fractional_audio_callbacks_bind_every_frame_and_each_original_pes_clock() {
+        let (_owner, root) = root();
+        let frames: Vec<_> = (0..14)
+            .map(|marker| {
+                let mut data = frame(marker);
+                data[2] = 0x50;
+                data
+            })
+            .collect();
+        let first = resource(&root, "first.ts", 126_000, &frames[..7], 0);
+        let second = resource(&root, "second.ts", 140_629, &frames[7..], 1);
+        let clocks = [
+            126_000, 128_090, 130_179, 132_269, 134_359, 136_449, 138_539, 140_629, 142_719,
+            144_809, 146_899, 148_989, 151_078, 153_168,
+        ];
+        let mut scanner = NativeScanner::new();
+        let mut captured = Vec::new();
+        let mut observer = |pid, kind, data: &[u8], pts, dts| {
+            assert_eq!(pid, 256);
+            assert_eq!(kind, TrackKind::Audio);
+            assert_eq!(pts, dts);
+            captured.push((data.to_vec(), pts));
+            Ok(())
+        };
+        scanner
+            .segment_with(&first, &Stop::new(), &mut observer)
+            .unwrap();
+        scanner
+            .segment_with(&second, &Stop::new(), &mut observer)
+            .unwrap();
+        let (_, native) = scanner.finish().unwrap();
+        let expected: Vec<_> = frames.into_iter().zip(clocks).collect();
+        assert_eq!(captured, expected);
+        let config = canonical::Config::Audio {
+            channels: 2,
+            sample_rate: 44_100,
+        };
+        assert!(native[&256].matches(&config, &evidence_with(&expected, config.clone(), 2089)));
+        let mut original = canonical::Native::new(config);
+        for (data, pts) in &expected {
+            original.record(data, *pts, *pts).unwrap();
+        }
+        assert!(native[&256].same_as(&original));
+        let mut changed = canonical::Native::new(original.config.clone());
+        for (data, pts) in &expected {
+            changed.record(data, *pts + 1, *pts + 1).unwrap();
+        }
+        assert!(!native[&256].same_as(&changed));
+    }
+
+    #[test]
+    fn observer_failure_poisoning_prevents_partial_original_evidence() {
+        let (_owner, root) = root();
+        let first = resource(&root, "first.ts", 90_000, &[frame(1), frame(2)], 0);
+        let mut scanner = NativeScanner::new();
+        let error = ConversionError("observer-stopped");
+        assert_eq!(
+            scanner
+                .segment_with(&first, &Stop::new(), &mut |_, _, _, _, _| Err(error))
+                .unwrap_err(),
+            error
+        );
+        assert_eq!(
+            scanner
+                .segment_with(&first, &Stop::new(), &mut |_, _, _, _, _| panic!(
+                    "observer called after failure"
+                ))
+                .unwrap_err(),
+            error
+        );
+        assert!(scanner.finish().is_err());
+    }
+
+    #[test]
     fn empty_payload_padding_cannot_add_frames_or_reset_the_original_audio_clock() {
         let (_owner, root) = root();
         let first = resource(&root, "padded.ts", 90_000, &[frame(1)], 0);
@@ -420,7 +504,10 @@ mod tests {
         assert!(admission.has_empty_payload_padding());
         assert_eq!(native[&256].count, 2);
         assert!(native[&256].matches(
-            &canonical::Config::Audio { channels: 2 },
+            &canonical::Config::Audio {
+                channels: 2,
+                sample_rate: 48_000
+            },
             &evidence(&[(frame(1), 90_000), (frame(2), 91_920)])
         ));
         let first_bytes = std::fs::read(&first).unwrap();
@@ -442,7 +529,10 @@ mod tests {
         assert!(!projected_admission.has_empty_payload_padding());
         assert_eq!(projected_native[&256].count, native[&256].count);
         assert!(projected_native[&256].matches(
-            &canonical::Config::Audio { channels: 2 },
+            &canonical::Config::Audio {
+                channels: 2,
+                sample_rate: 48_000
+            },
             &evidence(&[(frame(1), 90_000), (frame(2), 91_920)])
         ));
         assert_eq!(std::fs::read(source).unwrap(), combined);
@@ -470,7 +560,10 @@ mod tests {
         expected.push((frame(40), 166_800));
         assert_eq!(native[&256].count, 41);
         assert!(native[&256].matches(
-            &canonical::Config::Audio { channels: 2 },
+            &canonical::Config::Audio {
+                channels: 2,
+                sample_rate: 48_000
+            },
             &evidence(&expected)
         ));
     }
@@ -584,7 +677,10 @@ mod tests {
         let (admission, native) = scanner.finish().unwrap();
         assert_eq!(admission.tracks[0].kind, TrackKind::Audio);
         assert_eq!(native[&256].count, 3);
-        let config = canonical::Config::Audio { channels: 2 };
+        let config = canonical::Config::Audio {
+            channels: 2,
+            sample_rate: 48_000,
+        };
         assert!(native[&256].matches(
             &config,
             &evidence(&[
@@ -625,7 +721,7 @@ mod tests {
         for (at, value) in [
             (0, 0),
             (1, 0xf0),
-            (2, 0x50),
+            (2, 0x54),
             (2, 0x0c),
             (3, 0x00),
             (6, 0xfd),
@@ -654,7 +750,7 @@ mod tests {
     fn unsupported_audio_rate_keeps_its_explicit_profile_reason() {
         let (_owner, root) = root();
         let mut bytes = frame(0x12);
-        bytes[2] = 0x50;
+        bytes[2] = 0x54;
         let p = resource(&root, "rate.ts", 90_000, &[bytes], 0);
         let mut scanner = NativeScanner::new();
         assert_eq!(
@@ -684,6 +780,7 @@ mod tests {
             256,
             Arc::new(canonical::Native::new(canonical::Config::Audio {
                 channels: 2,
+                sample_rate: 48_000,
             })),
         );
         assert!(super::super::require_audio_source_evidence(&admission, &map).is_err());

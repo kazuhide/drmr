@@ -212,7 +212,11 @@ Clear output needs no output-key section. Keep the original media and keys until
 
 ## MPEG transport stream input
 
-Completed local HLS playlists containing clear, AES-128, or SAMPLE-AES transport stream segments can produce DASH with clear, `cenc`, or `cbcs` protection, or fragmented MP4 HLS with clear, `cbcs`, or AES-128 protection. Encrypted input requires operator-supplied keys. The profile accepts one progressive H.264 video stream, one 48 kHz AAC-LC audio stream, or both, in a single program. Audio-only input supports DASH, fMP4 HLS, and TS output with the strict native audio timing checks described in [processing and verification](media-processing.md#mpeg-transport-stream-input). 44.1 kHz audio, SAMPLE-AES-CTR transport streams, and standalone MP4 output from this input are refused.
+Completed local HLS playlists containing clear, AES-128, or SAMPLE-AES transport stream segments can produce DASH with clear, `cenc`, or `cbcs` protection, or fragmented MP4 HLS with clear, `cbcs`, or AES-128 protection. Encrypted input requires operator-supplied keys. The profile accepts one progressive H.264 video stream, one 44.1 or 48 kHz AAC-LC audio stream, or both, in a single program. Audio-only input supports DASH, fMP4 HLS, and TS output with the strict native audio timing checks described in [processing and verification](media-processing.md#mpeg-transport-stream-input). SAMPLE-AES-CTR transport streams and standalone MP4 output from this input are refused.
+
+The 44.1 kHz correction is an **Unreleased** change on `main`. The published v1.0.0 archives remain unchanged and accept only 48 kHz AAC from TS. Build the CLI from the current source to use the correction; see [installation](../README.md#install) and [release status](releases.md).
+
+TS input whose final `EXTINF` ends inside the last AAC frame is still refused. Preserving complete frames and their clocks does not establish that this shorter playback range survives conversion. drmr does not guess which trailing samples are padding or verify output extending beyond the declared range. See [AAC timing and presentation limits](media-processing.md#aac-sample-rates-and-transport-clocks).
 
 For example, create CBCS DASH from a supported local TS playlist:
 
@@ -223,6 +227,8 @@ drmr verify result-dash/manifest.mpd --source source/media.m3u8 --keys-file keys
 
 Use separate input and output keys in the [protected configuration](usage.md#separate-input-and-output-keys). Clear output needs no output key. The conversion decrypts when required, separates the original tracks, and repackages them into fMP4 segments and a static DASH manifest. It preserves the encoding and original packet clocks; it does not re-encrypt each source segment in place. See [DASH timing from transport streams](media-processing.md#dash-output-from-transport-streams) for the manifest's time mapping and duration representation.
 
+For 44.1 kHz AAC, the private MP4 preparation retains the original 90 kHz media clock and declares the actual audio sample rate separately. Every original PTS, DTS, AAC payload, frame count, decoded sample, and final playback end must match. Nominal TS packet duration labels can differ from MP4 sample durations without changing those clocks; see [AAC sample rates and transport clocks](media-processing.md#aac-sample-rates-and-transport-clocks) for the exact comparison.
+
 The ten-second BBB regression covers all nine input/output protection pairs for each of video-only, joint video/audio, and audio-only TS: 27 routes. Each result must pass conversion checks and a fresh verification against both its original protected source and a matching clear reference. Checks cover every original frame, complete decoded media, packet timing, the shared presentation origin, source immutability, and rejected manifest changes. Additional cases cover reordered video pictures. These tests qualify the bounded media profile; they do not establish DRM licenses or device playback.
 
 ```sh
@@ -232,7 +238,7 @@ cargo test --locked -p drmr --test conversion_ts_dash -- --nocapture
 
 Audio-only TS to fMP4 HLS has a separate nine-pair regression: clear, AES-128,
 and SAMPLE-AES input, each converted to clear, `cbcs`, and AES-128 output.
-The complete ten-second fixture contains 470 AAC frames; every frame and all
+The complete ten-second 48 kHz fixture contains 470 AAC frames; every frame and all
 decoded samples are compared with the original TS. Input and output use separate
 keys. Conversion checks and fresh verification include the actual master and
 media playlists, initialization segment, every media segment, packet clocks,
@@ -282,7 +288,7 @@ protections. Use `--format hls-ts`, with `--to clear`, `--to hls-aes128`, or
 with this output container. MP4, fragmented MP4 HLS, and DASH inputs are outside
 the current TS output profile.
 
-The profile supports progressive H.264 video, 48 kHz AAC-LC audio, or both.
+The profile supports progressive H.264 video, 44.1 or 48 kHz AAC-LC audio, or both.
 When both are present, output uses separate video and audio TS playlists joined
 by an HLS master playlist. A single TS segment containing both tracks is not
 produced by the current packager integration; HLS itself allows that layout.

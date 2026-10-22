@@ -8,9 +8,11 @@ version: 1.0.0
 
 drmr changes media containers, delivery formats and encryption while retaining encoded video and audio. It is for engineers who control the media and already have the required decryption keys. It is not an encoder for creating a new quality ladder or a client for obtaining DRM licenses.
 
-This guide describes drmr 1.0.0 and was updated on 2026-10-22. Public source and command help define the behavior. For a different version, also read its accompanying documentation. A passing example does not qualify arbitrary media or playback devices.
+This guide describes the current `main` source, whose product version remains 1.0.0, and was updated on 2026-10-22. It includes **Unreleased** changes that are not in the published v1.0.0 archives. Public source and command help define the behavior; also read the documentation accompanying your exact archive. A passing example does not qualify arbitrary media or playback devices.
 
 Download a versioned CLI from [GitHub Releases](https://github.com/kazuhide/drmr/releases) and check its archive against `SHA256SUMS` before installation. External media tools remain separate. See [releases and compatibility](https://github.com/kazuhide/drmr/blob/main/docs/releases.md) for supported targets and the compatibility policy.
+
+Check each release's **Pre-release** label and notes. The published v1.0.0 is classified as a pre-release, and its immutable archives retain the original 48 kHz-only AAC TS input restriction. The 44.1 kHz correction is on `main` under **Unreleased**; the existing tag and assets are unchanged. To use it, [build the CLI](#installation) from current `main`. The documented 1.x CLI compatibility contract is separate from release qualification.
 
 ## Choose an operation
 
@@ -139,9 +141,11 @@ Multiple edits, initial empty edits, rate changes, extra tracks, unrelated-file 
 
 ## TS admission
 
-The TS profile uses one fixed program, one progressive H.264 video stream with optional 48 kHz AAC-LC audio. DASH, fMP4 HLS and TS output also accept audio-only input under the same single-program, 48 kHz AAC-LC conditions.
+The TS profile uses one fixed program, one progressive H.264 video stream with optional 44.1 or 48 kHz AAC-LC audio. DASH, fMP4 HLS and TS output also accept audio-only input under the same single-program, 44.1 or 48 kHz AAC-LC conditions.
 
-TS packets must be 188 bytes; H.264 decoder configuration must remain fixed. AAC uses seven-byte ADTS transport headers without a checksum and one raw data block. Multiple programs, configuration changes, corrupt packets, clock wrap, discontinuities, interlaced video, 44.1 kHz AAC and unsupported descriptors are refused.
+TS packets must be 188 bytes; H.264 decoder configuration must remain fixed. AAC uses seven-byte ADTS transport headers without a checksum and one raw data block. Multiple programs, configuration changes, corrupt packets, clock wrap, discontinuities, interlaced video and unsupported descriptors are refused. The sample rate and channel configuration must remain unchanged throughout the track.
+
+A final `EXTINF` that ends inside the last AAC frame is still refused. This shorter playback range needs explicit preservation in addition to keeping all encoded frames, clocks and decoded samples. drmr does not infer and discard trailing padding or mark output longer than the declared range as verified.
 
 SAMPLE-AES accepts one effective `identity` or `com.apple.streamingkeydelivery` key format, with version 1 when declared. Distinct simultaneously active key formats and unsupported method changes are refused. Nonzero audio priming is outside the profile. Joint TS output uses separate audio/video playlists and a master; it does not multiplex both into one output segment.
 
@@ -536,7 +540,7 @@ drmr verify protected-dash/manifest.mpd \
   --source ts-source/media.m3u8 --keys-file config/output.json --json
 ```
 
-Absolute packet PTS, DTS and duration, complete encoded units and relative audio/video offsets must match. drmr does not shift or trim the original to make a route pass.
+Absolute packet PTS and DTS, complete encoded units, relative audio/video offsets and the final playback end must match. Packet durations preserve those clocks; the 44.1 kHz TS/MP4 representation difference is explained in [chapter 9](#verification). drmr does not shift or trim the original to make a route pass.
 
 ## Audio-only TS to fMP4 HLS
 
@@ -549,7 +553,7 @@ drmr verify audio-fmp4-hls/master.m3u8 \
   --source audio-ts/master.m3u8 --keys-file config/hls-output.json --json
 ```
 
-Shaka Packager separates the complete audio track and packages new segments; FFmpeg/FFprobe provide probe, decode and hash evidence. The original ordered PES, every AAC frame and absolute PTS/DTS/duration remain authoritative. A two-second segment target does not permit trimming an AAC frame. The 470-frame TS regression retains 481,280 samples per channel; the progressive source with a finite 480,000-sample window is a different presentation.
+drmr separates the complete audio track and uses Shaka Packager to create new segments. For 44.1 kHz AAC, a Rust reader first copies the validated frames into a private fragmented MP4 with the original 90 kHz clocks and actual 44,100-sample audio rate; the 48 kHz path uses Shaka demultiplexing. FFmpeg/FFprobe provide probe, decode and hash evidence. The original ordered PES, every AAC frame and absolute PTS/DTS remain authoritative. A two-second segment target does not permit trimming an AAC frame. The existing 48 kHz, 470-frame TS regression retains 481,280 samples per channel; the progressive source with a finite 480,000-sample window is a different presentation.
 
 ## SAMPLE-AES TS
 
@@ -716,7 +720,7 @@ When needed, prepare `keys.json` here using [chapter 5's schemas and permissions
 
 CENC/CBCS input uses `input.keys`; AES-128 and TS SAMPLE-AES use `input.hls_keys` with absolute key URIs and required IVs. Cenc/cbcs output needs `output.kid` and `output.key`; HLS also needs `output.hls_key_uri`. Other output fields are in chapter 5. Input and output keys may differ; no key or license URL is fetched.
 
-Inputs must meet [chapter 3's profiles](#supported-profiles). MP4, DASH and fMP4 HLS examples assume one video track. TS video may include audio; audio-only TS uses 48 kHz AAC-LC. Joint TS output has separate audio/video playlists.
+Inputs must meet [chapter 3's profiles](#supported-profiles). MP4, DASH and fMP4 HLS examples assume one video track. TS video may include audio; audio-only TS uses 44.1 or 48 kHz AAC-LC. Joint TS output has separate audio/video playlists.
 
 Explicit FairPlay HLS or Widevine/PlayReady DASH signaling uses [chapter 6's multiple-output workflow](#inspect-plan) and its input/runtime requirements.
 
@@ -730,7 +734,7 @@ Explicit FairPlay HLS or Widevine/PlayReady DASH signaling uses [chapter 6's mul
 | --- | --- |
 | `stream_metadata` | Decoder configuration, dimensions, pixel/sample format, audio rate/channels, color, rotation and supported language; success is `pass` |
 | `packet_payloads_equal` | Ordered complete encoded packets or validated canonical access units, including count |
-| `packet_timing_equal` | Every PTS, DTS and duration plus applicable exact presentation windows |
+| `packet_timing_equal` | Every PTS and DTS, durations consistent with those clocks and the exact final end, plus applicable exact presentation windows |
 | `decoded_content_equal` | Every decoded video frame and presented audio sample, without spot sampling |
 
 Use the actual output `manifest.mpd` or `master.m3u8` for DASH/HLS. The verifier reads source and result independently and decrypts each with its own role keys. Packet identity alone cannot establish that a playback edit survived.
@@ -739,7 +743,15 @@ A source with a finite video window and a candidate missing that window fail `pa
 
 ## Audio frames and segment boundaries
 
-An AAC frame has a fixed number of samples. A two-second target does not require each audio segment to be exactly two seconds, nor force equal audio/video segment counts. Frames stay complete. A TS source may already present padding not present in an earlier MP4 edit; verification preserves the supplied TS rather than shortening it to that older file.
+An AAC-LC frame contains 1,024 samples in the supported TS profile. It lasts about 21.333 milliseconds at 48 kHz or 23.220 milliseconds at 44.1 kHz. A two-second target does not require each audio segment to be exactly two seconds, nor force equal audio/video segment counts. Frames stay complete. A TS source may already present padding not present in an earlier MP4 edit; verification preserves the supplied TS rather than shortening it to that older file.
+
+The audio sample rate and the timestamp clock have different roles. MPEG-TS counts 90,000 ticks per second. One frame therefore lasts exactly 1,920 ticks at 48 kHz, but about 2,089.796 ticks at 44.1 kHz. drmr retains the original integer PES timestamps and derives the enclosed frame clocks at the actual sample rate. It checks rounding against one consistent clock progression over the whole source track. Repeatedly adding a truncated 2,089-tick duration would create drift and is refused.
+
+For 44.1 kHz, native AAC preparation writes fragmented MP4 with the same 90 kHz media clock. Its decoder settings still declare 44,100 samples per second and the original channels. Every AAC payload, frame, decoded sample, PTS and DTS is preserved. Shaka Packager then creates the requested HLS, DASH or TS output. The native writer holds at most 128 frames and at most approximately 1 MiB of encoded audio per fragment; it does not keep the complete asset in memory.
+
+FFprobe may label a TS frame with a nominal duration of 2,089 ticks even when the next DTS is 2,090 ticks later. MP4 sample durations describe that actual distance to the next DTS. The last frame retains the nominal integer duration because there is no following timestamp. Verification requires valid consecutive MP4 durations, every original absolute PTS/DTS, and the exact final end. Allowing source timestamp rounding is not an output tolerance: a changed clock or end, missing sample, or changed encoded byte fails. See [AAC clock handling](https://github.com/kazuhide/drmr/blob/main/docs/media-processing.md#aac-sample-rates-and-transport-clocks) for details.
+
+A 44.1 kHz source playlist's nonfinal `EXTINF` may measure from this segment's first frame to the next segment's first frame. With no following boundary, the final declaration must match either its exact audio-sample span or its measured last-frame clock with a nominal 2,089- or 2,090-tick final frame, at the declaration's decimal precision. These checks recognize specific source duration representations; they do not permit changes to the original PTS/DTS or loosen the output comparison.
 
 The integer `EXT-X-TARGETDURATION` bounds segment durations after the nearest-integer rounding specified by RFC 8216. drmr derives conservative track bounds by rounding final segment durations upward, then applies the largest bound to every generated audio/video media playlist. For example, video and audio bounds of 2 and 3 become 3 and 3, while the encoded segments and `EXTINF` durations stay unchanged. Independent verification rejects inconsistent final bounds. RFC 8216 defines separate exceptions for VOD subtitles and I-frame playlists; those exceptions do not allow ordinary audio/video bounds to differ.
 

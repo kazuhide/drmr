@@ -117,6 +117,9 @@ fn last_pes_offsets(bytes: &[u8], audio: bool) -> Vec<usize> {
     offsets
 }
 pub(super) fn shift_final_audio_pes(path: &Path) {
+    shift_final_audio_pes_by(path, 1);
+}
+pub(super) fn shift_final_audio_pes_by(path: &Path, delta: u64) {
     let mut bytes = std::fs::read(path).unwrap();
     let offsets = last_pes_offsets(&bytes, true);
     let old: [u8; 5] = std::array::from_fn(|index| bytes[offsets[9 + index]]);
@@ -125,7 +128,7 @@ pub(super) fn shift_final_audio_pes(path: &Path) {
         | (u64::from(old[2] & 0xfe) << 14)
         | (u64::from(old[3]) << 7)
         | u64::from(old[4] >> 1);
-    let next = pts + 1;
+    let next = pts.checked_add(delta).unwrap();
     let encoded = [
         old[0] & 0xf0 | u8::try_from((next >> 29) & 0x0e).unwrap() | 1,
         u8::try_from((next >> 22) & 255).unwrap(),
@@ -136,6 +139,15 @@ pub(super) fn shift_final_audio_pes(path: &Path) {
     for (at, value) in offsets[9..14].iter().zip(encoded) {
         bytes[*at] = value;
     }
+    std::fs::write(path, bytes).unwrap();
+}
+pub(super) fn change_final_audio_sample_rate(path: &Path) {
+    let mut bytes = std::fs::read(path).unwrap();
+    let offsets = last_pes_offsets(&bytes, true);
+    let elementary = 9 + usize::from(bytes[offsets[8]]);
+    let at = offsets[elementary + 2];
+    assert_eq!((bytes[at] >> 2) & 15, 4);
+    bytes[at] = (bytes[at] & 0xc3) | (3 << 2);
     std::fs::write(path, bytes).unwrap();
 }
 fn corrupt_final_picture(path: &Path) {
