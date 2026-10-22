@@ -5,16 +5,30 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'windows-cli-archive-cleanup.ps1')
 if (Test-Path -LiteralPath $Report) { throw 'The qualification report already exists' }
 $checkout = (Get-Location).Path
+$python = (Get-Command python).Source
+$shell = (Get-Command pwsh).Source
 $username = 'drmr_archive_test'
-$directory = Join-Path $env:RUNNER_TEMP 'drmr-archive-user'
-New-Item -ItemType Directory -Path $directory | Out-Null
-$password = [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(36)) + '!aA1'
-Write-Output "::add-mask::$password"
-$securePassword = ConvertTo-SecureString $password -AsPlainText -Force
-$user = New-LocalUser -Name $username -Password $securePassword -Description 'Ephemeral drmr archive qualification user'
+$directory = Join-Path $env:RUNNER_TEMP ('drmr-archive-user-' + [guid]::NewGuid().ToString('N'))
+$directoryCreated = $false
+$directoryIdentity = $null
+$user = $null
+$userSid = $null
+$credential = $null
+$process = $null
+$executionAttempted = $false
+$executionExited = $false
 try {
+    New-Item -ItemType Directory -Path $directory | Out-Null
+    $directoryCreated = $true
+    $directoryIdentity = Get-DrmrArchiveDirectoryIdentity $directory $python
+    $password = [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(36)) + '!aA1'
+    Write-Output "::add-mask::$password"
+    $securePassword = ConvertTo-SecureString $password -AsPlainText -Force
+    $user = New-LocalUser -Name $username -Password $securePassword -Description 'Ephemeral drmr archive qualification user'
+    $userSid = $user.SID
     $users = Get-LocalGroup -SID 'S-1-5-32-545'
     if (-not (Get-LocalGroupMember -Group $users | Where-Object SID -eq $user.SID)) {
         Add-LocalGroupMember -Group $users -Member $user
@@ -36,7 +50,7 @@ try {
         archive = $retainedArchive
         version = $Version
         checkout = $checkout
-        python = (Get-Command python).Source
+        python = $python
         cargo = $cargo
         rustc = $rustc
         tools = $env:DRMR_WINDOWS_MEDIA_TOOLS
@@ -79,7 +93,9 @@ exit $status
 '@ | Set-Content -Encoding utf8 $script
     $stdout = Join-Path $directory 'stdout.log'
     $stderr = Join-Path $directory 'stderr.log'
-    $process = Start-Process -FilePath (Get-Command pwsh).Source -Credential $credential -LoadUserProfile -WorkingDirectory $checkout -ArgumentList @('-NoLogo', '-NoProfile', '-File', "`"$script`"") -RedirectStandardOutput $stdout -RedirectStandardError $stderr -Wait -PassThru
+    $executionAttempted = $true
+    $process = Start-Process -FilePath $shell -Credential $credential -LoadUserProfile -WorkingDirectory $checkout -ArgumentList @('-NoLogo', '-NoProfile', '-File', "`"$script`"") -RedirectStandardOutput $stdout -RedirectStandardError $stderr -Wait -PassThru
+    $executionExited = $true
     Get-Content -LiteralPath $stdout
     Get-Content -LiteralPath $stderr
     $userReport = Join-Path $directory 'public-report.json'
@@ -91,6 +107,5 @@ exit $status
         throw 'Extracted CLI qualification was incomplete'
     }
 } finally {
-    Remove-LocalUser -Name $username
-    Remove-Item -LiteralPath $directory -Recurse -Force
+    Complete-DrmrArchiveOwner -Directory $directory -ExpectedParent $env:RUNNER_TEMP -ExpectedIdentity $directoryIdentity -Python $python -PowerShell $shell -WorkingDirectory $checkout -Credential $credential -UserSid $userSid -Process $process -DirectoryCreated $directoryCreated -ExecutionAttempted $executionAttempted -ExecutionExited $executionExited
 }

@@ -36,6 +36,9 @@ jobs:
         with:
           python-version: '3.13.12'
 
+      - name: Check archive owner cleanup with real private Windows ACLs
+        run: ./.github/scripts/test-windows-cli-archive-cleanup.ps1
+
       - name: Install checksummed Windows media tools
         run: ./.github/scripts/install-windows-media-tools.ps1
 
