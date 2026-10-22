@@ -26,9 +26,9 @@ fn ready_server_handles_native_signals_before_the_shutdown_future_is_polled() {
             _ => panic!("unknown test signal"),
         };
         let root = drmr_core::native::private_tempdir().unwrap();
-        let catalog = root.path().join("catalog");
-        std::fs::create_dir(&catalog).unwrap();
-        let mut config = ServerConfig::new(catalog, root.path().join("output"));
+        let input = root.path().join("input");
+        std::fs::create_dir(&input).unwrap();
+        let mut config = ServerConfig::new(input, root.path().join("output"));
         config.bind_port = 0;
         serve_with_ready(config, |_address| {
             // raise delivers on this calling thread before returning. Process-directed kill

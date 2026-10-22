@@ -39,7 +39,6 @@ pub enum ChildSource {
     Local {
         input_file: PathBuf,
     },
-    #[serde(alias = "hls-url")]
     Url {
         url: String,
         download_dir: PathBuf,
@@ -320,20 +319,20 @@ impl<'de> Deserialize<'de> for UniqueJson {
 mod tests {
     use super::*;
     #[test]
-    fn source_urls_share_one_canonical_kind_and_accept_the_legacy_hls_alias() {
+    fn source_urls_use_one_kind_and_refuse_the_retired_alias() {
         let directory = std::env::temp_dir().join("retained-source");
         for file in ["master.m3u8", "manifest.mpd", "source.mp4"] {
-            for kind in ["url", "hls-url"] {
-                let source = serde_json::json!({"kind":kind,
-                    "url":format!("https://example.invalid/{file}"),
-                    "download_dir":directory,"fetch_policy_file":null});
-                let parsed: ChildSource =
-                    decode(&serde_json::to_vec(&source).unwrap(), REQUEST_LIMIT).unwrap();
-                assert!(matches!(parsed, ChildSource::Url { .. }));
-                let mut canonical = source;
-                canonical["kind"] = "url".into();
-                assert_eq!(serde_json::to_value(parsed).unwrap(), canonical);
-            }
+            let source = serde_json::json!({"kind":"url","url":format!("https://example.invalid/{file}"),"download_dir":directory,"fetch_policy_file":null});
+            let parsed: ChildSource =
+                decode(&serde_json::to_vec(&source).unwrap(), REQUEST_LIMIT).unwrap();
+            assert!(matches!(parsed, ChildSource::Url { .. }));
+            assert_eq!(serde_json::to_value(parsed).unwrap(), source);
+            let mut retired = source;
+            retired["kind"] = "hls-url".into();
+            assert!(
+                decode::<ChildSource>(&serde_json::to_vec(&retired).unwrap(), REQUEST_LIMIT)
+                    .is_err()
+            );
         }
     }
     #[test]

@@ -18,23 +18,19 @@ path = "src/main.rs"
 
 [dependencies]
 axum.workspace = true
-base64.workspace = true
 clap.workspace = true
 drmr-core = { path = "../drmr-core" }
 getrandom.workspace = true
 hex.workspace = true
 http-body.workspace = true
 include_dir.workspace = true
-indexmap.workspace = true
 libc.workspace = true
-regex.workspace = true
-roxmltree.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
-# The content key a preview session and a pending job hold in memory is wiped on drop.
+# Private copies of runtime configuration are wiped from memory on drop.
 zeroize.workspace = true
 
 [dev-dependencies]

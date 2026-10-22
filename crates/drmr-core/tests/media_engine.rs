@@ -498,7 +498,9 @@ fn a_streamed_decode_records_the_command_and_its_completion_only() {
     let expected_input = "6144, c463c2fa2a6cf8a8519de1a7311848cb\n6144, 6feb2a7969f1527f661713bc47738e52\n6144,   0123456789abcdef0123456789abcdef\n";
     assert_eq!(
         digest,
-        drmr_core::snapshot::sha256_hex(expected_input.as_bytes())
+        hex::encode(<sha2::Sha256 as sha2::Digest>::digest(
+            expected_input.as_bytes()
+        ))
     );
     let records = h.collector.records();
     assert_eq!(records.len(), 2);

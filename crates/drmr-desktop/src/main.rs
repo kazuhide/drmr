@@ -21,7 +21,7 @@ const UNCONFIRMED: u8 = 4;
 
 #[derive(Default)]
 struct Roots {
-    catalog: Option<PathBuf>,
+    input: Option<PathBuf>,
     output_parent: Option<PathBuf>,
     private_config: Option<PathBuf>,
 }
@@ -207,13 +207,13 @@ fn pick(app: &AppHandle, role: FolderRole) {
             match (selection.into_path(), state.roots.lock()) {
                 (Ok(path), Ok(mut roots)) if state.phase.load(Ordering::Acquire) == IDLE => {
                     match role {
-                        FolderRole::Input => roots.catalog = Some(path),
+                        FolderRole::Input => roots.input = Some(path),
                         FolderRole::Output => roots.output_parent = Some(path),
                         FolderRole::PrivateConfig => roots.private_config = Some(path),
                     }
                     title(
                         &handle,
-                        if roots.catalog.is_some() && roots.output_parent.is_some() {
+                        if roots.input.is_some() && roots.output_parent.is_some() {
                             "drmr — folders selected"
                         } else {
                             "drmr — choose both folders"
@@ -502,12 +502,12 @@ fn open_console(app: &AppHandle) {
     }
     let roots = state.roots.lock().ok().and_then(|roots| {
         Some((
-            roots.catalog.clone()?,
+            roots.input.clone()?,
             roots.output_parent.clone()?,
             roots.private_config.clone(),
         ))
     });
-    let Some((catalog, output_parent, private_config)) = roots else {
+    let Some((input, output_parent, private_config)) = roots else {
         state.phase.store(IDLE, Ordering::Release);
         error(
             app,
@@ -521,12 +521,11 @@ fn open_console(app: &AppHandle) {
     if std::thread::Builder::new().name("drmr-desktop-startup".into()).spawn(move || {
         let result = (|| {
             let cli = checked_cli().map_err(|_| ())?;
-            let mut config = ServerConfig::new(catalog.clone(), output_parent.join("drmr-output"));
+            let mut config = ServerConfig::new(input.clone(), output_parent.join("drmr-output"));
             config.common_config_root.clone_from(&private_config);
             "127.0.0.1".clone_into(&mut config.bind_host);
             config.bind_port = 0;
             config.cli_argv = vec![cli.into_os_string()];
-            config.batch_available = true;
             drmr_server::spawn(config).map_err(|_| ())
         })();
         match result {
@@ -542,7 +541,7 @@ fn open_console(app: &AppHandle) {
                 let notices = handle.clone();
                 let chooser = handle.clone();
                 let directory = private_config.unwrap_or_else(|| output_parent.join("drmr-plans"));
-                let exports = PlanExports::start(origin.clone(), &catalog, &output_parent.join("drmr-output"), &directory, move |notice| export_notice(&notices, notice), move |selection| choose_plan_file(&chooser, selection));
+                let exports = PlanExports::start(origin.clone(), &input, &output_parent.join("drmr-output"), &directory, move |notice| export_notice(&notices, notice), move |selection| choose_plan_file(&chooser, selection));
                 let Ok(exports) = exports else {
                     failed_plan_start(&handle, &worker_state);
                     return;
@@ -576,7 +575,7 @@ fn open_console(app: &AppHandle) {
 }
 
 fn menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
-    let catalog = MenuItem::with_id(app, "catalog", "Choose input folder…", true, None::<&str>)?;
+    let input = MenuItem::with_id(app, "input", "Choose input folder…", true, None::<&str>)?;
     let output = MenuItem::with_id(app, "output", "Choose output location…", true, None::<&str>)?;
     let private_config = MenuItem::with_id(
         app,
@@ -606,7 +605,7 @@ fn menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         "File",
         true,
         &[
-            &catalog,
+            &input,
             &output,
             &private_config,
             &clear_config,
@@ -662,7 +661,7 @@ fn main() -> std::process::ExitCode {
         .manage(state)
         .menu(menu)
         .on_menu_event(|app, event| match event.id().as_ref() {
-            "catalog" => pick(app, FolderRole::Input),
+            "input" => pick(app, FolderRole::Input),
             "output" => pick(app, FolderRole::Output),
             "private-config" => pick(app, FolderRole::PrivateConfig),
             "clear-config" => clear_private_config(app),

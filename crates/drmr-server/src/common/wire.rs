@@ -19,7 +19,6 @@ pub enum Source {
     Local {
         input_ref: String,
     },
-    #[serde(alias = "hls-url")]
     Url {
         url: String,
         #[serde(deserialize_with = "required_nullable")]
@@ -139,16 +138,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn source_url_aliases_preserve_request_identity_and_strict_fields() {
+    fn source_urls_refuse_retired_aliases_and_keep_strict_fields() {
         for file in ["master.m3u8", "manifest.mpd", "source.mp4"] {
             let canonical = json!({"kind":"url",
                 "url":format!("https://example.invalid/{file}"),"fetch_policy_ref":null});
             let current: Source = serde_json::from_value(canonical.clone()).unwrap();
             let mut legacy = canonical.clone();
             legacy["kind"] = "hls-url".into();
-            let old: Source = serde_json::from_value(legacy).unwrap();
-            assert!(current == old);
-            assert_eq!(serde_json::to_value(old).unwrap(), canonical);
+            assert!(serde_json::from_value::<Source>(legacy).is_err());
+            assert_eq!(serde_json::to_value(current).unwrap(), canonical);
 
             let mut missing = canonical.clone();
             missing.as_object_mut().unwrap().remove("fetch_policy_ref");

@@ -1110,7 +1110,10 @@ fn accepted_whitespace_hex_secrets_cover_canonical_byte_encodings() {
         .map(|pair| std::str::from_utf8(pair).unwrap())
         .collect::<Vec<_>>()
         .join(" \t");
-    drmr_core::config::KeyMaterial::new(compact, &spaced, &spaced).unwrap();
+    assert_eq!(
+        drmr_core::pycompat::fromhex(&spaced).unwrap(),
+        hex::decode(compact).unwrap()
+    );
     let secrets = Secrets::with([spaced.as_str()]);
     for (name, form) in forms(compact) {
         assert_eq!(secrets.scrub(&form), REDACTED, "canonical form: {name}");

@@ -87,7 +87,7 @@ class Site(unittest.TestCase):
                 dest = self.repo / original.relative_to(SOURCE)
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(original, dest)
-        for relative in ("crates/drmr-core/src/batch_cli.rs", "crates/drmr/tests/fixtures/bbb/CENC.md",
+        for relative in ("crates/drmr/tests/fixtures/bbb/CENC.md",
                          "crates/drmr/tests/fixtures/bbb/README.md") + CHECK.BUILDER_INPUTS:
             dest = self.repo / relative
             dest.parent.mkdir(parents=True, exist_ok=True)
@@ -108,7 +108,7 @@ class Site(unittest.TestCase):
         self.assertLessEqual(result["bytes"], 640 * 1024)
         self.assertEqual(result["byte_budget"], 640 * 1024)
         self.assertEqual(set(result["builder_inputs"]), set(CHECK.BUILDER_INPUTS))
-        self.assertEqual({v["chapters"] for v in result["guides"].values()}, {20})
+        self.assertEqual({v["chapters"] for v in result["guides"].values()}, {18})
         self.assertEqual(result["mounts"], ["/", "/drmr/"])
         self.assertEqual(result["scripts"], 0)
         self.assertEqual(result["languages"], ["en", "ja"])
@@ -425,7 +425,7 @@ class Site(unittest.TestCase):
                                   "\n[CLI chapter details](" + reference + ")\n", encoding="utf-8")
                 self.regenerate_guide_fixture()
                 self.assertIn('href="' + reference + '"', (self.site / output).read_text(encoding="utf-8"))
-                self.assertEqual(self.check()["guides"][output]["chapters"], 20)
+                self.assertEqual(self.check()["guides"][output]["chapters"], 18)
 
     def test_regeneration_does_not_waive_portable_chapter_url_boundaries(self):
         cases = (
@@ -665,7 +665,7 @@ class GuideMarkup(unittest.TestCase):
     def test_missing_chapters_code_labels_and_table_scopes_remain_refused(self):
         original = self.fixture()
         self.assertEqual(CHECK.validate_guide(original, "en"),
-                         {"chapters": 20, "code_examples": 46, "tables": 1, "conversion_examples": 45})
+                         {"chapters": 18, "code_examples": 46, "tables": 1, "conversion_examples": 45})
         for old, new in [('data-guide-chapter="verification"', 'data-guide-chapter="missing"'),
                          ('href="#verification"', 'href="#missing"'), ('tabindex="0"', ''),
                          ('aria-labelledby="example-1-title"', ''), ('data-code-language="sh"', 'data-code-language="unknown"'), ('scope="row"', '')]:
@@ -683,7 +683,7 @@ class GuideMarkup(unittest.TestCase):
                 with self.subTest(language=language, chapter=chapter):
                     value = original.replace('<h2 id="introduction-title">',
                         '<a href="' + canonical + '#' + chapter + '">Chapter details</a><h2 id="introduction-title">', 1)
-                    self.assertEqual(CHECK.validate_guide(value, language)["chapters"], 20)
+                    self.assertEqual(CHECK.validate_guide(value, language)["chapters"], 18)
 
     def test_chapter_reference_variants_cannot_bypass_the_primary_reference_contract(self):
         for language, canonical, other in (

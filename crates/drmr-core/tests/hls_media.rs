@@ -2,11 +2,11 @@
 
 mod common;
 
-use drmr_core::events::{Collector, NoSink};
+use drmr_core::events::NoSink;
 use drmr_core::media::{
     MediaEngine, MediaError, PacketInfo, Subprocess, codec_from_init, concatenate,
     default_timing_tolerance, packets_from_probe, payload_hashes_from_probe, payloads_from_probe,
-    same_timing, segment_timing_from_probe, split_fragmented_mp4,
+    same_timing, segment_timing_from_probe,
 };
 use drmr_core::toolrun::{Secrets, ToolRunner};
 use num_bigint::BigInt;
@@ -373,7 +373,7 @@ fn probe_packets_rejects_what_python_rejects() {
             "{name}"
         );
     }
-    // Errors outside HlsMediaError keep their category (hls_pipeline maps ValueError and
+    // Errors outside HlsMediaError keep their category (callers map ValueError and
     // KeyError to track-packaging-failed and lets TypeError / ZeroDivisionError through).
     let classes: Vec<(Value, &str)> = vec![
         (json!({"packets": []}), "KeyError"),
@@ -585,167 +585,6 @@ fn ffmpeg(args: &[&str]) -> std::process::Output {
 
 /// `_assert_stpp_fixture_result`: a host ffmpeg without TTML-in-MP4 muxing skips (no packager
 /// here, so this is the host-unit tier).
-fn stpp_supported(result: &std::process::Output) -> bool {
-    let unsupported = b"Error opening output files: Not yet implemented in FFmpeg, patches welcome";
-    if result.status.code() == Some(176)
-        && result
-            .stderr
-            .windows(unsupported.len())
-            .any(|w| w == unsupported)
-    {
-        eprintln!("skipped: host FFmpeg lacks TTML-in-MP4 muxing");
-        return false;
-    }
-    assert!(result.status.success(), "TTML fixture encoding unavailable");
-    true
-}
-
-/// The TTML sample of an ffmpeg STPP mp4 (Python's `<tt(?:\s|>).*?</tt>`) replaced by `xml`,
-/// padded to the same size so no box changes.
-fn with_document(data: &[u8], xml: &[u8]) -> Vec<u8> {
-    let start = data
-        .windows(4)
-        .position(|w| &w[..3] == b"<tt" && (w[3] == b'>' || w[3].is_ascii_whitespace()))
-        .expect("a TTML document");
-    let end = start
-        + data[start..]
-            .windows(5)
-            .position(|w| w == b"</tt>")
-            .unwrap()
-        + 5;
-    assert!(xml.len() <= end - start);
-    let mut document = xml.to_vec();
-    document.resize(end - start, b' ');
-    [&data[..start], &document, &data[end..]].concat()
-}
-
-#[test]
-fn real_imsc_payload_splits_into_one_fragment() {
-    if !on_path("ffmpeg") {
-        return;
-    }
-    let dir = common::private_tempdir().unwrap();
-    let source = dir.path().join("subs.srt");
-    std::fs::write(&source, "1\n00:00:00,000 --> 00:00:02,000\nHello\n").unwrap();
-    let mp4 = dir.path().join("subtitle.mp4");
-    let result = ffmpeg(&[
-        "-v",
-        "error",
-        "-y",
-        "-i",
-        source.to_str().unwrap(),
-        "-c:s",
-        "ttml",
-        "-movflags",
-        "+frag_keyframe+delay_moov+default_base_moof",
-        "-f",
-        "mp4",
-        mp4.to_str().unwrap(),
-    ]);
-    if !stpp_supported(&result) {
-        return;
-    }
-    let qualified = with_document(&std::fs::read(&mp4).unwrap(), b"<tt xmlns=\"http://www.w3.org/ns/ttml\" xmlns:ttp=\"http://www.w3.org/ns/ttml#parameter\" ttp:profile=\"http://www.w3.org/ns/ttml/profile/imsc1/text\"><body><div><p begin=\"0s\" end=\"2s\">Hello</p></div></body></tt>");
-    std::fs::write(&mp4, &qualified).unwrap();
-    let fragments = split_fragmented_mp4(&mp4, &dir.path().join("init.mp4")).unwrap();
-    assert_eq!(fragments.len(), 1);
-}
-
-#[test]
-fn real_imsc_payloads_are_every_packet_and_never_logged() {
-    if !on_path("ffmpeg") || !on_path("ffprobe") {
-        return;
-    }
-    let dir = common::private_tempdir().unwrap();
-    let source = dir.path().join("subs.srt");
-    std::fs::write(&source, "1\n00:00:00,000 --> 00:00:02,000\nHello\n").unwrap();
-    let base = dir.path().join("base.mp4");
-    let result = ffmpeg(&[
-        "-v",
-        "error",
-        "-y",
-        "-i",
-        source.to_str().unwrap(),
-        "-c:s",
-        "ttml",
-        "-movflags",
-        "+frag_keyframe+delay_moov+default_base_moof",
-        "-f",
-        "mp4",
-        base.to_str().unwrap(),
-    ]);
-    if !stpp_supported(&result) {
-        return;
-    }
-    let data = std::fs::read(&base).unwrap();
-    let valid: &[u8] = b"<tt xmlns=\"http://www.w3.org/ns/ttml\" xmlns:ttp=\"http://www.w3.org/ns/ttml#parameter\" ttp:profile=\"http://www.w3.org/ns/ttml/profile/imsc1/text\"><body><div><p begin=\"0s\" end=\"2s\">Hello</p></div></body></tt>";
-    let invalid: &[u8] = b"<tt:tt xmlns:tt=\"http://www.w3.org/ns/ttml\" xmlns:ttp=\"http://www.w3.org/ns/ttml#parameter\" ttp:profile=\"http://www.w3.org/ns/ttml/profile/imsc1/image\"><tt:body/></tt:tt>";
-    std::fs::write(dir.path().join("first.mp4"), with_document(&data, valid)).unwrap();
-    std::fs::write(dir.path().join("second.mp4"), with_document(&data, invalid)).unwrap();
-    std::fs::write(
-        dir.path().join("concat.txt"),
-        "file 'first.mp4'\nfile 'second.mp4'\n",
-    )
-    .unwrap();
-    let combined = dir.path().join("combined.mp4");
-    let listing = dir.path().join("concat.txt");
-    let result = ffmpeg(&[
-        "-v",
-        "error",
-        "-y",
-        "-f",
-        "concat",
-        "-safe",
-        "0",
-        "-i",
-        listing.to_str().unwrap(),
-        "-map",
-        "0",
-        "-c",
-        "copy",
-        "-movflags",
-        "+frag_keyframe+delay_moov+default_base_moof",
-        "-frag_duration",
-        "1",
-        "-f",
-        "mp4",
-        combined.to_str().unwrap(),
-    ]);
-    assert!(result.status.success());
-    assert_eq!(engine().packet_payloads(&combined, 0).unwrap().len(), 2);
-    let logged = Arc::new(Collector::default());
-    let engine = Subprocess::new(Arc::new(ToolRunner::new(
-        Arc::new(Secrets::new()),
-        logged.clone(),
-    )));
-    let payloads = engine.packet_payloads(&combined, 0).unwrap();
-    assert!(payloads.len() == 2 && payloads[0].windows(5).any(|w| w == b"Hello"));
-    let records = logged.records();
-    assert_eq!(
-        records
-            .iter()
-            .map(|r| r["event"].as_str().unwrap())
-            .collect::<Vec<_>>(),
-        ["command", "tool-output"]
-    );
-    assert!(
-        records[0]["argv"]
-            .as_array()
-            .unwrap()
-            .contains(&json!("-show_data"))
-    );
-    let text = serde_json::to_string(&records).unwrap();
-    assert!(
-        records[1]["stdout"]
-            .as_str()
-            .unwrap()
-            .starts_with("(stdout not logged: ")
-    );
-    assert!(!text.contains("Hello") && !text.contains(&hex::encode("Hello")));
-    let fragments = split_fragmented_mp4(&combined, &dir.path().join("init.mp4")).unwrap();
-    assert_ne!(fragments.len(), 0);
-}
-
 fn hls_fmp4(dir: &Path, codec: &str) -> PathBuf {
     let playlist = dir.join("source.m3u8");
     let mut argv = vec![

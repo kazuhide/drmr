@@ -9,7 +9,6 @@ pub mod path;
 pub mod py;
 pub mod xml;
 
-use crate::config::ConfigError;
 use crate::media::MediaError;
 use py::{PyErr, PyOsError};
 
@@ -31,24 +30,6 @@ pub fn os_error(error: &std::io::Error) -> PyErr {
         errno: error.raw_os_error(),
         message,
     })
-}
-
-/// `config`'s exceptions as the manifest modules raise them: `find_download_root` and
-/// `resolve_local_path` raise `ValueError` (not nested under `download/`, a path escaping the
-/// root), `RuntimeError` (a symlink loop in `Path.resolve`) and `OSError`.
-impl From<ConfigError> for PyErr {
-    fn from(error: ConfigError) -> Self {
-        match error {
-            ConfigError::Value(message) => PyErr::Value(message),
-            ConfigError::Xml(message) => PyErr::Other {
-                class: "ParseError",
-                message,
-            },
-            ConfigError::Runtime(message) => PyErr::Runtime(message),
-            ConfigError::ZeroDivision => PyErr::ZeroDivision("division by zero".to_string()),
-            ConfigError::Io(error) => os_error(&error),
-        }
-    }
 }
 
 /// The media helpers' exceptions as the gates see them: `HlsMediaError`, `ToolError` and the

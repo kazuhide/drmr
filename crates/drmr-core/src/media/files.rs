@@ -37,17 +37,6 @@ pub(crate) fn write_output_file(path: &Path, bytes: &[u8]) -> std::io::Result<()
     create_output_file(path)?.write_all(bytes)
 }
 
-pub(crate) fn create_output_dir(path: &Path) -> std::io::Result<()> {
-    #[cfg(windows)]
-    {
-        crate::native::create_private_dir_all(path)
-    }
-    #[cfg(unix)]
-    {
-        std::fs::create_dir_all(path)
-    }
-}
-
 /// `media::codec_from_init`: the RFC 6381 codec string from the first `avcC` (`avc1.PPCCLL`)
 /// or `hvcC` (`hvc1.<space><profile>.<compat>.<tier><level>[.<constraints>]`) found anywhere in
 /// the file's bytes; `mp4a.40.2` for an AAC fallback; otherwise `output-codec-unproven`.

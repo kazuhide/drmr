@@ -32,7 +32,7 @@ PAGES = {"index.html": ("en", "https://kazuhide.github.io/drmr/"),
 LANDING_PAGES = ("index.html", "ja/index.html")
 GUIDE_CHAPTERS = ("introduction", "terminology", "supported-profiles", "installation",
                   "key-configuration", "inspect-plan", "local-conversion", "url-input",
-                  "verification", "saved-hls", "prepared-dash-batch", "resources-stop",
+                  "verification", "resources-stop",
                   "docker", "windows", "web-console", "desktop", "results-errors",
                   "regression-tests", "cli-reference", "references")
 GUIDE_PRIMARY_REFERENCES = frozenset((

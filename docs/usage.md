@@ -12,8 +12,7 @@ information, native manifest linting, and optional [external manifest checks](ma
 For qualified local MP4, DASH, or HLS media, start with the common commands:
 `inspect` reads metadata, `analyze` checks complete source media, `plan` describes
 intent or saves one fixed conversion, `convert` writes new media, and `verify`
-compares a result with its original source. HLS input does not
-require `analyze-hls` first.
+compares a result with its original source.
 
 For URL preflight, a saved executable plan, offline conversion, and independent
 verification, follow [analyze, save a plan, convert, and verify](executable-plans.md).
@@ -23,18 +22,6 @@ then `convert --plan ./conversion.plan.json` and
 `verify --plan ./conversion.plan.json`, with keys supplied separately when needed.
 For DASH and MP4 URLs, plan from `./source/input.mpd` and `./source/input.mp4`
 respectively. The [URL input table](#convert-a-url) lists the acquisition limits.
-
-The separate HLS snapshot workflow saves clear media from a local or HTTPS
-source under an explicit access policy. `analyze-hls` downloads or copies the
-resources, probes them, and writes a snapshot: saved media plus its analysis
-record. `verify-snapshot --files` checks that those saved bytes still match the
-record. `package-hls` packages that verified snapshot with DRM signaling and can
-produce **both DASH and HLS**, despite its name. This workflow also has supported
-subtitle profiles; it is not an alias for generic `convert`.
-
-A snapshot integrity check detects changed saved files. It does not replace
-`verify OUTPUT --source INPUT`, which compares complete media and timing.
-`run` and `batch` serve the separately prepared catalog layouts described below.
 
 ## Inspect media and plan a conversion
 
@@ -48,7 +35,7 @@ drmr plan manifest.mpd --to cbcs --format dash,hls --json
 
 Manifest reports describe declarations. MP4 reports read initialization metadata and skip media payloads. Both return `media_verified: false`; they do not decrypt, decode, validate every sample, or prove device playback. Unsupported or incomplete protection remains `unknown`. An HLS `SAMPLE-AES` declaration alone does not establish the underlying MP4 encryption scheme.
 
-HLS inspection follows only local child playlists inside the input playlist's directory tree. It never fetches remote playlists, media segments, or keys. Remote, missing, cyclic, and escaping child references remain unresolved. Limits are 4 MiB per manifest, 16 MiB total, 32 playlists, and 128 references. Each track permits at most 64 key identifiers; DASH also limits inherited protection declarations to 64, and HLS permits at most 64 active key formats. MP4 movie metadata is limited to 16 MiB. This command is separate from `analyze-hls`, which downloads and probes media under an explicit source policy.
+HLS inspection follows only local child playlists inside the input playlist's directory tree. It never fetches remote playlists, media segments, or keys. Remote, missing, cyclic, and escaping child references remain unresolved. Limits are 4 MiB per manifest, 16 MiB total, 32 playlists, and 128 references. Each track permits at most 64 key identifiers; DASH also limits inherited protection declarations to 64, and HLS permits at most 64 active key formats. MP4 movie metadata is limited to 16 MiB. Use `analyze` to check complete local media or retain a supported URL under an explicit fetch policy.
 
 `plan INPUT --to clear|cenc|cbcs|hls-aes128|hls-sample-aes` describes the requested operations and independent input/output key roles. `--format mp4|dash|hls|hls-ts` selects output packaging; comma-separated values are accepted. Omitting it retains the input format. An HLS AES-128 target requires `hls` or `hls-ts` output. SAMPLE-AES TS requires `hls-ts`. `cenc` and `cbcs` are refused with TS output. CENC output to HLS is currently rejected. Unsupported source protection or unresolved encryption is reported as incompatible, except that a consistent SAMPLE-AES declaration can produce conditional HLS routes. Those routes still require the appropriate keys, IVs, and actual media validation.
 
@@ -192,9 +179,9 @@ conversions retain their existing result shape.
 
 ### Separate input and output keys
 
-New commands use an owner-only JSON configuration, with no environment fallback. Store this outside the output tree and version control. Here is its structure using placeholders; replace each placeholder with your own hexadecimal value before use:
+Supply keys in an owner-only JSON configuration; there is no environment fallback. Store this outside the output tree and version control. Here is its structure using placeholders; replace each placeholder with your own hexadecimal value before use:
 
-Read [keys and local security](security.md) before using confidential media. It explains which values are masked, which metadata is published, and how keys reach external tools, temporary files, and local playback.
+Read [keys and local security](security.md) before using confidential media. It explains which values are masked, which metadata is published, and how keys reach external tools, temporary files, and local interfaces.
 
 ```json
 {
@@ -294,162 +281,19 @@ configuration also lets verification read a playlist that omits an explicit IV.
 
 The advertised HLS URI is written to output playlists, so choose a location suitable for publication. AES-128 output uses fresh per-resource IVs; SAMPLE-AES output uses the explicit associated IV supplied by you. drmr never publishes a key file. Input key URI mappings, raw keys, and initialization vectors are excluded from reports and diagnostics. The external packager accepts raw keys in child-process arguments; an operating-system process inspector with sufficient access can observe them.
 
-On macOS/Linux, use `chmod 600 keys.json`. Unknown fields, duplicate fields, unsupported schema versions, oversized configurations, links, and permissions readable by other users are refused. Multiple-output conversions use a schema-version-2 key file with shared `input` and output-ID-keyed `outputs`; see [multiple outputs](multiple-outputs.md). Legacy commands below retain their existing configuration interfaces.
-
-## List a prepared DASH asset
-
-`plan` and `run` use a downloaded media tree. URLs in the DASH manifest resolve to local files under `download/<host>/<path>`. For example:
-
-```text
-sample/
-  download/
-    manifest.example.test/sample/dash/manifest.mpd
-    manifest.example.test/sample/hls/manifest.m3u8
-    cdn.example.test/sample/video/v0/init.mp4
-    cdn.example.test/sample/video/v0/seg_1.m4s
-    cdn.example.test/sample/video/v0/seg_2.m4s
-```
-
-The DASH manifest needs a `BaseURL`, MP4 adaptation sets, and a `SegmentTemplate` on each representation with `initialization`, `media`, `timescale`, and `duration`. Media templates use `$Number$`; segment filenames need numeric indices. For the tree above, a `BaseURL` of `https://cdn.example.test/sample/` and an initialization path of `video/v0/init.mp4` resolve to the shown local file. The source HLS master playlist is also needed when generating output playlists.
-
-```sh
-drmr plan --mpd sample/download/manifest.example.test/sample/dash/manifest.mpd
-```
-
-The command lists supported video and audio renditions and their segment counts. It writes nothing and needs no keys. It is not a full media validation.
-
-## Provide key material
-
-`run` and `package-hls` read these environment variables:
-
-| Variable | Meaning | Format |
-| --- | --- | --- |
-| `DRM_KID` | Key identifier | 16 bytes written as 32 hexadecimal characters |
-| `DRM_KEY` | Content encryption key | 16 bytes written as 32 hexadecimal characters |
-| `DRM_IV` | Initialization vector used for output encryption | 16 bytes written as 32 hexadecimal characters |
-
-Supply them through your local secret-management process before running the command. drmr has no command-line flags for key values. Keep keys out of shell history, work lists, and version control. The DASH conversion retains the supplied key identifier and key while changing the encryption scheme.
-
-`package-hls --drm-config` contains signaling, not encryption keys. Batch mode additionally supports a protected key file, described below.
-
-## Repackage a local DASH asset
-
-With the three environment variables already set:
-
-```sh
-drmr run \
-  --mpd sample/download/manifest.example.test/sample/dash/manifest.mpd \
-  --hls-master sample/download/manifest.example.test/sample/hls/manifest.m3u8 \
-  --output output \
-  --asset-id sample
-```
-
-Output is created beneath `output/sample/`. Use `--log-format jsonl` for one JSON record per line. `--max-workers` limits how many renditions run concurrently. Use `--packager-bin` to specify a directory containing an executable named `packager`, or the executable itself.
-
-`--no-manifests`, `--no-round-trip`, and `--limit-renditions` skip work or checks for debugging. A run using them provides less validation or incomplete output. See `drmr run --help` for details.
-
-## Analyze clear HLS
-
-Save this as `source.json`, replacing the paths with absolute paths to your media:
-
-```json
-{
-  "url": "/absolute/path/media/master.m3u8",
-  "policy": {
-    "allowed_local_roots": ["/absolute/path/media"]
-  }
-}
-```
-
-The configuration must be a JSON object readable only by its owner. On macOS/Linux:
-
-```sh
-chmod 600 source.json
-drmr analyze-hls --source-config source.json --asset-id sample --output output
-```
-
-The snapshot, including `analysis.json`, is saved under `output/sample/clear/source/`. Use a fresh asset identifier or output location for another analysis; an existing snapshot is not overwritten.
-
-For HTTPS input, replace the configuration with:
-
-```json
-{
-  "url": "https://media.example.test/master.m3u8",
-  "policy": {
-    "allowed_origins": ["https://media.example.test"]
-  }
-}
-```
-
-Allow every origin used by playlists, segments, and redirects. An origin is the URL scheme plus hostname and optional port. Local resources and remote origins are denied unless explicitly allowed. HTTP and private-network destinations are disabled by default.
-
-Optional policy fields include `headers_by_origin` (an object mapping allowed origins to request-header objects), `connections` and `probe_workers` (1–64), `attempts` (1–5), `timeout` in seconds, `max_playlist_bytes`, `max_playlists`, `max_segments_per_track`, `max_resource_bytes`, `max_total_bytes`, `max_total_resources`, and `min_free_disk_bytes`. Limits must be positive except the minimum free-space value, which may be zero. `allow_http` and `allow_private_network` can explicitly enable those destinations. Keep any configuration containing request credentials owner-only.
-
-A server may close an idle connection between segment downloads. If a reused connection
-fails before response headers arrive, drmr replaces it once without spending a configured
-attempt. Fresh-connection failures, response-body errors, and request timeouts still use
-the normal attempt limit. Windows can report the closed idle socket as an aborted connection;
-drmr recognizes this platform difference. See [Windows socket errors](https://learn.microsoft.com/en-us/windows/win32/winsock/windows-sockets-error-codes-2).
-
-Analysis supports only clear, completed on-demand presentations. Encrypted playlists, live input, discontinuities, unsupported tracks, and unsupported subtitle profiles are rejected.
-
-## Package the HLS snapshot
-
-This is a legacy snapshot workflow that writes both DASH and HLS manifests.
-For new work, use [the common multiple-output commands](multiple-outputs.md).
-The existing command and its saved snapshot format remain available for
-compatibility.
-
-Save DRM signaling in `drm.json` using the values issued for your content. This template contains placeholders and is not ready to run:
-
-```json
-{
-  "widevine_pssh": "<hex or base64 Widevine initialization data>",
-  "playready_la_url": "https://license.example.test/rightsmanager.asmx",
-  "fairplay_uri": "skd://<content-identifier>"
-}
-```
-
-`widevine_pssh` is the Protection System Specific Header (PSSH), initialization data used by a DRM system. A full Widevine PSSH box or a Widevine payload containing key identifiers is accepted in hexadecimal or base64. Its identifiers must match `DRM_KID`. `playready_la_url` is the PlayReady license acquisition URL; `fairplay_uri` identifies the FairPlay content key.
-
-With valid signaling and the three key environment variables set:
-
-```sh
-chmod 600 drm.json
-drmr package-hls \
-  --analysis output/sample/clear/source/analysis.json \
-  --drm-config drm.json
-```
-
-The command verifies the snapshot before packaging and writes output under the same asset directory. It emits progress as one JSON object per line. `--max-workers` limits concurrent segment packaging; `--packager-bin` accepts the packager executable path.
-
-When audio selection is required, create an owner-only JSON file containing `audio_source_id` from the snapshot's track identifiers and pass `--selection selection.json`. You can also include `analysis_id` and `snapshot_digest` from that snapshot to detect a stale selection.
-
-```sh
-drmr verify-snapshot --files output/sample/clear/source
-```
-
-`--files` verifies the saved playlist and segment bytes as well as the analysis record.
-
-## Batch processing
-
-`drmr batch --help` lists work-list, storage, restart-log, and retry options. On Windows, use the [regular-user and private-directory conditions](windows.md). A work list contains one JSON object per line: first `{"schema_version":"1"}`, then rows with exactly `asset_id`, `kind`, `dash_manifest`, and `hls_master`. `kind` is `dash-cenc` or `hls-clear`; manifest references are relative storage object keys, with unused references set to `null`.
-
-Use `--plan` to inspect planned work before processing. The default key provider reads the three environment variables. To use per-asset keys, pass `--key-provider file --key-file /protected/keys.jsonl`. Each line in that file has exactly `asset_id`, `kid`, `key`, and `iv`; there is no schema header. All three key fields use the hexadecimal formats above. The file must not be a symbolic link and must stay outside the output directory. Use mode `0600` on macOS/Linux; on Windows, apply the [protected current-user-only access control](windows.md#protect-configuration-files).
+On macOS/Linux, use `chmod 600 keys.json`. Unknown fields, duplicate fields, unsupported schema versions, oversized configurations, links, and permissions readable by other users are refused. Multiple-output conversions use a schema-version-2 key file with shared `input` and output-ID-keyed `outputs`; see [multiple outputs](multiple-outputs.md).
 
 ## Experimental web console
 
 The web console is a local operator interface without authentication. Keep it bound to loopback on a trusted machine.
 
-Local playback intentionally delivers ClearKey keys to the browser; masked form fields do not hide them from developer tools or network-recording exports. See the [local playback security boundary](security.md#local-web-and-desktop-playback).
-
 ```sh
-DRMR_CATALOG_ROOT=/absolute/path/catalog \
+DRMR_INPUT_ROOT=/absolute/path/media \
 DRMR_OUTPUT_ROOT=/absolute/path/output \
 drmr serve
 ```
 
-Open `http://127.0.0.1:8080`. Both root directories are required. `DRMR_BIND_PORT` changes the port; `DRMR_MAX_WORKERS` caps workers for the saved-plan workflow and prepared HLS packaging. Automatic allocation stays within that cap. The new workflow selects from allowed input folders; prepared catalog entries still require the documented layout. See `drmr serve --help` for options. The optional [Desktop host](desktop.md) opens this same console in a native window.
+Open `http://127.0.0.1:8080`. Both root directories are required. `DRMR_BIND_PORT` changes the port; `DRMR_MAX_WORKERS` caps workers for saved-plan operations. Automatic allocation stays within that cap. Select media and saved plans from the allowed input folder. See `drmr serve --help` for options. The optional [Desktop host](desktop.md) opens this same console in a native window.
 
 ### Saved-plan workflow
 
@@ -469,61 +313,33 @@ URL sessions use a generic **Source URL** label. The server does not return the 
 
 Every newly saved plan is v2, including a one-output list. When supplying a key file, analyze accepts either schema; new plan creation and v2 plan conversion/verification use v2 keys. Imported v1 plans use v1 keys. See [multiple outputs](multiple-outputs.md) and the [key-file reference](https://kazuhide.github.io/drmr/guide/#cli-reference).
 
-The common workflow fixes a request identifier before submitting an operation. A lost reply is recovered by GET lookup of that exact request and job; a missing live receipt remains unknown. **Check status** never repeats the POST. Stop acknowledgment is separate from confirmed process cleanup, and unconfirmed cleanup retains the global execution slot shared with prepared workflows. Selection and language changes do not release it.
+The common workflow fixes a request identifier before submitting an operation. A lost reply is recovered by GET lookup of that exact request and job; a missing live receipt remains unknown. **Check status** never repeats the POST. Stop acknowledgment is separate from confirmed process cleanup, and unconfirmed cleanup retains the global execution slot. Selection and language changes do not release it.
 
 Each session admits at most 32 requests, including claimed requests later refused. At the limit, download the plan, explicitly **Close this conversion**, and open the saved plan in a new session for verification. Closing uses an admission fence: delayed requests for the old session cannot start work. A pending, running or cleanup-unconfirmed session cannot close. Closing the page alone is not this explicit action.
 
-### Prepared workflows
+### Job state and shutdown
 
-The existing catalog conversion, clear-HLS analysis/packaging, queue and before/after player remain under **Prepared content**. These use their existing API and prepared-input restrictions. Their HLS access profiles are separate from the common workflow's fetch-policy file.
+A lost launch response remains unknown until the same request and job can be looked up. **Check status** does not resubmit the operation. Stop requests termination of the owned job and its media tools; an acknowledgment alone does not establish cleanup. Input media, retained URL originals, saved plans and completed results are not deleted by Stop.
 
-The console gives each JSON request a 15-second response budget, including response headers and body. This is a page recovery limit, not a deadline for media processing. If a launch response is lost, the page does not repeat the launch: it checks newly recorded jobs against the pre-submit list, content and job kind. An ambiguous or missing match remains unknown and keeps another launch blocked. Use **Check job status** to repeat only the status lookup. Lost job observation also keeps its owner until status can be checked again. A lost Stop response does not establish cleanup; its status action checks the same job without resending Stop. A known HTTP refusal keeps its normal error classification.
+The server owns the job CLI and its managed tools. Unconfirmed process cleanup retains the execution slot and private configuration references, and prevents new work. Status and logs remain available for diagnosis. Use the same version of `drmr` for the server and its job CLI; if you set `--cli`, supply the executable directly.
 
-For clear HLS added through the console, the server saves source URLs, original playlists, and downloaded media in `DRMR_OUTPUT_ROOT/<asset-id>/clear/source/`. Keep this private folder protected: the saved information can contain signed URLs. Temporary request configuration files are separate; the server attempts to remove them after jobs finish, without deleting the saved source. Removing a job from history hides its record; saved sources, packaged media, and logs remain on disk.
+On interruption or termination, the server closes submissions, stops active work, and waits for confirmed process cleanup before reporting successful shutdown. Rust embedding hosts should call `RunningServer::shutdown(&mut self)` and retain the owner if it returns an error; dropping a host is best effort. If shutdown remains incomplete, fix the reported cause and retry. Force-killing the server bypasses this confirmation.
 
-Use **Stop** beside a running job to terminate that job and its child processes. Queued jobs continue afterward. The console waits for cleanup before recording the job as interrupted, and keeps the process's actual exit code. Stopping is not an undo: partial output files can remain and previous output files may already have changed. Input media and job logs are retained.
-
-On macOS and Linux, media tools use separate process groups: operating-system groups that can be stopped together. This lets a timed-out tool and its descendants be cleaned up independently. The console server owns these tool processes directly, as well as the job CLI, so cleanup still includes the tools if the CLI exits first. Windows uses nested job objects for this ownership. Completion requires confirmation of both the CLI and its managed tools. A pause or resume notification is not an exit: a paused tool remains owned and can still be terminated with Stop. Cleanup waits for an actual exit and confirmation that the owned process group is gone.
-
-Use the same version of `drmr` for the server's job CLI. If you set `--cli`, point it to that executable. On macOS and Linux, console jobs establish supervision before media work starts; an incompatible executable or a wrapper that launches another CLI process is refused. Use the standalone CLI for batch processing and other commands; the console's supervised job profile covers analyze, saved-plan creation/conversion/verification, catalog conversion, HLS analysis and HLS packaging.
-
-If cleanup cannot be confirmed, the job keeps its execution slot and temporary configuration files; check the server log. Job status, stop and log endpoints remain available while shutdown waits or reports an error; new work is refused. A stop response only acknowledges the request. The job status and final log event establish completion. The local API accepts `POST /api/jobs/<job-id>/stop` with an empty JSON object (`{}`): `202` while running, `200` after completion, `404` for an unknown job, and `503` when cleanup is unconfirmed. Repeating a request is safe; an old job ID cannot stop a newer job.
-
-On interruption or termination, the server closes submissions, stops the active job, and drains its queue runner, log streams and background workers before reporting successful shutdown. Queued items are not started during shutdown. Rust embedding hosts should call `RunningServer::shutdown(&mut self)` and retain the owner if it returns an error; dropping a host is best effort and does not prove successful cleanup.
-
-If `drmr serve` reports incomplete shutdown, it keeps diagnostic access available. Fix the reported cause, then send an interrupt or termination signal again to retry. Force-killing the server bypasses this confirmation.
-
-Catalog output existence and verified readiness are separate. The API keeps the
-legacy `converted` flag for a saved manifest and adds `output_readiness`. A new
-attempt makes earlier output unverified before it starts writing. Only a fully
-successful run, confirmed process cleanup, and a matching report and output
-inventory make that generation ready for playback. Exit code zero alone does
-not qualify old or partial files. Existing outputs are not deleted or rolled back; interrupted work may have
-changed them. Unfenced legacy output remains unverified. Failed or incomplete
-reports remain readable as sanitized diagnostics without a playback URL; stale
-successful reports do not become a new verified result. This qualification is
-media verification, not a DRM license-service or device-playback guarantee.
-An already opened output response stops reading when a newer attempt invalidates
-its generation. It can finish sending bytes already buffered from the older
-verified output, but does not read the newer attempt's files under that authority.
-
-Requests must address `localhost`, `127.0.0.1`, `::1`, or an explicitly configured bind hostname/address. Binding to a wildcard address does not permit arbitrary hostnames. Reverse proxies and remote access are outside this local console's default setup.
-
-The console's before/after player uses local ClearKey test keys. Playback setup waits at most 20 seconds while the page's event loop runs, including previous-player cleanup, the local key response, media loading and the video actually starting to play. A loaded-media phase remains inside that same deadline until the video emits a playing event. A setup timeout restores the controls without changing conversion or verification results. Retry, or use a browser where this ClearKey test works. If cleanup of the previous player is unconfirmed, reload the page before retrying; the console keeps that owner instead of overlapping players. A key being configured is separate from usable playback, and a successful browser test does not qualify another browser or native WebView.
+Keep retained originals, plans, results and logs private. Closing a browser tab does not erase saved files or establish that a running operation has stopped.
 
 ## Exit codes
 
-Most commands return `0` for success, `1` for a failed operation or validation, and `2` for invalid usage or configuration. `verify-snapshot` returns `1` for changed content and `2` for an invalid snapshot. Batch processing can return `130` when interrupted. `convert` and `verify` also return `130` after cooperative cancellation: on Unix, send SIGINT (Ctrl+C) or SIGTERM. They stop queued work and terminate managed media subprocesses before returning. Cancellation observed before publication prevents publishing the result. Force-killing the CLI bypasses cooperative cleanup; the measurement tool reports that fallback as cleanup unconfirmed.
+Most commands return `0` for success, `1` for a failed operation or validation, and `2` for invalid usage or configuration. `convert` and `verify` also return `130` after cooperative cancellation: on Unix, send SIGINT (Ctrl+C) or SIGTERM. They stop queued work and terminate managed media subprocesses before returning. Cancellation observed before publication prevents publishing the result. Force-killing the CLI bypasses cooperative cleanup; the measurement tool reports that fallback as cleanup unconfirmed.
 
 `doctor` discovers executable files on the current launch environment's `PATH` without executing them. Add `--probe` to run version and help checks with a three-second deadline per call and a 1 MiB output limit per stream. Raw tool output is excluded from the report. Discovery returns `0` when required tools are found; probing additionally requires recognized supported versions and the advertised options. A missing or failed required check returns `1`; invalid arguments return `2`.
 
-Use `--route progressive-mp4` for FFmpeg and ffprobe, or another route from [processing routes](processing-routes.md) to additionally require Shaka Packager. `--route all` (the default) and `--route prepared-dash` also require Bento4. Unrelated tools remain optional, so an unsupported version or missing feature does not block the selected route. Unconfirmed process cleanup always blocks readiness, including an optional probe. For example:
+Use `--route progressive-mp4` for FFmpeg and ffprobe, or another route from [processing routes](processing-routes.md) to additionally require Shaka Packager. `--route all` (the default) checks all three tools. Unrelated tools remain optional, so an unsupported version or missing feature does not block the selected route. Unconfirmed process cleanup always blocks readiness, including an optional probe. For example:
 
 ```sh
 drmr doctor --probe --route progressive-mp4 --json
 ```
 
-The single JSON object retains `ready` and `tools`, with each tool's `name`, `purpose`, `available`, and `required`. Added version-one fields include `mode` (`discovery` or `probe`), `profile`, resolved `path`, `path_status`, `version`, `version_status`, `feature_status`, individual `features`, fixed `failure_code`, `cancelled`, and `cleanup_status` (`not-required`, `confirmed`, or `unconfirmed`). `ready` covers the selected checks only; `media_compatibility_checked` remains false. Bento4 reports `build-unverified` because its banner omits the build number: confirm build 641 or newer separately. Non-UTF-8 executable paths are reported without an ambiguous replacement path and are refused for probing. A successful diagnostic does not validate media, keys, licensing, or device playback.
+The single JSON object retains `ready` and `tools`, with each tool's `name`, `purpose`, `available`, and `required`. Added version-one fields include `mode` (`discovery` or `probe`), `profile`, resolved `path`, `path_status`, `version`, `version_status`, `feature_status`, individual `features`, fixed `failure_code`, `cancelled`, and `cleanup_status` (`not-required`, `confirmed`, or `unconfirmed`). `ready` covers the selected checks only; `media_compatibility_checked` remains false. Non-UTF-8 executable paths are reported without an ambiguous replacement path and are refused for probing. A successful diagnostic does not validate media, keys, licensing, or device playback.
 
 If a diagnostic cannot confirm tool cleanup, the CLI retains the process owner
 and retries cleanup in the foreground, pausing between failures. Ctrl+C or

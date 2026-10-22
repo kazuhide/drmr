@@ -18,6 +18,75 @@ SPEC.loader.exec_module(module)
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_empty_path_discovery_requires_the_current_runtime_inventory(self):
+        tools = [{"name": name, "available": False} for name in ("ffmpeg", "ffprobe", "packager")]
+        report = {"ready": False, "mode": "discovery", "tools": tools}
+        self.assertEqual(module.require_empty_path_discovery(1, json.dumps(report)),
+                         {"exit_code": 1, "ready": False, "tools_missing": 3})
+        for changed in (tools + [{"name": "mp4dump", "available": False}], tools[:-1],
+                        tools[:-1] + [{"name": "ffmpeg", "available": False}],
+                        tools[:-1] + [{"name": "packager", "available": True}]):
+            with self.subTest(tools=changed), self.assertRaisesRegex(
+                    module.Refusal, "^empty-path-discovery-invalid$"):
+                module.require_empty_path_discovery(1, json.dumps({**report, "tools": changed}))
+
+    def test_web_analysis_admission_is_bound_to_both_request_receipts(self):
+        server, policy, session, job = [value * 32 for value in "abcd"]
+        creation, request = [value * 32 for value in "12"]
+        session_reply = {"schema_version": 1, "server_id": server, "session_id": session,
+                         "creation_request_id": creation}
+        job_reply = {"schema_version": 1, "server_id": server, "session_id": session,
+                     "request_id": request, "job_id": job, "operation": "analyze", "state": "running"}
+        for invalid in (None, "session-schema", "creation", "job-schema", "job-session", "job-request"):
+            with self.subTest(invalid=invalid):
+                admitted_session, admitted_job = dict(session_reply), dict(job_reply)
+                if invalid == "session-schema":
+                    admitted_session["schema_version"] = 2
+                elif invalid == "creation":
+                    admitted_session["creation_request_id"] = "e" * 32
+                elif invalid == "job-schema":
+                    admitted_job["schema_version"] = 2
+                elif invalid == "job-session":
+                    admitted_job["session_id"] = "e" * 32
+                elif invalid == "job-request":
+                    admitted_job["request_id"] = "e" * 32
+                responses = [(201, json.dumps(admitted_session).encode()),
+                             (202, json.dumps(admitted_job).encode())]
+                with patch.object(module, "http_request", side_effect=responses) as calls, \
+                        patch.object(module.uuid, "uuid4", side_effect=[module.uuid.UUID(creation),
+                                                                      module.uuid.UUID(request)]):
+                    if invalid is None:
+                        self.assertEqual(module.submit_web_analysis(8080, server, policy,
+                                         "http://127.0.0.1/master.m3u8"), job)
+                        self.assertEqual(calls.call_count, 2)
+                    else:
+                        code = "web-real-session-not-created" if invalid in ("session-schema", "creation") else "web-real-job-not-launched"
+                        with self.assertRaisesRegex(module.Refusal, "^" + code + "$"):
+                            module.submit_web_analysis(8080, server, policy, "http://127.0.0.1/master.m3u8")
+
+    def test_common_web_context_uses_only_opaque_private_file_references(self):
+        server, root, file = "a" * 32, "b" * 32, "c" * 32
+        responses = [(200, json.dumps({"schema_version": 1, "server_id": server,
+                      "roots": [{"root_ref": root, "roles": ["keys", "fetch-policy"]}]}).encode()),
+                     (200, json.dumps({"schema_version": 1, "server_id": server, "next_cursor": None,
+                      "entries": [{"kind": "file", "file_ref": file, "label": "Configuration 1"}]}).encode())]
+        with patch.object(module, "http_request", side_effect=responses) as request:
+            self.assertEqual(module.common_web_context(8080), (server, file))
+        self.assertEqual(request.call_args_list[0].args, (8080, "GET", "/api/common/capabilities"))
+        self.assertEqual(request.call_args_list[1].args,
+                         (8080, "GET", "/api/common/files?root_ref=" + root + "&role=fetch-policy"))
+
+    def test_common_web_context_refuses_changed_server_or_missing_configuration(self):
+        for entries, reply_server in (([], "a" * 32),
+                                      ([{"kind": "file", "file_ref": "c" * 32}], "d" * 32)):
+            responses = [(200, json.dumps({"schema_version": 1, "server_id": "a" * 32,
+                          "roots": [{"root_ref": "b" * 32, "roles": ["fetch-policy"]}]}).encode()),
+                         (200, json.dumps({"schema_version": 1, "server_id": reply_server,
+                          "next_cursor": None, "entries": entries}).encode())]
+            with patch.object(module, "http_request", side_effect=responses):
+                with self.assertRaisesRegex(module.Refusal, "^web-reference-invalid$"):
+                    module.common_web_context(8080)
+
     def valid(self):
         return {"passed": True, "media_verified": True, "license_playback_verified": False,
                 "checks": {"stream_metadata": "pass", "packet_payloads_equal": True,
@@ -100,8 +169,12 @@ class EvidenceTests(unittest.TestCase):
             def __init__(self, *_):
                 pass
 
-            def checked(self, *_):
+            def checked(self, *_, **__):
                 return b'{"ready":true,"cleanup_status":"confirmed"}'
+
+            def invoke(self, *_, **__):
+                tools = [{"name": name, "available": False} for name in ("ffmpeg", "ffprobe", "packager")]
+                return 1, json.dumps({"ready": False, "mode": "discovery", "tools": tools}), b""
 
             def close(self):
                 raise module.Refusal("owned-cleanup-unconfirmed")
@@ -120,6 +193,7 @@ class EvidenceTests(unittest.TestCase):
             actual = json.loads(report.read_text())
             self.assertIs(actual["success"], False)
             self.assertEqual(actual["failure_code"], "owned-cleanup-unconfirmed")
+            self.assertEqual(actual["active_gate"], "web")
 
     def test_failed_container_removal_cannot_be_reported_as_confirmed_cleanup(self):
         image = object.__new__(module.Image)
@@ -140,7 +214,7 @@ class EvidenceTests(unittest.TestCase):
                 hosts = self.headers.get_all("Host")
                 requests.append((self.path, hosts))
                 status, error = replies.get(hosts[0], (500, "fixture-invalid-host"))
-                body = json.dumps({"error": error}).encode("utf-8")
+                body = json.dumps({"schema_version": 1, "server_id": "a" * 32, "error": {"code": error}}).encode("utf-8")
                 self.send_response(status)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(body)))
@@ -167,8 +241,8 @@ class EvidenceTests(unittest.TestCase):
             {"case": "untrusted-authority", "status": 403, "error": "untrusted-host"},
             {"case": "malformed-authority", "status": 400, "error": "invalid-host"}])
         self.assertEqual(requests, [
-            ("/api/catalog", ["other.invalid"]),
-            ("/api/catalog", ["user@localhost"])])
+            ("/api/common/capabilities", ["other.invalid"]),
+            ("/api/common/capabilities", ["user@localhost"])])
 
     def test_real_http_guard_controls_refuse_success_and_wrong_failure_classes(self):
         for host, reply in (("other.invalid", (200, "untrusted-host")),
@@ -179,7 +253,7 @@ class EvidenceTests(unittest.TestCase):
                 port, requests = self.host_guard_control({host: reply})
                 with self.assertRaisesRegex(module.Refusal, "^web-host-guard-failed$"):
                     module.verify_web_host_guards(port)
-                self.assertEqual(requests[-1], ("/api/catalog", [host]))
+                self.assertEqual(requests[-1], ("/api/common/capabilities", [host]))
 
     def test_published_barrier_is_observed_when_the_real_child_exits_between_samples(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -244,18 +318,19 @@ class EvidenceTests(unittest.TestCase):
 
         def request(_port, method, path, body=None, headers=None):
             if headers and headers.get("Origin") == "https://other.invalid":
-                return 403, b'{"error":"same-origin-required"}'
-            if method == "GET" and path == "/api/catalog":
+                return 403, b'{"error":{"code":"same-origin-required"}}'
+            if method == "GET" and path == "/api/common/capabilities":
                 return 200, b"{}"
-            self.assertEqual((method, path), ("POST", "/api/hls/analyses"))
-            return 202, json.dumps({"job_id": "0" * 32}).encode()
+            self.fail("Only the explicit common job boundary may launch a fixture job")
 
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             (root / "input/hls").mkdir(parents=True)
             (root / "work/web-control").mkdir(parents=True)
             with patch.object(module, "http_request", side_effect=request), \
-                    patch.object(module, "verify_web_host_guards", return_value=[]):
+                    patch.object(module, "verify_web_host_guards", return_value=[]), \
+                    patch.object(module, "common_web_context", return_value=("a" * 32, "b" * 32)), \
+                    patch.object(module, "submit_web_analysis", return_value="0" * 32):
                 with self.assertRaisesRegex(module.Refusal, "^web-lifecycle-barrier-missing$") as denied:
                     module.web(Image(), root)
             evidence = denied.exception.evidence

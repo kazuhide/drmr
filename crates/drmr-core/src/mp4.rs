@@ -9,8 +9,6 @@ use std::fmt;
 use std::path::Path;
 use zeroize::Zeroizing;
 
-pub(crate) mod audio_edit;
-
 /// A box type.
 pub type FourCc = [u8; 4];
 

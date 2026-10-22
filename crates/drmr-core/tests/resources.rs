@@ -17,41 +17,6 @@ fn small_video() -> Workload {
     }
 }
 
-fn admitted_small_source(root: &std::path::Path) -> drmr_core::source::SourceAnalysis {
-    use drmr_core::source::{AnalyzeOptions, Direct, FetchPolicy, SourceRequest, analyze_hls_with};
-    let input = root.join("input");
-    std::fs::create_dir(&input).unwrap();
-    std::fs::write(
-        input.join("source.m3u8"),
-        "#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXTINF:6,\nsegment.ts\n#EXT-X-ENDLIST\n",
-    )
-    .unwrap();
-    let mut segment = [0_u8; 188];
-    segment[0] = 0x47;
-    std::fs::write(input.join("segment.ts"), segment).unwrap();
-    let policy = FetchPolicy {
-        allowed_local_roots: vec![input.clone()],
-        ..FetchPolicy::default()
-    };
-    let probe = |_: &std::path::Path, _: Option<&std::path::Path>| {
-        Ok(vec![serde_json::json!({"index":0,"codec_type":"video","codec_name":"h264","width":640,"height":360}).as_object().unwrap().clone()])
-    };
-    let options = AnalyzeOptions {
-        on_log: None,
-        prober: &probe,
-        platform: Arc::new(drmr_core::source::platform::SystemPlatform),
-        hooks: &Direct,
-    };
-    analyze_hls_with(
-        &SourceRequest::new(input.join("source.m3u8").to_string_lossy()),
-        "resource-test",
-        &root.join("output"),
-        &policy,
-        &options,
-    )
-    .unwrap()
-}
-
 #[test]
 fn process_cgroup_headroom_takes_precedence_over_host_memory() {
     let hardware = Hardware::from_observations(8, Some(16 * 1024 * MIB), Some(768 * MIB));
@@ -160,13 +125,14 @@ fn zero_or_out_of_range_worker_maximums_are_refused() {
 }
 
 #[test]
-fn real_ports_register_verified_content_and_preserve_the_worker_upper_bound() {
+fn registered_content_controls_tool_admission_without_losing_the_worker_upper_bound() {
     use drmr_core::events::NoSink;
-    use drmr_core::hls_pipeline_deps::{PipelineDeps, Ports};
     use drmr_core::toolrun::{RunOptions, Secrets, ToolRunner};
-    let directory = tempfile::tempdir().unwrap();
-    let analysis = admitted_small_source(directory.path());
-    let workload = Workload::from_analysis(&analysis).unwrap();
+    let workload = Workload {
+        max_pixels: Some(640 * 360),
+        input_buffer_bytes: Some(188),
+        tracks: 1,
+    };
     assert_eq!(workload.max_pixels, Some(640 * 360));
     assert_eq!(workload.input_buffer_bytes, Some(188));
     assert_eq!(workload.tracks, 1);
@@ -175,8 +141,10 @@ fn real_ports_register_verified_content_and_preserve_the_worker_upper_bound() {
         ToolRunner::new(Arc::new(Secrets::new()), Arc::new(NoSink))
             .with_limiter(Arc::new(Limiter::new(1, claim.memory_bytes))),
     );
-    let ports = Ports::new(Arc::clone(&runner));
-    assert_eq!(ports.resource_workers(&analysis, 1).unwrap(), 1);
+    runner.register_workload(workload);
+    let budget = Budget::choose(Hardware::detect(), workload, Some(1)).unwrap();
+    assert_eq!(budget.workers, 1);
+    runner.note_resource_budget(&budget);
     // This allocation fits the actual small source but not the unknown 4K fallback.
     assert_eq!(
         runner
@@ -251,21 +219,25 @@ fn streamed_decoding_uses_the_same_admission_pool_as_captured_tools() {
 }
 
 #[test]
-fn a_cancelled_source_probe_does_not_start_an_unavailable_tool() {
-    use drmr_core::events::NoSink;
-    use drmr_core::source::{Failure, FfprobeProber, Prober};
-    use drmr_core::toolrun::{Secrets, ToolRunner};
-    let directory = tempfile::tempdir().unwrap();
-    let segment = directory.path().join("segment.ts");
-    std::fs::write(&segment, [0x47_u8; 188]).unwrap();
-    let runner = ToolRunner::new(Arc::new(Secrets::new()), Arc::new(NoSink));
-    let probe = FfprobeProber::with_program(&runner, "not-a-real-ffprobe-resource-test");
+fn a_cancelled_tool_does_not_start_an_unavailable_executable() {
+    use drmr_core::events::Collector;
+    use drmr_core::toolrun::{RunOptions, Secrets, ToolRunner};
+    let records = Arc::new(Collector::default());
     let stop = Stop::new();
     stop.set();
-    assert!(matches!(
-        probe.probe_with_stop(&segment, None, &stop),
-        Err(Failure::Cancelled)
-    ));
+    let runner = ToolRunner::new(Arc::new(Secrets::new()), records.clone());
+    let error = runner
+        .run_tool(
+            &["not-a-real-ffprobe-resource-test".into()],
+            "probe",
+            &RunOptions {
+                stop: Some(&stop),
+                ..RunOptions::default()
+            },
+        )
+        .unwrap_err();
+    assert_eq!(error.kind, "cancelled");
+    assert!(records.records().is_empty());
 }
 
 #[test]

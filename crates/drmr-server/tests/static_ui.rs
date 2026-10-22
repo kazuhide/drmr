@@ -1,6 +1,6 @@
 //! The UI is embedded at build time from `static/`: the embedded copy is byte for
 //! byte the source tree (no file missing, none added), every file is served as it is, the page
-//! shell is `/` and `/static/report.html`, and `--static-dir` serves a directory instead.
+//! shell is `/`, and `--static-dir` serves a directory instead.
 
 mod support;
 
@@ -70,11 +70,7 @@ fn every_embedded_file_is_served_byte_for_byte() {
         (200, Some("text/html; charset=utf-8"))
     );
     assert_eq!(page.body, index);
-    let report = h.client.get("/static/report.html");
-    assert_eq!(
-        report.body,
-        std::fs::read(static_root().join("report.html")).unwrap()
-    );
+    assert_eq!(h.client.get("/static/report.html").status, 404);
     assert_eq!(h.client.get("/static/../keys.env").status, 404);
     assert_eq!(h.client.get("/static/nope.js").status, 404);
 }
@@ -89,8 +85,8 @@ fn a_static_directory_override_is_served_instead_of_the_embedded_copy() {
     .unwrap();
     std::fs::write(dir.path().join("app.css"), "body{}").unwrap();
     let mut config =
-        drmr_server::ServerConfig::new(dir.path().join("catalog"), dir.path().join("output"));
-    std::fs::create_dir(&config.catalog_root).unwrap();
+        drmr_server::ServerConfig::new(dir.path().join("input"), dir.path().join("output"));
+    std::fs::create_dir(&config.input_root).unwrap();
     config.bind_port = 0;
     config.static_dir = Some(dir.path().to_path_buf());
     let server = drmr_server::spawn(config).unwrap();

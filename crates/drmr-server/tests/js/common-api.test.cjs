@@ -30,7 +30,7 @@ test('a malformed successful mutation keeps the request outcome unknown', async 
   await assert.rejects(api.createSession({}), error => error.code === 'request-response-invalid' && error.uncertain === true);
 });
 test('URL sessions use a fixed label for creation recovery and every listing', async () => {
-  for (const kind of ['url', 'hls-url']) {
+  for (const kind of ['url']) {
     const session = envelope({ session_id: 'session_1', creation_request_id: 'a'.repeat(32),
       source: { kind, label: 'Source URL' }, plan_refs: [], request_ids: [], requests_used: 0, active_request_id: null });
     const api = load(url => Promise.resolve(url === '/api/common/sessions' ? envelope({ sessions: [session] }) : session));
@@ -59,4 +59,10 @@ test('export links must be the exact same-origin attachment endpoint', async () 
   const plan = envelope({ plan_ref: 'plan_1', session_id: 'session_1', plan_id: 'b'.repeat(64), plan_schema_version: 2, outputs: [{ id: 'clear', format: 'mp4', target: 'clear', drms: [], conformance: 'none' }], destination_state: 'absent', export_url: 'https://other.invalid/export' });
   const api = load(() => Promise.resolve(plan));
   await assert.rejects(api.plan('plan_1'), { code: 'request-response-invalid' });
+});
+
+test('a retired HLS URL session response cannot be accepted as the common source contract', async () => {
+  const response = envelope({ session_id: 'session_1', creation_request_id: 'a'.repeat(32), source: { kind: 'hls-url', label: 'Source URL' }, plan_refs: [], request_ids: [], requests_used: 0, active_request_id: null });
+  const api = load(() => Promise.resolve(response));
+  await assert.rejects(api.session('session_1'), { code: 'request-response-invalid' });
 });

@@ -1,8 +1,6 @@
-//! Shared batch and storage fixtures: a local S3 endpoint and synthetic DASH assets.
+//! Private media-test files and owned temporary directories.
 #![allow(dead_code)] // reason: a shared fixture; each test binary uses a different subset
 
-pub mod dash;
-pub mod fake_s3;
 #[cfg(windows)]
 pub mod windows;
 

@@ -84,7 +84,7 @@ create a separate plan and destination for another output.
 
 Without `--save`, `plan INPUT --to ... --json` still describes conditional intent
 from metadata and can describe multiple formats. That older JSON is not an
-execution plan. `plan --mpd` retains its prepared-DASH rendition listing.
+execution plan.
 
 ## 3. Execute the saved plan
 

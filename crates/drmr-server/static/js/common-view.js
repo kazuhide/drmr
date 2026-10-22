@@ -29,7 +29,7 @@
   }
 
   function safeLabel(source) {
-    if (source.kind === 'url' || source.kind === 'hls-url') return t('commonUrl');
+    if (source.kind === 'url') return t('commonUrl');
     return source.kind === 'local' && source.label === 'Local input' ? t('commonLocalInput') : source.label;
   }
   function validName(name) { return typeof name === 'string' && /^[a-z][a-z0-9-]{0,31}$/.test(name) && !/^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/.test(name); }

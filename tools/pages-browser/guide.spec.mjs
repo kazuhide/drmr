@@ -147,7 +147,7 @@ async function content(page, locale) {
   const observed = await page.evaluate(guideObservation);
   requireGuideLayout(observed);
   const toc = page.getByRole('navigation', { name: locale.toc, exact: true });
-  await expect(toc.locator('a')).toHaveCount(20);
+  await expect(toc.locator('a')).toHaveCount(18);
   expect(await toc.locator('a').evaluateAll(nodes => nodes.map(node => node.getAttribute('href'))))
     .toEqual(guideChapters.map(id => '#' + id));
   await expect(page.locator('script')).toHaveCount(0);
@@ -182,7 +182,7 @@ async function content(page, locale) {
   }
   expect(tables.length).toBeGreaterThan(0);
   const chapterLinks = page.locator('.guide-chapter-switch');
-  await expect(chapterLinks).toHaveCount(20);
+  await expect(chapterLinks).toHaveCount(18);
   const links = await chapterLinks.all();
   for (let start = 0; start < links.length; start += 16) {
     await Promise.all(links.slice(start, start + 16).map(async (link, offset) => {
@@ -300,7 +300,7 @@ for (const locale of guideLocales) test(`${locale.language} guide: chapters and 
   try {
     await confined(context); const page = await context.newPage(); const network = watch(page); const pages = [];
     for (const mount of live ? ['/drmr/'] : ['/', '/drmr/']) {
-      await ready(page, locale, mount); await expect(page.locator('[data-guide-chapter]')).toHaveCount(20);
+      await ready(page, locale, mount); await expect(page.locator('[data-guide-chapter]')).toHaveCount(18);
       await expect(page.locator('script')).toHaveCount(0);
       const first = page.getByRole('navigation', { name: locale.toc, exact: true }).locator('a[href="#introduction"]');
       await tabTo(page, first, 'no-js-contents'); await page.keyboard.press('Enter');
@@ -340,7 +340,7 @@ test('both guides retain all chapters, code and tables in print media', async ({
     const layout = await page.evaluate(guideObservation); requireGuideLayout(layout);
     const styles = await page.locator('.guide-toc,.guide-chapter-switch,.language-switch,.guide-header-nav,.guide-toplink')
       .evaluateAll(nodes => nodes.map(node => ({ class: node.className, display: getComputedStyle(node).display })));
-    expect(styles.length).toBeGreaterThan(20); expect(styles.every(row => row.display === 'none')).toBe(true);
+    expect(styles.length).toBeGreaterThan(18); expect(styles.every(row => row.display === 'none')).toBe(true);
     const contentStyles = await page.locator('pre,.guide-table-scroll').evaluateAll(nodes => nodes.map(node => ({
       tag: node.tagName, overflow: getComputedStyle(node).overflowX, whiteSpace: getComputedStyle(node).whiteSpace,
       text: node.textContent.trim(), shown: node.getClientRects().length > 0 })));

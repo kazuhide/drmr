@@ -9,62 +9,6 @@ pub enum Endpoint {
     Index,
     /// `GET /static/<path:filename>`
     Static,
-    /// `GET /api/catalog`
-    Catalog,
-    /// `POST /api/convert`
-    Convert,
-    /// `GET /api/jobs/<job_id>`
-    JobStatus,
-    /// `POST /api/jobs/<job_id>/stop`
-    JobStop,
-    /// `GET /api/jobs/<job_id>/log`
-    JobLog,
-    /// `GET /api/jobs/<job_id>/log.jsonl`
-    JobLogDownload,
-    /// `GET /api/assets/<asset_id>`
-    Assets,
-    /// `GET /api/reports/catalog/<asset_id>`
-    CatalogReport,
-    /// `GET /reports/catalog/<asset_id>`
-    CatalogReportPage,
-    /// `GET /source/<asset_id>/<path:rel>`
-    Source,
-    /// `GET /dash/old`
-    DashOld,
-    /// `GET /output/<asset_id>/<path:rel>`
-    Output,
-    /// `GET|POST /clearkey/license`
-    ClearkeyLicense,
-    /// `POST /api/hls/analyses`
-    HlsAnalyze,
-    /// `GET /api/hls/analyses/<analysis_id>`
-    HlsAnalysis,
-    /// `POST /api/hls/packages`
-    HlsPackage,
-    /// `GET /api/hls/jobs`
-    HlsJobs,
-    /// `DELETE /api/hls/jobs/<job_id>`
-    HlsJobDelete,
-    /// `GET /api/hls/results/<result_id>`
-    HlsResult,
-    /// `GET /api/platform`
-    Platform,
-    /// `GET /api/queue`
-    QueueState,
-    /// `POST /api/queue`
-    QueueAdd,
-    /// `DELETE /api/queue/<asset_id>`
-    QueueRemove,
-    /// `GET /reports/hls/<result_id>`
-    HlsReportPage,
-    /// `POST /api/hls/playback-sessions`
-    PlaybackSessions,
-    /// `DELETE /api/hls/playback/<session_id>`
-    PlaybackRevoke,
-    /// `POST /api/hls/playback/<session_id>/license`
-    PlaybackLicense,
-    /// `GET /api/hls/playback/<session_id>/source/<resource_id>`
-    PlaybackSource,
 }
 
 #[derive(Clone, Copy)]
@@ -167,151 +111,6 @@ const RULES: &[Rule] = &[
         parts: &[S("static"), P],
         method: "GET",
         endpoint: Endpoint::Static,
-    },
-    Rule {
-        parts: &[S("api"), S("catalog")],
-        method: "GET",
-        endpoint: Endpoint::Catalog,
-    },
-    Rule {
-        parts: &[S("api"), S("convert")],
-        method: "POST",
-        endpoint: Endpoint::Convert,
-    },
-    Rule {
-        parts: &[S("api"), S("jobs"), V],
-        method: "GET",
-        endpoint: Endpoint::JobStatus,
-    },
-    Rule {
-        parts: &[S("api"), S("jobs"), V, S("stop")],
-        method: "POST",
-        endpoint: Endpoint::JobStop,
-    },
-    Rule {
-        parts: &[S("api"), S("jobs"), V, S("log")],
-        method: "GET",
-        endpoint: Endpoint::JobLog,
-    },
-    Rule {
-        parts: &[S("api"), S("jobs"), V, S("log.jsonl")],
-        method: "GET",
-        endpoint: Endpoint::JobLogDownload,
-    },
-    Rule {
-        parts: &[S("api"), S("assets"), V],
-        method: "GET",
-        endpoint: Endpoint::Assets,
-    },
-    Rule {
-        parts: &[S("api"), S("reports"), S("catalog"), V],
-        method: "GET",
-        endpoint: Endpoint::CatalogReport,
-    },
-    Rule {
-        parts: &[S("reports"), S("catalog"), V],
-        method: "GET",
-        endpoint: Endpoint::CatalogReportPage,
-    },
-    Rule {
-        parts: &[S("source"), V, P],
-        method: "GET",
-        endpoint: Endpoint::Source,
-    },
-    Rule {
-        parts: &[S("dash"), S("old")],
-        method: "GET",
-        endpoint: Endpoint::DashOld,
-    },
-    Rule {
-        parts: &[S("output"), V, P],
-        method: "GET",
-        endpoint: Endpoint::Output,
-    },
-    Rule {
-        parts: &[S("clearkey"), S("license")],
-        method: "GET",
-        endpoint: Endpoint::ClearkeyLicense,
-    },
-    Rule {
-        parts: &[S("clearkey"), S("license")],
-        method: "POST",
-        endpoint: Endpoint::ClearkeyLicense,
-    },
-    Rule {
-        parts: &[S("api"), S("hls"), S("analyses")],
-        method: "POST",
-        endpoint: Endpoint::HlsAnalyze,
-    },
-    Rule {
-        parts: &[S("api"), S("hls"), S("analyses"), V],
-        method: "GET",
-        endpoint: Endpoint::HlsAnalysis,
-    },
-    Rule {
-        parts: &[S("api"), S("hls"), S("packages")],
-        method: "POST",
-        endpoint: Endpoint::HlsPackage,
-    },
-    Rule {
-        parts: &[S("api"), S("hls"), S("jobs")],
-        method: "GET",
-        endpoint: Endpoint::HlsJobs,
-    },
-    Rule {
-        parts: &[S("api"), S("hls"), S("jobs"), V],
-        method: "DELETE",
-        endpoint: Endpoint::HlsJobDelete,
-    },
-    Rule {
-        parts: &[S("api"), S("hls"), S("results"), V],
-        method: "GET",
-        endpoint: Endpoint::HlsResult,
-    },
-    Rule {
-        parts: &[S("api"), S("platform")],
-        method: "GET",
-        endpoint: Endpoint::Platform,
-    },
-    Rule {
-        parts: &[S("api"), S("queue")],
-        method: "GET",
-        endpoint: Endpoint::QueueState,
-    },
-    Rule {
-        parts: &[S("api"), S("queue")],
-        method: "POST",
-        endpoint: Endpoint::QueueAdd,
-    },
-    Rule {
-        parts: &[S("api"), S("queue"), V],
-        method: "DELETE",
-        endpoint: Endpoint::QueueRemove,
-    },
-    Rule {
-        parts: &[S("reports"), S("hls"), V],
-        method: "GET",
-        endpoint: Endpoint::HlsReportPage,
-    },
-    Rule {
-        parts: &[S("api"), S("hls"), S("playback-sessions")],
-        method: "POST",
-        endpoint: Endpoint::PlaybackSessions,
-    },
-    Rule {
-        parts: &[S("api"), S("hls"), S("playback"), V],
-        method: "DELETE",
-        endpoint: Endpoint::PlaybackRevoke,
-    },
-    Rule {
-        parts: &[S("api"), S("hls"), S("playback"), V, S("license")],
-        method: "POST",
-        endpoint: Endpoint::PlaybackLicense,
-    },
-    Rule {
-        parts: &[S("api"), S("hls"), S("playback"), V, S("source"), V],
-        method: "GET",
-        endpoint: Endpoint::PlaybackSource,
     },
 ];
 
@@ -434,48 +233,59 @@ mod tests {
     use super::*;
 
     #[test]
-    fn werkzeug_matching() {
+    fn common_and_static_routes_keep_method_and_path_boundaries() {
         assert_eq!(route("GET", "/"), Match::Found(Endpoint::Index, vec![]));
         assert_eq!(
-            route("GET", "/output/o1/cbcs//v/init.mp4"),
-            Match::Found(
-                Endpoint::Output,
-                vec!["o1".into(), "cbcs//v/init.mp4".into()]
-            )
+            route("GET", "/api//common/capabilities"),
+            Match::Redirect("/api/common/capabilities".into())
         );
         assert_eq!(
-            route("GET", "/output/o1//cbcs/v/init.mp4"),
-            Match::Redirect("/output/o1/cbcs/v/init.mp4".into())
+            route("GET", "//api/common/capabilities"),
+            Match::Found(Endpoint::Common, vec![])
         );
+        assert_eq!(route("GET", "/api/common/capabilities/"), Match::NotFound);
+        assert_eq!(route("GET", "/api/common/jobs/a/b"), Match::NotFound);
         assert_eq!(
-            route("GET", "/api//catalog"),
-            Match::Redirect("/api/catalog".into())
-        );
-        assert_eq!(
-            route("GET", "//api/catalog"),
-            Match::Found(Endpoint::Catalog, vec![])
-        );
-        assert_eq!(route("GET", "/api/catalog/"), Match::NotFound);
-        assert_eq!(route("GET", "/api/jobs/a/b"), Match::NotFound);
-        assert_eq!(
-            route("PUT", "/clearkey/license"),
+            route("PUT", "/api/common/sessions"),
             Match::MethodNotAllowed(vec!["GET", "HEAD", "OPTIONS", "POST"])
         );
         assert_eq!(
-            route("HEAD", "/api/convert"),
+            route("HEAD", "/api/common/jobs"),
             Match::MethodNotAllowed(vec!["OPTIONS", "POST"])
         );
         assert_eq!(
-            route("OPTIONS", "/api/queue"),
+            route("OPTIONS", "/api/common/sessions"),
             Match::Options(vec!["GET", "HEAD", "OPTIONS", "POST"])
         );
         assert_eq!(
-            route("HEAD", "/api/catalog"),
-            Match::Found(Endpoint::Catalog, vec![])
+            route("HEAD", "/api/common/capabilities"),
+            Match::Found(Endpoint::Common, vec![])
         );
         assert_eq!(
-            route("GET", "/api/hls/playback/s/source/media-x"),
-            Match::Found(Endpoint::PlaybackSource, vec!["s".into(), "media-x".into()])
+            route("GET", "/static/js/common-view.js"),
+            Match::Found(Endpoint::Static, vec!["js/common-view.js".into()])
         );
+    }
+    #[test]
+    fn retired_routes_are_not_executable_or_readable() {
+        for path in [
+            "/api/catalog",
+            "/api/convert",
+            "/api/jobs/a",
+            "/api/hls/analyses",
+            "/api/hls/packages",
+            "/api/platform",
+            "/api/queue",
+            "/reports/catalog/a",
+            "/reports/hls/a",
+            "/source/a/file",
+            "/output/a/file",
+            "/dash/old",
+            "/clearkey/license",
+        ] {
+            for method in ["GET", "POST", "DELETE", "OPTIONS"] {
+                assert_eq!(route(method, path), Match::NotFound, "{method} {path}");
+            }
+        }
     }
 }

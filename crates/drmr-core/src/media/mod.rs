@@ -5,7 +5,7 @@
 //! on drop, and key-bearing tool calls use the secure runner.
 
 mod files;
-pub(crate) use files::{create_output_dir, create_output_file, write_output_file};
+pub(crate) use files::{create_output_file, write_output_file};
 mod parse;
 mod playlist;
 pub mod python;
@@ -35,8 +35,7 @@ use std::path::{Path, PathBuf};
 use zeroize::Zeroizing;
 
 /// `media::HlsMediaError`: a classification token (`media-tool-failed`,
-/// `unsupported-timebase`, …), never a value from the media. `hls_pipeline` raises it with its own
-/// tokens too, so any token can be built.
+/// `unsupported-timebase`, …), never a value from the media.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[error("{0}")]
 pub struct HlsMediaError(pub String);
@@ -269,7 +268,7 @@ pub trait MediaEngine: Send + Sync {
     /// The SHA-256 payload digests ffprobe reports per packet of one stream (the
     /// `-show_data_hash sha256` call of `subtitle payload verification`), as printed (`SHA256:<hex>`).
     // `subtitle payload verification`'s local `payloads(location, stream)` runs this ffprobe call
-    // through `run_media`; the `hls_pipeline` implementation calls this method instead, so the native
+    // through `run_media`; native
     // engine can answer it. Compare the lists with `==` (ffprobe prints strings).
     fn packet_payload_hashes(
         &self,
@@ -298,7 +297,7 @@ pub trait MediaEngine: Send + Sync {
 
     /// The mp4dump `--format json` box tree of a file (`initialization segment validation`'s
     /// `run_media(["mp4dump", …])`, bytes mode).
-    // The `hls_pipeline` implementation reads `_validate_init`'s tenc pattern from this tree (the first
+    // Initialization validation reads the tenc pattern from this tree (the first
     // `tenc`'s `default_crypt_byte_block` / `default_skip_byte_block`, 0 when absent);
     // `mp4::tenc_pattern` gives the same pair from the bytes for the native engine.
     fn box_tree(&self, path: &Path) -> Result<Value, MediaError>;

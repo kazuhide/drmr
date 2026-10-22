@@ -14,7 +14,7 @@ from urllib.parse import urlsplit
 CHAPTER_IDS = (
     "introduction", "terminology", "supported-profiles", "installation",
     "key-configuration", "inspect-plan", "local-conversion", "url-input",
-    "verification", "saved-hls", "prepared-dash-batch", "resources-stop",
+    "verification", "resources-stop",
     "docker", "windows", "web-console", "desktop", "results-errors",
     "regression-tests", "cli-reference", "references",
 )
@@ -72,7 +72,7 @@ def chapter_titles(source):
     # A heading-looking line inside a code example is ordinary example content.
     ordinary = re.sub(r"^```[^\n]*\n.*?^```\s*$", "", source, flags=re.M | re.S)
     titles = re.findall(r"^# (\d+)\. (.+)$", ordinary, re.M)
-    if [number for number, _ in titles] != [str(i) for i in range(1, 21)]:
+    if [number for number, _ in titles] != [str(i) for i in range(1, len(CHAPTER_IDS) + 1)]:
         raise ValueError("guide-chapter-set")
     return [number + ". " + title for number, title in titles]
 

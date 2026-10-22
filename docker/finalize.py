@@ -38,7 +38,7 @@ def main():
         os_rows.append({"name": name, "version": version, "architecture": architecture, "source": source, "source_version": source_version})
     (ROOT / "licenses/os/packages.json").write_text(json.dumps(os_rows, indent=2) + "\n")
     binaries = {}
-    for name in ("drmr", "ffmpeg", "ffprobe", "mp4dump", "packager"):
+    for name in ("drmr", "ffmpeg", "ffprobe", "packager"):
         path = Path("/usr/local/bin") / name
         header = path.read_bytes()[:20]
         machine = struct.unpack("<H", header[18:20])[0]

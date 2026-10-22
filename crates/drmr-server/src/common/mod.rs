@@ -126,6 +126,16 @@ impl CommonService {
             },
         ))
     }
+    pub fn host_guard_reply(&self, status: u16) -> Reply {
+        self.error_reply(Error::new(
+            status,
+            if status == 403 {
+                "untrusted-host"
+            } else {
+                "invalid-host"
+            },
+        ))
+    }
     fn capability(&self) -> Value {
         let s = self.lock();
         let execution = self.manager.execution();
@@ -181,7 +191,7 @@ impl CommonService {
                 url,
                 fetch_policy_ref,
             } => {
-                let parsed = pyutil::urlparse(url).map_err(|_| invalid())?;
+                let parsed = drmr_core::source::pyurl::urlsplit(url, "").map_err(|_| invalid())?;
                 if url.len() > 8192
                     || url.chars().any(char::is_control)
                     || !matches!(parsed.scheme.as_str(), "http" | "https")

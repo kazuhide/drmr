@@ -655,11 +655,11 @@ impl Graph<'_> {
             let plan = playlist::master_plan(&lines, &effective).map_err(|_| INVALID)?;
             if plan
                 .iter()
-                .any(|(_, _, kind)| *kind == source::PlaylistKind::Text)
+                .any(|(_, kind)| *kind == source::PlaylistKind::Text)
             {
                 return Err(INVALID);
             }
-            for (child, _, _) in plan {
+            for (child, _) in plan {
                 self.playlist(&child, false)?;
             }
         } else {
@@ -695,7 +695,7 @@ impl Graph<'_> {
                         "resource-count-limit",
                     )));
                 }
-                Ok(PathBuf::from(format!("r{count:06}")))
+                Ok(())
             },
             &mut |value| {
                 retained_key_uri(value, effective)

@@ -1,41 +1,16 @@
 //! Source requests, fetch budgets, network rules, and configuration validation.
 
 use super::SourceError;
-use crate::concurrency::default_workers;
 use serde_json::{Map, Value};
 use std::fmt;
 use std::path::PathBuf;
 
 /// Resources fetched at once, at most.
 pub const MAX_CONNECTIONS: usize = 64;
-/// Segments inspected at once, at most, when given explicitly.
-pub const MAX_PROBE_WORKERS: usize = 64;
 const FORBIDDEN_HEADERS: [&str; 4] = ["host", "range", "connection", "content-length"];
 
 fn invalid() -> SourceError {
     SourceError::new("invalid-fetch-policy")
-}
-
-/// Where the source is: an `https`/`http` URL, a `file:` URL, or a local path.
-///
-/// `Debug` never shows the URL (signed URLs carry credentials).
-#[derive(Clone, PartialEq, Eq)]
-pub struct SourceRequest {
-    /// The master or media playlist.
-    pub url: String,
-}
-
-impl SourceRequest {
-    /// A request for `url`.
-    pub fn new(url: impl Into<String>) -> Self {
-        SourceRequest { url: url.into() }
-    }
-}
-
-impl fmt::Debug for SourceRequest {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("SourceRequest")
-    }
 }
 
 /// The bounds of one analysis (`source::FetchPolicy`), with the Python defaults.
@@ -73,8 +48,6 @@ pub struct FetchPolicy {
     pub attempts: u32,
     /// Resources fetched at once across every playlist (1–64).
     pub connections: usize,
-    /// Segments inspected at once (1–64); `None` is the CPUs the process may run on.
-    pub probe_workers: Option<usize>,
     /// Resources per analysis, including playlists and initialization segments.
     /// `None` leaves only the playlist and per-track budgets in effect.
     /// This bound limits the download plan before fetching begins.
@@ -98,7 +71,6 @@ impl Default for FetchPolicy {
             timeout: 30.0,
             attempts: 3,
             connections: 16,
-            probe_workers: None,
             max_total_resources: None,
         }
     }
@@ -120,7 +92,6 @@ impl fmt::Debug for FetchPolicy {
             .field("timeout", &self.timeout)
             .field("attempts", &self.attempts)
             .field("connections", &self.connections)
-            .field("probe_workers", &self.probe_workers)
             .field("max_total_resources", &self.max_total_resources)
             .finish_non_exhaustive()
     }
@@ -128,8 +99,8 @@ impl fmt::Debug for FetchPolicy {
 
 impl FetchPolicy {
     /// `__post_init__`: every limit a positive integer, `attempts` at most 5, `connections`
-    /// at most 64, `timeout` finite and positive, `probe_workers` 1–64 when given, the
-    /// resource budget positive when given, and every header for an allowed origin, named as
+    /// at most 64, `timeout` finite and positive, the resource budget positive when given,
+    /// and every header for an allowed origin, named as
     /// an HTTP token other than `Host`, `Range`, `Connection` or `Content-Length`, its value
     /// without a line break.
     pub fn validate(&self) -> Result<(), SourceError> {
@@ -150,11 +121,7 @@ impl FetchPolicy {
         {
             return Err(invalid());
         }
-        if self
-            .probe_workers
-            .is_some_and(|workers| !(1..=MAX_PROBE_WORKERS).contains(&workers))
-            || self.max_total_resources == Some(0)
-        {
+        if self.max_total_resources == Some(0) {
             return Err(invalid());
         }
         for (origin, headers) in &self.headers_by_origin {
@@ -177,11 +144,6 @@ impl FetchPolicy {
         Ok(())
     }
 
-    /// `effective_probe_workers`: the explicit value, else `concurrency::default_workers`.
-    pub fn effective_probe_workers(&self) -> usize {
-        self.probe_workers.unwrap_or_else(default_workers)
-    }
-
     /// The headers configured for `origin`, in order.
     pub fn headers_for(&self, origin: &str) -> Vec<(String, String)> {
         self.headers_by_origin
@@ -191,7 +153,7 @@ impl FetchPolicy {
             .unwrap_or_default()
     }
 
-    /// The policy a source config's `policy` object describes (`hls_cli.fetch_policy` then
+    /// The policy a private acquisition configuration describes (validated before
     /// `FetchPolicy(**policy)`): unknown keys, a limit that is not an integer (a boolean or a
     /// float included), a timeout that is not a number, a header map that is not a map of
     /// string maps — all `invalid-fetch-policy`. `allow_http` and `allow_private_network`
@@ -259,12 +221,6 @@ fn set_field(policy: &mut FetchPolicy, key: &str, item: &Value) -> Result<(), So
         }
         "connections" => {
             policy.connections = usize::try_from(positive(item)?).map_err(|_| invalid())?;
-        }
-        "probe_workers" => {
-            policy.probe_workers = match item {
-                Value::Null => None,
-                _ => Some(usize::try_from(positive(item)?).map_err(|_| invalid())?),
-            };
         }
         "max_total_resources" => {
             policy.max_total_resources = match item {

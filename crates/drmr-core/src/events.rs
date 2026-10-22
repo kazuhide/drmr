@@ -1,15 +1,13 @@
-//! Structured JSON Lines records and event sinks.
-//!
-//! Records preserve field insertion order. The writer scrubs every serialized line
-//! against the job's registered secrets before writing it.
+//! Structured activity records and event sinks shared by media operations.
 
-use crate::canonical::Dumps;
-use crate::checks::CheckId;
-use crate::toolrun::Secrets;
+use crate::{canonical::Dumps, toolrun::Secrets};
 use serde_json::{Map, Value};
 use std::io::Write;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// One job-log record.
@@ -164,31 +162,4 @@ pub fn round3(seconds: f64) -> f64 {
     format!("{seconds:.3}")
         .parse()
         .expect("a formatted float parses")
-}
-
-/// A pipeline record (`pipeline logging`): `ts`, `stage`, `level`, `message`, then the optional
-/// `rendition_id`, `check_id` and `duration_s` in that order.
-pub fn pipeline_record(
-    stage: &str,
-    level: &str,
-    message: &str,
-    rendition_id: Option<&str>,
-    check_id: Option<CheckId>,
-    duration_s: Option<f64>,
-) -> Record {
-    let mut record = Record::new();
-    record.insert("ts".into(), Value::String(now_iso()));
-    record.insert("stage".into(), Value::String(stage.to_string()));
-    record.insert("level".into(), Value::String(level.to_string()));
-    record.insert("message".into(), Value::String(message.to_string()));
-    if let Some(id) = rendition_id {
-        record.insert("rendition_id".into(), Value::String(id.to_string()));
-    }
-    if let Some(check) = check_id {
-        record.insert("check_id".into(), Value::String(check.as_str().to_string()));
-    }
-    if let Some(seconds) = duration_s {
-        record.insert("duration_s".into(), Value::from(round3(seconds)));
-    }
-    record
 }

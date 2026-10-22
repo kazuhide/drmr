@@ -11,8 +11,11 @@ const MARKER: &str = "DRMR_TOOL_BROKER_V1";
 #[test]
 fn incomplete_or_invalid_context_is_refused_before_help_or_media_work() {
     for (arguments, marker) in [
-        (vec![PREFIX, "run", "--help"], None),
-        (vec![PREFIX, "run", "--help"], Some("invalid-parent")),
+        (vec![PREFIX, "--internal-common-job-v1", "--help"], None),
+        (
+            vec![PREFIX, "--internal-common-job-v1", "--help"],
+            Some("invalid-parent"),
+        ),
         (vec!["--help"], Some("1")),
     ] {
         let mut command = Command::new(env!("CARGO_BIN_EXE_drmr"));
@@ -32,7 +35,15 @@ fn incomplete_or_invalid_context_is_refused_before_help_or_media_work() {
 
 #[test]
 fn the_supervised_profile_refuses_other_commands_before_clap_help() {
-    for command_name in ["batch", "serve", "convert", "doctor"] {
+    for command_name in [
+        "run",
+        "analyze-hls",
+        "package-hls",
+        "batch",
+        "serve",
+        "convert",
+        "doctor",
+    ] {
         let mut command = Command::new(env!("CARGO_BIN_EXE_drmr"));
         command
             .args([PREFIX, command_name, "--help"])
