@@ -11,6 +11,7 @@ export const locales = [
     matrixCorner: 'Input ↓ / Output →', outside: 'Outside profile',
     profiles: ['Progressive or fragmented', 'Fragmented MP4 tracks', 'Fragmented MP4 (fMP4)', 'Video with optional audio', 'Audio only'],
     matrix: 'Read the full support matrix and restrictions', license: 'Font license',
+    releaseStatus: 'release compatibility',
   },
   {
     language: 'ja', route: 'ja/', asset: 'ja/index.html', skip: '本文へ移動',
@@ -23,6 +24,7 @@ export const locales = [
     matrixCorner: '入力 ↓ / 出力 →', outside: '対象外',
     profiles: ['プログレッシブ / フラグメント化', 'フラグメント化MP4トラック', 'フラグメント化MP4（fMP4）', '映像（音声は省略可）', '音声のみ'],
     matrix: '対応範囲と制約を読む（英語）', license: 'フォントライセンス（英語）',
+    releaseStatus: '配布版との違い（英語）',
   },
 ];
 export const english = locales[0];

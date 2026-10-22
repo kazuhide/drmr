@@ -130,7 +130,7 @@ test.afterEach(async ({ page }, info) => {
 
 const focusSelector = 'a[href], pre[tabindex="0"], .matrix-scroll[tabindex="0"]';
 // Fixed inventories include the intentional documentation links in each locale.
-const focusTargetCounts = { en: 81, ja: 80 };
+const focusTargetCounts = { en: 82, ja: 81 };
 
 function textWithoutNotes(node) {
   const text = value => value.nodeType === Node.TEXT_NODE ? value.textContent :
@@ -636,6 +636,8 @@ for (const locale of locales) for (const width of [320, 768, 1024, 1440]) {
       expect(headings[i].name.length).toBeGreaterThan(0);
     }
     const matrix = await renderedMatrix(page, locale);
+    await expect(page.getByRole('link', { name: locale.releaseStatus, exact: true }))
+      .toHaveAttribute('href', 'https://github.com/kazuhide/drmr/blob/main/docs/releases.md');
     const tree = await page.locator('body').ariaSnapshot();
     for (const name of [locale.navigation, locale.footer, locale.languageNavigation]) expect(tree).toContain(`navigation "${name}"`);
     expect(tree).toContain('main:');
