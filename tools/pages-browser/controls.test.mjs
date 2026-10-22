@@ -959,6 +959,20 @@ test('guide viewport checkpoints reject wrong sources, phases, native owners, cl
     const invalid = structuredClone(record); mutate(invalid);
     assert.throws(() => requireGuideCheckpoint(invalid, expected));
   }
+  const vertical = structuredClone(record);
+  vertical.phase = 'native-code-vertical-viewport';
+  vertical.selected.chapter = 'windows';
+  vertical.selected.function_sha256 = 'e'.repeat(64);
+  vertical.selected.code_sha256 = 'f'.repeat(64);
+  vertical.before.scroll.chapter = vertical.after.scroll.chapter = 'windows';
+  requireGuideCheckpoint(vertical, expected);
+  for (const mutate of [row => { delete row.selected.function_sha256; }, row => { row.selected.code_sha256 = 'unknown'; },
+    row => { row.selected.chapter = row.before.scroll.chapter = row.after.scroll.chapter = 'installation'; },
+    row => { row.after.scroll.scrollTop = 1; }, row => { row.after.scroll.identity = 'other'; },
+    row => { row.after.focus.rect.bottom = 901; }]) {
+    const invalid = structuredClone(vertical); mutate(invalid);
+    assert.throws(() => requireGuideCheckpoint(invalid, expected));
+  }
 });
 
 function guideFigureFixture() {

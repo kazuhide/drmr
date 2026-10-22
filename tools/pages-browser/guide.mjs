@@ -211,10 +211,14 @@ export function requireGuideCheckpoint(record, expected) {
     if (record[key] !== expected[key]) throw new Error('Guide checkpoint source identity changed');
   }
   if (JSON.stringify(record.viewport) !== JSON.stringify(expected.viewport)) throw new Error('Guide checkpoint viewport changed');
-  const tag = { 'native-code-viewport': 'PRE', 'native-table-viewport': 'DIV' }[record.phase];
+  const tag = { 'native-code-viewport': 'PRE', 'native-table-viewport': 'DIV', 'native-code-vertical-viewport': 'PRE' }[record.phase];
   const owner = record.selected;
   if (!tag || owner.tag !== tag || !guideChapters.includes(owner.chapter) || !owner.identity) {
     throw new Error('Guide checkpoint phase or owner changed');
+  }
+  if (record.phase === 'native-code-vertical-viewport' && !(owner.chapter === 'windows' &&
+    /^[a-f0-9]{64}$/.test(owner.function_sha256) && /^[a-f0-9]{64}$/.test(owner.code_sha256))) {
+    throw new Error('The vertical guide checkpoint needs its source-bound Windows code example');
   }
   for (const value of [record.before, record.after]) {
     const f = value.focus, r = f.rect, v = f.viewport, s = value.scroll;

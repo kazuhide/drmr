@@ -2046,14 +2046,17 @@ if (Test-Path -LiteralPath $private) { throw 'Choose a new directory' }
 New-Item -ItemType Directory -Path $private | Out-Null
 
 function Set-OwnerOnlyAcl($path, $security) {
-    $directory = $security -is [System.Security.AccessControl.DirectorySecurity]
-    $sections = [System.Security.AccessControl.AccessControlSections]'Owner, Access'
+    $directory = $security -is
+        [System.Security.AccessControl.DirectorySecurity]
+    $sections =
+        [System.Security.AccessControl.AccessControlSections]'Owner, Access'
     $current = if ($directory) {
         [System.IO.Directory]::GetAccessControl($path, $sections)
     } else {
         [System.IO.File]::GetAccessControl($path, $sections)
     }
-    if (-not $current.GetOwner([System.Security.Principal.SecurityIdentifier]).Equals($sid)) {
+    if (-not $current.GetOwner(
+        [System.Security.Principal.SecurityIdentifier]).Equals($sid)) {
         throw 'The current user must own the path'
     }
     $security.SetAccessRuleProtection($true, $false)
@@ -2069,16 +2072,27 @@ function Set-OwnerOnlyAcl($path, $security) {
     }
     $rules = @($checked.GetAccessRules($true, $true,
         [System.Security.Principal.SecurityIdentifier]))
-    if (-not $checked.AreAccessRulesProtected -or $rules.Count -ne 1 -or
-        -not $checked.GetOwner([System.Security.Principal.SecurityIdentifier]).Equals($sid)) {
+    if (
+        -not $checked.AreAccessRulesProtected -or
+        $rules.Count -ne 1 -or
+        -not $checked.GetOwner(
+            [System.Security.Principal.SecurityIdentifier]).Equals($sid)
+    ) {
         throw 'Private ACL verification failed'
     }
     $actual = $rules[0]
-    if (-not $actual.IdentityReference.Equals($sid) -or $actual.IsInherited -or
-        $actual.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow -or
-        $actual.FileSystemRights -ne [System.Security.AccessControl.FileSystemRights]::FullControl -or
-        $actual.InheritanceFlags -ne [System.Security.AccessControl.InheritanceFlags]::None -or
-        $actual.PropagationFlags -ne [System.Security.AccessControl.PropagationFlags]::None) {
+    if (
+        -not $actual.IdentityReference.Equals($sid) -or
+        $actual.IsInherited -or
+        $actual.AccessControlType -ne
+            [System.Security.AccessControl.AccessControlType]::Allow -or
+        $actual.FileSystemRights -ne
+            [System.Security.AccessControl.FileSystemRights]::FullControl -or
+        $actual.InheritanceFlags -ne
+            [System.Security.AccessControl.InheritanceFlags]::None -or
+        $actual.PropagationFlags -ne
+            [System.Security.AccessControl.PropagationFlags]::None
+    ) {
         throw 'Private ACL verification failed'
     }
 }
