@@ -286,16 +286,17 @@ def reports(archive_proof, media, head, tree, target, version, archive_hash):
             and media["limits"] == MEDIA_LIMITS, "media-proof-invalid")
     doctor = media["doctor"]
     exact_keys(doctor, ("ready", "cleanup_status", "tools"))
+    expected_tools = {"ffmpeg", "ffprobe", "packager"}
     require(doctor["ready"] is True and doctor["cleanup_status"] == "confirmed" and isinstance(doctor["tools"], list)
-            and len(doctor["tools"]) == 4, "doctor-proof-invalid")
+            and len(doctor["tools"]) == len(expected_tools), "doctor-proof-invalid")
     tool_names = set()
     for tool in doctor["tools"]:
         exact_keys(tool, ("name", "available", "required", "version_status", "feature_status"))
-        require(tool["name"] in ("ffmpeg", "ffprobe", "mp4dump", "packager")
+        require(tool["name"] in expected_tools
                 and tool["available"] is True and tool["required"] is True
-                and tool["version_status"] in ("supported", "build-unverified") and tool["feature_status"] == "available", "doctor-proof-invalid")
+                and tool["version_status"] == "supported" and tool["feature_status"] == "available", "doctor-proof-invalid")
         tool_names.add(tool["name"])
-    require(len(tool_names) == 4, "doctor-proof-invalid")
+    require(tool_names == expected_tools, "doctor-proof-invalid")
     value = media["media"]
     exact_keys(value, ("fixture_sha256", "fixture_duration_seconds", "scope", "input_format", "input_protection", "output_format", "output_protection",
                        "segment_target_seconds", "input_segments", "source_graph", "cli_source_graph_sha256", "plan_schema_version", "plan_id",

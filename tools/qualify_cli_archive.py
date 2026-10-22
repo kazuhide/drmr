@@ -442,14 +442,14 @@ def doctor(report):
             and report.get("cleanup_status") == "confirmed" and report.get("cancelled") is False
             and report.get("media_compatibility_checked") is False, "doctor-proof-invalid")
     tools = report.get("tools")
-    expected = {"ffmpeg", "ffprobe", "mp4dump", "packager"}
+    expected = {"ffmpeg", "ffprobe", "packager"}
     require(isinstance(tools, list) and len(tools) == len(expected)
             and all(isinstance(tool, dict) for tool in tools)
             and {tool.get("name") for tool in tools} == expected, "doctor-proof-invalid")
     result = []
     for tool in tools:
         require(tool.get("available") is True and tool.get("required") is True
-                and tool.get("version_status") in ("supported", "build-unverified")
+                and tool.get("version_status") == "supported"
                 and tool.get("feature_status") == "available" and tool.get("failure_code") is None,
                 "doctor-proof-invalid")
         # Version banners and executable paths are deliberately not copied.

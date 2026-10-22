@@ -54,7 +54,7 @@ drmr doctor --probe
 ```
 
 The reported version must match the release. A CLI archive does not need Rust
-installed. FFmpeg, ffprobe, Bento4 and Shaka Packager are installed separately;
+installed. FFmpeg, ffprobe and Shaka Packager are installed separately;
 see [requirements](requirements.md). `doctor` checks the selected tool setup,
 while a successful conversion and independent `verify` check the actual media.
 See the [four-step workflow](executable-plans.md) and

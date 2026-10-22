@@ -54,7 +54,7 @@ class FakeGitHub:
                                                "cleanup_status": "confirmed", "cancelled": False, "media_compatibility_checked": False,
                                                "tools": [{"name": tool, "available": True, "required": True, "version_status": "supported",
                                                           "feature_status": "available", "failure_code": None}
-                                                         for tool in ("ffmpeg", "ffprobe", "mp4dump", "packager")]}),
+                                                         for tool in ("ffmpeg", "ffprobe", "packager")]}),
                      "media": {"fixture_sha256": PREPARE.FIXTURE_SHA256, "fixture_duration_seconds": 10,
                                "scope": "all 240 original H.264 video packets and frames; audio not selected",
                                "input_format": "dash", "input_protection": "clear", "output_format": "dash", "output_protection": "cbcs",
@@ -220,7 +220,34 @@ class ReleasePacket(unittest.TestCase):
         for _, artifact, target, suffix in PREPARE.TARGETS:
             self.assertEqual(self.client.entries[artifact][0][0], "drmr-1.0.0-" + target + suffix)
             media = json.loads((self.output / ("cli-media-qualification-" + target + ".json")).read_text())
-            self.assertEqual({tool["name"] for tool in media["doctor"]["tools"]}, {"ffmpeg", "ffprobe", "mp4dump", "packager"})
+            self.assertEqual({tool["name"] for tool in media["doctor"]["tools"]}, {"ffmpeg", "ffprobe", "packager"})
+
+    def test_doctor_inventory_and_each_tool_proof_are_required(self):
+        entries = dict(self.client.entries["drmr-Linux-X64"])
+        archive = json.loads(entries["cli-archive-verification.json"])
+        media = json.loads(entries["cli-media-qualification.json"])
+        def validate(report):
+            PREPARE.reports(archive, report, self.head, self.tree, "x86_64-unknown-linux-gnu",
+                            "1.0.0", archive["archive_sha256"])
+        validate(media)
+        for label, change in (
+                ("cleanup", lambda d: d.update(cleanup_status="unconfirmed")),
+                ("missing", lambda d: d["tools"].pop()),
+                ("extra", lambda d: d["tools"].append({**d["tools"][0], "name": "mp4dump"})),
+                ("duplicate", lambda d: d["tools"][1].update(name="ffmpeg"))):
+            altered = copy.deepcopy(media)
+            change(altered["doctor"])
+            with self.subTest(case=label), self.assertRaisesRegex(PREPARE.CHECK.Failure, "^doctor-proof-invalid$"):
+                validate(altered)
+        for index, tool in enumerate(media["doctor"]["tools"]):
+            for field, value in (("available", False), ("required", False),
+                                 ("version_status", "unsupported"), ("version_status", "build-unverified"),
+                                 ("feature_status", "missing")):
+                altered = copy.deepcopy(media)
+                altered["doctor"]["tools"][index][field] = value
+                with self.subTest(tool=tool["name"], field=field, value=value), self.assertRaisesRegex(
+                        PREPARE.CHECK.Failure, "^doctor-proof-invalid$"):
+                    validate(altered)
 
     def test_remote_main_must_be_the_exact_local_tag_commit(self):
         self.client.head = "b" * 40

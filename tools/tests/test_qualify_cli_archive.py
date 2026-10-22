@@ -78,19 +78,32 @@ class EvidenceTests(unittest.TestCase):
         report = {"schema_version": 1, "mode": "probe", "profile": "all", "ready": True,
                   "cleanup_status": "confirmed", "cancelled": False, "media_compatibility_checked": False,
                   "tools": [{"name": name, "available": True, "required": True,
-                             "version_status": "build-unverified" if name == "mp4dump" else "supported",
+                             "version_status": "supported",
                              "feature_status": "available", "failure_code": None,
                              "path": "private-marker", "version": "private-marker"}
-                            for name in ("ffmpeg", "ffprobe", "mp4dump", "packager")]}
-        self.assertNotIn("private-marker", json.dumps(module.doctor(report)))
-        for change in (lambda r: r.update(cleanup_status="unconfirmed"),
-                       lambda r: r["tools"].pop(),
-                       lambda r: r["tools"][0].update(failure_code="tool-failed"),
-                       lambda r: r["tools"][0].update(feature_status="missing")):
+                            for name in ("ffmpeg", "ffprobe", "packager")]}
+        result = module.doctor(report)
+        self.assertEqual({tool["name"] for tool in result["tools"]}, {"ffmpeg", "ffprobe", "packager"})
+        self.assertEqual(len(result["tools"]), 3)
+        self.assertNotIn("private-marker", json.dumps(result))
+        for label, change in (
+                ("cleanup", lambda r: r.update(cleanup_status="unconfirmed")),
+                ("missing", lambda r: r["tools"].pop()),
+                ("extra", lambda r: r["tools"].append({**r["tools"][0], "name": "mp4dump"})),
+                ("duplicate", lambda r: r["tools"][1].update(name="ffmpeg"))):
             altered = copy.deepcopy(report)
             change(altered)
-            with self.assertRaisesRegex(module.Refusal, "^doctor-proof-invalid$"):
+            with self.subTest(case=label), self.assertRaisesRegex(module.Refusal, "^doctor-proof-invalid$"):
                 module.doctor(altered)
+        for index, tool in enumerate(report["tools"]):
+            for field, value in (("available", False), ("required", False),
+                                 ("version_status", "unsupported"), ("version_status", "build-unverified"),
+                                 ("feature_status", "missing"), ("failure_code", "tool-failed")):
+                altered = copy.deepcopy(report)
+                altered["tools"][index][field] = value
+                with self.subTest(tool=tool["name"], field=field, value=value), self.assertRaisesRegex(
+                        module.Refusal, "^doctor-proof-invalid$"):
+                    module.doctor(altered)
 
     def test_duplicate_members_and_nonfinite_json_are_rejected(self):
         for raw in (b'{"passed":false,"passed":true}', b'{"nested":{"a":1,"a":2}}',
@@ -349,9 +362,34 @@ class ProcessTests(unittest.TestCase):
             self.runner.run([sys.executable, "-c", "print('private-marker')"], "version", timeout=3)
 
     def test_output_limit_is_checked_when_child_has_already_exited(self):
-        with patch.object(module, "MAX_OUTPUT", 32):
+        native_popen = module.subprocess.Popen
+
+        def completed_child(*arguments, **options):
+            child = native_popen(*arguments, **options)
+            try:
+                self.assertEqual(child.wait(timeout=3), 0)
+            except BaseException:
+                child.kill()
+                child.wait(timeout=5)
+                raise
+            return child
+
+        # The real child has finished before Runner observes its spools. A short
+        # print command alone races the live-child forced-cleanup path on Windows.
+        with patch.object(module, "MAX_OUTPUT", 32), \
+                patch.object(module.subprocess, "Popen", side_effect=completed_child):
             with self.assertRaisesRegex(module.Refusal, "^command-output-limit$"):
                 self.runner.run([sys.executable, "-c", "print('x'*200)"], "version", timeout=3)
+        self.assertEqual(self.runner.stages, [])
+
+    def test_live_output_limit_preserves_unconfirmed_forced_cleanup(self):
+        expected = "^command-cleanup-unconfirmed$" if os.name == "nt" else "^command-output-limit$"
+        script = "import os,time; os.write(1,b'x'*200); time.sleep(10)"
+        with patch.object(module, "MAX_OUTPUT", 32):
+            with self.assertRaisesRegex(module.Refusal, expected) as denied:
+                self.runner.run([sys.executable, "-c", script], "version", timeout=3)
+        self.assertEqual(denied.exception.stage, "version")
+        self.assertEqual(self.runner.stages, [])
 
     def test_deadline_reaps_the_owned_child_and_never_returns_a_success(self):
         expected = "^command-cleanup-unconfirmed$" if os.name == "nt" else "^command-deadline$"

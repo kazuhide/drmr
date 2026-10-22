@@ -10,6 +10,9 @@ for installation, stable interfaces and versioning.
 First stable CLI release. The local Web console and Desktop host remain
 experimental.
 
+The eight public commands are `inspect`, `analyze`, `plan`, `convert`, `verify`,
+`doctor`, `serve` and `version`.
+
 ### Media workflows
 
 - Inspect local MP4, DASH and HLS metadata; analyze complete media before
@@ -46,6 +49,11 @@ experimental.
 
 ### Scope
 
+- Remove the pre-1.0 `run`, `batch`, `analyze-hls`, `package-hls`,
+  `verify-snapshot` and `canonical` commands, the catalog-only `plan --mpd` and
+  `plan --asset-id` options, and the catalog/queue APIs and screens. The console
+  uses the common saved-plan workflow. `DRMR_INPUT_ROOT` replaces `DRMR_CATALOG_ROOT`;
+  `DRMR_HLS_PROFILES` is removed.
 - The CLI compatibility policy begins at 1.0.0. Saved-plan and report schema
   versions are independent of the product version.
 - Supported formats are limited to the documented on-demand profiles. License
