@@ -21,8 +21,9 @@ jobs:
       matrix:
         rust: [minimum, stable]
     runs-on: windows-2022
-    # Keep complete native media fixtures separate from release compilation.
-    timeout-minutes: 60
+    # Run every native protection route and round trip as an ordinary user,
+    # with room for complete media comparisons before release compilation.
+    timeout-minutes: 75
     env:
       CARGO_TERM_COLOR: always
     steps:

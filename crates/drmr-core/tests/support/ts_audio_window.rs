@@ -512,12 +512,12 @@ fn assert_short_presentation(output: &Path, format: OutputFormat, profile: Audio
 fn assert_raw_result(
     output: &Path,
     format: OutputFormat,
-    root: &Path,
     profile: AudioProfile,
     packets: &[[Ratio<i64>; 3]],
     media: &RawAudio,
 ) {
-    let candidate = root.join(if format == OutputFormat::HlsTs {
+    let evidence = drmr_core::native::private_tempdir().unwrap();
+    let candidate = evidence.path().join(if format == OutputFormat::HlsTs {
         "candidate.ts"
     } else {
         "candidate.mp4"
@@ -712,7 +712,7 @@ fn saved_clear_route(profile: AudioProfile, zero_origin: bool, format: OutputFor
     assert_eq!(checked.plan_id, planned.plan_id);
     assert!(checked.source_unchanged && checked.output_matches_plan);
     all_checks(&checked.verification);
-    assert_raw_result(&output, format, root.path(), profile, &packets, &media);
+    assert_raw_result(&output, format, profile, &packets, &media);
     assert_eq!(std::fs::read(&saved).unwrap(), plan_before);
     assert_eq!(
         common::snapshot_tree(source.parent().unwrap()),
@@ -1114,12 +1114,9 @@ fn protected_audio_cell(
     }
     let roundtrip = root.join(format!("roundtrip-{index}"));
     reconvert_protected_audio(reference, &candidate, &roundtrip, format, target, &material);
-    let evidence = root.join(format!("evidence-{index}"));
-    drmr_core::native::create_media_dir_all(&evidence).unwrap();
     assert_raw_result(
         &roundtrip,
         OutputFormat::Dash,
-        &evidence,
         AAC_44100,
         reference.packets,
         reference.media,
@@ -1796,7 +1793,6 @@ fn av_dash_case(video_longer: bool) {
         .find(|track| track.kind == TrackKind::Video)
         .unwrap();
     assert_av_coded_media(
-        root.path(),
         &output,
         &audio_track.id,
         &video_track.id,
@@ -1817,7 +1813,7 @@ fn write_av_master(master: &Path) -> String {
         "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"audio\",NAME=\"Main\",DEFAULT=YES,AUTOSELECT=YES,URI=\"clear/media.m3u8\"\n",
         "#EXT-X-STREAM-INF:BANDWIDTH=2000000,AUDIO=\"audio\"\nvideo/media.m3u8\n"
     );
-    drmr_core::native::create_media_new(master)
+    drmr_core::native::create_private_new(master)
         .unwrap()
         .write_all(master_text.as_bytes())
         .unwrap();
@@ -1825,7 +1821,6 @@ fn write_av_master(master: &Path) -> String {
 }
 
 fn assert_av_coded_media(
-    root: &Path,
     output: &Path,
     audio_track: &str,
     video_track: &str,
@@ -1833,8 +1828,9 @@ fn assert_av_coded_media(
     audio_media: &RawAudio,
     video_packets: &[[Ratio<i64>; 3]],
 ) {
-    let result_audio = root.join("result-audio.mp4");
-    let result_video = root.join("result-video.mp4");
+    let evidence = drmr_core::native::private_tempdir().unwrap();
+    let result_audio = evidence.path().join("result-audio.mp4");
+    let result_video = evidence.path().join("result-video.mp4");
     join_dash_track_named(output, audio_track, &result_audio);
     join_dash_track_named(output, video_track, &result_video);
     assert_eq!(raw_audio(&result_audio, true, AAC_44100), *audio_media);
@@ -2024,7 +2020,7 @@ fn multi_video_fixture(root: &Path) -> MultiVideoFixture {
         videos[1].decoded_frame_sha256
     );
     let source = input.join("master.m3u8");
-    drmr_core::native::create_media_new(&source)
+    drmr_core::native::create_private_new(&source)
         .unwrap()
         .write_all(concat!(
             "#EXTM3U\n#EXT-X-VERSION:5\n",
@@ -2099,10 +2095,9 @@ fn assert_multi_clear_output(
     fixture: &MultiVideoFixture,
     directory: &Path,
     report: &drmr_core::conversion::ConversionReport,
-    evidence: &Path,
 ) {
     use drmr_core::inspection::TrackKind;
-    drmr_core::native::create_media_dir_all(evidence).unwrap();
+    let evidence = drmr_core::native::private_tempdir().unwrap();
     assert_eq!(report.output.tracks.len(), 3);
     let audio: Vec<_> = report
         .output
@@ -2111,7 +2106,7 @@ fn assert_multi_clear_output(
         .filter(|track| track.kind == TrackKind::Audio)
         .collect();
     assert_eq!(audio.len(), 1);
-    assert_multi_audio(fixture, directory, &audio[0].id, evidence);
+    assert_multi_audio(fixture, directory, &audio[0].id, evidence.path());
     let mut expected: Vec<_> = fixture.videos.iter().collect();
     for track in report
         .output
@@ -2119,7 +2114,7 @@ fn assert_multi_clear_output(
         .iter()
         .filter(|track| track.kind == TrackKind::Video)
     {
-        let raw = evidence.join(format!("{}.mp4", track.id));
+        let raw = evidence.path().join(format!("{}.mp4", track.id));
         join_dash_track_named(directory, &track.id, &raw);
         let observed = raw_video(&raw, true);
         let at = expected
@@ -2202,9 +2197,8 @@ fn prove_multi_output(
             })
             .unwrap(),
     );
-    let evidence = root.join(format!("{}-evidence", format.as_str()));
     if format == OutputFormat::Dash {
-        assert_multi_clear_output(fixture, output, report, &evidence);
+        assert_multi_clear_output(fixture, output, report);
     } else {
         assert_multi_hls_audio_declaration(output, report);
         let clear = root.join("hls-clear-reconversion");
@@ -2223,7 +2217,7 @@ fn prove_multi_output(
             .unwrap();
         all_checks(&reconverted.verification);
         all_checks(&verify_clear_range(&fixture.source, &clear, OutputFormat::Dash).unwrap());
-        assert_multi_clear_output(fixture, &clear, &reconverted, &evidence);
+        assert_multi_clear_output(fixture, &clear, &reconverted);
     }
 }
 
