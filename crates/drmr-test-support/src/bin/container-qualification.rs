@@ -387,7 +387,7 @@ fn job_state(port: u16, id: &str) -> io::Result<String> {
     stream.set_write_timeout(Some(Duration::from_secs(2)))?;
     write!(
         stream,
-        "GET /api/jobs/{id} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+        "GET /api/common/jobs/{id} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
     )?;
     let mut bytes = Vec::new();
     stream.take(65_537).read_to_end(&mut bytes)?;
@@ -480,11 +480,7 @@ fn assert_loopback(pid: u32, port: u16) -> io::Result<()> {
 fn web(cli: &Path, fixture: &Path, work: &Path, port: u16) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt as _;
     let control = work.join("web-control");
-    for path in [
-        &control,
-        &work.join("web-catalog"),
-        &work.join("web-output"),
-    ] {
+    for path in [&control, &work.join("web-input"), &work.join("web-output")] {
         fs::create_dir(path)?;
         fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
     }
@@ -498,9 +494,9 @@ fn web(cli: &Path, fixture: &Path, work: &Path, port: u16) -> io::Result<()> {
     .map_err(|_| fail())?;
     let child = Command::new(cli)
         .arg("serve")
-        .env("DRMR_CATALOG_ROOT", work.join("web-catalog"))
+        .env("DRMR_INPUT_ROOT", work.join("web-input"))
         .env("DRMR_OUTPUT_ROOT", work.join("web-output"))
-        .env("DRMR_HLS_PROFILES", work.join("web-profiles.json"))
+        .env("DRMR_COMMON_CONFIG_ROOT", work.join("web-config"))
         .env("DRMR_BIND_PORT", port.to_string())
         .env("PATH", path)
         .stdin(Stdio::null())

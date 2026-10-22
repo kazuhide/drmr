@@ -15,7 +15,7 @@ fn env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<OsString> + use<> {
 }
 
 const ROOTS: [(&str, &str); 2] = [
-    ("DRMR_CATALOG_ROOT", "/srv/catalog"),
+    ("DRMR_INPUT_ROOT", "/srv/input"),
     ("DRMR_OUTPUT_ROOT", "/srv/output"),
 ];
 
@@ -55,7 +55,7 @@ fn missing_roots_stop_the_tool_at_startup() {
         assert_eq!(error.exit_code, 2);
         assert_eq!(
             error.message,
-            "error: DRMR_CATALOG_ROOT and DRMR_OUTPUT_ROOT must both be set"
+            "error: DRMR_INPUT_ROOT and DRMR_OUTPUT_ROOT must both be set"
         );
     }
 }
@@ -67,29 +67,29 @@ fn the_defaults_and_the_remaining_environment_variables() {
         (
             config.bind_host.as_str(),
             config.bind_port,
-            config.hls_profiles.clone()
+            config.common_config_root
         ),
         ("127.0.0.1", 8080, None)
     );
     let config = config_from_env(env(&with_roots(&[
         ("DRMR_BIND_HOST", "0.0.0.0"),
         ("DRMR_BIND_PORT", " 9_090 "),
-        ("DRMR_HLS_PROFILES", "/srv/profiles.json"),
+        ("DRMR_COMMON_CONFIG_ROOT", "/srv/private"),
     ])))
     .unwrap();
     assert_eq!(
         (config.bind_host.as_str(), config.bind_port),
-        ("0.0.0.0", 9090),
-        "int() accepts spaces and underscores"
+        ("0.0.0.0", 9090)
     );
     assert_eq!(
-        config.hls_profiles.unwrap().to_str(),
-        Some("/srv/profiles.json")
+        config.common_config_root.unwrap().to_str(),
+        Some("/srv/private")
     );
-    let empty = config_from_env(env(&with_roots(&[("DRMR_HLS_PROFILES", "")]))).unwrap();
     assert!(
-        empty.hls_profiles.is_none(),
-        "an empty value means no profiles"
+        config_from_env(env(&with_roots(&[("DRMR_COMMON_CONFIG_ROOT", "")])))
+            .unwrap()
+            .common_config_root
+            .is_none()
     );
     let bad = config_from_env(env(&with_roots(&[("DRMR_BIND_PORT", "http")]))).unwrap_err();
     assert_eq!(
@@ -107,92 +107,55 @@ fn the_defaults_and_the_remaining_environment_variables() {
 fn the_jobs_run_the_hosting_executables_cli_unless_another_is_named() {
     let default = JobCli {
         argv: vec![OsString::from("/opt/drmr/bin/drmr")],
-        has_batch: true,
     };
     let config = configure(env(&ROOTS), &ServeArgs::default(), default.clone()).unwrap();
     assert_eq!(config.cli_argv, default.argv);
-    assert!(config.batch_available, "the default CLI carries batch");
     assert_eq!(config.static_dir, None);
-
-    let dir = tempfile::tempdir().unwrap();
-    let other = dir.path().join("other-cli");
-    std::fs::write(&other, b"").unwrap();
     let named = ServeArgs {
-        static_dir: Some(dir.path().join("static")),
-        cli: Some(other.clone()),
+        static_dir: Some("/srv/static".into()),
+        cli: Some("/opt/other/drmr".into()),
     };
     let config = configure(env(&ROOTS), &named, default.clone()).unwrap();
-    assert_eq!(config.cli_argv, vec![other.clone().into_os_string()]);
-    assert!(
-        !config.batch_available,
-        "another program is not vouched for"
-    );
+    assert_eq!(config.cli_argv, vec![OsString::from("/opt/other/drmr")]);
     assert_eq!(config.static_dir, named.static_dir);
-
-    // Naming the default CLI's own file, here through a symlink, keeps what it carries.
-    #[cfg(unix)]
-    let link = {
-        let link = dir.path().join("link");
-        support::file_link(&other, &link);
-        link
-    };
-    #[cfg(windows)]
-    let link = {
-        let junction = dir.path().join("link-directory");
-        support::directory_link(dir.path(), &junction);
-        junction.join("other-cli")
-    };
-    let own = JobCli {
-        argv: vec![other.into_os_string()],
-        has_batch: true,
-    };
-    let through_link = ServeArgs {
-        static_dir: None,
-        cli: Some(link.clone()),
-    };
-    let config = configure(env(&ROOTS), &through_link, own).unwrap();
-    assert_eq!(config.cli_argv, vec![link.into_os_string()]);
-    assert!(config.batch_available);
-
-    let refused = configure(env(&[]), &named, default).unwrap_err();
-    assert_eq!(refused.exit_code, 2);
+    assert_eq!(
+        configure(env(&[]), &named, default).unwrap_err().exit_code,
+        2
+    );
 }
-
 #[test]
 fn drmr_serve_runs_itself_and_drmr_server_its_sibling() {
-    let itself = JobCli::this_executable(true);
     assert_eq!(
-        itself.argv,
+        JobCli::this_executable().argv,
         vec![std::env::current_exe().unwrap().into_os_string()]
     );
-    assert!(itself.has_batch);
-    assert!(!JobCli::this_executable(false).has_batch);
-    let sibling = JobCli::sibling();
-    assert_eq!(sibling.argv, drmr_server::config::default_cli_argv());
-    assert!(!sibling.has_batch, "a separate program is not vouched for");
+    assert_eq!(
+        JobCli::sibling().argv,
+        drmr_server::config::default_cli_argv()
+    );
 }
 
 #[test]
 fn the_binary_refuses_to_start_without_its_roots() {
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_drmr-server"))
-        .env_remove("DRMR_CATALOG_ROOT")
+        .env_remove("DRMR_INPUT_ROOT")
         .env_remove("DRMR_OUTPUT_ROOT")
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(2));
     assert_eq!(
         String::from_utf8_lossy(&output.stderr),
-        "error: DRMR_CATALOG_ROOT and DRMR_OUTPUT_ROOT must both be set\n"
+        "error: DRMR_INPUT_ROOT and DRMR_OUTPUT_ROOT must both be set\n"
     );
 }
 
 #[test]
 fn the_binary_serves_the_embedded_page_and_the_api_on_the_configured_port() {
     let dir = tempfile::tempdir().unwrap();
-    let catalog = dir.path().join("catalog");
-    std::fs::create_dir(&catalog).unwrap();
+    let input = dir.path().join("input");
+    std::fs::create_dir(&input).unwrap();
     let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_drmr-server"))
-        .env("DRMR_CATALOG_ROOT", &catalog)
+        .env("DRMR_INPUT_ROOT", &input)
         .env("DRMR_OUTPUT_ROOT", dir.path().join("output"))
         .env("DRMR_BIND_PORT", "0")
         .env_remove("DRMR_BIND_HOST")
@@ -217,7 +180,7 @@ fn the_binary_serves_the_embedded_page_and_the_api_on_the_configured_port() {
         stream.read_to_string(&mut answer).unwrap();
         answer
     };
-    let catalog_answer = address.as_ref().map(|_| fetch("/api/catalog"));
+    let capabilities_answer = address.as_ref().map(|_| fetch("/api/common/capabilities"));
     let page = address.as_ref().map(|_| fetch("/"));
     child.kill().unwrap();
     child.wait().unwrap();
@@ -227,12 +190,15 @@ fn the_binary_serves_the_embedded_page_and_the_api_on_the_configured_port() {
             .is_some_and(|a| a.starts_with("127.0.0.1:")),
         "loopback by default: {banner:?}"
     );
-    let catalog_answer = catalog_answer.unwrap();
+    let capabilities_answer = capabilities_answer.unwrap();
     assert!(
-        catalog_answer.starts_with("HTTP/1.1 200"),
-        "{catalog_answer}"
+        capabilities_answer.starts_with("HTTP/1.1 200"),
+        "{capabilities_answer}"
     );
-    assert!(catalog_answer.ends_with("\r\n\r\n[]\n"), "{catalog_answer}");
+    let payload: serde_json::Value =
+        serde_json::from_str(capabilities_answer.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+    assert_eq!(payload["schema_version"], 1);
+    assert_eq!(payload["execution"]["availability"], "idle");
     let page = page.unwrap();
     let index =
         std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/static/index.html")).unwrap();
@@ -330,13 +296,13 @@ fn an_open_reader_exhausts_the_pipe_probe_bound() {
 #[test]
 fn a_closed_stderr_returns_an_internal_error_page() {
     let dir = tempfile::tempdir().unwrap();
-    let catalog = dir.path().join("catalog");
-    std::fs::create_dir(&catalog).unwrap();
+    let input = dir.path().join("input");
+    std::fs::create_dir(&input).unwrap();
     let (reader, writer) = std::io::pipe().unwrap();
     let mut probe = writer.try_clone().unwrap();
     let mut child = OwnedServer(
         std::process::Command::new(env!("CARGO_BIN_EXE_drmr-server"))
-            .env("DRMR_CATALOG_ROOT", &catalog)
+            .env("DRMR_INPUT_ROOT", &input)
             .env("DRMR_OUTPUT_ROOT", dir.path().join("output"))
             .env("DRMR_BIND_PORT", "0")
             .env_remove("DRMR_BIND_HOST")
@@ -363,7 +329,7 @@ fn a_closed_stderr_returns_an_internal_error_page() {
         stream.read_to_string(&mut answer).unwrap();
         answer
     };
-    let open = fetch("/api/catalog");
+    let open = fetch("/api/common/capabilities");
     drop(stderr);
     // A concurrent spawn can temporarily retain another reader. Establish the
     // kernel's actual BrokenPipe state before asserting any HTTP error response.
@@ -373,10 +339,14 @@ fn a_closed_stderr_returns_an_internal_error_page() {
         std::time::Instant::now() + std::time::Duration::from_secs(1),
     )
     .unwrap();
-    let answers: Vec<String> = ["/api/catalog", "/api/hls/jobs", "/api/hls/jobs"]
-        .iter()
-        .map(|path| fetch(path))
-        .collect();
+    let answers: Vec<String> = [
+        "/api/common/capabilities",
+        "/api/common/sessions",
+        "/api/common/capabilities",
+    ]
+    .iter()
+    .map(|path| fetch(path))
+    .collect();
     let still_running = child.0.try_wait().unwrap().is_none();
     child.0.kill().unwrap();
     child.0.wait().unwrap();

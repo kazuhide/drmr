@@ -23,9 +23,9 @@ fn the_console_keeps_paths_queries_and_media_on_its_exact_origin() {
     let origin = ConsoleOrigin::new(SocketAddr::from((Ipv4Addr::LOCALHOST, 4000))).unwrap();
     for path in [
         "/",
-        "/api/platform",
+        "/api/common/capabilities",
         "/assets/a/video.m3u8?preview=1",
-        "/reports/report.html?view=full#checks",
+        "/api/common/reports/report_1?view=full#checks",
     ] {
         assert!(origin.permits_navigation(&origin.url().join(path).unwrap()));
     }

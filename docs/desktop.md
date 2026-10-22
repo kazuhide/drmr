@@ -1,17 +1,17 @@
 # Desktop console
 
-The experimental Desktop host opens the existing local Web console in a native window. It uses the same catalog, jobs and media tools as `drmr serve`. The common workflow runs analyze, saved-plan creation, conversion and independent verification. Other CLI commands remain available through the CLI.
+The experimental Desktop host opens the existing local Web console in a native window. It uses the same saved plans, jobs and media tools as `drmr serve`. The common workflow runs analyze, saved-plan creation, conversion and independent verification. Other CLI commands remain available through the CLI.
 
 ## Choose folders
 
-1. Open **File → Choose input folder…** and select the allowed media/saved-plan folder. Prepared catalog entries can still use their existing layout.
+1. Open **File → Choose input folder…** and select the allowed media/saved-plan folder.
 2. Open **File → Choose output location…**. drmr creates or opens a private `drmr-output` child folder there.
 3. Optionally choose **File → Choose private configuration folder…** for key and fetch-policy files. Keep it separate from input and output folders. **Clear private configuration selection** removes this selection before starting the console. Clear-media flows without fetch settings need no configuration folder.
 4. Select **File → Open console**.
 
 The macOS bundle permits plain HTTP only for the loopback IP `127.0.0.1`; window navigation still requires the exact owned port. The native menus handle folder selection. The console receives no native shell or filesystem permissions. Links cannot navigate the window to another origin or open another window. An owned report link opens in the existing window; **File → Open console** returns to the console.
 
-To change folders after opening the console, quit and reopen the application. Source URLs and downloaded media can remain in private analysis folders; closing the window does not delete them. See [usage](usage.md) for saved-source and history retention.
+To change folders after opening the console, quit and reopen the application. Source URLs and downloaded media can remain in private analysis folders; closing the window does not delete them. See [usage](usage.md) for retention of downloaded inputs, saved plans and results.
 
 **Quit drmr** stops admission and waits for the local server to confirm cleanup. If cleanup cannot be confirmed, the application stays open, retains its running work and shows an error. Correct the reported cause, then select **Quit drmr** again to retry orderly cleanup. An operating-system force quit is separate from this orderly shutdown.
 
@@ -27,15 +27,9 @@ After submission, URL input is cleared and shown only as a generic **Source URL*
 
 Choose **Convert** to create the output, then **Verify again** for an independent comparison. To reopen a private downloaded copy later, select its folder as **Private configuration folder** before opening the console, then choose **Saved CLI plan**. For a copy saved in `drmr-plans`, select that folder in the later session. The folder must remain separate from the input and output media folders. You can also use `drmr verify --plan /path/to/private/drmr-plan.json` with the CLI, supplying runtime keys if needed. Existing plans in the allowed input/output folders remain supported. When a key file is needed, new plans use v2 even with one output; an imported v1 plan uses v1. The page selects private configuration references and never uploads or retrieves key-file contents.
 
-All common and prepared workflows share one execution slot. A lost response remains unknown until status lookup resolves it; the page does not repeat a launch. Stop acknowledgment does not establish process cleanup. A pending, running or cleanup-unconfirmed session remains owned. See [the Web workflow](usage.md#saved-plan-workflow) for session limits and recovery.
+Saved-plan operations share one execution slot. A lost response remains unknown until status lookup resolves it; the page does not repeat a launch. Stop acknowledgment does not establish process cleanup. A pending, running or cleanup-unconfirmed session remains owned. See [the Web workflow](usage.md#saved-plan-workflow) for session limits and recovery.
 
 These controls do not extend the native runtime results in the table below. Each native WebView still needs its own workflow, attachment-download and keyboard qualification.
-
-## Local playback
-
-The before/after player is a local ClearKey playback test, independent of the conversion's media checks. A fetched or configured test key is not reported as usable until the video emits a playing event. Successful playback in Chrome does not qualify WKWebView, WebView2 or WebKitGTK; each native WebView needs its own runtime check. No DRM service or device playback guarantee follows from this test.
-
-Playback setup has a 20-second budget covering previous-player cleanup, the local test-key response, Shaka media loading and the video actually beginning to play. This bounds a stalled setup in the running page without changing media-processing timeouts. On expiry the controls return with recovery guidance; conversion results remain unchanged. “Loading media” means Shaka has not completed its load; “Media loaded; waiting for playback to start” means the media load returned but the video has not emitted a playing event. Neither phase establishes that a key is usable. Retry after a setup timeout. If previous-player cleanup cannot be confirmed, reload the console page before retrying: drmr retains that owner and does not create another player on the same video. JavaScript timers depend on the WebView event loop running and are not an operating-system termination deadline.
 
 ## Tested results
 
@@ -44,10 +38,7 @@ Development checks on macOS used the public Big Buck Bunny 10-second fixture wit
 | Check | Observed result |
 | --- | --- |
 | Native folder menus, keyboard input and report navigation | Tested; owned reports open in the same window. |
-| Native catalog conversion | Completed with all media checks passing. |
 | Native Stop and orderly close during active processing | Owned CLI and media processes exited; closing the app also released its listener. |
-| Chrome local ClearKey playback | Before and after clips both reached the end. |
-| WKWebView local ClearKey playback | English/Japanese setup failure and retry recovery tested; completed playback remains unqualified. |
 | Windows and Linux native GUI | Runtime qualification remains open. The [Linux dependency warnings](#linux-dependency-qualification) also remain open. |
 
 ## External tools and launch environment
@@ -63,7 +54,7 @@ Before launching on macOS, use the bundled CLI in a terminal where your media to
 
 Before opening the console, choose **File → Check external tools…**. This runs the same bounded version and advertised-option checks as `drmr doctor --probe`, using the native application's actual launch environment. The dialog shows resolved paths and fixed results. It does not run shell startup files or add guessed installation directories. If tools are missing, install them and reopen the application from an environment whose `PATH` contains their executable directories. A close request stops subsequent probes and waits for the active diagnostic call and its readers. If process cleanup remains unconfirmed, the application stays open and retains that process owner; select Quit again to retry. It cannot open the console or exit normally until cleanup is confirmed.
 
-A successful check does not establish media compatibility; Bento4's build number must be confirmed separately because its banner omits it. A window opening successfully does not establish tool availability. Windows and Linux portable builds likewise inherit the environment used to launch their native executable.
+A successful diagnostic does not establish media compatibility. A window opening successfully does not establish tool availability. Windows and Linux portable builds likewise inherit the environment used to launch their native executable.
 
 ## Build from source
 
@@ -81,7 +72,7 @@ The script builds the CLI from the same checkout, stages dependency license text
 
 Published packages that omit a license text require a version-pinned publisher fallback with a verified checksum. Unresolved or changed fallbacks stop packaging. CLI archives use the same notice collector and retain embedded Web asset licenses.
 
-The host checks the bundled CLI's SHA-256 before starting the server. Keep the two binaries together. FFmpeg, Shaka Packager and Bento4 are not bundled. Keys, downloaded media and operator configuration are not included in the application bundle.
+The host checks the bundled CLI's SHA-256 before starting the server. Keep the two binaries together. FFmpeg, ffprobe and Shaka Packager are installed separately. Keys, downloaded media and operator configuration are not included in the application bundle.
 
 The Tauri configuration also describes native installer packaging. The build script does not sign, notarize or create an installer, and its output does not establish qualification on another operating system.
 

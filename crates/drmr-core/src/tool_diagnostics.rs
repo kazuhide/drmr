@@ -12,14 +12,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-const TOOLS: [(&str, &str, &str); 4] = [
+const TOOLS: [(&str, &str, &str); 3] = [
     ("ffmpeg", "media processing (FFmpeg)", "9.0.1"),
     ("ffprobe", "media inspection (FFmpeg)", "9.0.1"),
-    (
-        "mp4dump",
-        "MP4 structure inspection (Bento4)",
-        "1.6.0 (build 641 not exposed by banner)",
-    ),
     (
         "packager",
         "media encryption and packaging (Shaka Packager)",
@@ -27,7 +22,7 @@ const TOOLS: [(&str, &str, &str); 4] = [
     ),
 ];
 
-/// A selected processing route, or the complete dependency set of the older workflow.
+/// A selected processing route or the complete dependency set.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Profile(&'static str);
 
@@ -37,7 +32,6 @@ impl Profile {
     pub fn parse(value: &str) -> Option<Self> {
         [
             "all",
-            "prepared-dash",
             "progressive-mp4",
             "fragmented-mp4",
             "dash-presentation",
@@ -53,7 +47,6 @@ impl Profile {
 
     fn required(self, tool: &str) -> bool {
         match tool {
-            "mp4dump" => matches!(self.0, "all" | "prepared-dash"),
             "packager" => self.0 != "progressive-mp4",
             _ => true,
         }
@@ -132,7 +125,7 @@ impl DiagnosticReport {
                 writeln!(text, "  {code}").expect("String write");
             }
         }
-        text.push_str("\nVersion/help checks do not prove media compatibility. Bento4's build number is not exposed; confirm build 641 or newer with its distributor.\n\nIf required checks fail, install compatible tools and reopen drmr from an environment whose PATH contains them. Shell startup files and extra installation folders are not searched.");
+        text.push_str("\nVersion/help checks do not prove media compatibility.\n\nIf required checks fail, install compatible tools and reopen drmr from an environment whose PATH contains them. Shell startup files and extra installation folders are not searched.");
         text
     }
 }
@@ -353,7 +346,7 @@ fn diagnose(
         && tools.iter().filter(|t| t.required).all(|t| {
             t.available
                 && (!probe
-                    || (matches!(t.version_status, "supported" | "build-unverified")
+                    || (t.version_status == "supported"
                         && t.feature_status == "available"
                         && t.failure_code.is_none()))
         });
@@ -429,18 +422,25 @@ fn probe_tool(
     tool: &mut ToolDiagnostic,
     stop: &crate::concurrency::Stop,
 ) -> Result<(), &'static str> {
-    let args: &[&str] = match tool.name {
-        "ffmpeg" | "ffprobe" => &["-version"],
-        "packager" => &["--version"],
-        _ => &[],
+    let (args, pattern, minimum): (&[&str], &str, &[u64]) = match tool.name {
+        "ffmpeg" => (
+            &["-version"],
+            r"(?m)^ffmpeg version n?([0-9]+)\.([0-9]+)(?:\.([0-9]+))?",
+            &[9, 0, 1],
+        ),
+        "ffprobe" => (
+            &["-version"],
+            r"(?m)^ffprobe version n?([0-9]+)\.([0-9]+)(?:\.([0-9]+))?",
+            &[9, 0, 1],
+        ),
+        "packager" => (
+            &["--version"],
+            r"(?m)^packager version v?([0-9]+)\.([0-9]+)(?:\.([0-9]+))?",
+            &[3, 8, 0],
+        ),
+        _ => return Err("probe-tool-unsupported"),
     };
-    let banner = output(runner, tool, args, tool.name == "mp4dump", stop)?;
-    let pattern = match tool.name {
-        "ffmpeg" => r"(?m)^ffmpeg version n?([0-9]+)\.([0-9]+)(?:\.([0-9]+))?",
-        "ffprobe" => r"(?m)^ffprobe version n?([0-9]+)\.([0-9]+)(?:\.([0-9]+))?",
-        "packager" => r"(?m)^packager version v?([0-9]+)\.([0-9]+)(?:\.([0-9]+))?",
-        _ => r"\(Bento4 Version ([0-9]+)\.([0-9]+)\.([0-9]+)",
-    };
+    let banner = output(runner, tool, args, false, stop)?;
     let Some(captures) = Regex::new(pattern)
         .expect("fixed banner pattern")
         .captures(&banner)
@@ -456,15 +456,8 @@ fn probe_tool(
         return Err("probe-version-unrecognized");
     };
     tool.version = Some(format!("{}.{}.{}", v[0], v[1], v[2]));
-    let minimum: &[u64] = match tool.name {
-        "ffmpeg" | "ffprobe" => &[9, 0, 1],
-        "packager" => &[3, 8, 0],
-        _ => &[1, 6, 0],
-    };
     tool.version_status = if v.as_slice() < minimum {
         "below-minimum"
-    } else if tool.name == "mp4dump" {
-        "build-unverified"
     } else {
         "supported"
     };
@@ -509,7 +502,7 @@ fn probe_tool(
                 "hls_master_playlist_output",
             ],
         ),
-        _ => (banner, &["format"]),
+        _ => return Err("probe-tool-unsupported"),
     };
     tool.features = features
         .iter()

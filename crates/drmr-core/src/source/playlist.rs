@@ -10,7 +10,6 @@ use super::pytext::{all_digits, ascii_digits, cmp_decimal, decimal_digit, splitl
 use super::{Failure, FetchPolicy, SourceError, child_url};
 use crate::m3u8::{Attributes, parse_attributes};
 use std::cmp::Ordering;
-use std::path::PathBuf;
 
 /// `_COMMON`: tags of both playlist kinds.
 pub const COMMON: [&str; 3] = ["#EXTM3U", "#EXT-X-VERSION", "#EXT-X-INDEPENDENT-SEGMENTS"];
@@ -136,30 +135,12 @@ pub enum PlaylistKind {
     Text,
 }
 
-/// A media playlist's attributes: the variant's (or rendition's) attribute list and, for a
-/// variant whose audio group declares an in-band rendition, that rendition's
-/// (`_INBAND_AUDIO`).
-#[derive(Clone, Debug, Default)]
-pub struct PlaylistAttrs {
-    /// The attribute list.
-    pub attrs: Attributes,
-    /// `_INBAND_AUDIO`.
-    pub inband_audio: Option<Attributes>,
-}
-
-impl PlaylistAttrs {
-    /// `attrs.get(key)`.
-    pub fn get(&self, key: &str) -> Option<&str> {
-        self.attrs.get(key)
-    }
-}
-
 /// `_master_plan`: the media playlists a master names, in the order the sequential analysis
 /// visited them — every variant, then every alternative rendition with a URI.
 pub fn master_plan(
     lines: &[String],
     effective: &str,
-) -> Result<Vec<(String, PlaylistAttrs, PlaylistKind)>, Failure> {
+) -> Result<Vec<(String, PlaylistKind)>, Failure> {
     let mut variants: Vec<(String, Attributes)> = Vec::new();
     let mut alternatives: Vec<Attributes> = Vec::new();
     let mut pending: Option<Attributes> = None;
@@ -226,11 +207,7 @@ pub fn master_plan(
         if inband.len() > 1 {
             return Err(fail("ambiguous-source-topology"));
         }
-        let attrs = PlaylistAttrs {
-            attrs: a.clone(),
-            inband_audio: inband.first().map(|t| (*t).clone()),
-        };
-        plan.push((location.clone(), attrs, PlaylistKind::Variant));
+        plan.push((location.clone(), PlaylistKind::Variant));
     }
     for a in &alternatives {
         if let Some(uri) = a.get("URI") {
@@ -239,11 +216,7 @@ pub fn master_plan(
             } else {
                 PlaylistKind::Text
             };
-            let attrs = PlaylistAttrs {
-                attrs: a.clone(),
-                inband_audio: None,
-            };
-            plan.push((child_url(effective, uri)?, attrs, kind));
+            plan.push((child_url(effective, uri)?, kind));
         } else if !variants
             .iter()
             .any(|(_, v)| v.get("AUDIO").is_some() && v.get("AUDIO") == a.get("GROUP-ID"))
@@ -284,18 +257,11 @@ fn check_rendition(a: &Attributes) -> Result<(), Failure> {
     Ok(())
 }
 
-/// A media resource planned from a playlist (`_Resource`): its id, and so its file, is fixed
-/// before the download starts.
+/// One referenced media resource, validated before download starts.
 #[derive(Clone, Debug)]
 pub struct Planned {
-    /// The resource's file without its suffix (`r000001`).
-    pub base: PathBuf,
     /// Where it comes from.
     pub url: String,
-    /// The bytes of `url` it is.
-    pub byte_range: Option<ByteRange>,
-    /// The `EXTINF` duration (segments).
-    pub duration: Option<f64>,
     /// An `EXT-X-MAP` was in effect at this segment's line.
     pub has_init: bool,
 }
@@ -309,31 +275,13 @@ pub struct MediaPlan {
     pub segments: Vec<Planned>,
 }
 
-/// `_media_plan`: parse a media playlist and plan its resources, allocating their ids in
-/// playlist order (`allocate` returns the next resource's base path, or the total-resource
-/// budget's refusal).
-pub fn media_plan(
-    lines: &[String],
-    effective: &str,
-    policy: &FetchPolicy,
-    allocate: &mut dyn FnMut() -> Result<PathBuf, Failure>,
-) -> Result<MediaPlan, Failure> {
-    media_plan_with_keys(lines, effective, policy, allocate, &mut |value| {
-        let a = parse_attributes(value).map_err(Failure::Source)?;
-        if a.len() != 1 || a.get("METHOD") != Some("NONE") {
-            return Err(fail("encrypted-source-unsupported"));
-        }
-        Ok(())
-    })
-}
-
 /// Plan ciphertext acquisition only after the caller validates each key declaration.
 /// Key identifiers never become planned resources. Local media admission remains separate.
 pub(crate) fn retained_media_plan(
     lines: &[String],
     effective: &str,
     policy: &FetchPolicy,
-    allocate: &mut dyn FnMut() -> Result<PathBuf, Failure>,
+    allocate: &mut dyn FnMut() -> Result<(), Failure>,
     validate_key: &mut dyn FnMut(&str) -> Result<(), Failure>,
 ) -> Result<MediaPlan, Failure> {
     media_plan_with_keys(lines, effective, policy, allocate, validate_key)
@@ -343,7 +291,7 @@ fn media_plan_with_keys(
     lines: &[String],
     effective: &str,
     policy: &FetchPolicy,
-    allocate: &mut dyn FnMut() -> Result<PathBuf, Failure>,
+    allocate: &mut dyn FnMut() -> Result<(), Failure>,
     validate_key: &mut dyn FnMut(&str) -> Result<(), Failure>,
 ) -> Result<MediaPlan, Failure> {
     if lines.iter().any(|line| MASTER.contains(&tag_of(line))) {
@@ -508,7 +456,7 @@ fn map_line(
     effective: &str,
     state: &mut MediaState,
     plan: &mut MediaPlan,
-    allocate: &mut dyn FnMut() -> Result<PathBuf, Failure>,
+    allocate: &mut dyn FnMut() -> Result<(), Failure>,
 ) -> Result<(), Failure> {
     let a = parse_attributes(value).map_err(Failure::Source)?;
     let Some(uri) = a.get("URI") else {
@@ -526,11 +474,9 @@ fn map_line(
         return Err(fail("changing-initialization-unsupported"));
     }
     if plan.init.is_none() {
+        allocate()?;
         plan.init = Some(Planned {
-            base: allocate()?,
             url: location,
-            byte_range: range,
-            duration: None,
             has_init: false,
         });
         state.init_identity = Some(identity);
@@ -544,11 +490,11 @@ fn segment_line(
     policy: &FetchPolicy,
     state: &mut MediaState,
     plan: &mut MediaPlan,
-    allocate: &mut dyn FnMut() -> Result<PathBuf, Failure>,
+    allocate: &mut dyn FnMut() -> Result<(), Failure>,
 ) -> Result<(), Failure> {
-    let Some(duration) = state.duration else {
+    if state.duration.is_none() {
         return Err(fail("invalid-playlist"));
-    };
+    }
     if plan.segments.len() as u64 >= policy.max_segments_per_track {
         return Err(fail("segment-budget-exceeded"));
     }
@@ -569,11 +515,9 @@ fn segment_line(
         ),
         _ => None,
     };
+    allocate()?;
     plan.segments.push(Planned {
-        base: allocate()?,
         url: location.clone(),
-        byte_range: range,
-        duration: Some(duration),
         has_init: plan.init.is_some(),
     });
     state.previous_range = range.map(|range| {
@@ -598,8 +542,7 @@ mod tests {
         let plan = master_plan(&parsed, "https://media.example.invalid/master.m3u8").unwrap();
         assert_eq!(plan.len(), 1);
         assert_eq!(plan[0].0, "https://media.example.invalid/video/media.m3u8");
-        assert_eq!(plan[0].2, PlaylistKind::Variant);
-        assert_eq!(plan[0].1.get("BANDWIDTH"), Some("128000"));
+        assert_eq!(plan[0].1, PlaylistKind::Variant);
     }
 
     #[test]
@@ -626,23 +569,29 @@ mod tests {
     fn media_comments_leave_segment_and_endlist_rules_intact() {
         let body = b"#EXTM3U\n## Generated by a packager\n#EXT-X-TARGETDURATION:2\n#EXTINF:2,\n# comment before the segment\nsegment.ts\n#EXT-X-ENDLIST\n# trailing comment\n";
         let parsed = lines(body).unwrap();
-        let mut allocate = || Ok(PathBuf::from("segment"));
-        let plan = media_plan(
+        let mut allocate = || Ok(());
+        let plan = retained_media_plan(
             &parsed,
             "https://media.example.invalid/media.m3u8",
             &FetchPolicy::default(),
             &mut allocate,
+            &mut |_| Ok(()),
         )
         .unwrap();
         assert_eq!(plan.segments.len(), 1);
-        assert_eq!(plan.segments[0].duration, Some(2.0));
+        assert_eq!(
+            plan.segments[0].url,
+            "https://media.example.invalid/segment.ts"
+        );
+        assert!(!plan.segments[0].has_init);
         let parsed = lines(&[body.as_slice(), b"#EXT-X-VERSION:7\n"].concat()).unwrap();
         assert_eq!(
-            media_plan(
+            retained_media_plan(
                 &parsed,
                 "https://media.example.invalid/media.m3u8",
                 &FetchPolicy::default(),
-                &mut allocate
+                &mut allocate,
+                &mut |_| Ok(())
             )
             .unwrap_err()
             .token(),

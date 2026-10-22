@@ -16,10 +16,7 @@ FROM native AS cargo-cache-check
 COPY docker/cargo_cache.py docker/tests/cargo_cache_control.py /cache-recipe/
 RUN python3 /cache-recipe/cargo_cache_control.py --report /cargo-cache-control.json
 
-FROM native AS bento-build
-COPY docker/bento4.py /recipe/bento4.py
-RUN python3 /recipe/bento4.py --jobs "$BUILD_JOBS"
-FROM bento-build AS shaka-build
+FROM native AS shaka-build
 COPY docker/shaka.py /recipe/shaka.py
 RUN python3 /recipe/shaka.py --jobs "$BUILD_JOBS"
 

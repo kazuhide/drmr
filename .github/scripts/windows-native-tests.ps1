@@ -115,17 +115,12 @@ try {
     Get-Content $stderr
     $text = (Get-Content $stdout -Raw) + (Get-Content $stderr -Raw)
     foreach ($match in [regex]::Matches($text, 'skipped: [^\r\n]*')) {
-        if ($match.Value -ne 'skipped: host FFmpeg lacks TTML-in-MP4 muxing') {
+        if ($match.Value -notmatch '^skipped: ffmpeg [0-6] omits packet timing on this fixture(?: \(.*\))?$') {
             throw "Unexpected test skip: $($match.Value)"
         }
     }
-    $expectedHelpers = @(
-        'child_reads_the_process_environment',
-        'child_transcrypts_with_relative_paths'
-    )
-    $ignored = @([regex]::Matches($text, 'test (\S+) \.\.\. ignored(?:, [^\r\n]*)?') | ForEach-Object { $_.Groups[1].Value })
-    if (@(Compare-Object ($expectedHelpers | Sort-Object) ($ignored | Sort-Object)).Count -ne 0) {
-        throw 'Ignored tests must be exactly the two isolated child-process helpers'
+    if ([regex]::IsMatch($text, 'test [^\r\n]* \.\.\. ignored\b')) {
+        throw 'Native tests must not contain ignored tests'
     }
     if ($process.ExitCode -ne 0) { throw "Native tests failed with exit code $($process.ExitCode)" }
 } finally {

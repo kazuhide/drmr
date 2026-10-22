@@ -1,4 +1,6 @@
 //! Backend command construction. Retained records contain neither raw arguments nor tool output.
+
+const RESOURCE_FLAGS: [&str; 2] = ["--single_threaded", "--io_cache_size=0"];
 use super::{ContentKey, ConversionError, InputKeys, OutputKey};
 use crate::{
     inspection::TargetProtection,
@@ -101,7 +103,7 @@ impl Backend {
             }
         }
         if tool == "packager" {
-            effective.extend(crate::packager::RESOURCE_FLAGS.map(String::from));
+            effective.extend(RESOURCE_FLAGS.map(String::from));
         }
         effective
     }

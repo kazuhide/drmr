@@ -8,16 +8,16 @@ fn private_plan_service(
     std::path::PathBuf,
     drmr_server::RunningServer,
 ) {
-    let catalog = root.join("catalog");
+    let input = root.join("input");
     let output = root.join("output");
     let private = root.join("private");
-    support::private_dir(&catalog).unwrap();
+    support::private_dir(&input).unwrap();
     support::private_dir(&private).unwrap();
-    let mut config = ServerConfig::new(&catalog, &output);
+    let mut config = ServerConfig::new(&input, &output);
     config.common_config_root = Some(private.clone());
     config.bind_port = 0;
     config.hooks.log = std::sync::Arc::new(|_| Ok(()));
-    (catalog, output, private, spawn(config).unwrap())
+    (input, output, private, spawn(config).unwrap())
 }
 
 fn common_root(capability: &Value, label: &str) -> String {
@@ -109,7 +109,7 @@ fn copy_plan_input(path: &std::path::Path) {
 fn private_saved_plan_imports_both_schemas_and_preserves_public_plan_selection() {
     for schema in [1, 2] {
         let root = tempfile::tempdir().unwrap();
-        let (catalog, output, private, server) = private_plan_service(root.path());
+        let (input_root, output, private, server) = private_plan_service(root.path());
         let client = Client::new(&server.url());
         let cap = client.get("/api/common/capabilities").json();
         let private_root = cap["roots"]
@@ -124,14 +124,18 @@ fn private_saved_plan_imports_both_schemas_and_preserves_public_plan_selection()
                 .unwrap()
                 .contains(&serde_json::json!("saved-plan"))
         );
-        let input = catalog.join("clip.mp4");
-        copy_plan_input(&input);
-        let bytes = private_plan_bytes(&input, &output.join(format!("result-v{schema}")), schema);
+        let input_file = input_root.join("clip.mp4");
+        copy_plan_input(&input_file);
+        let bytes = private_plan_bytes(
+            &input_file,
+            &output.join(format!("result-v{schema}")),
+            schema,
+        );
         let expected: Value = serde_json::from_slice(&bytes).unwrap();
         let run = cap["server_id"].as_str().unwrap();
         for (index, (directory, label)) in [
             (&private, "Private configuration folder"),
-            (&catalog, "Input folder"),
+            (&input_root, "Input folder"),
             (&output, "Output folder"),
         ]
         .into_iter()
@@ -274,15 +278,15 @@ fn private_saved_plan_references_cannot_cross_roles_roots_or_replaced_ancestors(
 #[test]
 fn private_saved_plan_import_revalidates_private_media_and_output_destinations() {
     let root = tempfile::tempdir().unwrap();
-    let (catalog, output, private, server) = private_plan_service(root.path());
-    copy_plan_input(&catalog.join("clip.mp4"));
+    let (input, output, private, server) = private_plan_service(root.path());
+    copy_plan_input(&input.join("clip.mp4"));
     copy_plan_input(&private.join("clip.mp4"));
     let client = Client::new(&server.url());
     let cap = client.get("/api/common/capabilities").json();
     let private_root = common_root(&cap, "Private configuration folder");
     for (schema, source, destination) in [
         (1, private.join("clip.mp4"), output.join("public-result")),
-        (2, catalog.join("clip.mp4"), private.join("private-result")),
+        (2, input.join("clip.mp4"), private.join("private-result")),
     ] {
         let path = private.join("plan.json");
         let bytes = private_plan_bytes(&source, &destination, schema);
@@ -351,16 +355,16 @@ fn private_saved_plan_import_keeps_strict_private_reads_and_schema_validation() 
 #[test]
 fn private_saved_plan_selection_cannot_browse_reserved_internal_artifacts() {
     let root = tempfile::tempdir().unwrap();
-    let (catalog, output, private, server) = private_plan_service(root.path());
+    let (input, output, private, server) = private_plan_service(root.path());
     for path in [
-        catalog.join("_jobs/PRIVATE.json"),
+        input.join("_jobs/PRIVATE.json"),
         output.join("_jobs/PRIVATE.json"),
         output.join("_common/PRIVATE.json"),
         private.join("_jobs/PRIVATE.json"),
     ] {
         support::write_private(&path, b"PRIVATE_INTERNAL_CONTENT").unwrap();
     }
-    support::write_private(&catalog.join("ordinary/saved-plan.json"), b"{}").unwrap();
+    support::write_private(&input.join("ordinary/saved-plan.json"), b"{}").unwrap();
     support::write_private(&private.join("ordinary/PRIVATE_PLAN.json"), b"{}").unwrap();
     let client = Client::new(&server.url());
     let cap = client.get("/api/common/capabilities").json();
@@ -409,8 +413,9 @@ fn private_saved_plan_selection_cannot_browse_reserved_internal_artifacts() {
 fn private_saved_plan_files_and_directories_cannot_be_selected_or_served_through_aliases() {
     use std::os::unix::fs::symlink;
     let root = tempfile::tempdir().unwrap();
-    let catalog = root.path().join("catalog");
-    let (entry, _) = stage(&catalog, "asset");
+    let input = root.path().join("input");
+    let entry = input.join("asset");
+    support::private_dir(entry.join("download")).unwrap();
     let private = root.path().join("private");
     support::write_private(&private.join("PRIVATE_PLAN.json"), b"PRIVATE_PLAN_CONTENT").unwrap();
     let static_dir = root.path().join("static");
@@ -419,15 +424,15 @@ fn private_saved_plan_files_and_directories_cannot_be_selected_or_served_through
     symlink(&private, entry.join("download/alias")).unwrap();
     symlink(
         private.join("PRIVATE_PLAN.json"),
-        catalog.join("public-plan.json"),
+        input.join("public-plan.json"),
     )
     .unwrap();
     symlink(
-        catalog.join("public-plan.json"),
+        input.join("public-plan.json"),
         private.join("alias-plan.json"),
     )
     .unwrap();
-    let mut config = ServerConfig::new(&catalog, root.path().join("output"));
+    let mut config = ServerConfig::new(&input, root.path().join("output"));
     config.common_config_root = Some(private);
     config.static_dir = Some(static_dir);
     config.bind_port = 0;

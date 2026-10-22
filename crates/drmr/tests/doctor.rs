@@ -42,7 +42,13 @@ fn missing_dependencies_report_failure_as_json_without_environment_values() {
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(report["ready"], false);
     let tools = report["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 4);
+    assert_eq!(
+        tools
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["ffmpeg", "ffprobe", "packager"]
+    );
     for tool in tools {
         assert_eq!(tool["available"], false);
         assert_eq!(tool["required"], true);
@@ -53,7 +59,7 @@ fn missing_dependencies_report_failure_as_json_without_environment_values() {
 }
 
 #[test]
-fn all_executable_dependencies_report_success_without_running_them() {
+fn discovery_lists_only_current_runtime_dependencies_without_running_them() {
     let directory = tempfile::tempdir().unwrap();
     for name in ["ffmpeg", "ffprobe", "mp4dump", "packager"] {
         fixture_tool(directory.path(), name, true);
@@ -62,7 +68,15 @@ fn all_executable_dependencies_report_success_without_running_them() {
     assert_eq!(output.status.code(), Some(0));
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(report["ready"], true);
-    for tool in report["tools"].as_array().unwrap() {
+    let tools = report["tools"].as_array().unwrap();
+    assert_eq!(
+        tools
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["ffmpeg", "ffprobe", "packager"]
+    );
+    for tool in tools {
         assert_eq!(tool["available"], true);
     }
     assert_eq!(output.stderr, [] as [u8; 0]);
@@ -80,7 +94,6 @@ fn selected_route_does_not_require_unrelated_tools() {
     assert_eq!(report["ready"], true);
     assert_eq!(report["mode"], "discovery");
     assert_eq!(report["tools"][2]["required"], false);
-    assert_eq!(report["tools"][3]["required"], false);
 }
 
 fn probing_tool(directory: &Path, name: &str, version: &str, options: &str) {
@@ -106,6 +119,37 @@ fn probing_pair(directory: &Path, version: &str, ffmpeg_options: &str) {
         "9.0.1",
         "-show_packets\n-show_entries\n-show_data_hash\n-decryption_keys",
     );
+}
+
+#[test]
+fn complete_probe_requires_only_the_three_runtime_tools() {
+    let directory = tempfile::tempdir().unwrap();
+    probing_pair(
+        directory.path(),
+        "9.0.1",
+        "-encryption_scheme\n-decryption_key",
+    );
+    probing_tool(
+        directory.path(),
+        "packager",
+        "v3.8.0",
+        "--enable_raw_key_encryption\n--enable_raw_key_decryption\n--protection_scheme\n--segment_duration\n--mpd_output\n--hls_master_playlist_output",
+    );
+    let output = doctor(directory.path(), &["--probe", "--json"]);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["ready"], true);
+    let tools = report["tools"].as_array().unwrap();
+    assert_eq!(tools.len(), 3);
+    for tool in tools {
+        assert_eq!(tool["required"], true);
+        assert_eq!(tool["version_status"], "supported");
+        assert_eq!(tool["feature_status"], "available");
+        assert_eq!(tool["failure_code"], Value::Null);
+    }
+    for bytes in [&output.stdout, &output.stderr] {
+        assert!(!String::from_utf8_lossy(bytes).contains("untrusted-secret-must-not-appear"));
+    }
 }
 
 #[test]
@@ -386,11 +430,12 @@ fn default_report_explains_next_steps_for_missing_dependencies() {
     let output = doctor(directory.path(), &[]);
     assert_eq!(output.status.code(), Some(1));
     let text = String::from_utf8(output.stdout).unwrap();
-    for name in ["ffmpeg", "ffprobe", "mp4dump", "packager"] {
+    for name in ["ffmpeg", "ffprobe", "packager"] {
         assert!(text.contains(name));
     }
     assert!(text.contains("PATH"));
-    assert!(text.contains("Bento4"));
+    assert!(!text.contains("Bento4"));
+    assert!(!text.contains("mp4dump"));
     assert!(text.contains("Shaka Packager"));
     assert!(!text.contains("secret-must-not-appear"));
 }
@@ -401,7 +446,6 @@ fn directories_and_non_executable_files_do_not_count_as_available() {
     let directory = tempfile::tempdir().unwrap();
     std::fs::create_dir(directory.path().join("ffmpeg")).unwrap();
     fixture_tool(directory.path(), "ffprobe", false);
-    fixture_tool(directory.path(), "mp4dump", true);
     fixture_tool(directory.path(), "packager", true);
     let output = doctor(directory.path(), &["--json"]);
     assert_eq!(output.status.code(), Some(1));
@@ -427,8 +471,7 @@ fn root_help_shows_getting_started_examples_and_command_help_is_available() {
         "drmr convert",
         "drmr verify",
         "--download-dir",
-        "drmr plan --mpd",
-        "drmr run --help",
+        "drmr analyze URL --download-dir SOURCE_DIR",
     ] {
         assert!(text.contains(example), "missing {example}: {text}");
     }

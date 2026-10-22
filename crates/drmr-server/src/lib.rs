@@ -1,18 +1,13 @@
 //! HTTP API and embedded browser console for drmr.
 
-pub mod catalog;
 pub mod common;
 pub mod common_protocol;
 pub mod config;
-pub mod hls;
 pub mod http;
 pub mod jobs;
 pub mod pyutil;
-pub mod queue;
-mod readiness;
 pub mod router;
 pub mod routes;
-pub mod safelog;
 pub mod static_files;
 mod workers;
 
@@ -41,16 +36,11 @@ pub struct App {
     pub manager: Arc<jobs::ConversionJobManager>,
     /// The common CLI console service.
     pub common: Arc<common::CommonService>,
-    /// The record machinery and the clear-HLS service.
-    pub service: Arc<hls::HlsService>,
-    /// The conversion queue.
-    pub queue: Arc<queue::ConversionQueue>,
     /// Where the UI comes from.
     pub static_root: static_files::StaticRoot,
     streams: Arc<workers::Workers>,
     requests: Arc<workers::Requests>,
     shutdown_lock: std::sync::Mutex<()>,
-    closing: std::sync::atomic::AtomicBool,
 }
 
 /// Why the application could not be built.
@@ -59,14 +49,10 @@ pub enum AppError {
     /// The job log directory cannot be created.
     #[error("the job log directory cannot be created: {0}")]
     Jobs(#[source] std::io::Error),
-    /// The service refused to start.
-    #[error(transparent)]
-    Service(#[from] hls::StartError),
 }
 
 impl App {
-    /// `create_app(config)`: the job runner over `<output_root>/_jobs`, the service (output root
-    /// resolved, history loaded), the queue.
+    /// Create the common workflow service and its one supervised job manager.
     pub fn new(config: ServerConfig) -> Result<Arc<App>, AppError> {
         let config = Arc::new(config);
         let manager = Arc::new(
@@ -77,10 +63,8 @@ impl App {
             )
             .map_err(AppError::Jobs)?,
         );
-        let service = hls::HlsService::new(config.clone(), manager.clone())?;
         let common =
             common::CommonService::new(config.clone(), manager.clone()).map_err(AppError::Jobs)?;
-        let queue = queue::ConversionQueue::new(config.clone(), manager.clone(), service.clone());
         let static_root = match &config.static_dir {
             Some(directory) => static_files::StaticRoot::Dir(directory.clone()),
             None => static_files::StaticRoot::Embedded,
@@ -89,17 +73,14 @@ impl App {
             config,
             manager,
             common,
-            service,
-            queue,
             static_root,
             streams: Arc::new(workers::Workers::default()),
             requests: Arc::new(workers::Requests::default()),
             shutdown_lock: std::sync::Mutex::new(()),
-            closing: std::sync::atomic::AtomicBool::new(false),
         }))
     }
 
-    /// Close submissions and drain owned jobs, queue, streams, records and credentials.
+    /// Close submissions and drain owned processes, requests and private configurations.
     /// External `Arc<App>` owners cannot keep launching work after this gate closes.
     pub fn shutdown(&self) -> Result<(), ShutdownError> {
         let _shutdown = self
@@ -108,9 +89,6 @@ impl App {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         self.common.begin_shutdown();
         self.manager.begin_shutdown();
-        self.closing
-            .store(true, std::sync::atomic::Ordering::SeqCst);
-        let queue_ok = self.queue.shutdown().is_ok();
         self.manager
             .shutdown()
             .map_err(|_| ShutdownError::CleanupUnconfirmed)?;
@@ -120,18 +98,15 @@ impl App {
         let streams_ok = self.streams.shutdown().is_ok();
         self.requests.drain();
         let common_ok = self.common.shutdown().is_ok();
-        let service_ok = self.service.shutdown().is_ok();
-        if !queue_ok || !streams_ok || !service_ok || !common_ok {
+        if !streams_ok || !common_ok {
             // A failed embedding host still owns the server. Permit only its
-            // diagnostic routes, with fresh owned streams for logs.
+            // common diagnostic routes, with fresh owned response workers.
             self.streams.reopen_after_drain();
             self.requests.reopen();
-            return Err(if !common_ok {
-                ShutdownError::CleanupUnconfirmed
-            } else if !queue_ok || !streams_ok {
+            return Err(if common_ok {
                 ShutdownError::WorkerUnconfirmed
             } else {
-                ShutdownError::RecordsUnconfirmed
+                ShutdownError::CleanupUnconfirmed
             });
         }
         Ok(())
@@ -171,26 +146,12 @@ fn host_guard(req: &Req, config: &ServerConfig) -> Option<Reply> {
     }
 }
 
-/// `hls_request_guard`: for `/api/hls/`, `/api/jobs/`, `/api/queue` and `/api/convert`, a declared body over
-/// 256 KiB is `413`; a `POST` / `DELETE` from another origin (`Origin` not this host, or
-/// `Sec-Fetch-Site` other than `same-origin` / `none`) is `403`; a `POST` without JSON (but the
-/// license route) is `415`.
-fn hls_guard(req: &Req) -> Option<Reply> {
-    if ![
-        "/api/hls/",
-        "/api/jobs/",
-        "/api/queue",
-        "/api/convert",
-        "/api/common/",
-    ]
-    .iter()
-    .any(|prefix| req.path.starts_with(prefix))
-    {
+/// Apply same-origin, JSON and body-size checks before common request processing.
+fn common_guard(req: &Req) -> Option<Reply> {
+    if !req.path.starts_with("/api/common/") {
         return None;
     }
-    let refuse = |code: &'static str, status: u16| {
-        Some(routes::RouteError::Api(hls::HlsApiError::status(code, status)).reply())
-    };
+    let refuse = |code: &'static str, status: u16| Some(Reply::json_error(status, code));
     if req
         .content_length()
         .is_some_and(|length| length > MAX_CONTENT_LENGTH)
@@ -206,7 +167,7 @@ fn hls_guard(req: &Req) -> Option<Reply> {
         if foreign_origin || site.is_some_and(|site| site != "same-origin" && site != "none") {
             return refuse("same-origin-required", 403);
         }
-        if req.method == "POST" && !req.path.ends_with("/license") && !req.is_json() {
+        if req.method == "POST" && !req.is_json() {
             return refuse("json-required", 415);
         }
     }
@@ -252,19 +213,9 @@ fn host_url(req: &Req) -> String {
     }
 }
 
-/// `hls_no_store`: no caching of the API, report and platform answers.
+/// Common resources may contain operator-specific state and must never be cached.
 fn no_store(path: &str, reply: &mut Reply) {
-    if [
-        "/api/common/",
-        "/api/hls/",
-        "/api/reports/",
-        "/reports/",
-        "/api/platform",
-        "/api/queue",
-    ]
-    .iter()
-    .any(|prefix| path.starts_with(prefix))
-    {
+    if path.starts_with("/api/common/") {
         reply.set_header("Cache-Control", "no-store");
         reply.set_header("Pragma", "no-cache");
     }
@@ -363,18 +314,20 @@ async fn handle(
             .collect(),
         body: Vec::new(),
     };
-    let (mut reply, timed) =
-        if let Some(reply) = host_guard(&req, &app.config).or_else(|| hls_guard(&req)) {
-            // The guard runs before the request timer starts (`before_request` order).
-            let reply = if req.path.starts_with("/api/common/") {
-                app.common.guard_reply(reply.status)
-            } else {
-                reply
-            };
-            (reply, false)
+    let refusal = if let Some(reply) = host_guard(&req, &app.config) {
+        Some(if req.path.starts_with("/api/common/") {
+            app.common.host_guard_reply(reply.status)
         } else {
-            (respond(&app, &mut req, body).await, true)
-        };
+            reply
+        })
+    } else {
+        common_guard(&req).map(|reply| app.common.guard_reply(reply.status))
+    };
+    let (mut reply, timed) = if let Some(reply) = refusal {
+        (reply, false)
+    } else {
+        (respond(&app, &mut req, body).await, true)
+    };
     no_store(&req.path, &mut reply);
     let mut record = Map::new();
     record.insert("path".into(), Value::from(req.path.clone()));
@@ -402,21 +355,6 @@ async fn handle(
 async fn respond(app: &Arc<App>, req: &mut Req, body: axum::body::Body) -> Reply {
     match router::route(&req.method, &req.path) {
         Match::Found(endpoint, values) => {
-            let observation = matches!(
-                endpoint,
-                router::Endpoint::Common
-                    | router::Endpoint::Index
-                    | router::Endpoint::Static
-                    | router::Endpoint::JobStatus
-                    | router::Endpoint::JobStop
-                    | router::Endpoint::JobLog
-                    | router::Endpoint::JobLogDownload
-                    | router::Endpoint::HlsJobs
-                    | router::Endpoint::QueueState
-            );
-            if app.closing.load(std::sync::atomic::Ordering::SeqCst) && !observation {
-                return Reply::json_error(503, "server-shutting-down");
-            }
             if routes::reads_body(endpoint, &req.method) {
                 if req
                     .content_length()
@@ -550,9 +488,6 @@ pub enum ShutdownError {
     /// An owned background worker failed to join successfully.
     #[error("worker-cleanup-unconfirmed")]
     WorkerUnconfirmed,
-    /// Terminal history or private request cleanup could not be confirmed.
-    #[error("record-cleanup-unconfirmed")]
-    RecordsUnconfirmed,
 }
 
 /// Why `serve` stopped.
@@ -806,7 +741,7 @@ mod host_tests {
 
     #[test]
     fn explicit_bind_names_are_trusted_but_wildcards_are_not_host_allowlists() {
-        let mut config = ServerConfig::new("catalog", "output");
+        let mut config = ServerConfig::new("input", "output");
         config.bind_host = "console.example".into();
         assert!(host_guard(&request("CONSOLE.EXAMPLE:8080"), &config).is_none());
         assert_eq!(

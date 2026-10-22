@@ -18,8 +18,7 @@ pub use files::{
 #[cfg(unix)]
 mod broker;
 mod process;
-pub(crate) use process::mark_asset_worker;
-pub use process::{ManagedChild, ManagedIo, ManagedStdio, in_asset_worker};
+pub use process::{ManagedChild, ManagedIo, ManagedStdio};
 
 /// Initialize the private, versioned server-to-CLI ownership protocol.
 pub fn initialize_supervised_cli() -> std::io::Result<()> {

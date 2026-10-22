@@ -14,7 +14,7 @@ The CLI is the primary interface. The local web console and optional [Desktop ho
 
 [Releases and compatibility](docs/releases.md) · [Changelog](CHANGELOG.md)
 
-See [keys and local security](docs/security.md) for diagnostic masking, temporary files, external-tool process arguments, and browser playback boundaries.
+See [keys and local security](docs/security.md) for diagnostic masking, temporary files, external-tool process arguments, and the local interface security boundary.
 
 ## Install
 
@@ -47,10 +47,11 @@ Media processing uses these external tools. Follow their installation instructio
 | Executable | Supported from | Install | Purpose |
 | --- | --- | --- | --- |
 | `ffmpeg`, `ffprobe` | 9.0.1 | [FFmpeg](https://ffmpeg.org/download.html) | Process and inspect media |
-| `mp4dump` | 1.6.0, build 641 | [Bento4](https://www.bento4.com/downloads/) | Inspect MP4 structure |
 | `packager` | 3.8.0 | [Shaka Packager](https://github.com/shaka-project/shaka-packager#readme) | Encrypt and package media |
 
-These are supported lower bounds. The [requirements table](docs/requirements.md#media-tools) records the builds used for qualification and explains which CI tools are pinned. Some older FFmpeg builds omit packet durations needed for encrypted audio verification; drmr refuses incomplete timing evidence. See [media processing](docs/media-processing.md) for details.
+The Rust executable checks MP4 structure directly. These are supported lower bounds. The [requirements table](docs/requirements.md#media-tools) records the builds used for qualification and explains which CI tools are pinned. Some older FFmpeg builds omit packet durations needed for encrypted audio verification; drmr refuses incomplete timing evidence. See [media processing](docs/media-processing.md) for details.
+
+For the full source test suite, install [Bento4](https://www.bento4.com/downloads/): `mp4dump` provides an independent reference for MP4 parser checks, and `mp4encrypt` generates encrypted test fixtures. These additional tools are used by development tests.
 
 ## Start here
 
@@ -59,12 +60,11 @@ drmr doctor
 drmr inspect /path/to/media.mp4
 drmr analyze /path/to/media.mp4 --json
 drmr plan /path/to/manifest.mpd --to cbcs --format dash,hls
-drmr plan --mpd /path/to/asset/download/manifest.example.test/sample/dash/manifest.mpd
 drmr convert --help
 drmr verify --help
 ```
 
-`inspect` reads local MP4 metadata or DASH/HLS declarations without keys or external tools. `analyze` checks complete source media and identifies candidate output formats. Without `--save`, `plan INPUT --to ...` describes conditional intent from metadata. `plan --mpd` keeps the original prepared-DASH rendition listing.
+`inspect` reads local MP4 metadata or DASH/HLS declarations without keys or external tools. `analyze` checks complete source media and identifies candidate output formats. Without `--save`, `plan INPUT --to ...` describes conditional intent from metadata.
 
 To retain a supported HLS, static DASH or MP4 URL, save fixed conversion conditions, execute them offline,
 and verify against the retained original:
@@ -100,7 +100,7 @@ report scopes, and optional tool setup.
 
 Use `convert INPUT --to ... --format ... --output ...` with a protected key configuration, then `verify OUTPUT --source INPUT` for independent comparison. See [conversion support](docs/conversion-support.md) for the tested protection routes, TS output options, and precise input profiles.
 
-For a supported HLS, static DASH or MP4 URL, use `convert URL --download-dir ./source` with the target and output options below. The saved source can be reused offline. DASH acquisition requires one static Period, SegmentTemplate addressing and an explicit finite SegmentTimeline; live input, byte ranges and other DASH addressing profiles are outside this acquisition profile. The existing `run` path processes prepared DASH assets; `analyze-hls` and `package-hls` remain as legacy commands for saved snapshots and their supported subtitle profiles. Use the common commands for new multi-output DRM workflows. See the [usage guide](docs/usage.md) for configuration examples, the expected local layout, key handling, and output.
+For a supported HLS, static DASH or MP4 URL, use `convert URL --download-dir ./source` with the target and output options below. The saved source can be reused offline. DASH acquisition requires one static Period, SegmentTemplate addressing and an explicit finite SegmentTimeline; live input, byte ranges and other DASH addressing profiles are outside this acquisition profile. See the [usage guide](docs/usage.md) for configuration examples, key handling, and output.
 
 The common converter can also write explicit Widevine/PlayReady DASH and
 FairPlay HLS information for qualified clear transport-stream HLS and clear MP4.
@@ -109,11 +109,9 @@ runtime settings, generated declarations, and independent library checks.
 
 ## Supported input
 
-The generic `convert` command accepts qualified local MP4, fragmented MP4 DASH/HLS, and MPEG transport stream HLS profiles, including encrypted input. Transport stream input can be clear, AES-128, or SAMPLE-AES with supplied keys and initialization vectors. See [conversion support](docs/conversion-support.md) for restrictions and tested routes. The older workflow commands have these separate input scopes:
+The generic `convert` command accepts qualified local MP4, fragmented MP4 DASH/HLS, and MPEG transport stream HLS profiles, including encrypted input. Transport stream input can be clear, AES-128, or SAMPLE-AES with supplied keys and initialization vectors. See [conversion support](docs/conversion-support.md) for restrictions and tested routes.
 
-- **Local DASH:** MP4 video with `avc1` (H.264) or `hvc1` (H.265), and MP4 audio with `mp4a` codec identifiers. The asset must use the supported downloaded-directory layout and per-representation segment templates. Other codecs and subtitle adaptations are excluded from this path.
-- **Clear, on-demand HLS:** supported MPEG transport stream or fragmented MP4 media with H.264/H.265 video and AAC-LC audio, plus supported WebVTT or MP4-carried TTML subtitle profiles. Analysis rejects unsupported playlists and media rather than treating every HLS stream as compatible.
-- Live HLS, already encrypted HLS input, discontinuities, and unsupported subtitle profiles are outside the clear-HLS input scope.
+Subtitle tracks and arbitrary track selection are outside the common conversion profile. Live input, discontinuities, and other unsupported manifest or codec profiles are refused.
 
 drmr packages supplied media and signaling. It does not provide a DRM license server.
 
@@ -124,16 +122,10 @@ drmr packages supplied media and signaling. It does not provide a DRM license se
 | `doctor` | Discover tools; add `--probe` for version and option checks, or `--json` for scripts |
 | `inspect` | Read local MP4, DASH, or HLS metadata; use `--json` for scripts |
 | `analyze` | Check complete local media or retain and check a supported HLS, static DASH or MP4 URL with `--download-dir`; encrypted input uses `--keys-file` |
-| `plan` | Describe conditional intent; add `--save` and `--output` for an executable plan; `--outputs` selects named outputs; `--mpd` lists prepared DASH renditions |
+| `plan` | Describe conditional intent; add `--save` and `--output` for an executable plan; `--outputs` selects named outputs |
 | `convert` | Convert media directly or execute a saved plan with `--plan`; `--outputs` selects several outputs without saving a plan |
 | `verify` | Compare result media with its original source; `--plan` also checks source identity and output intent; `--manifest-only` runs the native HLS/DASH linter; `--external-validator` adds external checks |
-| `run` | Repackage one local DASH asset and check its output |
-| `analyze-hls` | Legacy: download and analyze clear HLS into a saved snapshot |
-| `package-hls` | Legacy: package a verified snapshot into DASH and HLS |
-| `verify-snapshot` | Detect changes to a saved snapshot; `--files` also hashes its files |
-| `batch` | Process an asset work list with restart support; see the [Windows conditions](docs/windows.md) |
 | `serve` | Start the experimental local web console |
-| `canonical` | Print JSON with stable formatting and key order |
 | `version` | Print the version |
 
 Use `drmr help <COMMAND>` for command options. See [usage](docs/usage.md) for examples and exit codes.

@@ -26,7 +26,7 @@ Download a versioned CLI from [GitHub Releases](https://github.com/kazuhide/drmr
 | Compare independently | `verify` | Reads original and result independently and checks complete media and timing |
 | Check only final manifests | `verify --manifest-only` | Native HLS/DASH linting; add --external-validator for external checks; no media comparison or decryption |
 
-Use `analyze`, `plan --save`, `convert --plan` and `verify --plan` to check the source, save the conversion request, execute it and compare the result. `inspect` remains a quick metadata check. Direct `convert INPUT` also remains available; generic HLS conversion does not require an earlier `analyze-hls` step.
+Use `analyze`, `plan --save`, `convert --plan` and `verify --plan` to check the source, save the conversion request, execute it and compare the result. `inspect` remains a quick metadata check. Direct `convert INPUT` also remains available.
 
 ## First local example
 
@@ -45,7 +45,7 @@ drmr verify --plan clear.plan.json --json
 
 Encrypted input or output requires the private key configuration described in chapter 5. Unsupported media is refused even in this simple example. Input checks and a saved plan do not guarantee a later conversion: source bytes, runtime keys, tools and the requested output are checked again when used.
 
-The CLI is the main interface. Docker provides an option with media tools included. The experimental local Web console and Desktop host support analysis, plan saving, conversion and verification using the same saved plans, alongside prepared-content workflows. They do not expose every CLI command.
+The CLI is the main interface. Docker provides an option with media tools included. The experimental local Web console and Desktop host support analysis, plan saving, conversion and verification using the same saved plans. They do not expose every CLI command.
 
 # 2. Formats, encryption and DRM
 
@@ -82,7 +82,7 @@ AES-128 HLS is not an MP4 sample-protection scheme. `cens` and `cbc1` may be ide
 
 Widevine, PlayReady and FairPlay involve signaling, key exchange and device behavior beyond selecting an AES mode. A KID identifies a key; it is not the secret content key.
 
-Common `plan`, `convert` and `verify` commands accept an output list for DASH with Widevine/PlayReady and HLS with FairPlay. Protection System Specific Header (PSSH) data carries DRM initialization information; it is separate from the encrypted media and from a license. Chapter 5 describes the runtime metadata, and chapter 6 describes the output list. The existing single-output PlayReady configuration and saved-HLS workflow remain available. Successful known-key verification does not prove a license service or device will play the result.
+Common `plan`, `convert` and `verify` commands accept an output list for DASH with Widevine/PlayReady and HLS with FairPlay. Protection System Specific Header (PSSH) data carries DRM initialization information; it is separate from the encrypted media and from a license. Chapter 5 describes the runtime metadata, and chapter 6 describes the output list. The single-output PlayReady configuration remains available. Successful known-key verification does not prove a license service or device will play the result.
 
 # 3. Supported input and output profiles
 
@@ -147,7 +147,7 @@ SAMPLE-AES accepts one effective `identity` or `com.apple.streamingkeydelivery` 
 
 ## Common exclusions and bounds
 
-Local DASH requires one static Period, a finite continuous `SegmentTimeline` and supported confined relative references. Live/dynamic input, multiple periods, byte ranges, discontinuities and unsupported events or rendition metadata are refused. Generic conversion does not retain arbitrary subtitles; the saved-HLS workflow has a separate supported subtitle profile.
+Local DASH requires one static Period, a finite continuous `SegmentTimeline` and supported confined relative references. Live/dynamic input, multiple periods, byte ranges, discontinuities and unsupported events or rendition metadata are refused. Subtitle tracks and arbitrary track selection are outside the supported conversion profile.
 
 Generic conversion stages at most 16 GiB per track, 64 tracks and 100,000 DASH segment references. Metadata, fragment and resource-admission bounds also apply. Exceeding a bound fails rather than verifying a partial result.
 
@@ -181,9 +181,8 @@ cargo build --release --locked -p drmr
 | --- | --- | --- |
 | `ffmpeg` / `ffprobe` | 9.0.1 | Media reading/decryption, packet clocks and complete decoded data |
 | `packager` | Shaka Packager 3.8.0 | Sample encryption, container changes and segmentation |
-| `mp4dump` | Bento4 1.6.0, build 641 | MP4 structure inspection for prepared DASH and related workflows |
 
-Obtain trusted tool distributions and put the executables on PATH. CLI archives and Desktop bundles do not include the media tools; the Docker image does. A newer version still needs the required options and complete packet clocks. Bento4's banner does not establish its build number: `build-unverified` is not proof of build 641 or newer.
+Obtain trusted tool distributions and put the executables on PATH. CLI archives and Desktop bundles do not include the media tools; the Docker image does. A newer version still needs the required options and complete packet clocks. MP4 structure checks run in Rust.
 
 ## Discovery versus probing
 
@@ -195,7 +194,7 @@ drmr doctor --probe --route dash-presentation
 
 Default `doctor` discovers paths without executing tools. `--probe` checks version and help output with a three-second budget per call and 1 MiB per stdout/stderr stream. Raw output is not included in the report. It does not validate media, keys, licenses or playback devices.
 
-`--route` chooses the required tool set. `progressive-mp4` needs FFmpeg/ffprobe; `prepared-dash` and `all` also need Bento4. Other routes inspect Packager as needed. Unrelated tools may be optional, but unconfirmed process cleanup prevents readiness even for an optional probe. `ready` means the selected diagnostics passed; `media_compatibility_checked` stays false. Desktop and terminal launch environments may have different PATH values.
+`--route` chooses the required tool set. `progressive-mp4` needs FFmpeg/ffprobe; `all` checks all three tools. Other routes inspect Packager as needed. Unrelated tools may be optional, but unconfirmed process cleanup prevents readiness even for an optional probe. `ready` means the selected diagnostics passed; `media_compatibility_checked` stays false. Desktop and terminal launch environments may have different PATH values.
 
 See [requirements](https://github.com/kazuhide/drmr/blob/main/docs/requirements.md) and [Windows](https://github.com/kazuhide/drmr/blob/main/docs/windows.md).
 
@@ -203,7 +202,7 @@ See [requirements](https://github.com/kazuhide/drmr/blob/main/docs/requirements.
 
 ## Separate input and output roles
 
-Store generic conversion keys in an owner-only JSON file outside output directories. On Unix, use an owner-only directory and mode 600. Do not commit real keys. Windows ACL preparation is in chapter 14.
+Store generic conversion keys in an owner-only JSON file outside output directories. On Unix, use an owner-only directory and mode 600. Do not commit real keys. Windows ACL preparation is in chapter 12.
 
 `analyze` and `plan --save` also accept `--keys-file` when source checks need input keys. Saving a plan does not require an output key; `convert --plan` and `verify --plan` receive runtime keys separately.
 
@@ -355,7 +354,7 @@ The file schemas serve different roles: the public output recipe uses version 1,
 
 Known key material is masked in retained tool logs and errors. Masking does not classify arbitrary filenames, URLs or metadata as secret. Keys are held in ordinary process memory. External tools can receive keys through process arguments/environment, visible to permitted operating-system inspection while running.
 
-Some workflows create private temporary key/configuration files. Cleanup and zeroizing reduce retention but do not promise secure erasure, protection from the same user, crash-dump exclusion or hardware isolation. Treat original media, saved URLs, manifests and raw tool results as potentially sensitive. Local ClearKey playback intentionally delivers a usable key to the browser; chapter 15 explains that boundary.
+Some workflows create private temporary key/configuration files. Cleanup and zeroizing reduce retention but do not promise secure erasure, protection from the same user, crash-dump exclusion or hardware isolation. Treat original media, saved URLs, manifests and raw tool results as potentially sensitive. The local interfaces select protected key files without retrieving their contents in the browser.
 
 See [local security](https://github.com/kazuhide/drmr/blob/main/docs/security.md).
 
@@ -406,7 +405,7 @@ Keys, signed source URLs, authentication headers, license URLs, HLS key URIs and
 
 On Unix, use trusted output and plan parent directories owned by your user that other users cannot modify. Saving a plan refuses an unsafe output parent before media admission. See [workspace permissions](https://github.com/kazuhide/drmr/blob/main/docs/security.md#temporary-files-and-cleanup) for the supported shared temporary-directory rule and cleanup boundaries.
 
-Saving a plan creates no converted media. Encrypted source checks can decrypt with supplied input keys. Source admission is repeated when executing. The `plan --mpd` mode remains the separate prepared-DASH rendition listing described in chapter 11.
+Saving a plan creates no converted media. Encrypted source checks can decrypt with supplied input keys. Source admission is repeated when executing.
 
 ## Save several explicitly named outputs
 
@@ -687,7 +686,7 @@ Default policy is HTTPS with same-origin references and bounded acquisition. `an
 }
 ```
 
-Prepare a protected configuration directory as described in chapter 5 and save the JSON as `config/fetch.json`. Replace the token placeholder with your own token if authentication is needed. For macOS/Linux, set owner-only file permissions before analyzing the URL; use the current-user-only ACL procedure in chapter 14 on Windows.
+Prepare a protected configuration directory as described in chapter 5 and save the JSON as `config/fetch.json`. Replace the token placeholder with your own token if authentication is needed. For macOS/Linux, set owner-only file permissions before analyzing the URL; use the current-user-only ACL procedure in chapter 12 on Windows.
 
 ```sh
 chmod 600 config/fetch.json
@@ -820,147 +819,7 @@ Multi-output conversion retains byte-bound private copies of completed outputs u
 
 See [processing and timing](https://github.com/kazuhide/drmr/blob/main/docs/media-processing.md).
 
-# 10. Saved HLS workflows
-
-## Why separate commands exist
-
-Use common `analyze`, `plan --outputs`, `convert --plan` and `verify --plan` for new multi-output DRM conversions. The separate `analyze-hls` and `package-hls` commands remain compatibility workflows for saved HLS analysis, including their supported subtitles and audio selection. `package-hls` can produce both DASH and HLS despite its historical name. It is not the recommended entrypoint for a new multi-output conversion.
-
-The examples below retain that workflow's source snapshot and configuration conventions. These commands are not aliases for common conversion, and its specific subtitle or selection features should be checked before migrating an existing job.
-
-## Capture a local source
-
-Create a private source JSON with explicit local-read permission:
-
-```json
-{
-  "url": "/absolute/path/media/master.m3u8",
-  "policy": {
-    "allowed_local_roots": ["/absolute/path/media"]
-  }
-}
-```
-
-```sh
-chmod 600 source.json
-drmr analyze-hls --source-config source.json \
-  --asset-id sample --output output
-drmr verify-snapshot --files output/sample/clear/source
-```
-
-Remote inputs instead need the supported fetch policy and origin permissions. The private analysis directory retains the source URLs and downloaded resources. `analysis.json` binds the saved snapshot; an arbitrary edited JSON file is not a new valid source.
-
-## Package with signaling
-
-```json
-{
-  "widevine_pssh": "<hex-or-base64-widevine-initialization-data>",
-  "playready_la_url": "https://license.example.invalid/acquire",
-  "fairplay_uri": "skd://content-identifier"
-}
-```
-
-```sh
-chmod 600 drm.json
-drmr package-hls --analysis output/sample/clear/source/analysis.json \
-  --drm-config drm.json
-```
-
-Widevine PSSH is initialization metadata supplied as a complete box or supported payload in hex/Base64. Its identifiers must match `DRM_KID`. Dummy bytes do not create a valid license. Content keys for these commands come from `DRM_KID`, `DRM_KEY` and `DRM_IV`, not the generic `--keys-file` schema.
-
-Audio selection uses the analyzed `audio_source_id` in a private selection JSON. Bind `analysis_id` and `snapshot_digest` to detect stale choices.
-
-`verify-snapshot` checks the recorded content digest; `--files` also rehashes saved playlists and media. It does not replace `verify OUTPUT --source INPUT`, which compares complete media. Snapshot exit values are 0 for matching, 1 for changed and 2 for an invalid snapshot.
-
-See [saved HLS](https://github.com/kazuhide/drmr/blob/main/docs/usage.md).
-
-# 11. Prepared DASH and batch processing
-
-## Prepared input layout
-
-`run` uses a downloaded layout corresponding to original URLs. It does not accept any isolated MPD as a general-purpose conversion request.
-
-```text
-sample/
-  download/
-    manifest.example.test/sample/dash/manifest.mpd
-    manifest.example.test/sample/hls/manifest.m3u8
-    cdn.example.test/sample/video/v0/init.mp4
-    cdn.example.test/sample/video/v0/seg_1.m4s
-    cdn.example.test/sample/video/v0/seg_2.m4s
-```
-
-The MPD needs BaseURL, MP4 adaptation sets, and a supported SegmentTemplate for each representation with `initialization`, `media`, `timescale` and `duration`. Media names use `$Number$` and numeric segments. BaseURL `https://cdn.example.test/sample/` maps `video/v0/init.mp4` to the illustrated downloaded path.
-
-Prepare `DRM_KID`, `DRM_KEY` and `DRM_IV`, then run:
-
-```sh
-drmr plan --mpd sample/download/manifest.example.test/sample/dash/manifest.mpd
-drmr run \
-  --mpd sample/download/manifest.example.test/sample/dash/manifest.mpd \
-  --hls-master \
-    sample/download/manifest.example.test/sample/hls/manifest.m3u8 \
-  --output output --asset-id sample --log-format jsonl
-```
-
-Results appear under `output/sample/`. `--packager-bin` accepts the executable or a directory containing it in this workflow. `--no-round-trip`, `--no-manifests` and `--limit-renditions` are diagnostic reductions, not equivalent to complete conversion and verification.
-
-## Work-list JSON Lines
-
-`batch` processes assets serially and records resumable attempts. It is not an arbitrary list of generic `convert` commands. Its supported kinds are the prepared-DASH and clear-HLS workflows.
-
-The first JSONL line is `{"schema_version":"1"}` with a string value. Each subsequent asset has only these four fields:
-
-| Field | Meaning |
-| --- | --- |
-| `asset_id` | Asset identifier |
-| `kind` | `dash-cenc` or `hls-clear` |
-| `dash_manifest` | Relative object key from the storage root, or null when unused |
-| `hls_master` | Relative object key from the storage root, or null when unused |
-
-Save this readable asset record as `asset.json`; the actual work list uses one line per record:
-
-```json
-{
-  "asset_id": "sample",
-  "kind": "dash-cenc",
-  "dash_manifest":
-    "sample/download/manifest.example.test/sample/dash/manifest.mpd",
-  "hls_master":
-    "sample/download/manifest.example.test/sample/hls/manifest.m3u8"
-}
-```
-
-```sh
-printf '%s\n' '{"schema_version":"1"}' > work-list.jsonl
-{
-  drmr canonical asset.json && printf '\n'
-} >> work-list.jsonl
-drmr batch --work-list work-list.jsonl --output output \
-  --resume-log resume.jsonl --plan
-```
-
-`canonical` emits stable one-line JSON without a terminating newline. The guarded append above adds LF only after success. It prints input values and is not a secret-removal command; do not use it to display key files or credentials.
-
-## Keys and resumption
-
-Default key provider is environment variables. The private file provider uses one JSONL record per asset with `asset_id`, `kid`, `key`, `iv`, without a schema header. This differs from generic `--keys-file` JSON.
-
-```sh
-drmr batch --work-list work-list.jsonl --output output \
-  --resume-log resume.jsonl --storage local --storage-root ./catalog \
-  --key-provider file --key-file ./private/keys.jsonl
-```
-
-Keep the key file outside output. HLS configuration can come from `--hls-config-dir`. `--retry-failed` selects failed items; default `--max-attempts` is 3. `--per-asset-timeout-s` defaults to 3600 and `--heartbeat-s` to 60. Resumption is not rollback: inspect existing output and logs first.
-
-For `hls-clear`, `--hls-config-dir DIR` contains an owner-only `ASSET_ID.json` object with `source_config` and `drm_config` paths and optional `selection`; those referenced files use the [saved HLS JSON formats in chapter 10](https://kazuhide.github.io/drmr/guide/#saved-hls). Relative references resolve from that configuration directory. `--packager-bin` is passed to `run` for `dash-cenc`, which accepts an executable or its directory, and to `package-hls` for `hls-clear`, which requires the executable. Use an executable path for mixed or HLS batches.
-
-S3 storage is implemented with current supported region `ap-northeast-1`. It uses AWS environment/default-profile credentials. `--bucket`, `--region` and `--output-prefix` configure storage. Native local-media CI results do not qualify a real S3 account.
-
-See [batch usage](https://github.com/kazuhide/drmr/blob/main/docs/usage.md).
-
-# 12. Workers, memory and Stop
+# 10. Workers, memory and Stop
 
 ## Worker limits
 
@@ -973,7 +832,7 @@ drmr verify result/manifest.mpd --source source.mpd \
   --keys-file config/keys.json --max-workers 1 --json --measure
 ```
 
-Worker count never reduces proof coverage. Track, segment and source-probe pools share reservations within one process. `batch` processes assets serially. Separate CLI processes do not share a reservation pool.
+Worker count never reduces proof coverage. Track, segment and source-probe pools share reservations within one process. Separate CLI processes do not share a reservation pool.
 
 Native manifest checks share this capacity. Small inputs run inline; larger HLS graphs can distribute document work, and a large DASH manifest can share one parsed tree across independent checks. Pools do not nest. Parsed child facts and inherited timelines are reused. The adapter reserves memory for retained manifest bytes and lint work, then verifies file identities and content. Exhausted byte, node, reference or diagnostic limits produce an incomplete report and cannot pass.
 
@@ -1010,11 +869,11 @@ separate allocation and process-memory observations.
 
 See [resources and measurements](https://github.com/kazuhide/drmr/blob/main/docs/resources.md).
 
-# 13. Docker with media tools
+# 11. Docker with media tools
 
 ## Build an image from committed source
 
-The image includes drmr, FFmpeg/ffprobe, Bento4 mp4dump and Shaka Packager. Build requires Git and BuildKit-capable Docker. Native Linux amd64/arm64 are supported build targets; select Linux containers in Docker Desktop.
+The image includes drmr, FFmpeg/ffprobe and Shaka Packager. Build requires Git and BuildKit-capable Docker. Native Linux amd64/arm64 are supported build targets; select Linux containers in Docker Desktop.
 
 ```sh
 revision=$(git rev-parse HEAD)
@@ -1075,9 +934,9 @@ On Linux, host networking preserves the default loopback address `127.0.0.1:8080
 ```sh
 docker run --rm --init --name drmr-console --network host \
   --user "$(id -u):$(id -g)" \
-  --mount "type=bind,src=$PWD/catalog,dst=/catalog,readonly" \
+  --mount "type=bind,src=$PWD/media,dst=/media,readonly" \
   --mount "type=bind,src=$PWD/output,dst=/output" \
-  --env DRMR_CATALOG_ROOT=/catalog --env DRMR_OUTPUT_ROOT=/output \
+  --env DRMR_INPUT_ROOT=/media --env DRMR_OUTPUT_ROOT=/output \
   drmr:local serve
 ```
 
@@ -1089,7 +948,7 @@ On Windows, use Docker Desktop WSL2 integration and a Linux shell. Keep private 
 
 See [Docker usage and scope](https://github.com/kazuhide/drmr/blob/main/docs/docker.md).
 
-# 14. Native Windows CLI
+# 12. Native Windows CLI
 
 ## Environment
 
@@ -1105,9 +964,10 @@ cargo build --release --locked -p drmr
 
 ## Owner-only key files
 
-Windows uses an access-control list (ACL), not chmod. The protected ACL must disable inheritance, retain the current user as owner and grant that user full control. The following creates a new private directory and empty key file before editing secret content:
+Windows uses an access-control list (ACL), not chmod. The protected ACL must disable inheritance, retain the current user as owner and grant that user full control. Run the following setup in a regular Windows PowerShell 5.1 terminal (`powershell.exe`). It creates a new private directory and empty key file before editing secret content:
 
 ```powershell
+$ErrorActionPreference = 'Stop'
 $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
 $private = Join-Path $env:LOCALAPPDATA 'drmr-keys'
 if (Test-Path -LiteralPath $private) { throw 'Choose a new directory' }
@@ -1119,7 +979,11 @@ function Set-OwnerOnlyAcl($path, $security) {
     $rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
         $sid, 'FullControl', 'Allow')
     $security.AddAccessRule($rule)
-    Set-Acl -LiteralPath $path -AclObject $security
+    if ($security -is [System.Security.AccessControl.DirectorySecurity]) {
+        [System.IO.Directory]::SetAccessControl($path, $security)
+    } else {
+        [System.IO.File]::SetAccessControl($path, $security)
+    }
 }
 
 ```
@@ -1156,19 +1020,19 @@ Keep output and temporary paths shallow: a media tool can create a longer tempor
 
 See [Windows conditions](https://github.com/kazuhide/drmr/blob/main/docs/windows.md).
 
-# 15. Local Web console
+# 13. Local Web console
 
-## Start with prepared roots
+## Start with input and output folders
 
 The console is an unauthenticated local operator interface. Use trusted loopback only; do not expose it with a reverse proxy or port forwarding. Host/Origin validation does not authenticate another local process.
 
 ```sh
-DRMR_CATALOG_ROOT=/absolute/path/catalog \
+DRMR_INPUT_ROOT=/absolute/path/media \
 DRMR_OUTPUT_ROOT=/absolute/path/output \
 drmr serve
 ```
 
-Open `http://127.0.0.1:8080`. Both roots are required. `DRMR_BIND_PORT` changes the port; `DRMR_MAX_WORKERS` caps workers for saved-plan operations and prepared HLS packaging. Automatic allocation stays within that cap. New conversions select from allowed input folders. Prepared catalog entries still need their supported layouts.
+Open `http://127.0.0.1:8080`. Both roots are required. `DRMR_BIND_PORT` changes the port; `DRMR_MAX_WORKERS` caps workers for saved-plan operations. Automatic allocation stays within that cap. Select media and saved plans from the allowed input folder.
 
 Use the same-version server and CLI. `--cli` selects the actual executable; a wrapper launching a different CLI can be refused by the supervision contract.
 
@@ -1186,7 +1050,7 @@ The private configuration picker replaces file and folder names with numbered la
 4. Use **Download original plan** to retain a private copy, then **Convert**. Existing destinations are refused. Editing output settings requires saving a new plan.
 5. Choose **Verify again** to compare the saved plan with existing output without reconverting it. Later, open the same file as a **Saved CLI plan** to verify without repeating analysis or conversion.
 
-New plans use the named-output v2 format, even with one output. When supplying a key file, analyze accepts v1 or v2; new plans and their conversion/verification use v2. An imported CLI v1 plan uses v1 keys. Chapter 19 documents the file formats.
+New plans use the named-output v2 format, even with one output. When supplying a key file, analyze accepts v1 or v2; new plans and their conversion/verification use v2. An imported CLI v1 plan uses v1 keys. Chapter 17 documents the file formats.
 
 Plan downloads preserve the original bytes and absolute paths. Keep them private: they can contain local paths and signed URLs. Do not rewrite paths to move a plan between environments. The page sends references rather than raw keys, configuration contents or executable paths, and never retrieves key-file contents.
 
@@ -1194,72 +1058,31 @@ URL sessions use a generic **Source URL** label. The server does not return the 
 
 A session admits at most 32 operations. At the limit, download the plan, choose **Close this conversion**, then reopen the saved plan to verify existing output. If a launch outcome is unknown, **Check status** looks up that same operation without resubmitting it. A running or cleanup-unconfirmed session cannot close. Changing the selection or language does not release its execution slot.
 
-**Prepared content** retains catalog conversion, HLS snapshots, queues and local playback. The named HLS profiles and key-entry form described below belong to that workflow; they are separate from the new workflow's fetch-policy file.
+## Job state and cleanup
 
-## Prepared-HLS connection policy
+A lost launch response remains unknown until the same request and job can be looked up. **Check status** only checks that operation; it does not submit another conversion. Selection and language changes do not release a running operation.
 
-Without extra configuration, the default profile allows only the input URL's own HTTPS origin. Additional origins/credentials require a private named-profile file. `DRMR_HLS_PROFILES` is that file path, not inline JSON:
+Stop requests termination of the owned job and its media tools. An acknowledgment alone does not establish cleanup. Unconfirmed cleanup retains the execution slot and prevents new work. Check status and logs before retrying. During shutdown the server closes submissions and waits for owned work to stop. Fix an incomplete shutdown and retry; force-exit bypasses this confirmation.
 
-```json
-{
-  "default": {
-    "policy": {
-      "allowed_origins": ["https://media.example.com"],
-      "headers_by_origin": {
-        "https://media.example.com": {"Authorization": "Bearer <token>"}
-      }
-    }
-  }
-}
-```
+## Saved files and private configuration
 
-```sh
-chmod 600 profiles.json
-DRMR_CATALOG_ROOT=/absolute/path/catalog \
-DRMR_OUTPUT_ROOT=/absolute/path/output \
-DRMR_HLS_PROFILES=/absolute/path/profiles.json \
-drmr serve
-```
+Retained originals, saved plans, results and logs remain on disk. Closing the page does not erase them or prove that active work has stopped. Keep these files private. URL input is cleared after submission; key and fetch-policy file contents are not sent to the browser.
 
-This corresponds to the UI's default profile. Include the input origin itself in its allowlist. Web acquisition clears local roots and does not allow file input. Prepared catalog DASH and explicitly permitted CLI local HLS are separate workflows.
+See [console operation](https://github.com/kazuhide/drmr/blob/main/docs/usage.md) and [local interface security](https://github.com/kazuhide/drmr/blob/main/docs/security.md).
 
-## Job state and recovery
-
-UI JSON requests have a 15-second headers-and-body response budget for recovery, not the media processing deadline. A lost mutation response does not trigger an automatic POST retry. The UI reconciles recorded jobs, leaves unresolved outcomes unknown and offers GET-only status recovery.
-
-Stop requests termination for the owned job and tools. An accepted response alone is not confirmed cleanup; inspect terminal job status and logs. Normal Stop can advance the queued job. New jobs are not started during server shutdown.
-
-Prepared Web workflows can modify partial/older results, unlike generic conversion's new-destination publication. Stop is not rollback. Exit 0, file existence or a stale converted flag alone does not establish playback readiness; the output-readiness generation must match.
-
-Unconfirmed cleanup retains the job slot and private configuration ownership. Status/log/Stop diagnosis remains available while new work is refused. Fix the cause and retry orderly shutdown; force-exit skips this assurance.
-
-## Retention and keys
-
-Adding clear HLS retains URLs, original playlists and downloaded media under `OUTPUT_ROOT/<asset-id>/clear/source/`. Removing history does not delete saved originals/results/logs.
-
-Prepared-workflow key inputs are visually masked by default, can be revealed explicitly and clear after submission. The application does not persist content keys to localStorage/sessionStorage. That does not isolate keys from browser memory, developer tools, extensions or page/network inspection.
-
-Local ClearKey playback intentionally supplies keys as JWK JSON or player configuration. Even `no-store` responses remain observable in developer tools/HAR. It is not an operational DRM license service or hardware-protected playback.
-
-HLS playback authorization context can remain in memory for 30 minutes of inactivity, checked on related access and a 30-second sweep. Clearing a form is not immediate revocation. The final playback-session revocation or server shutdown destroys owned context.
-
-Player setup has a 20-second local budget including prior-player destruction, key lookup, media loading and actual `playing`. Failure restores controls; unconfirmed destruction prevents overlapping players and may require reloading the page. Playback recovery does not alter conversion verification.
-
-See [console operation](https://github.com/kazuhide/drmr/blob/main/docs/usage.md) and [security](https://github.com/kazuhide/drmr/blob/main/docs/security.md).
-
-# 16. Desktop host
+# 14. Desktop host
 
 ## Open the same local console
 
-The experimental native host wraps the local Web console. Catalog, jobs, media tools and restrictions are shared.
+The experimental native host wraps the local Web console. Saved plans, jobs, media tools and restrictions are shared.
 
-1. Choose **File > Choose input folder…** for allowed media and saved plans. Existing prepared catalog layouts remain usable.
+1. Choose **File > Choose input folder…** for allowed media and saved plans.
 2. Choose **File > Choose output location…**. A private `drmr-output` child is created or reopened there.
 3. Optionally choose **File > Choose private configuration folder…** for keys and fetch policies, separate from input/output. Clear private configuration selection removes this selection before console startup.
 4. Choose File > Check external tools in the actual application environment.
 5. Choose File > Open console.
 
-Use **New conversion** for the saved-plan steps in chapter 15. Without a configuration folder, clear flows without keys or fetch settings remain available. Key-file contents are not uploaded through the browser.
+Use **New conversion** for the saved-plan steps in chapter 13. Without a configuration folder, clear flows without keys or fetch settings remain available. Key-file contents are not uploaded through the browser.
 
 **Download original plan** opens a native save dialog for a new private JSON file. Choose a folder outside the input folder and `drmr-output`: the unchanged plan can contain absolute paths and signed URLs. The private folder must not contain either media folder. The default is the private configuration folder, or an owner-only `drmr-plans` sibling of `drmr-output`. Unsafe existing folders and existing files are refused without changing them. To reopen the copy later, select its folder as **Private configuration folder** before console startup, then choose **Saved CLI plan**. Select `drmr-plans` in the later session if the copy was saved there; the private folder must remain separate from input/output media. CLI verification with `drmr verify --plan /path/to/private/drmr-plan.json` is also available, with runtime keys if needed. Other attachment downloads are unavailable in the Desktop window.
 
@@ -1301,15 +1124,13 @@ python tools/build_desktop.py --bundle
 
 `--release` selects optimization. Use a dedicated `CARGO_TARGET_DIR`; the default is `target/desktop`. The helper stages matching CLI/notices and produces an unsigned macOS app or Windows/Linux portable directory/archive. Existing bundles are refused. Signing, notarization and installers are outside this workflow.
 
-## Observed behavior and limits
+## Runtime qualification
 
-Native macOS checks have exercised folder menus, keyboard input, report navigation, catalog conversion, active Stop and orderly close/listener release. Chrome's local ClearKey original/result playback has reached the end.
-
-WKWebView English/Japanese error and retry recovery was exercised; completed playback remains unqualified. Windows/Linux GUI behavior also remains unqualified. Native builds do not establish dialog/WebView/DRM playback success. Linux GUI dependencies have documented maintenance limitations.
+Native package builds check the host and CLI pairing; they do not establish dialog, WebView or DRM playback behavior. Each operating system and native WebView needs its own runtime qualification. Linux GUI dependencies have documented maintenance limitations.
 
 See [Desktop scope](https://github.com/kazuhide/drmr/blob/main/docs/desktop.md) and [dependency policy](https://github.com/kazuhide/drmr/blob/main/docs/dependency-security.md).
 
-# 17. Results, exit values and troubleshooting
+# 15. Results, exit values and troubleshooting
 
 ## JSON and progress
 
@@ -1364,17 +1185,17 @@ Without JSON, observed activity/count/elapsed lines go to stderr. A closed track
 | --- | --- |
 | 0 | The selected command succeeded; what it checked depends on the command |
 | 1 | Processing, comparison, required diagnostics or cleanup confirmation failed |
-| 2 | Invalid arguments/configuration; invalid snapshot for `verify-snapshot` |
+| 2 | Invalid arguments/configuration |
 | 130 | A supported CLI confirmed cooperative cancellation and owned-process cleanup |
 
-`doctor` success is selected diagnostic success; `inspect` success is metadata reading, not complete media verification. Snapshot exit 1 means content changed.
+`doctor` success is selected diagnostic success; `inspect` success is metadata reading, not complete media verification.
 
 ## Common failures
 
 | Symptom/code | Action |
 | --- | --- |
 | Tool unavailable | Check the actual launch PATH, executable permission and Desktop diagnostics |
-| Unsupported version/features | Inspect build options as well as version; confirm Bento4 build with its distributor |
+| Unsupported version/features | Inspect build options as well as version; confirm the required advertised options |
 | Key file refused | Check owner, mode 600/ACL, link count, duplicate/unknown fields and schema |
 | `output-spec-invalid` | Check recipe schema version 1, unique safe IDs and supported format/protection/DRM combinations |
 | `execution-plan-output-keys-mismatch` / `execution-plan-drm-mismatch` | Match the version-2 key file's encrypted output IDs and DRM selections to the plan |
@@ -1393,7 +1214,7 @@ Choose a fresh destination for another conversion. A complete retained URL input
 
 Share fixed error codes, tool versions, supported profile and a minimal sanitized reproduction. Redacted logs do not mean every URL, filename or signaling field is confidential-data-free.
 
-# 18. Regression tests and evidence limits
+# 16. Regression tests and evidence limits
 
 ## Short public media
 
@@ -1401,7 +1222,7 @@ Real-media regressions use the attributed ten-second Big Buck Bunny excerpt with
 
 | Regression | Scope |
 | --- | --- |
-| Legacy 16 protection routes | Prepared clear/cenc/cbcs DASH and AES-128 fMP4 HLS, separate original/result keys, conversion and fresh verification |
+| 16 protection routes | Prepared clear/cenc/cbcs DASH and AES-128 fMP4 HLS, separate original/result keys, conversion and fresh verification |
 | TS to DASH: 27 routes | Three input protections, video/joint/audio layouts, clear/cenc/cbcs DASH |
 | Audio-only TS to fMP4 HLS: 9 pairs | Clear/AES-128/SAMPLE-AES inputs to clear/CBCS/AES-128 fMP4 HLS; complete original packet, clock and decoded-audio checks |
 | TS output: 27 routes | The same input protections/layouts to clear/AES-128/SAMPLE-AES TS |
@@ -1430,9 +1251,9 @@ Minimum Rust and stable run on Linux/macOS/Windows. Native Windows checks cover 
 
 Read each revision's CI logs and artifacts for source identity, compilers, tools and results. This guide does not certify every later moving-main revision or arbitrary device.
 
-The 54 finite combinations consist of audio27 plus joint27; CLI27 repeats the latter. The legacy16 use a prepared fragmented reference, whereas finite tests use the original progressive file's own playback range. Do not mix sample counts across different references/decoding paths.
+The 54 finite combinations consist of audio27 plus joint27; CLI27 repeats the latter. The 16 protection routes use a fragmented reference, whereas finite tests use the original progressive file's own playback range. Do not mix sample counts across different references/decoding paths.
 
-Bento4 installation pins and observed build banners are different evidence. Docker HTTP tests do not qualify a browser UI; native bundle construction does not qualify playback. Known-key media checks do not establish license acquisition or device operation.
+Docker HTTP tests do not qualify a browser UI; native bundle construction does not qualify playback. Known-key media checks do not establish license acquisition or device operation.
 
 ## Recorded three-output manifest checks
 
@@ -1488,7 +1309,7 @@ cargo test --locked -p drmr-core --test conversion_bundle_encryption \
   --test conversion_bundle_publication -- --nocapture
 ```
 
-`DRMR_CONVERSION_REPORT` saves the legacy16 `bbb_media` matrix's JSON to a new path outside the repository. It does not configure every TS/finite suite's report. Use their test logs and CI artifacts. Reports include actual fixture hashes, four comparisons, tool versions, elapsed/sampled-memory observations and measurement limits.
+`DRMR_CONVERSION_REPORT` saves the 16-route `bbb_media` matrix's JSON to a new path outside the repository. It does not configure every TS/finite suite's report. Use their test logs and CI artifacts. Reports include actual fixture hashes, four comparisons, tool versions, elapsed/sampled-memory observations and measurement limits.
 
 A separate long-clock regression repeats a tiny derived 32x18 source 417 times for 4,170 seconds and 100,080 packets:
 
@@ -1500,7 +1321,7 @@ This checks complete long packet evidence, not a benchmark for high-resolution t
 
 See [fixture attribution](https://github.com/kazuhide/drmr/blob/main/crates/drmr/tests/fixtures/bbb/README.md), [encrypted fixtures](https://github.com/kazuhide/drmr/blob/main/crates/drmr/tests/fixtures/bbb/CENC.md) and [processing](https://github.com/kazuhide/drmr/blob/main/docs/media-processing.md).
 
-# 19. CLI argument and option reference
+# 17. CLI argument and option reference
 
 All public commands accept `-h` / `--help`; `drmr help COMMAND` also displays help. Use top-level `-V` / `--version` or `drmr version`. Private supervision bootstrap arguments are not a user interface.
 
@@ -1510,7 +1331,7 @@ All public commands accept `-h` / `--help`; `drmr help COMMAND` also displays he
 
 For example, `--fetch-policy config/fetch.json` reads the [Fetch policy JSON in chapter 8](https://kazuhide.github.io/drmr/guide/#url-input). `--keys-file config/keys.json` reads the [private key JSON examples in chapter 5](https://kazuhide.github.io/drmr/guide/#key-configuration): version 1 uses `input` and one `output`, while version 2 shares `input` and names each result under `outputs`. `analyze` validates either schema and uses only its source keys. `--outputs` and version-2 saved plans require version-2 key JSON even when the output list has one entry; the older single-result mode uses version 1.
 
-For common commands, `--packager-bin "./tools/packager"` selects one installed executable. A Windows example is `--packager-bin "C:\Media Tools\packager.exe"`. Quote paths containing spaces and supply only the program name/path, without a shell command or appended arguments. The default `packager` is found on the launch environment's PATH; CLI archives and Desktop bundles do not include it. See [Media tools in chapter 4](https://kazuhide.github.io/drmr/guide/#installation). The prepared-DASH `run` workflow also accepts a containing directory; the legacy tables below distinguish that case.
+For common commands, `--packager-bin "./tools/packager"` selects one installed executable. A Windows example is `--packager-bin "C:\Media Tools\packager.exe"`. Quote paths containing spaces and supply only the program name/path, without a shell command or appended arguments. The default `packager` is found on the launch environment's PATH; CLI archives and Desktop bundles do not include it. See [Media tools in chapter 4](https://kazuhide.github.io/drmr/guide/#installation).
 
 For example, prepare the version-1 output key configuration from chapter 5 and select the installed executable for a conversion. Replace the input, new output, configuration and executable paths with the ones in your environment:
 
@@ -1528,7 +1349,7 @@ drmr convert original.mp4 --to cbcs --format mp4 \
 | `--probe` | Bounded version/help/advertised-options checks; default is discovery only |
 | `--route PROFILE` | Required tool set, default `all` |
 
-PROFILE is `all`, `prepared-dash`, `progressive-mp4`, `fragmented-mp4`, `dash-presentation`, `fmp4-hls-presentation`, `mpeg-ts-hls`, `mpeg-ts-sample-aes-hls` or `mpeg-ts-hls-ts`. Output route names are not automatically valid doctor values; use `all` to include the tool set for TS-DASH.
+PROFILE is `all`, `progressive-mp4`, `fragmented-mp4`, `dash-presentation`, `fmp4-hls-presentation`, `mpeg-ts-hls`, `mpeg-ts-sample-aes-hls` or `mpeg-ts-hls-ts`. Output route names are not automatically valid doctor values; use `all` to include the tool set for TS-DASH.
 
 ## inspect
 
@@ -1567,8 +1388,6 @@ Local input refuses download/fetch options. URL analysis always requires a new d
 | `--packager-bin FILE` | Shaka Packager executable name/path for source checks; only with --save, default packager; [tool installation](https://kazuhide.github.io/drmr/guide/#installation) |
 | `--max-workers N` | Upper bound 1-64 for source checks; only with --save |
 | `--measure` | Add measurements to stdout; requires --json and --save; saved file stays an execution plan |
-| `--mpd MPD` | Local MPD file for the separate prepared-DASH rendition-listing mode; [prepared layout and example](https://kazuhide.github.io/drmr/guide/#prepared-dash-batch) |
-| `--asset-id ID` | Asset name in MPD mode |
 
 ## convert
 
@@ -1616,71 +1435,9 @@ Verification does not rebuild the result using a new target/format.
 
 Version-1 plan verification adds plan_id, source_unchanged and output_matches_plan, with complete comparisons under verification. Success requires source_unchanged, output_matches_plan and verification.passed all to be true. An explicitly supplied PlayReady configuration is also checked against the current result. Version-2 results list every output's media, protection, signaling and conformance outcomes and include an overall passed flag. Matching media alone does not establish planned protection or DRM declarations. Neither mode proves license playback.
 
-## run
+## version
 
-| Option | Meaning/default |
-| --- | --- |
-| `--mpd MPD` | Required local prepared DASH MPD file; [Prepared input layout](https://kazuhide.github.io/drmr/guide/#prepared-dash-batch) |
-| `--output ROOT` | Required; results under ROOT/asset-id |
-| `--asset-id ID` | Asset name, otherwise original directory name |
-| `--hls-master M3U8` | Local original HLS master playlist file; needed unless --no-manifests; [prepared layout example](https://kazuhide.github.io/drmr/guide/#prepared-dash-batch) |
-| `--packager-bin PATH` | Executable named packager (packager.exe on Windows), or its containing directory; [prepared-DASH tool override](https://kazuhide.github.io/drmr/guide/#prepared-dash-batch) |
-| `--max-workers N` | Rendition parallelism upper bound |
-| `--manifest-local-url-base URL` | Also generate manifests for local HTTP serving |
-| `--log-format FORMAT` | text or jsonl; default text |
-| `--no-round-trip` | Diagnostic: omit complete decode comparison |
-| `--limit-renditions N` | Diagnostic: process only part of the rendition set |
-| `--no-manifests` | Diagnostic: omit playlist/manifest generation |
-
-## analyze-hls / package-hls
-
-| analyze-hls option | Meaning |
-| --- | --- |
-| `--source-config FILE` | Required owner-only JSON with url and nested policy; [Capture a local source example](https://kazuhide.github.io/drmr/guide/#saved-hls) |
-| `--asset-id ID` | Required saved asset name |
-| `--output ROOT` | Required; save under ROOT/ID/clear/source |
-
-| package-hls option | Meaning |
-| --- | --- |
-| `--analysis FILE` | Required analysis.json generated by a completed analyze-hls; [snapshot capture and packaging](https://kazuhide.github.io/drmr/guide/#saved-hls) |
-| `--drm-config FILE` | Required owner-only signaling JSON; fields include widevine_pssh, playready_la_url and fairplay_uri; [Package with signaling example](https://kazuhide.github.io/drmr/guide/#saved-hls) |
-| `--selection FILE` | Owner-only JSON with analyzed audio_source_id and optional analysis_id/snapshot_digest bindings; [audio selection details](https://github.com/kazuhide/drmr/blob/main/docs/usage.md#package-the-hls-snapshot) |
-| `--packager-bin FILE` | Shaka Packager executable name/path, default packager on PATH; [tool installation](https://kazuhide.github.io/drmr/guide/#installation) |
-| `--max-workers N` | Shared track/segment bound 1-64 |
-
-Content keys for these workflows are `DRM_KID`/`DRM_KEY`/`DRM_IV`. Passing generic key JSON as drm-config is not supported.
-
-## verify-snapshot / canonical / version
-
-| Command/argument | Meaning |
-| --- | --- |
-| `verify-snapshot PATH` | Check recorded digest for the generated snapshot directory or analysis.json; [snapshot example](https://kazuhide.github.io/drmr/guide/#saved-hls) |
-| `verify-snapshot --files PATH` | Also rehash saved playlists/media in that snapshot; [snapshot example](https://kazuhide.github.io/drmr/guide/#saved-hls) |
-| `canonical PATH` | Read a JSON file and print stable JSON; no final LF or secret removal; [JSONL construction example](https://kazuhide.github.io/drmr/guide/#prepared-dash-batch) |
-| `version` | Print version; no command-specific options |
-
-## batch
-
-| Option | Meaning/default |
-| --- | --- |
-| `--work-list FILE` | Required JSONL with a schema header and one asset per line; [Work-list JSON Lines example](https://kazuhide.github.io/drmr/guide/#prepared-dash-batch) |
-| `--output ROOT` | Required output root |
-| `--resume-log FILE` | Required JSONL attempt-state log written/reused by batch, e.g. resume.jsonl; [Keys and resumption](https://kazuhide.github.io/drmr/guide/#prepared-dash-batch) |
-| `--storage STORAGE` | local or s3; default local |
-| `--storage-root DIR` | Local object-key root |
-| `--bucket NAME` | S3 bucket |
-| `--region REGION` | Default and currently supported S3 region ap-northeast-1 |
-| `--output-prefix PREFIX` | Storage result prefix, default output |
-| `--key-provider PROVIDER` | env or file; default env |
-| `--key-file FILE` | Owner-only per-asset JSONL with asset_id/kid/key/iv, no schema header; file provider only; [Keys and resumption example](https://kazuhide.github.io/drmr/guide/#prepared-dash-batch) |
-| `--hls-config-dir DIR` | Directory of per-asset HLS JSON configuration references; [HLS batch configuration](https://kazuhide.github.io/drmr/guide/#prepared-dash-batch) |
-| `--packager-bin PATH` | Packager executable path; prepared-DASH batches also accept its directory; [workflow-specific override](https://kazuhide.github.io/drmr/guide/#prepared-dash-batch) |
-| `--max-workers N` | Per-asset processing bound; assets remain serial |
-| `--retry-failed` | Select failed attempts |
-| `--plan` | Show intended work without executing |
-| `--max-attempts N` | Per-asset attempt cap, default 3 |
-| `--per-asset-timeout-s SEC` | Per-asset budget, default 3600 |
-| `--heartbeat-s SEC` | Status interval, default 60 |
+Print the product version with `drmr version` or `drmr --version`. This command has no additional options.
 
 ## serve
 
@@ -1688,14 +1445,14 @@ Content keys for these workflows are `DRM_KID`/`DRM_KEY`/`DRM_IV`. Passing gener
 | --- | --- |
 | `--static-dir DIR` | Trusted directory of UI files replacing embedded assets; [local console setup](https://kazuhide.github.io/drmr/guide/#web-console) |
 | `--cli FILE` | Same-version drmr executable file for jobs (drmr.exe on Windows); [console CLI selection](https://kazuhide.github.io/drmr/guide/#web-console) |
-| `DRMR_CATALOG_ROOT` | Required prepared catalog root |
-| `DRMR_OUTPUT_ROOT` | Required results/saved-HLS/log root |
+| `DRMR_INPUT_ROOT` | Required allowed input folder for local media and saved plans |
+| `DRMR_OUTPUT_ROOT` | Required folder for results, retained URL originals and logs |
 | `DRMR_BIND_HOST` | Default loopback; remote exposure is not intended |
 | `DRMR_BIND_PORT` | Default 8080 |
-| `DRMR_MAX_WORKERS` | HLS packaging worker upper bound |
-| `DRMR_HLS_PROFILES` | Owner-only named-profile JSON file path; [HLS connection policy JSON example](https://kazuhide.github.io/drmr/guide/#web-console) |
+| `DRMR_MAX_WORKERS` | Worker cap for saved-plan operations |
+| `DRMR_COMMON_CONFIG_ROOT` | Private folder for key and fetch-policy files, separate from input and output folders; [configuration selection](https://kazuhide.github.io/drmr/guide/#web-console) |
 
-# 20. References and maintenance
+# 18. References and maintenance
 
 ## Current public documentation
 

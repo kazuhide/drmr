@@ -26,7 +26,7 @@ drmr は映像・音声の符号化データを維持しながら、ファイル
 | 原本と結果を改めて比べる | `verify` | 原本を独立に読み直し、内容・復号結果・時刻などを照合する |
 | 完成したマニフェストだけを調べる | `verify --manifest-only` | Rust の内蔵 Linter で HLS/DASH の宣言を検査する。--external-validator で外部検査も追加できる。メディアの比較や復号は行わない |
 
-原本を確認してから変換計画を保存する場合は、`analyze`、`plan --save`、`convert --plan`、`verify --plan` の順に使います。メタデータだけを短時間で確認するには `inspect` を使います。計画を保存せずに `convert INPUT` を実行することもできます。HLS の汎用変換でも、事前に `analyze-hls` を実行する必要はありません。
+原本を確認してから変換計画を保存する場合は、`analyze`、`plan --save`、`convert --plan`、`verify --plan` の順に使います。メタデータだけを短時間で確認するには `inspect` を使います。計画を保存せずに `convert INPUT` を実行することもできます。
 
 ## 最短の実行例
 
@@ -45,7 +45,7 @@ drmr verify --plan clear.plan.json --json
 
 入力が暗号化されている場合や出力を暗号化する場合は、第5章の手順でアクセス権を制限した鍵設定ファイルを渡します。この例でも、入力が対応範囲外なら処理は拒否されます。入力の確認や計画の保存に成功しても、その後の変換が成功するとは限りません。実行時に原本、鍵、ツール、指定した出力条件を改めて確認します。
 
-主な操作手段は CLI です。依存ツールもまとめて実行したい場合は Docker を使えます。実験的な Web コンソールと Desktop では、同じ保存計画による解析・計画保存・変換・検証と、準備済みコンテンツの処理を操作できます。CLI の全コマンドを画面から実行する機能はありません。
+主な操作手段は CLI です。依存ツールもまとめて実行したい場合は Docker を使えます。実験的な Web コンソールと Desktop では、同じ保存計画による解析・計画保存・変換・検証を操作できます。CLI の全コマンドを画面から実行する機能はありません。
 
 # 2. 形式・暗号・DRM の読み方
 
@@ -80,13 +80,13 @@ AES は共通鍵暗号の名前です。CTR は counter mode、CBC は cipher bl
 
 `cbcs` と HLS AES-128 は、どちらも CBC を使いますが、適用単位とメタデータが異なります。fMP4 HLS の CBCS と、FairPlay 向け TS の SAMPLE-AES も同じファイル形式ではありません。方式名を置き換えるだけでは変換できません。
 
-これらの違いは W3C の MP4 暗号化説明、RFC 8216 の暗号化宣言、Apple の SAMPLE-AES 説明にも記載されています。一次資料のリンクは第20章にまとめています。
+これらの違いは W3C の MP4 暗号化説明、RFC 8216 の暗号化宣言、Apple の SAMPLE-AES 説明にも記載されています。一次資料のリンクは第18章にまとめています。
 
 ## DRM システムと暗号方式の違い
 
 Widevine、PlayReady、FairPlay は、鍵の取得や利用条件、プレーヤーとの連携を含む DRM システムです。drmr は既知の鍵を使ってメディアを変換し、対応する経路では必要なシグナリングを格納します。シグナリングとは、プレーヤーが DRM システムや鍵の場所を判断するための付加情報です。
 
-複数の出力を作る場合も、共通の `plan`、`convert`、`verify` を使います。出力一覧で、Widevine/PlayReady 向けの DASH、FairPlay 向けの HLS をそれぞれ指定できます。PSSH は Protection System Specific Header の略で、DRM の初期化情報を格納するデータです。鍵設定と出力一覧の具体例は第5・6章に示します。従来の単一出力 PlayReady 設定と HLS 保存経路も引き続き使えます。
+複数の出力を作る場合も、共通の `plan`、`convert`、`verify` を使います。出力一覧で、Widevine/PlayReady 向けの DASH、FairPlay 向けの HLS をそれぞれ指定できます。PSSH は Protection System Specific Header の略で、DRM の初期化情報を格納するデータです。鍵設定と出力一覧の具体例は第5・6章に示します。単一出力の PlayReady 設定も引き続き使えます。
 
 暗号方式の変換、シグナリングの整合性確認、ライセンス取得、実機再生はそれぞれ別の確認事項です。メディアの検証に成功しても、対象機器でそのコンテナ形式・コーデック・暗号方式・DRM の組み合わせを再生できるとは限りません。サービスで配信する前に、実際に使うライセンスサーバーと機器で確認してください。
 
@@ -157,7 +157,7 @@ TS 出力で映像と音声がある場合は、それぞれ別の TS プレイ�
 
 ## 共通の対象外と上限
 
-ローカル DASH は静的な一つの Period、連続した有限の SegmentTimeline、対応する相対参照を持つ必要があります。ライブ、動的 DASH、複数 Period、バイト範囲、不連続、保持できないイベントやレンディション情報などは対象外です。汎用変換で字幕を一律に保持することもできません。対応する字幕には別の HLS スナップショット経路があります。
+ローカル DASH は静的な一つの Period、連続した有限の SegmentTimeline、対応する相対参照を持つ必要があります。ライブ、動的 DASH、複数 Period、バイト範囲、不連続、保持できないイベントやレンディション情報などは対象外です。字幕トラックや任意のトラック選択も、現在の変換対象に含みません。
 
 汎用変換の上限は、作業用に保存するデータが一トラックあたり 16 GiB、トラック数が 64、DASH の参照セグメント数が 100,000 個です。このほか、初期化メタデータや断片ごとの上限があり、利用可能な CPU とメモリに応じても処理を制限します。上限を超えた部分を無視して成功とすることはありません。
 
@@ -191,11 +191,10 @@ cargo build --release --locked -p drmr
 | --- | --- | --- |
 | `ffmpeg` / `ffprobe` | 9.0.1 | メディアの読み取りと復号、復号後のデータ・パケット・時刻の確認 |
 | `packager` | Shaka Packager 3.8.0 | MP4 サンプル暗号化、格納形式の変更、セグメント化 |
-| `mp4dump` | Bento4 1.6.0、build 641 | 準備済み DASH などの MP4 構造確認 |
 
 必要な実行ファイルを信頼できる配布元から入手し、シェルがプログラムを検索する PATH に追加してください。CLI アーカイブと Desktop バンドルには、これらのメディアツールは含まれません。Docker イメージには含まれます。
 
-最低要件より新しいバージョンでも、必要なオプションを備えていないビルドや、全パケットの時刻を出力できないビルドは使えません。Bento4 は起動時のバージョン表示に build 番号を含めません。`doctor --probe` の `build-unverified` だけでは build 641 以上と判断できないため、配布元でも確認してください。
+最低要件より新しいバージョンでも、必要なオプションを備えていないビルドや、全パケットの時刻を出力できないビルドは使えません。MP4 の構造は Rust 実装で検査します。
 
 ## doctor の使い分け
 
@@ -207,7 +206,7 @@ drmr doctor --probe --route dash-presentation
 
 既定の `doctor` は実行ファイルの探索だけを行い、外部ツールを起動しません。`--probe` はバージョンとヘルプを、各呼び出し 3 秒、標準出力・標準エラー各 1 MiB の上限で確認します。生の出力はレポートに含めません。メディア、鍵、ライセンス、再生機器は検証しません。
 
-`--route` では、どの処理経路に必要なツールを確認するかを選びます。`progressive-mp4` では FFmpeg と ffprobe、`prepared-dash` と `all` では Bento4 も必要です。他の処理経路では必要に応じて Shaka Packager を確認します。選んだ経路で使わないツールの検査は任意です。ただし、任意の検査でも起動したプロセスの終了を確認できない場合は、準備完了と判定しません。
+`--route` では、どの処理経路に必要なツールを確認するかを選びます。`progressive-mp4` では FFmpeg と ffprobe、`all` では三つのツールすべてを確認します。他の処理経路では必要に応じて Shaka Packager を確認します。選んだ経路で使わないツールの検査は任意です。ただし、任意の検査でも起動したプロセスの終了を確認できない場合は、準備完了と判定しません。
 
 レポートの `ready` は選んだ診断項目が通ったという意味です。`media_compatibility_checked` は false のままです。`path` は実際に解決した実行ファイルの場所です。GUI の起動環境とターミナルの PATH は異なることがあるため、Desktop 内の外部ツール確認も使ってください。
 
@@ -383,7 +382,7 @@ TS の SAMPLE-AES では、鍵に対応する IV を実行時の鍵設定に明�
 | 作業用ディスク | 復号済みメディアや平文鍵ファイルを所有者専用の一時領域に書く経路がある。メモリ内だけの処理ではない |
 | 通常終了後 | drmr が作成した一時ファイルを削除する。強制終了した場合や子プロセスの終了を確認できない場合は残ることがある |
 
-一部のバッファを消去しても、Secure Enclave などの隔離環境で処理するわけではありません。外部プロセス、ブラウザー、メモリ管理機構が作るコピー、スワップ、クラッシュダンプ、バックアップまで一括で消去する保証はありません。ファイルを削除しても、ストレージやスナップショットからデータが完全に消えるとは限りません。
+一部のバッファを消去しても、Secure Enclave などの隔離環境で処理するわけではありません。外部プロセス、メモリ管理機構が作るコピー、スワップ、クラッシュダンプ、バックアップまで一括で消去する保証はありません。ファイルを削除しても、ストレージやスナップショットからデータが完全に消えるとは限りません。
 
 ライセンス URL、HLS 鍵 URI、PSSH に含めた URL は、意図して出力メディアへ書かれる場合があります。Base64 や十六進表現は暗号化ではありません。公開する予定のない認証トークンをこれらの値へ含めないでください。入力 URL、原本プレイリスト、保存したダウンロードにも署名や認証情報が含まれることがあります。
 
@@ -491,7 +490,7 @@ drmr plan clear-ts/master.m3u8 --outputs outputs.json \
 
 `conformance: "required"` を指定すると、変換時に加え、後から `verify --plan` を実行する際にも外部マニフェスト検査が必須になります。`"none"` を指定するかフィールドを省略すると、外部検査は要求しません。どちらの場合も内蔵 Linter の検査とコンテンツ全体の検証を行います。第9章のツールを実行前に準備してください。計画の保存に成功しても、そのツールが使えることまでは確認できません。
 
-従来の操作との互換性のために残している `plan --mpd MPD` は、準備済み DASH のレンディションとセグメント数を読む別のモードです。汎用の `plan INPUT --to ...` とは必要な入力ファイルの配置が異なります。具体例は「準備済み DASH とバッチ処理」を参照してください。
+
 
 参照（英語）: [処理経路と解析で確認する内容](https://github.com/kazuhide/drmr/blob/main/docs/processing-routes.md)。
 
@@ -761,7 +760,7 @@ drmr verify retry-hls/master.m3u8 --source saved-source/input.m3u8 \
 | `max_total_bytes` | 取得量の合計を 1,073,741,824 バイト（1 GiB）までに制限する |
 | `connections` | 同時取得数を最大 4 にする。CPU・メモリや `--max-workers` によっては、実際の同時取得数はさらに少なくなる |
 
-第5章と同様に `config` ディレクトリを保護し、JSON を保存した後にファイルの権限を設定します。macOS/Linux の指定例です。Windows では第14章の所有者専用 ACL を使います。
+第5章と同様に `config` ディレクトリを保護し、JSON を保存した後にファイルの権限を設定します。macOS/Linux の指定例です。Windows では第12章の所有者専用 ACL を使います。
 
 ```sh
 chmod 600 config/fetch.json
@@ -903,8 +902,6 @@ drmr verify result/dash/manifest.mpd --manifest-only --json
 | --- | --- |
 | 汎用 `convert` | 原本トラックの初期化情報と断片を順に専用ディスク領域へ組み立て、必要な復号・格納形式変更・再セグメント化・暗号化を行う |
 | TS を読む汎用変換 | 原本 TS の構成・連続性・時刻を先に検査。SAMPLE-AES は Rust で符号化フレームを復号し、完全トラックとして新たにパッケージする |
-| 準備済み DASH の `run` | 通常は全レンディションを復号して比較用のデータを作り、再セグメント化する。条件を満たす AAC では、元の境界を保持してセグメント別に処理する場合もある |
-| HLS スナップショットの `package-hls` | 初期化情報とともに各セグメントを処理・暗号化する。再生内容全体を検証するために、セグメントを結合する処理もある |
 
 汎用 `convert` は原本のセグメントを単に一つずつ再暗号化するのではなく、映像・音声の符号化データと正確な再生時刻を保持しながら、二秒を目標に再分割します。そのため、出力のセグメント境界が入力と同じになるとは限りません。HLS AES-128 を使う場合は、再分割後の出力リソースごとに暗号化します。
 
@@ -914,155 +911,7 @@ drmr verify result/dash/manifest.mpd --manifest-only --json
 
 参照（英語）: [処理方法とコンテンツ全体の検証](https://github.com/kazuhide/drmr/blob/main/docs/media-processing.md)。
 
-# 10. HLS スナップショット経路
-
-## 汎用 convert との違い
-
-複数の DRM 出力を作る場合は、共通の `analyze`、`plan --outputs`、`convert --plan`、`verify --plan` を使います。`analyze-hls` と `package-hls` は、保存した HLS の解析結果を使う従来の操作との互換性のために残しています。`package-hls` という名前も以前からのもので、HLS に加えて DASH も出力できます。新しく複数出力の変換を始める場合は共通 CLI を推奨します。
-
-`analyze-hls` は clear HLS を取得またはコピーし、メディアを調べ、ファイルと `analysis.json` を保存します。以下はこの経路固有の設定と使い方です。共通変換の別名ではありません。
-
-この経路では、対応条件を満たす WebVTT や MP4 内 TTML 字幕など、汎用 `convert` が扱わない入力も処理できます。ただし、解析元は配信内容が確定した clear HLS に限ります。暗号化入力、ライブ、不連続、未対応のトラックや字幕は拒否します。汎用変換とは対応範囲が異なる点に注意してください。
-
-## ローカル HLS の保存
-
-所有者専用の `source.json` を用意します。次のパスは実際の絶対パスへ置き換えてください。
-
-```json
-{
-  "url": "/absolute/path/media/master.m3u8",
-  "policy": {
-    "allowed_local_roots": ["/absolute/path/media"]
-  }
-}
-```
-
-```sh
-chmod 600 source.json
-drmr analyze-hls --source-config source.json \
-  --asset-id sample --output output
-drmr verify-snapshot --files output/sample/clear/source
-```
-
-出力は `output/sample/clear/source/` に保存されます。既存スナップショットは上書きしません。別の asset-id または出力場所を選んでください。HTTPS の場合は `url` と `policy.allowed_origins` を指定し、プレイリスト・リソース・リダイレクトの全 origin を明示します。
-
-## package-hls によるシグナリング付き出力の生成
-
-`DRM_KID`、`DRM_KEY`、`DRM_IV` は、秘密情報の管理手順に従って環境変数に設定します。どれも 16 バイトを 32 桁の十六進数で表します。鍵の値を含むシェルコマンドを履歴に残さないでください。この環境変数による指定方法は、汎用 `convert` の鍵設定とは異なります。
-
-`drm.json` は暗号鍵ではなくシグナリングの設定です。
-
-```json
-{
-  "widevine_pssh": "<hex-or-base64-widevine-initialization-data>",
-  "playready_la_url": "https://license.example.invalid/acquire",
-  "fairplay_uri": "skd://content-identifier"
-}
-```
-
-```sh
-chmod 600 drm.json
-drmr package-hls --analysis output/sample/clear/source/analysis.json \
-  --drm-config drm.json
-```
-
-Widevine PSSH は DRM 初期化情報で、完全な box または対応するペイロードを十六進か Base64 で渡します。含まれる識別子は `DRM_KID` と一致する必要があります。独自のダミー値で置き換えても有効なライセンスは作れません。
-
-音声選択が必要な場合は、解析されたトラック ID を `audio_source_id` として所有者専用 JSON に保存し、`--selection` に渡します。`analysis_id`、`snapshot_digest` も指定して古い選択を検出できます。
-
-`verify-snapshot` は、既定では記録の内容から計算したダイジェストを照合します。`--files` を付けると、保存したプレイリストとセグメントのハッシュも再計算します。原本と変換結果の映像・音声・時刻をすべて比較する `verify OUTPUT --source INPUT` の代わりにはなりません。終了コードは 0 が一致、1 が変更あり、2 が不正なスナップショットを示します。
-
-参照（英語）: [保存 HLS の使い方](https://github.com/kazuhide/drmr/blob/main/docs/usage.md)。
-
-# 11. 準備済み DASH とバッチ処理
-
-## run 用の入力レイアウト
-
-`run` には、元の URL の構造に対応したディレクトリ配置でダウンロード済みのファイルが必要です。任意の MPD を単独で置くだけでは使えません。
-
-```text
-sample/
-  download/
-    manifest.example.test/sample/dash/manifest.mpd
-    manifest.example.test/sample/hls/manifest.m3u8
-    cdn.example.test/sample/video/v0/init.mp4
-    cdn.example.test/sample/video/v0/seg_1.m4s
-    cdn.example.test/sample/video/v0/seg_2.m4s
-```
-
-MPD には BaseURL、MP4 の adaptation set、representation ごとの SegmentTemplate が必要です。テンプレートは `initialization`、`media`、`timescale`、`duration` を持ち、メディア名は `$Number$` と数値セグメント名を使います。上の例では、BaseURL が `https://cdn.example.test/sample/` なら、`video/v0/init.mp4` は示した位置へ対応します。
-
-`DRM_KID`、`DRM_KEY`、`DRM_IV` を環境へ準備したうえで実行します。
-
-```sh
-drmr plan --mpd sample/download/manifest.example.test/sample/dash/manifest.mpd
-drmr run \
-  --mpd sample/download/manifest.example.test/sample/dash/manifest.mpd \
-  --hls-master \
-    sample/download/manifest.example.test/sample/hls/manifest.m3u8 \
-  --output output --asset-id sample --log-format jsonl
-```
-
-結果は `output/sample/` の下に保存します。`--packager-bin` には実行ファイルか packager のあるディレクトリを指定します。`--no-round-trip`、`--no-manifests`、`--limit-renditions` はデバッグ用であり、検査や出力の一部を省略します。すべての処理と検証を終えた結果として扱わないでください。
-
-## batch の作業リスト
-
-`batch` は再開ログを使いながら、複数のアセットを一つずつ処理します。対象は準備済み DASH と clear-HLS のワークフローです。汎用 `convert` の任意のコマンド列を実行する機能ではありません。
-
-作業リストは JSON Lines、つまり一行に一つの JSON オブジェクトです。最初の行は文字列の schema_version を持つ `{"schema_version":"1"}`、以後は次の四フィールドだけを持ちます。
-
-| フィールド | 内容 |
-| --- | --- |
-| `asset_id` | アセット識別子 |
-| `kind` | `dash-cenc` または `hls-clear` |
-| `dash_manifest` | ストレージ基点からの相対オブジェクトキー。使わない場合は null |
-| `hls_master` | ストレージ基点からの相対オブジェクトキー。使わない場合は null |
-
-例えば、次の内容を `asset.json` に保存します。これは一件のレコードを読みやすく書いたもので、作業リストへ入れる際は一行にします。
-
-```json
-{
-  "asset_id": "sample",
-  "kind": "dash-cenc",
-  "dash_manifest":
-    "sample/download/manifest.example.test/sample/dash/manifest.mpd",
-  "hls_master":
-    "sample/download/manifest.example.test/sample/hls/manifest.m3u8"
-}
-```
-
-`canonical` は JSON を安定したキー順・書式の一行にできるため、このレコードの整形にも使えます。次は新しい作業リストを作る例です。
-
-```sh
-printf '%s\n' '{"schema_version":"1"}' > work-list.jsonl
-{
-  drmr canonical asset.json && printf '\n'
-} >> work-list.jsonl
-drmr batch --work-list work-list.jsonl --output output \
-  --resume-log resume.jsonl --plan
-```
-
-`canonical` の出力末尾には改行がないため、レコードを追加するたびに上記の例のように改行も出力します。このコマンドは入力した JSON の値をそのまま出力し、秘密情報を除去しません。鍵ファイルや認証情報をログに表示しないよう注意してください。
-
-## 鍵と再開
-
-既定の鍵提供元は環境変数です。アセットごとの保護された JSONL を使う場合は次の形式を指定します。鍵ファイルにはスキーマヘッダーはなく、各行が `asset_id`、`kid`、`key`、`iv` だけを持ちます。汎用 `--keys-file` の形式とは違います。
-
-```sh
-drmr batch --work-list work-list.jsonl --output output \
-  --resume-log resume.jsonl --storage local --storage-root ./catalog \
-  --key-provider file --key-file ./private/keys.jsonl
-```
-
-鍵ファイルを所有者専用にし、出力ツリーの外に置きます。HLS 向けの設定群には `--hls-config-dir` を使います。アセットごとの設定と入力は、対応するワークフローの条件を満たす必要があります。
-
-失敗した項目を再試行するには `--retry-failed` を指定します。アセット1件あたりの試行回数の上限は `--max-attempts` で設定し、既定値は 3 です。`--per-asset-timeout-s` の既定値は 3600 秒、`--heartbeat-s` の既定値は 60 秒です。再開しても、それまでに行った処理を元に戻すわけではありません。ログと既存出力を確認してから再処理してください。
-
-`--storage s3` にも対応していますが、このバージョンで使える region は `ap-northeast-1` に限ります。実行時には bucket の場所を確認します。認証には AWS の環境変数と標準プロファイルを使います。`--bucket`、`--region`、`--output-prefix` はストレージの設定です。このガイドのメディア検証結果には、実際の S3 アカウントでの動作確認は含みません。
-
-参照（英語）: [準備済み入力と batch](https://github.com/kazuhide/drmr/blob/main/docs/usage.md)、[batch の CLI 定義](https://github.com/kazuhide/drmr/blob/main/crates/drmr-core/src/batch_cli.rs)。
-
-# 12. 並列処理・メモリ・停止
+# 10. 並列処理・メモリ・停止
 
 ## 並列数の自動調整と --max-workers
 
@@ -1075,7 +924,7 @@ drmr verify result/manifest.mpd --source source.mpd \
   --keys-file config/keys.json --max-workers 1 --json --measure
 ```
 
-ワーカー数を変えても、内容と時刻の検証は省略しません。トラック処理、セグメント処理、原本解析では、同じプロセス内で外部処理に使う CPU・メモリの予約枠を共有します。`batch` のアセット自体は一つずつ処理します。別々の CLI プロセス間では予約枠を共有しません。
+ワーカー数を変えても、内容と時刻の検証は省略しません。トラック処理、セグメント処理、原本解析では、同じプロセス内で外部処理に使う CPU・メモリの予約枠を共有します。別々の CLI プロセス間では予約枠を共有しません。
 
 内蔵のマニフェスト検査も同じ予約枠を使います。小さい入力は呼び出し元で処理します。大きな HLS は文書ごとに、大きな DASH は一度解析したツリー内の独立した検査ごとに並列処理できます。処理用のプールを入れ子にせず、子プレイリストの解析結果や継承したタイムラインを再利用します。マニフェストの保持と検査に必要なメモリを予約し、ファイルの識別情報と内容も照合します。バイト数、ノード数、参照数、診断数などの上限に達した場合は不完全な検査として報告し、合格にはしません。
 
@@ -1109,11 +958,11 @@ Unix では drmr が作成したプロセスグループで、Windows では job
 
 参照（英語）: [資源制限と測定方法](https://github.com/kazuhide/drmr/blob/main/docs/resources.md)。
 
-# 13. Docker による実行
+# 11. Docker による実行
 
 ## イメージのビルド
 
-Docker イメージは CLI、FFmpeg/ffprobe、Bento4 の mp4dump、Shaka Packager を含みます。ビルドには Git と BuildKit が使える Docker が必要です。ネイティブ Linux amd64 または arm64 が対象で、Docker Desktop は Linux コンテナを選びます。
+Docker イメージは CLI、FFmpeg/ffprobe、Shaka Packager を含みます。ビルドには Git と BuildKit が使える Docker が必要です。ネイティブ Linux amd64 または arm64 が対象で、Docker Desktop は Linux コンテナを選びます。
 
 リポジトリのルートから実行します。ビルドにはコミット済みのファイルを使います。
 
@@ -1178,9 +1027,9 @@ Linux ホストでは host networking を使うと、既定の `127.0.0.1:8080` 
 ```sh
 docker run --rm --init --name drmr-console --network host \
   --user "$(id -u):$(id -g)" \
-  --mount "type=bind,src=$PWD/catalog,dst=/catalog,readonly" \
+  --mount "type=bind,src=$PWD/media,dst=/media,readonly" \
   --mount "type=bind,src=$PWD/output,dst=/output" \
-  --env DRMR_CATALOG_ROOT=/catalog --env DRMR_OUTPUT_ROOT=/output \
+  --env DRMR_INPUT_ROOT=/media --env DRMR_OUTPUT_ROOT=/output \
   drmr:local serve
 ```
 
@@ -1192,7 +1041,7 @@ Windows では Docker Desktop の WSL 2 連携を使い、Linux シェルで実�
 
 参照（英語）: [Docker の使い方と確認結果](https://github.com/kazuhide/drmr/blob/main/docs/docker.md)。
 
-# 14. Windows のネイティブ CLI
+# 12. Windows のネイティブ CLI
 
 ## 実行環境
 
@@ -1210,9 +1059,10 @@ cargo build --release --locked -p drmr
 
 ## 所有者専用の鍵ファイル
 
-Windows では chmod の代わりに access control list（アクセス制御リスト、ACL）を使います。所有者を現在のユーザーに設定し、権限の継承を止めて、そのユーザーだけに完全アクセスを許可する ACL が必要です。次の例では所有者専用の新しいディレクトリと空ファイルを作成し、その後でエディターから設定を入力します。
+Windows では chmod の代わりに access control list（アクセス制御リスト、ACL）を使います。所有者を現在のユーザーに設定し、権限の継承を止めて、そのユーザーだけに完全アクセスを許可する ACL が必要です。次の設定は、管理者として起動していない Windows PowerShell 5.1（`powershell.exe`）で実行します。所有者専用の新しいディレクトリと空ファイルを作成してから、エディターで設定を入力します。
 
 ```powershell
+$ErrorActionPreference = 'Stop'
 $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
 $private = Join-Path $env:LOCALAPPDATA 'drmr-keys'
 if (Test-Path -LiteralPath $private) { throw 'Choose a new directory' }
@@ -1224,7 +1074,11 @@ function Set-OwnerOnlyAcl($path, $security) {
     $rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
         $sid, 'FullControl', 'Allow')
     $security.AddAccessRule($rule)
-    Set-Acl -LiteralPath $path -AclObject $security
+    if ($security -is [System.Security.AccessControl.DirectorySecurity]) {
+        [System.IO.Directory]::SetAccessControl($path, $security)
+    } else {
+        [System.IO.File]::SetAccessControl($path, $security)
+    }
 }
 
 ```
@@ -1265,19 +1119,19 @@ Ctrl+C と Ctrl+Break で協調停止できます。子孫プロセスの終了�
 
 参照（英語）: [Windows の保護条件](https://github.com/kazuhide/drmr/blob/main/docs/windows.md)。
 
-# 15. ローカル Web コンソール
+# 13. ローカル Web コンソール
 
 ## 起動と対象
 
 Web コンソールは認証なしのローカル操作画面です。信頼できるマシン上の loopback で使い、リバースプロキシやポート転送で公開しないでください。Host と Origin の確認は、他のローカルプロセスを認証する機能ではありません。
 
 ```sh
-DRMR_CATALOG_ROOT=/absolute/path/catalog \
+DRMR_INPUT_ROOT=/absolute/path/media \
 DRMR_OUTPUT_ROOT=/absolute/path/output \
 drmr serve
 ```
 
-`http://127.0.0.1:8080` を開きます。二つのルートディレクトリが必要です。`DRMR_BIND_PORT` でポート、`DRMR_MAX_WORKERS` で保存計画の各処理と準備済み HLS パッケージのワーカー上限を設定します。自動割当てでもこの上限を超えません。新しい変換では許可された入力フォルダーからファイルを選びます。準備済みコンテンツのカタログには、従来どおり対応レイアウトのエントリーを置きます。
+`http://127.0.0.1:8080` を開きます。二つのルートディレクトリが必要です。`DRMR_BIND_PORT` でポート、`DRMR_MAX_WORKERS` で保存計画の各処理に使うワーカー数の上限を設定します。自動割当てでもこの上限を超えません。メディアと保存計画は、許可された入力フォルダーから選びます。
 
 サーバーとジョブ用の CLI は同じバージョンを使います。`--cli` で差し替える場合は実行ファイルを直接指定してください。別の CLI を起動するラッパーを指定すると、子プロセスを管理するための起動条件を満たさず、拒否される場合があります。
 
@@ -1295,7 +1149,7 @@ drmr serve
 4. 「元の計画ファイルを取得」で計画を非公開に保管し、「変換する」を押します。出力済みの場所は上書きできません。出力の設定を編集した場合は、新しい計画を保存してください。
 5. 変換後は「改めて検証する」で、保存した計画と既存の出力を再変換せずに照合します。後日も「CLI の保存計画」から同じ計画を開けば、解析や変換を繰り返さずに検証できます。
 
-新規の計画は、出力が一つでも名前付き出力の v2 です。鍵ファイルを指定する場合、解析には v1・v2 のどちらも使えますが、新規計画の保存とその変換・検証には v2 を使います。CLI の v1 計画を読み込んだ場合は v1 の鍵ファイルを使います。ファイルの書式は第19章の CLI リファレンスを参照してください。
+新規の計画は、出力が一つでも名前付き出力の v2 です。鍵ファイルを指定する場合、解析には v1・v2 のどちらも使えますが、新規計画の保存とその変換・検証には v2 を使います。CLI の v1 計画を読み込んだ場合は v1 の鍵ファイルを使います。ファイルの書式は第17章の CLI リファレンスを参照してください。
 
 取得した計画は元のバイト列と絶対パスを保持します。ローカルパスや署名付き URL が含まれる場合があるため、非公開で保管し、別環境へ移すためにパスを書き換えないでください。鍵や実行ファイルのパスを HTTP リクエストで渡す機能はありません。鍵ファイルの内容はブラウザーで取得しません。
 
@@ -1303,72 +1157,31 @@ URL の入力は送信時に消去し、以後は「入力 URL」とだけ表示
 
 一つのセッションで受け付ける操作は最大 32 回です。上限に達したら計画を取得し、「この変換を閉じる」で終了してから保存計画を開き直すと、既存の出力を検証できます。開始結果が不明なときは「状態を確認」で同じ操作だけを照会します。実行中や後処理を確認できない間は閉じられず、画面や言語を切り替えても実行枠は解放しません。
 
-「準備済みコンテンツ」には、従来のカタログ変換、HLS スナップショット、キュー、ローカル再生が残ります。以下の名前付き HLS プロファイルと鍵入力欄は、この準備済みワークフローの設定です。「新しい変換」の取得ポリシーファイルとは分けて扱います。
+## ジョブの状態と停止
 
-## 準備済み HLS の取得ポリシー
+開始要求への応答が届かない場合は、同じ要求とジョブの状態を確認します。「状態を確認」は照会だけを行い、変換を再送しません。画面や言語を切り替えても、実行中の処理を管理する枠は解放しません。
 
-追加設定がなければ、default プロファイルは入力 URL 自身の HTTPS origin だけを許可します。別 origin の参照や認証が必要なら、所有者専用の profiles.json に名前付きポリシーを保存し、`DRMR_HLS_PROFILES` にそのファイルのパスを設定します。環境変数へ JSON 文字列自体を渡す指定ではありません。
+「停止」は、そのジョブと管理中のメディアツールの終了を要求します。応答だけで後片付けが完了したとは判断せず、最終状態とログを確認してください。終了を確認できない間は実行枠を保持し、新しい処理を開始しません。サーバー終了時も新規処理の受け付けを止め、管理中の処理が停止するまで待ちます。終了できない原因を解消してから再試行してください。強制終了では、この確認は行われません。
 
-```json
-{
-  "default": {
-    "policy": {
-      "allowed_origins": ["https://media.example.com"],
-      "headers_by_origin": {
-        "https://media.example.com": {"Authorization": "Bearer <token>"}
-      }
-    }
-  }
-}
-```
+## 保存するファイルと秘密情報
 
-```sh
-chmod 600 profiles.json
-DRMR_CATALOG_ROOT=/absolute/path/catalog \
-DRMR_OUTPUT_ROOT=/absolute/path/output \
-DRMR_HLS_PROFILES=/absolute/path/profiles.json \
-drmr serve
-```
+取得した原本、保存計画、結果、ログはディスクに残ります。画面を閉じても消去されず、実行中の処理が停止したと判断することもできません。これらの保存先は非公開にしてください。入力 URL は送信後に画面から消去し、鍵や取得ポリシーのファイル内容はブラウザーへ送りません。
 
-この例は、画面の default プロファイルに対応します。入力 URL の origin も許可リストに含める必要があります。Web 画面からの取得ではローカルファイルを許可せず、ポリシー内のローカルルートも除外します。カタログ内のローカル DASH の処理や、CLI analyze-hls で明示的に許可したローカル入力とは扱いが異なります。
+参照（英語）: [Web の操作とプロセス管理](https://github.com/kazuhide/drmr/blob/main/docs/usage.md)、[ローカル画面と秘密情報の扱い](https://github.com/kazuhide/drmr/blob/main/docs/security.md)。
 
-## ジョブ状態と Stop
-
-画面からの JSON リクエストは、ヘッダーと本文の受信を含めて 15 秒でタイムアウトします。応答がない場合に画面を再操作できるようにするための制限であり、メディア処理の制限時間ではありません。開始要求への応答が届かなくても、同じ要求を自動で再送しません。記録済みのジョブと照合し、開始したか判断できない場合は別のジョブの開始も止めます。「状態を確認」（英語表示では Check job status）で状態だけを再照会してください。
-
-実行中の Stop は、そのジョブと子プロセスの終了を要求します。応答だけで後片付け完了と判断せず、最終ジョブ状態とログを確認してください。通常の停止後は次の待機ジョブへ進みます。サーバー終了中は新しい待機ジョブを開始しません。
-
-Web の準備済みワークフローでは、汎用 `convert` のように新規出力を完成後に配置する方式とは異なり、途中出力や以前の結果を変更する場合があります。「停止」（英語表示では Stop）を押しても、それまでの処理を元に戻すことはありません。終了コード 0、出力ファイルの存在、カタログの古い `converted` フラグだけで再生準備が完了したと判断せず、現在保存されている出力に対応する `output_readiness` を確認してください。
-
-子プロセスの終了を確認できない場合は、ジョブの実行枠と一時設定を保持します。状態の確認、ログの参照、停止に関する診断機能は利用できますが、新規処理は拒否します。原因を確認し、サーバーの正常終了を再試行してください。強制終了すると、この確認を行えません。
-
-## 保存物と秘密情報
-
-clear HLS を追加すると、URL、原本プレイリスト、取得メディアは `OUTPUT_ROOT/<asset-id>/clear/source/` に残ります。履歴から削除しても、保存原本、結果、ログをディスクから消すわけではありません。
-
-準備済みワークフローの鍵入力欄は既定で視覚的にマスクし、明示的に表示できます。送信後は入力値を消し、アプリ自身の localStorage/sessionStorage へ鍵を保存しません。ただし、ブラウザーのメモリ、開発者ツール、ページや通信の観察から鍵を隔離する機能ではありません。
-
-ローカル ClearKey 再生では、JWK と呼ぶ JSON 形式の鍵応答かプレーヤー設定を通じて、コンテンツキーをブラウザーに渡します。no-store を指定していても、開発者ツール、HAR、拡張機能などから読み取れます。運用 DRM のライセンスサービスや、ハードウェアで保護した再生を提供するものではありません。
-
-HLS パッケージ後は、プレビュー再生に必要な鍵などの情報が、操作がなくなってから最大 30 分間メモリに残る場合があります。30 秒ごとの定期処理と関連アクセスの際に期限を確認します。フォームの入力を消しても、再生用に保持した情報が直ちに失効するわけではありません。その結果に対する最後の再生セッションが失効するか、サーバーが終了した時点で関連情報を破棄します。
-
-再生開始処理の制限時間は 20 秒で、前のプレーヤーの破棄、鍵応答の取得、メディアの読み込み、実際の playing イベントまでを含みます。タイムアウトしても画面を再操作できますが、変換結果の検証状態は変えません。前のプレーヤーを破棄できたか確認できない場合は、別のプレーヤーを重ねて作らず、ページを再読み込みしてください。
-
-参照（英語）: [Web の操作とプロセス管理](https://github.com/kazuhide/drmr/blob/main/docs/usage.md)、[ローカル再生での鍵の扱い](https://github.com/kazuhide/drmr/blob/main/docs/security.md)。
-
-# 16. Desktop の使い方と検証範囲
+# 14. Desktop の使い方と検証範囲
 
 ## フォルダーの選択とコンソールの起動
 
-実験的な Desktop アプリは、ローカル Web コンソールをネイティブウィンドウで開きます。カタログ、ジョブ、外部メディアツールは Web 版と共通です。
+実験的な Desktop アプリは、ローカル Web コンソールをネイティブウィンドウで開きます。保存計画、ジョブ、外部メディアツールは Web 版と共通です。
 
-1. File → Choose input folder… でメディアと保存計画を選べる入力フォルダーを選ぶ。準備済みカタログのレイアウトも引き続き使える。
+1. File → Choose input folder… でメディアと保存計画を選べる入力フォルダーを選ぶ。
 2. File → Choose output location… で出力先を選ぶ。その下に所有者専用の drmr-output を作成するか、既存のものを開く。
 3. 鍵や取得ポリシーを使う場合は、File → Choose private configuration folder… で非公開の設定フォルダーを選ぶ。入力・出力と別のフォルダーにする。起動前なら Clear private configuration selection で選択を解除できる。
 4. File → Check external tools… で、実際の起動環境の外部ツールを確認する。
 5. File → Open console で操作画面を開く。
 
-操作画面の「新しい変換」では第15章と同じ保存計画の手順を使います。設定フォルダーを指定しなければ、鍵や取得設定を使わない Clear の処理ができます。鍵ファイルの内容をブラウザーへアップロードしません。
+操作画面の「新しい変換」では第13章と同じ保存計画の手順を使います。設定フォルダーを指定しなければ、鍵や取得設定を使わない Clear の処理ができます。鍵ファイルの内容をブラウザーへアップロードしません。
 
 「元の計画ファイルを取得」を選ぶと、OS の保存ダイアログが開きます。計画には絶対パスや署名付き URL が含まれる場合があるため、非公開フォルダーへ新しい JSON ファイルとして保存してください。入力フォルダーや drmr-output の中、それらの上位フォルダーには保存できません。既定の保存先は設定フォルダーです。未選択の場合は drmr-output と同じ階層に所有者専用の drmr-plans を作成します。権限の要件を満たさない既存フォルダーや既存ファイルへの保存は拒否し、権限の変更や上書きは行いません。
 
@@ -1416,13 +1229,11 @@ python tools/build_desktop.py --bundle
 
 ## 動作確認と未確認部分
 
-macOS では、ネイティブのフォルダーメニュー、キーボード操作、レポート画面への移動、カタログ変換、処理中の Stop、正常終了と待ち受けの解除を動作確認しています。Chrome のローカル ClearKey 試験では、原本と変換結果の両方を最後まで再生できました。
-
-WKWebView では、英語・日本語の両画面で再生失敗後の表示と再試行ができることを確認しています。ただし、最後まで再生できたという確認はありません。Windows/Linux のネイティブ GUI の動作も確認できていません。各 OS でバンドルのビルドと検査に成功しても、ダイアログ、WebView、DRM 再生まで動作確認したことにはなりません。Linux GUI の依存関係には、公開ドキュメントに記載した保守上の制限もあります。
+ネイティブのバンドル検査では、ホストと CLI の組み合わせを確認します。ダイアログや WebView の動作確認とは別です。各 OS とネイティブ WebView は、それぞれ実行時の検証が必要です。Linux GUI の依存関係には、公開ドキュメントに記載した保守上の制限もあります。
 
 参照（英語）: [Desktop の詳細と確認範囲](https://github.com/kazuhide/drmr/blob/main/docs/desktop.md)、[依存関係のセキュリティ方針](https://github.com/kazuhide/drmr/blob/main/docs/dependency-security.md)。
 
-# 17. 結果・終了コード・問題の切り分け
+# 15. 結果・終了コード・問題の切り分け
 
 ## JSON と進捗
 
@@ -1481,17 +1292,17 @@ JSON を使わない場合は、処理名、件数、経過時間を標準エラ
 | --- | --- |
 | 0 | 選択したコマンドの確認・処理に成功。何を検証したかはコマンドによる |
 | 1 | 処理、比較、必要な診断、終了確認などの失敗 |
-| 2 | 引数・設定の不正。verify-snapshot では不正なスナップショット |
+| 2 | 引数・設定の不正 |
 | 130 | 協調停止に対応する CLI で、管理中の子プロセスの終了確認まで完了 |
 
-`doctor` の 0 は選択した診断の成功、`inspect` の 0 はメタデータの読み取り成功を示します。コンテンツ全体の検証に成功したという意味ではありません。`verify-snapshot` の 1 は、記録や保存内容に変更があったことを示します。
+`doctor` の 0 は選択した診断の成功、`inspect` の 0 はメタデータの読み取り成功を示します。コンテンツ全体の検証に成功したという意味ではありません。
 
 ## よくある失敗
 
 | 症状・コード | 確認すること |
 | --- | --- |
 | 必須ツールが見つからない | 実際の起動環境の PATH、実行権限、Desktop の Check external tools を確認する |
-| バージョン・機能検査が失敗 | 版だけでなくビルドのオプションを確認する。Bento4 の build は配布元でも確認する |
+| バージョン・機能検査が失敗 | 版だけでなく、そのビルドに必要なオプションがあるか確認する |
 | 鍵設定が拒否される | 所有者、600 または ACL の権限、リンク数、JSON の重複キー、不明フィールド、スキーマを確認する |
 | `output-spec-invalid` | 出力一覧の schema_version が 1 か、ID が重複せず安全な名前か、形式・暗号・DRM の組み合わせが対応範囲内か確認する |
 | `execution-plan-output-keys-mismatch` / `execution-plan-drm-mismatch` | version 2 の鍵ファイルの暗号化出力 ID と DRM 選択を計画に合わせる |
@@ -1510,7 +1321,7 @@ JSON を使わない場合は、処理名、件数、経過時間を標準エラ
 
 問題を報告する際は、コマンド名、固定のエラーコード、バージョン、入力と出力の対応条件、秘密情報を除いた最小限の再現手順を中心に共有してください。レポート内の鍵などがマスクされていても、原本 URL、パス、メディア名、出力シグナリングに秘密情報が残っている場合があります。
 
-# 18. 試験結果の読み方と再現方法
+# 16. 試験結果の読み方と再現方法
 
 ## 短い公開アセットによる回帰試験
 
@@ -1518,7 +1329,7 @@ JSON を使わない場合は、処理名、件数、経過時間を標準エラ
 
 | 試験 | 対象と確認内容 |
 | --- | --- |
-| 従来の暗号方式の 16 経路 | clear/cenc/cbcs DASH と AES-128 fMP4 HLS の原本から四つの出力を作る。原本と結果に別々の鍵を使い、変換後に改めて verify を行う |
+| 暗号方式の 16 経路 | clear/cenc/cbcs DASH と AES-128 fMP4 HLS の原本から四つの出力を作る。原本と結果に別々の鍵を使い、変換後に改めて verify を行う |
 | TS→DASH の 27 経路 | clear/AES-128/SAMPLE-AES 入力 × 映像のみ・映像音声・音声のみ × clear/cenc/cbcs DASH。原本の全データ・時刻と最終宣言を確認 |
 | 音声のみ TS→fMP4 HLS の 9 経路 | clear/AES-128/SAMPLE-AES 入力から clear/CBCS/AES-128 の fMP4 HLS へ変換。原本の全パケット・時刻・デコード音声を確認 |
 | TS 出力の 27 経路 | 同じ三つの入力暗号方式と三つのトラック構成から clear/AES-128/SAMPLE-AES TS を作り、内容全体を比較する |
@@ -1582,9 +1393,9 @@ fMP4 のメディアプレイリストを version 5 に変えると検査は失�
 
 CI のログと成果物には、実行したソースの識別値、コンパイラーと外部ツールのバージョン、検証結果を記録します。利用するバージョンに対応する実行結果を確認してください。このガイドの記述だけで、以降のバージョンや任意の入力・機器での動作を保証するものではありません。
 
-有限音声の 54 種類は、音声のみ 27 種類と映像音声 27 種類です。実 CLI の 27 経路は後者の再確認で、追加の独立したプロファイルではありません。従来の 16 経路は事前にフラグメント化した原本を基準にし、有限音声の試験は元のプログレッシブ MP4 自身の再生範囲を基準にします。原本やデコード方法が異なる試験のサンプル数を混同しません。
+有限音声の 54 種類は、音声のみ 27 種類と映像音声 27 種類です。実 CLI の 27 経路は後者の再確認で、追加の独立したプロファイルではありません。16 経路の試験は事前にフラグメント化した原本を基準にし、有限音声の試験は元のプログレッシブ MP4 自身の再生範囲を基準にします。原本やデコード方法が異なる試験のサンプル数を混同しません。
 
-Bento4 の build 番号など、配布物に指定されたバージョンと起動時の表示で確認できる情報は区別してください。Desktop のビルド成功は GUI や再生の動作確認にはなりません。Docker の HTTP 試験も、ブラウザー画面を確認した結果ではありません。既知の鍵でコンテンツ全体が一致していても、DRM ライセンス取得や実機再生を確認したことにはなりません。
+Desktop のビルド成功は GUI や再生の動作確認にはなりません。Docker の HTTP 試験も、ブラウザー画面を確認した結果ではありません。既知の鍵でコンテンツ全体が一致していても、DRM ライセンス取得や実機再生を確認したことにはなりません。
 
 ## 代表的な再現コマンド
 
@@ -1617,7 +1428,7 @@ cargo test --locked -p drmr --test long_conversion
 
 参照（英語）: [アセットの出典・ライセンス](https://github.com/kazuhide/drmr/blob/main/crates/drmr/tests/fixtures/bbb/README.md)、[暗号化 fixture](https://github.com/kazuhide/drmr/blob/main/crates/drmr/tests/fixtures/bbb/CENC.md)、[処理と試験の詳細](https://github.com/kazuhide/drmr/blob/main/docs/media-processing.md)。
 
-# 19. CLI オプション一覧
+# 17. CLI オプション一覧
 
 この章に公開 CLI の引数とオプションをまとめます。すべてのコマンドで `-h` / `--help` を使えるほか、`drmr help COMMAND` でもヘルプを確認できます。CLI のバージョンは `-V` / `--version` または `drmr version` で表示します。子プロセスの管理に使う内部用の起動引数は、利用者向けのインターフェースに含めません。
 
@@ -1647,7 +1458,7 @@ drmr convert original.mp4 --to cbcs --format mp4 \
   --packager-bin "/opt/media-tools/packager"
 ```
 
-Windows では、例えば `--packager-bin 'C:\media-tools\packager.exe'` と指定します。汎用 `analyze`・`plan`・`convert`・`verify` と `package-hls` は実行ファイルを受け取ります。`run` と準備済み DASH の `batch` は、`packager`（Windows は `packager.exe`）という名前の実行ファイルを含むディレクトリも指定できます。HLS を含む `batch` では実行ファイルのパスを指定してください。オプションの値にシェルコマンド全体や追加引数は含めません。CLI アーカイブには Shaka Packager は同梱されていません。
+Windows では、例えば `--packager-bin 'C:\media-tools\packager.exe'` と指定します。実行ファイル自体のパスを指定してください。オプションの値にシェルコマンド全体や追加引数は含めません。CLI アーカイブには Shaka Packager は同梱されていません。
 
 `NEW_FILE`・`NEW_PATH`・`NEW_DIR` は、これから作る保存先です。読み込む `FILE` とは異なり、既存の出力先を上書きするための指定ではありません。秘密情報を含むファイルは、鍵設定の保護手順に従って作成してください。
 
@@ -1659,7 +1470,7 @@ Windows では、例えば `--packager-bin 'C:\media-tools\packager.exe'` と指
 | `--probe` | バージョンとヘルプに記載されたオプションを、各呼び出し三秒の上限で検査。既定は実行ファイルの探索のみ |
 | `--route PROFILE` | 確認するツールの組み合わせ。既定は all |
 
-PROFILE に指定できるのは `all`、`prepared-dash`、`progressive-mp4`、`fragmented-mp4`、`dash-presentation`、`fmp4-hls-presentation`、`mpeg-ts-hls`、`mpeg-ts-sample-aes-hls`、`mpeg-ts-hls-ts` です。変換結果に表示される処理経路名を、そのまま doctor に指定できるとは限りません。TS→DASH を含めてツール一式を診断する場合は all を使えます。
+PROFILE に指定できるのは `all`、`progressive-mp4`、`fragmented-mp4`、`dash-presentation`、`fmp4-hls-presentation`、`mpeg-ts-hls`、`mpeg-ts-sample-aes-hls`、`mpeg-ts-hls-ts` です。変換結果に表示される処理経路名を、そのまま doctor に指定できるとは限りません。TS→DASH を含めてツール一式を診断する場合は all を使えます。
 
 ## inspect
 
@@ -1698,8 +1509,6 @@ PROFILE に指定できるのは `all`、`prepared-dash`、`progressive-mp4`、`
 | `--packager-bin FILE` | 原本確認の Shaka Packager 実行ファイル。--save 時のみ。既定 packager。[準備方法](https://kazuhide.github.io/drmr/ja/guide/#installation) |
 | `--max-workers N` | 原本確認の同時作業上限 1-64。--save 時のみ |
 | `--measure` | 標準出力に計測を追加。--json と --save が必要。保存ファイル自体は実行用の計画 |
-| `--mpd MPD` | 準備済み DASH のレンディションを列挙する別モード |
-| `--asset-id ID` | --mpd モードのアセット名を指定 |
 
 ## convert
 
@@ -1747,71 +1556,9 @@ verify は検証用のコマンドです。target や format を指定して変�
 
 version 1 の計画検証では plan_id、source_unchanged、output_matches_plan を返し、コンテンツ全体の比較結果を verification の下に入れます。成功には source_unchanged、output_matches_plan、verification.passed がすべて true である必要があります。PlayReady 情報を明示した場合は、現在の出力とも照合します。version 2 は各出力のメディア・暗号方式・シグナリング・外部検査を一覧で返し、全体の passed も示します。内容が一致していても、それだけで計画した暗号方式や DRM 宣言を確認できるわけではありません。どちらのモードもライセンス取得を伴う再生の確認は行いません。
 
-## run
+## version
 
-| オプション | 意味・既定値 |
-| --- | --- |
-| `--mpd MPD` | 必須。対応する準備済み DASH マニフェスト |
-| `--output ROOT` | 必須。ROOT/asset-id の下に出力 |
-| `--asset-id ID` | アセット名。既定は原本ディレクトリ名 |
-| `--hls-master M3U8` | 原本 HLS master。--no-manifests を使わなければ必要 |
-| `--packager-bin PATH` | packager 実行ファイル、またはそれを含むディレクトリ。[準備済み DASH の実行例](https://kazuhide.github.io/drmr/ja/guide/#prepared-dash-batch) |
-| `--max-workers N` | レンディション並列度の上限 |
-| `--manifest-local-url-base URL` | ローカル HTTP 配信用ベース URL のマニフェストも生成 |
-| `--log-format FORMAT` | text または jsonl。概要表示または一行に一つの JSON。既定は text |
-| `--no-round-trip` | デバッグ用。原本と変換結果のデコード照合を省く |
-| `--limit-renditions N` | デバッグ用。一部のレンディションだけ処理する |
-| `--no-manifests` | デバッグ用。プレイリスト・マニフェストを生成しない |
-
-## analyze-hls / package-hls
-
-| analyze-hls のオプション | 意味 |
-| --- | --- |
-| `--source-config FILE` | 必須。入力 URL/パスとアクセス許可を記す、所有者専用 JSON。[source.json の構造例](https://kazuhide.github.io/drmr/ja/guide/#saved-hls) |
-| `--asset-id ID` | 必須。保存アセット名 |
-| `--output ROOT` | 必須。ROOT/ID/clear/source の下に保存 |
-
-| package-hls のオプション | 意味 |
-| --- | --- |
-| `--analysis FILE` | 必須。analyze-hls が生成した analysis.json。[生成手順](https://kazuhide.github.io/drmr/ja/guide/#saved-hls) |
-| `--drm-config FILE` | 必須。DRM シグナリング用の所有者専用 JSON。汎用の鍵 JSON とは別の書式。[drm.json の構造例](https://kazuhide.github.io/drmr/ja/guide/#saved-hls) |
-| `--selection FILE` | 解析済み音声トラックの選択用 JSON。所有者専用。[選択ファイルの書式（英語）](https://github.com/kazuhide/drmr/blob/main/docs/usage.md#package-the-hls-snapshot) |
-| `--packager-bin FILE` | Shaka Packager の実行ファイル。既定 packager。[準備方法](https://kazuhide.github.io/drmr/ja/guide/#installation) |
-| `--max-workers N` | 全トラック間のセグメント処理上限 1-64 |
-
-これらの暗号鍵は、DRM_KID/DRM_KEY/DRM_IV から受け取ります。汎用鍵 JSON を drm-config へ渡す方式ではありません。
-
-## verify-snapshot / canonical / version
-
-| コマンドと引数 | 意味 |
-| --- | --- |
-| `verify-snapshot PATH` | スナップショットディレクトリまたは analysis.json の記録を確認 |
-| `verify-snapshot --files PATH` | 保存プレイリスト・メディアも再ハッシュ |
-| `canonical PATH` | 任意の JSON を安定したキー順で表示。末尾の改行追加や秘密情報の除去は行わない |
-| `version` | 版を表示。個別オプションなし |
-
-## batch
-
-| オプション | 意味・既定値 |
-| --- | --- |
-| `--work-list FILE` | 必須。schema ヘッダーとアセット行を持つ JSONL。一行ごとに JSON を書く。[作業リスト例](https://kazuhide.github.io/drmr/ja/guide/#prepared-dash-batch) |
-| `--output ROOT` | 必須。出力ルート |
-| `--resume-log FILE` | 必須。batch が再開状態を記録するファイル。鍵ファイルではない。[再開手順](https://kazuhide.github.io/drmr/ja/guide/#prepared-dash-batch) |
-| `--storage STORAGE` | local または s3。既定 local |
-| `--storage-root DIR` | ローカルオブジェクトキーの基点 |
-| `--bucket NAME` | S3 bucket |
-| `--region REGION` | 既定 ap-northeast-1。この版の S3 対応 region も同じ |
-| `--output-prefix PREFIX` | ストレージの結果 prefix。既定 output |
-| `--key-provider PROVIDER` | env または file。既定 env |
-| `--key-file FILE` | file 方式の所有者専用アセット別 JSONL。汎用 --keys-file の JSON とは異なる。[一行ごとの鍵設定例](https://kazuhide.github.io/drmr/ja/guide/#prepared-dash-batch) |
-| `--hls-config-dir DIR` | HLS ワークフロー用設定群 |
-| `--packager-bin PATH` | packager 実行ファイル。準備済み DASH の batch では、それを含むディレクトリも指定可能。HLS を含む場合は実行ファイルを指定する。[準備方法](https://kazuhide.github.io/drmr/ja/guide/#prepared-dash-batch) |
-| `--max-workers N` | 各アセット内の同時処理数の上限。アセット自体は一つずつ処理 |
-| `--retry-failed` | 失敗項目の再試行を選択 |
-| `--plan` | 実処理せず予定を表示 |
-| `--max-attempts N` | アセット1件あたりの試行回数の上限。既定は 3 |
-| `--per-asset-timeout-s SEC` | アセット1件あたりの処理時間の上限。既定は 3600 秒 |
-| `--heartbeat-s SEC` | 状態通知の間隔。既定 60 秒 |
+`drmr version` または `drmr --version` で製品のバージョンを表示します。個別のオプションはありません。
 
 ## serve
 
@@ -1819,14 +1566,14 @@ version 1 の計画検証では plan_id、source_unchanged、output_matches_plan
 | --- | --- |
 | `--static-dir DIR` | 組み込み画面の代わりに配信する信頼済み UI ディレクトリ |
 | `--cli FILE` | ジョブを実行する同じ版の drmr 実行ファイル。設定 JSON ではない。[Web の起動方法](https://kazuhide.github.io/drmr/ja/guide/#web-console) |
-| `DRMR_CATALOG_ROOT` | 必須。準備済みメディアのカタログルート |
-| `DRMR_OUTPUT_ROOT` | 必須。結果・保存 HLS・ログのルート |
+| `DRMR_INPUT_ROOT` | 必須。メディアと保存計画を選べる入力フォルダー |
+| `DRMR_OUTPUT_ROOT` | 必須。結果・取得した原本・ログの保存先 |
 | `DRMR_BIND_HOST` | 既定は loopback。リモート公開を想定しない |
 | `DRMR_BIND_PORT` | 既定 8080 |
-| `DRMR_MAX_WORKERS` | HLS パッケージの並列度上限 |
-| `DRMR_HLS_PROFILES` | Web 用取得プロファイルの所有者専用 JSON ファイルへのパス。汎用 --fetch-policy とは別の書式。[プロファイルの構造例](https://kazuhide.github.io/drmr/ja/guide/#web-console) |
+| `DRMR_MAX_WORKERS` | 保存計画の各処理に使う並列数の上限 |
+| `DRMR_COMMON_CONFIG_ROOT` | 鍵と取得ポリシーを置く非公開フォルダー。入力・出力と分ける。[設定の選び方](https://kazuhide.github.io/drmr/ja/guide/#web-console) |
 
-# 20. 資料とこのガイドの更新
+# 18. 資料とこのガイドの更新
 
 ## バージョン別の公開資料
 

@@ -93,16 +93,6 @@ controls, including first use and long valid and invalid values, observed no
 runtime scanner heap allocations. Parser, report and graph allocations remain
 part of the library's resource accounting.
 
-## S3 transfer timeouts
-
-The Rust S3 storage backend's `TransferPolicy.per_object_timeout_s` defaults to
-30 seconds. After name resolution, each connection has one cumulative budget for
-TCP setup and the TLS handshake, which establishes an authenticated encrypted
-connection. Receiving partial handshake bytes does not restart that budget.
-Once connected, the same value limits idle periods in socket reads and writes;
-a transfer that keeps making progress can take longer than this value. Retry
-counts and object byte budgets apply separately.
-
 ## Output and pending work
 
 Captured stdout defaults to 16 MiB and stderr to 1 MiB, independently. Rust callers can
@@ -129,9 +119,7 @@ response remains unconfirmed, including while exited processes await collection 
 their parent. After the direct child's exit status is collected, this group-completion
 wait has a 30-second deadline; it does not bound unrelated blocking I/O or pipe-reader
 joins. If absence cannot be confirmed, cleanup fails rather than reporting success or
-a completed cancellation. Tools inside a batch asset worker retain
-the worker supervisor's group ownership; they do not wait for their own inherited
-group to disappear.
+a completed cancellation. Supervised Web and Desktop jobs retain their owner until managed tools have exited.
 
 Generic `convert` and `verify` register Unix SIGINT and SIGTERM before starting tools.
 The same cancellation flag reaches track scheduling, resource admission, and active
@@ -158,8 +146,8 @@ the reader even while another process or the caller retains a writer.
 
 If pipes remain open after the direct child exits, cleanup starts after two seconds,
 including calls without an explicit command timeout. Windows jobs retain ordinary descendants;
-Unix uses an owned process group, or the inherited supervisor group inside an asset
-worker. A Unix child that deliberately starts a separate session can escape group
+Unix gives each managed child its own process group. A Unix child that deliberately
+starts a separate session can escape group
 termination; nonblocking pipe readers still stop and join at the capture deadline.
 On Windows, readers no longer need every writer to close before they can stop and join.
 The existing 30-second job-notification deadline remains separate from the command deadline;

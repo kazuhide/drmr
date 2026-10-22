@@ -5,7 +5,6 @@
   function changed() {
     if (paused || !view) return;
     view.update();
-    if (App.ConsoleBridge) App.ConsoleBridge.commonChanged();
   }
   async function observe() {
     if (paused || observing || !model) return;
@@ -21,13 +20,14 @@
   }
   function show() {
     if (!view) return;
-    if (App.ConsoleBridge) App.ConsoleBridge.showCommon();
     view.show();
   }
   function boot() {
     var host = document.getElementById('common-workflow');
     if (!host) return;
-    model = App.CommonState.create({ onChange: changed, onObserverError: function () { console.error('common-view-unavailable'); }, legacyBusy: function () { return !!(App.ConsoleBridge && App.ConsoleBridge.ownsExecution()); } });
+    App.I18n.apply();
+    document.getElementById('language-select').addEventListener('change', function (event) { App.I18n.setLanguage(event.target.value); });
+    model = App.CommonState.create({ onChange: changed, onObserverError: function () { console.error('common-view-unavailable'); } });
     view = App.CommonView.create(host, document.getElementById('common-sessions'), document.getElementById('common-owner'), model, { show: show });
     document.getElementById('common-new').addEventListener('click', function () { view.newInput(); });
     document.addEventListener('workbench-language', function () { if (view) view.translate(); });

@@ -86,36 +86,6 @@ pub struct Workload {
 }
 
 impl Workload {
-    /// Read resource sizes from a verified source snapshot. Dimensions come from admitted
-    /// stream metadata; audio-only sources do not pay the video-frame estimate.
-    pub fn from_analysis(analysis: &crate::source::SourceAnalysis) -> std::io::Result<Self> {
-        let mut pixels = 0;
-        let mut largest = 0;
-        for track in &analysis.tracks {
-            if track.content_type == "video" {
-                let size = match (track.width, track.height) {
-                    (Some(width), Some(height)) if width != 0 && height != 0 => {
-                        width.saturating_mul(height)
-                    }
-                    _ => 3840 * 2160,
-                };
-                pixels = pixels.max(size);
-            }
-            for path in track
-                .init_path
-                .iter()
-                .chain(track.segments.iter().map(|segment| &segment.path))
-            {
-                largest = largest.max(std::fs::metadata(path)?.len());
-            }
-        }
-        Ok(Self {
-            max_pixels: Some(pixels),
-            input_buffer_bytes: Some(largest),
-            tracks: analysis.tracks.len(),
-        })
-    }
-
     /// Combine already registered work conservatively. Missing dimensions and sizes use
     /// the same fallback as an estimate; a later call cannot lower an existing job charge.
     #[must_use]

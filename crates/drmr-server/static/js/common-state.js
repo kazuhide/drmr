@@ -36,7 +36,7 @@
     function bindingError(owner) { if (active(owner)) { owner.phase = 'unknown'; owner.error = failure('response-binding-invalid'); changed(); } }
     function canStart() {
       var item = selected(), execution = data.capabilities && data.capabilities.execution;
-      return !!item && !item.closing && item.session.requests_used < 32 && !data.owner && !data.creation && execution && execution.availability === 'idle' && !(options.legacyBusy && options.legacyBusy());
+      return !!item && !item.closing && item.session.requests_used < 32 && !data.owner && !data.creation && execution && execution.availability === 'idle';
     }
     function planBinding(item, value, ref) { return same(value) && value.session_id === item.session.session_id && value.plan_ref === ref; }
     function outputKey(outputs) {

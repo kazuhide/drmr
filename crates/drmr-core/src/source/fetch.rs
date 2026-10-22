@@ -208,13 +208,6 @@ impl Fetcher {
         lock(&self.shared).inflight -= count;
     }
 
-    /// [`Fetcher::claim_disk`] where Python lets the `OSError` of `shutil.disk_usage` escape
-    /// (the probe's temporary copy).
-    pub(crate) fn claim_disk_or_escape(&self, count: u128) -> Result<(), Failure> {
-        self.claim_disk(count)
-            .map_err(|fault| escape_os(fault, "OSError"))
-    }
-
     // --- public reads ----------------------------------------------------------------------
 
     /// The resource in memory (playlists) with its effective URL.

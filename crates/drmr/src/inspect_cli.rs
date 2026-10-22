@@ -1,4 +1,4 @@
-//! Read-only metadata commands. Legacy catalog planning remains available through --mpd.
+//! Read-only metadata inspection and conversion planning.
 
 use clap::Args;
 use drmr_core::inspection::{self, Inspection, OutputFormat, TargetProtection};
@@ -18,25 +18,21 @@ pub struct InspectArgs {
 #[derive(Args)]
 pub struct PlanArgs {
     /// Local media or manifest whose conversion intent should be described.
-    #[arg(conflicts_with = "mpd")]
-    pub input: Option<PathBuf>,
-    /// Keep the original read-only catalog rendition listing.
-    #[arg(long, required_unless_present = "input")]
-    pub mpd: Option<PathBuf>,
+    pub input: PathBuf,
     /// Output protection for one result; use --outputs for several results.
-    #[arg(long, requires = "input", required_unless_present_any = ["outputs", "mpd"], conflicts_with = "outputs")]
+    #[arg(long, required_unless_present = "outputs", conflicts_with = "outputs")]
     pub to: Option<TargetProtection>,
     /// Output packaging: mp4, dash, hls, hls-ts, or a comma-separated list.
-    #[arg(long, value_delimiter = ',', requires = "input")]
+    #[arg(long, value_delimiter = ',')]
     pub format: Vec<OutputFormat>,
     /// Print the versioned JSON plan without executing any conversion.
-    #[arg(long, requires = "input")]
+    #[arg(long)]
     pub json: bool,
     /// New private execution-plan file; requires --output and one intent or --outputs.
-    #[arg(long, requires_all = ["input", "output"], conflicts_with = "mpd")]
+    #[arg(long, requires = "output")]
     pub save: Option<PathBuf>,
     /// JSON output list, with each result's format, protection, DRM systems and manifest checks.
-    #[arg(long, requires = "save", conflicts_with_all = ["to", "format", "mpd"])]
+    #[arg(long, requires = "save", conflicts_with_all = ["to", "format"])]
     pub outputs: Option<PathBuf>,
     /// New result file or directory recorded in the saved execution plan.
     #[arg(long, requires = "save")]
@@ -53,9 +49,6 @@ pub struct PlanArgs {
     /// Include numeric measurements in JSON; only available when saving a plan.
     #[arg(long, requires_all = ["json", "save"])]
     pub measure: bool,
-    /// Override the asset name for the original --mpd catalog listing.
-    #[arg(long, requires = "mpd")]
-    pub asset_id: Option<String>,
 }
 
 fn write_json(value: &serde_json::Value) -> bool {
@@ -153,11 +146,11 @@ pub fn plan(args: &PlanArgs) -> ExitCode {
     if args.save.is_some() {
         return crate::plan_cli::save(args);
     }
-    let (Some(input), Some(target)) = (&args.input, args.to) else {
+    let Some(target) = args.to else {
         eprintln!("plan: --to is required with INPUT");
         return ExitCode::from(2);
     };
-    let report = match inspect_input(input, "plan") {
+    let report = match inspect_input(&args.input, "plan") {
         Ok(value) => value,
         Err(code) => return code,
     };

@@ -27,7 +27,7 @@ async function tool(name) {
   }
   throw new Error('A required real media tool is unavailable');
 }
-const realTools = Object.fromEntries(await Promise.all(['ffmpeg', 'ffprobe', 'mp4dump', 'packager'].map(async name => [name, await tool(name)])));
+const realTools = Object.fromEntries(await Promise.all(['ffmpeg', 'ffprobe', 'packager'].map(async name => [name, await tool(name)])));
 const fixture = resolve('../../crates/drmr/tests/fixtures/bbb/clip.mp4');
 const progressive = join(input, 'source.mp4');
 await copyFile(fixture, progressive);
@@ -110,7 +110,7 @@ await once(fixtureServer, 'listening');
 log = await open(join(reportRoot, 'server.log'), 'wx', 0o600);
 const binary = resolve(process.env.DRMR_CONSOLE_BINARY);
 child = spawn(binary, ['serve'], { env: { ...process.env, PATH: tools + ':' + process.env.PATH,
-  DRMR_CATALOG_ROOT: input, DRMR_OUTPUT_ROOT: output, DRMR_COMMON_CONFIG_ROOT: config,
+  DRMR_INPUT_ROOT: input, DRMR_OUTPUT_ROOT: output, DRMR_COMMON_CONFIG_ROOT: config,
   DRMR_BIND_HOST: '127.0.0.1', DRMR_BIND_PORT: '4174', DRMR_MAX_WORKERS: '4' },
   stdio: ['ignore', log.fd, log.fd] });
 ended = new Promise(resolve => { child.once('exit', (code, signal) => resolve({ code, signal })); child.once('error', () => resolve({ code: null, signal: 'spawn-error' })); });

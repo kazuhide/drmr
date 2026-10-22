@@ -18,7 +18,7 @@
   function error(v) { return object(v) && typeof v.code === 'string' && /^[a-z0-9][a-z0-9-]{0,127}$/.test(v.code) && nullable(v.last_activity, function (x) { return one(x, ACTIVITIES); }) && nullable(v.job_id, token); }
   function progress(v) { return object(v) && integer(v.sequence, Number.MAX_SAFE_INTEGER) && integer(v.elapsed_ms, Number.MAX_SAFE_INTEGER) && integer(v.scopes_started, Number.MAX_SAFE_INTEGER) && integer(v.scopes_closed, Number.MAX_SAFE_INTEGER) && nullable(v.last_activity, function (x) { return one(x, ACTIVITIES); }) && nullable(v.workers, function (x) { return integer(x, 64) && x > 0; }); }
   function session(v) {
-    if (!envelope(v) || !token(v.session_id) || !correlation(v.creation_request_id) || !object(v.source) || !one(v.source.kind, ['local', 'url', 'hls-url', 'saved-plan'])) return false;
+    if (!envelope(v) || !token(v.session_id) || !correlation(v.creation_request_id) || !object(v.source) || !one(v.source.kind, ['local', 'url', 'saved-plan'])) return false;
     return label(v.source.label) && Array.isArray(v.plan_refs) && v.plan_refs.every(token) && Array.isArray(v.request_ids) && v.request_ids.every(correlation) && integer(v.requests_used, 32) && nullable(v.active_request_id, correlation);
   }
   function job(v) {
@@ -32,7 +32,7 @@
     }) && one(v.destination_state, ['absent', 'present', 'mixed', 'unavailable']) && v.export_url === BASE + '/plans/' + encodeURIComponent(v.plan_ref) + '/export';
   }
   function capabilities(v) {
-    return envelope(v) && Array.isArray(v.roots) && v.roots.every(function (r) { return object(r) && token(r.root_ref) && label(r.label) && Array.isArray(r.roles) && r.roles.every(function (role) { return one(role, ROLES); }); }) && object(v.limits) && v.limits.sessions === 8 && v.limits.requests_per_session === 32 && v.limits.max_outputs === 8 && object(v.worker_policy) && integer(v.worker_policy.maximum, 64) && v.worker_policy.maximum > 0 && v.worker_policy.automatic === true && object(v.execution) && one(v.execution.availability, ['idle', 'busy', 'cleanup-unconfirmed', 'closing']) && nullable(v.execution.job_id, token) && nullable(v.execution.owner, function (x) { return one(x, ['common', 'legacy']); }) && v.observation === 'poll';
+    return envelope(v) && Array.isArray(v.roots) && v.roots.every(function (r) { return object(r) && token(r.root_ref) && label(r.label) && Array.isArray(r.roles) && r.roles.every(function (role) { return one(role, ROLES); }); }) && object(v.limits) && v.limits.sessions === 8 && v.limits.requests_per_session === 32 && v.limits.max_outputs === 8 && object(v.worker_policy) && integer(v.worker_policy.maximum, 64) && v.worker_policy.maximum > 0 && v.worker_policy.automatic === true && object(v.execution) && one(v.execution.availability, ['idle', 'busy', 'cleanup-unconfirmed', 'closing']) && nullable(v.execution.job_id, token) && nullable(v.execution.owner, function (x) { return x === 'common'; }) && v.observation === 'poll';
   }
   function filePage(v) {
     return envelope(v) && token(v.root_ref) && one(v.role, ROLES) && nullable(v.directory_ref, token) && (v.role === 'output-parent' ? token(v.output_parent_ref) && v.output_parent_ref !== v.root_ref && v.output_parent_ref !== v.directory_ref : v.output_parent_ref === null) && Array.isArray(v.entries) && v.entries.length <= 100 && v.entries.every(function (e) {

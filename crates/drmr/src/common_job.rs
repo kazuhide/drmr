@@ -220,8 +220,7 @@ pub(crate) fn run(path: &Path) -> ExitCode {
             save_file,
             output_spec_file,
         } => inspect_cli::plan(&inspect_cli::PlanArgs {
-            input: Some(input_file),
-            mpd: None,
+            input: input_file,
             to: None,
             format: Vec::new(),
             json: true,
@@ -232,7 +231,6 @@ pub(crate) fn run(path: &Path) -> ExitCode {
             packager_bin: Some(tools.packager_bin),
             max_workers: workers,
             measure: false,
-            asset_id: None,
         }),
         ChildOperation::Convert { plan_file } => convert_cli::convert(&convert_cli::ConvertArgs {
             input: None,

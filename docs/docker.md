@@ -1,6 +1,6 @@
 # Run with Docker
 
-Build a Linux container containing `drmr`, FFmpeg and ffprobe, Bento4's `mp4dump`, and Shaka Packager. Rust and the media tools are built inside Docker. The image runs the CLI and its experimental web console.
+Build a Linux container containing `drmr`, FFmpeg and ffprobe, and Shaka Packager. Rust and the media tools are built inside Docker. The image runs the CLI and its experimental web console.
 
 Use a running Docker installation with BuildKit and Git. Builds are native for Linux `amd64` (64-bit Intel/AMD) or `arm64`; select Linux containers when using Docker Desktop. The examples use a macOS or Linux shell. The native [Windows guide](windows.md) covers installation without Docker.
 
@@ -77,13 +77,13 @@ On a Linux Docker host, use host networking so the console can keep its default 
 ```sh
 docker run --rm --init --name drmr-console --network host \
   --user "$(id -u):$(id -g)" \
-  --mount "type=bind,src=$PWD/catalog,dst=/catalog,readonly" \
+  --mount "type=bind,src=$PWD/media,dst=/media,readonly" \
   --mount "type=bind,src=$PWD/output,dst=/output" \
-  --env DRMR_CATALOG_ROOT=/catalog --env DRMR_OUTPUT_ROOT=/output \
+  --env DRMR_INPUT_ROOT=/media --env DRMR_OUTPUT_ROOT=/output \
   drmr:local serve
 ```
 
-Open `http://127.0.0.1:8080` on that host. `catalog` must use the [web console's supported source layout](usage.md#experimental-web-console). Its workflows remain experimental.
+Open `http://127.0.0.1:8080` on that host. Select media and saved plans from the mounted `media` folder; see [the Web workflow](usage.md#experimental-web-console). Its workflows remain experimental.
 
 Docker Desktop requires its optional [host networking feature](https://docs.docker.com/engine/network/drivers/host/) for this mode. Ordinary port publishing does not reach a listener bound only to the container's loopback address. Keep the console's existing loopback and request-origin protections. The Desktop application itself runs on the host; this image supplies CLI and web execution.
 

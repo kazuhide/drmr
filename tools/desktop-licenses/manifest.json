@@ -117,46 +117,6 @@
       ]
     },
     {
-      "name": "instant-xml",
-      "version": "0.7.6",
-      "license": "Apache-2.0 OR MIT",
-      "selected_license": "Apache-2.0",
-      "repository": "https://github.com/djc/instant-xml",
-      "revision": "63bf1953fe7b7838770ba4e8d11651c229960523",
-      "notices": [
-        {
-          "file": "instant-xml-0.7.6/publisher-declaration.txt",
-          "source_url": "https://raw.githubusercontent.com/djc/instant-xml/63bf1953fe7b7838770ba4e8d11651c229960523/instant-xml/Cargo.toml",
-          "sha256": "469013cb0b53bd6290e3c57c30cb2bf3a2559d479f0f7171088b0408b3ac9d0f"
-        },
-        {
-          "file": "instant-xml-0.7.6/Apache-2.0.txt",
-          "source_url": "https://raw.githubusercontent.com/spdx/license-list-data/31ba1a50e5397e00a304dbadc76531740e89ee48/text/Apache-2.0.txt",
-          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
-        }
-      ]
-    },
-    {
-      "name": "instant-xml-macros",
-      "version": "0.7.2",
-      "license": "Apache-2.0 OR MIT",
-      "selected_license": "Apache-2.0",
-      "repository": "https://github.com/djc/instant-xml",
-      "revision": "d3101874c2ba1b4081d581590d43736de9b5e67c",
-      "notices": [
-        {
-          "file": "instant-xml-macros-0.7.2/publisher-declaration.txt",
-          "source_url": "https://raw.githubusercontent.com/djc/instant-xml/d3101874c2ba1b4081d581590d43736de9b5e67c/instant-xml-macros/Cargo.toml",
-          "sha256": "bf60fcaacd307118da294c4bd8b02ea8c2011cf81d15585a556b3d515a8e33f0"
-        },
-        {
-          "file": "instant-xml-macros-0.7.2/Apache-2.0.txt",
-          "source_url": "https://raw.githubusercontent.com/spdx/license-list-data/31ba1a50e5397e00a304dbadc76531740e89ee48/text/Apache-2.0.txt",
-          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
-        }
-      ]
-    },
-    {
       "name": "libappindicator-sys",
       "version": "0.9.0",
       "license": "Apache-2.0 OR MIT",

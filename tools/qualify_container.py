@@ -253,7 +253,7 @@ def provenance(image, revision, tree):
             or manifest.get("target_architecture") != image.architecture):
         raise Refusal("source-manifest-mismatch")
     actual = {}
-    for name in ("drmr", "ffmpeg", "ffprobe", "mp4dump", "packager"):
+    for name in ("drmr", "ffmpeg", "ffprobe", "packager"):
         record = manifest.get("binaries", {}).get(name, {})
         if record.get("path") != "/usr/local/bin/" + name:
             raise Refusal("binary-manifest-invalid")
@@ -522,15 +522,71 @@ def http_request(port, method, path, body=None, headers=None):
         connection.close()
 
 
+def web_token(value):
+    return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{32}", value) is not None
+
+
+def common_web_context(port):
+    """Resolve the sole protected fixture policy through the actual common API."""
+    status, content = http_request(port, "GET", "/api/common/capabilities")
+    capabilities = load_json(content)
+    if (status != 200 or not isinstance(capabilities, dict)
+            or capabilities.get("schema_version") != 1 or not web_token(capabilities.get("server_id"))
+            or not isinstance(capabilities.get("roots"), list)):
+        raise Refusal("web-reference-invalid")
+    roots = [root.get("root_ref") for root in capabilities["roots"]
+             if isinstance(root, dict) and isinstance(root.get("roles"), list) and "fetch-policy" in root["roles"]]
+    if len(roots) != 1 or not web_token(roots[0]):
+        raise Refusal("web-reference-invalid")
+    server = capabilities["server_id"]
+    status, content = http_request(port, "GET", "/api/common/files?root_ref=" + roots[0] + "&role=fetch-policy")
+    page = load_json(content)
+    if (status != 200 or not isinstance(page, dict) or page.get("schema_version") != 1
+            or page.get("server_id") != server or page.get("next_cursor") is not None
+            or not isinstance(page.get("entries"), list) or len(page["entries"]) != 1):
+        raise Refusal("web-reference-invalid")
+    entry = page["entries"][0]
+    if not isinstance(entry, dict) or entry.get("kind") != "file" or not web_token(entry.get("file_ref")):
+        raise Refusal("web-reference-invalid")
+    return server, entry["file_ref"]
+
+
+def submit_web_analysis(port, server, policy, url):
+    creation = uuid.uuid4().hex
+    status, content = http_request(port, "POST", "/api/common/sessions", {
+        "schema_version": 1, "server_id": server, "creation_request_id": creation,
+        "source": {"kind": "url", "url": url, "fetch_policy_ref": policy}})
+    session = load_json(content)
+    if (status != 201 or not isinstance(session, dict) or session.get("schema_version") != 1
+            or session.get("server_id") != server or session.get("creation_request_id") != creation
+            or not web_token(session.get("session_id"))):
+        raise Refusal("web-real-session-not-created")
+    request = uuid.uuid4().hex
+    status, content = http_request(port, "POST", "/api/common/jobs", {
+        "schema_version": 1, "server_id": server, "session_id": session["session_id"],
+        "request_id": request, "operation": {"kind": "analyze"},
+        "runtime": {"keys_ref": None, "max_workers": 1}})
+    job = load_json(content)
+    if (status != 202 or not isinstance(job, dict) or job.get("schema_version") != 1
+            or job.get("server_id") != server
+            or job.get("session_id") != session["session_id"] or job.get("request_id") != request
+            or job.get("operation") != "analyze" or job.get("state") != "running"
+            or not web_token(job.get("job_id"))):
+        raise Refusal("web-real-job-not-launched")
+    return job["job_id"]
+
+
 def verify_web_host_guards(port):
     cases = (("untrusted-authority", "other.invalid", 403, "untrusted-host"),
              ("malformed-authority", "user@localhost", 400, "invalid-host"))
     records = []
     for case, host, expected_status, expected_error in cases:
-        status, content = http_request(port, "GET", "/api/catalog", headers={"Host": host})
+        status, content = http_request(port, "GET", "/api/common/capabilities", headers={"Host": host})
         parsed = load_json(content)
-        error = parsed.get("error") if isinstance(parsed, dict) else None
-        if status != expected_status or error != expected_error:
+        detail = parsed.get("error") if isinstance(parsed, dict) else None
+        error = detail.get("code") if isinstance(detail, dict) else None
+        if (status != expected_status or error != expected_error or parsed.get("schema_version") != 1
+                or not web_token(parsed.get("server_id"))):
             raise Refusal("web-host-guard-failed", {
                 "case": case, "actual_status": status,
                 "actual_error": error if error in ("untrusted-host", "invalid-host") else "unexpected"})
@@ -653,10 +709,11 @@ def web(image, root):
     thread.start()
     port = available_port()
     origin = f"http://127.0.0.1:{fixture.server_port}"
-    profiles = root / "work/web-profiles.json"
-    with open(profiles, "x", encoding="utf-8", opener=lambda path, flags: os.open(path, flags, 0o600)) as stream:
-        json.dump({"default": {"policy": {"allowed_origins": [origin], "allow_http": True,
-                                         "allow_private_network": True}}}, stream)
+    configuration = root / "work/web-config"
+    configuration.mkdir(mode=0o700)
+    with open(configuration / "fetch.json", "x", encoding="utf-8",
+              opener=lambda path, flags: os.open(path, flags, 0o600)) as stream:
+        json.dump({"allowed_origins": [origin], "allow_http": True, "allow_private_network": True}, stream)
     stdout = root / "work/web-driver.stdout"
     stderr = root / "work/web-driver.stderr"
     command = image.command("/qualifiers/container-qualification", [
@@ -669,34 +726,30 @@ def web(image, root):
             deadline = time.monotonic() + 15
             while True:
                 try:
-                    status, _ = http_request(port, "GET", "/api/catalog")
+                    status, _ = http_request(port, "GET", "/api/common/capabilities")
                     if status != 200:
-                        raise Refusal("web-catalog-failed")
+                        raise Refusal("web-capabilities-failed")
                     break
                 except (ConnectionError, OSError):
                     if process.poll() is not None or time.monotonic() >= deadline:
                         raise Refusal("web-loopback-unavailable") from None
                     time.sleep(0.02)
             # These are actual image HTTP/API checks, not a browser or GUI qualification.
-            for path in ("/api/queue", "/api/hls/analyses"):
+            for path in ("/api/common/sessions", "/api/common/jobs"):
                 status, content = http_request(port, "POST", path, {}, {"Origin": "https://other.invalid"})
-                if status != 403 or load_json(content).get("error") != "same-origin-required":
+                if status != 403 or load_json(content).get("error", {}).get("code") != "same-origin-required":
                     raise Refusal("web-origin-guard-failed")
             host_guard_cases = verify_web_host_guards(port)
+            server, policy = common_web_context(port)
             controls = root / "work/web-control"
             ids = []
             for label in ("stop", "shutdown"):
-                body = {"asset_id": "container-" + label, "url": origin + "/master.m3u8", "access_profile": "default"}
-                status, content = http_request(port, "POST", "/api/hls/analyses", body)
-                result = load_json(content)
-                job = result.get("job_id") if isinstance(result, dict) else None
-                if status != 202 or not isinstance(job, str) or not re.fullmatch(r"[0-9a-f]{32}", job):
-                    raise Refusal("web-real-job-not-launched")
+                job = submit_web_analysis(port, server, policy, origin + "/master.m3u8")
                 ids.append(job)
                 atomic_text(controls / (label + "-job"), job)
                 wait_file(controls / (label + "-ready"), process)
                 if label == "stop":
-                    status, _ = http_request(port, "POST", f"/api/jobs/{job}/stop", {})
+                    status, _ = http_request(port, "POST", f"/api/common/jobs/{job}/stop", {})
                     if status not in (200, 202):
                         raise Refusal("web-stop-refused")
                     wait_file(controls / "stop-confirmed", process)
@@ -738,6 +791,17 @@ def web(image, root):
                 process.wait(timeout=5)
 
 
+def require_empty_path_discovery(status, raw):
+    missing = load_json(raw)
+    tools = missing.get("tools") if isinstance(missing, dict) else None
+    if (status != 1 or not isinstance(missing, dict) or missing.get("ready") is not False
+            or missing.get("mode") != "discovery" or not isinstance(tools, list) or len(tools) != 3
+            or any(not isinstance(tool, dict) or tool.get("available") is not False for tool in tools)
+            or {tool.get("name") for tool in tools} != {"ffmpeg", "ffprobe", "packager"}):
+        raise Refusal("empty-path-discovery-invalid")
+    return {"exit_code": status, "ready": False, "tools_missing": 3}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--image", required=True)
@@ -775,12 +839,7 @@ def main():
                 raise Refusal("diagnosis-failed")
             report["diagnosis"] = diagnosis
             status, stdout, _ = image.invoke(["doctor", "--route", "all", "--json"], empty_path=True)
-            missing = load_json(stdout)
-            if (status != 1 or missing.get("ready") is not False or missing.get("mode") != "discovery"
-                    or len(missing.get("tools", [])) != 4
-                    or any(tool.get("available") is not False for tool in missing["tools"])):
-                raise Refusal("empty-path-discovery-invalid")
-            report["empty_path_discovery"] = {"exit_code": status, "ready": False, "tools_missing": 4}
+            report["empty_path_discovery"] = require_empty_path_discovery(status, stdout)
             image.checked(["-c", "for tool in python python3 node cargo rustc cmake gcc g++; do if command -v \"$tool\" >/dev/null 2>&1; then exit 1; fi; done"], entry="/bin/sh")
             report["active_gate"] = "media"
             report["media"] = media(image, root)
