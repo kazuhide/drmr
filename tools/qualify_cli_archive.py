@@ -45,7 +45,7 @@ MAX_OUTPUT = 8 * 1024 * 1024
 MAX_GRAPH_BYTES = 64 * 1024 * 1024
 SEMVER = r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?"
 CHECKS = ("packet_payloads_equal", "packet_timing_equal", "decoded_content_equal")
-ARCHIVE_ERRORS = (VERIFY.Failure, OSError, ValueError, TypeError, KeyError, EOFError,
+ARCHIVE_ERRORS = (VERIFY.Failure, OSError, ValueError, TypeError, KeyError, EOFError, NotImplementedError,
                   tarfile.TarError, zipfile.BadZipFile, zlib.error)
 
 

@@ -41,7 +41,7 @@ def read(path):
         with path.open("rb") as stream:
             data = stream.read(MAX_SOURCE_BYTES + 1)
         require(len(data) <= MAX_SOURCE_BYTES, "source-file-too-large")
-        return data.decode("utf-8")
+        return data.decode("utf-8").replace("\r\n", "\n")
     except (OSError, UnicodeError):
         raise Failure("source-file-unavailable") from None
 

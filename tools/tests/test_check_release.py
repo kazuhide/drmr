@@ -55,6 +55,14 @@ class ReleaseIdentity(unittest.TestCase):
         self.assertIsNone(report["tag"])
         self.assertEqual(report["packages"], ["drmr", "drmr-core"])
 
+    def test_windows_crlf_checkout_has_the_same_release_identity(self):
+        expected = self.check(tag="v1.0.0")
+        for path in self.root.rglob("*"):
+            if path.is_file():
+                path.write_bytes(path.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n"))
+        self.assertIn(b"\r\n", (self.root / "Cargo.toml").read_bytes())
+        self.assertEqual(self.check(tag="v1.0.0"), expected)
+
     def test_expected_final_tag_must_match_product_version(self):
         self.assertEqual(self.check(tag="v1.0.0")["tag"], "v1.0.0")
         with self.assertRaisesRegex(CHECK.Failure, "tag-version-mismatch"):

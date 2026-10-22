@@ -12,6 +12,7 @@ import tarfile
 import tempfile
 import unittest
 from unittest.mock import patch
+import zipfile
 
 
 SPEC = importlib.util.spec_from_file_location(
@@ -219,6 +220,24 @@ class OwnedFilesTests(unittest.TestCase):
         with self.assertRaisesRegex(module.Refusal, "^archive-extraction-invalid$") as denied:
             module.extract_cli(archive, "x86_64-unknown-linux-gnu", "0" * 64, self.root / "drmr")
         self.assertNotIn("private-marker", str(denied.exception))
+
+    def test_unsupported_zip_compression_has_only_a_fixed_diagnostic(self):
+        payload = bytearray(64)
+        payload[:7] = b"\x7fELF\x02\x01\x01"
+        payload[16:20] = b"\x02\x00\x3e\x00"
+        archive = self.root / "private-marker.zip"
+        with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_STORED) as output:
+            output.writestr("package/drmr", payload)
+        damaged = bytearray(archive.read_bytes())
+        damaged[8:10] = (99).to_bytes(2, "little")
+        central = damaged.index(b"PK\x01\x02")
+        damaged[central + 10:central + 12] = (99).to_bytes(2, "little")
+        archive.write_bytes(damaged)
+        destination = self.root / "drmr"
+        with self.assertRaisesRegex(module.Refusal, "^archive-extraction-invalid$") as denied:
+            module.extract_cli(archive, "x86_64-unknown-linux-gnu", module.VERIFY.sha(payload), destination)
+        self.assertNotIn("private-marker", str(denied.exception))
+        self.assertFalse(destination.exists())
 
     def test_cleanup_never_follows_a_changed_workspace_identity(self):
         workspace = module.Workspace(self.root)
