@@ -65,7 +65,9 @@ try {
     $userSid = $user.SID
     $researchStage = 'group-membership'
     $users = Get-LocalGroup -SID 'S-1-5-32-545'
-    Add-LocalGroupMember -Group $users -Member $user
+    if (-not (Get-LocalGroupMember -Group $users | Where-Object SID -eq $userSid)) {
+        Add-LocalGroupMember -Group $users -Member $user
+    }
     $credential = [PSCredential]::new("$env:COMPUTERNAME\$username", $securePassword)
     $researchStage = 'grant-helper-read'
     foreach ($path in @($checkout, (Join-Path $checkout '.github'))) {
@@ -86,6 +88,17 @@ try {
     $acl = Get-Acl -LiteralPath $directory
     $researchStage = 'check-parent-rules'
     $rules = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))
+    $safeRules = @()
+    foreach ($rule in $rules) {
+        $role = if ($rule.IdentityReference.Value -eq $userSid.Value) { 'ordinary' }
+            elseif ($rule.IdentityReference.Value -eq $adminSid.Value) { 'admin' }
+            elseif ($rule.IdentityReference.Value -eq 'S-1-5-18') { 'system' }
+            elseif ($rule.IdentityReference.Value -eq 'S-1-3-0') { 'creator-owner' } else { 'other' }
+        $safeRules += [ordered]@{ role = $role; inherited = [bool]$rule.IsInherited;
+            allow = $rule.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow;
+            rights = [long]$rule.FileSystemRights; inheritance = [int]$rule.InheritanceFlags; propagation = [int]$rule.PropagationFlags }
+    }
+    Write-Output ('DRMR_ACL_PARENT_PROFILE ' + ([ordered]@{ protected = [bool]$acl.AreAccessRulesProtected; count = $rules.Count; rules = $safeRules } | ConvertTo-Json -Depth 4 -Compress))
     Assert-OwnerResearch ($acl.AreAccessRulesProtected -and $rules.Count -eq 3)
     foreach ($rule in $rules) {
         Assert-OwnerResearch (-not $rule.IsInherited -and $rule.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow)
