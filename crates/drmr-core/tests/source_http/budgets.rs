@@ -42,8 +42,29 @@ fn chunk(exchange: &mut Exchange<'_>, bytes: &[u8]) -> io::Result<()> {
 fn written_bytes(root: &Path) -> u64 {
     std::fs::read_dir(root)
         .unwrap()
-        .map(|entry| entry.unwrap().metadata().unwrap().len())
+        .map(|entry| {
+            // Windows directory enumeration can return stale sizes while a writer is open.
+            // Query an open handle so in-progress writes are included in the fake budget.
+            std::fs::File::open(entry.unwrap().path())
+                .unwrap()
+                .metadata()
+                .unwrap()
+                .len()
+        })
         .sum()
+}
+
+#[test]
+fn the_disk_probe_counts_bytes_while_the_private_writer_is_open() {
+    let root = drmr_core::native::private_tempdir().unwrap();
+    let mut writer = drmr_core::native::create_private_new(&root.path().join("body.part")).unwrap();
+    assert_eq!(written_bytes(root.path()), 0);
+    let mut total = 0;
+    for length in [188, 64 * 1024, 8 * 1024 * 1024] {
+        writer.write_all(&vec![b'x'; length]).unwrap();
+        total += length as u64;
+        assert_eq!(written_bytes(root.path()), total);
+    }
 }
 
 #[test]
@@ -192,12 +213,12 @@ fn a_truncated_response_refunds_its_bytes_before_the_retry() {
 fn an_undeclared_body_is_checked_against_the_floor_every_eight_mebibytes() {
     let root = drmr_core::native::private_tempdir().unwrap();
     let directory = root.path().to_path_buf();
-    let checks = Arc::new(AtomicUsize::new(0));
+    let checks = Arc::new(Mutex::new(Vec::new()));
     let platform = Arc::new(FreeSpace({
         let checks = Arc::clone(&checks);
         move |_: &Path| {
-            checks.fetch_add(1, Ordering::SeqCst);
             let written = written_bytes(&directory);
+            checks.lock().unwrap().push(written);
             if (15 * 512 * 1024..17 * 512 * 1024).contains(&written) {
                 999_999
             } else {
@@ -230,7 +251,12 @@ fn an_undeclared_body_is_checked_against_the_floor_every_eight_mebibytes() {
         "disk-budget-exceeded"
     );
     assert!(!path.exists());
-    assert!(checks.load(Ordering::SeqCst) >= 1);
+    let checks = checks.lock().unwrap();
+    assert_eq!(checks.len(), 1, "disk probe positions: {checks:?}");
+    assert!(
+        (8 * 1024 * 1024 - 64 * 1024..8 * 1024 * 1024).contains(&checks[0]),
+        "the first periodic check must precede the write that crosses 8 MiB: {checks:?}"
+    );
 }
 
 fn paced_server(declared: bool) -> TestServer {
