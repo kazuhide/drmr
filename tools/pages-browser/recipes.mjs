@@ -47,9 +47,9 @@ export function requireRecipe(value, expected) {
     const name = { Clear: 'clear', 'AES-128': 'aes128', 'SAMPLE-AES': 'sample-aes' }[profile] ?? profile;
     const inputKeys = profile === 'Clear' ? [] : ['--keys-file', 'keys.json'];
     const runtimeKeys = profile === 'Clear' && expected.target === 'clear' ? [] : ['--keys-file', 'keys.json'];
-    assert.deepEqual(commands[0], ['drmr', 'analyze', `https://example.com/${name}.${extension}`,
+    assert.deepEqual(commands[0], ['drmr', 'analyze', `"https://example.com/${name}.${extension}"`,
       '--download-dir', 'src', ...inputKeys],
-    'Every input must use native URL acquisition with only its source keys');
+    'Every input must use a quoted URL for native acquisition with only its source keys');
     assert.deepEqual(commands[1], ['drmr', 'plan', `src/input.${extension}`, '--to', expected.target,
       '--format', expected.format, '--output', expected.format === 'mp4' ? 'result.mp4' : 'result',
       '--save', 'plan.json', ...inputKeys],

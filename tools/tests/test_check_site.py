@@ -53,7 +53,7 @@ def recipe_fixture(language="en", first_example=1):
                     runtime_keys = " --keys-file keys.json" if protection != "clear" or target != "clear" else ""
                     name = {"hls-aes128": "aes128", "hls-sample-aes": "sample-aes"}.get(protection, protection)
                     groups.append("# " + protection_labels[protection] + " input\n"
-                                  "drmr analyze https://example.com/" + name + "." + suffix + " --download-dir src" + input_keys + " &&\n"
+                                  'drmr analyze "https://example.com/' + name + "." + suffix + '" --download-dir src' + input_keys + " &&\n"
                                   "drmr plan " + source + " --to " + target + " --format " + output_format
                                   + " --output " + output + " --save plan.json" + input_keys + " &&\n"
                                   "drmr convert --plan plan.json" + runtime_keys + " &&\n"
@@ -763,7 +763,7 @@ class ConversionExamples(unittest.TestCase):
                 ('--save plan.json', '--save other.plan.json'),
                 ('drmr convert --plan plan.json', 'drmr convert --plan other.plan.json'),
                 ('drmr verify --plan plan.json', 'drmr inspect result.mp4'),
-                ('drmr analyze https://example.com/clear.mp4', 'drmr analyze result.mp4'),
+                ('drmr analyze &quot;https://example.com/clear.mp4&quot;', 'drmr analyze result.mp4'),
                 ('--keys-file keys.json', '--keys-file other.json'),
                 ('drmr verify --plan', '# drmr verify --plan')):
             with self.subTest(changed=new), self.assertRaisesRegex(CHECK.Failure, "site-guide-recipe-command"):
@@ -777,6 +777,7 @@ class ConversionExamples(unittest.TestCase):
                 ('https://example.com/clear.mpd', './remote.mpd'),
                 ('https://example.com/clear.mpd', 'http://example.com/clear.mpd'),
                 ('https://example.com/clear.mp4', 'https://example.com/cenc.mp4'),
+                ('&quot;https://example.com/clear.mp4&quot;', 'https://example.com/clear.mp4'),
                 ('drmr plan src/input.mpd', 'drmr plan src/manifest.mpd'),
                 ('drmr plan src/input.mp4', 'drmr plan source.mp4'),
                 ('--download-dir src', '--download-dir different-source'),

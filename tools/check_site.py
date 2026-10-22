@@ -402,7 +402,9 @@ def validate_recipe_commands(code, row, output_format, target):
         input_keys = [] if profile == "Clear" else ["--keys-file", "keys.json"]
         runtime_keys = [] if profile == "Clear" and target == "clear" else ["--keys-file", "keys.json"]
         name = {"Clear": "clear", "AES-128": "aes128", "SAMPLE-AES": "sample-aes"}.get(profile, profile)
-        require(commands[0] == ["drmr", "analyze", f"https://example.com/{name}.{extension}",
+        url = f"https://example.com/{name}.{extension}"
+        require(steps[0].startswith(f'drmr analyze "{url}" ')
+                and commands[0] == ["drmr", "analyze", url,
                                 "--download-dir", "src"] + input_keys, token)
         require(commands[1] == ["drmr", "plan", f"src/input.{extension}", "--to", target,
                                 "--format", output_format, "--output", output, "--save", "plan.json"] + input_keys

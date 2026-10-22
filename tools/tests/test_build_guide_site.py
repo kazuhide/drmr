@@ -109,6 +109,15 @@ class GuideBuilderTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             builder.inline('<script>bad</script>')
 
+    def test_fenced_code_keeps_shell_quotes_literal_and_escapes_markup(self):
+        command = 'drmr analyze "https://example.com/input.mp4?a=1&b=2"'
+        hostile = "'</code><script>bad</script>&quot;"
+        output = builder.body('```sh\n' + command + '\n' + hostile + '\n```', 'en')
+        self.assertIn('drmr analyze "https://example.com/input.mp4?a=1&amp;b=2"', output)
+        self.assertIn("'&lt;/code&gt;&lt;script&gt;bad&lt;/script&gt;&amp;quot;", output)
+        self.assertNotIn('<script>', output)
+        self.assertEqual(output.count('</code>'), 1)
+
     def test_malformed_tables_and_unclosed_fences_are_refused(self):
         for source in ['| a | b |\n| --- | --- |\n| one |\n', '```sh\necho nope\n', '- \n']:
             with self.subTest(source=source), self.assertRaises(ValueError):

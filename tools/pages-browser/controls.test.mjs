@@ -545,7 +545,7 @@ function recipeSample(recipe = matrixRecipes.find(value => value.id === 'recipe-
     const inputKeys = profile === 'Clear' ? '' : ' --keys-file keys.json';
     const runtimeKeys = profile === 'Clear' && recipe.target === 'clear' ? '' : ' --keys-file keys.json';
     const output = recipe.format === 'mp4' ? 'result.mp4' : 'result';
-    return `# ${profile} input\ndrmr analyze https://example.com/${name}.${extension} --download-dir src${inputKeys} &&\ndrmr plan src/input.${extension} --to ${recipe.target} --format ${recipe.format} --output ${output} --save plan.json${inputKeys} &&\ndrmr convert --plan plan.json${runtimeKeys} &&\ndrmr verify --plan plan.json${runtimeKeys}`;
+    return `# ${profile} input\ndrmr analyze "https://example.com/${name}.${extension}" --download-dir src${inputKeys} &&\ndrmr plan src/input.${extension} --to ${recipe.target} --format ${recipe.format} --output ${output} --save plan.json${inputKeys} &&\ndrmr convert --plan plan.json${runtimeKeys} &&\ndrmr verify --plan plan.json${runtimeKeys}`;
   }).join('\n\n') + '\n';
   return { id: recipe.id, tag: 'H3', tabindex: '-1', chapter: 'url-input', heading: 'HLS to DASH',
     presented: true, setupTag: 'P', setupHrefs: ['#recipe-setup'], figureTag: 'FIGURE',
@@ -582,6 +582,7 @@ test('all format recipes require native acquisition and the matching retained en
     for (const code of [
       good.code.replace('--download-dir src', '--download-dir other'),
       good.code.replace(/src\/input\.(mp4|mpd|m3u8)/, 'src/download.bin'),
+      good.code.replace(/"https:\/\/[^"\n]+"/, url => url.slice(1, -1)),
       good.code.replace('drmr analyze', 'curl https://example.com/other\ndrmr analyze'),
     ]) assert.throws(() => requireRecipe({ ...good, code, rendered: code }, expected));
   }

@@ -206,25 +206,25 @@ chmod 700 config
 <h3>MP4 sample keys</h3>
 <p>For clear input and encrypted output:</p>
 <figure class="guide-example" aria-labelledby="example-7-title" data-code-language="json"><figcaption id="example-7-title">Example 7: json</figcaption><pre tabindex="0"><code>{
-  &quot;schema_version&quot;: 1,
-  &quot;output&quot;: {
-    &quot;kid&quot;: &quot;&lt;32-hex-output-kid&gt;&quot;,
-    &quot;key&quot;: &quot;&lt;32-hex-output-key&gt;&quot;
+  "schema_version": 1,
+  "output": {
+    "kid": "&lt;32-hex-output-kid&gt;",
+    "key": "&lt;32-hex-output-key&gt;"
   }
 }
 </code></pre></figure>
 <p>For encrypted input, list every source-track key under <code>input.keys</code>; the output key is a separate role:</p>
 <figure class="guide-example" aria-labelledby="example-8-title" data-code-language="json"><figcaption id="example-8-title">Example 8: json</figcaption><pre tabindex="0"><code>{
-  &quot;schema_version&quot;: 1,
-  &quot;input&quot;: {
-    &quot;keys&quot;: [
-      {&quot;kid&quot;: &quot;&lt;32-hex-video-kid&gt;&quot;, &quot;key&quot;: &quot;&lt;32-hex-video-key&gt;&quot;},
-      {&quot;kid&quot;: &quot;&lt;32-hex-audio-kid&gt;&quot;, &quot;key&quot;: &quot;&lt;32-hex-audio-key&gt;&quot;}
+  "schema_version": 1,
+  "input": {
+    "keys": [
+      {"kid": "&lt;32-hex-video-kid&gt;", "key": "&lt;32-hex-video-key&gt;"},
+      {"kid": "&lt;32-hex-audio-kid&gt;", "key": "&lt;32-hex-audio-key&gt;"}
     ]
   },
-  &quot;output&quot;: {
-    &quot;kid&quot;: &quot;&lt;32-hex-output-kid&gt;&quot;,
-    &quot;key&quot;: &quot;&lt;32-hex-output-key&gt;&quot;
+  "output": {
+    "kid": "&lt;32-hex-output-kid&gt;",
+    "key": "&lt;32-hex-output-key&gt;"
   }
 }
 </code></pre></figure>
@@ -232,32 +232,32 @@ chmod 700 config
 <h3>HLS key URI and IV</h3>
 <p>HLS input keys map the exact URI string from the playlist. drmr does not fetch a playlist key URI. For SAMPLE-AES input, associate the IV with the same input key entry, as in this example:</p>
 <figure class="guide-example" aria-labelledby="example-9-title" data-code-language="json"><figcaption id="example-9-title">Example 9: json</figcaption><pre tabindex="0"><code>{
-  &quot;schema_version&quot;: 1,
-  &quot;input&quot;: {
-    &quot;hls_keys&quot;: [{
-      &quot;uri&quot;: &quot;skd://source-content&quot;,
-      &quot;key&quot;: &quot;&lt;32-hex-source-key&gt;&quot;,
-      &quot;iv&quot;: &quot;&lt;32-hex-associated-iv&gt;&quot;
+  "schema_version": 1,
+  "input": {
+    "hls_keys": [{
+      "uri": "skd://source-content",
+      "key": "&lt;32-hex-source-key&gt;",
+      "iv": "&lt;32-hex-associated-iv&gt;"
     }]
   }
 }
 </code></pre></figure>
 <p>For AES-128 HLS output, supply the output key and key URI:</p>
 <figure class="guide-example" aria-labelledby="example-10-title" data-code-language="json"><figcaption id="example-10-title">Example 10: json</figcaption><pre tabindex="0"><code>{
-  &quot;schema_version&quot;: 1,
-  &quot;output&quot;: {
-    &quot;key&quot;: &quot;&lt;32-hex-output-key&gt;&quot;,
-    &quot;hls_key_uri&quot;: &quot;https://keys.example.invalid/content.key&quot;
+  "schema_version": 1,
+  "output": {
+    "key": "&lt;32-hex-output-key&gt;",
+    "hls_key_uri": "https://keys.example.invalid/content.key"
   }
 }
 </code></pre></figure>
 <p>For SAMPLE-AES TS output, supply the common key, IV and HLS key URI:</p>
 <figure class="guide-example" aria-labelledby="example-11-title" data-code-language="json"><figcaption id="example-11-title">Example 11: json</figcaption><pre tabindex="0"><code>{
-  &quot;schema_version&quot;: 1,
-  &quot;output&quot;: {
-    &quot;key&quot;: &quot;&lt;32-hex-output-key&gt;&quot;,
-    &quot;iv&quot;: &quot;&lt;32-hex-associated-iv&gt;&quot;,
-    &quot;hls_key_uri&quot;: &quot;skd://output-content&quot;
+  "schema_version": 1,
+  "output": {
+    "key": "&lt;32-hex-output-key&gt;",
+    "iv": "&lt;32-hex-associated-iv&gt;",
+    "hls_key_uri": "skd://output-content"
   }
 }
 </code></pre></figure>
@@ -265,24 +265,24 @@ chmod 700 config
 <h3>One key configuration for several outputs</h3>
 <p>When keys or DRM metadata are required, an output list uses a protected schema-version-2 key file. Shared source keys belong under <code>input</code>; output keys and DRM metadata belong under <code>outputs</code>, indexed by the IDs in the output list. Encrypted outputs require their own entry, clear outputs have no entry, and extra or missing IDs are refused. The following template is for the <code>dash</code> and <code>hls</code> outputs in chapter 6. Replace every placeholder before use.</p>
 <figure class="guide-example" aria-labelledby="example-12-title" data-code-language="json"><figcaption id="example-12-title">Example 12: json</figcaption><pre tabindex="0"><code>{
-  &quot;schema_version&quot;: 2,
-  &quot;outputs&quot;: {
-    &quot;dash&quot;: {
-      &quot;kid&quot;: &quot;&lt;32-hex-dash-kid&gt;&quot;,
-      &quot;key&quot;: &quot;&lt;32-hex-dash-key&gt;&quot;,
-      &quot;signaling&quot;: {
-        &quot;system&quot;: &quot;multi-drm&quot;,
-        &quot;widevine_pssh&quot;: &quot;&lt;complete Widevine PSSH box in hex or base64&gt;&quot;,
-        &quot;playready_license_url&quot;: &quot;https://license.example.invalid/playready&quot;
+  "schema_version": 2,
+  "outputs": {
+    "dash": {
+      "kid": "&lt;32-hex-dash-kid&gt;",
+      "key": "&lt;32-hex-dash-key&gt;",
+      "signaling": {
+        "system": "multi-drm",
+        "widevine_pssh": "&lt;complete Widevine PSSH box in hex or base64&gt;",
+        "playready_license_url": "https://license.example.invalid/playready"
       }
     },
-    &quot;hls&quot;: {
-      &quot;kid&quot;: &quot;&lt;32-hex-hls-kid&gt;&quot;,
-      &quot;key&quot;: &quot;&lt;32-hex-hls-key&gt;&quot;,
-      &quot;hls_key_uri&quot;: &quot;skd://&lt;content-identifier&gt;&quot;,
-      &quot;signaling&quot;: {
-        &quot;system&quot;: &quot;multi-drm&quot;,
-        &quot;fairplay&quot;: true
+    "hls": {
+      "kid": "&lt;32-hex-hls-kid&gt;",
+      "key": "&lt;32-hex-hls-key&gt;",
+      "hls_key_uri": "skd://&lt;content-identifier&gt;",
+      "signaling": {
+        "system": "multi-drm",
+        "fairplay": true
       }
     }
   }
@@ -291,13 +291,13 @@ chmod 700 config
 <p>Supply a complete Widevine PSSH box whose declared KIDs match the DASH output&#x27;s <code>kid</code>. drmr checks that metadata and generates PlayReady information from the selected KID and license URL. It writes the FairPlay HLS declaration from the explicit FairPlay selection and <code>hls_key_uri</code>. Runtime DRM systems must exactly match the saved plan. No license service or advertised key URI is contacted.</p>
 <p>For a FairPlay TS output named <code>hls-ts</code>, replace the HLS entry with this member of <code>outputs</code>:</p>
 <figure class="guide-example" aria-labelledby="example-13-title" data-code-language="json"><figcaption id="example-13-title">Example 13: json</figcaption><pre tabindex="0"><code>{
-  &quot;hls-ts&quot;: {
-    &quot;key&quot;: &quot;&lt;32-hex-ts-key&gt;&quot;,
-    &quot;iv&quot;: &quot;&lt;32-hex-associated-iv&gt;&quot;,
-    &quot;hls_key_uri&quot;: &quot;skd://&lt;content-identifier&gt;&quot;,
-    &quot;signaling&quot;: {
-      &quot;system&quot;: &quot;multi-drm&quot;,
-      &quot;fairplay&quot;: true
+  "hls-ts": {
+    "key": "&lt;32-hex-ts-key&gt;",
+    "iv": "&lt;32-hex-associated-iv&gt;",
+    "hls_key_uri": "skd://&lt;content-identifier&gt;",
+    "signaling": {
+      "system": "multi-drm",
+      "fairplay": true
     }
   }
 }
@@ -340,21 +340,21 @@ drmr verify --plan conversion.plan.json --keys-file config/keys.json --json
 <h3>Save several explicitly named outputs</h3>
 <p>Use <code>--outputs</code> when all listed outputs must be produced together. Save this public recipe as <code>outputs.json</code>:</p>
 <figure class="guide-example" aria-labelledby="example-18-title" data-code-language="json"><figcaption id="example-18-title">Example 18: json</figcaption><pre tabindex="0"><code>{
-  &quot;schema_version&quot;: 1,
-  &quot;outputs&quot;: [
+  "schema_version": 1,
+  "outputs": [
     {
-      &quot;id&quot;: &quot;dash&quot;,
-      &quot;format&quot;: &quot;dash&quot;,
-      &quot;target&quot;: &quot;cbcs&quot;,
-      &quot;drms&quot;: [&quot;widevine&quot;, &quot;playready&quot;],
-      &quot;conformance&quot;: &quot;required&quot;
+      "id": "dash",
+      "format": "dash",
+      "target": "cbcs",
+      "drms": ["widevine", "playready"],
+      "conformance": "required"
     },
     {
-      &quot;id&quot;: &quot;hls&quot;,
-      &quot;format&quot;: &quot;hls&quot;,
-      &quot;target&quot;: &quot;cbcs&quot;,
-      &quot;drms&quot;: [&quot;fairplay&quot;],
-      &quot;conformance&quot;: &quot;required&quot;
+      "id": "hls",
+      "format": "hls",
+      "target": "cbcs",
+      "drms": ["fairplay"],
+      "conformance": "required"
     }
   ]
 }
@@ -448,13 +448,13 @@ drmr verify clear-ts/master.m3u8 --source encrypted-ts/media.m3u8 \
 <h3>Explicit PlayReady signaling</h3>
 <p>This opt-in generic-conversion profile produces CBCS DASH from a qualified clear MP4 source. Supply the output key identifier (KID), key, and license URL as shown below. drmr generates the PlayReady Object (PRO) and Protection System Specific Header (PSSH), then checks their consistency in the initialization segments and DASH manifest. Source DRM initialization metadata is refused by conversion.</p>
 <figure class="guide-example" aria-labelledby="example-32-title" data-code-language="json"><figcaption id="example-32-title">Example 32: json</figcaption><pre tabindex="0"><code>{
-  &quot;schema_version&quot;: 1,
-  &quot;output&quot;: {
-    &quot;kid&quot;: &quot;&lt;32-hex-output-kid&gt;&quot;,
-    &quot;key&quot;: &quot;&lt;32-hex-output-key&gt;&quot;,
-    &quot;signaling&quot;: {
-      &quot;system&quot;: &quot;playready&quot;,
-      &quot;license_url&quot;: &quot;https://license.example.invalid/acquire&quot;
+  "schema_version": 1,
+  "output": {
+    "kid": "&lt;32-hex-output-kid&gt;",
+    "key": "&lt;32-hex-output-key&gt;",
+    "signaling": {
+      "system": "playready",
+      "license_url": "https://license.example.invalid/acquire"
     }
   }
 }
@@ -467,7 +467,7 @@ drmr verify clear-ts/master.m3u8 --source encrypted-ts/media.m3u8 \
 <section class="guide-chapter" id="url-input" data-guide-chapter="url-input" aria-labelledby="url-input-title"><h2 id="url-input-title">8. Acquire and analyze a URL</h2><a class="guide-chapter-switch" href="../ja/guide/#url-input" lang="ja" hreflang="ja">日本語</a>
 <h3>A retained download directory is mandatory</h3>
 <p>This example uses clear HLS and a CBCS DASH output. Prepare chapter 5&#x27;s <code>config/keys.json</code> with only the output key. <code>&amp;&amp;</code> proceeds only after success. <code>inspect</code> reads retained declarations after acquisition; omit it if this summary is unnecessary.</p>
-<figure class="guide-example" aria-labelledby="example-34-title" data-code-language="sh"><figcaption id="example-34-title">Example 34: sh</figcaption><pre tabindex="0"><code>drmr analyze &quot;https://example.com/vod/master.m3u8&quot; \
+<figure class="guide-example" aria-labelledby="example-34-title" data-code-language="sh"><figcaption id="example-34-title">Example 34: sh</figcaption><pre tabindex="0"><code>drmr analyze "https://example.com/vod/master.m3u8" \
   --download-dir ./saved-source &amp;&amp;
 drmr inspect ./saved-source/input.m3u8 &amp;&amp;
 drmr plan ./saved-source/input.m3u8 --to cbcs --format dash \
@@ -487,7 +487,7 @@ drmr verify --plan ./conversion.plan.json --keys-file config/keys.json
 <p>Only <code>analyze</code> needs the server. Completed downloads survive later failures; incomplete downloads are refused. <code>convert URL --download-dir NEW_DIR</code> combines acquisition and conversion without saving a plan.</p>
 <h3>URL to several DRM outputs</h3>
 <p>For a supported clear TS HLS URL, use the same public <code>outputs.json</code> and private version-2 key file as the local workflow:</p>
-<figure class="guide-example" aria-labelledby="example-35-title" data-code-language="sh"><figcaption id="example-35-title">Example 35: sh</figcaption><pre tabindex="0"><code>drmr analyze &quot;https://example.com/vod/master.m3u8&quot; \
+<figure class="guide-example" aria-labelledby="example-35-title" data-code-language="sh"><figcaption id="example-35-title">Example 35: sh</figcaption><pre tabindex="0"><code>drmr analyze "https://example.com/vod/master.m3u8" \
   --download-dir ./multi-source --json
 drmr plan ./multi-source/input.m3u8 --outputs outputs.json \
   --output multi-result --save multi.plan.json --json
@@ -497,7 +497,7 @@ drmr verify --plan multi.plan.json \
   --keys-file config/multi-keys.json --json
 </code></pre></figure>
 <p>One retained source is used by all outputs. URL acquisition also supports the other documented input profiles, but explicit multi-DRM conversion still requires a qualified clear TS HLS or clear MP4 source. Acquisition support does not extend that output profile. For one acquisition-and-conversion command without saving a plan:</p>
-<figure class="guide-example" aria-labelledby="example-36-title" data-code-language="sh"><figcaption id="example-36-title">Example 36: sh</figcaption><pre tabindex="0"><code>drmr convert &quot;https://example.com/vod/master.m3u8&quot; \
+<figure class="guide-example" aria-labelledby="example-36-title" data-code-language="sh"><figcaption id="example-36-title">Example 36: sh</figcaption><pre tabindex="0"><code>drmr convert "https://example.com/vod/master.m3u8" \
   --download-dir ./multi-source --outputs outputs.json \
   --output multi-result --keys-file config/multi-keys.json --json
 </code></pre></figure>
@@ -520,21 +520,21 @@ drmr verify retry-hls/master.m3u8 --source saved-source/input.m3u8 \
 <li><code>connections</code>: the fetch concurrency upper bound; worker and CPU/memory admission can reduce actual concurrency.</li>
 </ul>
 <figure class="guide-example" aria-labelledby="example-38-title" data-code-language="json"><figcaption id="example-38-title">Example 38: json</figcaption><pre tabindex="0"><code>{
-  &quot;allowed_origins&quot;: [&quot;https://media.example.com&quot;],
-  &quot;headers_by_origin&quot;: {
-    &quot;https://example.com&quot;: {&quot;Authorization&quot;: &quot;Bearer &lt;your-token&gt;&quot;}
+  "allowed_origins": ["https://media.example.com"],
+  "headers_by_origin": {
+    "https://example.com": {"Authorization": "Bearer &lt;your-token&gt;"}
   },
-  &quot;max_total_bytes&quot;: 1073741824,
-  &quot;connections&quot;: 4
+  "max_total_bytes": 1073741824,
+  "connections": 4
 }
 </code></pre></figure>
 <p>Prepare a protected configuration directory as described in chapter 5 and save the JSON as <code>config/fetch.json</code>. Replace the token placeholder with your own token if authentication is needed. For macOS/Linux, set owner-only file permissions before analyzing the URL; use the current-user-only ACL procedure in chapter 14 on Windows.</p>
 <figure class="guide-example" aria-labelledby="example-39-title" data-code-language="sh"><figcaption id="example-39-title">Example 39: sh</figcaption><pre tabindex="0"><code>chmod 600 config/fetch.json
-drmr analyze &quot;https://example.com/vod/master.m3u8&quot; \
+drmr analyze "https://example.com/vod/master.m3u8" \
   --download-dir analyzed-source --fetch-policy config/fetch.json --json
 </code></pre></figure>
 <p>The same file can be used for direct conversion:</p>
-<figure class="guide-example" aria-labelledby="example-40-title" data-code-language="sh"><figcaption id="example-40-title">Example 40: sh</figcaption><pre tabindex="0"><code>drmr convert &quot;https://example.com/vod/master.m3u8&quot; \
+<figure class="guide-example" aria-labelledby="example-40-title" data-code-language="sh"><figcaption id="example-40-title">Example 40: sh</figcaption><pre tabindex="0"><code>drmr convert "https://example.com/vod/master.m3u8" \
   --download-dir authenticated-source --fetch-policy config/fetch.json \
   --to clear --format hls --output clear-result
 </code></pre></figure>
@@ -550,19 +550,19 @@ drmr analyze &quot;https://example.com/vod/master.m3u8&quot; \
 <h3 id="recipe-mp4-mp4-clear" tabindex="-1">MP4 → MP4 / Clear</h3>
 <p><a href="#recipe-setup">Setup</a></p>
 <figure class="guide-example" aria-labelledby="example-41-title" data-code-language="sh"><figcaption id="example-41-title">Example 41: sh</figcaption><pre tabindex="0"><code># Clear input
-drmr analyze https://example.com/clear.mp4 --download-dir src &amp;&amp;
+drmr analyze "https://example.com/clear.mp4" --download-dir src &amp;&amp;
 drmr plan src/input.mp4 --to clear --format mp4 --output result.mp4 --save plan.json &amp;&amp;
 drmr convert --plan plan.json &amp;&amp;
 drmr verify --plan plan.json
 
 # cenc input
-drmr analyze https://example.com/cenc.mp4 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/cenc.mp4" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.mp4 --to clear --format mp4 --output result.mp4 --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # cbcs input
-drmr analyze https://example.com/cbcs.mp4 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/cbcs.mp4" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.mp4 --to clear --format mp4 --output result.mp4 --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
@@ -571,19 +571,19 @@ drmr verify --plan plan.json --keys-file keys.json
 <h3 id="recipe-mp4-mp4-cenc" tabindex="-1">MP4 → MP4 / cenc</h3>
 <p><a href="#recipe-setup">Setup</a></p>
 <figure class="guide-example" aria-labelledby="example-42-title" data-code-language="sh"><figcaption id="example-42-title">Example 42: sh</figcaption><pre tabindex="0"><code># Clear input
-drmr analyze https://example.com/clear.mp4 --download-dir src &amp;&amp;
+drmr analyze "https://example.com/clear.mp4" --download-dir src &amp;&amp;
 drmr plan src/input.mp4 --to cenc --format mp4 --output result.mp4 --save plan.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # cenc input
-drmr analyze https://example.com/cenc.mp4 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/cenc.mp4" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.mp4 --to cenc --format mp4 --output result.mp4 --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # cbcs input
-drmr analyze https://example.com/cbcs.mp4 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/cbcs.mp4" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.mp4 --to cenc --format mp4 --output result.mp4 --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
@@ -592,19 +592,19 @@ drmr verify --plan plan.json --keys-file keys.json
 <h3 id="recipe-mp4-mp4-cbcs" tabindex="-1">MP4 → MP4 / cbcs</h3>
 <p><a href="#recipe-setup">Setup</a></p>
 <figure class="guide-example" aria-labelledby="example-43-title" data-code-language="sh"><figcaption id="example-43-title">Example 43: sh</figcaption><pre tabindex="0"><code># Clear input
-drmr analyze https://example.com/clear.mp4 --download-dir src &amp;&amp;
+drmr analyze "https://example.com/clear.mp4" --download-dir src &amp;&amp;
 drmr plan src/input.mp4 --to cbcs --format mp4 --output result.mp4 --save plan.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # cenc input
-drmr analyze https://example.com/cenc.mp4 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/cenc.mp4" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.mp4 --to cbcs --format mp4 --output result.mp4 --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # cbcs input
-drmr analyze https://example.com/cbcs.mp4 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/cbcs.mp4" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.mp4 --to cbcs --format mp4 --output result.mp4 --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
@@ -613,19 +613,19 @@ drmr verify --plan plan.json --keys-file keys.json
 <h3 id="recipe-mp4-dash-clear" tabindex="-1">MP4 → DASH / Clear</h3>
 <p><a href="#recipe-setup">Setup</a></p>
 <figure class="guide-example" aria-labelledby="example-44-title" data-code-language="sh"><figcaption id="example-44-title">Example 44: sh</figcaption><pre tabindex="0"><code># Clear input
-drmr analyze https://example.com/clear.mp4 --download-dir src &amp;&amp;
+drmr analyze "https://example.com/clear.mp4" --download-dir src &amp;&amp;
 drmr plan src/input.mp4 --to clear --format dash --output result --save plan.json &amp;&amp;
 drmr convert --plan plan.json &amp;&amp;
 drmr verify --plan plan.json
 
 # cenc input
-drmr analyze https://example.com/cenc.mp4 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/cenc.mp4" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.mp4 --to clear --format dash --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # cbcs input
-drmr analyze https://example.com/cbcs.mp4 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/cbcs.mp4" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.mp4 --to clear --format dash --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
@@ -634,19 +634,19 @@ drmr verify --plan plan.json --keys-file keys.json
 <h3 id="recipe-mp4-dash-cenc" tabindex="-1">MP4 → DASH / cenc</h3>
 <p><a href="#recipe-setup">Setup</a></p>
 <figure class="guide-example" aria-labelledby="example-45-title" data-code-language="sh"><figcaption id="example-45-title">Example 45: sh</figcaption><pre tabindex="0"><code># Clear input
-drmr analyze https://example.com/clear.mp4 --download-dir src &amp;&amp;
+drmr analyze "https://example.com/clear.mp4" --download-dir src &amp;&amp;
 drmr plan src/input.mp4 --to cenc --format dash --output result --save plan.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # cenc input
-drmr analyze https://example.com/cenc.mp4 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/cenc.mp4" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.mp4 --to cenc --format dash --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # cbcs input
-drmr analyze https://example.com/cbcs.mp4 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/cbcs.mp4" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.mp4 --to cenc --format dash --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
@@ -655,19 +655,19 @@ drmr verify --plan plan.json --keys-file keys.json
 <h3 id="recipe-mp4-dash-cbcs" tabindex="-1">MP4 → DASH / cbcs</h3>
 <p><a href="#recipe-setup">Setup</a></p>
 <figure class="guide-example" aria-labelledby="example-46-title" data-code-language="sh"><figcaption id="example-46-title">Example 46: sh</figcaption><pre tabindex="0"><code># Clear input
-drmr analyze https://example.com/clear.mp4 --download-dir src &amp;&amp;
+drmr analyze "https://example.com/clear.mp4" --download-dir src &amp;&amp;
 drmr plan src/input.mp4 --to cbcs --format dash --output result --save plan.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # cenc input
-drmr analyze https://example.com/cenc.mp4 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/cenc.mp4" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.mp4 --to cbcs --format dash --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # cbcs input
-drmr analyze https://example.com/cbcs.mp4 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/cbcs.mp4" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.mp4 --to cbcs --format dash --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
@@ -676,19 +676,19 @@ drmr verify --plan plan.json --keys-file keys.json
 <h3 id="recipe-mp4-hls-clear" tabindex="-1">MP4 → HLS / fMP4 / Clear</h3>
 <p><a href="#recipe-setup">Setup</a></p>
 <figure class="guide-example" aria-labelledby="example-47-title" data-code-language="sh"><figcaption id="example-47-title">Example 47: sh</figcaption><pre tabindex="0"><code># Clear input
-drmr analyze https://example.com/clear.mp4 --download-dir src &amp;&amp;
+drmr analyze "https://example.com/clear.mp4" --download-dir src &amp;&amp;
 drmr plan src/input.mp4 --to clear --format hls --output result --save plan.json &amp;&amp;
 drmr convert --plan plan.json &amp;&amp;
 drmr verify --plan plan.json
 
 # cenc input
-drmr analyze https://example.com/cenc.mp4 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/cenc.mp4" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.mp4 --to clear --format hls --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # cbcs input
-drmr analyze https://example.com/cbcs.mp4 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/cbcs.mp4" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.mp4 --to clear --format hls --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
@@ -697,19 +697,19 @@ drmr verify --plan plan.json --keys-file keys.json
 <h3 id="recipe-mp4-hls-cbcs" tabindex="-1">MP4 → HLS / fMP4 / cbcs</h3>
 <p><a href="#recipe-setup">Setup</a></p>
 <figure class="guide-example" aria-labelledby="example-48-title" data-code-language="sh"><figcaption id="example-48-title">Example 48: sh</figcaption><pre tabindex="0"><code># Clear input
-drmr analyze https://example.com/clear.mp4 --download-dir src &amp;&amp;
+drmr analyze "https://example.com/clear.mp4" --download-dir src &amp;&amp;
 drmr plan src/input.mp4 --to cbcs --format hls --output result --save plan.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # cenc input
-drmr analyze https://example.com/cenc.mp4 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/cenc.mp4" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.mp4 --to cbcs --format hls --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # cbcs input
-drmr analyze https://example.com/cbcs.mp4 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/cbcs.mp4" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.mp4 --to cbcs --format hls --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
@@ -718,19 +718,19 @@ drmr verify --plan plan.json --keys-file keys.json
 <h3 id="recipe-mp4-hls-hls-aes128" tabindex="-1">MP4 → HLS / fMP4 / AES-128</h3>
 <p><a href="#recipe-setup">Setup</a></p>
 <figure class="guide-example" aria-labelledby="example-49-title" data-code-language="sh"><figcaption id="example-49-title">Example 49: sh</figcaption><pre tabindex="0"><code># Clear input
-drmr analyze https://example.com/clear.mp4 --download-dir src &amp;&amp;
+drmr analyze "https://example.com/clear.mp4" --download-dir src &amp;&amp;
 drmr plan src/input.mp4 --to hls-aes128 --format hls --output result --save plan.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # cenc input
-drmr analyze https://example.com/cenc.mp4 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/cenc.mp4" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.mp4 --to hls-aes128 --format hls --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # cbcs input
-drmr analyze https://example.com/cbcs.mp4 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/cbcs.mp4" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.mp4 --to hls-aes128 --format hls --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
@@ -739,19 +739,19 @@ drmr verify --plan plan.json --keys-file keys.json
 <h3 id="recipe-dash-mp4-clear" tabindex="-1">DASH → MP4 / Clear</h3>
 <p><a href="#recipe-setup">Setup</a></p>
 <figure class="guide-example" aria-labelledby="example-50-title" data-code-language="sh"><figcaption id="example-50-title">Example 50: sh</figcaption><pre tabindex="0"><code># Clear input
-drmr analyze https://example.com/clear.mpd --download-dir src &amp;&amp;
+drmr analyze "https://example.com/clear.mpd" --download-dir src &amp;&amp;
 drmr plan src/input.mpd --to clear --format mp4 --output result.mp4 --save plan.json &amp;&amp;
 drmr convert --plan plan.json &amp;&amp;
 drmr verify --plan plan.json
 
 # cenc input
-drmr analyze https://example.com/cenc.mpd --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/cenc.mpd" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.mpd --to clear --format mp4 --output result.mp4 --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # cbcs input
-drmr analyze https://example.com/cbcs.mpd --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/cbcs.mpd" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.mpd --to clear --format mp4 --output result.mp4 --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
@@ -760,19 +760,19 @@ drmr verify --plan plan.json --keys-file keys.json
 <h3 id="recipe-dash-mp4-cenc" tabindex="-1">DASH → MP4 / cenc</h3>
 <p><a href="#recipe-setup">Setup</a></p>
 <figure class="guide-example" aria-labelledby="example-51-title" data-code-language="sh"><figcaption id="example-51-title">Example 51: sh</figcaption><pre tabindex="0"><code># Clear input
-drmr analyze https://example.com/clear.mpd --download-dir src &amp;&amp;
+drmr analyze "https://example.com/clear.mpd" --download-dir src &amp;&amp;
 drmr plan src/input.mpd --to cenc --format mp4 --output result.mp4 --save plan.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # cenc input
-drmr analyze https://example.com/cenc.mpd --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/cenc.mpd" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.mpd --to cenc --format mp4 --output result.mp4 --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # cbcs input
-drmr analyze https://example.com/cbcs.mpd --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/cbcs.mpd" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.mpd --to cenc --format mp4 --output result.mp4 --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
@@ -781,19 +781,19 @@ drmr verify --plan plan.json --keys-file keys.json
 <h3 id="recipe-dash-mp4-cbcs" tabindex="-1">DASH → MP4 / cbcs</h3>
 <p><a href="#recipe-setup">Setup</a></p>
 <figure class="guide-example" aria-labelledby="example-52-title" data-code-language="sh"><figcaption id="example-52-title">Example 52: sh</figcaption><pre tabindex="0"><code># Clear input
-drmr analyze https://example.com/clear.mpd --download-dir src &amp;&amp;
+drmr analyze "https://example.com/clear.mpd" --download-dir src &amp;&amp;
 drmr plan src/input.mpd --to cbcs --format mp4 --output result.mp4 --save plan.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # cenc input
-drmr analyze https://example.com/cenc.mpd --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/cenc.mpd" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.mpd --to cbcs --format mp4 --output result.mp4 --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # cbcs input
-drmr analyze https://example.com/cbcs.mpd --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/cbcs.mpd" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.mpd --to cbcs --format mp4 --output result.mp4 --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
@@ -802,19 +802,19 @@ drmr verify --plan plan.json --keys-file keys.json
 <h3 id="recipe-dash-dash-clear" tabindex="-1">DASH → DASH / Clear</h3>
 <p><a href="#recipe-setup">Setup</a></p>
 <figure class="guide-example" aria-labelledby="example-53-title" data-code-language="sh"><figcaption id="example-53-title">Example 53: sh</figcaption><pre tabindex="0"><code># Clear input
-drmr analyze https://example.com/clear.mpd --download-dir src &amp;&amp;
+drmr analyze "https://example.com/clear.mpd" --download-dir src &amp;&amp;
 drmr plan src/input.mpd --to clear --format dash --output result --save plan.json &amp;&amp;
 drmr convert --plan plan.json &amp;&amp;
 drmr verify --plan plan.json
 
 # cenc input
-drmr analyze https://example.com/cenc.mpd --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/cenc.mpd" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.mpd --to clear --format dash --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # cbcs input
-drmr analyze https://example.com/cbcs.mpd --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/cbcs.mpd" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.mpd --to clear --format dash --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
@@ -823,19 +823,19 @@ drmr verify --plan plan.json --keys-file keys.json
 <h3 id="recipe-dash-dash-cenc" tabindex="-1">DASH → DASH / cenc</h3>
 <p><a href="#recipe-setup">Setup</a></p>
 <figure class="guide-example" aria-labelledby="example-54-title" data-code-language="sh"><figcaption id="example-54-title">Example 54: sh</figcaption><pre tabindex="0"><code># Clear input
-drmr analyze https://example.com/clear.mpd --download-dir src &amp;&amp;
+drmr analyze "https://example.com/clear.mpd" --download-dir src &amp;&amp;
 drmr plan src/input.mpd --to cenc --format dash --output result --save plan.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # cenc input
-drmr analyze https://example.com/cenc.mpd --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/cenc.mpd" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.mpd --to cenc --format dash --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # cbcs input
-drmr analyze https://example.com/cbcs.mpd --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/cbcs.mpd" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.mpd --to cenc --format dash --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
@@ -844,19 +844,19 @@ drmr verify --plan plan.json --keys-file keys.json
 <h3 id="recipe-dash-dash-cbcs" tabindex="-1">DASH → DASH / cbcs</h3>
 <p><a href="#recipe-setup">Setup</a></p>
 <figure class="guide-example" aria-labelledby="example-55-title" data-code-language="sh"><figcaption id="example-55-title">Example 55: sh</figcaption><pre tabindex="0"><code># Clear input
-drmr analyze https://example.com/clear.mpd --download-dir src &amp;&amp;
+drmr analyze "https://example.com/clear.mpd" --download-dir src &amp;&amp;
 drmr plan src/input.mpd --to cbcs --format dash --output result --save plan.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # cenc input
-drmr analyze https://example.com/cenc.mpd --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/cenc.mpd" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.mpd --to cbcs --format dash --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # cbcs input
-drmr analyze https://example.com/cbcs.mpd --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/cbcs.mpd" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.mpd --to cbcs --format dash --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
@@ -865,19 +865,19 @@ drmr verify --plan plan.json --keys-file keys.json
 <h3 id="recipe-dash-hls-clear" tabindex="-1">DASH → HLS / fMP4 / Clear</h3>
 <p><a href="#recipe-setup">Setup</a></p>
 <figure class="guide-example" aria-labelledby="example-56-title" data-code-language="sh"><figcaption id="example-56-title">Example 56: sh</figcaption><pre tabindex="0"><code># Clear input
-drmr analyze https://example.com/clear.mpd --download-dir src &amp;&amp;
+drmr analyze "https://example.com/clear.mpd" --download-dir src &amp;&amp;
 drmr plan src/input.mpd --to clear --format hls --output result --save plan.json &amp;&amp;
 drmr convert --plan plan.json &amp;&amp;
 drmr verify --plan plan.json
 
 # cenc input
-drmr analyze https://example.com/cenc.mpd --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/cenc.mpd" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.mpd --to clear --format hls --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # cbcs input
-drmr analyze https://example.com/cbcs.mpd --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/cbcs.mpd" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.mpd --to clear --format hls --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
@@ -886,19 +886,19 @@ drmr verify --plan plan.json --keys-file keys.json
 <h3 id="recipe-dash-hls-cbcs" tabindex="-1">DASH → HLS / fMP4 / cbcs</h3>
 <p><a href="#recipe-setup">Setup</a></p>
 <figure class="guide-example" aria-labelledby="example-57-title" data-code-language="sh"><figcaption id="example-57-title">Example 57: sh</figcaption><pre tabindex="0"><code># Clear input
-drmr analyze https://example.com/clear.mpd --download-dir src &amp;&amp;
+drmr analyze "https://example.com/clear.mpd" --download-dir src &amp;&amp;
 drmr plan src/input.mpd --to cbcs --format hls --output result --save plan.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # cenc input
-drmr analyze https://example.com/cenc.mpd --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/cenc.mpd" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.mpd --to cbcs --format hls --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # cbcs input
-drmr analyze https://example.com/cbcs.mpd --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/cbcs.mpd" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.mpd --to cbcs --format hls --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
@@ -907,19 +907,19 @@ drmr verify --plan plan.json --keys-file keys.json
 <h3 id="recipe-dash-hls-hls-aes128" tabindex="-1">DASH → HLS / fMP4 / AES-128</h3>
 <p><a href="#recipe-setup">Setup</a></p>
 <figure class="guide-example" aria-labelledby="example-58-title" data-code-language="sh"><figcaption id="example-58-title">Example 58: sh</figcaption><pre tabindex="0"><code># Clear input
-drmr analyze https://example.com/clear.mpd --download-dir src &amp;&amp;
+drmr analyze "https://example.com/clear.mpd" --download-dir src &amp;&amp;
 drmr plan src/input.mpd --to hls-aes128 --format hls --output result --save plan.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # cenc input
-drmr analyze https://example.com/cenc.mpd --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/cenc.mpd" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.mpd --to hls-aes128 --format hls --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # cbcs input
-drmr analyze https://example.com/cbcs.mpd --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/cbcs.mpd" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.mpd --to hls-aes128 --format hls --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
@@ -928,25 +928,25 @@ drmr verify --plan plan.json --keys-file keys.json
 <h3 id="recipe-hls-fmp4-mp4-clear" tabindex="-1">HLS / fMP4 → MP4 / Clear</h3>
 <p><a href="#recipe-setup">Setup</a></p>
 <figure class="guide-example" aria-labelledby="example-59-title" data-code-language="sh"><figcaption id="example-59-title">Example 59: sh</figcaption><pre tabindex="0"><code># Clear input
-drmr analyze https://example.com/clear.m3u8 --download-dir src &amp;&amp;
+drmr analyze "https://example.com/clear.m3u8" --download-dir src &amp;&amp;
 drmr plan src/input.m3u8 --to clear --format mp4 --output result.mp4 --save plan.json &amp;&amp;
 drmr convert --plan plan.json &amp;&amp;
 drmr verify --plan plan.json
 
 # cenc input
-drmr analyze https://example.com/cenc.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/cenc.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to clear --format mp4 --output result.mp4 --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # cbcs input
-drmr analyze https://example.com/cbcs.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/cbcs.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to clear --format mp4 --output result.mp4 --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # AES-128 input
-drmr analyze https://example.com/aes128.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/aes128.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to clear --format mp4 --output result.mp4 --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
@@ -955,25 +955,25 @@ drmr verify --plan plan.json --keys-file keys.json
 <h3 id="recipe-hls-fmp4-mp4-cenc" tabindex="-1">HLS / fMP4 → MP4 / cenc</h3>
 <p><a href="#recipe-setup">Setup</a></p>
 <figure class="guide-example" aria-labelledby="example-60-title" data-code-language="sh"><figcaption id="example-60-title">Example 60: sh</figcaption><pre tabindex="0"><code># Clear input
-drmr analyze https://example.com/clear.m3u8 --download-dir src &amp;&amp;
+drmr analyze "https://example.com/clear.m3u8" --download-dir src &amp;&amp;
 drmr plan src/input.m3u8 --to cenc --format mp4 --output result.mp4 --save plan.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # cenc input
-drmr analyze https://example.com/cenc.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/cenc.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to cenc --format mp4 --output result.mp4 --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # cbcs input
-drmr analyze https://example.com/cbcs.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/cbcs.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to cenc --format mp4 --output result.mp4 --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # AES-128 input
-drmr analyze https://example.com/aes128.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/aes128.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to cenc --format mp4 --output result.mp4 --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
@@ -982,25 +982,25 @@ drmr verify --plan plan.json --keys-file keys.json
 <h3 id="recipe-hls-fmp4-mp4-cbcs" tabindex="-1">HLS / fMP4 → MP4 / cbcs</h3>
 <p><a href="#recipe-setup">Setup</a></p>
 <figure class="guide-example" aria-labelledby="example-61-title" data-code-language="sh"><figcaption id="example-61-title">Example 61: sh</figcaption><pre tabindex="0"><code># Clear input
-drmr analyze https://example.com/clear.m3u8 --download-dir src &amp;&amp;
+drmr analyze "https://example.com/clear.m3u8" --download-dir src &amp;&amp;
 drmr plan src/input.m3u8 --to cbcs --format mp4 --output result.mp4 --save plan.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # cenc input
-drmr analyze https://example.com/cenc.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/cenc.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to cbcs --format mp4 --output result.mp4 --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # cbcs input
-drmr analyze https://example.com/cbcs.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/cbcs.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to cbcs --format mp4 --output result.mp4 --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # AES-128 input
-drmr analyze https://example.com/aes128.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/aes128.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to cbcs --format mp4 --output result.mp4 --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
@@ -1009,25 +1009,25 @@ drmr verify --plan plan.json --keys-file keys.json
 <h3 id="recipe-hls-fmp4-dash-clear" tabindex="-1">HLS / fMP4 → DASH / Clear</h3>
 <p><a href="#recipe-setup">Setup</a></p>
 <figure class="guide-example" aria-labelledby="example-62-title" data-code-language="sh"><figcaption id="example-62-title">Example 62: sh</figcaption><pre tabindex="0"><code># Clear input
-drmr analyze https://example.com/clear.m3u8 --download-dir src &amp;&amp;
+drmr analyze "https://example.com/clear.m3u8" --download-dir src &amp;&amp;
 drmr plan src/input.m3u8 --to clear --format dash --output result --save plan.json &amp;&amp;
 drmr convert --plan plan.json &amp;&amp;
 drmr verify --plan plan.json
 
 # cenc input
-drmr analyze https://example.com/cenc.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/cenc.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to clear --format dash --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # cbcs input
-drmr analyze https://example.com/cbcs.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/cbcs.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to clear --format dash --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # AES-128 input
-drmr analyze https://example.com/aes128.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/aes128.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to clear --format dash --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
@@ -1036,25 +1036,25 @@ drmr verify --plan plan.json --keys-file keys.json
 <h3 id="recipe-hls-fmp4-dash-cenc" tabindex="-1">HLS / fMP4 → DASH / cenc</h3>
 <p><a href="#recipe-setup">Setup</a></p>
 <figure class="guide-example" aria-labelledby="example-63-title" data-code-language="sh"><figcaption id="example-63-title">Example 63: sh</figcaption><pre tabindex="0"><code># Clear input
-drmr analyze https://example.com/clear.m3u8 --download-dir src &amp;&amp;
+drmr analyze "https://example.com/clear.m3u8" --download-dir src &amp;&amp;
 drmr plan src/input.m3u8 --to cenc --format dash --output result --save plan.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # cenc input
-drmr analyze https://example.com/cenc.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/cenc.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to cenc --format dash --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # cbcs input
-drmr analyze https://example.com/cbcs.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/cbcs.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to cenc --format dash --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # AES-128 input
-drmr analyze https://example.com/aes128.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/aes128.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to cenc --format dash --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
@@ -1063,25 +1063,25 @@ drmr verify --plan plan.json --keys-file keys.json
 <h3 id="recipe-hls-fmp4-dash-cbcs" tabindex="-1">HLS / fMP4 → DASH / cbcs</h3>
 <p><a href="#recipe-setup">Setup</a></p>
 <figure class="guide-example" aria-labelledby="example-64-title" data-code-language="sh"><figcaption id="example-64-title">Example 64: sh</figcaption><pre tabindex="0"><code># Clear input
-drmr analyze https://example.com/clear.m3u8 --download-dir src &amp;&amp;
+drmr analyze "https://example.com/clear.m3u8" --download-dir src &amp;&amp;
 drmr plan src/input.m3u8 --to cbcs --format dash --output result --save plan.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # cenc input
-drmr analyze https://example.com/cenc.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/cenc.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to cbcs --format dash --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # cbcs input
-drmr analyze https://example.com/cbcs.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/cbcs.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to cbcs --format dash --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # AES-128 input
-drmr analyze https://example.com/aes128.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/aes128.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to cbcs --format dash --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
@@ -1090,25 +1090,25 @@ drmr verify --plan plan.json --keys-file keys.json
 <h3 id="recipe-hls-fmp4-hls-clear" tabindex="-1">HLS / fMP4 → HLS / fMP4 / Clear</h3>
 <p><a href="#recipe-setup">Setup</a></p>
 <figure class="guide-example" aria-labelledby="example-65-title" data-code-language="sh"><figcaption id="example-65-title">Example 65: sh</figcaption><pre tabindex="0"><code># Clear input
-drmr analyze https://example.com/clear.m3u8 --download-dir src &amp;&amp;
+drmr analyze "https://example.com/clear.m3u8" --download-dir src &amp;&amp;
 drmr plan src/input.m3u8 --to clear --format hls --output result --save plan.json &amp;&amp;
 drmr convert --plan plan.json &amp;&amp;
 drmr verify --plan plan.json
 
 # cenc input
-drmr analyze https://example.com/cenc.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/cenc.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to clear --format hls --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # cbcs input
-drmr analyze https://example.com/cbcs.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/cbcs.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to clear --format hls --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # AES-128 input
-drmr analyze https://example.com/aes128.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/aes128.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to clear --format hls --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
@@ -1117,25 +1117,25 @@ drmr verify --plan plan.json --keys-file keys.json
 <h3 id="recipe-hls-fmp4-hls-cbcs" tabindex="-1">HLS / fMP4 → HLS / fMP4 / cbcs</h3>
 <p><a href="#recipe-setup">Setup</a></p>
 <figure class="guide-example" aria-labelledby="example-66-title" data-code-language="sh"><figcaption id="example-66-title">Example 66: sh</figcaption><pre tabindex="0"><code># Clear input
-drmr analyze https://example.com/clear.m3u8 --download-dir src &amp;&amp;
+drmr analyze "https://example.com/clear.m3u8" --download-dir src &amp;&amp;
 drmr plan src/input.m3u8 --to cbcs --format hls --output result --save plan.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # cenc input
-drmr analyze https://example.com/cenc.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/cenc.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to cbcs --format hls --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # cbcs input
-drmr analyze https://example.com/cbcs.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/cbcs.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to cbcs --format hls --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # AES-128 input
-drmr analyze https://example.com/aes128.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/aes128.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to cbcs --format hls --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
@@ -1144,25 +1144,25 @@ drmr verify --plan plan.json --keys-file keys.json
 <h3 id="recipe-hls-fmp4-hls-hls-aes128" tabindex="-1">HLS / fMP4 → HLS / fMP4 / AES-128</h3>
 <p><a href="#recipe-setup">Setup</a></p>
 <figure class="guide-example" aria-labelledby="example-67-title" data-code-language="sh"><figcaption id="example-67-title">Example 67: sh</figcaption><pre tabindex="0"><code># Clear input
-drmr analyze https://example.com/clear.m3u8 --download-dir src &amp;&amp;
+drmr analyze "https://example.com/clear.m3u8" --download-dir src &amp;&amp;
 drmr plan src/input.m3u8 --to hls-aes128 --format hls --output result --save plan.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # cenc input
-drmr analyze https://example.com/cenc.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/cenc.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to hls-aes128 --format hls --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # cbcs input
-drmr analyze https://example.com/cbcs.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/cbcs.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to hls-aes128 --format hls --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # AES-128 input
-drmr analyze https://example.com/aes128.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/aes128.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to hls-aes128 --format hls --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
@@ -1171,19 +1171,19 @@ drmr verify --plan plan.json --keys-file keys.json
 <h3 id="recipe-hls-ts-video-dash-clear" tabindex="-1">HLS / MPEG-TS (video) → DASH / Clear</h3>
 <p><a href="#recipe-setup">Setup</a></p>
 <figure class="guide-example" aria-labelledby="example-68-title" data-code-language="sh"><figcaption id="example-68-title">Example 68: sh</figcaption><pre tabindex="0"><code># Clear input
-drmr analyze https://example.com/clear.m3u8 --download-dir src &amp;&amp;
+drmr analyze "https://example.com/clear.m3u8" --download-dir src &amp;&amp;
 drmr plan src/input.m3u8 --to clear --format dash --output result --save plan.json &amp;&amp;
 drmr convert --plan plan.json &amp;&amp;
 drmr verify --plan plan.json
 
 # AES-128 input
-drmr analyze https://example.com/aes128.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/aes128.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to clear --format dash --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # SAMPLE-AES input
-drmr analyze https://example.com/sample-aes.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/sample-aes.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to clear --format dash --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
@@ -1192,19 +1192,19 @@ drmr verify --plan plan.json --keys-file keys.json
 <h3 id="recipe-hls-ts-video-dash-cenc" tabindex="-1">HLS / MPEG-TS (video) → DASH / cenc</h3>
 <p><a href="#recipe-setup">Setup</a></p>
 <figure class="guide-example" aria-labelledby="example-69-title" data-code-language="sh"><figcaption id="example-69-title">Example 69: sh</figcaption><pre tabindex="0"><code># Clear input
-drmr analyze https://example.com/clear.m3u8 --download-dir src &amp;&amp;
+drmr analyze "https://example.com/clear.m3u8" --download-dir src &amp;&amp;
 drmr plan src/input.m3u8 --to cenc --format dash --output result --save plan.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # AES-128 input
-drmr analyze https://example.com/aes128.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/aes128.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to cenc --format dash --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # SAMPLE-AES input
-drmr analyze https://example.com/sample-aes.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/sample-aes.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to cenc --format dash --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
@@ -1213,19 +1213,19 @@ drmr verify --plan plan.json --keys-file keys.json
 <h3 id="recipe-hls-ts-video-dash-cbcs" tabindex="-1">HLS / MPEG-TS (video) → DASH / cbcs</h3>
 <p><a href="#recipe-setup">Setup</a></p>
 <figure class="guide-example" aria-labelledby="example-70-title" data-code-language="sh"><figcaption id="example-70-title">Example 70: sh</figcaption><pre tabindex="0"><code># Clear input
-drmr analyze https://example.com/clear.m3u8 --download-dir src &amp;&amp;
+drmr analyze "https://example.com/clear.m3u8" --download-dir src &amp;&amp;
 drmr plan src/input.m3u8 --to cbcs --format dash --output result --save plan.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # AES-128 input
-drmr analyze https://example.com/aes128.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/aes128.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to cbcs --format dash --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # SAMPLE-AES input
-drmr analyze https://example.com/sample-aes.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/sample-aes.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to cbcs --format dash --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
@@ -1234,19 +1234,19 @@ drmr verify --plan plan.json --keys-file keys.json
 <h3 id="recipe-hls-ts-video-hls-clear" tabindex="-1">HLS / MPEG-TS (video) → HLS / fMP4 / Clear</h3>
 <p><a href="#recipe-setup">Setup</a></p>
 <figure class="guide-example" aria-labelledby="example-71-title" data-code-language="sh"><figcaption id="example-71-title">Example 71: sh</figcaption><pre tabindex="0"><code># Clear input
-drmr analyze https://example.com/clear.m3u8 --download-dir src &amp;&amp;
+drmr analyze "https://example.com/clear.m3u8" --download-dir src &amp;&amp;
 drmr plan src/input.m3u8 --to clear --format hls --output result --save plan.json &amp;&amp;
 drmr convert --plan plan.json &amp;&amp;
 drmr verify --plan plan.json
 
 # AES-128 input
-drmr analyze https://example.com/aes128.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/aes128.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to clear --format hls --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # SAMPLE-AES input
-drmr analyze https://example.com/sample-aes.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/sample-aes.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to clear --format hls --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
@@ -1255,19 +1255,19 @@ drmr verify --plan plan.json --keys-file keys.json
 <h3 id="recipe-hls-ts-video-hls-cbcs" tabindex="-1">HLS / MPEG-TS (video) → HLS / fMP4 / cbcs</h3>
 <p><a href="#recipe-setup">Setup</a></p>
 <figure class="guide-example" aria-labelledby="example-72-title" data-code-language="sh"><figcaption id="example-72-title">Example 72: sh</figcaption><pre tabindex="0"><code># Clear input
-drmr analyze https://example.com/clear.m3u8 --download-dir src &amp;&amp;
+drmr analyze "https://example.com/clear.m3u8" --download-dir src &amp;&amp;
 drmr plan src/input.m3u8 --to cbcs --format hls --output result --save plan.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # AES-128 input
-drmr analyze https://example.com/aes128.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/aes128.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to cbcs --format hls --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # SAMPLE-AES input
-drmr analyze https://example.com/sample-aes.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/sample-aes.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to cbcs --format hls --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
@@ -1276,19 +1276,19 @@ drmr verify --plan plan.json --keys-file keys.json
 <h3 id="recipe-hls-ts-video-hls-hls-aes128" tabindex="-1">HLS / MPEG-TS (video) → HLS / fMP4 / AES-128</h3>
 <p><a href="#recipe-setup">Setup</a></p>
 <figure class="guide-example" aria-labelledby="example-73-title" data-code-language="sh"><figcaption id="example-73-title">Example 73: sh</figcaption><pre tabindex="0"><code># Clear input
-drmr analyze https://example.com/clear.m3u8 --download-dir src &amp;&amp;
+drmr analyze "https://example.com/clear.m3u8" --download-dir src &amp;&amp;
 drmr plan src/input.m3u8 --to hls-aes128 --format hls --output result --save plan.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # AES-128 input
-drmr analyze https://example.com/aes128.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/aes128.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to hls-aes128 --format hls --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # SAMPLE-AES input
-drmr analyze https://example.com/sample-aes.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/sample-aes.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to hls-aes128 --format hls --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
@@ -1297,19 +1297,19 @@ drmr verify --plan plan.json --keys-file keys.json
 <h3 id="recipe-hls-ts-video-hls-ts-clear" tabindex="-1">HLS / MPEG-TS (video) → HLS / MPEG-TS / Clear</h3>
 <p><a href="#recipe-setup">Setup</a></p>
 <figure class="guide-example" aria-labelledby="example-74-title" data-code-language="sh"><figcaption id="example-74-title">Example 74: sh</figcaption><pre tabindex="0"><code># Clear input
-drmr analyze https://example.com/clear.m3u8 --download-dir src &amp;&amp;
+drmr analyze "https://example.com/clear.m3u8" --download-dir src &amp;&amp;
 drmr plan src/input.m3u8 --to clear --format hls-ts --output result --save plan.json &amp;&amp;
 drmr convert --plan plan.json &amp;&amp;
 drmr verify --plan plan.json
 
 # AES-128 input
-drmr analyze https://example.com/aes128.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/aes128.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to clear --format hls-ts --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # SAMPLE-AES input
-drmr analyze https://example.com/sample-aes.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/sample-aes.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to clear --format hls-ts --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
@@ -1318,19 +1318,19 @@ drmr verify --plan plan.json --keys-file keys.json
 <h3 id="recipe-hls-ts-video-hls-ts-hls-aes128" tabindex="-1">HLS / MPEG-TS (video) → HLS / MPEG-TS / AES-128</h3>
 <p><a href="#recipe-setup">Setup</a></p>
 <figure class="guide-example" aria-labelledby="example-75-title" data-code-language="sh"><figcaption id="example-75-title">Example 75: sh</figcaption><pre tabindex="0"><code># Clear input
-drmr analyze https://example.com/clear.m3u8 --download-dir src &amp;&amp;
+drmr analyze "https://example.com/clear.m3u8" --download-dir src &amp;&amp;
 drmr plan src/input.m3u8 --to hls-aes128 --format hls-ts --output result --save plan.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # AES-128 input
-drmr analyze https://example.com/aes128.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/aes128.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to hls-aes128 --format hls-ts --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # SAMPLE-AES input
-drmr analyze https://example.com/sample-aes.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/sample-aes.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to hls-aes128 --format hls-ts --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
@@ -1339,19 +1339,19 @@ drmr verify --plan plan.json --keys-file keys.json
 <h3 id="recipe-hls-ts-video-hls-ts-hls-sample-aes" tabindex="-1">HLS / MPEG-TS (video) → HLS / MPEG-TS / SAMPLE-AES</h3>
 <p><a href="#recipe-setup">Setup</a></p>
 <figure class="guide-example" aria-labelledby="example-76-title" data-code-language="sh"><figcaption id="example-76-title">Example 76: sh</figcaption><pre tabindex="0"><code># Clear input
-drmr analyze https://example.com/clear.m3u8 --download-dir src &amp;&amp;
+drmr analyze "https://example.com/clear.m3u8" --download-dir src &amp;&amp;
 drmr plan src/input.m3u8 --to hls-sample-aes --format hls-ts --output result --save plan.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # AES-128 input
-drmr analyze https://example.com/aes128.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/aes128.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to hls-sample-aes --format hls-ts --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # SAMPLE-AES input
-drmr analyze https://example.com/sample-aes.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/sample-aes.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to hls-sample-aes --format hls-ts --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
@@ -1360,19 +1360,19 @@ drmr verify --plan plan.json --keys-file keys.json
 <h3 id="recipe-hls-ts-audio-dash-clear" tabindex="-1">HLS / MPEG-TS (audio only) → DASH / Clear</h3>
 <p><a href="#recipe-setup">Setup</a></p>
 <figure class="guide-example" aria-labelledby="example-77-title" data-code-language="sh"><figcaption id="example-77-title">Example 77: sh</figcaption><pre tabindex="0"><code># Clear input
-drmr analyze https://example.com/clear.m3u8 --download-dir src &amp;&amp;
+drmr analyze "https://example.com/clear.m3u8" --download-dir src &amp;&amp;
 drmr plan src/input.m3u8 --to clear --format dash --output result --save plan.json &amp;&amp;
 drmr convert --plan plan.json &amp;&amp;
 drmr verify --plan plan.json
 
 # AES-128 input
-drmr analyze https://example.com/aes128.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/aes128.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to clear --format dash --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # SAMPLE-AES input
-drmr analyze https://example.com/sample-aes.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/sample-aes.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to clear --format dash --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
@@ -1381,19 +1381,19 @@ drmr verify --plan plan.json --keys-file keys.json
 <h3 id="recipe-hls-ts-audio-dash-cenc" tabindex="-1">HLS / MPEG-TS (audio only) → DASH / cenc</h3>
 <p><a href="#recipe-setup">Setup</a></p>
 <figure class="guide-example" aria-labelledby="example-78-title" data-code-language="sh"><figcaption id="example-78-title">Example 78: sh</figcaption><pre tabindex="0"><code># Clear input
-drmr analyze https://example.com/clear.m3u8 --download-dir src &amp;&amp;
+drmr analyze "https://example.com/clear.m3u8" --download-dir src &amp;&amp;
 drmr plan src/input.m3u8 --to cenc --format dash --output result --save plan.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # AES-128 input
-drmr analyze https://example.com/aes128.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/aes128.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to cenc --format dash --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # SAMPLE-AES input
-drmr analyze https://example.com/sample-aes.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/sample-aes.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to cenc --format dash --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
@@ -1402,19 +1402,19 @@ drmr verify --plan plan.json --keys-file keys.json
 <h3 id="recipe-hls-ts-audio-dash-cbcs" tabindex="-1">HLS / MPEG-TS (audio only) → DASH / cbcs</h3>
 <p><a href="#recipe-setup">Setup</a></p>
 <figure class="guide-example" aria-labelledby="example-79-title" data-code-language="sh"><figcaption id="example-79-title">Example 79: sh</figcaption><pre tabindex="0"><code># Clear input
-drmr analyze https://example.com/clear.m3u8 --download-dir src &amp;&amp;
+drmr analyze "https://example.com/clear.m3u8" --download-dir src &amp;&amp;
 drmr plan src/input.m3u8 --to cbcs --format dash --output result --save plan.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # AES-128 input
-drmr analyze https://example.com/aes128.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/aes128.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to cbcs --format dash --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # SAMPLE-AES input
-drmr analyze https://example.com/sample-aes.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/sample-aes.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to cbcs --format dash --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
@@ -1423,19 +1423,19 @@ drmr verify --plan plan.json --keys-file keys.json
 <h3 id="recipe-hls-ts-audio-hls-clear" tabindex="-1">HLS / MPEG-TS (audio only) → HLS / fMP4 / Clear</h3>
 <p><a href="#recipe-setup">Setup</a></p>
 <figure class="guide-example" aria-labelledby="example-80-title" data-code-language="sh"><figcaption id="example-80-title">Example 80: sh</figcaption><pre tabindex="0"><code># Clear input
-drmr analyze https://example.com/clear.m3u8 --download-dir src &amp;&amp;
+drmr analyze "https://example.com/clear.m3u8" --download-dir src &amp;&amp;
 drmr plan src/input.m3u8 --to clear --format hls --output result --save plan.json &amp;&amp;
 drmr convert --plan plan.json &amp;&amp;
 drmr verify --plan plan.json
 
 # AES-128 input
-drmr analyze https://example.com/aes128.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/aes128.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to clear --format hls --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # SAMPLE-AES input
-drmr analyze https://example.com/sample-aes.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/sample-aes.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to clear --format hls --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
@@ -1444,19 +1444,19 @@ drmr verify --plan plan.json --keys-file keys.json
 <h3 id="recipe-hls-ts-audio-hls-cbcs" tabindex="-1">HLS / MPEG-TS (audio only) → HLS / fMP4 / cbcs</h3>
 <p><a href="#recipe-setup">Setup</a></p>
 <figure class="guide-example" aria-labelledby="example-81-title" data-code-language="sh"><figcaption id="example-81-title">Example 81: sh</figcaption><pre tabindex="0"><code># Clear input
-drmr analyze https://example.com/clear.m3u8 --download-dir src &amp;&amp;
+drmr analyze "https://example.com/clear.m3u8" --download-dir src &amp;&amp;
 drmr plan src/input.m3u8 --to cbcs --format hls --output result --save plan.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # AES-128 input
-drmr analyze https://example.com/aes128.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/aes128.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to cbcs --format hls --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # SAMPLE-AES input
-drmr analyze https://example.com/sample-aes.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/sample-aes.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to cbcs --format hls --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
@@ -1465,19 +1465,19 @@ drmr verify --plan plan.json --keys-file keys.json
 <h3 id="recipe-hls-ts-audio-hls-hls-aes128" tabindex="-1">HLS / MPEG-TS (audio only) → HLS / fMP4 / AES-128</h3>
 <p><a href="#recipe-setup">Setup</a></p>
 <figure class="guide-example" aria-labelledby="example-82-title" data-code-language="sh"><figcaption id="example-82-title">Example 82: sh</figcaption><pre tabindex="0"><code># Clear input
-drmr analyze https://example.com/clear.m3u8 --download-dir src &amp;&amp;
+drmr analyze "https://example.com/clear.m3u8" --download-dir src &amp;&amp;
 drmr plan src/input.m3u8 --to hls-aes128 --format hls --output result --save plan.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # AES-128 input
-drmr analyze https://example.com/aes128.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/aes128.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to hls-aes128 --format hls --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # SAMPLE-AES input
-drmr analyze https://example.com/sample-aes.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/sample-aes.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to hls-aes128 --format hls --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
@@ -1486,19 +1486,19 @@ drmr verify --plan plan.json --keys-file keys.json
 <h3 id="recipe-hls-ts-audio-hls-ts-clear" tabindex="-1">HLS / MPEG-TS (audio only) → HLS / MPEG-TS / Clear</h3>
 <p><a href="#recipe-setup">Setup</a></p>
 <figure class="guide-example" aria-labelledby="example-83-title" data-code-language="sh"><figcaption id="example-83-title">Example 83: sh</figcaption><pre tabindex="0"><code># Clear input
-drmr analyze https://example.com/clear.m3u8 --download-dir src &amp;&amp;
+drmr analyze "https://example.com/clear.m3u8" --download-dir src &amp;&amp;
 drmr plan src/input.m3u8 --to clear --format hls-ts --output result --save plan.json &amp;&amp;
 drmr convert --plan plan.json &amp;&amp;
 drmr verify --plan plan.json
 
 # AES-128 input
-drmr analyze https://example.com/aes128.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/aes128.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to clear --format hls-ts --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # SAMPLE-AES input
-drmr analyze https://example.com/sample-aes.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/sample-aes.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to clear --format hls-ts --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
@@ -1507,19 +1507,19 @@ drmr verify --plan plan.json --keys-file keys.json
 <h3 id="recipe-hls-ts-audio-hls-ts-hls-aes128" tabindex="-1">HLS / MPEG-TS (audio only) → HLS / MPEG-TS / AES-128</h3>
 <p><a href="#recipe-setup">Setup</a></p>
 <figure class="guide-example" aria-labelledby="example-84-title" data-code-language="sh"><figcaption id="example-84-title">Example 84: sh</figcaption><pre tabindex="0"><code># Clear input
-drmr analyze https://example.com/clear.m3u8 --download-dir src &amp;&amp;
+drmr analyze "https://example.com/clear.m3u8" --download-dir src &amp;&amp;
 drmr plan src/input.m3u8 --to hls-aes128 --format hls-ts --output result --save plan.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # AES-128 input
-drmr analyze https://example.com/aes128.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/aes128.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to hls-aes128 --format hls-ts --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # SAMPLE-AES input
-drmr analyze https://example.com/sample-aes.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/sample-aes.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to hls-aes128 --format hls-ts --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
@@ -1528,19 +1528,19 @@ drmr verify --plan plan.json --keys-file keys.json
 <h3 id="recipe-hls-ts-audio-hls-ts-hls-sample-aes" tabindex="-1">HLS / MPEG-TS (audio only) → HLS / MPEG-TS / SAMPLE-AES</h3>
 <p><a href="#recipe-setup">Setup</a></p>
 <figure class="guide-example" aria-labelledby="example-85-title" data-code-language="sh"><figcaption id="example-85-title">Example 85: sh</figcaption><pre tabindex="0"><code># Clear input
-drmr analyze https://example.com/clear.m3u8 --download-dir src &amp;&amp;
+drmr analyze "https://example.com/clear.m3u8" --download-dir src &amp;&amp;
 drmr plan src/input.m3u8 --to hls-sample-aes --format hls-ts --output result --save plan.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # AES-128 input
-drmr analyze https://example.com/aes128.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/aes128.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to hls-sample-aes --format hls-ts --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
 
 # SAMPLE-AES input
-drmr analyze https://example.com/sample-aes.m3u8 --download-dir src --keys-file keys.json &amp;&amp;
+drmr analyze "https://example.com/sample-aes.m3u8" --download-dir src --keys-file keys.json &amp;&amp;
 drmr plan src/input.m3u8 --to hls-sample-aes --format hls-ts --output result --save plan.json --keys-file keys.json &amp;&amp;
 drmr convert --plan plan.json --keys-file keys.json &amp;&amp;
 drmr verify --plan plan.json --keys-file keys.json
@@ -1609,9 +1609,9 @@ drmr verify result/dash/manifest.mpd --manifest-only --json
 <h3>Capture a local source</h3>
 <p>Create a private source JSON with explicit local-read permission:</p>
 <figure class="guide-example" aria-labelledby="example-87-title" data-code-language="json"><figcaption id="example-87-title">Example 87: json</figcaption><pre tabindex="0"><code>{
-  &quot;url&quot;: &quot;/absolute/path/media/master.m3u8&quot;,
-  &quot;policy&quot;: {
-    &quot;allowed_local_roots&quot;: [&quot;/absolute/path/media&quot;]
+  "url": "/absolute/path/media/master.m3u8",
+  "policy": {
+    "allowed_local_roots": ["/absolute/path/media"]
   }
 }
 </code></pre></figure>
@@ -1623,9 +1623,9 @@ drmr verify-snapshot --files output/sample/clear/source
 <p>Remote inputs instead need the supported fetch policy and origin permissions. The private analysis directory retains the source URLs and downloaded resources. <code>analysis.json</code> binds the saved snapshot; an arbitrary edited JSON file is not a new valid source.</p>
 <h3>Package with signaling</h3>
 <figure class="guide-example" aria-labelledby="example-89-title" data-code-language="json"><figcaption id="example-89-title">Example 89: json</figcaption><pre tabindex="0"><code>{
-  &quot;widevine_pssh&quot;: &quot;&lt;hex-or-base64-widevine-initialization-data&gt;&quot;,
-  &quot;playready_la_url&quot;: &quot;https://license.example.invalid/acquire&quot;,
-  &quot;fairplay_uri&quot;: &quot;skd://content-identifier&quot;
+  "widevine_pssh": "&lt;hex-or-base64-widevine-initialization-data&gt;",
+  "playready_la_url": "https://license.example.invalid/acquire",
+  "fairplay_uri": "skd://content-identifier"
 }
 </code></pre></figure>
 <figure class="guide-example" aria-labelledby="example-90-title" data-code-language="sh"><figcaption id="example-90-title">Example 90: sh</figcaption><pre tabindex="0"><code>chmod 600 drm.json
@@ -1669,17 +1669,17 @@ drmr run \
 </tbody></table></div>
 <p>Save this readable asset record as <code>asset.json</code>; the actual work list uses one line per record:</p>
 <figure class="guide-example" aria-labelledby="example-93-title" data-code-language="json"><figcaption id="example-93-title">Example 93: json</figcaption><pre tabindex="0"><code>{
-  &quot;asset_id&quot;: &quot;sample&quot;,
-  &quot;kind&quot;: &quot;dash-cenc&quot;,
-  &quot;dash_manifest&quot;:
-    &quot;sample/download/manifest.example.test/sample/dash/manifest.mpd&quot;,
-  &quot;hls_master&quot;:
-    &quot;sample/download/manifest.example.test/sample/hls/manifest.m3u8&quot;
+  "asset_id": "sample",
+  "kind": "dash-cenc",
+  "dash_manifest":
+    "sample/download/manifest.example.test/sample/dash/manifest.mpd",
+  "hls_master":
+    "sample/download/manifest.example.test/sample/hls/manifest.m3u8"
 }
 </code></pre></figure>
-<figure class="guide-example" aria-labelledby="example-94-title" data-code-language="sh"><figcaption id="example-94-title">Example 94: sh</figcaption><pre tabindex="0"><code>printf &#x27;%s\n&#x27; &#x27;{&quot;schema_version&quot;:&quot;1&quot;}&#x27; &gt; work-list.jsonl
+<figure class="guide-example" aria-labelledby="example-94-title" data-code-language="sh"><figcaption id="example-94-title">Example 94: sh</figcaption><pre tabindex="0"><code>printf '%s\n' '{"schema_version":"1"}' &gt; work-list.jsonl
 {
-  drmr canonical asset.json &amp;&amp; printf &#x27;\n&#x27;
+  drmr canonical asset.json &amp;&amp; printf '\n'
 } &gt;&gt; work-list.jsonl
 drmr batch --work-list work-list.jsonl --output output \
   --resume-log resume.jsonl --plan
@@ -1723,29 +1723,29 @@ drmr verify result/manifest.mpd --source source.mpd \
 <h3>Build an image from committed source</h3>
 <p>The image includes drmr, FFmpeg/ffprobe, Bento4 mp4dump and Shaka Packager. Build requires Git and BuildKit-capable Docker. Native Linux amd64/arm64 are supported build targets; select Linux containers in Docker Desktop.</p>
 <figure class="guide-example" aria-labelledby="example-97-title" data-code-language="sh"><figcaption id="example-97-title">Example 97: sh</figcaption><pre tabindex="0"><code>revision=$(git rev-parse HEAD)
-tree=$(git rev-parse &quot;${revision}^{tree}&quot;)
-git archive --format=tar &quot;$revision&quot; | docker build \
-  --build-arg DRMR_REVISION=&quot;$revision&quot; \
-  --build-arg DRMR_TREE=&quot;$tree&quot; --tag drmr:local -
+tree=$(git rev-parse "${revision}^{tree}")
+git archive --format=tar "$revision" | docker build \
+  --build-arg DRMR_REVISION="$revision" \
+  --build-arg DRMR_TREE="$tree" --tag drmr:local -
 docker run --rm --init drmr:local doctor --probe --route all
 </code></pre></figure>
 <p>This captures committed files and the lockfile, excluding uncommitted changes. Keep keys, input, downloads and output outside the repository and bind-mount them at runtime. Initial compilation uses time and disk; Docker retains caches. Image compiler pins are separate from the CLI&#x27;s supported minimum Rust version.</p>
 <h3>Read-only input and private configuration</h3>
 <p>Prepare host <code>media</code>, <code>config</code> and <code>output</code> directories. Protect configuration/output for your user and key JSON with mode 600. This example assumes supported DASH and valid keys already exist:</p>
-<figure class="guide-example" aria-labelledby="example-98-title" data-code-language="sh"><figcaption id="example-98-title">Example 98: sh</figcaption><pre tabindex="0"><code>docker run --rm --init --user &quot;$(id -u):$(id -g)&quot; \
-  --mount &quot;type=bind,src=$PWD/media,dst=/input,readonly&quot; \
-  --mount &quot;type=bind,src=$PWD/config,dst=/config,readonly&quot; \
-  --mount &quot;type=bind,src=$PWD/output,dst=/output&quot; \
+<figure class="guide-example" aria-labelledby="example-98-title" data-code-language="sh"><figcaption id="example-98-title">Example 98: sh</figcaption><pre tabindex="0"><code>docker run --rm --init --user "$(id -u):$(id -g)" \
+  --mount "type=bind,src=$PWD/media,dst=/input,readonly" \
+  --mount "type=bind,src=$PWD/config,dst=/config,readonly" \
+  --mount "type=bind,src=$PWD/output,dst=/output" \
   drmr:local convert /input/manifest.mpd \
   --to cbcs --format dash --output /output/protected-dash \
   --keys-file /config/keys.json
 </code></pre></figure>
 <p>Paths passed to drmr are container paths. <code>/input</code> and <code>/config</code> are read-only; <code>/output</code> is writable. Matching host UID/GID allows owner-only key reading and output ownership. The default image user is not root. drmr does not repair unsafe host ownership or permissions.</p>
 <p>Fresh verification can mount the result read-only:</p>
-<figure class="guide-example" aria-labelledby="example-99-title" data-code-language="sh"><figcaption id="example-99-title">Example 99: sh</figcaption><pre tabindex="0"><code>docker run --rm --init --user &quot;$(id -u):$(id -g)&quot; \
-  --mount &quot;type=bind,src=$PWD/media,dst=/input,readonly&quot; \
-  --mount &quot;type=bind,src=$PWD/config,dst=/config,readonly&quot; \
-  --mount &quot;type=bind,src=$PWD/output,dst=/output,readonly&quot; \
+<figure class="guide-example" aria-labelledby="example-99-title" data-code-language="sh"><figcaption id="example-99-title">Example 99: sh</figcaption><pre tabindex="0"><code>docker run --rm --init --user "$(id -u):$(id -g)" \
+  --mount "type=bind,src=$PWD/media,dst=/input,readonly" \
+  --mount "type=bind,src=$PWD/config,dst=/config,readonly" \
+  --mount "type=bind,src=$PWD/output,dst=/output,readonly" \
   drmr:local verify /output/protected-dash/manifest.mpd \
   --source /input/manifest.mpd --keys-file /config/keys.json --json
 </code></pre></figure>
@@ -1759,9 +1759,9 @@ docker run --rm --init drmr:local doctor --probe --route all
 <h3>Web console networking</h3>
 <p>On Linux, host networking preserves the default loopback address <code>127.0.0.1:8080</code>:</p>
 <figure class="guide-example" aria-labelledby="example-101-title" data-code-language="sh"><figcaption id="example-101-title">Example 101: sh</figcaption><pre tabindex="0"><code>docker run --rm --init --name drmr-console --network host \
-  --user &quot;$(id -u):$(id -g)&quot; \
-  --mount &quot;type=bind,src=$PWD/catalog,dst=/catalog,readonly&quot; \
-  --mount &quot;type=bind,src=$PWD/output,dst=/output&quot; \
+  --user "$(id -u):$(id -g)" \
+  --mount "type=bind,src=$PWD/catalog,dst=/catalog,readonly" \
+  --mount "type=bind,src=$PWD/output,dst=/output" \
   --env DRMR_CATALOG_ROOT=/catalog --env DRMR_OUTPUT_ROOT=/output \
   drmr:local serve
 </code></pre></figure>
@@ -1781,15 +1781,15 @@ docker run --rm --init drmr:local doctor --probe --route all
 <h3>Owner-only key files</h3>
 <p>Windows uses an access-control list (ACL), not chmod. The protected ACL must disable inheritance, retain the current user as owner and grant that user full control. The following creates a new private directory and empty key file before editing secret content:</p>
 <figure class="guide-example" aria-labelledby="example-103-title" data-code-language="powershell"><figcaption id="example-103-title">Example 103: powershell</figcaption><pre tabindex="0"><code>$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
-$private = Join-Path $env:LOCALAPPDATA &#x27;drmr-keys&#x27;
-if (Test-Path -LiteralPath $private) { throw &#x27;Choose a new directory&#x27; }
+$private = Join-Path $env:LOCALAPPDATA 'drmr-keys'
+if (Test-Path -LiteralPath $private) { throw 'Choose a new directory' }
 New-Item -ItemType Directory -Path $private | Out-Null
 
 function Set-OwnerOnlyAcl($path, $security) {
     $security.SetOwner($sid)
     $security.SetAccessRuleProtection($true, $false)
     $rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
-        $sid, &#x27;FullControl&#x27;, &#x27;Allow&#x27;)
+        $sid, 'FullControl', 'Allow')
     $security.AddAccessRule($rule)
     Set-Acl -LiteralPath $path -AclObject $security
 }
@@ -1797,21 +1797,21 @@ function Set-OwnerOnlyAcl($path, $security) {
 </code></pre></figure>
 <p>Apply the ACL to the directory and file, then enter keys:</p>
 <figure class="guide-example" aria-labelledby="example-104-title" data-code-language="powershell"><figcaption id="example-104-title">Example 104: powershell</figcaption><pre tabindex="0"><code>Set-OwnerOnlyAcl $private ([Security.AccessControl.DirectorySecurity]::new())
-$keyFile = Join-Path $private &#x27;keys.json&#x27;
+$keyFile = Join-Path $private 'keys.json'
 New-Item -ItemType File -Path $keyFile | Out-Null
 Set-OwnerOnlyAcl $keyFile ([Security.AccessControl.FileSecurity]::new())
 notepad $keyFile
 </code></pre></figure>
 <p>If an editor replaces the file and changes its ACL, reapply the owner-only ACL while keeping it inside the private directory. drmr does not silently fix an unsafe existing key file.</p>
 <h3>PowerShell conversion</h3>
-<figure class="guide-example" aria-labelledby="example-105-title" data-code-language="powershell"><figcaption id="example-105-title">Example 105: powershell</figcaption><pre tabindex="0"><code>.\drmr.exe inspect &#x27;C:\media\source.mp4&#x27; --json
-.\drmr.exe plan &#x27;C:\media\source.mp4&#x27; --to cbcs --format mp4
-$outDir = Join-Path $env:LOCALAPPDATA &#x27;drmr-output&#x27;
+<figure class="guide-example" aria-labelledby="example-105-title" data-code-language="powershell"><figcaption id="example-105-title">Example 105: powershell</figcaption><pre tabindex="0"><code>.\drmr.exe inspect 'C:\media\source.mp4' --json
+.\drmr.exe plan 'C:\media\source.mp4' --to cbcs --format mp4
+$outDir = Join-Path $env:LOCALAPPDATA 'drmr-output'
 New-Item -ItemType Directory -Path $outDir -Force | Out-Null
-$result = Join-Path $outDir &#x27;protected.mp4&#x27;
-.\drmr.exe convert &#x27;C:\media\source.mp4&#x27; --to cbcs --format mp4 `
+$result = Join-Path $outDir 'protected.mp4'
+.\drmr.exe convert 'C:\media\source.mp4' --to cbcs --format mp4 `
   --output $result --keys-file $keyFile
-.\drmr.exe verify $result --source &#x27;C:\media\source.mp4&#x27; `
+.\drmr.exe verify $result --source 'C:\media\source.mp4' `
   --keys-file $keyFile --json
 </code></pre></figure>
 <p>Create <code>drmr-output</code> first and choose a nonexistent <code>protected.mp4</code>. Manifest URIs and object keys continue to use <code>/</code>, unlike native Windows paths. Ctrl+C/Ctrl+Break return 130 only after descendant and file-lock confirmation. Arbitrary filesystem/tool configurations, including long paths, are not guaranteed merely because native Windows CI passes.</p>
@@ -1846,11 +1846,11 @@ drmr serve
 <h3>Prepared-HLS connection policy</h3>
 <p>Without extra configuration, the default profile allows only the input URL&#x27;s own HTTPS origin. Additional origins/credentials require a private named-profile file. <code>DRMR_HLS_PROFILES</code> is that file path, not inline JSON:</p>
 <figure class="guide-example" aria-labelledby="example-107-title" data-code-language="json"><figcaption id="example-107-title">Example 107: json</figcaption><pre tabindex="0"><code>{
-  &quot;default&quot;: {
-    &quot;policy&quot;: {
-      &quot;allowed_origins&quot;: [&quot;https://media.example.com&quot;],
-      &quot;headers_by_origin&quot;: {
-        &quot;https://media.example.com&quot;: {&quot;Authorization&quot;: &quot;Bearer &lt;token&gt;&quot;}
+  "default": {
+    "policy": {
+      "allowed_origins": ["https://media.example.com"],
+      "headers_by_origin": {
+        "https://media.example.com": {"Authorization": "Bearer &lt;token&gt;"}
       }
     }
   }
@@ -1894,8 +1894,8 @@ drmr serve
 <p>Quit drmr stops admission and waits for server/tool confirmation. If cleanup is unconfirmed, the app keeps the window and owners, displays the error and permits another Quit attempt after the cause is fixed. This differs from OS force-quit.</p>
 <h3>Launch environment and bundle</h3>
 <p>Finder&#x27;s PATH may differ from a terminal. The app does not run shell startup files or guess installation paths. Launch from a terminal that can find your tools when needed:</p>
-<figure class="guide-example" aria-labelledby="example-109-title" data-code-language="sh"><figcaption id="example-109-title">Example 109: sh</figcaption><pre tabindex="0"><code>&quot;/path/to/drmr.app/Contents/MacOS/drmr&quot; doctor
-&quot;/path/to/drmr.app/Contents/MacOS/drmr-desktop&quot;
+<figure class="guide-example" aria-labelledby="example-109-title" data-code-language="sh"><figcaption id="example-109-title">Example 109: sh</figcaption><pre tabindex="0"><code>"/path/to/drmr.app/Contents/MacOS/drmr" doctor
+"/path/to/drmr.app/Contents/MacOS/drmr-desktop"
 </code></pre></figure>
 <p>Check external tools performs doctor-style version/help diagnostics, not media validation. An unconfirmed diagnostic process retains ownership and prevents normal exit or opening the console.</p>
 <p>CLI and host are paired inside one bundle; the host checks the CLI SHA-256. Media tools, keys, downloads and deployment configuration are not bundled. <code>build-manifest.json</code> records source/tree and binary identity; it is not a signed build-origin certificate.</p>
@@ -1904,7 +1904,7 @@ drmr serve
 <figure class="guide-example" aria-labelledby="example-110-title" data-code-language="sh"><figcaption id="example-110-title">Example 110: sh</figcaption><pre tabindex="0"><code>RUSTUP_TOOLCHAIN=1.95.0 python3 tools/build_desktop.py --bundle
 </code></pre></figure>
 <p>The preceding is a POSIX shell example. PowerShell uses a separate environment assignment:</p>
-<figure class="guide-example" aria-labelledby="example-111-title" data-code-language="powershell"><figcaption id="example-111-title">Example 111: powershell</figcaption><pre tabindex="0"><code>$env:RUSTUP_TOOLCHAIN = &#x27;1.95.0&#x27;
+<figure class="guide-example" aria-labelledby="example-111-title" data-code-language="powershell"><figcaption id="example-111-title">Example 111: powershell</figcaption><pre tabindex="0"><code>$env:RUSTUP_TOOLCHAIN = '1.95.0'
 python tools/build_desktop.py --bundle
 </code></pre></figure>
 <p><code>--release</code> selects optimization. Use a dedicated <code>CARGO_TARGET_DIR</code>; the default is <code>target/desktop</code>. The helper stages matching CLI/notices and produces an unsigned macOS app or Windows/Linux portable directory/archive. Existing bundles are refused. Signing, notarization and installers are outside this workflow.</p>
@@ -1917,36 +1917,36 @@ python tools/build_desktop.py --bundle
 <h3>JSON and progress</h3>
 <p>Use <code>convert --json</code> or <code>verify --json</code> for machine-readable output. A successful unmeasured verification produces one versioned JSON object:</p>
 <figure class="guide-example" aria-labelledby="example-112-title" data-code-language="json"><figcaption id="example-112-title">Example 112: json</figcaption><pre tabindex="0"><code>{
-  &quot;schema_version&quot;: 1,
-  &quot;passed&quot;: true,
-  &quot;media_verified&quot;: true,
-  &quot;checks&quot;: {
-    &quot;stream_metadata&quot;: &quot;pass&quot;,
-    &quot;packet_payloads_equal&quot;: true,
-    &quot;packet_timing_equal&quot;: true,
-    &quot;decoded_content_equal&quot;: true
+  "schema_version": 1,
+  "passed": true,
+  "media_verified": true,
+  "checks": {
+    "stream_metadata": "pass",
+    "packet_payloads_equal": true,
+    "packet_timing_equal": true,
+    "decoded_content_equal": true
   },
-  &quot;license_playback_verified&quot;: false
+  "license_playback_verified": false
 }
 </code></pre></figure>
 <p>Operational failure after a valid command returns <code>schema_version: 1</code>, <code>command</code>, <code>status</code> (<code>failed</code> or <code>cancelled</code>) and a fixed safe <code>error</code> containing <code>code</code>, <code>hint</code>, <code>last_activity</code>. A completed mismatch also retains comparison fields. For example, removing a finite video window can retain payload/decoded equality but fail timing:</p>
 <figure class="guide-example" aria-labelledby="example-113-title" data-code-language="json"><figcaption id="example-113-title">Example 113: json</figcaption><pre tabindex="0"><code>{
-  &quot;schema_version&quot;: 1,
-  &quot;passed&quot;: false,
-  &quot;media_verified&quot;: false,
-  &quot;checks&quot;: {
-    &quot;stream_metadata&quot;: &quot;pass&quot;,
-    &quot;packet_payloads_equal&quot;: true,
-    &quot;packet_timing_equal&quot;: false,
-    &quot;decoded_content_equal&quot;: true
+  "schema_version": 1,
+  "passed": false,
+  "media_verified": false,
+  "checks": {
+    "stream_metadata": "pass",
+    "packet_payloads_equal": true,
+    "packet_timing_equal": false,
+    "decoded_content_equal": true
   },
-  &quot;license_playback_verified&quot;: false,
-  &quot;command&quot;: &quot;verify&quot;,
-  &quot;status&quot;: &quot;failed&quot;,
-  &quot;error&quot;: {
-    &quot;code&quot;: &quot;verification-mismatch&quot;,
-    &quot;hint&quot;: &quot;Review every source/result check. Do not use the result as verified media.&quot;,
-    &quot;last_activity&quot;: &quot;verification&quot;
+  "license_playback_verified": false,
+  "command": "verify",
+  "status": "failed",
+  "error": {
+    "code": "verification-mismatch",
+    "hint": "Review every source/result check. Do not use the result as verified media.",
+    "last_activity": "verification"
   }
 }
 </code></pre></figure>
@@ -2058,7 +2058,7 @@ cargo test --locked -p drmr-core --test conversion_bundle_encryption \
 <p>For example, prepare the version-1 output key configuration from chapter 5 and select the installed executable for a conversion. Replace the input, new output, configuration and executable paths with the ones in your environment:</p>
 <figure class="guide-example" aria-labelledby="example-116-title" data-code-language="sh"><figcaption id="example-116-title">Example 116: sh</figcaption><pre tabindex="0"><code>drmr convert original.mp4 --to cbcs --format mp4 \
   --output protected.mp4 --keys-file config/keys.json \
-  --packager-bin &quot;/opt/media-tools/packager&quot;
+  --packager-bin "/opt/media-tools/packager"
 </code></pre></figure>
 <h3>doctor</h3>
 <div class="guide-table-scroll" role="region" aria-labelledby="table-19-title" tabindex="0"><table><caption id="table-19-title">doctor — Table 19</caption><thead><tr><th scope="col">Option</th><th scope="col">Meaning/default</th></tr></thead><tbody>

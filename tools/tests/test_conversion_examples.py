@@ -61,6 +61,7 @@ class ConversionExamples(unittest.TestCase):
                     extension = "mp4" if source == "mp4" else "mpd" if source == "dash" else "m3u8"
                     name = {"hls-aes128": "aes128", "hls-sample-aes": "sample-aes"}.get(protection, protection)
                     self.assertEqual(commands[0][2], f"https://example.com/{name}.{extension}")
+                    self.assertIn(f'analyze "https://example.com/{name}.{extension}" --download-dir', lines[0])
                     self.assertEqual(commands[0][commands[0].index("--download-dir") + 1], "src")
                     self.assertEqual(plan[2], "src/input." + extension)
                     checked += 1

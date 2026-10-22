@@ -57,7 +57,7 @@ def commands(source, output, target, input_protection):
     input_keys = " --keys-file keys.json" if input_protection != "clear" else ""
     runtime_keys = " --keys-file keys.json" if input_protection != "clear" or target != "clear" else ""
     destination = "result.mp4" if output == "mp4" else "result"
-    lines = [f"drmr analyze https://example.com/{name}.{extension} --download-dir src{input_keys}",
+    lines = [f'drmr analyze "https://example.com/{name}.{extension}" --download-dir src{input_keys}',
              f"drmr plan {INPUTS[source]['source']} --to {target} --format {output} "
              f"--output {destination} --save plan.json{input_keys}",
              f"drmr convert --plan plan.json{runtime_keys}",
