@@ -131,7 +131,7 @@ try {
     $researchStage = 'prepare-native-regression'
     $nativeFixture = Join-Path $PSScriptRoot 'windows-cli-private-acl-tests.ps1'
     . $nativeFixture -Directory $directory -Checkout $checkout -Python $python
-    Initialize-PrivateAclRegression $directory $userSid
+    Initialize-PrivateAclRegression $directory $userSid $parent $directoryIdentity $python $checkout
     $temporaryIdentity = Get-DrmrArchiveDirectoryIdentity (Join-Path $directory 'temp') $python
     $context = @{
         python = $python; helper = (Join-Path $checkout 'tools/qualify_cli_archive.py')
@@ -139,6 +139,7 @@ try {
         research = (Join-Path $PSScriptRoot 'windows_archive_acl_research.py')
         native_fixture = $nativeFixture; checkout = $checkout; parent = $parent
         identity = $directoryIdentity; temporary_identity = $temporaryIdentity
+        collector_sid = $adminSid.Value
     }
     $researchStage = 'write-fixture'
     $context | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $directory 'context.json')
@@ -150,7 +151,7 @@ try {
     $principal = [Security.Principal.WindowsPrincipal]::new($identity)
     if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { exit 4 }
     $context = Get-Content -Raw (Join-Path $PSScriptRoot 'context.json') | ConvertFrom-Json
-    & powershell.exe -NoLogo -NoProfile -NonInteractive -File $context.native_fixture -Ordinary -Directory $PSScriptRoot -Checkout $context.checkout -Python $context.python -ExpectedParent $context.parent -ExpectedIdentity $context.identity -ExpectedTempIdentity $context.temporary_identity
+    & powershell.exe -NoLogo -NoProfile -NonInteractive -File $context.native_fixture -Ordinary -Directory $PSScriptRoot -Checkout $context.checkout -Python $context.python -ExpectedParent $context.parent -ExpectedIdentity $context.identity -ExpectedTempIdentity $context.temporary_identity -ExpectedCollectorSid $context.collector_sid
     if ($LASTEXITCODE -ne 0) { exit 7 }
     [IO.File]::WriteAllText((Join-Path $PSScriptRoot 'qualification.json'), '{}')
     New-Item -ItemType Directory -Path (Join-Path $PSScriptRoot 'temp') | Out-Null
@@ -175,7 +176,7 @@ try {
         Assert-ExactKeys $nativeFailure @('schema_version', 'stage', 'category', 'hresult')
         Assert-ResearchInteger $nativeFailure.schema_version 1 1
         Assert-ResearchInteger $nativeFailure.hresult -2147483648 4294967295
-        Assert-OwnerResearch ($nativeFailure.stage -cin @('entered', 'root-premise', 'foreign-permission', 'helper-run', 'helper-positive', 'helper-negative-snapshot', 'document-extraction', 'document-positive', 'document-negative', 'owned-cleanup'))
+        Assert-OwnerResearch ($nativeFailure.stage -cin @('entered', 'root-premise', 'root-identity', 'ordinary-user', 'parent-profile', 'temporary-identity', 'temporary-profile', 'foreign-permission', 'helper-run', 'helper-positive', 'helper-negative-snapshot', 'document-extraction', 'document-positive', 'document-negative', 'owned-cleanup'))
         Assert-OwnerResearch ($nativeFailure.category -cin @('RuntimeException', 'MethodInvocationException', 'UnauthorizedAccessException', 'ItemNotFoundException', 'Win32Exception', 'UnclassifiedException'))
         Write-Output ('DRMR_PRIVATE_ACL_FAILURE ' + ($nativeFailure | ConvertTo-Json -Compress))
     }
@@ -259,9 +260,9 @@ try {
     throw 'The controlled owner diagnostic failed'
 } finally {
     Complete-DrmrArchiveOwner -Directory $directory -ExpectedParent $parent -ExpectedIdentity $directoryIdentity -Python $python -PowerShell $shell -WorkingDirectory $checkout -Credential $credential -UserSid $userSid -Process $process -DirectoryCreated $directoryCreated -ExecutionAttempted $executionAttempted -ExecutionExited $executionExited
+    if (-not (Test-Path -LiteralPath $directory)) { Write-Output 'DRMR_ACL_OWNER_OWNED_CLEANUP_CONFIRMED' }
 }
 Assert-OwnerResearch (-not (Test-Path -LiteralPath $directory))
-Write-Output 'DRMR_ACL_OWNER_OWNED_CLEANUP_CONFIRMED'
 if ($classifiedFailure) {
     Write-Output 'DRMR_ACL_MODIFY_ONLY_ACCESS_DENIED_CONFIRMED'
     if ($env:GITHUB_OUTPUT) { Add-Content -LiteralPath $env:GITHUB_OUTPUT 'classified_failure=true' }

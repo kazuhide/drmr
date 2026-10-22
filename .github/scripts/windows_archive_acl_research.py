@@ -26,6 +26,7 @@ PHRASES = (
     ("private acl verification failed", "PrivateAclVerificationFailed"),
     ("the handle is invalid", "InvalidHandle"),
     ("could not load file or assembly", "AssemblyLoadFailure"),
+    ("nameerror", "PythonNameError"),
 )
 CATEGORIES = frozenset(EXCEPTIONS + OPERATIONS + tuple(value for _, value in PHRASES) +
                        ("NoStderr", "UnclassifiedStderr"))
