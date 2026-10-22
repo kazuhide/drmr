@@ -707,7 +707,7 @@ See [URL conversion](https://github.com/kazuhide/drmr/blob/main/docs/usage.md).
 
 ## Example prerequisites and key file {#recipe-setup}
 
-Select an output in the matrix and **one four-command group** for your input's protection. The groups are alternatives. These POSIX shell examples use `&&` to stop on failure. They share files; `|` instead passes standard output. Replace the `https://example.com` URL.
+Select an output in the matrix and **one four-command group** for your input's protection. The groups are alternatives. In a POSIX shell on macOS/Linux, `\` continues a command on the next line and `&&` stops the sequence on failure. These commands share files; `|` instead passes standard output. Replace the `https://example.com` URL.
 
 Use an existing private working directory. drmr saves the input in `src` and creates `plan.json` and `result` (MP4: `result.mp4`); these paths must be new. No `mkdir` or `cd` is needed. For another run, change all paths consistently or use another directory. For [fetch policy settings](#url-input), add `--fetch-policy config/fetch.json` to `analyze`.
 

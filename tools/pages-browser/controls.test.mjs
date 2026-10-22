@@ -545,7 +545,12 @@ function recipeSample(recipe = matrixRecipes.find(value => value.id === 'recipe-
     const inputKeys = profile === 'Clear' ? '' : ' --keys-file keys.json';
     const runtimeKeys = profile === 'Clear' && recipe.target === 'clear' ? '' : ' --keys-file keys.json';
     const output = recipe.format === 'mp4' ? 'result.mp4' : 'result';
-    return `# ${profile} input\ndrmr analyze "https://example.com/${name}.${extension}" --download-dir src${inputKeys} &&\ndrmr plan src/input.${extension} --to ${recipe.target} --format ${recipe.format} --output ${output} --save plan.json${inputKeys} &&\ndrmr convert --plan plan.json${runtimeKeys} &&\ndrmr verify --plan plan.json${runtimeKeys}`;
+    return [`# ${profile} input`, `drmr analyze "https://example.com/${name}.${extension}" \\`,
+      `  --download-dir src${inputKeys} &&`,
+      `drmr plan src/input.${extension} --to ${recipe.target} --format ${recipe.format} \\`,
+      `  --output ${output} --save plan.json${inputKeys} &&`,
+      `drmr convert --plan plan.json${runtimeKeys} &&`,
+      `drmr verify --plan plan.json${runtimeKeys}`].join('\n');
   }).join('\n\n') + '\n';
   return { id: recipe.id, tag: 'H3', tabindex: '-1', chapter: 'url-input', heading: 'HLS to DASH',
     presented: true, setupTag: 'P', setupHrefs: ['#recipe-setup'], figureTag: 'FIGURE',
@@ -621,21 +626,21 @@ test('key options are required only by the source and runtime protection roles',
     for (let index = 0; index < groups.length; index++) {
       const lines = groups[index].split('\n');
       const encryptedInput = lines[0] !== '# Clear input';
-      for (let command = 1; command <= 4; command++) {
-        const required = encryptedInput || (command >= 3 && expected.target !== 'clear');
-        assert.equal(lines[command].includes('--keys-file keys.json'), required);
+      for (const [operation, line] of [2, 4, 5, 6].entries()) {
+        const required = encryptedInput || (operation >= 2 && expected.target !== 'clear');
+        assert.equal(lines[line].includes('--keys-file keys.json'), required);
         const changed = [...lines];
-        changed[command] = required ? changed[command].replace(' --keys-file keys.json', '')
-          : changed[command].replace(/( &&)?$/, ' --keys-file keys.json$1');
+        changed[line] = required ? changed[line].replace(' --keys-file keys.json', '')
+          : changed[line].replace(/( &&)?$/, ' --keys-file keys.json$1');
         const code = groups.map((group, current) => current === index ? changed.join('\n') : group).join('\n\n') + '\n';
         assert.throws(() => requireRecipe({ ...good, code, rendered: code }, expected),
-          `${expected.id}: ${lines[0]}, operation ${command}`);
+          `${expected.id}: ${lines[0]}, operation ${operation + 1}`);
       }
     }
   }
 });
 
-test('every input group stops on failure and uses the same saved plan through verification', () => {
+test('every input group retains literal continuations, stops on failure and verifies the same saved plan', () => {
   for (const expected of matrixRecipes) {
     const good = recipeSample(expected);
     requireRecipe(good, expected);
@@ -643,15 +648,23 @@ test('every input group stops on failure and uses the same saved plan through ve
     for (let index = 0; index < groups.length; index++) {
       const lines = groups[index].split('\n');
       const changes = [];
-      for (let operation = 1; operation <= 3; operation++) {
+      for (const operation of [2, 4, 5]) {
         for (const connector of ['', ';', ' ||']) {
           const changed = [...lines];
           changed[operation] = changed[operation].replace(/ &&$/, connector);
           changes.push(changed);
         }
       }
-      changes.push([...lines.slice(0, 4), lines[4] + ' &&']);
-      for (const operation of [3, 4]) {
+      changes.push([...lines.slice(0, 6), lines[6] + ' &&']);
+      for (const operation of [1, 3]) {
+        const changed = [...lines];
+        changed[operation] = changed[operation].slice(0, -2);
+        changes.push(changed);
+        const trailingSpace = [...lines];
+        trailingSpace[operation] += ' ';
+        changes.push(trailingSpace);
+      }
+      for (const operation of [5, 6]) {
         const changed = [...lines];
         changed[operation] = changed[operation].replace('--plan plan.json', '--plan stale.plan.json');
         changes.push(changed);

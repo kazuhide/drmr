@@ -53,9 +53,10 @@ def recipe_fixture(language="en", first_example=1):
                     runtime_keys = " --keys-file keys.json" if protection != "clear" or target != "clear" else ""
                     name = {"hls-aes128": "aes128", "hls-sample-aes": "sample-aes"}.get(protection, protection)
                     groups.append("# " + protection_labels[protection] + " input\n"
-                                  'drmr analyze "https://example.com/' + name + "." + suffix + '" --download-dir src' + input_keys + " &&\n"
-                                  "drmr plan " + source + " --to " + target + " --format " + output_format
-                                  + " --output " + output + " --save plan.json" + input_keys + " &&\n"
+                                  'drmr analyze "https://example.com/' + name + "." + suffix + '" \\\n'
+                                  "  --download-dir src" + input_keys + " &&\n"
+                                  "drmr plan " + source + " --to " + target + " --format " + output_format + " \\\n"
+                                  "  --output " + output + " --save plan.json" + input_keys + " &&\n"
                                   "drmr convert --plan plan.json" + runtime_keys + " &&\n"
                                   "drmr verify --plan plan.json" + runtime_keys)
                 code = "\n\n".join(groups)
@@ -822,7 +823,8 @@ class ConversionExamples(unittest.TestCase):
 
     def test_each_four_command_group_stops_on_failure_without_shell_boilerplate(self):
         code = next(CHECK.MatrixMarkup(recipe_fixture()).root.descendants("code")).text()
-        for changed in (code.replace(" &&\n", "\n", 1), code.replace(" &&\n", " ;\n", 1),
+        for changed in (code.replace(" \\\n", "\n", 1), code.replace(" \\\n", " \\ \n", 1),
+                        code.replace(" &&\n", "\n", 1), code.replace(" &&\n", " ;\n", 1),
                         code.replace(" &&\n", " ||\n", 1), code + " &&", "set -eu\n" + code,
                         "umask 077\n" + code, "mkdir work\n" + code, "(\n" + code + "\n)"):
             with self.subTest(changed=changed[:90]), self.assertRaisesRegex(CHECK.Failure, "site-guide-recipe-command"):

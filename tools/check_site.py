@@ -385,13 +385,16 @@ def validate_matrix(text, language):
 def validate_recipe_commands(code, row, output_format, target):
     token = "site-guide-recipe-command"
     profiles = dict(MATRIX_ROWS).get(row)
-    lines = [line.strip() for line in code.splitlines() if line.strip()]
-    require(profiles and len(lines) == len(profiles) * 5, token)
+    lines = [line.lstrip() for line in code.splitlines() if line.strip()]
+    require(profiles and len(lines) == len(profiles) * 7, token)
     extension = "mp4" if row == "mp4" else "mpd" if row == "dash" else "m3u8"
     output = "result.mp4" if output_format == "mp4" else "result"
     for index, profile in enumerate(profiles):
-        require(lines[index * 5] == f"# {profile} input", token)
-        steps = lines[index * 5 + 1:index * 5 + 5]
+        require(lines[index * 7] == f"# {profile} input", token)
+        physical = lines[index * 7 + 1:index * 7 + 7]
+        require(physical[0].endswith(" \\") and physical[2].endswith(" \\"), token)
+        steps = [physical[0][:-2] + " " + physical[1], physical[2][:-2] + " " + physical[3],
+                 physical[4], physical[5]]
         require(all(line.endswith(" &&") for line in steps[:3])
                 and not steps[3].endswith(" &&"), token)
         try:

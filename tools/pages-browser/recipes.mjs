@@ -32,12 +32,19 @@ export function requireRecipe(value, expected) {
   const extension = expected.row === 'mp4' ? 'mp4' : expected.row === 'dash' ? 'mpd' : 'm3u8';
   const profiles = inputProfiles[expected.row];
   assert.ok(profiles, 'Recipe input must have an independently supported protection profile');
-  const lines = value.code.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
-  assert.equal(lines.length, profiles.length * 5,
-    'Every supported input protection needs exactly one comment and four simple commands');
+  // Preserve trailing spaces: a continuation backslash must immediately precede the newline.
+  const lines = value.code.split(/\r?\n/).filter(line => line.trim());
+  assert.equal(lines.length, profiles.length * 7,
+    'Every supported input protection needs one comment and four commands with two wrapped lines');
   for (const [index, profile] of profiles.entries()) {
-    assert.equal(lines[index * 5], `# ${profile} input`, 'Input protection groups must be complete and ordered');
-    const steps = lines.slice(index * 5 + 1, index * 5 + 5);
+    assert.equal(lines[index * 7], `# ${profile} input`, 'Input protection groups must be complete and ordered');
+    const physical = lines.slice(index * 7 + 1, index * 7 + 7);
+    for (const start of [0, 2]) assert.match(physical[start], / \\$/,
+      'Analyze and plan must use literal shell continuations for their second line');
+    assert.match(physical[1], /^  --download-dir /);
+    assert.match(physical[3], /^  --output /);
+    const steps = [physical[0].slice(0, -1) + physical[1].trimStart(),
+      physical[2].slice(0, -1) + physical[3].trimStart(), physical[4], physical[5]];
     for (const step of steps.slice(0, 3)) assert.match(step, / &&$/, 'Each operation must stop the group on failure');
     assert.doesNotMatch(steps[3], / &&$/, 'Verification must finish its input group');
     const commands = steps.map(step => step.replace(/ &&$/, '').split(/\s+/));

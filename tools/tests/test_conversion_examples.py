@@ -37,7 +37,9 @@ class ConversionExamples(unittest.TestCase):
         for source, output, target in EXAMPLES.routes():
             for protection in input_profiles[source]:
                 with self.subTest(source=source, output=output, target=target, protection=protection):
-                    lines = EXAMPLES.commands(source, output, target, protection).splitlines()
+                    code = EXAMPLES.commands(source, output, target, protection)
+                    self.assertTrue(all(len(line) <= 72 for line in code.splitlines()))
+                    lines = re.sub(r"\\\n[ \t]*", " ", code).splitlines()
                     self.assertEqual(len(lines), 4)
                     commands = [shlex.split(line) for line in lines]
                     self.assertEqual([command[1] for command in commands], ["analyze", "plan", "convert", "verify"])
@@ -61,7 +63,7 @@ class ConversionExamples(unittest.TestCase):
                     extension = "mp4" if source == "mp4" else "mpd" if source == "dash" else "m3u8"
                     name = {"hls-aes128": "aes128", "hls-sample-aes": "sample-aes"}.get(protection, protection)
                     self.assertEqual(commands[0][2], f"https://example.com/{name}.{extension}")
-                    self.assertIn(f'analyze "https://example.com/{name}.{extension}" --download-dir', lines[0])
+                    self.assertIn(f'analyze "https://example.com/{name}.{extension}"', code.splitlines()[0])
                     self.assertEqual(commands[0][commands[0].index("--download-dir") + 1], "src")
                     self.assertEqual(plan[2], "src/input." + extension)
                     checked += 1
