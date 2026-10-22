@@ -37,7 +37,8 @@ jobs:
   native-build:
     name: Build / ${{ matrix.os }} / ${{ matrix.rust }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 40
+    # Include system-package downloads before native builds and archive checks.
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:

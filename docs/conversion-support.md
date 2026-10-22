@@ -216,7 +216,7 @@ Completed local HLS playlists containing clear, AES-128, or SAMPLE-AES transport
 
 The 44.1 kHz correction is an **Unreleased** change on `main`. The published v1.0.0 archives remain unchanged and accept only 48 kHz AAC from TS. Build the CLI from the current source to use the correction; see [installation](../README.md#install) and [release status](releases.md).
 
-TS input whose final `EXTINF` ends inside the last AAC frame is still refused. Preserving complete frames and their clocks does not establish that this shorter playback range survives conversion. drmr does not guess which trailing samples are padding or verify output extending beyond the declared range. See [AAC timing and presentation limits](media-processing.md#aac-sample-rates-and-transport-clocks).
+A supported AAC-only rendition may declare a playback end inside its final frame. drmr retains the complete encoded frame and preserves the shorter playback range in HLS or DASH. The declaration must identify one exact audio-sample boundary; ambiguous precision, clipping a nonfinal segment, or omitting a whole frame is refused. Standalone MP4 output from TS remains outside this profile. See [AAC playback boundaries](media-processing.md#playback-ending-inside-the-final-aac-frame).
 
 For example, create CBCS DASH from a supported local TS playlist:
 

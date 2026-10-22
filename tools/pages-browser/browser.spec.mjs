@@ -130,7 +130,7 @@ test.afterEach(async ({ page }, info) => {
 
 const focusSelector = 'a[href], pre[tabindex="0"], .matrix-scroll[tabindex="0"]';
 // Fixed inventories include the intentional documentation links in each locale.
-const focusTargetCounts = { en: 81, ja: 80 };
+const focusTargetCounts = { en: 82, ja: 81 };
 
 function textWithoutNotes(node) {
   const text = value => value.nodeType === Node.TEXT_NODE ? value.textContent :
@@ -636,6 +636,8 @@ for (const locale of locales) for (const width of [320, 768, 1024, 1440]) {
       expect(headings[i].name.length).toBeGreaterThan(0);
     }
     const matrix = await renderedMatrix(page, locale);
+    await expect(page.getByRole('link', { name: locale.releaseStatus, exact: true }))
+      .toHaveAttribute('href', 'https://github.com/kazuhide/drmr/blob/main/docs/releases.md');
     const tree = await page.locator('body').ariaSnapshot();
     for (const name of [locale.navigation, locale.footer, locale.languageNavigation]) expect(tree).toContain(`navigation "${name}"`);
     expect(tree).toContain('main:');
@@ -934,38 +936,45 @@ test('native Tab keeps edge targets fully visible only with the production scrol
   monitor(page);
   const comparisons = [];
   const discoveries = [];
+  const viewportHeights = [900, 768, 640];
   try {
     for (const width of [320, 1440]) {
-      // Discover a naturally clipped edge, never manufacture one by scrolling
-      // or refocusing. The full five-second replay below must confirm it.
-      await page.setViewportSize({ width, height: 900 });
-      await page.goto('about:blank');
-      await ready(page);
-      await page.addStyleTag({ content: `${focusSelector} { scroll-margin-block: 0 !important; }` });
-      const route = [];
-      const discovery = { width, viewportHeight: 900, route };
-      discoveries.push(discovery);
-      const candidates = page.locator(focusSelector);
-      await expect(candidates).toHaveCount(focusTargetCounts[english.language]);
       let selected;
-      for (let index = 0; index < focusTargetCounts[english.language]; index++) {
-        await page.keyboard.press('Tab');
-        await expect(candidates.nth(index)).toBeFocused();
-        const sample = await candidates.nth(index).evaluate(focusObservation);
-        const margin = await candidates.nth(index).evaluate(element => getComputedStyle(element).scrollMarginBlockStart);
-        expect(margin).toBe('0px');
-        route.push({ ordinal: index + 1, margin, sample });
-        if (partialFocusCandidate(sample)) {
-          selected = { ordinal: index + 1, identity: sample.target };
-          discovery.selected = selected;
-          break;
+      // Discover only through fresh native Tab routes at these fixed heights.
+      // Unhealthy observations stay fatal; only a healthy route without a
+      // bottom-clipped target can advance to the next viewport candidate.
+      for (const height of viewportHeights) {
+        const route = [];
+        const discovery = { width, viewportHeight: height, route };
+        discoveries.push(discovery);
+        await page.setViewportSize({ width, height });
+        await page.goto('about:blank');
+        await ready(page);
+        await page.addStyleTag({ content: `${focusSelector} { scroll-margin-block: 0 !important; }` });
+        const candidates = page.locator(focusSelector);
+        await expect(candidates).toHaveCount(focusTargetCounts[english.language]);
+        for (let index = 0; index < focusTargetCounts[english.language]; index++) {
+          await page.keyboard.press('Tab');
+          await expect(candidates.nth(index)).toBeFocused();
+          const sample = await candidates.nth(index).evaluate(focusObservation);
+          const margin = await candidates.nth(index).evaluate(element => getComputedStyle(element).scrollMarginBlockStart);
+          expect(margin).toBe('0px');
+          route.push({ ordinal: index + 1, margin, sample });
+          expect(sample.viewport).toEqual({ width, height });
+          if (partialFocusCandidate(sample)) {
+            selected = { width, height, ordinal: index + 1, identity: sample.target };
+            discovery.selected = selected;
+            break;
+          }
         }
+        if (selected) break;
       }
-      expect(selected, 'A native Tab target must naturally cross only the bottom edge with margin disabled').toBeDefined();
-      const { ordinal, identity } = selected;
-      // Reproduce the same ordinal and complete identity in all three states.
+      expect(selected, 'A native Tab target must naturally cross only the bottom edge within the fixed viewport candidates').toBeDefined();
+      const { height, ordinal, identity } = selected;
+      // Reproduce this exact viewport, ordinal and identity without fallback
+      // after any production, disabled-control or restored replay failure.
       for (const state of ['production', 'disabled-control', 'restored']) {
-        await page.setViewportSize({ width, height: 900 });
+        await page.setViewportSize({ width, height });
         await page.goto('about:blank');
         await ready(page);
         if (state === 'disabled-control') {
@@ -990,8 +999,11 @@ test('native Tab keeps edge targets fully visible only with the production scrol
           failure = error;
         }
         const check = monitors.get(page).evidence.focusChecks.at(-1);
-        comparisons.push({ width, state, ...check });
-        for (const sample of check.samples) expect(sample.target).toEqual(identity);
+        comparisons.push({ width, viewportHeight: height, state, ...check });
+        for (const sample of check.samples) {
+          expect(sample.target).toEqual(identity);
+          expect(sample.viewport).toEqual({ width, height });
+        }
         if (state === 'disabled-control') {
           requireClippedFocusTimeout(failure, check);
         } else {
@@ -1003,6 +1015,6 @@ test('native Tab keeps edge targets fully visible only with the production scrol
   } finally {
     await artifact(info, 'scroll-margin-comparison.json', { schema_version: 1,
       source_head: info.config.metadata.sourceHead, source_tree: info.config.metadata.sourceTree,
-      mode: info.config.metadata.mode, discoveries, comparisons });
+      mode: info.config.metadata.mode, viewportHeights, discoveries, comparisons });
   }
 });

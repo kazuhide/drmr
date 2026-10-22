@@ -6,7 +6,7 @@ import { focusObservation, pollFocus, requireFocus, requireImages } from './chec
 import { completeMatrixKey } from './matrix.mjs';
 import { guideChapters, guideLocales, guideObservation, requireGuideLayout,
   guideScrollObservation, requireGuideMovement, guideFiguresObservation, requireGuideFigures,
-  requireGuideCheckpoint } from './guide.mjs';
+  requireGuideCheckpoint, requireGuideCodeEdge, requireGuidePrintCode } from './guide.mjs';
 import { matrixRecipes } from './recipes.mjs';
 
 const live = liveMode(process.env.PAGES_LIVE);
@@ -98,22 +98,24 @@ async function jumpToChapter(page, locale, chapter) {
   expect(rect.y).toBeGreaterThanOrEqual(0);
   expect(rect.y).toBeLessThan(900);
 }
-async function scrollTarget(page, locator, checkpoint) {
+async function scrollTarget(page, locator, checkpoint, axis) {
   const target = await locator.elementHandle();
   expect(target).not.toBeNull();
-  const record = { samples: [] };
+  const record = { axis, samples: [] };
   records.get(page).value.scrolls.push(record);
   try {
     const initial = await target.evaluate(guideScrollObservation);
     expect(initial.focused).toBe(true);
     expect(initial.scrollLeft).toBe(0);
+    expect(initial.scrollTop).toBe(0);
     record.samples.push(initial);
     record.scrollNeeded = initial.scrollWidth > initial.clientWidth;
-    if (!record.scrollNeeded) { record.passed = true; await checkpoint(target); return record; }
+    expect(['horizontal', 'vertical']).toContain(axis);
+    if (axis === 'horizontal' && !record.scrollNeeded) { record.passed = true; await checkpoint(target); return record; }
     const deadline = performance.now() + 5000;
-    const move = async key => {
+    const move = async (key, direction = key === 'ArrowRight' ? 'right' : 'left') => {
       const after = await completeMatrixKey({ before: record.samples.at(-1),
-        direction: key === 'ArrowRight' ? 'right' : 'left', deadline, validateMovement: requireGuideMovement,
+        direction, deadline, validateMovement: requireGuideMovement,
         arm: async () => {
           const handle = await target.evaluateHandle(element => {
             const signal = { element };
@@ -134,10 +136,25 @@ async function scrollTarget(page, locator, checkpoint) {
       });
       record.samples.push({ ...after, completedKey: key, scrollEndObserved: true });
     };
-    for (let count = 0; record.samples.at(-1).scrollLeft < initial.scrollWidth - initial.clientWidth && count < 64; count++) await move('ArrowRight');
-    expect(record.samples.at(-1).scrollLeft).toBe(initial.scrollWidth - initial.clientWidth);
-    for (let count = 0; record.samples.at(-1).scrollLeft > 0 && count < 64; count++) await move('ArrowLeft');
-    expect(record.samples.at(-1).scrollLeft).toBe(0);
+    if (axis === 'horizontal') {
+      for (let count = 0; record.samples.at(-1).scrollLeft < initial.scrollWidth - initial.clientWidth && count < 64; count++) await move('ArrowRight');
+      expect(record.samples.at(-1).scrollLeft).toBe(initial.scrollWidth - initial.clientWidth);
+      for (let count = 0; record.samples.at(-1).scrollLeft > 0 && count < 64; count++) await move('ArrowLeft');
+      expect(record.samples.at(-1).scrollLeft).toBe(0);
+    } else {
+      expect(initial.tag).toBe('PRE');
+      record.vertical = { scrollNeeded: initial.scrollHeight > initial.clientHeight, budget_ms: 5000,
+        start_sample: record.samples.length - 1 };
+      expect(record.vertical.scrollNeeded).toBe(true);
+      requireGuideCodeEdge(record.samples.at(-1), 'top');
+      await move('End', 'down');
+      requireGuideCodeEdge(record.samples.at(-1), 'bottom');
+      record.vertical.bottom_sample = record.samples.length - 1;
+      await move('Home', 'up');
+      requireGuideCodeEdge(record.samples.at(-1), 'top');
+      record.vertical.top_sample = record.samples.length - 1;
+      record.vertical.passed = true;
+    }
     record.passed = true;
     await checkpoint(target);
     return record;
@@ -242,17 +259,32 @@ for (const locale of guideLocales) for (const width of [320, 768, 1024, 1440]) {
     await focus(page, page.getByRole('link', { name: locale.skip, exact: true }), 'skip-link');
     await page.keyboard.press('Enter'); await expect(page.getByRole('main')).toBeFocused();
     const native = [];
-    for (const selector of ['pre[tabindex="0"]', '.guide-table-scroll']) {
+    for (const operation of [
+      { selector: 'pre[tabindex="0"]', axis: 'horizontal', phase: 'native-code-viewport' },
+      { selector: '.guide-table-scroll', axis: 'horizontal', phase: 'native-table-viewport' },
+      { selector: '#windows figure[data-code-language="powershell"] pre[tabindex="0"]', axis: 'vertical',
+        signature: 'function Set-OwnerOnlyAcl($path, $security) {', phase: 'native-code-vertical-viewport' },
+    ]) {
+      const { selector, axis, phase, signature } = operation;
       const started = performance.now();
       await ready(page, locale);
-      const candidates = await page.locator(selector).evaluateAll(nodes => nodes.map((node, index) => ({ index,
+      const targets = signature ? page.locator(selector).filter({ hasText: signature }) : page.locator(selector);
+      if (signature) await expect(targets).toHaveCount(1);
+      const candidates = await targets.evaluateAll(nodes => nodes.map((node, index) => ({ index,
         extent: node.scrollWidth - node.clientWidth, chapter: node.closest('[data-guide-chapter]').id,
         tag: node.tagName, identity: node.getAttribute('aria-labelledby') || node.parentElement.getAttribute('aria-labelledby') })));
-      const selected = candidates.reduce((best, item) => item.extent > best.extent ? item : best);
+      const selected = axis === 'horizontal' ? candidates.reduce((best, item) => item.extent > best.extent ? item : best) : candidates[0];
       await jumpToChapter(page, locale, selected.chapter);
-      const target = page.locator(selector).nth(selected.index);
+      const target = targets.nth(selected.index);
+      if (signature) {
+        expect(selected.chapter).toBe('windows');
+        const code = await target.locator('code').textContent();
+        const functions = [...code.matchAll(/^function Set-OwnerOnlyAcl\(\$path, \$security\) \{\n.*?^\}/gms)];
+        expect(functions).toHaveLength(1);
+        selected.function_sha256 = digest(functions[0][0]);
+        selected.code_sha256 = digest(code);
+      }
       const ordinal = await tabTo(page, target, 'native-scroll-owner');
-      const phase = selector.startsWith('pre') ? 'native-code-viewport' : 'native-table-viewport';
       const expected = { source_head: info.config.metadata.sourceHead, source_tree: info.config.metadata.sourceTree,
         language: locale.language, page_asset: locale.asset, page_sha256: info.config.metadata.assetHashes[locale.asset],
         viewport: { width, height: 900 } };
@@ -271,7 +303,7 @@ for (const locale of guideLocales) for (const width of [320, 768, 1024, 1440]) {
           record.passed = true;
         } finally { record.passed ??= false; }
       };
-      native.push({ selector, selected, ordinal, traversal: await scrollTarget(page, target, checkpoint) });
+      native.push({ selector, axis, signature, selected, ordinal, traversal: await scrollTarget(page, target, checkpoint, axis) });
       network.phases.push({ name: phase, started_ms: started, elapsed_ms: performance.now() - started, passed: true });
     }
     const served = [];
@@ -336,7 +368,10 @@ test('guide native language links retain the selected chapter in both directions
 test('both guides retain all chapters, code and tables in print media', async ({ page, context }, info) => {
   await confined(context); watch(page); const pages = [];
   for (const locale of guideLocales) {
-    await ready(page, locale); await page.emulateMedia({ media: 'print' });
+    await ready(page, locale);
+    const sourceCode = await page.locator('pre code').allTextContents();
+    expect(sourceCode).toHaveLength(105);
+    await page.emulateMedia({ media: 'print' });
     const layout = await page.evaluate(guideObservation); requireGuideLayout(layout);
     const styles = await page.locator('.guide-toc,.guide-chapter-switch,.language-switch,.guide-header-nav,.guide-toplink')
       .evaluateAll(nodes => nodes.map(node => ({ class: node.className, display: getComputedStyle(node).display })));
@@ -346,7 +381,25 @@ test('both guides retain all chapters, code and tables in print media', async ({
       text: node.textContent.trim(), shown: node.getClientRects().length > 0 })));
     expect(contentStyles.length).toBeGreaterThan(0);
     expect(contentStyles.every(row => row.shown && row.text && row.overflow === 'visible' && (row.tag !== 'PRE' || row.whiteSpace === 'pre-wrap'))).toBe(true);
-    pages.push({ language: locale.language, page_asset: locale.asset, page_sha256: info.config.metadata.assetHashes[locale.asset], layout, hidden_navigation: styles, content: contentStyles });
+    const printedCode = await page.locator('pre').evaluateAll(nodes => {
+      const shown = element => {
+        if (!element.getClientRects().length) return false;
+        for (let current = element; current; current = current.parentElement) {
+          const style = getComputedStyle(current);
+          if (style.display === 'none' || style.visibility !== 'visible' || Number(style.opacity) === 0) return false;
+        }
+        return true;
+      };
+      return nodes.map(node => {
+        const style = getComputedStyle(node), code = node.querySelector('code');
+        return { code: code.textContent, rendered: code.innerText, shown: shown(node) && shown(code),
+          maxBlockSize: style.maxBlockSize, overflowX: style.overflowX, overflowY: style.overflowY, whiteSpace: style.whiteSpace,
+          clientWidth: node.clientWidth, scrollWidth: node.scrollWidth,
+          clientHeight: node.clientHeight, scrollHeight: node.scrollHeight };
+      });
+    });
+    requireGuidePrintCode(printedCode, sourceCode);
+    pages.push({ language: locale.language, page_asset: locale.asset, page_sha256: info.config.metadata.assetHashes[locale.asset], layout, hidden_navigation: styles, content: contentStyles, code_viewports: printedCode });
     await page.emulateMedia({ media: 'screen' });
   }
   await attach(info, 'print-media.json', { ...identity(info), pages,

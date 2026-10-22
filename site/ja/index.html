@@ -99,7 +99,7 @@
       <ol id="matrix-limits" class="matrix-limits">
         <li>MP4 出力は 1 トラックのみの構成か、次項の条件を満たす同一ファイル内の映像・音声の組み合わせに対応しています。DASH/HLS で別々に配信される音声と映像を 1 つの MP4 に結合する出力には対応していません。</li>
         <li>MP4 の編集リストは音声の開始位置と再生時間を指定する情報で、エンコード時に生じる余分な音声を再生から除く場合などに使われます。対応条件を満たすプログレッシブ MP4 では、同一ファイル内の AAC-LC 音声 1 本、またはそれに H.264 映像 1 本を組み合わせた構成で編集リストを保持します。Clear・<code>cenc</code>・<code>cbcs</code> の各入力から表内の MP4・DASH・fMP4 HLS に変換する際も再生範囲を保ちます。複雑な編集や入力の DRM 初期化情報は対象外です。暗号化情報の構造と検証条件の詳細は、対応範囲のドキュメントに記載しています。</li>
-        <li>TS 入力はプログレッシブ H.264 映像と 48 kHz AAC-LC 音声を使った限定的な構成が対象です。音声のみの入力からも DASH・fMP4 HLS・TS を出力できます。映像と音声を TS で出力する場合は、それぞれ別のプレイリストになります。</li>
+        <li>TS 入力はプログレッシブ H.264 映像と 44.1 kHz または 48 kHz の AAC-LC 音声を使った限定的な構成が対象です。音声のみの入力からも DASH・fMP4 HLS・TS を出力できます。映像と音声を TS で出力する場合は、それぞれ別のプレイリストになります。</li>
       </ol>
       <div id="matrix-definitions" class="support-detail">
         <p>MP4 は映像や音声を格納する形式です。DASH（Dynamic Adaptive Streaming over HTTP）と HLS（HTTP Live Streaming）では、コンテンツを区間に分け、その構成をマニフェストやプレイリストに記述します。fMP4 はフラグメント化 MP4、MPEG-TS はトランスポートストリームです。</p>
@@ -176,6 +176,7 @@
       <div class="section-intro">
         <h2 id="start-title">CLI のインストール</h2>
         <p>Rust 1.95 以降を使ってソースからビルドします。Windows でも CLI を直接実行できます。PowerShell の使い方、パスや保護されたファイルの扱いは Windows ガイドを参照してください。</p>
+        <p>対応表は現在の <code>main</code> を基準にしています。配布済みの v1.0.0 はプレリリースです。配布版の TS 音声入力は 48 kHz に限られるため、44.1 kHz を使う場合は現在の <code>main</code> からビルドしてください。詳しくは<a href="https://github.com/kazuhide/drmr/blob/main/docs/releases.md">配布版との違い（英語）</a>を参照してください。</p>
       </div>
       <div class="install-layout">
         <div class="install-commands">

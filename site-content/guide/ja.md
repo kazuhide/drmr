@@ -1,6 +1,6 @@
 ---
 title: ユーザーガイド
-updated: 2026-10-22
+updated: 2026-10-23
 version: 1.0.0
 ---
 
@@ -8,7 +8,7 @@ version: 1.0.0
 
 drmr は映像・音声の符号化データを維持しながら、ファイルの格納形式、配信形式、暗号化方式を変更するツールです。復号に必要な鍵を持つ技術者が、管理下のオンデマンドコンテンツを解析・変換・検証する用途を想定しています。画質を変更するエンコーダーや DRM ライセンスを取得するクライアントの機能はありません。
 
-このガイドは `main` ブランチのソースに基づき、操作方法と対応条件を説明します。製品の版番号は 1.0.0 ですが、配布済みの v1.0.0 には含まれない **Unreleased**（未公開）の変更も記載しています。更新日は 2026-10-22 です。利用する配布物に同梱されたドキュメントも確認してください。リポジトリ内の関連ドキュメントは英語で記載しています。
+このガイドは `main` ブランチのソースに基づき、操作方法と対応条件を説明します。製品の版番号は 1.0.0 ですが、配布済みの v1.0.0 には含まれない **Unreleased**（未公開）の変更も記載しています。更新日は 2026-10-23 です。利用する配布物に同梱されたドキュメントも確認してください。リポジトリ内の関連ドキュメントは英語で記載しています。
 
 公開版の CLI は [GitHub Releases](https://github.com/kazuhide/drmr/releases) から入手できます。展開する前に、配布ファイルのハッシュを同じ版の `SHA256SUMS` と照合してください。外部のメディア処理ツールは別途必要です。配布対象と互換性の方針は[リリースの説明（英語）](https://github.com/kazuhide/drmr/blob/main/docs/releases.md)に記載しています。
 
@@ -153,7 +153,7 @@ TS 入力の対象は配信内容が確定した HLS です。番組構成が一
 
 TS パケットは 188 バイトです。映像の復号設定を表す SPS/PPS は途中で変更できません。AAC は 7 バイトの ADTS ヘッダーを使い、チェックサムを持たず、一単位に音声フレームを一つ含む必要があります。サンプルレートとチャンネル構成も途中で変更できません。複数番組、設定変更、壊れたパケット、時刻カウンターの周回、不連続、インターレース映像、未対応の記述子などは拒否します。
 
-最終区間の `EXTINF` が最後の AAC フレームの途中で終わる入力は、現在の TS 処理では拒否します。これは時刻の丸めではなく、再生する範囲の指定です。全フレームとその時刻、デコードした全サンプルを保持する処理とは別に、指定された再生範囲を出力へ引き継ぐ必要があります。末尾をパディングと推測して捨てたり、宣言された範囲より長い出力を検証済みと扱ったりはしません。
+音声のみのプレイリストでは、最終区間の `EXTINF` が最後の AAC フレームの途中で終わる場合もあります。宣言の精度から再生する音声サンプル数を一つに決められる場合は、符号化された最終フレームをすべて残し、指定された再生範囲を HLS・DASH 出力に引き継ぎます。精度不足で複数の範囲が当てはまる指定、途中区間の短縮、丸ごと一フレーム以上を除く指定は拒否します。別の音声プレイリストを映像に組み合わせることはできますが、映像・音声を多重化したプレイリストでは音声だけの短縮範囲を宣言できません。この編集形式は HLS・DASH のマニフェストと組み合わせて検証します。同じ編集を持つ単一 MP4 の入力・出力は、独立した検証経路をまだ実装していないため拒否します。
 
 SAMPLE-AES 入力では暗号方式を途中で変更できません。鍵形式は `identity` または `com.apple.streamingkeydelivery` の一つで、指定する形式版は 1 です。異なる鍵形式の同時宣言は拒否します。非ゼロの音声初期遅延も対象外です。
 
@@ -835,7 +835,11 @@ drmr は、原本の PES（符号化した映像や音声をまとめたパケ�
 
 FFprobe が TS の一フレームの継続時間を 2,089 刻みと表示していても、次の復号時刻までは 2,090 刻み離れていることがあります。MP4 のサンプル継続時間には、この実際の時刻差を記録します。次の時刻がない最終フレームだけは、TS の整数の継続時間を使います。検証では MP4 の継続時間が次の復号時刻につながること、原本の全 PTS・DTS と最終的な終端が一致することを確認します。原本の時刻の丸めを理由に、変換結果の時刻ずれを許すことはありません。詳細は [AAC のサンプルレートと時刻の説明（英語）](https://github.com/kazuhide/drmr/blob/main/docs/media-processing.md#aac-sample-rates-and-transport-clocks)を参照してください。
 
-44.1 kHz の入力プレイリストでは、最終区間以外の `EXTINF` が「この区間の先頭フレームから次区間の先頭フレームまで」を表す場合もあります。最終区間には次の境界がないため、音声サンプル数から求めた正確な長さ、または最終フレームを 2,089 か 2,090 刻みとして求めた長さと、宣言された小数桁数で一致することを確認します。こうした記載方式に応じて原本の区間長を検査しますが、PTS・DTS の比較に許容差を設けるものではありません。
+44.1 kHz の入力プレイリストでは、最終区間以外の `EXTINF` が「この区間の先頭フレームから次区間の先頭フレームまで」を表す場合もあります。最終フレーム全体を再生する区間では、音声サンプル数から求めた長さ、または最終フレームを 2,089 か 2,090 刻みとして求めた長さとの一致を確認します。こうした記載方式に応じて原本の区間長を検査しますが、PTS・DTS の比較に許容差を設けるものではありません。
+
+最後のフレームの一部だけを再生する指定は、時刻の丸めとは別に扱います。符号化データとデコードした全サンプルは残し、どこまで再生するかを別途記録します。fMP4 HLS・DASH では、MP4 の二つの編集項目で原本の開始時刻と正確な再生時間を保持します。全体の時刻単位には音声一サンプルと TS 一刻みの両方を正確に表せる値を使い、メディアの時刻は 90 kHz のままにします。編集項目はパッケージング後に追加します。再変換時は、この形式と確認できた編集だけを作業用コピーから除いてパッケージャーに渡すため、時刻調整の丸めを避けられます。
+
+HLS の区間長は出力自身の再生範囲から求めます。DASH は符号化されたセグメントの時刻表を保持し、映像・音声それぞれの再生終端をすべて含むように全体の長さを決めます。TS 出力では最終プレイリストに短縮後の長さを記録します。独立検証は出力自身から再生範囲を読み直し、原本の全データと実際に再生する音声サンプルの両方を照合します。MP4 に記録された音量、再生速度、トラックの有効・無効も検査します。この処理では標準の音量と速度、有効なトラックを前提とし、符号化データが同じでも再生設定を変えた出力は検証を通しません。詳しくは [AAC の再生終端の説明（英語）](https://github.com/kazuhide/drmr/blob/main/docs/media-processing.md#playback-ending-inside-the-final-aac-frame)を参照してください。
 
 整数の `EXT-X-TARGETDURATION` は、各区間の長さを最も近い整数に丸めた値以上である必要があります。drmr は生成した区間の長さを切り上げて余裕のある上限を求め、映像と音声のうち最大の値をすべてのメディアプレイリストに設定します。例えば映像が 2、音声が 3 なら、両方を 3 に揃えます。符号化したセグメントと `EXTINF` の長さは変えません。別途行う検証でも最終ファイルの宣言を読み、上限が揃わない出力を拒否します。RFC 8216 には VOD の字幕と I-frame プレイリストに関する例外がありますが、通常の映像・音声に別々の上限を設定できるという意味ではありません。
 
@@ -1073,7 +1077,7 @@ cargo build --release --locked -p drmr
 
 ## 所有者専用の鍵ファイル
 
-Windows では chmod の代わりに access control list（アクセス制御リスト、ACL）を使います。所有者を現在のユーザーに設定し、権限の継承を止めて、そのユーザーだけに完全アクセスを許可する ACL が必要です。次の設定は、管理者として起動していない Windows PowerShell 5.1（`powershell.exe`）で実行します。所有者専用の新しいディレクトリと空ファイルを作成してから、エディターで設定を入力します。
+Windows では chmod の代わりに access control list（アクセス制御リスト、ACL）を使います。鍵ファイルは現在のユーザーが所有し、継承を無効にした ACL でそのユーザーだけに完全アクセスを許可する必要があります。次の設定は、管理者として起動していない Windows PowerShell 5.1（`powershell.exe`）で実行します。所有者専用の新しいディレクトリと空ファイルを作成してから、エディターで設定を入力します。
 
 ```powershell
 $ErrorActionPreference = 'Stop'
@@ -1083,15 +1087,54 @@ if (Test-Path -LiteralPath $private) { throw 'Choose a new directory' }
 New-Item -ItemType Directory -Path $private | Out-Null
 
 function Set-OwnerOnlyAcl($path, $security) {
-    $security.SetOwner($sid)
+    $directory = $security -is
+        [System.Security.AccessControl.DirectorySecurity]
+    $sections =
+        [System.Security.AccessControl.AccessControlSections]'Owner, Access'
+    $current = if ($directory) {
+        [System.IO.Directory]::GetAccessControl($path, $sections)
+    } else {
+        [System.IO.File]::GetAccessControl($path, $sections)
+    }
+    if (-not $current.GetOwner(
+        [System.Security.Principal.SecurityIdentifier]).Equals($sid)) {
+        throw 'The current user must own the path'
+    }
     $security.SetAccessRuleProtection($true, $false)
     $rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
         $sid, 'FullControl', 'Allow')
     $security.AddAccessRule($rule)
-    if ($security -is [System.Security.AccessControl.DirectorySecurity]) {
+    $checked = if ($directory) {
         [System.IO.Directory]::SetAccessControl($path, $security)
+        [System.IO.Directory]::GetAccessControl($path, $sections)
     } else {
         [System.IO.File]::SetAccessControl($path, $security)
+        [System.IO.File]::GetAccessControl($path, $sections)
+    }
+    $rules = @($checked.GetAccessRules($true, $true,
+        [System.Security.Principal.SecurityIdentifier]))
+    if (
+        -not $checked.AreAccessRulesProtected -or
+        $rules.Count -ne 1 -or
+        -not $checked.GetOwner(
+            [System.Security.Principal.SecurityIdentifier]).Equals($sid)
+    ) {
+        throw 'Private ACL verification failed'
+    }
+    $actual = $rules[0]
+    if (
+        -not $actual.IdentityReference.Equals($sid) -or
+        $actual.IsInherited -or
+        $actual.AccessControlType -ne
+            [System.Security.AccessControl.AccessControlType]::Allow -or
+        $actual.FileSystemRights -ne
+            [System.Security.AccessControl.FileSystemRights]::FullControl -or
+        $actual.InheritanceFlags -ne
+            [System.Security.AccessControl.InheritanceFlags]::None -or
+        $actual.PropagationFlags -ne
+            [System.Security.AccessControl.PropagationFlags]::None
+    ) {
+        throw 'Private ACL verification failed'
     }
 }
 
@@ -1107,7 +1150,7 @@ Set-OwnerOnlyAcl $keyFile ([Security.AccessControl.FileSecurity]::new())
 notepad $keyFile
 ```
 
-エディターによるファイルの置き換えで ACL が変わった場合は、ファイルを所有者専用ディレクトリ内に置いたまま ACL を再適用してください。既存ファイルの不適切な権限を drmr が自動で修正することはありません。
+この関数は、パスの所有者が現在のユーザーであることを確認してから、アクセス権だけを設定します。設定後も所有者と ACL を検査します。所有者の変更には別の権限が必要ですが、自分で作成したパスでは変更する必要はありません。エディターによるファイルの置き換えで ACL が変わった場合は、ファイルを所有者専用ディレクトリ内に置いたまま ACL を再適用してください。既存ファイルの不適切な権限を drmr が自動で修正することはありません。
 
 ## PowerShell からの変換
 

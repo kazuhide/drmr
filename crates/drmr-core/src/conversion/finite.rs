@@ -263,7 +263,7 @@ fn copy_n(
     }
     Ok(())
 }
-fn generic_ftyp(data: &[u8]) -> Result<Vec<u8>, ConversionError> {
+pub(super) fn generic_ftyp(data: &[u8]) -> Result<Vec<u8>, ConversionError> {
     if data.len() < 16
         || data.len() > 1024 * 1024
         || !(data.len() - 16).is_multiple_of(4)

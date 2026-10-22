@@ -78,6 +78,10 @@ pub(super) struct FragmentClock {
     trim: u64,
     next: Option<u64>,
     finite: Option<super::finite::Window>,
+    audio_claim: Option<super::audio_presentation::AudioClaim>,
+    coded_count: u64,
+    coded_first: Option<u64>,
+    coded_end: u64,
     segment_first: Option<u64>,
     segment_end: u64,
     first_presented: Option<u64>,
@@ -119,12 +123,14 @@ impl FragmentClock {
             }
             default_duration = integer(trex, 12)?;
         }
+        let audio_claim = super::audio_presentation::read_claim(path)?;
         let mut trim = 0;
         if unique(&mdia.children, *b"hdlr")?
             .header
             .payload(&data)
             .get(8..12)
             == Some(b"soun")
+            && audio_claim.is_none()
             && let Some(edts) = trak.children.iter().find(|n| n.kind() == *b"edts")
         {
             let elst = unique(&edts.children, *b"elst")?.header.payload(&data);
@@ -154,7 +160,15 @@ impl FragmentClock {
             default_duration,
             trim,
             next: None,
-            finite: super::finite::window(path, 0)?,
+            finite: if audio_claim.is_some() {
+                None
+            } else {
+                super::finite::window(path, 0)?
+            },
+            audio_claim,
+            coded_count: 0,
+            coded_first: None,
+            coded_end: 0,
             segment_first: None,
             segment_end: 0,
             first_presented: None,
@@ -287,6 +301,14 @@ impl FragmentClock {
         duration: u32,
     ) -> Result<(), ConversionError> {
         let pts = i128::from(dts) + i128::from(offset);
+        if self.audio_claim.is_some() {
+            let pts = u64::try_from(pts).map_err(|_| BAD)?;
+            self.coded_count = self.coded_count.checked_add(1).ok_or(BAD)?;
+            self.coded_first = Some(self.coded_first.map_or(pts, |first| first.min(pts)));
+            self.coded_end = self
+                .coded_end
+                .max(pts.checked_add(u64::from(duration)).ok_or(BAD)?);
+        }
         let trim = i128::from(self.finite.map_or(self.trim, |w| w.start));
         let first = (pts - trim).max(0);
         let end = pts + i128::from(duration) - trim;
@@ -302,6 +324,16 @@ impl FragmentClock {
         Ok(())
     }
     pub(super) fn presentation_window(&self) -> Result<(u64, u64, u64), ConversionError> {
+        if let Some(claim) = self.audio_claim {
+            let first = self.coded_first.ok_or(BAD)?;
+            claim.bind(super::audio_presentation::AudioEvidence {
+                sample_rate: claim.sample_rate,
+                coded_frames: self.coded_count,
+                raw_first_pts: i64::try_from(first).map_err(|_| BAD)?,
+                raw_coded_end: i64::try_from(self.coded_end).map_err(|_| BAD)?,
+            })?;
+            return claim.interval(first, self.coded_end);
+        }
         if self
             .finite
             .is_some_and(|w| self.first_presented != Some(0) || self.presented_end != w.duration)
@@ -319,6 +351,9 @@ impl FragmentClock {
         path: &Path,
     ) -> Result<(u64, u64, u64), ConversionError> {
         self.measure(path)?;
+        if let Some(claim) = self.audio_claim {
+            return claim.interval(self.segment_first.ok_or(BAD)?, self.segment_end);
+        }
         Ok((
             self.segment_first.ok_or(BAD)?,
             self.segment_end,
@@ -354,6 +389,19 @@ impl FragmentClock {
     }
     pub fn check(&mut self, path: &Path, declared: f64) -> Result<(), ConversionError> {
         let (base, total) = self.measure(path)?;
+        if let Some(claim) = self.audio_claim {
+            let (first, end, scale) =
+                claim.interval(self.segment_first.ok_or(BAD)?, self.segment_end)?;
+            // The producer writes one canonical nanosecond-rounded declaration.
+            let expected =
+                super::audio_presentation::seconds(u128::from(end - first), u128::from(scale))?
+                    .parse::<f64>()
+                    .map_err(|_| BAD)?;
+            if declared.to_bits() != expected.to_bits() {
+                return Err(super::audio_presentation::MISMATCH);
+            }
+            return Ok(());
+        }
         let total = if self.finite.is_some() {
             self.segment_end
                 .checked_sub(self.segment_first.ok_or(BAD)?)
@@ -398,6 +446,10 @@ mod tests {
             trim,
             next: None,
             finite: None,
+            audio_claim: None,
+            coded_count: 0,
+            coded_first: None,
+            coded_end: 0,
             segment_first: None,
             segment_end: 0,
             first_presented: None,

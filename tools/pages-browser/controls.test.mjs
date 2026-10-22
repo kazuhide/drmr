@@ -1,5 +1,5 @@
 import { guideChapters, requireGuideLayout, requireGuideMovement, codeAriaTemplate, requireGuideCheckpoint,
-  guideFiguresObservation, requireGuideFigures } from './guide.mjs';
+  guideFiguresObservation, requireGuideFigures, guideScrollObservation, requireGuideCodeEdge, requireGuidePrintCode } from './guide.mjs';
 import { locales } from './locales.mjs';
 import { matrixRows, matrixColumns, matrixObservation, requireMatrixLayout, requireMatrixMovement, completeMatrixKey, MatrixKeyDeadline } from './matrix.mjs';
 import { matrixRecipes, recipeObservation, requireRecipe, requireRecipeIdentity, requireRecipePosition, requireMatrixLinkExposure } from './recipes.mjs';
@@ -825,11 +825,13 @@ test('guide guards refuse missing or hidden chapters and page overflow', () => {
 test('guide scrolling uses the shared deadline and propagates its own guard failure after cleanup', async () => {
   const before = { focused: true, tag: 'PRE', chapter: 'installation', identity: 'example-1-title',
     pageX: 0, pageY: 1000, clientWidth: 288, scrollWidth: 500, scrollLeft: 0,
-    overflowX: 'auto', documentWidth: 320, rect: { left: 16, right: 304, width: 288 } };
+    clientHeight: 574, scrollHeight: 1048, scrollTop: 0, overflowX: 'auto', overflowY: 'auto',
+    documentWidth: 320, documentHeight: 900,
+    rect: { left: 16, right: 304, width: 288, top: 100, bottom: 676, height: 576 } };
   const after = { ...before, scrollLeft: 40 };
   requireGuideMovement(before, after, 'right');
   for (const changed of [{ focused: false }, { identity: 'other' }, { pageY: 1001 },
-    { scrollLeft: 0 }, { overflowX: 'clip' }, { rect: { left: 16, right: 321 } }]) {
+    { scrollLeft: 0 }, { scrollTop: 1 }, { overflowX: 'clip' }, { rect: { left: 16, right: 321 } }]) {
     assert.throws(() => requireGuideMovement(before, { ...after, ...changed }, 'right'));
   }
   let disposed = 0;
@@ -840,6 +842,80 @@ test('guide scrolling uses the shared deadline and propagates its own guard fail
     validateMovement: () => { throw actual; },
   }), error => error === actual);
   assert.equal(disposed, 1);
+});
+
+test('guide vertical scrolling retains the same fully visible code owner and horizontal origin', () => {
+  const before = { focused: true, tag: 'PRE', chapter: 'windows', identity: 'example-96-title',
+    pageX: 0, pageY: 1000, clientWidth: 288, scrollWidth: 800, scrollLeft: 0,
+    clientHeight: 574, scrollHeight: 1048, scrollTop: 0, overflowX: 'auto', overflowY: 'auto',
+    documentWidth: 320, documentHeight: 900,
+    rect: { left: 16, right: 304, width: 288, top: 100, bottom: 676, height: 576 } };
+  const bottom = { ...before, scrollTop: 474 };
+  requireGuideMovement(before, bottom, 'down');
+  requireGuideMovement(bottom, before, 'up');
+  for (const changed of [{ focused: false }, { tag: 'DIV' }, { chapter: 'installation' },
+    { identity: 'other' }, { pageX: 1 }, { pageY: 1001 }, { scrollTop: 0 }, { scrollLeft: 1 },
+    { overflowY: 'clip' }, { clientHeight: 573 }, { scrollHeight: 1049 },
+    { rect: { ...before.rect, top: -1 } }, { rect: { ...before.rect, bottom: 901 } }]) {
+    assert.throws(() => requireGuideMovement(before, { ...bottom, ...changed }, 'down'));
+  }
+  assert.throws(() => requireGuideMovement(bottom, bottom, 'up'));
+  assert.throws(() => requireGuideMovement(before, bottom, 'unknown'));
+});
+
+test('guide code edges allow fractional scrollTop rounding only while the actual code edge is visible', () => {
+  const top = { focused: true, tag: 'PRE', scrollLeft: 0, scrollTop: 0, scrollHeight: 1048, clientHeight: 574,
+    client: { top: 101, bottom: 675 }, code: { top: 117, bottom: 1133, height: 1016 } };
+  const bottom = { ...top, scrollTop: 474.5, code: { top: -357.5, bottom: 658.5, height: 1016 } };
+  requireGuideCodeEdge(top, 'top');
+  requireGuideCodeEdge(bottom, 'bottom');
+  requireGuideCodeEdge({ ...bottom, scrollTop: 473.5 }, 'bottom');
+  for (const changed of [{ focused: false }, { tag: 'DIV' }, { scrollLeft: 1 }, { scrollTop: 473 },
+    { scrollTop: 475 }, { scrollTop: 0 }, { scrollHeight: 574 },
+    { code: { ...bottom.code, bottom: 675.01 } }, { code: { ...bottom.code, bottom: 101 } },
+    { code: { ...bottom.code, height: 0 } }, { code: null }]) {
+    assert.throws(() => requireGuideCodeEdge({ ...bottom, ...changed }, 'bottom'));
+  }
+  for (const changed of [{ scrollTop: 0.5 }, { code: { ...top.code, top: 100.99 } },
+    { code: { ...top.code, top: 675 } }]) {
+    assert.throws(() => requireGuideCodeEdge({ ...top, ...changed }, 'top'));
+  }
+  assert.throws(() => requireGuideCodeEdge(top, 'unknown'));
+});
+
+test('the actual guide scroll observer retains vertical, client and code geometry through transport', () => {
+  const rect = { left: 16, right: 304, width: 288, top: 100, bottom: 676, height: 576 };
+  const code = { top: -357.5, bottom: 658.5, height: 1016 };
+  const element = { tagName: 'PRE', scrollLeft: 0, scrollTop: 474.5, scrollWidth: 800, clientWidth: 288,
+    scrollHeight: 1048, clientHeight: 574, clientTop: 1,
+    getBoundingClientRect: () => rect, closest: () => ({ id: 'windows' }),
+    getAttribute: name => name === 'aria-labelledby' ? 'example-96-title' : null,
+    querySelector: selector => selector === 'code' ? { getBoundingClientRect: () => code } : null };
+  const raw = runInNewContext(`(${guideScrollObservation.toString()})(element)`, {
+    element, document: { activeElement: element, documentElement: { clientWidth: 320, clientHeight: 900 } },
+    scrollX: 0, scrollY: 1000, getComputedStyle: () => ({ overflowX: 'auto', overflowY: 'auto' }),
+  }, { timeout: 1000 });
+  const observed = JSON.parse(JSON.stringify(raw));
+  assert.deepEqual(observed, { focused: true, tag: 'PRE', chapter: 'windows', identity: 'example-96-title',
+    scrollLeft: 0, scrollWidth: 800, clientWidth: 288, scrollTop: 474.5, scrollHeight: 1048, clientHeight: 574,
+    pageX: 0, pageY: 1000, documentWidth: 320, documentHeight: 900, rect,
+    client: { top: 101, bottom: 675 }, code, overflowX: 'auto', overflowY: 'auto' });
+  requireGuideCodeEdge(observed, 'bottom');
+});
+
+test('guide print code refuses missing, truncated, hidden, height-limited or clipped examples', () => {
+  const source = ['drmr --version\n', 'first line\nlast line\n'];
+  const values = source.map(code => ({ code, rendered: code, shown: true, maxBlockSize: 'none',
+    overflowX: 'visible', overflowY: 'visible', whiteSpace: 'pre-wrap',
+    clientWidth: 288, scrollWidth: 288, clientHeight: 100, scrollHeight: 100 }));
+  requireGuidePrintCode(values, source);
+  assert.throws(() => requireGuidePrintCode(values.slice(1), source));
+  assert.throws(() => requireGuidePrintCode([], []));
+  for (const changed of [{ code: 'first line\n' }, { rendered: 'first line\n' }, { shown: false },
+    { maxBlockSize: '576px' }, { overflowX: 'auto' }, { overflowY: 'clip' }, { whiteSpace: 'pre' },
+    { clientWidth: 0 }, { scrollWidth: 289 }, { clientHeight: 0 }, { scrollHeight: 101 }]) {
+    assert.throws(() => requireGuidePrintCode([values[0], { ...values[1], ...changed }], source));
+  }
 });
 
 
@@ -867,7 +943,7 @@ test('guide viewport checkpoints reject wrong sources, phases, native owners, cl
     page_asset: 'guide/index.html', page_sha256: 'c'.repeat(64), viewport: { width: 320, height: 900 } };
   const target = { tag: 'PRE', id: '', label: null, href: null, text: 'drmr --version' };
   const observation = { scroll: { focused: true, tag: 'PRE', chapter: 'installation', identity: 'example-1-title',
-    scrollLeft: 0, pageX: 0, pageY: 1000 }, focus: { target, active: target, matchesTarget: true,
+    scrollLeft: 0, scrollTop: 0, pageX: 0, pageY: 1000 }, focus: { target, active: target, matchesTarget: true,
     rect: { top: 20, bottom: 100, left: 16, right: 304, width: 288, height: 80 },
     viewport: { width: 320, height: 900 }, scroll: { x: 0, y: 1000 }, inViewport: true,
     outlineWidth: 3, outlineStyle: 'solid' } };
@@ -878,8 +954,23 @@ test('guide viewport checkpoints reject wrong sources, phases, native owners, cl
     row => { row.phase = 'native-table-viewport'; }, row => { row.selected.identity = 'other'; },
     row => { row.viewport.height = 901; }, row => { row.before.focus.viewport.width = 321; }, row => { row.before.focus.rect.bottom = 901; }, row => { row.after.focus.matchesTarget = false; },
     row => { row.after.focus.outlineStyle = 'none'; }, row => { row.after.scroll.scrollLeft = 1; },
+    row => { row.after.scroll.scrollTop = 1; },
     row => { row.after.scroll.pageY++; }, row => { row.after.focus.rect.top++; }]) {
     const invalid = structuredClone(record); mutate(invalid);
+    assert.throws(() => requireGuideCheckpoint(invalid, expected));
+  }
+  const vertical = structuredClone(record);
+  vertical.phase = 'native-code-vertical-viewport';
+  vertical.selected.chapter = 'windows';
+  vertical.selected.function_sha256 = 'e'.repeat(64);
+  vertical.selected.code_sha256 = 'f'.repeat(64);
+  vertical.before.scroll.chapter = vertical.after.scroll.chapter = 'windows';
+  requireGuideCheckpoint(vertical, expected);
+  for (const mutate of [row => { delete row.selected.function_sha256; }, row => { row.selected.code_sha256 = 'unknown'; },
+    row => { row.selected.chapter = row.before.scroll.chapter = row.after.scroll.chapter = 'installation'; },
+    row => { row.after.scroll.scrollTop = 1; }, row => { row.after.scroll.identity = 'other'; },
+    row => { row.after.focus.rect.bottom = 901; }]) {
+    const invalid = structuredClone(vertical); mutate(invalid);
     assert.throws(() => requireGuideCheckpoint(invalid, expected));
   }
 });

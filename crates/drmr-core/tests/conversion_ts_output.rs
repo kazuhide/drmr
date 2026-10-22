@@ -3,6 +3,8 @@
 mod audio_44100;
 #[path = "support/ts_audio_hls.rs"]
 mod audio_hls;
+#[path = "support/ts_audio_window.rs"]
+mod audio_window;
 mod common;
 #[path = "support/ts_output_lifecycle.rs"]
 mod lifecycle;

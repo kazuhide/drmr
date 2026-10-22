@@ -11,6 +11,8 @@ Those immutable archives remain pre-release candidates with the original
 
 ### Fixed
 
+- Preserve a uniquely declared partial final AAC playback range from HLS/TS in HLS and DASH, while retaining every coded frame, raw timestamp and decoded sample. Verify the result's own edit list and manifest boundaries independently.
+
 - Accept AAC-LC at 44.1 kHz alongside 48 kHz in supported clear, AES-128 and
   SAMPLE-AES HLS transport streams, including audio-only input.
 - Preserve every original AAC frame, decoded sample and absolute presentation

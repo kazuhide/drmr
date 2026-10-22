@@ -30,15 +30,54 @@ if (Test-Path -LiteralPath $private) { throw 'Choose a new private directory' }
 New-Item -ItemType Directory -Path $private | Out-Null
 
 function Set-OwnerOnlyAcl($path, $security) {
-    $security.SetOwner($sid)
+    $directory = $security -is
+        [System.Security.AccessControl.DirectorySecurity]
+    $sections =
+        [System.Security.AccessControl.AccessControlSections]'Owner, Access'
+    $current = if ($directory) {
+        [System.IO.Directory]::GetAccessControl($path, $sections)
+    } else {
+        [System.IO.File]::GetAccessControl($path, $sections)
+    }
+    if (-not $current.GetOwner(
+        [System.Security.Principal.SecurityIdentifier]).Equals($sid)) {
+        throw 'The current user must own the path'
+    }
     $security.SetAccessRuleProtection($true, $false)
     $rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
         $sid, 'FullControl', 'Allow')
     $security.AddAccessRule($rule)
-    if ($security -is [System.Security.AccessControl.DirectorySecurity]) {
+    $checked = if ($directory) {
         [System.IO.Directory]::SetAccessControl($path, $security)
+        [System.IO.Directory]::GetAccessControl($path, $sections)
     } else {
         [System.IO.File]::SetAccessControl($path, $security)
+        [System.IO.File]::GetAccessControl($path, $sections)
+    }
+    $rules = @($checked.GetAccessRules($true, $true,
+        [System.Security.Principal.SecurityIdentifier]))
+    if (
+        -not $checked.AreAccessRulesProtected -or
+        $rules.Count -ne 1 -or
+        -not $checked.GetOwner(
+            [System.Security.Principal.SecurityIdentifier]).Equals($sid)
+    ) {
+        throw 'Private ACL verification failed'
+    }
+    $actual = $rules[0]
+    if (
+        -not $actual.IdentityReference.Equals($sid) -or
+        $actual.IsInherited -or
+        $actual.AccessControlType -ne
+            [System.Security.AccessControl.AccessControlType]::Allow -or
+        $actual.FileSystemRights -ne
+            [System.Security.AccessControl.FileSystemRights]::FullControl -or
+        $actual.InheritanceFlags -ne
+            [System.Security.AccessControl.InheritanceFlags]::None -or
+        $actual.PropagationFlags -ne
+            [System.Security.AccessControl.PropagationFlags]::None
+    ) {
+        throw 'Private ACL verification failed'
     }
 }
 
@@ -49,7 +88,7 @@ Set-OwnerOnlyAcl $keyFile ([System.Security.AccessControl.FileSecurity]::new())
 notepad $keyFile
 ```
 
-Save the [key configuration structure](usage.md#separate-input-and-output-keys) in that file using your editor or secret-management process. Keep the directory outside the output tree and version control. Never put key values in command arguments or shell history. If an editor replaces the file and changes its ACL, apply the owner-only file ACL again while it remains inside the private directory. The example uses the .NET Framework [Directory.SetAccessControl](https://learn.microsoft.com/en-us/dotnet/api/system.io.directory.setaccesscontrol?view=netframework-4.8.1) and [File.SetAccessControl](https://learn.microsoft.com/en-us/dotnet/api/system.io.file.setaccesscontrol?view=netframework-4.8.1) methods available in Windows PowerShell 5.1. It changes the owner and access rules without copying unrelated audit or group settings.
+Save the [key configuration structure](usage.md#separate-input-and-output-keys) in that file using your editor or secret-management process. Keep the directory outside the output tree and version control. Never put key values in command arguments or shell history. If an editor replaces the file and changes its ACL, apply the owner-only file ACL again while it remains inside the private directory. The example uses the .NET Framework [Directory.SetAccessControl](https://learn.microsoft.com/en-us/dotnet/api/system.io.directory.setaccesscontrol?view=netframework-4.8.1) and [File.SetAccessControl](https://learn.microsoft.com/en-us/dotnet/api/system.io.file.setaccesscontrol?view=netframework-4.8.1) methods available in Windows PowerShell 5.1. It verifies that you already own each path and changes only its access rules, then checks the resulting owner and ACL. Assigning an owner requires a separate permission and is unnecessary for these new paths. Unrelated audit and group settings are not copied.
 
 While external tools run, drmr keeps handles to the working directories and their ancestors. These handles allow child files to be created and updated while refusing rename or deletion of the held directories. Private configuration is checked using the path you supplied, so resolving a path cannot hide a junction or alternate data stream. A completed conversion is published in one filesystem operation that refuses an existing destination. Tools can exit while descendants still have files open. drmr confirms termination of the supervised tree before reporting success or a completed cancellation; unconfirmed cleanup is an error.
 
