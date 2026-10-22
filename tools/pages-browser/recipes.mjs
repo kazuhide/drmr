@@ -9,6 +9,13 @@ export const matrixRecipes = matrixRows.flatMap(row => row.output.flatMap((label
   labels.map(label => ({ row: row.id, column, label, format: formats[column], target: targets[label],
     id: `recipe-${row.id}-${formats[column]}-${targets[label]}` }))));
 
+const inputProfiles = {
+  mp4: ['Clear', 'cenc', 'cbcs'], dash: ['Clear', 'cenc', 'cbcs'],
+  'hls-fmp4': ['Clear', 'cenc', 'cbcs', 'AES-128'],
+  'hls-ts-video': ['Clear', 'AES-128', 'SAMPLE-AES'],
+  'hls-ts-audio': ['Clear', 'AES-128', 'SAMPLE-AES'],
+};
+
 export function requireRecipe(value, expected) {
   assert.equal(value.id, expected.id, 'The matrix link must reach its exact recipe');
   assert.equal(value.tag, 'H3');
@@ -22,30 +29,44 @@ export function requireRecipe(value, expected) {
   assert.equal(value.language, 'sh');
   assert.equal(value.code.trim().replace(/\s+/g, ' '), value.rendered.trim().replace(/\s+/g, ' '),
     'The complete recipe code must be rendered');
-  const code = value.code.replace(/\\\r?\n\s*/g, ' ');
-  const commands = [...code.matchAll(/^\s*drmr (analyze|plan|convert|verify)\b(.*)$/gm)];
-  assert.deepEqual(commands.map(command => command[1]), ['analyze', 'plan', 'convert', 'verify'],
-    'Every recipe must include the four complete CLI steps');
-  assert.match(code, /^\s*\(\s*\n\s*set -eu\s*$/m, 'Recipes must isolate their working directory and stop on failure');
-  const flag = (command, name) => {
-    const found = command.match(new RegExp(`(?:^|\\s)--${name}\\s+(?:"([^"\\n]+)"|'([^'\\n]+)'|([^\\s]+))`));
-    assert.ok(found, `Recipe command needs --${name}`);
-    return found[1] ?? found[2] ?? found[3];
-  };
-  assert.equal(flag(commands[1][2], 'to'), expected.target);
-  assert.equal(flag(commands[1][2], 'format'), expected.format);
-  assert.ok(flag(commands[1][2], 'output'));
-  const plan = flag(commands[1][2], 'save');
-  for (const command of commands) assert.equal(flag(command[2], 'keys-file'), '../config/keys.json');
-  for (const command of commands.slice(2)) {
-    assert.equal(flag(command[2], 'plan'), plan, 'Conversion and verification must use the saved plan');
-  }
-  assert.match(commands[0][2], /^\s+"?https:\/\//, 'Every format must acquire its public URL with analyze');
-  assert.equal(flag(commands[0][2], 'download-dir').replace(/^\.\//, ''), 'source');
   const extension = expected.row === 'mp4' ? 'mp4' : expected.row === 'dash' ? 'mpd' : 'm3u8';
-  assert.match(commands[1][2], new RegExp(`^\\s+(?:\\./)?source/input\\.${extension}(?:\\s|$)`),
-    'Planning must use the actual retained entrypoint for this format');
-  assert.doesNotMatch(code, /\bcurl\s/, 'Recipes must use native analyze acquisition');
+  const profiles = inputProfiles[expected.row];
+  assert.ok(profiles, 'Recipe input must have an independently supported protection profile');
+  // Preserve interior blank lines and trailing spaces so shell continuations stay adjacent.
+  const groups = value.code.replace(/\r\n/g, '\n').replace(/^\n+|\n+$/g, '').split(/\n[ \t]*\n/);
+  assert.equal(groups.length, profiles.length, 'Every supported input protection needs one complete command group');
+  for (const [index, profile] of profiles.entries()) {
+    const lines = groups[index].split('\n');
+    assert.equal(lines.length, 7, 'Each group needs one comment and six adjacent physical command lines');
+    assert.equal(lines[0], `# ${profile} input`, 'Input protection groups must be complete and ordered');
+    const physical = lines.slice(1);
+    for (const start of [0, 2]) assert.match(physical[start], / \\$/,
+      'Analyze and plan must use literal shell continuations for their second line');
+    assert.match(physical[1], /^  --download-dir /);
+    assert.match(physical[3], /^  --output /);
+    const steps = [physical[0].slice(0, -1) + physical[1].trimStart(),
+      physical[2].slice(0, -1) + physical[3].trimStart(), physical[4], physical[5]];
+    for (const step of steps.slice(0, 3)) assert.match(step, / &&$/, 'Each operation must stop the group on failure');
+    assert.doesNotMatch(steps[3], / &&$/, 'Verification must finish its input group');
+    const commands = steps.map(step => step.replace(/ &&$/, '').split(/\s+/));
+    assert.deepEqual(commands.map(command => command.slice(0, 2)),
+      ['analyze', 'plan', 'convert', 'verify'].map(operation => ['drmr', operation]),
+      'Every input protection must include the four complete CLI steps');
+    const name = { Clear: 'clear', 'AES-128': 'aes128', 'SAMPLE-AES': 'sample-aes' }[profile] ?? profile;
+    const inputKeys = profile === 'Clear' ? [] : ['--keys-file', 'keys.json'];
+    const runtimeKeys = profile === 'Clear' && expected.target === 'clear' ? [] : ['--keys-file', 'keys.json'];
+    assert.deepEqual(commands[0], ['drmr', 'analyze', `"https://example.com/${name}.${extension}"`,
+      '--download-dir', 'src', ...inputKeys],
+    'Every input must use a quoted URL for native acquisition with only its source keys');
+    assert.deepEqual(commands[1], ['drmr', 'plan', `src/input.${extension}`, '--to', expected.target,
+      '--format', expected.format, '--output', expected.format === 'mp4' ? 'result.mp4' : 'result',
+      '--save', 'plan.json', ...inputKeys],
+    'Planning must use the actual retained entrypoint, selected output and only source keys');
+    for (const [offset, operation] of ['convert', 'verify'].entries()) {
+      assert.deepEqual(commands[offset + 2], ['drmr', operation, '--plan', 'plan.json', ...runtimeKeys],
+        'Conversion and verification must use the saved plan and the required runtime keys');
+    }
+  }
 }
 
 // This readback does not scroll or focus the fragment on behalf of the browser.

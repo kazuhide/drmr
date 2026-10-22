@@ -1,6 +1,6 @@
 ---
 title: User guide
-updated: 2026-10-21
+updated: 2026-10-22
 version: 0.1.0
 ---
 
@@ -597,16 +597,16 @@ The explicit signaling regression uses a derived fragmented clear MP4. It does n
 
 ## A retained download directory is mandatory
 
-Generic URL input supports MP4, static DASH and completed HLS within the supported media profiles, including encrypted input. To analyze before conversion, use these four commands. Prepare chapter 5's key configuration outside source/output trees, with the input keys when encrypted and the CBCS output key.
+This example uses clear HLS and a CBCS DASH output. Prepare chapter 5's `config/keys.json` with only the output key. `&&` proceeds only after success. `inspect` reads retained declarations after acquisition; omit it if this summary is unnecessary.
 
 ```sh
 drmr analyze "https://example.com/vod/master.m3u8" \
-  --download-dir ./saved-source --keys-file config/keys.json --json
+  --download-dir ./saved-source &&
+drmr inspect ./saved-source/input.m3u8 &&
 drmr plan ./saved-source/input.m3u8 --to cbcs --format dash \
-  --output ./converted-dash --save ./conversion.plan.json \
-  --keys-file config/keys.json --json
-drmr convert --plan ./conversion.plan.json --keys-file config/keys.json --json
-drmr verify --plan ./conversion.plan.json --keys-file config/keys.json --json
+  --output ./converted-dash --save ./conversion.plan.json &&
+drmr convert --plan ./conversion.plan.json --keys-file config/keys.json &&
+drmr verify --plan ./conversion.plan.json --keys-file config/keys.json
 ```
 
 URL input requires a new `--download-dir` under an existing parent. The plan file and result destination must also be new and separate from the source. Format detection uses the response content, so URLs need no filename extension. Queries and allowed redirects do not select the format.
@@ -617,13 +617,13 @@ URL input requires a new `--download-dir` under an existing parent. The plan fil
 | DASH | `saved-source/input.mpd` | Static MPD with one `Period`, `SegmentTemplate` and an explicit finite `SegmentTimeline` |
 | HLS | `saved-source/input.m3u8` | Completed TS/fMP4 playlists within the supported input profiles |
 
-For a DASH or MP4 URL, use the corresponding entrypoint in the `plan` command above. DASH acquisition saves every referenced initialization and media file. It retains the original MPD separately and localizes resource references in `input.mpd`, preserving protection declarations, PSSH DRM initialization data and the explicit timeline. HLS acquisition retains original playlists and localizes media references and relative key identifiers. Encrypted media and initialization bytes remain unchanged during acquisition. Private originals can contain signed URLs.
+For DASH or MP4, change the local input path above accordingly. DASH saves every referenced initialization and media file. Its localized `input.mpd` retains protection declarations, PSSH DRM initialization data and the timeline. HLS localizes media references and relative key identifiers. Original manifests are kept separately and may contain signed URLs. Acquisition leaves encrypted media and initialization bytes unchanged.
 
 The same local codec, track, encryption and timing restrictions still apply. Live input, byte ranges, multiple DASH periods, `SegmentList`, `SegmentBase`, duration-only DASH templates and negative timeline repeats remain outside this acquisition profile. These are implementation limits, rather than technical impossibilities of those formats.
 
-The encrypted HLS URL profiles are AES-128 TS/fMP4, SAMPLE-AES TS, and CENC/CBCS fMP4 within the same local input restrictions. For AES-128 and SAMPLE-AES TS, `input.hls_keys[].uri` must exactly match the absolute key identifier resolved against the playlist's final address after redirects. For example, `keys/key.bin` under `https://example.com/vod/media.m3u8` becomes `https://example.com/vod/keys/key.bin`. Absolute `skd:` identifiers stay unchanged. CENC/CBCS MP4, DASH and fMP4 HLS use the existing KID mappings in `input.keys`. No key URI or license endpoint is fetched. Clear input with clear output can omit the key-file options.
+Encrypted HLS accepts AES-128 TS/fMP4, SAMPLE-AES TS and CENC/CBCS fMP4 under the local input restrictions. For AES-128 and TS SAMPLE-AES, `input.hls_keys[].uri` must match the absolute identifier resolved after redirects: `keys/key.bin` in `https://example.com/vod/media.m3u8` becomes `https://example.com/vod/keys/key.bin`. Absolute `skd:` URIs stay unchanged. CENC/CBCS uses `input.keys`. No key or license URL is fetched. Encrypted input requires `--keys-file config/keys.json` on `analyze` and `plan` too; clear input does not.
 
-Only the first command needs the server. The remaining commands use the retained local source. A completed download remains available after a later analysis or conversion failure; an incomplete acquisition is not admitted. Direct `convert URL --download-dir NEW_DIR` also remains available for a single invocation without a saved plan.
+Only `analyze` needs the server. Completed downloads survive later failures; incomplete downloads are refused. `convert URL --download-dir NEW_DIR` combines acquisition and conversion without saving a plan.
 
 ## URL to several DRM outputs
 
@@ -707,29 +707,17 @@ See [URL conversion](https://github.com/kazuhide/drmr/blob/main/docs/usage.md).
 
 ## Example prerequisites and key file {#recipe-setup}
 
-Select a protection choice in the matrix to open its example below. Commands use a POSIX shell, such as on macOS or Linux. URLs under `https://media.example.com` are placeholders to replace, not hosted sample assets. Inputs must satisfy the [supported profiles in chapter 3](#supported-profiles).
+Select an output in the matrix and **one four-command group** for your input's protection. The groups are alternatives. In a POSIX shell on macOS/Linux, `\` continues a command on the next line and `&&` stops the sequence on failure. These commands share files; `|` instead passes standard output. Replace the `https://example.com` URL.
 
-All examples acquire the URL with `analyze URL --download-dir ./source`. The saved entrypoint is `source/input.mp4`, `source/input.mpd` or `source/input.m3u8`, depending on the actual format. DASH needs a static, single-Period MPD with `SegmentTemplate` and an explicit finite `SegmentTimeline`; drmr saves all referenced initialization and media resources. The same [fetch policy](#url-input) applies to MP4, DASH and HLS.
+Use an existing private working directory. drmr saves the input in `src` and creates `plan.json` and `result` (MP4: `result.mp4`); these paths must be new. No `mkdir` or `cd` is needed. For another run, change all paths consistently or use another directory. For [fetch policy settings](#url-input), add `--fetch-policy config/fetch.json` to `analyze`.
 
-Prepare an owner-only `config/keys.json` in your starting directory using [chapter 5](#key-configuration). Each example creates a new workspace and reads that configuration as `../config/keys.json`. Match its input and output roles to your media:
+When needed, prepare `keys.json` here using [chapter 5's schemas and permissions](#key-configuration), replacing its `config/keys.json` path. Keep it outside source/output directories. Use `schema_version: 1`; omit the clear side's `input` or `output` role. `analyze` and `plan` need only input keys when encrypted; `convert` and `verify` need keys for each encrypted side. Clear → Clear needs no key file.
 
-| Role | Key configuration |
-| --- | --- |
-| Clear input | Omit `input` |
-| cenc/cbcs MP4, DASH or fMP4 HLS input | Supply the source `kid` and `key` in `input.keys` |
-| HLS AES-128 input | Supply the resolved absolute input key URI and `key` in `input.hls_keys` |
-| TS SAMPLE-AES input | Supply its URI, `key` and associated `iv` when needed in `input.hls_keys`. A playlist IV must agree with a supplied IV |
-| Clear output | Omit `output` |
-| cenc/cbcs MP4 or DASH output | Supply `output.kid` and `output.key` |
-| cbcs fMP4 HLS output | Supply `output.kid`, `output.key` and `output.hls_key_uri` |
-| HLS AES-128 output | Supply `output.key` and `output.hls_key_uri`; omit `kid` and `iv` |
-| TS SAMPLE-AES output | Supply `output.key`, `output.iv` and `output.hls_key_uri`; omit `kid` |
+CENC/CBCS input uses `input.keys`; AES-128 and TS SAMPLE-AES use `input.hls_keys` with absolute key URIs and required IVs. Cenc/cbcs output needs `output.kid` and `output.key`; HLS also needs `output.hls_key_uri`. Other output fields are in chapter 5. Input and output keys may differ; no key or license URL is fetched.
 
-Use `schema_version: 1`. Keys and IVs contain 16 bytes written as 32 hexadecimal characters. Encrypted input requires its keys during analysis and planning too. Every example supplies the key file to all four operations. If both input and output are clear, omit every `--keys-file ../config/keys.json`. Input and output keys can differ even when the protection scheme stays the same. drmr never fetches input key or license URLs.
+Inputs must meet [chapter 3's profiles](#supported-profiles). MP4, DASH and fMP4 HLS examples assume one video track. TS video may include audio; audio-only TS uses 48 kHz AAC-LC. Joint TS output has separate audio/video playlists.
 
-Run each example from your original starting directory. The parenthesized commands run in a subshell and return there afterward. Workspace, retained source, plan and output locations must be new. To repeat an example, choose a new workspace name or create a new plan using the retained local source. Add `--fetch-policy ../config/fetch.json` to `analyze` when additional origins, authentication or transfer limits are needed.
-
-These examples convert encryption schemes. For explicit FairPlay HLS or Widevine/PlayReady DASH information, use the [multiple-output workflow in chapter 6](#inspect-plan); its admitted inputs and runtime settings differ.
+Explicit FairPlay HLS or Widevine/PlayReady DASH signaling uses [chapter 6's multiple-output workflow](#inspect-plan) and its input/runtime requirements.
 
 {{conversion-examples}}
 
