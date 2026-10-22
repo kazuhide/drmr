@@ -55,6 +55,9 @@ jobs:
           rustup run "$rust_channel" cargo --version
           rustup run "$rust_channel" rustc --version
 
+      - name: Check product version and changelog consistency
+        run: python3 tools/check_release.py
+
       - name: Check formatting
         run: cargo fmt --all -- --check
 
@@ -253,24 +256,37 @@ jobs:
           rustup run "$rust_channel" cargo --version
           rustup run "$rust_channel" rustc --version
 
+      - name: Install media tools for extracted CLI qualification
+        if: matrix.rust == 'stable'
+        uses: ./.github/actions/media-tools
+
       - name: Build release CLI
         run: cargo build --release --locked -p drmr
 
       - name: Package CLI and user documentation
         if: matrix.rust == 'stable'
-        env:
-          PACKAGE_NAME: drmr-${{ runner.os }}-${{ runner.arch }}
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/$PACKAGE_NAME/docs"
-          cp target/release/drmr README.md LICENSE "$RUNNER_TEMP/$PACKAGE_NAME/"
-          cp docs/*.md "$RUNNER_TEMP/$PACKAGE_NAME/docs/"
-          python3 tools/collect_notices.py --output "$RUNNER_TEMP/$PACKAGE_NAME/licenses"
+          python3 tools/check_release.py --cli target/release/drmr > "$RUNNER_TEMP/release-identity.json"
+          version="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$RUNNER_TEMP/release-identity.json")"
           target="$(rustc -vV | sed -n 's/^host: //p')"
-          python3 tools/verify_archive.py manifest --kind cli --target "$target" --directory "$RUNNER_TEMP/$PACKAGE_NAME"
-          tar -czf "$RUNNER_TEMP/$PACKAGE_NAME.tar.gz" -C "$RUNNER_TEMP" "$PACKAGE_NAME"
+          package="drmr-${version}-${target}"
+          mkdir -p "$RUNNER_TEMP/$package/docs"
+          cp target/release/drmr README.md CHANGELOG.md LICENSE "$RUNNER_TEMP/$package/"
+          cp docs/*.md "$RUNNER_TEMP/$package/docs/"
+          python3 tools/collect_notices.py --output "$RUNNER_TEMP/$package/licenses"
+          python3 tools/verify_archive.py manifest --kind cli --target "$target" --directory "$RUNNER_TEMP/$package"
+          tar -czf "$RUNNER_TEMP/$package.tar.gz" -C "$RUNNER_TEMP" "$package"
           python3 tools/verify_archive.py verify --kind cli --target "$target" \
-            --archive "$RUNNER_TEMP/$PACKAGE_NAME.tar.gz" --report "$RUNNER_TEMP/cli-archive-verification.json"
+            --archive "$RUNNER_TEMP/$package.tar.gz" --report "$RUNNER_TEMP/cli-archive-verification.json"
+          printf 'CLI_ARCHIVE=%s\nCLI_TARGET=%s\nCLI_VERSION=%s\n' \
+            "$RUNNER_TEMP/$package.tar.gz" "$target" "$version" >> "$GITHUB_ENV"
+
+      - name: Qualify the extracted CLI with real media
+        if: matrix.rust == 'stable'
+        run: |
+          python3 tools/qualify_cli_archive.py --archive "$CLI_ARCHIVE" --target "$CLI_TARGET" \
+            --expected-version "$CLI_VERSION" --report "$RUNNER_TEMP/cli-media-qualification.json"
 
       - name: Upload CLI archive
         if: matrix.rust == 'stable'
@@ -278,7 +294,8 @@ jobs:
         with:
           name: drmr-${{ runner.os }}-${{ runner.arch }}
           path: |
-            ${{ runner.temp }}/drmr-${{ runner.os }}-${{ runner.arch }}.tar.gz
+            ${{ env.CLI_ARCHIVE }}
             ${{ runner.temp }}/cli-archive-verification.json
+            ${{ runner.temp }}/cli-media-qualification.json
           if-no-files-found: error
           retention-days: 14

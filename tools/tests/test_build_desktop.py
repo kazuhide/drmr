@@ -249,7 +249,7 @@ class DesktopPackages(unittest.TestCase):
             (resources / "inventory.json").write_text("[]")
             (root / "docs").mkdir()
             (root / "docs" / "desktop.md").write_text("guide")
-            for name in ("LICENSE", "README.md"):
+            for name in ("LICENSE", "README.md", "CHANGELOG.md"):
                 (root / name).write_text(name)
             with patch.object(BUILD, "ROOT", root), patch.object(BUILD, "DESKTOP", root / "desktop"), patch.object(BUILD.sys, "platform", "darwin"):
                 bundle = BUILD.bundle(profile, "", "1.0.0", root)

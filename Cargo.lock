@@ -986,7 +986,7 @@ dependencies = [
 
 [[package]]
 name = "drmr"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "clap",
  "drmr-core",
@@ -1002,7 +1002,7 @@ dependencies = [
 
 [[package]]
 name = "drmr-core"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "aes",
  "base64 0.22.1",
@@ -1047,7 +1047,7 @@ dependencies = [
 
 [[package]]
 name = "drmr-desktop"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "drmr-core",
  "drmr-server",
@@ -1063,7 +1063,7 @@ dependencies = [
 
 [[package]]
 name = "drmr-manifest"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "base64 0.22.1",
  "roxmltree",
@@ -1074,7 +1074,7 @@ dependencies = [
 
 [[package]]
 name = "drmr-server"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -1103,7 +1103,7 @@ dependencies = [
 
 [[package]]
 name = "drmr-test-support"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "rustix",
  "tempfile",

@@ -186,7 +186,7 @@ def bundle(profile, suffix, version, target_directory):
         shutil.copy2(profile / (name + suffix), binaries / (name + suffix))
     shutil.copytree(DESKTOP / "bundle-resources", resources / "licenses")
     shutil.copytree(ROOT / "docs", resources / "docs")
-    for name in ("LICENSE", "README.md"):
+    for name in ("LICENSE", "README.md", "CHANGELOG.md"):
         shutil.copyfile(ROOT / name, resources / name)
     if sys.platform == "darwin":
         shutil.copyfile(DESKTOP / "icons" / "icon.icns", resources / "icon.icns")

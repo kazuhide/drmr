@@ -1,14 +1,16 @@
 ---
 title: User guide
 updated: 2026-10-22
-version: 0.1.0
+version: 1.0.0
 ---
 
 # 1. Introduction
 
 drmr changes media containers, delivery formats and encryption while retaining encoded video and audio. It is for engineers who control the media and already have the required decryption keys. It is not an encoder for creating a new quality ladder or a client for obtaining DRM licenses.
 
-This guide describes drmr 0.1.0 and was updated on 2026-10-21. Public source and command help define the behavior. For a different version, also read its accompanying documentation. A passing example does not qualify arbitrary media or playback devices.
+This guide describes drmr 1.0.0 and was updated on 2026-10-22. Public source and command help define the behavior. For a different version, also read its accompanying documentation. A passing example does not qualify arbitrary media or playback devices.
+
+Download a versioned CLI from [GitHub Releases](https://github.com/kazuhide/drmr/releases) and check its archive against `SHA256SUMS` before installation. External media tools remain separate. See [releases and compatibility](https://github.com/kazuhide/drmr/blob/main/docs/releases.md) for supported targets and the compatibility policy.
 
 ## Choose an operation
 

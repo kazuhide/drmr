@@ -54,6 +54,9 @@ jobs:
           & rustup run $rustChannel rustc --version
           if ($LASTEXITCODE -ne 0) { throw 'Rust compiler version check failed' }
 
+      - name: Check product version and changelog consistency
+        run: python tools/check_release.py
+
       - name: Check formatting
         run: cargo fmt --all -- --check
 
@@ -147,9 +150,12 @@ jobs:
         if: matrix.rust == 'stable'
         shell: pwsh
         run: |
-          $archive = Join-Path $env:RUNNER_TEMP 'drmr-windows-x86_64'
+          $identity = & python tools/check_release.py --cli .\target\release\drmr.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Release product identity did not match' }
+          $version = ($identity | ConvertFrom-Json).version
+          $archive = Join-Path $env:RUNNER_TEMP "drmr-${version}-x86_64-pc-windows-msvc"
           New-Item -ItemType Directory -Path $archive | Out-Null
-          Copy-Item .\target\release\drmr.exe, .\LICENSE, .\README.md $archive
+          Copy-Item .\target\release\drmr.exe, .\LICENSE, .\README.md, .\CHANGELOG.md $archive
           New-Item -ItemType Directory -Path "$archive\docs" | Out-Null
           Copy-Item .\docs\*.md "$archive\docs"
           python tools/collect_notices.py --output (Join-Path $archive 'licenses')
@@ -159,6 +165,13 @@ jobs:
           Compress-Archive -Path "$archive\*" -DestinationPath "$archive.zip"
           python tools/verify_archive.py verify --kind cli --target x86_64-pc-windows-msvc --archive "$archive.zip" --report (Join-Path $env:RUNNER_TEMP 'cli-archive-verification.json')
           if ($LASTEXITCODE -ne 0) { throw 'Completed archive verification failed' }
+          "CLI_ARCHIVE=$archive.zip" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CLI_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Qualify the extracted CLI as a regular user
+        if: matrix.rust == 'stable'
+        shell: pwsh
+        run: ./.github/scripts/windows-cli-archive.ps1 -Archive $env:CLI_ARCHIVE -Version $env:CLI_VERSION -Report (Join-Path $env:RUNNER_TEMP 'cli-media-qualification.json')
 
       - name: Upload native CLI archive
         if: matrix.rust == 'stable'
@@ -166,6 +179,7 @@ jobs:
         with:
           name: drmr-windows-x86_64
           path: |
-            ${{ runner.temp }}/drmr-windows-x86_64.zip
+            ${{ env.CLI_ARCHIVE }}
             ${{ runner.temp }}/cli-archive-verification.json
+            ${{ runner.temp }}/cli-media-qualification.json
           if-no-files-found: error

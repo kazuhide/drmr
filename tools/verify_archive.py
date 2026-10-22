@@ -109,7 +109,7 @@ def build_expectation(source, kind, target, metadata=None):
         data = data if exact else normalized(data)
         files[rel] = {"sha256": sha(data), "bytes": len(data), "comparison": "raw" if exact else "lf"}
     docs = sorted(p for p in source.paths if p.startswith("docs/") and (kind == "desktop" or (p.count("/") == 1 and p.endswith(".md"))))
-    for p in ["README.md", "LICENSE"] + docs: add(p, source.read(p))
+    for p in ["README.md", "CHANGELOG.md", "LICENSE"] + docs: add(p, source.read(p))
     expected = {"schema_version": 1, "kind": kind, "target": target, "source_head": source.head, "source_tree": source.tree, "files": files}
     require(metadata is not None, "metadata-required")
     roots = ("drmr", "drmr-desktop") if kind == "desktop" else ("drmr",)
