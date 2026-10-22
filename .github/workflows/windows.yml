@@ -1,189 +1,86 @@
-name: Windows native contracts
+name: Windows guide ACL proof
 
 on:
-  pull_request:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: windows-native-${{ github.ref }}
-  cancel-in-progress: true
+  group: windows-guide-acl-proof-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  native:
-    name: Windows / ${{ matrix.rust }} / private files and process trees
-    strategy:
-      fail-fast: false
-      matrix:
-        rust: [minimum, stable]
+  diagnostic:
+    name: Windows PowerShell 5.1 / actual guide ACLs
     runs-on: windows-2022
-    # Run every native protection route and round trip as an ordinary user,
-    # with room for complete media comparisons before release compilation.
-    timeout-minutes: 75
-    env:
-      CARGO_TERM_COLOR: always
+    timeout-minutes: 20
     steps:
-      - name: Check out source
+      - name: Check out diagnostic source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+          fetch-depth: 8
 
-      - name: Install pinned Python for the real-media harness
+      - name: Bind the diagnostic to the frozen guide source
+        run: |
+          function Read-GitValue([string]$revision) {
+            $value = & git rev-parse $revision
+            if ($LASTEXITCODE -ne 0) { throw 'Source identity is unavailable' }
+            return $value
+          }
+          $expectedParent = 'a1498616d4a07aa43da0dd1b9be8221d14865cdf'
+          $head = Read-GitValue 'HEAD'
+          $tree = Read-GitValue 'HEAD^{tree}'
+          $parent = Read-GitValue 'HEAD^'
+          if ($head -cne $env:GITHUB_SHA -or $parent -cne $expectedParent) {
+            throw 'The diagnostic source does not match the frozen guide candidate'
+          }
+          $allowed = @('.github/scripts/test-windows-archive-acl-owner.ps1',
+            '.github/scripts/windows_archive_acl_owner_worker.py',
+            '.github/scripts/windows_archive_acl_research.py',
+            '.github/workflows/windows.yml',
+            'tools/tests/test_windows_archive_acl_research.py')
+          $changed = @(& git diff --name-only $expectedParent HEAD)
+          if ($LASTEXITCODE -ne 0 -or
+              @(Compare-Object @($changed | Sort-Object) @($allowed | Sort-Object)).Count -ne 0) {
+            throw 'The diagnostic changes exceed the approved source allowlist'
+          }
+          Write-Output ('DRMR_GUIDE_ACL_SOURCE ' + ([ordered]@{
+            parent = $parent; head = $head; tree = $tree
+          } | ConvertTo-Json -Compress))
+
+      - name: Install pinned Python for the cleanup fixture
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.13.12'
 
-      - name: Check archive owner cleanup with real private Windows ACLs
-        run: ./.github/scripts/test-windows-cli-archive-cleanup.ps1
-
-      - name: Install checksummed Windows media tools
-        run: ./.github/scripts/install-windows-media-tools.ps1
-
-      - name: Install the supported Rust toolchain
+      - name: Parse the diagnostic PowerShell scripts
         run: |
-          $rustChannel = '${{ matrix.rust }}'
-          if ($rustChannel -eq 'minimum') {
-            $rustChannel = (& python .github/scripts/minimum-rust.py).Trim()
-            if ($LASTEXITCODE -ne 0) { throw 'Could not read the minimum Rust version' }
+          foreach ($file in @('.github/scripts/test-windows-cli-archive-cleanup.ps1', '.github/scripts/windows-cli-archive-cleanup.ps1', '.github/scripts/test-windows-archive-acl-owner.ps1', '.github/scripts/windows-cli-private-acl-tests.ps1')) {
+            $tokens = $null
+            $parseErrors = $null
+            [Management.Automation.Language.Parser]::ParseFile((Join-Path $pwd $file), [ref]$tokens, [ref]$parseErrors) | Out-Null
+            if ($parseErrors.Count -ne 0) { throw 'Diagnostic PowerShell syntax check failed' }
           }
-          & rustup toolchain install $rustChannel --profile minimal --component clippy,rustfmt --no-self-update
-          if ($LASTEXITCODE -ne 0) { throw 'Rust toolchain installation failed' }
-          "RUSTUP_TOOLCHAIN=$rustChannel" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          & rustup run $rustChannel cargo --version
-          if ($LASTEXITCODE -ne 0) { throw 'Cargo version check failed' }
-          & rustup run $rustChannel rustc --version
-          if ($LASTEXITCODE -ne 0) { throw 'Rust compiler version check failed' }
 
-      - name: Check product version and changelog consistency
-        run: python tools/check_release.py
+      - name: Check the embedded Python observer
+        run: python -B -m unittest discover -s tools/tests -p test_windows_archive_cleanup_observer.py
 
-      - name: Check formatting
-        run: cargo fmt --all -- --check
+      - name: Check the separate bounded research capture
+        run: python -B -m unittest discover -s tools/tests -p test_windows_archive_acl_research.py
 
-      - name: Check native platform warnings
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Prove actual guide ACLs under a protected Modify parent
+        id: owner
+        run: .github/scripts/test-windows-archive-acl-owner.ps1
 
-      - name: Run native manifest lint rules
+      - name: Require no classified owner failure
+        env:
+          CLASSIFIED_FAILURE: ${{ steps.owner.outputs.classified_failure }}
         run: |
-          cargo test -p drmr-manifest --locked -- --nocapture 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP/manifest-lint-tests.log"
-          if ($LASTEXITCODE -ne 0) { throw 'Native manifest lint tests failed' }
-          python .github/scripts/check-rust-test-skips.py --scope workspace --log "$env:RUNNER_TEMP/manifest-lint-tests.log"
-          if ($LASTEXITCODE -ne 0) { throw 'Native manifest lint tests were incomplete' }
-
-      - name: Check elevated media execution is refused before payload creation
-        run: cargo test -p drmr-core --test native media_workspace_checks_default_ownership_before_generating_payloads --locked -- --nocapture
-
-      - name: Test native access controls, descendants and the common CLI as a regular user
-        run: ./.github/scripts/windows-native-tests.ps1
-
-      - name: Preserve native test results
-        if: always()
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v4
-        with:
-          name: windows-native-results-${{ matrix.rust }}
-          path: |
-            ${{ runner.temp }}/manifest-lint-tests.log
-            ${{ runner.temp }}/drmr-native-user/bbb-media-report.json
-            ${{ runner.temp }}/drmr-native-user/conversion-report.json
-            ${{ runner.temp }}/drmr-native-user/stdout.log
-            ${{ runner.temp }}/drmr-native-user/stderr.log
-          if-no-files-found: warn
-
-  release:
-    name: Windows CLI release / ${{ matrix.rust }}
-    # Release qualification starts only after both native profiles pass.
-    needs: native
-    strategy:
-      fail-fast: false
-      matrix:
-        rust: [minimum, stable]
-    runs-on: windows-2022
-    timeout-minutes: 45
-    env:
-      CARGO_TERM_COLOR: always
-    steps:
-      - name: Check out source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-
-      - name: Install pinned Python for the real-media harness
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: '3.13.12'
-
-      - name: Install checksummed Windows media tools
-        run: ./.github/scripts/install-windows-media-tools.ps1
-
-      - name: Install the supported Rust toolchain
-        run: |
-          $rustChannel = '${{ matrix.rust }}'
-          if ($rustChannel -eq 'minimum') {
-            $rustChannel = (& python .github/scripts/minimum-rust.py).Trim()
-            if ($LASTEXITCODE -ne 0) { throw 'Could not read the minimum Rust version' }
+          if ($env:CLASSIFIED_FAILURE -cne 'false') {
+            throw 'The owner probe reported or omitted its failure classification'
           }
-          & rustup toolchain install $rustChannel --profile minimal --component clippy,rustfmt --no-self-update
-          if ($LASTEXITCODE -ne 0) { throw 'Rust toolchain installation failed' }
-          "RUSTUP_TOOLCHAIN=$rustChannel" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          & rustup run $rustChannel cargo --version
-          if ($LASTEXITCODE -ne 0) { throw 'Cargo version check failed' }
-          & rustup run $rustChannel rustc --version
-          if ($LASTEXITCODE -ne 0) { throw 'Rust compiler version check failed' }
 
-      - name: Build native CLI
-        run: cargo build --release --locked -p drmr
-
-      - name: Check native CLI help
-        run: .\target\release\drmr.exe --help
-
-      - name: Inspect native runtime dependencies
-        shell: pwsh
-        run: |
-          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-          $installation = & $vswhere -latest -products '*' -property installationPath
-          $dumpbin = Get-ChildItem (Join-Path $installation 'VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe') | Sort-Object FullName -Descending | Select-Object -First 1
-          if (-not $dumpbin) { throw 'PE dependency inspection tool is unavailable' }
-          & $dumpbin.FullName /DEPENDENTS .\target\release\drmr.exe
-          if ($LASTEXITCODE -ne 0) { throw 'Native runtime dependency inspection failed' }
-
-      - name: Package native CLI and user documentation
-        if: matrix.rust == 'stable'
-        shell: pwsh
-        run: |
-          $identity = & python tools/check_release.py --cli .\target\release\drmr.exe
-          if ($LASTEXITCODE -ne 0) { throw 'Release product identity did not match' }
-          $version = ($identity | ConvertFrom-Json).version
-          $archive = Join-Path $env:RUNNER_TEMP "drmr-${version}-x86_64-pc-windows-msvc"
-          New-Item -ItemType Directory -Path $archive | Out-Null
-          Copy-Item .\target\release\drmr.exe, .\LICENSE, .\README.md, .\CHANGELOG.md $archive
-          New-Item -ItemType Directory -Path "$archive\docs" | Out-Null
-          Copy-Item .\docs\*.md "$archive\docs"
-          python tools/collect_notices.py --output (Join-Path $archive 'licenses')
-          if ($LASTEXITCODE -ne 0) { throw 'Dependency notice collection failed' }
-          python tools/verify_archive.py manifest --kind cli --target x86_64-pc-windows-msvc --directory $archive
-          if ($LASTEXITCODE -ne 0) { throw 'Build manifest creation failed' }
-          Compress-Archive -Path "$archive\*" -DestinationPath "$archive.zip"
-          python tools/verify_archive.py verify --kind cli --target x86_64-pc-windows-msvc --archive "$archive.zip" --report (Join-Path $env:RUNNER_TEMP 'cli-archive-verification.json')
-          if ($LASTEXITCODE -ne 0) { throw 'Completed archive verification failed' }
-          "CLI_ARCHIVE=$archive.zip" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "CLI_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-
-      - name: Qualify the extracted CLI as a regular user
-        if: matrix.rust == 'stable'
-        shell: pwsh
-        run: ./.github/scripts/windows-cli-archive.ps1 -Archive $env:CLI_ARCHIVE -Version $env:CLI_VERSION -Report (Join-Path $env:RUNNER_TEMP 'cli-media-qualification.json')
-
-      - name: Upload native CLI archive
-        if: matrix.rust == 'stable'
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v4
-        with:
-          name: drmr-windows-x86_64
-          path: |
-            ${{ env.CLI_ARCHIVE }}
-            ${{ runner.temp }}/cli-archive-verification.json
-            ${{ runner.temp }}/cli-media-qualification.json
-          if-no-files-found: error
+      - name: Preserve all seven ordinary-user cleanup gates
+        run: .github/scripts/test-windows-cli-archive-cleanup.ps1
