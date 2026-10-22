@@ -10,6 +10,9 @@ for installation, stable interfaces and versioning.
 First stable CLI release. The local Web console and Desktop host remain
 experimental.
 
+See [installation and compatibility](https://github.com/kazuhide/drmr/blob/v1.0.0/docs/releases.md)
+and [runtime requirements](https://github.com/kazuhide/drmr/blob/v1.0.0/docs/requirements.md).
+
 The eight public commands are `inspect`, `analyze`, `plan`, `convert`, `verify`,
 `doctor`, `serve` and `version`.
 
@@ -25,7 +28,7 @@ The eight public commands are `inspect`, `analyze`, `plan`, `convert`, `verify`,
   to eight named outputs are supported.
 - Convert the documented profiles between clear media, `cenc`, `cbcs`, HLS
   AES-128 and transport-stream SAMPLE-AES without changing the audio or video
-  encoding. See the [support matrix](docs/conversion-support.md) for individual
+  encoding. See the [support matrix](https://github.com/kazuhide/drmr/blob/v1.0.0/docs/conversion-support.md) for individual
   routes and input restrictions.
 - Generate DASH and HLS manifests, including separate Widevine/PlayReady DASH
   and FairPlay HLS outputs from qualified clear sources. Keys and DRM settings
@@ -59,4 +62,4 @@ The eight public commands are `inspect`, `analyze`, `plan`, `convert`, `verify`,
 - Supported formats are limited to the documented on-demand profiles. License
   acquisition and device DRM playback are outside the conversion checks.
 - The Web/Desktop saved-plan workflow uses the CLI. Native Desktop results and
-  unqualified platforms are listed in the [Desktop guide](docs/desktop.md#tested-results).
+  unqualified platforms are listed in the [Desktop guide](https://github.com/kazuhide/drmr/blob/v1.0.0/docs/desktop.md#tested-results).
