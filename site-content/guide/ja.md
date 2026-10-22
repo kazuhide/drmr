@@ -1,6 +1,6 @@
 ---
 title: ユーザーガイド
-updated: 2026-10-21
+updated: 2026-10-22
 version: 0.1.0
 ---
 
@@ -659,19 +659,19 @@ drmr convert qualified-clear.mp4 --to cbcs --format dash \
 
 ## 原本の取得から計画・変換・検証までの手順
 
-URL から原本を取得して解析し、変換計画を保存してから実行するには、次の四つのコマンドを使います。第5章の鍵設定 `config/keys.json` は原本と出力のディレクトリの外に用意してください。入力が暗号化されている場合は入力鍵を、CBCS 出力には出力鍵を設定します。
+次の例は、Clear HLS を取得して CBCS の DASH に変換する手順です。第5章の `config/keys.json` には出力鍵だけを設定します。`&&` でつなぐと、成功した場合だけ次のコマンドに進み、失敗した時点で止まります。`inspect` は取得後の宣言内容を確認する操作で、この概要が不要なら省略できます。
 
 ```sh
 drmr analyze "https://example.com/vod/master.m3u8" \
-  --download-dir ./saved-source --keys-file config/keys.json --json
+  --download-dir ./saved-source &&
+drmr inspect ./saved-source/input.m3u8 &&
 drmr plan ./saved-source/input.m3u8 --to cbcs --format dash \
-  --output ./converted-dash --save ./conversion.plan.json \
-  --keys-file config/keys.json --json
-drmr convert --plan ./conversion.plan.json --keys-file config/keys.json --json
-drmr verify --plan ./conversion.plan.json --keys-file config/keys.json --json
+  --output ./converted-dash --save ./conversion.plan.json &&
+drmr convert --plan ./conversion.plan.json --keys-file config/keys.json &&
+drmr verify --plan ./conversion.plan.json --keys-file config/keys.json
 ```
 
-URL 入力では、`--download-dir` に新しい保存先を指定します。親ディレクトリはあらかじめ作成してください。計画ファイルと出力先にも、原本とは別の新しい場所を選びます。取得済みのファイルを上書きしたり、既存のディレクトリを自動的に再取得先として使ったりすることはありません。ローカル入力では `--download-dir` や `--fetch-policy` を指定しません。
+URL 入力の `--download-dir`、計画ファイル、出力先には、互いに別の新しいパスを指定します。親ディレクトリは既存のものを使います。既存ファイルの上書きや取得先の自動再利用はしません。ローカル入力では `--download-dir` や `--fetch-policy` は不要です。
 
 MP4、static DASH、配信が完結した HLS を URL から取得できます。形式は取得した内容で判別するため、URL に拡張子がなくても利用できます。クエリの有無や、許可されたリダイレクトの有無で形式が決まることはありません。
 
@@ -681,17 +681,17 @@ MP4、static DASH、配信が完結した HLS を URL から取得できます�
 | DASH | `saved-source/input.mpd` | 一つの `Period` を持ち、`SegmentTemplate` と有限の `SegmentTimeline` が明示された static MPD |
 | HLS | `saved-source/input.m3u8` | 対応条件を満たす、配信が完結した TS/fMP4 プレイリスト |
 
-DASH または MP4 の URL を使う場合は、上の `plan` に渡すパスを表のファイルに置き換えます。DASH では参照する初期化ファイルとセグメントをすべて保存します。元の MPD は別に保持し、`input.mpd` のリソース参照をローカルに書き換えます。暗号化情報、DRM 初期化データの PSSH、明示された時系列情報は保持します。
+DASH または MP4 では、上のローカル入力パスを表に合わせます。DASH は参照する初期化ファイルとセグメントをすべて保存し、`input.mpd` の参照をローカルに書き換えます。元の MPD は別に残し、暗号化情報、DRM 初期化データの PSSH、時系列情報を保持します。
 
 取得後の解析には、ローカル入力と同じコーデック・トラック・暗号・時刻の条件を適用します。ライブ、バイト範囲による参照、複数の DASH Period、`SegmentList`、`SegmentBase`、`duration` だけで区間を表す DASH テンプレート、繰り返し回数が負の時系列指定は現在の取得機能の対象外です。これらは実装上の制限で、形式として変換が不可能という意味ではありません。
 
 HLS は clear に加え、AES-128 の TS/fMP4、SAMPLE-AES の TS、CENC/CBCS の fMP4 に対応します。MP4 と DASH も、ローカル入力で対応する clear・暗号化済みデータを取得できます。
 
-AES-128 と SAMPLE-AES TS の `input.hls_keys[].uri` は、リダイレクト後のプレイリスト URL を基準に解決した絶対 URI と完全一致させます。例えば `https://example.com/vod/media.m3u8` 内の `keys/key.bin` は `https://example.com/vod/keys/key.bin` になります。別のディレクトリにある同じ相対名を、同じ鍵と決めつけません。絶対 URI の `skd:` はそのまま識別子として扱います。CENC/CBCS の MP4・DASH・fMP4 HLS は、従来どおり `input.keys` に KID と鍵を指定します。鍵 URI やライセンスへのリクエストは行いません。clear 入力から clear を作る場合は鍵ファイルを省略できます。
+AES-128 と TS SAMPLE-AES の `input.hls_keys[].uri` は、リダイレクト後のプレイリスト URL から解決した絶対 URI と一致させます。`https://example.com/vod/media.m3u8` 内の `keys/key.bin` は `https://example.com/vod/keys/key.bin`、絶対 URI の `skd:` はそのまま使います。CENC/CBCS は `input.keys` に KID と鍵を指定します。鍵 URI やライセンスには接続しません。暗号化入力では `analyze` と `plan` にも入力鍵の `--keys-file config/keys.json` が必要で、Clear 入力では不要です。
 
-HLS は元のプレイリストとリソースを保存し、ローカル参照にした `saved-source/input.m3u8` を作ります。原本プレイリストのバイト列は別に保持し、ローカル版ではメディア参照と鍵識別 URI の解決だけを書き換えます。どの形式でも、取得中は暗号化済みのメディアや初期化ファイルを復号しません。時刻、シーケンス番号、音声の関連付けなどを解析結果から作り直す方式ではありません。保存した原本マニフェストには署名付き URL などが含まれる場合があるため、非公開で保管してください。
+HLS は元のプレイリストとリソースを保存し、メディア参照と鍵識別 URI をローカル用に解決した `saved-source/input.m3u8` を作ります。時刻・シーケンス番号・音声の関連付けは作り直しません。どの形式でも取得中は暗号化済みデータを復号しません。原本マニフェストは元のバイト列で別に残り、署名付き URL を含み得るため非公開で保管してください。
 
-配信元への接続が必要なのは最初の `analyze` だけです。その後は保存した原本で計画・変換・検証を進めます。後の解析や変換が失敗しても、取得が完了した原本は残ります。一回の操作で取得から変換まで進めたい場合は、従来どおり `convert URL --download-dir NEW_DIR` も使えます。
+配信元への接続は `analyze` だけです。取得が完了した原本は後の処理が失敗しても残り、未完了の取得は受け付けません。`convert URL --download-dir NEW_DIR` なら計画保存なしで取得・変換できます。
 
 ## URL 入力からの複数 DRM 出力
 
@@ -785,29 +785,17 @@ drmr convert "https://example.com/vod/master.m3u8" \
 
 ## 変換例の準備と鍵ファイル {#recipe-setup}
 
-対応表の各方式名から、以下の該当する例へ移動できます。コマンドは macOS/Linux などの POSIX シェル向けです。`https://media.example.com` 配下の URL は差し替え用の例で、実在する配信素材ではありません。各入力は[第3章の対応条件](#supported-profiles)を満たすものとします。
+対応表の出力方式から例を開き、入力の暗号化方式に合う**4コマンドの組を一つ選んで**実行します。ほかの組は別の入力向けです。POSIX シェルの `&&` で失敗時に止め、ファイルを介して処理をつなぎます。`|` は標準出力を渡す仕組みです。`https://example.com` の URL は差し替えてください。
 
-すべての例で `analyze URL --download-dir ./source` を使います。保存後は、実際の形式に応じて `source/input.mp4`、`source/input.mpd`、`source/input.m3u8` を使います。DASH は、一つの Period を持つ static MPD に SegmentTemplate と有限の SegmentTimeline が明示された構成が対象です。drmr が初期化ファイルとセグメントを漏れなく取得します。MP4・DASH・HLS で[同じ取得ポリシー](#url-input)を使えます。
+所有者だけがアクセスできる既存の作業ディレクトリで実行します。入力を保存する `src`、`plan.json`、`result`（MP4 は `result.mp4`）は新規作成のため、同名のものがない場所を選びます。`mkdir` や `cd` は不要です。再実行時は各パスを揃えて変更するか、別の作業場所を使います。取得条件は `analyze` に `--fetch-policy config/fetch.json` を追加します。[設定例](#url-input)を参照してください。
 
-実行する場所に、[第5章の手順](#key-configuration)で所有者専用の `config/keys.json` を用意してください。各例は新しい作業ディレクトリを作り、その中から `../config/keys.json` を参照します。入力と出力の方式に合わせて、次の項目を設定します。
+鍵が必要なら[第5章の構造例と権限設定](#key-configuration)に従い、`config/keys.json` をこの作業場所の `keys.json` に置き換えます。原本・出力の中には置きません。`schema_version: 1` を使い、Clear 側の `input` または `output` は省略します。`analyze` と `plan` は暗号化入力の鍵だけ、`convert` と `verify` は入力・出力それぞれの暗号化に使う鍵が必要です。両方 Clear なら鍵ファイルは不要です。
 
-| 対象 | 鍵ファイルの設定 |
-| --- | --- |
-| 暗号化されていない入力 | `input` を省略する |
-| MP4・DASH・fMP4 HLS の cenc/cbcs 入力 | `input.keys` に入力の `kid` と `key` を指定する |
-| HLS AES-128 入力 | `input.hls_keys` に入力プレイリストから解決した絶対 URI と `key` を指定する |
-| TS の SAMPLE-AES 入力 | `input.hls_keys` に URI、`key`、必要ならその鍵に対応する `iv` を指定する。プレイリストにも IV がある場合は一致が必要 |
-| Clear 出力 | `output` を省略する |
-| MP4・DASH の cenc/cbcs 出力 | `output.kid` と `output.key` を指定する |
-| fMP4 HLS の cbcs 出力 | `output.kid`、`output.key`、`output.hls_key_uri` を指定する |
-| HLS の AES-128 出力 | `output.key` と `output.hls_key_uri` を指定する。`kid` と `iv` は指定しない |
-| TS の SAMPLE-AES 出力 | `output.key`、`output.iv`、`output.hls_key_uri` を指定する。`kid` は指定しない |
+CENC/CBCS 入力は `input.keys`、AES-128 と TS SAMPLE-AES は `input.hls_keys` に絶対鍵 URI と必要な IV を設定します。cenc/cbcs 出力は `output.kid` と `output.key`、HLS はさらに `output.hls_key_uri` が必要です。他の出力項目は第5章に例があります。入力鍵と出力鍵は別の値にできます。鍵 URI やライセンス URL には接続しません。
 
-鍵ファイルは `schema_version: 1` を使います。鍵や IV は、各 16 バイトを 32 桁の 16 進数で記します。入力が暗号化されている場合は、解析と計画にも入力鍵が必要です。各例では鍵ファイルを全4操作に指定していますが、入力・出力が両方とも Clear なら、すべての `--keys-file ../config/keys.json` を省略できます。入力と出力の方式が同じでも、鍵はそれぞれ別に設定できます。drmr は入力の鍵 URI やライセンス URL を取得しません。
+入力は[第3章の対応条件](#supported-profiles)を満たすものとします。MP4・DASH・fMP4 HLS の例は映像1トラックを想定しています。TS 映像は音声を含められ、音声のみの TS は 48 kHz AAC-LC が対象です。映像・音声を含む TS 出力は別プレイリストになります。
 
-例はそれぞれ元の実行場所から使ってください。括弧内は独立したシェルで実行するため、終了すると元の場所に戻ります。作業ディレクトリ、原本保存先、計画ファイル、出力先は新規作成します。同じ例をやり直す場合は、別の作業ディレクトリ名を選ぶか、保存済みの原本を使って新しい計画を作ってください。追加 origin・認証・取得量の上限を指定する場合は、`analyze` に `--fetch-policy ../config/fetch.json` を追加します。
-
-これらは暗号化方式の変換例です。DRM 提供者の情報を明示して FairPlay 向け HLS や Widevine/PlayReady 向け DASH を作る場合は、[第6章の複数出力の手順](#inspect-plan)を参照してください。対象入力や実行時の設定が異なります。
+FairPlay HLS や Widevine/PlayReady DASH の情報を明示する場合は、[第6章の複数出力の手順と対応条件](#inspect-plan)を使います。
 
 {{conversion-examples}}
 

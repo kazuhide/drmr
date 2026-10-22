@@ -538,7 +538,15 @@ test('each supported protection token has one stable recipe identity and unavail
 
 function recipeSample(recipe = matrixRecipes.find(value => value.id === 'recipe-hls-ts-video-dash-cbcs')) {
   const extension = recipe.row === 'mp4' ? 'mp4' : recipe.row === 'dash' ? 'mpd' : 'm3u8';
-  const code = `(\n  set -eu\n  workspace="$(mktemp -d)"\n  cd "$workspace"\n  drmr analyze "https://example.com/vod/master.${extension}" --download-dir source --keys-file ../config/keys.json --json\n  drmr plan source/input.${extension} --to ${recipe.target} --format ${recipe.format} --output output --save conversion.plan.json --keys-file ../config/keys.json\n  drmr convert --plan conversion.plan.json --keys-file ../config/keys.json\n  drmr verify --plan conversion.plan.json --keys-file ../config/keys.json --json\n)\n`;
+  const profiles = recipe.row.startsWith('hls-ts-') ? ['Clear', 'AES-128', 'SAMPLE-AES']
+    : recipe.row === 'hls-fmp4' ? ['Clear', 'cenc', 'cbcs', 'AES-128'] : ['Clear', 'cenc', 'cbcs'];
+  const code = profiles.map(profile => {
+    const name = { Clear: 'clear', 'AES-128': 'aes128', 'SAMPLE-AES': 'sample-aes' }[profile] ?? profile;
+    const inputKeys = profile === 'Clear' ? '' : ' --keys-file keys.json';
+    const runtimeKeys = profile === 'Clear' && recipe.target === 'clear' ? '' : ' --keys-file keys.json';
+    const output = recipe.format === 'mp4' ? 'result.mp4' : 'result';
+    return `# ${profile} input\ndrmr analyze https://example.com/${name}.${extension} --download-dir src${inputKeys} &&\ndrmr plan src/input.${extension} --to ${recipe.target} --format ${recipe.format} --output ${output} --save plan.json${inputKeys} &&\ndrmr convert --plan plan.json${runtimeKeys} &&\ndrmr verify --plan plan.json${runtimeKeys}`;
+  }).join('\n\n') + '\n';
   return { id: recipe.id, tag: 'H3', tabindex: '-1', chapter: 'url-input', heading: 'HLS to DASH',
     presented: true, setupTag: 'P', setupHrefs: ['#recipe-setup'], figureTag: 'FIGURE',
     figureClass: true, language: 'sh', code, rendered: code };
@@ -556,12 +564,13 @@ test('recipe checks refuse wrong destinations, hidden code, incomplete steps and
   ];
   for (const change of changes) assert.throws(() => requireRecipe({ ...good, ...change }, expected));
   for (const [before, after] of [
-    ['--to cbcs', '--to clear'], ['--format dash', '--format hls'], ['--output output', ''],
-    ['--save conversion.plan.json', ''], ['drmr convert --plan conversion.plan.json', 'drmr convert --plan stale.plan.json'],
-    ['--keys-file ../config/keys.json', '--keys-file keys.json'], ['https://example.com/', 'source/'],
-    ['--download-dir source', ''], ['drmr verify', 'printf verify'], ['set -eu', 'set -u'],
+    ['--to cbcs', '--to clear'], ['--format dash', '--format hls'], ['--output result', ''],
+    ['--save plan.json', ''], ['drmr convert --plan plan.json', 'drmr convert --plan stale.plan.json'],
+    ['--keys-file keys.json', '--keys-file other.json'], ['https://example.com/', 'src/'],
+    ['--download-dir src', ''], ['drmr verify', 'printf verify'], ['# Clear input\n', '# Clear input\nset -eu\n'],
   ]) {
     const code = good.code.replace(before, after);
+    assert.notEqual(code, good.code, before);
     assert.throws(() => requireRecipe({ ...good, code, rendered: code }, expected), before);
   }
 });
@@ -571,10 +580,86 @@ test('all format recipes require native acquisition and the matching retained en
     const good = recipeSample(expected);
     requireRecipe(good, expected);
     for (const code of [
-      good.code.replace('--download-dir source', '--download-dir other'),
-      good.code.replace(/source\/input\.(mp4|mpd|m3u8)/, 'source/download.bin'),
-      good.code.replace('  drmr analyze', '  curl https://example.com/other\n  drmr analyze'),
+      good.code.replace('--download-dir src', '--download-dir other'),
+      good.code.replace(/src\/input\.(mp4|mpd|m3u8)/, 'src/download.bin'),
+      good.code.replace('drmr analyze', 'curl https://example.com/other\ndrmr analyze'),
     ]) assert.throws(() => requireRecipe({ ...good, code, rendered: code }, expected));
+  }
+});
+
+test('each recipe includes all supported input protection groups in order exactly once', () => {
+  const profiles = {
+    mp4: ['Clear', 'cenc', 'cbcs'], dash: ['Clear', 'cenc', 'cbcs'],
+    'hls-fmp4': ['Clear', 'cenc', 'cbcs', 'AES-128'],
+    'hls-ts-video': ['Clear', 'AES-128', 'SAMPLE-AES'],
+    'hls-ts-audio': ['Clear', 'AES-128', 'SAMPLE-AES'],
+  };
+  for (const expected of matrixRecipes) {
+    const good = recipeSample(expected);
+    requireRecipe(good, expected);
+    const groups = good.code.trimEnd().split('\n\n');
+    assert.deepEqual(groups.map(group => group.split('\n')[0]), profiles[expected.row].map(profile => `# ${profile} input`));
+    for (let index = 0; index < groups.length; index++) {
+      const changes = [groups.filter((_, current) => current !== index), [...groups, groups[index]],
+        groups.map((group, current) => current === index ? group.replace(/^# .+ input/, '# cbc1 input') : group)];
+      for (const changed of changes) {
+        const code = changed.join('\n\n') + '\n';
+        assert.throws(() => requireRecipe({ ...good, code, rendered: code }, expected), `${expected.id}: ${index}`);
+      }
+    }
+    const code = [...groups].reverse().join('\n\n') + '\n';
+    assert.throws(() => requireRecipe({ ...good, code, rendered: code }, expected));
+  }
+});
+
+test('key options are required only by the source and runtime protection roles', () => {
+  for (const expected of matrixRecipes) {
+    const good = recipeSample(expected);
+    requireRecipe(good, expected);
+    const groups = good.code.trimEnd().split('\n\n');
+    for (let index = 0; index < groups.length; index++) {
+      const lines = groups[index].split('\n');
+      const encryptedInput = lines[0] !== '# Clear input';
+      for (let command = 1; command <= 4; command++) {
+        const required = encryptedInput || (command >= 3 && expected.target !== 'clear');
+        assert.equal(lines[command].includes('--keys-file keys.json'), required);
+        const changed = [...lines];
+        changed[command] = required ? changed[command].replace(' --keys-file keys.json', '')
+          : changed[command].replace(/( &&)?$/, ' --keys-file keys.json$1');
+        const code = groups.map((group, current) => current === index ? changed.join('\n') : group).join('\n\n') + '\n';
+        assert.throws(() => requireRecipe({ ...good, code, rendered: code }, expected),
+          `${expected.id}: ${lines[0]}, operation ${command}`);
+      }
+    }
+  }
+});
+
+test('every input group stops on failure and uses the same saved plan through verification', () => {
+  for (const expected of matrixRecipes) {
+    const good = recipeSample(expected);
+    requireRecipe(good, expected);
+    const groups = good.code.trimEnd().split('\n\n');
+    for (let index = 0; index < groups.length; index++) {
+      const lines = groups[index].split('\n');
+      const changes = [];
+      for (let operation = 1; operation <= 3; operation++) {
+        for (const connector of ['', ';', ' ||']) {
+          const changed = [...lines];
+          changed[operation] = changed[operation].replace(/ &&$/, connector);
+          changes.push(changed);
+        }
+      }
+      changes.push([...lines.slice(0, 4), lines[4] + ' &&']);
+      for (const operation of [3, 4]) {
+        const changed = [...lines];
+        changed[operation] = changed[operation].replace('--plan plan.json', '--plan stale.plan.json');
+        changes.push(changed);
+      }
+      for (const changed of changes) {
+        const code = groups.map((group, current) => current === index ? changed.join('\n') : group).join('\n\n') + '\n';
+        assert.throws(() => requireRecipe({ ...good, code, rendered: code }, expected), `${expected.id}: ${index}`);
+      }
+    }
   }
 });
 

@@ -382,32 +382,32 @@ def validate_matrix(text, language):
     return {"rows": 5, "output_columns": 4, "cells": 20, "caption": locale["caption"], "recipe_links": 45}
 
 
-def recipe_https_url(value):
-    parsed = urlsplit(value)
-    return (parsed.scheme == "https" and bool(parsed.hostname) and parsed.username is None
-            and parsed.password is None and not parsed.fragment and not parsed.query
-            and not any(ord(character) <= 32 for character in value))
-
-
 def validate_recipe_commands(code, row, output_format, target):
     token = "site-guide-recipe-command"
-    logical = re.sub(r"\\\r?\n[ \t]*", " ", code).splitlines()
-    try:
-        commands = [shlex.split(line.strip()) for line in logical if re.match(r"\s*drmr(?:\s|$)", line)]
-    except ValueError:
-        raise Failure(token) from None
-    require(len(commands) == 4 and not any(re.match(r"\s*curl(?:\s|$)", line) for line in logical), token)
-    suffix = ".mp4" if row == "mp4" else ".mpd" if row == "dash" else ".m3u8"
-    source = "./source/input" + suffix
-    runtime = ["--keys-file", "../config/keys.json", "--json"]
-    require(len(commands[0]) >= 3 and recipe_https_url(commands[0][2])
-            and urlsplit(commands[0][2]).path.endswith(suffix)
-            and commands[0] == ["drmr", "analyze", commands[0][2], "--download-dir", "./source"] + runtime, token)
-    output = "./result.mp4" if output_format == "mp4" else "./result"
-    require(commands[1] == ["drmr", "plan", source, "--to", target, "--format", output_format,
-                            "--output", output, "--save", "./conversion.plan.json"] + runtime
-            and commands[2] == ["drmr", "convert", "--plan", "./conversion.plan.json"] + runtime
-            and commands[3] == ["drmr", "verify", "--plan", "./conversion.plan.json"] + runtime, token)
+    profiles = dict(MATRIX_ROWS).get(row)
+    lines = [line.strip() for line in code.splitlines() if line.strip()]
+    require(profiles and len(lines) == len(profiles) * 5, token)
+    extension = "mp4" if row == "mp4" else "mpd" if row == "dash" else "m3u8"
+    output = "result.mp4" if output_format == "mp4" else "result"
+    for index, profile in enumerate(profiles):
+        require(lines[index * 5] == f"# {profile} input", token)
+        steps = lines[index * 5 + 1:index * 5 + 5]
+        require(all(line.endswith(" &&") for line in steps[:3])
+                and not steps[3].endswith(" &&"), token)
+        try:
+            commands = [shlex.split(line[:-3] if offset < 3 else line)
+                        for offset, line in enumerate(steps)]
+        except ValueError:
+            raise Failure(token) from None
+        input_keys = [] if profile == "Clear" else ["--keys-file", "keys.json"]
+        runtime_keys = [] if profile == "Clear" and target == "clear" else ["--keys-file", "keys.json"]
+        name = {"Clear": "clear", "AES-128": "aes128", "SAMPLE-AES": "sample-aes"}.get(profile, profile)
+        require(commands[0] == ["drmr", "analyze", f"https://example.com/{name}.{extension}",
+                                "--download-dir", "src"] + input_keys, token)
+        require(commands[1] == ["drmr", "plan", f"src/input.{extension}", "--to", target,
+                                "--format", output_format, "--output", output, "--save", "plan.json"] + input_keys
+                and commands[2] == ["drmr", "convert", "--plan", "plan.json"] + runtime_keys
+                and commands[3] == ["drmr", "verify", "--plan", "plan.json"] + runtime_keys, token)
 
 
 def validate_conversion_examples(chapter, language):

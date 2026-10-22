@@ -31,6 +31,10 @@ def recipe_fixture(language="en", first_example=1):
     rows = ("mp4", "dash", "hls-fmp4", "hls-ts-video", "hls-ts-audio")
     protection_labels = {"clear": "Clear", "cenc": "cenc", "cbcs": "cbcs",
                          "hls-aes128": "AES-128", "hls-sample-aes": "SAMPLE-AES"}
+    input_profiles = (("clear", "cenc", "cbcs"), ("clear", "cenc", "cbcs"),
+                      ("clear", "cenc", "cbcs", "hls-aes128"),
+                      ("clear", "hls-aes128", "hls-sample-aes"),
+                      ("clear", "hls-aes128", "hls-sample-aes"))
     content = ['<h3 id="recipe-setup">Prepare a private key file</h3><p>Use separate input and output keys.</p>']
     example = first_example
     for index, row in enumerate(rows):
@@ -41,13 +45,20 @@ def recipe_fixture(language="en", first_example=1):
                 identifier = "recipe-" + row + "-" + output_format + "-" + target
                 heading = input_labels[language][index] + " → " + output_label + " / " + protection_labels[target]
                 suffix = "mp4" if row == "mp4" else "mpd" if row == "dash" else "m3u8"
-                source = "./source/input." + suffix
-                analyzed = '"https://media.example.com/vod/' + row + '/clear/media.' + suffix + '" --download-dir ./source'
-                output = "./result.mp4" if output_format == "mp4" else "./result"
-                code = ('(\n  drmr analyze ' + analyzed + ' --keys-file ../config/keys.json --json\n'
-                        '  drmr plan ' + source + ' \\\n    --to ' + target + ' --format ' + output_format + ' \\\n    --output ' + output + ' --save ./conversion.plan.json \\\n    --keys-file ../config/keys.json --json\n'
-                        '  drmr convert --plan ./conversion.plan.json --keys-file ../config/keys.json --json\n'
-                        '  drmr verify --plan ./conversion.plan.json --keys-file ../config/keys.json --json\n)')
+                source = "src/input." + suffix
+                output = "result.mp4" if output_format == "mp4" else "result"
+                groups = []
+                for protection in input_profiles[index]:
+                    input_keys = " --keys-file keys.json" if protection != "clear" else ""
+                    runtime_keys = " --keys-file keys.json" if protection != "clear" or target != "clear" else ""
+                    name = {"hls-aes128": "aes128", "hls-sample-aes": "sample-aes"}.get(protection, protection)
+                    groups.append("# " + protection_labels[protection] + " input\n"
+                                  "drmr analyze https://example.com/" + name + "." + suffix + " --download-dir src" + input_keys + " &&\n"
+                                  "drmr plan " + source + " --to " + target + " --format " + output_format
+                                  + " --output " + output + " --save plan.json" + input_keys + " &&\n"
+                                  "drmr convert --plan plan.json" + runtime_keys + " &&\n"
+                                  "drmr verify --plan plan.json" + runtime_keys)
+                code = "\n\n".join(groups)
                 content.append('<h3 id="' + identifier + '" tabindex="-1">' + heading + '</h3>'
                                '<p><a href="#recipe-setup">Prepare the key configuration</a></p>'
                                '<figure class="guide-example" data-code-language="sh" aria-labelledby="example-' + str(example) + '-title">'
@@ -745,15 +756,15 @@ class ConversionExamples(unittest.TestCase):
     def test_swapped_plan_source_target_format_output_and_missing_flow_steps_are_refused(self):
         original = recipe_fixture()
         for old, new in (
-                ('drmr plan ./source/input.mp4', 'drmr plan ./source/input.mpd'),
+                ('drmr plan src/input.mp4', 'drmr plan src/input.mpd'),
                 ('--to clear --format mp4', '--to cbcs --format mp4'),
                 ('--to clear --format mp4', '--to clear --format dash'),
-                ('--output ./result.mp4', '--output ./result'),
-                ('--save ./conversion.plan.json', '--save ./other.plan.json'),
-                ('drmr convert --plan ./conversion.plan.json', 'drmr convert --plan ./other.plan.json'),
-                ('drmr verify --plan ./conversion.plan.json', 'drmr inspect ./result.mp4'),
-                ('drmr analyze &quot;https://media.example.com/vod/mp4/clear/media.mp4&quot;', 'drmr analyze ./result.mp4'),
-                ('--keys-file ../config/keys.json', '--keys-file ../config/other.json'),
+                ('--output result.mp4', '--output result'),
+                ('--save plan.json', '--save other.plan.json'),
+                ('drmr convert --plan plan.json', 'drmr convert --plan other.plan.json'),
+                ('drmr verify --plan plan.json', 'drmr inspect result.mp4'),
+                ('drmr analyze https://example.com/clear.mp4', 'drmr analyze result.mp4'),
+                ('--keys-file keys.json', '--keys-file other.json'),
                 ('drmr verify --plan', '# drmr verify --plan')):
             with self.subTest(changed=new), self.assertRaisesRegex(CHECK.Failure, "site-guide-recipe-command"):
                 self.check(original.replace(old, new, 1))
@@ -761,18 +772,60 @@ class ConversionExamples(unittest.TestCase):
     def test_every_remote_format_requires_native_acquisition_and_matching_local_entrypoint(self):
         original = recipe_fixture()
         for old, new in (
-                ('https://media.example.com/vod/mp4/clear/media.mp4', 'file:///private/video.mp4'),
-                ('https://media.example.com/vod/mp4/clear/media.mp4', 'https://media.example.com/vod/dash/manifest.mpd'),
-                ('https://media.example.com/vod/dash/clear/media.mpd', './remote.mpd'),
-                ('https://media.example.com/vod/dash/clear/media.mpd', 'http://media.example.com/vod/dash/clear/media.mpd'),
-                ('drmr plan ./source/input.mpd', 'drmr plan ./source/manifest.mpd'),
-                ('drmr plan ./source/input.mp4', 'drmr plan ./source.mp4'),
-                ('--download-dir ./source', '--download-dir ./different-source'),
-                ('--download-dir ./source', ''),
-                ('drmr analyze', 'curl --fail --location https://media.example.com/source.mp4\ndrmr analyze'),
-                ('https://media.example.com/vod/hls-fmp4/clear/media.m3u8', './remote.m3u8')):
+                ('https://example.com/clear.mp4', 'file:///private/video.mp4'),
+                ('https://example.com/clear.mp4', 'https://example.com/manifest.mpd'),
+                ('https://example.com/clear.mpd', './remote.mpd'),
+                ('https://example.com/clear.mpd', 'http://example.com/clear.mpd'),
+                ('https://example.com/clear.mp4', 'https://example.com/cenc.mp4'),
+                ('drmr plan src/input.mpd', 'drmr plan src/manifest.mpd'),
+                ('drmr plan src/input.mp4', 'drmr plan source.mp4'),
+                ('--download-dir src', '--download-dir different-source'),
+                ('--download-dir src', ''),
+                ('drmr analyze', 'curl --fail --location https://example.com/source.mp4\ndrmr analyze'),
+                ('https://example.com/clear.m3u8', './remote.m3u8')):
             with self.subTest(changed=new), self.assertRaisesRegex(CHECK.Failure, "site-guide-recipe-command"):
                 self.check(original.replace(old, new, 1))
+
+    def test_input_groups_must_be_complete_unique_and_supported(self):
+        code = next(CHECK.MatrixMarkup(recipe_fixture()).root.descendants("code")).text()
+        first, second, third = code.split("\n\n")
+        for changed in (first, first + "\n\n" + third,
+                        "\n\n".join((first, second, second)),
+                        "\n\n".join((second, first, third)),
+                        code.replace("# cenc input", "# AES-128 input", 1),
+                        code + "\n\n" + third, code + "\nexit 0"):
+            with self.subTest(changed=changed[:90]), self.assertRaisesRegex(CHECK.Failure, "site-guide-recipe-command"):
+                CHECK.validate_recipe_commands(changed, "mp4", "mp4", "clear")
+
+    def test_keys_follow_each_input_and_output_role(self):
+        code = next(CHECK.MatrixMarkup(recipe_fixture()).root.descendants("code")).text()
+        for old, new in (("--download-dir src &&", "--download-dir src --keys-file keys.json &&"),
+                         ("--save plan.json &&", "--save plan.json --keys-file keys.json &&"),
+                         ("drmr convert --plan plan.json &&", "drmr convert --plan plan.json --keys-file keys.json &&"),
+                         ("drmr verify --plan plan.json\n", "drmr verify --plan plan.json --keys-file keys.json\n"),
+                         ("--download-dir src --keys-file keys.json", "--download-dir src"),
+                         ("--save plan.json --keys-file keys.json", "--save plan.json"),
+                         ("drmr convert --plan plan.json --keys-file keys.json", "drmr convert --plan plan.json"),
+                         ("drmr verify --plan plan.json --keys-file keys.json", "drmr verify --plan plan.json")):
+            self.assertIn(old, code)
+            with self.subTest(changed=new), self.assertRaisesRegex(CHECK.Failure, "site-guide-recipe-command"):
+                CHECK.validate_recipe_commands(code.replace(old, new, 1), "mp4", "mp4", "clear")
+        # A clear source still needs output keys when encrypting at execution time.
+        blocks = list(CHECK.MatrixMarkup(recipe_fixture()).root.descendants("code"))
+        for operation in ("convert", "verify"):
+            encrypted_code = blocks[2].text()
+            old = f"drmr {operation} --plan plan.json --keys-file keys.json"
+            with self.subTest(output="cbcs", operation=operation), self.assertRaisesRegex(CHECK.Failure, "site-guide-recipe-command"):
+                CHECK.validate_recipe_commands(encrypted_code.replace(old, f"drmr {operation} --plan plan.json", 1),
+                                               "mp4", "mp4", "cbcs")
+
+    def test_each_four_command_group_stops_on_failure_without_shell_boilerplate(self):
+        code = next(CHECK.MatrixMarkup(recipe_fixture()).root.descendants("code")).text()
+        for changed in (code.replace(" &&\n", "\n", 1), code.replace(" &&\n", " ;\n", 1),
+                        code.replace(" &&\n", " ||\n", 1), code + " &&", "set -eu\n" + code,
+                        "umask 077\n" + code, "mkdir work\n" + code, "(\n" + code + "\n)"):
+            with self.subTest(changed=changed[:90]), self.assertRaisesRegex(CHECK.Failure, "site-guide-recipe-command"):
+                CHECK.validate_recipe_commands(changed, "mp4", "mp4", "clear")
 
 
 if __name__ == "__main__":

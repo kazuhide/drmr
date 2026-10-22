@@ -3,31 +3,26 @@
 
 INPUTS = {
     "mp4": {
-        "en": "MP4", "ja": "MP4", "source": "./source/input.mp4",
-        "note_en": "This example uses one video track in an MP4 file.",
-        "note_ja": "この例では、映像 1 トラックの MP4 を使います。",
+        "en": "MP4", "ja": "MP4", "source": "src/input.mp4",
+        "protections": ("clear", "cenc", "cbcs"),
     },
     "dash": {
-        "en": "DASH", "ja": "DASH", "source": "./source/input.mpd",
-        "note_en": "Use one video representation in a static MPD with one Period and a SegmentTemplate with an explicit finite SegmentTimeline. drmr saves the manifest and all referenced initialization and media resources. MP4 output requires a single track.",
-        "note_ja": "一つの Period に映像 1 トラックを持つ static MPD を使います。SegmentTemplate と有限の SegmentTimeline の明示が必要です。drmr がマニフェストと、参照する初期化ファイル・セグメントをまとめて保存します。MP4 出力は 1 トラックが対象です。",
+        "en": "DASH", "ja": "DASH", "source": "src/input.mpd",
+        "protections": ("clear", "cenc", "cbcs"),
     },
     "hls-fmp4": {
-        "en": "HLS / fMP4", "ja": "HLS / fMP4", "source": "./source/input.m3u8",
-        "note_en": "Use a completed fMP4 media playlist with one video track. This also keeps MP4 output within the single-track profile; separate audio and video cannot be combined into one MP4.",
-        "note_ja": "映像 1 トラックの、配信が完結した fMP4 メディアプレイリストを使います。MP4 出力も 1 トラックです。別々の音声と映像を一つの MP4 に結合する例ではありません。",
+        "en": "HLS / fMP4", "ja": "HLS / fMP4", "source": "src/input.m3u8",
+        "protections": ("clear", "cenc", "cbcs", "hls-aes128"),
     },
     "hls-ts-video": {
         "en": "HLS / MPEG-TS (video)", "ja": "HLS / MPEG-TS（映像）",
-        "source": "./source/input.m3u8",
-        "note_en": "Use a completed MPEG-TS playlist with progressive H.264 video and optional 48 kHz AAC-LC audio. TS output uses separate audio and video playlists when both are present.",
-        "note_ja": "プログレッシブ H.264 映像を含む、配信が完結した MPEG-TS プレイリストを使います。音声を含める場合は 48 kHz AAC-LC が対象です。音声と映像を TS で出力する場合は別々のプレイリストになります。",
+        "source": "src/input.m3u8",
+        "protections": ("clear", "hls-aes128", "hls-sample-aes"),
     },
     "hls-ts-audio": {
         "en": "HLS / MPEG-TS (audio only)", "ja": "HLS / MPEG-TS（音声のみ）",
-        "source": "./source/input.m3u8",
-        "note_en": "Use a completed MPEG-TS playlist containing only 48 kHz AAC-LC audio. The output remains audio only.",
-        "note_ja": "48 kHz AAC-LC 音声だけを含む、配信が完結した MPEG-TS プレイリストを使います。出力も音声のみです。",
+        "source": "src/input.m3u8",
+        "protections": ("clear", "hls-aes128", "hls-sample-aes"),
     },
 }
 FORMATS = {"mp4": "MP4", "dash": "DASH", "hls": "HLS / fMP4", "hls-ts": "HLS / MPEG-TS"}
@@ -53,36 +48,34 @@ def identifier(source, output, target):
     return f"recipe-{source}-{output}-{target}"
 
 
-def commands(source, output, target):
-    workspace = identifier(source, output, target).removeprefix("recipe-")
-    lines = ["(", "  set -eu", "  umask 077", f"  mkdir {workspace}", f"  cd {workspace}", ""]
-    path = {"mp4": "mp4/video.mp4", "dash": "dash/manifest.mpd",
-            "hls-fmp4": "hls-fmp4/video.m3u8", "hls-ts-video": "hls-ts/video.m3u8",
-            "hls-ts-audio": "hls-ts-audio/audio.m3u8"}[source]
-    lines += [f'  drmr analyze "https://media.example.com/vod/{path}" \\',
-              "    --download-dir ./source \\", "    --keys-file ../config/keys.json --json"]
-    destination = "./result.mp4" if output == "mp4" else "./result"
-    lines += ["", f"  drmr plan {INPUTS[source]['source']} \\",
-              f"    --to {target} --format {output} \\",
-              f"    --output {destination} --save ./conversion.plan.json \\",
-              "    --keys-file ../config/keys.json --json", "",
-              "  drmr convert --plan ./conversion.plan.json \\",
-              "    --keys-file ../config/keys.json --json", "",
-              "  drmr verify --plan ./conversion.plan.json \\",
-              "    --keys-file ../config/keys.json --json", ")"]
-    return "\n".join(lines) + "\n"
+def commands(source, output, target, input_protection):
+    identifier(source, output, target)
+    if input_protection not in INPUTS[source]["protections"]:
+        raise ValueError("conversion-example-input-protection")
+    extension = INPUTS[source]["source"].rsplit(".", 1)[1]
+    name = {"hls-aes128": "aes128", "hls-sample-aes": "sample-aes"}.get(input_protection, input_protection)
+    input_keys = " --keys-file keys.json" if input_protection != "clear" else ""
+    runtime_keys = " --keys-file keys.json" if input_protection != "clear" or target != "clear" else ""
+    destination = "result.mp4" if output == "mp4" else "result"
+    lines = [f"drmr analyze https://example.com/{name}.{extension} --download-dir src{input_keys}",
+             f"drmr plan {INPUTS[source]['source']} --to {target} --format {output} "
+             f"--output {destination} --save plan.json{input_keys}",
+             f"drmr convert --plan plan.json{runtime_keys}",
+             f"drmr verify --plan plan.json{runtime_keys}"]
+    return " &&\n".join(lines) + "\n"
 
 
 def markdown(locale):
     if locale not in ("en", "ja"):
         raise ValueError("conversion-example-locale")
-    preparation = "Prerequisites and key file" if locale == "en" else "実行前の準備と鍵ファイル"
+    preparation = "Setup" if locale == "en" else "準備"
     blocks = []
     for source, output, target in routes():
         heading = f"{INPUTS[source][locale]} → {FORMATS[output]} / {PROTECTIONS[target]}"
         preparation_link = f"[{preparation}](#recipe-setup)"
         blocks += [f"## {heading} {{#{identifier(source, output, target)}}}", "",
-                   preparation_link + ("。" if locale == "ja" else ". ")
-                   + INPUTS[source]["note_" + locale], "",
-                   "```sh", commands(source, output, target).rstrip(), "```", ""]
+                   preparation_link, "", "```sh"]
+        for protection in INPUTS[source]["protections"]:
+            blocks += [f"# {PROTECTIONS[protection]} input", commands(source, output, target, protection).rstrip(), ""]
+        blocks += ["```", ""]
     return "\n".join(blocks)
