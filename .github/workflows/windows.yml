@@ -1,4 +1,4 @@
-name: Windows archive ACL diagnostic
+name: Windows archive DWORD regression
 
 on:
   workflow_dispatch:
@@ -7,16 +7,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: windows-archive-acl-diagnostic-${{ github.ref }}
+  group: windows-archive-dword-diagnostic-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   diagnostic:
-    name: Archive ACL diagnostic / probe ${{ matrix.probe }}
-    strategy:
-      fail-fast: false
-      matrix:
-        probe: [1, 2]
+    name: Archive DWORD regression / RED then GREEN
     runs-on: windows-2022
     timeout-minutes: 20
     steps:
@@ -39,10 +35,38 @@ jobs:
             if ($parseErrors.Count -ne 0) { throw 'Diagnostic PowerShell syntax check failed' }
           }
 
-      - name: Run at most five complete fresh-user cleanup iterations
+      - name: Check the embedded Python observer
+        run: python -B -m unittest discover -s tools/tests -p test_windows_archive_cleanup_observer.py
+
+      - name: Prove the old reader fails and the restored reader passes
         run: |
           $ErrorActionPreference = 'Stop'
-          foreach ($iteration in 1..5) {
-            & ./.github/scripts/test-windows-cli-archive-cleanup.ps1 -DiagnosticIteration $iteration
-            Write-Output ('DRMR_ARCHIVE_ITERATION_COMPLETE ' + $iteration)
+          $script = Join-Path $pwd '.github/scripts/test-windows-cli-archive-cleanup.ps1'
+          $original = [IO.File]::ReadAllBytes($script)
+          $text = [Text.UTF8Encoding]::new($false, $true).GetString($original)
+          $needle = '$call.exit_code -gt 4294967295'
+          if ([regex]::Matches($text, [regex]::Escape($needle)).Count -ne 1) { throw 'The DWORD regression mutation target is ambiguous' }
+          Write-Output ('DRMR_DWORD_SOURCE_SHA256 ' + [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($original)).ToLowerInvariant())
+          $before = @(Get-ChildItem -LiteralPath $env:RUNNER_TEMP -Directory -Force | Where-Object Name -Like 'drmr-archive-observer-*' | Select-Object -ExpandProperty FullName)
+          $redConfirmed = $false
+          try {
+            [IO.File]::WriteAllText($script, $text.Replace($needle, '$call.exit_code -gt 2147483647'), [Text.UTF8Encoding]::new($false))
+            try { & $script } catch {
+              if ($_.Exception.Message -ne 'The diagnostic reader changed or refused a valid exit code') { throw 'The RED check failed at an unexpected stage' }
+              $redConfirmed = $true
+            }
+          } finally {
+            [IO.File]::WriteAllBytes($script, $original)
           }
+          if (-not $redConfirmed) { throw 'The old signed reader did not fail its real regression check' }
+          if ([Convert]::ToBase64String([IO.File]::ReadAllBytes($script)) -ne [Convert]::ToBase64String($original)) { throw 'The GREEN source was not restored byte for byte' }
+          $after = @(Get-ChildItem -LiteralPath $env:RUNNER_TEMP -Directory -Force | Where-Object Name -Like 'drmr-archive-observer-*' | Select-Object -ExpandProperty FullName)
+          if ($after.Count -ne $before.Count -or @($after | Where-Object { $_ -notin $before }).Count -ne 0) { throw 'The RED observer directory was not removed' }
+          Write-Output 'DRMR_DWORD_RED_CONFIRMED'
+          Write-Output 'DRMR_DWORD_RED_OWNED_CLEANUP_CONFIRMED'
+          & $script
+          $after = @(Get-ChildItem -LiteralPath $env:RUNNER_TEMP -Directory -Force | Where-Object Name -Like 'drmr-archive-observer-*' | Select-Object -ExpandProperty FullName)
+          if ($after.Count -ne $before.Count -or @($after | Where-Object { $_ -notin $before }).Count -ne 0) { throw 'The GREEN observer directory was not removed' }
+          if ([Convert]::ToBase64String([IO.File]::ReadAllBytes($script)) -ne [Convert]::ToBase64String($original)) { throw 'The GREEN check changed its source' }
+          Write-Output 'DRMR_DWORD_GREEN_CONFIRMED'
+          Write-Output 'DRMR_DWORD_GREEN_OWNED_CLEANUP_CONFIRMED'

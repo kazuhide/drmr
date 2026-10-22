@@ -63,7 +63,7 @@ function Write-ArchiveCleanupDiagnostic {
                     $call.elapsed_ms -lt 0 -or $call.elapsed_ms -gt 120000 -or
                     ($null -ne $call.exit_code -and
                         (($call.exit_code -isnot [int] -and $call.exit_code -isnot [long]) -or
-                         $call.exit_code -lt -2147483648 -or $call.exit_code -gt 2147483647))) { throw 'Invalid ACL diagnostic schema' }
+                         $call.exit_code -lt -2147483648 -or $call.exit_code -gt 4294967295))) { throw 'Invalid ACL diagnostic schema' }
                 $calls += [ordered]@{ stage = $call.stage; status = $call.status; elapsed_ms = $call.elapsed_ms; exit_code = $call.exit_code }
             }
             $result.diagnostic_status = 'validated'
@@ -73,6 +73,44 @@ function Write-ArchiveCleanupDiagnostic {
         }
     } catch { $result.diagnostic_status = 'invalid-or-unreadable' }
     Write-Output ('DRMR_ARCHIVE_DIAGNOSTIC ' + ($result | ConvertTo-Json -Depth 8 -Compress))
+}
+
+$observerDirectory = Join-Path $parent ('drmr-archive-observer-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $observerDirectory | Out-Null
+$observerIdentity = Get-DrmrArchiveDirectoryIdentity $observerDirectory $python
+try {
+    $readObserver = {
+        param($Code, [bool]$ExtraField = $false)
+        $row = [ordered]@{
+            schema_version = 1; mode = 'success'; stage = 'python-exited'; python_exit_code = 0
+            acl_calls = @([ordered]@{ stage = 'report-file'; status = 'nonzero'; elapsed_ms = 1; exit_code = $Code })
+        }
+        if ($ExtraField) { $row['unexpected'] = 'synthetic-private-value' }
+        [IO.File]::WriteAllText((Join-Path $observerDirectory 'diagnostic.json'),
+            ($row | ConvertTo-Json -Depth 8 -Compress), [Text.UTF8Encoding]::new($false))
+        $trace = @(Write-ArchiveCleanupDiagnostic $observerDirectory $observerIdentity 'success' 0 0)
+        Assert-ArchiveCleanupTest ($trace.Count -eq 1 -and $trace[0].StartsWith('DRMR_ARCHIVE_DIAGNOSTIC ')) 'The diagnostic reader did not return one record'
+        Assert-ArchiveCleanupTest (-not $trace[0].Contains('synthetic-private-value')) 'The diagnostic reader disclosed a private marker'
+        return $trace[0].Substring('DRMR_ARCHIVE_DIAGNOSTIC '.Length) | ConvertFrom-Json -AsHashtable
+    }
+    # CPython reports the Windows DWORD directly; preserve either representation.
+    foreach ($code in @([long]-1073741502, [long]3221225794, [long]4294967295)) {
+        $observed = & $readObserver $code
+        Assert-ArchiveCleanupTest ($observed.diagnostic_status -eq 'validated' -and
+            $observed.acl_calls.Count -eq 1 -and $observed.acl_calls[0].exit_code -eq $code) 'The diagnostic reader changed or refused a valid exit code'
+    }
+    foreach ($code in @([long]-2147483649, [long]4294967296, 'synthetic-private-value', $true, [double]1.5)) {
+        $observed = & $readObserver $code
+        Assert-ArchiveCleanupTest ($observed.diagnostic_status -eq 'invalid-or-unreadable') 'The diagnostic reader accepted an invalid exit code'
+    }
+    $observed = & $readObserver 0 $true
+    Assert-ArchiveCleanupTest ($observed.diagnostic_status -eq 'invalid-or-unreadable') 'The diagnostic reader accepted an unknown field'
+    Write-Output 'Archive cleanup diagnostic reader regression passed'
+} finally {
+    Assert-DrmrArchiveDirectory $observerDirectory $parent $observerIdentity $python
+    Assert-NoDrmrArchiveReparsePoint $observerDirectory
+    Remove-Item -LiteralPath $observerDirectory -Recurse -Force
+    Assert-ArchiveCleanupTest (-not (Test-Path -LiteralPath $observerDirectory)) 'The observer regression directory remains'
 }
 
 foreach ($mode in @('success', 'qualification-failure', 'public-copy-failure', 'setup-failure', 'reparse-refusal', 'report-type-refusal', 'replacement-refusal')) {
