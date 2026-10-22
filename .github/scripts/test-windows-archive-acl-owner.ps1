@@ -13,6 +13,7 @@ $process = $null
 $executionAttempted = $false
 $executionExited = $false
 $classifiedFailure = $false
+$researchStage = 'create-root'
 
 function Assert-OwnerResearch {
     param([bool]$Condition)
@@ -55,15 +56,18 @@ try {
     New-Item -ItemType Directory -Path $directory | Out-Null
     $directoryCreated = $true
     $directoryIdentity = Get-DrmrArchiveDirectoryIdentity $directory $python
+    $researchStage = 'create-user'
     $username = 'drmr_own_' + [guid]::NewGuid().ToString('N').Substring(0, 10)
     $password = [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(36)) + '!aA1'
     Write-Output "::add-mask::$password"
     $securePassword = ConvertTo-SecureString $password -AsPlainText -Force
     $user = New-LocalUser -Name $username -Password $securePassword -Description 'Ephemeral owner ACL diagnostic user'
     $userSid = $user.SID
+    $researchStage = 'group-membership'
     $users = Get-LocalGroup -SID 'S-1-5-32-545'
     Add-LocalGroupMember -Group $users -Member $user
     $credential = [PSCredential]::new("$env:COMPUTERNAME\$username", $securePassword)
+    $researchStage = 'grant-helper-read'
     foreach ($path in @($checkout, (Join-Path $checkout '.github'))) {
         $null = & icacls $path /grant "*$($userSid.Value):RX" /Q 2>&1
         Assert-OwnerResearch ($LASTEXITCODE -eq 0)
@@ -73,12 +77,14 @@ try {
         Assert-OwnerResearch ($LASTEXITCODE -eq 0)
     }
     $adminSid = [Security.Principal.WindowsIdentity]::GetCurrent().User
+    $researchStage = 'protect-parent'
     Assert-OwnerResearch ($adminSid.Value -ne 'S-1-5-18' -and $adminSid.Value -ne $userSid.Value)
     $null = & icacls $directory /grant "*$($adminSid.Value):(OI)(CI)F" '*S-1-5-18:(OI)(CI)F' "*$($userSid.Value):(OI)(CI)M" /Q 2>&1
     Assert-OwnerResearch ($LASTEXITCODE -eq 0)
     $null = & icacls $directory /inheritance:r /Q 2>&1
     Assert-OwnerResearch ($LASTEXITCODE -eq 0)
     $acl = Get-Acl -LiteralPath $directory
+    $researchStage = 'check-parent-rules'
     $rules = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))
     Assert-OwnerResearch ($acl.AreAccessRulesProtected -and $rules.Count -eq 3)
     foreach ($rule in $rules) {
@@ -88,6 +94,7 @@ try {
     $ordinary = @($rules | Where-Object { $_.IdentityReference.Value -eq $userSid.Value })
     Assert-OwnerResearch ($ordinary.Count -eq 1)
     $rights = $ordinary[0].FileSystemRights
+    $researchStage = 'check-modify-only'
     $modify = [Security.AccessControl.FileSystemRights]::Modify
     $allowed = $modify -bor [Security.AccessControl.FileSystemRights]::Synchronize
     Assert-OwnerResearch (($rights -band $modify) -eq $modify -and ($rights -band (-bnot $allowed)) -eq 0)
@@ -97,6 +104,7 @@ try {
         worker = (Join-Path $PSScriptRoot 'windows_archive_acl_owner_worker.py')
         research = (Join-Path $PSScriptRoot 'windows_archive_acl_research.py')
     }
+    $researchStage = 'write-fixture'
     $context | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $directory 'context.json')
     $fixture = Join-Path $directory 'fixture.ps1'
     @'
@@ -119,12 +127,15 @@ try {
 } catch { exit 6 }
 '@ | Set-Content -Encoding utf8 $fixture
     $arguments = @('-NoLogo', '-NoProfile', '-NonInteractive', '-File', "`"$fixture`"")
+    $researchStage = 'launch-child'
     $executionAttempted = $true
     $process = Start-Process -FilePath $shell -Credential $credential -LoadUserProfile -WorkingDirectory $directory -ArgumentList $arguments -Wait -PassThru
     $executionExited = $true
     Write-Output ('DRMR_ACL_OWNER_CHILD_EXIT ' + $process.ExitCode)
+    $researchStage = 'check-child-exit'
     Assert-OwnerResearch ($process.ExitCode -eq 0)
     $premises = Read-OwnedResearchJson 'preconditions.json'
+    $researchStage = 'check-preconditions'
     Assert-ExactKeys $premises @('schema_version', 'ordinary_user', 'file_owner_matches', 'directory_owner_matches')
     Assert-ResearchInteger $premises.schema_version 1 1
     foreach ($key in @('ordinary_user', 'file_owner_matches', 'directory_owner_matches')) {
@@ -132,6 +143,7 @@ try {
     }
     Write-Output 'DRMR_ACL_MODIFY_ONLY_PRECONDITIONS_CONFIRMED'
     $record = Read-OwnedResearchJson 'research.json'
+    $researchStage = 'check-research-record'
     Assert-ExactKeys $record @('schema_version', 'results', 'calls')
     Assert-ResearchInteger $record.schema_version 1 1
     Assert-OwnerResearch ($record.results -is [array] -and $record.results.Count -eq 2 -and $record.calls -is [array] -and $record.calls.Count -eq 2)
@@ -175,6 +187,9 @@ try {
         }
     }
 } catch {
+    $category = $_.Exception.GetType().Name
+    if ($category -cnotin @('MemberExistsException', 'InvalidOperationException', 'UnauthorizedAccessException', 'ItemNotFoundException', 'Win32Exception', 'RuntimeException', 'MethodInvocationException')) { $category = 'UnclassifiedException' }
+    Write-Output ('DRMR_ACL_OWNER_SETUP ' + ([ordered]@{ stage = $researchStage; category = $category; hresult = [long]$_.Exception.HResult } | ConvertTo-Json -Compress))
     Write-Output 'DRMR_ACL_OWNER_RESEARCH_FAILURE'
     throw 'The controlled owner diagnostic failed'
 } finally {
