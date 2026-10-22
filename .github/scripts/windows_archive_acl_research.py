@@ -27,6 +27,7 @@ PHRASES = (
     ("the handle is invalid", "InvalidHandle"),
     ("could not load file or assembly", "AssemblyLoadFailure"),
     ("nameerror", "PythonNameError"),
+    ("the owned archive directory identity is unavailable", "OwnedIdentityUnavailable"),
 )
 CATEGORIES = frozenset(EXCEPTIONS + OPERATIONS + tuple(value for _, value in PHRASES) +
                        ("NoStderr", "UnclassifiedStderr"))
