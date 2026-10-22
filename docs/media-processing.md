@@ -189,7 +189,7 @@ Audio-only input uses those native checks for DASH, fragmented MP4 HLS, and TS o
 
 ### AAC sample rates and transport clocks
 
-The 44.1 kHz handling below is an **Unreleased** change on `main`. The immutable published v1.0.0 archives retain their 48 kHz-only TS audio profile; see [release status](releases.md).
+The 44.1 kHz handling below is included in the 1.0.1 source. The immutable v1.0.0 archives retain their 48 kHz-only TS audio profile; see [release status](releases.md).
 
 The sample rate describes decoded audio samples per second. The container's clock describes timestamp units; the two need not be equal. MPEG-TS uses 90,000 ticks per second. A 1,024-sample AAC frame occupies exactly 1,920 ticks at 48 kHz, but about 2,089.796 ticks at 44.1 kHz. Integer timestamps therefore need rounding at 44.1 kHz. Adding 2,089 ticks for every frame would accumulate drift.
 

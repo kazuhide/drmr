@@ -31,10 +31,10 @@
   </header>
   <main class="wrap" id="main" tabindex="-1">
     <div class="guide-intro">
-      <p class="eyebrow">drmr / 1.0.0</p>
+      <p class="eyebrow">drmr</p>
       <h1>User guide</h1>
       <p>A practical drmr guide: formats, keys, conversion, verification, Docker and local interfaces.</p>
-      <p class="guide-meta">Updated: <time datetime="2026-10-23">2026-10-23</time> · Version: 1.0.0</p>
+      <p class="guide-meta">Updated: <time datetime="2026-10-23">2026-10-23</time> · Version: 1.0.1</p>
     </div>
     <div class="guide-layout">
       <aside class="guide-toc" id="guide-toc">
@@ -62,9 +62,9 @@
       </aside>
       <article class="guide-content" id="guide-content"><section class="guide-chapter" id="introduction" data-guide-chapter="introduction" aria-labelledby="introduction-title"><h2 id="introduction-title">1. Introduction</h2><a class="guide-chapter-switch" href="../ja/guide/#introduction" lang="ja" hreflang="ja">日本語</a>
 <p>drmr changes media containers, delivery formats and encryption while retaining encoded video and audio. It is for engineers who control the media and already have the required decryption keys. It is not an encoder for creating a new quality ladder or a client for obtaining DRM licenses.</p>
-<p>This guide describes the current <code>main</code> source, whose product version remains 1.0.0, and was updated on 2026-10-23. It includes <strong>Unreleased</strong> changes that are not in the published v1.0.0 archives. Public source and command help define the behavior; also read the documentation accompanying your exact archive. A passing example does not qualify arbitrary media or playback devices.</p>
+<p>This guide describes the current source and its supported operations. For a downloaded CLI, also read the documentation packaged with that release. Public source and command help define the behavior. A passing example does not qualify arbitrary media or playback devices.</p>
 <p>Download a versioned CLI from <a href="https://github.com/kazuhide/drmr/releases">GitHub Releases</a> and check its archive against <code>SHA256SUMS</code> before installation. External media tools remain separate. See <a href="https://github.com/kazuhide/drmr/blob/main/docs/releases.md">releases and compatibility</a> for supported targets and the compatibility policy.</p>
-<p>Check each release&#x27;s <strong>Pre-release</strong> label and notes. The published v1.0.0 is classified as a pre-release, and its immutable archives retain the original 48 kHz-only AAC TS input restriction. The 44.1 kHz correction is on <code>main</code> under <strong>Unreleased</strong>; the existing tag and assets are unchanged. To use it, <a href="#installation">build the CLI</a> from current <code>main</code>. The documented 1.x CLI compatibility contract is separate from release qualification.</p>
+<p>Check each release&#x27;s <strong>Pre-release</strong> label and notes before use. For a source build, follow <a href="#installation">CLI installation</a>. CLI compatibility and release qualification are separate. The local Web console and Desktop host remain experimental.</p>
 <h3>Choose an operation</h3>
 <div class="guide-table-scroll" role="region" aria-labelledby="table-1-title" tabindex="0"><table><caption id="table-1-title">Choose an operation — Table 1</caption><thead><tr><th scope="col">Goal</th><th scope="col">Command</th><th scope="col">What it establishes</th></tr></thead><tbody>
 <tr><th scope="row">Find external tools</th><td><code>doctor</code></td><td>Required executables can be found in the launch environment</td></tr>

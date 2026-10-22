@@ -1,18 +1,18 @@
 ---
 title: User guide
 updated: 2026-10-23
-version: 1.0.0
+version: 1.0.1
 ---
 
 # 1. Introduction
 
 drmr changes media containers, delivery formats and encryption while retaining encoded video and audio. It is for engineers who control the media and already have the required decryption keys. It is not an encoder for creating a new quality ladder or a client for obtaining DRM licenses.
 
-This guide describes the current `main` source, whose product version remains 1.0.0, and was updated on 2026-10-23. It includes **Unreleased** changes that are not in the published v1.0.0 archives. Public source and command help define the behavior; also read the documentation accompanying your exact archive. A passing example does not qualify arbitrary media or playback devices.
+This guide describes the current source and its supported operations. For a downloaded CLI, also read the documentation packaged with that release. Public source and command help define the behavior. A passing example does not qualify arbitrary media or playback devices.
 
 Download a versioned CLI from [GitHub Releases](https://github.com/kazuhide/drmr/releases) and check its archive against `SHA256SUMS` before installation. External media tools remain separate. See [releases and compatibility](https://github.com/kazuhide/drmr/blob/main/docs/releases.md) for supported targets and the compatibility policy.
 
-Check each release's **Pre-release** label and notes. The published v1.0.0 is classified as a pre-release, and its immutable archives retain the original 48 kHz-only AAC TS input restriction. The 44.1 kHz correction is on `main` under **Unreleased**; the existing tag and assets are unchanged. To use it, [build the CLI](#installation) from current `main`. The documented 1.x CLI compatibility contract is separate from release qualification.
+Check each release's **Pre-release** label and notes before use. For a source build, follow [CLI installation](#installation). CLI compatibility and release qualification are separate. The local Web console and Desktop host remain experimental.
 
 ## Choose an operation
 

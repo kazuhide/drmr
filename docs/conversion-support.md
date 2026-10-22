@@ -214,7 +214,7 @@ Clear output needs no output-key section. Keep the original media and keys until
 
 Completed local HLS playlists containing clear, AES-128, or SAMPLE-AES transport stream segments can produce DASH with clear, `cenc`, or `cbcs` protection, or fragmented MP4 HLS with clear, `cbcs`, or AES-128 protection. Encrypted input requires operator-supplied keys. The profile accepts one progressive H.264 video stream, one 44.1 or 48 kHz AAC-LC audio stream, or both, in a single program. Audio-only input supports DASH, fMP4 HLS, and TS output with the strict native audio timing checks described in [processing and verification](media-processing.md#mpeg-transport-stream-input). SAMPLE-AES-CTR transport streams and standalone MP4 output from this input are refused.
 
-The 44.1 kHz correction is an **Unreleased** change on `main`. The published v1.0.0 archives remain unchanged and accept only 48 kHz AAC from TS. Build the CLI from the current source to use the correction; see [installation](../README.md#install) and [release status](releases.md).
+The 1.0.1 source includes 44.1 kHz AAC support for this TS profile. The unchanged v1.0.0 archives accept only 48 kHz AAC from TS. See [installation](../README.md#install) and [release status](releases.md) when choosing a build.
 
 A supported AAC-only rendition may declare a playback end inside its final frame. drmr retains the complete encoded frame and preserves the shorter playback range in HLS or DASH. The declaration must identify one exact audio-sample boundary; ambiguous precision, clipping a nonfinal segment, or omitting a whole frame is refused. Standalone MP4 output from TS remains outside this profile. See [AAC playback boundaries](media-processing.md#playback-ending-inside-the-final-aac-frame).
 

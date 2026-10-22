@@ -31,10 +31,10 @@
   </header>
   <main class="wrap" id="main" tabindex="-1">
     <div class="guide-intro">
-      <p class="eyebrow">drmr / 1.0.0</p>
+      <p class="eyebrow">drmr</p>
       <h1>ユーザーガイド</h1>
       <p>drmr の対応形式、鍵の設定、変換・検証の手順、Docker・Web コンソール・デスクトップアプリの使い方を説明します。</p>
-      <p class="guide-meta">更新日: <time datetime="2026-10-23">2026-10-23</time> · バージョン: 1.0.0</p>
+      <p class="guide-meta">更新日: <time datetime="2026-10-23">2026-10-23</time> · バージョン: 1.0.1</p>
     </div>
     <div class="guide-layout">
       <aside class="guide-toc" id="guide-toc">
@@ -62,9 +62,9 @@
       </aside>
       <article class="guide-content" id="guide-content"><section class="guide-chapter" id="introduction" data-guide-chapter="introduction" aria-labelledby="introduction-title"><h2 id="introduction-title">1. はじめに</h2><a class="guide-chapter-switch" href="../../guide/#introduction" lang="en" hreflang="en">English</a>
 <p>drmr は映像・音声の符号化データを維持しながら、ファイルの格納形式、配信形式、暗号化方式を変更するツールです。復号に必要な鍵を持つ技術者が、管理下のオンデマンドコンテンツを解析・変換・検証する用途を想定しています。画質を変更するエンコーダーや DRM ライセンスを取得するクライアントの機能はありません。</p>
-<p>このガイドは <code>main</code> ブランチのソースに基づき、操作方法と対応条件を説明します。製品の版番号は 1.0.0 ですが、配布済みの v1.0.0 には含まれない <strong>Unreleased</strong>（未公開）の変更も記載しています。更新日は 2026-10-23 です。利用する配布物に同梱されたドキュメントも確認してください。リポジトリ内の関連ドキュメントは英語で記載しています。</p>
+<p>このガイドでは現在のソースで使える操作と対応条件を説明します。配布版を使う場合は同梱のドキュメントも確認してください。リポジトリ内の関連ドキュメントは英語で記載しています。実行例が成功しても、すべてのメディアや再生端末での動作を確認したことにはなりません。</p>
 <p>公開版の CLI は <a href="https://github.com/kazuhide/drmr/releases">GitHub Releases</a> から入手できます。展開する前に、配布ファイルのハッシュを同じ版の <code>SHA256SUMS</code> と照合してください。外部のメディア処理ツールは別途必要です。配布対象と互換性の方針は<a href="https://github.com/kazuhide/drmr/blob/main/docs/releases.md">リリースの説明（英語）</a>に記載しています。</p>
-<p>各リリースの <strong>Pre-release</strong> 表示と説明も確認してください。配布済みの v1.0.0 はプレリリースに変更しており、差し替えできない配布ファイルには TS 入力音声が 48 kHz に限られる制限が残っています。44.1 kHz への対応は <code>main</code> の <strong>Unreleased</strong> に含まれ、既存のタグや配布ファイルは変更していません。この修正を使う場合は、現在の <code>main</code> から <a href="#installation">CLI をビルド</a>してください。1.x の CLI 互換性に関する方針と、各版の検証範囲は別に定めています。</p>
+<p>利用する配布物の <strong>Pre-release</strong> 表示と説明を確認してください。ソースからのビルド手順は <a href="#installation">CLI のインストール</a>に記載しています。CLI の互換性と各版の検証範囲は別に定めています。Web コンソールとデスクトップアプリは実験的な機能です。</p>
 <h3>目的別のコマンド</h3>
 <div class="guide-table-scroll" role="region" aria-labelledby="table-1-title" tabindex="0"><table><caption id="table-1-title">目的別のコマンド — 表 1</caption><thead><tr><th scope="col">目的</th><th scope="col">コマンド</th><th scope="col">わかること・実行すること</th></tr></thead><tbody>
 <tr><th scope="row">外部ツールを探す</th><td><code>doctor</code></td><td>起動環境の PATH に必要な実行ファイルがあるか</td></tr>

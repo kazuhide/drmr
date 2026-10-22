@@ -6,14 +6,15 @@ maturity is separate: check the **Pre-release** label on each
 version. A 1.x version number alone does not establish complete media or platform
 qualification. The local Web console and Desktop host remain experimental.
 
-The published v1.0.0 is classified as a pre-release after a 44.1 kHz AAC limitation was
-found in its TS input path. Its immutable archives retain the original
-48 kHz-only TS audio profile. The correction is an **Unreleased** change on `main`;
-the product version remains 1.0.0, and the existing release tag and assets are
-unchanged. No replacement archive or new release is provided for this correction.
-[Build from the current source](../README.md#install) to use 44.1 kHz TS audio. Refer to each release's
-notes and status; the correction does not qualify arbitrary codecs, broadcast
-streams or playback devices.
+The 1.0.1 source includes 44.1 kHz AAC support and preservation of supported final
+AAC playback ranges from HLS/TS. See [AAC processing and playback boundaries](media-processing.md#aac-sample-rates-and-transport-clocks)
+for the conditions. Check each release's status, requirements and verification
+reports before choosing an archive; these corrections do not qualify arbitrary
+codecs, broadcast streams or playback devices.
+
+The published v1.0.0 remains a pre-release. Its immutable archives retain the
+original 48 kHz-only TS audio profile and do not include these corrections.
+Its release tag, archives and original verification reports remain unchanged.
 
 ## Install a released CLI
 
@@ -27,12 +28,13 @@ system and processor in the release notes:
 | macOS | Apple Silicon | `aarch64-apple-darwin` |
 | Windows | x86-64 | `x86_64-pc-windows-msvc` |
 
-The existing v1.0.0 archives are named
-`drmr-1.0.0-x86_64-unknown-linux-gnu.tar.gz`,
-`drmr-1.0.0-aarch64-apple-darwin.tar.gz` and
-`drmr-1.0.0-x86_64-pc-windows-msvc.zip`, respectively. Download documentation and
-verification reports from that same release rather than assuming that the
-current repository documentation describes an older archive.
+CLI archive names include the version and target. For 1.0.1, they are
+`drmr-1.0.1-x86_64-unknown-linux-gnu.tar.gz`,
+`drmr-1.0.1-aarch64-apple-darwin.tar.gz` and
+`drmr-1.0.1-x86_64-pc-windows-msvc.zip`, respectively. Choose an archive actually
+listed on GitHub Releases, and download its documentation and verification
+reports from that same release. Current repository documentation can describe
+changes absent from an older archive.
 
 These are the native CLI distribution targets. They do not establish support
 for other processor architectures or native Desktop operation. See
