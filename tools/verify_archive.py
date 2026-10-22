@@ -109,7 +109,7 @@ def build_expectation(source, kind, target, metadata=None):
         data = data if exact else normalized(data)
         files[rel] = {"sha256": sha(data), "bytes": len(data), "comparison": "raw" if exact else "lf"}
     docs = sorted(p for p in source.paths if p.startswith("docs/") and (kind == "desktop" or (p.count("/") == 1 and p.endswith(".md"))))
-    for p in ["README.md", "LICENSE"] + docs: add(p, source.read(p))
+    for p in ["README.md", "CHANGELOG.md", "LICENSE"] + docs: add(p, source.read(p))
     expected = {"schema_version": 1, "kind": kind, "target": target, "source_head": source.head, "source_tree": source.tree, "files": files}
     require(metadata is not None, "metadata-required")
     roots = ("drmr", "drmr-desktop") if kind == "desktop" else ("drmr",)
@@ -213,6 +213,9 @@ class Archive:
                 directory = item.is_dir() if self.zip else item.isdir()
                 mode = (item.external_attr >> 16) if self.zip else item.mode
                 if self.zip:
+                    # Release ZIPs use stored or DEFLATE members. Admit their decoder
+                    # before any member body can allocate decoder-specific state.
+                    require(item.compress_type in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED), "archive-compression-method")
                     require(not item.flag_bits & 1, "archive-encrypted-member")
                     require(stat.S_IFMT(mode) in ((0, stat.S_IFDIR) if directory else (0, stat.S_IFREG)), "archive-link-special-or-type-mismatch")
                 else: require(item.isdir() or item.isreg(), "archive-link-or-special-member")

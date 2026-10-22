@@ -516,6 +516,9 @@ def document(reference, repository, pending_docs):
     parsed = urlsplit(reference)
     require(parsed.scheme == "https" and parsed.netloc == "github.com" and not parsed.query, "site-external-link")
     path = parsed.path
+    if path == "/kazuhide/drmr/releases":
+        require(not parsed.fragment, "site-external-link")
+        return None
     if re.fullmatch(r"/kazuhide/drmr/(?:commit/[0-9a-f]{40}|actions/runs/[1-9][0-9]*/job/[1-9][0-9]*)", path):
         require(not parsed.fragment, "site-external-link")
         return None

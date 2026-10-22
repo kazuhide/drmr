@@ -9,6 +9,7 @@ on:
       - 'Cargo.lock'
       - '.gitattributes'
       - 'README.md'
+      - 'CHANGELOG.md'
       - 'LICENSE'
       - 'docs/**'
       - '.github/scripts/minimum-rust.py'

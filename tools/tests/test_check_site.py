@@ -258,6 +258,17 @@ class Site(unittest.TestCase):
                 self.assertIsNone(CHECK.document("https://github.com/kazuhide/drmr/" + path,
                                                  self.repo, ()))
 
+    def test_release_download_link_accepts_only_the_canonical_repository(self):
+        reference = "https://github.com/kazuhide/drmr/releases"
+        self.assertIsNone(CHECK.document(reference, self.repo, ()))
+        invalid = (reference + "/", reference + "?download=1", reference + "#assets",
+                   reference.replace("/drmr/", "/other/"),
+                   reference.replace("https://", "http://"),
+                   reference.replace("github.com", "github.com.example.test"))
+        for candidate in invalid:
+            with self.subTest(candidate=candidate), self.assertRaises(CHECK.Failure):
+                CHECK.document(candidate, self.repo, ())
+
     def test_evidence_link_variants_and_other_repositories_are_refused(self):
         revision = "0123456789abcdef0123456789abcdef01234567"
         paths = ("commit/main", "commit/" + revision[:-1], "commit/" + revision.upper(),

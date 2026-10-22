@@ -61,12 +61,12 @@ These controls cover recognized secret material. They do not classify every file
 ### Saved plans and retained originals
 
 An [execution plan](executable-plans.md) stores local source filenames, sizes,
-SHA-256 fingerprints, and one output location and media intent. It contains no
+SHA-256 fingerprints, and requested output locations and conversion settings. It contains no
 keys, initialization vectors, key or license addresses, request headers, source
 URLs, or executable commands. Keys and optional output signaling are read
 separately at runtime. Paths and fingerprints can identify an asset, so saved
-plans are private files too. The original downloaded manifests may contain
-signed URLs even though the plan does not.
+plans are private files too. The original downloaded manifests and `raw/index.json`
+can contain signed URLs even though source URLs are not saved in the plan.
 
 The plan digest detects edits, not a malicious author who can calculate another
 digest. Execute only plans you trust. Every use validates the strict schema,
@@ -132,4 +132,4 @@ The Web console has no authentication. Keep it on loopback on a trusted machine;
 
 Keys and fetch policies are selected as references to protected local files. The page does not upload their contents or retrieve key-file contents. Source URL input is cleared after submission and shown only as a generic label. These measures do not isolate the application from an attacker controlling the same operating-system account, local filesystem or browser.
 
-Saved plans preserve local paths and may contain signed URLs. Export them to a private folder and protect retained source material, output and logs with the same account controls. Neither interface provides a DRM license service or hardware-protected key storage.
+Saved plans retain local paths and file fingerprints. Export them to a private folder and protect retained source material, output and logs with the same account controls. Neither interface provides a DRM license service or hardware-protected key storage.

@@ -1,0 +1,64 @@
+name: Prepare versioned release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag on the fully checked main commit
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: prepare-versioned-release
+  cancel-in-progress: false
+
+jobs:
+  assemble:
+    name: Assemble checked CLI release assets
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out the main commit and version tags
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install the release helper runtime
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13.12'
+
+      - name: Install the supported minimum Rust toolchain
+        run: |
+          set -euo pipefail
+          channel="$(python3 .github/scripts/minimum-rust.py)"
+          rustup toolchain install "$channel" --profile minimal --no-self-update
+          printf 'RUSTUP_TOOLCHAIN=%s\n' "$channel" >> "$GITHUB_ENV"
+
+      - name: Fetch the locked metadata inputs without building
+        run: cargo fetch --locked
+
+      - name: Require a matching clean tagged commit
+        run: python3 tools/check_release.py --tag "$RELEASE_TAG" --require-tag
+
+      - name: Assemble only the exact successful native CI artifacts
+        run: |
+          python3 tools/prepare_release.py --tag "$RELEASE_TAG" \
+            --repository "$GITHUB_REPOSITORY" --output "$RUNNER_TEMP/release-assets"
+
+      - name: Retain the complete candidate for immutable publication
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: checked-release-${{ inputs.tag }}
+          path: ${{ runner.temp }}/release-assets/*
+          if-no-files-found: error
+          retention-days: 14

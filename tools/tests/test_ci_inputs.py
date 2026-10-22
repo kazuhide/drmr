@@ -16,7 +16,7 @@ def desktop_paths():
 class DesktopInputs(unittest.TestCase):
     def test_each_build_and_distribution_input_triggers_validation(self):
         paths = desktop_paths()
-        inputs = [".gitattributes", "README.md", "LICENSE", "Cargo.toml", "Cargo.lock",
+        inputs = [".gitattributes", "README.md", "CHANGELOG.md", "LICENSE", "Cargo.toml", "Cargo.lock",
                   ".github/scripts/minimum-rust.py", ".github/workflows/desktop.yml",
                   "vendor/process-wrap/src/std/job_object.rs", "crates/drmr-test-support/build.rs",
                   "tools/build_desktop.py", "tools/collect_notices.py", "tools/verify_archive.py",

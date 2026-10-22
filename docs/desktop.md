@@ -17,7 +17,7 @@ To change folders after opening the console, quit and reopen the application. So
 
 ## Saved-plan conversion and later verification
 
-Choose **New conversion** in the console. Select local media or **Source URL**, open the input, and analyze it. URL input accepts the [supported MP4, static DASH and completed HLS profiles](conversion-support.md#url-input). Add 1–8 named outputs, choose a new output folder, then **Save plan**. **Download original plan** preserves the original bytes and absolute paths; keep that file private because it can contain paths and signed URLs.
+Choose **New conversion** in the console. Select local media or **Source URL**, open the input, and analyze it. URL input accepts the [supported MP4, static DASH and completed HLS profiles](conversion-support.md#url-input). Add 1–8 named outputs, choose a new output folder, then **Save plan**. **Download original plan** preserves the original bytes and absolute paths; keep that file private because it identifies local files and output locations.
 
 In Desktop, **Download original plan** opens a native save dialog. Choose a new JSON file in a private folder outside the input folder and `drmr-output`. The private folder must not contain either media folder. The default is the selected private configuration folder, or a private `drmr-plans` sibling of `drmr-output`. drmr creates that folder when needed and refuses an existing folder with unsafe permissions; it does not change its permissions. Existing files are never overwritten. Other attachment downloads are unavailable in the Desktop window.
 

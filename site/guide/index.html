@@ -31,10 +31,10 @@
   </header>
   <main class="wrap" id="main" tabindex="-1">
     <div class="guide-intro">
-      <p class="eyebrow">drmr / 0.1.0</p>
+      <p class="eyebrow">drmr / 1.0.0</p>
       <h1>User guide</h1>
       <p>A practical drmr guide: formats, keys, conversion, verification, Docker and local interfaces.</p>
-      <p class="guide-meta">Updated: <time datetime="2026-10-22">2026-10-22</time> · Version: 0.1.0</p>
+      <p class="guide-meta">Updated: <time datetime="2026-10-22">2026-10-22</time> · Version: 1.0.0</p>
     </div>
     <div class="guide-layout">
       <aside class="guide-toc" id="guide-toc">
@@ -62,7 +62,8 @@
       </aside>
       <article class="guide-content" id="guide-content"><section class="guide-chapter" id="introduction" data-guide-chapter="introduction" aria-labelledby="introduction-title"><h2 id="introduction-title">1. Introduction</h2><a class="guide-chapter-switch" href="../ja/guide/#introduction" lang="ja" hreflang="ja">日本語</a>
 <p>drmr changes media containers, delivery formats and encryption while retaining encoded video and audio. It is for engineers who control the media and already have the required decryption keys. It is not an encoder for creating a new quality ladder or a client for obtaining DRM licenses.</p>
-<p>This guide describes drmr 0.1.0 and was updated on 2026-10-21. Public source and command help define the behavior. For a different version, also read its accompanying documentation. A passing example does not qualify arbitrary media or playback devices.</p>
+<p>This guide describes drmr 1.0.0 and was updated on 2026-10-22. Public source and command help define the behavior. For a different version, also read its accompanying documentation. A passing example does not qualify arbitrary media or playback devices.</p>
+<p>Download a versioned CLI from <a href="https://github.com/kazuhide/drmr/releases">GitHub Releases</a> and check its archive against <code>SHA256SUMS</code> before installation. External media tools remain separate. See <a href="https://github.com/kazuhide/drmr/blob/main/docs/releases.md">releases and compatibility</a> for supported targets and the compatibility policy.</p>
 <h3>Choose an operation</h3>
 <div class="guide-table-scroll" role="region" aria-labelledby="table-1-title" tabindex="0"><table><caption id="table-1-title">Choose an operation — Table 1</caption><thead><tr><th scope="col">Goal</th><th scope="col">Command</th><th scope="col">What it establishes</th></tr></thead><tbody>
 <tr><th scope="row">Find external tools</th><td><code>doctor</code></td><td>Required executables can be found in the launch environment</td></tr>
@@ -2035,7 +2036,7 @@ drmr serve
 <li>Choose <strong>Verify again</strong> to compare the saved plan with existing output without reconverting it. Later, open the same file as a <strong>Saved CLI plan</strong> to verify without repeating analysis or conversion.</li>
 </ol>
 <p>New plans use the named-output v2 format, even with one output. When supplying a key file, analyze accepts v1 or v2; new plans and their conversion/verification use v2. An imported CLI v1 plan uses v1 keys. Chapter 17 documents the file formats.</p>
-<p>Plan downloads preserve the original bytes and absolute paths. Keep them private: they can contain local paths and signed URLs. Do not rewrite paths to move a plan between environments. The page sends references rather than raw keys, configuration contents or executable paths, and never retrieves key-file contents.</p>
+<p>Plan downloads preserve the original bytes and absolute paths. Keep them private because they identify local files and output locations. Do not rewrite paths to move a plan between environments. The page sends references rather than raw keys, configuration contents or executable paths, and never retrieves key-file contents.</p>
 <p>URL sessions use a generic <strong>Source URL</strong> label. The server does not return the submitted URL to the page; credentials can occur in the path as well as in query parameters. The input field is cleared when submitted.</p>
 <p>A session admits at most 32 operations. At the limit, download the plan, choose <strong>Close this conversion</strong>, then reopen the saved plan to verify existing output. If a launch outcome is unknown, <strong>Check status</strong> looks up that same operation without resubmitting it. A running or cleanup-unconfirmed session cannot close. Changing the selection or language does not release its execution slot.</p>
 <h3>Job state and cleanup</h3>
@@ -2056,7 +2057,7 @@ drmr serve
 <li>Choose File &gt; Open console.</li>
 </ol>
 <p>Use <strong>New conversion</strong> for the saved-plan steps in chapter 13. Without a configuration folder, clear flows without keys or fetch settings remain available. Key-file contents are not uploaded through the browser.</p>
-<p><strong>Download original plan</strong> opens a native save dialog for a new private JSON file. Choose a folder outside the input folder and <code>drmr-output</code>: the unchanged plan can contain absolute paths and signed URLs. The private folder must not contain either media folder. The default is the private configuration folder, or an owner-only <code>drmr-plans</code> sibling of <code>drmr-output</code>. Unsafe existing folders and existing files are refused without changing them. To reopen the copy later, select its folder as <strong>Private configuration folder</strong> before console startup, then choose <strong>Saved CLI plan</strong>. Select <code>drmr-plans</code> in the later session if the copy was saved there; the private folder must remain separate from input/output media. CLI verification with <code>drmr verify --plan /path/to/private/drmr-plan.json</code> is also available, with runtime keys if needed. Other attachment downloads are unavailable in the Desktop window.</p>
+<p><strong>Download original plan</strong> opens a native save dialog for a new private JSON file. Choose a folder outside the input folder and <code>drmr-output</code>: the unchanged plan records absolute local paths. The private folder must not contain either media folder. The default is the private configuration folder, or an owner-only <code>drmr-plans</code> sibling of <code>drmr-output</code>. Unsafe existing folders and existing files are refused without changing them. To reopen the copy later, select its folder as <strong>Private configuration folder</strong> before console startup, then choose <strong>Saved CLI plan</strong>. Select <code>drmr-plans</code> in the later session if the copy was saved there; the private folder must remain separate from input/output media. CLI verification with <code>drmr verify --plan /path/to/private/drmr-plan.json</code> is also available, with runtime keys if needed. Other attachment downloads are unavailable in the Desktop window.</p>
 <p>Canceling the save dialog creates no file. If Quit drmr is waiting for an open save dialog, cancel the dialog to finish closing. A late selection is discarded, active transfer and owned partial-file cleanup are awaited, and a replaced file or parent folder is preserved.</p>
 <p>If cleanup remains unconfirmed, inspect the selected private folder and any hidden .drmr-plan-cleanup- folders. Unfamiliar files are preserved and are never restored by overwriting an occupied name. Keep those files, restore the original private folder, then choose Quit drmr again.</p>
 <p>Restart the application to change roots after opening. Navigation stays inside the owned loopback origin; external origins and new windows are denied. Reports open in the same window, and Open console returns home. The page receives no native shell/filesystem bridge.</p>

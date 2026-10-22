@@ -12,9 +12,17 @@ The CLI is the primary interface. The local web console and optional [Desktop ho
 
 [Web user guide (English)](https://kazuhide.github.io/drmr/guide/) · [Japanese web guide](https://kazuhide.github.io/drmr/ja/guide/) · [CLI usage](docs/usage.md) · [Conversion support](docs/conversion-support.md)
 
+[Releases and compatibility](docs/releases.md) · [Changelog](CHANGELOG.md)
+
 See [keys and local security](docs/security.md) for diagnostic masking, temporary files, external-tool process arguments, and the local interface security boundary.
 
 ## Install
+
+Download a CLI archive for your operating system and processor from
+[GitHub Releases](https://github.com/kazuhide/drmr/releases), then follow the
+[archive and version checks](docs/releases.md#install-a-released-cli). Rust is
+only needed when building from source; external media tools are installed
+separately for either CLI installation method.
 
 To run the CLI with its media tools included, use the [Docker guide](docs/docker.md). It also covers the experimental local web console.
 
