@@ -16,7 +16,7 @@ function harness() {
   const box = { console, setTimeout: fn => { timers.set(1, fn); return 1; }, clearTimeout: id => timers.delete(id),
     document: { getElementById: button, addEventListener: (name, fn) => events.set(name, fn) },
     window: { addEventListener: (name, fn) => events.set(name, fn), App: {
-      ConsoleBridge: { ownsExecution: () => false, showCommon() {}, commonChanged() {} },
+      I18n: { apply: () => calls.push('initial language'), setLanguage: value => calls.push('language ' + value) },
       CommonState: { create: options => { onChange = options.onChange; return model; } },
       CommonView: { create: () => view, ownerText: () => 'common owner' }
     } } };
@@ -28,6 +28,13 @@ test('observation uses GET recovery and never replaces an uncertain owner', asyn
   const h = harness(); await flush();
   assert.deepEqual(h.calls.filter(v => v.startsWith('GET')), ['GET refresh', 'GET recovery']);
   assert.equal(h.data.owner, h.owner); assert.equal(h.controller.isBusy(), true);
+});
+test('the standalone console initializes and changes language without a legacy controller', async () => {
+  const h = harness(); await flush();
+  assert.equal(h.calls.filter(value => value === 'initial language').length, 1);
+  h.events.get('language-select:change')({ target: { value: 'ja' } });
+  assert.equal(h.calls.at(-1), 'language ja');
+  assert.equal(h.data.owner, h.owner);
 });
 test('a locale event updates the existing view without changing ownership or starting operations', async () => {
   const h = harness(); await flush(); h.calls.length = 0;

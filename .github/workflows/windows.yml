@@ -70,7 +70,7 @@ jobs:
       - name: Check elevated media execution is refused before payload creation
         run: cargo test -p drmr-core --test native media_workspace_checks_default_ownership_before_generating_payloads --locked -- --nocapture
 
-      - name: Test native access controls, descendants, CLI and batch as a regular user
+      - name: Test native access controls, descendants and the common CLI as a regular user
         run: ./.github/scripts/windows-native-tests.ps1
 
       - name: Preserve native test results

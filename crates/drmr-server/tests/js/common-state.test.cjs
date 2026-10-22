@@ -93,7 +93,7 @@ test('a failed independent verification retains its negative report and cannot b
   assert.equal(record.report.report.passed, false);
 });
 test('lost session creation uses its original correlation ID and never retains a secret URL', async () => {
-  for (const kind of ['url', 'hls-url']) {
+  for (const kind of ['url']) {
     let posts = 0;
     const h = await harness({ createSession: async body => { posts++; assert.equal(body.creation_request_id, rid); throw unknown(); },
       creation: async () => { throw refused(404, 'session-request-not-found'); } });

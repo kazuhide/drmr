@@ -2,8 +2,8 @@
 //! the Python interpreter; see `tests/fixtures/`).
 
 use drmr_core::canonical::{Dumps, python_float_repr, write_string};
-use drmr_core::snapshot::sha256_hex;
 use serde_json::Value;
+use sha2::{Digest as _, Sha256};
 use std::path::PathBuf;
 
 fn fixture(name: &str) -> PathBuf {
@@ -21,7 +21,10 @@ fn canonical_bytes_match_python_json_dumps() {
     let actual = Dumps::CANONICAL.dumps(&value);
     assert_eq!(actual, expected);
     let digest = std::fs::read_to_string(fixture("canonical.sha256")).unwrap();
-    assert_eq!(sha256_hex(actual.as_bytes()), digest.trim());
+    assert_eq!(
+        hex::encode(Sha256::digest(actual.as_bytes())),
+        digest.trim()
+    );
 }
 
 #[test]

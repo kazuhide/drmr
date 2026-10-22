@@ -6,9 +6,8 @@ import { resolve } from 'node:path';
 export const consoleOrigin = 'http://127.0.0.1:4174';
 export const fixtureOrigin = 'http://127.0.0.1:4175';
 export const consoleAssets = [
-  'index.html', 'app.css', 'js/api.js', 'js/ui.js', 'js/i18n.js', 'js/model.js',
-  'js/jobs.js', 'js/player.js', 'js/report.js', 'js/reportview.js', 'js/playback.js',
-  'js/console.js', 'js/common-api.js', 'js/common-state.js', 'js/common-report.js',
+  'index.html', 'app.css', 'js/api.js', 'js/ui.js', 'js/i18n.js',
+  'js/common-api.js', 'js/common-state.js', 'js/common-report.js',
   'js/common-files.js', 'js/common-view.js', 'js/common-console.js',
 ];
 export const digest = bytes => createHash('sha256').update(bytes).digest('hex');

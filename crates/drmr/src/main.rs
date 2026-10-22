@@ -1,4 +1,4 @@
-//! Command-line media inspection, packaging, batch processing, and a local web console.
+//! Command-line media inspection, conversion, verification, and a local web console.
 //! Exit codes: 0 success, 1 the check failed, 2 usage or an input that is not what the
 //! command expects.
 
@@ -13,22 +13,10 @@ mod inspect_cli;
 mod plan_cli;
 
 use clap::{Parser, Subcommand};
-use drmr_core::batch_cli::{self, BatchArgs};
-use drmr_core::canonical::Dumps;
-use drmr_core::cli;
-use drmr_core::events::JsonLinesWriter;
-use drmr_core::hls_cli;
-use drmr_core::pipeline_deps::Ports;
-use drmr_core::snapshot::{self, SnapshotError, SnapshotReport};
-use drmr_core::toolrun::Secrets;
 use drmr_server::{JobCli, ServeArgs};
-use serde_json::{Map, Value};
-use std::io::Write as _;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::ExitCode;
-use std::sync::Arc;
 
-const EXIT_CHANGED: u8 = 1;
 const EXIT_INVALID: u8 = 2;
 
 #[derive(Parser)]
@@ -36,7 +24,7 @@ const EXIT_INVALID: u8 = 2;
     name = "drmr",
     version,
     about = "Inspect and repackage streaming media with digital rights management (DRM)",
-    after_help = "Getting started:\n  drmr doctor                       Check external media tools\n  drmr inspect media.mp4             Read local media metadata without keys\n  drmr analyze media.mp4             Check the complete source media\n  drmr plan media.mp4 --to cbcs       Describe conversion intent\n  drmr convert input.mpd --to clear --output clear-media\n  drmr verify clear-media/manifest.mpd --source input.mpd\n\nSaved-plan workflow:\n  drmr analyze URL --download-dir SOURCE_DIR\n  drmr plan SOURCE_DIR/input.m3u8 --to cbcs --format dash --output RESULT_DIR --save PLAN.json\n  drmr convert --plan PLAN.json --keys-file KEYS.json\n  drmr verify --plan PLAN.json --keys-file KEYS.json\n\nRetained entrypoints are SOURCE_DIR/input.m3u8 (HLS), input.mpd (DASH), or input.mp4 (MP4).\nSupported URL input also works directly with 'drmr convert URL --download-dir SOURCE_DIR'.\nFor compatible prepared-asset workflows, see 'drmr run --help' and 'drmr analyze-hls --help'.\nUse 'drmr plan --mpd manifest.mpd' to list prepared DASH renditions.\nDASH and HLS describe streaming media using manifests or playlists.\nUse 'drmr help <COMMAND>' for detailed command help."
+    after_help = "Getting started:\n  drmr doctor                       Check external media tools\n  drmr inspect media.mp4             Read local media metadata without keys\n  drmr analyze media.mp4             Check the complete source media\n  drmr plan media.mp4 --to cbcs       Describe conversion intent\n  drmr convert input.mpd --to clear --output clear-media\n  drmr verify clear-media/manifest.mpd --source input.mpd\n\nSaved-plan workflow:\n  drmr analyze URL --download-dir SOURCE_DIR\n  drmr plan SOURCE_DIR/input.m3u8 --to cbcs --format dash --output RESULT_DIR --save PLAN.json\n  drmr convert --plan PLAN.json --keys-file KEYS.json\n  drmr verify --plan PLAN.json --keys-file KEYS.json\n\nRetained entrypoints are SOURCE_DIR/input.m3u8 (HLS), input.mpd (DASH), or input.mp4 (MP4).\nSupported URL input also works directly with 'drmr convert URL --download-dir SOURCE_DIR'.\nDASH and HLS describe streaming media using manifests or playlists.\nUse 'drmr help <COMMAND>' for detailed command help."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -59,29 +47,9 @@ enum Command {
         #[arg(long)]
         probe: bool,
         /// Check the tools required by this processing route; other tools are optional.
-        #[arg(long, default_value = "all", value_parser = ["all", "prepared-dash", "progressive-mp4", "fragmented-mp4", "dash-presentation", "fmp4-hls-presentation", "mpeg-ts-hls", "mpeg-ts-sample-aes-hls", "mpeg-ts-hls-ts"])]
+        #[arg(long, default_value = "all", value_parser = ["all", "progressive-mp4", "fragmented-mp4", "dash-presentation", "fmp4-hls-presentation", "mpeg-ts-hls", "mpeg-ts-sample-aes-hls", "mpeg-ts-hls-ts"])]
         route: String,
     },
-    /// Verify a saved HLS snapshot by comparing its recorded content digest.
-    #[command(
-        after_help = "A snapshot stores downloaded playlists, media segments, and analysis.json.\nA digest is a content fingerprint used to detect changes.\n\nExamples:\n  drmr verify-snapshot output/sample/clear/source\n  drmr verify-snapshot --files output/sample/clear/source\n\nExit codes: 0 verified; 1 changed; 2 invalid snapshot."
-    )]
-    VerifySnapshot {
-        /// The snapshot directory (`output/<id>/clear/source/`) or its `analysis.json`.
-        path: PathBuf,
-        /// Also re-hash every recorded playlist and segment file.
-        #[arg(long)]
-        files: bool,
-    },
-    /// Print JSON with stable formatting and key order for content fingerprints.
-    #[command(after_help = "Example:\n  drmr canonical analysis.json")]
-    Canonical {
-        /// Any JSON file.
-        path: PathBuf,
-    },
-    /// Repackage the supported downloaded DASH catalog layout.
-    #[command(about = cli::RUN_ABOUT, args_override_self = true, infer_long_args = true)]
-    Run(cli::RunArgs),
     /// Inspect local MP4, DASH, or HLS metadata without keys or output files.
     Inspect(inspect_cli::InspectArgs),
     /// Check complete MP4, DASH, or HLS input media; retain URL input locally.
@@ -90,32 +58,13 @@ enum Command {
     Convert(convert_cli::ConvertArgs),
     /// Compare result media with its original source, including every packet timestamp.
     Verify(convert_cli::VerifyArgs),
-    /// Describe conversion intent, save an execution plan, or list renditions with --mpd.
+    /// Describe conversion intent or save an execution plan.
     #[command(
-        args_override_self = true,
-        infer_long_args = true,
-        after_help = "With INPUT: describe a requested conversion without executing it.\nWith --save FILE and --output PATH: validate the complete source and save its fingerprints and output intent. Use --outputs FILE for several results with separate DRM and manifest-check policies. Keys remain separate.\nWith --mpd: enumerate renditions only; writes nothing (read-only).\n\nExamples:\n  drmr plan source/input.m3u8 --outputs outputs.json --output converted --save conversion.plan.json\n  drmr convert --plan conversion.plan.json --keys-file keys.json\n  drmr verify --plan conversion.plan.json --keys-file keys.json"
+        after_help = "With INPUT: describe a requested conversion without executing it.\nWith --save FILE and --output PATH: validate the complete source and save its fingerprints and output intent. Use --outputs FILE for several results with separate DRM and manifest-check policies. Keys remain separate.\n\nExamples:\n  drmr plan source/input.m3u8 --outputs outputs.json --output converted --save conversion.plan.json\n  drmr convert --plan conversion.plan.json --keys-file keys.json\n  drmr verify --plan conversion.plan.json --keys-file keys.json"
     )]
     Plan(inspect_cli::PlanArgs),
-    /// Repackage multiple assets sequentially, with support for restarting.
-    Batch(BatchArgs),
     /// Start the local web console, configured using DRMR_* environment variables.
     Serve(ServeArgs),
-    #[command(
-        name = "analyze-hls",
-        about = hls_cli::ANALYZE_ABOUT,
-        args_override_self = true,
-        infer_long_args = true
-    )]
-    AnalyzeHls(hls_cli::AnalyzeArgs),
-    #[command(
-        name = "package-hls",
-        about = hls_cli::PACKAGE_ABOUT,
-        after_help = "Legacy snapshot command. For new workflows use analyze, plan --outputs, convert --plan, and verify --plan. The common output list names HLS and DASH results explicitly.",
-        args_override_self = true,
-        infer_long_args = true
-    )]
-    PackageHls(hls_cli::PackageArgs),
 }
 
 fn main() -> ExitCode {
@@ -125,25 +74,12 @@ fn main() -> ExitCode {
     }
     let supervised = drmr_core::native::is_supervised_cli();
     if supervised
-        && !std::env::args_os().nth(2).is_some_and(|command| {
-            matches!(
-                command.to_str(),
-                Some(
-                    "run"
-                        | "analyze-hls"
-                        | "package-hls"
-                        | drmr_server::common_protocol::JOB_ARGUMENT
-                )
-            )
-        })
+        && std::env::args_os()
+            .nth(2)
+            .is_none_or(|command| command != drmr_server::common_protocol::JOB_ARGUMENT)
     {
         eprintln!("drmr: this command is unavailable in a supervised console job");
         return ExitCode::from(EXIT_INVALID);
-    }
-    // The asset worker of `batch`: this executable, invoked with exactly the worker
-    // argument, reads its private configuration from stdin and never parses a command line.
-    if invoked_as_worker() {
-        return process_exit(drmr_core::batch::worker_main());
     }
     let job_arguments: Vec<_> = std::env::args_os()
         .skip(if supervised { 2 } else { 1 })
@@ -159,163 +95,23 @@ fn main() -> ExitCode {
             ExitCode::from(EXIT_INVALID)
         };
     }
-    let command = if supervised {
-        Cli::parse_from(
-            std::env::args_os()
-                .enumerate()
-                .filter_map(|(index, value)| (index != 1).then_some(value)),
-        )
-        .command
-    } else {
-        Cli::parse().command
-    };
+    let command = Cli::parse().command;
     match command {
         Command::Version => {
             println!("drmr {}", drmr_core::VERSION);
             ExitCode::SUCCESS
         }
         Command::Doctor { json, probe, route } => doctor::run(json, probe, &route),
-        Command::VerifySnapshot { path, files } => verify(&path, files),
-        Command::Canonical { path } => canonical(&path),
-        Command::Run(args) => repackage(&cli::Commands::Run(args)),
         Command::Inspect(args) => inspect_cli::inspect(&args),
         Command::Analyze(args) => analyze_cli::analyze(&args),
         Command::Convert(args) => convert_cli::convert(&args),
         Command::Verify(args) => convert_cli::verify(&args),
-        Command::Plan(args) => match &args.mpd {
-            Some(mpd) => repackage(&cli::Commands::Plan(cli::PlanArgs {
-                mpd: mpd.clone(),
-                asset_id: args.asset_id.clone(),
-            })),
-            None => inspect_cli::plan(&args),
-        },
-        Command::Batch(args) => batch(&args),
+        Command::Plan(args) => inspect_cli::plan(&args),
         Command::Serve(args) => serve(&args),
-        Command::AnalyzeHls(args) => {
-            ExitCode::from(hls_cli::analyze_command(&args, std::io::stdout()))
-        }
-        Command::PackageHls(args) => package_hls(&args),
     }
 }
 
-/// `package-hls` with the process environment: the key material is read from `DRM_KID` /
-/// `DRM_KEY` / `DRM_IV` there, never from a flag.
-fn package_hls(args: &hls_cli::PackageArgs) -> ExitCode {
-    let env = |name: &str| std::env::var_os(name).map(|value| value.to_string_lossy().into_owned());
-    ExitCode::from(hls_cli::package_command(args, &env, std::io::stdout()))
-}
-
-/// `serve`: `drmr-server` inside this executable, with this executable as the jobs' CLI; that
-/// CLI carries `batch`, which `GET /api/platform` reports as available.
+/// Start the local console with this executable for its shared CLI operations.
 fn serve(args: &ServeArgs) -> ExitCode {
-    drmr_server::run_server(args, JobCli::this_executable(true), "drmr serve")
-}
-
-/// The worker protocol accepts exactly `[WORKER_ARG]`.
-fn invoked_as_worker() -> bool {
-    let mut args = std::env::args_os().skip(1);
-    matches!(
-        (args.next(), args.next()),
-        (Some(first), None) if first == drmr_core::batch::WORKER_ARG
-    )
-}
-
-/// A worker exit status as a process exit code (the codes the tool uses are 0..=130).
-fn process_exit(code: i32) -> ExitCode {
-    ExitCode::from(u8::try_from(code).unwrap_or(1))
-}
-
-/// `batch`: the records go to stdout as JSON Lines (one JSON object per line); the keys
-/// of the fleet never reach this process's records (the workers hold them), so the writer
-/// scrubs nothing.
-fn batch(args: &BatchArgs) -> ExitCode {
-    let writer = JsonLinesWriter::new(std::io::stdout(), Arc::new(Secrets::new()));
-    let code = batch_cli::cmd_batch(args, &writer);
-    if writer.failed() {
-        return ExitCode::from(1);
-    }
-    process_exit(code)
-}
-
-/// `run` / `plan` with the process environment (keys come from `DRM_KID` / `DRM_KEY` /
-/// `DRM_IV` there, never from a flag), over the real `config` / `packager` / `media_inspect` /
-/// `manifest_dash` + `manifest_hls` / `playready` ports.
-fn repackage(command: &cli::Commands) -> ExitCode {
-    let modules = cli::Modules {
-        config: &Ports,
-        packager: &Ports,
-        media_inspect: &Ports,
-        manifests: &Ports,
-        playready: &Ports,
-    };
-    let env: cli::Env = std::env::vars_os()
-        .map(|(name, value)| {
-            (
-                name.to_string_lossy().into_owned(),
-                value.to_string_lossy().into_owned(),
-            )
-        })
-        .collect();
-    let code = cli::dispatch(
-        command,
-        &env,
-        &modules,
-        std::io::stdout(),
-        &mut std::io::stderr(),
-    );
-    ExitCode::from(code)
-}
-
-fn verify(path: &Path, files: bool) -> ExitCode {
-    let result = if files {
-        snapshot::verify_files(path)
-    } else {
-        snapshot::verify_record(path)
-    };
-    match result {
-        Ok(report) => {
-            println!("{}", Dumps::DEFAULT.dumps(&report_value(path, &report)));
-            ExitCode::SUCCESS
-        }
-        Err(error) => {
-            let mut record = Map::new();
-            record.insert("path".into(), Value::String(path.display().to_string()));
-            record.insert("status".into(), Value::String(error.token().to_string()));
-            println!("{}", Dumps::DEFAULT.dumps(&Value::Object(record)));
-            eprintln!("verify-snapshot: {error}");
-            ExitCode::from(match error {
-                SnapshotError::Changed => EXIT_CHANGED,
-                SnapshotError::Invalid => EXIT_INVALID,
-            })
-        }
-    }
-}
-
-fn report_value(path: &Path, report: &SnapshotReport) -> Value {
-    let mut record = Map::new();
-    record.insert("path".into(), Value::String(path.display().to_string()));
-    record.insert("status".into(), Value::String("ok".to_string()));
-    if let Value::Object(fields) = serde_json::to_value(report).expect("report serializes") {
-        record.extend(fields);
-    }
-    Value::Object(record)
-}
-
-fn canonical(path: &Path) -> ExitCode {
-    let parsed = std::fs::read(path)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
-    let Some(value) = parsed else {
-        eprintln!("canonical: not a JSON file: {}", path.display());
-        return ExitCode::from(EXIT_INVALID);
-    };
-    let mut stdout = std::io::stdout().lock();
-    if stdout
-        .write_all(Dumps::CANONICAL.dumps(&value).as_bytes())
-        .and_then(|()| stdout.flush())
-        .is_err()
-    {
-        return ExitCode::from(EXIT_INVALID);
-    }
-    ExitCode::SUCCESS
+    drmr_server::run_server(args, JobCli::this_executable(), "drmr serve")
 }

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 // Fixed guide routes and chapter identity; the committed builder owns the copy.
 export const guideChapters = ['introduction', 'terminology', 'supported-profiles', 'installation',
   'key-configuration', 'inspect-plan', 'local-conversion', 'url-input', 'verification',
-  'saved-hls', 'prepared-dash-batch', 'resources-stop', 'docker', 'windows', 'web-console',
+  'resources-stop', 'docker', 'windows', 'web-console',
   'desktop', 'results-errors', 'regression-tests', 'cli-reference', 'references'];
 export const guideLocales = [
   { language: 'en', route: 'guide/', asset: 'guide/index.html', title: 'User guide',

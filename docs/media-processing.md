@@ -38,8 +38,6 @@ This arithmetic explains a boundary difference; it does not justify missing or d
 
 Audio can also carry encoder priming: samples decoded at the beginning that should not be presented. MP4 edit-list metadata can describe this trimming. Identical compressed audio packets alone do not establish identical presented audio if that metadata changes during repackaging.
 
-The clear-HLS path preserves a single open-ended audio trim at normal playback rate and compensates decode timestamps to retain presentation timing. Complex or finite edits and inexact timescale conversions are rejected. The [ten-second Big Buck Bunny regression](https://github.com/kazuhide/drmr/blob/main/crates/drmr/tests/fixtures/bbb/README.md) verifies both individual segments and the continuous presentation, including 240 video frames and the source's audio sample count. Its JSON results include tool versions, elapsed time, and sampled memory; CI uploads them with each platform's test artifacts.
-
 ## Generic conversion and timing limits
 
 `convert` stages a private snapshot of each supported input track. For local DASH it appends the initialization data and referenced fragments in timeline order; for local HLS it first decrypts complete AES-128 resources when required, then assembles each fragmented MP4 track. Shaka Packager decrypts supported MP4 sample encryption and packages the resulting tracks into the selected output format. SAMPLE-AES TS is decrypted in Rust before packaging. DASH and HLS output are segmented again at a two-second target. HLS AES-128 is applied separately to each resulting resource, with a fresh initialization vector and padding. This route uses whole-track temporary disk files; it does not re-encrypt each original segment in place.
@@ -291,14 +289,6 @@ The timing reader retains one record of at most 256 bytes and an 8 KiB read buff
 Other limits remain: staged track size, track and segment counts, MP4 initialization metadata, fragment metadata and samples per fragment are bounded separately. Removing the packet-proof limit does not make total memory, temporary disk space or runtime unlimited.
 
 The long-presentation regression derives a 32 × 18 video from the attributed [Big Buck Bunny clip](https://github.com/kazuhide/drmr/blob/main/crates/drmr/tests/fixtures/bbb/README.md) and repeats all ten seconds 417 times. It converts and independently verifies all 100,080 packets over 4,170 seconds. Generate and check it locally with `cargo test -p drmr --test long_conversion --locked`; media files are temporary. This small resolution tests complete long-duration verification, not representative encoding throughput or device playback. A separate generated 700,001-packet test passes more than 32 MiB of valid timing records through the same reader.
-
-## How the existing processing paths handle segments
-
-The prepared-DASH `run` path concatenates a rendition's initialization segment and media segments, then decrypts a complete clear reference. Normally, Shaka Packager encrypts and segments that reference again. For supported AAC audio whose source segment duration does not divide into 1,024-sample frames, drmr instead decrypts and encrypts each original segment with its initialization data, preserving the original boundary and checking decode timestamps. The complete clear reference is still produced for validation; this path does not eliminate whole-rendition temporary files.
-
-The clear-HLS `package-hls` path processes each downloaded media segment with its initialization data, normalizes the supported container and timeline, and encrypts that segment. It checks the resulting structure, timing, and decoded content. Validation can join media when checking the presentation, so per-segment encryption does not imply that every verification operation is per segment.
-
-These paths use temporary disk space and external tools. They do not yet promise a constant total memory footprint or a universal conversion route between every format and protection scheme. The command's reported checks describe what was actually verified.
 
 ## Interpret a result
 

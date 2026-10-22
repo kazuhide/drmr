@@ -17,7 +17,7 @@ an asset to a hosted validation service. Their result scope is `manifest-only`;
 successful media correspondence is a separate internal check. Executable paths
 and raw validator diagnostics are excluded from retained result summaries.
 
-drmr processes media with keys supplied by the operator. It does not obtain DRM licenses or isolate keys in secure hardware. Use a trusted operating-system account, trusted media tools, and a trusted browser for local playback.
+drmr processes media with keys supplied by the operator. It does not obtain DRM licenses or isolate keys in secure hardware. Use a trusted operating-system account and trusted media tools.
 
 ## Where supplied information goes
 
@@ -45,14 +45,14 @@ download summary includes local paths, not the source URL or request headers.
 
 For `analyze`, saved-plan creation, `convert`, and `verify`, supply an owner-only JSON file with `--keys-file` when keys are needed. Input decryption keys and output encryption keys have separate roles. The file must be a regular, singly linked file with the required owner-only permissions; symbolic links and insecure files are refused. See [key configuration](usage.md#separate-input-and-output-keys) and [Windows file protection](windows.md#protect-configuration-files).
 
-The older `run` and `package-hls` commands read `DRM_KID`, `DRM_KEY`, and `DRM_IV` from the environment. Batch processing can use a protected per-asset key file. drmr has no public command-line option for entering a content-key value. Avoid shell-history entries containing keys; use your local secret-management process to prepare the environment or file.
+drmr has no public command-line option for entering a content-key value. Keep key values out of shell history and prepare the protected key file through your local secret-management process.
 
 Diagnostic protection has several layers:
 
 - Key-holding types provide redacted debug output.
 - Tool records mask registered secrets and their supported hexadecimal, byte-separated, Base64, escaped, and encoded representations. Secret values become `***REDACTED***`; some commands omit tool arguments and raw output entirely.
-- The command-line JSON Lines writer scrubs serialized records before writing them. Generic conversion failures use fixed error codes and safe progress labels.
-- The local web console excludes keys from ordinary job, history, and result fields. Its tool-log safety also depends on the command-line producer's masking.
+- Conversion and verification failures use fixed error codes and safe progress labels without raw tool output.
+- The local web console selects protected key files by reference and excludes their contents from session, job, and result responses.
 
 These controls cover recognized secret material. They do not classify every filename, label, media tag, or arbitrary value as confidential. Public Rust APIs that return captured raw tool output return data for processing; their raw buffers are not a safe log format. Review exported reports and third-party diagnostics before sharing them.
 
@@ -85,7 +85,7 @@ configured license addresses and remains private working data. This transport
 does not remove content keys from other tool arguments or protect them from
 process-memory inspection.
 
-Keys also exist in ordinary process memory. Sensitive Rust key buffers and several temporary representations are wiped when their owners are dropped. This is a best-effort lifetime control, not a guarantee that every copy has been erased. Child processes, browser buffers, allocator copies, swap, crash dumps, and forced termination are outside that guarantee. drmr does not provide Secure Enclave storage or control the host's dump and swap policies.
+Keys also exist in ordinary process memory. Sensitive Rust key buffers and several temporary representations are wiped when their owners are dropped. This is a best-effort lifetime control, not a guarantee that every copy has been erased. Child processes, allocator copies, swap, crash dumps, and forced termination are outside that guarantee. drmr does not provide Secure Enclave storage or control the host's dump and swap policies.
 
 ## Temporary files and cleanup
 
@@ -126,12 +126,10 @@ These checks have the same operating-system account boundary described above.
 
 Confirmed normal cleanup removes owned temporary files. An interrupted process or unconfirmed child cleanup can leave private working files behind; inspect the reported job and workspace before reuse. Deleting a file does not guarantee secure erasure from the storage device, snapshots, or backups. Keep working directories, retained source material, and backups under the same access controls as the input keys.
 
-## Local web and Desktop playback
+## Local Web and Desktop interfaces
 
-The web console has no authentication. Keep it on loopback on a trusted machine; do not publish it through a proxy or port forward. Host and Origin checks restrict browser-origin requests, but they do not authenticate other local processes. The Desktop host uses the same local server and security boundary.
+The Web console has no authentication. Keep it on loopback on a trusted machine; do not publish it through a proxy or port forward. Host and Origin checks restrict browser-origin requests, but they do not authenticate other local processes. The Desktop host uses the same local server and security boundary.
 
-Key fields are visually masked by default and can be explicitly revealed. The application clears submitted form values and does not save keys to its own browser local storage or session storage. A visual mask or cleared form does not erase browser memory or prevent inspection of the page and network requests.
+Keys and fetch policies are selected as references to protected local files. The page does not upload their contents or retrieve key-file contents. Source URL input is cleared after submission and shown only as a generic label. These measures do not isolate the application from an attacker controlling the same operating-system account, local filesystem or browser.
 
-Local ClearKey playback intentionally supplies the actual content key to the browser in a JSON Web Key (JWK) response or player configuration. The response is marked `no-store`, but the key remains readable to browser developer tools, network-recording exports such as HAR files, page code, and sufficiently privileged extensions. This preview is not a production DRM license service or a hardware-protected playback path.
-
-Successful HLS packaging can retain an in-memory preview credential context for 30 minutes of inactivity. Expiry is checked by a 30-second sweep and on relevant accesses; clearing the form does not immediately revoke that context. Revoking the last playback session for a result removes that result's credential context; server shutdown clears its owned playback sessions and contexts. Do not share a browser profile or capture playback diagnostics when its keys must remain private.
+Saved plans preserve local paths and may contain signed URLs. Export them to a private folder and protect retained source material, output and logs with the same account controls. Neither interface provides a DRM license service or hardware-protected key storage.

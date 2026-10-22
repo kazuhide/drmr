@@ -2,14 +2,15 @@ mod support;
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use support::{Harness, stage};
+use support::Harness;
 
 fn raw_request(h: &Harness, headers: &str) -> String {
     let address = h.client.base.strip_prefix("http://").unwrap();
     let mut stream = TcpStream::connect(address).unwrap();
     stream
         .write_all(
-            format!("GET /api/catalog HTTP/1.1\r\nConnection: close\r\n{headers}\r\n").as_bytes(),
+            format!("GET /api/common/capabilities HTTP/1.1\r\nConnection: close\r\n{headers}\r\n")
+                .as_bytes(),
         )
         .unwrap();
     let mut response = String::new();
@@ -18,20 +19,46 @@ fn raw_request(h: &Harness, headers: &str) -> String {
 }
 
 #[test]
-fn untrusted_hosts_cannot_read_catalog_keys_or_static_pages() {
+fn untrusted_hosts_cannot_read_common_resources_or_static_pages() {
     let h = Harness::new();
-    stage(&h.catalog, "sample");
+
     for path in [
         "/",
-        "/api/catalog",
+        "/api/common/capabilities",
         "/clearkey/license?asset_id=sample",
-        "/api/platform",
+        "/api/common/sessions",
     ] {
         let answer = h.client.get_with(path, &[("Host", "attacker.example")]);
         assert_eq!(answer.status, 403, "{path}");
-        assert!(!answer.text().contains(support::KEY));
+        assert!(!answer.text().contains("PRIVATE_SENTINEL"));
         assert!(!answer.text().contains("sample"));
     }
+}
+
+#[test]
+fn common_host_refusals_retain_distinct_domain_codes() {
+    let h = Harness::new();
+    for (host, status, code) in [
+        ("attacker.example", 403, "untrusted-host"),
+        ("localhost:bad", 400, "invalid-host"),
+    ] {
+        let response = h
+            .client
+            .get_with("/api/common/capabilities", &[("Host", host)]);
+        assert_eq!(response.status, status);
+        let body = response.json();
+        assert_eq!(body["schema_version"], 1);
+        assert_eq!(body["error"]["code"], code);
+        assert_ne!(body["error"]["code"], "same-origin-required");
+        assert!(!response.text().contains(host));
+    }
+    let response = h.client.post_json_with(
+        "/api/common/sessions",
+        &serde_json::json!({}),
+        &[("Origin", "https://attacker.example")],
+    );
+    assert_eq!(response.status, 403);
+    assert_eq!(response.json()["error"]["code"], "same-origin-required");
 }
 
 #[test]
@@ -44,12 +71,14 @@ fn trusted_local_hosts_with_valid_ports_remain_usable() {
         "[::1]:8080",
     ] {
         assert_eq!(
-            h.client.get_with("/api/platform", &[("Host", host)]).status,
+            h.client
+                .get_with("/api/common/sessions", &[("Host", host)])
+                .status,
             200,
             "{host}"
         );
     }
-    assert_eq!(h.client.get("/api/platform").status, 200);
+    assert_eq!(h.client.get("/api/common/sessions").status, 200);
 }
 
 #[test]

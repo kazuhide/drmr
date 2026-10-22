@@ -25,7 +25,6 @@ regex.workspace = true
 roxmltree.workspace = true
 rustix.workspace = true
 rustls.workspace = true
-rusty-s3.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
@@ -38,16 +37,6 @@ url = "2.5.8"
 webpki-roots.workspace = true
 zeroize.workspace = true
 zmij.workspace = true
-
-[[test]]
-name = "batch_worker"
-harness = false
-
-# The S3 credential chain and endpoint from the environment: each probe runs in a child process
-# with an explicit environment (this process's environment is never mutated).
-[[test]]
-name = "storage_env"
-harness = false
 
 [dev-dependencies]
 drmr-test-support = { path = "../drmr-test-support" }

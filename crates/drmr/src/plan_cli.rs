@@ -118,10 +118,7 @@ pub fn save(args: &PlanArgs) -> ExitCode {
         Ok(value) => value,
         Err(code) => return code,
     };
-    let input = args
-        .input
-        .as_deref()
-        .expect("clap requires the saved-plan input");
+    let input = args.input.as_path();
     let output = args
         .output
         .as_deref()

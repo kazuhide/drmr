@@ -23,7 +23,7 @@ fn the_bbb_fixture_is_pinned_and_has_five_two_second_video_segments() {
 }
 
 #[test]
-fn the_real_cli_packages_the_bbb_hls_fixture_without_changing_decoded_media() {
+fn the_real_cli_saves_converts_and_independently_verifies_the_bbb_multi_drm_plan() {
     let root = tempfile::tempdir().unwrap();
     let harness = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bbb/regression.py");
     let output = Command::new(if cfg!(windows) { "python" } else { "python3" })
@@ -41,11 +41,14 @@ fn the_real_cli_packages_the_bbb_hls_fixture_without_changing_decoded_media() {
     );
     let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(report["success"], true);
+    assert_eq!(report["workflow"], "saved-plan-multi-output");
+    assert_eq!(report["source_and_plan_unchanged"], true);
+    assert_eq!(report["outputs"].as_array().unwrap().len(), 2);
     assert_eq!(report["video_segments"], 5);
     assert_eq!(report["packaged_tracks"], 2);
     assert_eq!(report["complete_presentation_identity"], "pass");
     assert_eq!(report["complete_packet_timing"], "pass");
-    for stage in ["analysis", "packaging"] {
+    for stage in ["analysis", "planning", "packaging", "verification"] {
         assert!(report["timing_seconds"][stage].as_f64().unwrap() > 0.0);
         let memory = &report["memory"][stage];
         match memory["status"].as_str().unwrap() {

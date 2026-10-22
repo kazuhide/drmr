@@ -48,22 +48,6 @@
       "COPYING.LGPLv2.1"
     ]
   },
-  "bento4": {
-    "version": "1.6.0-641",
-    "commit": "dc264854d1f76c370b65b18d9f303a95f7f21ab1",
-    "archive": "bento4-v1.6.0-641.tar.gz",
-    "url": "https://codeload.github.com/axiomatic-systems/Bento4/tar.gz/refs/tags/v1.6.0-641",
-    "sha256": "e6575877708526e399cff752b4ee23cb1e2ac32fb251e2ca0a1e8d691fd172a7",
-    "notices": [
-      {
-        "path": "Documents/LICENSE.txt",
-        "sha256": "7daae92c8628ada28def8d096fe2fde298b72ec3e2d64a3c408afce38edb361b"
-      }
-    ],
-    "license_files": [
-      "Documents/LICENSE.txt"
-    ]
-  },
   "shaka": {
     "version": "3.8.0",
     "repository": "https://github.com/shaka-project/shaka-packager.git",

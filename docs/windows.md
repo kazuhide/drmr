@@ -12,7 +12,7 @@ cargo build --release --locked -p drmr
 .\target\release\drmr.exe doctor
 ```
 
-The Windows CI archive contains `drmr.exe`, the license, and user documentation. Extract it to a local directory and add that directory to your user `PATH`, or invoke the executable by its full path. External tools are installed separately: FFmpeg (`ffmpeg.exe` and `ffprobe.exe`), Bento4 (`mp4dump.exe`), and Shaka Packager (`packager.exe`). See the [installation links](../README.md#install). `doctor` discovers executables; it does not validate their versions.
+The Windows CI archive contains `drmr.exe`, the license, and user documentation. Extract it to a local directory and add that directory to your user `PATH`, or invoke the executable by its full path. External tools are installed separately: FFmpeg (`ffmpeg.exe` and `ffprobe.exe`) and Shaka Packager (`packager.exe`). See the [installation links](../README.md#install). `doctor` discovers executables; it does not validate their versions.
 
 The CI-built executable imports `VCRUNTIME140.dll`. Install the [Microsoft Visual C++ x64 Redistributable](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist) if that runtime is not already available. CI prints the release executable's imported libraries before creating the archive.
 
@@ -20,9 +20,10 @@ The CI-built executable imports `VCRUNTIME140.dll`. Install the [Microsoft Visua
 
 Windows uses an access control list (ACL) instead of `chmod`. Secret configuration must have a protected ACL granting only the current user full control, with the current user as owner. Inherited permissions alone are insufficient. drmr refuses an insecure existing file or directory; it does not silently change its permissions.
 
-Create a new private directory and an empty protected key configuration before entering any keys:
+In a regular Windows PowerShell 5.1 terminal (`powershell.exe`), create a new private directory and an empty protected key configuration before entering any keys:
 
 ```powershell
+$ErrorActionPreference = 'Stop'
 $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
 $private = Join-Path $env:LOCALAPPDATA 'drmr-keys'
 if (Test-Path -LiteralPath $private) { throw 'Choose a new private directory' }
@@ -34,7 +35,11 @@ function Set-OwnerOnlyAcl($path, $security) {
     $rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
         $sid, 'FullControl', 'Allow')
     $security.AddAccessRule($rule)
-    Set-Acl -LiteralPath $path -AclObject $security
+    if ($security -is [System.Security.AccessControl.DirectorySecurity]) {
+        [System.IO.Directory]::SetAccessControl($path, $security)
+    } else {
+        [System.IO.File]::SetAccessControl($path, $security)
+    }
 }
 
 Set-OwnerOnlyAcl $private ([System.Security.AccessControl.DirectorySecurity]::new())
@@ -44,7 +49,7 @@ Set-OwnerOnlyAcl $keyFile ([System.Security.AccessControl.FileSecurity]::new())
 notepad $keyFile
 ```
 
-Save the [key configuration structure](usage.md#separate-input-and-output-keys) in that file using your editor or secret-management process. Keep the directory outside the output tree and version control. Never put key values in command arguments or shell history. If an editor replaces the file and changes its ACL, apply the owner-only file ACL again while it remains inside the private directory. See Microsoft's [Set-Acl documentation](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.security/set-acl) for ACL commands.
+Save the [key configuration structure](usage.md#separate-input-and-output-keys) in that file using your editor or secret-management process. Keep the directory outside the output tree and version control. Never put key values in command arguments or shell history. If an editor replaces the file and changes its ACL, apply the owner-only file ACL again while it remains inside the private directory. The example uses the .NET Framework [Directory.SetAccessControl](https://learn.microsoft.com/en-us/dotnet/api/system.io.directory.setaccesscontrol?view=netframework-4.8.1) and [File.SetAccessControl](https://learn.microsoft.com/en-us/dotnet/api/system.io.file.setaccesscontrol?view=netframework-4.8.1) methods available in Windows PowerShell 5.1. It changes the owner and access rules without copying unrelated audit or group settings.
 
 While external tools run, drmr keeps handles to the working directories and their ancestors. These handles allow child files to be created and updated while refusing rename or deletion of the held directories. Private configuration is checked using the path you supplied, so resolving a path cannot hide a junction or alternate data stream. A completed conversion is published in one filesystem operation that refuses an existing destination. Tools can exit while descendants still have files open. drmr confirms termination of the supervised tree before reporting success or a completed cancellation; unconfirmed cleanup is an error.
 
@@ -61,16 +66,15 @@ New-Item -ItemType Directory -Path $outputDirectory -Force | Out-Null
 .\drmr.exe plan 'C:\media\source.mp4' --to cbcs --format mp4
 .\drmr.exe convert 'C:\media\source.mp4' --to cbcs --format mp4 --output "$outputDirectory\protected.mp4" --keys-file $keyFile
 .\drmr.exe verify "$outputDirectory\protected.mp4" --source 'C:\media\source.mp4' --keys-file $keyFile --json
-.\drmr.exe batch --help
 ```
 
-Use the [usage guide](usage.md) for prepared DASH, downloaded HLS inputs, saved multi-output plans, batch work lists, and exit codes. Windows paths belong in command arguments and local configuration paths; manifest URLs and object keys continue to use `/`.
+Use the [usage guide](usage.md) for URL input, saved multi-output plans, protected key files, and exit codes. Windows paths belong in command arguments and local configuration paths; manifest URLs and object keys continue to use `/`.
 
 Keep output and temporary-directory paths reasonably shallow. Media tools can create longer temporary names than the final media or manifest names: Shaka Packager, for example, [writes manifests through a temporary file in the same directory](https://github.com/shaka-project/shaka-packager/blob/v3.8.0/packager/file/file.cc#L75). A segment can therefore be written successfully while a later manifest write reaches a tool's path-length limit. Windows long-path settings do not make every external tool support long paths; see Microsoft's [path-length conditions](https://learn.microsoft.com/en-us/windows/win32/fileio/maximum-file-path-limitation).
 
 For HLS and DASH children of a multi-output conversion, drmr creates media-output stages beside the bundle stage under the original output parent, avoiding another level of temporary-directory nesting. A verified HLS or DASH child is moved into the private bundle on the same filesystem. MP4 retains its separate file-copy publication stage. The complete bundle is published only after all requested outputs pass, with no cross-volume copy fallback for that final atomic move.
 
-The Windows qualification workflow runs the native CLI, batch supervision, access-control and descendant-process tests as a regular user with pinned media tools. Its artifacts retain real-media JSON reports and test logs. These checks establish only the tested media profiles; license acquisition and device playback require separate validation.
+The Windows qualification workflow runs the native CLI, supervision, access-control and descendant-process tests as a regular user with pinned media tools. Its artifacts retain real-media JSON reports and test logs. These checks establish only the tested media profiles; license acquisition and device playback require separate validation.
 
 ## Cancel a media operation
 

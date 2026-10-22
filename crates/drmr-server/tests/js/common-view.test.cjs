@@ -90,7 +90,7 @@ test('HLS, DASH and MP4 URLs use one source selection and clear before registrat
 
 test('URL session navigation and ownership use a localized label without any source path', () => {
   const h = harness();
-  h.record.session.source = { kind: 'hls-url', label: 'HLS URL', display_url: 'https://source.example.invalid/PRIVATE_PATH/master.m3u8' };
+  h.record.session.source = { kind: 'url', label: 'Source URL', display_url: 'https://source.example.invalid/PRIVATE_PATH/master.m3u8' };
   h.data.owner = { sessionId: 'session_1', kind: 'analyze', phase: 'running', stop: 'none', jobId: 'job_1' };
   h.view.update();
   assert.equal(h.descendants(h.host).some(node => String(node.textContent).includes('PRIVATE_PATH')), false);
@@ -126,7 +126,7 @@ test('local label translation preserves custom labels and the fixed private URL 
       h.view.translate();
       assert.equal(sourceLabel(), source.label);
     }
-    for (const kind of ['url', 'hls-url']) {
+    for (const kind of ['url']) {
       h.record.session.source = { kind, label: 'PRIVATE_LABEL', display_url: 'https://source.invalid/PRIVATE_SOURCE' };
       h.view.translate();
       assert.equal(sourceLabel(), language === 'ja' ? '入力 URL' : 'Source URL');

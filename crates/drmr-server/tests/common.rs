@@ -5,15 +5,15 @@ mod private_plans;
 
 use drmr_server::{ServerConfig, spawn};
 use serde_json::Value;
-use support::{Client, stage};
+use support::Client;
 
 #[test]
 fn capabilities_issue_role_bound_refs_without_host_paths() {
     let root = tempfile::tempdir().unwrap();
-    let catalog = root.path().join("catalog");
+    let input = root.path().join("input");
     let output = root.path().join("output");
-    std::fs::create_dir(&catalog).unwrap();
-    let mut config = ServerConfig::new(&catalog, &output);
+    std::fs::create_dir(&input).unwrap();
+    let mut config = ServerConfig::new(&input, &output);
     config.bind_port = 0;
     let server = spawn(config).unwrap();
     let client = Client::new(&server.url());
@@ -35,12 +35,13 @@ fn capabilities_issue_role_bound_refs_without_host_paths() {
 }
 
 #[test]
-fn nested_output_jobs_are_never_served_through_legacy_source() {
+fn nested_output_jobs_are_never_exposed_through_retired_source_routes() {
     let root = tempfile::tempdir().unwrap();
-    let catalog = root.path().join("catalog");
-    let (entry, _) = stage(&catalog, "asset");
+    let input = root.path().join("input");
+    let entry = input.join("asset");
+    support::private_dir(entry.join("download")).unwrap();
     let output = entry.join("download/results");
-    let mut config = ServerConfig::new(&catalog, &output);
+    let mut config = ServerConfig::new(&input, &output);
     config.bind_port = 0;
     let server = spawn(config).unwrap();
     let marker = "COMMON_PRIVATE_SOURCE_MARKER";
@@ -55,9 +56,9 @@ fn nested_output_jobs_are_never_served_through_legacy_source() {
 #[test]
 fn common_control_bodies_are_strict_at_every_depth() {
     let root = tempfile::tempdir().unwrap();
-    let catalog = root.path().join("catalog");
-    std::fs::create_dir(&catalog).unwrap();
-    let mut config = ServerConfig::new(&catalog, root.path().join("output"));
+    let input = root.path().join("input");
+    std::fs::create_dir(&input).unwrap();
+    let mut config = ServerConfig::new(&input, root.path().join("output"));
     config.bind_port = 0;
     let server = spawn(config).unwrap();
     let client = Client::new(&server.url());
@@ -94,9 +95,9 @@ fn common_control_bodies_are_strict_at_every_depth() {
 #[test]
 fn url_sessions_never_return_credentials_or_unbounded_source_labels() {
     let root = tempfile::tempdir().unwrap();
-    let catalog = root.path().join("catalog");
-    std::fs::create_dir(&catalog).unwrap();
-    let mut config = ServerConfig::new(&catalog, root.path().join("output"));
+    let input = root.path().join("input");
+    std::fs::create_dir(&input).unwrap();
+    let mut config = ServerConfig::new(&input, root.path().join("output"));
     config.bind_port = 0;
     let server = spawn(config).unwrap();
     let client = Client::new(&server.url());
@@ -111,7 +112,7 @@ fn url_sessions_never_return_credentials_or_unbounded_source_labels() {
     );
     let cases = [
         ("url", sensitive),
-        ("hls-url", long.as_str()),
+        ("url", long.as_str()),
         (
             "url",
             "https://source.example.invalid/PRIVATE_PATH/manifest.mpd?auth=PRIVATE_QUERY",
@@ -135,10 +136,13 @@ fn url_sessions_never_return_credentials_or_unbounded_source_labels() {
             client.get(&format!("/api/common/sessions/{id}")).json(),
             value
         );
-        body["source"]["kind"] = if kind == "url" { "hls-url" } else { "url" }.into();
+        body["source"]["kind"] = "hls-url".into();
         let replay = client.post_json("/api/common/sessions", &body);
-        assert_eq!(replay.status, 200);
-        assert_eq!(replay.json(), value);
+        assert_eq!(replay.status, 400);
+        assert_eq!(
+            client.get(&format!("/api/common/sessions/{id}")).json(),
+            value
+        );
     }
     let listed = client.get("/api/common/sessions");
     assert_eq!(listed.status, 200);
@@ -183,19 +187,19 @@ fn local_session(client: &Client, server_id: &str, input_ref: &str, creation: ch
 #[test]
 fn atomic_request_replay_owns_one_supervised_child_and_retains_cleanup() {
     let root = tempfile::tempdir().unwrap();
-    let catalog = root.path().join("catalog");
-    std::fs::create_dir(&catalog).unwrap();
-    std::fs::write(catalog.join("clip.mp4"), b"test fixture input").unwrap();
+    let input = root.path().join("input");
+    std::fs::create_dir(&input).unwrap();
+    std::fs::write(input.join("clip.mp4"), b"test fixture input").unwrap();
     let cli = support::FakeCli::new(root.path());
     cli.hold();
     cli.lines(&["COMMON_RAW_SECRET_MARKER"]);
-    let mut config = ServerConfig::new(&catalog, root.path().join("output"));
+    let mut config = ServerConfig::new(&input, root.path().join("output"));
     config.bind_port = 0;
     config.cli_argv = vec![cli.script.clone().into_os_string()];
     let server = spawn(config).unwrap();
     let client = Client::new(&server.url());
-    let (run, input) = media_ref(&client);
-    let session = local_session(&client, &run, &input, 'a');
+    let (run, input_ref) = media_ref(&client);
+    let session = local_session(&client, &run, &input_ref, 'a');
     let sid = session["session_id"].as_str().unwrap();
     let body = serde_json::json!({"schema_version":1,"server_id":run,"session_id":sid,"request_id":"b".repeat(32),"operation":{"kind":"analyze"},"runtime":{"keys_ref":null,"max_workers":null}});
     let first = client.post_json("/api/common/jobs", &body);
@@ -244,7 +248,7 @@ fn atomic_request_replay_owns_one_supervised_child_and_retains_cleanup() {
         argv.iter()
             .any(|x| x == drmr_server::common_protocol::JOB_ARGUMENT)
     );
-    assert!(!argv.iter().any(|x| x == catalog.to_str().unwrap()));
+    assert!(!argv.iter().any(|x| x == input.to_str().unwrap()));
     assert_eq!(
         client.delete(&format!("/api/common/sessions/{sid}")).status,
         204
@@ -256,9 +260,9 @@ fn atomic_request_replay_owns_one_supervised_child_and_retains_cleanup() {
 #[test]
 fn output_parent_refs_are_explicit_and_not_directory_or_root_aliases() {
     let root = tempfile::tempdir().unwrap();
-    let catalog = root.path().join("catalog");
-    std::fs::create_dir(&catalog).unwrap();
-    let mut config = ServerConfig::new(&catalog, root.path().join("output"));
+    let input = root.path().join("input");
+    std::fs::create_dir(&input).unwrap();
+    let mut config = ServerConfig::new(&input, root.path().join("output"));
     config.bind_port = 0;
     let server = spawn(config).unwrap();
     let client = Client::new(&server.url());
@@ -293,8 +297,8 @@ fn output_parent_refs_are_explicit_and_not_directory_or_root_aliases() {
     server.stop().unwrap();
 }
 
-fn analysis_payload(catalog: &std::path::Path) -> Value {
-    serde_json::json!({"kind":"input-analysis","schema_version":1,"input_admitted":true,"input_checks":{"stream_metadata":"pass","packet_payloads_equal":true,"packet_timing_equal":true,"decoded_content_equal":true},"input":{"schema_version":1,"format":"mp4","evidence":"container-metadata","protection":"clear","tracks":[{"id":"private-label","kind":"video","codec":"avc1.640028","protection":"clear","key_ids":["0123456789abcdef0123456789abcdef"],"pattern":null}],"drm_systems":[],"findings":[{"code":"media-samples-not-verified"}],"media_verified":false},"actual_format":"mp4","track_protection":["clear"],"compatibility_notes":[],"eligible_formats":["mp4"],"source":{"schema_version":1,"root":catalog.canonicalize().unwrap(),"entrypoint":"clip.mp4","files":[{"path":"clip.mp4","bytes":18,"sha256":"a".repeat(64)}],"graph_digest":"b".repeat(64)}})
+fn analysis_payload(input: &std::path::Path) -> Value {
+    serde_json::json!({"kind":"input-analysis","schema_version":1,"input_admitted":true,"input_checks":{"stream_metadata":"pass","packet_payloads_equal":true,"packet_timing_equal":true,"decoded_content_equal":true},"input":{"schema_version":1,"format":"mp4","evidence":"container-metadata","protection":"clear","tracks":[{"id":"private-label","kind":"video","codec":"avc1.640028","protection":"clear","key_ids":["0123456789abcdef0123456789abcdef"],"pattern":null}],"drm_systems":[],"findings":[{"code":"media-samples-not-verified"}],"media_verified":false},"actual_format":"mp4","track_protection":["clear"],"compatibility_notes":[],"eligible_formats":["mp4"],"source":{"schema_version":1,"root":input.canonicalize().unwrap(),"entrypoint":"clip.mp4","files":[{"path":"clip.mp4","bytes":18,"sha256":"a".repeat(64)}],"graph_digest":"b".repeat(64)}})
 }
 fn common_child_request(cli: &support::FakeCli) -> Value {
     cli.wait_calls(1);
@@ -305,11 +309,11 @@ fn common_child_request(cli: &support::FakeCli) -> Value {
         .unwrap()[1];
     serde_json::from_slice(&std::fs::read(request_path).unwrap()).unwrap()
 }
-fn assert_analysis_report(client: &Client, ended: &Value, catalog: &std::path::Path) -> String {
+fn assert_analysis_report(client: &Client, ended: &Value, input: &std::path::Path) -> String {
     let report_ref = ended["report_ref"].as_str().unwrap();
     let report = client.get(&format!("/api/common/reports/{report_ref}"));
     assert_eq!(report.status, 200);
-    assert!(!report.text().contains(catalog.to_str().unwrap()));
+    assert!(!report.text().contains(input.to_str().unwrap()));
     assert!(!report.text().contains("0123456789abcdef0123456789abcdef"));
     assert!(!report.text().contains("private-label"));
     assert_eq!(report.json()["report"]["input"]["media_verified"], false);
@@ -328,19 +332,19 @@ fn owned_result_projection_rejects_stale_nonce_replacement_and_duplicate_fields(
         "oversize",
     ] {
         let root = tempfile::tempdir().unwrap();
-        let catalog = root.path().join("catalog");
-        std::fs::create_dir(&catalog).unwrap();
-        std::fs::write(catalog.join("clip.mp4"), b"test fixture input").unwrap();
+        let input = root.path().join("input");
+        std::fs::create_dir(&input).unwrap();
+        std::fs::write(input.join("clip.mp4"), b"test fixture input").unwrap();
         let cli = support::FakeCli::new(root.path());
         cli.hold();
-        let mut config = ServerConfig::new(&catalog, root.path().join("output"));
+        let mut config = ServerConfig::new(&input, root.path().join("output"));
         config.bind_port = 0;
         config.cli_argv = vec![cli.script.clone().into_os_string()];
         config.hooks.log = std::sync::Arc::new(|_| Ok(()));
         let server = spawn(config).unwrap();
         let client = Client::new(&server.url());
-        let (run, input) = media_ref(&client);
-        let session = local_session(&client, &run, &input, 'a');
+        let (run, input_ref) = media_ref(&client);
+        let session = local_session(&client, &run, &input_ref, 'a');
         let sid = session["session_id"].as_str().unwrap();
         let body = serde_json::json!({"schema_version":1,"server_id":run,"session_id":sid,"request_id":"b".repeat(32),"operation":{"kind":"analyze"},"runtime":{"keys_ref":null,"max_workers":null}});
         let started = client.post_json("/api/common/jobs", &body);
@@ -348,7 +352,7 @@ fn owned_result_projection_rejects_stale_nonce_replacement_and_duplicate_fields(
         let job = started.json()["job_id"].as_str().unwrap().to_owned();
         let request = common_child_request(&cli);
         let result = std::path::Path::new(request["channels"]["result_file"].as_str().unwrap());
-        let envelope = serde_json::json!({"protocol_version":1,"nonce":if control=="nonce" {"c".repeat(32)}else{request["nonce"].as_str().unwrap().to_owned()},"operation":if control=="operation" {"plan"}else{"analyze"},"payload":analysis_payload(&catalog)});
+        let envelope = serde_json::json!({"protocol_version":1,"nonce":if control=="nonce" {"c".repeat(32)}else{request["nonce"].as_str().unwrap().to_owned()},"operation":if control=="operation" {"plan"}else{"analyze"},"payload":analysis_payload(&input)});
         let bytes = if control == "duplicate" {
             format!(
                 "{{\"protocol_version\":1,\"protocol_version\":1,{}",
@@ -385,7 +389,7 @@ fn owned_result_projection_rejects_stale_nonce_replacement_and_duplicate_fields(
         assert_eq!(ended["supervision_confirmed"], true);
         if control == "valid" {
             assert_eq!(ended["state"], "succeeded", "{ended}");
-            let report_ref = assert_analysis_report(&client, &ended, &catalog);
+            let report_ref = assert_analysis_report(&client, &ended, &input);
             assert_eq!(
                 client.post_json("/api/common/jobs", &body).json()["job_id"],
                 job
@@ -420,19 +424,19 @@ fn owned_result_projection_rejects_stale_nonce_replacement_and_duplicate_fields(
 #[test]
 fn capacity_and_closed_session_fences_do_not_evict_an_active_owner() {
     let root = tempfile::tempdir().unwrap();
-    let catalog = root.path().join("catalog");
-    std::fs::create_dir(&catalog).unwrap();
-    std::fs::write(catalog.join("clip.mp4"), b"fixture").unwrap();
+    let input = root.path().join("input");
+    std::fs::create_dir(&input).unwrap();
+    std::fs::write(input.join("clip.mp4"), b"fixture").unwrap();
     let cli = support::FakeCli::new(root.path());
     cli.hold();
-    let mut config = ServerConfig::new(&catalog, root.path().join("output"));
+    let mut config = ServerConfig::new(&input, root.path().join("output"));
     config.bind_port = 0;
     config.cli_argv = vec![cli.script.clone().into_os_string()];
     config.hooks.log = std::sync::Arc::new(|_| Ok(()));
     let server = spawn(config).unwrap();
     let client = Client::new(&server.url());
-    let (run, input) = media_ref(&client);
-    let first = local_session(&client, &run, &input, 'a');
+    let (run, input_ref) = media_ref(&client);
+    let first = local_session(&client, &run, &input_ref, 'a');
     let sid = first["session_id"].as_str().unwrap();
     assert_eq!(
         client
@@ -468,9 +472,9 @@ fn capacity_and_closed_session_fences_do_not_evict_an_active_owner() {
         409
     );
     for c in ['b', 'c', 'd', 'e', 'f', '0', '1'] {
-        local_session(&client, &run, &input, c);
+        local_session(&client, &run, &input_ref, c);
     }
-    let extra=client.post_json("/api/common/sessions",&serde_json::json!({"schema_version":1,"server_id":run,"creation_request_id":"2".repeat(32),"source":{"kind":"local","input_ref":input}}));
+    let extra=client.post_json("/api/common/sessions",&serde_json::json!({"schema_version":1,"server_id":run,"creation_request_id":"2".repeat(32),"source":{"kind":"local","input_ref":input_ref}}));
     assert_eq!(extra.json()["error"]["code"], "session-limit-reached");
     client.post_json(
         &format!("/api/common/jobs/{job}/stop"),
@@ -483,7 +487,7 @@ fn capacity_and_closed_session_fences_do_not_evict_an_active_owner() {
         client.delete(&format!("/api/common/sessions/{sid}")).status,
         204
     );
-    let fresh = local_session(&client, &run, &input, 'a');
+    let fresh = local_session(&client, &run, &input_ref, 'a');
     assert_ne!(fresh["session_id"], sid);
     assert_eq!(fresh["requests_used"], 0);
     assert_eq!(client.post_json("/api/common/jobs", &body).status, 404);
@@ -495,24 +499,24 @@ fn capacity_and_closed_session_fences_do_not_evict_an_active_owner() {
 fn insecure_original_configuration_is_refused_before_copy_or_launch() {
     use std::os::unix::fs::PermissionsExt;
     let root = tempfile::tempdir().unwrap();
-    let catalog = root.path().join("catalog");
-    std::fs::create_dir(&catalog).unwrap();
-    std::fs::write(catalog.join("clip.mp4"), b"fixture").unwrap();
+    let input = root.path().join("input");
+    std::fs::create_dir(&input).unwrap();
+    std::fs::write(input.join("clip.mp4"), b"fixture").unwrap();
     let private = root.path().join("private");
     std::fs::create_dir(&private).unwrap();
     let key = private.join("DO_NOT_DISPLAY_SECRET_NAME.json");
     std::fs::write(&key, b"{}").unwrap();
     std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o644)).unwrap();
     let cli = support::FakeCli::new(root.path());
-    let mut config = ServerConfig::new(&catalog, root.path().join("output"));
+    let mut config = ServerConfig::new(&input, root.path().join("output"));
     config.common_config_root = Some(private);
     config.bind_port = 0;
     config.cli_argv = vec![cli.script.clone().into_os_string()];
     config.hooks.log = std::sync::Arc::new(|_| Ok(()));
     let server = spawn(config).unwrap();
     let client = Client::new(&server.url());
-    let (run, input) = media_ref(&client);
-    let sid = local_session(&client, &run, &input, 'a')["session_id"]
+    let (run, input_ref) = media_ref(&client);
+    let sid = local_session(&client, &run, &input_ref, 'a')["session_id"]
         .as_str()
         .unwrap()
         .to_owned();
@@ -552,12 +556,12 @@ fn insecure_original_configuration_is_refused_before_copy_or_launch() {
 fn dedicated_configuration_root_is_disjoint_in_both_ancestor_directions() {
     for direction in ["below", "above"] {
         let root = tempfile::tempdir().unwrap();
-        let catalog = root.path().join("catalog");
-        std::fs::create_dir(&catalog).unwrap();
+        let input = root.path().join("input");
+        std::fs::create_dir(&input).unwrap();
         let output = root.path().join("output");
-        let mut config = ServerConfig::new(&catalog, &output);
+        let mut config = ServerConfig::new(&input, &output);
         let private = if direction == "below" {
-            catalog.join("private")
+            input.join("private")
         } else {
             root.path().to_path_buf()
         };
@@ -574,8 +578,9 @@ fn dedicated_configuration_root_is_disjoint_in_both_ancestor_directions() {
 fn original_copies_result_progress_and_retained_plans_are_denied_by_custom_static_aliases() {
     use std::os::unix::fs::symlink;
     let root = tempfile::tempdir().unwrap();
-    let catalog = root.path().join("catalog");
-    let (entry, _) = stage(&catalog, "asset");
+    let input = root.path().join("input");
+    let entry = input.join("asset");
+    support::private_dir(entry.join("download")).unwrap();
     let output = entry.join("download/results");
     let private = root.path().join("private");
     std::fs::create_dir(&private).unwrap();
@@ -586,7 +591,7 @@ fn original_copies_result_progress_and_retained_plans_are_denied_by_custom_stati
     symlink(&private, static_dir.join("secret")).unwrap();
     symlink(&output, static_dir.join("results")).unwrap();
     std::fs::write(static_dir.join("public.txt"), b"public").unwrap();
-    let mut config = ServerConfig::new(&catalog, &output);
+    let mut config = ServerConfig::new(&input, &output);
     config.common_config_root = Some(private);
     config.static_dir = Some(static_dir);
     config.bind_port = 0;
@@ -627,19 +632,19 @@ fn original_copies_result_progress_and_retained_plans_are_denied_by_custom_stati
 fn private_copy_cleanup_failure_holds_the_shared_execution_lease_until_recovered() {
     use std::os::unix::fs::PermissionsExt;
     let root = tempfile::tempdir().unwrap();
-    let catalog = root.path().join("catalog");
-    std::fs::create_dir(&catalog).unwrap();
-    std::fs::write(catalog.join("clip.mp4"), b"fixture").unwrap();
+    let input = root.path().join("input");
+    std::fs::create_dir(&input).unwrap();
+    std::fs::write(input.join("clip.mp4"), b"fixture").unwrap();
     let cli = support::FakeCli::new(root.path());
     cli.hold();
-    let mut config = ServerConfig::new(&catalog, root.path().join("output"));
+    let mut config = ServerConfig::new(&input, root.path().join("output"));
     config.bind_port = 0;
     config.cli_argv = vec![cli.script.clone().into_os_string()];
     config.hooks.log = std::sync::Arc::new(|_| Ok(()));
     let server = spawn(config).unwrap();
     let client = Client::new(&server.url());
-    let (run, input) = media_ref(&client);
-    let sid = local_session(&client, &run, &input, 'a')["session_id"]
+    let (run, input_ref) = media_ref(&client);
+    let sid = local_session(&client, &run, &input_ref, 'a')["session_id"]
         .as_str()
         .unwrap()
         .to_owned();
@@ -669,10 +674,13 @@ fn private_copy_cleanup_failure_holds_the_shared_execution_lease_until_recovered
         409
     );
     assert!(request.exists());
+    let mut conflict = body.clone();
+    conflict["request_id"] = serde_json::json!("c".repeat(32));
     assert!(matches!(
-        server.app.manager.submit_command(&["doctor".into()], &[]),
-        Err(drmr_server::jobs::JobError::AlreadyRunning)
+        client.post_json("/api/common/jobs", &conflict).status,
+        409 | 503
     ));
+    assert_eq!(cli.calls(), 1);
     std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700)).unwrap();
     support::wait_until(|| {
         client.get(&format!("/api/common/jobs/{job}")).json()["state"] == "interrupted"
@@ -685,19 +693,19 @@ fn private_copy_cleanup_failure_holds_the_shared_execution_lease_until_recovered
 #[test]
 fn progress_is_bounded_and_bound_to_the_live_nonce_operation_and_monotone_snapshot() {
     let root = tempfile::tempdir().unwrap();
-    let catalog = root.path().join("catalog");
-    std::fs::create_dir(&catalog).unwrap();
-    std::fs::write(catalog.join("clip.mp4"), b"test fixture input").unwrap();
+    let input = root.path().join("input");
+    std::fs::create_dir(&input).unwrap();
+    std::fs::write(input.join("clip.mp4"), b"test fixture input").unwrap();
     let cli = support::FakeCli::new(root.path());
     cli.hold();
-    let mut config = ServerConfig::new(&catalog, root.path().join("output"));
+    let mut config = ServerConfig::new(&input, root.path().join("output"));
     config.bind_port = 0;
     config.cli_argv = vec![cli.script.clone().into_os_string()];
     config.hooks.log = std::sync::Arc::new(|_| Ok(()));
     let server = spawn(config).unwrap();
     let client = Client::new(&server.url());
-    let (run, input) = media_ref(&client);
-    let session = local_session(&client, &run, &input, 'a');
+    let (run, input_ref) = media_ref(&client);
+    let session = local_session(&client, &run, &input_ref, 'a');
     let started = client.post_json("/api/common/jobs", &serde_json::json!({
         "schema_version":1,"server_id":run,"session_id":session["session_id"],"request_id":"b".repeat(32),
         "operation":{"kind":"analyze"},"runtime":{"keys_ref":null,"max_workers":null}
@@ -772,15 +780,15 @@ fn pending_admission_replay_and_delete_share_the_claim_fence_before_spawn() {
     use std::sync::{Arc, Condvar, Mutex, mpsc};
     use std::time::Duration;
     let root = tempfile::tempdir().unwrap();
-    let catalog = root.path().join("catalog");
-    std::fs::create_dir(&catalog).unwrap();
-    std::fs::write(catalog.join("clip.mp4"), b"test fixture input").unwrap();
+    let input = root.path().join("input");
+    std::fs::create_dir(&input).unwrap();
+    std::fs::write(input.join("clip.mp4"), b"test fixture input").unwrap();
     let cli = support::FakeCli::new(root.path());
     cli.hold();
     let gate = Arc::new((Mutex::new(false), Condvar::new()));
     let wait = gate.clone();
     let (entered, ready) = mpsc::channel();
-    let mut config = ServerConfig::new(&catalog, root.path().join("output"));
+    let mut config = ServerConfig::new(&input, root.path().join("output"));
     config.bind_port = 0;
     config.cli_argv = vec![cli.script.clone().into_os_string()];
     config.hooks.log = Arc::new(|_| Ok(()));
@@ -794,8 +802,8 @@ fn pending_admission_replay_and_delete_share_the_claim_fence_before_spawn() {
     });
     let server = spawn(config).unwrap();
     let client = Client::new(&server.url());
-    let (run, input) = media_ref(&client);
-    let session = local_session(&client, &run, &input, 'a');
+    let (run, input_ref) = media_ref(&client);
+    let session = local_session(&client, &run, &input_ref, 'a');
     let sid = session["session_id"].as_str().unwrap().to_owned();
     let body = serde_json::json!({"schema_version":1,"server_id":run,"session_id":sid,"request_id":"b".repeat(32),
         "operation":{"kind":"analyze"},"runtime":{"keys_ref":null,"max_workers":null}});
@@ -892,16 +900,16 @@ fn race_pending_observers(server: &drmr_server::RunningServer, body: &Value, rec
 fn launch_failure_retains_prepared_copies_pending_claim_and_shared_lease_until_cleanup() {
     use std::sync::{Arc, Mutex};
     let root = tempfile::tempdir().unwrap();
-    let catalog = root.path().join("catalog");
-    std::fs::create_dir(&catalog).unwrap();
-    std::fs::write(catalog.join("clip.mp4"), b"test fixture input").unwrap();
+    let input = root.path().join("input");
+    std::fs::create_dir(&input).unwrap();
+    std::fs::write(input.join("clip.mp4"), b"test fixture input").unwrap();
     let output = root.path().join("output");
     let common = output.join("_jobs/common");
     let held = Arc::new(Mutex::new(None));
     let capture = held.clone();
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let called = calls.clone();
-    let mut config = ServerConfig::new(&catalog, &output);
+    let mut config = ServerConfig::new(&input, &output);
     config.bind_port = 0;
     config.cli_argv = vec![root.path().join("absent-cli").into_os_string()];
     config.hooks.log = Arc::new(|_| Ok(()));
@@ -927,8 +935,8 @@ fn launch_failure_retains_prepared_copies_pending_claim_and_shared_lease_until_c
     let mut server = spawn(config).unwrap();
     let _restore = RestorePrivateMode(held.clone());
     let client = Client::new(&server.url());
-    let (run, input) = media_ref(&client);
-    let session = local_session(&client, &run, &input, 'a');
+    let (run, input_ref) = media_ref(&client);
+    let session = local_session(&client, &run, &input_ref, 'a');
     let sid = session["session_id"].as_str().unwrap();
     let body = serde_json::json!({"schema_version":1,"server_id":run,"session_id":sid,"request_id":"b".repeat(32),
         "operation":{"kind":"analyze"},"runtime":{"keys_ref":null,"max_workers":null}});
@@ -943,10 +951,11 @@ fn launch_failure_retains_prepared_copies_pending_claim_and_shared_lease_until_c
         client.delete(&format!("/api/common/sessions/{sid}")).status,
         409
     );
-    assert!(matches!(
-        server.app.manager.submit_command(&["noop".into()], &[]),
-        Err(drmr_server::jobs::JobError::AlreadyRunning)
-    ));
+    let mut conflict = body.clone();
+    conflict["request_id"] = serde_json::json!("c".repeat(32));
+    let rejected_conflict = client.post_json("/api/common/jobs", &conflict);
+    assert_eq!(rejected_conflict.status, 409);
+    assert_eq!(rejected_conflict.json()["error"]["code"], "session-busy");
     assert_eq!(
         client.get("/api/common/capabilities").json()["execution"]["availability"],
         "cleanup-unconfirmed"
@@ -954,7 +963,7 @@ fn launch_failure_retains_prepared_copies_pending_claim_and_shared_lease_until_c
     let attempt = held.lock().unwrap().clone().unwrap();
     assert!(attempt.join("request.json").is_file());
     assert_eq!(
-        std::fs::read(catalog.join("clip.mp4")).unwrap(),
+        std::fs::read(input.join("clip.mp4")).unwrap(),
         b"test fixture input"
     );
     race_pending_observers(&server, &body, &receipt_path);
@@ -970,9 +979,12 @@ fn launch_failure_retains_prepared_copies_pending_claim_and_shared_lease_until_c
     assert_eq!(receipt["error"]["code"], "common-service-unavailable");
     assert!(!attempt.join("request.json").exists());
     assert!(!server.app.manager.execution().busy);
+    let session = client.get(&format!("/api/common/sessions/{sid}")).json();
+    // The retained original claim and the distinct rejected claim each use one slot.
+    assert_eq!(session["requests_used"], 2);
     assert_eq!(
-        client.get(&format!("/api/common/sessions/{sid}")).json()["requests_used"],
-        1
+        session["request_ids"],
+        serde_json::json!(["b".repeat(32), "c".repeat(32)])
     );
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     server.shutdown().unwrap();
@@ -982,10 +994,10 @@ fn launch_failure_retains_prepared_copies_pending_claim_and_shared_lease_until_c
 fn directory_references_remain_bound_to_the_issuing_root_even_for_nested_public_roots() {
     let root = tempfile::tempdir().unwrap();
     let output = root.path().join("output");
-    let catalog = output.join("input");
-    support::private_dir(catalog.join("folder")).unwrap();
-    std::fs::write(catalog.join("folder/clip.mp4"), b"fixture").unwrap();
-    let mut config = ServerConfig::new(&catalog, &output);
+    let input = output.join("input");
+    support::private_dir(input.join("folder")).unwrap();
+    std::fs::write(input.join("folder/clip.mp4"), b"fixture").unwrap();
+    let mut config = ServerConfig::new(&input, &output);
     config.bind_port = 0;
     config.hooks.log = std::sync::Arc::new(|_| Ok(()));
     let server = spawn(config).unwrap();

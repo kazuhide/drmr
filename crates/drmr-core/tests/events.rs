@@ -1,12 +1,6 @@
-//! Record shapes, timestamps and the JSON-Lines writer.
-
-use drmr_core::checks::CheckId;
-use drmr_core::events::{
-    Collector, JsonLinesWriter, Record, Sink, format_utc, now_iso, pipeline_record, round3,
-};
-use drmr_core::toolrun::Secrets;
-use serde_json::{Value, json};
-use std::sync::Arc;
+//! Activity collection, timestamps, and duration formatting.
+use drmr_core::events::{Collector, Record, Sink, format_utc, now_iso, round3};
+use serde_json::json;
 
 #[test]
 fn timestamps_format_like_python_isoformat() {
@@ -25,72 +19,6 @@ fn timestamps_format_like_python_isoformat() {
     let shape =
         regex::Regex::new(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{6})?\+00:00$").unwrap();
     assert!(shape.is_match(&now), "{now}");
-}
-
-#[test]
-fn pipeline_records_keep_the_python_key_order() {
-    let record = pipeline_record(
-        "manifest",
-        "info",
-        "6-4.framemd5 PASS",
-        Some("video_1"),
-        Some(CheckId::Framemd5),
-        Some(1.234_56),
-    );
-    let keys: Vec<&str> = record.keys().map(String::as_str).collect();
-    assert_eq!(
-        keys,
-        [
-            "ts",
-            "stage",
-            "level",
-            "message",
-            "rendition_id",
-            "check_id",
-            "duration_s"
-        ]
-    );
-    assert_eq!(record["duration_s"], json!(1.235));
-    assert_eq!(record["check_id"], json!("6-4.framemd5"));
-    let minimal = pipeline_record("report", "info", "written", None, None, None);
-    assert_eq!(
-        minimal.keys().map(String::as_str).collect::<Vec<_>>(),
-        ["ts", "stage", "level", "message"]
-    );
-}
-
-#[test]
-fn the_writer_emits_one_scrubbed_ascii_line_per_record() {
-    let secrets = Arc::new(Secrets::with(["0f0e0d0c0b0a09080706050403020100"]));
-    let writer = JsonLinesWriter::new(Vec::new(), secrets);
-    writer.emit(&pipeline_record(
-        "report",
-        "info",
-        "iv 0F0E0D0C0B0A09080706050403020100 日本語",
-        None,
-        None,
-        None,
-    ));
-    writer.emit(&pipeline_record(
-        "report", "info", "second", None, None, None,
-    ));
-    let text = String::from_utf8(writer.into_inner()).unwrap();
-    let lines: Vec<&str> = text.split_terminator('\n').collect();
-    assert_eq!(lines.len(), 2);
-    assert!(
-        lines[0].contains(r#""message": "iv ***REDACTED*** \u65e5\u672c\u8a9e""#),
-        "{}",
-        lines[0]
-    );
-    assert!(!text.to_lowercase().contains("0f0e0d0c"));
-    assert!(text.is_ascii());
-    let parsed: Value = serde_json::from_str(lines[0]).unwrap();
-    assert_eq!(parsed["stage"], json!("report"));
-
-    let collector = Collector::default();
-    collector.emit(&pipeline_record("raw", "info", "a", None, None, None));
-    collector.emit(&pipeline_record("raw", "info", "b", None, None, None));
-    assert_eq!(collector.records().len(), 2);
 }
 
 #[test]
@@ -127,29 +55,16 @@ fn round3_matches_pythons_round() {
     }
 }
 
-/// A log stream whose reader went away.
-struct ClosedPipe;
-
-impl std::io::Write for ClosedPipe {
-    fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
-        Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe))
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
 #[test]
-fn a_closed_log_stream_is_remembered_not_ignored() {
-    let secrets = Arc::new(Secrets::with(["0f0e0d0c0b0a09080706050403020100"]));
-    let writer = JsonLinesWriter::new(ClosedPipe, secrets);
-    assert!(!writer.failed());
-    writer.emit(&Record::new());
-    assert!(
-        writer.failed(),
-        "the first failed write is kept for the exit code"
-    );
-    writer.emit(&Record::new());
-    assert!(writer.failed());
+fn activity_collection_retains_independent_record_snapshots() {
+    let collector = Collector::default();
+    let mut first = Record::new();
+    first.insert("stage".into(), json!("tool-start"));
+    collector.emit(&first);
+    first.insert("stage".into(), json!("changed"));
+    collector.emit(&first);
+    let records = collector.records();
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0]["stage"], "tool-start");
+    assert_eq!(records[1]["stage"], "changed");
 }

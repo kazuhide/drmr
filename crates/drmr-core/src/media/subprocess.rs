@@ -678,7 +678,7 @@ fn stream_digest_with_cleanup(
     audio: bool,
     mut cleanup: impl FnMut(&mut crate::native::ManagedChild) -> std::io::Result<()>,
 ) -> std::io::Result<(Option<i32>, String)> {
-    use crate::native::{ManagedChild, in_asset_worker};
+    use crate::native::ManagedChild;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc::{self, TryRecvError};
     use std::time::Duration;
@@ -691,7 +691,7 @@ fn stream_digest_with_cleanup(
         .stderr(Stdio::null());
     let mut child = ManagedChild::spawn_with_io(
         command,
-        !in_asset_worker(),
+        true,
         crate::native::ManagedIo {
             stdin: crate::native::ManagedStdio::Null,
             stdout: crate::native::ManagedStdio::Piped,

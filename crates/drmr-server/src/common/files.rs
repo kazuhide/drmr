@@ -164,7 +164,7 @@ impl Files {
             .map(std::fs::canonicalize)
             .transpose()?;
         if let Some(private) = &secret {
-            for public in [&config.catalog_root, &config.output_root]
+            for public in [&config.input_root, &config.output_root]
                 .into_iter()
                 .chain(config.static_dir.iter())
             {
@@ -190,7 +190,7 @@ impl Files {
             config: secret,
         };
         this.add_root(
-            &config.catalog_root,
+            &config.input_root,
             "Input folder",
             vec![Role::Media, Role::SavedPlan],
         );

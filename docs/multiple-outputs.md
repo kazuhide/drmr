@@ -9,8 +9,7 @@ transport-stream presentation can produce:
 - transport-stream HLS encrypted with `SAMPLE-AES`, with FairPlay information.
 
 Choose the outputs you need. The common `plan`, `convert`, and `verify` commands
-name every output explicitly. `analyze-hls` and `package-hls` remain available for
-older snapshot workflows; new workflows should use these common commands.
+name every output explicitly.
 
 ## Describe the outputs
 

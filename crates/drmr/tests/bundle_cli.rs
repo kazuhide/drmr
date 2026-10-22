@@ -61,8 +61,6 @@ fn help_exposes_output_sets_and_explicit_manifest_validator_executables() {
             assert!(help.contains("--manifest-only"), "{help}");
         }
     }
-    let result = invoke(&["package-hls", "--help"]);
-    assert!(String::from_utf8(result.stdout).unwrap().contains("Legacy"));
 }
 
 #[test]

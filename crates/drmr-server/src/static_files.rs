@@ -44,7 +44,7 @@ pub fn lookup(root: &StaticRoot, filename: &str) -> Option<FileFacts> {
     }
 }
 
-/// `index.html` / `report.html` (sent by their own routes).
+/// The console index document, served by its own route.
 pub fn page(root: &StaticRoot, name: &str) -> std::io::Result<FileFacts> {
     match root {
         StaticRoot::Embedded => EMBEDDED

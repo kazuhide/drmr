@@ -284,11 +284,10 @@ fn execute_owned_with_reader(
     if let Some(path) = path {
         command.env("PATH", path);
     }
-    // Asset workers inherit one supervisor-owned Unix group. Creating a subgroup here
-    // would let media tools survive a hard worker kill; Windows retains nested jobs.
+    // Each tool retains an owned process group on Unix or a nested job on Windows.
     let mut child = ManagedChild::spawn_with_io(
         command,
-        !crate::native::in_asset_worker(),
+        true,
         crate::native::ManagedIo {
             stdin: crate::native::ManagedStdio::Null,
             stdout: crate::native::ManagedStdio::Piped,

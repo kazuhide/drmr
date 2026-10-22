@@ -276,12 +276,6 @@ test.beforeEach(async ({ page, context }) => {
   await context.route('**/*', route => allowedConsoleRequest(route.request().url()) ? route.continue() : route.abort('blockedbyclient'));
   await page.goto('/'); await expect(page.locator('#common-title')).toBeVisible();
   await expect(page.locator('#common-open')).toBeDisabled();
-  // Verify the separate report page's asset bytes without executing its page-specific code here.
-  await page.evaluate(async () => {
-    const response = await fetch('/static/js/report.js');
-    if (response.status !== 200) throw new Error('Separate report-page asset is unavailable');
-    await response.arrayBuffer();
-  });
 });
 test.afterEach(async ({ page }, info) => {
   const record = pages.get(page);

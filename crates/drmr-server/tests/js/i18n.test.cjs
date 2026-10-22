@@ -1,72 +1,33 @@
 'use strict';
-
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
-
 function translations(language) {
-  const sandbox = {
-    window: {},
-    localStorage: { getItem: () => language },
-  };
+  const stored = [], events = [], select = {};
+  const sandbox = { window: {}, Event: class { constructor(type) { this.type = type; } },
+    localStorage: { getItem: () => language, setItem: (key, value) => stored.push([key, value]) },
+    document: { documentElement: {}, querySelectorAll: () => [], getElementById: () => select, dispatchEvent: event => events.push(event.type) } };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../../static/js/i18n.js'), 'utf8'), sandbox);
-  return sandbox.window.App.I18n;
+  return { i18n: sandbox.window.App.I18n, stored, events, document: sandbox.document, select };
 }
-
-for (const language of ['en', 'ja']) {
-  test(language + ': known source access errors give fixed recovery guidance', () => {
-    const i18n = translations(language);
-    for (const status of [422, 400]) {
-      for (const code of ['source-profile-invalid', 'source-not-allowed']) {
-        const message = i18n.error({ status, body: {
-          error: code,
-          message: 'untrusted-response-secret',
-          url: 'https://source.invalid/?secret=untrusted-response-secret',
-        } });
-        assert.match(message, /HTTPS/);
-        assert.equal(message, i18n.t('sourceAccessError'));
-        assert.ok(!message.includes('untrusted-response-secret'));
-      }
-    }
-  });
-
-  test(language + ': untrusted classifications and existing status classes keep safe fallbacks', () => {
-    const i18n = translations(language);
-    for (const code of ['private-sentinel', '__proto__', 'constructor', 'toString', null, {
-      toString() { throw new Error('untrusted conversion must not execute'); },
-    }]) {
-      for (const status of [400, 415, 422]) {
-        assert.equal(i18n.error({ status, body: { error: code, message: 'private-sentinel' } }), i18n.t('invalidError'));
-      }
-    }
-    for (const [status, key] of [[403, 'forbiddenError'], [404, 'notFoundError'], [409, 'conflictError'], [410, 'expiredError'], [500, 'requestError']]) {
-      assert.equal(i18n.error({ status, body: { error: 'source-profile-invalid' } }), i18n.t(key));
-    }
-    assert.equal(i18n.error(null), i18n.t('networkError'));
-    assert.equal(i18n.error({ status: 409, body: { error: 'job-busy' } }), i18n.t('busyError'));
-  });
-}
-
-
-test('readiness and diagnostic states have fixed English and Japanese copy', () => {
+test('both languages cover the standalone shell and current status labels', () => {
   for (const language of ['en', 'ja']) {
-    const i18n = translations(language);
-    for (const key of ['cstate_unverified', 'outputUnverified', 'reportDiagnostic', 'convertUnverified', 'transformCatalogUnverified']) {
-      assert.notEqual(i18n.t(key), key);
-      assert.ok(i18n.t(key).length > 0);
-    }
+    const h = translations(language); h.i18n.apply();
+    assert.equal(h.document.documentElement.lang, language);
+    assert.equal(h.select.value, language);
+    for (const key of ['brandName', 'language', 'skipToContent', 'leaseIdle', 'stopOutcomeUnknown', 'close']) assert.notEqual(h.i18n.t(key), key);
+    assert.equal(h.i18n.t('close'), language === 'ja' ? '閉じる' : 'Close');
+    assert.equal(h.i18n.has('commonLegacy'), false);
   }
 });
-
-test('response timeouts and unknown mutations have fixed localized recovery guidance', () => {
-  for (const language of ['en', 'ja']) {
-    const i18n = translations(language);
-    assert.equal(i18n.error({ code: 'request-timeout', message: 'private-sentinel' }), i18n.t('requestTimeout'));
-    assert.equal(i18n.error({ uncertain: true, body: { error: 'private-sentinel' } }), i18n.t('mutationOutcomeUnknown'));
-    for (const key of ['launchOutcomeUnknown', 'jobOutcomeUnknown', 'stopOutcomeUnknown', 'checkJobStatus']) {
-      assert.notEqual(i18n.t(key), key); assert.doesNotMatch(i18n.t(key), /private-sentinel/);
-    }
-  }
+test('language changes persist only the preference and notify the current common view', () => {
+  const h = translations('en'); h.i18n.setLanguage('ja');
+  assert.deepEqual(h.stored, [['drmr-language', 'ja']]);
+  assert.deepEqual(h.events, ['workbench-language']);
+  assert.equal(h.document.documentElement.lang, 'ja');
+  h.i18n.setLanguage('unsupported');
+  assert.equal(h.i18n.getLanguage(), 'en');
+  assert.deepEqual(h.stored.at(-1), ['drmr-language', 'en']);
 });

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare clear adapters and run the attributed BBB clip through the real drmr CLI."""
+"""Exercise saved plans and two DRM outputs with the attributed BBB fixture."""
 
 import argparse
 import csv
@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import platform
 import subprocess
+import struct
 import tempfile
 import threading
 import time
@@ -18,7 +19,8 @@ import zipfile
 FIXTURE = Path(__file__).resolve().parent
 KID = "000102030405060708090a0b0c0d0e0f"
 KEY = "10101010101010101010101010101010"
-IV = "20202020202020202020202020202020"
+HLS_KID = "303132333435363738393a3b3c3d3e3f"
+HLS_KEY = "404142434445464748494a4b4c4d4e4f"
 
 
 def failure_detail(stderr, stdout):
@@ -137,27 +139,19 @@ def verify_fixture():
     return metadata
 
 
-def prepare_adapters(destination):
+def prepare_source(destination):
+    """Copy all original H.264/AAC packets into five clear transport segments."""
     destination.mkdir(parents=True)
-    for kind in ("video", "audio"):
-        (destination / kind).mkdir()
-    streams = [
-        f"in={FIXTURE / 'clip.mp4'},stream=video,init_segment={destination / 'video/init.mp4'},"
-        f"segment_template={destination / 'video/seg_$Number$.m4s'},playlist_name=video/media.m3u8",
-        f"in={FIXTURE / 'clip.mp4'},stream=audio,init_segment={destination / 'audio/init.mp4'},"
-        f"segment_template={destination / 'audio/seg_$Number$.m4s'},playlist_name=audio/media.m3u8,"
-        "hls_group_id=audio,hls_name=English,language=en",
-    ]
-    run(["packager", *streams, "--segment_duration", "2", "--fragment_duration", "2",
-         "--hls_master_playlist_output", destination / "master.m3u8",
-         "--mpd_output", destination / "source.mpd", "--generate_static_live_mpd"])
-    video = (destination / "video/media.m3u8").read_text()
-    durations = [float(line.split(":", 1)[1].rstrip(",")) for line in video.splitlines() if line.startswith("#EXTINF:")]
+    playlist = destination / "media.m3u8"
+    run(["ffmpeg", "-v", "error", "-nostdin", "-i", FIXTURE / "clip.mp4",
+         "-map", "0:v:0", "-map", "0:a:0", "-c", "copy", "-f", "hls",
+         "-hls_time", "2", "-hls_playlist_type", "vod", "-hls_segment_filename",
+         destination / "segment-%03d.ts", playlist])
+    durations = [float(line.split(":", 1)[1].rstrip(",")) for line in
+                 playlist.read_text().splitlines() if line.startswith("#EXTINF:")]
     assert durations == [2] * 5, durations
-    for kind in ("video", "audio"):
-        assert "#EXT-X-KEY:" not in (destination / kind / "media.m3u8").read_text()
-    assert "ContentProtection" not in (destination / "source.mpd").read_text()
-    return destination / "master.m3u8"
+    assert "#EXT-X-KEY:" not in playlist.read_text()
+    return playlist
 
 
 def private_json(path, value):
@@ -171,114 +165,106 @@ def private_json(path, value):
     return path
 
 
-def verify_complete_presentations(analysis, snapshot, asset, destination):
-    """Decode each continuous presentation, applying initial audio trimming only once."""
-    proofs = []
-    for track in analysis["tracks"]:
-        source = destination / f"source-{track['id']}-complete.mp4"
-        source.write_bytes((snapshot / track["init_path"]).read_bytes() +
-                           b"".join((snapshot / segment["path"]).read_bytes() for segment in track["segments"]))
-        folder = asset / "cbcs" / track["id"]
-        encrypted = destination / f"encrypted-{track['id']}-complete.mp4"
-        encrypted.write_bytes((folder / "init.mp4").read_bytes() +
-                              b"".join((folder / f"seg_{index}.m4s").read_bytes() for index in range(track["segment_count"])))
+def require_media_verification(report):
+    """Require full coded packets, timestamps, decoded media and native manifests."""
+    assert report["passed"] is True and report["media_verified"] is True
+    assert report["license_playback_verified"] is False
+    assert report["checks"]["stream_metadata"] == "pass"
+    for field in ("packet_payloads_equal", "packet_timing_equal", "decoded_content_equal"):
+        assert report["checks"][field] is True, field
+    native = report["native_manifest"]
+    assert native["errors"] == 0 and native["incomplete"] is False and native["truncated"] is False
+    assert native["document_count"] >= 1
 
-        def decoded(path, decrypt):
-            argv = ["ffmpeg", "-v", "error", "-threads", "1"]
-            if decrypt:
-                argv += ["-decryption_key", KEY]
-            argv += ["-i", str(path), "-map", "0:0"]
-            if track["content_type"] == "audio":
-                argv += ["-f", "s32le", "-acodec", "pcm_s32le", "-"]
-            else:
-                argv += ["-fps_mode", "passthrough", "-f", "framemd5", "-"]
-            output = subprocess.run(argv, capture_output=True, check=True).stdout
-            if track["content_type"] == "video":
-                return [line.split(b",")[-2:] for line in output.splitlines() if line and not line.startswith(b"#")]
-            return output
 
-        source_decoded, output_decoded = decoded(source, False), decoded(encrypted, True)
-        assert source_decoded == output_decoded, f"complete {track['content_type']} presentation changed"
-        def digest(value):
-            if isinstance(value, list):
-                value = b"\n".join(b",".join(row) for row in value)
-            return hashlib.sha256(value).hexdigest()
-        proofs.append({"track_id": track["id"], "content_type": track["content_type"],
-                       "source_decoded_sha256": digest(source_decoded),
-                       "output_decoded_sha256": digest(output_decoded),
-                       "source_mp4_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
-                       "encrypted_mp4_sha256": hashlib.sha256(encrypted.read_bytes()).hexdigest(),
-                       "decoded_frames" if track["content_type"] == "video" else "decoded_samples_per_channel":
-                           len(source_decoded) if track["content_type"] == "video" else len(source_decoded) // 8})
-        timing = []
-        for path, decrypt in ((source, False), (encrypted, True)):
-            argv = ["ffprobe", "-v", "error"]
-            if decrypt:
-                argv += ["-decryption_key", KEY]
-            argv += ["-show_packets", "-show_entries", "packet=pts_time,dts_time,duration_time", "-of", "json", path]
-            timing.append(json.loads(run(argv))["packets"])
-        assert len(timing[0]) == len(timing[1])
-        for before, after in zip(*timing):
-            for field in ("pts_time", "dts_time", "duration_time"):
-                shift = 0 if field == "duration_time" else 2
-                assert abs(float(after[field]) - float(before[field]) - shift) < 1 / 45000, field
-    return proofs
+def source_fingerprints(root):
+    return {path.relative_to(root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in sorted(root.rglob("*")) if path.is_file()}
 
 
 def regression(binary, destination):
     metadata = verify_fixture()
     destination = destination.resolve()
     destination.mkdir(parents=True, exist_ok=True)
-    master = prepare_adapters(destination / "source")
-    config = private_json(destination / "source.json", {
-        "url": str(master), "policy": {"allowed_local_roots": [str(master.parent)]},
-    })
-    clean_env = {name: value for name, value in os.environ.items() if not name.startswith("DRM_")}
-    analysis_seconds, analysis_memory = measured_run(
-        [binary, "analyze-hls", "--source-config", config, "--asset-id", "bbb", "--output", destination / "output"], clean_env)
-    asset = destination / "output/bbb"
-    analysis_path = asset / "clear/source/analysis.json"
-    analysis = json.loads(analysis_path.read_text())
-    assert len(analysis["tracks"]) == 2
-    video = next(track for track in analysis["tracks"] if track["content_type"] == "video")
-    assert video["segment_count"] == 5
-    drm = private_json(destination / "drm.json", {
-        "widevine_pssh": "1210" + KID,
-        "playready_la_url": "https://license.example.invalid/rightsmanager.asmx",
-        "fairplay_uri": "skd://bbb-regression",
-    })
-    summary = asset / "reports/package-hls-summary.json"
-    try:
-        packaging_seconds, packaging_memory = measured_run(
-            [binary, "package-hls", "--analysis", analysis_path, "--drm-config", drm, "--max-workers", "2"],
-            {**clean_env, "DRM_KID": KID, "DRM_KEY": KEY, "DRM_IV": IV})
-    except RuntimeError as error:
-        if summary.exists():
-            failed = json.loads(summary.read_text())
-            raise RuntimeError(f"packaging findings: {failed['findings']}") from error
-        raise
-    report = json.loads(summary.read_text())
-    assert report["success"] and not report["production_verified"], report
-    assert len(report["tracks"]) == 2
-    for track in report["tracks"]:
-        assert track["disposition"] == "packaged"
-        assert {"source-correspondence-pass", "timing-pass", "decoded-identity-pass", "cbcs-signaling-pass"} <= set(track["checks"])
-        assert len(track["segments"]) > 0
-    presentation_proofs = verify_complete_presentations(analysis, analysis_path.parent, asset, destination)
+    source = prepare_source(destination / "source")
+    source_before = source_fingerprints(source.parent)
+    clean_env = {name: value for name, value in os.environ.items()
+                 if not (name.upper() if os.name == "nt" else name).startswith("DRM_")}
+    timings, memory, results = {}, {}, {}
+
+    def execute(stage, arguments):
+        def capture(stdout):
+            assert KEY not in stdout and HLS_KEY not in stdout, "content key leaked"
+            results[stage] = json.loads(stdout)
+        timings[stage], memory[stage] = measured_run([binary, *arguments], clean_env, capture)
+        return results[stage]
+
+    inspected = json.loads(run([binary, "inspect", source, "--json"], clean_env))
+    assert inspected["format"] == "hls" and inspected["media_verified"] is False
+    streams = json.loads(run(["ffprobe", "-v", "error", "-show_streams", "-of", "json",
+                              source.parent / "segment-000.ts"]))["streams"]
+    assert len(streams) == 2 and {stream["codec_type"] for stream in streams} == {"video", "audio"}
+    analysis = execute("analysis", ["analyze", source, "--max-workers", "2", "--json"])
+    assert analysis["input_admitted"] is True and analysis["actual_format"] == "hls-ts"
+    assert all(value == "clear" for value in analysis["track_protection"])
+    for field in ("packet_payloads_equal", "packet_timing_equal", "decoded_content_equal"):
+        assert analysis["input_checks"][field] is True
+    assert analysis["input_checks"]["stream_metadata"] == "pass"
+
+    outputs = private_json(destination / "outputs.json", {"schema_version": 1, "outputs": [
+        {"id": "dash", "format": "dash", "target": "cbcs", "drms": ["widevine", "playready"]},
+        {"id": "hls", "format": "hls", "target": "cbcs", "drms": ["fairplay"]},
+    ]})
+    plan_path = destination / "conversion.plan.json"
+    output = destination / "result"
+    planned = execute("planning", ["plan", source, "--outputs", outputs, "--output", output,
+                                    "--save", plan_path, "--max-workers", "2", "--json"])
+    plan_bytes = plan_path.read_bytes()
+    assert planned == json.loads(plan_bytes) and planned["schema_version"] == 2
+    assert planned["kind"] == "execution-plan" and len(planned["outputs"]) == 2
+    assert not output.exists()
+    # A complete version-one PSSH declares the output KID without opaque test data.
+    payload = bytes.fromhex("01000000edef8ba979d64acea3c827dcd51d21ed")
+    payload += struct.pack(">I", 1) + bytes.fromhex(KID) + struct.pack(">I", 0)
+    pssh = (struct.pack(">I4s", len(payload) + 8, b"pssh") + payload).hex()
+    keys = private_json(destination / "keys.json", {"schema_version": 2, "outputs": {
+        "dash": {"kid": KID, "key": KEY, "signaling": {"system": "multi-drm",
+                 "widevine_pssh": pssh, "playready_license_url": "https://license.example.invalid/playready"}},
+        "hls": {"kid": HLS_KID, "key": HLS_KEY, "hls_key_uri": "skd://bbb-regression",
+                "signaling": {"system": "multi-drm", "fairplay": True}},
+    }})
+    converted = execute("packaging", ["convert", "--plan", plan_path, "--keys-file", keys,
+                                       "--max-workers", "2", "--json"])
+    assert converted["kind"] == "bundle-conversion" and converted["plan_id"] == planned["plan_id"]
+    assert {row["id"] for row in converted["outputs"]} == {"dash", "hls"}
+    for row in converted["outputs"]:
+        require_media_verification(row["conversion"]["verification"])
+        assert row["signaling"]["verified"] is True
+        assert row["signaling"]["systems"] == (["widevine", "playready"] if row["id"] == "dash" else ["fairplay"])
+    verified = execute("verification", ["verify", "--plan", plan_path, "--keys-file", keys,
+                                         "--max-workers", "2", "--json"])
+    assert verified["kind"] == "bundle-verification" and verified["plan_id"] == planned["plan_id"]
+    assert verified["passed"] is True and verified["source_unchanged"] is True
+    assert {row["id"] for row in verified["outputs"]} == {"dash", "hls"}
+    for row in verified["outputs"]:
+        assert row["output_matches_plan"] is True and row["signaling"]["verified"] is True
+        require_media_verification(row["verification"])
+    assert source_fingerprints(source.parent) == source_before and plan_path.read_bytes() == plan_bytes
+    assert (output / "dash/manifest.mpd").is_file() and (output / "hls/master.m3u8").is_file()
     return {
-        "schema_version": "1", "fixture_sha256": metadata["clip"]["sha256"], "success": True,
-        "video_segments": video["segment_count"], "packaged_tracks": len(report["tracks"]),
+        "schema_version": 1, "workflow": "saved-plan-multi-output", "success": True,
+        "fixture_sha256": metadata["clip"]["sha256"], "video_segments": 5, "packaged_tracks": 2,
         "complete_presentation_identity": "pass", "complete_packet_timing": "pass",
-        "presentation_proofs": presentation_proofs,
-        "timing_seconds": {"analysis": analysis_seconds, "packaging": packaging_seconds},
-        "memory": {"analysis": analysis_memory, "packaging": packaging_memory},
+        "source_and_plan_unchanged": True, "plan_id": planned["plan_id"],
+        "outputs": verified["outputs"], "timing_seconds": timings, "memory": memory,
         "platform": {"system": platform.system(), "machine": platform.machine()},
         "tools": {name: run([tool, flag]).splitlines()[0]
                   for name, tool, flag in (("ffmpeg", "ffmpeg", "-version"),
                                            ("packager", "packager", "--version"),
                                            ("drmr", binary, "--version"))},
-        "evidence": {"packaging": "measured-local", "real_license": "not-verified",
-                     "conformance": "not-verified", "windows": "measured-native" if os.name == "nt" else "not-tested"},
+        "evidence": {"packaging": "measured-native", "real_license": "not-verified",
+                     "external_conformance": "not-requested", "native_manifest": "pass",
+                     "windows": "measured-native" if os.name == "nt" else "not-tested"},
     }
 
 

@@ -366,7 +366,7 @@ pub fn save(args: &PlanArgs) -> ExitCode {
         session.progress.mark("input-preparation");
         let plan = converter.create_bundle_plan(BundlePlanRequest {
             input: VerificationSource {
-                input: args.input.as_deref().expect("clap requires the input"),
+                input: args.input.as_path(),
                 input_keys: &session.keys.input,
                 hls_keys: &session.keys.hls_input,
             },

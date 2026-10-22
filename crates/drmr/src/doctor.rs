@@ -85,9 +85,6 @@ pub fn run(as_json: bool, probe: bool, route: &str) -> ExitCode {
             println!(
                 "\nProbes check version banners and advertised options. They do not process media."
             );
-            println!(
-                "Bento4 does not expose its build number; confirm build 641 or newer with its distributor."
-            );
         } else {
             println!(
                 "\nDiscovery does not run tools or verify versions. Use 'drmr doctor --probe' to check versions and advertised options."
@@ -98,7 +95,7 @@ pub fn run(as_json: bool, probe: bool, route: &str) -> ExitCode {
         }
         if !report.ready {
             println!(
-                "Install compatible FFmpeg, Bento4 or Shaka Packager tools required for this route, and add their directories to the launcher's PATH."
+                "Install compatible FFmpeg or Shaka Packager tools required for this route, and add their directories to the launcher's PATH."
             );
             println!(
                 "Run 'drmr doctor --probe' again; media compatibility still requires conversion checks."

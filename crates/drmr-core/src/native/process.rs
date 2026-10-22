@@ -613,19 +613,6 @@ mod windows {
     }
 }
 
-// Asset workers are already supervised as one process group on Unix. Starting
-// separate groups inside them would escape their supervisor's crash cleanup.
-static IN_ASSET_WORKER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-/// Whether this process is an asset worker supervised as one process tree.
-pub fn in_asset_worker() -> bool {
-    IN_ASSET_WORKER.load(std::sync::atomic::Ordering::SeqCst)
-}
-
-pub(crate) fn mark_asset_worker() {
-    IN_ASSET_WORKER.store(true, std::sync::atomic::Ordering::SeqCst);
-}
-
 #[cfg(all(test, unix))]
 mod cleanup_tests {
     use super::*;
