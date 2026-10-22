@@ -27,6 +27,20 @@ archives remain unchanged.
 - Retain exact 48 kHz checks and add 44.1 kHz configuration, clock, protection,
   complete-content and independent verification regressions.
 
+### Requirements and verification
+
+CLI archives target Linux x86-64, Apple Silicon macOS and Windows x86-64.
+FFmpeg, ffprobe and Shaka Packager are installed separately; see
+[installation and compatibility](https://github.com/kazuhide/drmr/blob/v1.0.1/docs/releases.md)
+and [runtime requirements](https://github.com/kazuhide/drmr/blob/v1.0.1/docs/requirements.md).
+Rust is required only for source builds.
+
+Archive qualification checks the extracted CLI with ten-second video and
+44.1 kHz AAC transport-stream fixtures, including saved-plan conversion and
+independent verification. Reports accompany each archive. These checks do not
+qualify arbitrary media, DRM license services or device playback. The Web console
+and Desktop host remain experimental.
+
 ## [1.0.0] - 2026-10-22
 
 Initial CLI release, subsequently reclassified as a pre-release candidate.
