@@ -895,7 +895,7 @@ fn private_dns_and_unapproved_http_are_refused_before_a_request() {
             "source-not-allowed"
         );
     }
-    assert!(server.paths().is_empty());
+    assert_eq!(server.paths(), Vec::<String>::new());
 }
 
 #[test]

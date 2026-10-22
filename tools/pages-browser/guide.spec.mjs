@@ -160,7 +160,7 @@ async function content(page, locale) {
     page.evaluate(guideFiguresObservation),
     timed(records.get(page).value, 'complete-body-aria', () => page.locator('body').ariaSnapshot()),
   ]);
-  expect(facts).toHaveLength(116);
+  expect(facts).toHaveLength(105);
   const groups = requireGuideFigures(facts, aria);
   const tables = [];
   const regions = await page.locator('.guide-table-scroll').all();

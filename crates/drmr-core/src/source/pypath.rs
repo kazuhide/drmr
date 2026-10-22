@@ -154,16 +154,6 @@ pub(crate) fn from_file_uri(uri: &str) -> Result<PathBuf, Escaped> {
         .map_err(|()| Escaped::new("ValueError"))
 }
 
-/// Whether text starts with a native Windows drive, root or UNC prefix.
-#[cfg(windows)]
-pub(crate) fn is_native_path(text: &str) -> bool {
-    use std::path::Component;
-    matches!(
-        Path::new(text).components().next(),
-        Some(Component::Prefix(_) | Component::RootDir)
-    )
-}
-
 /// `path.stem` as text.
 pub fn stem(path: &Path) -> String {
     path.file_stem()
