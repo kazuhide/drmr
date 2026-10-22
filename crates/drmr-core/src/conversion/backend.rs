@@ -225,13 +225,36 @@ impl Backend {
     ) -> Result<serde_json::Value, ConversionError> {
         self.profile_stream_keys(path, index, key.map(super::keys::ProbeKeys::One))
     }
+    pub(super) fn profile_stream_options(
+        &self,
+        path: &Path,
+        index: usize,
+        key: Option<&ContentKey>,
+        unedited: bool,
+    ) -> Result<serde_json::Value, ConversionError> {
+        self.profile_stream_keys_options(
+            path,
+            index,
+            key.map(super::keys::ProbeKeys::One),
+            unedited,
+        )
+    }
     pub(super) fn profile_stream_keys(
         &self,
         path: &Path,
         index: usize,
         key: Option<super::keys::ProbeKeys<'_>>,
     ) -> Result<serde_json::Value, ConversionError> {
-        let argv = vec![
+        self.profile_stream_keys_options(path, index, key, false)
+    }
+    fn profile_stream_keys_options(
+        &self,
+        path: &Path,
+        index: usize,
+        key: Option<super::keys::ProbeKeys<'_>>,
+        unedited: bool,
+    ) -> Result<serde_json::Value, ConversionError> {
+        let mut argv = vec![
             self.ffprobe.clone(),
             "-v".into(),
             "error".into(),
@@ -254,6 +277,9 @@ impl Backend {
             "json".into(),
             super::files::tool_path(path)?,
         ];
+        if unedited {
+            argv.splice(1..1, ["-ignore_editlist".into(), "1".into()]);
+        }
         // Codec metadata can be inferred from packets, so encrypted inputs need their role key.
         let keyed = super::keys::KeyedArguments::new(argv, key);
         let argv = &keyed.argv;
@@ -342,13 +368,39 @@ impl Backend {
         index: usize,
         key: Option<super::keys::ProbeKeys<'_>>,
     ) -> Result<super::packets::Evidence, ConversionError> {
-        let profile = self.profile_stream_keys(path, index, key)?;
+        self.packets_stream_keys_options(path, index, key, false)
+    }
+    pub(super) fn packets_stream_options(
+        &self,
+        path: &Path,
+        index: usize,
+        key: Option<&ContentKey>,
+        unedited: bool,
+    ) -> Result<super::packets::Evidence, ConversionError> {
+        if !unedited {
+            return self.packets_stream(path, index, key);
+        }
+        self.packets_stream_keys_options(
+            path,
+            index,
+            key.map(super::keys::ProbeKeys::One),
+            unedited,
+        )
+    }
+    fn packets_stream_keys_options(
+        &self,
+        path: &Path,
+        index: usize,
+        key: Option<super::keys::ProbeKeys<'_>>,
+        unedited: bool,
+    ) -> Result<super::packets::Evidence, ConversionError> {
+        let profile = self.profile_stream_keys_options(path, index, key, unedited)?;
         let expected = profile["nb_read_packets"]
             .as_str()
             .and_then(|count| count.parse::<u64>().ok())
             .filter(|count| *count > 0)
             .ok_or(ConversionError("media-packets-missing"))?;
-        let argv = vec![
+        let mut argv = vec![
             self.ffprobe.clone(),
             "-v".into(),
             "error".into(),
@@ -363,6 +415,9 @@ impl Backend {
             "compact=p=1:nk=0".into(),
             super::files::tool_path(path)?,
         ];
+        if unedited {
+            argv.splice(1..1, ["-ignore_editlist".into(), "1".into()]);
+        }
         let keyed = super::keys::KeyedArguments::new(argv, key);
         let argv = &keyed.argv;
         let secrets = keyed.secrets();
@@ -412,7 +467,36 @@ impl Backend {
         copy: bool,
         key: Option<super::keys::ProbeKeys<'_>>,
     ) -> Result<String, ConversionError> {
-        let argv = vec![
+        self.hash_stream_keys_options(path, index, copy, key, false)
+    }
+    pub(super) fn hash_stream_options(
+        &self,
+        path: &Path,
+        index: usize,
+        copy: bool,
+        key: Option<&ContentKey>,
+        unedited: bool,
+    ) -> Result<String, ConversionError> {
+        if !unedited {
+            return self.hash_stream(path, index, copy, key);
+        }
+        self.hash_stream_keys_options(
+            path,
+            index,
+            copy,
+            key.map(super::keys::ProbeKeys::One),
+            unedited,
+        )
+    }
+    fn hash_stream_keys_options(
+        &self,
+        path: &Path,
+        index: usize,
+        copy: bool,
+        key: Option<super::keys::ProbeKeys<'_>>,
+        unedited: bool,
+    ) -> Result<String, ConversionError> {
+        let mut argv = vec![
             self.ffmpeg.clone(),
             "-v".into(),
             "error".into(),
@@ -431,6 +515,9 @@ impl Backend {
             "-map".into(),
             format!("0:{index}"),
         ];
+        if unedited {
+            argv.splice(1..1, ["-ignore_editlist".into(), "1".into()]);
+        }
         let mut keyed = super::keys::KeyedArguments::new(argv, key);
         let argv = &mut keyed.argv;
         if copy {

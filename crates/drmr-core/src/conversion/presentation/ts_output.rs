@@ -13,6 +13,22 @@ fn descriptor(path: &Path) -> Result<String, ConversionError> {
     }
     Ok(value)
 }
+fn require_transport_sources(sources: &[Prepared]) -> Result<(), ConversionError> {
+    if sources.is_empty()
+        || sources.len() > 64
+        || sources.iter().any(|source| {
+            source.transport_index.is_none()
+                || source.transport_native.is_none()
+                || !matches!(
+                    source.report.tracks[0].kind,
+                    TrackKind::Video | TrackKind::Audio
+                )
+        })
+    {
+        return Err(ConversionError("ts-original-evidence-required"));
+    }
+    Ok(())
+}
 impl Converter {
     pub(super) fn verify_transport_pair(
         &self,
@@ -36,6 +52,7 @@ impl Converter {
                 key: None,
                 transport: true,
                 native: source.transport_native.as_deref(),
+                unedited: false,
             },
             super::super::ts::View {
                 input: &result.source,
@@ -44,6 +61,7 @@ impl Converter {
                 key: None,
                 transport: true,
                 native: result.transport_native.as_deref(),
+                unedited: false,
             },
         )
     }
@@ -56,19 +74,7 @@ impl Converter {
         work: &super::super::files::Stage,
     ) -> Result<ConversionReport, ConversionError> {
         sources.sort_by_key(|source| kind_order(source.report.tracks[0].kind));
-        if sources.is_empty()
-            || sources.len() > 64
-            || sources.iter().any(|source| {
-                source.transport_index.is_none()
-                    || source.transport_native.is_none()
-                    || !matches!(
-                        source.report.tracks[0].kind,
-                        TrackKind::Video | TrackKind::Audio
-                    )
-            })
-        {
-            return Err(ConversionError("ts-original-evidence-required"));
-        }
+        require_transport_sources(&sources)?;
         let sample_input = sources.iter().any(|source| source.transport_sample);
         let destination = destination(request.output)?;
         let stage = self.output_stage(&destination)?;
@@ -103,6 +109,7 @@ impl Converter {
                 &stage.path().join("master.m3u8"),
             )?;
         }
+        self.finish_transport_audio(stage.path(), &sources, request)?;
         validate_playlists(stage.path(), sources.len(), request)?;
         self.finish_multi_signaling(
             stage.path(),
@@ -155,6 +162,26 @@ impl Converter {
                 },
             )),
         })
+    }
+    fn finish_transport_audio(
+        &self,
+        root: &Path,
+        sources: &[Prepared],
+        request: &ConversionRequest<'_>,
+    ) -> Result<(), ConversionError> {
+        let keys = super::output_hls_keys(request.hls_output_key)?;
+        for (ordinal, source) in sources.iter().enumerate() {
+            if let Some(range) = source.audio_presentation {
+                super::super::audio_presentation::finish_transport_hls(
+                    root,
+                    ordinal,
+                    range,
+                    &keys,
+                    &self.backend,
+                )?;
+            }
+        }
+        Ok(())
     }
     fn package_transport(
         &self,

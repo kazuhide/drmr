@@ -49,6 +49,7 @@ struct Prepared {
     transport_sample: bool,
     playlist_reference: Option<PathBuf>,
     dash_reference: bool,
+    audio_presentation: Option<super::audio_presentation::AudioPresentation>,
 }
 fn presentation_processing(format: OutputFormat) -> inspection::ActualProcessing {
     inspection::ActualProcessing::new(
@@ -98,15 +99,17 @@ impl Converter {
                 },
                 None,
                 None,
+                None,
             );
         }
-        self.convert_tracks_inner(request, None, None)
+        self.convert_tracks_inner(request, None, None, None)
     }
     fn convert_tracks_inner(
         &self,
         request: TrackConversionRequest<'_>,
         transport_stage: Option<&super::files::Stage>,
         metadata: Option<&[metadata::Metadata]>,
+        presentations: Option<&[Option<super::audio_presentation::AudioPresentation>]>,
     ) -> Result<ConversionReport, ConversionError> {
         self.validate_signaling_tracks(&request, metadata.is_some())?;
         if request.format == OutputFormat::HlsTs {
@@ -122,6 +125,14 @@ impl Converter {
             .transpose()?;
         let work = workspace()?;
         let (mut sources, clears) = self.normalize_tracks(&request, work.path())?;
+        if let Some(ranges) = presentations {
+            if ranges.len() != sources.len() {
+                return Err(super::audio_presentation::MISMATCH);
+            }
+            for (source, range) in sources.iter_mut().zip(ranges) {
+                source.audio_presentation = *range;
+            }
+        }
         metadata::apply(&mut sources, metadata)?;
         metadata::materialize(&mut sources, &self.backend, request.input_keys)?;
         let owned_stage = destination
@@ -140,21 +151,7 @@ impl Converter {
             stage.path()
         };
         self.package_joint(&clears, package_root, &request)?;
-        metadata::finish(package_root, request.format, &sources)?;
-        if request.format == OutputFormat::Dash {
-            super::dash::finish_transport(&package_root.join("manifest.mpd"))?;
-        }
-        if let Some(key) = request.hls_output_key {
-            encrypt_packaged_hls(package_root, stage.path(), clears.len(), key)?;
-        }
-        self.finish_multi_signaling(
-            stage.path(),
-            request.format,
-            request.target,
-            request.output_key,
-            request.hls_key_uri,
-            request.hls_output_key,
-        )?;
+        self.finish_packaged_presentation(package_root, stage.path(), &sources, &request)?;
         let (checks, output_tracks, input_tracks) =
             self.verify_joint(&sources, &request, stage.path(), work.path())?;
         secure_tree(stage.path())?;
@@ -204,6 +201,49 @@ impl Converter {
             },
             processing: Some(presentation_processing(request.format)),
         })
+    }
+    fn finish_packaged_presentation(
+        &self,
+        package_root: &Path,
+        output_root: &Path,
+        sources: &[Prepared],
+        request: &TrackConversionRequest<'_>,
+    ) -> Result<(), ConversionError> {
+        metadata::finish(package_root, request.format, sources)?;
+        if sources
+            .iter()
+            .any(|source| source.audio_presentation.is_some())
+        {
+            // The editor reopens only private files after every packaging writer exits.
+            super::files::seal(package_root)?;
+        }
+        for (ordinal, source) in sources.iter().enumerate() {
+            if let Some(range) = source.audio_presentation {
+                super::audio_presentation::restore(
+                    &package_root.join(format!("track-{ordinal:04}/init.mp4")),
+                    range,
+                    &self.backend.stop,
+                )?;
+            }
+        }
+        if request.format == OutputFormat::Hls {
+            super::audio_presentation::finish_hls(package_root, sources.len(), &self.backend.stop)?;
+        }
+
+        if request.format == OutputFormat::Dash {
+            super::dash::finish_transport(&package_root.join("manifest.mpd"))?;
+        }
+        if let Some(key) = request.hls_output_key {
+            encrypt_packaged_hls(package_root, output_root, sources.len(), key)?;
+        }
+        self.finish_multi_signaling(
+            output_root,
+            request.format,
+            request.target,
+            request.output_key,
+            request.hls_key_uri,
+            request.hls_output_key,
+        )
     }
     fn convert_complete_mp4(
         &self,
@@ -692,7 +732,9 @@ fn prepare_for(
     if report.format != InputFormat::Mp4 || report.tracks.len() > 64 {
         return Err(ConversionError("input-format-not-supported"));
     }
-    let source_dictionary = matches!(report.protection, Protection::Cenc | Protection::Cbcs)
+    let audio_claim = super::audio_presentation::read_claim(source)?;
+    let source_dictionary = audio_claim.is_none()
+        && matches!(report.protection, Protection::Cenc | Protection::Cbcs)
         && match purpose {
             SourceValidationPurpose::Conversion => {
                 super::progressive::validate_input(source, &report, keys)?
@@ -751,6 +793,7 @@ fn prepare_for(
         transport_sample: false,
         playlist_reference: None,
         dash_reference: false,
+        audio_presentation: None,
     })
 }
 fn key_for<'a>(source: &Prepared, keys: &'a InputKeys) -> Option<&'a ContentKey> {
@@ -758,6 +801,17 @@ fn key_for<'a>(source: &Prepared, keys: &'a InputKeys) -> Option<&'a ContentKey>
         .key_id
         .as_ref()
         .and_then(|id| keys.keys.iter().find(|k| k.id_hex() == *id))
+}
+fn raw_audio_view<'a>(source: &'a Prepared, keys: &'a InputKeys) -> super::ts::View<'a> {
+    super::ts::View {
+        input: &source.source,
+        metadata: &source.source,
+        index: source.transport_index.unwrap_or(source.index),
+        key: key_for(source, keys),
+        transport: source.transport_index.is_some(),
+        native: source.transport_native.as_deref(),
+        unedited: source.transport_index.is_none(),
+    }
 }
 fn combine_generated(directory: &Path, output: &Path) -> Result<(), ConversionError> {
     let mut segments = Vec::new();
@@ -918,7 +972,10 @@ impl Converter {
             .into_iter()
             .collect();
         let mut eligible_formats = Vec::new();
-        if original.format == InputFormat::Mp4 {
+        let declared_audio = prepared
+            .iter()
+            .any(|track| track.audio_presentation.is_some());
+        if !declared_audio && original.format == InputFormat::Mp4 {
             let first = &prepared[0];
             let report = inspection::inspect(&first.media)
                 .map_err(|_| ConversionError("invalid-input-media"))?;
@@ -947,7 +1004,8 @@ impl Converter {
             } else if prepared.len() == 1 {
                 eligible_formats.push(OutputFormat::Mp4);
             }
-        } else if actual_format != OutputFormat::HlsTs
+        } else if !declared_audio
+            && actual_format != OutputFormat::HlsTs
             && prepared.len() == 1
             && prepared[0].metadata.audio.is_none()
             && prepared[0].metadata.audio_group.is_none()
@@ -1176,6 +1234,22 @@ impl Converter {
         source_keys: &InputKeys,
         result_keys: &InputKeys,
     ) -> Result<VerificationReport, ConversionError> {
+        if a.audio_presentation.is_some() || b.audio_presentation.is_some() {
+            let (Some(first), Some(second)) = (a.audio_presentation, b.audio_presentation) else {
+                return Err(super::audio_presentation::MISMATCH);
+            };
+            let source = raw_audio_view(a, source_keys);
+            let result = raw_audio_view(b, result_keys);
+            let mut proof = self.backend.verify_transport(source, result)?;
+            let range_equal = self
+                .backend
+                .verify_audio_presentation(source, result, first, second)?;
+            proof.checks.packet_timing_equal &= first == second;
+            proof.checks.decoded_content_equal &= range_equal;
+            proof.passed &= first == second && range_equal;
+            proof.media_verified = proof.passed;
+            return Ok(proof);
+        }
         if b.transport_index.is_some() {
             return self.verify_transport_pair(a, b);
         }
@@ -1197,6 +1271,7 @@ impl Converter {
                     key: None,
                     transport: true,
                     native: a.transport_native.as_deref(),
+                    unedited: false,
                 },
                 super::ts::View {
                     input: result_input,
@@ -1206,6 +1281,7 @@ impl Converter {
                     key: result_key,
                     transport: false,
                     native: None,
+                    unedited: false,
                 },
             );
         }
@@ -1322,7 +1398,8 @@ fn prepare_transport(
         .find(|(_, kind)| *kind == TrackKind::Video)
         .unwrap_or(&streams[0])
         .0;
-    backend.transport_durations(&localized.transport_segments, clock_index)?;
+    let audio_presentation =
+        backend.transport_durations(&localized.transport_segments, clock_index)?;
     let projection = directory.join("demux-view.ts");
     let demux_source = if admission.has_empty_payload_padding() {
         super::ts::demux_view(&localized.combined, &projection, admission, &backend.stop)?;
@@ -1346,6 +1423,7 @@ fn prepare_transport(
                 key: None,
                 transport: true,
                 native: Some(anchor),
+                unedited: false,
             })?;
         }
         let root = directory.join(format!("demux-{index}"));
@@ -1363,11 +1441,39 @@ fn prepare_transport(
                 .compatibility
                 .push(SourceCompatibilityNote::TsEmptyPayloadPadding);
         }
+        track.audio_presentation = audio_presentation.filter(|_| kind == TrackKind::Audio);
         track.transport_native = native;
         track.transport_sample = localized.sample_transport;
         prepared.push(track);
     }
     Ok(prepared)
+}
+fn bind_audio_presentation(
+    track: &mut Prepared,
+    backend: &super::backend::Backend,
+    keys: &InputKeys,
+    directory: &Path,
+) -> Result<(), ConversionError> {
+    if super::audio_presentation::read_claim(&track.media)?.is_none() {
+        return Ok(());
+    }
+    let evidence = backend.audio_evidence(super::ts::View {
+        input: &track.media,
+        metadata: &track.media,
+        index: track.index,
+        key: key_for(track, keys),
+        transport: false,
+        native: None,
+        unedited: true,
+    })?;
+    let range = super::audio_presentation::read(&track.media, evidence)?
+        .ok_or(super::audio_presentation::MISMATCH)?;
+    let view = directory.join(format!("raw-audio-{}.mp4", track.index));
+    copy_private(&track.media, &view)?;
+    super::audio_presentation::strip(&view, range, &backend.stop)?;
+    track.audio_presentation = Some(range);
+    track.media = view;
+    Ok(())
 }
 fn prepare_presentation(
     input: &VerificationSource<'_>,
@@ -1384,6 +1490,9 @@ fn prepare_presentation(
         inspection::inspect(input.input).map_err(|_| ConversionError("invalid-input-media"))?;
     match report.format {
         InputFormat::Mp4 => {
+            if super::audio_presentation::read_claim(input.input)?.is_some() {
+                return Err(ConversionError("audio-presentation-range-not-supported"));
+            }
             let path = stage.join("source.mp4");
             copy_private(input.input, &path)?;
             let actual =
@@ -1415,6 +1524,7 @@ fn prepare_presentation(
                         input.input_keys,
                         purpose,
                     )?;
+                    bind_audio_presentation(&mut prepared, backend, input.input_keys, stage)?;
                     prepared.metadata = metadata;
                     if prepared.metadata.audio.is_some() && track.kind != TrackKind::Audio {
                         return Err(ConversionError("track-role-mismatch"));
@@ -1488,6 +1598,7 @@ fn prepare_hls_presentation(
             input.input_keys,
             purpose,
         )?;
+        bind_audio_presentation(&mut track, backend, input.input_keys, &directory)?;
         track.metadata = media.metadata.clone();
         if localized.empty_cue_pair {
             track
@@ -1510,7 +1621,11 @@ fn prepare_hls_presentation(
         } else {
             None
         };
-        track.source = localized.reference;
+        track.source = if track.audio_presentation.is_some() {
+            localized.combined
+        } else {
+            localized.reference
+        };
         tracks.push(track);
     }
     if tracks.len() > 64
@@ -1798,7 +1913,20 @@ impl Converter {
     ) -> Result<(), ConversionError> {
         for source in prepared {
             if source.source != source.media {
-                let verified = if let Some(index) = source.transport_index {
+                let verified = if source.audio_presentation.is_some() {
+                    self.backend.verify_transport(
+                        raw_audio_view(source, input_keys),
+                        super::ts::View {
+                            input: &source.media,
+                            metadata: &source.media,
+                            index: source.index,
+                            key: key_for(source, input_keys),
+                            transport: false,
+                            native: None,
+                            unedited: true,
+                        },
+                    )?
+                } else if let Some(index) = source.transport_index {
                     self.backend.verify_transport(
                         super::ts::View {
                             input: &source.source,
@@ -1807,6 +1935,7 @@ impl Converter {
                             key: None,
                             transport: true,
                             native: source.transport_native.as_deref(),
+                            unedited: false,
                         },
                         super::ts::View {
                             input: &source.media,
@@ -1815,6 +1944,7 @@ impl Converter {
                             key: None,
                             transport: false,
                             native: None,
+                            unedited: false,
                         },
                     )?
                 } else {
@@ -1924,6 +2054,12 @@ impl Converter {
             return self.convert_transport_output(&request, prepared, input_report, &work);
         }
         validate_prepared_output(&request, &prepared, transport)?;
+        if request.format == OutputFormat::Mp4
+            && prepared.iter().any(|p| p.audio_presentation.is_some())
+        {
+            return Err(ConversionError("audio-presentation-range-not-supported"));
+        }
+        let presentations: Vec<_> = prepared.iter().map(|p| p.audio_presentation).collect();
         let descriptions: Vec<_> = prepared.iter().map(|p| p.metadata.clone()).collect();
         let mut tracks = Vec::new();
         self.verify_source_tracks(&prepared, &mut tracks, request.input_keys)?;
@@ -1946,6 +2082,7 @@ impl Converter {
             },
             stage.as_ref(),
             Some(&descriptions),
+            Some(&presentations),
         )?;
         if let (Some(candidate), Some(destination)) = (&candidate, &destination) {
             report.verification =

@@ -81,6 +81,7 @@ fn candidate(c: &Converter, parent: &Path, destination: &Path) -> Stage {
             },
             Some(&stage),
             None,
+            None,
         )
         .unwrap();
     assert!(report.verification.passed && report.verification.media_verified);

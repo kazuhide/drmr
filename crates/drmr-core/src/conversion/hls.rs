@@ -579,6 +579,9 @@ impl Localizer<'_> {
                 .map_err(|_| ConversionError("temporary-file-unavailable"))?;
             combined = raw;
         }
+        if let Some(clock) = &playlist.clock {
+            clock.presentation_window()?;
+        }
         let actual = if let Some(transport) = &playlist.transport {
             if self.ts_wall_clock {
                 return Err(ConversionError("ts-wall-clock-metadata-not-supported"));

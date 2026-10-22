@@ -41,6 +41,7 @@ pub(super) struct View<'a> {
     pub key: Option<&'a ContentKey>,
     pub transport: bool,
     pub native: Option<&'a NativeEvidence>,
+    pub unedited: bool,
 }
 fn require_audio_source_evidence(
     admission: &Admission,
@@ -61,7 +62,8 @@ impl Backend {
         let native = view
             .native
             .ok_or(ConversionError("ts-original-evidence-required"))?;
-        let profile = self.profile_stream(view.input, view.index, view.key)?;
+        let profile =
+            self.profile_stream_options(view.input, view.index, view.key, view.unedited)?;
         let config = self.transport_config(view, &profile)?;
         Self::require_native_count(&profile, native.count)?;
         let units = self.access_units(view, &profile, config.clone())?;
@@ -99,7 +101,7 @@ impl Backend {
             .and_then(|n| n.checked_mul(u64::from(channels)))
             .and_then(|n| n.checked_mul(4))
             .ok_or(ConversionError("ts-decoded-sample-count-mismatch"))?;
-        let argv = vec![
+        let mut argv = vec![
             self.ffmpeg.clone(),
             "-v".into(),
             "error".into(),
@@ -125,6 +127,9 @@ impl Backend {
             "s32le".into(),
             "-".into(),
         ];
+        if view.unedited {
+            argv.splice(1..1, ["-ignore_editlist".into(), "1".into()]);
+        }
         let keyed =
             super::keys::KeyedArguments::new(argv, view.key.map(super::keys::ProbeKeys::One));
         let secrets = keyed.secrets();
@@ -230,12 +235,32 @@ impl Backend {
         }
         Ok(result)
     }
+    pub(super) fn audio_evidence(
+        &self,
+        view: View<'_>,
+    ) -> Result<super::audio_presentation::AudioEvidence, ConversionError> {
+        let profile =
+            self.profile_stream_options(view.input, view.index, view.key, view.unedited)?;
+        let config = self.transport_config(view, &profile)?;
+        let canonical::Config::Audio { sample_rate, .. } = config else {
+            return Err(super::audio_presentation::MISMATCH);
+        };
+        let units = self.access_units(view, &profile, config)?;
+        Ok(super::audio_presentation::AudioEvidence {
+            sample_rate,
+            coded_frames: units.count,
+            raw_first_pts: units.first_pts,
+            raw_coded_end: units.end_pts,
+        })
+    }
     pub fn transport_durations(
         &self,
         segments: &[(std::path::PathBuf, String)],
         index: usize,
-    ) -> Result<(), ConversionError> {
-        let mut previous_audio: Option<(&str, canonical::Evidence)> = None;
+    ) -> Result<Option<super::audio_presentation::AudioPresentation>, ConversionError> {
+        let bad = ConversionError("ts-segment-duration-mismatch");
+        let mut previous: Option<(&str, canonical::Evidence, u32)> = None;
+        let mut whole: Option<super::audio_presentation::AudioEvidence> = None;
         for (path, declared) in segments {
             let view = View {
                 input: path,
@@ -244,66 +269,79 @@ impl Backend {
                 key: None,
                 transport: true,
                 native: None,
+                unedited: false,
             };
             let profile = self.profile_stream(path, index, None)?;
             let config = self.transport_config(view, &profile)?;
             let units = self.access_units(view, &profile, config.clone())?;
-            if let Some((previous_declared, previous)) = previous_audio.take() {
-                // A non-final audio segment ends at the following segment's
-                // first frame, not at FFprobe's independently truncated duration.
+            if let Some((old, observed, rate)) = previous.take() {
                 let boundary = check_duration(
-                    previous_declared,
-                    units
-                        .first_pts
-                        .checked_sub(previous.first_pts)
-                        .ok_or(ConversionError("ts-segment-duration-mismatch"))?,
+                    old,
+                    units.first_pts.checked_sub(observed.first_pts).ok_or(bad)?,
                 );
                 if boundary.is_err()
                     && check_duration(
-                        previous_declared,
-                        previous
+                        old,
+                        observed
                             .end_pts
-                            .checked_sub(previous.first_pts)
-                            .ok_or(ConversionError("ts-segment-duration-mismatch"))?,
+                            .checked_sub(observed.first_pts)
+                            .ok_or(bad)?,
                     )
                     .is_err()
                 {
-                    check_duration_ratio(
-                        previous_declared,
-                        u128::from(previous.count) * 1024,
-                        44_100,
+                    super::audio_presentation::check_sample_duration(
+                        old,
+                        observed.count.checked_mul(1024).ok_or(bad)?,
+                        rate,
                     )?;
                 }
             }
-            if matches!(
-                config,
-                canonical::Config::Audio {
-                    sample_rate: 44_100,
-                    ..
+            if let canonical::Config::Audio { sample_rate, .. } = config {
+                if let Some(all) = &mut whole {
+                    if all.sample_rate != sample_rate {
+                        return Err(bad);
+                    }
+                    all.coded_frames = all.coded_frames.checked_add(units.count).ok_or(bad)?;
+                    all.raw_coded_end = units.end_pts;
+                } else {
+                    whole = Some(super::audio_presentation::AudioEvidence {
+                        sample_rate,
+                        coded_frames: units.count,
+                        raw_first_pts: units.first_pts,
+                        raw_coded_end: units.end_pts,
+                    });
                 }
-            ) {
-                previous_audio = Some((declared, units));
+                previous = Some((declared, units, sample_rate));
             } else {
                 check_duration(
                     declared,
-                    units
-                        .end_pts
-                        .checked_sub(units.first_pts)
-                        .ok_or(ConversionError("ts-segment-duration-mismatch"))?,
+                    units.end_pts.checked_sub(units.first_pts).ok_or(bad)?,
                 )?;
             }
         }
-        if let Some((declared, units)) = previous_audio {
-            check_final_audio_duration(
-                declared,
-                units
-                    .end_pts
-                    .checked_sub(units.first_pts)
-                    .ok_or(ConversionError("ts-segment-duration-mismatch"))?,
-                units.count,
-            )?;
+        if let Some((declared, units, rate)) = previous {
+            let ticks = units.end_pts.checked_sub(units.first_pts).ok_or(bad)?;
+            let full = if rate == 44_100 {
+                check_final_audio_duration(declared, ticks, units.count)
+            } else {
+                check_duration(declared, ticks).or_else(|_| {
+                    super::audio_presentation::check_sample_duration(
+                        declared,
+                        units.count.checked_mul(1024).ok_or(bad)?,
+                        rate,
+                    )
+                })
+            };
+            if full.is_err() {
+                return super::audio_presentation::AudioPresentation::from_final(
+                    whole.ok_or(bad)?,
+                    units.count,
+                    declared,
+                )
+                .map(Some);
+            }
         }
-        Ok(())
+        Ok(None)
     }
     pub fn demux_transport(
         &self,
@@ -453,6 +491,9 @@ impl Backend {
             "-of".into(),
             "compact=p=1:nk=0".into(),
         ]);
+        if view.unedited {
+            argv.splice(1..1, ["-ignore_editlist".into(), "1".into()]);
+        }
         let secret = view.key.map(ContentKey::key_hex);
         if let Some(key) = &secret {
             argv.extend(["-decryption_key".into(), key.to_string()]);
@@ -554,8 +595,14 @@ impl Backend {
         result: View<'_>,
     ) -> Result<VerificationReport, ConversionError> {
         let _scope = self.scope(super::measurement::Phase::Verification);
-        let mut a = self.profile_stream(source.input, source.index, source.key)?;
-        let mut b = self.profile_stream(result.metadata, result.index, result.key)?;
+        let mut a =
+            self.profile_stream_options(source.input, source.index, source.key, source.unedited)?;
+        let mut b = self.profile_stream_options(
+            result.metadata,
+            result.index,
+            result.key,
+            result.unedited,
+        )?;
         let config_a = self.transport_config(source, &a)?;
         let config_b = self.transport_config(result, &b)?;
         let units_a = self.access_units(source, &a, config_a.clone())?;
@@ -597,12 +644,28 @@ impl Backend {
             // absolute PTS/DTS and the final end, without a time tolerance.
             units_a.timing_equal(&units_b)
         } else {
-            self.packets_stream(source.input, source.index, source.key)?
-                == self.packets_stream(result.input, result.index, result.key)?
+            self.packets_stream_options(source.input, source.index, source.key, source.unedited)?
+                == self.packets_stream_options(
+                    result.input,
+                    result.index,
+                    result.key,
+                    result.unedited,
+                )?
         };
         let payload = units_a.payload_equal(&units_b);
-        let decoded = self.hash_stream(source.input, source.index, false, source.key)?
-            == self.hash_stream(result.input, result.index, false, result.key)?;
+        let decoded = self.hash_stream_options(
+            source.input,
+            source.index,
+            false,
+            source.key,
+            source.unedited,
+        )? == self.hash_stream_options(
+            result.input,
+            result.index,
+            false,
+            result.key,
+            result.unedited,
+        )?;
         let passed = metadata && timing && payload && decoded;
 
         Ok(VerificationReport {
@@ -651,10 +714,16 @@ fn check_final_audio_duration(
     {
         return Ok(());
     }
-    check_duration_ratio(declared, u128::from(frames) * 1024, 44_100)
+    super::audio_presentation::check_sample_duration(
+        declared,
+        frames
+            .checked_mul(1024)
+            .ok_or(ConversionError("ts-segment-duration-mismatch"))?,
+        44_100,
+    )
 }
 
-fn check_duration_ratio(
+pub(super) fn check_duration_ratio(
     declared: &str,
     numerator: u128,
     denominator: u32,

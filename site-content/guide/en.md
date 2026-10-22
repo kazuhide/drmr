@@ -1,6 +1,6 @@
 ---
 title: User guide
-updated: 2026-10-22
+updated: 2026-10-23
 version: 1.0.0
 ---
 
@@ -8,7 +8,7 @@ version: 1.0.0
 
 drmr changes media containers, delivery formats and encryption while retaining encoded video and audio. It is for engineers who control the media and already have the required decryption keys. It is not an encoder for creating a new quality ladder or a client for obtaining DRM licenses.
 
-This guide describes the current `main` source, whose product version remains 1.0.0, and was updated on 2026-10-22. It includes **Unreleased** changes that are not in the published v1.0.0 archives. Public source and command help define the behavior; also read the documentation accompanying your exact archive. A passing example does not qualify arbitrary media or playback devices.
+This guide describes the current `main` source, whose product version remains 1.0.0, and was updated on 2026-10-23. It includes **Unreleased** changes that are not in the published v1.0.0 archives. Public source and command help define the behavior; also read the documentation accompanying your exact archive. A passing example does not qualify arbitrary media or playback devices.
 
 Download a versioned CLI from [GitHub Releases](https://github.com/kazuhide/drmr/releases) and check its archive against `SHA256SUMS` before installation. External media tools remain separate. See [releases and compatibility](https://github.com/kazuhide/drmr/blob/main/docs/releases.md) for supported targets and the compatibility policy.
 
@@ -145,7 +145,7 @@ The TS profile uses one fixed program, one progressive H.264 video stream with o
 
 TS packets must be 188 bytes; H.264 decoder configuration must remain fixed. AAC uses seven-byte ADTS transport headers without a checksum and one raw data block. Multiple programs, configuration changes, corrupt packets, clock wrap, discontinuities, interlaced video and unsupported descriptors are refused. The sample rate and channel configuration must remain unchanged throughout the track.
 
-A final `EXTINF` that ends inside the last AAC frame is still refused. This shorter playback range needs explicit preservation in addition to keeping all encoded frames, clocks and decoded samples. drmr does not infer and discard trailing padding or mark output longer than the declared range as verified.
+For an AAC-only rendition, the final `EXTINF` may end inside its last frame when its precision identifies one exact audio-sample boundary. drmr keeps the complete encoded frame and preserves the shorter playback range in HLS or DASH. Ambiguous precision, a partial nonfinal segment, and removing a whole frame are refused. An external audio rendition can accompany video; a multiplexed playlist does not independently declare an audio trim. This edit profile requires an HLS or DASH manifest; standalone MP4 input and output are outside its implemented verification route.
 
 SAMPLE-AES accepts one effective `identity` or `com.apple.streamingkeydelivery` key format, with version 1 when declared. Distinct simultaneously active key formats and unsupported method changes are refused. Nonzero audio priming is outside the profile. Joint TS output uses separate audio/video playlists and a master; it does not multiplex both into one output segment.
 
@@ -751,7 +751,9 @@ For 44.1 kHz, native AAC preparation writes fragmented MP4 with the same 90 kHz 
 
 FFprobe may label a TS frame with a nominal duration of 2,089 ticks even when the next DTS is 2,090 ticks later. MP4 sample durations describe that actual distance to the next DTS. The last frame retains the nominal integer duration because there is no following timestamp. Verification requires valid consecutive MP4 durations, every original absolute PTS/DTS, and the exact final end. Allowing source timestamp rounding is not an output tolerance: a changed clock or end, missing sample, or changed encoded byte fails. See [AAC clock handling](https://github.com/kazuhide/drmr/blob/main/docs/media-processing.md#aac-sample-rates-and-transport-clocks) for details.
 
-A 44.1 kHz source playlist's nonfinal `EXTINF` may measure from this segment's first frame to the next segment's first frame. With no following boundary, the final declaration must match either its exact audio-sample span or its measured last-frame clock with a nominal 2,089- or 2,090-tick final frame, at the declaration's decimal precision. These checks recognize specific source duration representations; they do not permit changes to the original PTS/DTS or loosen the output comparison.
+A 44.1 kHz source playlist's nonfinal `EXTINF` may measure from this segment's first frame to the next segment's first frame. A complete final segment can use its exact audio-sample span or its measured last-frame clock with a nominal 2,089- or 2,090-tick final frame. These duration representations do not permit changes to any original PTS/DTS.
+
+A shorter final audio declaration is a playback boundary, not timestamp rounding. drmr keeps all coded frames and PCM samples, and separately records which samples should be presented. For fMP4 HLS and DASH, two standard MP4 edits retain the timeline origin and the exact presented duration. The movie clock represents both individual audio samples and transport ticks; the media clock stays at 90 kHz. The edits are written after packaging and removed only from a private repackaging copy before the packager reads it. HLS uses the output's own playback bounds; DASH keeps the coded segment timeline and covers every track's presented end. TS uses its final playlist declaration. Fresh verification reconstructs the result's range and compares both raw media and presented PCM. See [AAC playback boundaries](https://github.com/kazuhide/drmr/blob/main/docs/media-processing.md#playback-ending-inside-the-final-aac-frame).
 
 The integer `EXT-X-TARGETDURATION` bounds segment durations after the nearest-integer rounding specified by RFC 8216. drmr derives conservative track bounds by rounding final segment durations upward, then applies the largest bound to every generated audio/video media playlist. For example, video and audio bounds of 2 and 3 become 3 and 3, while the encoded segments and `EXTINF` durations stay unchanged. Independent verification rejects inconsistent final bounds. RFC 8216 defines separate exceptions for VOD subtitles and I-frame playlists; those exceptions do not allow ordinary audio/video bounds to differ.
 
