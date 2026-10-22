@@ -157,7 +157,24 @@ foreach ($mode in @('success', 'qualification-failure', 'public-copy-failure', '
             if ($LASTEXITCODE -ne 0) { throw 'Could not grant the cleanup test directory' }
             & icacls $external /grant "*$($user.SID.Value):(OI)(CI)RX" /T /Q
             if ($LASTEXITCODE -ne 0) { throw 'Could not grant read-only sentinel access' }
+            $privateAcl = $null
+            if ($mode -eq 'success') {
+                # Import in a child scope: script parameters must not replace
+                # the surrounding fixture's credentials, paths or identities.
+                $privateAcl = & {
+                    param($Root, $RootIdentity, $OwnerSid, $Source, $Interpreter, $Parent)
+                    $script = Join-Path $Source '.github/scripts/windows-cli-private-acl-tests.ps1'
+                    . $script -Directory $Root -Checkout $Source -Python $Interpreter
+                    Initialize-PrivateAclRegression $Root $OwnerSid $Parent $RootIdentity $Interpreter $Source
+                    return @{
+                        fixture = $script; checkout = $Source; parent = $Parent; identity = $RootIdentity
+                        temporary_identity = Get-DrmrArchiveDirectoryIdentity (Join-Path $Root 'temp') $Interpreter
+                        collector_sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+                    }
+                } $directory $directoryIdentity $userSid $checkout $python $parent
+            }
             $context = @{ python = $python; helper = (Join-Path $checkout 'tools/qualify_cli_archive.py'); mode = $mode; external = $external }
+            $context.private_acl = $privateAcl
             $context | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $directory 'context.json')
             if ($mode -eq 'public-copy-failure') {
                 New-Item -ItemType Directory -Path (Join-Path $directory 'public-report.json') | Out-Null
@@ -180,6 +197,11 @@ $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = [Security.Principal.WindowsPrincipal]::new($identity)
 if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'The ACL fixture must be ordinary' }
 Publish-FixtureStage 'ordinary-checked'
+if ($context.mode -eq 'success') {
+    $aclFixture = $context.private_acl
+    & powershell.exe -NoLogo -NoProfile -NonInteractive -File $aclFixture.fixture -Ordinary -Directory $PSScriptRoot -Checkout $aclFixture.checkout -Python $context.python -ExpectedParent $aclFixture.parent -ExpectedIdentity $aclFixture.identity -ExpectedTempIdentity $aclFixture.temporary_identity -ExpectedCollectorSid $aclFixture.collector_sid
+    if ($LASTEXITCODE -ne 0) { throw 'Private ACL regression failed' }
+}
 $code = @"
 import importlib.util, json, pathlib, subprocess, sys, time
 sys.dont_write_bytecode = True
@@ -259,7 +281,7 @@ Publish-FixtureStage 'report-checked'
 if ($context.mode -eq 'reparse-refusal') {
     New-Item -ItemType Junction -Path (Join-Path $PSScriptRoot 'temp/escape') -Target $context.external | Out-Null
 }
-@{ ordinary_sid = $identity.User.Value; private_acl_checked = ($context.mode -ne 'report-type-refusal') } |
+@{ ordinary_sid = $identity.User.Value; private_acl_checked = ($context.mode -ne 'report-type-refusal'); private_acl_regression_checked = ($context.mode -eq 'success') } |
     ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $PSScriptRoot 'public-check.json')
 Publish-FixtureStage 'proof-written'
 # These failures occur after genuine production ACL creation, before owner cleanup.
@@ -287,6 +309,10 @@ Publish-FixtureStage 'complete'
             Assert-ArchiveCleanupTest ($proof.ordinary_sid -eq $user.SID.Value) 'The fixture ran as the wrong account'
             $expectedFailure = $mode -in @('qualification-failure', 'public-copy-failure')
             Assert-ArchiveCleanupTest (($process.ExitCode -ne 0) -eq $expectedFailure) 'The fixture failed at the wrong stage'
+            if ($mode -eq 'success') {
+                Assert-ArchiveCleanupTest $proof.private_acl_regression_checked 'The owner-only ACL regression was not checked'
+                Write-Output 'Private ACL regression passed: helper 2 positive / 2 foreign-owner refusals; documentation 6 positive / 6 foreign-owner refusals'
+            }
             if ($mode -ne 'report-type-refusal') {
                 Assert-ArchiveCleanupTest $proof.private_acl_checked 'The private report ACL was not checked'
                 $denied = $false
