@@ -209,18 +209,16 @@ fn private_new(path: &Path) -> Result<File, ConversionError> {
     super::files::create_new(path)
 }
 
-fn append(
+fn append<T>(
     source: &Path,
     stage: &Path,
     output: &mut File,
     total: &mut u64,
-    timing: Option<(&mut super::timing::FragmentClock, (u64, u64, u64))>,
-) -> Result<(), ConversionError> {
+    validate: impl FnOnce(&Path) -> Result<T, ConversionError>,
+) -> Result<T, ConversionError> {
     let piece = stage.join("dash-piece");
     super::copy_private(source, &piece)?;
-    if let Some((clock, (time, duration, scale))) = timing {
-        clock.check_dash(&piece, time, duration, scale)?;
-    }
+    let validated = validate(&piece)?;
     let size = piece
         .metadata()
         .map_err(|_| error("media-copy-failed"))?
@@ -238,7 +236,7 @@ fn append(
     }
     *total += copied;
     fs::remove_file(piece).map_err(|_| error("media-copy-failed"))?;
-    Ok(())
+    Ok(validated)
 }
 
 /// Apply the same presentation and addressing admission before local or remote resolution.
@@ -415,8 +413,13 @@ fn snapshot_representation(
         &base,
         &initialization_uri(representation, &templates, values[0])?,
     )?;
-    append(&initialization, stage, &mut combined, &mut total, None)?;
-    let mut clock = super::timing::FragmentClock::read(&source)?;
+    let mut clock = append(
+        &initialization,
+        stage,
+        &mut combined,
+        &mut total,
+        super::timing::FragmentClock::read,
+    )?;
     let scale = integer(attribute(&templates, "timescale"), 1)?;
     let mut seen = HashSet::new();
     for (number, time, duration) in values {
@@ -428,13 +431,9 @@ fn snapshot_representation(
         if !seen.insert(segment.clone()) {
             return Err(error("dash-repeated-resource-not-supported"));
         }
-        append(
-            &segment,
-            stage,
-            &mut combined,
-            &mut total,
-            Some((&mut clock, (time, duration, scale))),
-        )?;
+        append(&segment, stage, &mut combined, &mut total, |piece| {
+            clock.check_dash(piece, time, duration, scale)
+        })?;
     }
     let window = window::Window::read(&templates, clock.presentation_window()?)?;
     combined

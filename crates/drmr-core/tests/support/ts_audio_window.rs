@@ -2295,3 +2295,151 @@ fn multiple_video_renditions_preserve_partial_aac_in_saved_dash_and_hls_conversi
         );
     }
 }
+
+fn changed_playback_field(original: &[u8], at: usize, before: &[u8], after: &[u8]) -> Vec<u8> {
+    assert_eq!(before.len(), after.len());
+    assert_eq!(&original[at..at + before.len()], before);
+    assert_ne!(before, after);
+    let mut changed = original.to_vec();
+    changed[at..at + after.len()].copy_from_slice(after);
+    changed
+}
+
+fn playback_control_mutations(original: &[u8]) -> Vec<(&'static str, Vec<u8>)> {
+    let movie = one_box(original, &[*b"moov", *b"mvhd"]);
+    let track = one_box(original, &[*b"moov", *b"trak", *b"tkhd"]);
+    let movie_rate = movie.payload
+        + match original[movie.payload] {
+            0 => 20,
+            1 => 32,
+            _ => panic!("unknown movie-header version"),
+        };
+    let track_layer = track.payload
+        + match original[track.payload] {
+            0 => 32,
+            1 => 44,
+            _ => panic!("unknown track-header version"),
+        };
+    let alternate_group = &original[track_layer + 2..track_layer + 4];
+    assert!(alternate_group == [0, 0] || alternate_group == [0, 1]);
+    let flags = &original[track.payload + 1..track.payload + 4];
+    let mut disabled: [u8; 3] = flags.try_into().unwrap();
+    assert_ne!(disabled[2] & 1, 0);
+    disabled[2] &= !1;
+    vec![
+        (
+            "movie-gain-zero",
+            changed_playback_field(original, movie_rate + 4, &[1, 0], &[0, 0]),
+        ),
+        (
+            "track-gain-zero",
+            changed_playback_field(original, track_layer + 4, &[1, 0], &[0, 0]),
+        ),
+        (
+            "movie-rate-nonunit",
+            changed_playback_field(original, movie_rate, &[0, 1, 0, 0], &[0, 2, 0, 0]),
+        ),
+        (
+            "track-disabled",
+            changed_playback_field(original, track.payload + 1, flags, &disabled),
+        ),
+        (
+            "alternate-group-two",
+            changed_playback_field(original, track_layer + 2, alternate_group, &[0, 2]),
+        ),
+    ]
+}
+
+fn refuse_partial_playback_controls(
+    source: &Path,
+    output: &Path,
+    format: OutputFormat,
+    plan: &drmr_core::conversion::plan::ExecutionPlan,
+    keys: &drmr_core::conversion::key_file::OperatorKeys,
+) {
+    let source_before = common::snapshot_tree(source.parent().unwrap());
+    let output_before = common::snapshot_tree(output);
+    let init = output.join("track-0000/init.mp4");
+    let original = std::fs::read(&init).unwrap();
+    for (label, changed) in playback_control_mutations(&original) {
+        println!(
+            "partial-audio-playback-control-check: rate=44100 format={} mutation={label}",
+            format.as_str()
+        );
+        std::fs::write(&init, changed).unwrap();
+        let expected = if matches!(label, "track-disabled" | "movie-rate-nonunit") {
+            "audio-presentation-range-not-supported"
+        } else {
+            "presentation-window-not-supported"
+        };
+        refuse_code(&verify_clear_range(source, output, format), expected);
+        refuse_code(&converter().verify_plan(plan, keys), expected);
+        std::fs::write(&init, &original).unwrap();
+        all_checks(&verify_clear_range(source, output, format).unwrap());
+        let restored = converter().verify_plan(plan, keys).unwrap();
+        assert!(restored.source_unchanged && restored.output_matches_plan);
+        assert_eq!(restored.plan_id, plan.plan_id);
+        all_checks(&restored.verification);
+        assert_eq!(common::snapshot_tree(output), output_before);
+        assert_eq!(
+            common::snapshot_tree(source.parent().unwrap()),
+            source_before
+        );
+    }
+}
+
+#[test]
+fn partial_audio_playback_control_changes_are_rejected_by_original_and_saved_plan_verification() {
+    use drmr_core::conversion::{
+        VerificationSource,
+        key_file::OperatorKeys,
+        plan::{self, ExecutionPlanRequest},
+    };
+    let root = drmr_core::native::private_tempdir().unwrap();
+    let (source, _) = audio_sources_at_rate(root.path(), Some(44_100));
+    let packets = shorten_final_declaration(&source, AAC_44100);
+    let source_before = common::snapshot_tree(source.parent().unwrap());
+    let keys = OperatorKeys::default();
+    for format in [OutputFormat::Hls, OutputFormat::Dash] {
+        let output = root.path().join(format.as_str());
+        let planned = converter()
+            .create_execution_plan(ExecutionPlanRequest {
+                input: VerificationSource {
+                    input: &source,
+                    input_keys: &keys.input,
+                    hls_keys: &keys.hls_input,
+                },
+                output: &output,
+                format: Some(format),
+                target: TargetProtection::Clear,
+            })
+            .unwrap();
+        let file = root.path().join(format!("{}.plan.json", format.as_str()));
+        plan::write_new(&file, &planned).unwrap();
+        let plan_before = std::fs::read(&file).unwrap();
+        let loaded = plan::read(&file).unwrap();
+        all_checks(
+            &converter()
+                .execute_plan(&loaded, &keys)
+                .unwrap()
+                .verification,
+        );
+        all_checks(
+            &converter()
+                .verify_plan(&loaded, &keys)
+                .unwrap()
+                .verification,
+        );
+        assert_two_standard_edits(
+            &output.join("track-0000/init.mp4"),
+            AAC_44100,
+            packets[0][0],
+        );
+        refuse_partial_playback_controls(&source, &output, format, &loaded, &keys);
+        assert_eq!(std::fs::read(&file).unwrap(), plan_before);
+        assert_eq!(
+            common::snapshot_tree(source.parent().unwrap()),
+            source_before
+        );
+    }
+}

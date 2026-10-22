@@ -813,6 +813,13 @@ fn raw_audio_view<'a>(source: &'a Prepared, keys: &'a InputKeys) -> super::ts::V
         unedited: source.transport_index.is_none(),
     }
 }
+fn playback_metadata(source: &Prepared) -> &Path {
+    if source.transport_index.is_some() {
+        &source.media
+    } else {
+        &source.source
+    }
+}
 fn combine_generated(directory: &Path, output: &Path) -> Result<(), ConversionError> {
     let mut segments = Vec::new();
     for entry in
@@ -1239,15 +1246,24 @@ impl Converter {
             let (Some(first), Some(second)) = (a.audio_presentation, b.audio_presentation) else {
                 return Err(super::audio_presentation::MISMATCH);
             };
+            let controls_equal = super::progressive::playback_controls_equal(
+                playback_metadata(a),
+                a.index,
+                playback_metadata(b),
+                b.index,
+            )?;
             let source = raw_audio_view(a, source_keys);
             let result = raw_audio_view(b, result_keys);
             let mut proof = self.backend.verify_transport(source, result)?;
             let range_equal = self
                 .backend
                 .verify_audio_presentation(source, result, first, second)?;
+            if !controls_equal {
+                proof.checks.stream_metadata = super::CheckOutcome::Fail;
+            }
             proof.checks.packet_timing_equal &= first == second;
             proof.checks.decoded_content_equal &= range_equal;
-            proof.passed &= first == second && range_equal;
+            proof.passed &= controls_equal && first == second && range_equal;
             proof.media_verified = proof.passed;
             return Ok(proof);
         }

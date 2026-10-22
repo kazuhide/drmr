@@ -89,7 +89,6 @@ pub(super) struct FragmentClock {
 }
 impl FragmentClock {
     pub fn read(path: &Path) -> Result<Self, ConversionError> {
-        let audio_claim = super::audio_presentation::read_claim(path)?;
         let data = metadata(path)?;
         let nodes = mp4::parse_boxes(&data).map_err(|_| BAD)?;
         let moov = unique(&nodes, *b"moov")?;
@@ -124,6 +123,7 @@ impl FragmentClock {
             }
             default_duration = integer(trex, 12)?;
         }
+        let audio_claim = super::audio_presentation::read_claim(path)?;
         let mut trim = 0;
         if unique(&mdia.children, *b"hdlr")?
             .header
