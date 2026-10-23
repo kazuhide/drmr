@@ -28,7 +28,7 @@ const EXIT_INVALID: u8 = 2;
     after_help = "Getting started:\n  drmr doctor                       Check external media tools\n  drmr analyze media.mp4 --metadata-only  Read metadata without keys or media tools\n  drmr analyze media.mp4             Check the complete source media\n  drmr plan media.mp4 --to cbcs       Describe conversion intent\n  drmr convert input.mpd --to clear --output clear-media\n  drmr verify clear-media/manifest.mpd --source input.mpd\n\nSaved-plan workflow:\n  drmr analyze URL --download-dir SOURCE_DIR\n  drmr plan SOURCE_DIR/input.m3u8 --to cbcs --format dash --output RESULT_DIR --save PLAN.json\n  drmr convert --plan PLAN.json --keys-file KEYS.json\n  drmr verify --plan PLAN.json --keys-file KEYS.json\n\nRetained entrypoints are SOURCE_DIR/input.m3u8 (HLS), input.mpd (DASH), or input.mp4 (MP4).\nFor URL metadata without retaining a source, use 'drmr analyze URL --metadata-only'.\nSupported URL input also works directly with 'drmr convert URL --download-dir SOURCE_DIR'.\nDASH and HLS describe streaming media using manifests or playlists.\nUse 'drmr help <COMMAND>' for detailed command help."
 )]
 struct Cli {
-    /// Progress on stderr: auto follows the result mode; text or JSON Lines can be forced.
+    /// Progress on stderr: auto shows text interactively and keeps redirected JSON quiet.
     #[arg(long, global = true, value_enum, default_value = "auto")]
     progress: progress::Mode,
     #[command(subcommand)]

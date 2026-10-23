@@ -1,11 +1,11 @@
 //! Bounded command observations built from fixed labels and numeric counters only.
 use drmr_core::events::{Record, Sink};
-use std::io::Write;
+use std::io::{IsTerminal as _, Write};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-#[derive(Clone, Copy, Default, clap::ValueEnum)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
 pub(crate) enum Mode {
     #[default]
     Auto,
@@ -19,6 +19,14 @@ struct Configuration {
     command: &'static str,
 }
 static CONFIGURATION: OnceLock<Configuration> = OnceLock::new();
+
+fn resolved(mode: Mode, human_result: bool, terminal: bool) -> Mode {
+    match mode {
+        Mode::Auto if human_result || terminal => Mode::Text,
+        Mode::Auto => Mode::Off,
+        value => value,
+    }
+}
 
 pub(crate) fn configure(mode: Mode, command: &'static str) {
     let _ = CONFIGURATION.set(Configuration { mode, command });
@@ -112,11 +120,7 @@ impl Progress {
         let (mode, command) = CONFIGURATION
             .get()
             .map_or((Mode::Auto, "job"), |c| (c.mode, c.command));
-        let mode = match mode {
-            Mode::Auto if human_result => Mode::Text,
-            Mode::Auto => Mode::Off,
-            value => value,
-        };
+        let mode = resolved(mode, human_result, std::io::stderr().is_terminal());
         Self::with_writer(
             mode,
             command,
@@ -599,5 +603,18 @@ mod tests {
             "result-output-unavailable"
         );
         assert_eq!(Arc::strong_count(&bytes), 1);
+    }
+
+    #[test]
+    fn automatic_progress_covers_interactive_json_and_preserves_redirected_json() {
+        assert_eq!(resolved(Mode::Auto, false, true), Mode::Text);
+        assert_eq!(resolved(Mode::Auto, false, false), Mode::Off);
+        for terminal in [false, true] {
+            assert_eq!(resolved(Mode::Auto, true, terminal), Mode::Text);
+            for mode in [Mode::Text, Mode::Json, Mode::Off] {
+                assert_eq!(resolved(mode, false, terminal), mode);
+                assert_eq!(resolved(mode, true, terminal), mode);
+            }
+        }
     }
 }

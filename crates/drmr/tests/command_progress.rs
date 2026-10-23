@@ -152,19 +152,16 @@ fn multiple_output_configuration_uses_one_command_observer() {
     assert!(!text.contains("sentinel"));
 }
 
-#[cfg(unix)]
 #[test]
 fn doctor_reports_a_closed_result_stream_without_panicking_into_json_logs() {
-    use std::os::fd::OwnedFd;
-    use std::os::unix::net::UnixStream;
     use std::process::Stdio;
     for options in [&["--json"][..], &[][..]] {
-        let (reader, writer) = UnixStream::pair().unwrap();
+        let (reader, writer) = std::io::pipe().unwrap();
         drop(reader);
         let result = Command::new(env!("CARGO_BIN_EXE_drmr"))
             .args(["doctor", "--progress", "json"])
             .args(options)
-            .stdout(Stdio::from(OwnedFd::from(writer)))
+            .stdout(Stdio::from(writer))
             .output()
             .unwrap();
         assert_eq!(result.status.code(), Some(1));
