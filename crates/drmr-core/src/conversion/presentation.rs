@@ -1040,6 +1040,25 @@ impl Converter {
         if actual_format == OutputFormat::HlsTs {
             eligible_formats.push(OutputFormat::HlsTs);
         }
+        let verification = self.validate_prepared_sources(&prepared, input.input_keys)?;
+        if !verification.passed {
+            return Err(ConversionError("source-media-verification-failed"));
+        }
+        self.backend.checkpoint(&[&work]);
+        Ok(SourceQualification {
+            input: original,
+            actual_format,
+            track_protection,
+            compatibility_notes,
+            eligible_formats,
+            verification,
+        })
+    }
+    fn validate_prepared_sources(
+        &self,
+        prepared: &[Prepared],
+        input_keys: &InputKeys,
+    ) -> Result<VerificationReport, ConversionError> {
         let verified = self.run_tracks(prepared.len(), |ordinal| {
             let track = &prepared[ordinal];
             metadata::pair(&track.metadata, &track.metadata)?;
@@ -1055,22 +1074,10 @@ impl Converter {
                 self.backend
                     .validate_transport_source(&track.source, index, native)
             } else {
-                self.verify_prepared_pair(track, track, input.input_keys, input.input_keys)
+                self.verify_prepared_pair(track, track, input_keys, input_keys)
             }
         })?;
-        let verification = combine_verification(verified);
-        if !verification.passed {
-            return Err(ConversionError("source-media-verification-failed"));
-        }
-        self.backend.checkpoint(&[&work]);
-        Ok(SourceQualification {
-            input: original,
-            actual_format,
-            track_protection,
-            compatibility_notes,
-            eligible_formats,
-            verification,
-        })
+        Ok(combine_verification(verified))
     }
 }
 impl Converter {
