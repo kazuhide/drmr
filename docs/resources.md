@@ -58,6 +58,13 @@ compare processing, rather than comparing two unrelated downloads. With
 `--json --measure`, phase observations help locate the work; overlapping phase
 times must not be added together as command wall time.
 
+TS preparation collects metadata and encoded-frame evidence from independent
+segments in parallel within the worker limit. It retains only a bounded window
+of compact results, then checks duration and clock boundaries in the original
+playlist order. Each media playlist is prepared in turn. This pool does not
+parallelize every stage or split a complete-track decode, and all source media
+checks remain required.
+
 For a quick look at MP4 metadata or HLS/DASH declarations, use
 `analyze --metadata-only`. It does not download complete media or run complete
 source checks, so its success does not establish conversion eligibility. See

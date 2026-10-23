@@ -863,6 +863,8 @@ Worker count never reduces proof coverage. Track, segment and source-probe pools
 
 Full `analyze` continues after downloading: it validates a private source copy, prepares tracks and checks encoded packets, decoded media and timing. Worker selection applies to independent jobs within a stage; it does not make every stage or media-tool call parallel. Network and disk throughput, process startup, track count and ordered checks affect the total time. Compare one worker with automatic selection on the same retained local source to separate processing from download time. `analyze --metadata-only` is a lighter metadata or declaration read and does not establish conversion eligibility.
 
+Within TS preparation, independent segments supply metadata and encoded-frame evidence in parallel. Only a limited number of compact results are retained at once. Duration and clock boundaries are then checked in playlist order, with each media playlist prepared in turn. Complete-track decoding and the other source checks remain required.
+
 Native manifest checks share this capacity. Small inputs run inline; larger HLS graphs can distribute document work, and a large DASH manifest can share one parsed tree across independent checks. Pools do not nest. Parsed child facts and inherited timelines are reused. The adapter reserves memory for retained manifest bytes and lint work, then verifies file identities and content. Exhausted byte, node, reference or diagnostic limits produce an incomplete report and cannot pass.
 
 ## Admission is not OS enforcement
@@ -1267,9 +1269,11 @@ drmr analyze original.mp4 --metadata-only --progress off
 
 On an interactive terminal, the current task updates in one status line. Finished stages remain above it with their durations, so completed downloads stay visible while inspection continues. Byte counts use readable units. Redirected text, or a terminal without live-display support, records stage starts and ends with occasional updates rather than every tool call or counter change. Unchanged work still produces an occasional elapsed-time notice.
 
-A download can show its completed count and percentage once resource discovery has finished. TS segment preparation can show the same information for its current batch. Approximate time remaining appears only after enough progress has been observed. The estimate applies to the named stage or batch, not the entire command. Discovery and other work with an unknown total show the task and elapsed time without a percentage or estimate. All segment reads can finish while ordered boundary checks are still running.
+A download can show its completed count and percentage once resource discovery has finished. TS preparation counts all segments in the media playlist currently being processed. Approximate time remaining appears only after at least one second and two further resources or segments have completed since the total became known. It estimates the rest of that download or playlist's preparation, not the entire command. Once all TS segments have been read, `checking segment boundaries` replaces the percentage and estimate until the ordered checks finish.
 
-Resource totals include completed discovery requests and distinct media resources. Received bytes include retry traffic and do not equal retained file size. Worker selection applies to bounded independent jobs, not every stage of analysis.
+Discovery and other work with an unknown total show the task and elapsed time. A single MP4 URL shows received bytes during transfer, without a running percentage or remaining-time estimate. Its resource count becomes `1/1` after transfer completes.
+
+Resource totals include completed discovery requests and distinct media resources. Received bytes include retry traffic and can differ from retained file size. Worker selection applies to bounded independent jobs, not every stage of analysis.
 
 | Stage | Observed work |
 | --- | --- |
