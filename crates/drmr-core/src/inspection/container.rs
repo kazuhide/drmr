@@ -11,6 +11,8 @@ use std::path::Path;
 
 const MAX_METADATA_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_TOP_LEVEL_BOXES: usize = 100_000;
+// Keep the tree, sample descriptions and report within the metadata memory claim.
+const MAX_METADATA_BOXES: usize = 16_384;
 
 fn metadata_bytes(path: &Path) -> Result<Vec<u8>, InspectionError> {
     let mut file = File::open(path).map_err(|_| InspectionError("input-unreadable"))?;
@@ -129,9 +131,14 @@ pub(super) fn inspect_metadata(bytes: &[u8]) -> Result<Inspection, InspectionErr
     if bytes.len() as u64 > MAX_METADATA_BYTES {
         return Err(InspectionError("mp4-metadata-size-limit"));
     }
-    let boxes = mp4::parse_boxes(bytes).map_err(|_| InspectionError("invalid-mp4-metadata"))?;
-    let entries =
-        mp4::sample_entries(bytes).map_err(|_| InspectionError("invalid-mp4-metadata"))?;
+    let boxes = mp4::parse_boxes_with_limit(bytes, MAX_METADATA_BOXES).map_err(|cause| {
+        InspectionError(if cause.0 == "mp4-box-count-limit" {
+            cause.0
+        } else {
+            "invalid-mp4-metadata"
+        })
+    })?;
+    let entries = mp4::sample_entries_from_boxes(bytes, &boxes);
     if entries.is_empty() {
         return Err(InspectionError("mp4-sample-descriptions-missing"));
     }

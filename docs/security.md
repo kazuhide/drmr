@@ -47,6 +47,11 @@ or MP4 structural ranges, not media segments, keys or licenses. MP4 media
 payloads are skipped. This mode does not accept a key file and does not provide
 a saved original for later conversion or verification.
 
+Local and URL MP4 metadata inspection both limit movie metadata to 16 MiB and
+the parsed tree to 16,384 boxes, including nested boxes. The byte limit alone
+does not bound the memory needed for many small boxes. The box limit is checked
+before allocating another node; excess boxes fail with `mp4-box-count-limit`.
+
 ## Input and diagnostic handling
 
 For complete `analyze`, saved-plan creation, `convert`, and `verify`, supply an owner-only JSON file with `--keys-file` when keys are needed. `analyze --metadata-only` never needs or accepts a key file. Input decryption keys and output encryption keys have separate roles. The file must be a regular, singly linked file with the required owner-only permissions; symbolic links and insecure files are refused. See [key configuration](usage.md#separate-input-and-output-keys) and [Windows file protection](windows.md#protect-configuration-files).

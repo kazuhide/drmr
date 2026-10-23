@@ -381,7 +381,7 @@ Local HLS follows bounded child playlists within its directory tree. URL HLS rea
 
 URL metadata is temporary private data, not a saved original for a plan or offline conversion. No `--download-dir` is needed. Live HLS or dynamic DASH declarations may be readable, but this does not establish a complete on-demand source or conversion support. Normal URL analysis in chapter 8 retains and checks complete media.
 
-Metadata-only refuses `--download-dir`, `--keys-file`, `--packager-bin`, `--max-workers` and `--measure`. URL input can use chapter 8's `--fetch-policy`; local input cannot. Metadata parser limits and fetch-policy limits both apply.
+Metadata-only refuses `--download-dir`, `--keys-file`, `--packager-bin`, `--max-workers` and `--measure`. URL input can use chapter 8's `--fetch-policy`; local input cannot. Metadata parser limits and fetch-policy limits both apply. Local and URL MP4 inspection both cap `moov` metadata at 16 MiB and the parsed tree at 16,384 boxes, including nested boxes. Many small boxes require memory beyond their payload bytes; excess boxes are refused with `mp4-box-count-limit` before allocating another node.
 
 The former `inspect INPUT` command is removed during the pre-release CLI consolidation. Replace it with `analyze --metadata-only INPUT`; no alias remains. See the [pre-release migration](https://github.com/kazuhide/drmr/blob/main/docs/releases.md#pre-release-cli-consolidation).
 

@@ -407,6 +407,38 @@ fn mp4_metadata_does_not_inherit_the_manifest_byte_cap() {
 }
 
 #[test]
+fn remote_mp4_metadata_rejects_too_many_boxes_inside_the_movie() {
+    let base = movie();
+    let mut body = base[8..].to_vec();
+    for _ in 7..16_384 {
+        body.extend(atom(*b"free", &[]));
+    }
+    let server = Server::new(
+        BTreeMap::from([("/entry", Body::Bytes(atom(*b"moov", &body)))]),
+        true,
+        false,
+    );
+    assert!(
+        converter(Stop::new(), Arc::new(Collector::default()))
+            .inspect_url_metadata(&server.url(), &policy())
+            .is_ok()
+    );
+    body.extend(atom(*b"free", &[]));
+    let server = Server::new(
+        BTreeMap::from([("/entry", Body::Bytes(atom(*b"moov", &body)))]),
+        true,
+        false,
+    );
+    assert_eq!(
+        converter(Stop::new(), Arc::new(Collector::default()))
+            .inspect_url_metadata(&server.url(), &policy())
+            .unwrap_err()
+            .0,
+        "mp4-box-count-limit"
+    );
+}
+
+#[test]
 fn metadata_playlist_and_origin_limits_refuse_children_before_a_request() {
     let other = Server::new(
         BTreeMap::from([(
