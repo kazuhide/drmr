@@ -138,7 +138,7 @@ fn an_unavailable_real_tool_has_structured_failure_and_safe_last_activity() {
     assert!(!output.exists());
 }
 #[test]
-fn redirected_text_reports_real_activity_counts_and_elapsed_without_ansi_or_fake_percentages() {
+fn redirected_text_reports_steps_and_elapsed_without_internal_counters_or_fake_percentages() {
     let root = tempfile::tempdir().unwrap();
     let output = root.path().join("output.mp4");
     let result = invoke("convert", &clip(), &output, &[]);
@@ -148,44 +148,34 @@ fn redirected_text_reports_real_activity_counts_and_elapsed_without_ansi_or_fake
         String::from_utf8_lossy(&result.stderr)
     );
     let progress = String::from_utf8(result.stderr).unwrap();
-    assert!(progress.contains("Activity: verification"), "{progress}");
+    assert!(progress.contains("Verifying media"), "{progress}");
     assert!(
-        progress.contains("Hashing complete encoded media payloads"),
+        progress.contains("elapsed") && progress.contains("Finished convert in"),
         "{progress}"
     );
-    assert!(
-        progress.contains("Decoding and hashing complete media content"),
-        "{progress}"
-    );
-    assert!(
-        progress.contains("scopes closed") && progress.contains("elapsed"),
-        "{progress}"
-    );
+    assert!(!progress.contains("scopes") && !progress.contains("Activity:"));
     assert!(!progress.contains('\u{1b}') && !progress.contains('%') && !progress.contains("ETA"));
     assert!(
         !progress.contains("clip.mp4") && !progress.contains(&root.path().display().to_string())
     );
-    let last = progress
+    // Internal scope observations remain available in the explicit JSON stream.
+    let structured = invoke(
+        "verify",
+        &clip(),
+        &output,
+        &["--json", "--progress", "json"],
+    );
+    assert!(structured.status.success());
+    let records: Vec<Value> = String::from_utf8(structured.stderr)
+        .unwrap()
         .lines()
-        .rev()
-        .find(|line| line.starts_with("Activity:"))
-        .unwrap();
-    let counts = last
-        .split(';')
-        .skip(1)
-        .take(2)
-        .map(|part| {
-            part.split(':')
-                .nth(1)
-                .unwrap()
-                .trim()
-                .parse::<u64>()
-                .unwrap()
-        })
-        .collect::<Vec<_>>();
-    assert!(counts[0] > 0);
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let last = records.last().unwrap();
+    assert_eq!(last["event"], "finished");
+    assert!(last["scopes_started"].as_u64().unwrap() > 0);
     assert_eq!(
-        counts[0], counts[1],
+        last["scopes_started"], last["scopes_closed"],
         "all observed scopes are closed before the result"
     );
     assert!(String::from_utf8_lossy(&result.stdout).contains("Verified stream metadata"));
@@ -293,7 +283,7 @@ fn longer_public_source_preserves_full_proof_and_progress_without_changing_succe
         String::from_utf8_lossy(&verified.stderr)
     );
     let progress = String::from_utf8(verified.stderr).unwrap();
-    assert!(progress.contains("Activity: verification") && progress.contains("scopes closed"));
+    assert!(progress.contains("Verifying media") && progress.contains("Finished verify in"));
     assert_eq!(std::fs::read(&source).unwrap(), before);
 }
 

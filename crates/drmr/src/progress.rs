@@ -1,9 +1,20 @@
 //! Bounded command observations built from fixed labels and numeric counters only.
 use drmr_core::events::{Record, Sink};
+use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use std::io::{IsTerminal as _, Write};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+mod display;
+
+#[derive(Clone, Copy)]
+struct Analysis {
+    completed: u64,
+    total: u64,
+    began: Duration,
+    state: &'static str,
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
 pub(crate) enum Mode {
@@ -35,6 +46,7 @@ pub(crate) fn configure(mode: Mode, command: &'static str) {
 #[derive(Default)]
 struct State {
     last_activity: Option<&'static str>,
+    acquiring: bool,
     started: u64,
     closed: u64,
     workers: Option<u64>,
@@ -46,7 +58,11 @@ struct State {
     tools_closed: u64,
     tasks: [u64; 4],
     downloads: Option<[u64; 3]>,
+    resources_total: Option<u64>,
+    resources_began: Option<(Duration, u64)>,
+    analysis: Option<Analysis>,
     work_completed: u64,
+    display: display::Display,
 }
 
 struct Inner {
@@ -57,6 +73,7 @@ struct Inner {
     state: Mutex<State>,
     wake: Condvar,
     out: Mutex<Box<dyn Write + Send>>,
+    terminal: Option<ProgressBar>,
 }
 
 pub(crate) struct Progress {
@@ -120,20 +137,48 @@ impl Progress {
         let (mode, command) = CONFIGURATION
             .get()
             .map_or((Mode::Auto, "job"), |c| (c.mode, c.command));
-        let mode = resolved(mode, human_result, std::io::stderr().is_terminal());
-        Self::with_writer(
+        let terminal = std::io::stderr().is_terminal();
+        let mode = resolved(mode, human_result, terminal);
+        let bar = if terminal && matches!(mode, Mode::Text) {
+            let bar = ProgressBar::with_draw_target(None, ProgressDrawTarget::stderr_with_hz(10));
+            if bar.is_hidden() {
+                None
+            } else {
+                bar.set_style(
+                    ProgressStyle::with_template("{spinner:.cyan} {wide_msg}")
+                        .unwrap_or_else(|_| ProgressStyle::default_spinner()),
+                );
+                bar.enable_steady_tick(Duration::from_millis(100));
+                Some(bar)
+            }
+        } else {
+            None
+        };
+        Self::with_terminal(
             mode,
             command,
             Box::new(std::io::stderr()),
             Duration::from_secs(2),
+            bar,
         )
     }
 
+    #[cfg(test)]
     fn with_writer(
         mode: Mode,
         command: &'static str,
         out: Box<dyn Write + Send>,
         interval: Duration,
+    ) -> Self {
+        Self::with_terminal(mode, command, out, interval, None)
+    }
+
+    fn with_terminal(
+        mode: Mode,
+        command: &'static str,
+        out: Box<dyn Write + Send>,
+        interval: Duration,
+        terminal: Option<ProgressBar>,
     ) -> Self {
         let inner = Arc::new(Inner {
             mode,
@@ -150,6 +195,7 @@ impl Progress {
             state: Mutex::new(State::default()),
             wake: Condvar::new(),
             out: Mutex::new(out),
+            terminal,
         });
         let heartbeat = if !matches!(mode, Mode::Off) || crate::common_job::active() {
             let observed = Arc::clone(&inner);
@@ -197,6 +243,10 @@ impl Progress {
             return;
         }
         let changed = state.last_activity != Some(value);
+        state.acquiring = value == "acquisition";
+        if value != "input-preparation" {
+            state.analysis = None;
+        }
         state.last_activity = Some(value);
         self.inner.line(&mut state, "activity", None, changed);
     }
@@ -230,7 +280,7 @@ impl Progress {
 
     pub(crate) fn diagnostic(&self, command: &str, code: &'static str) {
         self.fail(code);
-        if !self.structured() {
+        if matches!(self.inner.mode, Mode::Off | Mode::Auto) {
             eprintln!("{command}: {code}");
         }
     }
@@ -256,6 +306,10 @@ impl Progress {
         {
             let _ = worker.join();
         }
+        if let Some(bar) = &self.inner.terminal {
+            bar.disable_steady_tick();
+            bar.finish_and_clear();
+        }
     }
 }
 
@@ -273,22 +327,24 @@ impl Inner {
         error: Option<&'static str>,
         force: bool,
     ) {
-        if !force
-            && state
+        let observe = force
+            || state
                 .last_line
-                .is_some_and(|last| last.elapsed() < Duration::from_millis(250))
-        {
+                .is_none_or(|last| last.elapsed() >= Duration::from_millis(250));
+        if !observe && !matches!(self.mode, Mode::Text) {
             return;
         }
         let elapsed_ms = u64::try_from(self.began.elapsed().as_millis()).unwrap_or(u64::MAX);
-        crate::common_job::progress(crate::common_job::Observation {
-            elapsed_ms,
-            last_activity: state.last_activity,
-            scopes_started: state.started,
-            scopes_closed: state.closed,
-            workers: state.workers,
-        });
-        state.last_line = Some(Instant::now());
+        if observe {
+            crate::common_job::progress(crate::common_job::Observation {
+                elapsed_ms,
+                last_activity: state.last_activity,
+                scopes_started: state.started,
+                scopes_closed: state.closed,
+                workers: state.workers,
+            });
+            state.last_line = Some(Instant::now());
+        }
         if state.output_failed || matches!(self.mode, Mode::Off | Mode::Auto) {
             return;
         }
@@ -330,6 +386,15 @@ impl Inner {
                 value["resources_completed"] = completed.into();
                 value["bytes_received"] = bytes.into();
             }
+            if let Some(total) = state.resources_total {
+                value["resources_total"] = total.into();
+            }
+            if let Some(analysis) = state.analysis {
+                value["analysis_task"] = "ts-preparation".into();
+                value["analysis_state"] = analysis.state.into();
+                value["analysis_completed"] = analysis.completed.into();
+                value["analysis_total"] = analysis.total.into();
+            }
             if let Some(code) = error {
                 value["error_code"] = code.into();
             }
@@ -337,14 +402,22 @@ impl Inner {
                 .map_err(std::io::Error::other)
                 .and_then(|()| writeln!(out))
         } else {
-            let details = state.text_details(&active);
-            writeln!(
-                out,
-                "Activity: {}; scopes started: {}; scopes closed: {}; task: {task}{details}; elapsed: {:.1}s; event: {event}.",
-                state.last_activity.unwrap_or("configuration"),
-                state.started,
-                state.closed,
-                self.began.elapsed().as_secs_f64()
+            let activity = state.last_activity.unwrap_or("configuration");
+            let units = state.units(activity);
+            let view = display::View {
+                activity,
+                task: if tasks.is_empty() { "" } else { &task },
+                tools: &active,
+                downloads: state.downloads,
+                units,
+            };
+            state.display.render(
+                &mut *out,
+                self.terminal.as_ref(),
+                self.command,
+                &view,
+                self.began.elapsed(),
+                matches!(event, "finished" | "failed" | "cancelled").then_some((event, error)),
             )
         };
         if result.and_then(|()| out.flush()).is_err() {
@@ -354,36 +427,120 @@ impl Inner {
 }
 
 impl State {
-    fn text_details(&self, active: &[&str]) -> String {
-        let mut details = String::new();
-        if !active.is_empty() {
-            use std::fmt::Write as _;
-            let _ = write!(details, "; tools: {}", active.join(", "));
+    fn units(&self, activity: &str) -> Option<display::Units> {
+        if let Some(analysis) = self.analysis.filter(|a| a.state != "aborted") {
+            Some(display::Units {
+                completed: analysis.completed,
+                total: analysis.total,
+                initial: 0,
+                began: analysis.began,
+                segments: true,
+                checking: analysis.completed == analysis.total && analysis.state != "finished",
+            })
+        } else if activity == "acquisition" {
+            self.downloads
+                .zip(self.resources_total)
+                .zip(self.resources_began)
+                .map(
+                    |(([_, completed, _], total), (began, initial))| display::Units {
+                        completed,
+                        total,
+                        initial,
+                        began,
+                        segments: false,
+                        checking: false,
+                    },
+                )
+        } else {
+            None
         }
-        if let Some(workers) = self.workers {
-            use std::fmt::Write as _;
-            let _ = write!(details, "; workers: {workers}");
-        }
-        if let Some([started, completed, bytes]) = self.downloads {
-            use std::fmt::Write as _;
-            let _ = write!(
-                details,
-                "; resources completed/started: {completed}/{started}; bytes received: {bytes}"
-            );
-        }
-        if self.work_completed > 0 {
-            use std::fmt::Write as _;
-            let _ = write!(
-                details,
-                "; track work units completed: {}",
-                self.work_completed
-            );
-        }
-        details
     }
-}
 
-impl State {
+    fn observe_download(&mut self, record: &Record, now: Duration) -> Option<()> {
+        let get = |key| record.get(key).and_then(serde_json::Value::as_u64);
+        let (Some(started), Some(completed), Some(bytes)) = (
+            get("resources_started"),
+            get("resources_completed"),
+            get("bytes_received"),
+        ) else {
+            return None;
+        };
+        if completed > started {
+            return None;
+        }
+        let total = record.get("resources_total");
+        let parsed = total.and_then(serde_json::Value::as_u64);
+        if total.is_some() && parsed.is_none_or(|n| completed > n || started > n) {
+            return None;
+        }
+        if parsed != self.resources_total {
+            self.resources_began = parsed.map(|_| (now, completed));
+        }
+        self.resources_total = parsed;
+        self.downloads = Some([started, completed, bytes]);
+        self.last_activity = Some("acquisition");
+        Some(())
+    }
+
+    fn observe_activity(&mut self, record: &Record) -> Option<()> {
+        let value = record
+            .get("activity")
+            .and_then(serde_json::Value::as_str)
+            .and_then(activity)?;
+        match record.get("state").and_then(serde_json::Value::as_str) {
+            Some("started") => {
+                self.started = self.started.saturating_add(1);
+                if value != "input-preparation" {
+                    self.analysis = None;
+                }
+            }
+            Some("closed") => self.closed = self.closed.saturating_add(1),
+            _ => return None,
+        }
+        self.last_activity = Some(if self.acquiring { "acquisition" } else { value });
+        Some(())
+    }
+
+    fn observe_analysis(&mut self, record: &Record, now: Duration) -> Option<bool> {
+        if record.get("task").and_then(serde_json::Value::as_str) != Some("ts-preparation") {
+            return None;
+        }
+        let (Some(completed), Some(total)) = (
+            record.get("completed").and_then(serde_json::Value::as_u64),
+            record.get("total").and_then(serde_json::Value::as_u64),
+        ) else {
+            return None;
+        };
+        let status = match record.get("state").and_then(serde_json::Value::as_str) {
+            Some("started") if completed == 0 => "started",
+            Some("running") => "running",
+            Some("finished") if completed == total => "finished",
+            Some("aborted") => "aborted",
+            _ => return None,
+        };
+        if completed > total {
+            return None;
+        }
+        let began = if status == "started" {
+            now
+        } else if let Some(prior) = self.analysis {
+            if prior.total != total || prior.completed > completed {
+                return None;
+            }
+            prior.began
+        } else {
+            return None;
+        };
+        self.analysis = Some(Analysis {
+            completed,
+            total,
+            began,
+            state: status,
+        });
+        self.last_activity = Some("input-preparation");
+        Some(status != "running")
+    }
+
     fn tool(&mut self, record: &Record, started: bool) -> Option<bool> {
         let index = record
             .get("tool")
@@ -425,19 +582,19 @@ impl Sink for Progress {
                 state.workers = Some(workers);
             }
             (Some("acquisition"), Some("progress")) => {
-                let get = |key| record.get(key).and_then(serde_json::Value::as_u64);
-                let (Some(started), Some(completed), Some(bytes)) = (
-                    get("resources_started"),
-                    get("resources_completed"),
-                    get("bytes_received"),
-                ) else {
-                    return;
-                };
-                if completed > started {
+                if state
+                    .observe_download(record, self.inner.began.elapsed())
+                    .is_none()
+                {
                     return;
                 }
-                state.downloads = Some([started, completed, bytes]);
-                state.last_activity = Some("acquisition");
+            }
+            (Some("analysis"), Some("progress")) => {
+                let Some(changed) = state.observe_analysis(record, self.inner.began.elapsed())
+                else {
+                    return;
+                };
+                force = changed;
             }
             (Some("tool"), Some("command" | "tool-output")) => {
                 let Some(changed) = state.tool(record, event == Some("command")) else {
@@ -446,19 +603,9 @@ impl Sink for Progress {
                 force = changed;
             }
             (Some("conversion"), Some("activity")) => {
-                let Some(value) = record
-                    .get("activity")
-                    .and_then(serde_json::Value::as_str)
-                    .and_then(activity)
-                else {
+                if state.observe_activity(record).is_none() {
                     return;
-                };
-                match record.get("state").and_then(serde_json::Value::as_str) {
-                    Some("started") => state.started = state.started.saturating_add(1),
-                    Some("closed") => state.closed = state.closed.saturating_add(1),
-                    _ => return,
                 }
-                state.last_activity = Some(value);
             }
             (Some("conversion"), Some("task")) => {
                 let Some(index) = record
@@ -495,6 +642,12 @@ impl Sink for Progress {
         }
         force |= previous != state.last_activity;
         self.inner.line(&mut state, "progress", None, force);
+        if state.analysis.is_some_and(|a| a.state == "finished") {
+            // Preserve the final count in history, then reveal the remaining
+            // whole-track preparation rather than leaving a stale 100% visible.
+            state.analysis = None;
+            self.inner.line(&mut state, "progress", None, true);
+        }
     }
 }
 
@@ -616,5 +769,146 @@ mod tests {
                 assert_eq!(resolved(mode, true, terminal), mode);
             }
         }
+    }
+
+    #[test]
+    fn repeated_short_tools_do_not_flood_plain_progress() {
+        let bytes = Arc::new(Mutex::new(Vec::new()));
+        let (sent, _received) = mpsc::channel();
+        let progress = Progress::with_writer(
+            Mode::Text,
+            "analyze",
+            Box::new(Captured {
+                bytes: bytes.clone(),
+                flushed: sent,
+            }),
+            Duration::from_mins(1),
+        );
+        progress.mark("inspection");
+        for _ in 0..100 {
+            for event in ["command", "tool-output"] {
+                progress.emit(
+                    serde_json::json!({
+                        "stage":"tool", "event":event, "tool":"ffprobe",
+                        "argv":["secret-sentinel"], "stderr":"secret-sentinel"
+                    })
+                    .as_object()
+                    .unwrap(),
+                );
+            }
+        }
+        progress.finish();
+        let output = String::from_utf8(bytes.lock().unwrap().clone()).unwrap();
+        assert!(output.lines().count() <= 4, "{output}");
+        assert!(!output.contains("scopes") && !output.contains("sentinel"));
+        assert!(!output.contains('\u{1b}') && !output.contains('\r'));
+    }
+
+    #[test]
+    fn analysis_progress_accepts_only_valid_monotonic_numeric_evidence() {
+        let (progress, bytes, _) = observed(Duration::from_mins(1));
+        progress.mark("input-preparation");
+        for value in [
+            serde_json::json!({"stage":"analysis","event":"progress","task":"ts-preparation","state":"started","completed":0,"total":5}),
+            serde_json::json!({"stage":"analysis","event":"progress","task":"ts-preparation","state":"running","completed":3,"total":5,"url":"secret-sentinel"}),
+            serde_json::json!({"stage":"analysis","event":"progress","task":"ts-preparation","state":"running","completed":2,"total":5}),
+            serde_json::json!({"stage":"analysis","event":"progress","task":"ts-preparation","state":"finished","completed":4,"total":5}),
+            serde_json::json!({"stage":"analysis","event":"progress","task":"ts-preparation","state":"running","completed":4,"total":6}),
+            serde_json::json!({"stage":"analysis","event":"progress","task":"secret-sentinel","state":"running","completed":4,"total":5}),
+            serde_json::json!({"stage":"analysis","event":"progress","task":"ts-preparation","state":"secret-sentinel","completed":4,"total":5}),
+        ] {
+            progress.emit(value.as_object().unwrap());
+        }
+        progress.finish();
+        let values = records(&bytes);
+        let last = values.last().unwrap();
+        assert_eq!(last["analysis_task"], "ts-preparation");
+        assert_eq!(last["analysis_state"], "running");
+        assert_eq!(last["analysis_completed"], 3);
+        assert_eq!(last["analysis_total"], 5);
+        assert!(
+            !String::from_utf8(bytes.lock().unwrap().clone())
+                .unwrap()
+                .contains("sentinel")
+        );
+    }
+
+    #[test]
+    fn finished_ts_collection_yields_to_the_remaining_source_checks() {
+        let bytes = Arc::new(Mutex::new(Vec::new()));
+        let (sent, _) = mpsc::channel();
+        let progress = Progress::with_writer(
+            Mode::Text,
+            "analyze",
+            Box::new(Captured {
+                bytes: bytes.clone(),
+                flushed: sent,
+            }),
+            Duration::from_mins(1),
+        );
+        for (state, completed) in [("started", 0), ("running", 5), ("finished", 5)] {
+            progress.emit(
+                serde_json::json!({
+                    "stage":"analysis", "event":"progress", "task":"ts-preparation",
+                    "state":state, "completed":completed, "total":5
+                })
+                .as_object()
+                .unwrap(),
+            );
+        }
+        progress.emit(
+            serde_json::json!({
+                "stage":"tool", "event":"command", "tool":"ffprobe"
+            })
+            .as_object()
+            .unwrap(),
+        );
+        progress.finish();
+        let text = String::from_utf8(bytes.lock().unwrap().clone()).unwrap();
+        let source = text.find("Preparing source").expect(&text);
+        assert!(text[..source].contains("5/5 segments"), "{text}");
+        assert!(!text[source..].contains("Preparing TS segments"), "{text}");
+    }
+
+    #[test]
+    fn phase_history_retains_completion_received_inside_the_observer_interval() {
+        let bytes = Arc::new(Mutex::new(Vec::new()));
+        let (sent, _) = mpsc::channel();
+        let progress = Progress::with_writer(
+            Mode::Text,
+            "analyze",
+            Box::new(Captured {
+                bytes: bytes.clone(),
+                flushed: sent,
+            }),
+            Duration::from_mins(1),
+        );
+        for completed in [1, 6] {
+            progress.emit(serde_json::json!({
+                "stage":"acquisition", "event":"progress", "resources_started":6,
+                "resources_completed":completed, "resources_total":6, "bytes_received":completed*100
+            }).as_object().unwrap());
+        }
+        progress.mark("input-preparation");
+        progress.finish();
+        let text = String::from_utf8(bytes.lock().unwrap().clone()).unwrap();
+        assert!(text.contains("6/6 files"), "{text}");
+    }
+
+    #[test]
+    fn acquisition_keeps_one_label_while_its_internal_preparation_scope_is_open() {
+        let (progress, bytes, _) = observed(Duration::from_mins(1));
+        progress.mark("acquisition");
+        for state in ["started", "closed"] {
+            progress.emit(serde_json::json!({
+                "stage":"conversion", "event":"activity", "activity":"input-preparation", "state":state
+            }).as_object().unwrap());
+        }
+        progress.finish();
+        let values = records(&bytes);
+        let last = values.last().unwrap();
+        assert_eq!(last["activity"], "acquisition");
+        assert_eq!(last["scopes_started"], 1);
+        assert_eq!(last["scopes_closed"], 1);
     }
 }

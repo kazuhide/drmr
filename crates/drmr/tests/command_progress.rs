@@ -53,7 +53,12 @@ fn structured_progress_is_separate_from_the_single_result() {
                     "active_tool_count",
                     "resources_started",
                     "resources_completed",
+                    "resources_total",
                     "bytes_received",
+                    "analysis_task",
+                    "analysis_state",
+                    "analysis_completed",
+                    "analysis_total",
                     "work_units_completed",
                     "work_units_total",
                     "error_code"
@@ -79,8 +84,9 @@ fn explicit_text_is_available_with_json_results() {
     let result = doctor(&["--progress", "text"]);
     serde_json::from_slice::<Value>(&result.stdout).unwrap();
     let text = String::from_utf8(result.stderr).unwrap();
-    assert!(text.contains("Activity: tool-check"), "{text}");
-    assert!(text.contains("Checking external media tools"));
+    assert!(text.contains("Checking tools"), "{text}");
+    assert!(text.contains("Finished doctor in"));
+    assert!(!text.contains("scopes") && !text.contains("Activity:"));
     assert!(!text.contains('%') && !text.contains("ETA") && !text.contains('\u{1b}'));
 }
 
