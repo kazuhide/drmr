@@ -122,10 +122,16 @@ fn protection(entry: &SampleEntry, has_sinf: bool) -> Protection {
 }
 
 pub(super) fn inspect_mp4(path: &Path) -> Result<Inspection, InspectionError> {
-    let bytes = metadata_bytes(path)?;
-    let boxes = mp4::parse_boxes(&bytes).map_err(|_| InspectionError("invalid-mp4-metadata"))?;
+    inspect_metadata(&metadata_bytes(path)?)
+}
+
+pub(super) fn inspect_metadata(bytes: &[u8]) -> Result<Inspection, InspectionError> {
+    if bytes.len() as u64 > MAX_METADATA_BYTES {
+        return Err(InspectionError("mp4-metadata-size-limit"));
+    }
+    let boxes = mp4::parse_boxes(bytes).map_err(|_| InspectionError("invalid-mp4-metadata"))?;
     let entries =
-        mp4::sample_entries(&bytes).map_err(|_| InspectionError("invalid-mp4-metadata"))?;
+        mp4::sample_entries(bytes).map_err(|_| InspectionError("invalid-mp4-metadata"))?;
     if entries.is_empty() {
         return Err(InspectionError("mp4-sample-descriptions-missing"));
     }
@@ -164,7 +170,7 @@ pub(super) fn inspect_mp4(path: &Path) -> Result<Inspection, InspectionError> {
     }
     let mut systems = Vec::new();
     for item in walked.iter().filter(|item| item.kind() == *b"pssh") {
-        match mp4::Pssh::parse(item.header.payload(&bytes)) {
+        match mp4::Pssh::parse(item.header.payload(bytes)) {
             Some(pssh) => systems.push(match pssh.system_id {
                 crate::playready::WIDEVINE_SYSTEM_ID => "widevine".into(),
                 crate::playready::PLAYREADY_SYSTEM_ID => "playready".into(),

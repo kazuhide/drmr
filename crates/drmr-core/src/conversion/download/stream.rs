@@ -10,7 +10,7 @@ use std::{
     time::{Duration, Instant},
 };
 const SLICE: Duration = Duration::from_millis(50);
-pub(super) struct CancellablePlatform {
+pub(in crate::conversion) struct CancellablePlatform {
     pub stop: Stop,
     pub abort: Stop,
 }

@@ -9,11 +9,13 @@ pub mod netaddr;
 pub mod platform;
 pub(crate) mod playlist;
 mod policy;
+pub(crate) mod progress;
 pub mod pypath;
 pub mod pytext;
 pub mod pyurl;
 
 pub use crate::m3u8::SourceError;
+pub(crate) use fetch::MetadataRead;
 pub use fetch::{ByteRange, Fetched, Fetcher};
 pub use playlist::{COMMON, MASTER, MEDIA, PlaylistKind, lines, positive_int};
 pub use policy::{FetchPolicy, MAX_CONNECTIONS};

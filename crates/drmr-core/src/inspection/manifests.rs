@@ -670,69 +670,96 @@ impl Traversal {
         Ok(result)
     }
     fn inspect(&mut self, path: &Path, bytes: &[u8]) -> Result<Inspection, InspectionError> {
-        let document = hls_document(bytes)?;
-        let mut tracks = Vec::new();
-        let mut descriptions = Vec::new();
-        let mut systems = document.systems;
-        let mut findings = document.findings;
-        if document.references.is_empty() {
-            let mut item = track(Protection::aggregate(document.protections));
-            item.key_ids = document.key_ids.into_iter().collect();
-            if !document.has_media {
-                finding(&mut findings, "hls-no-media-declarations");
+        inspect_document(hls_document(bytes)?, |reference| {
+            self.child(path, reference)
+        })
+    }
+}
+
+fn inspect_document(
+    document: HlsDocument,
+    mut child: impl FnMut(&Reference) -> Result<Inspection, InspectionError>,
+) -> Result<Inspection, InspectionError> {
+    let mut tracks = Vec::new();
+    let mut descriptions = Vec::new();
+    let mut systems = document.systems;
+    let mut findings = document.findings;
+    if document.references.is_empty() {
+        let mut item = track(Protection::aggregate(document.protections));
+        item.key_ids = document.key_ids.into_iter().collect();
+        if !document.has_media {
+            finding(&mut findings, "hls-no-media-declarations");
+        }
+        tracks.push(item);
+        let mut detail = super::ProtectionDescription::track(&tracks[0], Evidence::Manifest);
+        detail.hls_methods(&document.methods);
+        descriptions.push(detail);
+    } else {
+        for reference in document.references {
+            let child = child(&reference)?;
+            let child_details = child.details.map(|details| details.track_protection);
+            for (index, mut item) in child.tracks.into_iter().enumerate() {
+                if item.kind == TrackKind::Unknown {
+                    item.kind = reference.kind;
+                }
+                if item.codec.is_none() {
+                    item.codec.clone_from(&reference.codec);
+                }
+                descriptions.push(
+                    child_details
+                        .as_ref()
+                        .and_then(|details| details.get(index))
+                        .cloned()
+                        .unwrap_or_else(|| {
+                            super::ProtectionDescription::track(&item, Evidence::Manifest)
+                        }),
+                );
+                tracks.push(item);
             }
-            tracks.push(item);
-            let mut detail = super::ProtectionDescription::track(&tracks[0], Evidence::Manifest);
-            detail.hls_methods(&document.methods);
-            descriptions.push(detail);
-        } else {
-            for reference in document.references {
-                let child = self.child(path, &reference)?;
-                let child_details = child.details.map(|details| details.track_protection);
-                for (index, mut item) in child.tracks.into_iter().enumerate() {
-                    if item.kind == TrackKind::Unknown {
-                        item.kind = reference.kind;
-                    }
-                    if item.codec.is_none() {
-                        item.codec.clone_from(&reference.codec);
-                    }
-                    descriptions.push(
-                        child_details
-                            .as_ref()
-                            .and_then(|details| details.get(index))
-                            .cloned()
-                            .unwrap_or_else(|| {
-                                super::ProtectionDescription::track(&item, Evidence::Manifest)
-                            }),
-                    );
-                    tracks.push(item);
+            systems.extend(child.drm_systems);
+            for item in child.findings {
+                if !findings.iter().any(|known| known == &item) {
+                    findings.push(item);
                 }
-                systems.extend(child.drm_systems);
-                for item in child.findings {
-                    if !findings.iter().any(|known| known == &item) {
-                        findings.push(item);
-                    }
-                }
-                if tracks.len() > MAX_TRACKS {
-                    return Err(InspectionError("manifest-track-limit"));
-                }
+            }
+            if tracks.len() > MAX_TRACKS {
+                return Err(InspectionError("manifest-track-limit"));
             }
         }
-        let mut result = Inspection::new(
-            InputFormat::Hls,
-            Evidence::Manifest,
-            tracks,
-            systems,
-            findings,
-        )
-        .with_details(super::PeriodCount::not_applicable());
-        result
-            .details
-            .as_mut()
-            .expect("details were added")
-            .track_protection = descriptions;
-        Ok(result)
     }
+    let mut result = Inspection::new(
+        InputFormat::Hls,
+        Evidence::Manifest,
+        tracks,
+        systems,
+        findings,
+    )
+    .with_details(super::PeriodCount::not_applicable());
+    result
+        .details
+        .as_mut()
+        .expect("details were added")
+        .track_protection = descriptions;
+    Ok(result)
+}
+
+pub(super) fn inspect_hls_metadata(
+    bytes: &[u8],
+    child: &mut dyn FnMut(&str) -> Result<Inspection, InspectionError>,
+) -> Result<Inspection, InspectionError> {
+    Ok(assign_hls_ids(inspect_document(
+        hls_document(bytes)?,
+        |reference| child(&reference.uri),
+    )?))
+}
+fn assign_hls_ids(mut result: Inspection) -> Inspection {
+    for (index, item) in result.tracks.iter_mut().enumerate() {
+        item.id = format!("hls-{index:04}");
+        if let Some(details) = &mut result.details {
+            details.track_protection[index].track_id = Some(item.id.clone());
+        }
+    }
+    result
 }
 
 pub(super) fn inspect_hls(path: &Path, bytes: &[u8]) -> Result<Inspection, InspectionError> {
@@ -752,12 +779,5 @@ pub(super) fn inspect_hls(path: &Path, bytes: &[u8]) -> Result<Inspection, Inspe
         references: 0,
         bytes: bytes.len() as u64,
     };
-    let mut result = traversal.inspect(&path, bytes)?;
-    for (index, item) in result.tracks.iter_mut().enumerate() {
-        item.id = format!("hls-{index:04}");
-        if let Some(details) = &mut result.details {
-            details.track_protection[index].track_id = Some(item.id.clone());
-        }
-    }
-    Ok(result)
+    Ok(assign_hls_ids(traversal.inspect(&path, bytes)?))
 }

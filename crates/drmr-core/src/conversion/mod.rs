@@ -10,6 +10,7 @@
 mod aes128;
 mod download;
 pub mod download_policy;
+mod remote_metadata;
 pub use download::{DownloadedSource, preflight_download_output};
 mod audio;
 mod audio_presentation;
