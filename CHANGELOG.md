@@ -5,6 +5,15 @@ for installation, stable interfaces and versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- Keep terminal progress in one live status with a history of finished stages
+  and their durations. Redirected text logs record stage changes and occasional
+  updates instead of every observation; detailed JSON Lines remain available.
+- Show percentages and approximate remaining time for the current resource
+  transfer or TS segment batch once its total and sufficient progress are known,
+  keeping discovery and unknown work unestimated.
+
 ## [1.0.1] - 2026-10-23
 
 Pre-release update for AAC in MPEG transport streams, key-free metadata

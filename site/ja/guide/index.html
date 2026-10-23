@@ -1958,13 +1958,14 @@ drmr verify result/dash/manifest.mpd --manifest-only --json
 </section>
 <section class="guide-chapter" id="resources-stop" data-guide-chapter="resources-stop" aria-labelledby="resources-stop-title"><h2 id="resources-stop-title">10. 並列処理・メモリ・停止</h2><a class="guide-chapter-switch" href="../../guide/#resources-stop" lang="en" hreflang="en">English</a>
 <h3>並列数の自動調整と --max-workers</h3>
-<p><code>convert</code> と <code>verify</code> は、利用可能な CPU とメモリ、映像の寸法、リソースのサイズ、トラック数から並列数を自動で調整します。<code>--max-workers</code> には 1 から 64 の範囲で上限を指定できますが、実際にはそれより少ないワーカーを使う場合があります。省略時に選ぶ推奨数は最大 32 です。</p>
+<p>通常の <code>analyze</code>、<code>plan --save</code>、<code>convert</code>、<code>verify</code> は、利用可能な CPU とメモリ、映像の寸法、リソースのサイズ、トラック数から並列数を自動で調整します。<code>--max-workers</code> には 1 から 64 の範囲で上限を指定できますが、実際にはそれより少ないワーカーを使う場合があります。省略時に選ぶ推奨数は最大 32 です。<code>analyze --metadata-only</code> とは併用できません。</p>
 <figure class="guide-example" aria-labelledby="example-87-title" data-code-language="sh"><figcaption id="example-87-title">例 87: sh</figcaption><pre tabindex="0"><code>drmr convert source.mpd --to cbcs --format dash \
   --output result --keys-file config/keys.json --max-workers 2
 drmr verify result/manifest.mpd --source source.mpd \
   --keys-file config/keys.json --max-workers 1 --json --measure
 </code></pre></figure>
 <p>ワーカー数を変えても、内容と時刻の検証は省略しません。トラック処理、セグメント処理、原本解析では、同じプロセス内で外部処理に使う CPU・メモリの予約枠を共有します。別々の CLI プロセス間では予約枠を共有しません。</p>
+<p>通常の <code>analyze</code> はダウンロード後も続きます。原本のコピーを照合してトラックを準備し、符号化されたパケット、復号後の映像・音声、時刻を検査するためです。並列に動かせるのは各段階の独立した作業で、すべての処理や外部ツールの呼び出しが同時に動くわけではありません。回線やディスクの速度、プロセスの起動、トラック数、順序を保つ必要のある検査も所要時間に影響します。性能を比べる場合は、保存済みの同じローカル原本を使い、並列数一つの場合と自動選択の場合を比較してください。概要だけを知りたい場合は <code>analyze --metadata-only</code> を使えますが、変換できるかどうかの確認にはなりません。</p>
 <p>内蔵のマニフェスト検査も同じ予約枠を使います。小さい入力は呼び出し元で処理します。大きな HLS は文書ごとに、大きな DASH は一度解析したツリー内の独立した検査ごとに並列処理できます。処理用のプールを入れ子にせず、子プレイリストの解析結果や継承したタイムラインを再利用します。マニフェストの保持と検査に必要なメモリを予約し、ファイルの識別情報と内容も照合します。バイト数、ノード数、参照数、診断数などの上限に達した場合は不完全な検査として報告し、合格にはしません。</p>
 <h3>資源見積もりの範囲</h3>
 <p>Linux では、読み取り可能な CPU quota、メモリの cgroup 上限、親 cgroup の上限も見積もりに使います。cgroup は、コンテナやサービスが使う OS の資源を制御する仕組みです。資源情報を取得できない場合は、512 MiB の枠で子処理を一つ実行する前提で見積もります。一つの処理もこの枠に収まらないと判断した場合は、<code>resource-budget</code> で失敗します。</p>
@@ -2243,7 +2244,7 @@ python tools/build_desktop.py --bundle
 <p>全コマンド共通の <code>--progress</code> で進捗の表示方法を選びます。標準出力には最後の結果だけを出すため、既存のパイプ処理はそのまま使えます。</p>
 <div class="guide-table-scroll" role="region" aria-labelledby="table-16-title" tabindex="0"><table><caption id="table-16-title">標準エラーへの進捗表示 — 表 16</caption><thead><tr><th scope="col">指定</th><th scope="col">動作</th></tr></thead><tbody>
 <tr><th scope="row"><code>auto</code></th><td>既定。人が読む結果にはテキストの進捗を表示。--json でも標準エラーが端末なら表示し、ファイルやパイプなら省略</td></tr>
-<tr><th scope="row"><code>text</code></th><td>テキストの進捗。--json の結果と併用可能</td></tr>
+<tr><th scope="row"><code>text</code></th><td>端末では現在の作業と完了した段階を表示。ファイルやパイプには要点を絞ったログを出力。--json の結果と併用可能</td></tr>
 <tr><th scope="row"><code>json</code></th><td>一行に一つの JSON オブジェクトを記録する JSON Lines。--json の結果と併用可能</td></tr>
 <tr><th scope="row"><code>off</code></th><td>進捗を省略。結果やエラーの出力は維持</td></tr>
 </tbody></table></div>
@@ -2253,7 +2254,9 @@ drmr analyze original.mp4 --metadata-only --json --progress json \
   &gt;metadata.json 2&gt;progress.jsonl
 drmr analyze original.mp4 --metadata-only --progress off
 </code></pre></figure>
-<p>処理段階、具体的な作業を表す固定の名前、経過時間を表示します。取得中は実際に受信したバイト数とリソース件数、並列処理では実行中・完了した作業数を表示できる範囲で示します。長い処理で新たな完了がなくても、およそ二秒ごとに現在の作業と経過時間を表示します。総数が不明な場合に、進捗率や残り時間を推測して表示することはありません。</p>
+<p>対話端末では現在の作業を一行で更新し、終わった処理段階と所要時間をその上に残します。ダウンロード後の検査中も、取得が済んだことを確認できます。受信量は MiB などの読みやすい単位で表示します。ファイルやパイプ、画面の更新に対応しない端末では、処理段階の開始・終了と、間隔を空けた途中経過を記録します。ツールの呼び出しや件数の変化を逐一記録せず、変化がない場合も時々経過時間を表示します。</p>
+<p>ダウンロードは取得対象の調査が終わると、完了件数と進捗率を表示できます。TS セグメントの準備では、現在処理している一まとまりの作業について表示します。残り時間の概算は、進み方をある程度観測してから表示します。その段階や作業の実績から求めた値であり、コマンド全体の終了予測ではありません。総数が不明な作業では、現在の作業と経過時間を表示します。すべてのセグメントを読んだ後も、元の順序で境界の整合性を調べる処理が残る場合があります。</p>
+<p>取得の総件数には、取得対象の調査に使った完了済みのリクエストと、重複を除いたメディアのリソースを含めます。受信量には再試行時の通信も含むため、保存したファイルのサイズとは一致しません。並列数は独立した作業に対する割り当てや上限であり、すべての段階が同じ並列数で動くわけではありません。</p>
 <div class="guide-table-scroll" role="region" aria-labelledby="table-17-title" tabindex="0"><table><caption id="table-17-title">標準エラーへの進捗表示 — 表 17</caption><thead><tr><th scope="col">処理段階</th><th scope="col">確認できる作業</th></tr></thead><tbody>
 <tr><th scope="row"><code>configuration</code></th><td>設定の読み取りと検査</td></tr>
 <tr><th scope="row"><code>acquisition</code></th><td>入力リソースの取得</td></tr>
@@ -2266,7 +2269,7 @@ drmr analyze original.mp4 --metadata-only --progress off
 <tr><th scope="row"><code>tool-check</code></th><td>doctor による外部ツールの探索・診断</td></tr>
 <tr><th scope="row"><code>server-startup</code></th><td>ローカルコンソールの起動と待機</td></tr>
 </tbody></table></div>
-<p>一つの処理区間が閉じても、その区間や変換全体の成功を意味しません。複数の区間が重なったり、入れ子になったりする場合もあります。最後の作業名だけで失敗原因を断定しないでください。短いメタデータ確認や計画は、定期表示の前に終わることもあります。ヘルプや版表示に架空の進捗は出しません。<code>--measure</code> は不要で、処理時間の計測レポートとは別の表示です。</p>
+<p>件数などの詳しい数値をプログラムから読む場合は <code>--progress json</code> を使います。JSON に含まれる処理区間の終了は、その区間や変換全体の成功を意味しません。複数の区間が重なったり、入れ子になったりする場合もあります。最後の作業名だけで失敗原因を断定しないでください。ヘルプや版表示に架空の進捗は出しません。<code>--measure</code> は不要で、処理時間の計測レポートとは別の表示です。</p>
 <p>進捗には URL、鍵、認証ヘッダー、入力・出力やツールのパス、生のメタデータ、外部ツールの出力を含めません。引数の解析を通過した通常の処理では、明示的な <code>--progress json</code> により標準エラーを JSON Lines で返し、失敗・停止にも固定のエラーコードを付けます。引数の構文エラーや、serve の既存の起動エラー・接続先通知は別のテキストになる場合があります。成功は進捗だけで判断せず、最後の結果と終了コードで確認してください。</p>
 <h3>終了コード</h3>
 <div class="guide-table-scroll" role="region" aria-labelledby="table-18-title" tabindex="0"><table><caption id="table-18-title">終了コード — 表 18</caption><thead><tr><th scope="col">値</th><th scope="col">意味</th></tr></thead><tbody>

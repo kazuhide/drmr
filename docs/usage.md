@@ -86,7 +86,7 @@ Global `--progress` controls observations on standard error. It never adds progr
 | Mode | Behavior |
 | --- | --- |
 | `auto` | Default: text with human-readable results; with `--json`, text only when stderr is a terminal, otherwise off |
-| `text` | One readable progress line per observation, also with `--json` results |
+| `text` | Live terminal status with stage history; concise log lines when redirected, also with `--json` results |
 | `json` | Progress records as JSON Lines: one JSON object per line, also with `--json` results |
 | `off` | No progress records; final results and errors still apply |
 
@@ -102,7 +102,13 @@ drmr analyze media.mp4 --metadata-only --json --progress json \
 drmr analyze media.mp4 --metadata-only --progress off
 ```
 
-Observations show the current stage, a fixed task label and elapsed time. Acquisition adds actual received bytes and resource counts; parallel work adds active and completed units when available. Ongoing work emits a heartbeat about every two seconds even when no new unit completes. No percentage or remaining-time estimate is invented when the total is unknown. A closed scope is not a successful conversion: scopes can overlap, nest or end with failure. The last activity is not a diagnosis. Progress works without `--measure`; measured phase durations remain separate and can overlap.
+On an interactive terminal, one status line updates in place with the current task and elapsed time. Finished stages remain above it with their durations, so the download history stays visible while inspection continues. Received bytes use readable units. Redirected text, or a terminal without live-display support, records stage starts and ends with occasional updates rather than every tool call or counter change. Unchanged work still produces an occasional elapsed-time notice.
+
+When resource discovery has finished, the current download can show its completed count and percentage. With enough observed progress, it can also show approximate time remaining. TS segment preparation can show the same information for its current batch. These estimates apply to the named stage or batch, not the entire command. Discovery and other work with an unknown total show the current task and elapsed time without a percentage or estimate. Finishing segment reads can still leave ordered boundary checks before preparation finishes.
+
+Download resource totals include completed discovery requests and the distinct media resources. Received bytes include data received again during retries and are not the retained file size. Worker selection applies to bounded independent jobs and does not mean every analysis stage runs with that many workers.
+
+Use `--progress json` when a script needs the detailed numeric observations, including resource and scope counters. A closed scope is not a successful conversion: scopes can overlap, nest or end with failure. The last activity is not a diagnosis. Progress works without `--measure`; measured phase durations remain separate and can overlap.
 
 Stages include configuration, acquisition, inspection, input preparation, normalization, packaging, verification and publication. `doctor` reports tool checks; `serve` reports startup and waiting. Quick metadata reads and plans can finish before a heartbeat. Help and version output do not invent work records.
 
@@ -394,8 +400,15 @@ An operating-system hard kill or power loss cannot preserve this ownership.
 
 ### Automatic worker limits
 
-`convert` and `verify` choose concurrency from processor capacity, available memory,
-and observed media dimensions. Use `--max-workers 1` to process one track at a time,
-or another value from 1 to 64 as an upper bound. Resource admission may choose fewer.
+Full `analyze`, `plan --save`, `convert` and `verify` choose concurrency from
+processor capacity, available memory and observed media dimensions. Use
+`--max-workers 1` to run independent jobs one at a time, or another value from 1
+to 64 as an upper bound. Resource admission may choose fewer.
 The same content and timing checks run in either mode. See [resource limits and
 measurements](resources.md) for the estimates and a repeatable comparison.
+
+Full `analyze` also performs work after the source download: it prepares tracks
+and checks encoded media, decoded content and timing. The worker count does not
+mean every stage runs concurrently. For a quick metadata or declaration check,
+use `analyze --metadata-only`; this does not establish that complete source media
+can be converted. See [full analysis time](resources.md#full-analysis-time).

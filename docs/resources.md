@@ -41,6 +41,28 @@ Structured `resource-budget` records show chosen workers, child thread allocatio
 CPU tokens, estimated memory tokens, and whether memory came from the host, the process
 control group, or the unknown fallback. They contain no source paths or machine IDs.
 
+## Full analysis time
+
+`analyze` without `--metadata-only` checks complete source media. A URL operation
+first retains the original resources, then checks a private copy against their bytes,
+prepares tracks and checks encoded packets, decoded media and timing. Finishing
+the download does not finish the analysis. The progress history distinguishes
+acquisition from the later inspection, preparation and verification work.
+
+Worker selection applies to independent jobs within a stage. It does not make
+every stage parallel or split every long-running media-tool call. Network and
+disk throughput, subprocess startup, track count and checks that must retain
+presentation order can limit the benefit of more workers. Use
+`--max-workers 1` and the automatic setting on the same retained local input to
+compare processing, rather than comparing two unrelated downloads. With
+`--json --measure`, phase observations help locate the work; overlapping phase
+times must not be added together as command wall time.
+
+For a quick look at MP4 metadata or HLS/DASH declarations, use
+`analyze --metadata-only`. It does not download complete media or run complete
+source checks, so its success does not establish conversion eligibility. See
+[analysis and progress](usage.md) for the two workflows.
+
 ## Native manifest work
 
 HLS and DASH manifest linting uses the same process capacity as media work.
@@ -231,7 +253,8 @@ live command workspaces. The scan assumes the private stage owners remain held
 and all writers have finished; metadata checks and directory traversal do not
 atomically prevent path replacement or impose a hard filesystem I/O deadline.
 
-`convert` and `verify` accept `--max-workers 1` through `64` as an upper bound.
+Full `analyze`, `plan --save`, `convert` and `verify` accept `--max-workers 1`
+through `64` as an upper bound. Metadata-only analysis refuses this option.
 With no option, independent tracks share the CPU and memory admission described above.
 Snapshots and stream metadata are checked before parallel normalization. Results retain
 presentation order, and a failed track prevents publication. All content checks still run.
