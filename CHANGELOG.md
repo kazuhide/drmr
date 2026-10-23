@@ -5,6 +5,11 @@ for installation, stable interfaces and versioning.
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-10-23
+
+Pre-release update for AAC in MPEG transport streams, key-free metadata
+analysis and command progress. The published v1.0.0 archives remain unchanged.
+
 ### Added
 
 - Read local and HTTP(S) MP4, HLS and DASH metadata with
@@ -14,11 +19,6 @@ for installation, stable interfaces and versioning.
 - Select stderr progress with global `--progress auto|text|json|off`, including
   progress alongside JSON results, actual acquisition counters and periodic
   elapsed-time observations without estimated percentages or completion times.
-
-## [1.0.1] - 2026-10-23
-
-Pre-release patch for AAC in MPEG transport streams. The published v1.0.0
-archives remain unchanged.
 
 ### Fixed
 
