@@ -370,3 +370,19 @@ Nonfinite numbers, exponents, excessive precision and trailing data fail this
 rule. A duration changed by one clock tick does not pass as decimal rounding.
 All media frame and absolute clock checks still apply; decimal acceptance
 cannot realign audio or video.
+
+## Complete input analysis
+
+Complete `analyze` checks every prepared source track directly. It does not match
+the input against a second copy of the same track set. MPEG-TS source checks read
+every encoded access unit and timestamp, compare the encoded content with
+evidence collected directly from the original transport packets, inspect every
+video frame, and decode the complete content. AAC checks also count the complete
+decoded samples. Removing repeated work does not turn complete analysis into a
+metadata check.
+
+Analysis still reads all referenced renditions. Its duration depends on their
+combined length and resolution, as well as retrieval and storage speed. The
+separate `verify` operation independently compares source and output media;
+source analysis does not replace that comparison or authorize a later command
+without fresh checks.

@@ -268,9 +268,20 @@ fn deep_admission_reports_actual_ts_format_and_never_admits_missing_media() {
         hls_keys: &hls,
     };
     let before = common::snapshot_tree(directory.path());
-    let qualification = converter()
-        .validate_source(source, SourceValidationPurpose::Conversion)
+    let (qualification, measurement) = converter()
+        .measure(|command| command.validate_source(source, SourceValidationPurpose::Conversion));
+    let qualification = qualification.unwrap();
+    let measurement = serde_json::to_value(measurement).unwrap();
+    let ffmpeg = measurement["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["tool"] == "ffmpeg")
         .unwrap();
+    assert!(
+        ffmpeg["calls"].as_u64().unwrap() <= 10,
+        "Source admission must not decode the same five tracks repeatedly: {measurement}"
+    );
     assert_eq!(qualification.actual_format, OutputFormat::HlsTs);
     assert_eq!(
         qualification.track_protection,
@@ -293,6 +304,56 @@ fn deep_admission_reports_actual_ts_format_and_never_admits_missing_media() {
             .validate_source(source, SourceValidationPurpose::Conversion)
             .is_err()
     );
+}
+
+#[test]
+fn complete_video_source_checks_require_the_selected_decoder() {
+    let directory = tempfile::tempdir().unwrap();
+    let input = fixture(directory.path());
+    let master = std::fs::read_to_string(&input).unwrap();
+    let video_only = master
+        .lines()
+        .filter(|line| !line.starts_with("#EXT-X-MEDIA:"))
+        .map(|line| line.replace(",AUDIO=\"aac\"", ""))
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(&input, format!("{video_only}\n")).unwrap();
+    proof(
+        &converter()
+            .validate_source(
+                VerificationSource {
+                    input: &input,
+                    input_keys: &InputKeys::default(),
+                    hls_keys: &HlsInputKeys::default(),
+                },
+                SourceValidationPurpose::Conversion,
+            )
+            .unwrap()
+            .verification,
+    );
+    let decoder = directory.path().join("missing-decoder");
+    let converter = Converter::new(
+        Arc::new(ToolRunner::new(
+            Arc::new(Secrets::default()),
+            Arc::new(NoSink),
+        )),
+        "packager",
+        decoder.to_str().unwrap(),
+    );
+    let original = common::snapshot_tree(directory.path());
+    assert!(
+        converter
+            .validate_source(
+                VerificationSource {
+                    input: &input,
+                    input_keys: &InputKeys::default(),
+                    hls_keys: &HlsInputKeys::default(),
+                },
+                SourceValidationPurpose::Conversion,
+            )
+            .is_err()
+    );
+    assert_eq!(common::snapshot_tree(directory.path()), original);
 }
 
 fn append_empty_transport_padding(root: &Path) {
