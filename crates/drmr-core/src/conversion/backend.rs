@@ -1,5 +1,7 @@
 //! Backend command construction. Retained records contain neither raw arguments nor tool output.
 
+mod decoded_hash;
+
 const RESOURCE_FLAGS: [&str; 2] = ["--single_threaded", "--io_cache_size=0"];
 use super::{ContentKey, ConversionError, InputKeys, OutputKey};
 use crate::{
@@ -528,17 +530,11 @@ impl Backend {
             argv.splice(1..1, ["-ignore_editlist".into(), "1".into()]);
         }
         let mut keyed = super::keys::KeyedArguments::new(argv, key);
-        let argv = &mut keyed.argv;
-        if copy {
-            argv.extend(["-c".into(), "copy".into()]);
-        } else {
-            argv.extend([
-                "-threads".into(),
-                "1".into(),
-                "-fps_mode".into(),
-                "passthrough".into(),
-            ]);
+        if !copy {
+            return self.hash_decoded_stream(keyed, index);
         }
+        let argv = &mut keyed.argv;
+        argv.extend(["-c".into(), "copy".into()]);
         argv.extend([
             "-f".into(),
             "hash".into(),
@@ -640,6 +636,12 @@ pub(super) fn tool_error(error: &crate::toolrun::ToolError) -> ConversionError {
         _ => "media-tool-unavailable-or-timeout",
     })
 }
+
+#[cfg(test)]
+mod hash_tests;
+
+#[cfg(test)]
+mod hash_media_tests;
 
 #[cfg(test)]
 mod packet_tests {

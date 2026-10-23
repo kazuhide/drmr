@@ -97,17 +97,83 @@ fn selected_route_does_not_require_unrelated_tools() {
 }
 
 fn probing_tool(directory: &Path, name: &str, version: &str, options: &str) {
+    let components = if name == "ffmpeg" {
+        "Muxer data [raw data]:\nMuxer hash [Hash testing]:\nEncoder rawvideo [raw video]:\nEncoder pcm_s16le [PCM signed 16-bit little-endian]:\n-thread_queue_size"
+    } else {
+        ""
+    };
+    probing_tool_with_components(directory, name, version, options, components);
+}
+
+fn probing_tool_with_components(
+    directory: &Path,
+    name: &str,
+    version: &str,
+    options: &str,
+    components: &str,
+) {
     drmr_test_support::install(
         &directory.join(name),
         &drmr_test_support::ToolSpec {
             stdout: format!(
-                "{name} version {version}\n{options}\nuntrusted-secret-must-not-appear\n"
+                "{name} version {version}\n{options}\n{components}\nuntrusted-secret-must-not-appear\n"
             )
             .into_bytes(),
             ..Default::default()
         },
     )
     .unwrap();
+}
+
+#[test]
+fn decoded_comparison_requires_both_muxers_and_both_default_encoders() {
+    let components = [
+        ("data_muxer", "Muxer data [raw data]:"),
+        ("hash_muxer", "Muxer hash [Hash testing]:"),
+        ("rawvideo_encoder", "Encoder rawvideo [raw video]:"),
+        (
+            "pcm_s16le_encoder",
+            "Encoder pcm_s16le [PCM signed 16-bit little-endian]:",
+        ),
+        ("thread_queue_size", "-thread_queue_size"),
+    ];
+    for (missing, _) in components {
+        let directory = tempfile::tempdir().unwrap();
+        probing_tool(
+            directory.path(),
+            "ffprobe",
+            "9.0.1",
+            "-show_packets\n-show_entries\n-show_data_hash\n-decryption_keys",
+        );
+        let present = components
+            .iter()
+            .filter(|(name, _)| *name != missing)
+            .map(|(_, header)| *header)
+            .collect::<Vec<_>>()
+            .join("\n");
+        probing_tool_with_components(
+            directory.path(),
+            "ffmpeg",
+            "9.0.1",
+            "-encryption_scheme\n-decryption_key\n-decryption_keys",
+            &present,
+        );
+        let output = doctor(
+            directory.path(),
+            &["--probe", "--route", "progressive-mp4", "--json"],
+        );
+        let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(output.status.code(), Some(1), "missing {missing}: {report}");
+        assert_eq!(report["ready"], false);
+        assert_eq!(report["tools"][0]["feature_status"], "missing");
+        assert!(
+            report["tools"][0]["features"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|feature| feature["name"] == missing && feature["available"] == false)
+        );
+    }
 }
 
 fn probing_pair(directory: &Path, version: &str, ffmpeg_options: &str) {
@@ -262,7 +328,16 @@ fn installed_tools_pass_the_actual_progressive_route_probe() {
         assert_eq!(tool["feature_status"], "available");
         assert_eq!(tool["failure_code"], Value::Null);
         let expected: &[&str] = if name == "ffmpeg" {
-            &["encryption_scheme", "decryption_key", "decryption_keys"]
+            &[
+                "encryption_scheme",
+                "decryption_key",
+                "decryption_keys",
+                "data_muxer",
+                "hash_muxer",
+                "rawvideo_encoder",
+                "pcm_s16le_encoder",
+                "thread_queue_size",
+            ]
         } else {
             &[
                 "show_packets",

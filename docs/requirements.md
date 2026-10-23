@@ -19,6 +19,13 @@ The lower bounds describe the supported baseline, rather than the earliest versi
 
 `doctor` discovers executables without launching tools. Add `--probe` to check their version banners and advertised options, and `--route progressive-mp4` (or another processing route) to select required tools. A newer version can still lack an option. MP4 structure checks run in the Rust executable. During conversion, incomplete timing or unsupported metadata causes an error. See [media processing](media-processing.md) and [conversion support](conversion-support.md) for the verified profiles and known tool behavior.
 
+Decoded-content verification also requires FFmpeg's `data` and `hash` output
+formats, its `rawvideo` and `pcm_s16le` encoders, and the `thread_queue_size`
+option. These preserve every decoded
+picture and 16-bit audio sample used by the complete SHA-256 comparison;
+`doctor --probe` checks that the build advertises each component. The probe
+does not decode a sample or establish compatibility with a particular input.
+
 Windows also needs the [Visual C++ runtime](windows.md#install-and-check-tools) used by its compiled executable. External media tools are installed separately from the CLI archive.
 
 ## Final-manifest checks

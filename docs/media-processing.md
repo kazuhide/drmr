@@ -312,6 +312,29 @@ The timing reader retains one record of at most 256 bytes and an 8 KiB read buff
 
 Other limits remain: staged track size, track and segment counts, MP4 initialization metadata, fragment metadata and samples per fragment are bounded separately. Removing the packet-proof limit does not make total memory, temporary disk space or runtime unlimited.
 
+### Complete decoded-content hashes
+
+Decoded-content verification still decodes the complete selected track. It hashes
+the same raw picture bytes and signed 16-bit little-endian audio samples as
+FFmpeg's SHA-256 output format, without selecting a different pixel format,
+sample rate or channel layout. Rust receives the bytes through a fixed-size
+buffer and computes SHA-256 with processor acceleration where available. The
+decoded presentation is not retained in memory or written to a temporary file.
+
+The same decoder feeds a second FFmpeg output using the original hash format
+and its timestamp checks. That output produces a small Adler-32 completion
+marker; the marker is never used to establish content equality. The SHA-256
+result is accepted only after the whole subprocess succeeds and its cleanup is
+confirmed. Decreasing timestamps still fail, while equal timestamps retain the
+hash format's existing handling. Cancellation, deadlines and the independently
+bounded error stream remain active. Each FFmpeg output queue is limited to one
+packet. Subprocess admission retains the previous memory reservation alongside
+the picture-size and input-buffer estimates; decoder and codec allocations
+remain estimates rather than an operating-system memory limit.
+
+Encoded-payload hashes and the higher-precision checks for native audio and
+finite audio playback ranges keep their existing formats and processing.
+
 The long-presentation regression derives a 32 × 18 video from the attributed [Big Buck Bunny clip](https://github.com/kazuhide/drmr/blob/main/crates/drmr/tests/fixtures/bbb/README.md) and repeats all ten seconds 417 times. It converts and independently verifies all 100,080 packets over 4,170 seconds. Generate and check it locally with `cargo test -p drmr --test long_conversion --locked`; media files are temporary. This small resolution tests complete long-duration verification, not representative encoding throughput or device playback. A separate generated 700,001-packet test passes more than 32 MiB of valid timing records through the same reader.
 
 ## Interpret a result
