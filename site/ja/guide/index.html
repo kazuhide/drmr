@@ -31,10 +31,10 @@
   </header>
   <main class="wrap" id="main" tabindex="-1">
     <div class="guide-intro">
-      <p class="eyebrow">drmr / 1.0.0</p>
+      <p class="eyebrow">drmr</p>
       <h1>ユーザーガイド</h1>
       <p>drmr の対応形式、鍵の設定、変換・検証の手順、Docker・Web コンソール・デスクトップアプリの使い方を説明します。</p>
-      <p class="guide-meta">更新日: <time datetime="2026-10-23">2026-10-23</time> · バージョン: 1.0.0</p>
+      <p class="guide-meta">更新日: <time datetime="2026-10-23">2026-10-23</time> · バージョン: 1.0.1</p>
     </div>
     <div class="guide-layout">
       <aside class="guide-toc" id="guide-toc">
@@ -45,7 +45,7 @@
 <li><a href="#supported-profiles">3. 入力と出力の対応表</a></li>
 <li><a href="#installation">4. 導入と依存ツール</a></li>
 <li><a href="#key-configuration">5. 鍵設定と秘密情報の扱い</a></li>
-<li><a href="#inspect-plan">6. inspect と plan</a></li>
+<li><a href="#inspect-plan">6. メタデータの確認と plan</a></li>
 <li><a href="#local-conversion">7. ローカル変換の実例</a></li>
 <li><a href="#url-input">8. URL 入力の取得と変換</a></li>
 <li><a href="#verification">9. 検証の意味と処理の単位</a></li>
@@ -62,14 +62,14 @@
       </aside>
       <article class="guide-content" id="guide-content"><section class="guide-chapter" id="introduction" data-guide-chapter="introduction" aria-labelledby="introduction-title"><h2 id="introduction-title">1. はじめに</h2><a class="guide-chapter-switch" href="../../guide/#introduction" lang="en" hreflang="en">English</a>
 <p>drmr は映像・音声の符号化データを維持しながら、ファイルの格納形式、配信形式、暗号化方式を変更するツールです。復号に必要な鍵を持つ技術者が、管理下のオンデマンドコンテンツを解析・変換・検証する用途を想定しています。画質を変更するエンコーダーや DRM ライセンスを取得するクライアントの機能はありません。</p>
-<p>このガイドは <code>main</code> ブランチのソースに基づき、操作方法と対応条件を説明します。製品の版番号は 1.0.0 ですが、配布済みの v1.0.0 には含まれない <strong>Unreleased</strong>（未公開）の変更も記載しています。更新日は 2026-10-23 です。利用する配布物に同梱されたドキュメントも確認してください。リポジトリ内の関連ドキュメントは英語で記載しています。</p>
+<p>このガイドでは現在のソースで使える操作と対応条件を説明します。配布版を使う場合は同梱のドキュメントも確認してください。リポジトリ内の関連ドキュメントは英語で記載しています。実行例が成功しても、すべてのメディアや再生端末での動作を確認したことにはなりません。</p>
 <p>公開版の CLI は <a href="https://github.com/kazuhide/drmr/releases">GitHub Releases</a> から入手できます。展開する前に、配布ファイルのハッシュを同じ版の <code>SHA256SUMS</code> と照合してください。外部のメディア処理ツールは別途必要です。配布対象と互換性の方針は<a href="https://github.com/kazuhide/drmr/blob/main/docs/releases.md">リリースの説明（英語）</a>に記載しています。</p>
-<p>各リリースの <strong>Pre-release</strong> 表示と説明も確認してください。配布済みの v1.0.0 はプレリリースに変更しており、差し替えできない配布ファイルには TS 入力音声が 48 kHz に限られる制限が残っています。44.1 kHz への対応は <code>main</code> の <strong>Unreleased</strong> に含まれ、既存のタグや配布ファイルは変更していません。この修正を使う場合は、現在の <code>main</code> から <a href="#installation">CLI をビルド</a>してください。1.x の CLI 互換性に関する方針と、各版の検証範囲は別に定めています。</p>
+<p>利用する配布物の <strong>Pre-release</strong> 表示と説明を確認してください。ソースからのビルド手順は <a href="#installation">CLI のインストール</a>に記載しています。CLI の互換性と各版の検証範囲は別に定めています。Web コンソールとデスクトップアプリは実験的な機能です。</p>
 <h3>目的別のコマンド</h3>
 <div class="guide-table-scroll" role="region" aria-labelledby="table-1-title" tabindex="0"><table><caption id="table-1-title">目的別のコマンド — 表 1</caption><thead><tr><th scope="col">目的</th><th scope="col">コマンド</th><th scope="col">わかること・実行すること</th></tr></thead><tbody>
 <tr><th scope="row">外部ツールを探す</th><td><code>doctor</code></td><td>起動環境の PATH に必要な実行ファイルがあるか</td></tr>
 <tr><th scope="row">ツールのバージョンと機能を確認する</th><td><code>doctor --probe</code></td><td>バージョンとヘルプに必要なオプションがあるか。メディア処理はしない</td></tr>
-<tr><th scope="row">入力の種類と暗号化方式の宣言を確認する</th><td><code>inspect</code></td><td>ローカル MP4・DASH・HLS のメタデータ。復号やサンプル自体の検証はしない</td></tr>
+<tr><th scope="row">入力の種類と暗号化方式の宣言を確認する</th><td><code>analyze --metadata-only</code></td><td>ローカルまたは HTTP(S) URL の MP4・DASH・HLS メタデータ。鍵は不要。コンテンツ全体の検証はしない</td></tr>
 <tr><th scope="row">入力データが対応条件を満たすか確認する</th><td><code>analyze</code></td><td>原本全体の解析と入力条件の確認。URL 入力は指定先に保存する</td></tr>
 <tr><th scope="row">変換先の候補と条件を確認する</th><td><code>plan</code></td><td>指定した形式・暗号方式の組み合わせと実行時に必要な条件</td></tr>
 <tr><th scope="row">変換計画を保存する</th><td><code>plan --save</code></td><td>原本のハッシュと出力条件を記録する。複数出力の場合は DRM の選択とマニフェスト検証方針も含む</td></tr>
@@ -77,12 +77,12 @@
 <tr><th scope="row">原本と結果を改めて比べる</th><td><code>verify</code></td><td>原本を独立に読み直し、内容・復号結果・時刻などを照合する</td></tr>
 <tr><th scope="row">完成したマニフェストだけを調べる</th><td><code>verify --manifest-only</code></td><td>Rust の内蔵 Linter で HLS/DASH の宣言を検査する。--external-validator で外部検査も追加できる。メディアの比較や復号は行わない</td></tr>
 </tbody></table></div>
-<p>原本を確認してから変換計画を保存する場合は、<code>analyze</code>、<code>plan --save</code>、<code>convert --plan</code>、<code>verify --plan</code> の順に使います。メタデータだけを短時間で確認するには <code>inspect</code> を使います。計画を保存せずに <code>convert INPUT</code> を実行することもできます。</p>
+<p>原本を確認してから変換計画を保存する場合は、通常の <code>analyze</code>、<code>plan --save</code>、<code>convert --plan</code>、<code>verify --plan</code> の順に使います。メタデータだけを確認するには <code>analyze</code> に <code>--metadata-only</code> を付けます。計画を保存せずに <code>convert INPUT</code> を実行することもできます。</p>
 <h3>最短の実行例</h3>
 <p>最初の動作確認には、対応条件を満たす非暗号化のローカル MP4 を使います。出力先の親ディレクトリをあらかじめ作成し、出力ファイルには既存のファイルと重複しない名前を指定してください。原本は変更されません。</p>
 <figure class="guide-example" aria-labelledby="example-1-title" data-code-language="sh"><figcaption id="example-1-title">例 1: sh</figcaption><pre tabindex="0"><code>drmr --version
 drmr doctor --probe --route progressive-mp4
-drmr inspect original.mp4 --json
+drmr analyze --metadata-only original.mp4 --json
 drmr analyze original.mp4 --json
 drmr plan original.mp4 --to clear --format mp4 \
   --output clear.mp4 --save clear.plan.json --json
@@ -329,21 +329,28 @@ chmod 700 config
 <p>信頼できる OS アカウント、外部メディアツール、ブラウザーを使い、作業ディレクトリも鍵と同様に保護してください。ログを共有する前に、マスクの対象外となる名前や外部ツールの出力も確認してください。Rust API が返す外部ツールの出力バッファには秘密情報が残る可能性があるため、そのままログに記録しないでください。</p>
 <p>参照（英語）: <a href="https://github.com/kazuhide/drmr/blob/main/docs/security.md">鍵とローカルセキュリティ</a>。</p>
 </section>
-<section class="guide-chapter" id="inspect-plan" data-guide-chapter="inspect-plan" aria-labelledby="inspect-plan-title"><h2 id="inspect-plan-title">6. inspect と plan</h2><a class="guide-chapter-switch" href="../../guide/#inspect-plan" lang="en" hreflang="en">English</a>
-<h3>inspect による宣言と初期化情報の確認</h3>
-<figure class="guide-example" aria-labelledby="example-14-title" data-code-language="sh"><figcaption id="example-14-title">例 14: sh</figcaption><pre tabindex="0"><code>drmr inspect media.mp4
-drmr inspect source/manifest.mpd --json
-drmr inspect source/master.m3u8 --json
+<section class="guide-chapter" id="inspect-plan" data-guide-chapter="inspect-plan" aria-labelledby="inspect-plan-title"><h2 id="inspect-plan-title">6. メタデータの確認と plan</h2><a class="guide-chapter-switch" href="../../guide/#inspect-plan" lang="en" hreflang="en">English</a>
+<h3>鍵を使わずに宣言情報を確認する</h3>
+<figure class="guide-example" aria-labelledby="example-14-title" data-code-language="sh"><figcaption id="example-14-title">例 14: sh</figcaption><pre tabindex="0"><code>drmr analyze --metadata-only media.mp4
+drmr analyze --metadata-only source/manifest.mpd --json
+drmr analyze --metadata-only source/master.m3u8 --json
+drmr analyze --metadata-only "https://example.com/vod/master.m3u8" --json
+drmr analyze --metadata-only "https://example.com/vod/manifest.mpd" --json
+drmr analyze --metadata-only "https://example.com/vod/media.mp4" --json
 </code></pre></figure>
-<p>入力形式は内容から判定します。JSON は <code>schema_version: 1</code> を持ち、形式、トラック・サンプル記述ごとの保護方式、既知の KID、DRM システム名、<code>findings</code> の説明トークンなどを返します。コンテンツキー、IV、ライセンス URL、鍵 URL は含めません。</p>
-<p>MP4 では初期化メタデータを読み、メディアのペイロード全体は走査しません。DASH/HLS では宣言情報を読みます。いずれも <code>media_verified: false</code> であり、全サンプルの復号・デコードや再生を確認するものではありません。未対応または不完全な暗号情報は <code>unknown</code> のままです。HLS の SAMPLE-AES 宣言だけで MP4 の暗号方式を断定することはありません。</p>
-<p>HLS の子プレイリストは、入力ディレクトリ配下のローカル参照だけをたどります。リモート、欠落、循環、ツリー外参照は解決しません。プレイリスト・メディア・鍵をネットワークから取得しません。</p>
-<p>解析の主な上限は、一マニフェスト 4 MiB、合計 16 MiB、32 プレイリスト、128 参照、トラックごとに 64 KID、MP4 の movie メタデータ 16 MiB です。変換本体や URL 取得の上限とは別です。</p>
+<p><code>analyze --metadata-only</code> は MP4 のメタデータや DASH/HLS の宣言を読み取ります。鍵、デコーダー、Shaka Packager は不要です。入力形式は内容から判定します。JSON は <code>schema_version: 1</code> を持ち、形式、トラック・サンプル記述ごとの保護方式、既知の KID、DRM システム名、<code>findings</code> の説明トークンなどを返します。鍵、IV、ライセンス URL、鍵 URL は含めません。</p>
+<p>MP4 では構造情報を読み、メディアのデータ全体は走査しません。DASH/HLS では宣言情報を読みます。いずれも <code>media_verified: false</code> であり、全サンプルの復号・デコードや再生を確認するものではありません。未対応または不完全な暗号情報は <code>unknown</code> のままです。HLS の SAMPLE-AES 宣言だけで MP4 の暗号方式を断定することはありません。</p>
+<p>ローカル HLS の子プレイリストは、入力ディレクトリ配下の参照だけをたどります。リモート、欠落、循環、ツリー外参照は解決しません。URL の HLS では宣言と必要な子プレイリスト、DASH では MPD を取得します。初期化ファイル、セグメント、鍵、ライセンスは取得しません。</p>
+<p>URL の MP4 は HTTP の Range リクエストで必要な位置だけを読みます。応答の範囲を確認し、box（MP4 を構成するデータの単位）の見出しと、再生構造を記録した <code>moov</code> を取得します。<code>moov</code> がファイル末尾にあっても、映像・音声のデータを格納する <code>mdat</code> は読み飛ばします。Range 指定を無視する配信元では、ファイル全体を取得せず拒否します。</p>
+<p>URL のメタデータは非公開の一時データとして扱い、保存計画やオフライン変換の原本にはしません。<code>--download-dir</code> は不要です。ライブ HLS や dynamic DASH の宣言も読める場合がありますが、更新を追い続けたり、VOD が完結していることや変換可能なことを確認したりする機能ではありません。原本全体の取得と検査には、第8章の通常の URL 解析を使います。</p>
+<p>HLS のマスタープレイリストは、画質や音声などの選択肢を列挙し、それぞれのメディアプレイリストを参照します（<a href="#references">RFC 8216 第4.3.4.2節</a>）。ローカル・URL のどちらでも、参照先が別のマスタープレイリストだった場合は、その先をたどらず <code>hls-nested-master-playlist</code> で拒否します。参照を何段もたどることで解析結果が増幅し、メモリを過剰に使うことも防ぎます。</p>
+<p><code>--metadata-only</code> と <code>--download-dir</code>、<code>--keys-file</code>、<code>--packager-bin</code>、<code>--max-workers</code>、<code>--measure</code> は併用できません。URL には第8章の <code>--fetch-policy</code> を指定できますが、ローカル入力には指定できません。メタデータ解析と取得ポリシーの両方の上限を適用します。解析の主な上限は、一マニフェスト 4 MiB、合計 16 MiB、32 プレイリスト、128 参照、トラックごとに 64 KID、MP4 の <code>moov</code> 情報 16 MiB です。MP4 はローカル入力・URL 入力とも、入れ子を含む解析対象の box を 16,384 個までに制限します。小さな box が多数あると、データ量以上に解析用メモリが必要になるためです。上限に達した後は新たな box の管理領域を確保せず、<code>mp4-box-count-limit</code> で拒否します。</p>
+<p>プレリリース中の CLI 整理に伴い、従来の <code>inspect INPUT</code> は削除しました。<code>analyze --metadata-only INPUT</code> に置き換えてください。旧名の別名コマンドは残していません。<a href="https://github.com/kazuhide/drmr/blob/main/docs/releases.md#pre-release-cli-consolidation">移行の説明（英語）</a>も確認してください。</p>
 <h3>analyze による入力データ全体の確認</h3>
 <figure class="guide-example" aria-labelledby="example-15-title" data-code-language="sh"><figcaption id="example-15-title">例 15: sh</figcaption><pre tabindex="0"><code>drmr analyze source/master.m3u8 --json
 drmr analyze encrypted.mp4 --keys-file config/keys.json --json
 </code></pre></figure>
-<p><code>analyze</code> は変換と同じ処理エンジンで原本全体を読み、符号化済みパケット、復号後の内容、時刻を確認します。<code>input_admitted: true</code> は、確認した入力が対応条件を満たしていることを示します。出力形式の候補が表示されても、指定する暗号方式との組み合わせは計画時に確認します。変換結果や DRM 再生の動作確認を済ませたという意味ではありません。ローカル MP4・DASH・HLS が対象です。URL 入力の保存手順は第8章に示します。</p>
+<p><code>--metadata-only</code> を付けない <code>analyze</code> は、変換と同じ処理エンジンで原本全体を読み、符号化済みパケット、復号後の内容、時刻を確認します。<code>input_admitted: true</code> は、確認した入力が対応条件を満たしていることを示します。出力形式の候補が表示されても、指定する暗号方式との組み合わせは計画時に確認します。変換結果や DRM 再生の動作確認を済ませたという意味ではありません。ローカル MP4・DASH・HLS が対象です。URL 入力の保存手順は第8章に示します。</p>
 <p>入力に互換処理を適用した場合は、<code>compatibility_notes</code> に固定の識別コードを示します。例えば、実データを含まない TS のパディングや、実際の区間を持たない隣接した HLS の広告境界タグが対象です。原本のバイト列は保持し、メディア内容と時刻の検査も行います。受理する条件と処理方法は、<a href="https://github.com/kazuhide/drmr/blob/main/docs/media-processing.md#transport-stream-compatibility">TS の互換処理の説明（英語）</a>に記載しています。</p>
 <h3>plan による変換条件の確認と保存</h3>
 <figure class="guide-example" aria-labelledby="example-16-title" data-code-language="sh"><figcaption id="example-16-title">例 16: sh</figcaption><pre tabindex="0"><code>drmr plan media.mp4 --to cbcs --format dash --json
@@ -500,16 +507,16 @@ drmr verify clear-ts/master.m3u8 --source encrypted-ts/media.m3u8 \
 </section>
 <section class="guide-chapter" id="url-input" data-guide-chapter="url-input" aria-labelledby="url-input-title"><h2 id="url-input-title">8. URL 入力の取得と変換</h2><a class="guide-chapter-switch" href="../../guide/#url-input" lang="en" hreflang="en">English</a>
 <h3>原本の取得から計画・変換・検証までの手順</h3>
-<p>次の例は、Clear HLS を取得して CBCS の DASH に変換する手順です。第5章の <code>config/keys.json</code> には出力鍵だけを設定します。<code>&amp;&amp;</code> でつなぐと、成功した場合だけ次のコマンドに進み、失敗した時点で止まります。<code>inspect</code> は取得後の宣言内容を確認する操作で、この概要が不要なら省略できます。</p>
+<p>次の例は、Clear HLS を取得して CBCS の DASH に変換する手順です。第5章の <code>config/keys.json</code> には出力鍵だけを設定します。<code>&amp;&amp;</code> でつなぐと、成功した場合だけ次のコマンドに進み、失敗した時点で止まります。取得後の <code>--metadata-only</code> は宣言内容の概要を確認する操作で、不要なら省略できます。</p>
 <figure class="guide-example" aria-labelledby="example-34-title" data-code-language="sh"><figcaption id="example-34-title">例 34: sh</figcaption><pre tabindex="0"><code>drmr analyze "https://example.com/vod/master.m3u8" \
   --download-dir ./saved-source &amp;&amp;
-drmr inspect ./saved-source/input.m3u8 &amp;&amp;
+drmr analyze --metadata-only ./saved-source/input.m3u8 &amp;&amp;
 drmr plan ./saved-source/input.m3u8 --to cbcs --format dash \
   --output ./converted-dash --save ./conversion.plan.json &amp;&amp;
 drmr convert --plan ./conversion.plan.json --keys-file config/keys.json &amp;&amp;
 drmr verify --plan ./conversion.plan.json --keys-file config/keys.json
 </code></pre></figure>
-<p>URL 入力の <code>--download-dir</code>、計画ファイル、出力先には、互いに別の新しいパスを指定します。親ディレクトリは既存のものを使います。既存ファイルの上書きや取得先の自動再利用はしません。ローカル入力では <code>--download-dir</code> や <code>--fetch-policy</code> は不要です。</p>
+<p>原本全体を取得する URL 解析では、<code>--download-dir</code>、計画ファイル、出力先に互いに別の新しいパスを指定します。親ディレクトリは既存のものを使います。既存ファイルの上書きや取得先の自動再利用はしません。ローカル入力では <code>--download-dir</code> や <code>--fetch-policy</code> は不要です。</p>
 <p>MP4、static DASH、配信が完結した HLS を URL から取得できます。形式は取得した内容で判別するため、URL に拡張子がなくても利用できます。クエリの有無や、許可されたリダイレクトの有無で形式が決まることはありません。</p>
 <div class="guide-table-scroll" role="region" aria-labelledby="table-10-title" tabindex="0"><table><caption id="table-10-title">原本の取得から計画・変換・検証までの手順 — 表 10</caption><thead><tr><th scope="col">URL の入力形式</th><th scope="col">保存後に使うローカルファイル</th><th scope="col">取得できる構成</th></tr></thead><tbody>
 <tr><th scope="row">MP4</th><td><code>saved-source/input.mp4</code></td><td>ローカル入力の対応条件を満たす一つの完全な MP4</td></tr>
@@ -519,9 +526,9 @@ drmr verify --plan ./conversion.plan.json --keys-file config/keys.json
 <p>DASH または MP4 では、上のローカル入力パスを表に合わせます。DASH は参照する初期化ファイルとセグメントをすべて保存し、<code>input.mpd</code> の参照をローカルに書き換えます。元の MPD は別に残し、暗号化情報、DRM 初期化データの PSSH、時系列情報を保持します。</p>
 <p>取得後の解析には、ローカル入力と同じコーデック・トラック・暗号・時刻の条件を適用します。ライブ、バイト範囲による参照、複数の DASH Period、<code>SegmentList</code>、<code>SegmentBase</code>、<code>duration</code> だけで区間を表す DASH テンプレート、繰り返し回数が負の時系列指定は現在の取得機能の対象外です。これらは実装上の制限で、形式として変換が不可能という意味ではありません。</p>
 <p>HLS は clear に加え、AES-128 の TS/fMP4、SAMPLE-AES の TS、CENC/CBCS の fMP4 に対応します。MP4 と DASH も、ローカル入力で対応する clear・暗号化済みデータを取得できます。</p>
-<p>AES-128 と TS SAMPLE-AES の <code>input.hls_keys[].uri</code> は、リダイレクト後のプレイリスト URL から解決した絶対 URI と一致させます。<code>https://example.com/vod/media.m3u8</code> 内の <code>keys/key.bin</code> は <code>https://example.com/vod/keys/key.bin</code>、絶対 URI の <code>skd:</code> はそのまま使います。CENC/CBCS は <code>input.keys</code> に KID と鍵を指定します。鍵 URI やライセンスには接続しません。暗号化入力では <code>analyze</code> と <code>plan</code> にも入力鍵の <code>--keys-file config/keys.json</code> が必要で、Clear 入力では不要です。</p>
+<p>AES-128 と TS SAMPLE-AES の <code>input.hls_keys[].uri</code> は、リダイレクト後のプレイリスト URL から解決した絶対 URI と一致させます。<code>https://example.com/vod/media.m3u8</code> 内の <code>keys/key.bin</code> は <code>https://example.com/vod/keys/key.bin</code>、絶対 URI の <code>skd:</code> はそのまま使います。CENC/CBCS は <code>input.keys</code> に KID と鍵を指定します。鍵 URI やライセンスには接続しません。暗号化入力では、通常の <code>analyze</code> と <code>plan --save</code> による原本の確認にも入力鍵の <code>--keys-file config/keys.json</code> が必要です。Clear 入力とメタデータだけの確認では不要です。</p>
 <p>HLS は元のプレイリストとリソースを保存し、メディア参照と鍵識別 URI をローカル用に解決した <code>saved-source/input.m3u8</code> を作ります。時刻・シーケンス番号・音声の関連付けは作り直しません。どの形式でも取得中は暗号化済みデータを復号しません。原本マニフェストは元のバイト列で別に残り、署名付き URL を含み得るため非公開で保管してください。</p>
-<p>配信元への接続は <code>analyze</code> だけです。取得が完了した原本は後の処理が失敗しても残り、未完了の取得は受け付けません。<code>convert URL --download-dir NEW_DIR</code> なら計画保存なしで取得・変換できます。</p>
+<p>この手順で配信元へ接続するのは、最初の通常の <code>analyze</code> だけです。取得が完了した原本は後の処理が失敗しても残り、未完了の取得は受け付けません。<code>convert URL --download-dir NEW_DIR</code> なら計画保存なしで取得・変換できます。</p>
 <h3>URL 入力からの複数 DRM 出力</h3>
 <p>入力が対応する clear TS HLS の URL であれば、第6章の <code>outputs.json</code> と、第5章の version 2 の鍵ファイルを使って次のように進めます。</p>
 <figure class="guide-example" aria-labelledby="example-35-title" data-code-language="sh"><figcaption id="example-35-title">例 35: sh</figcaption><pre tabindex="0"><code>drmr analyze "https://example.com/vod/master.m3u8" \
@@ -550,7 +557,7 @@ drmr verify retry-hls/master.m3u8 --source saved-source/input.m3u8 \
 <p>出力の配置直前にも、保存した原本とローカル参照を確認します。取得後に原本が改変・削除されていた場合は出力を配置しません。URL からの取得を再開するために、取得済みのディレクトリを指定することもできません。再実行には、保存したローカルのエントリーポイントを使ってください。</p>
 <p><code>convert --plan</code> は保存済みの出力先を使い、入力・暗号方式・形式・出力先の上書きや、既存の結果への上書きを拒否します。別の出力先を選ぶ場合は新しい計画を作ります。完成済みの結果を改めて確認する場合は <code>verify --plan</code> を使います。</p>
 <h3>取得ポリシー</h3>
-<p>既定では、HTTPS かつ入力 URL と同じ origin への接続だけを許可します。origin はスキーム、ホスト、ポートの組み合わせです。別 origin の参照や認証が必要な場合は、所有者だけがアクセスできる JSON ファイルに設定し、<code>--fetch-policy</code> で指定します。<code>analyze URL</code> と直接の <code>convert URL</code> の両方で使えます。</p>
+<p>既定では、HTTPS かつ入力 URL と同じ origin への接続だけを許可します。origin はスキーム、ホスト、ポートの組み合わせです。別 origin の参照や認証が必要な場合は、所有者だけがアクセスできる JSON ファイルに設定し、<code>--fetch-policy</code> で指定します。<code>analyze URL</code> と直接の <code>convert URL</code> の両方で使えます。<code>analyze --metadata-only URL</code> にも指定でき、その場合は取得先を指定せず、原本を保存しません。</p>
 <p>次の内容を、例えば <code>config/fetch.json</code> という UTF-8 のテキストファイルに保存します。ファイル名は任意です。入力 URL はコマンドで指定するため、この JSON に書く必要はありません。取得ポリシーには <code>schema_version</code> を付けません。認証が不要な場合は <code>headers_by_origin</code> を省けます。追加の設定が不要なら <code>--fetch-policy</code> 自体を省略できます。</p>
 <figure class="guide-example" aria-labelledby="example-38-title" data-code-language="json"><figcaption id="example-38-title">例 38: json</figcaption><pre tabindex="0"><code>{
   "allowed_origins": ["https://media.example.com"],
@@ -2107,7 +2114,7 @@ notepad $keyFile
 </code></pre></figure>
 <p>この関数は、パスの所有者が現在のユーザーであることを確認してから、アクセス権だけを設定します。設定後も所有者と ACL を検査します。所有者の変更には別の権限が必要ですが、自分で作成したパスでは変更する必要はありません。エディターによるファイルの置き換えで ACL が変わった場合は、ファイルを所有者専用ディレクトリ内に置いたまま ACL を再適用してください。既存ファイルの不適切な権限を drmr が自動で修正することはありません。</p>
 <h3>PowerShell からの変換</h3>
-<figure class="guide-example" aria-labelledby="example-96-title" data-code-language="powershell"><figcaption id="example-96-title">例 96: powershell</figcaption><pre tabindex="0"><code>.\drmr.exe inspect 'C:\media\source.mp4' --json
+<figure class="guide-example" aria-labelledby="example-96-title" data-code-language="powershell"><figcaption id="example-96-title">例 96: powershell</figcaption><pre tabindex="0"><code>.\drmr.exe analyze --metadata-only 'C:\media\source.mp4' --json
 .\drmr.exe plan 'C:\media\source.mp4' --to cbcs --format mp4
 $outDir = Join-Path $env:LOCALAPPDATA 'drmr-output'
 New-Item -ItemType Directory -Path $outDir -Force | Out-Null
@@ -2193,8 +2200,8 @@ python tools/build_desktop.py --bundle
 <p>参照（英語）: <a href="https://github.com/kazuhide/drmr/blob/main/docs/desktop.md">Desktop の詳細と確認範囲</a>、<a href="https://github.com/kazuhide/drmr/blob/main/docs/dependency-security.md">依存関係のセキュリティ方針</a>。</p>
 </section>
 <section class="guide-chapter" id="results-errors" data-guide-chapter="results-errors" aria-labelledby="results-errors-title"><h2 id="results-errors-title">15. 結果・終了コード・問題の切り分け</h2><a class="guide-chapter-switch" href="../../guide/#results-errors" lang="en" hreflang="en">English</a>
-<h3>JSON と進捗</h3>
-<p>スクリプトなどから結果を読み取る場合は <code>convert --json</code>、<code>verify --json</code> を使います。正常な結果は、スキーマのバージョンを含む一つの JSON オブジェクトとして返します。<code>--measure</code> を付ける場合も <code>--json</code> が必要です。</p>
+<h3>JSON の結果</h3>
+<p>スクリプトなどから結果を読み取る場合は、各コマンドの <code>--json</code> を使います。正常な結果は、スキーマのバージョンを含む一つの JSON オブジェクトとして返します。<code>--measure</code> を付ける場合も <code>--json</code> が必要です。</p>
 <p>例えば、計測なしの <code>verify --json</code> による成功結果は次の形式です。</p>
 <figure class="guide-example" aria-labelledby="example-101-title" data-code-language="json"><figcaption id="example-101-title">例 101: json</figcaption><pre tabindex="0"><code>{
   "schema_version": 1,
@@ -2232,18 +2239,47 @@ python tools/build_desktop.py --bundle
 }
 </code></pre></figure>
 <p>引数の構文エラーは処理開始前に起きるため、この JSON 形式では返しません。標準エラーにヘルプなどを表示し、終了コード 2 を返します。標準出力自体に書き込めない場合も完全な JSON は返せません。その場合は、標準エラーの <code>result-output-unavailable</code> と終了コード 1 を確認してください。</p>
-<p>JSON を使わない場合は、処理名、件数、経過時間を標準エラーに一行ずつ表示します。一つのトラックの処理が終わっても、変換全体の完了を意味するわけではありません。複数の処理段階が重なったり、終了した段階が失敗していたりする場合もあります。最後の処理名だけで原因を断定しないでください。</p>
+<h3>標準エラーへの進捗表示</h3>
+<p>全コマンド共通の <code>--progress</code> で進捗の表示方法を選びます。標準出力には最後の結果だけを出すため、既存のパイプ処理はそのまま使えます。</p>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-16-title" tabindex="0"><table><caption id="table-16-title">標準エラーへの進捗表示 — 表 16</caption><thead><tr><th scope="col">指定</th><th scope="col">動作</th></tr></thead><tbody>
+<tr><th scope="row"><code>auto</code></th><td>既定。人が読む結果にはテキストの進捗を表示。--json でも標準エラーが端末なら表示し、ファイルやパイプなら省略</td></tr>
+<tr><th scope="row"><code>text</code></th><td>テキストの進捗。--json の結果と併用可能</td></tr>
+<tr><th scope="row"><code>json</code></th><td>一行に一つの JSON オブジェクトを記録する JSON Lines。--json の結果と併用可能</td></tr>
+<tr><th scope="row"><code>off</code></th><td>進捗を省略。結果やエラーの出力は維持</td></tr>
+</tbody></table></div>
+<p>auto が判定するのは標準エラーの接続先です。JSON の結果だけを <code>&gt;result.json</code> で保存しても、標準エラーが端末なら進捗を表示します。<code>--json</code> で標準エラーを <code>2&gt;errors.log</code> などへ送る場合は、自動の進捗表示を省略します。text、json、off の明示指定が優先するため、次の例は出力をファイルやパイプに送る場合にも使えます。</p>
+<figure class="guide-example" aria-labelledby="example-103-title" data-code-language="sh"><figcaption id="example-103-title">例 103: sh</figcaption><pre tabindex="0"><code>drmr analyze original.mp4 --metadata-only --json --progress text
+drmr analyze original.mp4 --metadata-only --json --progress json \
+  &gt;metadata.json 2&gt;progress.jsonl
+drmr analyze original.mp4 --metadata-only --progress off
+</code></pre></figure>
+<p>処理段階、具体的な作業を表す固定の名前、経過時間を表示します。取得中は実際に受信したバイト数とリソース件数、並列処理では実行中・完了した作業数を表示できる範囲で示します。長い処理で新たな完了がなくても、およそ二秒ごとに現在の作業と経過時間を表示します。総数が不明な場合に、進捗率や残り時間を推測して表示することはありません。</p>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-17-title" tabindex="0"><table><caption id="table-17-title">標準エラーへの進捗表示 — 表 17</caption><thead><tr><th scope="col">処理段階</th><th scope="col">確認できる作業</th></tr></thead><tbody>
+<tr><th scope="row"><code>configuration</code></th><td>設定の読み取りと検査</td></tr>
+<tr><th scope="row"><code>acquisition</code></th><td>入力リソースの取得</td></tr>
+<tr><th scope="row"><code>inspection</code></th><td>メタデータや入力構造の確認</td></tr>
+<tr><th scope="row"><code>input-preparation</code></th><td>処理に使うトラックの準備</td></tr>
+<tr><th scope="row"><code>normalization</code></th><td>対応するメディア構成への整理</td></tr>
+<tr><th scope="row"><code>packaging</code></th><td>指定された形式・暗号方式での出力</td></tr>
+<tr><th scope="row"><code>verification</code></th><td>内容、時刻、出力条件の照合</td></tr>
+<tr><th scope="row"><code>publication</code></th><td>検査済みの出力を指定先へ配置</td></tr>
+<tr><th scope="row"><code>tool-check</code></th><td>doctor による外部ツールの探索・診断</td></tr>
+<tr><th scope="row"><code>server-startup</code></th><td>ローカルコンソールの起動と待機</td></tr>
+</tbody></table></div>
+<p>一つの処理区間が閉じても、その区間や変換全体の成功を意味しません。複数の区間が重なったり、入れ子になったりする場合もあります。最後の作業名だけで失敗原因を断定しないでください。短いメタデータ確認や計画は、定期表示の前に終わることもあります。ヘルプや版表示に架空の進捗は出しません。<code>--measure</code> は不要で、処理時間の計測レポートとは別の表示です。</p>
+<p>進捗には URL、鍵、認証ヘッダー、入力・出力やツールのパス、生のメタデータ、外部ツールの出力を含めません。引数の解析を通過した通常の処理では、明示的な <code>--progress json</code> により標準エラーを JSON Lines で返し、失敗・停止にも固定のエラーコードを付けます。引数の構文エラーや、serve の既存の起動エラー・接続先通知は別のテキストになる場合があります。成功は進捗だけで判断せず、最後の結果と終了コードで確認してください。</p>
 <h3>終了コード</h3>
-<div class="guide-table-scroll" role="region" aria-labelledby="table-16-title" tabindex="0"><table><caption id="table-16-title">終了コード — 表 16</caption><thead><tr><th scope="col">値</th><th scope="col">意味</th></tr></thead><tbody>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-18-title" tabindex="0"><table><caption id="table-18-title">終了コード — 表 18</caption><thead><tr><th scope="col">値</th><th scope="col">意味</th></tr></thead><tbody>
 <tr><th scope="row">0</th><td>選択したコマンドの確認・処理に成功。何を検証したかはコマンドによる</td></tr>
 <tr><th scope="row">1</th><td>処理、比較、必要な診断、終了確認などの失敗</td></tr>
 <tr><th scope="row">2</th><td>引数・設定の不正</td></tr>
 <tr><th scope="row">130</th><td>協調停止に対応する CLI で、管理中の子プロセスの終了確認まで完了</td></tr>
 </tbody></table></div>
-<p><code>doctor</code> の 0 は選択した診断の成功、<code>inspect</code> の 0 はメタデータの読み取り成功を示します。コンテンツ全体の検証に成功したという意味ではありません。</p>
+<p><code>doctor</code> の 0 は選択した診断の成功、<code>analyze --metadata-only</code> の 0 はメタデータの読み取り成功を示します。コンテンツ全体の検証に成功したという意味ではありません。</p>
 <h3>よくある失敗</h3>
-<div class="guide-table-scroll" role="region" aria-labelledby="table-17-title" tabindex="0"><table><caption id="table-17-title">よくある失敗 — 表 17</caption><thead><tr><th scope="col">症状・コード</th><th scope="col">確認すること</th></tr></thead><tbody>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-19-title" tabindex="0"><table><caption id="table-19-title">よくある失敗 — 表 19</caption><thead><tr><th scope="col">症状・コード</th><th scope="col">確認すること</th></tr></thead><tbody>
 <tr><th scope="row">必須ツールが見つからない</th><td>実際の起動環境の PATH、実行権限、Desktop の Check external tools を確認する</td></tr>
+<tr><th scope="row"><code>remote-metadata-not-supported</code></th><td>宣言情報が読み取り範囲にあるか確認する。URL の MP4 は HTTP Range 指定に従う配信元が必要</td></tr>
 <tr><th scope="row">バージョン・機能検査が失敗</th><td>版だけでなく、そのビルドに必要なオプションがあるか確認する</td></tr>
 <tr><th scope="row">鍵設定が拒否される</th><td>所有者、600 または ACL の権限、リンク数、JSON の重複キー、不明フィールド、スキーマを確認する</td></tr>
 <tr><th scope="row"><code>output-spec-invalid</code></th><td>出力一覧の schema_version が 1 か、ID が重複せず安全な名前か、形式・暗号・DRM の組み合わせが対応範囲内か確認する</td></tr>
@@ -2265,7 +2301,7 @@ python tools/build_desktop.py --bundle
 <section class="guide-chapter" id="regression-tests" data-guide-chapter="regression-tests" aria-labelledby="regression-tests-title"><h2 id="regression-tests-title">16. 試験結果の読み方と再現方法</h2><a class="guide-chapter-switch" href="../../guide/#regression-tests" lang="en" hreflang="en">English</a>
 <h3>短い公開アセットによる回帰試験</h3>
 <p>主なメディア試験には、出典と権利を明記した Big Buck Bunny の十秒アセットを使います。H.264 の映像パケット 240 個と AAC 音声を含み、映像は二秒を目標に五つのセグメントへ分割します。音声はフレーム境界で分割するため、すべてのセグメントが厳密に二秒になるわけではありません。</p>
-<div class="guide-table-scroll" role="region" aria-labelledby="table-18-title" tabindex="0"><table><caption id="table-18-title">短い公開アセットによる回帰試験 — 表 18</caption><thead><tr><th scope="col">試験</th><th scope="col">対象と確認内容</th></tr></thead><tbody>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-20-title" tabindex="0"><table><caption id="table-20-title">短い公開アセットによる回帰試験 — 表 20</caption><thead><tr><th scope="col">試験</th><th scope="col">対象と確認内容</th></tr></thead><tbody>
 <tr><th scope="row">暗号方式の 16 経路</th><td>clear/cenc/cbcs DASH と AES-128 fMP4 HLS の原本から四つの出力を作る。原本と結果に別々の鍵を使い、変換後に改めて verify を行う</td></tr>
 <tr><th scope="row">TS→DASH の 27 経路</th><td>clear/AES-128/SAMPLE-AES 入力 × 映像のみ・映像音声・音声のみ × clear/cenc/cbcs DASH。原本の全データ・時刻と最終宣言を確認</td></tr>
 <tr><th scope="row">音声のみ TS→fMP4 HLS の 9 経路</th><td>clear/AES-128/SAMPLE-AES 入力から clear/CBCS/AES-128 の fMP4 HLS へ変換。原本の全パケット・時刻・デコード音声を確認</td></tr>
@@ -2286,7 +2322,7 @@ python tools/build_desktop.py --bundle
 <p>最低要件の Rust 1.95 と最新安定版を使い、Linux、macOS、Windows の CI で検査します。ネイティブ Windows では通常ユーザーで実行し、権限、Ctrl+C/Ctrl+Break、子孫プロセス、ロック、作業領域を確認します。Docker では Linux AMD64 でメディア処理と Web の HTTP 通信・停止・終了を確認します。Desktop の各 OS 向けビルドと、ネイティブ GUI での再生試験は別です。</p>
 <h3>三つの出力とマニフェストの確認結果</h3>
 <p>以下はソース <a href="https://github.com/kazuhide/drmr/commit/3f8a9a89d0fc84e9699939a193baf823cafb6127">3f8a9a89</a> を対象に、2026年10月21日（日本時間）にローカルで完了した結果です。十秒の clear HLS/TS アセットと二秒のセグメント目標を用い、第6章の手順を実行しました。CLI は macOS ARM64、Apple mediastreamvalidator 1.25.36 は同じ環境でプレイリスト専用モードを使用しました。DASH は公式 DASH-IF v3.1.0 の XML スキーマと Schematron 規則（revision <code>bdf0c27a8f198da7a4bf81634bb01faf7c7c3c06</code>）を、ネットワーク接続を無効にした Linux ARM64 コンテナで実行しました。</p>
-<div class="guide-table-scroll" role="region" aria-labelledby="table-19-title" tabindex="0"><table><caption id="table-19-title">三つの出力とマニフェストの確認結果 — 表 19</caption><thead><tr><th scope="col">最終出力</th><th scope="col">暗号と DRM の宣言</th><th scope="col">マニフェストの実測結果</th></tr></thead><tbody>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-21-title" tabindex="0"><table><caption id="table-21-title">三つの出力とマニフェストの確認結果 — 表 21</caption><thead><tr><th scope="col">最終出力</th><th scope="col">暗号と DRM の宣言</th><th scope="col">マニフェストの実測結果</th></tr></thead><tbody>
 <tr><th scope="row">DASH fMP4</th><td>CBCS、Widevine と PlayReady</td><td>Rust の内蔵検査、MPD の XML スキーマ検査、Schematron 検査が成功</td></tr>
 <tr><th scope="row">HLS fMP4</th><td>CBCS、FairPlay</td><td>内蔵検査が成功。Apple ツールで三つのプレイリストすべてを検査。メディアプレイリストの宣言は version 6 で、最低値 6 を満たす</td></tr>
 <tr><th scope="row">HLS TS</th><td>SAMPLE-AES、FairPlay</td><td>内蔵検査が成功。Apple ツールで三つのプレイリストすべてを検査。メディアプレイリストの宣言は version 6 で、最低値 5 を満たす</td></tr>
@@ -2296,7 +2332,7 @@ python tools/build_desktop.py --bundle
 <p>fMP4 のメディアプレイリストを version 5 に変えると検査は失敗し、version 7 では成功しました。version 6 との完全一致ではなく、使っている機能に必要な最低値で判定しています。保存した原本は変更されていません。バージョン試験で変更した出力は復元し、この実行で作ったコンテナも残っていません。これは一つのアセットと実行環境に対する確認であり、ライセンス取得、DRM 端末での再生、任意の入力での動作を保証するものではありません。</p>
 <h3>音声のみ TS→fMP4 HLS の確認結果</h3>
 <p>以下はソース <a href="https://github.com/kazuhide/drmr/commit/f0096539e698d66cc77affcd7ea891c793aa87bf">f0096539</a> を対象に、2026年10月20日（日本時間）に完了した CI の結果です。最低要件は Rust 1.95 以上です。1.99.1 はこの実行で観測した安定版であり、固定の必須版ではありません。</p>
-<div class="guide-table-scroll" role="region" aria-labelledby="table-20-title" tabindex="0"><table><caption id="table-20-title">音声のみ TS→fMP4 HLS の確認結果 — 表 20</caption><thead><tr><th scope="col">環境と実行結果へのリンク</th><th scope="col">実際に使用した Rust</th><th scope="col">音声 HLS の組み合わせ</th><th scope="col">TS 回帰試験</th></tr></thead><tbody>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-22-title" tabindex="0"><table><caption id="table-22-title">音声のみ TS→fMP4 HLS の確認結果 — 表 22</caption><thead><tr><th scope="col">環境と実行結果へのリンク</th><th scope="col">実際に使用した Rust</th><th scope="col">音声 HLS の組み合わせ</th><th scope="col">TS 回帰試験</th></tr></thead><tbody>
 <tr><th scope="row"><a href="https://github.com/kazuhide/drmr/actions/runs/39327394237/job/118317107508">Linux AMD64 / 最低版</a></th><td><code>1.95.0</code></td><td>9/9</td><td>34/34</td></tr>
 <tr><th scope="row"><a href="https://github.com/kazuhide/drmr/actions/runs/39327394237/job/118317106710">Linux AMD64 / 安定版</a></th><td><code>1.99.1</code></td><td>9/9</td><td>34/34</td></tr>
 <tr><th scope="row"><a href="https://github.com/kazuhide/drmr/actions/runs/39327394237/job/118317107104">macOS ARM64 / 最低版</a></th><td><code>1.95.0</code></td><td>9/9</td><td>34/34</td></tr>
@@ -2313,7 +2349,7 @@ python tools/build_desktop.py --bundle
 <p>Desktop のビルド成功は GUI や再生の動作確認にはなりません。Docker の HTTP 試験も、ブラウザー画面を確認した結果ではありません。既知の鍵でコンテンツ全体が一致していても、DRM ライセンス取得や実機再生を確認したことにはなりません。</p>
 <h3>代表的な再現コマンド</h3>
 <p>開発用ソースとメディアツールを揃えた環境で、リポジトリのルートから実行します。</p>
-<figure class="guide-example" aria-labelledby="example-103-title" data-code-language="sh"><figcaption id="example-103-title">例 103: sh</figcaption><pre tabindex="0"><code>cargo test --locked -p drmr --test bbb_media -- --nocapture
+<figure class="guide-example" aria-labelledby="example-104-title" data-code-language="sh"><figcaption id="example-104-title">例 104: sh</figcaption><pre tabindex="0"><code>cargo test --locked -p drmr --test bbb_media -- --nocapture
 cargo test --locked -p drmr-core --test conversion_ts_output -- --nocapture
 cargo test --locked -p drmr-core --test conversion_ts_output \
   audio_hls -- --nocapture
@@ -2328,17 +2364,21 @@ cargo test --locked -p drmr-core --test conversion_bundle_encryption \
 </code></pre></figure>
 <p>16 経路を確認する bbb_media の回帰試験では、<code>DRMR_CONVERSION_REPORT</code> にリポジトリ外の新しいファイルのパスを設定すると、JSON の結果を保存できます。テストデータのハッシュ、経路、各比較結果、時間、サンプリングしたメモリ使用量、ツールのバージョン、測定上の制約を確認してください。他の TS・有限範囲試験は、この変数ではレポートを作成しません。それぞれのテストログと CI 成果物を使ってください。</p>
 <p>長時間のパケット列を検証するため、32×18 の小さな派生映像を 417 回繰り返し、4,170 秒・100,080 パケットを変換して独立検証する別の試験もあります。</p>
-<figure class="guide-example" aria-labelledby="example-104-title" data-code-language="sh"><figcaption id="example-104-title">例 104: sh</figcaption><pre tabindex="0"><code>cargo test --locked -p drmr --test long_conversion
+<figure class="guide-example" aria-labelledby="example-105-title" data-code-language="sh"><figcaption id="example-105-title">例 105: sh</figcaption><pre tabindex="0"><code>cargo test --locked -p drmr --test long_conversion
 </code></pre></figure>
 <p>この回帰試験では、長い時刻列を省略せずに読み取れることを確認します。高解像度や長尺コンテンツの処理速度、メモリ使用量全体を測るベンチマークではありません。十秒の試験も、任意の入力への対応や DRM 実機再生を保証するものではありません。</p>
 <p>参照（英語）: <a href="https://github.com/kazuhide/drmr/blob/main/crates/drmr/tests/fixtures/bbb/README.md">アセットの出典・ライセンス</a>、<a href="https://github.com/kazuhide/drmr/blob/main/crates/drmr/tests/fixtures/bbb/CENC.md">暗号化 fixture</a>、<a href="https://github.com/kazuhide/drmr/blob/main/docs/media-processing.md">処理と試験の詳細</a>。</p>
 </section>
 <section class="guide-chapter" id="cli-reference" data-guide-chapter="cli-reference" aria-labelledby="cli-reference-title"><h2 id="cli-reference-title">17. CLI オプション一覧</h2><a class="guide-chapter-switch" href="../../guide/#cli-reference" lang="en" hreflang="en">English</a>
 <p>この章に公開 CLI の引数とオプションをまとめます。すべてのコマンドで <code>-h</code> / <code>--help</code> を使えるほか、<code>drmr help COMMAND</code> でもヘルプを確認できます。CLI のバージョンは <code>-V</code> / <code>--version</code> または <code>drmr version</code> で表示します。子プロセスの管理に使う内部用の起動引数は、利用者向けのインターフェースに含めません。</p>
+<h3>全コマンド共通の進捗オプション</h3>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-23-title" tabindex="0"><table><caption id="table-23-title">全コマンド共通の進捗オプション — 表 23</caption><thead><tr><th scope="col">オプション</th><th scope="col">意味・既定値</th></tr></thead><tbody>
+<tr><th scope="row"><code>--progress MODE</code></th><td>auto、text、json、off。既定は auto。進捗は標準エラー、結果は標準出力。具体例と JSON Lines の適用範囲は第15章</td></tr>
+</tbody></table></div>
 <h3>FILE・PATH に指定するもの</h3>
 <p><code>FILE</code> や <code>PATH</code> は、その文字列をそのまま入力する指定ではありません。使うファイルのパスに置き換えます。相対パスはコマンドを実行するディレクトリを基準にします。パスに空白がある場合は引用符で囲んでください。JSON の中身をオプションの直後に直接書く方式ではありません。</p>
 <p>同じ <code>FILE</code> 表記でも、設定 JSON、生成済みの計画、実行プログラムでは渡すものが異なります。代表的な指定例と、内容の説明は次のとおりです。</p>
-<div class="guide-table-scroll" role="region" aria-labelledby="table-21-title" tabindex="0"><table><caption id="table-21-title">FILE・PATH に指定するもの — 表 21</caption><thead><tr><th scope="col">指定例</th><th scope="col">用意するもの・詳しい説明</th></tr></thead><tbody>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-24-title" tabindex="0"><table><caption id="table-24-title">FILE・PATH に指定するもの — 表 24</caption><thead><tr><th scope="col">指定例</th><th scope="col">用意するもの・詳しい説明</th></tr></thead><tbody>
 <tr><th scope="row"><code>--fetch-policy config/fetch.json</code></th><td>URL の取得条件を書く JSON。第8章の<a href="https://kazuhide.github.io/drmr/ja/guide/#url-input">取得ポリシーの書式と使用例</a>を参照。追加 origin・認証ヘッダー・取得量などを設定する</td></tr>
 <tr><th scope="row"><code>--keys-file config/keys.json</code></th><td>鍵を読み込む JSON。第5章の<a href="https://kazuhide.github.io/drmr/ja/guide/#key-configuration">入力鍵・出力鍵の構造例と保護方法</a>を参照。通常の単一出力は version 1。--outputs または version 2 の計画を使う場合は、出力が一つでも version 2。出力一覧や取得ポリシーとは別ファイル</td></tr>
 <tr><th scope="row"><code>--outputs config/outputs.json</code></th><td>利用者が作る version 1 の出力一覧 JSON。第6章の<a href="https://kazuhide.github.io/drmr/ja/guide/#inspect-plan">複数出力の設定例</a>を参照。出力 ID・形式・暗号方式などを指定し、鍵は含めない</td></tr>
@@ -2347,40 +2387,36 @@ cargo test --locked -p drmr-core --test conversion_bundle_encryption \
 <tr><th scope="row"><code>--hls-validator-bin /opt/media-tools/mediastreamvalidator</code></th><td>macOS に用意した Apple の検証プログラム。第9章の<a href="https://kazuhide.github.io/drmr/ja/guide/#verification">外部マニフェスト検査の準備</a>を参照</td></tr>
 <tr><th scope="row"><code>--dash-validator-bin /opt/media-tools/php</code></th><td>ローカルの DASH-IF アダプターを動かす PHP 実行ファイル。MPD や DASH-IF のディレクトリではない。第9章の<a href="https://kazuhide.github.io/drmr/ja/guide/#verification">検査ツールと DRMR_DASH_IF_ROOT</a>を参照</td></tr>
 </tbody></table></div>
-<p><code>analyze</code> は、どちらの版の鍵 JSON からも入力鍵を読み込めます。鍵ファイルに出力設定がある場合も、解析には入力鍵だけを使います。</p>
+<p>通常の <code>analyze</code> は、どちらの版の鍵 JSON からも入力鍵を読み込めます。出力設定がある場合も、解析には入力鍵だけを使います。<code>--metadata-only</code> では鍵ファイルを指定できません。</p>
 <p><code>--packager-bin</code> の既定値 <code>packager</code> は、起動環境の PATH から実行ファイルを探す指定です。別の場所に配置した場合は、その実行ファイルのパスを渡します。例えば macOS/Linux では次のように指定します。入力ファイル、出力先、鍵設定、実行ファイルの場所は自身の環境に合わせて置き換えてください。</p>
-<figure class="guide-example" aria-labelledby="example-105-title" data-code-language="sh"><figcaption id="example-105-title">例 105: sh</figcaption><pre tabindex="0"><code>drmr convert original.mp4 --to cbcs --format mp4 \
+<figure class="guide-example" aria-labelledby="example-106-title" data-code-language="sh"><figcaption id="example-106-title">例 106: sh</figcaption><pre tabindex="0"><code>drmr convert original.mp4 --to cbcs --format mp4 \
   --output protected.mp4 --keys-file config/keys.json \
   --packager-bin "/opt/media-tools/packager"
 </code></pre></figure>
 <p>Windows では、例えば <code>--packager-bin &#x27;C:\media-tools\packager.exe&#x27;</code> と指定します。実行ファイル自体のパスを指定してください。オプションの値にシェルコマンド全体や追加引数は含めません。CLI アーカイブには Shaka Packager は同梱されていません。</p>
 <p><code>NEW_FILE</code>・<code>NEW_PATH</code>・<code>NEW_DIR</code> は、これから作る保存先です。読み込む <code>FILE</code> とは異なり、既存の出力先を上書きするための指定ではありません。秘密情報を含むファイルは、鍵設定の保護手順に従って作成してください。</p>
 <h3>doctor</h3>
-<div class="guide-table-scroll" role="region" aria-labelledby="table-22-title" tabindex="0"><table><caption id="table-22-title">doctor — 表 22</caption><thead><tr><th scope="col">オプション</th><th scope="col">意味・既定値</th></tr></thead><tbody>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-25-title" tabindex="0"><table><caption id="table-25-title">doctor — 表 25</caption><thead><tr><th scope="col">オプション</th><th scope="col">意味・既定値</th></tr></thead><tbody>
 <tr><th scope="row"><code>--json</code></th><td>一つの機械可読 JSON レポート</td></tr>
 <tr><th scope="row"><code>--probe</code></th><td>バージョンとヘルプに記載されたオプションを、各呼び出し三秒の上限で検査。既定は実行ファイルの探索のみ</td></tr>
 <tr><th scope="row"><code>--route PROFILE</code></th><td>確認するツールの組み合わせ。既定は all</td></tr>
 </tbody></table></div>
 <p>PROFILE に指定できるのは <code>all</code>、<code>progressive-mp4</code>、<code>fragmented-mp4</code>、<code>dash-presentation</code>、<code>fmp4-hls-presentation</code>、<code>mpeg-ts-hls</code>、<code>mpeg-ts-sample-aes-hls</code>、<code>mpeg-ts-hls-ts</code> です。変換結果に表示される処理経路名を、そのまま doctor に指定できるとは限りません。TS→DASH を含めてツール一式を診断する場合は all を使えます。</p>
-<h3>inspect</h3>
-<div class="guide-table-scroll" role="region" aria-labelledby="table-23-title" tabindex="0"><table><caption id="table-23-title">inspect — 表 23</caption><thead><tr><th scope="col">引数・オプション</th><th scope="col">意味</th></tr></thead><tbody>
-<tr><th scope="row"><code>INPUT</code></th><td>ローカル MP4、MPD、M3U8。リモート参照は取得しない</td></tr>
-<tr><th scope="row"><code>--json</code></th><td>バージョン付きメタデータレポート</td></tr>
-</tbody></table></div>
 <h3>analyze</h3>
-<div class="guide-table-scroll" role="region" aria-labelledby="table-24-title" tabindex="0"><table><caption id="table-24-title">analyze — 表 24</caption><thead><tr><th scope="col">引数・オプション</th><th scope="col">意味・既定値</th></tr></thead><tbody>
-<tr><th scope="row"><code>INPUT</code></th><td>必要なファイルがすべて揃ったローカル MP4・DASH・HLS、または取得条件を満たす MP4・static DASH・完結した HLS の URL。<a href="#url-input">URL の対応条件と保存先</a></td></tr>
-<tr><th scope="row"><code>--download-dir NEW_DIR</code></th><td>URL に必須。原本を所有者専用で保存する新規ディレクトリ</td></tr>
-<tr><th scope="row"><code>--fetch-policy FILE</code></th><td>例 <code>config/fetch.json</code>。URL 取得用の JSON。<a href="https://kazuhide.github.io/drmr/ja/guide/#url-input">書式・各項目・権限の例</a></td></tr>
-<tr><th scope="row"><code>--keys-file FILE</code></th><td>例 <code>config/keys.json</code>。原本の復号に必要な入力鍵の JSON。<a href="https://kazuhide.github.io/drmr/ja/guide/#key-configuration">構造例と保護方法</a></td></tr>
-<tr><th scope="row"><code>--packager-bin FILE</code></th><td>Shaka Packager の実行ファイル。既定 packager。<a href="https://kazuhide.github.io/drmr/ja/guide/#installation">配置と最低要件</a></td></tr>
-<tr><th scope="row"><code>--max-workers N</code></th><td>上限 1-64。既定は CPU・メモリから自動選択</td></tr>
-<tr><th scope="row"><code>--json</code></th><td>一つの入力解析レポート。input_admitted は変換結果の検証を意味しない</td></tr>
-<tr><th scope="row"><code>--measure</code></th><td>数値計測を追加。--json が必要</td></tr>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-26-title" tabindex="0"><table><caption id="table-26-title">analyze — 表 26</caption><thead><tr><th scope="col">引数・オプション</th><th scope="col">意味・既定値</th></tr></thead><tbody>
+<tr><th scope="row"><code>INPUT</code></th><td>ローカル MP4・DASH・HLS、または HTTP(S) URL。原本全体の URL 取得には<a href="#url-input">対応条件</a>がある</td></tr>
+<tr><th scope="row"><code>--metadata-only</code></th><td>鍵や外部メディアツールを使わず、宣言情報を読む。原本の保存やコンテンツ全体の検証はしない。第6章を参照</td></tr>
+<tr><th scope="row"><code>--download-dir NEW_DIR</code></th><td>原本全体を取得する URL 解析に必須。新規の原本保存先。--metadata-only とは併用不可</td></tr>
+<tr><th scope="row"><code>--fetch-policy FILE</code></th><td>例 config/fetch.json。URL 専用の取得条件 JSON。--metadata-only と併用可能。<a href="https://kazuhide.github.io/drmr/ja/guide/#url-input">書式・権限・使用例</a></td></tr>
+<tr><th scope="row"><code>--keys-file FILE</code></th><td>原本の復号に必要な入力鍵の JSON。--metadata-only とは併用不可。<a href="https://kazuhide.github.io/drmr/ja/guide/#key-configuration">構造例と保護方法</a></td></tr>
+<tr><th scope="row"><code>--packager-bin FILE</code></th><td>原本全体の検査に使う Shaka Packager 実行ファイル。既定 packager。--metadata-only とは併用不可。<a href="https://kazuhide.github.io/drmr/ja/guide/#installation">配置と最低要件</a></td></tr>
+<tr><th scope="row"><code>--max-workers N</code></th><td>原本全体の検査の同時作業上限 1-64。既定は CPU・メモリから自動選択。--metadata-only とは併用不可</td></tr>
+<tr><th scope="row"><code>--json</code></th><td>--metadata-only はメタデータレポート、それ以外は入力解析レポート。どちらも変換結果の検証ではない</td></tr>
+<tr><th scope="row"><code>--measure</code></th><td>数値計測を追加。--json が必要。--metadata-only とは併用不可</td></tr>
 </tbody></table></div>
-<p>ローカル入力に取得用オプションを付けると拒否します。URL の解析には常に新規の取得先が必要です。</p>
+<p>ローカル入力に取得用オプションを付けると拒否します。URL のメタデータ確認に取得先は不要ですが、原本全体の解析には新規の取得先が必要です。</p>
 <h3>plan</h3>
-<div class="guide-table-scroll" role="region" aria-labelledby="table-25-title" tabindex="0"><table><caption id="table-25-title">plan — 表 25</caption><thead><tr><th scope="col">引数・オプション</th><th scope="col">意味</th></tr></thead><tbody>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-27-title" tabindex="0"><table><caption id="table-27-title">plan — 表 27</caption><thead><tr><th scope="col">引数・オプション</th><th scope="col">意味</th></tr></thead><tbody>
 <tr><th scope="row"><code>INPUT</code></th><td>変換先の候補と条件を確認するローカル入力</td></tr>
 <tr><th scope="row"><code>--to TARGET</code></th><td>INPUT を使い --outputs がない場合に必須。clear、cenc、cbcs、hls-aes128、hls-sample-aes</td></tr>
 <tr><th scope="row"><code>--format FORMAT</code></th><td>mp4、dash、hls、hls-ts。--save なしでは複数候補、単一出力の保存計画では一形式。省略時は MP4/DASH/HLS に従い、HLS は fMP4。--outputs とは併用不可</td></tr>
@@ -2394,7 +2430,7 @@ cargo test --locked -p drmr-core --test conversion_bundle_encryption \
 <tr><th scope="row"><code>--measure</code></th><td>標準出力に計測を追加。--json と --save が必要。保存ファイル自体は実行用の計画</td></tr>
 </tbody></table></div>
 <h3>convert</h3>
-<div class="guide-table-scroll" role="region" aria-labelledby="table-26-title" tabindex="0"><table><caption id="table-26-title">convert — 表 26</caption><thead><tr><th scope="col">引数・オプション</th><th scope="col">意味・既定値</th></tr></thead><tbody>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-28-title" tabindex="0"><table><caption id="table-28-title">convert — 表 28</caption><thead><tr><th scope="col">引数・オプション</th><th scope="col">意味・既定値</th></tr></thead><tbody>
 <tr><th scope="row"><code>INPUT</code></th><td>対応するローカル原本、または取得条件を満たす MP4・static DASH・完結した HLS の URL。暗号化入力には入力鍵が必要。--plan 時は省略。<a href="#url-input">URL の対応条件</a></td></tr>
 <tr><th scope="row"><code>--to TARGET</code></th><td>--plan・--outputs がない場合に必須。出力保護方式</td></tr>
 <tr><th scope="row"><code>--format FORMAT</code></th><td>一つの出力形式。省略時は MP4/DASH/HLS に従い、HLS は TS 入力でも fMP4</td></tr>
@@ -2408,13 +2444,13 @@ cargo test --locked -p drmr-core --test conversion_bundle_encryption \
 <tr><th scope="row"><code>--hls-validator-bin FILE</code></th><td>要求した HLS 検査用の Apple 実行ファイル。既定 mediastreamvalidator。<a href="https://kazuhide.github.io/drmr/ja/guide/#verification">検査ツールの準備</a></td></tr>
 <tr><th scope="row"><code>--dash-validator-bin FILE</code></th><td>ローカル DASH-IF アダプターを実行する PHP 実行ファイル。既定 php。<a href="https://kazuhide.github.io/drmr/ja/guide/#verification">配置先と設定</a></td></tr>
 <tr><th scope="row"><code>--max-workers N</code></th><td>メディアの同時処理数の上限 1-64。既定は CPU・メモリから自動選択</td></tr>
-<tr><th scope="row"><code>--json</code></th><td>スキーマのバージョンを含む一つの結果を表示。通常の進捗表示は省略</td></tr>
+<tr><th scope="row"><code>--json</code></th><td>スキーマのバージョンを含む一つの結果。auto は標準エラーが端末の場合だけ進捗を表示。--progress text/json/off の明示指定が優先</td></tr>
 <tr><th scope="row"><code>--measure</code></th><td>数値の計測情報を追加。--json が必要</td></tr>
 </tbody></table></div>
 <p>汎用 CLI に ffmpeg-bin/ffprobe-bin の独自フラグはありません。FFmpeg/ffprobe は起動環境の PATH を用います。</p>
 <p><code>--plan</code> は INPUT、--to、--format、--outputs、--output、--download-dir、--fetch-policy と併用できません。鍵・検証ツールの場所・並列数・レポート指定は実行時の設定として渡せます。各出力に保存したマニフェスト検証方針を実行時に上書きすることはできません。</p>
 <h3>verify</h3>
-<div class="guide-table-scroll" role="region" aria-labelledby="table-27-title" tabindex="0"><table><caption id="table-27-title">verify — 表 27</caption><thead><tr><th scope="col">引数・オプション</th><th scope="col">意味・既定値</th></tr></thead><tbody>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-29-title" tabindex="0"><table><caption id="table-29-title">verify — 表 29</caption><thead><tr><th scope="col">引数・オプション</th><th scope="col">意味・既定値</th></tr></thead><tbody>
 <tr><th scope="row"><code>OUTPUT</code></th><td>比較する結果の MP4、MPD、M3U8。--plan 時は省略</td></tr>
 <tr><th scope="row"><code>--source INPUT</code></th><td>--plan・--manifest-only がない場合に必須。元の入力。結果から原本を推測しない</td></tr>
 <tr><th scope="row"><code>--plan FILE</code></th><td><a href="https://kazuhide.github.io/drmr/ja/guide/#inspect-plan">生成済み計画 JSON</a>に記録した原本と出力条件を照合し、コンテンツ全体の一致を確認。OUTPUT・--source とは併用不可</td></tr>
@@ -2434,7 +2470,7 @@ cargo test --locked -p drmr-core --test conversion_bundle_encryption \
 <h3>version</h3>
 <p><code>drmr version</code> または <code>drmr --version</code> で製品のバージョンを表示します。個別のオプションはありません。</p>
 <h3>serve</h3>
-<div class="guide-table-scroll" role="region" aria-labelledby="table-28-title" tabindex="0"><table><caption id="table-28-title">serve — 表 28</caption><thead><tr><th scope="col">オプション・環境</th><th scope="col">意味・既定値</th></tr></thead><tbody>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-30-title" tabindex="0"><table><caption id="table-30-title">serve — 表 30</caption><thead><tr><th scope="col">オプション・環境</th><th scope="col">意味・既定値</th></tr></thead><tbody>
 <tr><th scope="row"><code>--static-dir DIR</code></th><td>組み込み画面の代わりに配信する信頼済み UI ディレクトリ</td></tr>
 <tr><th scope="row"><code>--cli FILE</code></th><td>ジョブを実行する同じ版の drmr 実行ファイル。設定 JSON ではない。<a href="https://kazuhide.github.io/drmr/ja/guide/#web-console">Web の起動方法</a></td></tr>
 <tr><th scope="row"><code>DRMR_INPUT_ROOT</code></th><td>必須。メディアと保存計画を選べる入力フォルダー</td></tr>

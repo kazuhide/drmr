@@ -178,7 +178,7 @@ class Site(unittest.TestCase):
         original = helper.read_text(encoding="utf-8")
         helper.write_text(original + '\n_original_markdown = markdown\n'
                           'def markdown(locale):\n'
-                          '    return _original_markdown(locale).replace("drmr analyze", "drmr inspect")\n',
+                          '    return _original_markdown(locale).replace("drmr analyze", "drmr version")\n',
                           encoding="utf-8")
         with self.assertRaisesRegex(CHECK.Failure, "site-guide-generated"):
             self.check()
@@ -642,8 +642,8 @@ class GuideMarkup(unittest.TestCase):
             body = "<p>Complete chapter content with a bounded, meaningful explanation.</p>"
             if name == "introduction":
                 body += ('<figure class="guide-example" data-code-language="sh" aria-labelledby="example-1-title">'
-                         '<figcaption id="example-1-title">Inspect the complete media</figcaption>'
-                         '<pre tabindex="0"><code>drmr inspect source.mp4</code></pre></figure>'
+                         '<figcaption id="example-1-title">Read media metadata</figcaption>'
+                         '<pre tabindex="0"><code>drmr analyze source.mp4 --metadata-only</code></pre></figure>'
                          '<div class="guide-table-scroll" role="region" aria-labelledby="table-1-title" tabindex="0">'
                          '<table><caption id="table-1-title">Known profiles</caption><thead><tr><th scope="col">Input</th></tr></thead>'
                          '<tbody><tr><th scope="row">MP4</th></tr></tbody></table></div>')
@@ -774,7 +774,7 @@ class ConversionExamples(unittest.TestCase):
                 ('--output result.mp4', '--output result'),
                 ('--save plan.json', '--save other.plan.json'),
                 ('drmr convert --plan plan.json', 'drmr convert --plan other.plan.json'),
-                ('drmr verify --plan plan.json', 'drmr inspect result.mp4'),
+                ('drmr verify --plan plan.json', 'drmr analyze result.mp4 --metadata-only'),
                 ('drmr analyze &quot;https://example.com/clear.mp4&quot;', 'drmr analyze result.mp4'),
                 ('--keys-file keys.json', '--keys-file other.json'),
                 ('drmr verify --plan', '# drmr verify --plan')):

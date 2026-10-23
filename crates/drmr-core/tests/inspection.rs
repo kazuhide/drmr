@@ -64,6 +64,23 @@ fn movie(entries: &[Vec<u8>]) -> Vec<u8> {
 }
 
 #[test]
+fn metadata_box_budget_counts_nested_and_sibling_boxes_before_allocation() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("bounded.mp4");
+    let base = movie(&[entry(None, false)]);
+    // The ordinary sample description uses seven boxes, including the movie.
+    let mut body = base[8..].to_vec();
+    for _ in 7..16_384 {
+        body.extend(atom(b"free", &[]));
+    }
+    std::fs::write(&path, atom(b"moov", &body)).unwrap();
+    assert_eq!(inspect(&path).unwrap().tracks.len(), 1);
+    body.extend(atom(b"free", &[]));
+    std::fs::write(&path, atom(b"moov", &body)).unwrap();
+    assert_eq!(inspect(&path).unwrap_err().0, "mp4-box-count-limit");
+}
+
+#[test]
 fn mp4_sample_descriptions_keep_their_own_schemes_keys_and_patterns() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("data-with-no-extension");

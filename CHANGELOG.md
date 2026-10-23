@@ -5,14 +5,26 @@ for installation, stable interfaces and versioning.
 
 ## [Unreleased]
 
-Corrections on `main` are not included in the published 1.0.0 archives.
-Those immutable archives remain pre-release candidates with the original
-48 kHz-only TS audio profile. Build from current source to use these corrections.
+## [1.0.1] - 2026-10-23
+
+Pre-release update for AAC in MPEG transport streams, key-free metadata
+analysis and command progress. The published v1.0.0 archives remain unchanged.
+
+### Added
+
+- Read local and HTTP(S) MP4, HLS and DASH metadata with
+  `analyze --metadata-only`, without keys or retained source downloads. This
+  replaces the removed `inspect` command during the pre-release CLI
+  consolidation; normal full-source analysis is unchanged.
+- Select stderr progress with global `--progress auto|text|json|off`, including
+  progress alongside JSON results, actual acquisition counters and periodic
+  elapsed-time observations without estimated percentages or completion times.
 
 ### Fixed
 
-- Preserve a uniquely declared partial final AAC playback range from HLS/TS in HLS and DASH, while retaining every coded frame, raw timestamp and decoded sample. Verify the result's own edit list and manifest boundaries independently.
-
+- Preserve a uniquely declared partial final AAC playback range from HLS/TS in
+  HLS and DASH, while retaining every coded frame, raw timestamp and decoded
+  sample. Verify the result's own edit list and manifest boundaries independently.
 - Accept AAC-LC at 44.1 kHz alongside 48 kHz in supported clear, AES-128 and
   SAMPLE-AES HLS transport streams, including audio-only input.
 - Preserve every original AAC frame, decoded sample and absolute presentation
@@ -24,6 +36,20 @@ Those immutable archives remain pre-release candidates with the original
   occupies an integral number of transport-clock ticks.
 - Retain exact 48 kHz checks and add 44.1 kHz configuration, clock, protection,
   complete-content and independent verification regressions.
+
+### Requirements and verification
+
+CLI archives target Linux x86-64, Apple Silicon macOS and Windows x86-64.
+FFmpeg, ffprobe and Shaka Packager are installed separately; see
+[installation and compatibility](https://github.com/kazuhide/drmr/blob/v1.0.1/docs/releases.md)
+and [runtime requirements](https://github.com/kazuhide/drmr/blob/v1.0.1/docs/requirements.md).
+Rust is required only for source builds.
+
+Archive qualification checks the extracted CLI with ten-second video and
+44.1 kHz AAC transport-stream fixtures, including saved-plan conversion and
+independent verification. Reports accompany each archive. These checks do not
+qualify arbitrary media, DRM license services or device playback. The Web console
+and Desktop host remain experimental.
 
 ## [1.0.0] - 2026-10-22
 

@@ -209,7 +209,9 @@ fn server_cli_records_environment_and_arguments_before_hold_release() {
     );
     assert_eq!(std::fs::read(ready).unwrap(), b"fixture-path\nmarker\n");
     assert!(child.try_wait().unwrap().is_none());
-    std::fs::write(d.path().join("release"), b"7").unwrap();
+    let release = d.path().join("release.pending");
+    std::fs::write(&release, b"7").unwrap();
+    std::fs::rename(release, d.path().join("release")).unwrap();
     let out = child.wait_with_output().unwrap();
     assert_eq!(out.status.code(), Some(7));
     assert_eq!(out.stdout, b"one\r\ntwo\n");

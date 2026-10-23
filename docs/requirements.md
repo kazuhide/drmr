@@ -8,7 +8,7 @@ CI derives the minimum version from that manifest and tests it alongside the lat
 
 ## Media tools
 
-Add the executable directories to `PATH`. Use each tool at the supported lower bound or a newer compatible version:
+Complete media checks and conversion use the tools below. Metadata-only analysis with `analyze --metadata-only` is built in and needs none of them. Add the executable directories to `PATH`. Use each tool at the supported lower bound or a newer compatible version:
 
 | Tool | Supported from | Builds used for the media qualification |
 | --- | --- | --- |

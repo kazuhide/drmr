@@ -21,6 +21,9 @@ pub(super) struct Backend {
     pub activity: Option<Arc<dyn crate::events::Sink>>,
 }
 impl Backend {
+    pub fn task(&self, task: super::observation::Task) -> super::observation::Scope {
+        super::observation::Scope::new(self.activity.as_ref(), task)
+    }
     pub fn scope(&self, phase: super::measurement::Phase) -> super::measurement::Scope {
         self.measurement
             .as_ref()
@@ -394,6 +397,7 @@ impl Backend {
         key: Option<super::keys::ProbeKeys<'_>>,
         unedited: bool,
     ) -> Result<super::packets::Evidence, ConversionError> {
+        let _task = self.task(super::observation::Task::PacketTiming);
         let profile = self.profile_stream_keys_options(path, index, key, unedited)?;
         let expected = profile["nb_read_packets"]
             .as_str()
@@ -496,6 +500,11 @@ impl Backend {
         key: Option<super::keys::ProbeKeys<'_>>,
         unedited: bool,
     ) -> Result<String, ConversionError> {
+        let _task = self.task(if copy {
+            super::observation::Task::EncodedContent
+        } else {
+            super::observation::Task::DecodedContent
+        });
         let mut argv = vec![
             self.ffmpeg.clone(),
             "-v".into(),
@@ -558,6 +567,7 @@ impl Backend {
         format: (u32, u32),
         complete: bool,
     ) -> Result<super::finite::Decoded, ConversionError> {
+        let _task = self.task(super::observation::Task::DecodedContent);
         let mut argv = vec![
             self.ffmpeg.clone(),
             "-v".into(),

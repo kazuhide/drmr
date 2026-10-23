@@ -1,6 +1,6 @@
 # Understand a processing route
 
-`inspect` reports what local metadata says. Without `--save`, `plan` lists conditional ways to satisfy the requested output. `analyze` checks complete source media; `plan --save` additionally fixes its file fingerprints and output intent for later execution. Use `--outputs` for [several named outputs](multiple-outputs.md). A successful single conversion reports the handler it actually used in `processing.route`, with a fixed reason and its input preparation; a multiple-output report includes this information for each child conversion. The identifiers below connect those reports to this guide. See [saved execution plans](executable-plans.md) for the four-stage workflow and fresh revalidation boundaries.
+`analyze --metadata-only` reports what local or URL metadata declares. Without `--save`, `plan` lists conditional ways to satisfy the requested output. Normal `analyze` checks complete source media; `plan --save` additionally fixes its file fingerprints and output intent for later execution. Use `--outputs` for [several named outputs](multiple-outputs.md). A successful single conversion reports the handler it actually used in `processing.route`, with a fixed reason and its input preparation; a multiple-output report includes this information for each child conversion. The identifiers below connect those reports to this guide. See [saved execution plans](executable-plans.md) for the four-stage workflow and fresh revalidation boundaries.
 
 ```text
 Original local file or manifest resources
@@ -52,14 +52,14 @@ anchor all content, sample counts, and timing checks. Complete frames determine
 audio segment boundaries; a two-second target does not permit trimming samples.
 See [audio-only fMP4 HLS](media-processing.md#audio-only-fmp4-hls-from-transport-streams).
 
-In the **Unreleased** `main` source, Rust prepares 44.1 kHz AAC as private fragmented MP4 directly from validated
+Rust prepares 44.1 kHz AAC as private fragmented MP4 directly from validated
 ADTS frames, with the original 90 kHz timestamps and the actual audio rate of
 44,100 samples per second. Shaka Packager then segments that track. Video and 48 kHz audio retain their
 Shaka demultiplexing path. The same 44.1 kHz preparation feeds DASH and TS output.
 All routes retain every original PTS and DTS exactly; source timestamp rounding
 is never reused as an output error allowance. See
 [AAC clock handling](media-processing.md#aac-sample-rates-and-transport-clocks).
-This correction is not included in the unchanged published v1.0.0 archives,
+This path is included in the 1.0.1 source. It is not included in the unchanged v1.0.0 archives,
 whose TS audio profile accepts only 48 kHz; see [release status](releases.md).
 
 ### mpeg-ts-sample-aes-hls
@@ -139,6 +139,6 @@ validates the actual container, keys, IVs, and complete media.
 
 The fixed `sample_coverage_reason` explains unknown evidence: `sample-auxiliary-data-not-inspected` for input inspection, or `target-intent-not-sample-evidence` for a requested output. Neither is evidence about actual produced samples.
 
-Inspection reads at most 16 MiB of MP4 movie metadata and skips media and fragment payloads. HLS inspection follows only bounded local child playlists, never media segments or keys. The additional facts do not widen those reads. DASH period counts describe direct, supported-namespace `Period` declarations, not verified durations or a complete media timeline. MP4 and HLS have no DASH period count.
+Metadata-only analysis reads at most 16 MiB of MP4 movie metadata and skips media and fragment payloads. Local HLS follows bounded child playlists inside its directory tree. URL metadata reads HLS playlists or a DASH MPD under the fetch policy, never initialization files, media segments or keys; remote MP4 requires valid Range responses. These temporary reads do not retain an executable-plan source. The additional facts do not widen those reads. DASH period counts describe direct, supported-namespace `Period` declarations, not verified durations or a complete media timeline. MP4 and HLS have no DASH period count.
 
 The version-one JSON additions are optional: `Inspection.details`, `ConversionPlan.processing`, and `ConversionReport.processing`. An absent field in an older report means the information was not supplied. It never means clear media, a selected route, or successful verification. Conditional plans and saved reports are not executable instructions. The separate `kind: "execution-plan"` format saves typed local intent and source identity; execution still revalidates the actual media and runtime configuration. License and device playback remain outside the media-identity checks.

@@ -1,19 +1,12 @@
 //! Read-only metadata inspection and conversion planning.
 
+use crate::convert_cli::{self, Progress};
 use clap::Args;
+use drmr_core::conversion::ConversionError;
 use drmr_core::inspection::{self, Inspection, OutputFormat, TargetProtection};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-
-#[derive(Args)]
-pub struct InspectArgs {
-    /// Local MP4, DASH manifest, or HLS playlist. References are not fetched remotely.
-    pub input: PathBuf,
-    /// Print the versioned JSON metadata report.
-    #[arg(long)]
-    pub json: bool,
-}
 
 #[derive(Args)]
 pub struct PlanArgs {
@@ -56,14 +49,11 @@ fn write_json(value: &serde_json::Value) -> bool {
     serde_json::to_writer_pretty(&mut out, value).is_ok() && writeln!(out).is_ok()
 }
 
-fn inspect_input(path: &Path, command: &str) -> Result<Inspection, ExitCode> {
-    inspection::inspect(path).map_err(|error| {
-        eprintln!("{command}: {error}");
-        ExitCode::from(2)
-    })
+fn inspect_input(path: &Path) -> Result<Inspection, ConversionError> {
+    inspection::inspect(path).map_err(|error| ConversionError(error.0))
 }
 
-fn summary(report: &Inspection, out: &mut impl Write) -> std::io::Result<()> {
+pub(crate) fn summary(report: &Inspection, out: &mut impl Write) -> std::io::Result<()> {
     writeln!(out, "Format: {}", report.format.as_str())?;
     writeln!(out, "Protection: {}", report.protection.as_str())?;
     writeln!(
@@ -129,37 +119,37 @@ fn summary(report: &Inspection, out: &mut impl Write) -> std::io::Result<()> {
     Ok(())
 }
 
-pub fn inspect(args: &InspectArgs) -> ExitCode {
-    let report = match inspect_input(&args.input, "inspect") {
-        Ok(value) => value,
-        Err(code) => return code,
-    };
-    let success = if args.json {
-        write_json(&serde_json::to_value(&report).expect("metadata report serializes"))
-    } else {
-        summary(&report, &mut std::io::stdout().lock()).is_ok()
-    };
-    ExitCode::from(u8::from(!success))
-}
-
 pub fn plan(args: &PlanArgs) -> ExitCode {
     if args.save.is_some() {
         return crate::plan_cli::save(args);
     }
+    let progress = Progress::new(!args.json);
+    progress.mark("configuration");
     let Some(target) = args.to else {
-        eprintln!("plan: --to is required with INPUT");
-        return ExitCode::from(2);
+        return convert_cli::error(
+            "plan",
+            ConversionError("target-required"),
+            args.json,
+            &progress,
+            Some(2),
+        );
     };
-    let report = match inspect_input(&args.input, "plan") {
+    progress.mark("inspection");
+    let report = match inspect_input(&args.input) {
         Ok(value) => value,
-        Err(code) => return code,
+        Err(cause) => return convert_cli::error("plan", cause, args.json, &progress, Some(2)),
     };
     let plan = inspection::plan(report, target, args.format.clone());
+    progress.mark("publication");
     let success = if args.json {
         write_json(&serde_json::to_value(&plan).expect("conversion plan serializes"))
     } else {
         text_plan(&plan).is_ok()
     };
+    progress.finish();
+    if !success {
+        progress.diagnostic("plan", "result-output-unavailable");
+    }
     ExitCode::from(u8::from(!success || !plan.compatible))
 }
 

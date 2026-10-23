@@ -49,6 +49,7 @@ AAC44100_FRAMES = 432
 MEDIA_LIMITS = (
     "One native packaged CLI, one ten-second video-only Clear DASH to CBCS DASH saved-plan route "
     "and one generated ten-second 44.1 kHz stereo AAC Clear HLS/TS to CBCS DASH saved-plan route. "
+    "One local Clear DASH metadata-only analysis with the original preserved. "
     "Full original video comparison, complete generated audio frame/clock evidence and CLI media comparisons, "
     "and native manifest linting; no independent external audio PCM comparison, DRM license/device playback, "
     "GUI, installer, signature, or build-origin certification.")
@@ -610,6 +611,18 @@ def media(cli, runner, source):
             "independent_verification": verified_proof, "output_graph": graph_identity(output)}
 
 
+def metadata_analysis(cli, runner, source):
+    before = graph_identity(source.parent)
+    report = runner.json([cli, "analyze", source, "--metadata-only", "--json"], "metadata-analysis")
+    require(isinstance(report, dict) and type(report.get("schema_version")) is int
+            and report.get("schema_version") == 1 and report.get("format") == "dash"
+            and report.get("protection") == "clear" and report.get("evidence") == "manifest"
+            and report.get("media_verified") is False and "download" not in report, "metadata-proof-invalid")
+    require(graph_identity(source.parent) == before, "metadata-original-changed")
+    return {"schema_version": 1, "format": "dash", "protection": "clear", "evidence": "manifest",
+            "media_verified": False, "source_unchanged": True}
+
+
 def audio_media(cli, runner, source):
     root = runner.workspace
     clip = source.read(CLIP)
@@ -715,6 +728,7 @@ def qualify(archive_path, target, version, source_path):
         tools = doctor(runner.json([cli, "doctor", "--probe", "--route", "all", "--json"], "doctor", 120))
         proof = media(cli, runner, source)
         audio = audio_media(cli, runner, source)
+        metadata = metadata_analysis(cli, runner, workspace.path / "dash/manifest.mpd")
         require(VERIFY.file_digest(snapshot) == archive_proof["archive_sha256"]
                 and VERIFY.file_digest(cli) == archive_proof["binaries"]["drmr"]["sha256"], "qualified-artifact-changed")
         return {"schema_version": 1, "success": True, "kind": "native-cli-archive-media",
@@ -724,6 +738,7 @@ def qualify(archive_path, target, version, source_path):
                 "binary_sha256": archive_proof["binaries"]["drmr"]["sha256"],
                 "archive_files": archive_proof["files"], "dependency_packages": archive_proof["packages"],
                 "native_ordinary_user": True, "doctor": tools, "media": proof, "aac_44100": audio,
+                "metadata_analysis": metadata,
                 "stages": runner.stages,
                 "owned_workspace_cleanup": "confirmed",
                 "limits": MEDIA_LIMITS}

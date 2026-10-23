@@ -30,7 +30,7 @@ fn failure(result: &Output, command: &str, expected: &str, exit: i32) -> Value {
 }
 
 #[test]
-fn analyze_help_explains_full_input_checks_separately_from_inspect() {
+fn analyze_help_explains_full_input_checks_separately_from_metadata_only() {
     let result = invoke(&["analyze", "--help"]);
     assert!(result.status.success());
     let help = String::from_utf8(result.stdout).unwrap();
@@ -52,13 +52,8 @@ fn analyze_help_explains_full_input_checks_separately_from_inspect() {
     ] {
         assert!(help.contains(profile), "{help}");
     }
-    let result = invoke(&["inspect", "--help"]);
-    assert!(result.status.success());
-    assert!(
-        !String::from_utf8(result.stdout)
-            .unwrap()
-            .contains("--download-dir")
-    );
+    assert!(help.contains("--metadata-only"));
+    assert!(help.contains("does not retain a source"));
 }
 
 #[test]

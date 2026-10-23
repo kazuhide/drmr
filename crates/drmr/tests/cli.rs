@@ -26,11 +26,12 @@ fn help_exposes_the_common_commands() {
     assert!(output.status.success());
     let help = String::from_utf8(output.stdout).unwrap();
     for command in [
-        "doctor", "inspect", "analyze", "plan", "convert", "verify", "serve", "version",
+        "doctor", "analyze", "plan", "convert", "verify", "serve", "version",
     ] {
         assert!(help.contains(&format!("  {command}")), "{help}");
     }
     for command in [
+        "inspect",
         "run",
         "analyze-hls",
         "package-hls",

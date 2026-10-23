@@ -57,6 +57,17 @@ impl Session {
         keys: Option<&PathBuf>,
     ) -> Result<Self, ExitCode> {
         let progress = Arc::new(Progress::new(!json));
+        Self::start_observed(command, json, packager, maximum, keys, progress)
+    }
+
+    fn start_observed(
+        command: &str,
+        json: bool,
+        packager: &str,
+        maximum: Option<u8>,
+        keys: Option<&PathBuf>,
+        progress: Arc<Progress>,
+    ) -> Result<Self, ExitCode> {
         progress.mark("configuration");
         let cancellation = crate::cancellation::Cancellation::install().map_err(|_| {
             convert_cli::error(
@@ -113,6 +124,9 @@ impl Session {
         }
         self.progress.finish();
         let passed = command != "verify" || report["passed"] == true;
+        if !passed {
+            self.progress.diagnostic(command, "verification-mismatch");
+        }
         if !passed && report["error"].is_null() {
             let error = convert_cli::error_value(
                 command,
@@ -133,7 +147,8 @@ impl Session {
             text(command, &report, passed)
         };
         if result.is_err() {
-            eprintln!("{command}: result-output-unavailable");
+            self.progress
+                .diagnostic(command, "result-output-unavailable");
         }
         ExitCode::from(u8::from(!passed || result.is_err()))
     }
@@ -419,7 +434,7 @@ pub fn verify(args: &VerifyArgs, plan: &BundlePlan) -> ExitCode {
 }
 
 pub fn convert_direct(args: &ConvertArgs) -> ExitCode {
-    let progress = Progress::new(!args.json);
+    let progress = Arc::new(Progress::new(!args.json));
     progress.mark("configuration");
     let input = match Input::parse(
         args.input
@@ -436,12 +451,13 @@ pub fn convert_direct(args: &ConvertArgs) -> ExitCode {
             return convert_cli::error("convert", error.cause, args.json, &progress, error.exit);
         }
     };
-    let session = match Session::start(
+    let session = match Session::start_observed(
         "convert",
         args.json,
         &args.packager_bin,
         args.max_workers,
         args.keys_file.as_ref(),
+        progress,
     ) {
         Ok(session) => session,
         Err(code) => return code,
@@ -481,7 +497,9 @@ pub fn convert_direct(args: &ConvertArgs) -> ExitCode {
                     output,
                     policy.as_ref().expect("fetch policy checked"),
                 )?;
-                eprintln!("Downloaded source retained in the requested download directory.");
+                if !session.progress.structured() {
+                    eprintln!("Downloaded source retained in the requested download directory.");
+                }
                 converter.convert_bundle_downloaded(
                     &downloaded,
                     &outputs,

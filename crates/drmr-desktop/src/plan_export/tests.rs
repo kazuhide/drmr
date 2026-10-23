@@ -360,16 +360,45 @@ fn native_export_retains_chooser_until_callback_and_discards_late_path() {
     let folders = Folders::new();
     let origin = origin();
     let (service, _) = folders.service(origin.clone());
+    let (idle_entered, idle_ready) = mpsc::channel();
+    let (idle_left, idle_returned) = mpsc::channel();
+    let release_idle = Arc::new(AtomicBool::new(false));
+    let idle_released = release_idle.clone();
+    *service.shared.before_park.lock().unwrap() = Some(Box::new(move || {
+        idle_entered.send(()).unwrap();
+        // Keep the nonblocking stop snapshot uncontended without consuming its wake token.
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !idle_released.load(Ordering::Acquire) {
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        idle_left.send(()).unwrap();
+    }));
+    service.shared.wake();
+    idle_ready.recv_timeout(Duration::from_secs(2)).unwrap();
     let selection = service
         .reserve(&origin.url().join(ENDPOINT).unwrap())
         .unwrap();
-    assert!(service.request_stop());
+    let choosing = service.request_stop();
+    release_idle.store(true, Ordering::Release);
+    idle_returned.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert!(choosing);
     let (done, completed) = mpsc::channel();
     let owner = service.clone();
     let closer = std::thread::spawn(move || {
         done.send(owner.shutdown()).unwrap();
     });
     assert!(completed.recv_timeout(Duration::from_millis(30)).is_err());
+    assert!(
+        service
+            .shared
+            .lock()
+            .current
+            .as_ref()
+            .is_some_and(|attempt| {
+                attempt.id == selection.id && matches!(attempt.phase, Phase::Choosing)
+            })
+    );
     let target = folders.private.join("late.plan.json");
     service.selected(selection, Some(target.clone()));
     assert!(completed.recv_timeout(Duration::from_secs(2)).unwrap());

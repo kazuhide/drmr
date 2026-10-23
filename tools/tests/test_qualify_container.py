@@ -10,11 +10,134 @@ import sys
 import tempfile
 import threading
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 SPEC = importlib.util.spec_from_file_location("qualify_container", Path(__file__).resolve().parents[1] / "qualify_container.py")
 module = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(module)
+
+
+class ResourceProgressTests(unittest.TestCase):
+    """Exercise the real resource gate with the public progress producer shape."""
+
+    def records(self):
+        base = {"schema_version": 1, "entry_point": "cli", "command": "convert", "run_id": "123-456",
+                "event": "activity", "elapsed_ms": 0, "activity": "configuration",
+                "task": "Checking command settings", "scopes_started": 0, "scopes_closed": 0,
+                "active_scopes": 0, "tools_started": 0, "tools_closed": 0,
+                "active_tool_count": 0, "active_tools": [], "work_units_completed": 0}
+        return [base, {**base, "event": "progress", "elapsed_ms": 1, "workers": 2},
+                {**base, "event": "finished", "elapsed_ms": 2, "activity": "publication", "workers": 2}]
+
+    def encode(self, records):
+        return b"".join((json.dumps(record) + "\n").encode() for record in records)
+
+    def run_gate(self, stderr=None, status=0, stdout=None, verification=None):
+        checked, invoked = [], []
+        observed = {"kind": "native-hardware-observation", "memory_source": "process-cgroup",
+                    "effective_cpus": 2, "available_memory_bytes": 512 * 1024 ** 2}
+        verified = EvidenceTests().valid() if verification is None else verification
+        stderr = self.encode(self.records()) if stderr is None else stderr
+        stdout = b"Verified stream metadata, packet payloads, decoded content, and packet timing.\n" if stdout is None else stdout
+
+        class Image:
+            def checked(self, arguments, **options):
+                checked.append((arguments, options))
+                return json.dumps(observed if not arguments else verified).encode()
+
+            def invoke(self, arguments, **options):
+                invoked.append((arguments, options))
+                return status, stdout, stderr
+
+        return module.resources(Image()), checked, invoked
+
+    def test_resource_gate_accepts_numeric_progress_without_legacy_human_worker_text(self):
+        raw = self.encode(self.records())
+        self.assertNotIn(b"Using up to", raw)
+        result, checked, invoked = self.run_gate(raw)
+        self.assertEqual(result["actual_cli_workers"], [2, 2])
+        self.assertEqual(result["limits"], {"memory_bytes": 1024 ** 3, "cpus": 2})
+        self.assertEqual(invoked, [(["convert", "/input/dash/manifest.mpd", "--to", "clear", "--format", "dash",
+                                    "--output", "/work/resource-limited", "--progress", "json"], {"limited": True})])
+        self.assertEqual(checked, [([], {"entry": "/qualifiers/container-resources", "limited": True}),
+                                  (["verify", "/work/resource-limited/manifest.mpd", "--source",
+                                    "/input/dash/manifest.mpd", "--json"], {"limited": True})])
+        self.assertIs(result["independent_verification"]["passed"], True)
+        rows = self.records()
+        for row in rows:
+            if "workers" in row:
+                row["workers"] = 1
+        result, _, _ = self.run_gate(self.encode(rows))
+        self.assertEqual(result["actual_cli_workers"], [1, 1])
+
+    def test_resource_gate_refuses_missing_malformed_or_unbound_progress(self):
+        changes = [lambda rows: rows[1].update(workers=0), lambda rows: rows[1].update(workers=3),
+                   lambda rows: rows[1].update(workers=True), lambda rows: rows[1].update(workers="2"),
+                   lambda rows: rows[1].update(workers=2.0), lambda rows: rows[1].update(command="analyze"),
+                   lambda rows: rows[1].update(schema_version=True), lambda rows: rows[1].update(schema_version=2),
+                   lambda rows: rows[1].update(entry_point="web"), lambda rows: rows[1].update(run_id="other-run"),
+                   lambda rows: rows[1].update(run_id="123-789"),
+                   lambda rows: rows[1].update(event="failed"), lambda rows: rows[1].update(elapsed_ms=-1),
+                   lambda rows: rows[1].update(elapsed_ms=True), lambda rows: rows[1].update(active_tools="ffprobe"),
+                   lambda rows: rows[1].pop("activity"), lambda rows: rows[1].update(activity=[]),
+                   lambda rows: rows[1].update(private_path="private-marker"),
+                   lambda rows: rows[-1].update(event="progress"), lambda rows: rows[-1].pop("workers"),
+                   lambda rows: rows[1].update(scopes_started=True),
+                   lambda rows: rows.append(rows[-1].copy())]
+        for change in changes:
+            rows = self.records()
+            change(rows)
+            with self.subTest(change=change):
+                with self.assertRaisesRegex(module.Refusal, "^container-resource-progress-invalid$") as refused:
+                    self.run_gate(self.encode(rows))
+                self.assertEqual(refused.exception.evidence["exit_code"], 0)
+                self.assertEqual(set(refused.exception.evidence), {"exit_code", "stdout_sha256", "stderr_sha256"})
+        for raw in (b"", b"not JSON\n", b"[]\n", b"\xff\n", b'{"schema_version":1,"schema_version":1}\n',
+                    self.encode(self.records()) + b"unexpected diagnostic\n"):
+            with self.subTest(raw_digest=hashlib.sha256(raw).hexdigest()), self.assertRaisesRegex(
+                    module.Refusal, "^container-resource-progress-invalid$"):
+                self.run_gate(raw)
+        rows = self.records()
+        for row in rows:
+            row.pop("workers", None)
+        with self.assertRaisesRegex(module.Refusal, "^container-resource-workers-missing$") as refused:
+            self.run_gate(self.encode(rows))
+        self.assertEqual(refused.exception.evidence["exit_code"], 0)
+
+    def test_progress_output_limit_is_enforced_before_json_parsing(self):
+        raw = b"x" * (module.MAX_OUTPUT + 1)
+        with patch.object(module, "load_json") as parser, self.assertRaisesRegex(
+                module.Refusal, "^container-resource-progress-invalid$"):
+            module.resource_workers(raw)
+        parser.assert_not_called()
+
+    def test_independent_verification_still_refuses_changed_media(self):
+        verification = EvidenceTests().valid()
+        verification["checks"]["decoded_content_equal"] = False
+        with self.assertRaisesRegex(module.Refusal, "^media-proof-invalid$"):
+            self.run_gate(verification=verification)
+
+    def test_native_cpu_and_memory_caps_remain_required_before_conversion(self):
+        base = {"kind": "native-hardware-observation", "memory_source": "process-cgroup",
+                "effective_cpus": 2, "available_memory_bytes": 512 * 1024 ** 2}
+        for field, value in (("effective_cpus", 0), ("effective_cpus", 3), ("effective_cpus", True),
+                             ("available_memory_bytes", 0), ("available_memory_bytes", 1024 ** 3 + 1),
+                             ("available_memory_bytes", True), ("memory_source", "host")):
+            image = Mock()
+            image.checked.return_value = json.dumps({**base, field: value}).encode()
+            with self.subTest(field=field, value=value), self.assertRaisesRegex(
+                    module.Refusal, "^container-resource-observation-invalid$"):
+                module.resources(image)
+            image.invoke.assert_not_called()
+
+    def test_exit_and_media_success_remain_required_and_diagnostics_are_bounded(self):
+        for status, stdout in ((1, b"private-marker"), (0, b"private-marker"), ("private-marker", b"")):
+            with self.subTest(status=status), self.assertRaisesRegex(
+                    module.Refusal, "^container-resource-cli-failed$") as refused:
+                self.run_gate(status=status, stdout=stdout)
+            self.assertEqual(refused.exception.evidence["exit_code"], status if type(status) is int else None)
+            self.assertEqual(set(refused.exception.evidence), {"exit_code", "stdout_sha256", "stderr_sha256"})
+            self.assertNotIn("private-marker", json.dumps(refused.exception.evidence))
 
 
 class EvidenceTests(unittest.TestCase):

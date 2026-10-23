@@ -11,6 +11,8 @@ use std::path::Path;
 
 const MAX_METADATA_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_TOP_LEVEL_BOXES: usize = 100_000;
+// Keep the tree, sample descriptions and report within the metadata memory claim.
+const MAX_METADATA_BOXES: usize = 16_384;
 
 fn metadata_bytes(path: &Path) -> Result<Vec<u8>, InspectionError> {
     let mut file = File::open(path).map_err(|_| InspectionError("input-unreadable"))?;
@@ -122,10 +124,21 @@ fn protection(entry: &SampleEntry, has_sinf: bool) -> Protection {
 }
 
 pub(super) fn inspect_mp4(path: &Path) -> Result<Inspection, InspectionError> {
-    let bytes = metadata_bytes(path)?;
-    let boxes = mp4::parse_boxes(&bytes).map_err(|_| InspectionError("invalid-mp4-metadata"))?;
-    let entries =
-        mp4::sample_entries(&bytes).map_err(|_| InspectionError("invalid-mp4-metadata"))?;
+    inspect_metadata(&metadata_bytes(path)?)
+}
+
+pub(super) fn inspect_metadata(bytes: &[u8]) -> Result<Inspection, InspectionError> {
+    if bytes.len() as u64 > MAX_METADATA_BYTES {
+        return Err(InspectionError("mp4-metadata-size-limit"));
+    }
+    let boxes = mp4::parse_boxes_with_limit(bytes, MAX_METADATA_BOXES).map_err(|cause| {
+        InspectionError(if cause.0 == "mp4-box-count-limit" {
+            cause.0
+        } else {
+            "invalid-mp4-metadata"
+        })
+    })?;
+    let entries = mp4::sample_entries_from_boxes(bytes, &boxes);
     if entries.is_empty() {
         return Err(InspectionError("mp4-sample-descriptions-missing"));
     }
@@ -164,7 +177,7 @@ pub(super) fn inspect_mp4(path: &Path) -> Result<Inspection, InspectionError> {
     }
     let mut systems = Vec::new();
     for item in walked.iter().filter(|item| item.kind() == *b"pssh") {
-        match mp4::Pssh::parse(item.header.payload(&bytes)) {
+        match mp4::Pssh::parse(item.header.payload(bytes)) {
             Some(pssh) => systems.push(match pssh.system_id {
                 crate::playready::WIDEVINE_SYSTEM_ID => "widevine".into(),
                 crate::playready::PLAYREADY_SYSTEM_ID => "playready".into(),

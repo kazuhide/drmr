@@ -5,7 +5,7 @@ mod dash;
 mod input;
 use input::{Acquired, Entrypoint};
 mod owned;
-mod stream;
+pub(super) mod stream;
 use owned::OwnedDownload;
 
 use super::{ConversionError, ConversionReport, ConversionRequest, Converter, files};
@@ -197,6 +197,11 @@ impl Converter {
             .backend
             .scope(super::measurement::Phase::InputPreparation);
         self.backend.check_cancelled()?;
+        let progress = self
+            .backend
+            .activity
+            .as_ref()
+            .map(|sink| source::progress::Progress::new(sink.clone()));
         valid_url(url)?;
         if let Some(output) = output {
             preflight_download_output(output)?;
@@ -237,7 +242,14 @@ impl Converter {
             Some(output) => OwnedDownload::reserve(directory, output)?,
             None => OwnedDownload::reserve_source(directory)?,
         };
-        let result = self.acquire(url, &policy, budget.workers, &owned, hls_only);
+        let result = self.acquire(
+            url,
+            &policy,
+            budget.workers,
+            &owned,
+            hls_only,
+            progress.clone(),
+        );
         match result {
             Ok(acquired) => {
                 // Publish the admission entrypoint only after all workers have joined.
@@ -309,6 +321,7 @@ impl Converter {
         workers: usize,
         owned: &OwnedDownload,
         hls_only: bool,
+        progress: Option<Arc<source::progress::Progress>>,
     ) -> Result<Acquired, ConversionError> {
         for name in ["raw", "media"] {
             owned.create_dir(Path::new(name))?;
@@ -323,6 +336,7 @@ impl Converter {
             }),
         )
         .with_stop(self.backend.stop.clone())
+        .with_progress(progress)
         .with_url_limit(4096);
         let mut graph = Graph {
             owned,

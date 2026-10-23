@@ -149,7 +149,7 @@
   --keys-file keys.json --json</code></pre>
         </li>
       </ol>
-      <p class="section-note">This example converts supported clear HLS to CBCS DASH. <a href="https://github.com/kazuhide/drmr/blob/main/docs/executable-plans.md">Read the four-step guide</a> and <a href="https://github.com/kazuhide/drmr/blob/main/docs/usage.md#separate-input-and-output-keys">prepare an owner-only key configuration</a>. For clear input and output, use <code>--to clear</code> and omit the key file. <code>inspect</code> remains the fast metadata-only command.</p>
+      <p class="section-note">This example converts supported clear HLS to CBCS DASH. <a href="https://github.com/kazuhide/drmr/blob/main/docs/executable-plans.md">Read the four-step guide</a> and <a href="https://github.com/kazuhide/drmr/blob/main/docs/usage.md#separate-input-and-output-keys">prepare an owner-only key configuration</a>. For clear input and output, use <code>--to clear</code> and omit the key file. Use <code>analyze --metadata-only</code> for local or URL metadata without keys or retained downloads; it does not verify complete media.</p>
       <p class="section-note">For FairPlay HLS and Widevine/PlayReady DASH from one supported clear HLS transport-stream source, use <code>plan --outputs outputs.json</code>. The <a href="https://github.com/kazuhide/drmr/blob/main/docs/multiple-outputs.md">multiple-output guide</a> covers the output list, separate keys, and required checks before publishing the complete result. Final manifests receive native Rust checks. Use <code>verify OUTPUT --manifest-only</code> to run native checks on saved output; add <code>--external-validator</code> to also run the Apple or DASH-IF tool for that format. <a href="https://github.com/kazuhide/drmr/blob/main/docs/manifest-validation.md">Manifest validation checks</a> are reported separately from complete media comparison.</p>
     </section>
 
@@ -175,7 +175,7 @@
       <div class="section-intro">
         <h2 id="start-title">Start with the CLI</h2>
         <p>Build from source with Rust 1.95 or newer. Windows is a native CLI target; use the Windows guide for PowerShell, paths, and protected files.</p>
-        <p>The support table describes current <code>main</code>. The published v1.0.0 archives remain pre-release candidates with a 48 kHz-only TS audio profile. Build current <code>main</code> to use 44.1 kHz TS audio. See <a href="https://github.com/kazuhide/drmr/blob/main/docs/releases.md">release compatibility</a> for details.</p>
+        <p class="section-note">Check each release's Pre-release label and notes before use. See <a href="https://github.com/kazuhide/drmr/blob/main/docs/releases.md">release compatibility</a> for requirements and verification scope.</p>
       </div>
       <div class="install-layout">
         <div class="install-commands">

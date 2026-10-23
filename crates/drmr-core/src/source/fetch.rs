@@ -55,6 +55,13 @@ pub struct Fetched {
     pub size: u64,
 }
 
+/// A bounded metadata request; source identities remain private to the caller.
+pub(crate) struct MetadataRead {
+    pub bytes: Vec<u8>,
+    pub effective: String,
+    pub total: Option<u64>,
+}
+
 /// A connection's identity in the pool: `(scheme, hostname, port, address)`.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct ConnKey {
@@ -107,6 +114,7 @@ pub struct Fetcher {
     stop: Stop,
     shared: Mutex<Shared>,
     url_limit: Option<usize>,
+    progress: Option<Arc<super::progress::Progress>>,
 }
 
 impl fmt::Debug for Fetcher {
@@ -128,6 +136,7 @@ impl Fetcher {
             stop: Stop::new(),
             shared: Mutex::new(Shared::default()),
             url_limit: None,
+            progress: None,
         }
     }
 
@@ -135,6 +144,14 @@ impl Fetcher {
     #[must_use]
     pub fn with_stop(mut self, stop: Stop) -> Self {
         self.stop = stop;
+        self
+    }
+
+    pub(crate) fn with_progress(
+        mut self,
+        progress: Option<Arc<super::progress::Progress>>,
+    ) -> Self {
+        self.progress = progress;
         self
     }
 
@@ -227,7 +244,56 @@ impl Fetcher {
         let size = u128::from(sink.size);
         self.disk(size)
             .map_err(|fault| escape_os(fault, "OSError"))?;
+        sink.transfer.complete();
         Ok((std::mem::take(&mut sink.chunks), effective))
+    }
+
+    /// Probe eight bytes with Range; a bounded text manifest may ignore Range.
+    pub(crate) fn metadata_probe(&self, url: &str) -> Result<MetadataRead, Failure> {
+        self.metadata_prefix(url, 8)
+    }
+
+    /// Extend an unknown text prefix without widening ordinary fetch semantics.
+    pub(crate) fn metadata_prefix(&self, url: &str, length: u64) -> Result<MetadataRead, Failure> {
+        if !(1..=64).contains(&length) {
+            return Err(Failure::Source(token("invalid-byte-range")));
+        }
+        self.metadata_read(url, ByteRange { offset: 0, length }, true)
+    }
+
+    /// Read exactly one validated range without accepting a whole-body fallback.
+    pub(crate) fn metadata_range(
+        &self,
+        url: &str,
+        range: ByteRange,
+    ) -> Result<MetadataRead, Failure> {
+        self.metadata_read(url, range, false)
+    }
+
+    fn metadata_read(
+        &self,
+        url: &str,
+        range: ByteRange,
+        probe: bool,
+    ) -> Result<MetadataRead, Failure> {
+        let cap = if probe {
+            self.policy
+                .max_playlist_bytes
+                .max(self.policy.max_resource_bytes.min(range.length))
+        } else {
+            self.policy.max_resource_bytes.min(range.length)
+        };
+        let mut sink = Sink::new(self, None, cap, false);
+        sink.metadata.probe = probe;
+        let effective = self.fetch_into(url, &mut sink, false, Some(range))?;
+        self.disk(u128::from(sink.size))
+            .map_err(|fault| escape_os(fault, "OSError"))?;
+        sink.transfer.complete();
+        Ok(MetadataRead {
+            bytes: std::mem::take(&mut sink.chunks),
+            effective,
+            total: sink.metadata.total,
+        })
     }
 
     /// The resource streamed into the new file `destination` (created exclusively, mode
@@ -295,6 +361,7 @@ impl Fetcher {
                 let created = sink
                     .created
                     .ok_or_else(|| Failure::Source(token("snapshot-write-failed")))?;
+                sink.transfer.complete();
                 Ok((
                     Fetched {
                         effective,
@@ -334,6 +401,7 @@ impl Fetcher {
             self.fetch_remote(url, sink, byte_range)?
         };
         if let Some(range) = byte_range
+            && !sink.metadata.ignored
             && sink.size != range.length
         {
             return Err(Failure::Source(token("invalid-byte-range")));
@@ -622,9 +690,11 @@ impl Fetcher {
         } else {
             200
         };
-        if response.status != expected {
+        let ignored_range = sink.metadata.probe && response.status == 200;
+        if response.status != expected && !ignored_range {
             return Err(fatal("source-http-failed"));
         }
+        sink.metadata.ignored = ignored_range;
         let encoding = response
             .header("Content-Encoding", Some("identity"))
             .unwrap_or_default();
@@ -632,8 +702,31 @@ impl Fetcher {
             return Err(fatal("unsupported-content-encoding"));
         }
         let expected_length = response.declared_length();
-        if let Some(range) = request.byte_range {
-            check_content_range(&response, range)?;
+        if let Some(range) = request.byte_range
+            && !ignored_range
+        {
+            let total = check_content_range(&response, range)?;
+            sink.metadata.total = u64::try_from(total).ok();
+        }
+        if ignored_range {
+            // Only the small format probe is shared by binary and manifest requests.
+            // A server's whole-body fallback always retains the independent text cap.
+            sink.cap = self.policy.max_playlist_bytes;
+            if expected_length.is_some_and(|length| length > u128::from(sink.cap)) {
+                return Err(fatal("metadata-range-required"));
+            }
+            while sink.size < 8 && !response.is_closed() {
+                let prefix = response
+                    .read1(usize::try_from(8 - sink.size).expect("prefix length"))
+                    .map_err(retry_http)?;
+                if prefix.is_empty() {
+                    break;
+                }
+                sink.write(&prefix).map_err(fault_to_attempt)?;
+            }
+            if inspection::format_hint(&sink.chunks) == Some(InputFormat::Mp4) {
+                return Err(fatal("metadata-range-required"));
+            }
         }
         if sink.path.is_some()
             && let Some(length) = expected_length
@@ -784,7 +877,7 @@ fn unscoped(address: SocketAddr) -> SocketAddr {
 
 /// `bytes (\d+)-(\d+)/(\d+)` naming exactly the requested range of a resource at least that
 /// long.
-fn check_content_range(response: &Response<'_>, range: ByteRange) -> Result<(), Attempt> {
+fn check_content_range(response: &Response<'_>, range: ByteRange) -> Result<u128, Attempt> {
     let value = response
         .header("Content-Range", Some(""))
         .unwrap_or_default();
@@ -800,7 +893,7 @@ fn check_content_range(response: &Response<'_>, range: ByteRange) -> Result<(), 
     if first != offset || last != end - 1 || total < end {
         return Err(invalid());
     }
-    Ok(())
+    Ok(total)
 }
 
 /// How many `policy.timeout`s a body of `length` bytes may take: one per MiB, one at least.
@@ -865,6 +958,13 @@ pub(crate) fn open_exclusive(path: &Path) -> Result<File, SourceError> {
 
 /// Receives one resource chunk by chunk: hashes it, charges the analysis-wide byte budget per
 /// chunk, and keeps it in memory (playlists) or streams it to a new exclusive file.
+#[derive(Default)]
+struct MetadataState {
+    probe: bool,
+    ignored: bool,
+    total: Option<u64>,
+}
+
 pub(crate) struct Sink<'f> {
     fetcher: &'f Fetcher,
     path: Option<PathBuf>,
@@ -881,6 +981,8 @@ pub(crate) struct Sink<'f> {
     claim: u128,
     /// At most 64 bytes used to distinguish a manifest from streamed binary media.
     entrypoint_prefix: Option<Vec<u8>>,
+    metadata: MetadataState,
+    transfer: super::progress::Transfer,
 }
 
 impl<'f> Sink<'f> {
@@ -900,6 +1002,8 @@ impl<'f> Sink<'f> {
             declared: false,
             claim: 0,
             entrypoint_prefix: None,
+            metadata: MetadataState::default(),
+            transfer: super::progress::Transfer::new(fetcher.progress.as_ref()),
         }
     }
 
@@ -913,6 +1017,8 @@ impl<'f> Sink<'f> {
         self.since_disk_check = 0;
         self.declared = false;
         self.claim = 0;
+        self.metadata.ignored = false;
+        self.metadata.total = None;
         if self.entrypoint_prefix.is_some() {
             self.entrypoint_prefix = Some(Vec::new());
             self.cap = self
@@ -942,6 +1048,7 @@ impl<'f> Sink<'f> {
     }
 
     fn write(&mut self, chunk: &[u8]) -> Result<(), Fault> {
+        self.transfer.received(chunk.len());
         if self.fetcher.stop.is_set() {
             return Err(Fault::Cancelled);
         }

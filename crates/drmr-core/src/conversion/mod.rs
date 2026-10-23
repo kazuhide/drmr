@@ -10,6 +10,7 @@
 mod aes128;
 mod download;
 pub mod download_policy;
+mod remote_metadata;
 pub use download::{DownloadedSource, preflight_download_output};
 mod audio;
 mod audio_presentation;
@@ -18,6 +19,7 @@ pub(crate) mod dash;
 mod execution;
 mod finite;
 pub mod key_file;
+mod observation;
 mod packets;
 pub mod plan;
 pub use aes128::{

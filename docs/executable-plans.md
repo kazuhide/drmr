@@ -46,8 +46,10 @@ for the accepted conditions and handling of the unchanged original.
 
 For a local input, use `drmr analyze original/manifest.mpd --json` or
 `drmr analyze original.mp4 --json`. Supply `--keys-file` for encrypted local or URL input, including source checks when saving a plan.
-Local input does not accept download options. `inspect` remains the faster,
-metadata-only command and does not read or decode complete media.
+Local input does not accept download options. `analyze --metadata-only INPUT`
+reads local or URL metadata without keys or complete media checks. Its temporary
+URL reads retain no original for a saved plan; use full analysis above to save
+and admit the source.
 
 The URL acquisition profile accepts the HLS, static DASH and MP4 profiles in the
 [input table](conversion-support.md#url-input). DASH needs one Period,

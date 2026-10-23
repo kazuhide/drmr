@@ -6,14 +6,15 @@ maturity is separate: check the **Pre-release** label on each
 version. A 1.x version number alone does not establish complete media or platform
 qualification. The local Web console and Desktop host remain experimental.
 
-The published v1.0.0 is classified as a pre-release after a 44.1 kHz AAC limitation was
-found in its TS input path. Its immutable archives retain the original
-48 kHz-only TS audio profile. The correction is an **Unreleased** change on `main`;
-the product version remains 1.0.0, and the existing release tag and assets are
-unchanged. No replacement archive or new release is provided for this correction.
-[Build from the current source](../README.md#install) to use 44.1 kHz TS audio. Refer to each release's
-notes and status; the correction does not qualify arbitrary codecs, broadcast
-streams or playback devices.
+The 1.0.1 source includes 44.1 kHz AAC support and preservation of supported final
+AAC playback ranges from HLS/TS. See [AAC processing and playback boundaries](media-processing.md#aac-sample-rates-and-transport-clocks)
+for the conditions. Check each release's status, requirements and verification
+reports before choosing an archive; these corrections do not qualify arbitrary
+codecs, broadcast streams or playback devices.
+
+The published v1.0.0 remains a pre-release. Its immutable archives retain the
+original 48 kHz-only TS audio profile and do not include these corrections.
+Its release tag, archives and original verification reports remain unchanged.
 
 ## Install a released CLI
 
@@ -27,12 +28,13 @@ system and processor in the release notes:
 | macOS | Apple Silicon | `aarch64-apple-darwin` |
 | Windows | x86-64 | `x86_64-pc-windows-msvc` |
 
-The existing v1.0.0 archives are named
-`drmr-1.0.0-x86_64-unknown-linux-gnu.tar.gz`,
-`drmr-1.0.0-aarch64-apple-darwin.tar.gz` and
-`drmr-1.0.0-x86_64-pc-windows-msvc.zip`, respectively. Download documentation and
-verification reports from that same release rather than assuming that the
-current repository documentation describes an older archive.
+CLI archive names include the version and target. For 1.0.1, they are
+`drmr-1.0.1-x86_64-unknown-linux-gnu.tar.gz`,
+`drmr-1.0.1-aarch64-apple-darwin.tar.gz` and
+`drmr-1.0.1-x86_64-pc-windows-msvc.zip`, respectively. Choose an archive actually
+listed on GitHub Releases, and download its documentation and verification
+reports from that same release. Current repository documentation can describe
+changes absent from an older archive.
 
 These are the native CLI distribution targets. They do not establish support
 for other processor architectures or native Desktop operation. See
@@ -76,12 +78,28 @@ GitHub's automatically generated **Source code** downloads contain source,
 rather than a compiled CLI. Docker is a separate installation option described
 in the [Docker guide](docker.md).
 
+## Pre-release CLI consolidation
+
+During the 1.0.1 pre-release, `inspect` is removed and its metadata report moves
+to `analyze --metadata-only`. Replace `drmr inspect INPUT --json` with
+`drmr analyze --metadata-only INPUT --json`; no `inspect` alias remains.
+This is an explicit exception to the command-preservation rule below while the
+pre-release CLI is consolidated. Published v1.0.0 archives and their original
+documentation remain unchanged.
+
+The replacement reads local MP4, HLS or DASH metadata and also accepts HTTP(S)
+URLs without keys or a download directory. URL metadata reads are temporary;
+they do not retain an original for a saved plan or establish complete media
+validity. Normal `analyze URL --download-dir NEW_DIR` retains and checks the
+complete source as before. See [metadata reading and progress](usage.md).
+
 ## What stays compatible in 1.x
 
 drmr follows [Semantic Versioning](https://semver.org/). Compatibility covers
 the documented CLI, rather than every implementation detail:
 
-- Existing commands, options and documented exit-code meanings remain usable.
+- Except for the pre-release migration above, existing commands, options and
+  documented exit-code meanings remain usable.
   Deprecated interfaces remain available throughout 1.x, with migration guidance
   before removal in a major release.
 - Supported configuration formats retain their existing fields and meanings.
@@ -151,9 +169,12 @@ requirements and remaining scope limits. These checks supplement the existing
 unit, media, manifest and archive-content tests; they do not claim universal
 media or DRM-device compatibility.
 
-The current source's archive qualifier defines 17 stages: the original 11-stage
-video workflow plus six stages that create and probe a 44.1 kHz AAC TS fixture,
-then analyze it, save a plan, convert it to CBCS DASH, and independently verify it.
+The current source's archive qualifier defines 18 stages: the original 11-stage
+video workflow, six stages that create and probe a 44.1 kHz AAC TS fixture,
+then analyze it, save a plan, convert it to CBCS DASH, and independently verify it,
+and a metadata-only analysis of the retained clear DASH source. The metadata
+stage uses `analyze --metadata-only --json` without keys and does not replace
+any of the previous 17 stages.
 The existing v1.0.0 assets and their original 11-stage reports are unchanged.
 These additional checks apply to newly built CI archives; they do not qualify the
 old release archives for 44.1 kHz input.

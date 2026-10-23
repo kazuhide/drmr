@@ -175,7 +175,7 @@ bodies stream to private files rather than being retained together in memory.
 
 The fragmented MP4 output route accepts a completed local HLS media playlist or a supported master with separate video qualities and one shared audio rendition. Segments in each playlist must use 188-byte packets and one fixed program. Each playlist accepts one progressive H.264 stream, one AAC-LC audio stream at 44,100 or 48,000 samples per second, or both; multiplexed audio/video is limited to the supported single-variant topology. The route supports a fixed single SPS/PPS video configuration (the sequence and picture parameter sets required by a decoder) and ordinary AAC channel configurations. AAC uses seven-byte transport headers without a checksum and one raw data block per frame. Output is DASH with `clear`, `cenc`, or `cbcs`, or fragmented MP4 HLS with `clear`, `cbcs`, or whole-resource AES-128 protection. Input key URI mappings are supplied by the operator; drmr never retrieves a playlist key URI.
 
-Without `--save`, `plan` describes compatibility from metadata and reports `source-profile-validation-required`; it does not qualify the underlying HLS media container. `analyze` and `plan --save` check complete source media, while execution independently admits the actual source again. Conversion can refuse a profile that metadata alone could not distinguish.
+Without `--save`, `plan` describes compatibility from metadata and reports `source-profile-validation-required`; it does not qualify the underlying HLS media container. Normal `analyze` and `plan --save` check complete source media, while execution independently admits the actual source again. `analyze --metadata-only` reads declarations without that media admission. Conversion can refuse a profile that metadata alone could not distinguish.
 
 Before demuxing, drmr checks program tables and their cyclic redundancy checks, packet continuity, declared streams, packet and elementary-stream lengths, and clock progression across every segment. Multiple programs, unknown streams, configuration changes, corrupted or scrambled packets, clock wrap, discontinuities, byte ranges, wall-clock metadata, interlaced or mixed video, and unsupported descriptors are refused. Segment durations must match the primary video's measured duration rounded only to the decimal precision written in each `EXTINF` declaration. Every absolute packet timestamp is still compared exactly.
 
@@ -189,7 +189,7 @@ Audio-only input uses those native checks for DASH, fragmented MP4 HLS, and TS o
 
 ### AAC sample rates and transport clocks
 
-The 44.1 kHz handling below is an **Unreleased** change on `main`. The immutable published v1.0.0 archives retain their 48 kHz-only TS audio profile; see [release status](releases.md).
+The 44.1 kHz handling below is included in the 1.0.1 source. The immutable v1.0.0 archives retain their 48 kHz-only TS audio profile; see [release status](releases.md).
 
 The sample rate describes decoded audio samples per second. The container's clock describes timestamp units; the two need not be equal. MPEG-TS uses 90,000 ticks per second. A 1,024-sample AAC frame occupies exactly 1,920 ticks at 48 kHz, but about 2,089.796 ticks at 44.1 kHz. Integer timestamps therefore need rounding at 44.1 kHz. Adding 2,089 ticks for every frame would accumulate drift.
 

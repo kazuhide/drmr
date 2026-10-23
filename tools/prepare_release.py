@@ -55,11 +55,12 @@ MAX_ROWS = 1000
 STAGES = ("version", "doctor", "fixture-probe", "fixture-video", "prepared-video-probe", "fixture-segments",
           "prepared-source-verification", "analyze", "plan", "convert", "independent-verify",
           "fixture-aac44100", "fixture-aac44100-probe", "aac44100-analyze", "aac44100-plan",
-          "aac44100-convert", "aac44100-independent-verify")
+          "aac44100-convert", "aac44100-independent-verify", "metadata-analysis")
 ARCHIVE_LIMITS = "Archive/source and optional native CLI-pair checks only; no GUI, media, signature, build-origin or legal certification."
 MEDIA_LIMITS = (
     "One native packaged CLI, one ten-second video-only Clear DASH to CBCS DASH saved-plan route "
     "and one generated ten-second 44.1 kHz stereo AAC Clear HLS/TS to CBCS DASH saved-plan route. "
+    "One local Clear DASH metadata-only analysis with the original preserved. "
     "Full original video comparison, complete generated audio frame/clock evidence and CLI media comparisons, "
     "and native manifest linting; no independent external audio PCM comparison, DRM license/device playback, "
     "GUI, installer, signature, or build-origin certification.")
@@ -321,7 +322,7 @@ def reports(archive_proof, media, head, tree, target, version, archive_hash):
             and re.fullmatch(r"0o[0-7]{1,3}", binary["mode"]) is not None, "archive-proof-invalid")
     exact_keys(media, ("schema_version", "success", "kind", "source_head", "source_tree", "target", "version", "binary_reported_version",
                        "archive_sha256", "binary_sha256", "archive_files", "dependency_packages", "native_ordinary_user", "doctor", "media", "aac_44100",
-                       "stages", "owned_workspace_cleanup", "limits"))
+                       "metadata_analysis", "stages", "owned_workspace_cleanup", "limits"))
     require(type(media["schema_version"]) is int and media["schema_version"] == 1 and media["kind"] == "native-cli-archive-media"
             and media["version"] == version and media["binary_reported_version"] == version and media["binary_sha256"] == binary["sha256"]
             and media["archive_files"] == archive_proof["files"] and media["dependency_packages"] == archive_proof["packages"]
@@ -359,6 +360,12 @@ def reports(archive_proof, media, head, tree, target, version, archive_hash):
     for name in ("prepared_source_against_original_video", "conversion", "independent_verification"):
         proof(value[name])
     aac44100(media["aac_44100"])
+    metadata = media["metadata_analysis"]
+    exact_keys(metadata, ("schema_version", "format", "protection", "evidence", "media_verified", "source_unchanged"))
+    require(type(metadata["schema_version"]) is int and metadata["schema_version"] == 1
+            and metadata["format"] == "dash" and metadata["protection"] == "clear"
+            and metadata["evidence"] == "manifest" and metadata["media_verified"] is False
+            and metadata["source_unchanged"] is True, "metadata-proof-invalid")
     require(isinstance(media["stages"], list) and len(media["stages"]) == len(STAGES), "media-stages-invalid")
     for stage, expected in zip(media["stages"], STAGES):
         exact_keys(stage, ("stage", "elapsed_milliseconds", "exit_code"))

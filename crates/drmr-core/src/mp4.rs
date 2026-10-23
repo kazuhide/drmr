@@ -228,6 +228,7 @@ fn parse_range(
     start: usize,
     end: usize,
     depth: usize,
+    remaining_boxes: &mut usize,
 ) -> Result<Vec<Mp4Box>, Mp4Error> {
     if depth > MAX_DEPTH {
         return Err(Mp4Error("mp4-box-nesting-too-deep"));
@@ -235,12 +236,20 @@ fn parse_range(
     let mut boxes = Vec::new();
     let mut pos = start;
     while pos < end {
+        if *remaining_boxes == 0 {
+            return Err(Mp4Error("mp4-box-count-limit"));
+        }
+        *remaining_boxes -= 1;
         let header = walk_header(data, pos, end)?;
         // A sample entry too short for its fixed fields has no children (Bento4: opaque).
         let children = match children_offset(data, &header) {
-            Some(offset) if offset <= header.size => {
-                parse_range(data, pos + offset, pos + header.size, depth + 1)?
-            }
+            Some(offset) if offset <= header.size => parse_range(
+                data,
+                pos + offset,
+                pos + header.size,
+                depth + 1,
+                remaining_boxes,
+            )?,
             _ => Vec::new(),
         };
         pos += header.size;
@@ -253,7 +262,15 @@ fn parse_range(
 /// and its sample entries, `sinf`, `schi`, `mvex`, `moof`, `traf`, `edts`, `dinf`, `udta`,
 /// `meta`, `mfra`).
 pub fn parse_boxes(data: &[u8]) -> Result<Vec<Mp4Box>, Mp4Error> {
-    parse_range(data, 0, data.len(), 0)
+    parse_boxes_with_limit(data, usize::MAX)
+}
+
+/// Bound the complete tree before allocating another box, including nested children.
+pub(crate) fn parse_boxes_with_limit(
+    data: &[u8],
+    mut remaining_boxes: usize,
+) -> Result<Vec<Mp4Box>, Mp4Error> {
+    parse_range(data, 0, data.len(), 0, &mut remaining_boxes)
 }
 
 /// The boxes of a tree in depth-first file order (mp4dump's order).
@@ -580,8 +597,13 @@ fn child(boxes: &[Mp4Box], kind: FourCc) -> Option<&Mp4Box> {
 /// Every sample entry of every `moov/trak/mdia/minf/stbl/stsd`, in file order.
 pub fn sample_entries(data: &[u8]) -> Result<Vec<SampleEntry>, Mp4Error> {
     let boxes = parse_boxes(data)?;
+    Ok(sample_entries_from_boxes(data, &boxes))
+}
+
+/// Reuse an admitted tree rather than allocating and walking a second one.
+pub(crate) fn sample_entries_from_boxes(data: &[u8], boxes: &[Mp4Box]) -> Vec<SampleEntry> {
     let mut entries = Vec::new();
-    for stsd in walk(&boxes)
+    for stsd in walk(boxes)
         .into_iter()
         .filter(|found| &found.kind() == b"stsd")
     {
@@ -603,7 +625,7 @@ pub fn sample_entries(data: &[u8]) -> Result<Vec<SampleEntry>, Mp4Error> {
             });
         }
     }
-    Ok(entries)
+    entries
 }
 
 /// Every `pssh` box (`moov/pssh`, `moof/pssh`), in file order.

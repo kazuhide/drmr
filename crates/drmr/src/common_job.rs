@@ -176,6 +176,10 @@ pub(crate) fn progress(observation: Observation) {
     }
 }
 
+pub(crate) fn active() -> bool {
+    CONTEXT.get().is_some()
+}
+
 /// None preserves the ordinary CLI's existing stdout behavior.
 pub(crate) fn result(value: &Value) -> Option<io::Result<()>> {
     CONTEXT.get().map(|context| context.write_result(value))
@@ -205,6 +209,7 @@ pub(crate) fn run(path: &Path) -> ExitCode {
             };
             analyze_cli::analyze(&analyze_cli::AnalyzeArgs {
                 input,
+                metadata_only: false,
                 download_dir,
                 fetch_policy,
                 keys_file: keys,

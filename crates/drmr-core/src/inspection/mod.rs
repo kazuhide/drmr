@@ -275,6 +275,27 @@ pub fn inspect(path: &Path) -> Result<Inspection, InspectionError> {
     }
 }
 
+/// Parse only retained metadata bytes; these helpers never acquire referenced media.
+pub(crate) fn inspect_dash_metadata(bytes: &[u8]) -> Result<Inspection, InspectionError> {
+    manifests::inspect_dash(bytes)
+}
+pub(crate) fn inspect_mp4_metadata(bytes: &[u8]) -> Result<Inspection, InspectionError> {
+    container::inspect_metadata(bytes)
+}
+/// Master references are media playlists; only the entrypoint may be a master.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HlsMetadataRole {
+    Root,
+    Media,
+}
+pub(crate) fn inspect_hls_metadata(
+    bytes: &[u8],
+    role: HlsMetadataRole,
+    child: &mut dyn FnMut(&str) -> Result<Inspection, InspectionError>,
+) -> Result<Inspection, InspectionError> {
+    manifests::inspect_hls_metadata(bytes, role, child)
+}
+
 #[cfg(test)]
 mod format_tests {
     use super::{InputFormat, format_hint};

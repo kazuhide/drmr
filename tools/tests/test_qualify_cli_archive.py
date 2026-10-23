@@ -207,6 +207,58 @@ class EvidenceTests(unittest.TestCase):
             module.audio_conversion_proof(report, "a" * 64)
 
 
+class MetadataAnalysisTests(unittest.TestCase):
+    """Metadata orchestration controls do not substitute for packaged execution."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.source = self.root / "manifest.mpd"
+        self.source.write_bytes(b"<MPD/>")
+        self.cli = self.root / "extracted-cli"
+        self.raw = {"schema_version": 1, "format": "dash", "protection": "clear",
+                    "evidence": "manifest", "media_verified": False,
+                    "findings": [], "tracks": [], "private_path": "private-marker"}
+
+    def run_metadata(self, change=None, changed_source=False):
+        raw = copy.deepcopy(self.raw)
+        if change:
+            change(raw)
+        calls = []
+
+        def execute(arguments, stage):
+            calls.append((arguments, stage))
+            if changed_source:
+                self.source.write_bytes(b"<MPD changed='true'/>")
+            return raw
+
+        result = module.metadata_analysis(self.cli, SimpleNamespace(json=execute), self.source)
+        return result, calls
+
+    def test_metadata_stage_executes_only_the_extracted_cli_and_projects_fixed_evidence(self):
+        result, calls = self.run_metadata()
+        self.assertEqual(calls, [([self.cli, "analyze", self.source, "--metadata-only", "--json"],
+                                 "metadata-analysis")])
+        self.assertEqual(result, {"schema_version": 1, "format": "dash", "protection": "clear",
+                                  "evidence": "manifest", "media_verified": False, "source_unchanged": True})
+        self.assertNotIn("private-marker", json.dumps(result))
+
+    def test_metadata_stage_refuses_admission_claims_wrong_shapes_and_retained_downloads(self):
+        for change in (lambda r: r.update(schema_version=True), lambda r: r.update(schema_version=2),
+                       lambda r: r.update(format="mp4"), lambda r: r.update(protection="cbcs"),
+                       lambda r: r.update(evidence="container-metadata"),
+                       lambda r: r.update(media_verified=True), lambda r: r.update(media_verified=0),
+                       lambda r: r.pop("media_verified"), lambda r: r.update(download=None),
+                       lambda r: r.update(download={"retained": True})):
+            with self.subTest(change=change), self.assertRaisesRegex(module.Refusal, "^metadata-proof-invalid$"):
+                self.run_metadata(change)
+
+    def test_metadata_stage_refuses_any_changed_source(self):
+        with self.assertRaisesRegex(module.Refusal, "^metadata-original-changed$"):
+            self.run_metadata(changed_source=True)
+
+
 class AudioMediaFlowTests(unittest.TestCase):
     """Exercise producer orchestration with tools stubbed, not native-media proof."""
 

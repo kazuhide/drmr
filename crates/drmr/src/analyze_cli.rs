@@ -1,4 +1,4 @@
-//! Complete source admission, with explicit private retention for remote input.
+//! Key-free metadata analysis or complete source admission with retained remote input.
 use crate::convert_cli::{self, Progress};
 use clap::Args;
 use drmr_core::concurrency::Stop;
@@ -13,12 +13,15 @@ use std::sync::Arc;
 
 #[derive(Args)]
 #[command(
-    after_help = "Analyze complete local MP4, DASH, or HLS media before choosing a conversion.\nURL input requires a new --download-dir. Supported profiles: completed HLS; single-Period static DASH using SegmentTemplate with a finite SegmentTimeline; self-contained MP4.\nMP4 and DASH support clear, cenc, and cbcs within the ordinary input profile. Ciphertext and encryption declarations are retained; key and license URIs are never fetched.\nSupply decryption keys separately with --keys-file. Relative playlist key URIs resolve against the effective remote playlist URL.\nThe retained entrypoint is input.m3u8, input.mpd, or input.mp4; --json reports the actual local path.\nThe saved original is reused offline by plan, convert, and verify; keys and request headers stay separate.\nInput admission does not establish a converted result, DRM licensing, or device playback.\n\nExamples:\n  drmr analyze media.mp4 --json\n  drmr analyze https://example.com/vod/master.m3u8 --download-dir source --json\n  drmr analyze https://example.com/vod/manifest.mpd --download-dir dash-source --json\n  drmr analyze https://example.com/media.mp4 --download-dir mp4-source --json\n  drmr plan dash-source/input.mpd --to cbcs --format dash --output converted --save conversion.plan.json"
+    after_help = "Use --metadata-only to read local or HTTP(S) MP4, DASH, or HLS metadata without keys or media tools.\nMetadata-only URL input fetches bounded metadata, does not retain a source, and does not verify media. Use --fetch-policy for allowed origins, authentication, and limits; it applies only to URL input.\nDo not combine --metadata-only with --download-dir, --keys-file, --packager-bin, --max-workers, or --measure.\n\nComplete analysis checks local MP4, DASH, or HLS media before choosing a conversion.\nURL input requires a new --download-dir. Supported profiles: completed HLS; single-Period static DASH using SegmentTemplate with a finite SegmentTimeline; self-contained MP4.\nMP4 and DASH support clear, cenc, and cbcs within the ordinary input profile. Ciphertext and encryption declarations are retained; key and license URIs are never fetched.\nSupply decryption keys separately with --keys-file. Relative playlist key URIs resolve against the effective remote playlist URL.\nThe retained entrypoint is input.m3u8, input.mpd, or input.mp4; --json reports the actual local path.\nThe saved original is reused offline by plan, convert, and verify; keys and request headers stay separate.\nInput admission does not establish a converted result, DRM licensing, or device playback.\n\nExamples:\n  drmr analyze media.mp4 --json\n  drmr analyze https://example.com/vod/master.m3u8 --download-dir source --json\n  drmr analyze https://example.com/vod/manifest.mpd --download-dir dash-source --json\n  drmr analyze https://example.com/media.mp4 --download-dir mp4-source --json\n  drmr plan dash-source/input.mpd --to cbcs --format dash --output converted --save conversion.plan.json"
 )]
 pub struct AnalyzeArgs {
-    /// Local source media, or a supported HLS, static DASH, or MP4 URL to retain locally.
+    /// Local MP4, DASH, or HLS source, or an HTTP(S) URL to analyze.
     pub input: PathBuf,
-    /// New private directory for the original URL input; required for URL input.
+    /// Read metadata without keys, media tools, complete media checks, or retained URL input.
+    #[arg(long, conflicts_with_all = ["download_dir", "keys_file", "packager_bin", "max_workers", "measure"])]
+    pub metadata_only: bool,
+    /// New private original directory; required for complete URL analysis.
     #[arg(long)]
     pub download_dir: Option<PathBuf>,
     /// Private settings for allowed origins, authentication, and bounded retrieval.
@@ -33,7 +36,7 @@ pub struct AnalyzeArgs {
     /// Upper bound for simultaneous media work (1-64); default adapts to CPU and memory.
     #[arg(long, value_parser = clap::value_parser!(u8).range(1..=64))]
     pub max_workers: Option<u8>,
-    /// Print one versioned, secret-free input-analysis report.
+    /// Print one versioned metadata or complete input-analysis report.
     #[arg(long)]
     pub json: bool,
     /// Include numeric measurements in JSON; does not change input checks.
@@ -159,6 +162,85 @@ fn execute_analysis(
     Ok((report, download))
 }
 
+fn metadata_analysis(
+    args: &AnalyzeArgs,
+    input: &crate::download_cli::Input,
+    progress: &Arc<Progress>,
+) -> ExitCode {
+    let policy = match input {
+        crate::download_cli::Input::Local(_) if args.fetch_policy.is_some() => {
+            return convert_cli::error(
+                "analyze",
+                ConversionError("download-options-require-url"),
+                args.json,
+                progress,
+                Some(2),
+            );
+        }
+        crate::download_cli::Input::Local(_) => None,
+        crate::download_cli::Input::Url(url) => {
+            match drmr_core::conversion::download_policy::read(url, args.fetch_policy.as_deref()) {
+                Ok(policy) => Some(policy),
+                Err(cause) => {
+                    return convert_cli::error("analyze", cause, args.json, progress, None);
+                }
+            }
+        }
+    };
+    let Ok(cancellation) = crate::cancellation::Cancellation::install() else {
+        return convert_cli::error(
+            "analyze",
+            ConversionError("signal-monitor-unavailable"),
+            args.json,
+            progress,
+            None,
+        );
+    };
+    let result = match input {
+        crate::download_cli::Input::Local(path) => {
+            progress.mark("inspection");
+            drmr_core::inspection::inspect(path).map_err(|cause| ConversionError(cause.0))
+        }
+        crate::download_cli::Input::Url(url) => {
+            progress.mark("acquisition");
+            convert_cli::converter(
+                "packager",
+                None,
+                Arc::clone(progress),
+                cancellation.stop.clone(),
+            )
+            .inspect_url_metadata(url, policy.as_ref().expect("URL policy was checked"))
+        }
+    };
+    if cancellation.stop.is_set() {
+        return convert_cli::error(
+            "analyze",
+            ConversionError("cancelled"),
+            args.json,
+            progress,
+            None,
+        );
+    }
+    let report = match result {
+        Ok(report) => report,
+        Err(cause) => {
+            let exit = matches!(input, crate::download_cli::Input::Local(_)).then_some(2);
+            return convert_cli::error("analyze", cause, args.json, progress, exit);
+        }
+    };
+    progress.mark("publication");
+    let written = if args.json {
+        convert_cli::json(&serde_json::to_value(&report).expect("metadata report serializes"))
+    } else {
+        crate::inspect_cli::summary(&report, &mut std::io::stdout().lock())
+    };
+    progress.finish();
+    if written.is_err() {
+        progress.diagnostic("analyze", "result-output-unavailable");
+    }
+    ExitCode::from(u8::from(written.is_err()))
+}
+
 pub fn analyze(args: &AnalyzeArgs) -> ExitCode {
     let progress = Arc::new(Progress::new(!args.json));
     progress.mark("configuration");
@@ -166,6 +248,9 @@ pub fn analyze(args: &AnalyzeArgs) -> ExitCode {
         Ok(value) => value,
         Err(cause) => return convert_cli::error("analyze", cause, args.json, &progress, None),
     };
+    if args.metadata_only {
+        return metadata_analysis(args, &input, &progress);
+    }
     let policy = match fetch_settings(args, &input) {
         Ok(value) => value,
         Err(cause) => return convert_cli::error("analyze", cause, args.json, &progress, None),
@@ -219,7 +304,7 @@ pub fn analyze(args: &AnalyzeArgs) -> ExitCode {
             None,
         );
     }
-    progress.finish();
+    progress.mark("publication");
     let result = if args.json {
         let mut value = serde_json::to_value(&report).expect("source analysis serializes");
         if let Some(download) = download {
@@ -233,8 +318,9 @@ pub fn analyze(args: &AnalyzeArgs) -> ExitCode {
     } else {
         text_report(&report)
     };
+    progress.finish();
     if result.is_err() {
-        eprintln!("analyze: result-output-unavailable");
+        progress.diagnostic("analyze", "result-output-unavailable");
     }
     ExitCode::from(u8::from(result.is_err()))
 }

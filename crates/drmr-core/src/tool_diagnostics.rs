@@ -171,6 +171,15 @@ impl DiagnosticSession {
         self
     }
 
+    /// Observe tool calls without changing their cleanup owner or admission limits.
+    /// Records include diagnostic arguments and output; project only fixed labels and
+    /// numeric fields when presenting them as user-facing progress.
+    #[must_use]
+    pub fn with_activity_sink(mut self, sink: Arc<dyn crate::events::Sink>) -> Self {
+        self.runner = self.runner.observed(sink);
+        self
+    }
+
     /// Run once, or return the same completed report. Concurrent runs are refused.
     pub fn run(&self) -> std::io::Result<Arc<DiagnosticReport>> {
         let path = std::env::var_os("PATH");
