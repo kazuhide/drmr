@@ -396,6 +396,8 @@ drmr analyze encrypted.mp4 --keys-file config/keys.json --json
 
 Without `--metadata-only`, `analyze` checks the actual complete source with the conversion engine, including encoded packets, decoded content and timestamps. Its `input_admitted` result applies to the checked input profile; candidate output formats still need a target-specific plan. It does not certify a converted result or DRM playback. Local MP4, DASH and HLS are accepted within their supported profiles. Chapter 8 shows URL input with mandatory source retention.
 
+Complete analysis checks each known source track directly, without matching it against a second copy of the same track set. MPEG-TS source checks read every encoded access unit and timestamp, bind them to the original transport-packet evidence, inspect every video frame and decode the complete content. All referenced renditions are checked. The separate `verify` operation continues to compare independently prepared source and output media; analysis results do not replace fresh checks in later commands.
+
 When a documented source compatibility rule applies, `compatibility_notes` lists its fixed code. Examples include empty TS padding and adjacent HLS cue markers with no active interval. These rules retain the original bytes and all media and timing checks. See [transport-stream compatibility](https://github.com/kazuhide/drmr/blob/main/docs/media-processing.md#transport-stream-compatibility) for the exact accepted conditions.
 
 ## Plan a request

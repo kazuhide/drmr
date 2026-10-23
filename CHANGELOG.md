@@ -7,6 +7,10 @@ for installation, stable interfaces and versioning.
 
 ### Changed
 
+- Check prepared source tracks directly during complete input admission,
+  avoiding repeated decoded-content matching against the same track set.
+  MPEG-TS input checks retain complete original-packet, decoded-content and
+  timing evidence; independent source/output verification remains separate.
 - Keep terminal progress in one live status with a history of finished stages
   and their durations. Redirected text logs record stage changes and occasional
   updates instead of every observation; detailed JSON Lines remain available.

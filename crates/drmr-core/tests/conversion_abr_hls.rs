@@ -318,6 +318,19 @@ fn complete_video_source_checks_require_the_selected_decoder() {
         .collect::<Vec<_>>()
         .join("\n");
     std::fs::write(&input, format!("{video_only}\n")).unwrap();
+    proof(
+        &converter()
+            .validate_source(
+                VerificationSource {
+                    input: &input,
+                    input_keys: &InputKeys::default(),
+                    hls_keys: &HlsInputKeys::default(),
+                },
+                SourceValidationPurpose::Conversion,
+            )
+            .unwrap()
+            .verification,
+    );
     let decoder = directory.path().join("missing-decoder");
     let converter = Converter::new(
         Arc::new(ToolRunner::new(
