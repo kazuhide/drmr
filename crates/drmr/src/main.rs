@@ -11,6 +11,7 @@ mod doctor;
 mod download_cli;
 mod inspect_cli;
 mod plan_cli;
+mod progress;
 
 use clap::{Parser, Subcommand};
 use drmr_server::{JobCli, ServeArgs};
@@ -27,6 +28,9 @@ const EXIT_INVALID: u8 = 2;
     after_help = "Getting started:\n  drmr doctor                       Check external media tools\n  drmr inspect media.mp4             Read local media metadata without keys\n  drmr analyze media.mp4             Check the complete source media\n  drmr plan media.mp4 --to cbcs       Describe conversion intent\n  drmr convert input.mpd --to clear --output clear-media\n  drmr verify clear-media/manifest.mpd --source input.mpd\n\nSaved-plan workflow:\n  drmr analyze URL --download-dir SOURCE_DIR\n  drmr plan SOURCE_DIR/input.m3u8 --to cbcs --format dash --output RESULT_DIR --save PLAN.json\n  drmr convert --plan PLAN.json --keys-file KEYS.json\n  drmr verify --plan PLAN.json --keys-file KEYS.json\n\nRetained entrypoints are SOURCE_DIR/input.m3u8 (HLS), input.mpd (DASH), or input.mp4 (MP4).\nSupported URL input also works directly with 'drmr convert URL --download-dir SOURCE_DIR'.\nDASH and HLS describe streaming media using manifests or playlists.\nUse 'drmr help <COMMAND>' for detailed command help."
 )]
 struct Cli {
+    /// Progress on stderr: auto follows the result mode; text or JSON Lines can be forced.
+    #[arg(long, global = true, value_enum, default_value = "auto")]
+    progress: progress::Mode,
     #[command(subcommand)]
     command: Command,
 }
@@ -95,7 +99,19 @@ fn main() -> ExitCode {
             ExitCode::from(EXIT_INVALID)
         };
     }
-    let command = Cli::parse().command;
+    let cli = Cli::parse();
+    let command = cli.command;
+    let command_name = match &command {
+        Command::Version => "version",
+        Command::Doctor { .. } => "doctor",
+        Command::Inspect(_) => "inspect",
+        Command::Analyze(_) => "analyze",
+        Command::Convert(_) => "convert",
+        Command::Verify(_) => "verify",
+        Command::Plan(_) => "plan",
+        Command::Serve(_) => "serve",
+    };
+    progress::configure(cli.progress, command_name);
     match command {
         Command::Version => {
             println!("drmr {}", drmr_core::VERSION);
@@ -113,5 +129,23 @@ fn main() -> ExitCode {
 
 /// Start the local console with this executable for its shared CLI operations.
 fn serve(args: &ServeArgs) -> ExitCode {
-    drmr_server::run_server(args, JobCli::this_executable(), "drmr serve")
+    let progress = progress::Progress::new(true);
+    progress.mark("server-startup");
+    let code = drmr_server::run_server_with_ready(
+        args,
+        JobCli::this_executable(),
+        "drmr serve",
+        |address| {
+            progress.mark("serving");
+            if !progress.structured() {
+                eprintln!(" * Running on http://{address}");
+            }
+        },
+    );
+    if code == ExitCode::SUCCESS {
+        progress.finish();
+    } else {
+        progress.fail("server-stopped-with-error");
+    }
+    code
 }

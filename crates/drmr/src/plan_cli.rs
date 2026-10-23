@@ -172,7 +172,9 @@ pub fn save(args: &PlanArgs) -> ExitCode {
         )
     };
     if result.is_err() {
-        eprintln!("plan: result-output-unavailable");
+        session
+            .progress
+            .diagnostic("plan", "result-output-unavailable");
     }
     ExitCode::from(u8::from(result.is_err()))
 }
@@ -222,7 +224,9 @@ pub fn convert(args: &ConvertArgs, path: &Path) -> ExitCode {
         convert_cli::conversion_text(&report)
     };
     if result.is_err() {
-        eprintln!("convert: result-output-unavailable");
+        session
+            .progress
+            .diagnostic("convert", "result-output-unavailable");
     }
     ExitCode::from(u8::from(result.is_err()))
 }
@@ -263,7 +267,9 @@ pub fn verify(args: &VerifyArgs, path: &Path) -> ExitCode {
     let passed =
         report.source_unchanged && report.output_matches_plan && report.verification.passed;
     if !passed {
-        eprintln!("verify: verification-mismatch");
+        session
+            .progress
+            .diagnostic("verify", "verification-mismatch");
     }
     let result = if args.json {
         let mut value = serde_json::to_value(report).expect("plan verification serializes");
@@ -290,7 +296,9 @@ pub fn verify(args: &VerifyArgs, path: &Path) -> ExitCode {
         )
     };
     if result.is_err() {
-        eprintln!("verify: result-output-unavailable");
+        session
+            .progress
+            .diagnostic("verify", "result-output-unavailable");
     }
     ExitCode::from(u8::from(result.is_err() || !passed))
 }

@@ -4,9 +4,14 @@ use drmr_core::tool_diagnostics::{DiagnosticSession, Profile};
 use std::{io::Write as _, process::ExitCode};
 
 pub fn run(as_json: bool, probe: bool, route: &str) -> ExitCode {
+    let progress = std::sync::Arc::new(crate::progress::Progress::new(!as_json));
+    progress.mark("tool-check");
     let cancellation = if probe {
         let Ok(cancellation) = crate::cancellation::Cancellation::install() else {
-            eprintln!("doctor: signal-monitor-unavailable");
+            progress.fail("signal-monitor-unavailable");
+            if !progress.structured() {
+                eprintln!("doctor: signal-monitor-unavailable");
+            }
             return ExitCode::from(1);
         };
         Some(cancellation)
@@ -14,7 +19,8 @@ pub fn run(as_json: bool, probe: bool, route: &str) -> ExitCode {
         None
     };
     let mut session =
-        DiagnosticSession::new(Profile::parse(route).expect("validated route"), probe);
+        DiagnosticSession::new(Profile::parse(route).expect("validated route"), probe)
+            .with_activity_sink(progress.clone());
     if let Some(cancellation) = &cancellation {
         session = session.with_stop(cancellation.stop.clone());
     }
@@ -25,14 +31,26 @@ pub fn run(as_json: bool, probe: bool, route: &str) -> ExitCode {
         .clone();
     // Do not print before ownership recovery: even a closed stdout can panic.
     session.wait_for_cleanup(|| {
+        progress.mark("tool-check");
         // A closed diagnostic stream must not panic and discard the owner.
-        let _ = writeln!(std::io::stderr().lock(), "doctor: cleanup is unconfirmed; retaining the tool owner and retrying. Ctrl+C requests Stop but does not abandon cleanup.");
+        if !progress.structured() {
+            let _ = writeln!(std::io::stderr().lock(), "doctor: cleanup is unconfirmed; retaining the tool owner and retrying. Ctrl+C requests Stop but does not abandon cleanup.");
+        }
     });
     if probe {
         // Preserve the original failed probe and ready=false, but describe the
         // actual cleanup state at publication rather than its historical state.
         report.cleanup_status = "confirmed";
     }
+    progress.finish();
+    print_report(&report, as_json, probe)
+}
+
+fn print_report(
+    report: &drmr_core::tool_diagnostics::DiagnosticReport,
+    as_json: bool,
+    probe: bool,
+) -> ExitCode {
     if as_json {
         println!(
             "{}",

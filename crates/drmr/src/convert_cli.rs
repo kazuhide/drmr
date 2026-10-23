@@ -1,5 +1,6 @@
 //! Generic media commands with protected operator key files and secret-free summaries.
 
+pub(crate) use crate::progress::Progress;
 use clap::Args;
 use drmr_core::conversion::{
     ConversionError, ConversionReport, ConversionRequest, Converter, VerificationReport,
@@ -7,10 +8,8 @@ use drmr_core::conversion::{
     key_file::{self, OperatorKeys},
     measurement::MeasurementReport,
 };
-pub(crate) mod feedback;
 use drmr_core::inspection::{self, OutputFormat, TargetProtection};
 use drmr_core::toolrun::{Secrets, ToolRunner};
-pub(crate) use feedback::Progress;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -269,14 +268,15 @@ pub(crate) fn error(
     progress: &Progress,
     exit_override: Option<u8>,
 ) -> ExitCode {
-    progress.finish();
-    eprintln!("{command}: {error}");
+    progress.diagnostic(command, error.0);
     if as_json {
         if json(&error_value(command, error, progress)).is_err() {
-            eprintln!("{command}: result-output-unavailable");
+            progress.diagnostic(command, "result-output-unavailable");
             return ExitCode::from(1);
         }
-    } else if let Some(hint) = error_hint(error.0) {
+    } else if !progress.structured()
+        && let Some(hint) = error_hint(error.0)
+    {
         eprintln!("{hint}");
     }
     if error.0 == "cancelled" {
@@ -398,7 +398,9 @@ fn execute_conversion(
                     .expect("clap requires a direct output"),
                 fetch_policy.expect("URL fetch policy was checked"),
             )?;
-            eprintln!("Downloaded source retained in the requested download directory.");
+            if !progress.structured() {
+                eprintln!("Downloaded source retained in the requested download directory.");
+            }
             Some(source)
         }
         crate::download_cli::Input::Local(_) => None,
@@ -591,7 +593,7 @@ pub fn convert(args: &ConvertArgs) -> ExitCode {
         conversion_text(&report)
     };
     if result.is_err() {
-        eprintln!("convert: result-output-unavailable");
+        progress.diagnostic("convert", "result-output-unavailable");
     }
     ExitCode::from(u8::from(result.is_err()))
 }
@@ -718,7 +720,7 @@ fn verification_result(
     progress: &Progress,
 ) -> ExitCode {
     if !report.passed {
-        eprintln!("verify: verification-mismatch");
+        progress.diagnostic("verify", "verification-mismatch");
     }
     let result = if as_json {
         let mut value = serde_json::to_value(report).expect("verification report serializes");
@@ -741,7 +743,7 @@ fn verification_result(
         )
     };
     if result.is_err() {
-        eprintln!("verify: result-output-unavailable");
+        progress.diagnostic("verify", "result-output-unavailable");
     }
     ExitCode::from(u8::from(result.is_err() || !report.passed))
 }

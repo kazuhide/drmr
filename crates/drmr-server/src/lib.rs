@@ -556,6 +556,18 @@ fn serve_with_ready(
 }
 
 pub fn run_server(args: &config::ServeArgs, jobs: config::JobCli, program: &str) -> ExitCode {
+    run_server_with_ready(args, jobs, program, |address| {
+        let _ = writeln!(std::io::stderr(), " * Running on http://{address}");
+    })
+}
+
+/// Start the console and notify the host after binding and signal registration.
+pub fn run_server_with_ready(
+    args: &config::ServeArgs,
+    jobs: config::JobCli,
+    program: &str,
+    ready: impl FnOnce(SocketAddr),
+) -> ExitCode {
     let config = match config::configure(|name: &str| std::env::var_os(name), args, jobs) {
         Ok(config) => config,
         Err(error) => {
@@ -563,7 +575,7 @@ pub fn run_server(args: &config::ServeArgs, jobs: config::JobCli, program: &str)
             return ExitCode::from(error.exit_code);
         }
     };
-    match serve(config) {
+    match serve_with_ready(config, ready) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("{program}: {error}");

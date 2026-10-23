@@ -18,6 +18,7 @@ pub(crate) mod dash;
 mod execution;
 mod finite;
 pub mod key_file;
+mod observation;
 mod packets;
 pub mod plan;
 pub use aes128::{

@@ -150,6 +150,14 @@ fn redirected_text_reports_real_activity_counts_and_elapsed_without_ansi_or_fake
     let progress = String::from_utf8(result.stderr).unwrap();
     assert!(progress.contains("Activity: verification"), "{progress}");
     assert!(
+        progress.contains("Hashing complete encoded media payloads"),
+        "{progress}"
+    );
+    assert!(
+        progress.contains("Decoding and hashing complete media content"),
+        "{progress}"
+    );
+    assert!(
         progress.contains("scopes closed") && progress.contains("elapsed"),
         "{progress}"
     );

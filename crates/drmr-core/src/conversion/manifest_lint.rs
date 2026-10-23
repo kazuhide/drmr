@@ -201,6 +201,7 @@ impl Converter {
         };
         let mut options = self.manifest_options(profile.select(format)?);
         let _scope = self.backend.scope(super::measurement::Phase::Verification);
+        let _task = self.backend.task(super::observation::Task::ManifestLint);
         let snapshot = snapshot::Snapshot::capture(self, entrypoint, format, &options)?;
         let sizes: Vec<_> = snapshot
             .nodes
