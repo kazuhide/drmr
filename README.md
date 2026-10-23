@@ -57,14 +57,16 @@ For the full source test suite, install [Bento4](https://www.bento4.com/download
 
 ```sh
 drmr doctor
-drmr inspect /path/to/media.mp4
+drmr analyze /path/to/media.mp4 --metadata-only
 drmr analyze /path/to/media.mp4 --json
 drmr plan /path/to/manifest.mpd --to cbcs --format dash,hls
 drmr convert --help
 drmr verify --help
 ```
 
-`inspect` reads local MP4 metadata or DASH/HLS declarations without keys or external tools. `analyze` checks complete source media and identifies candidate output formats. Without `--save`, `plan INPUT --to ...` describes conditional intent from metadata.
+`analyze --metadata-only` reads MP4 metadata or DASH/HLS declarations from a local input or HTTP(S) URL without keys or external tools. It does not retain a URL source or verify complete media. Without that flag, `analyze` checks complete source media and identifies candidate output formats. Without `--save`, `plan INPUT --to ...` describes conditional intent from metadata. The former `inspect` command has been removed; see the [pre-release migration](docs/releases.md#pre-release-cli-consolidation).
+
+Use global `--progress text` or `--progress json` to write progress to standard error, including alongside `--json` results. Standard output remains the final result. The default `auto` mode suppresses progress with `--json`; `--progress off` suppresses it explicitly. See [progress output](docs/usage.md#progress-output) for examples and scope.
 
 To retain a supported HLS, static DASH or MP4 URL, save fixed conversion conditions, execute them offline,
 and verify against the retained original:
@@ -120,8 +122,7 @@ drmr packages supplied media and signaling. It does not provide a DRM license se
 | Command | Purpose |
 | --- | --- |
 | `doctor` | Discover tools; add `--probe` for version and option checks, or `--json` for scripts |
-| `inspect` | Read local MP4, DASH, or HLS metadata; use `--json` for scripts |
-| `analyze` | Check complete local media or retain and check a supported HLS, static DASH or MP4 URL with `--download-dir`; encrypted input uses `--keys-file` |
+| `analyze` | Read local or URL metadata with `--metadata-only`; otherwise check complete local media or retain and check a supported URL with `--download-dir`; encrypted full checks use `--keys-file` |
 | `plan` | Describe conditional intent; add `--save` and `--output` for an executable plan; `--outputs` selects named outputs |
 | `convert` | Convert media directly or execute a saved plan with `--plan`; `--outputs` selects several outputs without saving a plan |
 | `verify` | Compare result media with its original source; `--plan` also checks source identity and output intent; `--manifest-only` runs the native HLS/DASH linter; `--external-validator` adds external checks |

@@ -78,12 +78,28 @@ GitHub's automatically generated **Source code** downloads contain source,
 rather than a compiled CLI. Docker is a separate installation option described
 in the [Docker guide](docker.md).
 
+## Pre-release CLI consolidation
+
+During the 1.0.1 pre-release, `inspect` is removed and its metadata report moves
+to `analyze --metadata-only`. Replace `drmr inspect INPUT --json` with
+`drmr analyze --metadata-only INPUT --json`; no `inspect` alias remains.
+This is an explicit exception to the command-preservation rule below while the
+pre-release CLI is consolidated. Published v1.0.0 archives and their original
+documentation remain unchanged.
+
+The replacement reads local MP4, HLS or DASH metadata and also accepts HTTP(S)
+URLs without keys or a download directory. URL metadata reads are temporary;
+they do not retain an original for a saved plan or establish complete media
+validity. Normal `analyze URL --download-dir NEW_DIR` retains and checks the
+complete source as before. See [metadata reading and progress](usage.md).
+
 ## What stays compatible in 1.x
 
 drmr follows [Semantic Versioning](https://semver.org/). Compatibility covers
 the documented CLI, rather than every implementation detail:
 
-- Existing commands, options and documented exit-code meanings remain usable.
+- Except for the pre-release migration above, existing commands, options and
+  documented exit-code meanings remain usable.
   Deprecated interfaces remain available throughout 1.x, with migration guidance
   before removal in a major release.
 - Supported configuration formats retain their existing fields and meanings.

@@ -55,10 +55,16 @@ the [narrower input profile below](#mpeg-transport-stream-input).
 `analyze` can retain and fully check a supported HLS, DASH or MP4 URL before you save
 an execution plan. `convert` can also acquire the URL and convert directly. The
 response content determines the format; a filename extension is not required.
-This does not extend the local codec, track, or output limits. URL input requires
+This does not extend the local codec, track, or output limits. Full URL acquisition requires
 `--download-dir`, and the completed source is retained for offline conversion
 and independent verification. See the [four-stage saved-plan workflow](executable-plans.md)
 or [direct URL conversion and fetch settings](usage.md#convert-a-url).
+
+For declarations without a retained source, use `analyze --metadata-only URL`.
+This needs neither keys nor `--download-dir` and does not establish conversion
+support. The acquisition profiles below apply to complete-source analysis and
+conversion, not temporary metadata reading. See [metadata analysis](usage.md#read-metadata-and-plan-a-conversion)
+for the distinct reads and limits.
 
 | URL input | Acquisition profile | Retained local entrypoint |
 | --- | --- | --- |

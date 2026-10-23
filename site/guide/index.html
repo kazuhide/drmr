@@ -45,7 +45,7 @@
 <li><a href="#supported-profiles">3. Supported input and output profiles</a></li>
 <li><a href="#installation">4. Installation and external tools</a></li>
 <li><a href="#key-configuration">5. Key configuration and confidentiality</a></li>
-<li><a href="#inspect-plan">6. Inspect and plan</a></li>
+<li><a href="#inspect-plan">6. Analyze metadata and plan</a></li>
 <li><a href="#local-conversion">7. Local conversion examples</a></li>
 <li><a href="#url-input">8. Acquire and analyze a URL</a></li>
 <li><a href="#verification">9. What verification proves</a></li>
@@ -69,7 +69,7 @@
 <div class="guide-table-scroll" role="region" aria-labelledby="table-1-title" tabindex="0"><table><caption id="table-1-title">Choose an operation — Table 1</caption><thead><tr><th scope="col">Goal</th><th scope="col">Command</th><th scope="col">What it establishes</th></tr></thead><tbody>
 <tr><th scope="row">Find external tools</th><td><code>doctor</code></td><td>Required executables can be found in the launch environment</td></tr>
 <tr><th scope="row">Check versions and options</th><td><code>doctor --probe</code></td><td>Version and help output advertise required features; no media is processed</td></tr>
-<tr><th scope="row">Read input declarations</th><td><code>inspect</code></td><td>Local MP4, DASH or HLS metadata; no decryption or complete sample proof</td></tr>
+<tr><th scope="row">Read input declarations</th><td><code>analyze --metadata-only</code></td><td>Local or HTTP(S) MP4, DASH or HLS metadata; no keys or complete sample proof</td></tr>
 <tr><th scope="row">Check complete source media</th><td><code>analyze</code></td><td>Actual input admission; URL input is retained in an explicit download directory</td></tr>
 <tr><th scope="row">Describe a conversion</th><td><code>plan</code></td><td>Requested formats and protection, candidate routes and runtime conditions</td></tr>
 <tr><th scope="row">Save a conversion request</th><td><code>plan --save</code></td><td>Source fingerprints and one output, or an explicit list of outputs with DRM selections and manifest-check policies</td></tr>
@@ -77,12 +77,12 @@
 <tr><th scope="row">Compare independently</th><td><code>verify</code></td><td>Reads original and result independently and checks complete media and timing</td></tr>
 <tr><th scope="row">Check only final manifests</th><td><code>verify --manifest-only</code></td><td>Native HLS/DASH linting; add --external-validator for external checks; no media comparison or decryption</td></tr>
 </tbody></table></div>
-<p>Use <code>analyze</code>, <code>plan --save</code>, <code>convert --plan</code> and <code>verify --plan</code> to check the source, save the conversion request, execute it and compare the result. <code>inspect</code> remains a quick metadata check. Direct <code>convert INPUT</code> also remains available.</p>
+<p>Use normal <code>analyze</code>, <code>plan --save</code>, <code>convert --plan</code> and <code>verify --plan</code> to check the source, save the conversion request, execute it and compare the result. Add <code>--metadata-only</code> to <code>analyze</code> for a quick declaration check. Direct <code>convert INPUT</code> also remains available.</p>
 <h3>First local example</h3>
 <p>Start with a supported unencrypted local MP4. Create the output parent directory first and choose an output name that does not exist. The original is retained unchanged.</p>
 <figure class="guide-example" aria-labelledby="example-1-title" data-code-language="sh"><figcaption id="example-1-title">Example 1: sh</figcaption><pre tabindex="0"><code>drmr --version
 drmr doctor --probe --route progressive-mp4
-drmr inspect original.mp4 --json
+drmr analyze --metadata-only original.mp4 --json
 drmr analyze original.mp4 --json
 drmr plan original.mp4 --to clear --format mp4 \
   --output clear.mp4 --save clear.plan.json --json
@@ -309,18 +309,25 @@ chmod 700 config
 <p>Some workflows create private temporary key/configuration files. Cleanup and zeroizing reduce retention but do not promise secure erasure, protection from the same user, crash-dump exclusion or hardware isolation. Treat original media, saved URLs, manifests and raw tool results as potentially sensitive. The local interfaces select protected key files without retrieving their contents in the browser.</p>
 <p>See <a href="https://github.com/kazuhide/drmr/blob/main/docs/security.md">local security</a>.</p>
 </section>
-<section class="guide-chapter" id="inspect-plan" data-guide-chapter="inspect-plan" aria-labelledby="inspect-plan-title"><h2 id="inspect-plan-title">6. Inspect and plan</h2><a class="guide-chapter-switch" href="../ja/guide/#inspect-plan" lang="ja" hreflang="ja">日本語</a>
-<h3>Inspect declarations</h3>
-<figure class="guide-example" aria-labelledby="example-14-title" data-code-language="sh"><figcaption id="example-14-title">Example 14: sh</figcaption><pre tabindex="0"><code>drmr inspect media.mp4
-drmr inspect source/manifest.mpd --json
-drmr inspect source/master.m3u8 --json
+<section class="guide-chapter" id="inspect-plan" data-guide-chapter="inspect-plan" aria-labelledby="inspect-plan-title"><h2 id="inspect-plan-title">6. Analyze metadata and plan</h2><a class="guide-chapter-switch" href="../ja/guide/#inspect-plan" lang="ja" hreflang="ja">日本語</a>
+<h3>Read declarations without keys</h3>
+<figure class="guide-example" aria-labelledby="example-14-title" data-code-language="sh"><figcaption id="example-14-title">Example 14: sh</figcaption><pre tabindex="0"><code>drmr analyze --metadata-only media.mp4
+drmr analyze --metadata-only source/manifest.mpd --json
+drmr analyze --metadata-only source/master.m3u8 --json
+drmr analyze --metadata-only "https://example.com/vod/master.m3u8" --json
+drmr analyze --metadata-only "https://example.com/vod/manifest.mpd" --json
+drmr analyze --metadata-only "https://example.com/vod/media.mp4" --json
 </code></pre></figure>
-<p><code>inspect</code> reads local MP4, DASH and HLS declarations without keys, network acquisition or output media. It can identify a declared container, codec or protection scheme but does not establish complete sample validity. Unknown protection stays unknown; do not interpret missing evidence as clear.</p>
+<p><code>analyze --metadata-only</code> reads MP4 metadata or DASH/HLS declarations without keys, a decoder or Shaka Packager. It identifies format, declared protection, known key identifiers and DRM labels, while excluding keys, IVs and key/license addresses from the report. It does not decrypt, decode or check every sample; <code>media_verified</code> remains false. Unknown protection stays unknown. An HLS SAMPLE-AES declaration alone does not establish an MP4 encryption scheme.</p>
+<p>Local HLS follows bounded child playlists within its directory tree. URL HLS reads declarations and needed child playlists; URL DASH reads the MPD. Neither downloads initialization files, media segments, keys or licenses. URL MP4 uses HTTP Range requests for selected byte positions, validating responses before reading box headers and movie metadata (<code>moov</code>) while skipping media payloads (<code>mdat</code>). A server that ignores Range is refused instead of causing a full MP4 download.</p>
+<p>URL metadata is temporary private data, not a saved original for a plan or offline conversion. No <code>--download-dir</code> is needed. Live HLS or dynamic DASH declarations may be readable, but this does not establish a complete on-demand source or conversion support. Normal URL analysis in chapter 8 retains and checks complete media.</p>
+<p>Metadata-only refuses <code>--download-dir</code>, <code>--keys-file</code>, <code>--packager-bin</code>, <code>--max-workers</code> and <code>--measure</code>. URL input can use chapter 8&#x27;s <code>--fetch-policy</code>; local input cannot. Metadata parser limits and fetch-policy limits both apply.</p>
+<p>The former <code>inspect INPUT</code> command is removed during the pre-release CLI consolidation. Replace it with <code>analyze --metadata-only INPUT</code>; no alias remains. See the <a href="https://github.com/kazuhide/drmr/blob/main/docs/releases.md#pre-release-cli-consolidation">pre-release migration</a>.</p>
 <h3>Analyze complete media</h3>
 <figure class="guide-example" aria-labelledby="example-15-title" data-code-language="sh"><figcaption id="example-15-title">Example 15: sh</figcaption><pre tabindex="0"><code>drmr analyze source/master.m3u8 --json
 drmr analyze encrypted.mp4 --keys-file config/keys.json --json
 </code></pre></figure>
-<p><code>analyze</code> checks the actual complete source with the conversion engine, including encoded packets, decoded content and timestamps. Its <code>input_admitted</code> result applies to the checked input profile; candidate output formats still need a target-specific plan. It does not certify a converted result or DRM playback. Local MP4, DASH and HLS are accepted within their supported profiles. Chapter 8 shows URL input with mandatory source retention.</p>
+<p>Without <code>--metadata-only</code>, <code>analyze</code> checks the actual complete source with the conversion engine, including encoded packets, decoded content and timestamps. Its <code>input_admitted</code> result applies to the checked input profile; candidate output formats still need a target-specific plan. It does not certify a converted result or DRM playback. Local MP4, DASH and HLS are accepted within their supported profiles. Chapter 8 shows URL input with mandatory source retention.</p>
 <p>When a documented source compatibility rule applies, <code>compatibility_notes</code> lists its fixed code. Examples include empty TS padding and adjacent HLS cue markers with no active interval. These rules retain the original bytes and all media and timing checks. See <a href="https://github.com/kazuhide/drmr/blob/main/docs/media-processing.md#transport-stream-compatibility">transport-stream compatibility</a> for the exact accepted conditions.</p>
 <h3>Plan a request</h3>
 <figure class="guide-example" aria-labelledby="example-16-title" data-code-language="sh"><figcaption id="example-16-title">Example 16: sh</figcaption><pre tabindex="0"><code>drmr plan media.mp4 --to cbcs --format dash --json
@@ -466,16 +473,16 @@ drmr verify clear-ts/master.m3u8 --source encrypted-ts/media.m3u8 \
 </section>
 <section class="guide-chapter" id="url-input" data-guide-chapter="url-input" aria-labelledby="url-input-title"><h2 id="url-input-title">8. Acquire and analyze a URL</h2><a class="guide-chapter-switch" href="../ja/guide/#url-input" lang="ja" hreflang="ja">日本語</a>
 <h3>A retained download directory is mandatory</h3>
-<p>This example uses clear HLS and a CBCS DASH output. Prepare chapter 5&#x27;s <code>config/keys.json</code> with only the output key. <code>&amp;&amp;</code> proceeds only after success. <code>inspect</code> reads retained declarations after acquisition; omit it if this summary is unnecessary.</p>
+<p>This example uses clear HLS and a CBCS DASH output. Prepare chapter 5&#x27;s <code>config/keys.json</code> with only the output key. <code>&amp;&amp;</code> proceeds only after success. The optional metadata-only command summarizes the retained declarations; omit it if this summary is unnecessary.</p>
 <figure class="guide-example" aria-labelledby="example-34-title" data-code-language="sh"><figcaption id="example-34-title">Example 34: sh</figcaption><pre tabindex="0"><code>drmr analyze "https://example.com/vod/master.m3u8" \
   --download-dir ./saved-source &amp;&amp;
-drmr inspect ./saved-source/input.m3u8 &amp;&amp;
+drmr analyze --metadata-only ./saved-source/input.m3u8 &amp;&amp;
 drmr plan ./saved-source/input.m3u8 --to cbcs --format dash \
   --output ./converted-dash --save ./conversion.plan.json &amp;&amp;
 drmr convert --plan ./conversion.plan.json --keys-file config/keys.json &amp;&amp;
 drmr verify --plan ./conversion.plan.json --keys-file config/keys.json
 </code></pre></figure>
-<p>URL input requires a new <code>--download-dir</code> under an existing parent. The plan file and result destination must also be new and separate from the source. Format detection uses the response content, so URLs need no filename extension. Queries and allowed redirects do not select the format.</p>
+<p>Full URL analysis requires a new <code>--download-dir</code> under an existing parent. The plan file and result destination must also be new and separate from the source. Format detection uses the response content, so URLs need no filename extension. Queries and allowed redirects do not select the format.</p>
 <div class="guide-table-scroll" role="region" aria-labelledby="table-9-title" tabindex="0"><table><caption id="table-9-title">A retained download directory is mandatory — Table 9</caption><thead><tr><th scope="col">URL input</th><th scope="col">Retained local entrypoint</th><th scope="col">Acquisition profile</th></tr></thead><tbody>
 <tr><th scope="row">MP4</th><td><code>saved-source/input.mp4</code></td><td>One complete MP4 within the supported local media profiles</td></tr>
 <tr><th scope="row">DASH</th><td><code>saved-source/input.mpd</code></td><td>Static MPD with one <code>Period</code>, <code>SegmentTemplate</code> and an explicit finite <code>SegmentTimeline</code></td></tr>
@@ -483,8 +490,8 @@ drmr verify --plan ./conversion.plan.json --keys-file config/keys.json
 </tbody></table></div>
 <p>For DASH or MP4, change the local input path above accordingly. DASH saves every referenced initialization and media file. Its localized <code>input.mpd</code> retains protection declarations, PSSH DRM initialization data and the timeline. HLS localizes media references and relative key identifiers. Original manifests are kept separately and may contain signed URLs. Acquisition leaves encrypted media and initialization bytes unchanged.</p>
 <p>The same local codec, track, encryption and timing restrictions still apply. Live input, byte ranges, multiple DASH periods, <code>SegmentList</code>, <code>SegmentBase</code>, duration-only DASH templates and negative timeline repeats remain outside this acquisition profile. These are implementation limits, rather than technical impossibilities of those formats.</p>
-<p>Encrypted HLS accepts AES-128 TS/fMP4, SAMPLE-AES TS and CENC/CBCS fMP4 under the local input restrictions. For AES-128 and TS SAMPLE-AES, <code>input.hls_keys[].uri</code> must match the absolute identifier resolved after redirects: <code>keys/key.bin</code> in <code>https://example.com/vod/media.m3u8</code> becomes <code>https://example.com/vod/keys/key.bin</code>. Absolute <code>skd:</code> URIs stay unchanged. CENC/CBCS uses <code>input.keys</code>. No key or license URL is fetched. Encrypted input requires <code>--keys-file config/keys.json</code> on <code>analyze</code> and <code>plan</code> too; clear input does not.</p>
-<p>Only <code>analyze</code> needs the server. Completed downloads survive later failures; incomplete downloads are refused. <code>convert URL --download-dir NEW_DIR</code> combines acquisition and conversion without saving a plan.</p>
+<p>Encrypted HLS accepts AES-128 TS/fMP4, SAMPLE-AES TS and CENC/CBCS fMP4 under the local input restrictions. For AES-128 and TS SAMPLE-AES, <code>input.hls_keys[].uri</code> must match the absolute identifier resolved after redirects: <code>keys/key.bin</code> in <code>https://example.com/vod/media.m3u8</code> becomes <code>https://example.com/vod/keys/key.bin</code>. Absolute <code>skd:</code> URIs stay unchanged. CENC/CBCS uses <code>input.keys</code>. No key or license URL is fetched. Encrypted input requires <code>--keys-file config/keys.json</code> on full <code>analyze</code> and source checks for <code>plan --save</code> too; clear input does not. Metadata-only analysis never needs keys.</p>
+<p>In this workflow, only the first full <code>analyze</code> needs the server. Completed downloads survive later failures; incomplete downloads are refused. <code>convert URL --download-dir NEW_DIR</code> combines acquisition and conversion without saving a plan.</p>
 <h3>URL to several DRM outputs</h3>
 <p>For a supported clear TS HLS URL, use the same public <code>outputs.json</code> and private version-2 key file as the local workflow:</p>
 <figure class="guide-example" aria-labelledby="example-35-title" data-code-language="sh"><figcaption id="example-35-title">Example 35: sh</figcaption><pre tabindex="0"><code>drmr analyze "https://example.com/vod/master.m3u8" \
@@ -511,7 +518,7 @@ drmr verify retry-hls/master.m3u8 --source saved-source/input.m3u8 \
 </code></pre></figure>
 <p>Do not reuse an existing download directory for a new acquisition. Partial failed acquisition is not a complete saved source. Source byte identity and physical ownership are checked before final publication; cancellation or mutation prevents success. <code>convert --plan</code> preserves its recorded destination and refuses intent overrides or an existing result. Choose a new plan for a different destination; use <code>verify --plan</code> to recheck an already published result.</p>
 <h3>Fetch policy</h3>
-<p>Default policy is HTTPS with same-origin references and bounded acquisition. <code>analyze URL</code> and direct <code>convert URL</code> both accept <code>--fetch-policy</code>. Explicit origin/private-network/HTTP access requires the supported private policy configuration; it is not enabled by weakening Host or Origin checks.</p>
+<p>Default policy is HTTPS with same-origin references and bounded acquisition. <code>analyze URL</code>, including <code>--metadata-only</code>, and direct <code>convert URL</code> accept <code>--fetch-policy</code>. Metadata-only URL reads need no download directory and retain no original. Explicit origin/private-network/HTTP access requires the supported private policy configuration; it is not enabled by weakening Host or Origin checks.</p>
 <p><code>--fetch-policy FILE</code> reads an owner-only UTF-8 JSON object saved as, for example, <code>config/fetch.json</code>. It contains the policy fields directly, without a <code>schema_version</code> field; the input URL stays on the command line. The file is optional, and its fields are optional: omit <code>headers_by_origin</code> when authentication is not needed. The example fields mean:</p>
 <ul>
 <li><code>allowed_origins</code>: an array of additional exact origins (scheme, host and port), without a path. The input URL&#x27;s own origin is already allowed.</li>
@@ -2047,7 +2054,7 @@ notepad $keyFile
 </code></pre></figure>
 <p>The function verifies that you already own each path and changes only its access rules, then checks the resulting owner and ACL. Assigning an owner requires a separate permission and is unnecessary for these new paths. If an editor replaces the file and changes its ACL, reapply the owner-only ACL while keeping it inside the private directory. drmr does not silently fix an unsafe existing key file.</p>
 <h3>PowerShell conversion</h3>
-<figure class="guide-example" aria-labelledby="example-96-title" data-code-language="powershell"><figcaption id="example-96-title">Example 96: powershell</figcaption><pre tabindex="0"><code>.\drmr.exe inspect 'C:\media\source.mp4' --json
+<figure class="guide-example" aria-labelledby="example-96-title" data-code-language="powershell"><figcaption id="example-96-title">Example 96: powershell</figcaption><pre tabindex="0"><code>.\drmr.exe analyze --metadata-only 'C:\media\source.mp4' --json
 .\drmr.exe plan 'C:\media\source.mp4' --to cbcs --format mp4
 $outDir = Join-Path $env:LOCALAPPDATA 'drmr-output'
 New-Item -ItemType Directory -Path $outDir -Force | Out-Null
@@ -2129,8 +2136,8 @@ python tools/build_desktop.py --bundle
 <p>See <a href="https://github.com/kazuhide/drmr/blob/main/docs/desktop.md">Desktop scope</a> and <a href="https://github.com/kazuhide/drmr/blob/main/docs/dependency-security.md">dependency policy</a>.</p>
 </section>
 <section class="guide-chapter" id="results-errors" data-guide-chapter="results-errors" aria-labelledby="results-errors-title"><h2 id="results-errors-title">15. Results, exit values and troubleshooting</h2><a class="guide-chapter-switch" href="../ja/guide/#results-errors" lang="ja" hreflang="ja">日本語</a>
-<h3>JSON and progress</h3>
-<p>Use <code>convert --json</code> or <code>verify --json</code> for machine-readable output. A successful unmeasured verification produces one versioned JSON object:</p>
+<h3>JSON results</h3>
+<p>Use the command&#x27;s <code>--json</code> option for machine-readable output. A successful unmeasured verification produces one versioned JSON object:</p>
 <figure class="guide-example" aria-labelledby="example-101-title" data-code-language="json"><figcaption id="example-101-title">Example 101: json</figcaption><pre tabindex="0"><code>{
   "schema_version": 1,
   "passed": true,
@@ -2166,18 +2173,46 @@ python tools/build_desktop.py --bundle
 }
 </code></pre></figure>
 <p>Argument parsing errors occur before this JSON contract and retain stderr/help with exit 2. If stdout itself is unavailable, complete JSON cannot be guaranteed; stderr reports <code>result-output-unavailable</code> and exit 1.</p>
-<p>Without JSON, observed activity/count/elapsed lines go to stderr. A closed track scope is not proof that the conversion succeeded. Phases may overlap; the last observed activity is not an exclusive phase or a diagnosed cause.</p>
+<h3>Progress on standard error</h3>
+<p>Global <code>--progress</code> controls progress separately from the final result on standard output. Existing pipes keep receiving only the result.</p>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-13-title" tabindex="0"><table><caption id="table-13-title">Progress on standard error — Table 13</caption><thead><tr><th scope="col">Mode</th><th scope="col">Behavior</th></tr></thead><tbody>
+<tr><th scope="row"><code>auto</code></th><td>Default: readable text; off when the command uses --json</td></tr>
+<tr><th scope="row"><code>text</code></th><td>Readable progress, including alongside --json results</td></tr>
+<tr><th scope="row"><code>json</code></th><td>JSON Lines progress: one object per line, including alongside --json results</td></tr>
+<tr><th scope="row"><code>off</code></th><td>No progress records; results and errors still apply</td></tr>
+</tbody></table></div>
+<figure class="guide-example" aria-labelledby="example-103-title" data-code-language="sh"><figcaption id="example-103-title">Example 103: sh</figcaption><pre tabindex="0"><code>drmr analyze original.mp4 --metadata-only --json --progress text
+drmr analyze original.mp4 --metadata-only --json --progress json \
+  &gt;metadata.json 2&gt;progress.jsonl
+drmr analyze original.mp4 --metadata-only --progress off
+</code></pre></figure>
+<p>Observations show a stage, a fixed task label and elapsed time. Acquisition reports actual received bytes and resource counts; parallel work reports active and completed units when available. Ongoing work emits a heartbeat about every two seconds. Unknown totals do not produce invented percentages or remaining-time estimates.</p>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-14-title" tabindex="0"><table><caption id="table-14-title">Progress on standard error — Table 14</caption><thead><tr><th scope="col">Stage</th><th scope="col">Observed work</th></tr></thead><tbody>
+<tr><th scope="row"><code>configuration</code></th><td>Read and validate operation settings</td></tr>
+<tr><th scope="row"><code>acquisition</code></th><td>Receive source resources</td></tr>
+<tr><th scope="row"><code>inspection</code></th><td>Read metadata or check source structure</td></tr>
+<tr><th scope="row"><code>input-preparation</code></th><td>Prepare tracks for processing</td></tr>
+<tr><th scope="row"><code>normalization</code></th><td>Prepare the supported media layout</td></tr>
+<tr><th scope="row"><code>packaging</code></th><td>Write the requested media and encryption</td></tr>
+<tr><th scope="row"><code>verification</code></th><td>Compare content, timing and output conditions</td></tr>
+<tr><th scope="row"><code>publication</code></th><td>Publish checked output to its destination</td></tr>
+<tr><th scope="row"><code>tool-check</code></th><td>Discover or probe external tools for doctor</td></tr>
+<tr><th scope="row"><code>server-startup</code></th><td>Start the local console and wait for it</td></tr>
+</tbody></table></div>
+<p>Scopes can overlap or nest; a closed scope may have failed. A completed work unit is not a completed conversion. The last activity is not a diagnosis. Quick metadata reads and plans may finish before a heartbeat. Help and version output do not invent progress. These observations do not require <code>--measure</code>; measured phase durations remain separate and may overlap.</p>
+<p>Progress excludes URLs, keys, authentication headers, operator paths, raw metadata and raw tool output. For valid parsed operational commands, explicit <code>--progress json</code> keeps operational stderr in JSON Lines, including a fixed error code on failure or cancellation. Argument parsing errors and existing <code>serve</code> startup diagnostics/address notices can be separate text. The final result and exit value determine success, not progress records alone.</p>
 <h3>Exit values</h3>
-<div class="guide-table-scroll" role="region" aria-labelledby="table-13-title" tabindex="0"><table><caption id="table-13-title">Exit values — Table 13</caption><thead><tr><th scope="col">Value</th><th scope="col">Meaning</th></tr></thead><tbody>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-15-title" tabindex="0"><table><caption id="table-15-title">Exit values — Table 15</caption><thead><tr><th scope="col">Value</th><th scope="col">Meaning</th></tr></thead><tbody>
 <tr><th scope="row">0</th><td>The selected command succeeded; what it checked depends on the command</td></tr>
 <tr><th scope="row">1</th><td>Processing, comparison, required diagnostics or cleanup confirmation failed</td></tr>
 <tr><th scope="row">2</th><td>Invalid arguments/configuration</td></tr>
 <tr><th scope="row">130</th><td>A supported CLI confirmed cooperative cancellation and owned-process cleanup</td></tr>
 </tbody></table></div>
-<p><code>doctor</code> success is selected diagnostic success; <code>inspect</code> success is metadata reading, not complete media verification.</p>
+<p><code>doctor</code> success is selected diagnostic success; <code>analyze --metadata-only</code> success is metadata reading, not complete media verification.</p>
 <h3>Common failures</h3>
-<div class="guide-table-scroll" role="region" aria-labelledby="table-14-title" tabindex="0"><table><caption id="table-14-title">Common failures — Table 14</caption><thead><tr><th scope="col">Symptom/code</th><th scope="col">Action</th></tr></thead><tbody>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-16-title" tabindex="0"><table><caption id="table-16-title">Common failures — Table 16</caption><thead><tr><th scope="col">Symptom/code</th><th scope="col">Action</th></tr></thead><tbody>
 <tr><th scope="row">Tool unavailable</th><td>Check the actual launch PATH, executable permission and Desktop diagnostics</td></tr>
+<tr><th scope="row"><code>remote-metadata-not-supported</code></th><td>Check the declaration profile; remote MP4 metadata requires a server that honors HTTP Range requests</td></tr>
 <tr><th scope="row">Unsupported version/features</th><td>Inspect build options as well as version; confirm the required advertised options</td></tr>
 <tr><th scope="row">Key file refused</th><td>Check owner, mode 600/ACL, link count, duplicate/unknown fields and schema</td></tr>
 <tr><th scope="row"><code>output-spec-invalid</code></th><td>Check recipe schema version 1, unique safe IDs and supported format/protection/DRM combinations</td></tr>
@@ -2199,7 +2234,7 @@ python tools/build_desktop.py --bundle
 <section class="guide-chapter" id="regression-tests" data-guide-chapter="regression-tests" aria-labelledby="regression-tests-title"><h2 id="regression-tests-title">16. Regression tests and evidence limits</h2><a class="guide-chapter-switch" href="../ja/guide/#regression-tests" lang="ja" hreflang="ja">日本語</a>
 <h3>Short public media</h3>
 <p>Real-media regressions use the attributed ten-second Big Buck Bunny excerpt with 240 H.264 video packets and AAC audio. Video segmentation targets five two-second segments; audio follows complete frame boundaries rather than forcing every segment to exactly two seconds.</p>
-<div class="guide-table-scroll" role="region" aria-labelledby="table-15-title" tabindex="0"><table><caption id="table-15-title">Short public media — Table 15</caption><thead><tr><th scope="col">Regression</th><th scope="col">Scope</th></tr></thead><tbody>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-17-title" tabindex="0"><table><caption id="table-17-title">Short public media — Table 17</caption><thead><tr><th scope="col">Regression</th><th scope="col">Scope</th></tr></thead><tbody>
 <tr><th scope="row">16 protection routes</th><td>Prepared clear/cenc/cbcs DASH and AES-128 fMP4 HLS, separate original/result keys, conversion and fresh verification</td></tr>
 <tr><th scope="row">TS to DASH: 27 routes</th><td>Three input protections, video/joint/audio layouts, clear/cenc/cbcs DASH</td></tr>
 <tr><th scope="row">Audio-only TS to fMP4 HLS: 9 pairs</th><td>Clear/AES-128/SAMPLE-AES inputs to clear/CBCS/AES-128 fMP4 HLS; complete original packet, clock and decoded-audio checks</td></tr>
@@ -2221,7 +2256,7 @@ python tools/build_desktop.py --bundle
 <p>Docker HTTP tests do not qualify a browser UI; native bundle construction does not qualify playback. Known-key media checks do not establish license acquisition or device operation.</p>
 <h3>Recorded three-output manifest checks</h3>
 <p>A local run on 2026-10-21 (Japan time), using source <a href="https://github.com/kazuhide/drmr/commit/3f8a9a89d0fc84e9699939a193baf823cafb6127">3f8a9a89</a>, completed the chapter 6 workflow with the ten-second clear HLS/TS fixture and two-second segment targets. The CLI ran on macOS ARM64. Apple mediastreamvalidator 1.25.36 ran natively in playlist-only mode. DASH used the official DASH-IF v3.1.0 XML schema and Schematron rules at revision <code>bdf0c27a8f198da7a4bf81634bb01faf7c7c3c06</code>, in a Linux ARM64 container with network access disabled.</p>
-<div class="guide-table-scroll" role="region" aria-labelledby="table-16-title" tabindex="0"><table><caption id="table-16-title">Recorded three-output manifest checks — Table 16</caption><thead><tr><th scope="col">Final output</th><th scope="col">Protection and DRM declaration</th><th scope="col">Observed manifest result</th></tr></thead><tbody>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-18-title" tabindex="0"><table><caption id="table-18-title">Recorded three-output manifest checks — Table 18</caption><thead><tr><th scope="col">Final output</th><th scope="col">Protection and DRM declaration</th><th scope="col">Observed manifest result</th></tr></thead><tbody>
 <tr><th scope="row">DASH fMP4</th><td>CBCS; Widevine and PlayReady</td><td>Native Rust manifest checks, MPD XML schema and Schematron checks passed</td></tr>
 <tr><th scope="row">HLS fMP4</th><td>CBCS; FairPlay</td><td>Native Rust checks passed; Apple checked all three playlists; media playlists declared version 6, meeting minimum 6</td></tr>
 <tr><th scope="row">HLS TS</th><td>SAMPLE-AES; FairPlay</td><td>Native Rust checks passed; Apple checked all three playlists; media playlists declared version 6, meeting minimum 5</td></tr>
@@ -2231,7 +2266,7 @@ python tools/build_desktop.py --bundle
 <p>Changing an fMP4 media playlist to version 5 was refused; version 7 passed. These checks use the minimum required by the declared features, not equality with version 6. The retained source stayed unchanged, the version-test changes were restored, and no run-owned containers remained. This is one qualified fixture and tool environment; it does not establish license acquisition, DRM-device playback or arbitrary-input compatibility.</p>
 <h3>Recorded audio-only TS results</h3>
 <p>The following jobs completed on 20 October 2026 (Japan Standard Time) for source <a href="https://github.com/kazuhide/drmr/commit/f0096539e698d66cc77affcd7ea891c793aa87bf">f0096539</a>. Rust 1.95 or later is required; 1.99.1 is the stable compiler observed in this run, not a fixed requirement.</p>
-<div class="guide-table-scroll" role="region" aria-labelledby="table-17-title" tabindex="0"><table><caption id="table-17-title">Recorded audio-only TS results — Table 17</caption><thead><tr><th scope="col">Environment and job</th><th scope="col">Observed Rust</th><th scope="col">Audio HLS pairs</th><th scope="col">TS regression tests</th></tr></thead><tbody>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-19-title" tabindex="0"><table><caption id="table-19-title">Recorded audio-only TS results — Table 19</caption><thead><tr><th scope="col">Environment and job</th><th scope="col">Observed Rust</th><th scope="col">Audio HLS pairs</th><th scope="col">TS regression tests</th></tr></thead><tbody>
 <tr><th scope="row"><a href="https://github.com/kazuhide/drmr/actions/runs/39327394237/job/118317107508">Linux AMD64 / minimum</a></th><td><code>1.95.0</code></td><td>9/9</td><td>34/34</td></tr>
 <tr><th scope="row"><a href="https://github.com/kazuhide/drmr/actions/runs/39327394237/job/118317106710">Linux AMD64 / stable</a></th><td><code>1.99.1</code></td><td>9/9</td><td>34/34</td></tr>
 <tr><th scope="row"><a href="https://github.com/kazuhide/drmr/actions/runs/39327394237/job/118317107104">macOS ARM64 / minimum</a></th><td><code>1.95.0</code></td><td>9/9</td><td>34/34</td></tr>
@@ -2244,7 +2279,7 @@ python tools/build_desktop.py --bundle
 <p>The <a href="https://github.com/kazuhide/drmr/actions/runs/39327394297/job/118317216488">Linux AMD64 Docker job</a> separately passed one representative clear audio TS → CBCS fMP4 HLS route and fresh original-TS verification. It does not exercise all nine audio-HLS pairs. These results do not cover DRM license acquisition or device playback.</p>
 <h3>Reproduce selected suites</h3>
 <p>With source and media tools installed, run from the repository root:</p>
-<figure class="guide-example" aria-labelledby="example-103-title" data-code-language="sh"><figcaption id="example-103-title">Example 103: sh</figcaption><pre tabindex="0"><code>cargo test --locked -p drmr --test bbb_media -- --nocapture
+<figure class="guide-example" aria-labelledby="example-104-title" data-code-language="sh"><figcaption id="example-104-title">Example 104: sh</figcaption><pre tabindex="0"><code>cargo test --locked -p drmr --test bbb_media -- --nocapture
 cargo test --locked -p drmr-core --test conversion_ts_output -- --nocapture
 cargo test --locked -p drmr-core --test conversion_ts_output \
   audio_hls -- --nocapture
@@ -2259,48 +2294,48 @@ cargo test --locked -p drmr-core --test conversion_bundle_encryption \
 </code></pre></figure>
 <p><code>DRMR_CONVERSION_REPORT</code> saves the 16-route <code>bbb_media</code> matrix&#x27;s JSON to a new path outside the repository. It does not configure every TS/finite suite&#x27;s report. Use their test logs and CI artifacts. Reports include actual fixture hashes, four comparisons, tool versions, elapsed/sampled-memory observations and measurement limits.</p>
 <p>A separate long-clock regression repeats a tiny derived 32x18 source 417 times for 4,170 seconds and 100,080 packets:</p>
-<figure class="guide-example" aria-labelledby="example-104-title" data-code-language="sh"><figcaption id="example-104-title">Example 104: sh</figcaption><pre tabindex="0"><code>cargo test --locked -p drmr --test long_conversion
+<figure class="guide-example" aria-labelledby="example-105-title" data-code-language="sh"><figcaption id="example-105-title">Example 105: sh</figcaption><pre tabindex="0"><code>cargo test --locked -p drmr --test long_conversion
 </code></pre></figure>
 <p>This checks complete long packet evidence, not a benchmark for high-resolution throughput or an exact memory maximum. Neither this nor the short fixture establishes universal input or DRM-device compatibility.</p>
 <p>See <a href="https://github.com/kazuhide/drmr/blob/main/crates/drmr/tests/fixtures/bbb/README.md">fixture attribution</a>, <a href="https://github.com/kazuhide/drmr/blob/main/crates/drmr/tests/fixtures/bbb/CENC.md">encrypted fixtures</a> and <a href="https://github.com/kazuhide/drmr/blob/main/docs/media-processing.md">processing</a>.</p>
 </section>
 <section class="guide-chapter" id="cli-reference" data-guide-chapter="cli-reference" aria-labelledby="cli-reference-title"><h2 id="cli-reference-title">17. CLI argument and option reference</h2><a class="guide-chapter-switch" href="../ja/guide/#cli-reference" lang="ja" hreflang="ja">日本語</a>
 <p>All public commands accept <code>-h</code> / <code>--help</code>; <code>drmr help COMMAND</code> also displays help. Use top-level <code>-V</code> / <code>--version</code> or <code>drmr version</code>. Private supervision bootstrap arguments are not a user interface.</p>
+<h3>Global progress option</h3>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-20-title" tabindex="0"><table><caption id="table-20-title">Global progress option — Table 20</caption><thead><tr><th scope="col">Option</th><th scope="col">Meaning/default</th></tr></thead><tbody>
+<tr><th scope="row"><code>--progress MODE</code></th><td>auto, text, json or off; default auto. Progress goes to stderr; the result stays on stdout. See chapter 15 for examples and the JSON Lines boundary</td></tr>
+</tbody></table></div>
 <h3>File and path values</h3>
 <p><code>FILE</code> is a local filename supplied after the option, not inline JSON. <code>PATH</code> can name a file or directory as the row specifies. Relative option paths are resolved from the directory where you run the command. <code>NEW_FILE</code>, <code>NEW_PATH</code> and <code>NEW_DIR</code> name destinations that must be new; the workflow determines when they are written. Replace these placeholders with your paths; a <code>.json</code> extension does not make different configuration schemas interchangeable.</p>
-<p>For example, <code>--fetch-policy config/fetch.json</code> reads the <a href="https://kazuhide.github.io/drmr/guide/#url-input">Fetch policy JSON in chapter 8</a>. <code>--keys-file config/keys.json</code> reads the <a href="https://kazuhide.github.io/drmr/guide/#key-configuration">private key JSON examples in chapter 5</a>: version 1 uses <code>input</code> and one <code>output</code>, while version 2 shares <code>input</code> and names each result under <code>outputs</code>. <code>analyze</code> validates either schema and uses only its source keys. <code>--outputs</code> and version-2 saved plans require version-2 key JSON even when the output list has one entry; the older single-result mode uses version 1.</p>
+<p>For example, <code>--fetch-policy config/fetch.json</code> reads the <a href="https://kazuhide.github.io/drmr/guide/#url-input">Fetch policy JSON in chapter 8</a>. <code>--keys-file config/keys.json</code> reads the <a href="https://kazuhide.github.io/drmr/guide/#key-configuration">private key JSON examples in chapter 5</a>: version 1 uses <code>input</code> and one <code>output</code>, while version 2 shares <code>input</code> and names each result under <code>outputs</code>. Full <code>analyze</code> validates either schema and uses only its source keys; <code>--metadata-only</code> refuses key files. <code>--outputs</code> and version-2 saved plans require version-2 key JSON even when the output list has one entry; the older single-result mode uses version 1.</p>
 <p>For common commands, <code>--packager-bin &quot;./tools/packager&quot;</code> selects one installed executable. A Windows example is <code>--packager-bin &quot;C:\Media Tools\packager.exe&quot;</code>. Quote paths containing spaces and supply only the program name/path, without a shell command or appended arguments. The default <code>packager</code> is found on the launch environment&#x27;s PATH; CLI archives and Desktop bundles do not include it. See <a href="https://kazuhide.github.io/drmr/guide/#installation">Media tools in chapter 4</a>.</p>
 <p>For example, prepare the version-1 output key configuration from chapter 5 and select the installed executable for a conversion. Replace the input, new output, configuration and executable paths with the ones in your environment:</p>
-<figure class="guide-example" aria-labelledby="example-105-title" data-code-language="sh"><figcaption id="example-105-title">Example 105: sh</figcaption><pre tabindex="0"><code>drmr convert original.mp4 --to cbcs --format mp4 \
+<figure class="guide-example" aria-labelledby="example-106-title" data-code-language="sh"><figcaption id="example-106-title">Example 106: sh</figcaption><pre tabindex="0"><code>drmr convert original.mp4 --to cbcs --format mp4 \
   --output protected.mp4 --keys-file config/keys.json \
   --packager-bin "/opt/media-tools/packager"
 </code></pre></figure>
 <h3>doctor</h3>
-<div class="guide-table-scroll" role="region" aria-labelledby="table-18-title" tabindex="0"><table><caption id="table-18-title">doctor — Table 18</caption><thead><tr><th scope="col">Option</th><th scope="col">Meaning/default</th></tr></thead><tbody>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-21-title" tabindex="0"><table><caption id="table-21-title">doctor — Table 21</caption><thead><tr><th scope="col">Option</th><th scope="col">Meaning/default</th></tr></thead><tbody>
 <tr><th scope="row"><code>--json</code></th><td>One machine-readable diagnostic object</td></tr>
 <tr><th scope="row"><code>--probe</code></th><td>Bounded version/help/advertised-options checks; default is discovery only</td></tr>
 <tr><th scope="row"><code>--route PROFILE</code></th><td>Required tool set, default <code>all</code></td></tr>
 </tbody></table></div>
 <p>PROFILE is <code>all</code>, <code>progressive-mp4</code>, <code>fragmented-mp4</code>, <code>dash-presentation</code>, <code>fmp4-hls-presentation</code>, <code>mpeg-ts-hls</code>, <code>mpeg-ts-sample-aes-hls</code> or <code>mpeg-ts-hls-ts</code>. Output route names are not automatically valid doctor values; use <code>all</code> to include the tool set for TS-DASH.</p>
-<h3>inspect</h3>
-<div class="guide-table-scroll" role="region" aria-labelledby="table-19-title" tabindex="0"><table><caption id="table-19-title">inspect — Table 19</caption><thead><tr><th scope="col">Argument/option</th><th scope="col">Meaning</th></tr></thead><tbody>
-<tr><th scope="row"><code>INPUT</code></th><td>Local MP4, MPD or M3U8; remote resources are not acquired</td></tr>
-<tr><th scope="row"><code>--json</code></th><td>Versioned metadata report</td></tr>
-</tbody></table></div>
 <h3>analyze</h3>
-<div class="guide-table-scroll" role="region" aria-labelledby="table-20-title" tabindex="0"><table><caption id="table-20-title">analyze — Table 20</caption><thead><tr><th scope="col">Argument/option</th><th scope="col">Meaning</th></tr></thead><tbody>
-<tr><th scope="row"><code>INPUT</code></th><td>Complete local MP4, DASH or HLS; supported MP4, static DASH or completed HLS URL; <a href="#url-input">URL profiles and local entrypoints</a></td></tr>
-<tr><th scope="row"><code>--download-dir NEW_DIR</code></th><td>Required new directory for URL input; retain the original privately; <a href="https://kazuhide.github.io/drmr/guide/#url-input">acquisition example</a></td></tr>
-<tr><th scope="row"><code>--fetch-policy FILE</code></th><td>Owner-only fetch policy JSON, e.g. config/fetch.json; <a href="https://kazuhide.github.io/drmr/guide/#url-input">origin/header/limit fields and example</a></td></tr>
-<tr><th scope="row"><code>--keys-file FILE</code></th><td>Owner-only version-1 or version-2 JSON input keys when source checks need decryption; <a href="https://kazuhide.github.io/drmr/guide/#key-configuration">input key fields and examples</a></td></tr>
-<tr><th scope="row"><code>--packager-bin FILE</code></th><td>Shaka Packager executable name/path; default packager on PATH; <a href="https://kazuhide.github.io/drmr/guide/#installation">installation and discovery</a></td></tr>
-<tr><th scope="row"><code>--max-workers N</code></th><td>Upper bound 1-64; otherwise automatic CPU/memory choice</td></tr>
-<tr><th scope="row"><code>--json</code></th><td>One input-analysis report; input_admitted does not verify a converted output</td></tr>
-<tr><th scope="row"><code>--measure</code></th><td>Add numeric measurements; requires --json</td></tr>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-22-title" tabindex="0"><table><caption id="table-22-title">analyze — Table 22</caption><thead><tr><th scope="col">Argument/option</th><th scope="col">Meaning</th></tr></thead><tbody>
+<tr><th scope="row"><code>INPUT</code></th><td>Local MP4, DASH or HLS, or HTTP(S) URL; full URL analysis has the <a href="#url-input">acquisition profiles</a></td></tr>
+<tr><th scope="row"><code>--metadata-only</code></th><td>Read declarations without keys, external media tools or a retained download; no complete media verification. See chapter 6</td></tr>
+<tr><th scope="row"><code>--download-dir NEW_DIR</code></th><td>Required new directory for full URL analysis; refused with --metadata-only; <a href="https://kazuhide.github.io/drmr/guide/#url-input">acquisition example</a></td></tr>
+<tr><th scope="row"><code>--fetch-policy FILE</code></th><td>URL-only owner-only JSON, e.g. config/fetch.json; also accepted with --metadata-only; <a href="https://kazuhide.github.io/drmr/guide/#url-input">origin/header/limit fields</a></td></tr>
+<tr><th scope="row"><code>--keys-file FILE</code></th><td>Input keys for full source decryption; refused with --metadata-only; <a href="https://kazuhide.github.io/drmr/guide/#key-configuration">key fields and examples</a></td></tr>
+<tr><th scope="row"><code>--packager-bin FILE</code></th><td>Shaka Packager executable for full checks; default packager on PATH; refused with --metadata-only; <a href="https://kazuhide.github.io/drmr/guide/#installation">installation</a></td></tr>
+<tr><th scope="row"><code>--max-workers N</code></th><td>Full checks: upper bound 1-64; otherwise automatic CPU/memory choice; refused with --metadata-only</td></tr>
+<tr><th scope="row"><code>--json</code></th><td>One metadata report with --metadata-only, otherwise an input-analysis report; neither verifies a converted output</td></tr>
+<tr><th scope="row"><code>--measure</code></th><td>Add numeric measurements; requires --json; refused with --metadata-only</td></tr>
 </tbody></table></div>
-<p>Local input refuses download/fetch options. URL analysis always requires a new download directory.</p>
+<p>Local input refuses download/fetch options. URL metadata-only analysis needs no download directory; full URL analysis requires a new one.</p>
 <h3>plan</h3>
-<div class="guide-table-scroll" role="region" aria-labelledby="table-21-title" tabindex="0"><table><caption id="table-21-title">plan — Table 21</caption><thead><tr><th scope="col">Argument/option</th><th scope="col">Meaning</th></tr></thead><tbody>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-23-title" tabindex="0"><table><caption id="table-23-title">plan — Table 23</caption><thead><tr><th scope="col">Argument/option</th><th scope="col">Meaning</th></tr></thead><tbody>
 <tr><th scope="row"><code>INPUT</code></th><td>Local input for generic conversion intent</td></tr>
 <tr><th scope="row"><code>--to TARGET</code></th><td>Required for INPUT without --outputs: clear, cenc, cbcs, hls-aes128, hls-sample-aes</td></tr>
 <tr><th scope="row"><code>--format FORMAT</code></th><td>mp4, dash, hls, hls-ts; alternatives without --save, one resolved format in a single-output plan; omitted follows MP4/DASH/HLS, with HLS meaning fMP4; conflicts with --outputs</td></tr>
@@ -2314,7 +2349,7 @@ cargo test --locked -p drmr-core --test conversion_bundle_encryption \
 <tr><th scope="row"><code>--measure</code></th><td>Add measurements to stdout; requires --json and --save; saved file stays an execution plan</td></tr>
 </tbody></table></div>
 <h3>convert</h3>
-<div class="guide-table-scroll" role="region" aria-labelledby="table-22-title" tabindex="0"><table><caption id="table-22-title">convert — Table 22</caption><thead><tr><th scope="col">Argument/option</th><th scope="col">Meaning</th></tr></thead><tbody>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-24-title" tabindex="0"><table><caption id="table-24-title">convert — Table 24</caption><thead><tr><th scope="col">Argument/option</th><th scope="col">Meaning</th></tr></thead><tbody>
 <tr><th scope="row"><code>INPUT</code></th><td>Supported local original or MP4, static DASH or completed HLS URL; encrypted input requires source keys; omitted with --plan; <a href="#url-input">URL profiles</a></td></tr>
 <tr><th scope="row"><code>--to TARGET</code></th><td>Required output protection without --plan or --outputs</td></tr>
 <tr><th scope="row"><code>--format FORMAT</code></th><td>One output format; HLS defaults to fMP4 even for TS input</td></tr>
@@ -2328,13 +2363,13 @@ cargo test --locked -p drmr-core --test conversion_bundle_encryption \
 <tr><th scope="row"><code>--hls-validator-bin FILE</code></th><td>Apple executable name/path for requested HLS manifest checks; default mediastreamvalidator; <a href="https://kazuhide.github.io/drmr/guide/#verification">external validator setup</a></td></tr>
 <tr><th scope="row"><code>--dash-validator-bin FILE</code></th><td>PHP executable name/path for the local DASH-IF manifest adapter; default php; <a href="https://kazuhide.github.io/drmr/guide/#verification">external validator setup</a></td></tr>
 <tr><th scope="row"><code>--max-workers N</code></th><td>Upper bound 1-64; otherwise automatic CPU/memory choice</td></tr>
-<tr><th scope="row"><code>--json</code></th><td>One versioned result; suppress ordinary progress lines</td></tr>
+<tr><th scope="row"><code>--json</code></th><td>One versioned result; default auto progress is off, explicit --progress text/json remains available</td></tr>
 <tr><th scope="row"><code>--measure</code></th><td>Add measurement fields; requires --json</td></tr>
 </tbody></table></div>
 <p>There are no generic <code>ffmpeg-bin</code> or <code>ffprobe-bin</code> options. Those tools are found on the launch environment&#x27;s PATH.</p>
 <p><code>--plan</code> conflicts with INPUT, --to, --format, --outputs, --output, --download-dir and --fetch-policy. Runtime keys, validator/tool paths, worker limits and reporting options remain separate. Each output&#x27;s saved manifest-check policy cannot be overridden at execution.</p>
 <h3>verify</h3>
-<div class="guide-table-scroll" role="region" aria-labelledby="table-23-title" tabindex="0"><table><caption id="table-23-title">verify — Table 23</caption><thead><tr><th scope="col">Argument/option</th><th scope="col">Meaning</th></tr></thead><tbody>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-25-title" tabindex="0"><table><caption id="table-25-title">verify — Table 25</caption><thead><tr><th scope="col">Argument/option</th><th scope="col">Meaning</th></tr></thead><tbody>
 <tr><th scope="row"><code>OUTPUT</code></th><td>Candidate MP4, MPD or M3U8; omitted with --plan</td></tr>
 <tr><th scope="row"><code>--source INPUT</code></th><td>Required original media/manifest file without --plan or --manifest-only; never inferred from the result; <a href="https://kazuhide.github.io/drmr/guide/#verification">complete comparisons</a></td></tr>
 <tr><th scope="row"><code>--plan FILE</code></th><td>Generated execution-plan JSON, version 1 or 2; check recorded source, output format/protection and independent media correspondence; conflicts with OUTPUT and --source; <a href="https://kazuhide.github.io/drmr/guide/#inspect-plan">saved-plan workflow</a></td></tr>
@@ -2354,7 +2389,7 @@ cargo test --locked -p drmr-core --test conversion_bundle_encryption \
 <h3>version</h3>
 <p>Print the product version with <code>drmr version</code> or <code>drmr --version</code>. This command has no additional options.</p>
 <h3>serve</h3>
-<div class="guide-table-scroll" role="region" aria-labelledby="table-24-title" tabindex="0"><table><caption id="table-24-title">serve — Table 24</caption><thead><tr><th scope="col">Option/environment</th><th scope="col">Meaning/default</th></tr></thead><tbody>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-26-title" tabindex="0"><table><caption id="table-26-title">serve — Table 26</caption><thead><tr><th scope="col">Option/environment</th><th scope="col">Meaning/default</th></tr></thead><tbody>
 <tr><th scope="row"><code>--static-dir DIR</code></th><td>Trusted directory of UI files replacing embedded assets; <a href="https://kazuhide.github.io/drmr/guide/#web-console">local console setup</a></td></tr>
 <tr><th scope="row"><code>--cli FILE</code></th><td>Same-version drmr executable file for jobs (drmr.exe on Windows); <a href="https://kazuhide.github.io/drmr/guide/#web-console">console CLI selection</a></td></tr>
 <tr><th scope="row"><code>DRMR_INPUT_ROOT</code></th><td>Required allowed input folder for local media and saved plans</td></tr>

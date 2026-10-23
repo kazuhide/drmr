@@ -5,6 +5,16 @@ for installation, stable interfaces and versioning.
 
 ## [Unreleased]
 
+### Added
+
+- Read local and HTTP(S) MP4, HLS and DASH metadata with
+  `analyze --metadata-only`, without keys or retained source downloads. This
+  replaces the removed `inspect` command during the pre-release CLI
+  consolidation; normal full-source analysis is unchanged.
+- Select stderr progress with global `--progress auto|text|json|off`, including
+  progress alongside JSON results, actual acquisition counters and periodic
+  elapsed-time observations without estimated percentages or completion times.
+
 ## [1.0.1] - 2026-10-23
 
 Pre-release patch for AAC in MPEG transport streams. The published v1.0.0

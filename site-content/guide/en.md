@@ -20,7 +20,7 @@ Check each release's **Pre-release** label and notes before use. For a source bu
 | --- | --- | --- |
 | Find external tools | `doctor` | Required executables can be found in the launch environment |
 | Check versions and options | `doctor --probe` | Version and help output advertise required features; no media is processed |
-| Read input declarations | `inspect` | Local MP4, DASH or HLS metadata; no decryption or complete sample proof |
+| Read input declarations | `analyze --metadata-only` | Local or HTTP(S) MP4, DASH or HLS metadata; no keys or complete sample proof |
 | Check complete source media | `analyze` | Actual input admission; URL input is retained in an explicit download directory |
 | Describe a conversion | `plan` | Requested formats and protection, candidate routes and runtime conditions |
 | Save a conversion request | `plan --save` | Source fingerprints and one output, or an explicit list of outputs with DRM selections and manifest-check policies |
@@ -28,7 +28,7 @@ Check each release's **Pre-release** label and notes before use. For a source bu
 | Compare independently | `verify` | Reads original and result independently and checks complete media and timing |
 | Check only final manifests | `verify --manifest-only` | Native HLS/DASH linting; add --external-validator for external checks; no media comparison or decryption |
 
-Use `analyze`, `plan --save`, `convert --plan` and `verify --plan` to check the source, save the conversion request, execute it and compare the result. `inspect` remains a quick metadata check. Direct `convert INPUT` also remains available.
+Use normal `analyze`, `plan --save`, `convert --plan` and `verify --plan` to check the source, save the conversion request, execute it and compare the result. Add `--metadata-only` to `analyze` for a quick declaration check. Direct `convert INPUT` also remains available.
 
 ## First local example
 
@@ -37,7 +37,7 @@ Start with a supported unencrypted local MP4. Create the output parent directory
 ```sh
 drmr --version
 drmr doctor --probe --route progressive-mp4
-drmr inspect original.mp4 --json
+drmr analyze --metadata-only original.mp4 --json
 drmr analyze original.mp4 --json
 drmr plan original.mp4 --to clear --format mp4 \
   --output clear.mp4 --save clear.plan.json --json
@@ -362,17 +362,28 @@ Some workflows create private temporary key/configuration files. Cleanup and zer
 
 See [local security](https://github.com/kazuhide/drmr/blob/main/docs/security.md).
 
-# 6. Inspect and plan
+# 6. Analyze metadata and plan
 
-## Inspect declarations
+## Read declarations without keys
 
 ```sh
-drmr inspect media.mp4
-drmr inspect source/manifest.mpd --json
-drmr inspect source/master.m3u8 --json
+drmr analyze --metadata-only media.mp4
+drmr analyze --metadata-only source/manifest.mpd --json
+drmr analyze --metadata-only source/master.m3u8 --json
+drmr analyze --metadata-only "https://example.com/vod/master.m3u8" --json
+drmr analyze --metadata-only "https://example.com/vod/manifest.mpd" --json
+drmr analyze --metadata-only "https://example.com/vod/media.mp4" --json
 ```
 
-`inspect` reads local MP4, DASH and HLS declarations without keys, network acquisition or output media. It can identify a declared container, codec or protection scheme but does not establish complete sample validity. Unknown protection stays unknown; do not interpret missing evidence as clear.
+`analyze --metadata-only` reads MP4 metadata or DASH/HLS declarations without keys, a decoder or Shaka Packager. It identifies format, declared protection, known key identifiers and DRM labels, while excluding keys, IVs and key/license addresses from the report. It does not decrypt, decode or check every sample; `media_verified` remains false. Unknown protection stays unknown. An HLS SAMPLE-AES declaration alone does not establish an MP4 encryption scheme.
+
+Local HLS follows bounded child playlists within its directory tree. URL HLS reads declarations and needed child playlists; URL DASH reads the MPD. Neither downloads initialization files, media segments, keys or licenses. URL MP4 uses HTTP Range requests for selected byte positions, validating responses before reading box headers and movie metadata (`moov`) while skipping media payloads (`mdat`). A server that ignores Range is refused instead of causing a full MP4 download.
+
+URL metadata is temporary private data, not a saved original for a plan or offline conversion. No `--download-dir` is needed. Live HLS or dynamic DASH declarations may be readable, but this does not establish a complete on-demand source or conversion support. Normal URL analysis in chapter 8 retains and checks complete media.
+
+Metadata-only refuses `--download-dir`, `--keys-file`, `--packager-bin`, `--max-workers` and `--measure`. URL input can use chapter 8's `--fetch-policy`; local input cannot. Metadata parser limits and fetch-policy limits both apply.
+
+The former `inspect INPUT` command is removed during the pre-release CLI consolidation. Replace it with `analyze --metadata-only INPUT`; no alias remains. See the [pre-release migration](https://github.com/kazuhide/drmr/blob/main/docs/releases.md#pre-release-cli-consolidation).
 
 ## Analyze complete media
 
@@ -381,7 +392,7 @@ drmr analyze source/master.m3u8 --json
 drmr analyze encrypted.mp4 --keys-file config/keys.json --json
 ```
 
-`analyze` checks the actual complete source with the conversion engine, including encoded packets, decoded content and timestamps. Its `input_admitted` result applies to the checked input profile; candidate output formats still need a target-specific plan. It does not certify a converted result or DRM playback. Local MP4, DASH and HLS are accepted within their supported profiles. Chapter 8 shows URL input with mandatory source retention.
+Without `--metadata-only`, `analyze` checks the actual complete source with the conversion engine, including encoded packets, decoded content and timestamps. Its `input_admitted` result applies to the checked input profile; candidate output formats still need a target-specific plan. It does not certify a converted result or DRM playback. Local MP4, DASH and HLS are accepted within their supported profiles. Chapter 8 shows URL input with mandatory source retention.
 
 When a documented source compatibility rule applies, `compatibility_notes` lists its fixed code. Examples include empty TS padding and adjacent HLS cue markers with no active interval. These rules retain the original bytes and all media and timing checks. See [transport-stream compatibility](https://github.com/kazuhide/drmr/blob/main/docs/media-processing.md#transport-stream-compatibility) for the exact accepted conditions.
 
@@ -602,19 +613,19 @@ The explicit signaling regression uses a derived fragmented clear MP4. It does n
 
 ## A retained download directory is mandatory
 
-This example uses clear HLS and a CBCS DASH output. Prepare chapter 5's `config/keys.json` with only the output key. `&&` proceeds only after success. `inspect` reads retained declarations after acquisition; omit it if this summary is unnecessary.
+This example uses clear HLS and a CBCS DASH output. Prepare chapter 5's `config/keys.json` with only the output key. `&&` proceeds only after success. The optional metadata-only command summarizes the retained declarations; omit it if this summary is unnecessary.
 
 ```sh
 drmr analyze "https://example.com/vod/master.m3u8" \
   --download-dir ./saved-source &&
-drmr inspect ./saved-source/input.m3u8 &&
+drmr analyze --metadata-only ./saved-source/input.m3u8 &&
 drmr plan ./saved-source/input.m3u8 --to cbcs --format dash \
   --output ./converted-dash --save ./conversion.plan.json &&
 drmr convert --plan ./conversion.plan.json --keys-file config/keys.json &&
 drmr verify --plan ./conversion.plan.json --keys-file config/keys.json
 ```
 
-URL input requires a new `--download-dir` under an existing parent. The plan file and result destination must also be new and separate from the source. Format detection uses the response content, so URLs need no filename extension. Queries and allowed redirects do not select the format.
+Full URL analysis requires a new `--download-dir` under an existing parent. The plan file and result destination must also be new and separate from the source. Format detection uses the response content, so URLs need no filename extension. Queries and allowed redirects do not select the format.
 
 | URL input | Retained local entrypoint | Acquisition profile |
 | --- | --- | --- |
@@ -626,9 +637,9 @@ For DASH or MP4, change the local input path above accordingly. DASH saves every
 
 The same local codec, track, encryption and timing restrictions still apply. Live input, byte ranges, multiple DASH periods, `SegmentList`, `SegmentBase`, duration-only DASH templates and negative timeline repeats remain outside this acquisition profile. These are implementation limits, rather than technical impossibilities of those formats.
 
-Encrypted HLS accepts AES-128 TS/fMP4, SAMPLE-AES TS and CENC/CBCS fMP4 under the local input restrictions. For AES-128 and TS SAMPLE-AES, `input.hls_keys[].uri` must match the absolute identifier resolved after redirects: `keys/key.bin` in `https://example.com/vod/media.m3u8` becomes `https://example.com/vod/keys/key.bin`. Absolute `skd:` URIs stay unchanged. CENC/CBCS uses `input.keys`. No key or license URL is fetched. Encrypted input requires `--keys-file config/keys.json` on `analyze` and `plan` too; clear input does not.
+Encrypted HLS accepts AES-128 TS/fMP4, SAMPLE-AES TS and CENC/CBCS fMP4 under the local input restrictions. For AES-128 and TS SAMPLE-AES, `input.hls_keys[].uri` must match the absolute identifier resolved after redirects: `keys/key.bin` in `https://example.com/vod/media.m3u8` becomes `https://example.com/vod/keys/key.bin`. Absolute `skd:` URIs stay unchanged. CENC/CBCS uses `input.keys`. No key or license URL is fetched. Encrypted input requires `--keys-file config/keys.json` on full `analyze` and source checks for `plan --save` too; clear input does not. Metadata-only analysis never needs keys.
 
-Only `analyze` needs the server. Completed downloads survive later failures; incomplete downloads are refused. `convert URL --download-dir NEW_DIR` combines acquisition and conversion without saving a plan.
+In this workflow, only the first full `analyze` needs the server. Completed downloads survive later failures; incomplete downloads are refused. `convert URL --download-dir NEW_DIR` combines acquisition and conversion without saving a plan.
 
 ## URL to several DRM outputs
 
@@ -670,7 +681,7 @@ Do not reuse an existing download directory for a new acquisition. Partial faile
 
 ## Fetch policy
 
-Default policy is HTTPS with same-origin references and bounded acquisition. `analyze URL` and direct `convert URL` both accept `--fetch-policy`. Explicit origin/private-network/HTTP access requires the supported private policy configuration; it is not enabled by weakening Host or Origin checks.
+Default policy is HTTPS with same-origin references and bounded acquisition. `analyze URL`, including `--metadata-only`, and direct `convert URL` accept `--fetch-policy`. Metadata-only URL reads need no download directory and retain no original. Explicit origin/private-network/HTTP access requires the supported private policy configuration; it is not enabled by weakening Host or Origin checks.
 
 `--fetch-policy FILE` reads an owner-only UTF-8 JSON object saved as, for example, `config/fetch.json`. It contains the policy fields directly, without a `schema_version` field; the input URL stays on the command line. The file is optional, and its fields are optional: omit `headers_by_origin` when authentication is not needed. The example fields mean:
 
@@ -1056,7 +1067,7 @@ The function verifies that you already own each path and changes only its access
 ## PowerShell conversion
 
 ```powershell
-.\drmr.exe inspect 'C:\media\source.mp4' --json
+.\drmr.exe analyze --metadata-only 'C:\media\source.mp4' --json
 .\drmr.exe plan 'C:\media\source.mp4' --to cbcs --format mp4
 $outDir = Join-Path $env:LOCALAPPDATA 'drmr-output'
 New-Item -ItemType Directory -Path $outDir -Force | Out-Null
@@ -1185,9 +1196,9 @@ See [Desktop scope](https://github.com/kazuhide/drmr/blob/main/docs/desktop.md) 
 
 # 15. Results, exit values and troubleshooting
 
-## JSON and progress
+## JSON results
 
-Use `convert --json` or `verify --json` for machine-readable output. A successful unmeasured verification produces one versioned JSON object:
+Use the command's `--json` option for machine-readable output. A successful unmeasured verification produces one versioned JSON object:
 
 ```json
 {
@@ -1230,7 +1241,42 @@ Operational failure after a valid command returns `schema_version: 1`, `command`
 
 Argument parsing errors occur before this JSON contract and retain stderr/help with exit 2. If stdout itself is unavailable, complete JSON cannot be guaranteed; stderr reports `result-output-unavailable` and exit 1.
 
-Without JSON, observed activity/count/elapsed lines go to stderr. A closed track scope is not proof that the conversion succeeded. Phases may overlap; the last observed activity is not an exclusive phase or a diagnosed cause.
+## Progress on standard error
+
+Global `--progress` controls progress separately from the final result on standard output. Existing pipes keep receiving only the result.
+
+| Mode | Behavior |
+| --- | --- |
+| `auto` | Default: readable text; off when the command uses --json |
+| `text` | Readable progress, including alongside --json results |
+| `json` | JSON Lines progress: one object per line, including alongside --json results |
+| `off` | No progress records; results and errors still apply |
+
+```sh
+drmr analyze original.mp4 --metadata-only --json --progress text
+drmr analyze original.mp4 --metadata-only --json --progress json \
+  >metadata.json 2>progress.jsonl
+drmr analyze original.mp4 --metadata-only --progress off
+```
+
+Observations show a stage, a fixed task label and elapsed time. Acquisition reports actual received bytes and resource counts; parallel work reports active and completed units when available. Ongoing work emits a heartbeat about every two seconds. Unknown totals do not produce invented percentages or remaining-time estimates.
+
+| Stage | Observed work |
+| --- | --- |
+| `configuration` | Read and validate operation settings |
+| `acquisition` | Receive source resources |
+| `inspection` | Read metadata or check source structure |
+| `input-preparation` | Prepare tracks for processing |
+| `normalization` | Prepare the supported media layout |
+| `packaging` | Write the requested media and encryption |
+| `verification` | Compare content, timing and output conditions |
+| `publication` | Publish checked output to its destination |
+| `tool-check` | Discover or probe external tools for doctor |
+| `server-startup` | Start the local console and wait for it |
+
+Scopes can overlap or nest; a closed scope may have failed. A completed work unit is not a completed conversion. The last activity is not a diagnosis. Quick metadata reads and plans may finish before a heartbeat. Help and version output do not invent progress. These observations do not require `--measure`; measured phase durations remain separate and may overlap.
+
+Progress excludes URLs, keys, authentication headers, operator paths, raw metadata and raw tool output. For valid parsed operational commands, explicit `--progress json` keeps operational stderr in JSON Lines, including a fixed error code on failure or cancellation. Argument parsing errors and existing `serve` startup diagnostics/address notices can be separate text. The final result and exit value determine success, not progress records alone.
 
 ## Exit values
 
@@ -1241,13 +1287,14 @@ Without JSON, observed activity/count/elapsed lines go to stderr. A closed track
 | 2 | Invalid arguments/configuration |
 | 130 | A supported CLI confirmed cooperative cancellation and owned-process cleanup |
 
-`doctor` success is selected diagnostic success; `inspect` success is metadata reading, not complete media verification.
+`doctor` success is selected diagnostic success; `analyze --metadata-only` success is metadata reading, not complete media verification.
 
 ## Common failures
 
 | Symptom/code | Action |
 | --- | --- |
 | Tool unavailable | Check the actual launch PATH, executable permission and Desktop diagnostics |
+| `remote-metadata-not-supported` | Check the declaration profile; remote MP4 metadata requires a server that honors HTTP Range requests |
 | Unsupported version/features | Inspect build options as well as version; confirm the required advertised options |
 | Key file refused | Check owner, mode 600/ACL, link count, duplicate/unknown fields and schema |
 | `output-spec-invalid` | Check recipe schema version 1, unique safe IDs and supported format/protection/DRM combinations |
@@ -1378,11 +1425,17 @@ See [fixture attribution](https://github.com/kazuhide/drmr/blob/main/crates/drmr
 
 All public commands accept `-h` / `--help`; `drmr help COMMAND` also displays help. Use top-level `-V` / `--version` or `drmr version`. Private supervision bootstrap arguments are not a user interface.
 
+## Global progress option
+
+| Option | Meaning/default |
+| --- | --- |
+| `--progress MODE` | auto, text, json or off; default auto. Progress goes to stderr; the result stays on stdout. See chapter 15 for examples and the JSON Lines boundary |
+
 ## File and path values
 
 `FILE` is a local filename supplied after the option, not inline JSON. `PATH` can name a file or directory as the row specifies. Relative option paths are resolved from the directory where you run the command. `NEW_FILE`, `NEW_PATH` and `NEW_DIR` name destinations that must be new; the workflow determines when they are written. Replace these placeholders with your paths; a `.json` extension does not make different configuration schemas interchangeable.
 
-For example, `--fetch-policy config/fetch.json` reads the [Fetch policy JSON in chapter 8](https://kazuhide.github.io/drmr/guide/#url-input). `--keys-file config/keys.json` reads the [private key JSON examples in chapter 5](https://kazuhide.github.io/drmr/guide/#key-configuration): version 1 uses `input` and one `output`, while version 2 shares `input` and names each result under `outputs`. `analyze` validates either schema and uses only its source keys. `--outputs` and version-2 saved plans require version-2 key JSON even when the output list has one entry; the older single-result mode uses version 1.
+For example, `--fetch-policy config/fetch.json` reads the [Fetch policy JSON in chapter 8](https://kazuhide.github.io/drmr/guide/#url-input). `--keys-file config/keys.json` reads the [private key JSON examples in chapter 5](https://kazuhide.github.io/drmr/guide/#key-configuration): version 1 uses `input` and one `output`, while version 2 shares `input` and names each result under `outputs`. Full `analyze` validates either schema and uses only its source keys; `--metadata-only` refuses key files. `--outputs` and version-2 saved plans require version-2 key JSON even when the output list has one entry; the older single-result mode uses version 1.
 
 For common commands, `--packager-bin "./tools/packager"` selects one installed executable. A Windows example is `--packager-bin "C:\Media Tools\packager.exe"`. Quote paths containing spaces and supply only the program name/path, without a shell command or appended arguments. The default `packager` is found on the launch environment's PATH; CLI archives and Desktop bundles do not include it. See [Media tools in chapter 4](https://kazuhide.github.io/drmr/guide/#installation).
 
@@ -1404,27 +1457,21 @@ drmr convert original.mp4 --to cbcs --format mp4 \
 
 PROFILE is `all`, `progressive-mp4`, `fragmented-mp4`, `dash-presentation`, `fmp4-hls-presentation`, `mpeg-ts-hls`, `mpeg-ts-sample-aes-hls` or `mpeg-ts-hls-ts`. Output route names are not automatically valid doctor values; use `all` to include the tool set for TS-DASH.
 
-## inspect
-
-| Argument/option | Meaning |
-| --- | --- |
-| `INPUT` | Local MP4, MPD or M3U8; remote resources are not acquired |
-| `--json` | Versioned metadata report |
-
 ## analyze
 
 | Argument/option | Meaning |
 | --- | --- |
-| `INPUT` | Complete local MP4, DASH or HLS; supported MP4, static DASH or completed HLS URL; [URL profiles and local entrypoints](#url-input) |
-| `--download-dir NEW_DIR` | Required new directory for URL input; retain the original privately; [acquisition example](https://kazuhide.github.io/drmr/guide/#url-input) |
-| `--fetch-policy FILE` | Owner-only fetch policy JSON, e.g. config/fetch.json; [origin/header/limit fields and example](https://kazuhide.github.io/drmr/guide/#url-input) |
-| `--keys-file FILE` | Owner-only version-1 or version-2 JSON input keys when source checks need decryption; [input key fields and examples](https://kazuhide.github.io/drmr/guide/#key-configuration) |
-| `--packager-bin FILE` | Shaka Packager executable name/path; default packager on PATH; [installation and discovery](https://kazuhide.github.io/drmr/guide/#installation) |
-| `--max-workers N` | Upper bound 1-64; otherwise automatic CPU/memory choice |
-| `--json` | One input-analysis report; input_admitted does not verify a converted output |
-| `--measure` | Add numeric measurements; requires --json |
+| `INPUT` | Local MP4, DASH or HLS, or HTTP(S) URL; full URL analysis has the [acquisition profiles](#url-input) |
+| `--metadata-only` | Read declarations without keys, external media tools or a retained download; no complete media verification. See chapter 6 |
+| `--download-dir NEW_DIR` | Required new directory for full URL analysis; refused with --metadata-only; [acquisition example](https://kazuhide.github.io/drmr/guide/#url-input) |
+| `--fetch-policy FILE` | URL-only owner-only JSON, e.g. config/fetch.json; also accepted with --metadata-only; [origin/header/limit fields](https://kazuhide.github.io/drmr/guide/#url-input) |
+| `--keys-file FILE` | Input keys for full source decryption; refused with --metadata-only; [key fields and examples](https://kazuhide.github.io/drmr/guide/#key-configuration) |
+| `--packager-bin FILE` | Shaka Packager executable for full checks; default packager on PATH; refused with --metadata-only; [installation](https://kazuhide.github.io/drmr/guide/#installation) |
+| `--max-workers N` | Full checks: upper bound 1-64; otherwise automatic CPU/memory choice; refused with --metadata-only |
+| `--json` | One metadata report with --metadata-only, otherwise an input-analysis report; neither verifies a converted output |
+| `--measure` | Add numeric measurements; requires --json; refused with --metadata-only |
 
-Local input refuses download/fetch options. URL analysis always requires a new download directory.
+Local input refuses download/fetch options. URL metadata-only analysis needs no download directory; full URL analysis requires a new one.
 
 ## plan
 
@@ -1459,7 +1506,7 @@ Local input refuses download/fetch options. URL analysis always requires a new d
 | `--hls-validator-bin FILE` | Apple executable name/path for requested HLS manifest checks; default mediastreamvalidator; [external validator setup](https://kazuhide.github.io/drmr/guide/#verification) |
 | `--dash-validator-bin FILE` | PHP executable name/path for the local DASH-IF manifest adapter; default php; [external validator setup](https://kazuhide.github.io/drmr/guide/#verification) |
 | `--max-workers N` | Upper bound 1-64; otherwise automatic CPU/memory choice |
-| `--json` | One versioned result; suppress ordinary progress lines |
+| `--json` | One versioned result; default auto progress is off, explicit --progress text/json remains available |
 | `--measure` | Add measurement fields; requires --json |
 
 There are no generic `ffmpeg-bin` or `ffprobe-bin` options. Those tools are found on the launch environment's PATH.

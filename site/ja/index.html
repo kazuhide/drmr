@@ -149,7 +149,7 @@
   --keys-file keys.json --json</code></pre>
         </li>
       </ol>
-      <p class="section-note">この例では、対応範囲内の Clear HLS を CBCS DASH に変換します。<a href="guide/">日本語ガイド</a>で手順を確認し、<a href="https://github.com/kazuhide/drmr/blob/main/docs/usage.md#separate-input-and-output-keys">所有者だけが読める鍵の設定ファイルを用意してください（英語）</a>。Clear から Clear への変換では <code>--to clear</code> を指定し、鍵ファイルを省略できます。メタデータだけを調べる場合は <code>inspect</code> を使います。</p>
+      <p class="section-note">この例では、対応範囲内の Clear HLS を CBCS DASH に変換します。<a href="guide/">日本語ガイド</a>で手順を確認し、<a href="https://github.com/kazuhide/drmr/blob/main/docs/usage.md#separate-input-and-output-keys">所有者だけが読める鍵の設定ファイルを用意してください（英語）</a>。Clear から Clear への変換では <code>--to clear</code> を指定し、鍵ファイルを省略できます。ローカルや URL のメタデータだけを調べる場合は <code>analyze --metadata-only</code> を使います。鍵や取得先の指定は不要で、コンテンツ全体の検証は行いません。</p>
       <p class="section-note">対応範囲内の非暗号化 HLS（TS）から FairPlay 向け HLS と Widevine／PlayReady 向け DASH をまとめて作るには、<code>plan --outputs outputs.json</code> を使います。<a href="guide/#inspect-plan">日本語ガイド</a>では出力ごとの形式・鍵・検査条件の指定方法を説明しています。結果はすべての検査に通った後で確定します。</p>
       <p class="section-note">最終マニフェストは内蔵の検査機能（Linter）で確認します。保存済みの出力も <code>verify OUTPUT --manifest-only</code> で検査できます。<code>--external-validator</code> を追加すると、形式に応じて Apple または DASH-IF のツールでも検査します。マニフェストの検査結果と原本全体とのメディア比較結果は分けて表示します。</p>
     </section>

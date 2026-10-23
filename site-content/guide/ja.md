@@ -20,7 +20,7 @@ drmr は映像・音声の符号化データを維持しながら、ファイル
 | --- | --- | --- |
 | 外部ツールを探す | `doctor` | 起動環境の PATH に必要な実行ファイルがあるか |
 | ツールのバージョンと機能を確認する | `doctor --probe` | バージョンとヘルプに必要なオプションがあるか。メディア処理はしない |
-| 入力の種類と暗号化方式の宣言を確認する | `inspect` | ローカル MP4・DASH・HLS のメタデータ。復号やサンプル自体の検証はしない |
+| 入力の種類と暗号化方式の宣言を確認する | `analyze --metadata-only` | ローカルまたは HTTP(S) URL の MP4・DASH・HLS メタデータ。鍵は不要。コンテンツ全体の検証はしない |
 | 入力データが対応条件を満たすか確認する | `analyze` | 原本全体の解析と入力条件の確認。URL 入力は指定先に保存する |
 | 変換先の候補と条件を確認する | `plan` | 指定した形式・暗号方式の組み合わせと実行時に必要な条件 |
 | 変換計画を保存する | `plan --save` | 原本のハッシュと出力条件を記録する。複数出力の場合は DRM の選択とマニフェスト検証方針も含む |
@@ -28,7 +28,7 @@ drmr は映像・音声の符号化データを維持しながら、ファイル
 | 原本と結果を改めて比べる | `verify` | 原本を独立に読み直し、内容・復号結果・時刻などを照合する |
 | 完成したマニフェストだけを調べる | `verify --manifest-only` | Rust の内蔵 Linter で HLS/DASH の宣言を検査する。--external-validator で外部検査も追加できる。メディアの比較や復号は行わない |
 
-原本を確認してから変換計画を保存する場合は、`analyze`、`plan --save`、`convert --plan`、`verify --plan` の順に使います。メタデータだけを短時間で確認するには `inspect` を使います。計画を保存せずに `convert INPUT` を実行することもできます。
+原本を確認してから変換計画を保存する場合は、通常の `analyze`、`plan --save`、`convert --plan`、`verify --plan` の順に使います。メタデータだけを確認するには `analyze` に `--metadata-only` を付けます。計画を保存せずに `convert INPUT` を実行することもできます。
 
 ## 最短の実行例
 
@@ -37,7 +37,7 @@ drmr は映像・音声の符号化データを維持しながら、ファイル
 ```sh
 drmr --version
 drmr doctor --probe --route progressive-mp4
-drmr inspect original.mp4 --json
+drmr analyze --metadata-only original.mp4 --json
 drmr analyze original.mp4 --json
 drmr plan original.mp4 --to clear --format mp4 \
   --output clear.mp4 --save clear.plan.json --json
@@ -394,23 +394,32 @@ TS の SAMPLE-AES では、鍵に対応する IV を実行時の鍵設定に明�
 
 参照（英語）: [鍵とローカルセキュリティ](https://github.com/kazuhide/drmr/blob/main/docs/security.md)。
 
-# 6. inspect と plan
+# 6. メタデータの確認と plan
 
-## inspect による宣言と初期化情報の確認
+## 鍵を使わずに宣言情報を確認する
 
 ```sh
-drmr inspect media.mp4
-drmr inspect source/manifest.mpd --json
-drmr inspect source/master.m3u8 --json
+drmr analyze --metadata-only media.mp4
+drmr analyze --metadata-only source/manifest.mpd --json
+drmr analyze --metadata-only source/master.m3u8 --json
+drmr analyze --metadata-only "https://example.com/vod/master.m3u8" --json
+drmr analyze --metadata-only "https://example.com/vod/manifest.mpd" --json
+drmr analyze --metadata-only "https://example.com/vod/media.mp4" --json
 ```
 
-入力形式は内容から判定します。JSON は `schema_version: 1` を持ち、形式、トラック・サンプル記述ごとの保護方式、既知の KID、DRM システム名、`findings` の説明トークンなどを返します。コンテンツキー、IV、ライセンス URL、鍵 URL は含めません。
+`analyze --metadata-only` は MP4 のメタデータや DASH/HLS の宣言を読み取ります。鍵、デコーダー、Shaka Packager は不要です。入力形式は内容から判定します。JSON は `schema_version: 1` を持ち、形式、トラック・サンプル記述ごとの保護方式、既知の KID、DRM システム名、`findings` の説明トークンなどを返します。鍵、IV、ライセンス URL、鍵 URL は含めません。
 
-MP4 では初期化メタデータを読み、メディアのペイロード全体は走査しません。DASH/HLS では宣言情報を読みます。いずれも `media_verified: false` であり、全サンプルの復号・デコードや再生を確認するものではありません。未対応または不完全な暗号情報は `unknown` のままです。HLS の SAMPLE-AES 宣言だけで MP4 の暗号方式を断定することはありません。
+MP4 では構造情報を読み、メディアのデータ全体は走査しません。DASH/HLS では宣言情報を読みます。いずれも `media_verified: false` であり、全サンプルの復号・デコードや再生を確認するものではありません。未対応または不完全な暗号情報は `unknown` のままです。HLS の SAMPLE-AES 宣言だけで MP4 の暗号方式を断定することはありません。
 
-HLS の子プレイリストは、入力ディレクトリ配下のローカル参照だけをたどります。リモート、欠落、循環、ツリー外参照は解決しません。プレイリスト・メディア・鍵をネットワークから取得しません。
+ローカル HLS の子プレイリストは、入力ディレクトリ配下の参照だけをたどります。リモート、欠落、循環、ツリー外参照は解決しません。URL の HLS では宣言と必要な子プレイリスト、DASH では MPD を取得します。初期化ファイル、セグメント、鍵、ライセンスは取得しません。
 
-解析の主な上限は、一マニフェスト 4 MiB、合計 16 MiB、32 プレイリスト、128 参照、トラックごとに 64 KID、MP4 の movie メタデータ 16 MiB です。変換本体や URL 取得の上限とは別です。
+URL の MP4 は HTTP の Range リクエストで必要な位置だけを読みます。応答の範囲を確認し、box（MP4 を構成するデータの単位）の見出しと、再生構造を記録した `moov` を取得します。`moov` がファイル末尾にあっても、映像・音声のデータを格納する `mdat` は読み飛ばします。Range 指定を無視する配信元では、ファイル全体を取得せず拒否します。
+
+URL のメタデータは非公開の一時データとして扱い、保存計画やオフライン変換の原本にはしません。`--download-dir` は不要です。ライブ HLS や dynamic DASH の宣言も読める場合がありますが、更新を追い続けたり、VOD が完結していることや変換可能なことを確認したりする機能ではありません。原本全体の取得と検査には、第8章の通常の URL 解析を使います。
+
+`--metadata-only` と `--download-dir`、`--keys-file`、`--packager-bin`、`--max-workers`、`--measure` は併用できません。URL には第8章の `--fetch-policy` を指定できますが、ローカル入力には指定できません。メタデータ解析と取得ポリシーの両方の上限を適用します。解析の主な上限は、一マニフェスト 4 MiB、合計 16 MiB、32 プレイリスト、128 参照、トラックごとに 64 KID、MP4 の `moov` 情報 16 MiB です。
+
+プレリリース中の CLI 整理に伴い、従来の `inspect INPUT` は削除しました。`analyze --metadata-only INPUT` に置き換えてください。旧名の別名コマンドは残していません。[移行の説明（英語）](https://github.com/kazuhide/drmr/blob/main/docs/releases.md#pre-release-cli-consolidation)も確認してください。
 
 ## analyze による入力データ全体の確認
 
@@ -419,7 +428,7 @@ drmr analyze source/master.m3u8 --json
 drmr analyze encrypted.mp4 --keys-file config/keys.json --json
 ```
 
-`analyze` は変換と同じ処理エンジンで原本全体を読み、符号化済みパケット、復号後の内容、時刻を確認します。`input_admitted: true` は、確認した入力が対応条件を満たしていることを示します。出力形式の候補が表示されても、指定する暗号方式との組み合わせは計画時に確認します。変換結果や DRM 再生の動作確認を済ませたという意味ではありません。ローカル MP4・DASH・HLS が対象です。URL 入力の保存手順は第8章に示します。
+`--metadata-only` を付けない `analyze` は、変換と同じ処理エンジンで原本全体を読み、符号化済みパケット、復号後の内容、時刻を確認します。`input_admitted: true` は、確認した入力が対応条件を満たしていることを示します。出力形式の候補が表示されても、指定する暗号方式との組み合わせは計画時に確認します。変換結果や DRM 再生の動作確認を済ませたという意味ではありません。ローカル MP4・DASH・HLS が対象です。URL 入力の保存手順は第8章に示します。
 
 入力に互換処理を適用した場合は、`compatibility_notes` に固定の識別コードを示します。例えば、実データを含まない TS のパディングや、実際の区間を持たない隣接した HLS の広告境界タグが対象です。原本のバイト列は保持し、メディア内容と時刻の検査も行います。受理する条件と処理方法は、[TS の互換処理の説明（英語）](https://github.com/kazuhide/drmr/blob/main/docs/media-processing.md#transport-stream-compatibility)に記載しています。
 
@@ -664,19 +673,19 @@ drmr convert qualified-clear.mp4 --to cbcs --format dash \
 
 ## 原本の取得から計画・変換・検証までの手順
 
-次の例は、Clear HLS を取得して CBCS の DASH に変換する手順です。第5章の `config/keys.json` には出力鍵だけを設定します。`&&` でつなぐと、成功した場合だけ次のコマンドに進み、失敗した時点で止まります。`inspect` は取得後の宣言内容を確認する操作で、この概要が不要なら省略できます。
+次の例は、Clear HLS を取得して CBCS の DASH に変換する手順です。第5章の `config/keys.json` には出力鍵だけを設定します。`&&` でつなぐと、成功した場合だけ次のコマンドに進み、失敗した時点で止まります。取得後の `--metadata-only` は宣言内容の概要を確認する操作で、不要なら省略できます。
 
 ```sh
 drmr analyze "https://example.com/vod/master.m3u8" \
   --download-dir ./saved-source &&
-drmr inspect ./saved-source/input.m3u8 &&
+drmr analyze --metadata-only ./saved-source/input.m3u8 &&
 drmr plan ./saved-source/input.m3u8 --to cbcs --format dash \
   --output ./converted-dash --save ./conversion.plan.json &&
 drmr convert --plan ./conversion.plan.json --keys-file config/keys.json &&
 drmr verify --plan ./conversion.plan.json --keys-file config/keys.json
 ```
 
-URL 入力の `--download-dir`、計画ファイル、出力先には、互いに別の新しいパスを指定します。親ディレクトリは既存のものを使います。既存ファイルの上書きや取得先の自動再利用はしません。ローカル入力では `--download-dir` や `--fetch-policy` は不要です。
+原本全体を取得する URL 解析では、`--download-dir`、計画ファイル、出力先に互いに別の新しいパスを指定します。親ディレクトリは既存のものを使います。既存ファイルの上書きや取得先の自動再利用はしません。ローカル入力では `--download-dir` や `--fetch-policy` は不要です。
 
 MP4、static DASH、配信が完結した HLS を URL から取得できます。形式は取得した内容で判別するため、URL に拡張子がなくても利用できます。クエリの有無や、許可されたリダイレクトの有無で形式が決まることはありません。
 
@@ -692,11 +701,11 @@ DASH または MP4 では、上のローカル入力パスを表に合わせま�
 
 HLS は clear に加え、AES-128 の TS/fMP4、SAMPLE-AES の TS、CENC/CBCS の fMP4 に対応します。MP4 と DASH も、ローカル入力で対応する clear・暗号化済みデータを取得できます。
 
-AES-128 と TS SAMPLE-AES の `input.hls_keys[].uri` は、リダイレクト後のプレイリスト URL から解決した絶対 URI と一致させます。`https://example.com/vod/media.m3u8` 内の `keys/key.bin` は `https://example.com/vod/keys/key.bin`、絶対 URI の `skd:` はそのまま使います。CENC/CBCS は `input.keys` に KID と鍵を指定します。鍵 URI やライセンスには接続しません。暗号化入力では `analyze` と `plan` にも入力鍵の `--keys-file config/keys.json` が必要で、Clear 入力では不要です。
+AES-128 と TS SAMPLE-AES の `input.hls_keys[].uri` は、リダイレクト後のプレイリスト URL から解決した絶対 URI と一致させます。`https://example.com/vod/media.m3u8` 内の `keys/key.bin` は `https://example.com/vod/keys/key.bin`、絶対 URI の `skd:` はそのまま使います。CENC/CBCS は `input.keys` に KID と鍵を指定します。鍵 URI やライセンスには接続しません。暗号化入力では、通常の `analyze` と `plan --save` による原本の確認にも入力鍵の `--keys-file config/keys.json` が必要です。Clear 入力とメタデータだけの確認では不要です。
 
 HLS は元のプレイリストとリソースを保存し、メディア参照と鍵識別 URI をローカル用に解決した `saved-source/input.m3u8` を作ります。時刻・シーケンス番号・音声の関連付けは作り直しません。どの形式でも取得中は暗号化済みデータを復号しません。原本マニフェストは元のバイト列で別に残り、署名付き URL を含み得るため非公開で保管してください。
 
-配信元への接続は `analyze` だけです。取得が完了した原本は後の処理が失敗しても残り、未完了の取得は受け付けません。`convert URL --download-dir NEW_DIR` なら計画保存なしで取得・変換できます。
+この手順で配信元へ接続するのは、最初の通常の `analyze` だけです。取得が完了した原本は後の処理が失敗しても残り、未完了の取得は受け付けません。`convert URL --download-dir NEW_DIR` なら計画保存なしで取得・変換できます。
 
 ## URL 入力からの複数 DRM 出力
 
@@ -742,7 +751,7 @@ drmr verify retry-hls/master.m3u8 --source saved-source/input.m3u8 \
 
 ## 取得ポリシー
 
-既定では、HTTPS かつ入力 URL と同じ origin への接続だけを許可します。origin はスキーム、ホスト、ポートの組み合わせです。別 origin の参照や認証が必要な場合は、所有者だけがアクセスできる JSON ファイルに設定し、`--fetch-policy` で指定します。`analyze URL` と直接の `convert URL` の両方で使えます。
+既定では、HTTPS かつ入力 URL と同じ origin への接続だけを許可します。origin はスキーム、ホスト、ポートの組み合わせです。別 origin の参照や認証が必要な場合は、所有者だけがアクセスできる JSON ファイルに設定し、`--fetch-policy` で指定します。`analyze URL` と直接の `convert URL` の両方で使えます。`analyze --metadata-only URL` にも指定でき、その場合は取得先を指定せず、原本を保存しません。
 
 次の内容を、例えば `config/fetch.json` という UTF-8 のテキストファイルに保存します。ファイル名は任意です。入力 URL はコマンドで指定するため、この JSON に書く必要はありません。取得ポリシーには `schema_version` を付けません。認証が不要な場合は `headers_by_origin` を省けます。追加の設定が不要なら `--fetch-policy` 自体を省略できます。
 
@@ -1155,7 +1164,7 @@ notepad $keyFile
 ## PowerShell からの変換
 
 ```powershell
-.\drmr.exe inspect 'C:\media\source.mp4' --json
+.\drmr.exe analyze --metadata-only 'C:\media\source.mp4' --json
 .\drmr.exe plan 'C:\media\source.mp4' --to cbcs --format mp4
 $outDir = Join-Path $env:LOCALAPPDATA 'drmr-output'
 New-Item -ItemType Directory -Path $outDir -Force | Out-Null
@@ -1292,9 +1301,9 @@ python tools/build_desktop.py --bundle
 
 # 15. 結果・終了コード・問題の切り分け
 
-## JSON と進捗
+## JSON の結果
 
-スクリプトなどから結果を読み取る場合は `convert --json`、`verify --json` を使います。正常な結果は、スキーマのバージョンを含む一つの JSON オブジェクトとして返します。`--measure` を付ける場合も `--json` が必要です。
+スクリプトなどから結果を読み取る場合は、各コマンドの `--json` を使います。正常な結果は、スキーマのバージョンを含む一つの JSON オブジェクトとして返します。`--measure` を付ける場合も `--json` が必要です。
 
 例えば、計測なしの `verify --json` による成功結果は次の形式です。
 
@@ -1341,7 +1350,42 @@ python tools/build_desktop.py --bundle
 
 引数の構文エラーは処理開始前に起きるため、この JSON 形式では返しません。標準エラーにヘルプなどを表示し、終了コード 2 を返します。標準出力自体に書き込めない場合も完全な JSON は返せません。その場合は、標準エラーの `result-output-unavailable` と終了コード 1 を確認してください。
 
-JSON を使わない場合は、処理名、件数、経過時間を標準エラーに一行ずつ表示します。一つのトラックの処理が終わっても、変換全体の完了を意味するわけではありません。複数の処理段階が重なったり、終了した段階が失敗していたりする場合もあります。最後の処理名だけで原因を断定しないでください。
+## 標準エラーへの進捗表示
+
+全コマンド共通の `--progress` で進捗の表示方法を選びます。標準出力には最後の結果だけを出すため、既存のパイプ処理はそのまま使えます。
+
+| 指定 | 動作 |
+| --- | --- |
+| `auto` | 既定。人が読む結果にはテキストの進捗を表示し、--json の結果では進捗を省略 |
+| `text` | テキストの進捗。--json の結果と併用可能 |
+| `json` | 一行に一つの JSON オブジェクトを記録する JSON Lines。--json の結果と併用可能 |
+| `off` | 進捗を省略。結果やエラーの出力は維持 |
+
+```sh
+drmr analyze original.mp4 --metadata-only --json --progress text
+drmr analyze original.mp4 --metadata-only --json --progress json \
+  >metadata.json 2>progress.jsonl
+drmr analyze original.mp4 --metadata-only --progress off
+```
+
+処理段階、具体的な作業を表す固定の名前、経過時間を表示します。取得中は実際に受信したバイト数とリソース件数、並列処理では実行中・完了した作業数を表示できる範囲で示します。長い処理で新たな完了がなくても、およそ二秒ごとに現在の作業と経過時間を表示します。総数が不明な場合に、進捗率や残り時間を推測して表示することはありません。
+
+| 処理段階 | 確認できる作業 |
+| --- | --- |
+| `configuration` | 設定の読み取りと検査 |
+| `acquisition` | 入力リソースの取得 |
+| `inspection` | メタデータや入力構造の確認 |
+| `input-preparation` | 処理に使うトラックの準備 |
+| `normalization` | 対応するメディア構成への整理 |
+| `packaging` | 指定された形式・暗号方式での出力 |
+| `verification` | 内容、時刻、出力条件の照合 |
+| `publication` | 検査済みの出力を指定先へ配置 |
+| `tool-check` | doctor による外部ツールの探索・診断 |
+| `server-startup` | ローカルコンソールの起動と待機 |
+
+一つの処理区間が閉じても、その区間や変換全体の成功を意味しません。複数の区間が重なったり、入れ子になったりする場合もあります。最後の作業名だけで失敗原因を断定しないでください。短いメタデータ確認や計画は、定期表示の前に終わることもあります。ヘルプや版表示に架空の進捗は出しません。`--measure` は不要で、処理時間の計測レポートとは別の表示です。
+
+進捗には URL、鍵、認証ヘッダー、入力・出力やツールのパス、生のメタデータ、外部ツールの出力を含めません。引数の解析を通過した通常の処理では、明示的な `--progress json` により標準エラーを JSON Lines で返し、失敗・停止にも固定のエラーコードを付けます。引数の構文エラーや、serve の既存の起動エラー・接続先通知は別のテキストになる場合があります。成功は進捗だけで判断せず、最後の結果と終了コードで確認してください。
 
 ## 終了コード
 
@@ -1352,13 +1396,14 @@ JSON を使わない場合は、処理名、件数、経過時間を標準エラ
 | 2 | 引数・設定の不正 |
 | 130 | 協調停止に対応する CLI で、管理中の子プロセスの終了確認まで完了 |
 
-`doctor` の 0 は選択した診断の成功、`inspect` の 0 はメタデータの読み取り成功を示します。コンテンツ全体の検証に成功したという意味ではありません。
+`doctor` の 0 は選択した診断の成功、`analyze --metadata-only` の 0 はメタデータの読み取り成功を示します。コンテンツ全体の検証に成功したという意味ではありません。
 
 ## よくある失敗
 
 | 症状・コード | 確認すること |
 | --- | --- |
 | 必須ツールが見つからない | 実際の起動環境の PATH、実行権限、Desktop の Check external tools を確認する |
+| `remote-metadata-not-supported` | 宣言情報が読み取り範囲にあるか確認する。URL の MP4 は HTTP Range 指定に従う配信元が必要 |
 | バージョン・機能検査が失敗 | 版だけでなく、そのビルドに必要なオプションがあるか確認する |
 | 鍵設定が拒否される | 所有者、600 または ACL の権限、リンク数、JSON の重複キー、不明フィールド、スキーマを確認する |
 | `output-spec-invalid` | 出力一覧の schema_version が 1 か、ID が重複せず安全な名前か、形式・暗号・DRM の組み合わせが対応範囲内か確認する |
@@ -1489,6 +1534,12 @@ cargo test --locked -p drmr --test long_conversion
 
 この章に公開 CLI の引数とオプションをまとめます。すべてのコマンドで `-h` / `--help` を使えるほか、`drmr help COMMAND` でもヘルプを確認できます。CLI のバージョンは `-V` / `--version` または `drmr version` で表示します。子プロセスの管理に使う内部用の起動引数は、利用者向けのインターフェースに含めません。
 
+## 全コマンド共通の進捗オプション
+
+| オプション | 意味・既定値 |
+| --- | --- |
+| `--progress MODE` | auto、text、json、off。既定は auto。進捗は標準エラー、結果は標準出力。具体例と JSON Lines の適用範囲は第15章 |
+
 ## FILE・PATH に指定するもの
 
 `FILE` や `PATH` は、その文字列をそのまま入力する指定ではありません。使うファイルのパスに置き換えます。相対パスはコマンドを実行するディレクトリを基準にします。パスに空白がある場合は引用符で囲んでください。JSON の中身をオプションの直後に直接書く方式ではありません。
@@ -1505,7 +1556,7 @@ cargo test --locked -p drmr --test long_conversion
 | `--hls-validator-bin /opt/media-tools/mediastreamvalidator` | macOS に用意した Apple の検証プログラム。第9章の[外部マニフェスト検査の準備](https://kazuhide.github.io/drmr/ja/guide/#verification)を参照 |
 | `--dash-validator-bin /opt/media-tools/php` | ローカルの DASH-IF アダプターを動かす PHP 実行ファイル。MPD や DASH-IF のディレクトリではない。第9章の[検査ツールと DRMR_DASH_IF_ROOT](https://kazuhide.github.io/drmr/ja/guide/#verification)を参照 |
 
-`analyze` は、どちらの版の鍵 JSON からも入力鍵を読み込めます。鍵ファイルに出力設定がある場合も、解析には入力鍵だけを使います。
+通常の `analyze` は、どちらの版の鍵 JSON からも入力鍵を読み込めます。出力設定がある場合も、解析には入力鍵だけを使います。`--metadata-only` では鍵ファイルを指定できません。
 
 `--packager-bin` の既定値 `packager` は、起動環境の PATH から実行ファイルを探す指定です。別の場所に配置した場合は、その実行ファイルのパスを渡します。例えば macOS/Linux では次のように指定します。入力ファイル、出力先、鍵設定、実行ファイルの場所は自身の環境に合わせて置き換えてください。
 
@@ -1529,27 +1580,21 @@ Windows では、例えば `--packager-bin 'C:\media-tools\packager.exe'` と指
 
 PROFILE に指定できるのは `all`、`progressive-mp4`、`fragmented-mp4`、`dash-presentation`、`fmp4-hls-presentation`、`mpeg-ts-hls`、`mpeg-ts-sample-aes-hls`、`mpeg-ts-hls-ts` です。変換結果に表示される処理経路名を、そのまま doctor に指定できるとは限りません。TS→DASH を含めてツール一式を診断する場合は all を使えます。
 
-## inspect
-
-| 引数・オプション | 意味 |
-| --- | --- |
-| `INPUT` | ローカル MP4、MPD、M3U8。リモート参照は取得しない |
-| `--json` | バージョン付きメタデータレポート |
-
 ## analyze
 
 | 引数・オプション | 意味・既定値 |
 | --- | --- |
-| `INPUT` | 必要なファイルがすべて揃ったローカル MP4・DASH・HLS、または取得条件を満たす MP4・static DASH・完結した HLS の URL。[URL の対応条件と保存先](#url-input) |
-| `--download-dir NEW_DIR` | URL に必須。原本を所有者専用で保存する新規ディレクトリ |
-| `--fetch-policy FILE` | 例 `config/fetch.json`。URL 取得用の JSON。[書式・各項目・権限の例](https://kazuhide.github.io/drmr/ja/guide/#url-input) |
-| `--keys-file FILE` | 例 `config/keys.json`。原本の復号に必要な入力鍵の JSON。[構造例と保護方法](https://kazuhide.github.io/drmr/ja/guide/#key-configuration) |
-| `--packager-bin FILE` | Shaka Packager の実行ファイル。既定 packager。[配置と最低要件](https://kazuhide.github.io/drmr/ja/guide/#installation) |
-| `--max-workers N` | 上限 1-64。既定は CPU・メモリから自動選択 |
-| `--json` | 一つの入力解析レポート。input_admitted は変換結果の検証を意味しない |
-| `--measure` | 数値計測を追加。--json が必要 |
+| `INPUT` | ローカル MP4・DASH・HLS、または HTTP(S) URL。原本全体の URL 取得には[対応条件](#url-input)がある |
+| `--metadata-only` | 鍵や外部メディアツールを使わず、宣言情報を読む。原本の保存やコンテンツ全体の検証はしない。第6章を参照 |
+| `--download-dir NEW_DIR` | 原本全体を取得する URL 解析に必須。新規の原本保存先。--metadata-only とは併用不可 |
+| `--fetch-policy FILE` | 例 config/fetch.json。URL 専用の取得条件 JSON。--metadata-only と併用可能。[書式・権限・使用例](https://kazuhide.github.io/drmr/ja/guide/#url-input) |
+| `--keys-file FILE` | 原本の復号に必要な入力鍵の JSON。--metadata-only とは併用不可。[構造例と保護方法](https://kazuhide.github.io/drmr/ja/guide/#key-configuration) |
+| `--packager-bin FILE` | 原本全体の検査に使う Shaka Packager 実行ファイル。既定 packager。--metadata-only とは併用不可。[配置と最低要件](https://kazuhide.github.io/drmr/ja/guide/#installation) |
+| `--max-workers N` | 原本全体の検査の同時作業上限 1-64。既定は CPU・メモリから自動選択。--metadata-only とは併用不可 |
+| `--json` | --metadata-only はメタデータレポート、それ以外は入力解析レポート。どちらも変換結果の検証ではない |
+| `--measure` | 数値計測を追加。--json が必要。--metadata-only とは併用不可 |
 
-ローカル入力に取得用オプションを付けると拒否します。URL の解析には常に新規の取得先が必要です。
+ローカル入力に取得用オプションを付けると拒否します。URL のメタデータ確認に取得先は不要ですが、原本全体の解析には新規の取得先が必要です。
 
 ## plan
 
@@ -1584,7 +1629,7 @@ PROFILE に指定できるのは `all`、`progressive-mp4`、`fragmented-mp4`、
 | `--hls-validator-bin FILE` | 要求した HLS 検査用の Apple 実行ファイル。既定 mediastreamvalidator。[検査ツールの準備](https://kazuhide.github.io/drmr/ja/guide/#verification) |
 | `--dash-validator-bin FILE` | ローカル DASH-IF アダプターを実行する PHP 実行ファイル。既定 php。[配置先と設定](https://kazuhide.github.io/drmr/ja/guide/#verification) |
 | `--max-workers N` | メディアの同時処理数の上限 1-64。既定は CPU・メモリから自動選択 |
-| `--json` | スキーマのバージョンを含む一つの結果を表示。通常の進捗表示は省略 |
+| `--json` | スキーマのバージョンを含む一つの結果。既定の auto では進捗を省略。--progress text/json は明示的に併用可能 |
 | `--measure` | 数値の計測情報を追加。--json が必要 |
 
 汎用 CLI に ffmpeg-bin/ffprobe-bin の独自フラグはありません。FFmpeg/ffprobe は起動環境の PATH を用います。

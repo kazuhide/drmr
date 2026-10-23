@@ -1,6 +1,6 @@
 # Using drmr
 
-The examples below assume `drmr` is installed and the external tools are on `PATH`. The [Docker guide](docker.md) provides an alternative with those tools included. Run `drmr doctor` first. Commands process existing media; they do not encode new video qualities. For PowerShell examples and Windows file permissions, see the [Windows guide](windows.md).
+Install `drmr` before following these examples. Metadata-only analysis needs no external media tools. Complete media checks and conversion require the tools on `PATH`; run `drmr doctor` to check them. The [Docker guide](docker.md) provides an alternative with those tools included. Commands process existing media; they do not encode new video qualities. For PowerShell examples and Windows file permissions, see the [Windows guide](windows.md).
 
 Use the [multiple-output workflow](multiple-outputs.md) to produce HLS for FairPlay
 and CBCS DASH for Widevine/PlayReady from one qualified source. It uses the same
@@ -10,7 +10,7 @@ information, native manifest linting, and optional [external manifest checks](ma
 ## Choose a workflow
 
 For qualified local MP4, DASH, or HLS media, start with the common commands:
-`inspect` reads metadata, `analyze` checks complete source media, `plan` describes
+`analyze --metadata-only` reads metadata, `analyze` checks complete source media, `plan` describes
 intent or saves one fixed conversion, `convert` writes new media, and `verify`
 compares a result with its original source.
 
@@ -23,19 +23,33 @@ then `convert --plan ./conversion.plan.json` and
 For DASH and MP4 URLs, plan from `./source/input.mpd` and `./source/input.mp4`
 respectively. The [URL input table](#convert-a-url) lists the acquisition limits.
 
-## Inspect media and plan a conversion
+## Read metadata and plan a conversion
 
 ```sh
-drmr inspect media.mp4
-drmr inspect master.m3u8 --json
+drmr analyze media.mp4 --metadata-only
+drmr analyze master.m3u8 --metadata-only --json
 drmr plan manifest.mpd --to cbcs --format dash,hls --json
 ```
 
-`inspect` detects local MP4, DASH, and HLS by their contents. The JSON report has `schema_version: 1`, a format, protection per track or sample description, known key identifiers, DRM system labels, and explanation tokens in `findings`. It excludes encryption keys, initialization vectors, license URLs, and key URLs. Generated track identifiers are local to the report.
+`analyze --metadata-only` detects MP4, DASH, and HLS by their contents. It needs no keys, decoder or Shaka Packager. The JSON report has `schema_version: 1`, a format, protection per track or sample description, known key identifiers, DRM system labels, and explanation tokens in `findings`. It excludes encryption keys, initialization vectors, license URLs, and key URLs. Generated track identifiers are local to the report.
 
 Manifest reports describe declarations. MP4 reports read initialization metadata and skip media payloads. Both return `media_verified: false`; they do not decrypt, decode, validate every sample, or prove device playback. Unsupported or incomplete protection remains `unknown`. An HLS `SAMPLE-AES` declaration alone does not establish the underlying MP4 encryption scheme.
 
-HLS inspection follows only local child playlists inside the input playlist's directory tree. It never fetches remote playlists, media segments, or keys. Remote, missing, cyclic, and escaping child references remain unresolved. Limits are 4 MiB per manifest, 16 MiB total, 32 playlists, and 128 references. Each track permits at most 64 key identifiers; DASH also limits inherited protection declarations to 64, and HLS permits at most 64 active key formats. MP4 movie metadata is limited to 16 MiB. Use `analyze` to check complete local media or retain a supported URL under an explicit fetch policy.
+For a local HLS input, only child playlists inside the input playlist's directory tree are followed. Remote, missing, cyclic, and escaping child references remain unresolved. Metadata reading does not acquire media segments or keys. Limits are 4 MiB per manifest, 16 MiB total, 32 playlists, and 128 references. Each track permits at most 64 key identifiers; DASH also limits inherited protection declarations to 64, and HLS permits at most 64 active key formats. MP4 movie metadata is limited to 16 MiB.
+
+The same mode accepts HTTP(S) URLs without a download directory:
+
+```sh
+drmr analyze "https://example.com/vod/master.m3u8" --metadata-only --json
+drmr analyze "https://example.com/vod/manifest.mpd" --metadata-only --json
+drmr analyze "https://example.com/vod/media.mp4" --metadata-only --json
+```
+
+Remote HLS reads playlist declarations and needed child playlists; DASH reads the MPD. Neither fetches initialization files, media segments, key addresses or licenses. MP4 uses HTTP Range requests for selected byte positions. Validated responses provide box headers and movie metadata (`moov`), skipping `mdat` media payloads even when `moov` is at the end. A server that ignores Range is refused with `remote-metadata-not-supported` instead of triggering a full MP4 download. Temporary private metadata is cleaned up; it is not a retained original and cannot be used as a saved-plan source.
+
+The [fetch policy](#convert-a-url) applies to remote metadata too, including allowed origins, authentication headers and resource limits. Metadata parser limits still apply when a policy allows larger downloads. Live HLS or dynamic DASH declarations may be readable, but this mode does not follow updates, establish a complete VOD asset or admit a conversion. Use normal `analyze URL --download-dir NEW_DIR` for full acquisition and media checks.
+
+`--metadata-only` refuses `--download-dir`, `--keys-file`, `--packager-bin`, `--max-workers` and `--measure`. `--fetch-policy` is accepted only with a URL. The former `inspect INPUT` command is removed; replace it with `analyze --metadata-only INPUT`. See the [pre-release migration](releases.md#pre-release-cli-consolidation).
 
 `plan INPUT --to clear|cenc|cbcs|hls-aes128|hls-sample-aes` describes the requested operations and independent input/output key roles. `--format mp4|dash|hls|hls-ts` selects output packaging; comma-separated values are accepted. Omitting it retains the input format. An HLS AES-128 target requires `hls` or `hls-ts` output. SAMPLE-AES TS requires `hls-ts`. `cenc` and `cbcs` are refused with TS output. CENC output to HLS is currently rejected. Unsupported source protection or unresolved encryption is reported as incompatible, except that a consistent SAMPLE-AES declaration can produce conditional HLS routes. Those routes still require the appropriate keys, IVs, and actual media validation.
 
@@ -61,11 +75,35 @@ A qualified progressive MP4 with one AAC-LC audio track and optional H.264 video
 
 A narrow local MPEG transport stream input profile can produce clear, `cenc`, or `cbcs` DASH, and clear, `cbcs`, or AES-128 fragmented MP4 HLS. Use `--format hls-ts` to retain transport-stream packaging, including SAMPLE-AES encryption for FairPlay media. Other multiplexed MP4 output, live input, and unrestricted DASH/HLS profiles remain unsupported. See [conversion support](conversion-support.md) for the tested routes and [processing and verification](media-processing.md) for timing limits.
 
-`verify OUTPUT --source INPUT` independently compares the original source and result. It requires their respective keys when encrypted. Success means the stream metadata, encoded packets, decoded picture/sound, and packet timestamps match; it does not establish license acquisition or device playback. Use the generated `manifest.mpd` or `master.m3u8` as the output argument for a presentation. Both commands support `--json` for one versioned result object. Successful JSON reports keep their existing fields. Without `--json`, standard error reports observed activity, scope counts, completed track work-unit ordinals and elapsed time at each observation; standard output retains the final result. The same newline-based progress works in a terminal or redirected log, without invented percentages or remaining-time estimates. A work unit is one operation over a track, not a completed conversion. Scopes can overlap or nest, and a closed scope can have failed. The last observed activity is neither an exclusive phase nor a diagnosis of the failure. These observations remain available without `--measure`; measured phase durations retain their separate overlapping-sum meaning.
+`verify OUTPUT --source INPUT` independently compares the original source and result. It requires their respective keys when encrypted. Success means the stream metadata, encoded packets, decoded picture/sound, and packet timestamps match; it does not establish license acquisition or device playback. Use the generated `manifest.mpd` or `master.m3u8` as the output argument for a presentation. Both commands support `--json` for one versioned result object. Successful JSON reports keep their existing fields. Progress is separate, as described below.
 
-For an operational failure after a valid `convert` or `verify` command with `--json`, stdout contains one object with `schema_version: 1`, `command`, `status` (`failed` or `cancelled`), and `error` containing a fixed `code`, safe `hint`, and `last_activity` (a fixed label or `null`). A completed verification that finds a mismatch retains its existing `checks` and comparison fields and adds that failure description. JSON mode suppresses progress lines; stderr carries a fixed failure token. Exit codes remain `1` for processing or comparison failure, `2` for the existing configuration errors, and `130` for confirmed cancellation. Cleanup-unconfirmed failures remain failures, even if cancellation was requested. Clap argument parsing errors still use stderr and exit `2`, before this JSON command contract applies. If stdout itself cannot be written, a complete JSON object cannot be guaranteed: the command reports `result-output-unavailable` on stderr and exits `1`. No raw tool output, source URL, key, or operator path is added to progress or failure JSON. Successful URL conversion retains its explicit saved-source locations in the existing result.
+For an operational failure after a valid `convert` or `verify` command with `--json`, stdout contains one object with `schema_version: 1`, `command`, `status` (`failed` or `cancelled`), and `error` containing a fixed `code`, safe `hint`, and `last_activity` (a fixed label or `null`). A completed verification that finds a mismatch retains its existing `checks` and comparison fields and adds that failure description. With the default progress mode, `--json` suppresses progress and stderr carries a fixed failure token. Exit codes remain `1` for processing or comparison failure, `2` for the existing configuration errors, and `130` for confirmed cancellation. Cleanup-unconfirmed failures remain failures, even if cancellation was requested. Clap argument parsing errors still use stderr and exit `2`, before this JSON command contract applies. If stdout itself cannot be written, a complete JSON object cannot be guaranteed: the command reports `result-output-unavailable` on stderr and exits `1`. No raw tool output, source URL, key, or operator path is added to progress or failure JSON. Successful URL conversion retains its explicit saved-source locations in the existing result.
 
-### Convert a URL
+## Progress output
+
+Global `--progress` controls observations on standard error. It never adds progress to standard output or changes the final result format, so existing pipes keep working.
+
+| Mode | Behavior |
+| --- | --- |
+| `auto` | Default: text with human-readable results; off when the command uses `--json` |
+| `text` | One readable progress line per observation, also with `--json` results |
+| `json` | Progress records as JSON Lines: one JSON object per line, also with `--json` results |
+| `off` | No progress records; final results and errors still apply |
+
+```sh
+drmr analyze media.mp4 --metadata-only --json --progress text
+drmr analyze media.mp4 --metadata-only --json --progress json \
+  >metadata.json 2>progress.jsonl
+drmr analyze media.mp4 --metadata-only --progress off
+```
+
+Observations show the current stage, a fixed task label and elapsed time. Acquisition adds actual received bytes and resource counts; parallel work adds active and completed units when available. Ongoing work emits a heartbeat about every two seconds even when no new unit completes. No percentage or remaining-time estimate is invented when the total is unknown. A closed scope is not a successful conversion: scopes can overlap, nest or end with failure. The last activity is not a diagnosis. Progress works without `--measure`; measured phase durations remain separate and can overlap.
+
+Stages include configuration, acquisition, inspection, input preparation, normalization, packaging, verification and publication. `doctor` reports tool checks; `serve` reports startup and waiting. Quick metadata reads and plans can finish before a heartbeat. Help and version output do not invent work records.
+
+Progress contains no source URLs, keys, authentication headers, operator paths, raw media metadata or raw tool output. For a valid parsed operational command, explicit `--progress json` keeps operational stderr in JSON Lines, including a fixed error code on failure or cancellation. Argument parsing errors occur before that contract; existing `serve` startup diagnostics and its loopback address notice can also be separate text. The final result remains on stdout; progress records alone do not prove success.
+
+## Convert a URL
 
 For a supported HLS, static DASH or MP4 source, pass its URL directly to `convert` and choose
 where to retain the downloaded source:
@@ -88,10 +126,11 @@ resources and creates a local entrypoint before conversion and verification:
 | DASH | `source/input.mpd` | Static MPD with one `Period`, `SegmentTemplate` and an explicit finite `SegmentTimeline` |
 | HLS | `source/input.m3u8` | Completed TS/fMP4 playlists within the supported input profiles |
 
-The same URL input and `--download-dir` options work with `analyze` when you want
+The same URL input and `--download-dir` options work with normal `analyze` when you want
 to check the source before [saving a plan](executable-plans.md). URLs need no
 filename extension; queries and allowed redirects do not select the format.
-Use the corresponding local entrypoint for `plan` and offline reuse.
+Use the corresponding local entrypoint for `plan` and offline reuse. The separate
+`analyze --metadata-only URL` mode retains no such entrypoint.
 
 For DASH, drmr saves every referenced initialization and media file and creates a
 local MPD. Only resource addressing is localized; protection declarations,
@@ -122,7 +161,7 @@ encryption and timing restrictions still apply. Live input, byte ranges,
 multiple DASH periods, `SegmentList`, `SegmentBase`, duration-only DASH templates
 and negative timeline repeats remain outside this acquisition profile.
 
-Supply known input keys through `--keys-file` for `analyze`, source checks when
+Supply known input keys through `--keys-file` for full `analyze`, source checks when
 saving a plan, conversion, and independent verification. For AES-128 and
 SAMPLE-AES TS, `input.hls_keys[].uri` must exactly match the resolved absolute key
 identifier. For example, `keys/key.bin` in

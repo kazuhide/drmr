@@ -41,9 +41,15 @@ licenses and does not decrypt media. It streams resources into private files;
 decryption and media admission use separately supplied keys afterward. The
 download summary includes local paths, not the source URL or request headers.
 
+`analyze --metadata-only URL` uses the same request policy for bounded temporary
+metadata reads, without retaining source media. It fetches HLS/DASH declarations
+or MP4 structural ranges, not media segments, keys or licenses. MP4 media
+payloads are skipped. This mode does not accept a key file and does not provide
+a saved original for later conversion or verification.
+
 ## Input and diagnostic handling
 
-For `analyze`, saved-plan creation, `convert`, and `verify`, supply an owner-only JSON file with `--keys-file` when keys are needed. Input decryption keys and output encryption keys have separate roles. The file must be a regular, singly linked file with the required owner-only permissions; symbolic links and insecure files are refused. See [key configuration](usage.md#separate-input-and-output-keys) and [Windows file protection](windows.md#protect-configuration-files).
+For complete `analyze`, saved-plan creation, `convert`, and `verify`, supply an owner-only JSON file with `--keys-file` when keys are needed. `analyze --metadata-only` never needs or accepts a key file. Input decryption keys and output encryption keys have separate roles. The file must be a regular, singly linked file with the required owner-only permissions; symbolic links and insecure files are refused. See [key configuration](usage.md#separate-input-and-output-keys) and [Windows file protection](windows.md#protect-configuration-files).
 
 drmr has no public command-line option for entering a content-key value. Keep key values out of shell history and prepare the protected key file through your local secret-management process.
 
@@ -53,6 +59,12 @@ Diagnostic protection has several layers:
 - Tool records mask registered secrets and their supported hexadecimal, byte-separated, Base64, escaped, and encoded representations. Secret values become `***REDACTED***`; some commands omit tool arguments and raw output entirely.
 - Conversion and verification failures use fixed error codes and safe progress labels without raw tool output.
 - The local web console selects protected key files by reference and excludes their contents from session, job, and result responses.
+
+Global [progress output](usage.md#progress-output) uses fixed stage/task labels,
+elapsed time and numeric observations. It excludes URLs, keys, authentication
+headers, operator paths, raw metadata and raw tool output. This applies to both
+text and JSON Lines progress; it does not remove explicit retained-source paths
+from successful result reports or sanitize the original downloaded manifests.
 
 These controls cover recognized secret material. They do not classify every filename, label, media tag, or arbitrary value as confidential. Public Rust APIs that return captured raw tool output return data for processing; their raw buffers are not a safe log format. Review exported reports and third-party diagnostics before sharing them.
 

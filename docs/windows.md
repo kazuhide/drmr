@@ -101,7 +101,7 @@ PowerShell accepts quoted native paths. This example uses a supported single-tra
 ```powershell
 $outputDirectory = Join-Path $HOME 'drmr-output'
 New-Item -ItemType Directory -Path $outputDirectory -Force | Out-Null
-.\drmr.exe inspect 'C:\media\source.mp4' --json
+.\drmr.exe analyze 'C:\media\source.mp4' --metadata-only --json
 .\drmr.exe plan 'C:\media\source.mp4' --to cbcs --format mp4
 .\drmr.exe convert 'C:\media\source.mp4' --to cbcs --format mp4 --output "$outputDirectory\protected.mp4" --keys-file $keyFile
 .\drmr.exe verify "$outputDirectory\protected.mp4" --source 'C:\media\source.mp4' --keys-file $keyFile --json
