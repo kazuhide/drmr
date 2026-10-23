@@ -336,7 +336,7 @@ impl Converter {
             }),
         )
         .with_stop(self.backend.stop.clone())
-        .with_progress(progress)
+        .with_progress(progress.clone())
         .with_url_limit(4096);
         let mut graph = Graph {
             owned,
@@ -362,6 +362,9 @@ impl Converter {
             } else {
                 graph.entrypoint(url)?
             };
+            if let Some(progress) = &progress {
+                progress.discovered(graph.resources.len());
+            }
             graph.fetch_media(workers, &abort)?;
             let index = serde_json::to_vec(&graph.records).map_err(|_| IO)?;
             graph.save("raw/index.json", &index)?;
