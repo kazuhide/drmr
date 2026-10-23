@@ -1,8 +1,8 @@
 //! Manifest declarations with bounded local reference traversal and no media or key reads.
 
 use super::{
-    Evidence, Finding, InputFormat, Inspection, InspectionError, MAX_MANIFEST_BYTES, Protection,
-    Track, TrackKind, read_manifest,
+    Evidence, Finding, HlsMetadataRole, InputFormat, Inspection, InspectionError,
+    MAX_MANIFEST_BYTES, Protection, Track, TrackKind, read_manifest,
 };
 use crate::m3u8::{Attributes, parse_attributes};
 use roxmltree::{Document, Node, NodeId};
@@ -342,6 +342,7 @@ struct HlsDocument {
     systems: Vec<String>,
     findings: Vec<Finding>,
     has_media: bool,
+    is_master: bool,
     pending_duration: bool,
     pending_variant: Option<Reference>,
     methods: BTreeSet<String>,
@@ -509,7 +510,11 @@ impl HlsDocument {
         let (name, value) = line.split_once(':').unwrap_or((line, ""));
         match name {
             "#EXT-X-KEY" => self.key(value, false)?,
-            "#EXT-X-SESSION-KEY" => self.key(value, true)?,
+            "#EXT-X-SESSION-KEY" => {
+                self.is_master = true;
+                self.key(value, true)?;
+            }
+            "#EXT-X-SESSION-DATA" => self.is_master = true,
             "#EXT-X-MAP" => self.map(value)?,
             "#EXT-X-PART" => {
                 attributes(value)?;
@@ -519,6 +524,7 @@ impl HlsDocument {
                 finding(&mut self.findings, "hls-partial-segments-unverified");
             }
             "#EXT-X-STREAM-INF" => {
+                self.is_master = true;
                 if self.pending_variant.is_some() {
                     return Err(InspectionError("hls-reference-missing"));
                 }
@@ -536,6 +542,7 @@ impl HlsDocument {
                 });
             }
             "#EXT-X-MEDIA" => {
+                self.is_master = true;
                 let attrs = attributes(value)?;
                 let role = match attrs.get("TYPE") {
                     Some("AUDIO") => TrackKind::Audio,
@@ -547,7 +554,10 @@ impl HlsDocument {
                     self.reference(&attrs, role)?;
                 }
             }
-            "#EXT-X-I-FRAME-STREAM-INF" => self.reference(&attributes(value)?, TrackKind::Video)?,
+            "#EXT-X-I-FRAME-STREAM-INF" => {
+                self.is_master = true;
+                self.reference(&attributes(value)?, TrackKind::Video)?;
+            }
             "#EXTINF" => {
                 let duration = value
                     .split_once(',')
@@ -569,7 +579,7 @@ impl HlsDocument {
     }
 }
 
-fn hls_document(bytes: &[u8]) -> Result<HlsDocument, InspectionError> {
+fn hls_document(bytes: &[u8], role: HlsMetadataRole) -> Result<HlsDocument, InspectionError> {
     let text = text(bytes)?;
     let mut lines = text.lines().map(str::trim).filter(|line| !line.is_empty());
     if lines.next() != Some("#EXTM3U") {
@@ -584,6 +594,11 @@ fn hls_document(bytes: &[u8]) -> Result<HlsDocument, InspectionError> {
             return Err(InspectionError("hls-invalid-line"));
         }
         document.line(line)?;
+        // RFC 8216 4.3.4.1-3: master references identify media playlists.
+        // Refuse before any child report can recursively expand or enter a cache.
+        if role == HlsMetadataRole::Media && document.is_master {
+            return Err(InspectionError("hls-nested-master-playlist"));
+        }
         if document.references.len() > MAX_REFERENCES {
             return Err(InspectionError("hls-reference-limit"));
         }
@@ -664,13 +679,18 @@ impl Traversal {
             return Err(InspectionError("hls-total-size-limit"));
         }
         self.active.insert(path.clone());
-        let result = self.inspect(&path, &bytes)?;
+        let result = self.inspect(&path, &bytes, HlsMetadataRole::Media)?;
         self.active.remove(&path);
         self.cache.insert(path, result.clone());
         Ok(result)
     }
-    fn inspect(&mut self, path: &Path, bytes: &[u8]) -> Result<Inspection, InspectionError> {
-        inspect_document(hls_document(bytes)?, |reference| {
+    fn inspect(
+        &mut self,
+        path: &Path,
+        bytes: &[u8],
+        role: HlsMetadataRole,
+    ) -> Result<Inspection, InspectionError> {
+        inspect_document(hls_document(bytes, role)?, |reference| {
             self.child(path, reference)
         })
     }
@@ -745,10 +765,11 @@ fn inspect_document(
 
 pub(super) fn inspect_hls_metadata(
     bytes: &[u8],
+    role: HlsMetadataRole,
     child: &mut dyn FnMut(&str) -> Result<Inspection, InspectionError>,
 ) -> Result<Inspection, InspectionError> {
     Ok(assign_hls_ids(inspect_document(
-        hls_document(bytes)?,
+        hls_document(bytes, role)?,
         |reference| child(&reference.uri),
     )?))
 }
@@ -779,5 +800,38 @@ pub(super) fn inspect_hls(path: &Path, bytes: &[u8]) -> Result<Inspection, Inspe
         references: 0,
         bytes: bytes.len() as u64,
     };
-    Ok(assign_hls_ids(traversal.inspect(&path, bytes)?))
+    Ok(assign_hls_ids(traversal.inspect(
+        &path,
+        bytes,
+        HlsMetadataRole::Root,
+    )?))
+}
+
+#[cfg(test)]
+mod hls_media_reference_tests {
+    use super::*;
+
+    #[test]
+    fn nested_master_is_rejected_before_invoking_the_shared_child_loader() {
+        let bytes = b"#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=100\nnever-read.m3u8\n";
+        let mut reads = 0;
+        let error = inspect_hls_metadata(bytes, HlsMetadataRole::Media, &mut |_| {
+            reads += 1;
+            Err(InspectionError("unexpected-child-read"))
+        })
+        .unwrap_err();
+        assert_eq!(error.0, "hls-nested-master-playlist");
+        assert_eq!(reads, 0, "a rejected child must not read another playlist");
+    }
+
+    #[test]
+    fn media_comments_and_segment_uris_are_not_master_tags() {
+        let bytes = b"#EXTM3U\n# Comment: #EXT-X-STREAM-INF:BANDWIDTH=100\n#EXTINF:2,\nsegment.ts?description=EXT-X-STREAM-INF\n";
+        let report = inspect_hls_metadata(bytes, HlsMetadataRole::Media, &mut |_| {
+            panic!("a media playlist cannot load child playlists")
+        })
+        .unwrap();
+        assert_eq!(report.protection, Protection::Clear);
+        assert_eq!(report.tracks.len(), 1);
+    }
 }

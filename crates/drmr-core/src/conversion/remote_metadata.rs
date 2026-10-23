@@ -166,7 +166,7 @@ impl Remote<'_> {
             if format == InputFormat::Dash {
                 inspection::inspect_dash_metadata(&bytes).map_err(|e| ConversionError(e.0))
             } else {
-                self.hls(&bytes, &effective)
+                self.hls(&bytes, &effective, inspection::HlsMetadataRole::Root)
                     .map_err(|e| ConversionError(e.0))
             }
         }
@@ -211,7 +211,12 @@ impl Remote<'_> {
             .read(url, true, None)
             .map_err(|error| self.failure(error))
     }
-    fn hls(&mut self, bytes: &[u8], effective: &str) -> Result<Inspection, InspectionError> {
+    fn hls(
+        &mut self,
+        bytes: &[u8],
+        effective: &str,
+        role: inspection::HlsMetadataRole,
+    ) -> Result<Inspection, InspectionError> {
         if self.fetcher.stop().is_set() {
             return Err(InspectionError("cancelled"));
         }
@@ -221,7 +226,7 @@ impl Remote<'_> {
         {
             return Err(InspectionError("hls-reference-limit"));
         }
-        let result = inspection::inspect_hls_metadata(bytes, &mut |reference| {
+        let result = inspection::inspect_hls_metadata(bytes, role, &mut |reference| {
             self.references += 1;
             if self.references > 128 || reference.len() > 4096 {
                 return Err(InspectionError("hls-reference-limit"));
@@ -239,7 +244,7 @@ impl Remote<'_> {
             }
             let (bytes, effective) = self.manifest(&url).map_err(|e| InspectionError(e.0))?;
             self.charge(bytes.len()).map_err(|e| InspectionError(e.0))?;
-            let child = self.hls(&bytes, &effective)?;
+            let child = self.hls(&bytes, &effective, inspection::HlsMetadataRole::Media)?;
             self.cache.insert(url, child.clone());
             Ok(child)
         });
