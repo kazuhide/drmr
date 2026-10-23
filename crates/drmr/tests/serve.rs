@@ -203,7 +203,7 @@ fn serve_refuses_to_start_without_its_roots() {
             .output()
             .unwrap();
         assert_eq!(output.status.code(), Some(2));
-        assert!(output.stdout.is_empty());
+        assert_eq!(output.stdout, [] as [u8; 0]);
         let stderr = String::from_utf8(output.stderr).unwrap();
         let error = "error: DRMR_INPUT_ROOT and DRMR_OUTPUT_ROOT must both be set\n";
         if progress == Some("off") {
