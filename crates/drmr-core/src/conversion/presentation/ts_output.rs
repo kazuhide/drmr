@@ -131,6 +131,7 @@ impl Converter {
             },
             &verification_root,
             &self.backend,
+            self.maximum_workers,
             super::SourceValidationPurpose::Verification,
         )?;
         let mut verification =

@@ -6,6 +6,7 @@ mod clock;
 mod compatibility;
 mod frames;
 mod native;
+mod preparation;
 mod projection;
 mod sample_aes;
 use super::{
@@ -257,66 +258,78 @@ impl Backend {
         &self,
         segments: &[(std::path::PathBuf, String)],
         index: usize,
+        maximum_workers: Option<usize>,
     ) -> Result<Option<super::audio_presentation::AudioPresentation>, ConversionError> {
         let bad = ConversionError("ts-segment-duration-mismatch");
         let mut previous: Option<(&str, canonical::Evidence, u32)> = None;
         let mut whole: Option<super::audio_presentation::AudioEvidence> = None;
-        for (path, declared) in segments {
-            let view = View {
-                input: path,
-                metadata: path,
-                index,
-                key: None,
-                transport: true,
-                native: None,
-                unedited: false,
-            };
-            let profile = self.profile_stream(path, index, None)?;
-            let config = self.transport_config(view, &profile)?;
-            let units = self.access_units(view, &profile, config.clone())?;
-            if let Some((old, observed, rate)) = previous.take() {
-                let boundary = check_duration(
-                    old,
-                    units.first_pts.checked_sub(observed.first_pts).ok_or(bad)?,
-                );
-                if boundary.is_err()
-                    && check_duration(
+        let batch = preparation::Batch::new(self, segments.len(), maximum_workers)?;
+        for segments in segments.chunks(preparation::BATCH) {
+            let evidence = batch.collect(segments.len(), |ordinal| {
+                let path = &segments[ordinal].0;
+                let view = View {
+                    input: path,
+                    metadata: path,
+                    index,
+                    key: None,
+                    transport: true,
+                    native: None,
+                    unedited: false,
+                };
+                let profile = self.profile_stream(path, index, None)?;
+                let config = self.transport_config(view, &profile)?;
+                let units = self.access_units(view, &profile, config.clone())?;
+                let rate = match config {
+                    canonical::Config::Audio { sample_rate, .. } => Some(sample_rate),
+                    canonical::Config::Video { .. } => None,
+                };
+                Ok((units, rate))
+            })?;
+            for ((_, declared), (units, rate)) in segments.iter().zip(evidence) {
+                if let Some((old, observed, rate)) = previous.take() {
+                    let boundary = check_duration(
                         old,
-                        observed
-                            .end_pts
-                            .checked_sub(observed.first_pts)
-                            .ok_or(bad)?,
-                    )
-                    .is_err()
-                {
-                    super::audio_presentation::check_sample_duration(
-                        old,
-                        observed.count.checked_mul(1024).ok_or(bad)?,
-                        rate,
+                        units.first_pts.checked_sub(observed.first_pts).ok_or(bad)?,
+                    );
+                    if boundary.is_err()
+                        && check_duration(
+                            old,
+                            observed
+                                .end_pts
+                                .checked_sub(observed.first_pts)
+                                .ok_or(bad)?,
+                        )
+                        .is_err()
+                    {
+                        super::audio_presentation::check_sample_duration(
+                            old,
+                            observed.count.checked_mul(1024).ok_or(bad)?,
+                            rate,
+                        )?;
+                    }
+                }
+                if let Some(sample_rate) = rate {
+                    if let Some(all) = &mut whole {
+                        if all.sample_rate != sample_rate {
+                            return Err(bad);
+                        }
+                        all.coded_frames = all.coded_frames.checked_add(units.count).ok_or(bad)?;
+                        all.raw_coded_end = units.end_pts;
+                    } else {
+                        whole = Some(super::audio_presentation::AudioEvidence {
+                            sample_rate,
+                            coded_frames: units.count,
+                            raw_first_pts: units.first_pts,
+                            raw_coded_end: units.end_pts,
+                        });
+                    }
+                    previous = Some((declared, units, sample_rate));
+                } else {
+                    check_duration(
+                        declared,
+                        units.end_pts.checked_sub(units.first_pts).ok_or(bad)?,
                     )?;
                 }
-            }
-            if let canonical::Config::Audio { sample_rate, .. } = config {
-                if let Some(all) = &mut whole {
-                    if all.sample_rate != sample_rate {
-                        return Err(bad);
-                    }
-                    all.coded_frames = all.coded_frames.checked_add(units.count).ok_or(bad)?;
-                    all.raw_coded_end = units.end_pts;
-                } else {
-                    whole = Some(super::audio_presentation::AudioEvidence {
-                        sample_rate,
-                        coded_frames: units.count,
-                        raw_first_pts: units.first_pts,
-                        raw_coded_end: units.end_pts,
-                    });
-                }
-                previous = Some((declared, units, sample_rate));
-            } else {
-                check_duration(
-                    declared,
-                    units.end_pts.checked_sub(units.first_pts).ok_or(bad)?,
-                )?;
             }
         }
         if let Some((declared, units, rate)) = previous {
@@ -333,14 +346,16 @@ impl Backend {
                 })
             };
             if full.is_err() {
-                return super::audio_presentation::AudioPresentation::from_final(
+                let presentation = super::audio_presentation::AudioPresentation::from_final(
                     whole.ok_or(bad)?,
                     units.count,
                     declared,
-                )
-                .map(Some);
+                )?;
+                batch.finish()?;
+                return Ok(Some(presentation));
             }
         }
+        batch.finish()?;
         Ok(None)
     }
     pub fn demux_transport(

@@ -391,6 +391,7 @@ impl Converter {
             },
             &directory,
             &self.backend,
+            self.maximum_workers,
             SourceValidationPurpose::Verification,
         )?;
         self.compare_presentations(sources.to_vec(), actual, request.input_keys, &keys)
@@ -965,7 +966,13 @@ impl Converter {
     ) -> Result<SourceQualification, ConversionError> {
         let work = workspace()?;
         let original = self.inspect_input(input.input)?;
-        let prepared = prepare_presentation(&input, work.path(), &self.backend, purpose)?;
+        let prepared = prepare_presentation(
+            &input,
+            work.path(),
+            &self.backend,
+            self.maximum_workers,
+            purpose,
+        )?;
         let actual_format = if prepared.iter().all(|t| t.transport_index.is_some()) {
             OutputFormat::HlsTs
         } else {
@@ -1072,6 +1079,7 @@ impl Converter {
             &request.source,
             &source_dir,
             &self.backend,
+            self.maximum_workers,
             SourceValidationPurpose::Verification,
         )?;
         let checked = self.checked_output_manifest(request.output.input)?;
@@ -1079,6 +1087,7 @@ impl Converter {
             &request.output,
             &result_dir,
             &self.backend,
+            self.maximum_workers,
             SourceValidationPurpose::Verification,
         )?;
         drop(preparation);
@@ -1407,6 +1416,7 @@ fn prepare_transport(
     directory: &Path,
     keys: &InputKeys,
     backend: &super::backend::Backend,
+    maximum_workers: Option<usize>,
 ) -> Result<Vec<Prepared>, ConversionError> {
     let mut prepared = Vec::new();
     let streams = backend.transport_streams(&localized.combined, admission, &localized.native)?;
@@ -1416,7 +1426,7 @@ fn prepare_transport(
         .unwrap_or(&streams[0])
         .0;
     let audio_presentation =
-        backend.transport_durations(&localized.transport_segments, clock_index)?;
+        backend.transport_durations(&localized.transport_segments, clock_index, maximum_workers)?;
     let projection = directory.join("demux-view.ts");
     let demux_source = if admission.has_empty_payload_padding() {
         super::ts::demux_view(&localized.combined, &projection, admission, &backend.stop)?;
@@ -1496,6 +1506,7 @@ fn prepare_presentation(
     input: &VerificationSource<'_>,
     stage: &Path,
     backend: &super::backend::Backend,
+    maximum_workers: Option<usize>,
     purpose: SourceValidationPurpose,
 ) -> Result<Vec<Prepared>, ConversionError> {
     let metadata =
@@ -1526,7 +1537,9 @@ fn prepare_presentation(
                 })
                 .collect()
         }
-        InputFormat::Hls => prepare_hls_presentation(input, stage, backend, purpose),
+        InputFormat::Hls => {
+            prepare_hls_presentation(input, stage, backend, maximum_workers, purpose)
+        }
         InputFormat::Dash => {
             let tracks = super::dash::snapshot_dash(input.input, stage)?;
             let descriptions = metadata::read_dash(&stage.join("dash-manifest.mpd"))?;
@@ -1557,28 +1570,32 @@ fn prepare_hls_presentation(
     input: &VerificationSource<'_>,
     stage: &Path,
     backend: &super::backend::Backend,
+    maximum_workers: Option<usize>,
     purpose: SourceValidationPurpose,
 ) -> Result<Vec<Prepared>, ConversionError> {
     let paths = hls_media_paths(input.input)?;
     let mut tracks = Vec::new();
     for (ordinal, media) in paths.iter().enumerate() {
-        let path = &media.path;
         let directory = stage.join(format!("track-{ordinal:04}"));
         super::files::create_dir(&directory)
             .map_err(|_| ConversionError("temporary-workspace-unavailable"))?;
-        let localized = hls::localize(path, &directory, input.hls_keys, backend)?;
+        let localized = hls::localize(&media.path, &directory, input.hls_keys, backend)?;
         if let Some(admission) = &localized.transport {
-            if media
-                .role
-                .is_some_and(|kind| admission.tracks.len() != 1 || admission.tracks[0].kind != kind)
+            if (paths.len() != 1 && admission.tracks.len() != 1)
+                || media.role.is_some_and(|kind| {
+                    admission.tracks.len() != 1 || admission.tracks[0].kind != kind
+                })
             {
                 return Err(ConversionError("ts-presentation-layout-not-supported"));
             }
-            if paths.len() != 1 && admission.tracks.len() != 1 {
-                return Err(ConversionError("ts-presentation-layout-not-supported"));
-            }
-            let mut prepared =
-                prepare_transport(&localized, admission, &directory, input.input_keys, backend)?;
+            let mut prepared = prepare_transport(
+                &localized,
+                admission,
+                &directory,
+                input.input_keys,
+                backend,
+                maximum_workers,
+            )?;
             for track in &mut prepared {
                 track.metadata = media.metadata.clone();
                 if localized.empty_cue_pair {
@@ -1586,15 +1603,13 @@ fn prepare_hls_presentation(
                         .compatibility
                         .push(SourceCompatibilityNote::HlsEmptyCuePair);
                 }
-                track.outer_protection = if localized.sample_transport {
-                    SourceProtection::HlsSampleAes
-                } else {
-                    match localized.report.protection {
-                        Protection::HlsAes128 => SourceProtection::HlsAes128,
-                        Protection::Mixed => SourceProtection::Mixed,
+                track.outer_protection =
+                    match (localized.sample_transport, localized.report.protection) {
+                        (true, _) => SourceProtection::HlsSampleAes,
+                        (_, Protection::HlsAes128) => SourceProtection::HlsAes128,
+                        (_, Protection::Mixed) => SourceProtection::Mixed,
                         _ => SourceProtection::Clear,
-                    }
-                };
+                    };
                 metadata::validate_profile(track, backend, key_for(track, input.input_keys))?;
             }
             tracks.extend(prepared);
@@ -2010,6 +2025,7 @@ impl Converter {
             },
             &verification_root,
             &self.backend,
+            self.maximum_workers,
             SourceValidationPurpose::Verification,
         )?;
         let verification =
@@ -2062,6 +2078,7 @@ impl Converter {
             &input,
             work.path(),
             &self.backend,
+            self.maximum_workers,
             SourceValidationPurpose::Conversion,
         )?;
         drop(preparation);
