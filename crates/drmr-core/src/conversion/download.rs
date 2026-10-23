@@ -248,7 +248,7 @@ impl Converter {
             budget.workers,
             &owned,
             hls_only,
-            progress.clone(),
+            progress.as_ref(),
         );
         match result {
             Ok(acquired) => {
@@ -321,7 +321,7 @@ impl Converter {
         workers: usize,
         owned: &OwnedDownload,
         hls_only: bool,
-        progress: Option<Arc<source::progress::Progress>>,
+        progress: Option<&Arc<source::progress::Progress>>,
     ) -> Result<Acquired, ConversionError> {
         for name in ["raw", "media"] {
             owned.create_dir(Path::new(name))?;
@@ -336,7 +336,7 @@ impl Converter {
             }),
         )
         .with_stop(self.backend.stop.clone())
-        .with_progress(progress.clone())
+        .with_progress(progress.cloned())
         .with_url_limit(4096);
         let mut graph = Graph {
             owned,
@@ -362,7 +362,7 @@ impl Converter {
             } else {
                 graph.entrypoint(url)?
             };
-            if let Some(progress) = &progress {
+            if let Some(progress) = progress {
                 progress.discovered(graph.resources.len());
             }
             graph.fetch_media(workers, &abort)?;
