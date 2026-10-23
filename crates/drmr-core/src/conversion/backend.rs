@@ -2,6 +2,15 @@
 
 mod decoded_hash;
 
+pub(super) const PROFILE_FIELDS: &str = concat!(
+    "index,codec_name,codec_type,time_base,nb_read_packets,",
+    "sample_rate,channels,channel_layout,width,height,pix_fmt,sample_aspect_ratio,",
+    "color_range,color_space,color_transfer,color_primaries,chroma_location,field_order,",
+    "bits_per_raw_sample,extradata_hash"
+);
+pub(super) const PROFILE_SIDE_DATA: &str =
+    "stream_tags=language:stream_side_data=side_data_type,displaymatrix,rotation";
+
 const RESOURCE_FLAGS: [&str; 2] = ["--single_threaded", "--io_cache_size=0"];
 use super::{ContentKey, ConversionError, InputKeys, OutputKey};
 use crate::{
@@ -269,13 +278,7 @@ impl Backend {
             index.to_string(),
             "-count_packets".into(),
             "-show_entries".into(),
-            concat!(
-                "stream=index,codec_name,codec_type,time_base,nb_read_packets,",
-                "sample_rate,channels,channel_layout,width,height,pix_fmt,sample_aspect_ratio,",
-                "color_range,color_space,color_transfer,color_primaries,chroma_location,field_order,",
-                "bits_per_raw_sample,extradata_hash:stream_tags=language:",
-                "stream_side_data=side_data_type,displaymatrix,rotation"
-            ).into(),
+            format!("stream={PROFILE_FIELDS}:{PROFILE_SIDE_DATA}"),
             "-show_data_hash".into(),
             "sha256".into(),
             "-of".into(),
@@ -295,66 +298,7 @@ impl Backend {
         }
         let value: serde_json::Value =
             serde_json::from_slice(&bytes).map_err(|_| ConversionError("invalid-media-probe"))?;
-        let streams = value
-            .get("streams")
-            .and_then(serde_json::Value::as_array)
-            .ok_or(ConversionError("invalid-media-probe"))?;
-        if streams.len() != 1 {
-            return Err(ConversionError("single-track-mp4-required"));
-        }
-        let stream = &streams[0];
-        if stream["index"].as_u64() != Some(index as u64) {
-            return Err(ConversionError("stream-selector-mismatch"));
-        }
-        if !matches!(stream["codec_type"].as_str(), Some("audio" | "video"))
-            || !stream["nb_read_packets"]
-                .as_str()
-                .is_some_and(|count| count.parse::<u64>().is_ok_and(|value| value > 0))
-        {
-            return Err(ConversionError("media-packets-missing"));
-        }
-        let mut profile = serde_json::Map::new();
-        for name in ["codec_name", "codec_type", "time_base", "nb_read_packets"] {
-            profile.insert(
-                name.into(),
-                stream
-                    .get(name)
-                    .cloned()
-                    .ok_or(ConversionError("stream-metadata-unavailable"))?,
-            );
-        }
-        for name in [
-            "sample_rate",
-            "channels",
-            "channel_layout",
-            "width",
-            "height",
-            "pix_fmt",
-            "sample_aspect_ratio",
-            "color_range",
-            "color_space",
-            "color_transfer",
-            "color_primaries",
-            "chroma_location",
-            "field_order",
-            "bits_per_raw_sample",
-            "extradata_hash",
-        ] {
-            profile.insert(name.into(), stream.get(name).cloned().unwrap_or_default());
-        }
-        let display_matrices: Vec<_> = stream["side_data_list"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter(|data| data.get("displaymatrix").is_some() || data.get("rotation").is_some())
-            .cloned()
-            .collect();
-        profile.insert("display_matrices".into(), display_matrices.into());
-        profile.insert(
-            "language".into(),
-            stream["tags"]["language"].as_str().unwrap_or("und").into(),
-        );
-        let profile = serde_json::Value::Object(profile);
+        let profile = stream_profile(&value, index)?;
         self.runner
             .register_workload(super::execution::observe_profile(&profile, path)?);
         Ok(profile)
@@ -624,6 +568,73 @@ impl Backend {
         }
         pcm.finish()
     }
+}
+
+/// Normalize one explicitly selected stream without retaining raw codec bytes.
+pub(super) fn stream_profile(
+    value: &serde_json::Value,
+    index: usize,
+) -> Result<serde_json::Value, ConversionError> {
+    let streams = value
+        .get("streams")
+        .and_then(serde_json::Value::as_array)
+        .ok_or(ConversionError("invalid-media-probe"))?;
+    if streams.len() != 1 {
+        return Err(ConversionError("single-track-mp4-required"));
+    }
+    let stream = &streams[0];
+    if stream["index"].as_u64() != Some(index as u64) {
+        return Err(ConversionError("stream-selector-mismatch"));
+    }
+    if !matches!(stream["codec_type"].as_str(), Some("audio" | "video"))
+        || !stream["nb_read_packets"]
+            .as_str()
+            .is_some_and(|count| count.parse::<u64>().is_ok_and(|value| value > 0))
+    {
+        return Err(ConversionError("media-packets-missing"));
+    }
+    let mut profile = serde_json::Map::new();
+    for name in ["codec_name", "codec_type", "time_base", "nb_read_packets"] {
+        profile.insert(
+            name.into(),
+            stream
+                .get(name)
+                .cloned()
+                .ok_or(ConversionError("stream-metadata-unavailable"))?,
+        );
+    }
+    for name in [
+        "sample_rate",
+        "channels",
+        "channel_layout",
+        "width",
+        "height",
+        "pix_fmt",
+        "sample_aspect_ratio",
+        "color_range",
+        "color_space",
+        "color_transfer",
+        "color_primaries",
+        "chroma_location",
+        "field_order",
+        "bits_per_raw_sample",
+        "extradata_hash",
+    ] {
+        profile.insert(name.into(), stream.get(name).cloned().unwrap_or_default());
+    }
+    let display_matrices: Vec<_> = stream["side_data_list"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|data| data.get("displaymatrix").is_some() || data.get("rotation").is_some())
+        .cloned()
+        .collect();
+    profile.insert("display_matrices".into(), display_matrices.into());
+    profile.insert(
+        "language".into(),
+        stream["tags"]["language"].as_str().unwrap_or("und").into(),
+    );
+    Ok(serde_json::Value::Object(profile))
 }
 
 pub(super) fn tool_error(error: &crate::toolrun::ToolError) -> ConversionError {

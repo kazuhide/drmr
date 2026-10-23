@@ -404,6 +404,13 @@ video frame, and decode the complete content. AAC checks also count the complete
 decoded samples. Removing repeated work does not turn complete analysis into a
 metadata check.
 
+For each TS segment, one bounded probe collects the selected stream's metadata,
+packet count and codec configuration. A second probe streams every encoded
+packet and timestamp through the existing checks. Configuration is checked for
+each segment; it is not inferred from a different segment or sampled from the
+presentation. The native evidence from original transport packets, complete
+decoding and ordered segment-boundary checks remain required.
+
 Analysis still reads all referenced renditions. Its duration depends on their
 combined length and resolution, as well as retrieval and storage speed. The
 separate `verify` operation independently compares source and output media;

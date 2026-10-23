@@ -9,6 +9,7 @@ mod native;
 mod preparation;
 mod projection;
 mod sample_aes;
+mod segment_probe;
 mod source_admission;
 use super::{
     CheckOutcome, ContentKey, ConversionError, VerificationChecks, VerificationReport,
@@ -277,8 +278,7 @@ impl Backend {
                     native: None,
                     unedited: false,
                 };
-                let profile = self.profile_stream(path, index, None)?;
-                let config = self.transport_config(view, &profile)?;
+                let (profile, config) = self.transport_segment_profile(view)?;
                 let units = self.access_units(view, &profile, config.clone())?;
                 let rate = match config {
                     canonical::Config::Audio { sample_rate, .. } => Some(sample_rate),

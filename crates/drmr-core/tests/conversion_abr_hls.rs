@@ -282,6 +282,24 @@ fn deep_admission_reports_actual_ts_format_and_never_admits_missing_media() {
         ffmpeg["calls"].as_u64().unwrap() <= 10,
         "Source admission must not decode the same five tracks repeatedly: {measurement}"
     );
+    let segments = ["video-0", "video-1", "video-2", "video-3", "audio"]
+        .into_iter()
+        .flat_map(|track| std::fs::read_dir(directory.path().join(track)).unwrap())
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|extension| extension == "ts"))
+        .count();
+    let ffprobe = measurement["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["tool"] == "ffprobe")
+        .unwrap();
+    // Two probes per segment, plus up to twelve complete-track probes per track.
+    let probe_budget = 2 * u64::try_from(segments).unwrap() + 12 * 5;
+    assert!(
+        ffprobe["calls"].as_u64().unwrap() <= probe_budget,
+        "Complete source checks must share segment metadata and codec probing: {measurement}"
+    );
     assert_eq!(qualification.actual_format, OutputFormat::HlsTs);
     assert_eq!(
         qualification.track_protection,
