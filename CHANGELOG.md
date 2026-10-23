@@ -7,6 +7,9 @@ for installation, stable interfaces and versioning.
 
 ### Changed
 
+- Compute complete decoded-content SHA-256 in Rust with processor acceleration
+  where available, preserving the same decoded bytes and FFmpeg timestamp
+  refusal checks. Decoded media is streamed instead of retained in memory.
 - Check prepared source tracks directly during complete input admission,
   avoiding repeated decoded-content matching against the same track set.
   MPEG-TS input checks retain complete original-packet, decoded-content and

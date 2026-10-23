@@ -975,6 +975,7 @@ dependencies = [
  "process-wrap",
  "rcgen",
  "regex",
+ "ring",
  "roxmltree",
  "rustix",
  "rustls",

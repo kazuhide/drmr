@@ -470,10 +470,24 @@ fn probe_tool(
     } else {
         "supported"
     };
+    tool.features = probe_features(runner, tool, stop)?;
+    tool.feature_status = if tool.features.iter().all(|f| f.available) {
+        "available"
+    } else {
+        "missing"
+    };
+    Ok(())
+}
+
+fn probe_features(
+    runner: &ToolRunner,
+    tool: &ToolDiagnostic,
+    stop: &crate::concurrency::Stop,
+) -> Result<Vec<FeatureCheck>, &'static str> {
     let (help, features): (String, &[&'static str]) = match tool.name {
         "ffmpeg" => (
             format!(
-                "{}\n{}",
+                "{}\n{}\n{}",
                 output(
                     runner,
                     tool,
@@ -487,9 +501,15 @@ fn probe_tool(
                     &["-hide_banner", "-h", "demuxer=mov"],
                     false,
                     stop
-                )?
+                )?,
+                output(runner, tool, &["-hide_banner", "-h", "long"], false, stop)?
             ),
-            &["encryption_scheme", "decryption_key", "decryption_keys"],
+            &[
+                "encryption_scheme",
+                "decryption_key",
+                "decryption_keys",
+                "thread_queue_size",
+            ],
         ),
         "ffprobe" => (
             output(runner, tool, &["-hide_banner", "-h", "full"], false, stop)?,
@@ -513,7 +533,7 @@ fn probe_tool(
         ),
         _ => return Err("probe-tool-unsupported"),
     };
-    tool.features = features
+    let mut checks: Vec<_> = features
         .iter()
         .map(|&name| {
             let pattern = format!(r"(?m)^\s*--?{}(?:\s|\b)", regex::escape(name));
@@ -525,12 +545,31 @@ fn probe_tool(
             }
         })
         .collect();
-    tool.feature_status = if tool.features.iter().all(|f| f.available) {
-        "available"
-    } else {
-        "missing"
-    };
-    Ok(())
+    if tool.name == "ffmpeg" {
+        for (name, component, header) in [
+            ("data_muxer", "muxer=data", "Muxer data "),
+            ("hash_muxer", "muxer=hash", "Muxer hash "),
+            ("rawvideo_encoder", "encoder=rawvideo", "Encoder rawvideo "),
+            (
+                "pcm_s16le_encoder",
+                "encoder=pcm_s16le",
+                "Encoder pcm_s16le ",
+            ),
+        ] {
+            let help = output(
+                runner,
+                tool,
+                &["-hide_banner", "-h", component],
+                false,
+                stop,
+            )?;
+            checks.push(FeatureCheck {
+                name,
+                available: help.lines().any(|line| line.starts_with(header)),
+            });
+        }
+    }
+    Ok(checks)
 }
 
 fn is_executable(path: &Path) -> bool {
