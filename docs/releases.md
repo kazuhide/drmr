@@ -169,9 +169,12 @@ requirements and remaining scope limits. These checks supplement the existing
 unit, media, manifest and archive-content tests; they do not claim universal
 media or DRM-device compatibility.
 
-The current source's archive qualifier defines 17 stages: the original 11-stage
-video workflow plus six stages that create and probe a 44.1 kHz AAC TS fixture,
-then analyze it, save a plan, convert it to CBCS DASH, and independently verify it.
+The current source's archive qualifier defines 18 stages: the original 11-stage
+video workflow, six stages that create and probe a 44.1 kHz AAC TS fixture,
+then analyze it, save a plan, convert it to CBCS DASH, and independently verify it,
+and a metadata-only analysis of the retained clear DASH source. The metadata
+stage uses `analyze --metadata-only --json` without keys and does not replace
+any of the previous 17 stages.
 The existing v1.0.0 assets and their original 11-stage reports are unchanged.
 These additional checks apply to newly built CI archives; they do not qualify the
 old release archives for 44.1 kHz input.
