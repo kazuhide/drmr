@@ -9,6 +9,7 @@ mod native;
 mod preparation;
 mod projection;
 mod sample_aes;
+mod source_admission;
 use super::{
     CheckOutcome, ContentKey, ConversionError, VerificationChecks, VerificationReport,
     backend::{Backend, tool_error},

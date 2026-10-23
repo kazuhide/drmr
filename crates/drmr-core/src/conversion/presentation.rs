@@ -1040,12 +1040,25 @@ impl Converter {
         if actual_format == OutputFormat::HlsTs {
             eligible_formats.push(OutputFormat::HlsTs);
         }
-        let verification = self.compare_presentations(
-            prepared.clone(),
-            prepared,
-            input.input_keys,
-            input.input_keys,
-        )?;
+        let verified = self.run_tracks(prepared.len(), |ordinal| {
+            let track = &prepared[ordinal];
+            metadata::pair(&track.metadata, &track.metadata)?;
+            // Source admission checks each known track directly. Matching decoded
+            // content is only needed when comparing independently prepared outputs.
+            if let Some(index) = track.transport_index
+                && track.audio_presentation.is_none()
+            {
+                let native = track
+                    .transport_native
+                    .as_deref()
+                    .ok_or(ConversionError("ts-original-evidence-required"))?;
+                self.backend
+                    .validate_transport_source(&track.source, index, native)
+            } else {
+                self.verify_prepared_pair(track, track, input.input_keys, input.input_keys)
+            }
+        })?;
+        let verification = combine_verification(verified);
         if !verification.passed {
             return Err(ConversionError("source-media-verification-failed"));
         }
@@ -1332,12 +1345,6 @@ impl Converter {
         if source.len() != result.len() {
             return Err(ConversionError("presentation-track-count-mismatch"));
         }
-        let mut checks = VerificationChecks {
-            stream_metadata: super::CheckOutcome::Pass,
-            packet_payloads_equal: true,
-            packet_timing_equal: true,
-            decoded_content_equal: true,
-        };
         if source
             .iter()
             .zip(&result)
@@ -1352,26 +1359,38 @@ impl Converter {
         let verified_tracks = self.run_tracks(source.len(), |ordinal| {
             self.verify_prepared_pair(&source[ordinal], &result[ordinal], source_keys, result_keys)
         })?;
-        for check in verified_tracks {
-            checks.stream_metadata.include(check.checks.stream_metadata);
-            checks.packet_payloads_equal &= check.checks.packet_payloads_equal;
-            checks.packet_timing_equal &= check.checks.packet_timing_equal;
-            checks.decoded_content_equal &= check.checks.decoded_content_equal;
-        }
-        let passed = checks.stream_metadata.is_pass()
-            && checks.packet_payloads_equal
-            && checks.packet_timing_equal
-            && checks.decoded_content_equal;
-        Ok(VerificationReport {
-            schema_version: 1,
-            passed,
-            media_verified: passed,
-            checks,
-            license_playback_verified: false,
-            native_manifest: None,
-        })
+        Ok(combine_verification(verified_tracks))
     }
 }
+fn combine_verification(
+    verified: impl IntoIterator<Item = VerificationReport>,
+) -> VerificationReport {
+    let mut checks = VerificationChecks {
+        stream_metadata: super::CheckOutcome::Pass,
+        packet_payloads_equal: true,
+        packet_timing_equal: true,
+        decoded_content_equal: true,
+    };
+    for check in verified {
+        checks.stream_metadata.include(check.checks.stream_metadata);
+        checks.packet_payloads_equal &= check.checks.packet_payloads_equal;
+        checks.packet_timing_equal &= check.checks.packet_timing_equal;
+        checks.decoded_content_equal &= check.checks.decoded_content_equal;
+    }
+    let passed = checks.stream_metadata.is_pass()
+        && checks.packet_payloads_equal
+        && checks.packet_timing_equal
+        && checks.decoded_content_equal;
+    VerificationReport {
+        schema_version: 1,
+        passed,
+        media_verified: passed,
+        checks,
+        license_playback_verified: false,
+        native_manifest: None,
+    }
+}
+
 fn describe_transport(report: &mut ConversionReport, sample_transport: bool, dash: bool) {
     report.processing = Some(inspection::ActualProcessing::new(
         if dash {
