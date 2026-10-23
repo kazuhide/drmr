@@ -417,6 +417,8 @@ URL の MP4 は HTTP の Range リクエストで必要な位置だけを読み�
 
 URL のメタデータは非公開の一時データとして扱い、保存計画やオフライン変換の原本にはしません。`--download-dir` は不要です。ライブ HLS や dynamic DASH の宣言も読める場合がありますが、更新を追い続けたり、VOD が完結していることや変換可能なことを確認したりする機能ではありません。原本全体の取得と検査には、第8章の通常の URL 解析を使います。
 
+HLS のマスタープレイリストは、画質や音声などの選択肢を列挙し、それぞれのメディアプレイリストを参照します（[RFC 8216 第4.3.4.2節](#references)）。ローカル・URL のどちらでも、参照先が別のマスタープレイリストだった場合は、その先をたどらず `hls-nested-master-playlist` で拒否します。参照を何段もたどることで解析結果が増幅し、メモリを過剰に使うことも防ぎます。
+
 `--metadata-only` と `--download-dir`、`--keys-file`、`--packager-bin`、`--max-workers`、`--measure` は併用できません。URL には第8章の `--fetch-policy` を指定できますが、ローカル入力には指定できません。メタデータ解析と取得ポリシーの両方の上限を適用します。解析の主な上限は、一マニフェスト 4 MiB、合計 16 MiB、32 プレイリスト、128 参照、トラックごとに 64 KID、MP4 の `moov` 情報 16 MiB です。MP4 はローカル入力・URL 入力とも、入れ子を含む解析対象の box を 16,384 個までに制限します。小さな box が多数あると、データ量以上に解析用メモリが必要になるためです。上限に達した後は新たな box の管理領域を確保せず、`mp4-box-count-limit` で拒否します。
 
 プレリリース中の CLI 整理に伴い、従来の `inspect INPUT` は削除しました。`analyze --metadata-only INPUT` に置き換えてください。旧名の別名コマンドは残していません。[移行の説明（英語）](https://github.com/kazuhide/drmr/blob/main/docs/releases.md#pre-release-cli-consolidation)も確認してください。

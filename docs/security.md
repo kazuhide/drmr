@@ -52,6 +52,12 @@ the parsed tree to 16,384 boxes, including nested boxes. The byte limit alone
 does not bound the memory needed for many small boxes. The box limit is checked
 before allocating another node; excess boxes fail with `mp4-box-count-limit`.
 
+HLS master playlists reference media playlists, as specified in
+[RFC 8216](https://www.rfc-editor.org/rfc/rfc8216#section-4.3.4.2).
+Local and URL metadata inspection reject a referenced master playlist with
+`hls-nested-master-playlist` before following its references. This also prevents
+recursive expansion and caching of increasingly large inspection reports.
+
 ## Input and diagnostic handling
 
 For complete `analyze`, saved-plan creation, `convert`, and `verify`, supply an owner-only JSON file with `--keys-file` when keys are needed. `analyze --metadata-only` never needs or accepts a key file. Input decryption keys and output encryption keys have separate roles. The file must be a regular, singly linked file with the required owner-only permissions; symbolic links and insecure files are refused. See [key configuration](usage.md#separate-input-and-output-keys) and [Windows file protection](windows.md#protect-configuration-files).
