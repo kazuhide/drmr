@@ -209,6 +209,7 @@ pub(crate) fn run(path: &Path) -> ExitCode {
             };
             analyze_cli::analyze(&analyze_cli::AnalyzeArgs {
                 input,
+                metadata_only: false,
                 download_dir,
                 fetch_policy,
                 keys_file: keys,

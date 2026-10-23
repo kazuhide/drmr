@@ -50,6 +50,8 @@ class FakeGitHub:
                      "target": target, "version": "1.0.0", "binary_reported_version": "1.0.0", "archive_sha256": archive_hash,
                      "binary_sha256": binary_hash, "archive_files": 100, "dependency_packages": 20, "native_ordinary_user": True,
                      "owned_workspace_cleanup": "confirmed", "limits": PREPARE.MEDIA_LIMITS,
+                     "metadata_analysis": {"schema_version": 1, "format": "dash", "protection": "clear",
+                                           "evidence": "manifest", "media_verified": False, "source_unchanged": True},
                      "doctor": QUALIFY.doctor({"schema_version": 1, "mode": "probe", "profile": "all", "ready": True,
                                                "cleanup_status": "confirmed", "cancelled": False, "media_compatibility_checked": False,
                                                "tools": [{"name": tool, "available": True, "required": True, "version_status": "supported",
@@ -244,14 +246,18 @@ class ReleasePacket(unittest.TestCase):
                                         "cleanup_status": "confirmed", "cancelled": False, "media_compatibility_checked": False,
                                         "tools": [{**tool, "failure_code": None} for tool in previous["doctor"]["tools"]]}
             def extract(path, selected_target, expected_hash, destination):
+                runner.workspace = destination.parent
                 destination.write_bytes(selected_target.encode())
                 return destination
             with patch.object(QUALIFY, "require_native"), patch.object(QUALIFY.VERIFY, "Source", return_value=source), \
                     patch.object(QUALIFY.VERIFY, "metadata", return_value={}), patch.object(QUALIFY.VERIFY, "build_expectation", return_value={}), \
                     patch.object(QUALIFY.VERIFY, "qualify", return_value=archive_proof), patch.object(QUALIFY, "extract_cli", side_effect=extract), \
                     patch.object(QUALIFY, "Runner", return_value=runner), patch.object(QUALIFY, "media", return_value=previous["media"]), \
-                    patch.object(QUALIFY, "audio_media", return_value=previous["aac_44100"]):
+                    patch.object(QUALIFY, "audio_media", return_value=previous["aac_44100"]), \
+                    patch.object(QUALIFY, "metadata_analysis", return_value=previous["metadata_analysis"]) as metadata:
                 result = QUALIFY.qualify(candidate, target, "1.0.0", self.root)
+                metadata.assert_called_once_with(runner.workspace / ("drmr.exe" if target.endswith("windows-msvc") else "drmr"),
+                                                 runner, runner.workspace / "dash/manifest.mpd")
             self.client.report(artifact, "cli-media-qualification.json", lambda report: (report.clear(), report.update(result)))
         self.assertTrue(self.prepare()["success"])
         for _, artifact, target, suffix in PREPARE.TARGETS:
@@ -259,7 +265,33 @@ class ReleasePacket(unittest.TestCase):
             media = json.loads((self.output / ("cli-media-qualification-" + target + ".json")).read_text())
             self.assertEqual({tool["name"] for tool in media["doctor"]["tools"]}, {"ffmpeg", "ffprobe", "packager"})
             self.assertEqual(media["aac_44100"]["source_audio"]["sample_rate"], 44100)
-            self.assertEqual(len(media["stages"]), 17)
+            self.assertEqual(len(media["stages"]), 18)
+            self.assertEqual(media["metadata_analysis"], previous["metadata_analysis"])
+
+    def test_metadata_analysis_is_mandatory_exact_and_does_not_claim_media_admission(self):
+        entries = dict(self.client.entries["drmr-Linux-X64"])
+        archive = json.loads(entries["cli-archive-verification.json"])
+        media = json.loads(entries["cli-media-qualification.json"])
+        changes = [lambda r: r.pop("metadata_analysis"),
+                   lambda r: r["metadata_analysis"].update(schema_version=True),
+                   lambda r: r["metadata_analysis"].update(schema_version=2),
+                   lambda r: r["metadata_analysis"].update(format="hls"),
+                   lambda r: r["metadata_analysis"].update(protection="cbcs"),
+                   lambda r: r["metadata_analysis"].update(evidence="container-metadata"),
+                   lambda r: r["metadata_analysis"].update(media_verified=True),
+                   lambda r: r["metadata_analysis"].update(media_verified=0),
+                   lambda r: r["metadata_analysis"].update(source_unchanged=False),
+                   lambda r: r["metadata_analysis"].update(source_unchanged=1),
+                   lambda r: r["metadata_analysis"].update(download={"retained": True}),
+                   lambda r: r["metadata_analysis"].update(private_path="private-marker"),
+                   lambda r: r["metadata_analysis"].pop("source_unchanged"),
+                   lambda r: r["stages"].pop()]
+        for change in changes:
+            altered = copy.deepcopy(media)
+            change(altered)
+            with self.subTest(change=change), self.assertRaises(PREPARE.CHECK.Failure):
+                PREPARE.reports(archive, altered, self.head, self.tree, "x86_64-unknown-linux-gnu",
+                                "1.0.0", archive["archive_sha256"])
 
     def test_aac44100_route_is_mandatory_and_every_source_frame_is_bound(self):
         entries = dict(self.client.entries["drmr-Linux-X64"])
@@ -298,7 +330,8 @@ class ReleasePacket(unittest.TestCase):
         entries = dict(self.client.entries["drmr-Linux-X64"])
         archive = json.loads(entries["cli-archive-verification.json"])
         media = json.loads(entries["cli-media-qualification.json"])
-        self.assertEqual(len(PREPARE.STAGES), 17)
+        self.assertEqual(len(PREPARE.STAGES), 18)
+        self.assertEqual(PREPARE.STAGES[-1], "metadata-analysis")
         self.assertEqual(PREPARE.MEDIA_LIMITS, QUALIFY.MEDIA_LIMITS)
         for index in range(11, 17):
             altered = copy.deepcopy(media)
@@ -306,7 +339,7 @@ class ReleasePacket(unittest.TestCase):
             with self.subTest(stage=index), self.assertRaisesRegex(PREPARE.CHECK.Failure, "^media-stages-invalid$"):
                 PREPARE.reports(archive, altered, self.head, self.tree, "x86_64-unknown-linux-gnu",
                                 "1.0.0", archive["archive_sha256"])
-        media["stages"][-1], media["stages"][-2] = media["stages"][-2], media["stages"][-1]
+        media["stages"][15], media["stages"][16] = media["stages"][16], media["stages"][15]
         with self.assertRaisesRegex(PREPARE.CHECK.Failure, "^media-stages-invalid$"):
             PREPARE.reports(archive, media, self.head, self.tree, "x86_64-unknown-linux-gnu",
                             "1.0.0", archive["archive_sha256"])

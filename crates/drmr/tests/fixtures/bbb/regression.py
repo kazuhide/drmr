@@ -199,7 +199,7 @@ def regression(binary, destination):
         timings[stage], memory[stage] = measured_run([binary, *arguments], clean_env, capture)
         return results[stage]
 
-    inspected = json.loads(run([binary, "inspect", source, "--json"], clean_env))
+    inspected = json.loads(run([binary, "analyze", "--metadata-only", source, "--json"], clean_env))
     assert inspected["format"] == "hls" and inspected["media_verified"] is False
     streams = json.loads(run(["ffprobe", "-v", "error", "-show_streams", "-of", "json",
                               source.parent / "segment-000.ts"]))["streams"]

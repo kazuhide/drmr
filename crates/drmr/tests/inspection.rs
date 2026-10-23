@@ -22,14 +22,14 @@ fn json(output: &Output) -> serde_json::Value {
 }
 
 #[test]
-fn inspect_is_read_only_and_never_fetches_or_displays_hls_key_material() {
+fn metadata_analysis_is_read_only_and_never_fetches_or_displays_hls_key_material() {
     let dir = tempfile::tempdir().unwrap();
     let input = fixture(
         dir.path(),
         "input.m3u8",
         "#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-KEY:METHOD=AES-128,URI=\"https://example.test/key?credential=do-not-print\",IV=0x0123456789abcdef0123456789abcdef\n#EXTINF:2,\nsegment.ts\n#EXT-X-ENDLIST\n",
     );
-    let output = run(&["inspect", &input, "--json"]);
+    let output = run(&["analyze", "--metadata-only", &input, "--json"]);
     assert!(
         output.status.success(),
         "{}",
@@ -49,14 +49,14 @@ fn inspect_is_read_only_and_never_fetches_or_displays_hls_key_material() {
 }
 
 #[test]
-fn human_inspect_names_the_sample_method_without_claiming_a_container_scheme() {
+fn human_metadata_analysis_names_the_sample_method_without_claiming_a_container_scheme() {
     let dir = tempfile::tempdir().unwrap();
     let input = fixture(
         dir.path(),
         "input.m3u8",
         "#EXTM3U\n#EXT-X-KEY:METHOD=SAMPLE-AES,URI=\"skd://private-sentinel\",KEYFORMAT=\"com.apple.streamingkeydelivery\",IV=0x0123456789abcdef0123456789abcdef\n#EXTINF:2,\nnot-read.ts\n#EXT-X-ENDLIST\n",
     );
-    let output = run(&["inspect", &input]);
+    let output = run(&["analyze", "--metadata-only", &input]);
     assert!(output.status.success());
     let shown = String::from_utf8(output.stdout).unwrap();
     assert!(shown.contains("HLS method: SAMPLE-AES"));
@@ -105,14 +105,15 @@ fn plan_separates_input_and_output_key_roles_and_explains_incompatible_formats()
 #[test]
 fn errors_do_not_echo_secret_source_urls_and_new_plan_requires_a_target() {
     let output = run(&[
-        "inspect",
-        "https://example.test/source.mpd?credential=do-not-print",
+        "analyze",
+        "--metadata-only",
+        "ftp://example.test/source.mpd?credential=do-not-print",
         "--json",
     ]);
     assert_eq!(output.status.code(), Some(2));
     assert_eq!(
         String::from_utf8_lossy(&output.stderr),
-        "inspect: remote-input-requires-policy\n"
+        "analyze: download-url-scheme-not-supported\n"
     );
     assert!(!String::from_utf8_lossy(&output.stdout).contains("do-not-print"));
     let output = run(&["plan", "source.mpd"]);
