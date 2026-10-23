@@ -509,10 +509,21 @@ fn full_acquisition_progress_counts_received_bytes_and_never_completes_a_failed_
             final_record["bytes_received"],
             manifest.len() as u64 + 101 + if complete { 203 } else { 0 }
         );
+        let mut total_known = false;
         for record in records {
-            assert_eq!(record.len(), 5);
+            if let Some(total) = record.get("resources_total") {
+                assert_eq!(total, 3);
+                total_known = true;
+            } else {
+                assert!(!total_known, "a discovered total must remain available");
+            }
+            assert_eq!(record.len(), if total_known { 6 } else { 5 });
             assert_eq!(record["event"], "progress");
         }
+        assert!(
+            total_known,
+            "resource discovery must publish its fixed total"
+        );
     }
 }
 
