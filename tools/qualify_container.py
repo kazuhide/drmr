@@ -474,6 +474,54 @@ def lifecycle(image, root):
     return report
 
 
+def resource_workers(raw):
+    invalid = "container-resource-progress-invalid"
+    if not isinstance(raw, bytes) or not raw or len(raw) > MAX_OUTPUT:
+        raise Refusal(invalid)
+    counters = {"elapsed_ms", "scopes_started", "scopes_closed", "active_scopes", "tools_started",
+                "tools_closed", "active_tool_count", "work_units_completed"}
+    required = counters | {"schema_version", "entry_point", "command", "run_id", "event", "activity", "task", "active_tools"}
+    optional = {"workers", "resources_started", "resources_completed", "bytes_received", "work_units_total"}
+    activities = {"configuration", "acquisition", "input-preparation", "inspection", "normalization", "packaging",
+                  "verification", "publication", "tool-check", "server-startup", "serving"}
+    workers, run_id, elapsed, finished, last_workers = [], None, -1, False, False
+    for line in raw.splitlines():
+        try:
+            record = load_json(line)
+        except Refusal:
+            raise Refusal(invalid) from None
+        if (finished or not isinstance(record, dict) or not required.issubset(record)
+                or set(record) - required - optional or type(record["schema_version"]) is not int
+                or record["schema_version"] != 1 or record["entry_point"] != "cli" or record["command"] != "convert"
+                or not isinstance(record["run_id"], str)
+                or re.fullmatch(r"[0-9]{1,20}-[0-9]{1,40}", record["run_id"]) is None
+                or record["event"] not in ("activity", "progress", "heartbeat", "finished")
+                or (record["activity"] is not None
+                    and (not isinstance(record["activity"], str) or record["activity"] not in activities))
+                or not isinstance(record["task"], str) or not 0 < len(record["task"]) <= 4096
+                or any(type(record[name]) is not int or not 0 <= record[name] < 2 ** 64
+                       for name in counters | (optional.intersection(record)))
+                or not isinstance(record["active_tools"], list) or len(record["active_tools"]) > 3
+                or any(tool not in ("ffmpeg", "ffprobe", "packager") for tool in record["active_tools"])
+                or len(set(record["active_tools"])) != len(record["active_tools"])):
+            raise Refusal(invalid)
+        if (run_id is not None and record["run_id"] != run_id) or record["elapsed_ms"] < elapsed:
+            raise Refusal(invalid)
+        run_id, elapsed = record["run_id"], record["elapsed_ms"]
+        finished, last_workers = record["event"] == "finished", "workers" in record
+        if last_workers:
+            if not 1 <= record["workers"] <= 2:
+                raise Refusal(invalid)
+            workers.append(record["workers"])
+    if not finished:
+        raise Refusal(invalid)
+    if not workers:
+        raise Refusal("container-resource-workers-missing")
+    if not last_workers:
+        raise Refusal(invalid)
+    return workers
+
+
 def resources(image):
     observed = load_json(image.checked([], entry="/qualifiers/container-resources", limited=True))
     if (observed.get("kind") != "native-hardware-observation"
@@ -491,11 +539,18 @@ def resources(image):
             "available_memory_bytes": memory if type(memory) is int and 0 <= memory < 2 ** 63 else None})
     status, stdout, stderr = image.invoke([
         "convert", "/input/dash/manifest.mpd", "--to", "clear", "--format", "dash",
-        "--output", "/work/resource-limited"], limited=True)
-    workers = re.findall(rb"Using up to ([0-9]+) workers", stderr)
-    if (status != 0 or not workers or any(not 1 <= int(count) <= 2 for count in workers)
-            or b"Verified stream metadata, packet payloads, decoded content, and packet timing." not in stdout):
-        raise Refusal("container-resource-cli-failed")
+        "--output", "/work/resource-limited", "--progress", "json"], limited=True)
+    failure = {"exit_code": status if type(status) is int and -(2 ** 31) <= status < 2 ** 32 else None,
+               "stdout_sha256": hashlib.sha256(stdout).hexdigest(),
+               "stderr_sha256": hashlib.sha256(stderr).hexdigest()}
+    if type(status) is not int or status != 0:
+        raise Refusal("container-resource-cli-failed", failure)
+    try:
+        workers = resource_workers(stderr)
+    except Refusal as error:
+        raise Refusal(str(error), failure) from None
+    if b"Verified stream metadata, packet payloads, decoded content, and packet timing." not in stdout:
+        raise Refusal("container-resource-cli-failed", failure)
     verified = load_json(image.checked([
         "verify", "/work/resource-limited/manifest.mpd", "--source", "/input/dash/manifest.mpd", "--json"], limited=True))
     require_verification(verified)
