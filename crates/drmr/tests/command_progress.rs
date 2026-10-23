@@ -118,6 +118,70 @@ fn failed_commands_keep_structured_progress_secret_free() {
     );
 }
 
+#[test]
+fn multiple_output_configuration_uses_one_command_observer() {
+    let root = tempfile::tempdir().unwrap();
+    let result = Command::new(env!("CARGO_BIN_EXE_drmr"))
+        .args([
+            "convert",
+            "source-sentinel.mp4",
+            "--progress",
+            "json",
+            "--json",
+            "--outputs",
+        ])
+        .arg(root.path().join("missing-sentinel.json"))
+        .arg("--output")
+        .arg(root.path().join("result"))
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+    let result_report: Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(result_report["status"], "failed");
+    let text = String::from_utf8(result.stderr).unwrap();
+    let rows: Vec<Value> = text
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let id = rows[0]["run_id"].as_str().unwrap();
+    assert!(
+        rows.iter().all(|r| r["run_id"] == id),
+        "one observer must own the complete operation"
+    );
+    assert_eq!(rows.last().unwrap()["event"], "failed");
+    assert!(!text.contains("sentinel"));
+}
+
+#[cfg(unix)]
+#[test]
+fn doctor_reports_a_closed_result_stream_without_panicking_into_json_logs() {
+    use std::os::fd::OwnedFd;
+    use std::os::unix::net::UnixStream;
+    use std::process::Stdio;
+    for options in [&["--json"][..], &[][..]] {
+        let (reader, writer) = UnixStream::pair().unwrap();
+        drop(reader);
+        let result = Command::new(env!("CARGO_BIN_EXE_drmr"))
+            .args(["doctor", "--progress", "json"])
+            .args(options)
+            .stdout(Stdio::from(OwnedFd::from(writer)))
+            .output()
+            .unwrap();
+        assert_eq!(result.status.code(), Some(1));
+        let text = String::from_utf8(result.stderr).unwrap();
+        let rows: Vec<Value> = text
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("a write failure remains JSON Lines"))
+            .collect();
+        assert_eq!(rows.last().unwrap()["event"], "failed");
+        assert_eq!(
+            rows.last().unwrap()["error_code"],
+            "result-output-unavailable"
+        );
+        assert!(!text.contains("panicked"));
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn console_reports_actual_readiness_and_heartbeat_then_stops_cleanly() {

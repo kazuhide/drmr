@@ -43,82 +43,93 @@ pub fn run(as_json: bool, probe: bool, route: &str) -> ExitCode {
         report.cleanup_status = "confirmed";
     }
     progress.finish();
-    print_report(&report, as_json, probe)
+    if print_report(&report, as_json, probe, &mut std::io::stdout().lock()).is_err() {
+        progress.diagnostic("doctor", "result-output-unavailable");
+        return ExitCode::from(1);
+    }
+    ExitCode::from(u8::from(!report.ready))
 }
 
 fn print_report(
     report: &drmr_core::tool_diagnostics::DiagnosticReport,
     as_json: bool,
     probe: bool,
-) -> ExitCode {
+    out: &mut impl std::io::Write,
+) -> std::io::Result<()> {
     if as_json {
-        println!(
-            "{}",
-            serde_json::to_string(&report).expect("diagnostic report")
-        );
-    } else {
-        println!(
-            "External media tools (current launch PATH; route {}):",
-            report.profile
-        );
-        for tool in &report.tools {
-            let status = if !tool.available {
-                "MISSING"
-            } else if probe
-                && (tool.failure_code.is_some()
-                    || tool.version_status == "below-minimum"
-                    || tool.feature_status == "missing")
-            {
-                "CHECK"
-            } else {
-                "FOUND"
-            };
-            println!(
-                "  {status:7} {:8} {} ({})",
-                tool.name,
-                tool.purpose,
-                if tool.required {
-                    "required"
-                } else {
-                    "optional for this route"
-                }
-            );
-            if let Some(path) = &tool.path {
-                println!("    path: {}", serde_json::to_string(path).expect("path"));
-            }
-            if probe && tool.available {
-                println!(
-                    "    version: {} [{}]; minimum: {}",
-                    tool.version.as_deref().unwrap_or("unknown"),
-                    tool.version_status,
-                    tool.minimum_version
-                );
-                println!("    advertised features: {}", tool.feature_status);
-                if let Some(code) = tool.failure_code {
-                    println!("    diagnostic: {code}");
-                }
-            }
-        }
-        if probe {
-            println!(
-                "\nProbes check version banners and advertised options. They do not process media."
-            );
+        serde_json::to_writer(&mut *out, report).map_err(std::io::Error::other)?;
+        return writeln!(out);
+    }
+    writeln!(
+        out,
+        "External media tools (current launch PATH; route {}):",
+        report.profile
+    )?;
+    for tool in &report.tools {
+        let status = if !tool.available {
+            "MISSING"
+        } else if probe
+            && (tool.failure_code.is_some()
+                || tool.version_status == "below-minimum"
+                || tool.feature_status == "missing")
+        {
+            "CHECK"
         } else {
-            println!(
-                "\nDiscovery does not run tools or verify versions. Use 'drmr doctor --probe' to check versions and advertised options."
-            );
+            "FOUND"
+        };
+        writeln!(
+            out,
+            "  {status:7} {:8} {} ({})",
+            tool.name,
+            tool.purpose,
+            if tool.required {
+                "required"
+            } else {
+                "optional for this route"
+            }
+        )?;
+        if let Some(path) = &tool.path {
+            writeln!(
+                out,
+                "    path: {}",
+                serde_json::to_string(path).expect("path")
+            )?;
         }
-        if probe {
-            println!("Cleanup: {}", report.cleanup_status);
-        }
-        if !report.ready {
-            println!(
-                "Install compatible FFmpeg or Shaka Packager tools required for this route, and add their directories to the launcher's PATH."
-            );
-            println!(
-                "Run 'drmr doctor --probe' again; media compatibility still requires conversion checks."
-            );
+        if probe && tool.available {
+            writeln!(
+                out,
+                "    version: {} [{}]; minimum: {}",
+                tool.version.as_deref().unwrap_or("unknown"),
+                tool.version_status,
+                tool.minimum_version
+            )?;
+            writeln!(out, "    advertised features: {}", tool.feature_status)?;
+            if let Some(code) = tool.failure_code {
+                writeln!(out, "    diagnostic: {code}")?;
+            }
         }
     }
-    ExitCode::from(u8::from(!report.ready))
+    if probe {
+        writeln!(
+            out,
+            "\nProbes check version banners and advertised options. They do not process media."
+        )?;
+        writeln!(out, "Cleanup: {}", report.cleanup_status)?;
+    } else {
+        writeln!(
+            out,
+            "\nDiscovery does not run tools or verify versions. Use 'drmr doctor --probe' to check versions and advertised options."
+        )?;
+    }
+    if !report.ready {
+        writeln!(
+            out,
+            "Install compatible FFmpeg or Shaka Packager tools required for this route, and add their directories to the launcher's PATH."
+        )?;
+        writeln!(
+            out,
+            "Run 'drmr doctor --probe' again; media compatibility still requires conversion checks."
+        )?;
+    }
+    Ok(())
 }
