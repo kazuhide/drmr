@@ -523,13 +523,12 @@ impl State {
         }
         let began = if status == "started" {
             now
-        } else if let Some(prior) = self.analysis {
+        } else {
+            let prior = self.analysis?;
             if prior.total != total || prior.completed > completed {
                 return None;
             }
             prior.began
-        } else {
-            return None;
         };
         self.analysis = Some(Analysis {
             completed,

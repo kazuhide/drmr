@@ -127,6 +127,27 @@ fn verified(value: &Value) {
     }
 }
 
+fn bundle_progress(output: &Output) {
+    let text = std::str::from_utf8(&output.stderr).unwrap();
+    let records: Vec<Value> = text
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    for activity in [
+        "acquisition",
+        "input-preparation",
+        "verification",
+        "publication",
+    ] {
+        assert!(
+            records.iter().any(|v| v["activity"] == activity),
+            "missing {activity}: {text}"
+        );
+    }
+    assert_eq!(records.last().unwrap()["event"], "finished");
+    assert_eq!(records.last().unwrap()["activity"], "publication");
+}
+
 fn remote_files(original: &BTreeMap<PathBuf, Vec<u8>>) -> BTreeMap<String, Vec<u8>> {
     original
         .iter()
@@ -419,20 +440,21 @@ fn mp4_and_dash_urls_share_direct_single_and_multiple_output_conversion() {
         );
         let bundle_download = root.path().join("bundle-original");
         let bundle_output = root.path().join("bundle-output");
-        let bundle = success(
-            &command("convert", &bundle_keys)
-                .arg(&url)
-                .arg("--outputs")
-                .arg(&outputs)
-                .arg("--output")
-                .arg(&bundle_output)
-                .arg("--download-dir")
-                .arg(&bundle_download)
-                .arg("--fetch-policy")
-                .arg(&policy)
-                .output()
-                .unwrap(),
-        );
+        let bundle_result = command("convert", &bundle_keys)
+            .arg(&url)
+            .arg("--outputs")
+            .arg(&outputs)
+            .arg("--output")
+            .arg(&bundle_output)
+            .arg("--download-dir")
+            .arg(&bundle_download)
+            .arg("--fetch-policy")
+            .arg(&policy)
+            .args(["--progress", "json"])
+            .output()
+            .unwrap();
+        let bundle = success(&bundle_result);
+        bundle_progress(&bundle_result);
         assert_eq!(bundle["kind"], "bundle-conversion");
         assert_eq!(bundle["outputs"].as_array().unwrap().len(), 2);
         for child in bundle["outputs"].as_array().unwrap() {
