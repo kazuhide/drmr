@@ -28,14 +28,21 @@ impl Drop for Server {
 
 fn text_progress(line: &str, activity: &str, event: &str) {
     assert!(
-        line.starts_with(&format!("Activity: {activity};")),
+        !line.contains('\u{1b}') && !line.contains("scopes"),
         "{line}"
     );
-    assert!(
-        line.contains("scopes started: 0; scopes closed: 0;"),
-        "{line}"
-    );
-    assert!(line.ends_with(&format!("; event: {event}.")), "{line}");
+    if event == "failed" {
+        assert!(line.starts_with("Failed serve in "), "{line}");
+        assert!(line.ends_with(" | server-stopped-with-error"), "{line}");
+    } else {
+        let label = if activity == "serving" {
+            "Running web console"
+        } else {
+            "Starting web console"
+        };
+        assert!(line.starts_with(&format!("  {label}")), "{line}");
+        assert_eq!(line.contains("| elapsed "), event != "history", "{line}");
+    }
 }
 
 fn start(input: &Path, output: &Path, progress: Option<&str>) -> Server {
@@ -92,7 +99,7 @@ fn start(input: &Path, output: &Path, progress: Option<&str>) -> Server {
                 assert!(serving, "readiness must follow the serving activity");
                 break line;
             }
-            if line.ends_with("; event: activity.") {
+            if line.starts_with("  Running web console |") {
                 assert!(!serving, "serving must be announced once");
                 text_progress(&line, "serving", "activity");
                 serving = true;
@@ -100,7 +107,11 @@ fn start(input: &Path, output: &Path, progress: Option<&str>) -> Server {
                 text_progress(
                     &line,
                     if serving { "serving" } else { "server-startup" },
-                    "heartbeat",
+                    if line.contains("| elapsed ") {
+                        "heartbeat"
+                    } else {
+                        "history"
+                    },
                 );
             }
         }
@@ -217,7 +228,15 @@ fn serve_refuses_to_start_without_its_roots() {
                 if *line == error.trim_end() {
                     errors += 1;
                 } else {
-                    text_progress(line, "server-startup", "heartbeat");
+                    text_progress(
+                        line,
+                        "server-startup",
+                        if line.contains("| elapsed ") {
+                            "heartbeat"
+                        } else {
+                            "history"
+                        },
+                    );
                 }
             }
             assert_eq!(errors, 1, "{stderr}");

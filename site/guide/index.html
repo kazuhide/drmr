@@ -1905,13 +1905,15 @@ drmr verify result/dash/manifest.mpd --manifest-only --json
 </section>
 <section class="guide-chapter" id="resources-stop" data-guide-chapter="resources-stop" aria-labelledby="resources-stop-title"><h2 id="resources-stop-title">10. Workers, memory and Stop</h2><a class="guide-chapter-switch" href="../ja/guide/#resources-stop" lang="ja" hreflang="ja">日本語</a>
 <h3>Worker limits</h3>
-<p><code>convert</code> and <code>verify</code> select workers from available CPU, memory, media dimensions, resource sizes and track count. <code>--max-workers</code> is an upper bound from 1 to 64; the actual worker count can be lower. Automatic recommendations cap at 32.</p>
+<p>Full <code>analyze</code>, <code>plan --save</code>, <code>convert</code> and <code>verify</code> select workers from available CPU, memory, media dimensions, resource sizes and track count. <code>--max-workers</code> is an upper bound from 1 to 64; the actual worker count can be lower. Automatic recommendations cap at 32. Metadata-only analysis refuses this option.</p>
 <figure class="guide-example" aria-labelledby="example-87-title" data-code-language="sh"><figcaption id="example-87-title">Example 87: sh</figcaption><pre tabindex="0"><code>drmr convert source.mpd --to cbcs --format dash \
   --output result --keys-file config/keys.json --max-workers 2
 drmr verify result/manifest.mpd --source source.mpd \
   --keys-file config/keys.json --max-workers 1 --json --measure
 </code></pre></figure>
 <p>Worker count never reduces proof coverage. Track, segment and source-probe pools share reservations within one process. Separate CLI processes do not share a reservation pool.</p>
+<p>Full <code>analyze</code> continues after downloading: it validates a private source copy, prepares tracks and checks encoded packets, decoded media and timing. Worker selection applies to independent jobs within a stage; it does not make every stage or media-tool call parallel. Network and disk throughput, process startup, track count and ordered checks affect the total time. Compare one worker with automatic selection on the same retained local source to separate processing from download time. <code>analyze --metadata-only</code> is a lighter metadata or declaration read and does not establish conversion eligibility.</p>
+<p>Within TS preparation, independent segments supply metadata and encoded-frame evidence in parallel. Only a limited number of compact results are retained at once. Duration and clock boundaries are then checked in playlist order, with each media playlist prepared in turn. Complete-track decoding and the other source checks remain required.</p>
 <p>Native manifest checks share this capacity. Small inputs run inline; larger HLS graphs can distribute document work, and a large DASH manifest can share one parsed tree across independent checks. Pools do not nest. Parsed child facts and inherited timelines are reused. The adapter reserves memory for retained manifest bytes and lint work, then verifies file identities and content. Exhausted byte, node, reference or diagnostic limits produce an incomplete report and cannot pass.</p>
 <h3>Admission is not OS enforcement</h3>
 <p>Readable Linux CPU/memory cgroup limits, including parent limits, inform admission. If unavailable, drmr assumes a 512 MiB budget and one child process. An operation that cannot fit fails with <code>resource-budget</code>.</p>
@@ -2178,7 +2180,7 @@ python tools/build_desktop.py --bundle
 <p>Global <code>--progress</code> controls progress separately from the final result on standard output. Existing pipes keep receiving only the result.</p>
 <div class="guide-table-scroll" role="region" aria-labelledby="table-13-title" tabindex="0"><table><caption id="table-13-title">Progress on standard error — Table 13</caption><thead><tr><th scope="col">Mode</th><th scope="col">Behavior</th></tr></thead><tbody>
 <tr><th scope="row"><code>auto</code></th><td>Default: readable text; with --json, text only when stderr is a terminal, otherwise off</td></tr>
-<tr><th scope="row"><code>text</code></th><td>Readable progress, including alongside --json results</td></tr>
+<tr><th scope="row"><code>text</code></th><td>Live terminal status and stage history; concise log lines when redirected, including alongside --json results</td></tr>
 <tr><th scope="row"><code>json</code></th><td>JSON Lines progress: one object per line, including alongside --json results</td></tr>
 <tr><th scope="row"><code>off</code></th><td>No progress records; results and errors still apply</td></tr>
 </tbody></table></div>
@@ -2188,7 +2190,10 @@ drmr analyze original.mp4 --metadata-only --json --progress json \
   &gt;metadata.json 2&gt;progress.jsonl
 drmr analyze original.mp4 --metadata-only --progress off
 </code></pre></figure>
-<p>Observations show a stage, a fixed task label and elapsed time. Acquisition reports actual received bytes and resource counts; parallel work reports active and completed units when available. Ongoing work emits a heartbeat about every two seconds. Unknown totals do not produce invented percentages or remaining-time estimates.</p>
+<p>On an interactive terminal, the current task updates in one status line. Finished stages remain above it with their durations, so completed downloads stay visible while inspection continues. Byte counts use readable units. Redirected text, or a terminal without live-display support, records stage starts and ends with occasional updates rather than every tool call or counter change. Unchanged work still produces an occasional elapsed-time notice.</p>
+<p>A download can show its completed count and percentage once resource discovery has finished. TS preparation counts all segments in the media playlist currently being processed. Approximate time remaining appears only after at least one second and two further resources or segments have completed since the total became known. It estimates the rest of that download or playlist&#x27;s preparation, not the entire command. Once all TS segments have been read, <code>checking segment boundaries</code> replaces the percentage and estimate until the ordered checks finish.</p>
+<p>Discovery and other work with an unknown total show the task and elapsed time. A single MP4 URL shows received bytes during transfer, without a running percentage or remaining-time estimate. Its resource count becomes <code>1/1</code> after transfer completes.</p>
+<p>Resource totals include completed discovery requests and distinct media resources. Received bytes include retry traffic and can differ from retained file size. Worker selection applies to bounded independent jobs, not every stage of analysis.</p>
 <div class="guide-table-scroll" role="region" aria-labelledby="table-14-title" tabindex="0"><table><caption id="table-14-title">Progress on standard error — Table 14</caption><thead><tr><th scope="col">Stage</th><th scope="col">Observed work</th></tr></thead><tbody>
 <tr><th scope="row"><code>configuration</code></th><td>Read and validate operation settings</td></tr>
 <tr><th scope="row"><code>acquisition</code></th><td>Receive source resources</td></tr>
@@ -2201,7 +2206,7 @@ drmr analyze original.mp4 --metadata-only --progress off
 <tr><th scope="row"><code>tool-check</code></th><td>Discover or probe external tools for doctor</td></tr>
 <tr><th scope="row"><code>server-startup</code></th><td>Start the local console and wait for it</td></tr>
 </tbody></table></div>
-<p>Scopes can overlap or nest; a closed scope may have failed. A completed work unit is not a completed conversion. The last activity is not a diagnosis. Quick metadata reads and plans may finish before a heartbeat. Help and version output do not invent progress. These observations do not require <code>--measure</code>; measured phase durations remain separate and may overlap.</p>
+<p>Use <code>--progress json</code> for detailed numeric observations, including resource and scope counters. Scopes can overlap or nest; a closed scope may have failed. A completed work unit is not a completed conversion. The last activity is not a diagnosis. Help and version output do not invent progress. These observations do not require <code>--measure</code>; measured phase durations remain separate and may overlap.</p>
 <p>Progress excludes URLs, keys, authentication headers, operator paths, raw metadata and raw tool output. For valid parsed operational commands, explicit <code>--progress json</code> keeps operational stderr in JSON Lines, including a fixed error code on failure or cancellation. Argument parsing errors and existing <code>serve</code> startup diagnostics/address notices can be separate text. The final result and exit value determine success, not progress records alone.</p>
 <h3>Exit values</h3>
 <div class="guide-table-scroll" role="region" aria-labelledby="table-15-title" tabindex="0"><table><caption id="table-15-title">Exit values — Table 15</caption><thead><tr><th scope="col">Value</th><th scope="col">Meaning</th></tr></thead><tbody>

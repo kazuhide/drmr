@@ -850,7 +850,7 @@ See [processing and timing](https://github.com/kazuhide/drmr/blob/main/docs/medi
 
 ## Worker limits
 
-`convert` and `verify` select workers from available CPU, memory, media dimensions, resource sizes and track count. `--max-workers` is an upper bound from 1 to 64; the actual worker count can be lower. Automatic recommendations cap at 32.
+Full `analyze`, `plan --save`, `convert` and `verify` select workers from available CPU, memory, media dimensions, resource sizes and track count. `--max-workers` is an upper bound from 1 to 64; the actual worker count can be lower. Automatic recommendations cap at 32. Metadata-only analysis refuses this option.
 
 ```sh
 drmr convert source.mpd --to cbcs --format dash \
@@ -860,6 +860,10 @@ drmr verify result/manifest.mpd --source source.mpd \
 ```
 
 Worker count never reduces proof coverage. Track, segment and source-probe pools share reservations within one process. Separate CLI processes do not share a reservation pool.
+
+Full `analyze` continues after downloading: it validates a private source copy, prepares tracks and checks encoded packets, decoded media and timing. Worker selection applies to independent jobs within a stage; it does not make every stage or media-tool call parallel. Network and disk throughput, process startup, track count and ordered checks affect the total time. Compare one worker with automatic selection on the same retained local source to separate processing from download time. `analyze --metadata-only` is a lighter metadata or declaration read and does not establish conversion eligibility.
+
+Within TS preparation, independent segments supply metadata and encoded-frame evidence in parallel. Only a limited number of compact results are retained at once. Duration and clock boundaries are then checked in playlist order, with each media playlist prepared in turn. Complete-track decoding and the other source checks remain required.
 
 Native manifest checks share this capacity. Small inputs run inline; larger HLS graphs can distribute document work, and a large DASH manifest can share one parsed tree across independent checks. Pools do not nest. Parsed child facts and inherited timelines are reused. The adapter reserves memory for retained manifest bytes and lint work, then verifies file identities and content. Exhausted byte, node, reference or diagnostic limits produce an incomplete report and cannot pass.
 
@@ -1250,7 +1254,7 @@ Global `--progress` controls progress separately from the final result on standa
 | Mode | Behavior |
 | --- | --- |
 | `auto` | Default: readable text; with --json, text only when stderr is a terminal, otherwise off |
-| `text` | Readable progress, including alongside --json results |
+| `text` | Live terminal status and stage history; concise log lines when redirected, including alongside --json results |
 | `json` | JSON Lines progress: one object per line, including alongside --json results |
 | `off` | No progress records; results and errors still apply |
 
@@ -1263,7 +1267,13 @@ drmr analyze original.mp4 --metadata-only --json --progress json \
 drmr analyze original.mp4 --metadata-only --progress off
 ```
 
-Observations show a stage, a fixed task label and elapsed time. Acquisition reports actual received bytes and resource counts; parallel work reports active and completed units when available. Ongoing work emits a heartbeat about every two seconds. Unknown totals do not produce invented percentages or remaining-time estimates.
+On an interactive terminal, the current task updates in one status line. Finished stages remain above it with their durations, so completed downloads stay visible while inspection continues. Byte counts use readable units. Redirected text, or a terminal without live-display support, records stage starts and ends with occasional updates rather than every tool call or counter change. Unchanged work still produces an occasional elapsed-time notice.
+
+A download can show its completed count and percentage once resource discovery has finished. TS preparation counts all segments in the media playlist currently being processed. Approximate time remaining appears only after at least one second and two further resources or segments have completed since the total became known. It estimates the rest of that download or playlist's preparation, not the entire command. Once all TS segments have been read, `checking segment boundaries` replaces the percentage and estimate until the ordered checks finish.
+
+Discovery and other work with an unknown total show the task and elapsed time. A single MP4 URL shows received bytes during transfer, without a running percentage or remaining-time estimate. Its resource count becomes `1/1` after transfer completes.
+
+Resource totals include completed discovery requests and distinct media resources. Received bytes include retry traffic and can differ from retained file size. Worker selection applies to bounded independent jobs, not every stage of analysis.
 
 | Stage | Observed work |
 | --- | --- |
@@ -1278,7 +1288,7 @@ Observations show a stage, a fixed task label and elapsed time. Acquisition repo
 | `tool-check` | Discover or probe external tools for doctor |
 | `server-startup` | Start the local console and wait for it |
 
-Scopes can overlap or nest; a closed scope may have failed. A completed work unit is not a completed conversion. The last activity is not a diagnosis. Quick metadata reads and plans may finish before a heartbeat. Help and version output do not invent progress. These observations do not require `--measure`; measured phase durations remain separate and may overlap.
+Use `--progress json` for detailed numeric observations, including resource and scope counters. Scopes can overlap or nest; a closed scope may have failed. A completed work unit is not a completed conversion. The last activity is not a diagnosis. Help and version output do not invent progress. These observations do not require `--measure`; measured phase durations remain separate and may overlap.
 
 Progress excludes URLs, keys, authentication headers, operator paths, raw metadata and raw tool output. For valid parsed operational commands, explicit `--progress json` keeps operational stderr in JSON Lines, including a fixed error code on failure or cancellation. Argument parsing errors and existing `serve` startup diagnostics/address notices can be separate text. The final result and exit value determine success, not progress records alone.
 

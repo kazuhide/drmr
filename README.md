@@ -66,7 +66,7 @@ drmr verify --help
 
 `analyze --metadata-only` reads MP4 metadata or DASH/HLS declarations from a local input or HTTP(S) URL without keys or external tools. It does not retain a URL source or verify complete media. Without that flag, `analyze` checks complete source media and identifies candidate output formats. Without `--save`, `plan INPUT --to ...` describes conditional intent from metadata. The former `inspect` command has been removed; see the [pre-release migration](docs/releases.md#pre-release-cli-consolidation).
 
-Use global `--progress text` or `--progress json` to write progress to standard error, including alongside `--json` results. Standard output remains the final result. The default `auto` mode uses text for readable results. With `--json`, it also shows text when standard error is a terminal and stays silent when standard error is redirected. Explicit `text`, `json` or `off` overrides that choice. See [progress output](docs/usage.md#progress-output) for examples and scope.
+Use global `--progress text` for a live terminal status and a history of finished stages, or `--progress json` for detailed observations on standard error. Standard output remains the final result. The default `auto` mode uses text for readable results. With `--json`, it also shows text when standard error is a terminal and stays silent when standard error is redirected. Redirected text records stage changes and occasional updates. Explicit `text`, `json` or `off` overrides that choice. See [progress output](docs/usage.md#progress-output) for examples and scope.
 
 To retain a supported HLS, static DASH or MP4 URL, save fixed conversion conditions, execute them offline,
 and verify against the retained original:

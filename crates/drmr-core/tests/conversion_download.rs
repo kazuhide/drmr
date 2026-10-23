@@ -2,7 +2,7 @@
 use drmr_core::{
     concurrency::Stop,
     conversion::{ConversionRequest, Converter, HlsInputKeys, InputKeys},
-    events::NoSink,
+    events::{Collector, NoSink},
     inspection::{OutputFormat, TargetProtection},
     source::FetchPolicy,
     toolrun::{Secrets, ToolRunner},
@@ -151,19 +151,48 @@ fn policy() -> FetchPolicy {
     }
 }
 
+fn assert_resource_total(sink: &Collector, discovered: u64, total: u64, completed: u64) {
+    let records: Vec<_> = sink
+        .records()
+        .into_iter()
+        .filter(|record| {
+            record
+                .get("stage")
+                .is_some_and(|stage| stage == "acquisition")
+        })
+        .collect();
+    assert!(!records[0].contains_key("resources_total"));
+    let sealed = records
+        .iter()
+        .position(|record| record.contains_key("resources_total"))
+        .expect("resource discovery must publish its fixed total");
+    assert_eq!(records[sealed]["resources_started"], discovered);
+    assert_eq!(records[sealed]["resources_completed"], discovered);
+    for record in &records[sealed..] {
+        assert_eq!(record["resources_total"], total);
+        let started = record["resources_started"].as_u64().unwrap();
+        assert!(record["resources_completed"].as_u64().unwrap() <= started);
+        assert!(started <= total);
+    }
+    assert_eq!(records.last().unwrap()["resources_completed"], completed);
+}
+
 #[test]
 fn mp4_url_without_a_media_suffix_is_retained_byte_for_byte() {
     let bytes = b"\0\0\0\x18ftypisom\0\0\0\0isomiso2\0\0\0\x10mdatcontent!";
     let server = Server::new(BTreeMap::from([("/source.m3u8", bytes.to_vec())]));
     let parent = tempfile::tempdir().unwrap();
     let directory = parent.path().join("download");
+    let sink = Arc::new(Collector::default());
     let source = converter(Stop::new())
+        .with_activity_sink(sink.clone())
         .acquire_source(&server.url(), &directory, &policy())
         .expect("content, rather than the URL suffix, identifies an MP4");
     assert_eq!(source.entrypoint().file_name().unwrap(), "input.mp4");
     assert_eq!(std::fs::read(source.entrypoint()).unwrap(), bytes);
     source.check(&Stop::new()).unwrap();
     assert_eq!(*server.calls.lock().unwrap(), ["/source.m3u8"]);
+    assert_resource_total(&sink, 1, 1, 1);
 }
 
 #[test]
@@ -177,7 +206,9 @@ fn dash_url_localizes_all_resources_and_preserves_the_raw_manifest() {
     ]));
     let parent = tempfile::tempdir().unwrap();
     let directory = parent.path().join("download");
+    let sink = Arc::new(Collector::default());
     let source = converter(Stop::new())
+        .with_activity_sink(sink.clone())
         .acquire_source(&server.url(), &directory, &policy())
         .expect("a static finite DASH graph can be retained");
     assert_eq!(source.entrypoint().file_name().unwrap(), "input.mpd");
@@ -199,6 +230,64 @@ fn dash_url_localizes_all_resources_and_preserves_the_raw_manifest() {
     let mut calls = server.calls.lock().unwrap().clone();
     calls.sort();
     assert_eq!(calls, ["/init.mp4", "/s1.m4s", "/s2.m4s", "/source.m3u8"]);
+    assert_resource_total(&sink, 1, 4, 4);
+}
+
+#[test]
+fn resource_total_counts_deduplicated_hls_resources_and_stays_fixed_on_failure() {
+    let manifest = b"#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXTINF:2,\nsegment.ts\n#EXTINF:2,\nsegment.ts\n#EXT-X-ENDLIST\n";
+    for succeeds in [true, false] {
+        let mut resources = BTreeMap::from([("/source.m3u8", manifest.to_vec())]);
+        if succeeds {
+            resources.insert("/segment.ts", vec![0x47; 188]);
+        }
+        let server = Server::new(resources);
+        let parent = tempfile::tempdir().unwrap();
+        let directory = parent.path().join("download");
+        let sink = Arc::new(Collector::default());
+        let result = converter(Stop::new())
+            .with_activity_sink(sink.clone())
+            .acquire_source(&server.url(), &directory, &policy());
+        assert_eq!(result.is_ok(), succeeds);
+        assert_eq!(directory.exists(), succeeds);
+        assert_resource_total(&sink, 1, 2, if succeeds { 2 } else { 1 });
+        assert_eq!(
+            *server.calls.lock().unwrap(),
+            ["/source.m3u8", "/segment.ts"]
+        );
+    }
+}
+
+#[test]
+fn failed_resource_discovery_never_publishes_a_total() {
+    let manifest = b"#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1000\nmissing.m3u8\n";
+    let server = Server::new(BTreeMap::from([("/source.m3u8", manifest.to_vec())]));
+    let parent = tempfile::tempdir().unwrap();
+    let directory = parent.path().join("download");
+    let sink = Arc::new(Collector::default());
+    assert!(
+        converter(Stop::new())
+            .with_activity_sink(sink.clone())
+            .acquire_source(&server.url(), &directory, &policy())
+            .is_err()
+    );
+    let records: Vec<_> = sink
+        .records()
+        .into_iter()
+        .filter(|record| {
+            record
+                .get("stage")
+                .is_some_and(|stage| stage == "acquisition")
+        })
+        .collect();
+    assert!(
+        records
+            .iter()
+            .all(|record| !record.contains_key("resources_total"))
+    );
+    assert_eq!(records.last().unwrap()["resources_started"], 2);
+    assert_eq!(records.last().unwrap()["resources_completed"], 1);
+    assert!(!directory.exists());
 }
 
 #[test]
@@ -739,7 +828,9 @@ fn redirected_root_aliases_do_not_consume_extra_playlist_budget() {
     let mut policy = policy();
     policy.max_playlists = 2;
     policy.max_total_resources = Some(3);
+    let sink = Arc::new(Collector::default());
     let source = converter(Stop::new())
+        .with_activity_sink(sink.clone())
         .download_hls(
             &server.url(),
             &directory,
@@ -762,6 +853,7 @@ fn redirected_root_aliases_do_not_consume_extra_playlist_budget() {
             "/segment.ts"
         ]
     );
+    assert_resource_total(&sink, 2, 3, 3);
 }
 
 #[test]

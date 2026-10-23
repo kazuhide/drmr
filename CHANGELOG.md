@@ -5,6 +5,19 @@ for installation, stable interfaces and versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- Keep terminal progress in one live status with a history of finished stages
+  and their durations. Redirected text logs record stage changes and occasional
+  updates instead of every observation; detailed JSON Lines remain available.
+- Show percentages for resource transfers and the current TS media playlist
+  once their totals are known, and approximate remaining time after enough
+  progress is observed. Keep discovery and unknown work unestimated, and
+  distinguish collected segments from the final ordered boundary checks.
+- Read independent TS segment metadata and encoded frames in parallel within
+  worker limits, while retaining ordered duration and clock checks and keeping
+  only a bounded set of compact results in memory.
+
 ## [1.0.1] - 2026-10-23
 
 Pre-release update for AAC in MPEG transport streams, key-free metadata

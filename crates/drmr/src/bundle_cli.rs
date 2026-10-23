@@ -497,6 +497,7 @@ pub fn convert_direct(args: &ConvertArgs) -> ExitCode {
                     output,
                     policy.as_ref().expect("fetch policy checked"),
                 )?;
+                session.progress.mark("input-preparation");
                 if !session.progress.structured() {
                     eprintln!("Downloaded source retained in the requested download directory.");
                 }
