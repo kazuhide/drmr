@@ -117,3 +117,78 @@ fn failed_commands_keep_structured_progress_secret_free() {
         "download-directory-required"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn console_reports_actual_readiness_and_heartbeat_then_stops_cleanly() {
+    use std::io::{BufRead as _, BufReader};
+    use std::process::Stdio;
+    use std::time::{Duration, Instant};
+    struct OwnedChild(std::process::Child);
+    impl Drop for OwnedChild {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let root = tempfile::tempdir().unwrap();
+    let input = root.path().join("input");
+    std::fs::create_dir(&input).unwrap();
+    let mut child = OwnedChild(
+        Command::new(env!("CARGO_BIN_EXE_drmr"))
+            .args(["serve", "--progress", "json"])
+            .env("DRMR_INPUT_ROOT", &input)
+            .env("DRMR_OUTPUT_ROOT", root.path().join("output"))
+            .env("DRMR_BIND_HOST", "127.0.0.1")
+            .env("DRMR_BIND_PORT", "0")
+            .env_remove("DRMR_COMMON_CONFIG_ROOT")
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+    let stderr = child.0.stderr.take().unwrap();
+    let (sent, received) = std::sync::mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        for line in BufReader::new(stderr).lines() {
+            if sent.send(line.unwrap()).is_err() {
+                break;
+            }
+        }
+    });
+    let mut ready = false;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let line = received
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .unwrap();
+        let event: Value = serde_json::from_str(&line).expect("console progress is JSON Lines");
+        assert_eq!(event["command"], "serve");
+        if event["activity"] == "serving" {
+            if event["event"] == "activity" {
+                ready = true;
+            }
+            if event["event"] == "heartbeat" {
+                assert!(ready);
+                break;
+            }
+        }
+    }
+    assert!(ready);
+    let pid = rustix::process::Pid::from_raw(i32::try_from(child.0.id()).unwrap()).unwrap();
+    rustix::process::kill_process(pid, rustix::process::Signal::TERM).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let status = loop {
+        if let Some(status) = child.0.try_wait().unwrap() {
+            break status;
+        }
+        assert!(Instant::now() < deadline, "console must confirm shutdown");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert!(status.success());
+    // Drain the sender before joining so neither bounded observation nor teardown blocks.
+    let remaining: Vec<_> = received.iter().collect();
+    reader.join().unwrap();
+    let last: Value = serde_json::from_str(remaining.last().unwrap()).unwrap();
+    assert_eq!(last["event"], "finished");
+}
