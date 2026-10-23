@@ -561,7 +561,7 @@ mod tests {
     }
     #[test]
     fn only_fixed_tool_labels_and_numeric_observations_reach_output() {
-        let (progress, bytes, _) = observed(Duration::from_secs(60));
+        let (progress, bytes, _) = observed(Duration::from_mins(1));
         progress.mark("verification");
         for value in [
             serde_json::json!({"stage":"tool","event":"command","tool":"ffmpeg","argv":["secret-sentinel"],"rendition_id":"private-sentinel"}),
@@ -590,7 +590,7 @@ mod tests {
 
     #[test]
     fn a_result_write_failure_after_work_finishes_remains_structured() {
-        let (progress, bytes, _) = observed(Duration::from_secs(60));
+        let (progress, bytes, _) = observed(Duration::from_mins(1));
         progress.mark("publication");
         progress.finish();
         progress.diagnostic("analyze", "result-output-unavailable");
