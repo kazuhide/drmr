@@ -2176,11 +2176,12 @@ python tools/build_desktop.py --bundle
 <h3>Progress on standard error</h3>
 <p>Global <code>--progress</code> controls progress separately from the final result on standard output. Existing pipes keep receiving only the result.</p>
 <div class="guide-table-scroll" role="region" aria-labelledby="table-13-title" tabindex="0"><table><caption id="table-13-title">Progress on standard error — Table 13</caption><thead><tr><th scope="col">Mode</th><th scope="col">Behavior</th></tr></thead><tbody>
-<tr><th scope="row"><code>auto</code></th><td>Default: readable text; off when the command uses --json</td></tr>
+<tr><th scope="row"><code>auto</code></th><td>Default: readable text; with --json, text only when stderr is a terminal, otherwise off</td></tr>
 <tr><th scope="row"><code>text</code></th><td>Readable progress, including alongside --json results</td></tr>
 <tr><th scope="row"><code>json</code></th><td>JSON Lines progress: one object per line, including alongside --json results</td></tr>
 <tr><th scope="row"><code>off</code></th><td>No progress records; results and errors still apply</td></tr>
 </tbody></table></div>
+<p>Automatic selection checks stderr, not stdout. Redirecting only the JSON result with <code>&gt;result.json</code> keeps terminal progress. Redirecting stderr with <code>2&gt;errors.log</code> suppresses automatic progress for <code>--json</code>. Explicit <code>text</code>, <code>json</code> or <code>off</code> takes precedence, so the examples below also work with redirected streams.</p>
 <figure class="guide-example" aria-labelledby="example-103-title" data-code-language="sh"><figcaption id="example-103-title">Example 103: sh</figcaption><pre tabindex="0"><code>drmr analyze original.mp4 --metadata-only --json --progress text
 drmr analyze original.mp4 --metadata-only --json --progress json \
   &gt;metadata.json 2&gt;progress.jsonl
@@ -2363,7 +2364,7 @@ cargo test --locked -p drmr-core --test conversion_bundle_encryption \
 <tr><th scope="row"><code>--hls-validator-bin FILE</code></th><td>Apple executable name/path for requested HLS manifest checks; default mediastreamvalidator; <a href="https://kazuhide.github.io/drmr/guide/#verification">external validator setup</a></td></tr>
 <tr><th scope="row"><code>--dash-validator-bin FILE</code></th><td>PHP executable name/path for the local DASH-IF manifest adapter; default php; <a href="https://kazuhide.github.io/drmr/guide/#verification">external validator setup</a></td></tr>
 <tr><th scope="row"><code>--max-workers N</code></th><td>Upper bound 1-64; otherwise automatic CPU/memory choice</td></tr>
-<tr><th scope="row"><code>--json</code></th><td>One versioned result; default auto progress is off, explicit --progress text/json remains available</td></tr>
+<tr><th scope="row"><code>--json</code></th><td>One versioned result; auto shows text progress only when stderr is a terminal; explicit --progress text/json/off takes precedence</td></tr>
 <tr><th scope="row"><code>--measure</code></th><td>Add measurement fields; requires --json</td></tr>
 </tbody></table></div>
 <p>There are no generic <code>ffmpeg-bin</code> or <code>ffprobe-bin</code> options. Those tools are found on the launch environment&#x27;s PATH.</p>

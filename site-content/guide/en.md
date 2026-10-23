@@ -1247,10 +1247,12 @@ Global `--progress` controls progress separately from the final result on standa
 
 | Mode | Behavior |
 | --- | --- |
-| `auto` | Default: readable text; off when the command uses --json |
+| `auto` | Default: readable text; with --json, text only when stderr is a terminal, otherwise off |
 | `text` | Readable progress, including alongside --json results |
 | `json` | JSON Lines progress: one object per line, including alongside --json results |
 | `off` | No progress records; results and errors still apply |
+
+Automatic selection checks stderr, not stdout. Redirecting only the JSON result with `>result.json` keeps terminal progress. Redirecting stderr with `2>errors.log` suppresses automatic progress for `--json`. Explicit `text`, `json` or `off` takes precedence, so the examples below also work with redirected streams.
 
 ```sh
 drmr analyze original.mp4 --metadata-only --json --progress text
@@ -1506,7 +1508,7 @@ Local input refuses download/fetch options. URL metadata-only analysis needs no 
 | `--hls-validator-bin FILE` | Apple executable name/path for requested HLS manifest checks; default mediastreamvalidator; [external validator setup](https://kazuhide.github.io/drmr/guide/#verification) |
 | `--dash-validator-bin FILE` | PHP executable name/path for the local DASH-IF manifest adapter; default php; [external validator setup](https://kazuhide.github.io/drmr/guide/#verification) |
 | `--max-workers N` | Upper bound 1-64; otherwise automatic CPU/memory choice |
-| `--json` | One versioned result; default auto progress is off, explicit --progress text/json remains available |
+| `--json` | One versioned result; auto shows text progress only when stderr is a terminal; explicit --progress text/json/off takes precedence |
 | `--measure` | Add measurement fields; requires --json |
 
 There are no generic `ffmpeg-bin` or `ffprobe-bin` options. Those tools are found on the launch environment's PATH.

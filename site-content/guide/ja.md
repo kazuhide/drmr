@@ -1356,10 +1356,12 @@ python tools/build_desktop.py --bundle
 
 | 指定 | 動作 |
 | --- | --- |
-| `auto` | 既定。人が読む結果にはテキストの進捗を表示し、--json の結果では進捗を省略 |
+| `auto` | 既定。人が読む結果にはテキストの進捗を表示。--json でも標準エラーが端末なら表示し、ファイルやパイプなら省略 |
 | `text` | テキストの進捗。--json の結果と併用可能 |
 | `json` | 一行に一つの JSON オブジェクトを記録する JSON Lines。--json の結果と併用可能 |
 | `off` | 進捗を省略。結果やエラーの出力は維持 |
+
+auto が判定するのは標準エラーの接続先です。JSON の結果だけを `>result.json` で保存しても、標準エラーが端末なら進捗を表示します。`--json` で標準エラーを `2>errors.log` などへ送る場合は、自動の進捗表示を省略します。text、json、off の明示指定が優先するため、次の例は出力をファイルやパイプに送る場合にも使えます。
 
 ```sh
 drmr analyze original.mp4 --metadata-only --json --progress text
@@ -1629,7 +1631,7 @@ PROFILE に指定できるのは `all`、`progressive-mp4`、`fragmented-mp4`、
 | `--hls-validator-bin FILE` | 要求した HLS 検査用の Apple 実行ファイル。既定 mediastreamvalidator。[検査ツールの準備](https://kazuhide.github.io/drmr/ja/guide/#verification) |
 | `--dash-validator-bin FILE` | ローカル DASH-IF アダプターを実行する PHP 実行ファイル。既定 php。[配置先と設定](https://kazuhide.github.io/drmr/ja/guide/#verification) |
 | `--max-workers N` | メディアの同時処理数の上限 1-64。既定は CPU・メモリから自動選択 |
-| `--json` | スキーマのバージョンを含む一つの結果。既定の auto では進捗を省略。--progress text/json は明示的に併用可能 |
+| `--json` | スキーマのバージョンを含む一つの結果。auto は標準エラーが端末の場合だけ進捗を表示。--progress text/json/off の明示指定が優先 |
 | `--measure` | 数値の計測情報を追加。--json が必要 |
 
 汎用 CLI に ffmpeg-bin/ffprobe-bin の独自フラグはありません。FFmpeg/ffprobe は起動環境の PATH を用います。

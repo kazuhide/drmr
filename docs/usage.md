@@ -77,7 +77,7 @@ A narrow local MPEG transport stream input profile can produce clear, `cenc`, or
 
 `verify OUTPUT --source INPUT` independently compares the original source and result. It requires their respective keys when encrypted. Success means the stream metadata, encoded packets, decoded picture/sound, and packet timestamps match; it does not establish license acquisition or device playback. Use the generated `manifest.mpd` or `master.m3u8` as the output argument for a presentation. Both commands support `--json` for one versioned result object. Successful JSON reports keep their existing fields. Progress is separate, as described below.
 
-For an operational failure after a valid `convert` or `verify` command with `--json`, stdout contains one object with `schema_version: 1`, `command`, `status` (`failed` or `cancelled`), and `error` containing a fixed `code`, safe `hint`, and `last_activity` (a fixed label or `null`). A completed verification that finds a mismatch retains its existing `checks` and comparison fields and adds that failure description. With the default progress mode, `--json` suppresses progress and stderr carries a fixed failure token. Exit codes remain `1` for processing or comparison failure, `2` for the existing configuration errors, and `130` for confirmed cancellation. Cleanup-unconfirmed failures remain failures, even if cancellation was requested. Clap argument parsing errors still use stderr and exit `2`, before this JSON command contract applies. If stdout itself cannot be written, a complete JSON object cannot be guaranteed: the command reports `result-output-unavailable` on stderr and exits `1`. No raw tool output, source URL, key, or operator path is added to progress or failure JSON. Successful URL conversion retains its explicit saved-source locations in the existing result.
+For an operational failure after a valid `convert` or `verify` command with `--json`, stdout contains one object with `schema_version: 1`, `command`, `status` (`failed` or `cancelled`), and `error` containing a fixed `code`, safe `hint`, and `last_activity` (a fixed label or `null`). A completed verification that finds a mismatch retains its existing `checks` and comparison fields and adds that failure description. With default `auto` progress and `--json`, stderr carries a fixed failure token and shows text progress only when it is a terminal. Exit codes remain `1` for processing or comparison failure, `2` for the existing configuration errors, and `130` for confirmed cancellation. Cleanup-unconfirmed failures remain failures, even if cancellation was requested. Clap argument parsing errors still use stderr and exit `2`, before this JSON command contract applies. If stdout itself cannot be written, a complete JSON object cannot be guaranteed: the command reports `result-output-unavailable` on stderr and exits `1`. No raw tool output, source URL, key, or operator path is added to progress or failure JSON. Successful URL conversion retains its explicit saved-source locations in the existing result.
 
 ## Progress output
 
@@ -85,10 +85,15 @@ Global `--progress` controls observations on standard error. It never adds progr
 
 | Mode | Behavior |
 | --- | --- |
-| `auto` | Default: text with human-readable results; off when the command uses `--json` |
+| `auto` | Default: text with human-readable results; with `--json`, text only when stderr is a terminal, otherwise off |
 | `text` | One readable progress line per observation, also with `--json` results |
 | `json` | Progress records as JSON Lines: one JSON object per line, also with `--json` results |
 | `off` | No progress records; final results and errors still apply |
+
+The automatic check uses stderr, not stdout. For example, `--json >result.json`
+still shows progress on an attached terminal; `--json 2>errors.log` does not.
+Explicit `text`, `json` or `off` takes precedence, including when streams are
+redirected.
 
 ```sh
 drmr analyze media.mp4 --metadata-only --json --progress text
