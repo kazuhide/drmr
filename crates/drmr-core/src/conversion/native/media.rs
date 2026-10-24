@@ -3,12 +3,12 @@ use super::super::{ConversionError, InputKeys, backend::Backend, native_media, t
 use super::samples::{SampleEvidence, Samples};
 use std::{collections::BTreeMap, path::Path};
 
-pub(super) struct Track {
+pub(in crate::conversion) struct Track {
     pub descriptor: native_media::TrackDescriptor,
     pub samples: SampleEvidence,
     pub config: Option<ts::CanonicalConfig>,
 }
-pub(super) struct Media {
+pub(in crate::conversion) struct Media {
     pub movie: native_media::Movie,
     pub tracks: Vec<Track>,
 }
@@ -70,6 +70,20 @@ fn canonical(
         }
         _ => Err(ConversionError("native-codec-profile-not-supported")),
     }
+}
+
+pub(super) fn accumulator(
+    descriptor: &native_media::TrackDescriptor,
+) -> Result<(Samples, Option<ts::CanonicalConfig>), ConversionError> {
+    let canonical = canonical(descriptor)?;
+    let config = canonical.as_ref().map(|(config, _)| config.clone());
+    let mut samples = Samples::new(descriptor.timescale, descriptor.sample_count, canonical)?
+        .with_presentation_offset(presentation_offset(descriptor)?);
+    if descriptor.decoder_config_kind == *b"esds" {
+        let aac = native_media::AacConfiguration::parse(&descriptor.decoder_config)?;
+        samples = samples.with_audio_clock(aac.frame_samples, aac.sample_rate)?;
+    }
+    Ok((samples, config))
 }
 
 impl Backend {
@@ -183,15 +197,7 @@ impl Backend {
             if let std::collections::btree_map::Entry::Vacant(entry) =
                 pending.entry(descriptor.index)
             {
-                let canonical = canonical(descriptor)?;
-                let config = canonical.as_ref().map(|(config, _)| config.clone());
-                let mut samples =
-                    Samples::new(descriptor.timescale, descriptor.sample_count, canonical)?
-                        .with_presentation_offset(presentation_offset(descriptor)?);
-                if descriptor.decoder_config_kind == *b"esds" {
-                    let aac = native_media::AacConfiguration::parse(&descriptor.decoder_config)?;
-                    samples = samples.with_audio_clock(aac.frame_samples, aac.sample_rate)?;
-                }
+                let (samples, config) = accumulator(descriptor)?;
                 entry.insert((descriptor.clone(), samples, config));
             }
             let (seen, samples, _) = pending
