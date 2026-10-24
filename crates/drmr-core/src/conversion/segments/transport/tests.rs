@@ -685,6 +685,247 @@ fn identical_video_variants_match_complete_boundaries_independently_of_master_or
     assert!(!report.checks.packet_timing_equal);
 }
 
+fn fairplay_operator_keys(enabled: bool) -> super::super::super::key_file::OperatorKeys {
+    let mut keys = super::super::super::key_file::OperatorKeys::default();
+    keys.hls_output = Some(output_key(true));
+    keys.signaling =
+        enabled.then(|| super::super::super::OutputSignaling::multi_drm(None, None, true).unwrap());
+    keys
+}
+
+fn check_fairplay_declaration(
+    converter: &Converter,
+    root: &Path,
+    keys: &super::super::super::key_file::OperatorKeys,
+) {
+    let master = root.join("master.m3u8");
+    let playlist = root.join("track-0000/media.m3u8");
+    let original = std::fs::read_to_string(&playlist).unwrap();
+    let tags = original
+        .lines()
+        .filter_map(|line| line.strip_prefix("#EXT-X-KEY:"))
+        .collect::<Vec<_>>();
+    assert_eq!(tags.len(), 1);
+    let attrs = super::super::super::hls::attributes(tags[0]).unwrap();
+    assert_eq!(attrs.get("METHOD"), Some("SAMPLE-AES"));
+    assert_eq!(attrs.get("URI"), Some("skd://synthetic"));
+    assert_eq!(attrs.get("IV"), Some("0x101112131415161718191a1b1c1d1e1f"));
+    assert_eq!(
+        attrs.get("KEYFORMAT"),
+        Some("com.apple.streamingkeydelivery")
+    );
+    assert_eq!(attrs.get("KEYFORMATVERSIONS"), Some("1"));
+    converter
+        .verify_output_signaling(
+            &master,
+            OutputFormat::HlsTs,
+            TargetProtection::HlsSampleAes,
+            keys,
+        )
+        .unwrap();
+    for changed in [
+        original.replace(",KEYFORMAT=\"com.apple.streamingkeydelivery\"", ""),
+        original.replace("KEYFORMATVERSIONS=\"1\"", "KEYFORMATVERSIONS=\"2\""),
+        original.replace("skd://synthetic", "skd://different"),
+        original.replace(
+            "0x101112131415161718191a1b1c1d1e1f",
+            "0x202122232425262728292a2b2c2d2e2f",
+        ),
+    ] {
+        assert_ne!(changed, original);
+        std::fs::write(&playlist, changed).unwrap();
+        assert_eq!(
+            converter
+                .verify_output_signaling(
+                    &master,
+                    OutputFormat::HlsTs,
+                    TargetProtection::HlsSampleAes,
+                    keys
+                )
+                .unwrap_err()
+                .0,
+            "output-signaling-verification-failed"
+        );
+    }
+    std::fs::write(playlist, original).unwrap();
+    converter
+        .verify_output_signaling(
+            &master,
+            OutputFormat::HlsTs,
+            TargetProtection::HlsSampleAes,
+            keys,
+        )
+        .unwrap();
+}
+
+#[test]
+fn requested_fairplay_segments_convert_and_verify_from_original_media() {
+    for decode in [false, true] {
+        let root = crate::native::private_tempdir().unwrap();
+        let original = fixture(&root.path().join("original"), 44_100, true, true, true);
+        let keys = fairplay_operator_keys(true);
+        let converter = if decode {
+            Converter::new(
+                Arc::new(ToolRunner::new(
+                    Arc::new(Secrets::default()),
+                    Arc::new(NoSink),
+                )),
+                "packager",
+                "ffmpeg",
+            )
+        } else {
+            converter()
+        };
+        let converter = converter
+            .with_processing(ProcessingMode::Segments)
+            .with_decode(decode)
+            .with_output_signaling(keys.signaling.clone());
+        let output = root.path().join("fairplay");
+        let report = converter
+            .convert(ConversionRequest {
+                input: &original,
+                output: &output,
+                format: OutputFormat::HlsTs,
+                target: TargetProtection::HlsSampleAes,
+                input_keys: &keys.input,
+                hls_input_keys: &keys.hls_input,
+                output_key: None,
+                hls_key_uri: None,
+                hls_output_key: keys.hls_output.as_ref(),
+            })
+            .unwrap();
+        assert!(report.verification.passed);
+        assert!(!report.verification.license_playback_verified);
+        let output_keys = keys.output_hls_verification_keys().unwrap();
+        let fresh = converter
+            .verify(VerificationRequest {
+                source: VerificationSource {
+                    input: &original,
+                    input_keys: &keys.input,
+                    hls_keys: &keys.hls_input,
+                },
+                output: VerificationSource {
+                    input: &output.join("master.m3u8"),
+                    input_keys: &keys.input,
+                    hls_keys: &output_keys,
+                },
+            })
+            .unwrap();
+        assert!(fresh.passed);
+        assert!(fresh.checks.is_pass());
+        assert!(!fresh.license_playback_verified);
+        assert_eq!(
+            fresh.required_depth,
+            if decode {
+                ValidationDepth::Decoded
+            } else {
+                ValidationDepth::Native
+            }
+        );
+        if decode {
+            assert_eq!(
+                fresh.decode_evidence,
+                super::super::super::DecodeEvidence::ContentCompared { equal: true }
+            );
+        }
+        check_fairplay_declaration(&converter, &output, &keys);
+    }
+}
+
+#[test]
+fn generic_sample_aes_segments_do_not_implicitly_select_fairplay() {
+    let root = crate::native::private_tempdir().unwrap();
+    let original = fixture(&root.path().join("original"), 44_100, false, true, false);
+    let keys = fairplay_operator_keys(false);
+    let converter = converter().with_processing(ProcessingMode::Segments);
+    let output = root.path().join("generic");
+    let report = converter
+        .convert(ConversionRequest {
+            input: &original,
+            output: &output,
+            format: OutputFormat::HlsTs,
+            target: TargetProtection::HlsSampleAes,
+            input_keys: &keys.input,
+            hls_input_keys: &keys.hls_input,
+            output_key: None,
+            hls_key_uri: None,
+            hls_output_key: keys.hls_output.as_ref(),
+        })
+        .unwrap();
+    assert!(report.verification.passed);
+    let playlist = std::fs::read_to_string(output.join("track-0000/media.m3u8")).unwrap();
+    let tag = playlist
+        .lines()
+        .find_map(|line| line.strip_prefix("#EXT-X-KEY:"))
+        .unwrap();
+    let attrs = super::super::super::hls::attributes(tag).unwrap();
+    assert_eq!(attrs.get("KEYFORMAT"), None);
+    assert_eq!(attrs.get("KEYFORMATVERSIONS"), None);
+    converter
+        .verify_output_signaling(
+            &output.join("master.m3u8"),
+            OutputFormat::HlsTs,
+            TargetProtection::HlsSampleAes,
+            &keys,
+        )
+        .unwrap();
+}
+
+#[test]
+fn fairplay_segments_reject_invalid_uri_and_incompatible_drm_profiles() {
+    use super::super::super::OutputSignaling;
+    let root = crate::native::private_tempdir().unwrap();
+    let original = fixture(&root.path().join("original"), 44_100, false, true, false);
+    let invalid_uri = HlsOutputKey::new_with_iv(
+        "https://example.invalid/key",
+        Aes128Key::from_hex("000102030405060708090a0b0c0d0e0f").unwrap(),
+        SegmentIv::from_hex("101112131415161718191a1b1c1d1e1f").unwrap(),
+    )
+    .unwrap();
+    for (index, (signaling, key, target, expected)) in [
+        (
+            OutputSignaling::multi_drm(None, None, true).unwrap(),
+            invalid_uri,
+            TargetProtection::HlsSampleAes,
+            "output-signaling-invalid",
+        ),
+        (
+            OutputSignaling::multi_drm(None, None, true).unwrap(),
+            output_key(false),
+            TargetProtection::HlsAes128,
+            "output-signaling-profile-not-supported",
+        ),
+        (
+            OutputSignaling::multi_drm(None, Some("https://example.invalid/license"), false)
+                .unwrap(),
+            output_key(true),
+            TargetProtection::HlsSampleAes,
+            "output-signaling-profile-not-supported",
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let converter = converter()
+            .with_processing(ProcessingMode::Segments)
+            .with_output_signaling(signaling);
+        let output = root.path().join(format!("refused-{index}"));
+        let report = converter.convert(ConversionRequest {
+            input: &original,
+            output: &output,
+            format: OutputFormat::HlsTs,
+            target,
+            input_keys: &InputKeys::default(),
+            hls_input_keys: &HlsInputKeys::default(),
+            output_key: None,
+            hls_key_uri: None,
+            hls_output_key: Some(&key),
+        });
+        assert_eq!(report.unwrap_err().0, expected);
+        assert!(!output.exists());
+    }
+}
+
 #[test]
 fn explicit_decode_adds_complete_source_and_output_evidence() {
     for video in [false, true] {

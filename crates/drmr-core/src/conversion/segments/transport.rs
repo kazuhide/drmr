@@ -436,11 +436,23 @@ fn protect_resources(
         let iv = key
             .associated_iv()
             .ok_or(ConversionError("hls-sample-output-iv-required"))?;
-        Some(format!(
+        let mut tag = format!(
             "#EXT-X-KEY:METHOD=SAMPLE-AES,URI=\"{}\",IV=0x{}",
             key.key_uri(),
             hex::encode(iv.0.as_ref())
-        ))
+        );
+        if converter
+            .output_signaling
+            .as_ref()
+            .is_some_and(|signaling| {
+                signaling
+                    .systems()
+                    .contains(&super::super::DrmSystem::FairPlay)
+            })
+        {
+            tag.push_str(",KEYFORMAT=\"com.apple.streamingkeydelivery\",KEYFORMATVERSIONS=\"1\"");
+        }
+        Some(tag)
     } else {
         None
     };
