@@ -432,6 +432,42 @@ fn snapshot_initialization(
     }
 }
 
+fn captured_representation(
+    source: Option<PathBuf>,
+    initialization: Option<PathBuf>,
+    resources: Vec<(PathBuf, SegmentBoundary)>,
+    declared: Protection,
+    window: window::Window,
+) -> Result<CapturedRepresentation, ConversionError> {
+    let observed = source
+        .as_deref()
+        .or(initialization.as_deref())
+        .ok_or(error("dash-initialization-required"))?;
+    let actual = inspection::inspect(observed).map_err(|_| error("dash-invalid-staged-media"))?;
+    if actual.tracks.len() != 1 || actual.protection != declared {
+        return Err(error("dash-media-protection-mismatch"));
+    }
+    let kind = actual.tracks[0].kind;
+    if !matches!(kind, TrackKind::Video | TrackKind::Audio) {
+        return Err(error("dash-media-track-not-supported"));
+    }
+    if let Some(source) = source {
+        Ok(CapturedRepresentation::Joined(LocalTrack {
+            source,
+            kind,
+            index: 0,
+        }))
+    } else {
+        Ok(CapturedRepresentation::Segments(SegmentedRepresentation {
+            initialization: initialization.ok_or(error("dash-initialization-required"))?,
+            resources,
+            window,
+            kind,
+            protection: actual.protection,
+        }))
+    }
+}
+
 fn snapshot_representation(
     representation: Node<'_, '_>,
     declared: Protection,
@@ -518,33 +554,8 @@ fn snapshot_representation(
         joined.sync_all().map_err(|_| error("media-copy-failed"))?;
         drop(joined);
     }
-    let observed = source
-        .as_deref()
-        .or(initialization.as_deref())
-        .ok_or(error("dash-initialization-required"))?;
-    let actual = inspection::inspect(observed).map_err(|_| error("dash-invalid-staged-media"))?;
-    if actual.tracks.len() != 1 || actual.protection != declared {
-        return Err(error("dash-media-protection-mismatch"));
-    }
-    let kind = actual.tracks[0].kind;
-    if !matches!(kind, TrackKind::Video | TrackKind::Audio) {
-        return Err(error("dash-media-track-not-supported"));
-    }
-    let representation = if let Some(source) = source {
-        CapturedRepresentation::Joined(LocalTrack {
-            source,
-            kind,
-            index: 0,
-        })
-    } else {
-        CapturedRepresentation::Segments(SegmentedRepresentation {
-            initialization: initialization.ok_or(error("dash-initialization-required"))?,
-            resources,
-            window,
-            kind,
-            protection: actual.protection,
-        })
-    };
+    let representation =
+        captured_representation(source, initialization, resources, declared, window)?;
     Ok((representation, used, window))
 }
 
@@ -781,6 +792,41 @@ mod tests {
         }
     }
 
+    fn assert_segment_snapshot(tracks: &[LocalTrack], segmented: &Segmented, root: &Path) {
+        for (track, representation) in tracks.iter().zip(&segmented.representations) {
+            assert_eq!(track.kind, representation.kind);
+            assert_eq!(representation.protection, Protection::Clear);
+            assert!(representation.initialization.starts_with(root));
+            assert!(representation.initialization.is_file());
+            let mut clock =
+                super::super::timing::FragmentClock::read(&representation.initialization).unwrap();
+            let mut original = fs::read(&representation.initialization).unwrap();
+            for (index, (resource, boundary)) in representation.resources.iter().enumerate() {
+                assert!(resource.starts_with(root));
+                assert_eq!(boundary.number, u64::try_from(index + 1).unwrap());
+                assert!(boundary.duration > 0 && boundary.timescale > 0);
+                let (time, duration, scale) = clock.dash_segment(resource).unwrap();
+                assert_eq!(
+                    u128::from(time) * u128::from(boundary.timescale),
+                    u128::from(boundary.time) * u128::from(scale)
+                );
+                assert_eq!(
+                    u128::from(duration) * u128::from(boundary.timescale),
+                    u128::from(boundary.duration) * u128::from(scale)
+                );
+                if index > 0 {
+                    let previous = representation.resources[index - 1].1;
+                    assert_eq!(boundary.time, previous.time + previous.duration);
+                }
+                original.extend(fs::read(resource).unwrap());
+            }
+            assert_eq!(original, fs::read(&track.source).unwrap());
+            let (first, end, scale) = clock.presentation_window().unwrap();
+            assert_eq!(representation.window.first, (first, scale));
+            assert_eq!(representation.window.end, (end, scale));
+        }
+    }
+
     #[test]
     fn generated_static_dash_becomes_two_private_observed_media_tracks() {
         let root = tempfile::tempdir().unwrap();
@@ -843,42 +889,7 @@ mod tests {
             );
             assert_eq!(track.index, 0);
         }
-        for (track, representation) in tracks.iter().zip(&segmented.representations) {
-            assert_eq!(track.kind, representation.kind);
-            assert_eq!(representation.protection, Protection::Clear);
-            assert!(
-                representation
-                    .initialization
-                    .starts_with(segment_stage.path())
-            );
-            assert!(representation.initialization.is_file());
-            let mut clock =
-                super::super::timing::FragmentClock::read(&representation.initialization).unwrap();
-            let mut original = fs::read(&representation.initialization).unwrap();
-            for (index, (resource, boundary)) in representation.resources.iter().enumerate() {
-                assert!(resource.starts_with(segment_stage.path()));
-                assert_eq!(boundary.number, u64::try_from(index + 1).unwrap());
-                assert!(boundary.duration > 0 && boundary.timescale > 0);
-                let (time, duration, scale) = clock.dash_segment(resource).unwrap();
-                assert_eq!(
-                    u128::from(time) * u128::from(boundary.timescale),
-                    u128::from(boundary.time) * u128::from(scale)
-                );
-                assert_eq!(
-                    u128::from(duration) * u128::from(boundary.timescale),
-                    u128::from(boundary.duration) * u128::from(scale)
-                );
-                if index > 0 {
-                    let previous = representation.resources[index - 1].1;
-                    assert_eq!(boundary.time, previous.time + previous.duration);
-                }
-                original.extend(fs::read(resource).unwrap());
-            }
-            assert_eq!(original, fs::read(&track.source).unwrap());
-            let (first, end, scale) = clock.presentation_window().unwrap();
-            assert_eq!(representation.window.first, (first, scale));
-            assert_eq!(representation.window.end, (end, scale));
-        }
+        assert_segment_snapshot(&tracks, &segmented, segment_stage.path());
         assert!(!segment_stage.path().join("dash-track-0.mp4").exists());
         assert!(!segment_stage.path().join("dash-track-1.mp4").exists());
         assert_eq!(
@@ -908,13 +919,12 @@ mod tests {
                 "dash-presentation-metadata-not-supported"
             );
             let denied_segments = super::super::files::Stage::new(None).unwrap();
-            let error = match snapshot_segments(
+            let Err(error) = snapshot_segments(
                 &manifest,
                 denied_segments.path(),
                 &crate::concurrency::Stop::new(),
-            ) {
-                Ok(_) => panic!("unsupported metadata was accepted"),
-                Err(error) => error,
+            ) else {
+                panic!("unsupported metadata was accepted");
             };
             assert_eq!(error.0, "dash-presentation-metadata-not-supported");
         }

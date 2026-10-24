@@ -358,9 +358,7 @@ impl Converter {
         output_key: Option<&OutputKey>,
     ) -> Result<ConversionReport, ConversionError> {
         self.refuse_signaling()?;
-        if self.processing_mode == ProcessingMode::Segments {
-            return Err(ConversionError("processing-segments-source-required"));
-        }
+        self.check_complete_file_processing()?;
         if target == TargetProtection::HlsSampleAes {
             return Err(ConversionError("target-requires-ts-output"));
         }
@@ -466,9 +464,7 @@ impl Converter {
         output: &Path,
         output_keys: &InputKeys,
     ) -> Result<VerificationReport, ConversionError> {
-        if self.processing_mode == ProcessingMode::Segments {
-            return Err(ConversionError("processing-segments-source-required"));
-        }
+        self.check_complete_file_processing()?;
         let workspace = workspace()?;
         let source = workspace.path().join("source.mp4");
         let result = workspace.path().join("result.mp4");

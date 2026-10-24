@@ -72,9 +72,7 @@ impl Converter {
         &self,
         request: TrackConversionRequest<'_>,
     ) -> Result<ConversionReport, ConversionError> {
-        if self.processing_mode == super::ProcessingMode::Segments {
-            return Err(ConversionError("processing-segments-source-required"));
-        }
+        self.check_complete_file_processing()?;
         if self
             .output_signaling
             .as_ref()

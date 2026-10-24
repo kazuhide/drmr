@@ -173,6 +173,16 @@ impl super::Converter {
         }
         Ok(())
     }
+
+    pub(in crate::conversion) fn check_complete_file_processing(
+        &self,
+    ) -> Result<(), ConversionError> {
+        if self.processing_mode == ProcessingMode::Segments {
+            Err(ConversionError("processing-segments-source-required"))
+        } else {
+            Ok(())
+        }
+    }
 }
 
 #[cfg(test)]

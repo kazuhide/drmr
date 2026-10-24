@@ -1424,15 +1424,14 @@ mod resource_tests {
             for join in [false, true] {
                 let output = root.path().join(format!("invalid-{index}-{join}"));
                 super::super::files::create_dir(&output).unwrap();
-                let error = match localize_with(
+                let Err(error) = localize_with(
                     &source,
                     &output,
                     &HlsInputKeys::default(),
                     &no_tool_backend(),
                     join,
-                ) {
-                    Ok(_) => panic!("unsupported manifest was accepted"),
-                    Err(error) => error,
+                ) else {
+                    panic!("unsupported manifest was accepted");
                 };
                 assert_eq!(error.0, reason);
             }
@@ -1446,9 +1445,9 @@ mod resource_tests {
         super::super::files::create_dir(&output).unwrap();
         let backend = no_tool_backend();
         backend.stop.set();
-        let error = match localize_segments(&source, &output, &HlsInputKeys::default(), &backend) {
-            Ok(_) => panic!("cancelled localization succeeded"),
-            Err(error) => error,
+        let Err(error) = localize_segments(&source, &output, &HlsInputKeys::default(), &backend)
+        else {
+            panic!("cancelled localization succeeded");
         };
         assert_eq!(error.0, "cancelled");
         assert_eq!(fs::read_dir(&output).unwrap().count(), 0);

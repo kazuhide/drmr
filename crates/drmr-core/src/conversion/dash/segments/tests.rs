@@ -199,10 +199,9 @@ fn no_join_cancellation_and_foreign_files_are_preserved() {
     let stage = crate::conversion::files::Stage::new(None).unwrap();
     let stop = Stop::new();
     stop.set();
-    let error = match dash::snapshot_segments(&root.path().join("absent.mpd"), stage.path(), &stop)
-    {
-        Ok(_) => panic!("cancelled snapshot succeeded"),
-        Err(error) => error,
+    let Err(error) = dash::snapshot_segments(&root.path().join("absent.mpd"), stage.path(), &stop)
+    else {
+        panic!("cancelled snapshot succeeded");
     };
     assert_eq!(error.0, "cancelled");
     assert_eq!(fs::read_dir(stage.path()).unwrap().count(), 0);
@@ -363,9 +362,8 @@ fn original_timing_and_protection_tampering_has_the_same_semantic_refusal() {
             legacy.0
         );
         let stage = files::Stage::new(None).unwrap();
-        let actual = match dash::snapshot_segments(&manifest, stage.path(), &Stop::new()) {
-            Ok(_) => panic!("tampered input succeeded"),
-            Err(error) => error,
+        let Err(actual) = dash::snapshot_segments(&manifest, stage.path(), &Stop::new()) else {
+            panic!("tampered input succeeded");
         };
         assert_eq!(actual, legacy);
     }
