@@ -311,12 +311,6 @@ impl Backend {
         }
         Ok(result)
     }
-    pub(super) fn audio_evidence(
-        &self,
-        view: View<'_>,
-    ) -> Result<super::audio_presentation::AudioEvidence, ConversionError> {
-        self.audio_evidence_with_clock(view, None)
-    }
     pub(super) fn audio_evidence_with_clock(
         &self,
         view: View<'_>,
