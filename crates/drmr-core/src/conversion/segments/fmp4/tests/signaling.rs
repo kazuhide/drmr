@@ -1,0 +1,178 @@
+use super::*;
+
+#[test]
+fn rekeyed_dash_replaces_provider_records_using_the_generated_output_key() {
+    let fixture = fixture(48_000);
+    let input = manifest_fixture(
+        &fixture,
+        TargetProtection::Cbcs,
+        OutputFormat::Dash,
+        "source",
+    );
+    let keys = InputKeys::new(vec![
+        crate::conversion::ContentKey::from_hex(SOURCE_ID, SOURCE_KEY).unwrap(),
+    ])
+    .unwrap();
+    let key = OutputKey::from_hex(OUTPUT_ID, OUTPUT_KEY).unwrap();
+    let mut payload = vec![0x12, 0x10];
+    payload.extend(hex::decode(OUTPUT_ID).unwrap());
+    let widevine =
+        crate::playready::build_pssh_box(&crate::playready::WIDEVINE_SYSTEM_ID, &payload).unwrap();
+    let widevine_hex = hex::encode(&widevine);
+    let license = "https://example.invalid/license?synthetic=private";
+    let signaling =
+        crate::conversion::OutputSignaling::multi_drm(Some(&widevine_hex), Some(license), false)
+            .unwrap();
+    let (converter, events) = converter();
+    let converter = converter.with_output_signaling(signaling);
+    let output = fixture.directory.path().join("multi-drm");
+    let hls = HlsInputKeys::default();
+    let report = convert_dash(
+        &converter,
+        ConversionRequest {
+            input: &input,
+            output: &output,
+            format: OutputFormat::Dash,
+            target: TargetProtection::Cbcs,
+            input_keys: &keys,
+            hls_input_keys: &hls,
+            output_key: Some(&key),
+            hls_key_uri: None,
+            hls_output_key: None,
+        },
+    )
+    .unwrap();
+    assert!(report.verification.passed);
+    let result = output.join("manifest.mpd");
+    let frozen =
+        crate::conversion::FrozenSource::capture(&result, &converter.backend.stop).unwrap();
+    converter
+        .verify_segment_signaling(
+            &frozen,
+            OutputFormat::Dash,
+            TargetProtection::Cbcs,
+            Some(&key),
+            None,
+            None,
+        )
+        .unwrap();
+    let text = std::fs::read_to_string(&result).unwrap();
+    assert_eq!(text.matches("<ContentProtection").count(), 6);
+    for ordinal in 0..2 {
+        let bytes = std::fs::read(output.join(format!("track-{ordinal:04}/init.mp4"))).unwrap();
+        let nodes = crate::mp4::parse_boxes(&bytes).unwrap();
+        let boxes = crate::mp4::walk(&nodes);
+        let pssh = boxes
+            .iter()
+            .filter(|node| node.kind() == *b"pssh")
+            .collect::<Vec<_>>();
+        assert_eq!(pssh.len(), 2);
+        assert!(
+            pssh.iter()
+                .any(|node| node.header.bytes(&bytes) == widevine)
+        );
+        assert!(pssh.iter().all(|node| {
+            node.header.payload(&bytes).get(4..20)
+                != Some(
+                    hex::decode("1077efecc0b24d02ace33c1e52e2fb4b")
+                        .unwrap()
+                        .as_slice(),
+                )
+        }));
+        for node in boxes.iter().filter(|node| node.kind() == *b"tenc") {
+            let tenc = crate::mp4::Tenc::parse(node.header.payload(&bytes)).unwrap();
+            assert_eq!(hex::encode(tenc.default_kid), OUTPUT_ID);
+        }
+    }
+    let logs = serde_json::to_string(&events.records()).unwrap();
+    let report = serde_json::to_string(&report).unwrap();
+    for sensitive in [SOURCE_KEY, OUTPUT_KEY, license, widevine_hex.as_str()] {
+        assert!(!logs.contains(sensitive));
+        assert!(!report.contains(sensitive));
+    }
+    assert_no_tools(&events);
+}
+
+#[test]
+fn fairplay_hls_uses_final_cbcs_metadata_without_stale_pssh() {
+    let fixture = fixture(48_000);
+    let input = manifest_fixture(
+        &fixture,
+        TargetProtection::Cenc,
+        OutputFormat::Hls,
+        "source",
+    );
+    let keys = InputKeys::new(vec![
+        crate::conversion::ContentKey::from_hex(SOURCE_ID, SOURCE_KEY).unwrap(),
+    ])
+    .unwrap();
+    let key = OutputKey::from_hex(OUTPUT_ID, OUTPUT_KEY).unwrap();
+    let uri = "skd://synthetic/fairplay";
+    let signaling = crate::conversion::OutputSignaling::multi_drm(None, None, true).unwrap();
+    let (converter, events) = converter();
+    let converter = converter.with_output_signaling(signaling);
+    let hls = HlsInputKeys::default();
+    let output = fixture.directory.path().join("fairplay");
+    let source = super::super::super::source::HlsSource::load(
+        &converter,
+        VerificationSource {
+            input: &input,
+            input_keys: &keys,
+            hls_keys: &hls,
+        },
+    )
+    .unwrap();
+    let report = convert_hls(
+        &converter,
+        ConversionRequest {
+            input: &input,
+            output: &output,
+            format: OutputFormat::Hls,
+            target: TargetProtection::Cbcs,
+            input_keys: &keys,
+            hls_input_keys: &hls,
+            output_key: Some(&key),
+            hls_key_uri: Some(uri),
+            hls_output_key: None,
+        },
+        source,
+    )
+    .unwrap();
+    assert!(report.verification.passed);
+    assert!(!report.verification.license_playback_verified);
+    let frozen = crate::conversion::FrozenSource::capture(
+        &output.join("master.m3u8"),
+        &converter.backend.stop,
+    )
+    .unwrap();
+    converter
+        .verify_segment_signaling(
+            &frozen,
+            OutputFormat::Hls,
+            TargetProtection::Cbcs,
+            Some(&key),
+            Some(uri),
+            None,
+        )
+        .unwrap();
+    for ordinal in 0..2 {
+        let playlist =
+            std::fs::read_to_string(output.join(format!("track-{ordinal:04}/media.m3u8"))).unwrap();
+        assert!(playlist.contains("#EXT-X-VERSION:6\n"));
+        assert!(playlist.contains("KEYFORMAT=\"com.apple.streamingkeydelivery\""));
+        let bytes = std::fs::read(output.join(format!("track-{ordinal:04}/init.mp4"))).unwrap();
+        let nodes = crate::mp4::parse_boxes(&bytes).unwrap();
+        assert!(
+            !crate::mp4::walk(&nodes)
+                .iter()
+                .any(|node| node.kind() == *b"pssh")
+        );
+    }
+    assert!(
+        !serde_json::to_string(&events.records())
+            .unwrap()
+            .contains(uri)
+    );
+    assert!(!serde_json::to_string(&report).unwrap().contains(uri));
+    assert_no_tools(&events);
+}

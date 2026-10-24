@@ -431,6 +431,43 @@ fn clear_metadata_tree(
 }
 
 impl super::Converter {
+    /// Validate final native output records against the same private graph used for media checks.
+    pub(in crate::conversion) fn verify_segment_signaling(
+        &self,
+        frozen: &super::FrozenSource,
+        format: OutputFormat,
+        target: TargetProtection,
+        key: Option<&OutputKey>,
+        uri: Option<&str>,
+        hls: Option<&super::HlsOutputKey>,
+    ) -> Result<(), ConversionError> {
+        self.backend.check_cancelled()?;
+        if let Some(signaling) = &self.output_signaling {
+            signaling.validate_profile(format, target)?;
+            if format == OutputFormat::Dash {
+                let key = key.ok_or(INVALID)?;
+                let records = if signaling.is_multi() {
+                    signaling.multi_objects(key)?
+                } else {
+                    records::MultiObjects::legacy_playready(signaling.objects(key)?)
+                };
+                records.finish(frozen.entrypoint(), key)?;
+            } else {
+                records::fairplay(
+                    frozen.entrypoint(),
+                    format,
+                    target,
+                    uri.or_else(|| hls.map(super::HlsOutputKey::key_uri))
+                        .ok_or(INVALID)?,
+                    key,
+                    hls,
+                )?;
+            }
+        } else {
+            records::unrequested(frozen, target, key)?;
+        }
+        frozen.check_original()
+    }
     /// Independently check the current manifest and initialization records against operator
     /// metadata. Media comparison and license playback are separate verification domains.
     pub fn verify_output_signaling(

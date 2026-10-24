@@ -7,6 +7,7 @@ use crate::{
 use base64::Engine as _;
 use std::{
     collections::BTreeSet,
+    fmt::Write as _,
     fs::File,
     io::{Read as _, Seek as _, SeekFrom},
     path::{Path, PathBuf},
@@ -20,6 +21,52 @@ const CENC: &str = "urn:mpeg:cenc:2013";
 const PR: &str = "urn:uuid:9a04f079-9840-4286-ab92-e65be0885f95";
 const WV: &str = "urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed";
 const COMMON: &str = "urn:mpeg:dash:mp4protection:2011";
+
+/// Generated provider records have no diagnostic representation of their contents.
+pub(in crate::conversion) struct SegmentRecords {
+    pub initialization: Zeroizing<Vec<u8>>,
+    pub content_protection: Zeroizing<String>,
+}
+
+impl OutputSignaling {
+    /// Reuse the same provider objects for native resource writing and final validation.
+    pub(in crate::conversion) fn segment_records(
+        &self,
+        key: &OutputKey,
+    ) -> Result<SegmentRecords, ConversionError> {
+        let objects = if self.is_multi() {
+            self.multi_objects(key)?
+        } else {
+            MultiObjects::legacy_playready(self.objects(key)?)
+        };
+        let kid = key.0.id_hex();
+        let uuid = format!(
+            "{}-{}-{}-{}-{}",
+            &kid[..8],
+            &kid[8..12],
+            &kid[12..16],
+            &kid[16..20],
+            &kid[20..]
+        );
+        let mut content_protection = Zeroizing::new(format!(
+            "<ContentProtection schemeIdUri=\"{COMMON}\" value=\"cbcs\" cenc:default_KID=\"{uuid}\"/>"
+        ));
+        let mut initialization = Zeroizing::new(Vec::new());
+        if let Some(widevine) = &objects.widevine {
+            initialization.extend_from_slice(widevine);
+            let pssh = Zeroizing::new(base64::engine::general_purpose::STANDARD.encode(widevine));
+            write!(content_protection, "<ContentProtection schemeIdUri=\"{WV}\"><cenc:pssh>{}</cenc:pssh></ContentProtection>", pssh.as_str()).map_err(|_| MISMATCH)?;
+        }
+        if let Some(playready) = &objects.playready {
+            initialization.extend_from_slice(&playready.bytes);
+            write!(content_protection, "<ContentProtection schemeIdUri=\"{PR}\"><cenc:pssh>{}</cenc:pssh><mspr:pro>{}</mspr:pro></ContentProtection>", playready.pssh.as_str(), playready.pro.as_str()).map_err(|_| MISMATCH)?;
+        }
+        Ok(SegmentRecords {
+            initialization,
+            content_protection,
+        })
+    }
+}
 
 pub(in crate::conversion) struct MultiObjects {
     playready: Option<Objects>,
