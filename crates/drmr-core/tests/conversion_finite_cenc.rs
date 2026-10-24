@@ -782,6 +782,36 @@ fn exclusive_lock(path: &Path) -> std::io::Result<std::fs::File> {
     Ok(file)
 }
 
+fn assert_additional_decoder_arguments(arguments: &str) {
+    let arguments = arguments.lines().collect::<Vec<_>>();
+    assert!(
+        arguments
+            .windows(2)
+            .any(|pair| pair == ["-decryption_keys", dictionary().as_str()])
+    );
+    assert!(
+        arguments
+            .windows(2)
+            .any(|pair| { pair[0] == "-map" && matches!(pair[1], "0:0" | "0:1") })
+    );
+    assert!(
+        arguments
+            .windows(2)
+            .any(|pair| { pair == ["-c:v", "rawvideo"] || pair == ["-c:a", "pcm_f32le"] })
+    );
+    assert!(
+        arguments
+            .windows(2)
+            .any(|pair| { pair == ["-f", "data"] || pair == ["-f", "f32le"] })
+    );
+    assert!(matches!(arguments.last(), Some(&"-" | &"pipe:2")));
+    assert!(
+        !arguments
+            .iter()
+            .any(|argument| matches!(*argument, "copy" | "-copyts" | "-movie_timescale"))
+    );
+}
+
 #[test]
 fn cancellation_of_the_additional_decoder_drains_its_descendant_before_returning() {
     use drmr_core::concurrency::Stop;
@@ -852,33 +882,7 @@ fn cancellation_of_the_additional_decoder_drains_its_descendant_before_returning
         "decoder must read the complete original media"
     );
     let arguments = arguments.unwrap();
-    let arguments = arguments.lines().collect::<Vec<_>>();
-    assert!(
-        arguments
-            .windows(2)
-            .any(|pair| pair == ["-decryption_keys", dictionary().as_str()])
-    );
-    assert!(
-        arguments
-            .windows(2)
-            .any(|pair| { pair[0] == "-map" && matches!(pair[1], "0:0" | "0:1") })
-    );
-    assert!(
-        arguments
-            .windows(2)
-            .any(|pair| { pair == ["-c:v", "rawvideo"] || pair == ["-c:a", "pcm_f32le"] })
-    );
-    assert!(
-        arguments
-            .windows(2)
-            .any(|pair| { pair == ["-f", "data"] || pair == ["-f", "f32le"] })
-    );
-    assert!(matches!(arguments.last(), Some(&"-" | &"pipe:2")));
-    assert!(
-        !arguments
-            .iter()
-            .any(|argument| matches!(*argument, "copy" | "-copyts" | "-movie_timescale"))
-    );
+    assert_additional_decoder_arguments(&arguments);
     assert!(!output.exists());
     assert_eq!(std::fs::read(source).unwrap(), before);
     let commands = events
