@@ -369,26 +369,61 @@ fn original_hls_and_dash_cipher_pairs_keep_membership_and_manifest_selection_wit
     )
     .unwrap();
     let empty_hls = HlsInputKeys::default();
+    let aes_hls = HlsInputKeys::new(vec![(
+        "https://example.invalid/source-key".into(),
+        crate::conversion::Aes128Key::from_hex(SOURCE_KEY).unwrap(),
+    )])
+    .unwrap();
+    let expected = fixture
+        .parts
+        .iter()
+        .map(|(_, _, path)| {
+            (
+                std::fs::read(path).unwrap(),
+                packets(path, None),
+                decoded(path, None),
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut cases = 0;
     for source_format in [OutputFormat::Hls, OutputFormat::Dash] {
-        for source_scheme in [
-            TargetProtection::Clear,
-            TargetProtection::Cenc,
-            TargetProtection::Cbcs,
-        ] {
-            let input = manifest_fixture(
-                &fixture,
-                source_scheme,
-                source_format,
-                &format!(
-                    "source-{}-{}",
-                    source_format.as_str(),
-                    source_scheme.as_str()
-                ),
+        let schemes = if source_format == OutputFormat::Hls {
+            vec![
+                TargetProtection::Clear,
+                TargetProtection::Cenc,
+                TargetProtection::Cbcs,
+                TargetProtection::HlsAes128,
+            ]
+        } else {
+            vec![
+                TargetProtection::Clear,
+                TargetProtection::Cenc,
+                TargetProtection::Cbcs,
+            ]
+        };
+        for source_scheme in schemes {
+            let name = format!(
+                "source-{}-{}",
+                source_format.as_str(),
+                source_scheme.as_str()
             );
-            let input_keys = if source_scheme == TargetProtection::Clear {
+            let input = if source_scheme == TargetProtection::HlsAes128 {
+                aes_fixture(&fixture, &name)
+            } else {
+                manifest_fixture(&fixture, source_scheme, source_format, &name)
+            };
+            let input_keys = if matches!(
+                source_scheme,
+                TargetProtection::Clear | TargetProtection::HlsAes128
+            ) {
                 &empty
             } else {
                 &source_keys
+            };
+            let source_hls = if source_scheme == TargetProtection::HlsAes128 {
+                &aes_hls
+            } else {
+                &empty_hls
             };
             for (format, targets) in [
                 (
@@ -423,7 +458,7 @@ fn original_hls_and_dash_cipher_pairs_keep_membership_and_manifest_selection_wit
                         format,
                         target,
                         input_keys,
-                        hls_input_keys: &empty_hls,
+                        hls_input_keys: source_hls,
                         output_key: matches!(
                             target,
                             TargetProtection::Cenc | TargetProtection::Cbcs
@@ -441,7 +476,7 @@ fn original_hls_and_dash_cipher_pairs_keep_membership_and_manifest_selection_wit
                             VerificationSource {
                                 input: &input,
                                 input_keys,
-                                hls_keys: &empty_hls,
+                                hls_keys: source_hls,
                             },
                         )
                         .unwrap();
@@ -451,13 +486,22 @@ fn original_hls_and_dash_cipher_pairs_keep_membership_and_manifest_selection_wit
                             VerificationSource {
                                 input: &input,
                                 input_keys,
-                                hls_keys: &empty_hls,
+                                hls_keys: source_hls,
                             },
                             SourceValidationPurpose::Conversion,
                         )
                         .unwrap();
                         assert!(qualified.verification.passed);
                         assert_eq!(qualified.actual_format, OutputFormat::Hls);
+                        if source_scheme == TargetProtection::HlsAes128 {
+                            assert!(
+                                qualified
+                                    .track_protection
+                                    .iter()
+                                    .all(|protection| *protection
+                                        == crate::conversion::SourceProtection::HlsAes128)
+                            );
+                        }
                         convert_hls(&converter, request, source)
                     } else {
                         convert_dash(&converter, request)
@@ -503,7 +547,7 @@ fn original_hls_and_dash_cipher_pairs_keep_membership_and_manifest_selection_wit
                                 source: VerificationSource {
                                     input: &input,
                                     input_keys,
-                                    hls_keys: &empty_hls
+                                    hls_keys: source_hls
                                 },
                                 output: VerificationSource {
                                     input: &result,
@@ -544,21 +588,78 @@ fn original_hls_and_dash_cipher_pairs_keep_membership_and_manifest_selection_wit
                         let oracle_key =
                             matches!(target, TargetProtection::Cenc | TargetProtection::Cbcs)
                                 .then_some((OUTPUT_ID, OUTPUT_KEY));
-                        assert_eq!(
-                            packets(&fixture.parts[index].2, None),
-                            packets(&joined, oracle_key)
-                        );
-                        assert_eq!(
-                            decoded(&fixture.parts[index].2, None),
-                            decoded(&joined, oracle_key)
-                        );
+                        assert_eq!(expected[index].1, packets(&joined, oracle_key));
+                        assert_eq!(expected[index].2, decoded(&joined, oracle_key));
                         std::fs::remove_file(joined).unwrap();
                     }
                     assert_no_tools(&events);
+                    cases += 1;
                 }
             }
         }
     }
+    assert_eq!(cases, 42);
+    for ((_, _, path), (before, _, _)) in fixture.parts.iter().zip(expected) {
+        assert_eq!(std::fs::read(path).unwrap(), before);
+    }
+    eprintln!(
+        "verified {cases} native conversions against independent packet and complete decoded-content oracles"
+    );
+}
+
+fn aes_fixture(fixture: &Fixture, name: &str) -> PathBuf {
+    let input = manifest_fixture(
+        fixture,
+        TargetProtection::Clear,
+        OutputFormat::Hls,
+        &format!("{name}-clear"),
+    );
+    let output = fixture.directory.path().join(name);
+    let empty = InputKeys::default();
+    let hls = HlsInputKeys::default();
+    let key = crate::conversion::HlsOutputKey::new(
+        "https://example.invalid/source-key",
+        crate::conversion::Aes128Key::from_hex(SOURCE_KEY).unwrap(),
+    )
+    .unwrap();
+    let (converter, events) = converter();
+    let source = super::super::source::HlsSource::load(
+        &converter,
+        VerificationSource {
+            input: &input,
+            input_keys: &empty,
+            hls_keys: &hls,
+        },
+    )
+    .unwrap();
+    let report = convert_hls(
+        &converter,
+        ConversionRequest {
+            input: &input,
+            output: &output,
+            format: OutputFormat::Hls,
+            target: TargetProtection::HlsAes128,
+            input_keys: &empty,
+            hls_input_keys: &hls,
+            output_key: None,
+            hls_key_uri: None,
+            hls_output_key: Some(&key),
+        },
+        source,
+    )
+    .unwrap();
+    assert!(report.verification.passed);
+    for ordinal in 0..2 {
+        let text =
+            std::fs::read_to_string(output.join(format!("track-{ordinal:04}/media.m3u8"))).unwrap();
+        assert!(text.contains("METHOD=AES-128"));
+        assert!(text.contains("IV=0x"));
+        assert!(text.contains("#EXT-X-MAP:"));
+        let bytes = std::fs::read(output.join(format!("track-{ordinal:04}/init.mp4"))).unwrap();
+        assert!(crate::inspection::inspect_mp4_metadata(&bytes).is_err());
+    }
+    assert_no_tools(&events);
+    output.join("master.m3u8")
 }
 
 fn oracle_arguments(command: &mut Command, key: Option<(&str, &str)>) {
