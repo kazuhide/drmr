@@ -221,6 +221,8 @@ impl Converter {
                 qualified.input.format.into()
             }
         });
+        let processing =
+            ProcessingSelection::resolve(self.processing_mode, qualified.actual_format, format)?;
         if !qualified.eligible_formats.contains(&format) || !supported(format, request.target) {
             return Err(UNSUPPORTED);
         }
@@ -236,11 +238,7 @@ impl Converter {
                 output,
             },
             required_depth: Some(self.backend.validation_depth),
-            processing: Some(ProcessingSelection::resolve(
-                self.processing_mode,
-                qualified.actual_format,
-                format,
-            )?),
+            processing: Some(processing),
         };
         check_output_location(&plan)?;
         plan.plan_id = identity(&plan)?;

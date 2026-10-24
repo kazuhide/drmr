@@ -187,12 +187,27 @@ impl Converter {
             ));
         let source = super::rebound(request.input, &frozen);
         let qualified = command.validate_source(source, SourceValidationPurpose::Conversion)?;
-        for output in &outputs {
+        let processing = outputs
+            .iter()
+            .map(|output| {
+                Ok(OutputProcessing {
+                    id: output.id.clone(),
+                    selection: ProcessingSelection::resolve(
+                        output.processing.unwrap_or(self.processing_mode),
+                        qualified.actual_format,
+                        output.format,
+                    )?,
+                })
+            })
+            .collect::<Result<Vec<_>, ConversionError>>()?;
+        for (output, processing) in outputs.iter().zip(&processing) {
             if !qualified.eligible_formats.contains(&output.format) {
                 return Err(UNSUPPORTED);
             }
             if !output.drms.is_empty() {
-                command.validate_drm_source(source, &output.drms, output.format, output.target)?;
+                command
+                    .with_processing_clone(processing.selection.resolved)
+                    .validate_drm_source(source, &output.drms, output.format, output.target)?;
             }
         }
         let mut plan = BundlePlan {
@@ -202,21 +217,7 @@ impl Converter {
             source: frozen.inventory().clone(),
             source_format: qualified.actual_format,
             output_root,
-            processing: Some(
-                outputs
-                    .iter()
-                    .map(|output| {
-                        Ok(OutputProcessing {
-                            id: output.id.clone(),
-                            selection: ProcessingSelection::resolve(
-                                output.processing.unwrap_or(self.processing_mode),
-                                qualified.actual_format,
-                                output.format,
-                            )?,
-                        })
-                    })
-                    .collect::<Result<Vec<_>, ConversionError>>()?,
-            ),
+            processing: Some(processing),
             outputs,
             required_depth: Some(self.backend.validation_depth),
         };
@@ -350,7 +351,9 @@ impl Converter {
         }
         for output in &plan.outputs {
             if !output.drms.is_empty() {
-                command.validate_drm_source(source, &output.drms, output.format, output.target)?;
+                command
+                    .with_processing_clone(plan.processing_mode(&output.id))
+                    .validate_drm_source(source, &output.drms, output.format, output.target)?;
             }
         }
         Ok(())

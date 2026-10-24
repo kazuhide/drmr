@@ -274,6 +274,19 @@ impl Converter {
         input_keys: &InputKeys,
         output_key: &HlsOutputKey,
     ) -> Result<ConversionReport, ConversionError> {
+        if self.processing_mode == ProcessingMode::Segments {
+            return self.convert(ConversionRequest {
+                input,
+                output,
+                format: inspection::OutputFormat::Hls,
+                target: TargetProtection::HlsAes128,
+                input_keys,
+                hls_input_keys: &HlsInputKeys::default(),
+                output_key: None,
+                hls_key_uri: None,
+                hls_output_key: Some(output_key),
+            });
+        }
         self.hls_output(input, output, input_keys, output_key)
     }
     pub fn convert_hls_to_hls_aes128(
@@ -285,6 +298,19 @@ impl Converter {
         output_key: &HlsOutputKey,
     ) -> Result<ConversionReport, ConversionError> {
         self.refuse_signaling()?;
+        if self.processing_mode == ProcessingMode::Segments {
+            return self.convert(ConversionRequest {
+                input,
+                output,
+                format: inspection::OutputFormat::Hls,
+                target: TargetProtection::HlsAes128,
+                input_keys,
+                hls_input_keys: hls_keys,
+                output_key: None,
+                hls_key_uri: None,
+                hls_output_key: Some(output_key),
+            });
+        }
         if output_key.associated_iv().is_some() {
             return Err(ConversionError("output-iv-not-used"));
         }
@@ -318,6 +344,9 @@ impl Converter {
         output_key: Option<&OutputKey>,
     ) -> Result<ConversionReport, ConversionError> {
         self.refuse_signaling()?;
+        if self.processing_mode == ProcessingMode::Segments {
+            return Err(ConversionError("processing-container-change-not-supported"));
+        }
         self.hls_input(input, output, target, input_keys, hls_keys, output_key)
     }
     pub fn convert_mp4(
@@ -329,6 +358,9 @@ impl Converter {
         output_key: Option<&OutputKey>,
     ) -> Result<ConversionReport, ConversionError> {
         self.refuse_signaling()?;
+        if self.processing_mode == ProcessingMode::Segments {
+            return Err(ConversionError("processing-segments-source-required"));
+        }
         if target == TargetProtection::HlsSampleAes {
             return Err(ConversionError("target-requires-ts-output"));
         }
@@ -434,6 +466,9 @@ impl Converter {
         output: &Path,
         output_keys: &InputKeys,
     ) -> Result<VerificationReport, ConversionError> {
+        if self.processing_mode == ProcessingMode::Segments {
+            return Err(ConversionError("processing-segments-source-required"));
+        }
         let workspace = workspace()?;
         let source = workspace.path().join("source.mp4");
         let result = workspace.path().join("result.mp4");

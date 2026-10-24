@@ -72,6 +72,9 @@ impl Converter {
         &self,
         request: TrackConversionRequest<'_>,
     ) -> Result<ConversionReport, ConversionError> {
+        if self.processing_mode == super::ProcessingMode::Segments {
+            return Err(ConversionError("processing-segments-source-required"));
+        }
         if self
             .output_signaling
             .as_ref()
@@ -969,6 +972,9 @@ impl Converter {
         input: VerificationSource<'_>,
         purpose: SourceValidationPurpose,
     ) -> Result<SourceQualification, ConversionError> {
+        if self.processing_mode == super::ProcessingMode::Segments {
+            return super::segments::qualify(self, input, purpose);
+        }
         let work = workspace()?;
         let original = self.inspect_input(input.input)?;
         let prepared = prepare_presentation_mode(
@@ -1115,6 +1121,9 @@ impl Converter {
         &self,
         request: VerificationRequest<'_>,
     ) -> Result<VerificationReport, ConversionError> {
+        if self.processing_mode == super::ProcessingMode::Segments {
+            return super::segments::verify(self, request);
+        }
         let work = workspace()?;
         let source_dir = work.path().join("source");
         let result_dir = work.path().join("result");
@@ -2244,6 +2253,10 @@ impl Converter {
         &self,
         request: ConversionRequest<'_>,
     ) -> Result<ConversionReport, ConversionError> {
+        if self.processing_mode == super::ProcessingMode::Segments {
+            validate_output(&request)?;
+            return super::segments::convert(self, request);
+        }
         self.validate_signaling_input(&request)?;
         validate_output(&request)?;
         let work = workspace()?;

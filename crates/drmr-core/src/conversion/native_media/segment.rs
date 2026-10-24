@@ -166,6 +166,7 @@ impl SegmentInput {
         Ok((reader, layout, initialization))
     }
     /// Callback data is provisional until all resource and initialization checks finish.
+    #[cfg(test)]
     pub fn scan(
         &self,
         resource: &Path,
@@ -176,6 +177,7 @@ impl SegmentInput {
         self.scan_with_evidence(resource, keys, stop, visitor)
             .map(|(movie, _)| movie)
     }
+    #[cfg(test)]
     pub fn evidence(
         &self,
         resource: &Path,
@@ -322,9 +324,11 @@ impl<'a> SegmentTransformer<'a> {
             constant_ivs,
         })
     }
+    #[cfg(test)]
     pub fn source(&self) -> &SegmentInput {
         &self.source
     }
+    #[cfg(test)]
     pub fn movie(&self) -> &Movie {
         self.source.movie()
     }
