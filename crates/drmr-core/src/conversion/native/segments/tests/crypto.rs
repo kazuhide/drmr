@@ -69,7 +69,7 @@ fn packaged(source: &Fixture, track: &str, scheme: &str) -> (PathBuf, Vec<PathBu
         .filter(|path| path.extension().is_some_and(|value| value == "m4s"))
         .collect::<Vec<_>>();
     resources.sort();
-    assert!(!resources.is_empty());
+    assert_ne!(resources.as_slice(), [] as [PathBuf; 0]);
     (init, resources)
 }
 
@@ -83,7 +83,10 @@ fn compare_schemes(source: &Fixture, track: &str) {
     for scheme in ["clear", "cenc", "cbcs"] {
         let (init, resources) = packaged(source, track, scheme);
         let observed = oracle(&init, &resources, scheme != "clear");
-        assert!(!observed["packets"].as_array().unwrap().is_empty());
+        assert_ne!(
+            observed["packets"].as_array().unwrap().as_slice(),
+            [] as [serde_json::Value; 0]
+        );
         if let Some(expected) = &expected {
             assert_eq!(&observed, expected, "independent decrypted packets differ");
         } else {

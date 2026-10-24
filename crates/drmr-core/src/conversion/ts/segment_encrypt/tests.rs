@@ -449,6 +449,6 @@ fn pending_bounds_refuse_before_retaining_extra_plaintext_or_slot_metadata() {
         bytes: Zeroizing::new(vec![0; MAX_PES]),
     };
     assert_eq!(bytes.append(1, b"x").unwrap_err(), LIMIT);
-    assert!(bytes.slots.is_empty());
+    assert_eq!(bytes.slots.as_slice(), [] as [u64; 0]);
     assert_eq!(bytes.bytes.len(), MAX_PES);
 }

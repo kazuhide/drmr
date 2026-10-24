@@ -113,7 +113,7 @@ fn saved_plan_execution_cannot_override_processing_even_with_auto() {
             "--json",
         ]);
         assert_eq!(result.status.code(), Some(2), "{mode}");
-        assert!(result.stdout.is_empty());
+        assert_eq!(result.stdout, [] as [u8; 0]);
         let error = String::from_utf8(result.stderr).unwrap();
         assert!(error.contains("--processing"), "{error}");
         assert!(error.contains("--plan"), "{error}");
@@ -148,7 +148,7 @@ fn metadata_only_commands_and_unsaved_plans_do_not_accept_processing_intent() {
     ] {
         let result = invoke(&args);
         assert_eq!(result.status.code(), Some(2), "{args:?}");
-        assert!(result.stdout.is_empty());
+        assert_eq!(result.stdout, [] as [u8; 0]);
     }
 }
 
@@ -171,6 +171,6 @@ fn unknown_processing_values_and_unpublished_aliases_are_usage_errors() {
         command.extend(args);
         let result = invoke(&command);
         assert_eq!(result.status.code(), Some(2), "{command:?}");
-        assert!(result.stdout.is_empty());
+        assert_eq!(result.stdout, [] as [u8; 0]);
     }
 }

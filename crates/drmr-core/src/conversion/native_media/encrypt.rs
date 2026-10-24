@@ -11,6 +11,24 @@ use zeroize::Zeroizing;
 static PREFIX: OnceLock<Result<[u8; 8], ConversionError>> = OnceLock::new();
 static SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
+fn reserve_sequence(allocator: &AtomicU64) -> Result<u32, ConversionError> {
+    let mut current = allocator.load(Ordering::Relaxed);
+    loop {
+        if current >= u64::from(u32::MAX) {
+            return Err(ConversionError("native-output-iv-exhausted"));
+        }
+        match allocator.compare_exchange_weak(
+            current,
+            current + 1,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => return u32::try_from(current).map_err(|_| BAD),
+            Err(observed) => current = observed,
+        }
+    }
+}
+
 pub(super) fn constant_iv() -> Result<Zeroizing<[u8; 16]>, ConversionError> {
     let mut bytes = Zeroizing::new([0; 16]);
     getrandom::fill(bytes.as_mut()).map_err(|_| ConversionError("secure-random-unavailable"))?;
@@ -29,14 +47,10 @@ pub(super) fn iv() -> Result<Zeroizing<[u8; 16]>, ConversionError> {
         })
         .as_ref()
         .map_err(|error| *error)?;
-    let sequence = SEQUENCE
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
-            (n < u64::from(u32::MAX)).then_some(n + 1)
-        })
-        .map_err(|_| ConversionError("native-output-iv-exhausted"))?;
+    let sequence = reserve_sequence(&SEQUENCE)?;
     let mut bytes = Zeroizing::new([0; 16]);
     bytes[..8].copy_from_slice(prefix);
-    bytes[8..12].copy_from_slice(&u32::try_from(sequence).map_err(|_| BAD)?.to_be_bytes());
+    bytes[8..12].copy_from_slice(&sequence.to_be_bytes());
     Ok(bytes)
 }
 
@@ -195,6 +209,32 @@ fn append_span(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn exhausted_iv_sequence_never_wraps_or_reuses_a_reserved_value() {
+        let sequence = AtomicU64::new(u64::from(u32::MAX) - 2);
+        let mut values = std::thread::scope(|scope| {
+            let tasks = (0..8)
+                .map(|_| scope.spawn(|| reserve_sequence(&sequence)))
+                .collect::<Vec<_>>();
+            tasks
+                .into_iter()
+                .filter_map(|task| task.join().unwrap().ok())
+                .collect::<Vec<_>>()
+        });
+        values.sort_unstable();
+        assert_eq!(values, [u32::MAX - 2, u32::MAX - 1]);
+        assert_eq!(sequence.load(Ordering::Relaxed), u64::from(u32::MAX));
+        assert_eq!(
+            reserve_sequence(&sequence).unwrap_err().0,
+            "native-output-iv-exhausted"
+        );
+        let overflow = AtomicU64::new(u64::MAX);
+        assert_eq!(
+            reserve_sequence(&overflow).unwrap_err().0,
+            "native-output-iv-exhausted"
+        );
+        assert_eq!(overflow.load(Ordering::Relaxed), u64::MAX);
+    }
     #[test]
     fn output_cbc_matches_nist_sp800_38a_f2_and_resets_each_subsample() {
         let key: [u8; 16] = hex::decode("2b7e151628aed2a6abf7158809cf4f3c")

@@ -482,13 +482,14 @@ fn assert_matrix_case(
         report.processing.as_ref().unwrap().route,
         crate::inspection::ProcessingRouteId::Fmp4Segments
     );
-    assert!(
+    assert_eq!(
         report
             .processing
             .as_ref()
             .unwrap()
             .required_tools
-            .is_empty()
+            .as_slice(),
+        []
     );
     let output_keys = super::proof::output_keys(request.output_key).unwrap();
     let hls_keys = super::proof::output_hls_keys(request.hls_output_key).unwrap();

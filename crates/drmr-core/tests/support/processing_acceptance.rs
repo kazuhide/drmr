@@ -178,7 +178,7 @@ pub fn assert_processing(
     if report.verification.required_depth == ValidationDepth::Native
         && mode == ProcessingMode::Segments
     {
-        assert!(actual.required_tools.is_empty());
+        assert_eq!(actual.required_tools.as_slice(), []);
     }
 }
 
