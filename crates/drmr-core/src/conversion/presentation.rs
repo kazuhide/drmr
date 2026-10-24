@@ -1794,6 +1794,10 @@ fn apply_transport_metadata(
 ) -> Result<(), ConversionError> {
     for track in prepared {
         track.metadata = media.metadata.clone();
+        // A muxed variant's display size describes its video stream only.
+        if track.report.tracks[0].kind == TrackKind::Audio {
+            track.metadata.resolution = None;
+        }
         if localized.empty_cue_pair {
             track
                 .compatibility
@@ -1859,6 +1863,7 @@ pub(in crate::conversion) fn hls_media_paths(
     let mut paths = Vec::new();
     let mut pending = false;
     let mut pending_metadata = None;
+    let mut pending_role = None;
     let mut audio_count = 0;
     let mut audio_group = None;
     let mut variant_groups = Vec::new();
@@ -1900,6 +1905,17 @@ pub(in crate::conversion) fn hls_media_paths(
                 return Err(ConversionError("track-count-limit"));
             }
             pending_metadata = Some(metadata::variant(&attrs)?);
+            pending_role = attrs.get("CODECS").map(|codecs| {
+                if !codecs.is_empty()
+                    && codecs
+                        .split(',')
+                        .all(|codec| codec.trim().starts_with("mp4a."))
+                {
+                    TrackKind::Audio
+                } else {
+                    TrackKind::Video
+                }
+            });
             variant_groups.push(attrs.get("AUDIO").map(str::to_owned));
             pending = true;
         } else if !line.starts_with('#') {
@@ -1909,7 +1925,7 @@ pub(in crate::conversion) fn hls_media_paths(
             paths.push(MediaPath {
                 path: hls::local_resource(&root, line)?,
                 // Resolve variant roles only after every rendition declaration is known.
-                role: None,
+                role: pending_role.take(),
                 variants: 0,
                 metadata: pending_metadata
                     .take()
@@ -1939,11 +1955,33 @@ fn reconcile_media_paths(
     separate_audio: bool,
     variants: usize,
 ) -> Result<Vec<MediaPath>, ConversionError> {
+    let audio = paths
+        .iter()
+        .filter(|media| media.metadata.audio.is_some())
+        .map(|media| (media.path.clone(), media.metadata.clone()))
+        .collect::<std::collections::BTreeMap<_, _>>();
     let mut seen = std::collections::BTreeMap::new();
     let mut unique = Vec::new();
     for mut media in paths {
-        if separate_audio && media.role.is_none() {
+        if media.metadata.audio.is_none()
+            && let Some(rendition) = audio.get(&media.path)
+        {
+            if media.role == Some(TrackKind::Video)
+                || media.metadata.resolution.is_some()
+                || media.metadata.audio_group.as_deref()
+                    != rendition.audio.as_ref().map(|audio| audio.group.as_str())
+            {
+                return Err(ConversionError("hls-audio-association-not-supported"));
+            }
+            // One audio playlist can be both a rendition and an audio-only variant.
+            // Its native stream role is still checked after opening the media.
+            media.role = Some(TrackKind::Audio);
+            media.metadata = rendition.clone();
+        } else if separate_audio && media.role.is_none() {
             media.role = Some(TrackKind::Video);
+        } else if !separate_audio && media.role == Some(TrackKind::Video) {
+            // Without a separate audio group this variant may contain both streams.
+            media.role = None;
         }
         // Canonical aliases must agree before any duplicate resource can be discarded.
         match seen.get(&media.path) {
@@ -2304,6 +2342,59 @@ impl Converter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn audio_only_variant_aliases_retain_rendition_metadata_in_either_order() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(directory.path().join("audio.m3u8"), "#EXTM3U\n").unwrap();
+        let manifest = directory.path().join("master.m3u8");
+        let rendition = "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"a\",NAME=\"Main\",LANGUAGE=\"en\",DEFAULT=YES,AUTOSELECT=YES,CHANNELS=\"2\",URI=\"audio.m3u8\"\n";
+        for codecs in ["", ",CODECS=\"mp4a.40.2\""] {
+            let variant =
+                format!("#EXT-X-STREAM-INF:BANDWIDTH=100,AUDIO=\"a\"{codecs}\n./audio.m3u8\n");
+            for body in [
+                format!("{rendition}{variant}"),
+                format!("{variant}{rendition}"),
+            ] {
+                fs::write(&manifest, format!("#EXTM3U\n{body}")).unwrap();
+                let paths = hls_media_paths(&manifest).unwrap();
+                assert_eq!(paths.len(), 1);
+                assert_eq!(paths[0].role, Some(TrackKind::Audio));
+                assert_eq!(paths[0].variants, 1);
+                assert_eq!(paths[0].metadata.audio_group, None);
+                let audio = paths[0].metadata.audio.as_ref().unwrap();
+                assert_eq!(audio.name.as_deref(), Some("Main"));
+                assert_eq!(audio.language, "en");
+                assert_eq!(audio.channels.as_deref(), Some("2"));
+                assert_eq!(audio.is_default, Some(true));
+            }
+        }
+    }
+
+    #[test]
+    fn audio_only_variant_aliases_cannot_hide_conflicting_video_declarations() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(directory.path().join("audio.m3u8"), "#EXTM3U\n").unwrap();
+        let manifest = directory.path().join("master.m3u8");
+        let rendition = "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"a\",NAME=\"Main\",URI=\"audio.m3u8\"\n";
+        for attributes in [
+            "AUDIO=\"a\",CODECS=\"avc1.64001e,mp4a.40.2\"",
+            "AUDIO=\"a\",RESOLUTION=64x64",
+            "AUDIO=\"wrong\",CODECS=\"mp4a.40.2\"",
+        ] {
+            fs::write(
+                &manifest,
+                format!(
+                    "#EXTM3U\n{rendition}#EXT-X-STREAM-INF:BANDWIDTH=100,{attributes}\naudio.m3u8\n"
+                ),
+            )
+            .unwrap();
+            assert_eq!(
+                hls_media_paths(&manifest).unwrap_err().0,
+                "hls-audio-association-not-supported"
+            );
+        }
+    }
 
     #[test]
     fn audio_associations_cannot_be_added_to_unrelated_variants() {
