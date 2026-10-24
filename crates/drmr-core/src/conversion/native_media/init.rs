@@ -208,6 +208,8 @@ fn table(track: &Mp4Box) -> Result<Mp4Box, ConversionError> {
                 | b"saio"
                 | b"sgpd"
                 | b"sbgp"
+                | b"free"
+                | b"skip"
         ) {
             return Err(UNSUPPORTED);
         }

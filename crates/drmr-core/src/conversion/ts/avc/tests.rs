@@ -530,3 +530,38 @@ fn timing_sei_rejects_fields_duplicates_and_malformed_envelopes() {
         assert!(c.access_unit(&[&bad, &frame]).is_err());
     }
 }
+
+#[test]
+fn sei_messages_precede_the_primary_coded_picture() {
+    let (sps, pps) = parameter_sets(true, true, None, 0);
+    let config = Configuration::parse(&sps, &pps).unwrap();
+    let frame = header(true, false, 0, 0, 0);
+    let mut user_data = vec![6, 5, 32];
+    user_data.extend_from_slice(b"0123456789abcdef");
+    user_data.extend_from_slice(b"rendition-marker");
+    user_data.push(0x80);
+    let timing = [6, 1, 1, 0x04, 0x80];
+    let recovery = [6, 6, 1, 0xc4, 0x80];
+    for sei in [user_data.as_slice(), &timing, &recovery] {
+        assert_eq!(config.access_unit(&[sei, &frame]).unwrap().slice_count, 1);
+        assert_eq!(
+            config.access_unit(&[&frame, sei]).unwrap_err().0,
+            "ts-nal-type-not-supported"
+        );
+    }
+    let mut short_uuid = vec![6, 5, 15];
+    short_uuid.extend_from_slice(b"0123456789abcde");
+    short_uuid.push(0x80);
+    let mut truncated_payload = user_data.clone();
+    truncated_payload[2] += 1;
+    let mut no_trailing_bits = user_data;
+    no_trailing_bits.pop();
+    for malformed in [
+        short_uuid,
+        truncated_payload,
+        no_trailing_bits,
+        vec![6, 5, 16, 0, 0, 3, 4, 0x80],
+    ] {
+        assert!(config.access_unit(&[&malformed, &frame]).is_err());
+    }
+}

@@ -13,25 +13,24 @@ fn console_cancellation(command: &str, event: &str) {
     let tools = root.path().join("tools");
     let control = root.path().join("control");
     std::fs::create_dir(&control).unwrap();
-    install(
-        &tools.join("ffprobe"),
-        &ToolSpec::default()
-            .with("pid_file", control.join("media.pid").to_str().unwrap())
-            .with(
-                "descendant_pid_file",
-                control.join("descendant.pid").to_str().unwrap(),
-            )
-            .with(
-                "descendant_lock_file",
-                control.join("descendant.lock").to_str().unwrap(),
-            )
-            .with("descendant_detached_console", "1")
-            .with(
-                "release_file",
-                control.join("never-release").to_str().unwrap(),
-            ),
-    )
-    .unwrap();
+    let specification = ToolSpec::default()
+        .with("pid_file", control.join("media.pid").to_str().unwrap())
+        .with(
+            "descendant_pid_file",
+            control.join("descendant.pid").to_str().unwrap(),
+        )
+        .with(
+            "descendant_lock_file",
+            control.join("descendant.lock").to_str().unwrap(),
+        )
+        .with("descendant_detached_console", "1")
+        .with(
+            "release_file",
+            control.join("never-release").to_str().unwrap(),
+        );
+    for program in ["ffprobe", "ffmpeg"] {
+        install(&tools.join(program), &specification).unwrap();
+    }
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     let output = root.path().join("controller.stdout");
     let errors = root.path().join("controller.stderr");

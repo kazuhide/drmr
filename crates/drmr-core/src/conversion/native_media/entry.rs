@@ -188,7 +188,7 @@ fn semantic_boxes(
     let mut boxes = Vec::new();
     for child in &entry.children {
         let kind = child.kind();
-        if kind == config || kind == *b"sinf" {
+        if kind == config || matches!(&kind, b"sinf" | b"free" | b"skip") {
             continue;
         }
         if kind == *b"btrt" {
@@ -331,6 +331,31 @@ mod tests {
         let nodes = mp4::parse_boxes(&data).unwrap();
         assert!(semantic_boxes(&nodes[0], *b"avcC", &data).is_err());
     }
+
+    #[test]
+    fn neutral_sample_entry_padding_is_ignored_without_hiding_live_declarations() {
+        let mut value = vec![0; 78];
+        let aspect = [0, 0, 0, 2, 0, 0, 0, 1];
+        value.extend(boxed(*b"avcC", &[1, 2, 3, 4]));
+        value.extend(boxed(*b"pasp", &aspect));
+        value.extend(boxed(*b"free", &boxed(*b"sinf", &[])));
+        value.extend(boxed(*b"skip", &[1, 2, 3]));
+        let data = boxed(*b"avc1", &value);
+        let nodes = mp4::parse_boxes(&data).unwrap();
+        assert_eq!(
+            semantic_boxes(&nodes[0], *b"avcC", &data).unwrap(),
+            vec![SemanticBox {
+                kind: *b"pasp",
+                payload: aspect.to_vec(),
+            }]
+        );
+        encryption(&nodes[0], &data).unwrap();
+        value.extend(boxed(*b"sinf", &[]));
+        let data = boxed(*b"avc1", &value);
+        let nodes = mp4::parse_boxes(&data).unwrap();
+        assert!(encryption(&nodes[0], &data).is_err());
+    }
+
     #[test]
     fn semantic_metadata_shapes_and_reserved_bits_are_checked() {
         semantic(*b"pasp", &[0, 0, 0, 1, 0, 0, 0, 1]).unwrap();

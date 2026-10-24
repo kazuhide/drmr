@@ -89,6 +89,149 @@ fn changed_original_sample_content_is_a_negative_completed_comparison() {
     assert_eq!(report.decode_evidence, DecodeEvidence::not_requested());
 }
 
+fn with_display_matrices(bytes: &[u8], movie: [i32; 9], track: [i32; 9]) -> Vec<u8> {
+    let nodes = crate::mp4::parse_boxes(bytes).unwrap();
+    let video_headers: Vec<_> = crate::mp4::walk(&nodes)
+        .into_iter()
+        .filter(|node| node.kind() == *b"trak")
+        .filter(|node| {
+            let media = node
+                .children
+                .iter()
+                .find(|node| node.kind() == *b"mdia")
+                .unwrap();
+            let handler = media
+                .children
+                .iter()
+                .find(|node| node.kind() == *b"hdlr")
+                .unwrap();
+            handler.header.payload(bytes).get(8..12) == Some(b"vide")
+        })
+        .flat_map(|node| node.children.iter().filter(|node| node.kind() == *b"tkhd"))
+        .map(|node| node.header.offset)
+        .collect();
+    let mut changed = bytes.to_vec();
+    for node in crate::mp4::walk(&nodes) {
+        let (matrix, at) = match &node.kind() {
+            b"mvhd" => (movie, 36),
+            b"tkhd" if video_headers.contains(&node.header.offset) => (track, 40),
+            _ => continue,
+        };
+        let version = node.header.payload(bytes)[0];
+        assert!(version <= 1);
+        let start = node.header.offset + node.header.header_size + at + usize::from(version) * 12;
+        for (index, value) in matrix.into_iter().enumerate() {
+            changed[start + index * 4..start + (index + 1) * 4]
+                .copy_from_slice(&value.to_be_bytes());
+        }
+    }
+    changed
+}
+
+#[test]
+fn equivalent_composed_display_matrices_keep_all_native_evidence_without_rounding() {
+    let identity = [0x10000_i32, 0, 0, 0, 0x10000, 0, 0, 0, 0x4000_0000];
+    let mut scale = identity;
+    scale[0] = -0x18000;
+    scale[4] = 0x8000;
+    let mut translated = identity;
+    translated[6] = 0x20000;
+    translated[7] = -0x10000;
+    let mut composed = scale;
+    composed[6] = -0x30000;
+    composed[7] = -0x8000;
+    let original = std::fs::read(fixture()).unwrap();
+    let source_bytes = with_display_matrices(&original, scale, translated);
+    let result_bytes = with_display_matrices(&original, identity, composed);
+    let root = crate::native::private_tempdir().unwrap();
+    let source = root.path().join("source.mp4");
+    let result = root.path().join("result.mp4");
+    std::fs::write(&source, &source_bytes).unwrap();
+    std::fs::write(&result, &result_bytes).unwrap();
+    let (converter, events) = converter();
+    let empty = InputKeys::default();
+    let hls = HlsInputKeys::default();
+    for input in [&source, &result] {
+        let admitted = converter
+            .validate_source(
+                VerificationSource {
+                    input,
+                    input_keys: &empty,
+                    hls_keys: &hls,
+                },
+                SourceValidationPurpose::Conversion,
+            )
+            .unwrap();
+        assert!(admitted.verification.passed);
+    }
+    let compare = || {
+        converter
+            .verify_mp4(&source, &empty, &result, &empty)
+            .unwrap()
+    };
+    assert!(compare().passed);
+    let nodes = crate::mp4::parse_boxes(&result_bytes).unwrap();
+    let headers: Vec<_> = crate::mp4::walk(&nodes)
+        .into_iter()
+        .filter(|node| node.kind() == *b"tkhd")
+        .collect();
+    assert_eq!(headers.len(), 2);
+    // The video has the same composed transform. Audio retains its original
+    // raw matrix: the movie's coordinate transform does not rescale sound.
+    for (track, header) in headers.into_iter().enumerate() {
+        let start = header.header.offset + header.header.header_size + 40;
+        assert_eq!(header.header.payload(&result_bytes)[0], 0);
+        for index in 0..9 {
+            let mut changed = result_bytes.clone();
+            changed[start + index * 4 + 3] ^= 1;
+            std::fs::write(&result, &changed).unwrap();
+            let negative = compare();
+            assert!(!negative.passed, "track {track}, coefficient {index}");
+            assert!(!negative.checks.stream_metadata.is_pass());
+            assert!(negative.checks.packet_payloads_equal);
+            assert!(negative.checks.packet_timing_equal);
+            assert_eq!(negative.decode_evidence, DecodeEvidence::not_requested());
+            assert_eq!(std::fs::read(&source).unwrap(), source_bytes);
+            assert_eq!(std::fs::read(&result).unwrap(), changed);
+        }
+    }
+    std::fs::write(&result, &result_bytes).unwrap();
+    let restored = compare();
+    assert!(restored.passed);
+    assert_eq!(restored.decode_evidence, DecodeEvidence::not_requested());
+    std::fs::write(&result, &original).unwrap();
+    let audio = converter
+        .backend
+        .native_verify_views(
+            super::super::verify::StreamView::new(&source, 1, None),
+            super::super::verify::StreamView::new(&result, 1, None),
+        )
+        .unwrap();
+    assert!(
+        audio.passed,
+        "movie display coordinates must not rescale audio"
+    );
+    let joint = compare();
+    assert!(
+        !joint.passed,
+        "joint comparison still requires the video transform"
+    );
+    assert!(!joint.checks.stream_metadata.is_pass());
+    assert!(joint.checks.packet_payloads_equal);
+    assert!(joint.checks.packet_timing_equal);
+    std::fs::write(&result, &result_bytes).unwrap();
+    assert!(compare().passed);
+    assert_eq!(std::fs::read(&source).unwrap(), source_bytes);
+    assert_eq!(std::fs::read(&result).unwrap(), result_bytes);
+    assert_eq!(std::fs::read(fixture()).unwrap(), original);
+    assert!(
+        events
+            .records()
+            .iter()
+            .all(|record| record.get("stage").and_then(serde_json::Value::as_str) != Some("tool"))
+    );
+}
+
 #[test]
 fn independent_packager_track_normalization_keeps_original_sample_evidence() {
     let (converter, _) = converter();

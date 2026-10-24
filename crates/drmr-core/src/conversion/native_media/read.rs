@@ -105,6 +105,9 @@ impl<'a> Reader<'a> {
                     moofs.push(at..end);
                 }
                 b"ftyp" | b"styp" | b"sidx" | b"ssix" | b"mfra" | b"free" | b"skip" | b"pssh" => {}
+                // A conventional empty wide box is padding. Nonempty legacy
+                // variants can contain media and require a separate reader.
+                b"wide" if size == 8 && head == 8 => {}
                 b"emsg" => return Err(ConversionError("inband-events-not-supported")),
                 _ => return Err(UNSUPPORTED),
             }
@@ -261,6 +264,36 @@ pub(super) fn disjoint(ranges: &mut [Range<u64>]) -> Result<(), ConversionError>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_empty_conventional_wide_box_is_neutral_top_level_padding() {
+        let root = crate::native::private_tempdir().unwrap();
+        let input = root.path().join("layout.mp4");
+        let stop = Stop::new();
+        for (kind, payload) in [
+            (*b"wide", Vec::new()),
+            (*b"wide", vec![0; 8]),
+            (*b"uuid", vec![0; 16]),
+            (*b"zzzz", Vec::new()),
+        ] {
+            let mut bytes = u32::try_from(payload.len() + 8)
+                .unwrap()
+                .to_be_bytes()
+                .to_vec();
+            bytes.extend(kind);
+            bytes.extend(payload);
+            bytes.extend([0, 0, 0, 8, b'm', b'o', b'o', b'v']);
+            std::fs::write(&input, &bytes).unwrap();
+            let layout = Reader::open(&input, &stop, true).unwrap().layout();
+            if kind == *b"wide" && bytes.len() == 16 {
+                assert_eq!(layout.unwrap().movie_offset, 8);
+            } else {
+                assert!(matches!(layout, Err(UNSUPPORTED)));
+            }
+            assert_eq!(std::fs::read(&input).unwrap(), bytes);
+        }
+    }
+
     #[test]
     fn logarithmic_mdat_lookup_keeps_exact_payload_boundaries_and_refusals() {
         let mdats = [10..20, 30..30, 40..50, 60..70];

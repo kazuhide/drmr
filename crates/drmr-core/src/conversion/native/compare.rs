@@ -30,7 +30,6 @@ fn entry_equal(a: &Track, b: &Track) -> Result<bool, ConversionError> {
         && (aac || (x.channels == y.channels && x.sample_rate == y.sample_rate))
         && x.sample_size == y.sample_size
         && x.language.as_deref().unwrap_or("und") == y.language.as_deref().unwrap_or("und")
-        && x.display_matrix == y.display_matrix
         && x.display_width == y.display_width
         && x.display_height == y.display_height
         && x.volume == y.volume
@@ -153,10 +152,24 @@ impl Backend {
             (None, None) => true,
             _ => false,
         };
+        let matrices_equal = if a.descriptor.kind == crate::inspection::TrackKind::Video {
+            super::semantics::display_matrix(
+                &first.movie.matrix,
+                &a.descriptor.sample_entry_metadata.display_matrix,
+            )? == super::semantics::display_matrix(
+                &second.movie.matrix,
+                &b.descriptor.sample_entry_metadata.display_matrix,
+            )?
+        } else {
+            // A movie's coordinate transform does not affect sound. Preserve
+            // the audio track's own raw matrix rather than applying that transform.
+            a.descriptor.sample_entry_metadata.display_matrix
+                == b.descriptor.sample_entry_metadata.display_matrix
+        };
         let metadata = entry_equal(a, b)?
             && first.movie.rate == second.movie.rate
             && first.movie.volume == second.movie.volume
-            && first.movie.matrix == second.movie.matrix;
+            && matrices_equal;
         let payload = a.samples.count == b.samples.count
             && match (a.samples.canonical_payload, b.samples.canonical_payload) {
                 (Some(x), Some(y)) => x == y,
