@@ -20,7 +20,7 @@ use std::sync::Arc;
 pub(crate) fn error_hint(code: &str) -> Option<&'static str> {
     match code {
         "output-spec-invalid" => Some(
-            "Use a schema-version-1 output list with unique safe IDs and supported format, protection, DRM systems and manifest-check policy.",
+            "Use a version-1 output recipe, or version 2 for per-output processing, with unique safe IDs and supported format, protection, DRM systems and manifest-check policy.",
         ),
         "execution-plan-output-keys-mismatch" => Some(
             "Match schema-version-2 output key entries to the encrypted output IDs; omit clear outputs and unused entries.",

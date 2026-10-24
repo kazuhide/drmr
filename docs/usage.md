@@ -1,6 +1,6 @@
 # Using drmr
 
-Install `drmr` before following these examples. Rust checks complete supported media by default. Native analysis and verification need no external media tools. Conversion uses Shaka Packager on packaging routes; encrypted finite progressive output also uses one FFmpeg container copy. Optional `--decode` adds complete FFmpeg decoding. Run `drmr doctor` to check installed external tools. The [Docker guide](docker.md) provides an alternative with those tools included. Commands process existing media; they do not encode new video qualities. For PowerShell examples and Windows file permissions, see the [Windows guide](windows.md).
+Install `drmr` before following these examples. Rust checks complete supported media by default. Native analysis and verification need no external media tools. Complete-track packaging uses Shaka Packager; encrypted finite progressive output also uses one FFmpeg container copy. Optional `--decode` adds complete FFmpeg decoding. Run `drmr doctor` to check installed external tools. The [Docker guide](docker.md) provides an alternative with those tools included. Commands process existing media; they do not encode new video qualities. For PowerShell examples and Windows file permissions, see the [Windows guide](windows.md).
 
 Use the [multiple-output workflow](multiple-outputs.md) to produce HLS for FairPlay
 and CBCS DASH for Widevine/PlayReady from one qualified source. It uses the same
@@ -29,6 +29,34 @@ then `convert --plan ./conversion.plan.json` and
 `verify --plan ./conversion.plan.json`, with keys supplied separately when needed.
 For DASH and MP4 URLs, plan from `./source/input.mpd` and `./source/input.mp4`
 respectively. The [URL input table](#convert-a-url) lists the acquisition limits.
+
+## Select a processing mode
+
+Use `--processing auto|segments|stitch` with direct `convert` or `plan --save`:
+
+| Mode | Behavior |
+| --- | --- |
+| `auto` | Select a qualified route for the input and requested output. Omitting the option retains the existing packaging behavior. |
+| `segments` | Process the original segments, retaining their sample membership, timestamps and boundaries. This requires a supported segmented source and matching media containers. |
+| `stitch` | Join source segments when needed, then package the media in the requested output format. MP4 output is a file; HLS/DASH output is segmented again. Original segment boundaries are not retained. |
+
+For a supported clear TS HLS source, preserve its segment boundaries with:
+
+```sh
+drmr plan source/input.m3u8 --to clear --format hls-ts --processing segments \
+  --output result --save conversion.plan.json
+drmr convert --plan conversion.plan.json
+drmr verify --plan conversion.plan.json
+```
+
+For TS to fragmented MP4 DASH, select `--processing stitch` instead. The output
+format and protection remain separate `--format` and `--to` choices. HLS/DASH
+resegmentation uses a two-second target; actual cuts follow media frame boundaries.
+An explicitly selected mode that cannot satisfy the profile is refused rather
+than replaced. Saved plans fix the selected mode and boundary behavior, so
+`convert --plan` refuses `--processing`, including `auto`. No mode changes the
+required native checks or the meaning of `--decode`. See
+[processing and timing](media-processing.md#generic-conversion-and-timing-limits).
 
 ## Read metadata and plan a conversion
 
