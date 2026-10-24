@@ -61,7 +61,7 @@ fn relocated(source: &[u8], movie_first: bool, wide_offsets: bool) -> Vec<u8> {
         .iter()
         .filter(|node| node.kind() == *b"mdat")
         .collect::<Vec<_>>();
-    assert!(!media.is_empty());
+    assert_ne!(media, [] as [&Mp4Box; 0]);
     let movie_at = if movie_first {
         file_type.len()
     } else {

@@ -137,7 +137,7 @@ fn human_plan_explains_unknown_sample_coverage_and_conditional_tools_without_run
     assert!(text.contains("Conditional route: fmp4-hls-presentation"));
     assert!(text.contains("Native minimum tools: shaka-packager"));
     assert!(text.contains("Additional complete decoding requires FFmpeg and ffprobe"));
-    assert!(text.contains("encrypted-finite-progressive-source-copy-requires-ffmpeg"));
+    assert!(!text.contains("encrypted-finite-progressive-source-copy-requires-ffmpeg"));
     assert!(text.contains("Source revalidation is required"));
     assert!(text.contains("manifest declaration"));
     assert!(

@@ -709,7 +709,7 @@ mod packet_tests {
                 ConversionError("decoder-tool-requires-decode")
             );
         }
-        assert!(events.records().is_empty());
+        assert_eq!(events.records(), []);
         assert!(converter.with_decode(true).backend.require_decode().is_ok());
     }
 
