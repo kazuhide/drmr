@@ -850,7 +850,7 @@ The report has `scope: "manifest-only"` and `media_verified: false`. It reads no
 
 ## Processing units and storage
 
-Select `--processing` on direct `convert` or `plan --save`. `auto` retains the existing default packaging behavior. `segments` processes supported matching containers at their original segment boundaries. `stitch` joins when needed, then writes MP4 or segments HLS/DASH again at a two-second target. Explicit unsupported modes are refused. The saved choice cannot be overridden by `convert --plan`.
+Select `--processing` on direct `convert` or `plan --save`. `auto` retains the existing default packaging behavior. `segments` processes supported matching containers at their original segment boundaries. `stitch` joins when needed, then writes MP4 or segments HLS/DASH again at a two-second target. Explicit unsupported modes are refused. The saved choice cannot be overridden by `convert --plan`. fMP4 with two edits for a partial final AAC frame requires `stitch`.
 
 Native `segments` checks sample membership and clocks without a whole-track intermediate. `--decode` can still prepare complete tracks and uses Shaka Packager for TS preparation. Complete source-to-result checks precede publication. Metadata and temporary media remain bounded; this mode promises neither zero temporary storage nor a measured speedup.
 

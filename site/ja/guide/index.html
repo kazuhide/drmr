@@ -1958,7 +1958,7 @@ drmr verify result/dash/manifest.mpd --manifest-only --json
 <tr><th scope="row"><code>segments</code></th><td>対応する同一コンテナの元セグメントを処理し、境界・サンプルの所属・時刻を保持</td></tr>
 <tr><th scope="row"><code>stitch</code></th><td>必要な復号・結合後、MP4 または HLS/DASH を出力。HLS/DASH は二秒を目標に再分割</td></tr>
 </tbody></table></div>
-<p>直接の <code>convert</code> と <code>plan --save</code> で指定します。未対応の方式は理由を示して拒否し、別方式へ切り替えません。保存した処理方式は <code>convert --plan</code> で上書きできません。Rust の <code>segments</code> 検査では全編の結合ファイルを作りません。<code>--decode</code> は別途トラック全体を準備する場合があり、TS の準備には Shaka Packager も使います。<code>stitch</code> は元の境界を保証しません。</p>
+<p>直接の <code>convert</code> と <code>plan --save</code> で指定します。未対応の方式は理由を示して拒否し、別方式へ切り替えません。保存した処理方式は <code>convert --plan</code> で上書きできません。Rust の <code>segments</code> 検査では全編の結合ファイルを作りません。<code>--decode</code> は別途トラック全体を準備する場合があり、TS の準備には Shaka Packager も使います。<code>stitch</code> は元の境界を保証しません。二つの編集項目で最後の AAC フレームの一部だけを再生する fMP4 は <code>stitch</code> を使います。</p>
 <p>作業用ディスクには原本のほか、比較用の復号済みデータや変換結果の候補も保存するため、元データと同じ空き容量だけでは足りない場合があります。必要な容量は処理経路によって異なります。十分な空き容量と適切なアクセス権を確保し、原本と鍵は独立検証が終わるまで保持してください。</p>
 <p>複数出力では、各出力のコピーを作成してバイト列を照合し、出力ルート全体を配置する直前まで保持します。独立した計画検証でも、各結果のコピーを最後の整合性確認まで保持します。各出力を別々に作成することもあり、必要な作業用ディスクの容量はコンテンツの長さと出力数に応じて増えます。コンテンツ全体をメモリに保持する方式ではなく、ディスクへ逐次保存します。空き容量を確保し、一時領域の削除が終わるまで待ってください。</p>
 <p>参照（英語）: <a href="https://github.com/kazuhide/drmr/blob/main/docs/media-processing.md">処理方法とコンテンツ全体の検証</a>。</p>
