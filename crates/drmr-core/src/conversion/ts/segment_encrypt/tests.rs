@@ -267,20 +267,19 @@ fn encryption_growth_inserts_a_continuation_after_the_final_original_slot() {
     let mut window = Window::default();
     window.push(packet).unwrap();
     let mut encoder = SegmentEncryptor::new();
-    encoder
-        .protect(
-            (256, TrackKind::Video),
-            Pending {
-                first: 0,
-                slots: vec![0],
-                bytes: Zeroizing::new(pes),
-            },
-            &mut window,
-            &key,
-            &iv,
-            &Stop::new(),
-        )
-        .unwrap();
+    SegmentEncryptor::protect(
+        (256, TrackKind::Video),
+        &Pending {
+            first: 0,
+            slots: vec![0],
+            bytes: Zeroizing::new(pes),
+        },
+        &mut window,
+        &key,
+        &iv,
+        &Stop::new(),
+    )
+    .unwrap();
     assert_eq!(window.get(0).unwrap().extra.len(), 1);
     let mut output = Vec::new();
     encoder

@@ -53,11 +53,14 @@ impl Pending {
     }
 }
 
+struct Continuation {
+    packet: Box<Zeroizing<[u8; 188]>>,
+}
 struct Slot {
     packet: Zeroizing<[u8; 188]>,
     // SAMPLE-AES packets still contain clear regions. Keep their allocations
     // stable while the pointer vector grows, just as for the original slots.
-    extra: Vec<Box<Zeroizing<[u8; 188]>>>,
+    extra: Vec<Continuation>,
 }
 #[derive(Default)]
 struct Window {
@@ -140,26 +143,7 @@ impl SegmentEncryptor {
         }
         let modified = metadata.modified().map_err(|_| BAD)?;
         // Admission and native codec/clock checks both precede output creation.
-        self.clear.segment(source, stop)?;
-        let audio = &mut self.audio;
-        self.original
-            .segment_with(source, stop, &mut |_, kind, bytes, _, _| {
-                if kind == TrackKind::Audio {
-                    canonical::Config::audio_adts(bytes)?;
-                    let current = [
-                        (((bytes[2] >> 6) + 1) << 3) | ((bytes[2] >> 2 & 15) >> 1),
-                        ((bytes[2] >> 2 & 1) << 7)
-                            | ((((bytes[2] & 1) << 2) | (bytes[3] >> 6)) << 3),
-                    ];
-                    if audio.is_some_and(|old| old != current) {
-                        return Err(ConversionError("ts-program-or-configuration-changed"));
-                    }
-                    *audio = Some(current);
-                }
-                Ok(())
-            })?;
-        let pmt = self.clear.sample_pmt(self.audio)?;
-        let pmt_pid = self.clear.pmt_pid().ok_or(BAD)?;
+        let (pmt, pmt_pid) = self.admit(source, stop)?;
         checkpoint(stop)?;
         let mut input = std::io::BufReader::new(held);
         let mut output = std::io::BufWriter::new(files::create_new(destination)?);
@@ -206,7 +190,7 @@ impl SegmentEncryptor {
             {
                 if start {
                     if let Some(previous) = pending.remove(&id) {
-                        self.protect((id, kind), previous, &mut window, key, iv, stop)?;
+                        Self::protect((id, kind), &previous, &mut window, key, iv, stop)?;
                     }
                     pending.insert(
                         id,
@@ -236,7 +220,7 @@ impl SegmentEncryptor {
                 .find(|t| t.pid == id)
                 .ok_or(BAD)?
                 .kind;
-            self.protect((id, kind), pes, &mut window, key, iv, stop)?;
+            Self::protect((id, kind), &pes, &mut window, key, iv, stop)?;
         }
         self.emit(&mut window, metadata.len() / 188, &mut output, stop)?;
         output.flush().map_err(|_| BAD)?;
@@ -252,10 +236,33 @@ impl SegmentEncryptor {
         checkpoint(stop)?;
         self.encrypted.segment(destination, stop)
     }
+    fn admit(&mut self, source: &Path, stop: &Stop) -> Result<(Vec<u8>, u16), ConversionError> {
+        self.clear.segment(source, stop)?;
+        let audio = &mut self.audio;
+        self.original
+            .segment_with(source, stop, &mut |_, kind, bytes, _, _| {
+                if kind == TrackKind::Audio {
+                    canonical::Config::audio_adts(bytes)?;
+                    let current = [
+                        (((bytes[2] >> 6) + 1) << 3) | ((bytes[2] >> 2 & 15) >> 1),
+                        ((bytes[2] >> 2 & 1) << 7)
+                            | ((((bytes[2] & 1) << 2) | (bytes[3] >> 6)) << 3),
+                    ];
+                    if audio.is_some_and(|old| old != current) {
+                        return Err(ConversionError("ts-program-or-configuration-changed"));
+                    }
+                    *audio = Some(current);
+                }
+                Ok(())
+            })?;
+        Ok((
+            self.clear.sample_pmt(self.audio)?,
+            self.clear.pmt_pid().ok_or(BAD)?,
+        ))
+    }
     fn protect(
-        &self,
         track: (u16, TrackKind),
-        pes: Pending,
+        pes: &Pending,
         window: &mut Window,
         key: &Aes128Key,
         iv: &SegmentIv,
@@ -307,10 +314,9 @@ impl SegmentEncryptor {
             }
             let end = (position + 184).min(rewritten.len());
             queued.extra.try_reserve(1).map_err(|_| LIMIT)?;
-            queued.extra.push(Box::new(continuation_packet(
-                track.0,
-                &rewritten[position..end],
-            )?));
+            queued.extra.push(Continuation {
+                packet: Box::new(continuation_packet(track.0, &rewritten[position..end])?),
+            });
             position = end;
         }
         Ok(())
@@ -327,7 +333,7 @@ impl SegmentEncryptor {
             let mut slot = window.slots.pop_front().ok_or(BAD)?;
             self.write_packet(&mut slot.packet, output)?;
             for packet in &mut slot.extra {
-                self.write_packet(packet, output)?;
+                self.write_packet(&mut packet.packet, output)?;
             }
             window.first = window.first.checked_add(1).ok_or(LIMIT)?;
         }

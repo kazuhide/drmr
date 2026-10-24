@@ -258,7 +258,10 @@ fn text_file(path: &Path, text: &str, stop: &Stop) -> Result<(), ConversionError
         return Err(BAD);
     }
     let mut output = files::create_new(path)?;
-    output.write_all(text.as_bytes()).map_err(|_| BAD)?;
+    for chunk in text.as_bytes().chunks(64 * 1024) {
+        check(stop)?;
+        output.write_all(chunk).map_err(|_| BAD)?;
+    }
     output.sync_all().map_err(|_| BAD)
 }
 
@@ -270,6 +273,103 @@ fn audio_only(part: &HlsPart) -> bool {
                 "ac-3" | "ec-3" | "opus" | "Opus" | "fLaC" | "flac"
             )
     })
+}
+
+fn write_media(
+    directory: &Path,
+    part: &HlsPart,
+    measure: &Measured,
+    stop: &Stop,
+) -> Result<(), ConversionError> {
+    let mut media = format!(
+        "#EXTM3U\n#EXT-X-VERSION:{}\n#EXT-X-TARGETDURATION:{}\n#EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-PLAYLIST-TYPE:VOD\n",
+        measure.version, measure.target
+    );
+    let mut active_key = part.initial_key_tag.as_deref();
+    if let Some(tag) = active_key {
+        writeln!(media, "{tag}").map_err(|_| BAD)?;
+    }
+    if let Some(initialization) = &part.initialization {
+        writeln!(
+            media,
+            "#EXT-X-MAP:URI=\"{}\"",
+            filename(initialization, directory)?
+        )
+        .map_err(|_| BAD)?;
+    }
+    for resource in &part.resources {
+        check(stop)?;
+        if let Some(tag) = resource.key_tag.as_deref()
+            && active_key != Some(tag)
+        {
+            writeln!(media, "{tag}").map_err(|_| BAD)?;
+            active_key = Some(tag);
+        }
+        writeln!(
+            media,
+            "#EXTINF:{},\n{}",
+            resource.duration,
+            filename(&resource.path, directory)?
+        )
+        .map_err(|_| BAD)?;
+        if u64::try_from(media.len()).map_err(|_| BAD)? > crate::inspection::MAX_MANIFEST_BYTES {
+            return Err(BAD);
+        }
+    }
+    media.push_str("#EXT-X-ENDLIST\n");
+    text_file(&directory.join("media.m3u8"), &media, stop)
+}
+
+fn write_variant(
+    master: &mut String,
+    index: usize,
+    parts: &[HlsPart],
+    measured: &[Measured],
+    audio_index: Option<usize>,
+    rendition: Option<&metadata::Rendition>,
+) -> Result<(), ConversionError> {
+    let part = &parts[index];
+    let measure = &measured[index];
+    let mut peak = measure.peak;
+    let mut average = measure.average;
+    let mut codecs = part.codecs.clone();
+    if let Some(audio) = audio_index
+        && audio != index
+    {
+        peak = peak.checked_add(measured[audio].peak).ok_or(BAD)?;
+        average = average.checked_add(measured[audio].average).ok_or(BAD)?;
+        for codec in &parts[audio].codecs {
+            if !codecs.contains(codec) {
+                codecs.push(codec.clone());
+            }
+        }
+    }
+    write!(
+        master,
+        "#EXT-X-STREAM-INF:BANDWIDTH={peak},AVERAGE-BANDWIDTH={average},CODECS=\"{}\"",
+        codecs.join(",")
+    )
+    .map_err(|_| BAD)?;
+    if let Some((width, height)) = part.resolution {
+        if width == 0 || height == 0 {
+            return Err(BAD);
+        }
+        write!(master, ",RESOLUTION={width}x{height}").map_err(|_| BAD)?;
+    }
+    if let Some(rendition) = rendition {
+        if part
+            .metadata
+            .audio_group
+            .as_ref()
+            .is_some_and(|group| *group != rendition.group)
+        {
+            return Err(BAD);
+        }
+        write!(master, ",AUDIO={}", quoted(&rendition.group)?).map_err(|_| BAD)?;
+    } else if part.metadata.audio_group.is_some() {
+        return Err(BAD);
+    }
+    writeln!(master, "\ntrack-{index:04}/media.m3u8").map_err(|_| BAD)
 }
 
 pub(in crate::conversion) fn write(
@@ -360,87 +460,18 @@ pub(in crate::conversion) fn write(
         check(stop)?;
         let directory = root.join(format!("track-{index:04}"));
         let measure = &measured[index];
-        let mut media = format!(
-            "#EXTM3U\n#EXT-X-VERSION:{}\n#EXT-X-TARGETDURATION:{}\n#EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-PLAYLIST-TYPE:VOD\n",
-            measure.version, measure.target
-        );
-        let mut active_key = part.initial_key_tag.as_deref();
-        if let Some(tag) = active_key {
-            writeln!(media, "{tag}").map_err(|_| BAD)?;
-        }
-        if let Some(initialization) = &part.initialization {
-            writeln!(
-                media,
-                "#EXT-X-MAP:URI=\"{}\"",
-                filename(initialization, &directory)?
-            )
-            .map_err(|_| BAD)?;
-        }
-        for resource in &part.resources {
-            check(stop)?;
-            if let Some(tag) = resource.key_tag.as_deref()
-                && active_key != Some(tag)
-            {
-                writeln!(media, "{tag}").map_err(|_| BAD)?;
-                active_key = Some(tag);
-            }
-            writeln!(
-                media,
-                "#EXTINF:{},\n{}",
-                resource.duration,
-                filename(&resource.path, &directory)?
-            )
-            .map_err(|_| BAD)?;
-            if u64::try_from(media.len()).map_err(|_| BAD)? > crate::inspection::MAX_MANIFEST_BYTES
-            {
-                return Err(BAD);
-            }
-        }
-        media.push_str("#EXT-X-ENDLIST\n");
-        text_file(&directory.join("media.m3u8"), &media, stop)?;
+        write_media(&directory, part, measure, stop)?;
         if audio_index == Some(index) && parts.len() > 1 {
             continue;
         }
-        let mut peak = measure.peak;
-        let mut average = measure.average;
-        let mut codecs = part.codecs.clone();
-        if let Some(audio) = audio_index
-            && audio != index
-        {
-            peak = peak.checked_add(measured[audio].peak).ok_or(BAD)?;
-            average = average.checked_add(measured[audio].average).ok_or(BAD)?;
-            for codec in &parts[audio].codecs {
-                if !codecs.contains(codec) {
-                    codecs.push(codec.clone());
-                }
-            }
-        }
-        write!(
-            master,
-            "#EXT-X-STREAM-INF:BANDWIDTH={peak},AVERAGE-BANDWIDTH={average},CODECS=\"{}\"",
-            codecs.join(",")
-        )
-        .map_err(|_| BAD)?;
-        if let Some((width, height)) = part.resolution {
-            if width == 0 || height == 0 {
-                return Err(BAD);
-            }
-            write!(master, ",RESOLUTION={width}x{height}").map_err(|_| BAD)?;
-        }
-        if let Some(rendition) = &rendition {
-            if part
-                .metadata
-                .audio_group
-                .as_ref()
-                .is_some_and(|group| *group != rendition.group)
-            {
-                return Err(BAD);
-            }
-            write!(master, ",AUDIO={}", quoted(&rendition.group)?).map_err(|_| BAD)?;
-        } else if part.metadata.audio_group.is_some() {
-            return Err(BAD);
-        }
-        writeln!(master, "\ntrack-{index:04}/media.m3u8").map_err(|_| BAD)?;
+        write_variant(
+            &mut master,
+            index,
+            parts,
+            &measured,
+            audio_index,
+            rendition.as_ref(),
+        )?;
     }
     text_file(&root.join("master.m3u8"), &master, stop)
 }
@@ -635,9 +666,13 @@ mod tests {
             let mut sizes = Vec::new();
             let mut milliseconds = Vec::new();
             for _ in 0..count {
-                random = random.wrapping_mul(6364136223846793005).wrapping_add(1);
+                random = random
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1);
                 sizes.push(1 + usize::try_from((random >> 32) % 20_000).unwrap());
-                random = random.wrapping_mul(6364136223846793005).wrapping_add(1);
+                random = random
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1);
                 milliseconds.push(1 + (random >> 32) % 5000);
             }
             let target_ms = milliseconds.iter().max().unwrap().div_ceil(1000) * 1000;

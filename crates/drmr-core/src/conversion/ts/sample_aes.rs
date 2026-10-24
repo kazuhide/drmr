@@ -725,21 +725,11 @@ mod tests {
             .map(str::to_owned)
             .collect()
     }
-    #[test]
-    fn real_shaka_bbb_all_240_pes_including_final_cipher_packet_match_and_decode() {
-        use sha2::{Digest as _, Sha256};
-        use std::io::Write as _;
-        // The existing ten-second fixture is attributed under CC BY 3.0 in
-        // crates/drmr/tests/fixtures/bbb/README.md. Shaka independently encrypts it;
-        // production decryption is never used to generate the expected bytes.
-        let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../drmr/tests/fixtures/bbb/clip.mp4");
-        let before = Sha256::digest(std::fs::read(&source).unwrap());
-        let work = crate::native::private_tempdir().unwrap();
+    fn package_video_pair(source: &std::path::Path, work: &std::path::Path) {
         for encrypted in [false, true] {
-            let dir = work.path().join(if encrypted { "cipher" } else { "clear" });
+            let dir = work.join(if encrypted { "cipher" } else { "clear" });
             crate::conversion::files::create_dir(&dir).unwrap();
-            let source_path = crate::conversion::files::tool_path(&source).unwrap();
+            let source_path = crate::conversion::files::tool_path(source).unwrap();
             let template =
                 crate::conversion::files::tool_path(&dir.join("seg_$Number$.ts")).unwrap();
             let mut args = vec![
@@ -766,6 +756,19 @@ mod tests {
             }
             real_tool("packager", args);
         }
+    }
+    #[test]
+    fn real_shaka_bbb_all_240_pes_including_final_cipher_packet_match_and_decode() {
+        use sha2::{Digest as _, Sha256};
+        use std::io::Write as _;
+        // The existing ten-second fixture is attributed under CC BY 3.0 in
+        // crates/drmr/tests/fixtures/bbb/README.md. Shaka independently encrypts it;
+        // production decryption is never used to generate the expected bytes.
+        let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../drmr/tests/fixtures/bbb/clip.mp4");
+        let before = Sha256::digest(std::fs::read(&source).unwrap());
+        let work = crate::native::private_tempdir().unwrap();
+        package_video_pair(&source, work.path());
         let clear = fixture_pes(&work.path().join("clear"));
         let cipher = fixture_pes(&work.path().join("cipher"));
         assert_eq!(clear.len(), 240);
