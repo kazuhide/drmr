@@ -44,6 +44,18 @@ impl HlsSource {
                 input.hls_keys,
                 &converter.backend,
             )?;
+            if let Some(admission) = &media.transport {
+                declaration
+                    .validate_audio_variant(admission.tracks.iter().map(|track| track.kind))?;
+            } else if declaration.audio_variant_alias {
+                let initialization = media
+                    .initialization
+                    .as_deref()
+                    .ok_or(ConversionError("hls-map-required"))?;
+                let actual = inspection::inspect(initialization)
+                    .map_err(|_| ConversionError("invalid-localized-hls-media"))?;
+                declaration.validate_audio_variant(actual.tracks.iter().map(|track| track.kind))?;
+            }
             Ok((index, media))
         })?;
         let mut parts = parts

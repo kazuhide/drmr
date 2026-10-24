@@ -1710,6 +1710,7 @@ fn prepare_hls_presentation(
             .map_err(|_| ConversionError("temporary-workspace-unavailable"))?;
         let localized = hls::localize(&media.path, &directory, input.hls_keys, backend)?;
         if let Some(admission) = &localized.transport {
+            media.validate_audio_variant(admission.tracks.iter().map(|track| track.kind))?;
             if (paths.len() != 1 && admission.tracks.len() != 1)
                 || media.role.is_some_and(|kind| {
                     admission.tracks.len() != 1 || admission.tracks[0].kind != kind
@@ -1736,6 +1737,7 @@ fn prepare_hls_presentation(
         }
         let actual = inspection::inspect(&localized.combined)
             .map_err(|_| ConversionError("invalid-localized-hls-media"))?;
+        media.validate_audio_variant(actual.tracks.iter().map(|track| track.kind))?;
         if actual.tracks.len() != 1 {
             return Err(ConversionError("hls-multiplexed-media-not-supported"));
         }
@@ -1826,6 +1828,23 @@ pub(in crate::conversion) struct MediaPath {
     pub role: Option<TrackKind>,
     pub variants: usize,
     pub metadata: metadata::Metadata,
+    pub audio_variant_alias: bool,
+}
+impl MediaPath {
+    pub(in crate::conversion) fn validate_audio_variant(
+        &self,
+        roles: impl IntoIterator<Item = TrackKind>,
+    ) -> Result<(), ConversionError> {
+        if !self.audio_variant_alias {
+            return Ok(());
+        }
+        let mut roles = roles.into_iter();
+        if roles.next() == Some(TrackKind::Audio) && roles.next().is_none() {
+            Ok(())
+        } else {
+            Err(ConversionError("hls-audio-association-not-supported"))
+        }
+    }
 }
 fn validate_variant(attrs: &crate::m3u8::Attributes) -> Result<(), ConversionError> {
     if attrs.iter().any(|(name, _)| {
@@ -1873,6 +1892,7 @@ pub(in crate::conversion) fn hls_media_paths(
             role: None,
             variants: 0,
             metadata: metadata::Metadata::default(),
+            audio_variant_alias: false,
         }]);
     }
     let root = path
@@ -1914,6 +1934,7 @@ pub(in crate::conversion) fn hls_media_paths(
                     audio: Some(rendition),
                     ..Default::default()
                 },
+                audio_variant_alias: false,
             });
         } else if let Some(value) = line.strip_prefix("#EXT-X-STREAM-INF:") {
             let attrs = hls::attributes(value)?;
@@ -1940,6 +1961,7 @@ pub(in crate::conversion) fn hls_media_paths(
                 metadata: pending_metadata
                     .take()
                     .ok_or(ConversionError("hls-variant-uri-required"))?,
+                audio_variant_alias: false,
             });
             pending = false;
         } else if line.starts_with("#EXT-X-")
@@ -1970,9 +1992,15 @@ fn reconcile_media_paths(
         .filter(|media| media.metadata.audio.is_some())
         .map(|media| (media.path.clone(), media.metadata.clone()))
         .collect::<std::collections::BTreeMap<_, _>>();
+    let aliases = paths
+        .iter()
+        .filter(|media| media.metadata.audio.is_none() && audio.contains_key(&media.path))
+        .map(|media| media.path.clone())
+        .collect::<std::collections::BTreeSet<_>>();
     let mut seen = std::collections::BTreeMap::new();
     let mut unique = Vec::new();
     for mut media in paths {
+        media.audio_variant_alias = aliases.contains(&media.path);
         if media.metadata.audio.is_none()
             && let Some(rendition) = audio.get(&media.path)
         {
