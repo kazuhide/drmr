@@ -79,7 +79,7 @@ fn metadata_light_plan_and_manifest_only_refuse_decode_before_work() {
     ] {
         let output = invoke(&args);
         assert_eq!(output.status.code(), Some(2), "{args:?}");
-        assert!(output.stdout.is_empty());
+        assert_eq!(output.stdout, Vec::<u8>::new());
     }
 }
 

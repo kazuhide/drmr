@@ -723,7 +723,7 @@ fn a_changed_audio_sample_clock_cannot_pass_with_identical_silent_samples() {
     let packets = oracle("ffprobe", &source, &packet_arguments);
     let parsed: serde_json::Value = serde_json::from_slice(&packets).unwrap();
     let records = parsed["packets"].as_array().unwrap();
-    assert!(!records.is_empty());
+    assert_ne!(records.as_slice(), [] as [serde_json::Value; 0]);
     assert!(records.iter().all(|packet| {
         ["pts", "dts", "duration"]
             .into_iter()
@@ -735,7 +735,7 @@ fn a_changed_audio_sample_clock_cannot_pass_with_identical_silent_samples() {
     assert_eq!(packets, oracle("ffprobe", &result, &packet_arguments));
     let pcm_arguments = ["-map", "0:a:0", "-c:a", "pcm_s16le", "-f", "s16le", "-"];
     let pcm = oracle("ffmpeg", &source, &pcm_arguments);
-    assert!(!pcm.is_empty());
+    assert_ne!(pcm, [] as [u8; 0]);
     assert!(pcm.iter().all(|sample| *sample == 0));
     assert_eq!(pcm, oracle("ffmpeg", &result, &pcm_arguments));
     for (decode, depth) in [

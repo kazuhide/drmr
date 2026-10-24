@@ -333,6 +333,8 @@ fn stop(cli: &Path, fixture: &Path, source: &Path, work: &Path) -> io::Result<()
     let stderr_path = control.join("stderr");
     let child = Command::new(cli)
         .arg("convert")
+        // This lifecycle fixture exercises the optional external validation path.
+        .arg("--decode")
         .arg(source)
         .args(["--to", "clear", "--format", "dash", "--output"])
         .arg(&output)

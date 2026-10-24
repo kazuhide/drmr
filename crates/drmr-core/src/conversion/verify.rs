@@ -1,8 +1,10 @@
 //! Independent full decoded-content and compressed-payload comparisons.
 use super::{ContentKey, ConversionError, backend::Backend};
-use std::path::Path;
+use std::{io::Read as _, path::Path};
 
 mod evidence;
+#[cfg(test)]
+mod input_keys_tests;
 pub use evidence::{
     CheckOutcome, DecodeEvidence, DecodeNotCheckedReason, ValidationDepth, VerificationChecks,
     VerificationFailure, VerificationReport, VerificationScope,
@@ -42,6 +44,29 @@ fn metadata_key(view: StreamView<'_>) -> Option<super::keys::ProbeKeys<'_>> {
         None
     } else {
         view.key
+    }
+}
+fn input_key(view: StreamView<'_>) -> Result<Option<super::keys::ProbeKeys<'_>>, ConversionError> {
+    let mut input = super::files::regular_input(view.input)?;
+    let mut prefix = [0_u8; 64];
+    let mut length = 0;
+    while length < prefix.len() {
+        let count = input
+            .read(&mut prefix[length..])
+            .map_err(|_| ConversionError("input-unreadable"))?;
+        if count == 0 {
+            break;
+        }
+        length += count;
+    }
+    // Private HLS references carry their own key URIs. MOV decryption options
+    // belong to MP4 inputs; native metadata keeps its complete dictionary.
+    if crate::inspection::format_hint(&prefix[..length])
+        == Some(crate::inspection::InputFormat::Hls)
+    {
+        Ok(None)
+    } else {
+        Ok(view.key)
     }
 }
 impl Backend {
@@ -145,12 +170,17 @@ impl Backend {
             if a.audio && b.audio {
                 self.verify_finite_audio(source, result, a, b, &source_profile)?
             } else {
-                self.hash_stream_keys(source.input, source.index, false, source.key)?
-                    == self.hash_stream_keys(result.input, result.index, false, result.key)?
+                self.hash_stream_keys(source.input, source.index, false, input_key(source)?)?
+                    == self.hash_stream_keys(
+                        result.input,
+                        result.index,
+                        false,
+                        input_key(result)?,
+                    )?
             }
         } else {
-            self.hash_stream_keys(source.input, source.index, false, source.key)?
-                == self.hash_stream_keys(result.input, result.index, false, result.key)?
+            self.hash_stream_keys(source.input, source.index, false, input_key(source)?)?
+                == self.hash_stream_keys(result.input, result.index, false, input_key(result)?)?
         };
         let mut report = VerificationReport::new(
             self.validation_depth,
