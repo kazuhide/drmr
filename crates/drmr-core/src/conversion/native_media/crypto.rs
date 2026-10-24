@@ -1,6 +1,6 @@
 //! CENC counter and CBCS pattern processing over exact sample subsample ranges.
 use super::{BAD, ConversionError, Scheme, UNSUPPORTED};
-use aes::cipher::{Block, BlockDecrypt as _, BlockEncrypt as _, KeyInit as _};
+use aes::cipher::{BlockCipherDecrypt as _, BlockCipherEncrypt as _, KeyInit as _};
 use zeroize::Zeroizing;
 
 pub(super) struct TrackEncryption {
@@ -52,7 +52,7 @@ impl Cipher {
         counter[..iv.len()].copy_from_slice(iv);
         let previous = Zeroizing::new(*counter);
         Ok(Self {
-            aes: aes::Aes128::new_from_slice(key).map_err(|_| BAD)?,
+            aes: aes::Aes128::new(key.into()),
             scheme,
             counter,
             previous,
@@ -97,9 +97,7 @@ impl Cipher {
                             }
                         }
                         self.stream.copy_from_slice(&*self.counter);
-                        self.aes.encrypt_block(Block::<aes::Aes128>::from_mut_slice(
-                            self.stream.as_mut(),
-                        ));
+                        self.aes.encrypt_block((&mut *self.stream).into());
                         self.stream_at = 0;
                         self.generated = true;
                     }
@@ -115,8 +113,7 @@ impl Cipher {
                     if self.block % (self.crypt + self.skip) < self.crypt {
                         let mut original = Zeroizing::new([0; 16]);
                         original.copy_from_slice(block);
-                        self.aes
-                            .decrypt_block(Block::<aes::Aes128>::from_mut_slice(block));
+                        self.aes.decrypt_block((&mut *block).into());
                         for (value, previous) in block.iter_mut().zip(self.previous.iter()) {
                             *value ^= previous;
                         }
@@ -135,6 +132,32 @@ impl Cipher {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn aes_known_answer_and_context_wiping_are_retained() {
+        fn require_wiping<T: zeroize::ZeroizeOnDrop>() {}
+        require_wiping::<aes::Aes128>();
+        require_wiping::<cbc::Encryptor<aes::Aes128>>();
+        require_wiping::<cbc::Decryptor<aes::Aes128>>();
+
+        let key: [u8; 16] = bytes("000102030405060708090a0b0c0d0e0f")
+            .try_into()
+            .unwrap();
+        let plain: [u8; 16] = bytes("00112233445566778899aabbccddeeff")
+            .try_into()
+            .unwrap();
+        let mut block = Zeroizing::new(aes::Block::from(plain));
+        let cipher = aes::Aes128::new((&key).into());
+        cipher.encrypt_block(&mut block);
+        assert_eq!(
+            hex::encode(block.as_slice()),
+            "69c4e0d86a7b0430d8cdb78070b4c55a"
+        );
+        cipher.decrypt_block(&mut block);
+        assert_eq!(block.as_slice(), plain);
+        eprintln!("AES hardware acceleration: {}", aes::hardware_accelerated());
+    }
+
     fn bytes(text: &str) -> Vec<u8> {
         hex::decode(text).unwrap()
     }

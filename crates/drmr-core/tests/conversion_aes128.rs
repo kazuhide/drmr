@@ -62,7 +62,7 @@ fn nist_cbc_vector_and_rustcrypto_pkcs7_vector_match_exactly() {
 }
 #[test]
 fn streaming_chunk_boundaries_preserve_cbc_chaining() {
-    use aes::cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
+    use aes::cipher::{BlockModeEncrypt, KeyIvInit, block_padding::Pkcs7};
     let directory = tempfile::tempdir().unwrap();
     for length in [0, 1, 15, 16, 17, 65535, 65536, 65537, 200_003] {
         let plaintext: Vec<_> = (0..length)
@@ -82,7 +82,7 @@ fn streaming_chunk_boundaries_preserve_cbc_chaining() {
             &hex::decode(IV).unwrap(),
         )
         .unwrap()
-        .encrypt_padded_vec_mut::<Pkcs7>(&plaintext);
+        .encrypt_padded_vec::<Pkcs7>(&plaintext);
         assert_eq!(fs::read(&encrypted).unwrap(), expected);
     }
 }

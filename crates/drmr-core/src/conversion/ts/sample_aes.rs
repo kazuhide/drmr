@@ -7,7 +7,7 @@
 //! Each call processes at most eight MiB; callers check cancellation
 //! and hold their resource permit before and after this bounded operation.
 use super::super::{Aes128Key, ConversionError, SegmentIv};
-use aes::cipher::{Block, BlockDecryptMut as _, BlockEncryptMut as _, KeyIvInit as _};
+use aes::cipher::{BlockModeDecrypt as _, BlockModeEncrypt as _, KeyIvInit as _};
 use zeroize::Zeroizing;
 
 const MAX_BYTES: usize = 8 * 1024 * 1024;
@@ -76,16 +76,13 @@ fn decrypt_blocks(
     iv: &SegmentIv,
     skip: usize,
 ) -> Result<(), ConversionError> {
-    let mut cipher = cbc::Decryptor::<aes::Aes128>::new_from_slices(key.0.as_ref(), iv.0.as_ref())
-        .map_err(|_| INVALID)?;
+    let mut cipher = cbc::Decryptor::<aes::Aes128>::new((&*key.0).into(), (&*iv.0).into());
     let mut at = 0;
     while bytes.len() - at >= 16 {
         if skip != 0 && bytes.len() - at == 16 {
             break;
         }
-        cipher.decrypt_block_mut(Block::<aes::Aes128>::from_mut_slice(
-            &mut bytes[at..at + 16],
-        ));
+        cipher.decrypt_block((&mut bytes[at..at + 16]).try_into().map_err(|_| INVALID)?);
         at += 16;
         at += skip.min(bytes.len() - at);
     }
@@ -97,16 +94,13 @@ fn encrypt_blocks(
     iv: &SegmentIv,
     skip: usize,
 ) -> Result<(), ConversionError> {
-    let mut cipher = cbc::Encryptor::<aes::Aes128>::new_from_slices(key.0.as_ref(), iv.0.as_ref())
-        .map_err(|_| INVALID)?;
+    let mut cipher = cbc::Encryptor::<aes::Aes128>::new((&*key.0).into(), (&*iv.0).into());
     let mut at = 0;
     while bytes.len() - at >= 16 {
         if skip != 0 && bytes.len() - at == 16 {
             break;
         }
-        cipher.encrypt_block_mut(Block::<aes::Aes128>::from_mut_slice(
-            &mut bytes[at..at + 16],
-        ));
+        cipher.encrypt_block((&mut bytes[at..at + 16]).try_into().map_err(|_| INVALID)?);
         at += 16;
         at += skip.min(bytes.len() - at);
     }

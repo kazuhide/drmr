@@ -161,7 +161,7 @@ impl HlsOutputKey {
     }
 }
 
-use aes::cipher::{Block, BlockDecryptMut, BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
+use aes::cipher::{BlockModeDecrypt, BlockModeEncrypt, KeyIvInit, block_padding::Pkcs7};
 use std::{
     fs::File,
     io::{BufReader, BufWriter, Read, Write},
@@ -306,19 +306,18 @@ fn encrypt_stream(
     key: &Aes128Key,
     iv: &SegmentIv,
 ) -> Result<(), ConversionError> {
-    let mut cipher = cbc::Encryptor::<aes::Aes128>::new_from_slices(key.0.as_ref(), iv.0.as_ref())
-        .map_err(|_| ConversionError("segment-cipher-invalid"))?;
+    let mut cipher = cbc::Encryptor::<aes::Aes128>::new((&*key.0).into(), (&*iv.0).into());
     let mut buffer = Zeroizing::new([0u8; 16]);
     loop {
         let size = read_block(input, &mut buffer)?;
         if size == 16 {
-            cipher.encrypt_block_mut(Block::<aes::Aes128>::from_mut_slice(buffer.as_mut()));
+            cipher.encrypt_block((&mut *buffer).into());
             output
                 .write_all(buffer.as_ref())
                 .map_err(|_| ConversionError("segment-write-failed"))?;
         } else {
             let bytes = cipher
-                .encrypt_padded_mut::<Pkcs7>(buffer.as_mut(), size)
+                .encrypt_padded::<Pkcs7>(buffer.as_mut(), size)
                 .map_err(|_| ConversionError("segment-encryption-failed"))?;
             output
                 .write_all(bytes)
@@ -333,8 +332,7 @@ fn decrypt_stream(
     key: &Aes128Key,
     iv: &SegmentIv,
 ) -> Result<(), ConversionError> {
-    let mut cipher = cbc::Decryptor::<aes::Aes128>::new_from_slices(key.0.as_ref(), iv.0.as_ref())
-        .map_err(|_| ConversionError("segment-cipher-invalid"))?;
+    let mut cipher = cbc::Decryptor::<aes::Aes128>::new((&*key.0).into(), (&*iv.0).into());
     let mut block = Zeroizing::new([0u8; 16]);
     if read_block(input, &mut block)? != 16 {
         return Err(ConversionError("invalid-encrypted-segment"));
@@ -344,7 +342,7 @@ fn decrypt_stream(
         match read_block(input, &mut next)? {
             0 => {
                 let plaintext = cipher
-                    .decrypt_padded_mut::<Pkcs7>(block.as_mut())
+                    .decrypt_padded::<Pkcs7>(block.as_mut())
                     .map_err(|_| ConversionError("invalid-encrypted-segment"))?;
                 output
                     .write_all(plaintext)
@@ -352,7 +350,7 @@ fn decrypt_stream(
                 return Ok(());
             }
             16 => {
-                cipher.decrypt_block_mut(Block::<aes::Aes128>::from_mut_slice(block.as_mut()));
+                cipher.decrypt_block((&mut *block).into());
                 output
                     .write_all(block.as_ref())
                     .map_err(|_| ConversionError("segment-write-failed"))?;

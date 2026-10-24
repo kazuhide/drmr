@@ -247,13 +247,12 @@ fn packet_rewrite_preserves_original_pcr_and_random_access_flags() {
 
 #[test]
 fn encryption_growth_inserts_a_continuation_after_the_final_original_slot() {
-    use aes::cipher::{Block, BlockDecryptMut as _, KeyIvInit as _};
+    use aes::cipher::{BlockModeDecrypt as _, KeyIvInit as _};
     let key = Aes128Key::from_hex("101112131415161718191a1b1c1d1e1f").unwrap();
     let iv = SegmentIv::from_hex("303132333435363738393a3b3c3d3e3f").unwrap();
     let mut zeros = [0; 16];
-    let mut independent =
-        cbc::Decryptor::<aes::Aes128>::new_from_slices(key.0.as_ref(), iv.0.as_ref()).unwrap();
-    independent.decrypt_block_mut(Block::<aes::Aes128>::from_mut_slice(&mut zeros));
+    let mut independent = cbc::Decryptor::<aes::Aes128>::new((&*key.0).into(), (&*iv.0).into());
+    independent.decrypt_block((&mut zeros).into());
     let mut pes = vec![0, 0, 1, 0xe0, 0, 0, 0x80, 0x80, 5, 0x21, 0, 1, 0, 1];
     pes.extend([0, 0, 1, 0x65]);
     pes.extend([0x55; 31]);

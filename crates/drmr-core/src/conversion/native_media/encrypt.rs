@@ -1,7 +1,7 @@
 //! CENC/CBCS encryption over explicit subsamples; encoded payload is never re-encoded.
 use super::{BAD, ConversionError, Scheme, TrackDescriptor, crypto};
 use crate::{concurrency::Stop, inspection::TrackKind};
-use aes::cipher::{Block, BlockEncrypt as _, KeyInit as _};
+use aes::cipher::{BlockCipherEncrypt as _, KeyInit as _};
 use std::sync::{
     OnceLock,
     atomic::{AtomicU64, Ordering},
@@ -74,7 +74,7 @@ impl Encryptor {
             return Err(BAD);
         }
         Ok(Self {
-            aes: aes::Aes128::new_from_slice(key).map_err(|_| BAD)?,
+            aes: aes::Aes128::new(key.into()),
             ctr: if scheme == Scheme::Cenc {
                 Some(crypto::Cipher::new(key, iv, scheme, 0, 0)?)
             } else {
@@ -106,8 +106,7 @@ impl Encryptor {
                 for (byte, previous) in block.iter_mut().zip(self.previous.iter()) {
                     *byte ^= previous;
                 }
-                self.aes
-                    .encrypt_block(Block::<aes::Aes128>::from_mut_slice(block));
+                self.aes.encrypt_block((&mut *block).into());
                 self.previous.copy_from_slice(block);
             }
             self.block = self.block.checked_add(1).ok_or(BAD)?;
