@@ -17,7 +17,7 @@ const codeExamples = [
   ['Plan command', 'drmr plan source/input.m3u8 \\ --to cbcs --format dash \\ --output converted \\ --save conversion.plan.json'],
   ['Convert command', 'drmr convert \\ --plan conversion.plan.json \\ --keys-file keys.json'],
   ['Verify command', 'drmr verify \\ --plan conversion.plan.json \\ --keys-file keys.json --json'],
-  ['Build and check the CLI', 'cargo install --path crates/drmr --locked drmr --version drmr doctor --probe --route progressive-mp4'],
+  ['Build and check the CLI', 'cargo install --path crates/drmr --locked drmr --version drmr doctor --probe'],
 ];
 const monitors = new WeakMap();
 

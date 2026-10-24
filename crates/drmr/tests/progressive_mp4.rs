@@ -964,7 +964,7 @@ fn nondefault_gain_never_becomes_a_verified_default_gain_presentation() {
 }
 
 #[test]
-fn a_global_display_transform_can_be_preserved_in_the_composed_track_matrix() {
+fn a_global_display_transform_retains_its_original_movie_and_track_matrices() {
     let root = tempfile::tempdir().unwrap();
     let original = root.path().join("original.mp4");
     source(&original, true);
@@ -1000,7 +1000,7 @@ fn a_global_display_transform_can_be_preserved_in_the_composed_track_matrix() {
         String::from_utf8_lossy(&result.stderr)
     );
     assert_checks(&serde_json::from_slice::<serde_json::Value>(&result.stdout).unwrap());
-    for (path, movie_scale, track_scale) in [(&transformed, 2_u32, 1_u32), (&output, 1, 2)] {
+    for (path, movie_scale, track_scale) in [(&transformed, 2_u32, 1_u32), (&output, 2, 1)] {
         let bytes = std::fs::read(path).unwrap();
         let boxes = drmr_core::mp4::parse_boxes(&bytes).unwrap();
         let all = drmr_core::mp4::walk(&boxes);
@@ -1043,8 +1043,19 @@ fn video_display_extent_is_checked_even_when_all_packets_and_decoded_frames_matc
         let before = std::fs::read(&altered).unwrap();
         let output = root.path().join(format!("{name}-output.mp4"));
         let result = convert(&altered, &output);
-        assert!(!result.status.success());
-        assert!(!output.exists());
+        assert!(result.status.success());
+        let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+        assert_checks(&report["verification"]);
+        assert_eq!(std::fs::read(&output).unwrap(), before);
+        let verified = command(&[
+            "verify",
+            output.to_str().unwrap(),
+            "--source",
+            altered.to_str().unwrap(),
+            "--json",
+        ]);
+        assert!(verified.status.success());
+        assert_checks(&serde_json::from_slice::<serde_json::Value>(&verified.stdout).unwrap());
         assert_eq!(std::fs::read(&altered).unwrap(), before);
         assert_eq!(packet_clocks(&original), packet_clocks(&altered));
         for (source, result) in [(&original, &altered), (&altered, &original)] {
