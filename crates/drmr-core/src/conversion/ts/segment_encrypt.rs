@@ -55,7 +55,9 @@ impl Pending {
 
 struct Slot {
     packet: Zeroizing<[u8; 188]>,
-    extra: Vec<Zeroizing<[u8; 188]>>,
+    // SAMPLE-AES packets still contain clear regions. Keep their allocations
+    // stable while the pointer vector grows, just as for the original slots.
+    extra: Vec<Box<Zeroizing<[u8; 188]>>>,
 }
 #[derive(Default)]
 struct Window {
@@ -305,9 +307,10 @@ impl SegmentEncryptor {
             }
             let end = (position + 184).min(rewritten.len());
             queued.extra.try_reserve(1).map_err(|_| LIMIT)?;
-            queued
-                .extra
-                .push(continuation_packet(track.0, &rewritten[position..end])?);
+            queued.extra.push(Box::new(continuation_packet(
+                track.0,
+                &rewritten[position..end],
+            )?));
             position = end;
         }
         Ok(())
