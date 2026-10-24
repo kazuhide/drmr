@@ -5,6 +5,7 @@ import argparse
 import csv
 import io
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -17,6 +18,10 @@ import time
 import zipfile
 
 FIXTURE = Path(__file__).resolve().parent
+EVIDENCE_SPEC = importlib.util.spec_from_file_location(
+    "media_evidence", FIXTURE.parents[4] / "tools/media_evidence.py")
+EVIDENCE = importlib.util.module_from_spec(EVIDENCE_SPEC)
+EVIDENCE_SPEC.loader.exec_module(EVIDENCE)
 KID = "000102030405060708090a0b0c0d0e0f"
 KEY = "10101010101010101010101010101010"
 HLS_KID = "303132333435363738393a3b3c3d3e3f"
@@ -165,16 +170,13 @@ def private_json(path, value):
     return path
 
 
-def require_media_verification(report):
+def require_media_verification(report, scope="comparison", manifest=True):
     """Require full coded packets, timestamps, decoded media and native manifests."""
-    assert report["passed"] is True and report["media_verified"] is True
-    assert report["license_playback_verified"] is False
-    assert report["checks"]["stream_metadata"] == "pass"
-    for field in ("packet_payloads_equal", "packet_timing_equal", "decoded_content_equal"):
-        assert report["checks"][field] is True, field
-    native = report["native_manifest"]
-    assert native["errors"] == 0 and native["incomplete"] is False and native["truncated"] is False
-    assert native["document_count"] >= 1
+    assert EVIDENCE.v2_proof(report, scope=scope, require_decoded=True) is not None
+    if manifest:
+        native = report["native_manifest"]
+        assert native["errors"] == 0 and native["incomplete"] is False and native["truncated"] is False
+        assert native["document_count"] >= 1
 
 
 def source_fingerprints(root):
@@ -204,12 +206,11 @@ def regression(binary, destination):
     streams = json.loads(run(["ffprobe", "-v", "error", "-show_streams", "-of", "json",
                               source.parent / "segment-000.ts"]))["streams"]
     assert len(streams) == 2 and {stream["codec_type"] for stream in streams} == {"video", "audio"}
-    analysis = execute("analysis", ["analyze", source, "--max-workers", "2", "--json"])
+    analysis = execute("analysis", ["analyze", "--decode", source, "--max-workers", "2", "--json"])
     assert analysis["input_admitted"] is True and analysis["actual_format"] == "hls-ts"
     assert all(value == "clear" for value in analysis["track_protection"])
-    for field in ("packet_payloads_equal", "packet_timing_equal", "decoded_content_equal"):
-        assert analysis["input_checks"][field] is True
-    assert analysis["input_checks"]["stream_metadata"] == "pass"
+    assert analysis["schema_version"] == 2
+    require_media_verification(analysis["verification"], scope="source-admission", manifest=False)
 
     outputs = private_json(destination / "outputs.json", {"schema_version": 1, "outputs": [
         {"id": "dash", "format": "dash", "target": "cbcs", "drms": ["widevine", "playready"]},
@@ -217,10 +218,11 @@ def regression(binary, destination):
     ]})
     plan_path = destination / "conversion.plan.json"
     output = destination / "result"
-    planned = execute("planning", ["plan", source, "--outputs", outputs, "--output", output,
+    planned = execute("planning", ["plan", "--decode", source, "--outputs", outputs, "--output", output,
                                     "--save", plan_path, "--max-workers", "2", "--json"])
     plan_bytes = plan_path.read_bytes()
-    assert planned == json.loads(plan_bytes) and planned["schema_version"] == 2
+    assert planned == json.loads(plan_bytes) and planned["schema_version"] == 4
+    assert planned["required_depth"] == "decoded"
     assert planned["kind"] == "execution-plan" and len(planned["outputs"]) == 2
     assert not output.exists()
     # A complete version-one PSSH declares the output KID without opaque test data.
@@ -233,7 +235,7 @@ def regression(binary, destination):
         "hls": {"kid": HLS_KID, "key": HLS_KEY, "hls_key_uri": "skd://bbb-regression",
                 "signaling": {"system": "multi-drm", "fairplay": True}},
     }})
-    converted = execute("packaging", ["convert", "--plan", plan_path, "--keys-file", keys,
+    converted = execute("packaging", ["convert", "--decode", "--plan", plan_path, "--keys-file", keys,
                                        "--max-workers", "2", "--json"])
     assert converted["kind"] == "bundle-conversion" and converted["plan_id"] == planned["plan_id"]
     assert {row["id"] for row in converted["outputs"]} == {"dash", "hls"}
@@ -241,7 +243,7 @@ def regression(binary, destination):
         require_media_verification(row["conversion"]["verification"])
         assert row["signaling"]["verified"] is True
         assert row["signaling"]["systems"] == (["widevine", "playready"] if row["id"] == "dash" else ["fairplay"])
-    verified = execute("verification", ["verify", "--plan", plan_path, "--keys-file", keys,
+    verified = execute("verification", ["verify", "--decode", "--plan", plan_path, "--keys-file", keys,
                                          "--max-workers", "2", "--json"])
     assert verified["kind"] == "bundle-verification" and verified["plan_id"] == planned["plan_id"]
     assert verified["passed"] is True and verified["source_unchanged"] is True

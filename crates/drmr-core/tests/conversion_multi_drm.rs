@@ -98,6 +98,7 @@ fn converter(events: &Arc<Collector>) -> Converter {
         "packager",
         "ffmpeg",
     )
+    .with_decode(true)
 }
 fn copy_manifests(root: &Path, current: &Path, destination: &Path) {
     for entry in std::fs::read_dir(current).unwrap() {
@@ -567,6 +568,19 @@ fn assert_report(report: &ConversionReport, name: &str) {
         "The report must describe actual final DRM declarations"
     );
 }
+fn assert_unspecified_hls_language(entrypoint: &Path) {
+    let text = std::fs::read_to_string(entrypoint).unwrap();
+    for line in text
+        .lines()
+        .filter_map(|line| line.strip_prefix("#EXT-X-MEDIA:"))
+    {
+        let attrs = drmr_core::m3u8::parse_attributes(line).unwrap();
+        assert!(
+            attrs.get("LANGUAGE").is_none(),
+            "An unspecified source language must remain unspecified in HLS"
+        );
+    }
+}
 #[test]
 fn clear_transport_has_independently_verified_dash_and_fairplay_outputs() {
     let owner = drmr_core::native::private_tempdir().unwrap();
@@ -603,17 +617,7 @@ fn clear_transport_has_independently_verified_dash_and_fairplay_outputs() {
         if format == OutputFormat::Dash {
             assert_label_order(&entrypoint);
         } else {
-            let text = std::fs::read_to_string(&entrypoint).unwrap();
-            for line in text
-                .lines()
-                .filter_map(|line| line.strip_prefix("#EXT-X-MEDIA:"))
-            {
-                let attrs = drmr_core::m3u8::parse_attributes(line).unwrap();
-                assert!(
-                    attrs.get("LANGUAGE").is_none(),
-                    "An unspecified source language must remain unspecified in HLS"
-                );
-            }
+            assert_unspecified_hls_language(&entrypoint);
         }
         converter(&events)
             .verify_output_signaling(&entrypoint, format, target, &keys)
@@ -637,7 +641,10 @@ fn clear_transport_has_independently_verified_dash_and_fairplay_outputs() {
         assert!(verified.passed);
         assert!(verified.checks.packet_payloads_equal);
         assert!(verified.checks.packet_timing_equal);
-        assert!(verified.checks.decoded_content_equal);
+        assert!(verified.decode_evidence.satisfies(
+            drmr_core::conversion::ValidationDepth::Decoded,
+            verified.scope
+        ));
         assert!(
             converter(&events)
                 .verify_output_signaling(

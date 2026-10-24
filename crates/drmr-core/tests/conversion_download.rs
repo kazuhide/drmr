@@ -138,6 +138,7 @@ fn converter(stop: Stop) -> Converter {
         "unused-packager",
         "unused-ffmpeg",
     )
+    .with_decode(true)
     .with_stop(stop)
     .with_max_workers(Some(1))
     .unwrap()
@@ -1031,6 +1032,7 @@ fn custom_resource_capacity_is_honored_before_any_network_or_directory_writes() 
         Arc::new(drmr_core::resources::Limiter::new(1, 128 * 1024 * 1024)),
     );
     let c = Converter::new(Arc::new(runner), "unused", "unused")
+        .with_decode(true)
         .with_max_workers(Some(1))
         .unwrap();
     assert_eq!(

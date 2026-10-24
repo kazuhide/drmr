@@ -100,6 +100,9 @@ impl NativeScanner {
         // Each segment is independently admitted before its bytes can seed an
         // anchor. Admission retains program, counters and raw PES clock state.
         self.admission.segment(path, stop)?;
+        for native in self.native.values_mut() {
+            native.begin_segment()?;
+        }
         let mut input = std::io::BufReader::new(file);
         let mut pending = BTreeMap::<u16, Pending>::new();
         let mut packet = [0; 188];
@@ -169,6 +172,9 @@ impl NativeScanner {
                 .ok_or(BAD)?
                 .kind;
             self.record(id, kind, &pes.bytes, stop, observer)?;
+        }
+        for native in self.native.values_mut() {
+            native.end_segment()?;
         }
         Ok(())
     }
@@ -388,7 +394,7 @@ mod tests {
         config: canonical::Config,
         duration: i64,
     ) -> canonical::Evidence {
-        let mut parser = canonical::Parser::new(0, frames.len() as u64, true, config);
+        let mut parser = canonical::Parser::new(0, frames.len() as u64, true, config, 0);
         for (data, pts) in frames {
             let mut dump = String::new();
             for (i, chunk) in data.chunks(16).enumerate() {
@@ -815,5 +821,240 @@ mod tests {
         let mut scanner = NativeScanner::new();
         assert!(scanner.segment(&broken, &Stop::new()).is_err());
         assert!(scanner.finish().is_err());
+    }
+    #[test]
+    fn native_audio_spans_keep_original_boundaries_and_nominal_terminal_duration() {
+        for (rate, header_byte, clocks, end) in [
+            (48_000, 0x4c, [126_000, 127_920, 129_840], 131_760),
+            (44_100, 0x50, [126_000, 128_090, 130_179], 132_268),
+        ] {
+            let (_owner, root) = root();
+            let frames: Vec<_> = (0..3)
+                .map(|marker| {
+                    let mut f = frame(marker);
+                    f[2] = header_byte;
+                    f
+                })
+                .collect();
+            let first = resource(
+                &root,
+                "first.ts",
+                u64::try_from(clocks[0]).unwrap(),
+                &frames[..2],
+                0,
+            );
+            let last = resource(
+                &root,
+                "last.ts",
+                u64::try_from(clocks[2]).unwrap(),
+                &frames[2..],
+                1,
+            );
+            let mut scanner = NativeScanner::new();
+            scanner.segment(&first, &Stop::new()).unwrap();
+            scanner.segment(&last, &Stop::new()).unwrap();
+            let (_, native) = scanner.finish().unwrap();
+            let native = &native[&256];
+            native.validate().unwrap();
+            let timing = native.timing().unwrap();
+            assert_eq!(
+                (
+                    timing.count,
+                    timing.first_pts,
+                    timing.max_pts,
+                    timing.end_pts
+                ),
+                (3, clocks[0], clocks[2], end)
+            );
+            assert_eq!(timing.coded_samples, Some(3072));
+            assert!(!timing.requires_manifest_duration);
+            let segments = native.segment_timings().unwrap();
+            assert_eq!(segments.len(), 2);
+            assert_eq!((segments[0].count, segments[1].count), (2, 1));
+            assert_eq!(segments[1].first_pts, clocks[2]);
+            let evidence = native.evidence().unwrap();
+            assert_eq!((evidence.first_pts, evidence.end_pts), (clocks[0], end));
+            for samples in [1, 1023] {
+                let raw = crate::conversion::audio_presentation::AudioEvidence {
+                    sample_rate: rate,
+                    coded_frames: timing.count,
+                    raw_first_pts: timing.first_pts,
+                    raw_coded_end: timing.end_pts,
+                };
+                let declared =
+                    crate::conversion::audio_presentation::seconds(samples, u128::from(rate))
+                        .unwrap();
+                let range = crate::conversion::audio_presentation::AudioPresentation::from_final(
+                    raw, 1, &declared,
+                )
+                .unwrap();
+                assert_eq!(u128::from(range.presented_samples), 2048 + samples);
+            }
+        }
+    }
+    #[test]
+    fn syntax_failure_cannot_yield_native_metadata_or_timing_proof() {
+        let (_owner, root) = root();
+        let source = track_resource(&root, "invalid-header.ts", 90_000, &video(1), 0, false);
+        let mut scanner = NativeScanner::new();
+        scanner.segment(&source, &Stop::new()).unwrap();
+        let (_, native) = scanner.finish().unwrap();
+        let native = &native[&256];
+        assert!(native.validate().is_err());
+        assert!(native.metadata().is_err());
+        assert!(native.timing().is_err());
+        assert!(native.segment_timings().is_err());
+        assert!(native.evidence().is_err());
+    }
+    fn short_transport_fixture(root: &Path, variant: &str) -> PathBuf {
+        use std::process::Command;
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../drmr/tests/fixtures/bbb/clip.mp4");
+        let manifest = root.join("media.m3u8");
+        let mut ffmpeg = Command::new("ffmpeg");
+        ffmpeg
+            .args(["-v", "error", "-threads", "1", "-i"])
+            .arg(&fixture);
+        if variant == "delayed-audio" {
+            ffmpeg.args(["-itsoffset", "0.25", "-i"]).arg(&fixture);
+        }
+        ffmpeg.args([
+            "-map",
+            "0:v:0",
+            "-map",
+            if variant == "delayed-audio" {
+                "1:a:0"
+            } else {
+                "0:a:0"
+            },
+            "-t",
+            "1",
+            "-c",
+            "copy",
+        ]);
+        if variant == "bframes" {
+            ffmpeg.args(["-c:v", "libx264", "-threads", "1", "-bf", "3", "-g", "12"]);
+        }
+        if variant == "fractional-audio" {
+            ffmpeg.args(["-c:a", "aac", "-ar", "44100"]);
+        }
+        let output = ffmpeg
+            .args([
+                "-hls_time",
+                "0.5",
+                "-hls_playlist_type",
+                "vod",
+                "-hls_segment_filename",
+            ])
+            .arg(root.join("seg-%02d.ts"))
+            .arg(&manifest)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{variant}: fixture generation failed"
+        );
+        manifest
+    }
+
+    fn assert_oracle_timing(
+        variant: &str,
+        manifest: &Path,
+        admission: &Admission,
+        native: &BTreeMap<u16, canonical::Native>,
+    ) {
+        use std::process::Command;
+        let output = Command::new("ffprobe")
+            .args([
+                "-v",
+                "error",
+                "-show_streams",
+                "-show_packets",
+                "-show_entries",
+                "stream=index,codec_type:packet=stream_index,pts,dts,duration",
+                "-of",
+                "json",
+            ])
+            .arg(manifest)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let oracle: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        for stream in oracle["streams"].as_array().unwrap() {
+            let index = stream["index"].as_u64().unwrap();
+            // The HLS demuxer's stream identifier is not the original TS
+            // PID. Match the independently selected codec role instead.
+            let kind = match stream["codec_type"].as_str().unwrap() {
+                "video" => TrackKind::Video,
+                "audio" => TrackKind::Audio,
+                _ => panic!("unexpected fixture role"),
+            };
+            let tracks: Vec<_> = admission
+                .tracks
+                .iter()
+                .filter(|track| track.kind == kind)
+                .collect();
+            assert_eq!(tracks.len(), 1);
+            let anchor = &native[&tracks[0].pid];
+            let timing = anchor
+                .timing()
+                .unwrap_or_else(|e| panic!("{variant} {index}: {e:?}"));
+            let packets: Vec<_> = oracle["packets"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|packet| packet["stream_index"].as_u64() == Some(index))
+                .collect();
+            let first = packets
+                .iter()
+                .map(|p| p["pts"].as_i64().unwrap())
+                .min()
+                .unwrap();
+            let final_packet = packets
+                .iter()
+                .max_by_key(|p| p["pts"].as_i64().unwrap())
+                .unwrap();
+            let end =
+                final_packet["pts"].as_i64().unwrap() + final_packet["duration"].as_i64().unwrap();
+            assert_eq!(
+                (timing.count, timing.first_pts, timing.end_pts),
+                (u64::try_from(packets.len()).unwrap(), first, end),
+                "{variant} {index}"
+            );
+            assert_eq!(timing.first_dts, packets[0]["dts"].as_i64().unwrap());
+            assert_eq!(
+                timing.last_dts,
+                packets.last().unwrap()["dts"].as_i64().unwrap()
+            );
+            assert_eq!(
+                anchor
+                    .segment_timings()
+                    .unwrap()
+                    .iter()
+                    .map(|s| s.count)
+                    .sum::<u64>(),
+                timing.count
+            );
+        }
+    }
+
+    #[test]
+    fn native_metadata_and_packet_spans_match_independent_short_fixture_oracles() {
+        for variant in ["copy", "bframes", "fractional-audio", "delayed-audio"] {
+            let (_owner, root) = root();
+            let manifest = short_transport_fixture(&root, variant);
+            let mut scanner = NativeScanner::new();
+            for resource in std::fs::read_to_string(&manifest)
+                .unwrap()
+                .lines()
+                .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            {
+                scanner
+                    .segment(&root.join(resource), &Stop::new())
+                    .unwrap_or_else(|e| panic!("{variant}: {e:?}"));
+            }
+            let (admission, native) = scanner.finish().unwrap();
+            assert_oracle_timing(variant, &manifest, &admission, &native);
+        }
     }
 }

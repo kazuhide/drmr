@@ -6,7 +6,8 @@
 Original local file or manifest resources
   -> private complete tracks, with decryption when needed
   -> requested packaging and output protection
-  -> metadata, every packet's timing, encoded content, and full decode checks
+  -> native metadata, every sample's timing/content, and playback-window checks
+  -> additional complete decoding when required by --decode or a saved plan
   -> new output, published only after verification
 ```
 
@@ -16,16 +17,28 @@ The progressive MP4 route copies the original encoded tracks directly, retaining
 
 | Identifier | Conditions and behavior | Required external tools |
 | --- | --- | --- |
-| `progressive-mp4` | Qualified clear, `cenc`, or `cbcs` progressive AAC-LC, optionally with H.264 from the same file, to clear MP4. Direct copying preserves the finite audio end. | FFmpeg, FFprobe |
-| `fragmented-mp4` | One supported track, or qualified finite audio and optional video from the same progressive source, to clear, `cenc`, or `cbcs` MP4. Shaka Packager creates fragments; qualified finite playback windows are preserved. | FFmpeg, FFprobe, Shaka Packager |
-| `dash-presentation` | Supported complete local tracks to static DASH. Source manifest resources are localized and assembled into tracks before new segmentation. | FFmpeg, FFprobe, Shaka Packager |
-| `fmp4-hls-presentation` | Supported complete tracks to fragmented MP4 HLS. Sample encryption applies within media samples; HLS AES-128 separately encrypts each complete output resource. | FFmpeg, FFprobe, Shaka Packager |
-| `mpeg-ts-hls` | The narrow local MPEG transport stream profile to fragmented MP4 HLS. Tracks are demultiplexed, and the actual final playlists are checked against the original transport streams. | FFmpeg, FFprobe, Shaka Packager |
-| `mpeg-ts-sample-aes-hls` | Known-key SAMPLE-AES transport streams to fragmented MP4 HLS. Decrypted encoded frames and original clocks are checked before packaging; final playlists are verified against the original encrypted source. | FFmpeg, FFprobe, Shaka Packager |
-| `mpeg-ts-dash` | Supported clear, AES-128, or SAMPLE-AES TS input to clear, `cenc`, or `cbcs` static DASH. Video, audio, or both retain their original frame and clock evidence; the final MPD and referenced media are read again before publication. | FFmpeg, FFprobe, Shaka Packager |
-| `mpeg-ts-hls-ts` | Supported original TS input to TS HLS, with clear, whole-resource AES-128, or SAMPLE-AES protection. Original frame and clock evidence qualifies the private reference; final playlists are compared against it. | FFmpeg, FFprobe, Shaka Packager |
+| `progressive-mp4` | Qualified clear, `cenc`, or `cbcs` progressive AAC-LC, optionally with H.264 from the same file, to clear MP4. Direct copying preserves the finite audio end. | None for clear native copy; FFmpeg copy remux for encrypted finite input |
+| `fragmented-mp4` | One supported track, or qualified finite audio and optional video from the same progressive source, to clear, `cenc`, or `cbcs` MP4. Shaka Packager creates fragments; qualified finite playback windows are preserved. | Shaka Packager; also FFmpeg for encrypted finite progressive input |
+| `dash-presentation` | Supported complete local tracks to static DASH. Source manifest resources are localized and assembled into tracks before new segmentation. | Shaka Packager; also FFmpeg for encrypted finite progressive input |
+| `fmp4-hls-presentation` | Supported complete tracks to fragmented MP4 HLS. Sample encryption applies within media samples; HLS AES-128 separately encrypts each complete output resource. | Shaka Packager; also FFmpeg for encrypted finite progressive input |
+| `mpeg-ts-hls` | The narrow local MPEG transport stream profile to fragmented MP4 HLS. Tracks are demultiplexed, and the actual final playlists are checked against the original transport streams. | Shaka Packager |
+| `mpeg-ts-sample-aes-hls` | Known-key SAMPLE-AES transport streams to fragmented MP4 HLS. Decrypted encoded frames and original clocks are checked before packaging; final playlists are verified against the original encrypted source. | Shaka Packager |
+| `mpeg-ts-dash` | Supported clear, AES-128, or SAMPLE-AES TS input to clear, `cenc`, or `cbcs` static DASH. Video, audio, or both retain their original frame and clock evidence; the final MPD and referenced media are read again before publication. | Shaka Packager |
+| `mpeg-ts-hls-ts` | Supported original TS input to TS HLS, with clear, whole-resource AES-128, or SAMPLE-AES protection. Original frame and clock evidence qualifies the private reference; final playlists are compared against it. | Shaka Packager |
+
+The table describes native conversion. Add FFmpeg and ffprobe for `--decode`;
+native analysis and verification need none of these tools. Decode evidence is
+additional to every required native check. See [verification depth](verification.md).
 
 These are dependency requirements, not a report that tools are installed or were version-checked. See [supported input profiles](conversion-support.md) for restrictions and [tool requirements](requirements.md#media-tools) for supported versions.
+
+Metadata-only candidate `required_tools` lists the native minimum. Its
+`condition_codes` and explanation state additional requirements:
+`additional-complete-decoding-requires-ffmpeg-and-ffprobe` applies to `--decode`,
+and `encrypted-finite-progressive-source-copy-requires-ffmpeg` applies when that
+source profile needs an edit-preserving container copy. Actual processing
+reports list the tools required by the selected depth and actual copy path.
+Native analysis and verification are distinct from these conversion tool sets.
 
 ### progressive-mp4
 
@@ -33,7 +46,7 @@ Complete original MP4 → direct encoded-track copy with its presentation edits 
 
 ### fragmented-mp4
 
-Complete original tracks → decryption when required → Shaka packaging and requested output encryption → preserve qualified playback windows → original-to-output checks. Finite audio and optional video from one qualified progressive source can share the resulting encrypted MP4. Its full coded content, native windows, playback settings, and each file's own presented samples must match the original; see [finite audio checks](media-processing.md#finite-audio-presentation-windows).
+Complete original tracks → decryption when required → Shaka packaging and requested output encryption → preserve qualified playback windows → original-to-output checks. Finite audio and optional video from one qualified progressive source can share the resulting encrypted MP4. Its full coded content, native windows and playback settings must match the original. With `--decode`, each file's own presented decoded samples must also match; see [finite audio checks](media-processing.md#finite-audio-presentation-windows).
 
 ### dash-presentation
 
@@ -45,7 +58,7 @@ Complete local tracks → Shaka segmentation and HLS playlists → optional whol
 
 ### mpeg-ts-hls
 
-Original local HLS transport-stream resources → native structure admission and complete-track demultiplexing → fragmented MP4 HLS packaging with Shaka Packager → actual final playlist checks against the original streams. FFmpeg and FFprobe supply probing, decoding, and comparison evidence. The intermediate MP4 is not used as the final reference.
+Original local HLS transport-stream resources → native structure admission and complete-track demultiplexing → fragmented MP4 HLS packaging with Shaka Packager → actual final playlist checks against the original streams. Rust supplies complete access-unit, configuration and clock evidence. Optional `--decode` additionally supplies complete decoding and decoded comparison evidence. The intermediate MP4 is not used as the final reference.
 
 This includes audio-only 44.1 or 48 kHz AAC-LC: original PES clocks and ADTS frame evidence
 anchor all content, sample counts, and timing checks. Complete frames determine
@@ -141,4 +154,4 @@ The fixed `sample_coverage_reason` explains unknown evidence: `sample-auxiliary-
 
 Metadata-only analysis reads at most 16 MiB of MP4 movie metadata and skips media and fragment payloads. Local HLS follows bounded child playlists inside its directory tree. URL metadata reads HLS playlists or a DASH MPD under the fetch policy, never initialization files, media segments or keys; remote MP4 requires valid Range responses. These temporary reads do not retain an executable-plan source. The additional facts do not widen those reads. DASH period counts describe direct, supported-namespace `Period` declarations, not verified durations or a complete media timeline. MP4 and HLS have no DASH period count.
 
-The version-one JSON additions are optional: `Inspection.details`, `ConversionPlan.processing`, and `ConversionReport.processing`. An absent field in an older report means the information was not supplied. It never means clear media, a selected route, or successful verification. Conditional plans and saved reports are not executable instructions. The separate `kind: "execution-plan"` format saves typed local intent and source identity; execution still revalidates the actual media and runtime configuration. License and device playback remain outside the media-identity checks.
+Metadata report version-one additions remain optional: `Inspection.details`, `ConversionPlan.processing`, and `ConversionReport.processing`. An absent field in an older report means the information was not supplied. It never means clear media, a selected route, or successful verification. Conditional plans and saved reports are not executable instructions. The separate `kind: "execution-plan"` format saves typed local intent and source identity; execution still revalidates the actual media and runtime configuration. License and device playback remain outside the media-identity checks.

@@ -13,14 +13,13 @@ fn success(command: &mut Command) -> Output {
 
 fn proof(value: &serde_json::Value) {
     assert_eq!(value["passed"], true);
-    assert_eq!(value["media_verified"], true);
+    assert_eq!(
+        value["decode_evidence"],
+        serde_json::json!({"status":"content-compared","equal":true})
+    );
     assert_eq!(value["license_playback_verified"], false);
     assert_eq!(value["checks"]["stream_metadata"], "pass");
-    for name in [
-        "packet_payloads_equal",
-        "packet_timing_equal",
-        "decoded_content_equal",
-    ] {
+    for name in ["packet_payloads_equal", "packet_timing_equal"] {
         assert_eq!(value["checks"][name], true);
     }
 }
@@ -91,6 +90,7 @@ fn a_long_bbb_presentation_converts_and_independently_verifies_every_packet() {
     let converted = success(
         Command::new(env!("CARGO_BIN_EXE_drmr"))
             .arg("convert")
+            .arg("--decode")
             .arg(&source)
             .args(["--to", "cbcs", "--format", "mp4", "--output"])
             .arg(&target)
@@ -103,6 +103,7 @@ fn a_long_bbb_presentation_converts_and_independently_verifies_every_packet() {
     let verified = success(
         Command::new(env!("CARGO_BIN_EXE_drmr"))
             .arg("verify")
+            .arg("--decode")
             .arg(&target)
             .arg("--source")
             .arg(&source)

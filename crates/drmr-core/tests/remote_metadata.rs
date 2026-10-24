@@ -189,6 +189,7 @@ fn converter(stop: Stop, events: Arc<Collector>) -> Converter {
         "unused",
         "unused",
     )
+    .with_decode(true)
     .with_stop(stop)
     .with_activity_sink(events)
 }

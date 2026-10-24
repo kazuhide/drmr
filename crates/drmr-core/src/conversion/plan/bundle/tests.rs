@@ -18,6 +18,7 @@ fn sample(root: &Path) -> BundlePlan {
     let mut plan = BundlePlan {
         kind: KIND.into(),
         schema_version: 2,
+        required_depth: None,
         plan_id: String::new(),
         source: frozen.inventory().clone(),
         source_format: OutputFormat::Mp4,
@@ -33,6 +34,35 @@ fn private_write(path: &Path, bytes: &[u8]) {
         .unwrap()
         .write_all(bytes)
         .unwrap();
+}
+
+#[test]
+fn bundle_minimum_depth_is_bound_without_changing_legacy_identity() {
+    let root = crate::native::private_tempdir().unwrap();
+    let mut plan = sample(root.path());
+    assert_eq!(plan.minimum_depth(), ValidationDepth::Decoded);
+    let legacy_id = plan.plan_id.clone();
+    assert!(
+        serde_json::to_value(&plan)
+            .unwrap()
+            .get("required_depth")
+            .is_none()
+    );
+    plan.schema_version = 4;
+    plan.required_depth = Some(ValidationDepth::Native);
+    plan.plan_id = identity(&plan).unwrap();
+    assert_ne!(plan.plan_id, legacy_id);
+    validate(&plan).unwrap();
+    let saved = root.path().join("native.plan.json");
+    plan::write_bundle(&saved, &plan).unwrap();
+    assert_eq!(
+        plan::read_saved(&saved).unwrap(),
+        SavedPlan::Bundle(plan.clone())
+    );
+    plan.required_depth = Some(ValidationDepth::Decoded);
+    assert_eq!(validate(&plan).unwrap_err(), INVALID);
+    plan.plan_id = identity(&plan).unwrap();
+    validate(&plan).unwrap();
 }
 
 #[test]
@@ -52,6 +82,7 @@ fn strict_saved_dispatch_accepts_both_schemas_and_preserves_private_no_replace()
     let mut legacy = plan::ExecutionPlan {
         kind: KIND.into(),
         schema_version: 1,
+        required_depth: None,
         plan_id: String::new(),
         source: plan.source.clone(),
         source_format: OutputFormat::Mp4,

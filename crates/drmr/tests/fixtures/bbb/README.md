@@ -22,18 +22,20 @@ Install FFmpeg (including `ffprobe`), Shaka Packager, and Python 3. With the rep
 cargo test --locked -p drmr --test bbb_media -- --nocapture
 ```
 
-The fixture test checks the committed bytes, codecs, duration, packet count, and actual H.264 IDR slices. The saved-plan test copies the video and audio into five two-second clear MPEG-TS segments for HTTP Live Streaming (HLS). It runs the real `inspect`, `analyze`, and `plan` commands against that local presentation, then saves a plan with two independent outputs:
+The fixture test checks the committed bytes, codecs, duration, packet count, and actual H.264 IDR slices. The saved-plan test copies the video and audio into five two-second clear MPEG-TS segments for HTTP Live Streaming (HLS). It runs the real `analyze --metadata-only`, `analyze --decode`, and `plan --save --decode` commands against that local presentation, then saves a plan with two independent outputs:
 
 - Dynamic Adaptive Streaming over HTTP (DASH), using fragmented MP4 with CBCS encryption and Widevine/PlayReady signaling.
 - HLS, using fragmented MP4 with CBCS encryption and FairPlay signaling.
 
-`convert --plan` must verify every coded packet, packet timestamp, decoded frame and audio sample for both outputs, together with native manifest checks and DRM signaling. A separate `verify --plan` repeats the comparison and checks that both outputs match the saved plan. The test also checks that the source bytes and saved plan remain unchanged.
+`convert --plan --decode` must verify every coded packet, packet timestamp, decoded frame and audio sample for both outputs, together with native manifest checks and DRM signaling. A separate `verify --plan --decode` repeats the comparison and checks that both outputs match the saved plan. The test also checks that the source bytes and saved plan remain unchanged.
 
 This test uses the MPEG-TS adapter as its comparison baseline. MPEG-TS does not carry the progressive MP4 edit list that trims AAC encoder priming and final padding. It therefore checks preservation of the complete TS presentation, rather than claiming to preserve the progressive clip's finite audio trim. Separate [progressive MP4 regressions](../../progressive_mp4.rs) check that behavior; see [media processing](../../../../../docs/media-processing.md) for the supported edit profiles and their limits.
 
 The printed JSON records verification results, tool versions, elapsed time, and resident memory sampled every 100 milliseconds separately for the CLI and its living child processes. Sampled peaks can miss short-lived processes or spikes; they are not exact lifetime maxima. If no sample is available, memory is explicitly reported as `unmeasured`. Save a report by setting `DRMR_MEDIA_REPORT` to a file outside the repository.
 
 The encryption keys and identifiers in `regression.py` are intentionally public test values. Generated encrypted outputs can be decrypted with those values; do not use them to restrict access or for production. This test does not verify a real license service, playback device, or external conformance tool. CI runs the regression natively on Linux, macOS, and Windows; each report identifies the platform that actually ran it.
+
+The complete-media regressions request `--decode` explicitly, preserving their existing native and complete-decoding requirements. New reports use schema 2 with typed decode evidence, and the named-output plan uses schema 4 with a decoded minimum. Native source admission and packaging-only comparisons have separate Rust integration tests; recognizing a codec configuration does not qualify every profile or bit depth. See [verification depth](../../../../../docs/verification.md).
 
 ## Generic conversion matrix
 

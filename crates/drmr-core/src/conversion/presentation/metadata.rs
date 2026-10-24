@@ -151,7 +151,14 @@ pub(super) fn validate_profile(
         .as_ref()
         .and_then(|a| a.channels.as_ref());
     if track.metadata.resolution.is_some() || channels.is_some() {
-        let profile = backend.profile_stream(&track.media, track.index, key)?;
+        let profile = if backend.validation_depth == super::super::ValidationDepth::Native {
+            match track.transport_native.as_deref() {
+                Some(native) => super::super::native::transport_profile(native)?,
+                None => backend.profile_stream(&track.media, track.index, key)?,
+            }
+        } else {
+            backend.profile_stream(&track.media, track.index, key)?
+        };
         if let Some((width, height)) = track.metadata.resolution
             && (profile["width"].as_u64() != Some(width)
                 || profile["height"].as_u64() != Some(height))

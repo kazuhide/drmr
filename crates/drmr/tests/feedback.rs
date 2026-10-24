@@ -20,10 +20,19 @@ fn invoke(command: &str, source: &Path, output: &Path, extra: &[&str]) -> Output
     process.args(extra).output().unwrap()
 }
 fn failure(result: &Output, command: &str, code: &str, exit: i32) -> Value {
+    failure_with_schema(result, command, code, exit, 1)
+}
+fn failure_with_schema(
+    result: &Output,
+    command: &str,
+    code: &str,
+    exit: i32,
+    schema: u32,
+) -> Value {
     assert_eq!(result.status.code(), Some(exit));
     let value: Value = serde_json::from_slice(&result.stdout)
         .expect("a valid --json command emits one structured failure object");
-    assert_eq!(value["schema_version"], 1);
+    assert_eq!(value["schema_version"], schema);
     assert_eq!(value["command"], command);
     assert_eq!(value["status"], "failed");
     assert_eq!(value["error"]["code"], code);
@@ -224,6 +233,7 @@ fn observed_capacity_refusal_is_structured_without_launching_packaging() {
     .unwrap();
     let result = Command::new(env!("CARGO_BIN_EXE_drmr"))
         .arg("convert")
+        .arg("--decode")
         .arg(&source)
         .args(["--to", "clear", "--format", "mp4", "--json", "--output"])
         .arg(&output)
@@ -267,7 +277,7 @@ fn longer_public_source_preserves_full_proof_and_progress_without_changing_succe
     assert!(packets.status.success());
     assert_eq!(String::from_utf8(packets.stdout).unwrap().trim(), "960");
     let before = std::fs::read(&source).unwrap();
-    let converted = invoke("convert", &source, &output, &["--json"]);
+    let converted = invoke("convert", &source, &output, &["--decode", "--json"]);
     assert!(
         converted.status.success(),
         "{}",
@@ -275,8 +285,18 @@ fn longer_public_source_preserves_full_proof_and_progress_without_changing_succe
     );
     let converted: Value = serde_json::from_slice(&converted.stdout).unwrap();
     assert!(converted.get("status").is_none() && converted.get("error").is_none());
-    assert_eq!(converted["verification"]["media_verified"], true);
-    let verified = invoke("verify", &source, &output, &[]);
+    assert_eq!(converted["schema_version"], 2);
+    assert_eq!(converted["verification"]["required_depth"], "decoded");
+    assert_eq!(converted["verification"]["scope"], "comparison");
+    assert_eq!(
+        converted["verification"]["checks"],
+        serde_json::json!({"stream_metadata":"pass", "packet_payloads_equal":true, "packet_timing_equal":true})
+    );
+    assert_eq!(
+        converted["verification"]["decode_evidence"],
+        serde_json::json!({"status":"content-compared","equal":true})
+    );
+    let verified = invoke("verify", &source, &output, &["--decode"]);
     assert!(
         verified.status.success(),
         "{}",
@@ -314,12 +334,20 @@ fn a_verification_mismatch_retains_the_check_report_and_adds_safe_failure_fields
             .unwrap()
             .success()
     );
-    let result = invoke("verify", &source, &altered, &["--json"]);
-    let report = failure(&result, "verify", "verification-mismatch", 1);
+    let result = invoke("verify", &source, &altered, &["--decode", "--json"]);
+    let report = failure_with_schema(&result, "verify", "verification-mismatch", 1, 2);
     assert_eq!(report["passed"], false);
-    assert_eq!(report["media_verified"], false);
+    assert_eq!(report["required_depth"], "decoded");
+    assert_eq!(report["scope"], "comparison");
+    assert_eq!(report["checks"]["packet_payloads_equal"], false);
+    assert_eq!(report["license_playback_verified"], false);
+    assert!(report.get("media_verified").is_none());
+    assert!(report["checks"].get("decoded_content_equal").is_none());
     assert!(report["checks"].is_object());
-    assert_eq!(report["checks"]["decoded_content_equal"], false);
+    assert_eq!(
+        report["decode_evidence"],
+        serde_json::json!({"status":"content-compared","equal":false})
+    );
     assert!(String::from_utf8_lossy(&result.stderr).contains("verify: verification-mismatch"));
 }
 

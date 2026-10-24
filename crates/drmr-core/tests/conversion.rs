@@ -12,7 +12,7 @@ fn runner() -> Arc<ToolRunner> {
     Arc::new(ToolRunner::new(Arc::new(Secrets::new()), Arc::new(NoSink)))
 }
 fn converter() -> Converter {
-    Converter::new(runner(), "packager", "ffmpeg")
+    Converter::new(runner(), "packager", "ffmpeg").with_decode(true)
 }
 fn input_keys(kid: &str, key: &str) -> InputKeys {
     InputKeys::new(vec![ContentKey::from_hex(kid, key).unwrap()]).unwrap()
@@ -99,7 +99,10 @@ fn real_mp4_clear_cenc_cbcs_nine_routes_use_independent_output_keys() {
                 serde_json::to_value(&report).unwrap()["processing"]["route"],
                 "fragmented-mp4"
             );
-            assert!(report.verification.checks.decoded_content_equal);
+            assert!(report.verification.decode_evidence.satisfies(
+                drmr_core::conversion::ValidationDepth::Decoded,
+                report.verification.scope
+            ));
             assert!(report.verification.checks.packet_payloads_equal);
             assert!(!report.verification.license_playback_verified);
             assert_eq!(
@@ -171,7 +174,10 @@ fn mismatched_media_does_not_pass_verification() {
         .verify_mp4(&a, &InputKeys::default(), &b, &InputKeys::default())
         .unwrap();
     assert!(!report.passed);
-    assert!(!report.checks.decoded_content_equal);
+    assert!(matches!(
+        report.decode_evidence,
+        drmr_core::conversion::DecodeEvidence::ContentCompared { equal: false }
+    ));
 }
 #[test]
 fn keys_never_reach_retained_tool_records_or_reports() {
@@ -180,7 +186,7 @@ fn keys_never_reach_retained_tool_records_or_reports() {
     video(&input, "testsrc2=size=64x64:rate=5");
     let sink = Arc::new(Collector::default());
     let runner = Arc::new(ToolRunner::new(Arc::new(Secrets::new()), sink.clone()));
-    let converter = Converter::new(runner, "packager", "ffmpeg");
+    let converter = Converter::new(runner, "packager", "ffmpeg").with_decode(true);
     let output = directory.path().join("output.mp4");
     let report = converter
         .convert_mp4(
@@ -329,11 +335,21 @@ fn missing_keys_fail_closed_and_finite_joint_tracks_are_independently_verified()
         .verify_mp4(&av, &source_keys, &output, &result_keys)
         .unwrap();
     for verified in [&report.verification, &fresh] {
-        assert!(verified.passed && verified.media_verified);
+        assert!(
+            verified.passed
+                && (verified.checks.is_pass()
+                    && verified.decode_evidence.satisfies(
+                        drmr_core::conversion::ValidationDepth::Decoded,
+                        verified.scope
+                    ))
+        );
         assert!(verified.checks.stream_metadata.is_pass());
         assert!(verified.checks.packet_payloads_equal);
         assert!(verified.checks.packet_timing_equal);
-        assert!(verified.checks.decoded_content_equal);
+        assert!(verified.decode_evidence.satisfies(
+            drmr_core::conversion::ValidationDepth::Decoded,
+            verified.scope
+        ));
         assert!(!verified.license_playback_verified);
     }
     assert_eq!(std::fs::read(&av).unwrap(), original);
@@ -550,7 +566,10 @@ fn middle_packet_timestamp_changes_fail_even_when_payloads_and_duration_match() 
         )
         .unwrap();
     assert!(report.checks.packet_payloads_equal);
-    assert!(report.checks.decoded_content_equal);
+    assert!(report.decode_evidence.satisfies(
+        drmr_core::conversion::ValidationDepth::Decoded,
+        report.scope
+    ));
     assert!(!report.checks.packet_timing_equal);
     assert!(!report.passed);
 }
@@ -634,11 +653,21 @@ fn progressive_aac_with_finite_tail_padding_preserves_the_complete_presentation(
         )
         .unwrap();
     for verified in [&report.verification, &fresh] {
-        assert!(verified.passed && verified.media_verified);
+        assert!(
+            verified.passed
+                && (verified.checks.is_pass()
+                    && verified.decode_evidence.satisfies(
+                        drmr_core::conversion::ValidationDepth::Decoded,
+                        verified.scope
+                    ))
+        );
         assert!(verified.checks.stream_metadata.is_pass());
         assert!(verified.checks.packet_payloads_equal);
         assert!(verified.checks.packet_timing_equal);
-        assert!(verified.checks.decoded_content_equal);
+        assert!(verified.decode_evidence.satisfies(
+            drmr_core::conversion::ValidationDepth::Decoded,
+            verified.scope
+        ));
         assert!(!verified.license_playback_verified);
     }
     assert_eq!(std::fs::read(&source).unwrap(), original);
@@ -646,31 +675,22 @@ fn progressive_aac_with_finite_tail_padding_preserves_the_complete_presentation(
 
 #[test]
 fn a_changed_audio_sample_clock_cannot_pass_with_identical_silent_samples() {
+    use drmr_core::conversion::{DecodeEvidence, ValidationDepth};
+
     let directory = tempfile::tempdir().unwrap();
     let source = directory.path().join("source.mp4");
     let result = directory.path().join("result.mp4");
     let status = std::process::Command::new("ffmpeg")
-        .args([
-            "-v",
-            "error",
-            "-f",
-            "lavfi",
-            "-i",
-            "anullsrc=channel_layout=stereo:sample_rate=48000",
-            "-t",
-            "0.2",
-            "-c:a",
-            "aac",
-            "-use_editlist",
-            "0",
-            "-movflags",
-            "+frag_keyframe+empty_moov+default_base_moof",
-        ])
+        .args(["-v", "error", "-f", "lavfi", "-i"])
+        .arg("anullsrc=channel_layout=stereo:sample_rate=48000")
+        .args(["-t", "0.2", "-c:a", "aac", "-use_editlist", "0"])
+        .args(["-movflags", "+frag_keyframe+empty_moov+default_base_moof"])
         .arg(&source)
         .status()
         .unwrap();
     assert!(status.success());
-    let mut data = std::fs::read(&source).unwrap();
+    let original = std::fs::read(&source).unwrap();
+    let mut data = original.clone();
     let esds = data.windows(4).position(|bytes| bytes == b"esds").unwrap();
     let asc = data[esds..esds + 100]
         .windows(2)
@@ -680,25 +700,79 @@ fn a_changed_audio_sample_clock_cannot_pass_with_identical_silent_samples() {
     // Only the AAC decoder configuration changes, from 48 kHz to 44.1 kHz.
     // The encoded packets, silent sample bytes, and MP4 clock remain identical.
     data[asc..asc + 2].copy_from_slice(&[0x12, 0x10]);
-    std::fs::write(&result, data).unwrap();
-    let report = converter()
-        .verify_mp4(
-            &source,
-            &InputKeys::default(),
-            &result,
-            &InputKeys::default(),
-        )
-        .unwrap();
-    assert!(
-        !report.passed,
-        "a different decoded sample clock changes presentation semantics"
-    );
-    assert!(!report.checks.stream_metadata.is_pass());
-    assert!(
-        report.checks.packet_payloads_equal
-            && report.checks.packet_timing_equal
-            && report.checks.decoded_content_equal
-    );
+    std::fs::write(&result, &data).unwrap();
+    let oracle = |program: &str, path: &Path, arguments: &[&str]| {
+        let mut command = std::process::Command::new(program);
+        command.args(["-v", "error", "-threads", "1"]);
+        if program == "ffmpeg" {
+            command.arg("-i");
+        }
+        let output = command.arg(path).args(arguments).output().unwrap();
+        assert!(output.status.success(), "independent {program} failed");
+        output.stdout
+    };
+    let packet_arguments = [
+        "-show_packets",
+        "-show_data_hash",
+        "sha256",
+        "-show_entries",
+        "packet=pts,dts,duration,data_hash:packet_side_data=",
+        "-of",
+        "json",
+    ];
+    let packets = oracle("ffprobe", &source, &packet_arguments);
+    let parsed: serde_json::Value = serde_json::from_slice(&packets).unwrap();
+    let records = parsed["packets"].as_array().unwrap();
+    assert_ne!(records.as_slice(), [] as [serde_json::Value; 0]);
+    assert!(records.iter().all(|packet| {
+        ["pts", "dts", "duration"]
+            .into_iter()
+            .all(|field| packet[field].as_i64().is_some())
+            && packet["data_hash"]
+                .as_str()
+                .is_some_and(|hash| hash.starts_with("SHA256:"))
+    }));
+    assert_eq!(packets, oracle("ffprobe", &result, &packet_arguments));
+    let pcm_arguments = ["-map", "0:a:0", "-c:a", "pcm_s16le", "-f", "s16le", "-"];
+    let pcm = oracle("ffmpeg", &source, &pcm_arguments);
+    assert_ne!(pcm, [] as [u8; 0]);
+    assert!(pcm.iter().all(|sample| *sample == 0));
+    assert_eq!(pcm, oracle("ffmpeg", &result, &pcm_arguments));
+    for (decode, depth) in [
+        (false, ValidationDepth::Native),
+        (true, ValidationDepth::Decoded),
+    ] {
+        let converter = converter().with_decode(decode);
+        let verify = || {
+            converter.verify_mp4(
+                &source,
+                &InputKeys::default(),
+                &result,
+                &InputKeys::default(),
+            )
+        };
+        std::fs::write(&result, &data).unwrap();
+        assert_eq!(
+            verify().unwrap_err(),
+            ConversionError("native-aac-clock-mismatch"),
+            "a changed AAC rate must be refused before optional decoding: decode={decode}"
+        );
+        assert_eq!(std::fs::read(&result).unwrap(), data);
+        std::fs::write(&result, &original).unwrap();
+        let restored = verify().unwrap();
+        assert!(restored.passed && restored.checks.is_pass());
+        assert_eq!(restored.required_depth, depth);
+        assert_eq!(
+            restored.decode_evidence,
+            if decode {
+                DecodeEvidence::ContentCompared { equal: true }
+            } else {
+                DecodeEvidence::not_requested()
+            }
+        );
+        assert!(!restored.license_playback_verified);
+    }
+    assert_eq!(std::fs::read(&source).unwrap(), original);
 }
 
 #[test]

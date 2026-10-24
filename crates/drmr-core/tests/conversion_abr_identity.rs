@@ -8,6 +8,7 @@ use drmr_core::{
     },
     events::{NoSink, Record, Sink},
     inspection::{OutputFormat, TargetProtection, TrackKind},
+    mp4::{parse_boxes, walk},
     toolrun::{Secrets, ToolRunner},
 };
 use std::{
@@ -29,6 +30,7 @@ fn converter() -> Converter {
         "packager",
         "ffmpeg",
     )
+    .with_decode(true)
 }
 fn run(command: &mut Command) -> Vec<u8> {
     let result = command.output().unwrap();
@@ -39,6 +41,68 @@ fn run(command: &mut Command) -> Vec<u8> {
     );
     result.stdout
 }
+fn sei_value(nal: &[u8], at: &mut usize) -> usize {
+    let mut value = 0_usize;
+    loop {
+        let byte = nal[*at];
+        *at += 1;
+        value = value.checked_add(usize::from(byte)).unwrap();
+        if byte != 255 {
+            return value;
+        }
+    }
+}
+fn mark_existing_user_data(path: &Path) {
+    let original = std::fs::read(path).unwrap();
+    let boxes = parse_boxes(&original).unwrap();
+    let configs: Vec<_> = walk(&boxes)
+        .into_iter()
+        .filter(|b| b.kind() == *b"avcC")
+        .collect();
+    assert_eq!(configs.len(), 1);
+    assert_eq!(configs[0].header.payload(&original)[4] & 3, 3);
+    let mdat = boxes.iter().find(|b| b.kind() == *b"mdat").unwrap();
+    let start = mdat.header.offset + mdat.header.header_size;
+    let data = mdat.header.payload(&original);
+    let size = usize::try_from(u32::from_be_bytes(data[..4].try_into().unwrap())).unwrap();
+    let nal = &data[4..4 + size];
+    assert_eq!(nal[0], 6);
+    assert_eq!(nal.last(), Some(&0x80));
+    // The existing SEI precedes the first IDR picture of this video-only fragment.
+    let next = &data[4 + size..];
+    let next_size = usize::try_from(u32::from_be_bytes(next[..4].try_into().unwrap())).unwrap();
+    assert!(next_size > 0 && next_size <= next.len() - 4);
+    assert_eq!(next[4] & 31, 5);
+    // This fixture's SEI has no emulation-prevention bytes; RBSP offsets are byte offsets.
+    assert!(!nal.windows(3).any(|bytes| bytes == [0, 0, 3]));
+    let mut at = 1;
+    assert_eq!(sei_value(nal, &mut at), 5);
+    let payload_size = sei_value(nal, &mut at);
+    assert_eq!(at + payload_size + 1, nal.len());
+    assert!(payload_size >= 16 + MARKER.len());
+    let uuid = &nal[at..at + 16];
+    let begin = start + 4 + at + 16;
+    let end = begin + MARKER.len();
+    assert!(
+        original[begin..end]
+            .iter()
+            .all(|b| b.is_ascii_graphic() || *b == b' ')
+    );
+    assert!(MARKER.bytes().all(|b| b.is_ascii_graphic()));
+    let mut marked = original.clone();
+    marked[begin..end].copy_from_slice(MARKER.as_bytes());
+    assert_eq!(marked.len(), original.len());
+    assert_eq!(&marked[..begin], &original[..begin]);
+    assert_eq!(&marked[end..], &original[end..]);
+    assert_eq!(&marked[start + 4 + at..start + 4 + at + 16], uuid);
+    assert!(
+        !marked[start + 4..start + 4 + size]
+            .windows(3)
+            .any(|bytes| bytes == [0, 0, 3])
+    );
+    assert_eq!(parse_boxes(&marked).unwrap(), boxes);
+    std::fs::write(path, marked).unwrap();
+}
 fn video_tracks(root: &Path) -> [LocalTrack; 2] {
     let clip = Path::new(env!("CARGO_MANIFEST_DIR")).join("../drmr/tests/fixtures/bbb/clip.mp4");
     std::array::from_fn(|index| {
@@ -48,17 +112,12 @@ fn video_tracks(root: &Path) -> [LocalTrack; 2] {
             .args(["-v", "error", "-nostdin", "-threads", "1", "-i"])
             .arg(&clip)
             .args(["-map", "0:v:0", "-c", "copy"]);
-        if index == 1 {
-            command.args([
-                "-bsf:v",
-                &format!(
-                    "h264_metadata=sei_user_data=086f3693-b7b3-4f2c-a299-1fb58e87c381+{MARKER}"
-                ),
-            ]);
-        }
         run(command
             .args(["-movflags", "+frag_keyframe+empty_moov"])
             .arg(&path));
+        if index == 1 {
+            mark_existing_user_data(&path);
+        }
         LocalTrack {
             source: path,
             index: 0,
@@ -190,12 +249,22 @@ fn identical_pictures_with_distinct_packets_verify_after_declaration_reordering(
     let text = std::fs::read_to_string(&result).unwrap();
     std::fs::write(&result, reverse_variants(&text)).unwrap();
     let verification = verify(&source, &result).unwrap();
-    assert!(verification.passed && verification.media_verified);
+    assert!(
+        verification.passed
+            && (verification.checks.is_pass()
+                && verification.decode_evidence.satisfies(
+                    drmr_core::conversion::ValidationDepth::Decoded,
+                    verification.scope
+                ))
+    );
     assert!(verification.checks.stream_metadata.is_pass());
     assert!(
         verification.checks.packet_payloads_equal
             && verification.checks.packet_timing_equal
-            && verification.checks.decoded_content_equal
+            && verification.decode_evidence.satisfies(
+                drmr_core::conversion::ValidationDepth::Decoded,
+                verification.scope
+            )
     );
     assert_tie_cancellation_propagates(&source, &result);
     let (path, mut bytes) = common::snapshot_tree(&candidate)

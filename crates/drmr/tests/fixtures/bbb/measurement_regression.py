@@ -38,7 +38,7 @@ def regression(binary, directory, condition="uncontrolled"):
     keys = private_json(directory / "keys.json", {"schema_version": 1, "output": {
         "kid": "303132333435363738393a3b3c3d3e3f", "key": "40404040404040404040404040404040"}})
     arguments = measure.parse_args(["--drmr", str(binary), "--input", str(source), "--keys-file", str(keys),
-                                    "--to", "cbcs", "--format", "dash", "--repeats", "1", "--condition", condition])
+                                    "--to", "cbcs", "--format", "dash", "--decode", "--repeats", "1", "--condition", condition])
     report = {"schema_version": 2, "runs": [], "success": False}
     measure.benchmark(arguments, report)
     assert report["success"] is True and len(report["runs"]) == 2

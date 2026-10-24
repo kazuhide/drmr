@@ -306,10 +306,13 @@ fn audio_44100_long_sample_span_extinf_passes_analysis_saved_plans_conversion_an
         .unwrap();
     assert!(analysis.input_admitted);
     assert_eq!(analysis.actual_format, OutputFormat::HlsTs);
-    assert!(analysis.input_checks.stream_metadata.is_pass());
-    assert!(analysis.input_checks.packet_payloads_equal);
-    assert!(analysis.input_checks.packet_timing_equal);
-    assert!(analysis.input_checks.decoded_content_equal);
+    assert!(analysis.verification.checks.stream_metadata.is_pass());
+    assert!(analysis.verification.checks.packet_payloads_equal);
+    assert!(analysis.verification.checks.packet_timing_equal);
+    assert!(analysis.verification.decode_evidence.satisfies(
+        drmr_core::conversion::ValidationDepth::Decoded,
+        analysis.verification.scope
+    ));
     for (format, name) in [(OutputFormat::Hls, "hls"), (OutputFormat::Dash, "dash")] {
         let output = root.path().join(name);
         let planned = c

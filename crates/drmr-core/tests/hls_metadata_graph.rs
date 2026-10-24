@@ -40,6 +40,7 @@ fn command() -> Converter {
         "unused",
         "unused",
     )
+    .with_decode(true)
 }
 
 fn remote(server: &TestServer) -> Result<Inspection, drmr_core::conversion::ConversionError> {

@@ -246,6 +246,7 @@ fn invoke(operation: &str, input: &Path, keys: Option<&Path>) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_drmr"));
     command
         .arg(operation)
+        .arg("--decode")
         .arg(input)
         .args(["--max-workers", "1", "--json"]);
     if let Some(keys) = keys {
@@ -300,16 +301,30 @@ fn success(output: &Output, operation: &'static str) -> Value {
     report
 }
 fn verified(report: &Value) {
+    assert_eq!(report["schema_version"], 2);
+    assert_eq!(report["required_depth"], "decoded");
+    assert_eq!(report["scope"], "comparison");
     assert_eq!(report["passed"], true);
-    assert_eq!(report["media_verified"], true);
+    assert_eq!(report["checks"]["stream_metadata"], "pass");
+    assert_eq!(
+        report["decode_evidence"],
+        serde_json::json!({"status":"content-compared","equal":true})
+    );
     assert_eq!(report["license_playback_verified"], false);
-    for name in [
-        "packet_payloads_equal",
-        "packet_timing_equal",
-        "decoded_content_equal",
-    ] {
+    for name in ["packet_payloads_equal", "packet_timing_equal"] {
         assert_eq!(report["checks"][name], true);
     }
+}
+
+fn decoded_bundle_plan(plan: &Value, outputs: usize) {
+    assert_eq!(plan["schema_version"], 4);
+    assert_eq!(plan["required_depth"], "decoded");
+    assert_eq!(plan["outputs"].as_array().unwrap().len(), outputs);
+}
+
+fn bundle_result(result: &Value, plan: &Value) {
+    assert_eq!(result["schema_version"], 2);
+    assert_eq!(result["plan_id"], plan["plan_id"]);
 }
 
 fn native_verified(report: &Value) {
@@ -404,6 +419,15 @@ fn encrypted_url_roundtrip(profile: Profile) {
     );
     assert_eq!(report["input_admitted"], true);
     assert_eq!(report["download"]["retained"], true);
+    for admission in [&local, &report] {
+        assert_eq!(admission["schema_version"], 2);
+        assert_eq!(admission["verification"]["required_depth"], "decoded");
+        assert_eq!(admission["verification"]["scope"], "source-admission");
+        assert_eq!(
+            admission["verification"]["decode_evidence"],
+            json!({"status":"source-decoded"})
+        );
+    }
     let counts = server.stop();
     assert_eq!(
         counts.refused, 0,
@@ -528,6 +552,7 @@ fn offline_plan(root: &Path, input: &Path, keys: &Path) {
             .unwrap(),
         "offline-plan",
     );
+    decoded_bundle_plan(&planned, 1);
     assert!(!output.exists());
     let saved = std::fs::read(&plan).unwrap();
     for secret in [KEY, ROTATED, WRONG, IV, SKD, download_http::QUERY] {
@@ -550,7 +575,7 @@ fn offline_plan(root: &Path, input: &Path, keys: &Path) {
                 "verify-plan"
             },
         );
-        assert_eq!(result["plan_id"], planned["plan_id"]);
+        bundle_result(&result, &planned);
         if operation == "verify" {
             verified(&result["outputs"][0]["verification"]);
             native_verified(&result["outputs"][0]["verification"]);
@@ -617,7 +642,7 @@ fn cenc_all_qualified_outputs(root: &Path, input: &Path) {
                 .unwrap(),
             "cenc-matrix-plan",
         );
-        assert_eq!(planned["outputs"].as_array().unwrap().len(), routes.len());
+        decoded_bundle_plan(&planned, routes.len());
         assert!(!output.exists());
         let saved = std::fs::read(&plan).unwrap();
         for secret in [KEY, ROTATED, IV, SKD] {
@@ -638,7 +663,7 @@ fn cenc_all_qualified_outputs(root: &Path, input: &Path) {
                 checked(&result)["error"]["code"]
             );
             let result = success(&result, operation);
-            assert_eq!(result["plan_id"], planned["plan_id"]);
+            bundle_result(&result, &planned);
             let outputs = result["outputs"].as_array().unwrap();
             assert_eq!(outputs.len(), routes.len());
             for (report, &(format, target)) in outputs.iter().zip(routes) {

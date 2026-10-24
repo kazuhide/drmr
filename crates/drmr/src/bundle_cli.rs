@@ -54,10 +54,11 @@ impl Session {
         json: bool,
         packager: &str,
         maximum: Option<u8>,
+        decode: bool,
         keys: Option<&PathBuf>,
     ) -> Result<Self, ExitCode> {
         let progress = Arc::new(Progress::new(!json));
-        Self::start_observed(command, json, packager, maximum, keys, progress)
+        Self::start_observed(command, json, packager, maximum, decode, keys, progress)
     }
 
     fn start_observed(
@@ -65,6 +66,7 @@ impl Session {
         json: bool,
         packager: &str,
         maximum: Option<u8>,
+        decode: bool,
         keys: Option<&PathBuf>,
         progress: Arc<Progress>,
     ) -> Result<Self, ExitCode> {
@@ -87,6 +89,7 @@ impl Session {
         let converter = convert_cli::converter(
             packager,
             maximum,
+            decode,
             progress.clone(),
             cancellation.stop.clone(),
         );
@@ -282,6 +285,7 @@ pub fn verify_manifest(args: &VerifyArgs) -> ExitCode {
         args.json,
         &args.packager_bin,
         args.max_workers,
+        false,
         None,
     ) {
         Ok(session) => session,
@@ -364,6 +368,7 @@ pub fn save(args: &PlanArgs) -> ExitCode {
         args.json,
         args.packager_bin.as_deref().unwrap_or("packager"),
         args.max_workers,
+        args.decode,
         args.keys_file.as_ref(),
     ) {
         Ok(session) => session,
@@ -403,6 +408,7 @@ pub fn convert(args: &ConvertArgs, plan: &BundlePlan) -> ExitCode {
         args.json,
         &args.packager_bin,
         args.max_workers,
+        args.decode,
         args.keys_file.as_ref(),
     ) {
         Ok(session) => session,
@@ -421,6 +427,7 @@ pub fn verify(args: &VerifyArgs, plan: &BundlePlan) -> ExitCode {
         args.json,
         &args.packager_bin,
         args.max_workers,
+        args.decode,
         args.keys_file.as_ref(),
     ) {
         Ok(session) => session,
@@ -456,6 +463,7 @@ pub fn convert_direct(args: &ConvertArgs) -> ExitCode {
         args.json,
         &args.packager_bin,
         args.max_workers,
+        args.decode,
         args.keys_file.as_ref(),
         progress,
     ) {

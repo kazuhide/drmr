@@ -6,7 +6,7 @@ mod tests;
 use super::{
     ConversionError, ConversionReport, ConversionRequest, Converter, FrozenSource,
     SourceCompatibilityNote, SourceInventory, SourceProtection, SourceQualification,
-    SourceValidationPurpose, VerificationChecks, VerificationReport, VerificationRequest,
+    SourceValidationPurpose, ValidationDepth, VerificationReport, VerificationRequest,
     VerificationSource, files, frozen, key_file::OperatorKeys,
 };
 use crate::inspection::{Inspection, OutputFormat, TargetProtection};
@@ -53,12 +53,12 @@ pub fn read_saved(path: &Path) -> Result<SavedPlan, ConversionError> {
         return Err(INVALID);
     }
     match header.schema_version {
-        1 => {
+        1 | 3 => {
             let plan = serde_json::from_slice(&bytes).map_err(|_| INVALID)?;
             validate(&plan)?;
             Ok(SavedPlan::Single(plan))
         }
-        2 => {
+        2 | 4 => {
             let plan = serde_json::from_slice(&bytes).map_err(|_| INVALID)?;
             bundle::validate(&plan)?;
             Ok(SavedPlan::Bundle(plan))
@@ -67,7 +67,7 @@ pub fn read_saved(path: &Path) -> Result<SavedPlan, ConversionError> {
     }
 }
 
-/// Save a new private version-two plan without replacing another entry.
+/// Save a private bundle plan without replacing another entry.
 pub fn write_bundle(path: &Path, plan: &bundle::BundlePlan) -> Result<(), ConversionError> {
     bundle::write_new(path, plan)
 }
@@ -91,6 +91,24 @@ pub struct ExecutionPlan {
     pub source: SourceInventory,
     pub source_format: OutputFormat,
     pub intent: OutputIntent,
+    #[serde(
+        default,
+        deserialize_with = "present_depth",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub required_depth: Option<ValidationDepth>,
+}
+impl ExecutionPlan {
+    /// Legacy version-one plans retain their original complete-decode requirement.
+    pub fn minimum_depth(&self) -> ValidationDepth {
+        self.required_depth.unwrap_or(ValidationDepth::Decoded)
+    }
+}
+
+pub(super) fn present_depth<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<ValidationDepth>, D::Error> {
+    ValidationDepth::deserialize(deserializer).map(Some)
 }
 impl std::fmt::Debug for ExecutionPlan {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -118,7 +136,7 @@ pub struct InputAnalysis {
     pub kind: &'static str,
     pub schema_version: u32,
     pub input_admitted: bool,
-    pub input_checks: VerificationChecks,
+    pub verification: VerificationReport,
     pub input: Inspection,
     pub actual_format: OutputFormat,
     pub track_protection: Vec<SourceProtection>,
@@ -153,9 +171,9 @@ impl Converter {
         frozen.check_original()?;
         Ok(InputAnalysis {
             kind: "input-analysis",
-            schema_version: 1,
+            schema_version: 2,
             input_admitted: true,
-            input_checks: qualified.verification.checks,
+            verification: qualified.verification,
             input: qualified.input,
             actual_format: qualified.actual_format,
             track_protection: qualified.track_protection,
@@ -186,7 +204,7 @@ impl Converter {
         }
         let mut plan = ExecutionPlan {
             kind: KIND.into(),
-            schema_version: 1,
+            schema_version: 3,
             plan_id: String::new(),
             source: frozen.inventory().clone(),
             source_format: qualified.actual_format,
@@ -195,6 +213,7 @@ impl Converter {
                 target: request.target,
                 output,
             },
+            required_depth: Some(self.backend.validation_depth),
         };
         check_output_location(&plan)?;
         plan.plan_id = identity(&plan)?;
@@ -220,6 +239,9 @@ impl Converter {
             FrozenSource::from_inventory(&plan.source, &self.backend.stop).map_err(source_error)?;
         let mut command = self
             .using_frozen_source(&frozen)
+            .with_decode(
+                self.backend.validation_depth.max(plan.minimum_depth()) == ValidationDepth::Decoded,
+            )
             .using_plan_destination(destination);
         if let Some(signaling) = &keys.signaling {
             if command.output_signaling.is_some() {
@@ -260,7 +282,9 @@ impl Converter {
         let original =
             FrozenSource::from_inventory(&plan.source, &self.backend.stop).map_err(source_error)?;
         let result = FrozenSource::capture(&result_entrypoint(plan), &self.backend.stop)?;
-        let command = self.using_frozen_source(&original);
+        let command = self.using_frozen_source(&original).with_decode(
+            self.backend.validation_depth.max(plan.minimum_depth()) == ValidationDepth::Decoded,
+        );
         let output_keys = keys.output_verification_keys()?;
         let output_hls_keys = keys.output_hls_verification_keys()?;
         let source = VerificationSource {
@@ -299,7 +323,7 @@ impl Converter {
         })?;
         Ok(PlanVerificationReport {
             kind: "plan-verification",
-            schema_version: 1,
+            schema_version: 2,
             plan_id: plan.plan_id.clone(),
             source_unchanged: true,
             output_matches_plan,
@@ -363,6 +387,8 @@ struct Identity<'a> {
     source: &'a SourceInventory,
     source_format: OutputFormat,
     intent: &'a OutputIntent,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    required_depth: Option<ValidationDepth>,
 }
 fn identity(plan: &ExecutionPlan) -> Result<String, ConversionError> {
     let bytes = serde_json::to_vec(&Identity {
@@ -371,13 +397,17 @@ fn identity(plan: &ExecutionPlan) -> Result<String, ConversionError> {
         source: &plan.source,
         source_format: plan.source_format,
         intent: &plan.intent,
+        required_depth: plan.required_depth,
     })
     .map_err(|_| INVALID)?;
     Ok(hex::encode(Sha256::digest(bytes)))
 }
 fn validate(plan: &ExecutionPlan) -> Result<(), ConversionError> {
     if plan.kind != KIND
-        || plan.schema_version != 1
+        || !matches!(
+            (plan.schema_version, plan.required_depth),
+            (1, None) | (3, Some(_))
+        )
         || plan.plan_id.len() != 64
         || !plan
             .plan_id

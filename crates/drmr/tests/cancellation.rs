@@ -34,17 +34,16 @@ fn cancelled_command(signal: rustix::process::Signal, command: &str) {
     std::fs::create_dir(&tools).unwrap();
     let descendant = root.path().join("descendant.pid");
     let lock = root.path().join("descendant.lock");
-    install(
-        &tools.join("ffprobe"),
-        &ToolSpec::default()
-            .with("descendant_pid_file", descendant.to_str().unwrap())
-            .with("descendant_lock_file", lock.to_str().unwrap())
-            .with(
-                "release_file",
-                root.path().join("never-release").to_str().unwrap(),
-            ),
-    )
-    .unwrap();
+    let specification = ToolSpec::default()
+        .with("descendant_pid_file", descendant.to_str().unwrap())
+        .with("descendant_lock_file", lock.to_str().unwrap())
+        .with(
+            "release_file",
+            root.path().join("never-release").to_str().unwrap(),
+        );
+    for program in ["ffprobe", "ffmpeg"] {
+        install(&tools.join(program), &specification).unwrap();
+    }
     let clip = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bbb/clip.mp4");
     let output = root.path().join("result");
     let mut invocation = Command::new(env!("CARGO_BIN_EXE_drmr"));
@@ -58,7 +57,7 @@ fn cancelled_command(signal: rustix::process::Signal, command: &str) {
         invocation.arg(&clip).arg("--source").arg(&clip);
     }
     invocation
-        .args(["--json", "--max-workers", "1"])
+        .args(["--decode", "--json", "--max-workers", "1"])
         .env("PATH", &tools)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

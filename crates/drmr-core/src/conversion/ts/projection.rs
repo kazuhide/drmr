@@ -24,6 +24,7 @@ pub(in crate::conversion) struct Projector {
     pub clear: admission::Admission,
     pub native: BTreeMap<u16, canonical::Native>,
     audio_clocks: BTreeMap<u16, clock::Audio>,
+    failed: Option<ConversionError>,
 }
 impl Projector {
     pub fn new() -> Self {
@@ -32,6 +33,7 @@ impl Projector {
             clear: admission::Admission::default(),
             native: BTreeMap::new(),
             audio_clocks: BTreeMap::new(),
+            failed: None,
         }
     }
     pub fn encrypted_segment(
@@ -53,6 +55,25 @@ impl Projector {
         source: &Path,
         destination: &Path,
         stop: &Stop,
+        decrypt: F,
+    ) -> Result<(), ConversionError>
+    where
+        F: FnMut(TrackKind, &[u8]) -> Result<Zeroizing<Vec<u8>>, ConversionError>,
+    {
+        if let Some(error) = self.failed {
+            return Err(error);
+        }
+        let result = self.segment_checked(source, destination, stop, decrypt);
+        if let Err(error) = result {
+            self.failed = Some(error);
+        }
+        result
+    }
+    fn segment_checked<F>(
+        &mut self,
+        source: &Path,
+        destination: &Path,
+        stop: &Stop,
         mut decrypt: F,
     ) -> Result<(), ConversionError>
     where
@@ -60,6 +81,9 @@ impl Projector {
     {
         // Admission precedes any foreign demuxer and bounds even unspecified-length video PES.
         self.encrypted.segment(source, stop)?;
+        for native in self.native.values_mut() {
+            native.begin_segment()?;
+        }
         let mut input = std::io::BufReader::new(File::open(source).map_err(|_| BAD)?);
         let mut original = File::open(source).map_err(|_| BAD)?;
         let mut output = super::super::files::create_new(destination)?;
@@ -147,6 +171,11 @@ impl Projector {
         }
         output.flush().map_err(|_| BAD)?;
         drop(output);
+        // These boundaries belong to the original encrypted resources, before
+        // the same-slot clear projection is admitted independently below.
+        for native in self.native.values_mut() {
+            native.end_segment()?;
+        }
         self.clear.segment(destination, stop)
     }
     fn flush<F>(

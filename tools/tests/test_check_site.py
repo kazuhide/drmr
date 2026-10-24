@@ -129,7 +129,10 @@ class Site(unittest.TestCase):
         path = self.site / "ja/guide/index.html"
         original = path.read_bytes()
         self.assertIn(b"\n", original)
-        path.write_bytes(original.replace(b"\n", b"\r\n"))
+        # Isolate byte identity from the separate transfer-budget invariant.
+        changed = original.replace(b"\n", b"\r\n", 1)
+        self.assertEqual(len(changed), len(original) + 1)
+        path.write_bytes(changed)
         with self.assertRaisesRegex(CHECK.Failure, "site-guide-generated"):
             self.check()
 

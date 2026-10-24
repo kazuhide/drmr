@@ -14,6 +14,7 @@ fn converter() -> Converter {
         "packager",
         "ffmpeg",
     )
+    .with_decode(true)
     .with_timeout(std::time::Duration::from_secs(30))
 }
 
@@ -84,11 +85,21 @@ fn candidate(c: &Converter, parent: &Path, destination: &Path) -> Stage {
             None,
         )
         .unwrap();
-    assert!(report.verification.passed && report.verification.media_verified);
+    assert!(
+        report.verification.passed
+            && (report.verification.checks.is_pass()
+                && report.verification.decode_evidence.satisfies(
+                    crate::conversion::ValidationDepth::Decoded,
+                    report.verification.scope
+                ))
+    );
     assert!(report.verification.checks.stream_metadata.is_pass());
     assert!(report.verification.checks.packet_payloads_equal);
     assert!(report.verification.checks.packet_timing_equal);
-    assert!(report.verification.checks.decoded_content_equal);
+    assert!(report.verification.decode_evidence.satisfies(
+        crate::conversion::ValidationDepth::Decoded,
+        report.verification.scope
+    ));
     assert!(!report.verification.license_playback_verified);
     assert_eq!(fs::read(source).unwrap(), original);
     assert_eq!(fs::read(fixture).unwrap(), fixture_bytes);

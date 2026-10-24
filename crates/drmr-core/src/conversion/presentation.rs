@@ -1,5 +1,6 @@
 //! Joint, codec-preserving presentations with independent evidence for every source stream.
 pub(in crate::conversion) mod metadata;
+mod native_preparation;
 #[cfg(test)]
 mod signaling_tests;
 #[cfg(test)]
@@ -7,8 +8,8 @@ mod staging_tests;
 mod ts_output;
 use super::{
     ContentKey, ConversionError, ConversionReport, Converter, HlsOutputKey, InputKeys, LocalTrack,
-    OutputKey, VerificationChecks, VerificationReport, audio, copy_private, destination, hls,
-    verify::StreamView, workspace,
+    OutputKey, VerificationReport, audio, copy_private, destination, hls, verify::StreamView,
+    workspace,
 };
 use crate::inspection::{
     self, Evidence, InputFormat, Inspection, OutputFormat, Protection, TargetProtection, TrackKind,
@@ -51,14 +52,19 @@ struct Prepared {
     dash_reference: bool,
     audio_presentation: Option<super::audio_presentation::AudioPresentation>,
 }
-fn presentation_processing(format: OutputFormat) -> inspection::ActualProcessing {
-    inspection::ActualProcessing::new(
+fn presentation_processing(
+    backend: &super::backend::Backend,
+    format: OutputFormat,
+    ffmpeg_copy: bool,
+) -> inspection::ActualProcessing {
+    backend.processing(
         if format == OutputFormat::Dash {
             inspection::ProcessingRouteId::DashPresentation
         } else {
             inspection::ProcessingRouteId::Fmp4HlsPresentation
         },
         inspection::InputPreparation::LocalTrackFiles,
+        ffmpeg_copy,
     )
 }
 impl Converter {
@@ -152,7 +158,7 @@ impl Converter {
         };
         self.package_joint(&clears, package_root, &request)?;
         self.finish_packaged_presentation(package_root, stage.path(), &sources, &request)?;
-        let (checks, output_tracks, input_tracks) =
+        let (mut verification, output_tracks, input_tracks) =
             self.verify_joint(&sources, &request, stage.path(), work.path())?;
         secure_tree(stage.path())?;
         let format = if request.format == OutputFormat::Dash {
@@ -187,19 +193,20 @@ impl Converter {
         } else {
             None
         };
+        verification.native_manifest = native_manifest;
+        verification.refresh_passed();
         Ok(ConversionReport {
-            schema_version: 1,
+            schema_version: 2,
             input,
             output,
-            verification: VerificationReport {
-                schema_version: 1,
-                passed: true,
-                media_verified: true,
-                checks,
-                license_playback_verified: false,
-                native_manifest,
-            },
-            processing: Some(presentation_processing(request.format)),
+            verification,
+            processing: Some(presentation_processing(
+                &self.backend,
+                request.format,
+                sources
+                    .iter()
+                    .any(|source| source.source_dictionary && source.key_id.is_some()),
+            )),
         })
     }
     fn finish_packaged_presentation(
@@ -285,7 +292,7 @@ impl Converter {
         work: &Path,
     ) -> Result<
         (
-            VerificationChecks,
+            VerificationReport,
             Vec<inspection::Track>,
             Vec<inspection::Track>,
         ),
@@ -356,7 +363,7 @@ impl Converter {
             return Err(ConversionError("round-trip-verification-failed"));
         }
         self.verify_signaled_output(&sources[0].source, request, stage)?;
-        Ok((verification.checks, output_tracks, input_tracks))
+        Ok((verification, output_tracks, input_tracks))
     }
     fn verify_generated_presentation(
         &self,
@@ -490,11 +497,7 @@ impl Converter {
                 key_for(source, request.input_keys),
             );
             let normalization = self.backend.verify_views(
-                if source.source_dictionary {
-                    a.with_all_keys(request.input_keys)
-                } else {
-                    a
-                },
+                a.with_all_keys(request.input_keys),
                 StreamView::new(&clear, 0, None),
             )?;
             if !normalization.passed {
@@ -809,10 +812,12 @@ fn raw_audio_view<'a>(source: &'a Prepared, keys: &'a InputKeys) -> super::ts::V
         metadata: &source.source,
         index: source.transport_index.unwrap_or(source.index),
         key: key_for(source, keys),
+        all_keys: None,
         transport: source.transport_index.is_some(),
         native: source.transport_native.as_deref(),
         unedited: source.transport_index.is_none(),
     }
+    .with_all_keys(keys)
 }
 fn playback_metadata(source: &Prepared) -> &Path {
     if source.transport_index.is_some() {
@@ -966,12 +971,13 @@ impl Converter {
     ) -> Result<SourceQualification, ConversionError> {
         let work = workspace()?;
         let original = self.inspect_input(input.input)?;
-        let prepared = prepare_presentation(
+        let prepared = prepare_presentation_mode(
             &input,
             work.path(),
             &self.backend,
             self.maximum_workers,
             purpose,
+            false,
         )?;
         let actual_format = if prepared.iter().all(|t| t.transport_index.is_some()) {
             OutputFormat::HlsTs
@@ -1062,6 +1068,23 @@ impl Converter {
         let verified = self.run_tracks(prepared.len(), |ordinal| {
             let track = &prepared[ordinal];
             metadata::pair(&track.metadata, &track.metadata)?;
+            if self.backend.validation_depth == super::ValidationDepth::Native {
+                if let Some(index) = track.transport_index {
+                    return self.backend.validate_transport_source(
+                        &track.source,
+                        index,
+                        track
+                            .transport_native
+                            .as_deref()
+                            .ok_or(ConversionError("ts-original-evidence-required"))?,
+                    );
+                }
+                return self.backend.native_validate_mp4(
+                    &track.media,
+                    track.index,
+                    Some(super::keys::ProbeKeys::All(input_keys)),
+                );
+            }
             // Source admission checks each known track directly. Matching decoded
             // content is only needed when comparing independently prepared outputs.
             if let Some(index) = track.transport_index
@@ -1077,7 +1100,14 @@ impl Converter {
                 self.verify_prepared_pair(track, track, input_keys, input_keys)
             }
         })?;
-        Ok(combine_verification(verified))
+        Ok(combine_verification(
+            self.backend.validation_depth,
+            super::VerificationScope::SourceAdmission,
+            verified
+                .into_iter()
+                .map(VerificationReport::into_source_admission)
+                .collect::<Result<Vec<_>, _>>()?,
+        ))
     }
 }
 impl Converter {
@@ -1130,6 +1160,17 @@ impl Converter {
         track: &Prepared,
         keys: &InputKeys,
     ) -> Result<String, ConversionError> {
+        if self.backend.validation_depth == super::ValidationDepth::Native {
+            if let Some(native) = track.transport_native.as_deref() {
+                native.validate()?;
+                return Ok(hex::encode(native.evidence()?.payload_digest()));
+            }
+            return self.backend.native_payload_digest(
+                &track.media,
+                track.index,
+                Some(super::keys::ProbeKeys::All(keys)),
+            );
+        }
         self.backend.hash_stream_keys_options(
             &track.source,
             track.transport_index.unwrap_or(track.index),
@@ -1147,6 +1188,9 @@ impl Converter {
         track: &Prepared,
         keys: &InputKeys,
     ) -> Result<String, ConversionError> {
+        if self.backend.validation_depth == super::ValidationDepth::Native {
+            return self.presentation_digest(track, keys);
+        }
         self.backend.hash_stream_keys(
             &track.media,
             track.index,
@@ -1271,6 +1315,21 @@ impl Converter {
         source_keys: &InputKeys,
         result_keys: &InputKeys,
     ) -> Result<VerificationReport, ConversionError> {
+        let native = self.native_prepared_pair(a, b, source_keys, result_keys)?;
+        if self.backend.validation_depth == super::ValidationDepth::Native {
+            return Ok(native);
+        }
+        let mut report = self.verify_prepared_pair_decoded(a, b, source_keys, result_keys)?;
+        report.require_native(&native)?;
+        Ok(report)
+    }
+    fn verify_prepared_pair_decoded(
+        &self,
+        a: &Prepared,
+        b: &Prepared,
+        source_keys: &InputKeys,
+        result_keys: &InputKeys,
+    ) -> Result<VerificationReport, ConversionError> {
         if a.audio_presentation.is_some() || b.audio_presentation.is_some() {
             let (Some(first), Some(second)) = (a.audio_presentation, b.audio_presentation) else {
                 return Err(super::audio_presentation::MISMATCH);
@@ -1291,9 +1350,11 @@ impl Converter {
                 proof.checks.stream_metadata = super::CheckOutcome::Fail;
             }
             proof.checks.packet_timing_equal &= first == second;
-            proof.checks.decoded_content_equal &= range_equal;
+            if let super::DecodeEvidence::ContentCompared { equal } = &mut proof.decode_evidence {
+                *equal &= range_equal;
+            }
             proof.passed &= controls_equal && first == second && range_equal;
-            proof.media_verified = proof.passed;
+            proof.refresh_passed();
             return Ok(proof);
         }
         if b.transport_index.is_some() {
@@ -1315,16 +1376,20 @@ impl Converter {
                     metadata: &a.source,
                     index,
                     key: None,
+                    all_keys: None,
                     transport: true,
                     native: a.transport_native.as_deref(),
                     unedited: false,
-                },
+                }
+                .with_all_keys(source_keys),
                 super::ts::View {
                     input: result_input,
-                    // HLS carries its private key URI; DASH uses the independent output key.
+                    // This HLS decoder reads its private key URI. MP4/DASH
+                    // discovery instead needs the complete track-key dictionary.
                     metadata: result_input,
                     index: b.index,
                     key: result_key,
+                    all_keys: b.playlist_reference.is_none().then_some(result_keys),
                     transport: false,
                     native: None,
                     unedited: false,
@@ -1336,8 +1401,8 @@ impl Converter {
         let b_view =
             StreamView::new(&b.source, b.index, key_for(b, result_keys)).with_metadata(&b.media);
         self.backend.verify_views(
-            a_view.with_original_keys(a.source_dictionary, source_keys),
-            b_view.with_original_keys(b.source_dictionary, result_keys),
+            a_view.with_all_keys(source_keys),
+            b_view.with_all_keys(result_keys),
         )
     }
     fn compare_presentations(
@@ -1366,40 +1431,28 @@ impl Converter {
         let verified_tracks = self.run_tracks(source.len(), |ordinal| {
             self.verify_prepared_pair(&source[ordinal], &result[ordinal], source_keys, result_keys)
         })?;
-        Ok(combine_verification(verified_tracks))
+        Ok(combine_verification(
+            self.backend.validation_depth,
+            super::VerificationScope::Comparison,
+            verified_tracks,
+        ))
     }
 }
 fn combine_verification(
+    required_depth: super::ValidationDepth,
+    scope: super::VerificationScope,
     verified: impl IntoIterator<Item = VerificationReport>,
 ) -> VerificationReport {
-    let mut checks = VerificationChecks {
-        stream_metadata: super::CheckOutcome::Pass,
-        packet_payloads_equal: true,
-        packet_timing_equal: true,
-        decoded_content_equal: true,
-    };
-    for check in verified {
-        checks.stream_metadata.include(check.checks.stream_metadata);
-        checks.packet_payloads_equal &= check.checks.packet_payloads_equal;
-        checks.packet_timing_equal &= check.checks.packet_timing_equal;
-        checks.decoded_content_equal &= check.checks.decoded_content_equal;
-    }
-    let passed = checks.stream_metadata.is_pass()
-        && checks.packet_payloads_equal
-        && checks.packet_timing_equal
-        && checks.decoded_content_equal;
-    VerificationReport {
-        schema_version: 1,
-        passed,
-        media_verified: passed,
-        checks,
-        license_playback_verified: false,
-        native_manifest: None,
-    }
+    VerificationReport::combine(required_depth, scope, verified)
 }
 
-fn describe_transport(report: &mut ConversionReport, sample_transport: bool, dash: bool) {
-    report.processing = Some(inspection::ActualProcessing::new(
+fn describe_transport(
+    backend: &super::backend::Backend,
+    report: &mut ConversionReport,
+    sample_transport: bool,
+    dash: bool,
+) {
+    report.processing = Some(backend.processing(
         if dash {
             inspection::ProcessingRouteId::MpegTsDash
         } else if sample_transport {
@@ -1412,6 +1465,7 @@ fn describe_transport(report: &mut ConversionReport, sample_transport: bool, das
         } else {
             inspection::InputPreparation::MpegTsDemux
         },
+        false,
     ));
 }
 fn encrypt_packaged_hls(
@@ -1451,8 +1505,33 @@ fn prepare_transport(
         .find(|(_, kind)| *kind == TrackKind::Video)
         .unwrap_or(&streams[0])
         .0;
-    let audio_presentation =
-        backend.transport_durations(&localized.transport_segments, clock_index, maximum_workers)?;
+    let native_presentation = {
+        let pid = admission
+            .tracks
+            .get(clock_index)
+            .ok_or(ConversionError("ts-stream-count-mismatch"))?
+            .pid;
+        super::native::durations::transport(
+            localized
+                .native
+                .get(&pid)
+                .ok_or(ConversionError("ts-original-evidence-required"))?,
+            &localized.transport_segments,
+        )?
+    };
+    let audio_presentation = if backend.validation_depth == super::ValidationDepth::Native {
+        native_presentation
+    } else {
+        let decoded = backend.transport_durations(
+            &localized.transport_segments,
+            clock_index,
+            maximum_workers,
+        )?;
+        if decoded != native_presentation {
+            return Err(ConversionError("ts-segment-duration-mismatch"));
+        }
+        decoded
+    };
     let projection = directory.join("demux-view.ts");
     let demux_source = if admission.has_empty_payload_padding() {
         super::ts::demux_view(&localized.combined, &projection, admission, &backend.stop)?;
@@ -1474,6 +1553,7 @@ fn prepare_transport(
                 metadata: &localized.combined,
                 index,
                 key: None,
+                all_keys: None,
                 transport: true,
                 native: Some(anchor),
                 unedited: false,
@@ -1510,15 +1590,19 @@ fn bind_audio_presentation(
     if super::audio_presentation::read_claim(&track.media)?.is_none() {
         return Ok(());
     }
-    let evidence = backend.audio_evidence(super::ts::View {
-        input: &track.media,
-        metadata: &track.media,
-        index: track.index,
-        key: key_for(track, keys),
-        transport: false,
-        native: None,
-        unedited: true,
-    })?;
+    let evidence = backend.audio_evidence(
+        super::ts::View {
+            input: &track.media,
+            metadata: &track.media,
+            index: track.index,
+            key: key_for(track, keys),
+            all_keys: None,
+            transport: false,
+            native: None,
+            unedited: true,
+        }
+        .with_all_keys(keys),
+    )?;
     let range = super::audio_presentation::read(&track.media, evidence)?
         .ok_or(super::audio_presentation::MISMATCH)?;
     let view = directory.join(format!("raw-audio-{}.mp4", track.index));
@@ -1534,6 +1618,17 @@ fn prepare_presentation(
     backend: &super::backend::Backend,
     maximum_workers: Option<usize>,
     purpose: SourceValidationPurpose,
+) -> Result<Vec<Prepared>, ConversionError> {
+    let normalize = !matches!(purpose, SourceValidationPurpose::Verification);
+    prepare_presentation_mode(input, stage, backend, maximum_workers, purpose, normalize)
+}
+fn prepare_presentation_mode(
+    input: &VerificationSource<'_>,
+    stage: &Path,
+    backend: &super::backend::Backend,
+    maximum_workers: Option<usize>,
+    purpose: SourceValidationPurpose,
+    normalize: bool,
 ) -> Result<Vec<Prepared>, ConversionError> {
     let metadata =
         fs::symlink_metadata(input.input).map_err(|_| ConversionError("input-unreadable"))?;
@@ -1564,7 +1659,7 @@ fn prepare_presentation(
                 .collect()
         }
         InputFormat::Hls => {
-            prepare_hls_presentation(input, stage, backend, maximum_workers, purpose)
+            prepare_hls_presentation(input, stage, backend, maximum_workers, purpose, normalize)
         }
         InputFormat::Dash => {
             let tracks = super::dash::snapshot_dash(input.input, stage)?;
@@ -1598,6 +1693,7 @@ fn prepare_hls_presentation(
     backend: &super::backend::Backend,
     maximum_workers: Option<usize>,
     purpose: SourceValidationPurpose,
+    normalize: bool,
 ) -> Result<Vec<Prepared>, ConversionError> {
     let paths = hls_media_paths(input.input)?;
     let mut tracks = Vec::new();
@@ -1614,30 +1710,20 @@ fn prepare_hls_presentation(
             {
                 return Err(ConversionError("ts-presentation-layout-not-supported"));
             }
-            let mut prepared = prepare_transport(
-                &localized,
-                admission,
-                &directory,
-                input.input_keys,
-                backend,
-                maximum_workers,
-            )?;
-            for track in &mut prepared {
-                track.metadata = media.metadata.clone();
-                if localized.empty_cue_pair {
-                    track
-                        .compatibility
-                        .push(SourceCompatibilityNote::HlsEmptyCuePair);
-                }
-                track.outer_protection =
-                    match (localized.sample_transport, localized.report.protection) {
-                        (true, _) => SourceProtection::HlsSampleAes,
-                        (_, Protection::HlsAes128) => SourceProtection::HlsAes128,
-                        (_, Protection::Mixed) => SourceProtection::Mixed,
-                        _ => SourceProtection::Clear,
-                    };
-                metadata::validate_profile(track, backend, key_for(track, input.input_keys))?;
-            }
+            let mut prepared =
+                if backend.validation_depth == super::ValidationDepth::Native && !normalize {
+                    native_preparation::transport(&localized, admission, backend)?
+                } else {
+                    prepare_transport(
+                        &localized,
+                        admission,
+                        &directory,
+                        input.input_keys,
+                        backend,
+                        maximum_workers,
+                    )?
+                };
+            apply_transport_metadata(&mut prepared, media, &localized, backend, input.input_keys)?;
             tracks.extend(prepared);
             continue;
         }
@@ -1698,6 +1784,30 @@ fn prepare_hls_presentation(
         return Err(ConversionError("ts-presentation-layout-not-supported"));
     }
     Ok(tracks)
+}
+fn apply_transport_metadata(
+    prepared: &mut [Prepared],
+    media: &MediaPath,
+    localized: &hls::Localized,
+    backend: &super::backend::Backend,
+    keys: &InputKeys,
+) -> Result<(), ConversionError> {
+    for track in prepared {
+        track.metadata = media.metadata.clone();
+        if localized.empty_cue_pair {
+            track
+                .compatibility
+                .push(SourceCompatibilityNote::HlsEmptyCuePair);
+        }
+        track.outer_protection = match (localized.sample_transport, localized.report.protection) {
+            (true, _) => SourceProtection::HlsSampleAes,
+            (_, Protection::HlsAes128) => SourceProtection::HlsAes128,
+            (_, Protection::Mixed) => SourceProtection::Mixed,
+            _ => SourceProtection::Clear,
+        };
+        metadata::validate_profile(track, backend, key_for(track, keys))?;
+    }
+    Ok(())
 }
 #[derive(Debug)]
 struct MediaPath {
@@ -1979,10 +2089,12 @@ impl Converter {
                             metadata: &source.media,
                             index: source.index,
                             key: key_for(source, input_keys),
+                            all_keys: None,
                             transport: false,
                             native: None,
                             unedited: true,
-                        },
+                        }
+                        .with_all_keys(input_keys),
                     )?
                 } else if let Some(index) = source.transport_index {
                     self.backend.verify_transport(
@@ -1991,19 +2103,23 @@ impl Converter {
                             metadata: &source.source,
                             index,
                             key: None,
+                            all_keys: None,
                             transport: true,
                             native: source.transport_native.as_deref(),
                             unedited: false,
-                        },
+                        }
+                        .with_all_keys(input_keys),
                         super::ts::View {
                             input: &source.media,
                             metadata: &source.media,
                             index: 0,
                             key: None,
+                            all_keys: None,
                             transport: false,
                             native: None,
                             unedited: false,
-                        },
+                        }
+                        .with_all_keys(input_keys),
                     )?
                 } else {
                     self.backend.verify_views(
@@ -2167,6 +2283,7 @@ impl Converter {
         report.input = input_report;
         if transport {
             describe_transport(
+                &self.backend,
                 &mut report,
                 sample_transport,
                 request.format == OutputFormat::Dash,

@@ -774,13 +774,14 @@ impl Converter {
             crate::inspection::OutputFormat::Hls,
         )?);
         Ok(ConversionReport {
-            schema_version: 1,
+            schema_version: 2,
             input: input_report,
             output: output_report,
             verification,
-            processing: Some(inspection::ActualProcessing::new(
+            processing: Some(self.backend.processing(
                 inspection::ProcessingRouteId::Fmp4HlsPresentation,
                 inspection::InputPreparation::CompleteFile,
+                false,
             )),
         })
     }

@@ -15,6 +15,30 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 
+/// Additional media validation is independent of metadata and result-format flags.
+#[derive(Args)]
+pub struct DecodeOptions {
+    /// Add complete decoding to the required native media checks.
+    #[arg(long)]
+    pub decode: bool,
+}
+
+pub(crate) const fn decode_summary(
+    evidence: drmr_core::conversion::DecodeEvidence,
+) -> &'static str {
+    use drmr_core::conversion::DecodeEvidence;
+    match evidence {
+        DecodeEvidence::NotChecked { .. } => "Additional complete decoding: not requested.",
+        DecodeEvidence::SourceDecoded => "Complete source decoding: passed.",
+        DecodeEvidence::ContentCompared { equal: true } => {
+            "Complete decoded-content comparison: passed."
+        }
+        DecodeEvidence::ContentCompared { equal: false } => {
+            "Complete decoded-content comparison: failed."
+        }
+    }
+}
+
 #[derive(Args)]
 pub struct ConvertArgs {
     /// Local source media or a supported HLS, static DASH, or MP4 URL. The source is never overwritten.
@@ -50,6 +74,9 @@ pub struct ConvertArgs {
     /// Upper bound for simultaneous media work (1-64); default adapts to CPU and memory.
     #[arg(long, value_parser = clap::value_parser!(u8).range(1..=64))]
     pub max_workers: Option<u8>,
+    /// Add complete source and result decoding to the required native media checks.
+    #[arg(long)]
+    pub decode: bool,
     /// Apple mediastreamvalidator executable for requested final HLS manifest checks.
     #[arg(long, default_value = "mediastreamvalidator")]
     pub hls_validator_bin: String,
@@ -86,6 +113,9 @@ pub struct VerifyArgs {
     /// Upper bound for simultaneous media or native manifest work (1-64); default adapts to CPU and memory.
     #[arg(long, value_parser = clap::value_parser!(u8).range(1..=64))]
     pub max_workers: Option<u8>,
+    /// Add complete source and result decoding to the required native media checks.
+    #[arg(long, conflicts_with = "manifest_only")]
+    pub decode: bool,
     /// Print the versioned verification result as one JSON object.
     #[arg(long)]
     pub json: bool,
@@ -127,11 +157,13 @@ pub(crate) fn load_source(path: Option<&PathBuf>) -> Result<OperatorKeys, Conver
 pub(crate) fn converter(
     packager: &str,
     maximum: Option<u8>,
+    decode: bool,
     progress: Arc<Progress>,
     stop: drmr_core::concurrency::Stop,
 ) -> Converter {
     let runner = Arc::new(ToolRunner::new(Arc::new(Secrets::new()), progress.clone()));
     Converter::new(runner, packager, "ffmpeg")
+        .with_decode(decode)
         .with_activity_sink(progress)
         .with_stop(stop)
         .with_max_workers(maximum.map(usize::from))
@@ -497,7 +529,12 @@ pub(crate) fn conversion_text(report: &ConversionReport) -> std::io::Result<()> 
     .and_then(|()| {
         writeln!(
             out,
-            "Verified stream metadata, packet payloads, decoded content, and packet timing."
+            "Verified stream metadata, packet payloads, and packet timing."
+        )?;
+        writeln!(
+            out,
+            "{}",
+            decode_summary(report.verification.decode_evidence)
         )
     })
 }
@@ -544,6 +581,7 @@ pub fn convert(args: &ConvertArgs) -> ExitCode {
     let converter = converter(
         &args.packager_bin,
         args.max_workers,
+        args.decode,
         progress.clone(),
         cancellation.stop.clone(),
     )
@@ -624,6 +662,7 @@ pub fn verify(args: &VerifyArgs) -> ExitCode {
     let converter = converter(
         &args.packager_bin,
         args.max_workers,
+        args.decode,
         progress.clone(),
         cancellation.stop.clone(),
     );

@@ -50,6 +50,7 @@ impl Converter {
                 metadata: &source.source,
                 index: source_index,
                 key: None,
+                all_keys: None,
                 transport: true,
                 native: source.transport_native.as_deref(),
                 unedited: false,
@@ -59,6 +60,7 @@ impl Converter {
                 metadata: &result.source,
                 index: result_index,
                 key: None,
+                all_keys: None,
                 transport: true,
                 native: result.transport_native.as_deref(),
                 unedited: false,
@@ -150,17 +152,18 @@ impl Converter {
             request.format,
         )?);
         Ok(ConversionReport {
-            schema_version: 1,
+            schema_version: 2,
             input,
             output,
             verification,
-            processing: Some(inspection::ActualProcessing::new(
+            processing: Some(self.backend.processing(
                 inspection::ProcessingRouteId::MpegTsHlsTs,
                 if sample_input {
                     inspection::InputPreparation::MpegTsSampleAesDecrypt
                 } else {
                     inspection::InputPreparation::MpegTsDemux
                 },
+                false,
             )),
         })
     }

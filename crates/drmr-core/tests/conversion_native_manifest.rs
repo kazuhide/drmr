@@ -22,6 +22,7 @@ fn converter() -> Converter {
         "packager",
         "ffmpeg",
     )
+    .with_decode(true)
 }
 fn source(root: &Path) -> PathBuf {
     let path = root.join("source.mp4");
@@ -303,7 +304,11 @@ fn full_verification_keeps_media_evidence_when_raw_output_manifest_fails_native_
         "raw manifest errors cannot become a full verification pass"
     );
     assert!(
-        report.media_verified,
+        (report.checks.is_pass()
+            && report.decode_evidence.satisfies(
+                drmr_core::conversion::ValidationDepth::Decoded,
+                report.scope
+            )),
         "manifest findings must preserve independently checked media evidence"
     );
     let report = serde_json::to_value(report).unwrap();
@@ -371,7 +376,14 @@ fn finite_audio_video_hls_uses_one_target_bound_and_verifies_the_raw_final_graph
             .unwrap()
     };
     let report = verify();
-    assert!(report.passed && report.media_verified);
+    assert!(
+        report.passed
+            && (report.checks.is_pass()
+                && report.decode_evidence.satisfies(
+                    drmr_core::conversion::ValidationDepth::Decoded,
+                    report.scope
+                ))
+    );
     assert_native(&serde_json::to_value(report).unwrap()["native_manifest"]);
     std::fs::write(
         &video,
@@ -381,7 +393,11 @@ fn finite_audio_video_hls_uses_one_target_bound_and_verifies_the_raw_final_graph
     let mismatch = verify();
     assert!(!mismatch.passed);
     assert!(
-        mismatch.media_verified,
+        (mismatch.checks.is_pass()
+            && mismatch.decode_evidence.satisfies(
+                drmr_core::conversion::ValidationDepth::Decoded,
+                mismatch.scope
+            )),
         "changing this bound does not change the original media"
     );
     assert!(

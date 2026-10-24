@@ -6,14 +6,13 @@ const AUDIO_KEY: &str = "202122232425262728292a2b2c2d2e2f";
 
 fn assert_verified(report: &serde_json::Value) {
     assert_eq!(report["passed"], true);
-    assert_eq!(report["media_verified"], true);
+    assert_eq!(
+        report["decode_evidence"],
+        serde_json::json!({"status":"content-compared","equal":true})
+    );
     assert_eq!(report["license_playback_verified"], false);
     assert_eq!(report["checks"]["stream_metadata"], "pass");
-    for name in [
-        "packet_payloads_equal",
-        "packet_timing_equal",
-        "decoded_content_equal",
-    ] {
+    for name in ["packet_payloads_equal", "packet_timing_equal"] {
         assert_eq!(report["checks"][name], true);
     }
 }
@@ -41,6 +40,7 @@ fn real_two_key_finite_convert_and_verify_use_the_input_key_domain_only() {
     let output = root.join("clear.mp4");
     let converted = Command::new(env!("CARGO_BIN_EXE_drmr"))
         .arg("convert")
+        .arg("--decode")
         .arg(&source)
         .args(["--to", "clear", "--format", "mp4", "--output"])
         .arg(&output)
@@ -64,6 +64,7 @@ fn real_two_key_finite_convert_and_verify_use_the_input_key_domain_only() {
     assert_verified(&report["verification"]);
     let verified = Command::new(env!("CARGO_BIN_EXE_drmr"))
         .arg("verify")
+        .arg("--decode")
         .arg(&output)
         .arg("--source")
         .arg(&source)

@@ -18,6 +18,7 @@ fn converter() -> Converter {
         "packager",
         "ffmpeg",
     )
+    .with_decode(true)
 }
 fn source(root: &Path) -> std::path::PathBuf {
     source_profile(root, "av")
@@ -491,11 +492,46 @@ fn complete_frame_evidence_rejects_an_interlaced_source_or_actual_hls_result() {
             acquisition_report(result),
             proxy_roles(&audit)
         );
-        assert_profile_omission(&audit, role);
+        assert_progressive_omission(&proxy, &input, &clear_result, &keys, &hls, &audit, role);
     }
     for (path, before) in originals {
         assert_eq!(common::snapshot_tree(path), before);
     }
+}
+
+fn assert_progressive_omission(
+    proxy: &Path,
+    source: &Path,
+    result: &Path,
+    keys: &InputKeys,
+    hls: &HlsInputKeys,
+    audit: &Path,
+    role: &str,
+) {
+    // Native slice headers refuse the interlaced fixture before decoded
+    // profile fallback. Exercise that fallback independently on the clean
+    // pair so each role still proves an actual omitted-field query.
+    let verified = converter()
+        .with_ffprobe(proxy.to_str().unwrap())
+        .verify(VerificationRequest {
+            source: VerificationSource {
+                input: source,
+                input_keys: keys,
+                hls_keys: hls,
+            },
+            output: VerificationSource {
+                input: result,
+                input_keys: keys,
+                hls_keys: hls,
+            },
+        })
+        .unwrap();
+    assert!(verified.passed);
+    assert!(verified.decode_evidence.satisfies(
+        drmr_core::conversion::ValidationDepth::Decoded,
+        verified.scope
+    ));
+    assert_profile_omission(audit, role);
 }
 
 fn remove_json_field(value: &mut serde_json::Value, key: &str) -> usize {
@@ -594,11 +630,21 @@ fn aac_44100_transport_to_hls_and_dash_preserves_original_media() {
         let converted = c
             .convert(request)
             .unwrap_or_else(|error| panic!("44.1 kHz AAC {name} conversion: {}", error.0));
-        assert!(converted.verification.passed && converted.verification.media_verified);
+        assert!(
+            converted.verification.passed
+                && (converted.verification.checks.is_pass()
+                    && converted.verification.decode_evidence.satisfies(
+                        drmr_core::conversion::ValidationDepth::Decoded,
+                        converted.verification.scope
+                    ))
+        );
         assert!(converted.verification.checks.stream_metadata.is_pass());
         assert!(converted.verification.checks.packet_payloads_equal);
         assert!(converted.verification.checks.packet_timing_equal);
-        assert!(converted.verification.checks.decoded_content_equal);
+        assert!(converted.verification.decode_evidence.satisfies(
+            drmr_core::conversion::ValidationDepth::Decoded,
+            converted.verification.scope
+        ));
         let verified = c
             .verify(VerificationRequest {
                 source: VerificationSource {
@@ -613,11 +659,21 @@ fn aac_44100_transport_to_hls_and_dash_preserves_original_media() {
                 },
             })
             .unwrap_or_else(|error| panic!("44.1 kHz AAC {name} fresh verify: {}", error.0));
-        assert!(verified.passed && verified.media_verified);
+        assert!(
+            verified.passed
+                && (verified.checks.is_pass()
+                    && verified.decode_evidence.satisfies(
+                        drmr_core::conversion::ValidationDepth::Decoded,
+                        verified.scope
+                    ))
+        );
         assert!(verified.checks.stream_metadata.is_pass());
         assert!(verified.checks.packet_payloads_equal);
         assert!(verified.checks.packet_timing_equal);
-        assert!(verified.checks.decoded_content_equal);
+        assert!(verified.decode_evidence.satisfies(
+            drmr_core::conversion::ValidationDepth::Decoded,
+            verified.scope
+        ));
         assert!(!verified.license_playback_verified);
     }
     for (name, bytes) in before {
@@ -749,7 +805,8 @@ fn aes_transport_rotation_implicit_and_explicit_vectors_and_none_keep_original_m
         Arc::new(ToolRunner::new(Arc::new(Secrets::new()), sink.clone())),
         "packager",
         "ffmpeg",
-    );
+    )
+    .with_decode(true);
     assert!(
         c.convert(clear_request(&input, &output, &keys, &hls))
             .unwrap()
@@ -975,7 +1032,7 @@ fn impossible_resource_budget_refuses_transport_before_publishing_or_changing_so
     let output = root.path().join("result");
     let runner = ToolRunner::new(Arc::new(Secrets::new()), Arc::new(NoSink))
         .with_limiter(Arc::new(drmr_core::resources::Limiter::new(1, 1)));
-    let c = Converter::new(Arc::new(runner), "packager", "ffmpeg");
+    let c = Converter::new(Arc::new(runner), "packager", "ffmpeg").with_decode(true);
     assert_eq!(
         c.convert(clear_request(
             &input,
@@ -1197,7 +1254,13 @@ fn dash_b_frames_preserve_absolute_decode_and_presentation_clocks() {
                 },
             })
             .unwrap_or_else(|e| panic!("fresh {}: {e}", target.as_str()));
-        assert!(proof.passed && proof.media_verified);
+        assert!(
+            proof.passed
+                && (proof.checks.is_pass()
+                    && proof
+                        .decode_evidence
+                        .satisfies(drmr_core::conversion::ValidationDepth::Decoded, proof.scope))
+        );
         assert_eq!(
             proof.checks.stream_metadata,
             drmr_core::conversion::CheckOutcome::Pass
@@ -1205,7 +1268,9 @@ fn dash_b_frames_preserve_absolute_decode_and_presentation_clocks() {
         assert!(
             proof.checks.packet_payloads_equal
                 && proof.checks.packet_timing_equal
-                && proof.checks.decoded_content_equal
+                && proof
+                    .decode_evidence
+                    .satisfies(drmr_core::conversion::ValidationDepth::Decoded, proof.scope)
         );
         assert!(!proof.license_playback_verified);
     }

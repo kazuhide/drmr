@@ -9,6 +9,7 @@ mod mux_observation;
 fn command(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_drmr"))
         .args(args)
+        .args(decode_option(args))
         .output()
         .unwrap()
 }
@@ -30,17 +31,33 @@ fn source(path: &Path, video: bool) {
     );
 }
 fn assert_checks(report: &serde_json::Value) {
+    assert_eq!(report["schema_version"], 2);
+    assert_eq!(report["required_depth"], "decoded");
+    assert_eq!(report["scope"], "comparison");
     assert_eq!(report["passed"], true);
-    assert_eq!(report["media_verified"], true);
+    assert_eq!(
+        report["decode_evidence"],
+        serde_json::json!({"status":"content-compared","equal":true})
+    );
     assert_eq!(report["license_playback_verified"], false);
     assert_eq!(report["checks"]["stream_metadata"], "pass");
-    for check in [
-        "packet_payloads_equal",
-        "packet_timing_equal",
-        "decoded_content_equal",
-    ] {
+    for check in ["packet_payloads_equal", "packet_timing_equal"] {
         assert_eq!(report["checks"][check], true, "{report}");
     }
+}
+fn assert_presentation_mismatch(report: &serde_json::Value, metadata: &str, timing: bool) {
+    assert_eq!(report["schema_version"], 2);
+    assert_eq!(report["required_depth"], "decoded");
+    assert_eq!(report["scope"], "comparison");
+    assert_eq!(report["passed"], false);
+    assert_eq!(report["license_playback_verified"], false);
+    assert_eq!(report["checks"]["stream_metadata"], metadata);
+    assert_eq!(report["checks"]["packet_payloads_equal"], true);
+    assert_eq!(report["checks"]["packet_timing_equal"], timing);
+    assert_eq!(
+        report["decode_evidence"],
+        serde_json::json!({"status":"content-compared","equal":true})
+    );
 }
 #[test]
 fn finite_bbb_audio_and_joint_video_convert_and_verify_against_the_whole_original() {
@@ -235,7 +252,10 @@ fn a_changed_finite_tail_fails_complete_decode_even_when_all_packet_clocks_match
     assert_eq!(report["checks"]["stream_metadata"], "pass");
     assert_eq!(report["checks"]["packet_payloads_equal"], true);
     assert_eq!(report["checks"]["packet_timing_equal"], false);
-    assert_eq!(report["checks"]["decoded_content_equal"], false);
+    assert_eq!(
+        report["decode_evidence"],
+        serde_json::json!({"status":"content-compared","equal":false})
+    );
 }
 #[test]
 fn nondefault_movie_and_video_clocks_are_preserved_without_rescaling_tolerance() {
@@ -361,6 +381,7 @@ fn converter_with_sink(
         "packager",
         ffmpeg,
     )
+    .with_decode(true)
 }
 fn assert_conversion_failure(result: &Output, code: &str, exit: i32) {
     assert_eq!(result.status.code(), Some(exit));
@@ -755,6 +776,8 @@ fn a_video_edit_ending_inside_the_final_frame_cannot_pass_independent_verificati
     source(&original, true);
     let altered = root.path().join("altered.mp4");
     shorten_video_window(&original, &altered);
+    let original_before = std::fs::read(&original).unwrap();
+    let altered_before = std::fs::read(&altered).unwrap();
     assert_eq!(packet_clocks(&original), packet_clocks(&altered));
     let result = command(&[
         "verify",
@@ -764,12 +787,22 @@ fn a_video_edit_ending_inside_the_final_frame_cannot_pass_independent_verificati
         "--json",
     ]);
     let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
-    assert_eq!(report["checks"]["stream_metadata"], "pass");
-    assert_eq!(report["checks"]["packet_payloads_equal"], true);
-    assert_eq!(report["checks"]["decoded_content_equal"], true);
     assert!(!result.status.success());
-    assert_eq!(report["checks"]["packet_timing_equal"], false);
-    assert_eq!(report["media_verified"], false);
+    assert_presentation_mismatch(&report, "pass", false);
+    assert_eq!(std::fs::read(&original).unwrap(), original_before);
+    assert_eq!(std::fs::read(&altered).unwrap(), altered_before);
+    std::fs::write(&altered, &original_before).unwrap();
+    let restored = command(&[
+        "verify",
+        altered.to_str().unwrap(),
+        "--source",
+        original.to_str().unwrap(),
+        "--json",
+    ]);
+    assert!(restored.status.success());
+    assert_checks(&serde_json::from_slice::<serde_json::Value>(&restored.stdout).unwrap());
+    assert_eq!(std::fs::read(&original).unwrap(), original_before);
+    assert_eq!(std::fs::read(&altered).unwrap(), original_before);
 }
 #[test]
 fn equivalent_integer_movie_clocks_preserve_the_same_presentation_windows() {
@@ -915,7 +948,7 @@ fn nondefault_gain_never_becomes_a_verified_default_gain_presentation() {
                 "error": {
                     "code": "presentation-window-not-supported",
                     "hint": "Review the error code and source profile before retrying with a new output destination.",
-                    "last_activity": "verification"
+                    "last_activity": "input-preparation"
                 }
             })
         );
@@ -1024,11 +1057,8 @@ fn video_display_extent_is_checked_even_when_all_packets_and_decoded_frames_matc
             ]);
             assert!(!result.status.success());
             let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
-            assert_eq!(report["checks"]["stream_metadata"], "pass");
-            assert_eq!(report["checks"]["packet_payloads_equal"], true);
-            assert_eq!(report["checks"]["decoded_content_equal"], true);
-            assert_eq!(report["checks"]["packet_timing_equal"], false);
-            assert_eq!(report["media_verified"], false);
+            assert_presentation_mismatch(&report, "fail", false);
+            assert_eq!(std::fs::read(&altered).unwrap(), before);
         }
     }
 }
@@ -1111,6 +1141,9 @@ fn encrypted_references_keep_finite_windows_display_sizes_and_metadata_strict() 
     native_cenc(&original, &encrypted, input_kid, input_key);
     let protected_output = root.path().join("result.mp4");
     native_cenc(&original, &protected_output, output_kid, output_key);
+    let original_before = std::fs::read(&original).unwrap();
+    let encrypted_before = std::fs::read(&encrypted).unwrap();
+    let protected_before = std::fs::read(&protected_output).unwrap();
     let private = root.path().join("private");
     drmr_core::native::create_private_dir_all(&private).unwrap();
     for (name, baseline, protected) in [
@@ -1165,6 +1198,7 @@ fn encrypted_references_keep_finite_windows_display_sizes_and_metadata_strict() 
                 ),
             }
             assert_eq!(packet_clocks(baseline), packet_clocks(&mutant));
+            let mutant_before = std::fs::read(&mutant).unwrap();
             let negative = verify(&mutant);
             assert!(
                 !negative.status.success(),
@@ -1172,16 +1206,19 @@ fn encrypted_references_keep_finite_windows_display_sizes_and_metadata_strict() 
                 String::from_utf8_lossy(&negative.stdout)
             );
             let report: serde_json::Value = serde_json::from_slice(&negative.stdout).unwrap();
-            assert_eq!(report["media_verified"], false);
-            assert_eq!(report["checks"]["packet_payloads_equal"], true);
-            assert_eq!(report["checks"]["decoded_content_equal"], true);
-            if change == "matrix" {
-                assert_eq!(report["checks"]["stream_metadata"], "fail");
-                assert_eq!(report["checks"]["packet_timing_equal"], true);
-            } else {
-                assert_eq!(report["checks"]["stream_metadata"], "pass");
-                assert_eq!(report["checks"]["packet_timing_equal"], false);
-            }
+            assert_presentation_mismatch(
+                &report,
+                if change == "window" { "pass" } else { "fail" },
+                change == "matrix",
+            );
+            assert_eq!(std::fs::read(&mutant).unwrap(), mutant_before);
+            std::fs::write(&mutant, std::fs::read(baseline).unwrap()).unwrap();
+            let restored = verify(&mutant);
+            assert!(restored.status.success());
+            assert_checks(&serde_json::from_slice::<serde_json::Value>(&restored.stdout).unwrap());
+            assert_eq!(std::fs::read(&original).unwrap(), original_before);
+            assert_eq!(std::fs::read(&encrypted).unwrap(), encrypted_before);
+            assert_eq!(std::fs::read(&protected_output).unwrap(), protected_before);
         }
     }
 }
@@ -1311,7 +1348,7 @@ fn mixed_reference_checks(clear_index: usize) {
             "--json",
         ])
     };
-    // The actual verifier decodes and hashes the clear role unkeyed and the CENC role with its key.
+    // Native sample checks and optional decode use the clear and CENC roles' distinct keys.
     let positive = verify(&original);
     assert!(
         positive.status.success(),
@@ -1335,9 +1372,16 @@ fn mixed_reference_checks(clear_index: usize) {
             );
         }
         assert_eq!(exact_clock_fields(&mutant), exact_clock_fields(&original));
+        let mutant_before = std::fs::read(&mutant).unwrap();
         let negative = verify(&mutant);
         let report: serde_json::Value = serde_json::from_slice(&negative.stdout).unwrap();
+        assert_eq!(std::fs::read(&mutant).unwrap(), mutant_before);
         negatives.push((change, negative.status.success(), report));
+        std::fs::write(&mutant, &original_before).unwrap();
+        let restored = verify(&mutant);
+        assert!(restored.status.success());
+        assert_checks(&serde_json::from_slice::<serde_json::Value>(&restored.stdout).unwrap());
+        assert_eq!(std::fs::read(&mutant).unwrap(), original_before);
     }
     assert_eq!(std::fs::read(&original).unwrap(), original_before);
     assert_eq!(std::fs::read(&mixed).unwrap(), before);
@@ -1345,12 +1389,12 @@ fn mixed_reference_checks(clear_index: usize) {
         negatives.iter().all(|(_, accepted, _)| !accepted),
         "clear_index={clear_index}: {negatives:?}"
     );
-    for (_, _, report) in negatives {
-        assert_eq!(report["media_verified"], false);
-        assert_eq!(report["checks"]["stream_metadata"], "pass");
-        assert_eq!(report["checks"]["packet_payloads_equal"], true);
-        assert_eq!(report["checks"]["decoded_content_equal"], true);
-        assert_eq!(report["checks"]["packet_timing_equal"], false);
+    for (change, _, report) in negatives {
+        assert_presentation_mismatch(
+            &report,
+            if change == "window" { "pass" } else { "fail" },
+            false,
+        );
     }
 }
 
@@ -1362,4 +1406,15 @@ fn mixed_clear_video_reference_keeps_finite_windows_and_display_sizes() {
 #[test]
 fn mixed_clear_audio_reference_keeps_finite_windows_and_display_sizes() {
     mixed_reference_checks(1);
+}
+
+fn decode_option(arguments: &[&str]) -> Option<&'static str> {
+    (matches!(
+        arguments.first().copied(),
+        Some("analyze" | "plan" | "convert" | "verify")
+    ) && !arguments.contains(&"--decode")
+        && !arguments.contains(&"--metadata-only")
+        && !arguments.contains(&"--manifest-only")
+        && (arguments.first().copied() != Some("plan") || arguments.contains(&"--save")))
+    .then_some("--decode")
 }

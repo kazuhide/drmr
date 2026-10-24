@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import { allowedConsoleRequest, consoleOrigin, fixtureOrigin, digest, consoleAssets } from './console-source.mjs';
+import { assertVerification as checks, decodeBadgeState, legacyPlan, planMinimumDepth } from './console-evidence.mjs';
 
 const id = () => randomBytes(16).toString('hex');
 const privateValues = ['00112233445566778899aabbccddeeff', 'ffeeddccbbaa99887766554433221100',
@@ -31,12 +32,6 @@ async function cli(arguments_, expected = 0) {
   const bytes = Buffer.concat(chunks), stderr = Buffer.concat(errors).toString('utf8');
   for (const key of privateValues.slice(0, 2)) expect(bytes.toString('utf8') + stderr).not.toContain(key);
   return { report: JSON.parse(bytes), sha256: digest(bytes), elapsedMs: Date.now() - started };
-}
-function checks(report) {
-  expect(report.passed).toBe(true); expect(report.media_verified).toBe(true);
-  expect(report.license_playback_verified).toBe(false);
-  expect(report.checks).toEqual({ stream_metadata: 'pass', packet_payloads_equal: true,
-    packet_timing_equal: true, decoded_content_equal: true });
 }
 async function selectedSession(page) {
   const sessions = await api(page.request, '/api/common/sessions');
@@ -108,8 +103,23 @@ async function renderedJob(page, job, { timeout = 15_000 } = {}) {
     await expect(element).toHaveCount(1, { timeout }); await expect(element).toBeVisible({ timeout });
     await expect(element).toHaveAttribute('data-common-state', state, { timeout });
   };
+  const verificationChecks = async (parent, verification) => {
+    expect(verification.schema_version).toBe(2);
+    await check(parent, 'required_coverage', booleanState(verification.passed));
+    await check(parent, 'stream_metadata', verification.checks.stream_metadata === 'pass' ? 'pass' : verification.checks.stream_metadata === 'fail' ? 'fail' : 'unknown');
+    for (const name of ['packet_payloads_equal', 'packet_timing_equal']) await check(parent, name, booleanState(verification.checks[name]));
+    await check(parent, 'decode_evidence', decodeBadgeState(verification));
+    await check(parent, 'license_playback_verified', 'not-checked');
+    await check(parent, 'native_manifest', nativeState(verification.native_manifest));
+    await expect(parent.locator('[data-common-check="media_verified"]')).toHaveCount(0);
+    await expect(parent.locator('[data-common-check="decoded_content_equal"]')).toHaveCount(0);
+  };
   const report = envelope.report;
-  if (envelope.report_kind === 'analysis') await check(host, 'input_admitted', booleanState(report.input_admitted));
+  if (envelope.report_kind === 'analysis') {
+    expect(report.schema_version).toBe(2);
+    await check(host, 'input_admitted', booleanState(report.input_admitted));
+    await verificationChecks(host, report.verification);
+  }
   if (['conversion', 'verification'].includes(envelope.report_kind)) {
     if (envelope.report_kind === 'verification') await check(host, 'source_unchanged', booleanState(report.source_unchanged));
     const rows = report.outputs || [report];
@@ -119,11 +129,7 @@ async function renderedJob(page, job, { timeout = 15_000 } = {}) {
       if (row.id !== undefined) await expect(block).toHaveAttribute('data-common-output-id', row.id, { timeout });
       const verification = (row.conversion || row).verification;
       if (envelope.report_kind === 'verification') await check(block, 'output_matches_plan', booleanState(row.output_matches_plan));
-      await check(block, 'media_verified', booleanState(verification.media_verified));
-      await check(block, 'stream_metadata', verification.checks.stream_metadata === 'pass' ? 'pass' : verification.checks.stream_metadata === 'fail' ? 'fail' : 'unknown');
-      for (const name of ['packet_payloads_equal', 'packet_timing_equal', 'decoded_content_equal']) await check(block, name, booleanState(verification.checks[name]));
-      await check(block, 'license_playback_verified', 'not-checked');
-      await check(block, 'native_manifest', nativeState(verification.native_manifest));
+      await verificationChecks(block, verification);
       if (Object.hasOwn(row, 'signaling')) await check(block, 'signaling', !row.signaling.systems.length ? 'not-requested' : booleanState(row.signaling.verified));
       if (Object.hasOwn(row, 'conformance')) await check(block, 'conformance', row.conformance === null ? 'not-requested' : booleanState(row.conformance.passed));
     }
@@ -170,7 +176,13 @@ async function openSession(page, kind = 'local', filename = 'source.mp4') {
   await page.locator('#common-open').click();
   await expect(page.locator('#common-url')).toHaveValue('');
   await expect(page.locator('#common-workers')).toBeVisible();
+  await expect(page.locator('#common-decode')).not.toBeChecked();
+  pages.get(page).decode = false;
   return selectedSession(page);
+}
+async function requestDecode(page) {
+  await page.locator('#common-decode').check();
+  pages.get(page).decode = true;
 }
 async function outputRow(page, index, { name, format, target = 'clear', drms = [], conformance = 'none' }) {
   const row = page.locator('tr[data-output-row]').nth(index);
@@ -210,7 +222,8 @@ async function retainedPlanBytes(planId, expectedBytes) {
       else if (metadata.isFile() && name.endsWith('.json') && metadata.size < 32 * 1024 * 1024) {
         const bytes = await readFile(path);
         let value; try { value = JSON.parse(bytes.toString('utf8')); } catch { continue; }
-        if (value.plan_id === planId && value.source && [1, 2].includes(value.schema_version)) {
+        if (value.plan_id === planId && value.source && [1, 2, 3, 4].includes(value.schema_version)) {
+          planMinimumDepth(value);
           expect(bytes.equals(expectedBytes)).toBe(true); matches.push(digest(bytes));
         }
       }
@@ -224,26 +237,31 @@ test.beforeAll(async ({ request }, info) => {
   caps = await api(request, '/api/common/capabilities');
   expect(caps.schema_version).toBe(1); expect(caps.worker_policy).toEqual({ maximum: 4, automatic: true });
   const worker = 'worker-' + info.workerIndex;
-  importedPlans = { v1: 'cli-v1-' + worker + '.plan.json', v2: 'cli-v2-' + worker + '.plan.json' };
-  const saved = join(fixture.input, importedPlans.v1), destination = join(fixture.output, 'cli-v1-' + worker + '.mp4');
+  importedPlans = Object.fromEntries([1, 2, 3, 4].map(version => ['v' + version, 'cli-v' + version + '-' + worker + '.plan.json']));
+  const saved = join(fixture.input, importedPlans.v3), destination = join(fixture.output, 'cli-v3-' + worker + '.mp4');
   const planned = await cli(['plan', fixture.progressive, '--to', 'clear', '--format', 'mp4', '--output', destination, '--save', saved, '--json']);
-  expect(planned.report.schema_version).toBe(1);
-  const converted = await cli(['convert', '--plan', saved, '--json']); checks(converted.report.verification);
-  const named = join(fixture.root, 'cli-v2-' + worker + '.outputs.json'), savedV2 = join(fixture.input, importedPlans.v2);
+  expect(planned.report.schema_version).toBe(3); expect(planMinimumDepth(planned.report)).toBe('native');
+  const legacySingle = legacyPlan(planned.report);
+  await writeFile(join(fixture.input, importedPlans.v1), JSON.stringify(legacySingle), { flag: 'wx', mode: 0o600 });
+  const converted = await cli(['convert', '--decode', '--plan', saved, '--json']); checks(converted.report.verification);
+  const named = join(fixture.root, 'cli-v4-' + worker + '.outputs.json'), savedV4 = join(fixture.input, importedPlans.v4);
   await writeFile(named, JSON.stringify({ schema_version: 1, outputs: [
     { id: 'dash', format: 'dash', target: 'cbcs', drms: ['widevine', 'playready'], conformance: 'none' },
     { id: 'hls', format: 'hls', target: 'cbcs', drms: ['fairplay'], conformance: 'none' },
   ] }), { flag: 'wx', mode: 0o600 });
   const keys = join(fixture.config, 'keys.json');
-  const plannedV2 = await cli(['plan', join(fixture.source, 'media.m3u8'), '--outputs', named,
-    '--output', join(fixture.output, 'cli-v2-' + worker), '--save', savedV2, '--keys-file', keys, '--json']);
-  expect(plannedV2.report.schema_version).toBe(2);
-  const convertedV2 = await cli(['convert', '--plan', savedV2, '--keys-file', keys, '--json']);
-  for (const output of convertedV2.report.outputs) checks(output.conversion.verification);
+  const plannedV4 = await cli(['plan', '--decode', join(fixture.source, 'media.m3u8'), '--outputs', named,
+    '--output', join(fixture.output, 'cli-v4-' + worker), '--save', savedV4, '--keys-file', keys, '--json']);
+  expect(plannedV4.report.schema_version).toBe(4); expect(planMinimumDepth(plannedV4.report)).toBe('decoded');
+  const legacyBundle = legacyPlan(plannedV4.report);
+  await writeFile(join(fixture.input, importedPlans.v2), JSON.stringify(legacyBundle), { flag: 'wx', mode: 0o600 });
+  const convertedV4 = await cli(['convert', '--plan', savedV4, '--keys-file', keys, '--json']);
+  for (const output of convertedV4.report.outputs) checks(output.conversion.verification);
   await writeFile(join(process.env.PW_REPORT_ROOT, 'cli-import-setup-' + worker + '.json'), JSON.stringify({
     sourceHead: fixture.sourceHead, binarySha256: fixture.binarySha256, planId: planned.report.plan_id,
-    plannedSha256: planned.sha256, convertedSha256: converted.sha256, checks: converted.report.verification.checks,
-    v2: { planId: plannedV2.report.plan_id, plannedSha256: plannedV2.sha256, convertedSha256: convertedV2.sha256 } }, null, 2));
+    plannedSha256: planned.sha256, convertedSha256: converted.sha256, verification: converted.report.verification,
+    legacySinglePlanId: legacySingle.plan_id, legacyBundlePlanId: legacyBundle.plan_id,
+    v4: { planId: plannedV4.report.plan_id, plannedSha256: plannedV4.sha256, convertedSha256: convertedV4.sha256 } }, null, 2));
 });
 test.beforeEach(async ({ page, context }) => {
   const record = { errors: [], console: [], assets: {}, responseErrors: [], privacyLeaks: [], jobs: [], submitted: [], selections: {} }, pending = [];
@@ -254,6 +272,7 @@ test.beforeEach(async ({ page, context }) => {
     if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/common/jobs') {
       const body = request.postDataJSON();
       expect(body.runtime.keys_ref).toBe(record.selections.keys || null);
+      expect(body.runtime.decode).toBe(record.decode || false);
       if (body.operation.kind === 'plan') expect(body.operation.output_parent_ref).toBe(record.selections['output-parent']);
       record.submitted.push({ requestId: body.request_id, sessionId: body.session_id, operation: body.operation.kind });
     }
@@ -343,17 +362,21 @@ for (const language of ['en', 'ja']) {
     const encrypted = language === 'en';
     await page.locator('#language-select').selectOption(language);
     await openSession(page, encrypted ? 'url' : 'local');
+    await requestDecode(page);
     if (encrypted) await pick(page, 'keys', 'keys.json');
     const analysis = await observedJob(page, '#common-analyze', 'analyze');
     expect(analysis.observedReport.report.input_admitted).toBe(true);
+    checks(analysis.observedReport.report.verification, { scope: 'source-admission' });
     await configure(page, 'browser-' + language, encrypted);
-    const planned = await plan(page); expect(planned.value.plan_schema_version).toBe(2);
+    const planned = await plan(page); expect(planned.value.plan_schema_version).toBe(4);
+    expect(planned.value.required_depth).toBe('decoded');
     expect(planned.value.outputs).toHaveLength(2);
     const downloadPromise = page.waitForEvent('download'); await page.locator('#common-export').click();
     const download = await downloadPromise, bytes = await readFile(await download.path());
     const saved = join(fixture.input, 'browser-' + language + '.plan.json');
     await writeFile(saved, bytes, { flag: 'wx', mode: 0o600 });
     const parsed = JSON.parse(bytes.toString('utf8')); expect(parsed.plan_id).toBe(planned.value.plan_id);
+    expect(parsed.schema_version).toBe(4); expect(planMinimumDepth(parsed)).toBe('decoded');
     const retainedHashes = await retainedPlanBytes(planned.value.plan_id, bytes);
     const converted = await observedJob(page, '#common-convert', 'convert');
     const verified = await observedJob(page, '#common-verify', 'verify');
@@ -379,6 +402,25 @@ test('CLI version-one saved plan can be independently verified without conversio
   const verified = await observedJob(page, '#common-verify', 'verify');
   checks(verified.observedReport.report.verification);
   expect(pages.get(page).submitted.map(item => item.operation)).toEqual(['verify']);
+});
+
+test('a native version-three saved plan keeps unrequested decoding distinct and permits strengthening', async ({ page }) => {
+  await openSession(page, 'saved-plan', importedPlans.v3);
+  const native = await observedJob(page, '#common-verify', 'verify');
+  checks(native.observedReport.report.verification, { depth: 'native' });
+  await requestDecode(page);
+  const decoded = await observedJob(page, '#common-verify', 'verify');
+  checks(decoded.observedReport.report.verification);
+  expect(decoded.plan_id).toBe(native.plan_id);
+  expect(pages.get(page).submitted.map(item => item.operation)).toEqual(['verify', 'verify']);
+});
+
+test('a version-four saved decode minimum survives an unchecked runtime option', async ({ page }) => {
+  await openSession(page, 'saved-plan', importedPlans.v4);
+  await pick(page, 'keys', 'keys.json');
+  const verified = await observedJob(page, '#common-verify', 'verify');
+  for (const output of verified.observedReport.report.outputs) checks(output.verification);
+  await expect(page.locator('#common-decode')).not.toBeChecked();
 });
 
 test('a lost launch response is recovered with the original request ID without resubmission', async ({ page }) => {
@@ -493,7 +535,7 @@ test('a full finished session closes before a fresh verify-only import', async (
     const requestId = id();
     const response = await page.request.post(consoleOrigin + '/api/common/jobs', { headers: { Origin: consoleOrigin },
       data: { schema_version: 1, server_id: caps.server_id, session_id: session.session_id, request_id: requestId,
-        operation: { kind: 'verify', plan_ref: id() }, runtime: { keys_ref: null, max_workers: null } } });
+        operation: { kind: 'verify', plan_ref: id() }, runtime: { keys_ref: null, max_workers: null, decode: false } } });
     expect(response.status()).toBe(404); expect((await response.json()).error.code).toBe('reference-not-found');
     const receipt = await api(page.request, '/api/common/sessions/' + session.session_id + '/requests/' + requestId);
     expect(receipt.state).toBe('rejected'); expect(receipt.job_id).toBeNull();
@@ -510,9 +552,12 @@ test('a full finished session closes before a fresh verify-only import', async (
 
 for (const operation of ['analyze', 'plan', 'convert', 'verify']) {
   test('Stop retains ownership until actual cleanup / ' + operation, async ({ page }, info) => {
-    if (operation === 'verify') await openSession(page, 'saved-plan', importedPlans.v1);
+    if (operation === 'verify') {
+      await openSession(page, 'saved-plan', importedPlans.v1); await requestDecode(page);
+    }
     else {
       await openSession(page);
+      await requestDecode(page);
       if (operation !== 'analyze') {
         await observedJob(page, '#common-analyze', 'analyze'); await configure(page, 'stop-' + operation);
         if (operation === 'convert') await plan(page);

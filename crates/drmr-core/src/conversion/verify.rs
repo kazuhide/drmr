@@ -1,57 +1,23 @@
 //! Independent full decoded-content and compressed-payload comparisons.
 use super::{ContentKey, ConversionError, backend::Backend};
-use serde::Serialize;
-use std::path::Path;
+use std::{io::Read as _, path::Path};
 
-/// Full decode and packet-payload evidence. This does not prove a license server or device playback.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct VerificationReport {
-    pub schema_version: u32,
-    pub passed: bool,
-    pub media_verified: bool,
-    pub checks: VerificationChecks,
-    pub license_playback_verified: bool,
-    /// Native checks of the exact output manifest bytes, separate from media evidence.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub native_manifest: Option<super::manifest_lint::NativeManifestReport>,
-}
-/// An executed check's outcome, kept distinct from an unchecked metadata claim.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum CheckOutcome {
-    Pass,
-    Fail,
-}
-impl CheckOutcome {
-    const fn from_equal(equal: bool) -> Self {
-        if equal { Self::Pass } else { Self::Fail }
-    }
-    pub const fn is_pass(self) -> bool {
-        matches!(self, Self::Pass)
-    }
-    pub(super) fn include(&mut self, other: Self) {
-        if other == Self::Fail {
-            *self = Self::Fail;
-        }
-    }
-}
-/// Packet timing compares every presentation timestamp, decode timestamp, and duration.
-/// The qualified progressive profile also compares exact presentation windows.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct VerificationChecks {
-    pub stream_metadata: CheckOutcome,
-    pub packet_payloads_equal: bool,
-    pub packet_timing_equal: bool,
-    pub decoded_content_equal: bool,
-}
+mod evidence;
+#[cfg(test)]
+mod input_keys_tests;
+pub use evidence::{
+    CheckOutcome, DecodeEvidence, DecodeNotCheckedReason, ValidationDepth, VerificationChecks,
+    VerificationFailure, VerificationReport, VerificationScope,
+};
+
 /// Independent demux/decode input and its byte-preserving local initialization view.
 /// HLS demuxers omit some initialization metadata, so it is read from the assembled MP4.
 #[derive(Clone, Copy)]
 pub(super) struct StreamView<'a> {
-    input: &'a Path,
-    metadata: &'a Path,
-    index: usize,
-    key: Option<super::keys::ProbeKeys<'a>>,
+    pub(in crate::conversion) input: &'a Path,
+    pub(in crate::conversion) metadata: &'a Path,
+    pub(in crate::conversion) index: usize,
+    pub(in crate::conversion) key: Option<super::keys::ProbeKeys<'a>>,
 }
 impl<'a> StreamView<'a> {
     pub fn new(input: &'a Path, index: usize, key: Option<&'a ContentKey>) -> Self {
@@ -61,9 +27,6 @@ impl<'a> StreamView<'a> {
             index,
             key: key.map(super::keys::ProbeKeys::One),
         }
-    }
-    pub fn with_original_keys(self, all: bool, keys: &'a super::InputKeys) -> Self {
-        if all { self.with_all_keys(keys) } else { self }
     }
     pub fn with_all_keys(mut self, keys: &'a super::InputKeys) -> Self {
         self.key = Some(super::keys::ProbeKeys::All(keys));
@@ -81,6 +44,29 @@ fn metadata_key(view: StreamView<'_>) -> Option<super::keys::ProbeKeys<'_>> {
         None
     } else {
         view.key
+    }
+}
+fn input_key(view: StreamView<'_>) -> Result<Option<super::keys::ProbeKeys<'_>>, ConversionError> {
+    let mut input = super::files::regular_input(view.input)?;
+    let mut prefix = [0_u8; 64];
+    let mut length = 0;
+    while length < prefix.len() {
+        let count = input
+            .read(&mut prefix[length..])
+            .map_err(|_| ConversionError("input-unreadable"))?;
+        if count == 0 {
+            break;
+        }
+        length += count;
+    }
+    // Private HLS references carry their own key URIs. MOV decryption options
+    // belong to MP4 inputs; native metadata keeps its complete dictionary.
+    if crate::inspection::format_hint(&prefix[..length])
+        == Some(crate::inspection::InputFormat::Hls)
+    {
+        Ok(None)
+    } else {
+        Ok(view.key)
     }
 }
 impl Backend {
@@ -170,80 +156,41 @@ impl Backend {
         result: StreamView<'_>,
     ) -> Result<VerificationReport, ConversionError> {
         let _scope = self.scope(super::measurement::Phase::Verification);
-        let source_profile = self.profile_stream_keys(source.input, source.index, source.key)?;
-        let result_profile = self.profile_stream_keys(result.input, result.index, result.key)?;
-        let source_metadata = if source.metadata == source.input {
-            source_profile.clone()
-        } else {
-            self.profile_stream_keys(source.metadata, source.index, source.key)?
-        };
-        let result_metadata = if result.metadata == result.input {
-            result_profile.clone()
-        } else {
-            self.profile_stream_keys(result.metadata, result.index, result.key)?
-        };
-        for (view, profile) in [(source, &source_profile), (result, &result_profile)] {
-            if matches!(view.key, Some(super::keys::ProbeKeys::All(_))) {
-                let counts = super::cenc::sample_counts(&super::audio::movie(view.input)?)?;
-                let actual = profile["nb_read_packets"]
-                    .as_str()
-                    .and_then(|n| n.parse::<u32>().ok());
-                if actual != counts.get(view.index).copied() {
-                    return Err(ConversionError("progressive-cenc-profile-not-supported"));
-                }
-            }
+        let native = self.native_verify_views(source, result)?;
+        if self.validation_depth == super::ValidationDepth::Native {
+            return Ok(native);
         }
-        let stream_metadata_equal = source_metadata == result_metadata;
+        // Native sample/configuration/window checks are authoritative for encoded
+        // preservation. Decoding adds a separate proof without treating legal
+        // container framing differences as changes to the encoded content.
+        let source_profile = self.native_profile(source.metadata, source.index)?;
         let source_window = super::finite::window(source.metadata, source.index)?;
         let result_window = super::finite::window(result.metadata, result.index)?;
-        let windows_equal = match (source_window, result_window) {
-            (Some(a), Some(b)) => {
-                a.equivalent(b)
-                    && super::progressive::playback_controls_equal(
-                        source.metadata,
-                        source.index,
-                        result.metadata,
-                        result.index,
-                    )?
-            }
-            (None, None) => true,
-            _ => false,
-        };
-        let packet_timing_equal = windows_equal
-            && source_profile["time_base"] == result_profile["time_base"]
-            && self.packets_stream_keys(source.input, source.index, source.key)?
-                == self.packets_stream_keys(result.input, result.index, result.key)?
-            && super::progressive::presentation_windows_equal(source.metadata, result.metadata)?;
-        let packet_payloads_equal =
-            self.hash_stream_keys(source.input, source.index, true, source.key)?
-                == self.hash_stream_keys(result.input, result.index, true, result.key)?;
         let decoded_content_equal = if let (Some(a), Some(b)) = (source_window, result_window) {
             if a.audio && b.audio {
                 self.verify_finite_audio(source, result, a, b, &source_profile)?
             } else {
-                self.hash_stream_keys(source.input, source.index, false, source.key)?
-                    == self.hash_stream_keys(result.input, result.index, false, result.key)?
+                self.hash_stream_keys(source.input, source.index, false, input_key(source)?)?
+                    == self.hash_stream_keys(
+                        result.input,
+                        result.index,
+                        false,
+                        input_key(result)?,
+                    )?
             }
         } else {
-            self.hash_stream_keys(source.input, source.index, false, source.key)?
-                == self.hash_stream_keys(result.input, result.index, false, result.key)?
+            self.hash_stream_keys(source.input, source.index, false, input_key(source)?)?
+                == self.hash_stream_keys(result.input, result.index, false, input_key(result)?)?
         };
-        let passed = stream_metadata_equal
-            && packet_payloads_equal
-            && decoded_content_equal
-            && packet_timing_equal;
-        Ok(VerificationReport {
-            schema_version: 1,
-            passed,
-            media_verified: passed,
-            checks: VerificationChecks {
-                stream_metadata: CheckOutcome::from_equal(stream_metadata_equal),
-                packet_payloads_equal,
-                packet_timing_equal,
-                decoded_content_equal,
+        let mut report = VerificationReport::new(
+            self.validation_depth,
+            VerificationScope::Comparison,
+            native.checks.clone(),
+            DecodeEvidence::ContentCompared {
+                equal: decoded_content_equal,
             },
-            license_playback_verified: false,
-            native_manifest: None,
-        })
+        );
+        report.require_native(&native)?;
+        Ok(report)
     }
 }

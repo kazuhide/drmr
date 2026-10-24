@@ -6,6 +6,7 @@ fn convert(source: &Path, output: &Path, measure: bool) -> std::process::Output 
     let mut command = Command::new(env!("CARGO_BIN_EXE_drmr"));
     command
         .arg("convert")
+        .arg("--decode")
         .arg(source)
         .args(["--to", "clear", "--format", "mp4", "--json", "--output"])
         .arg(output);
@@ -30,7 +31,10 @@ fn measured_conversion_and_verification_keep_the_complete_proof_and_default_shap
     assert!(measured.status.success(), "{:?}", measured.stderr);
     let measured: Value = serde_json::from_slice(&measured.stdout).unwrap();
     assert_eq!(plain["verification"], measured["verification"]);
-    assert_eq!(measured["verification"]["media_verified"], true);
+    assert_eq!(
+        measured["verification"]["decode_evidence"],
+        serde_json::json!({"status":"content-compared","equal":true})
+    );
     assert_eq!(measured["measurements"]["schema_version"], 1);
     assert!(
         measured["measurements"]["tools"]
@@ -49,6 +53,7 @@ fn measured_conversion_and_verification_keep_the_complete_proof_and_default_shap
 
     let result = Command::new(env!("CARGO_BIN_EXE_drmr"))
         .arg("verify")
+        .arg("--decode")
         .arg(&target)
         .arg("--source")
         .arg(&source)
@@ -58,7 +63,10 @@ fn measured_conversion_and_verification_keep_the_complete_proof_and_default_shap
     assert!(result.status.success(), "{:?}", result.stderr);
     let report: Value = serde_json::from_slice(&result.stdout).unwrap();
     assert_eq!(report["passed"], true);
-    assert_eq!(report["media_verified"], true);
+    assert_eq!(
+        report["decode_evidence"],
+        serde_json::json!({"status":"content-compared","equal":true})
+    );
     assert_eq!(report["measurements"]["schema_version"], 1);
     let encoded = serde_json::to_string(&report["measurements"]).unwrap();
     assert!(!encoded.contains(&directory.path().to_string_lossy().to_string()));
@@ -95,8 +103,14 @@ fn measurement_helper_observes_real_bbb_tools_in_both_worker_modes() {
             if condition == "uncontrolled" { 0 } else { 2 }
         );
         for row in report["runs"].as_array().unwrap() {
-            assert_eq!(row["conversion_proof"]["media_verified"], true);
-            assert_eq!(row["independent_proof"]["media_verified"], true);
+            assert_eq!(
+                row["conversion_proof"]["decode_evidence"],
+                serde_json::json!({"status":"content-compared","equal":true})
+            );
+            assert_eq!(
+                row["independent_proof"]["decode_evidence"],
+                serde_json::json!({"status":"content-compared","equal":true})
+            );
             assert_eq!(
                 row["independent_proof"]["checks"]["packet_timing_equal"],
                 true

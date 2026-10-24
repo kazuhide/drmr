@@ -78,8 +78,9 @@
     var currentInput = h('section', { className: 'common-section' }, sourceLabel, h('div', { className: 'actions' }, close), word('p', 'commonSessionCloseHelp', { className: 'help' }), capacity);
     var keys = selectionField('commonKeys', 'keys', function () { return draft && draft.keys; }, function (v) { if (draft) draft.keys = v; }, 'commonKeysHelp', true);
     var workers = h('input', { id: 'common-workers', type: 'number', min: '1', max: '64', step: '1', inputmode: 'numeric', oninput: function () { if (draft) draft.workers = workers.value; update(); } });
+    var decode = h('input', { id: 'common-decode', type: 'checkbox', 'aria-describedby': 'common-decode-help', onchange: function () { if (draft) draft.decode = decode.checked; update(); } });
     var workerHelp = h('small', { className: 'help' });
-    var runtime = h('section', { className: 'common-section' }, word('h2', 'commonRuntime'), keys.node, h('label', { className: 'field' }, word('span', 'commonWorkers'), workers, workerHelp));
+    var runtime = h('section', { className: 'common-section' }, word('h2', 'commonRuntime'), keys.node, h('label', { className: 'field' }, word('span', 'commonWorkers'), workers, workerHelp), h('div', { className: 'field' }, h('label', { className: 'common-decode-option' }, decode, word('span', 'commonDecodeRequested')), word('small', 'commonDecodeHelp', { id: 'common-decode-help' })));
     var analyze = button('common-analyze', 'commonAnalyze', function () { if (!analyze.disabled) model.submit({ kind: 'analyze' }, runtimeValue()); }, true);
     var analysisReport = h('div', { id: 'common-analysis-report' });
     var analysis = h('section', { className: 'common-section', 'aria-labelledby': 'common-analysis-title' }, word('h2', 'commonAnalysis', { id: 'common-analysis-title' }), h('div', { className: 'actions' }, analyze), analysisReport);
@@ -137,7 +138,7 @@
       open.disabled = !model.snapshot().capabilities || !!model.snapshot().creation || !validSource();
       media.update(); saved.update(); fetch.update();
     }
-    function runtimeValue() { return { keys_ref: draft && draft.keys ? draft.keys.ref : null, max_workers: workers.value.trim() === '' ? null : Number(workers.value) }; }
+    function runtimeValue() { return { keys_ref: draft && draft.keys ? draft.keys.ref : null, max_workers: workers.value.trim() === '' ? null : Number(workers.value), decode: decode.checked }; }
     function validRuntime() { var value = runtimeValue().max_workers, cap = model.snapshot().capabilities; return value === null || Number.isInteger(value) && value >= 1 && value <= (cap ? cap.worker_policy.maximum : 0); }
     function outputValues() { return rows.map(function (row) { return { id: row.id.value, format: row.format.value, target: row.target.value, drms: row.drms.filter(function (drm) { return drm.control.checked; }).map(function (drm) { return drm.value; }), conformance: row.conformance.value }; }); }
     function signature() { return JSON.stringify({ parent: draft && draft.parent && draft.parent.ref, destination: destination.value, outputs: outputValues() }); }
@@ -191,7 +192,7 @@
       currentId = next; rows = []; UI.replace(outputBody); reportViews.clear();
       if (!next) { draft = null; return; }
       if (!drafts.has(next)) drafts.set(next, defaultDraft());
-      draft = drafts.get(next); draft.values.forEach(addRow); workers.value = draft.workers; destination.value = draft.destination;
+      draft = drafts.get(next); draft.values.forEach(addRow); workers.value = draft.workers; decode.checked = draft.decode === true; destination.value = draft.destination;
     }
     function renderPlan(item) {
       var value = item && item.plan;
@@ -212,9 +213,9 @@
       var key = value ? value.plan_ref + '|' + value.destination_state : '';
       if (planInfo.dataset.plan !== key) {
         planInfo.dataset.plan = key;
-        UI.replace(planInfo, value ? [word('dt', 'commonPlanId'), h('dd', { className: 'mono', text: value.plan_id }), word('dt', 'commonPlanVersion'), h('dd', { text: 'v' + value.plan_schema_version })] : []);
+        UI.replace(planInfo, value ? [word('dt', 'commonPlanId'), h('dd', { className: 'mono', text: value.plan_id }), word('dt', 'commonPlanVersion'), h('dd', { text: 'v' + value.plan_schema_version }), word('dt', 'commonRequiredCoverage'), h('dd', null, word('span', value.required_depth === 'native' ? 'commonNativeCoverage' : 'commonDecodedCoverage'))] : []);
         UI.replace(planOutputs, value ? h('ul', { className: 'common-plan-outputs' }, value.outputs.map(function (output) {
-          return h('li', null, output.id === null ? word('span', 'commonSingleOutput') : h('code', { text: output.id }), h('span', { text: output.format + ' · ' + output.target }), value.plan_schema_version === 2 ? h('span', null, word('span', 'commonDrms'), ': ', (output.drms || []).length ? h('span', { text: output.drms.join(', ') }) : word('span', 'commonNotRequested')) : null, value.plan_schema_version === 2 ? h('span', null, word('span', 'commonConformance'), ': ', word('span', output.conformance === 'required' ? 'commonRequired' : 'commonNotRequested')) : null);
+          return h('li', null, output.id === null ? word('span', 'commonSingleOutput') : h('code', { text: output.id }), h('span', { text: output.format + ' · ' + output.target }), [2, 4].indexOf(value.plan_schema_version) !== -1 ? h('span', null, word('span', 'commonDrms'), ': ', (output.drms || []).length ? h('span', { text: output.drms.join(', ') }) : word('span', 'commonNotRequested')) : null, [2, 4].indexOf(value.plan_schema_version) !== -1 ? h('span', null, word('span', 'commonConformance'), ': ', word('span', output.conformance === 'required' ? 'commonRequired' : 'commonNotRequested')) : null);
         })) : null);
       }
       var destinationKey = value ? { absent: 'commonDestinationAbsent', present: 'commonDestinationPresent', mixed: 'commonDestinationMixed', unavailable: 'commonDestinationUnavailable' }[value.destination_state] : 'commonPlanNone';

@@ -26,6 +26,7 @@ pub struct Plan {
     pub digest: String,
     pub id: String,
     pub schema: u32,
+    pub required_depth: drmr_core::conversion::ValidationDepth,
     pub outputs: Value,
     pub destination: PathBuf,
     pub destinations: Vec<PathBuf>,
@@ -42,7 +43,7 @@ impl Plan {
         Ok(b)
     }
     pub fn view(&self) -> Value {
-        json!({"plan_ref":self.reference,"session_id":self.session,"plan_id":self.id,"plan_schema_version":self.schema,"outputs":self.outputs,"destination_state":destination_state(&self.destination,&self.destinations),"export_url":format!("/api/common/plans/{}/export",self.reference)})
+        json!({"plan_ref":self.reference,"session_id":self.session,"plan_id":self.id,"plan_schema_version":self.schema,"required_depth":self.required_depth,"outputs":self.outputs,"destination_state":destination_state(&self.destination,&self.destinations),"export_url":format!("/api/common/plans/{}/export",self.reference)})
     }
 }
 pub fn digest(bytes: &[u8]) -> String {
@@ -59,16 +60,20 @@ pub fn load(path: &Path, files: &Files, session: &str, reference: String) -> Res
             &p.source,
             p.intent.output.clone(),
             p.plan_id.clone(),
-            1,
+            p.schema_version,
             json!([{"id":null,"format":p.intent.format,"target":p.intent.target}]),
         ),
         SavedPlan::Bundle(p) => (
             &p.source,
             p.output_root.clone(),
             p.plan_id.clone(),
-            2,
+            p.schema_version,
             json!(p.outputs),
         ),
+    };
+    let required_depth = match &saved {
+        SavedPlan::Single(p) => p.minimum_depth(),
+        SavedPlan::Bundle(p) => p.minimum_depth(),
     };
     let destinations = match &saved {
         SavedPlan::Single(p) => vec![p.intent.output.clone()],
@@ -94,6 +99,7 @@ pub fn load(path: &Path, files: &Files, session: &str, reference: String) -> Res
         digest: digest(&bytes),
         id,
         schema,
+        required_depth,
         outputs,
         destination,
         destinations,

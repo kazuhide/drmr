@@ -168,7 +168,9 @@ fn output_matrix(
             assert!(
                 proof.checks.packet_payloads_equal
                     && proof.checks.packet_timing_equal
-                    && proof.checks.decoded_content_equal
+                    && proof
+                        .decode_evidence
+                        .satisfies(drmr_core::conversion::ValidationDepth::Decoded, proof.scope)
             );
             assert!(!proof.license_playback_verified);
         }
@@ -247,11 +249,18 @@ fn legacy_fmp4_declarations(
     let proof = verify();
     // Container IVs still establish complete legacy media proof; malformed manifest
     // declarations independently fail the public verification's native rule scope.
-    assert!(proof.media_verified);
+    assert!(
+        (proof.checks.is_pass()
+            && proof
+                .decode_evidence
+                .satisfies(drmr_core::conversion::ValidationDepth::Decoded, proof.scope))
+    );
     assert!(
         proof.checks.packet_payloads_equal
             && proof.checks.packet_timing_equal
-            && proof.checks.decoded_content_equal
+            && proof
+                .decode_evidence
+                .satisfies(drmr_core::conversion::ValidationDepth::Decoded, proof.scope)
     );
     assert_eq!(
         serde_json::to_value(&proof.checks).unwrap()["stream_metadata"],
@@ -272,7 +281,14 @@ fn legacy_fmp4_declarations(
         std::fs::write(output.join(name), bytes).unwrap();
     }
     let restored = verify();
-    assert!(restored.passed && restored.media_verified);
+    assert!(
+        restored.passed
+            && (restored.checks.is_pass()
+                && restored.decode_evidence.satisfies(
+                    drmr_core::conversion::ValidationDepth::Decoded,
+                    restored.scope
+                ))
+    );
     assert!(restored.native_manifest.unwrap().is_clean_for_scope());
 }
 #[test]
@@ -286,7 +302,8 @@ fn independently_encrypted_video_including_the_final_sample_preserves_original_m
         Arc::new(ToolRunner::new(Arc::new(Secrets::new()), events.clone())),
         "packager",
         "ffmpeg",
-    );
+    )
+    .with_decode(true);
     let hls = HlsInputKeys::new(vec![(URI.into(), Aes128Key::from_hex(KEY).unwrap())]).unwrap();
     output_matrix(root.path(), &c, &encrypted, &clear, &hls, &events);
     assert_eq!(
@@ -306,7 +323,8 @@ fn independently_encrypted_joint_video_and_aac_preserve_all_samples_and_pcm() {
         Arc::new(ToolRunner::new(Arc::new(Secrets::new()), events.clone())),
         "packager",
         "ffmpeg",
-    );
+    )
+    .with_decode(true);
     let hls = HlsInputKeys::new(vec![(
         sample_aes_fixture::KEY_URI.into(),
         Aes128Key::from_hex(KEY).unwrap(),
@@ -336,7 +354,7 @@ fn associated_iv_is_required_and_must_agree_with_the_playlist() {
     let encrypted = shaka_video(&root.path().join("encrypted"), true);
     let original = std::fs::read_to_string(&encrypted).unwrap();
     assert!(original.contains(&format!(",IV=0x{IV}")));
-    let c = Converter::new(runner(), "packager", "ffmpeg");
+    let c = Converter::new(runner(), "packager", "ffmpeg").with_decode(true);
     let empty = InputKeys::default();
     let keys = |iv: Option<&str>| {
         HlsInputKeys::new_with_ivs(vec![(
@@ -413,6 +431,7 @@ fn native_decryption_uses_the_custom_pool_and_releases_it_before_tools() {
     let output = root.path().join("insufficient");
     assert_eq!(
         Converter::new(limited, "packager", "ffmpeg")
+            .with_decode(true)
             .convert(request(&source, &output, &hls, &empty))
             .unwrap_err()
             .0,
@@ -423,7 +442,7 @@ fn native_decryption_uses_the_custom_pool_and_releases_it_before_tools() {
     let custom = Arc::new(
         ToolRunner::new(Arc::new(Secrets::new()), Arc::new(NoSink)).with_limiter(Arc::clone(&pool)),
     );
-    let c = Converter::new(custom, "packager", "ffmpeg");
+    let c = Converter::new(custom, "packager", "ffmpeg").with_decode(true);
     let output = root.path().join("output");
     assert!(
         c.convert(request(&source, &output, &hls, &empty))
@@ -440,6 +459,7 @@ fn native_decryption_uses_the_custom_pool_and_releases_it_before_tools() {
     let cancelled = root.path().join("cancelled");
     assert_eq!(
         Converter::new(stopped, "packager", "ffmpeg")
+            .with_decode(true)
             .with_stop(stop)
             .convert(request(&source, &cancelled, &hls, &empty))
             .unwrap_err()
@@ -454,7 +474,7 @@ fn unsupported_declarations_wrong_keys_and_protection_transitions_publish_nothin
     let root = common::private_tempdir().unwrap();
     let source = shaka_video(&root.path().join("source"), true);
     let original = std::fs::read_to_string(&source).unwrap();
-    let c = Converter::new(runner(), "packager", "ffmpeg");
+    let c = Converter::new(runner(), "packager", "ffmpeg").with_decode(true);
     let keys = HlsInputKeys::new(vec![(URI.into(), Aes128Key::from_hex(KEY).unwrap())]).unwrap();
     let empty = InputKeys::default();
     for (name, changed, token) in [
@@ -522,7 +542,7 @@ fn simultaneously_active_key_formats_cannot_hide_an_unsupported_or_conflicting_d
     );
     let aes = identity.replace("METHOD=SAMPLE-AES", "METHOD=AES-128");
     let implicit_aes = aes.replace(",KEYFORMAT=\"identity\"", "");
-    let c = Converter::new(runner(), "packager", "ffmpeg");
+    let c = Converter::new(runner(), "packager", "ffmpeg").with_decode(true);
     let keys = HlsInputKeys::new(vec![(URI.into(), Aes128Key::from_hex(KEY).unwrap())]).unwrap();
     let empty = InputKeys::default();
     for (name, declarations) in [
@@ -639,7 +659,7 @@ fn same_format_key_and_associated_iv_rotation_preserve_every_original_track() {
         ),
     ])
     .unwrap();
-    let c = Converter::new(runner(), "packager", "ffmpeg");
+    let c = Converter::new(runner(), "packager", "ffmpeg").with_decode(true);
     let output = root.path().join("output");
     let empty = InputKeys::default();
     assert!(

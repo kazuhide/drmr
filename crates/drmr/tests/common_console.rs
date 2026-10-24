@@ -163,11 +163,14 @@ fn no_private_fields(value: &Value, private_root: &str) {
 }
 fn media_checks(report: &Value) {
     assert_eq!(report["passed"], true);
-    assert_eq!(report["media_verified"], true);
+    assert_eq!(
+        report["decode_evidence"],
+        serde_json::json!({"status":"content-compared","equal":true})
+    );
     assert_eq!(report["license_playback_verified"], false);
     assert_eq!(
         report["checks"],
-        json!({"stream_metadata":"pass","packet_payloads_equal":true,"packet_timing_equal":true,"decoded_content_equal":true})
+        json!({"stream_metadata":"pass","packet_payloads_equal":true,"packet_timing_equal":true})
     );
 }
 
@@ -200,7 +203,7 @@ fn prepare_fragmented_video(source: &Path) {
 
 fn verify_exported_plan(saved: &Path, plan_id: &str) {
     let external = Command::new(env!("CARGO_BIN_EXE_drmr"))
-        .args(["verify", "--plan"])
+        .args(["verify", "--decode", "--plan"])
         .arg(saved)
         .arg("--json")
         .output()
@@ -241,7 +244,7 @@ fn real_http_flow_saves_exports_executes_and_independently_verifies_the_same_cli
     let server_id = capabilities["server_id"].clone();
     let session = client.post("/api/common/sessions", &json!({"schema_version":1,"server_id":server_id,"creation_request_id":"b".repeat(32),"source":{"kind":"local","input_ref":source_ref}}), 201);
     let session_id = session["session_id"].clone();
-    let submit = |ordinal: u32, operation: Value| json!({"schema_version":1,"server_id":server_id,"session_id":session_id,"request_id":format!("{ordinal:032x}"),"operation":operation,"runtime":{"keys_ref":null,"max_workers":null}});
+    let submit = |ordinal: u32, operation: Value| json!({"schema_version":1,"server_id":server_id,"session_id":session_id,"request_id":format!("{ordinal:032x}"),"operation":operation,"runtime":{"decode":true,"keys_ref":null,"max_workers":null}});
     let analyzed = client.job(&submit(1, json!({"kind":"analyze"})), "succeeded");
     let analysis = client.get(&format!(
         "/api/common/reports/{}",
@@ -254,7 +257,8 @@ fn real_http_flow_saves_exports_executes_and_independently_verifies_the_same_cli
     ]})), "succeeded");
     let plan_ref = planned["plan_ref"].clone();
     let plan = client.get(&format!("/api/common/plans/{}", plan_ref.as_str().unwrap()));
-    assert_eq!(plan["plan_schema_version"], 2);
+    assert_eq!(plan["plan_schema_version"], 4);
+    assert_eq!(plan["required_depth"], "decoded");
     assert_eq!(plan["outputs"].as_array().unwrap().len(), 2);
     let exported = client.export_plan(plan_ref.as_str().unwrap());
     let saved = input.join("exported.plan.json");
@@ -330,7 +334,7 @@ fn a_valid_source_changed_after_analysis_cannot_publish_a_new_plan() {
     let server_id = capabilities["server_id"].clone();
     let session = client.post("/api/common/sessions", &json!({"schema_version":1,"server_id":server_id,"creation_request_id":"c".repeat(32),"source":{"kind":"local","input_ref":source_ref}}), 201);
     let session_id = session["session_id"].clone();
-    let submit = |ordinal: u32, operation: Value| json!({"schema_version":1,"server_id":server_id,"session_id":session_id,"request_id":format!("{ordinal:032x}"),"operation":operation,"runtime":{"keys_ref":null,"max_workers":null}});
+    let submit = |ordinal: u32, operation: Value| json!({"schema_version":1,"server_id":server_id,"session_id":session_id,"request_id":format!("{ordinal:032x}"),"operation":operation,"runtime":{"decode":true,"keys_ref":null,"max_workers":null}});
     let analyzed = client.job(&submit(1, json!({"kind":"analyze"})), "succeeded");
 
     std::fs::OpenOptions::new()
@@ -341,6 +345,7 @@ fn a_valid_source_changed_after_analysis_cannot_publish_a_new_plan() {
         .unwrap();
     let changed = Command::new(env!("CARGO_BIN_EXE_drmr"))
         .arg("analyze")
+        .arg("--decode")
         .arg(&source)
         .arg("--json")
         .output()

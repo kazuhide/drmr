@@ -32,6 +32,9 @@ OBSERVER_SPEC = importlib.util.spec_from_file_location(
     "measurement_observer", Path(__file__).resolve().with_name("measurement_observer.py"))
 OBSERVER = importlib.util.module_from_spec(OBSERVER_SPEC)
 OBSERVER_SPEC.loader.exec_module(OBSERVER)
+EVIDENCE_SPEC = importlib.util.spec_from_file_location("media_evidence", Path(__file__).resolve().with_name("media_evidence.py"))
+EVIDENCE = importlib.util.module_from_spec(EVIDENCE_SPEC)
+EVIDENCE_SPEC.loader.exec_module(EVIDENCE)
 
 
 class Failure(Exception):
@@ -47,6 +50,7 @@ def parse_args(argv=None):
     parser = Parser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--drmr", type=Path, required=True, help="Explicit drmr executable.")
     parser.add_argument("--input", type=Path, required=True, help="Local media file or manifest.")
+    parser.add_argument("--decode", action="store_true", help="Add complete source and result decoding to native checks.")
     parser.add_argument("--keys-file", type=Path, help="Protected configuration with input/output key roles.")
     parser.add_argument("--to", choices=("clear", "cenc", "cbcs", "hls-aes128", "hls-sample-aes"), required=True)
     parser.add_argument("--format", choices=("mp4", "dash", "hls", "hls-ts"), required=True)
@@ -238,7 +242,10 @@ def measured_run(argv, environment, timeout, interval):
         return measurement, payload
 
 
-def validate_proof(value):
+def validate_proof(value, require_decoded=False):
+    current = EVIDENCE.v2_proof(value, require_decoded=require_decoded)
+    if current is not None:
+        return current
     if not isinstance(value, dict) or type(value.get("schema_version")) is not int or value["schema_version"] != 1:
         raise Failure("verification-proof-invalid")
     checks = value.get("checks")
@@ -387,6 +394,7 @@ def benchmark(args, report):
     initial = [(path, identity(path)) for path in (binary, source, keys) if path is not None]
     environment = {name: value for name, value in os.environ.items() if not name.upper().startswith("DRM_")}
     report.update({"target": args.to, "format": args.format, "repeats_per_mode": args.repeats,
+                   "additional_decode_requested": bool(getattr(args, "decode", False)),
                    "keys_file_supplied": keys is not None, "warmups": [],
                    "condition": {"kind": args.condition, "physical_cold": "not-measured",
                                  "cache_residency": "unverified",
@@ -411,20 +419,21 @@ def benchmark(args, report):
         row = {"round": index + 1, "order": len(rows) + 1, "mode": mode, "status": "failed"}
         rows.append(row)
         workers = [] if mode == "auto" else ["--max-workers", "1"]
+        decode_args = ["--decode"] if getattr(args, "decode", False) else []
         key_args = ["--keys-file", keys] if keys else []
         with tempfile.TemporaryDirectory(prefix="drmr-measure-") as directory:
             output = Path(directory) / ("result.mp4" if args.format == "mp4" else "result")
             converted, payload = measured_run(
-                [binary, "convert", source, "--to", args.to, "--format", args.format,
+                [binary, "convert", *decode_args, source, "--to", args.to, "--format", args.format,
                  "--output", output, *key_args, *workers, "--measure", "--json"],
                 environment, args.timeout, args.sample_interval)
             if not warmup:
                 row["convert"] = converted
             if converted["status"] != "completed":
                 raise Failure("conversion-failed")
-            if not isinstance(payload, dict) or type(payload.get("schema_version")) is not int or payload["schema_version"] != 1:
+            if not isinstance(payload, dict) or type(payload.get("schema_version")) is not int or payload["schema_version"] not in (1, 2):
                 raise Failure("conversion-report-invalid")
-            row["conversion_proof"] = validate_proof(payload.get("verification"))
+            row["conversion_proof"] = validate_proof(payload.get("verification"), require_decoded=bool(getattr(args, "decode", False)))
             work = validate_measurements(payload.get("measurements"))
             if not warmup:
                 converted["work_measurements"] = work
@@ -434,13 +443,13 @@ def benchmark(args, report):
             if not stat.S_ISREG(candidate.lstat().st_mode) or not candidate.resolve().is_relative_to(Path(directory).resolve()):
                 raise Failure("conversion-output-invalid")
             verified, proof = measured_run(
-                [binary, "verify", candidate, "--source", source, *key_args, *workers, "--measure", "--json"],
+                [binary, "verify", *decode_args, candidate, "--source", source, *key_args, *workers, "--measure", "--json"],
                 environment, args.timeout, args.sample_interval)
             if not warmup:
                 row["verify"] = verified
             if verified["status"] != "completed":
                 raise Failure("independent-verification-failed")
-            row["independent_proof"] = validate_proof(proof)
+            row["independent_proof"] = validate_proof(proof, require_decoded=bool(getattr(args, "decode", False)))
             work = validate_measurements(proof.get("measurements"))
             if not warmup:
                 verified["work_measurements"] = work

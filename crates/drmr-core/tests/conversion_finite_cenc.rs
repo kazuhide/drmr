@@ -48,7 +48,8 @@ fn converter() -> (Converter, Arc<Collector>) {
     let runner = Arc::new(ToolRunner::new(Arc::new(Secrets::new()), events.clone()));
     // A qualified progressive route must not need a fragmented-media intermediary.
     (
-        Converter::new(runner, "unused-packager-for-progressive-profile", "ffmpeg"),
+        Converter::new(runner, "unused-packager-for-progressive-profile", "ffmpeg")
+            .with_decode(true),
         events,
     )
 }
@@ -93,7 +94,15 @@ fn verify(
 }
 
 fn assert_verified(report: &VerificationReport) {
-    assert!(report.passed && report.media_verified, "{report:?}");
+    assert!(
+        report.passed
+            && (report.checks.is_pass()
+                && report.decode_evidence.satisfies(
+                    drmr_core::conversion::ValidationDepth::Decoded,
+                    report.scope
+                )),
+        "{report:?}"
+    );
     assert!(!report.license_playback_verified);
     assert_eq!(
         serde_json::to_value(report).unwrap()["checks"]["stream_metadata"],
@@ -101,7 +110,10 @@ fn assert_verified(report: &VerificationReport) {
     );
     assert!(report.checks.packet_payloads_equal);
     assert!(report.checks.packet_timing_equal);
-    assert!(report.checks.decoded_content_equal);
+    assert!(report.decode_evidence.satisfies(
+        drmr_core::conversion::ValidationDepth::Decoded,
+        report.scope
+    ));
 }
 
 fn dictionary() -> String {
@@ -501,7 +513,7 @@ fn incomplete_wrong_and_swapped_keys_refuse_publication_without_poisoning_the_co
             assert!(
                 matches!(
                     error.0,
-                    "media-tool-failed" | "round-trip-verification-failed"
+                    "media-tool-failed" | "round-trip-verification-failed" | "invalid-avc-syntax"
                 ),
                 "{name}: {error}"
             );
@@ -581,6 +593,8 @@ fn shorten_video(source: &Path, output: &Path) {
 
 #[test]
 fn encrypted_reference_and_clear_candidate_keep_finite_windows_and_display_extents() {
+    use drmr_core::conversion::{CheckOutcome, DecodeEvidence, ValidationDepth, VerificationScope};
+
     let root = common::private_tempdir().unwrap();
     let source = fixture("cenc-iv16.mp4");
     let output = root.path().join("clear.mp4");
@@ -591,6 +605,15 @@ fn encrypted_reference_and_clear_candidate_keep_finite_windows_and_display_exten
         ("source", source.as_path()),
         ("candidate", output.as_path()),
     ] {
+        let video_has_edit = {
+            let data = std::fs::read(baseline).unwrap();
+            let boxes = drmr_core::mp4::parse_boxes(&data).unwrap();
+            let tracks = drmr_core::mp4::walk(&boxes);
+            let video = tracks.iter().find(|node| node.kind() == *b"trak").unwrap();
+            drmr_core::mp4::walk(&video.children)
+                .iter()
+                .any(|node| node.kind() == *b"elst")
+        };
         for change in ["window", "width"] {
             let mutant = root.path().join(format!("{role}-{change}.mp4"));
             if change == "window" {
@@ -608,20 +631,45 @@ fn encrypted_reference_and_clear_candidate_keep_finite_windows_and_display_exten
                 packets(baseline, role == "source"),
                 packets(&mutant, role == "source")
             );
-            let report = if role == "source" {
+            let verified = if role == "source" {
                 verify(&c, &mutant, &output, &keys)
             } else {
                 verify(&c, &source, &mutant, &keys)
+            };
+            if change == "window" && !video_has_edit {
+                // With no edit, tkhd declares the complete sample presentation.
+                // shorten_video leaves mdhd/stts and every sample clock intact,
+                // so the shortened header contradicts the unchanged media end.
+                assert_eq!(
+                    verified.unwrap_err().0,
+                    "native-media-duration-mismatch",
+                    "{role}-{change}"
+                );
+                continue;
             }
-            .unwrap();
-            assert!(!report.passed && !report.media_verified, "{role}-{change}");
+            let report = verified.unwrap();
+            assert!(!report.passed, "{role}-{change}");
+            assert!(!report.checks.is_pass(), "{role}-{change}");
             assert_eq!(
-                serde_json::to_value(&report).unwrap()["checks"]["stream_metadata"],
-                "pass"
+                report.checks.stream_metadata,
+                if change == "width" {
+                    CheckOutcome::Fail
+                } else {
+                    CheckOutcome::Pass
+                },
+                "{role}-{change}"
             );
             assert!(report.checks.packet_payloads_equal);
-            assert!(report.checks.decoded_content_equal);
+            assert_eq!(report.required_depth, ValidationDepth::Decoded);
+            assert_eq!(report.scope, VerificationScope::Comparison);
+            assert_eq!(
+                report.decode_evidence,
+                DecodeEvidence::ContentCompared { equal: true }
+            );
+            // Finite presentation timing includes the selected display extent;
+            // matching packet clocks alone cannot authorize a changed width.
             assert!(!report.checks.packet_timing_equal);
+            assert!(!report.license_playback_verified);
         }
         let gain = root.path().join(format!("{role}-gain.mp4"));
         patch_track(baseline, &gain, *b"mvhd", 24, &128_u16.to_be_bytes());
@@ -766,8 +814,9 @@ fn cancellation_of_the_direct_mux_drains_its_descendant_before_returning() {
     let worker = std::thread::spawn(move || {
         let events = Arc::new(Collector::default());
         let runner = Arc::new(ToolRunner::new(Arc::new(Secrets::new()), events.clone()));
-        let c =
-            Converter::new(runner, "unused-packager", tool.to_str().unwrap()).with_stop(child_stop);
+        let c = Converter::new(runner, "unused-packager", tool.to_str().unwrap())
+            .with_decode(true)
+            .with_stop(child_stop);
         let result = convert(&c, &worker_source, &worker_output, &complete_keys());
         (result, events.records())
     });

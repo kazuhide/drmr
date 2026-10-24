@@ -38,7 +38,11 @@ fn cli(arguments: &[&str], secrets: &[&str]) -> Value {
             command.env_remove(name);
         }
     }
-    let result = command.args(arguments).output().unwrap();
+    let result = command
+        .args(arguments)
+        .args(decode_option(arguments))
+        .output()
+        .unwrap();
     for bytes in [&result.stdout, &result.stderr] {
         let text = String::from_utf8_lossy(bytes);
         for secret in secrets {
@@ -328,14 +332,13 @@ fn assert_drm(output: &Path, origin: u64, pr: &drmr_core::playready::PlayReadyOb
 
 fn assert_verification(report: &Value) {
     assert_eq!(report["passed"], true);
-    assert_eq!(report["media_verified"], true);
+    assert_eq!(
+        report["decode_evidence"],
+        serde_json::json!({"status":"content-compared","equal":true})
+    );
     assert_eq!(report["license_playback_verified"], false);
     assert_eq!(report["checks"]["stream_metadata"], "pass");
-    for check in [
-        "packet_payloads_equal",
-        "packet_timing_equal",
-        "decoded_content_equal",
-    ] {
+    for check in ["packet_payloads_equal", "packet_timing_equal"] {
         assert_eq!(report["checks"][check], true);
     }
     let lint = &report["native_manifest"];
@@ -375,13 +378,17 @@ fn analyze(input: &Path, secrets: &[&str]) {
     assert_eq!(analyzed["input_admitted"], true);
     assert_eq!(analyzed["actual_format"], "hls-ts");
     assert_eq!(analyzed["track_protection"], json!(["clear"]));
-    assert_eq!(analyzed["input_checks"]["stream_metadata"], "pass");
-    for check in [
-        "packet_payloads_equal",
-        "packet_timing_equal",
-        "decoded_content_equal",
-    ] {
-        assert_eq!(analyzed["input_checks"][check], true);
+    assert_eq!(
+        analyzed["verification"]["decode_evidence"]["status"],
+        "source-decoded"
+    );
+    assert_eq!(analyzed["verification"]["required_depth"], "decoded");
+    assert_eq!(
+        analyzed["verification"]["checks"]["stream_metadata"],
+        "pass"
+    );
+    for check in ["packet_payloads_equal", "packet_timing_equal"] {
+        assert_eq!(analyzed["verification"]["checks"][check], true);
     }
 }
 
@@ -408,7 +415,8 @@ fn saved_plan(
         ],
         secrets,
     );
-    assert_eq!(planned["schema_version"], 2);
+    assert_eq!(planned["schema_version"], 4);
+    assert_eq!(planned["required_depth"], "decoded");
     assert_eq!(planned["kind"], "execution-plan");
     assert_eq!(planned["outputs"].as_array().unwrap().len(), 2);
     let plan_before = std::fs::read(plan).unwrap();
@@ -507,4 +515,15 @@ fn partial_aac_tail_saved_bundle_preserves_complete_audio_and_three_drm_declarat
         "fresh_verification":true,"source_and_plan_unchanged":true,
         "operator_settings_absent_from_reports":true,"license_playback_verified":false})
     );
+}
+
+fn decode_option(arguments: &[&str]) -> Option<&'static str> {
+    (matches!(
+        arguments.first().copied(),
+        Some("analyze" | "plan" | "convert" | "verify")
+    ) && !arguments.contains(&"--decode")
+        && !arguments.contains(&"--metadata-only")
+        && !arguments.contains(&"--manifest-only")
+        && (arguments.first().copied() != Some("plan") || arguments.contains(&"--save")))
+    .then_some("--decode")
 }

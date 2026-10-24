@@ -1,6 +1,6 @@
 # Run with Docker
 
-Build a Linux container containing `drmr`, FFmpeg and ffprobe, and Shaka Packager. Rust and the media tools are built inside Docker. The image runs the CLI and its experimental web console.
+Build a Linux container containing `drmr`, FFmpeg and ffprobe, and Shaka Packager. Rust and the media tools are built inside Docker. The image runs the CLI and its experimental web console. Native Rust checks are the default; `--decode` adds complete decoding through the included FFmpeg tools. Conversion uses the selected packaging tools. See [verification depth](verification.md).
 
 Use a running Docker installation with BuildKit and Git. Builds are native for Linux `amd64` (64-bit Intel/AMD) or `arm64`; select Linux containers when using Docker Desktop. The examples use a macOS or Linux shell. The native [Windows guide](windows.md) covers installation without Docker.
 
@@ -97,7 +97,7 @@ Debian package versions and their packaged notices are recorded separately. The 
 
 The [native container workflow](https://github.com/kazuhide/drmr/actions/workflows/container.yml) builds on Linux AMD64 and saves a JSON qualification report with the source revision, image identifier, tool versions, and checks. Test observers run alongside the CLI; they are excluded from the runtime image.
 
-Local native ARM64 qualification with Docker Desktop, FFmpeg 9.0.2, and Shaka Packager 3.8.0 passed these cases:
+The recorded local ARM64 qualification below used complete decoding (now explicitly requested with `--decode`). It does not qualify a new source build or change the experimental interface status. The run used Docker Desktop, FFmpeg 9.0.2, and Shaka Packager 3.8.0 passed these cases:
 
 | Check | Result |
 | --- | --- |

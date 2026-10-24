@@ -4,6 +4,7 @@
 import argparse
 from contextlib import ExitStack
 import hashlib
+import importlib.util
 import http.client
 import http.server
 import json
@@ -22,6 +23,9 @@ import uuid
 
 
 ROOT = Path(__file__).resolve().parents[1]
+EVIDENCE_SPEC = importlib.util.spec_from_file_location("media_evidence", ROOT / "tools/media_evidence.py")
+EVIDENCE = importlib.util.module_from_spec(EVIDENCE_SPEC)
+EVIDENCE_SPEC.loader.exec_module(EVIDENCE)
 FIXTURE = ROOT / "crates/drmr/tests/fixtures/bbb/clip.mp4"
 CLIP_SHA256 = "a0ef6d20f2319c57af35d9c3165e46b669c67b951268cf882dbfff14b5b26e71"
 KEY = "40404040404040404040404040404040"
@@ -56,6 +60,10 @@ def load_json(raw):
 
 
 def require_verification(report):
+    if isinstance(report, dict) and report.get("schema_version") == 2:
+        if EVIDENCE.v2_proof(report, require_decoded=True) is None:
+            raise Refusal("media-proof-invalid")
+        return
     if not isinstance(report, dict):
         raise Refusal("media-proof-invalid")
     checks = report.get("checks")
@@ -387,33 +395,33 @@ def media(image, root):
     for kind in ("dash", "hls"):
         source = f"/input/{kind}/" + ("manifest.mpd" if kind == "dash" else "master.m3u8")
         prepared_sources[kind] = load_json(image.checked([
-            "verify", source, "--source", "/work/video.mp4", "--max-workers", "1", "--json"]))
+            "verify", "--decode", source, "--source", "/work/video.mp4", "--max-workers", "1", "--json"]))
         require_verification(prepared_sources[kind])
         for protection in ("clear", "cbcs"):
             output = f"/work/{kind}-{protection}"
             options = ["--keys-file", "/keys/safe.json"] if protection == "cbcs" else []
-            converted = load_json(image.checked(["convert", source, "--to", protection, "--format", kind,
+            converted = load_json(image.checked(["convert", "--decode", source, "--to", protection, "--format", kind,
                                                  "--output", output, "--max-workers", "1", "--json", *options]))
             require_verification(converted["verification"])
             manifest = output + ("/manifest.mpd" if kind == "dash" else "/master.m3u8")
-            verified = load_json(image.checked(["verify", manifest, "--source", source,
+            verified = load_json(image.checked(["verify", "--decode", manifest, "--source", source,
                                                 "--max-workers", "1", "--json", *options]))
             require_verification(verified)
             rows.append({"input": kind, "output": kind, "protection": protection,
                          "conversion": converted["verification"], "independent_verification": verified})
     audio_converted = load_json(image.checked([
-        "convert", "/input/audio-ts/master.m3u8", "--to", "cbcs", "--format", "hls",
+        "convert", "--decode", "/input/audio-ts/master.m3u8", "--to", "cbcs", "--format", "hls",
         "--output", "/work/audio-ts-cbcs", "--max-workers", "1", "--json",
         "--keys-file", "/keys/safe.json"]))
     require_verification(audio_converted["verification"])
     audio_verified = load_json(image.checked([
-        "verify", "/work/audio-ts-cbcs/master.m3u8", "--source", "/input/audio-ts/master.m3u8",
+        "verify", "--decode", "/work/audio-ts-cbcs/master.m3u8", "--source", "/input/audio-ts/master.m3u8",
         "--max-workers", "1", "--json", "--keys-file", "/keys/safe.json"]))
     require_verification(audio_verified)
-    finite = load_json(image.checked(["convert", "/input/clip.mp4", "--to", "clear", "--format", "mp4",
+    finite = load_json(image.checked(["convert", "--decode", "/input/clip.mp4", "--to", "clear", "--format", "mp4",
                                       "--output", "/work/finite.mp4", "--max-workers", "1", "--json"]))
     require_verification(finite["verification"])
-    finite_verify = load_json(image.checked(["verify", "/work/finite.mp4", "--source", "/input/clip.mp4",
+    finite_verify = load_json(image.checked(["verify", "--decode", "/work/finite.mp4", "--source", "/input/clip.mp4",
                                              "--max-workers", "1", "--json"]))
     require_verification(finite_verify)
     if hashes(root / "input") != before:
@@ -434,7 +442,7 @@ def permissions(image, root):
     unsafe = root / "keys/unsafe.json"
     shutil.copyfile(root / "keys/safe.json", unsafe)
     unsafe.chmod(0o644)
-    arguments = ["convert", "/input/dash/manifest.mpd", "--to", "cbcs", "--format", "dash",
+    arguments = ["convert", "--decode", "/input/dash/manifest.mpd", "--to", "cbcs", "--format", "dash",
                  "--output", "/work/unsafe-key-output", "--keys-file", "/keys/unsafe.json", "--json"]
     status, stdout, stderr = image.invoke(arguments)
     if KEY.encode() in stdout + stderr:
@@ -443,7 +451,7 @@ def permissions(image, root):
     if (root / "work/unsafe-key-output").exists():
         raise Refusal("unsafe-key-output-published")
     unsafe.unlink()
-    arguments = ["convert", "/input/dash/manifest.mpd", "--to", "clear", "--format", "dash",
+    arguments = ["convert", "--decode", "/input/dash/manifest.mpd", "--to", "clear", "--format", "dash",
                  "--output", "/work/readonly-output", "--json"]
     status, stdout, _ = image.invoke(arguments, readonly=True)
     readonly = require_failure(status, stdout, "temporary-workspace-unavailable", 1)
@@ -538,8 +546,8 @@ def resources(image):
             "effective_cpus": cpus if type(cpus) is int and 0 <= cpus <= 100_000 else None,
             "available_memory_bytes": memory if type(memory) is int and 0 <= memory < 2 ** 63 else None})
     status, stdout, stderr = image.invoke([
-        "convert", "/input/dash/manifest.mpd", "--to", "clear", "--format", "dash",
-        "--output", "/work/resource-limited", "--progress", "json"], limited=True)
+        "convert", "--decode", "/input/dash/manifest.mpd", "--to", "clear", "--format", "dash",
+        "--output", "/work/resource-limited", "--progress", "json", "--json"], limited=True)
     failure = {"exit_code": status if type(status) is int and -(2 ** 31) <= status < 2 ** 32 else None,
                "stdout_sha256": hashlib.sha256(stdout).hexdigest(),
                "stderr_sha256": hashlib.sha256(stderr).hexdigest()}
@@ -549,10 +557,24 @@ def resources(image):
         workers = resource_workers(stderr)
     except Refusal as error:
         raise Refusal(str(error), failure) from None
-    if b"Verified stream metadata, packet payloads, decoded content, and packet timing." not in stdout:
+    try:
+        converted = load_json(stdout)
+    except Refusal:
+        raise Refusal("container-resource-cli-failed", failure) from None
+    fields = {"schema_version", "input", "output", "verification"}
+    proof_fields = {"schema_version", "required_depth", "scope", "passed", "checks", "decode_evidence",
+                    "license_playback_verified", "native_manifest"}
+    conversion_proof = converted.get("verification") if isinstance(converted, dict) else None
+    if (not isinstance(converted, dict) or not fields.issubset(converted)
+            or set(converted) - fields - {"processing"}
+            or type(converted["schema_version"]) is not int or converted["schema_version"] != 2
+            or not isinstance(converted["input"], dict) or not isinstance(converted["output"], dict)
+            or not isinstance(conversion_proof, dict) or set(conversion_proof) != proof_fields
+            or EVIDENCE.v2_proof(conversion_proof, require_decoded=True) is None
+            or conversion_proof["native_manifest"]["profile"] != "dash-static-manifest"):
         raise Refusal("container-resource-cli-failed", failure)
     verified = load_json(image.checked([
-        "verify", "/work/resource-limited/manifest.mpd", "--source", "/input/dash/manifest.mpd", "--json"], limited=True))
+        "verify", "--decode", "/work/resource-limited/manifest.mpd", "--source", "/input/dash/manifest.mpd", "--json"], limited=True))
     require_verification(verified)
     return {"limits": {"memory_bytes": 1024 ** 3, "cpus": 2},
             "separate_native_hardware_observation": observed,
@@ -620,7 +642,7 @@ def submit_web_analysis(port, server, policy, url):
     status, content = http_request(port, "POST", "/api/common/jobs", {
         "schema_version": 1, "server_id": server, "session_id": session["session_id"],
         "request_id": request, "operation": {"kind": "analyze"},
-        "runtime": {"keys_ref": None, "max_workers": 1}})
+        "runtime": {"decode": True,"keys_ref": None, "max_workers": 1}})
     job = load_json(content)
     if (status != 202 or not isinstance(job, dict) or job.get("schema_version") != 1
             or job.get("server_id") != server

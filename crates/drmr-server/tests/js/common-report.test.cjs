@@ -11,6 +11,48 @@ function load() {
 }
 const checks = () => ({ stream_metadata: 'pass', packet_payloads_equal: true, packet_timing_equal: true, decoded_content_equal: true });
 const verification = extra => ({ schema_version: 1, passed: true, media_verified: true, checks: checks(), license_playback_verified: false, ...extra });
+const nativeVerification = extra => ({ schema_version: 2, required_depth: 'native', scope: 'comparison', passed: true, checks: { stream_metadata: 'pass', packet_payloads_equal: true, packet_timing_equal: true }, decode_evidence: { status: 'not-checked', reason: 'not-requested' }, license_playback_verified: false, ...extra });
+test('native evidence never pretends to establish decoded equality', () => {
+  const r = load();
+  assert.equal(r.verificationPassed(nativeVerification()), true);
+  assert.equal(r.verificationPassed(nativeVerification({ required_depth: 'decoded' })), false);
+  assert.equal(r.verificationPassed(nativeVerification({ failure: 'child-check-failed' })), false);
+  assert.equal(r.verificationPassed(nativeVerification({ decode_evidence: { status: 'content-compared', equal: false } })), false);
+  assert.equal(r.verificationPassed(nativeVerification({ decode_evidence: { status: 'source-decoded' } })), false);
+  assert.equal(r.verificationPassed(nativeVerification({ required_depth: 'decoded', decode_evidence: { status: 'content-compared', equal: true } })), true);
+  assert.equal(r.verificationPassed(nativeVerification({ required_depth: 'decoded', scope: 'source-admission', decode_evidence: { status: 'source-decoded' } })), true);
+});
+test('current reports and plans reach the overall evidence predicate with their actual scope', () => {
+  const r = load();
+  for (const schema of [1, 2, 3, 4]) {
+    const report = { schema_version: schema, plan_id: 'a'.repeat(64) };
+    if (schema >= 3) report.required_depth = 'native';
+    assert.equal(r.evidencePassed({ report_kind: 'plan', report }), true);
+    report.required_depth = schema >= 3 ? 'unknown' : 'native';
+    assert.equal(r.evidencePassed({ report_kind: 'plan', report }), false);
+  }
+  const source = nativeVerification({ scope: 'source-admission' });
+  const analysis = { report_kind: 'analysis', report: { schema_version: 2, input_admitted: true, verification: source } };
+  assert.equal(r.evidencePassed(analysis), true);
+  source.scope = 'comparison';
+  assert.equal(r.evidencePassed(analysis), false);
+  const child = { id: 'clear', output_matches_plan: true, verification: nativeVerification(), signaling: { systems: [], verified: false }, conformance: null };
+  const bundle = { report_kind: 'verification', report: { schema_version: 2, passed: true, source_unchanged: true, outputs: [child] } };
+  assert.equal(r.evidencePassed(bundle), true);
+  child.verification = verification();
+  assert.equal(r.evidencePassed(bundle), false);
+  child.verification = nativeVerification({ checks: { stream_metadata: 'pass', packet_payloads_equal: true, packet_timing_equal: false } });
+  assert.equal(r.evidencePassed(bundle), false);
+  const conversion = { report_kind: 'conversion', report: { schema_version: 2, verification: nativeVerification() } };
+  assert.equal(r.evidencePassed(conversion), true);
+  conversion.report.status = 'failed';
+  assert.equal(r.evidencePassed(conversion), false);
+  delete conversion.report.status;
+  conversion.report.verification.failure = 'child-check-failed';
+  assert.equal(r.evidencePassed(conversion), false);
+  delete conversion.report.verification;
+  assert.equal(r.evidencePassed(conversion), false);
+});
 test('media, timing and payload evidence are required independently', () => {
   const r = load();
   assert.equal(r.verificationPassed(verification()), true);
@@ -46,6 +88,62 @@ test('unrequested DRM signaling and external checks do not create pass evidence'
   assert.equal(r.conformanceState({ passed: true, checks: [] }), 'incomplete');
 });
 
+const nativeFailureCodes = [
+  "invalid-avc-syntax",
+  "native-aac-clock-mismatch",
+  "native-aac-config-invalid",
+  "native-aac-config-not-supported",
+  "native-avc-access-unit-size-limit",
+  "native-avc-sync-sample-mismatch",
+  "native-cipher-counter-overflow",
+  "native-codec-configuration-not-supported",
+  "native-codec-profile-not-supported",
+  "native-media-clock-overflow",
+  "native-mp4-invalid",
+  "native-mp4-profile-not-supported",
+  "native-presentation-metadata-invalid",
+  "native-presentation-window-not-supported",
+  "native-sample-evidence-incomplete",
+  "native-sample-evidence-invalid",
+  "native-sample-protection-mismatch",
+  "native-source-changed",
+  "native-track-changed",
+  "native-video-dimensions-mismatch",
+  "presentation-window-outside-media",
+  "ts-aac-mp4-invalid",
+  "ts-aac-mp4-write-failed",
+  "ts-avc-picture-duration-not-supported",
+  "ts-avc-separate-colour-plane-not-supported",
+  "ts-avc-slice-groups-not-supported",
+  "ts-avc-slice-order-not-supported",
+  "ts-segment-evidence-incomplete",
+  "ts-segment-evidence-limit",
+  "ts-segment-evidence-missing",
+  "ts-segment-evidence-unfinished",
+  "ts-video-duration-clock-required",
+  "ts-video-reorder-limit",
+  "verification-native-evidence-required"
+]
+;
+test('native refusal codes stay closed and visible across Rust and JavaScript', () => {
+  const r = load();
+  const rust = fs.readFileSync(path.join(__dirname, '../../src/common/projection.rs'), 'utf8');
+  const allowed = new Set(rust.split('const FAILURE_CODES: &[&str] = &[', 2)[1].split('];', 1)[0].match(/"[a-z0-9-]+"/g).map(value => JSON.parse(value)));
+  for (const code of nativeFailureCodes) {
+    assert.match(code, /^[a-z0-9][a-z0-9-]{0,127}$/);
+    assert.ok(allowed.has(code), code);
+    assert.equal(r.errorInfo({ code, hint: 'PRIVATE_NATIVE_DETAIL' }).code, code);
+    const text = renderResult({ report_kind: 'failure', operation: 'analyze', report: {
+      schema_version: 1, status: 'failed', error: { code, hint: 'PRIVATE_NATIVE_DETAIL', last_activity: 'verification' }
+    } });
+    assert.ok(text.includes(code), code);
+    assert.ok(!text.includes('PRIVATE_NATIVE_DETAIL'));
+  }
+  for (const code of ['native-private-sentinel', 'ts-private-sentinel', 'observer-stopped', 'native-source-changed/private', 'x'.repeat(129)]) {
+    assert.equal(r.errorInfo({ code, hint: 'PRIVATE_NATIVE_DETAIL' }).code, null);
+  }
+});
+
 test('known failure codes have focused guidance without exposing arbitrary server text', () => {
   const r = load();
   assert.equal(r.errorInfo({ code: 'execution-plan-source-changed', hint: 'secret' }).key, 'commonSourceChanged');
@@ -73,6 +171,15 @@ function renderer() {
 function renderResult(report) {
   const r = renderer(); r.render(report); return r.text();
 }
+test('the rendered decode badge states not checked rather than pass or failure', () => {
+  const r = renderer();
+  r.render({ report_kind: 'conversion', operation: 'convert', report: { schema_version: 2, verification: nativeVerification() } });
+  const decode = r.all(r.host).find(node => node.attrs && node.attrs.get('data-common-check') === 'decode_evidence');
+  assert.ok(decode);
+  assert.equal(decode.attrs.get('data-common-state'), 'not-checked');
+  assert.match(r.text(), /commonNotChecked/);
+  assert.doesNotMatch(r.text(), /commonMediaVerified/);
+});
 test('a media-tool failure retains its safe code without exposing private tool output', () => {
   const text = renderResult({ report_kind: 'failure', operation: 'verify', report: {
     schema_version: 1, status: 'failed', error: { code: 'media-tool-failed', hint: 'PRIVATE_TOOL_OUTPUT', last_activity: 'verification' },

@@ -36,6 +36,7 @@ fn converter() -> Converter {
         "packager",
         "ffmpeg",
     )
+    .with_decode(true)
 }
 
 fn transport(source: &Path) -> PathBuf {
@@ -173,7 +174,12 @@ fn sample_and_transport_encrypted_outputs_publish_and_verify_as_one_bundle() {
     for (result, intent) in converted.outputs.iter().zip(&outputs) {
         assert_eq!(result.id, intent.id);
         assert!(
-            result.conversion.verification.passed && result.conversion.verification.media_verified
+            result.conversion.verification.passed
+                && (result.conversion.verification.checks.is_pass()
+                    && result.conversion.verification.decode_evidence.satisfies(
+                        drmr_core::conversion::ValidationDepth::Decoded,
+                        result.conversion.verification.scope
+                    ))
         );
         assert_eq!(result.signaling.systems, intent.drms);
         assert_eq!(result.signaling.verified, !intent.drms.is_empty());
@@ -183,7 +189,11 @@ fn sample_and_transport_encrypted_outputs_publish_and_verify_as_one_bundle() {
         assert!(
             result.output_matches_plan
                 && result.verification.passed
-                && result.verification.media_verified
+                && (result.verification.checks.is_pass()
+                    && result.verification.decode_evidence.satisfies(
+                        drmr_core::conversion::ValidationDepth::Decoded,
+                        result.verification.scope
+                    ))
         );
         assert!(!result.verification.license_playback_verified);
     }
@@ -215,12 +225,30 @@ fn single_transport_plan(id: &str, target: TargetProtection) {
     let saved = root.path().join("single.plan.json");
     plan::write_new(&saved, &plan).unwrap();
     let loaded = plan::read(&saved).unwrap();
-    assert_eq!(loaded.schema_version, 1);
+    assert_eq!(loaded.schema_version, 3);
+    assert_eq!(
+        loaded.minimum_depth(),
+        drmr_core::conversion::ValidationDepth::Decoded
+    );
     let converted = converter().execute_plan(&loaded, &keys).unwrap();
-    assert!(converted.verification.passed && converted.verification.media_verified);
+    assert!(
+        converted.verification.passed
+            && (converted.verification.checks.is_pass()
+                && converted.verification.decode_evidence.satisfies(
+                    drmr_core::conversion::ValidationDepth::Decoded,
+                    converted.verification.scope
+                ))
+    );
     let checked = converter().verify_plan(&loaded, &keys).unwrap();
     assert!(checked.source_unchanged && checked.output_matches_plan);
-    assert!(checked.verification.passed && checked.verification.media_verified);
+    assert!(
+        checked.verification.passed
+            && (checked.verification.checks.is_pass()
+                && checked.verification.decode_evidence.satisfies(
+                    drmr_core::conversion::ValidationDepth::Decoded,
+                    checked.verification.scope
+                ))
+    );
     assert!(!checked.verification.license_playback_verified);
     assert_eq!(common::snapshot_tree(&source), original);
 }

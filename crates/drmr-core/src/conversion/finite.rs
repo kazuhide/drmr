@@ -456,13 +456,14 @@ impl super::Converter {
         }
         self.publish(&stage, &candidate, output)?;
         Ok(super::ConversionReport {
-            schema_version: 1,
+            schema_version: 2,
             input: input.clone(),
             output: actual,
             verification,
-            processing: Some(crate::inspection::ActualProcessing::new(
+            processing: Some(self.backend.processing(
                 crate::inspection::ProcessingRouteId::FragmentedMp4,
                 crate::inspection::InputPreparation::CompleteFile,
+                input.protection != crate::inspection::Protection::Clear,
             )),
         })
     }

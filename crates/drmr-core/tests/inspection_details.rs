@@ -215,9 +215,22 @@ fn finite_candidates_show_tool_requirements_without_claiming_selection() {
         .find(|c| c["route"] == "progressive-mp4")
         .unwrap();
     assert_eq!(progressive["revalidation_required"], true);
-    assert_eq!(
-        progressive["required_tools"],
-        serde_json::json!(["ffmpeg", "ffprobe"])
+    assert_eq!(progressive["required_tools"], serde_json::json!([]));
+    assert!(
+        progressive["condition_codes"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!(
+                "encrypted-finite-progressive-source-copy-requires-ffmpeg"
+            ))
+    );
+    assert!(
+        progressive["condition_codes"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!(
+                "additional-complete-decoding-requires-ffmpeg-and-ffprobe"
+            ))
     );
     assert_eq!(plan["input"]["media_verified"], false);
 }
@@ -264,8 +277,9 @@ fn hls_candidates_leave_actual_media_format_and_tool_availability_unresolved() {
     );
     assert!(candidates.iter().any(|item| item["route"] == "mpeg-ts-hls"));
     assert!(
-        candidates.iter().all(|item| item["required_tools"]
-            == serde_json::json!(["ffmpeg", "ffprobe", "shaka-packager"]))
+        candidates
+            .iter()
+            .all(|item| item["required_tools"] == serde_json::json!(["shaka-packager"]))
     );
     value.as_object_mut().unwrap().remove("processing");
     value["input"].as_object_mut().unwrap().remove("details");

@@ -25,7 +25,8 @@ pub(super) fn fmp4_hls_audio_row(
         )),
         "packager",
         "ffmpeg",
-    );
+    )
+    .with_decode(true);
     let before = common::snapshot_tree(source.parent().unwrap());
     let output_kid = "909192939495969798999a9b9c9d9e9f";
     for target in [
@@ -323,13 +324,24 @@ fn refused(
 ) {
     match result {
         Ok(report) => {
-            assert_eq!(report.schema_version, 1);
-            assert!(!report.passed && !report.media_verified && !report.license_playback_verified);
+            assert_eq!(report.schema_version, 2);
+            assert!(!report.passed);
+            assert!(
+                !report.checks.is_pass()
+                    || !report.decode_evidence.satisfies(
+                        drmr_core::conversion::ValidationDepth::Decoded,
+                        report.scope
+                    )
+            );
+            assert!(!report.license_playback_verified);
             assert!(
                 !report.checks.stream_metadata.is_pass()
                     || !report.checks.packet_payloads_equal
                     || !report.checks.packet_timing_equal
-                    || !report.checks.decoded_content_equal
+                    || matches!(
+                        report.decode_evidence,
+                        drmr_core::conversion::DecodeEvidence::ContentCompared { equal: false }
+                    )
             );
         }
         Err(error) => expected_error(error, expected),
@@ -343,6 +355,7 @@ fn audio_fmp4_hls_negative_oracle_rejects_operational_and_unknown_failures() {
         "manifest-segment-duration-mismatch",
         "hls-complete-vod-required",
         "ts-original-access-unit-count-mismatch",
+        "native-media-duration-mismatch",
         "fragment-timeline-gap-or-overlap",
         "media-tool-failed",
         "invalid-encrypted-segment",
@@ -440,7 +453,8 @@ fn audio_fmp4_hls_rejects_changed_duration_end_resources_payload_and_decode_cloc
         ),
         (
             "missing-segment",
-            "ts-original-access-unit-count-mismatch",
+            // The remaining fragments no longer satisfy the init's declared duration.
+            "native-media-duration-mismatch",
             missing.join("\n") + "\n",
         ),
         (

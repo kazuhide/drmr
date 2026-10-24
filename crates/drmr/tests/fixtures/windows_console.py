@@ -182,7 +182,7 @@ def run(args):
         invocation += [str(args.clip), "--to", "clear", "--format", "dash", "--output", str(output)]
     else:
         invocation += [str(args.clip), "--source", str(args.clip)]
-    invocation += ["--json", "--max-workers", "1"]
+    invocation += ["--decode", "--json", "--max-workers", "1"]
     # The console is already isolated and Ctrl+C processing enabled before child
     # birth. The later ignore attribute cannot affect the already-running CLI.
     flags = 0 if args.event == "ctrl-c" else CREATE_NEW_PROCESS_GROUP

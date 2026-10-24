@@ -17,7 +17,7 @@ fn nearest(numerator: i128, denominator: i128) -> Result<i128, ConversionError> 
 /// Advance one decoded AAC frame using the absolute rational clock phase.
 /// This is the integer rounding rule used by `FFprobe`'s stable audio clock;
 /// repeatedly adding the truncated packet duration would accumulate drift.
-pub(super) fn next(ticks: i64, sample_rate: u32) -> Result<i64, ConversionError> {
+pub(in crate::conversion) fn next(ticks: i64, sample_rate: u32) -> Result<i64, ConversionError> {
     if ticks < 0 || !matches!(sample_rate, 44_100 | 48_000) {
         return Err(BAD);
     }
@@ -51,6 +51,7 @@ struct Phase {
 
 /// Source admission only. Exact frame clocks are hashed separately and must
 /// match conversion results; this interval is never an output-equality tolerance.
+#[derive(Clone)]
 pub(super) struct Audio {
     sample_rate: u32,
     frames: u64,
@@ -128,6 +129,120 @@ impl Audio {
     }
 }
 
+/// A single codec clock phase covers every decode and presentation timestamp.
+/// Reordering retains at most a bounded decoder window; no full-track PTS list
+/// is needed. Exact timestamp equality is still hashed independently.
+#[derive(Clone)]
+pub(super) struct Video {
+    numerator: i128,
+    denominator: i128,
+    frames: u64,
+    first_dts: Option<i64>,
+    phase: Option<Phase>,
+    pending: std::collections::BTreeMap<u64, i64>,
+    next_presentation: Option<u64>,
+    presented: u64,
+}
+impl Video {
+    pub(super) fn new(clock: super::avc::VideoClock) -> Result<Self, ConversionError> {
+        let numerator = i128::from(clock.num_units_in_tick)
+            .checked_mul(180_000)
+            .ok_or(BAD)?;
+        let denominator = i128::from(clock.time_scale);
+        if numerator == 0 || denominator == 0 || numerator / denominator < 2 {
+            return Err(BAD);
+        }
+        Ok(Self {
+            numerator,
+            denominator,
+            frames: 0,
+            first_dts: None,
+            phase: None,
+            pending: std::collections::BTreeMap::new(),
+            next_presentation: None,
+            presented: 0,
+        })
+    }
+    pub(super) fn frame(&mut self, pts: i64, dts: i64) -> Result<(), ConversionError> {
+        if dts < 0 || pts < dts {
+            return Err(BAD);
+        }
+        let first = *self.first_dts.get_or_insert(dts);
+        let offset = i128::from(pts).checked_sub(i128::from(first)).ok_or(BAD)?;
+        let slot = nearest(
+            offset.checked_mul(self.denominator).ok_or(BAD)?,
+            self.numerator,
+        )?;
+        let slot = u64::try_from(slot).map_err(|_| BAD)?;
+        self.observe(dts, self.frames)?;
+        self.observe(pts, slot)?;
+        if self.next_presentation.is_some_and(|next| slot < next)
+            || self.pending.insert(slot, pts).is_some()
+        {
+            return Err(BAD);
+        }
+        self.frames = self.frames.checked_add(1).ok_or(BAD)?;
+        self.flush(Some(dts))?;
+        if self.pending.len() > 1024 {
+            return Err(ConversionError("ts-video-reorder-limit"));
+        }
+        Ok(())
+    }
+    fn observe(&mut self, ticks: i64, ordinal: u64) -> Result<(), ConversionError> {
+        let offset = i128::from(ticks)
+            .checked_mul(self.denominator)
+            .and_then(|n| n.checked_sub(i128::from(ordinal).checked_mul(self.numerator)?))
+            .and_then(|n| n.checked_mul(2))
+            .ok_or(BAD)?;
+        // Half-open nearest-integer intervals preserve tie direction without
+        // admitting accumulated drift or using an output-equality tolerance.
+        let observed = Phase {
+            low: offset.checked_sub(self.denominator).ok_or(BAD)?,
+            high: offset.checked_add(self.denominator).ok_or(BAD)?,
+        };
+        let intersection = self.phase.map_or(observed, |old| Phase {
+            low: old.low.max(observed.low),
+            high: old.high.min(observed.high),
+        });
+        if intersection.low >= intersection.high {
+            return Err(BAD);
+        }
+        self.phase = Some(intersection);
+        Ok(())
+    }
+    fn flush(&mut self, before: Option<i64>) -> Result<(), ConversionError> {
+        while let Some((&slot, &pts)) = self.pending.first_key_value() {
+            if before.is_some_and(|limit| pts >= limit) {
+                break;
+            }
+            if self.next_presentation.is_some_and(|next| slot != next) {
+                return Err(BAD);
+            }
+            self.next_presentation = Some(slot.checked_add(1).ok_or(BAD)?);
+            self.presented = self.presented.checked_add(1).ok_or(BAD)?;
+            self.pending.remove(&slot);
+        }
+        Ok(())
+    }
+    pub(super) fn finish(&self) -> Result<(), ConversionError> {
+        if self.frames == 0 {
+            return Err(BAD);
+        }
+        let mut completed = self.clone();
+        completed.flush(None)?;
+        if completed.presented != self.frames {
+            return Err(BAD);
+        }
+        Ok(())
+    }
+    /// Nominal packet duration follows the explicit codec clock. A VUI that
+    /// does not assert fixed rate also requires original manifest duration
+    /// evidence; the caller must not treat this candidate as that evidence.
+    pub(super) fn nominal_duration(&self) -> Result<i64, ConversionError> {
+        i64::try_from(self.numerator / self.denominator).map_err(|_| BAD)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,5 +296,50 @@ mod tests {
         assert!(clock.begin(91_919, 91_920).is_err());
         assert!(clock.begin(91_920, 91_921).is_err());
         clock.begin(91_920, 91_920).unwrap();
+    }
+
+    fn video_clock(units: u32, scale: u32) -> super::super::avc::VideoClock {
+        super::super::avc::VideoClock {
+            num_units_in_tick: units,
+            time_scale: scale,
+            fixed_frame_rate: false,
+            pic_struct_present: false,
+        }
+    }
+    #[test]
+    fn bframe_presentation_order_is_complete_even_when_the_first_pts_is_not_minimal() {
+        let mut video = Video::new(video_clock(1, 48)).unwrap();
+        for (index, pts) in [97_500, 90_000, 93_750, 101_250].into_iter().enumerate() {
+            video
+                .frame(pts, 82_500 + i64::try_from(index).unwrap() * 3750)
+                .unwrap();
+        }
+        video.finish().unwrap();
+        assert_eq!(video.nominal_duration().unwrap(), 3750);
+        let mut video = Video::new(video_clock(1, 48)).unwrap();
+        for (index, pts) in [90_000, 101_250, 93_750, 93_750].into_iter().enumerate() {
+            if video
+                .frame(pts, 82_500 + i64::try_from(index).unwrap() * 3750)
+                .is_err()
+            {
+                return;
+            }
+        }
+        assert!(video.finish().is_err());
+    }
+    #[test]
+    fn video_uses_one_rational_phase_without_a_terminal_dts_guess() {
+        let mut video = Video::new(video_clock(1001, 120_000)).unwrap();
+        for index in 0..50_i64 {
+            let ticks = 90_000 + (index * 3003 + 1) / 2;
+            video.frame(ticks, ticks).unwrap();
+        }
+        video.finish().unwrap();
+        assert_eq!(video.nominal_duration().unwrap(), 1501);
+        let mut video = Video::new(video_clock(1, 48)).unwrap();
+        video.frame(90_000, 90_000).unwrap();
+        assert!(video.frame(93_751, 93_750).is_err());
+        assert!(Video::new(video_clock(0, 48)).is_err());
+        assert!(Video::new(video_clock(1, 0)).is_err());
     }
 }

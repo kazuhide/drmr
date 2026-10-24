@@ -45,9 +45,15 @@ fn declared_ts_protection_offers_dash_with_original_clock_revalidation() {
             assert!(candidate.revalidation_required);
             assert_eq!(
                 candidate.condition_codes,
-                ["local-transport-stream-profile-and-absolute-timeline-must-pass"]
+                [
+                    "local-transport-stream-profile-and-absolute-timeline-must-pass",
+                    "additional-complete-decoding-requires-ffmpeg-and-ffprobe"
+                ]
             );
-            assert_eq!(candidate.required_tools.len(), 3);
+            assert_eq!(
+                candidate.required_tools,
+                [inspection::RequiredTool::ShakaPackager]
+            );
         }
     }
     assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);

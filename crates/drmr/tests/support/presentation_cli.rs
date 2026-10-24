@@ -23,6 +23,7 @@ pub(super) fn fixture(name: &str) -> PathBuf {
 fn cli(arguments: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_drmr"))
         .args(arguments)
+        .args(decode_option(arguments))
         .output()
         .unwrap()
 }
@@ -48,14 +49,14 @@ fn checked(result: &Output, operation: &str) -> Value {
 
 fn assert_verified(report: &Value) {
     assert_eq!(report["passed"], true, "{report}");
-    assert_eq!(report["media_verified"], true, "{report}");
+    assert_eq!(
+        report["decode_evidence"],
+        serde_json::json!({"status":"content-compared","equal":true}),
+        "{report}"
+    );
     assert_eq!(report["license_playback_verified"], false);
     assert_eq!(report["checks"]["stream_metadata"], "pass");
-    for check in [
-        "packet_payloads_equal",
-        "packet_timing_equal",
-        "decoded_content_equal",
-    ] {
+    for check in ["packet_payloads_equal", "packet_timing_equal"] {
         assert_eq!(report["checks"][check], true, "{report}");
     }
 }
@@ -162,4 +163,15 @@ pub(super) fn convert_and_verify(
         &format!("{format}/{target} fresh verification"),
     ));
     report
+}
+
+fn decode_option(arguments: &[&str]) -> Option<&'static str> {
+    (matches!(
+        arguments.first().copied(),
+        Some("analyze" | "plan" | "convert" | "verify")
+    ) && !arguments.contains(&"--decode")
+        && !arguments.contains(&"--metadata-only")
+        && !arguments.contains(&"--manifest-only")
+        && (arguments.first().copied() != Some("plan") || arguments.contains(&"--save")))
+    .then_some("--decode")
 }

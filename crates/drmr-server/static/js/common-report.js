@@ -5,6 +5,16 @@
   function checksPassed(checks) {
     return !!checks && checks.stream_metadata === 'pass' && checks.packet_payloads_equal === true && checks.packet_timing_equal === true && checks.decoded_content_equal === true;
   }
+  function nativeChecksPassed(checks) {
+    return !!checks && checks.stream_metadata === 'pass' && checks.packet_payloads_equal === true && checks.packet_timing_equal === true;
+  }
+  function decodeSatisfied(report) {
+    var evidence = report && report.decode_evidence;
+    if (!evidence || ['native', 'decoded'].indexOf(report.required_depth) === -1 || ['source-admission', 'comparison'].indexOf(report.scope) === -1) return false;
+    if (evidence.status === 'not-checked') return evidence.reason === 'not-requested' && report.required_depth === 'native';
+    if (evidence.status === 'source-decoded') return report.scope === 'source-admission';
+    return evidence.status === 'content-compared' && report.scope === 'comparison' && evidence.equal === true;
+  }
   function nativeState(report) {
     if (!report) return 'not-checked';
     if (Number.isSafeInteger(report.errors) && report.errors > 0) return 'fail';
@@ -12,6 +22,7 @@
     return report.warnings > 0 ? 'warning' : 'pass';
   }
   function verificationPassed(report) {
+    if (report && report.schema_version === 2) return report.passed === true && report.failure == null && report.license_playback_verified === false && nativeChecksPassed(report.checks) && decodeSatisfied(report) && (!report.native_manifest || nativeState(report.native_manifest) === 'pass' || nativeState(report.native_manifest) === 'warning');
     return !!report && report.schema_version === 1 && report.passed === true && report.media_verified === true && report.license_playback_verified === false && checksPassed(report.checks) && (!report.native_manifest || nativeState(report.native_manifest) === 'pass' || nativeState(report.native_manifest) === 'warning');
   }
   function signalingState(report) {
@@ -24,26 +35,66 @@
     if (!report || !Array.isArray(report.checks) || !report.checks.length) return 'incomplete';
     return report.passed === true && report.checks.every(function (check) { return check.passed === true; }) ? 'pass' : 'fail';
   }
-  function outputPassed(output, verify, bundle) {
+  function outputPassed(output, verify, bundle, version) {
     var conversion = output && (output.conversion || output);
-    return !!output && (!bundle || Object.prototype.hasOwnProperty.call(output, 'signaling') && Object.prototype.hasOwnProperty.call(output, 'conformance')) && (!verify || output.output_matches_plan === true) && verificationPassed(conversion.verification) && (!Object.prototype.hasOwnProperty.call(output, 'signaling') || signalingState(output.signaling) === 'pass' || signalingState(output.signaling) === 'not-requested') && (!Object.prototype.hasOwnProperty.call(output, 'conformance') || conformanceState(output.conformance) === 'pass' || conformanceState(output.conformance) === 'not-requested');
+    return !!output && (!bundle || Object.prototype.hasOwnProperty.call(output, 'signaling') && Object.prototype.hasOwnProperty.call(output, 'conformance')) && (!verify || output.output_matches_plan === true) && !!conversion.verification && conversion.verification.schema_version === version && (version !== 2 || conversion.verification.scope === 'comparison') && verificationPassed(conversion.verification) && (!Object.prototype.hasOwnProperty.call(output, 'signaling') || signalingState(output.signaling) === 'pass' || signalingState(output.signaling) === 'not-requested') && (!Object.prototype.hasOwnProperty.call(output, 'conformance') || conformanceState(output.conformance) === 'pass' || conformanceState(output.conformance) === 'not-requested');
   }
   function evidencePassed(envelope) {
     if (!envelope || !envelope.report) return false;
     var report = envelope.report;
-    if (envelope.report_kind === 'plan') return (report.schema_version === 1 || report.schema_version === 2) && typeof report.plan_id === 'string' && /^[a-f0-9]{64}$/.test(report.plan_id);
-    if (report.schema_version !== 1) return false;
-    if (envelope.report_kind === 'analysis') return report.input_admitted === true && checksPassed(report.input_checks);
+    if (report.error || report.status === 'failed' || report.status === 'cancelled') return false;
+    if (envelope.report_kind === 'plan') {
+      var legacy = (report.schema_version === 1 || report.schema_version === 2) && !Object.prototype.hasOwnProperty.call(report, 'required_depth');
+      var current = (report.schema_version === 3 || report.schema_version === 4) && ['native', 'decoded'].indexOf(report.required_depth) !== -1;
+      return (legacy || current) && typeof report.plan_id === 'string' && /^[a-f0-9]{64}$/.test(report.plan_id);
+    }
+    if (report.schema_version !== 1 && report.schema_version !== 2) return false;
+    if (envelope.report_kind === 'analysis') return report.input_admitted === true && (report.schema_version === 2 ? !!report.verification && report.verification.scope === 'source-admission' && verificationPassed(report.verification) : checksPassed(report.input_checks));
     if (envelope.report_kind === 'conversion') {
-      return Array.isArray(report.outputs) ? report.outputs.length > 0 && report.outputs.length <= 8 && report.outputs.every(function (output) { return outputPassed(output, false, true); }) : outputPassed(report, false);
+      return Array.isArray(report.outputs) ? report.outputs.length > 0 && report.outputs.length <= 8 && report.outputs.every(function (output) { return outputPassed(output, false, true, report.schema_version); }) : outputPassed(report, false, false, report.schema_version);
     }
     if (envelope.report_kind === 'verification') {
       if (report.source_unchanged !== true) return false;
-      return Array.isArray(report.outputs) ? report.passed === true && report.outputs.length > 0 && report.outputs.length <= 8 && report.outputs.every(function (output) { return outputPassed(output, true, true); }) : outputPassed(report, true);
+      return Array.isArray(report.outputs) ? report.passed === true && report.outputs.length > 0 && report.outputs.length <= 8 && report.outputs.every(function (output) { return outputPassed(output, true, true, report.schema_version); }) : outputPassed(report, true, false, report.schema_version);
     }
     return false;
   }
   var ERROR_KEYS = {
+    "invalid-avc-syntax": "commonVerificationFailed",
+    "native-aac-clock-mismatch": "commonVerificationFailed",
+    "native-aac-config-invalid": "commonVerificationFailed",
+    "native-aac-config-not-supported": "commonUnsupported",
+    "native-avc-access-unit-size-limit": "commonResourceBudget",
+    "native-avc-sync-sample-mismatch": "commonVerificationFailed",
+    "native-cipher-counter-overflow": "commonVerificationFailed",
+    "native-codec-configuration-not-supported": "commonUnsupported",
+    "native-codec-profile-not-supported": "commonUnsupported",
+    "native-media-clock-overflow": "commonUnsupported",
+    "native-media-duration-mismatch": "commonVerificationFailed",
+    "native-mp4-invalid": "commonVerificationFailed",
+    "native-mp4-profile-not-supported": "commonUnsupported",
+    "native-presentation-metadata-invalid": "commonVerificationFailed",
+    "native-presentation-window-not-supported": "commonUnsupported",
+    "native-sample-evidence-incomplete": "commonVerificationFailed",
+    "native-sample-evidence-invalid": "commonVerificationFailed",
+    "native-sample-protection-mismatch": "commonVerificationFailed",
+    "native-source-changed": "commonSourceChanged",
+    "native-track-changed": "commonSourceChanged",
+    "native-video-dimensions-mismatch": "commonVerificationFailed",
+    "presentation-window-outside-media": "commonVerificationFailed",
+    "ts-aac-mp4-invalid": "commonVerificationFailed",
+    "ts-aac-mp4-write-failed": "commonError",
+    "ts-avc-picture-duration-not-supported": "commonUnsupported",
+    "ts-avc-separate-colour-plane-not-supported": "commonUnsupported",
+    "ts-avc-slice-groups-not-supported": "commonUnsupported",
+    "ts-avc-slice-order-not-supported": "commonUnsupported",
+    "ts-segment-evidence-incomplete": "commonVerificationFailed",
+    "ts-segment-evidence-limit": "commonResourceBudget",
+    "ts-segment-evidence-missing": "commonVerificationFailed",
+    "ts-segment-evidence-unfinished": "commonVerificationFailed",
+    "ts-video-duration-clock-required": "commonVerificationFailed",
+    "ts-video-reorder-limit": "commonResourceBudget",
+    "verification-native-evidence-required": "commonVerificationFailed",
     "request-pending": "commonPending",
     "verification-mismatch": "commonVerificationFailed",
     "request-limit-reached": "commonCapacityFull",
@@ -82,6 +133,8 @@
     "media-tool-failed": "commonMediaToolFailed",
     "round-trip-verification-failed": "commonVerificationFailed",
     "source-media-verification-failed": "commonVerificationFailed",
+    "source-decode-comparison-failed": "commonVerificationFailed",
+    "verification-evidence-scope-mismatch": "commonVerificationFailed",
     "output-signaling-verification-failed": "commonDrmMismatch",
     "source-normalization-verification-failed": "commonVerificationFailed",
     "execution-plan-invalid": "commonPlanInvalid",
@@ -198,6 +251,20 @@
     function verify(report) {
       var checks = report && report.checks || {};
       var license = report && report.license_playback_verified === false ? 'not-checked' : 'unknown';
+      if (report && report.schema_version === 2) {
+        var evidence = report.decode_evidence || {}, state = evidence.status === 'not-checked' ? 'not-checked' : decodeSatisfied(report) ? 'pass' : 'fail';
+        var decodedKey = evidence.status === 'source-decoded' ? 'commonSourceDecoded' : 'commonDecoded';
+        return h('div', { className: 'common-result-block' },
+          h('dl', { className: 'kv' }, word('dt', 'commonRequiredCoverage'), h('dd', null, word('span', report.required_depth === 'decoded' ? 'commonDecodedCoverage' : 'commonNativeCoverage'))),
+          h('ul', { className: 'checks' },
+            check('commonRequestedCoverage', report.passed, 'required_coverage'),
+            check('commonMetadata', checks.stream_metadata === 'pass' ? true : checks.stream_metadata === 'fail' ? false : null, 'stream_metadata'),
+            check('commonPayload', checks.packet_payloads_equal, 'packet_payloads_equal'),
+            check('commonTiming', checks.packet_timing_equal, 'packet_timing_equal'),
+            h('li', checkState('decode_evidence', state), word('span', decodedKey), badge(state)),
+            h('li', checkState('license_playback_verified', license), word('span', 'commonLicensePlayback'), badge(license))),
+          native(report.native_manifest));
+      }
       return h('div', { className: 'common-result-block' },
         h('ul', { className: 'checks' },
           check('commonMediaVerified', report && report.media_verified, 'media_verified'),
@@ -245,6 +312,7 @@
       content.push(h('ul', { className: 'checks' }, check('commonInputAdmitted', report.input_admitted, 'input_admitted')), inspection(report.input, report.track_protection),
         h('dl', { className: 'kv' }, word('dt', 'commonActualFormat'), h('dd', null, code(report.actual_format)), word('dt', 'commonEligible'), h('dd', null, (report.eligible_formats || []).map(function (format, index) { return [index ? ', ' : null, code(format)]; }))));
       if (Array.isArray(report.compatibility_notes) && report.compatibility_notes.length) content.push(dynamic('p', 'commonInspectionNotes', { n: report.compatibility_notes.length }, { className: 'help' }));
+      if (report.schema_version === 2 && report.verification) content.push(verify(report.verification));
     } else if (envelope.report_kind === 'conversion' || envelope.report_kind === 'verification') {
       if (envelope.report_kind === 'verification') content.push(h('ul', { className: 'checks' }, check('commonSourceUnchanged', report.source_unchanged, 'source_unchanged')));
       var rows = Array.isArray(report.outputs) ? report.outputs : [report];

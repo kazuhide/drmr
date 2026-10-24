@@ -101,6 +101,8 @@ pub struct ChildRuntime {
     pub keys_file: Option<PathBuf>,
     #[serde(deserialize_with = "required_nullable")]
     pub max_workers: Option<u8>,
+    #[serde(default)]
+    pub decode: bool,
     pub tools: OperatorTools,
 }
 #[derive(Clone, Serialize, Deserialize)]

@@ -183,14 +183,13 @@ fn json_success(result: &Output) -> serde_json::Value {
 
 fn assert_verified(report: &serde_json::Value) {
     assert_eq!(report["passed"], true);
-    assert_eq!(report["media_verified"], true);
+    assert_eq!(
+        report["decode_evidence"],
+        serde_json::json!({"status":"content-compared","equal":true})
+    );
     assert_eq!(report["license_playback_verified"], false);
     assert_eq!(report["checks"]["stream_metadata"], "pass");
-    for check in [
-        "packet_payloads_equal",
-        "packet_timing_equal",
-        "decoded_content_equal",
-    ] {
+    for check in ["packet_payloads_equal", "packet_timing_equal"] {
         assert_eq!(report["checks"][check], true);
     }
 }
@@ -199,6 +198,7 @@ fn convert(input: &Path, output: &Path, keys: &Path) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_drmr"));
     command
         .arg("convert")
+        .arg("--decode")
         .arg(input)
         .args(["--to", "cbcs", "--format", "hls", "--output"])
         .arg(output)
@@ -211,6 +211,7 @@ fn convert(input: &Path, output: &Path, keys: &Path) -> Command {
 fn verify(output: &Path, source: &Path, keys: &Path) {
     let result = Command::new(env!("CARGO_BIN_EXE_drmr"))
         .arg("verify")
+        .arg("--decode")
         .arg(output.join("master.m3u8"))
         .arg("--source")
         .arg(source)
@@ -465,7 +466,7 @@ fn url_analysis_saved_plan_execution_and_verification_use_the_retained_original_
     );
     let analysis = json_success(
         &Command::new(env!("CARGO_BIN_EXE_drmr"))
-            .args(["analyze", &url, "--download-dir"])
+            .args(["analyze", "--decode", &url, "--download-dir"])
             .arg(&download)
             .arg("--fetch-policy")
             .arg(&policy)
@@ -474,7 +475,7 @@ fn url_analysis_saved_plan_execution_and_verification_use_the_retained_original_
             .unwrap(),
     );
     assert_eq!(analysis["kind"], "input-analysis");
-    assert_eq!(analysis["schema_version"], 1);
+    assert_eq!(analysis["schema_version"], 2);
     assert_eq!(analysis["input_admitted"], true);
     assert_eq!(analysis["download"]["retained"], true);
     assert_eq!(analysis["measurements"]["schema_version"], 1);
@@ -489,6 +490,7 @@ fn url_analysis_saved_plan_execution_and_verification_use_the_retained_original_
     let planned = json_success(
         &Command::new(env!("CARGO_BIN_EXE_drmr"))
             .arg("plan")
+            .arg("--decode")
             .arg(download.join("input.m3u8"))
             .args(["--to", "cbcs", "--format", "dash", "--output"])
             .arg(&output)
@@ -502,7 +504,8 @@ fn url_analysis_saved_plan_execution_and_verification_use_the_retained_original_
     let on_disk: serde_json::Value = serde_json::from_slice(&saved).unwrap();
     assert_eq!(planned, on_disk);
     assert_eq!(planned["kind"], "execution-plan");
-    assert_eq!(planned["schema_version"], 1);
+    assert_eq!(planned["schema_version"], 3);
+    assert_eq!(planned["required_depth"], "decoded");
     assert!(planned["plan_id"].as_str().is_some_and(|id| !id.is_empty()));
     let text = std::str::from_utf8(&saved).unwrap();
     for secret in [KEY, download_http::QUERY, download_http::AUTH] {

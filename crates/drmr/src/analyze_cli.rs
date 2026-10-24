@@ -13,13 +13,13 @@ use std::sync::Arc;
 
 #[derive(Args)]
 #[command(
-    after_help = "Use --metadata-only to read local or HTTP(S) MP4, DASH, or HLS metadata without keys or media tools.\nMetadata-only URL input fetches bounded metadata, does not retain a source, and does not verify media. Use --fetch-policy for allowed origins, authentication, and limits; it applies only to URL input.\nDo not combine --metadata-only with --download-dir, --keys-file, --packager-bin, --max-workers, or --measure.\n\nComplete analysis checks local MP4, DASH, or HLS media before choosing a conversion.\nURL input requires a new --download-dir. Supported profiles: completed HLS; single-Period static DASH using SegmentTemplate with a finite SegmentTimeline; self-contained MP4.\nMP4 and DASH support clear, cenc, and cbcs within the ordinary input profile. Ciphertext and encryption declarations are retained; key and license URIs are never fetched.\nSupply decryption keys separately with --keys-file. Relative playlist key URIs resolve against the effective remote playlist URL.\nThe retained entrypoint is input.m3u8, input.mpd, or input.mp4; --json reports the actual local path.\nThe saved original is reused offline by plan, convert, and verify; keys and request headers stay separate.\nInput admission does not establish a converted result, DRM licensing, or device playback.\n\nExamples:\n  drmr analyze media.mp4 --json\n  drmr analyze https://example.com/vod/master.m3u8 --download-dir source --json\n  drmr analyze https://example.com/vod/manifest.mpd --download-dir dash-source --json\n  drmr analyze https://example.com/media.mp4 --download-dir mp4-source --json\n  drmr plan dash-source/input.mpd --to cbcs --format dash --output converted --save conversion.plan.json"
+    after_help = "Use --metadata-only to read local or HTTP(S) MP4, DASH, or HLS metadata without keys or media tools.\nMetadata-only URL input fetches bounded metadata, does not retain a source, and does not verify media. Use --fetch-policy for allowed origins, authentication, and limits; it applies only to URL input.\nDo not combine --metadata-only with --download-dir, --keys-file, --packager-bin, --max-workers, --decode, or --measure.\n\nComplete analysis checks local MP4, DASH, or HLS media before choosing a conversion.\nURL input requires a new --download-dir. Supported profiles: completed HLS; single-Period static DASH using SegmentTemplate with a finite SegmentTimeline; self-contained MP4.\nMP4 and DASH support clear, cenc, and cbcs within the ordinary input profile. Ciphertext and encryption declarations are retained; key and license URIs are never fetched.\nSupply decryption keys separately with --keys-file. Relative playlist key URIs resolve against the effective remote playlist URL.\nThe retained entrypoint is input.m3u8, input.mpd, or input.mp4; --json reports the actual local path.\nThe saved original is reused offline by plan, convert, and verify; keys and request headers stay separate.\nInput admission does not establish a converted result, DRM licensing, or device playback.\n\nExamples:\n  drmr analyze media.mp4 --json\n  drmr analyze https://example.com/vod/master.m3u8 --download-dir source --json\n  drmr analyze https://example.com/vod/manifest.mpd --download-dir dash-source --json\n  drmr analyze https://example.com/media.mp4 --download-dir mp4-source --json\n  drmr plan dash-source/input.mpd --to cbcs --format dash --output converted --save conversion.plan.json"
 )]
 pub struct AnalyzeArgs {
     /// Local MP4, DASH, or HLS source, or an HTTP(S) URL to analyze.
     pub input: PathBuf,
     /// Read metadata without keys, media tools, complete media checks, or retained URL input.
-    #[arg(long, conflicts_with_all = ["download_dir", "keys_file", "packager_bin", "max_workers", "measure"])]
+    #[arg(long, conflicts_with_all = ["download_dir", "keys_file", "packager_bin", "max_workers", "decode", "measure"])]
     pub metadata_only: bool,
     /// New private original directory; required for complete URL analysis.
     #[arg(long)]
@@ -36,6 +36,8 @@ pub struct AnalyzeArgs {
     /// Upper bound for simultaneous media work (1-64); default adapts to CPU and memory.
     #[arg(long, value_parser = clap::value_parser!(u8).range(1..=64))]
     pub max_workers: Option<u8>,
+    #[command(flatten)]
+    pub decoding: convert_cli::DecodeOptions,
     /// Print one versioned metadata or complete input-analysis report.
     #[arg(long)]
     pub json: bool,
@@ -93,7 +95,12 @@ fn text_report(report: &InputAnalysis) -> std::io::Result<()> {
     }
     writeln!(
         out,
-        "Checked complete encoded packets, decoded content, and timestamps."
+        "Checked complete encoded packets, codec configuration, playback windows, and timestamps."
+    )?;
+    writeln!(
+        out,
+        "{}",
+        convert_cli::decode_summary(report.verification.decode_evidence)
     )?;
     writeln!(
         out,
@@ -206,6 +213,7 @@ fn metadata_analysis(
             convert_cli::converter(
                 "packager",
                 None,
+                false,
                 Arc::clone(progress),
                 cancellation.stop.clone(),
             )
@@ -271,6 +279,7 @@ pub fn analyze(args: &AnalyzeArgs) -> ExitCode {
     let converter = convert_cli::converter(
         &args.packager_bin,
         args.max_workers,
+        args.decoding.decode,
         progress.clone(),
         cancellation.stop.clone(),
     );

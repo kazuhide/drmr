@@ -20,6 +20,23 @@ SPEC.loader.exec_module(module)
 class ResourceProgressTests(unittest.TestCase):
     """Exercise the real resource gate with the public progress producer shape."""
 
+    def verification(self):
+        return {"schema_version": 2, "required_depth": "decoded", "scope": "comparison", "passed": True,
+                "checks": {"stream_metadata": "pass", "packet_payloads_equal": True, "packet_timing_equal": True},
+                "decode_evidence": {"status": "content-compared", "equal": True}, "license_playback_verified": False,
+                "native_manifest": {"schema_version": 1, "scope": "manifest-only", "profile": "dash-static-manifest",
+                                    "errors": 0, "warnings": 0, "truncated": False, "incomplete": False, "document_count": 1}}
+
+    def conversion(self):
+        inspection = {"schema_version": 1, "format": "dash", "evidence": "manifest", "protection": "clear",
+                      "tracks": [{"id": "1", "kind": "video", "codec": "avc1", "protection": "clear",
+                                  "key_ids": [], "pattern": None}], "drm_systems": [], "findings": [], "media_verified": False}
+        return {"schema_version": 2, "input": copy.deepcopy(inspection), "output": copy.deepcopy(inspection),
+                "verification": self.verification(), "processing": {"route": "dash-presentation",
+                "input_preparation": "local-dash-resources", "reason_code": "dash-presentation-handler-completed",
+                "explanation": "Verify each original track against the final presentation.",
+                "required_tools": ["ffmpeg", "ffprobe", "shaka-packager"]}}
+
     def records(self):
         base = {"schema_version": 1, "entry_point": "cli", "command": "convert", "run_id": "123-456",
                 "event": "activity", "elapsed_ms": 0, "activity": "configuration",
@@ -36,9 +53,9 @@ class ResourceProgressTests(unittest.TestCase):
         checked, invoked = [], []
         observed = {"kind": "native-hardware-observation", "memory_source": "process-cgroup",
                     "effective_cpus": 2, "available_memory_bytes": 512 * 1024 ** 2}
-        verified = EvidenceTests().valid() if verification is None else verification
+        verified = self.verification() if verification is None else verification
         stderr = self.encode(self.records()) if stderr is None else stderr
-        stdout = b"Verified stream metadata, packet payloads, decoded content, and packet timing.\n" if stdout is None else stdout
+        stdout = json.dumps(self.conversion()).encode() if stdout is None else stdout
 
         class Image:
             def checked(self, arguments, **options):
@@ -57,10 +74,10 @@ class ResourceProgressTests(unittest.TestCase):
         result, checked, invoked = self.run_gate(raw)
         self.assertEqual(result["actual_cli_workers"], [2, 2])
         self.assertEqual(result["limits"], {"memory_bytes": 1024 ** 3, "cpus": 2})
-        self.assertEqual(invoked, [(["convert", "/input/dash/manifest.mpd", "--to", "clear", "--format", "dash",
-                                    "--output", "/work/resource-limited", "--progress", "json"], {"limited": True})])
+        self.assertEqual(invoked, [(["convert", "--decode", "/input/dash/manifest.mpd", "--to", "clear", "--format", "dash",
+                                    "--output", "/work/resource-limited", "--progress", "json", "--json"], {"limited": True})])
         self.assertEqual(checked, [([], {"entry": "/qualifiers/container-resources", "limited": True}),
-                                  (["verify", "/work/resource-limited/manifest.mpd", "--source",
+                                  (["verify", "--decode", "/work/resource-limited/manifest.mpd", "--source",
                                     "/input/dash/manifest.mpd", "--json"], {"limited": True})])
         self.assertIs(result["independent_verification"]["passed"], True)
         rows = self.records()
@@ -112,8 +129,8 @@ class ResourceProgressTests(unittest.TestCase):
         parser.assert_not_called()
 
     def test_independent_verification_still_refuses_changed_media(self):
-        verification = EvidenceTests().valid()
-        verification["checks"]["decoded_content_equal"] = False
+        verification = self.verification()
+        verification["decode_evidence"]["equal"] = False
         with self.assertRaisesRegex(module.Refusal, "^media-proof-invalid$"):
             self.run_gate(verification=verification)
 
@@ -131,13 +148,75 @@ class ResourceProgressTests(unittest.TestCase):
             image.invoke.assert_not_called()
 
     def test_exit_and_media_success_remain_required_and_diagnostics_are_bounded(self):
-        for status, stdout in ((1, b"private-marker"), (0, b"private-marker"), ("private-marker", b"")):
+        for status, stdout in ((1, b"private-marker"), (0, b"private-marker"), ("private-marker", b""),
+                               (1, json.dumps(self.conversion()).encode()), (True, json.dumps(self.conversion()).encode())):
             with self.subTest(status=status), self.assertRaisesRegex(
                     module.Refusal, "^container-resource-cli-failed$") as refused:
                 self.run_gate(status=status, stdout=stdout)
             self.assertEqual(refused.exception.evidence["exit_code"], status if type(status) is int else None)
             self.assertEqual(set(refused.exception.evidence), {"exit_code", "stdout_sha256", "stderr_sha256"})
             self.assertNotIn("private-marker", json.dumps(refused.exception.evidence))
+
+    def assert_cli_refused(self, stdout):
+        stderr = self.encode(self.records())
+        with self.assertRaisesRegex(module.Refusal, "^container-resource-cli-failed$") as refused:
+            self.run_gate(stderr=stderr, stdout=stdout)
+        self.assertEqual(refused.exception.evidence, {"exit_code": 0,
+                         "stdout_sha256": hashlib.sha256(stdout).hexdigest(),
+                         "stderr_sha256": hashlib.sha256(stderr).hexdigest()})
+        self.assertNotIn("private-marker", str(refused.exception) + json.dumps(refused.exception.evidence))
+
+    def test_resource_success_requires_structured_conversion_not_human_success_text(self):
+        for stdout in (b"Verified stream metadata, packet payloads, decoded content, and packet timing.\n",
+                       b"Verified stream metadata, packet payloads, and packet timing.\n"
+                       b"Complete decoded-content comparison: passed.\n",
+                       b"private-marker Verified stream metadata, packet payloads, decoded content, and packet timing.\n",
+                       b"not JSON", b"[]", b"true", b"\xff", b"{}",
+                       b'{"schema_version":2,"schema_version":2}',
+                       json.dumps(self.conversion()).encode() + b"\nprivate-marker"):
+            with self.subTest(stdout_sha256=hashlib.sha256(stdout).hexdigest()):
+                self.assert_cli_refused(stdout)
+
+    def test_resource_conversion_requires_complete_native_and_actual_decoded_comparison(self):
+        changes = [lambda r: r.update(schema_version=1), lambda r: r.update(schema_version=True),
+                   lambda r: r.update(schema_version=2.0), lambda r: r.update(status="failed"),
+                   lambda r: r.pop("verification"), lambda r: r["verification"].update(schema_version=1),
+                   lambda r: r["verification"].update(required_depth="native"),
+                   lambda r: r["verification"].update(required_depth="unknown"),
+                   lambda r: r["verification"].update(required_depth="native", decode_evidence={"status": "not-checked", "reason": "not-requested"}),
+                   lambda r: r["verification"].update(decode_evidence={"status": "not-checked", "reason": "not-requested"}),
+                   lambda r: r["verification"].update(scope="source-admission", decode_evidence={"status": "source-decoded"}),
+                   lambda r: r["verification"].update(passed=False), lambda r: r["verification"].update(passed=1),
+                   lambda r: r["verification"].update(failure="child-check-failed"),
+                   lambda r: r["verification"].update(media_verified=True),
+                   lambda r: r["verification"].update(private_path="private-marker"),
+                   lambda r: r["verification"]["checks"].update(stream_metadata="fail"),
+                   lambda r: r["verification"]["checks"].update(packet_payloads_equal=False),
+                   lambda r: r["verification"]["checks"].update(packet_timing_equal=False),
+                   lambda r: r["verification"]["checks"].update(packet_timing_equal=1),
+                   lambda r: r["verification"]["checks"].update(decoded_content_equal=True),
+                   lambda r: r["verification"]["decode_evidence"].update(equal=False),
+                   lambda r: r["verification"]["decode_evidence"].update(equal="true"),
+                   lambda r: r["verification"]["decode_evidence"].update(private_path="private-marker"),
+                   lambda r: r["verification"].update(license_playback_verified=True),
+                   lambda r: r["verification"].pop("native_manifest"),
+                   lambda r: r["verification"]["native_manifest"].update(incomplete=True),
+                   lambda r: r["verification"]["native_manifest"].update(truncated=True),
+                   lambda r: r["verification"]["native_manifest"].update(errors=1),
+                   lambda r: r["verification"]["native_manifest"].update(profile="hls-base-manifest"),
+                   lambda r: r["verification"]["native_manifest"].update(document_count=0)]
+        for change in changes:
+            report = self.conversion()
+            change(report)
+            with self.subTest(change=change):
+                self.assert_cli_refused(json.dumps(report).encode())
+
+    def test_resource_conversion_refuses_bare_verification_and_wrapped_or_forged_reports(self):
+        for report in (self.verification(), {"conversion": self.conversion()},
+                       {**self.conversion(), "private_path": "private-marker"},
+                       {**self.conversion(), "input": None}, {**self.conversion(), "output": []}):
+            with self.subTest(report_keys=sorted(report)):
+                self.assert_cli_refused(json.dumps(report).encode())
 
 
 class EvidenceTests(unittest.TestCase):

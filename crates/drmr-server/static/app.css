@@ -175,6 +175,8 @@ table.common-outputs .btn { padding: 4px 6px; min-height: 36px; height: auto; fo
 .common-drm-choices { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
 .common-drm-choices label { display: inline-flex; align-items: center; gap: 4px; }
 .common-drm-choices input[type="checkbox"] { width: auto; min-height: auto; margin: 0; }
+.common-decode-option { display: inline-flex; align-items: center; gap: 8px; }
+.common-decode-option input[type="checkbox"] { width: auto; min-height: auto; margin: 0; }
 .common-plan-outputs { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .common-plan-outputs li { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; overflow-wrap: anywhere; }
 .common-result-block { display: flex; min-width: 0; flex-direction: column; gap: 10px; }

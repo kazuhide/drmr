@@ -4,7 +4,7 @@ export const locales = [
     language: 'en', route: '', asset: 'index.html', skip: 'Skip to content',
     navigation: 'Main navigation', footer: 'Documentation and source', languageNavigation: 'Language',
     switchName: '日本語', switchLanguage: 'ja', switchHref: './ja/',
-    headings: ['Input and output support', 'Analyze, plan, convert, verify', 'Four ways back to the original', 'Start with the CLI'],
+    headings: ['Input and output support', 'Analyze, plan, convert, verify', 'Native checks and optional complete decoding', 'Start with the CLI'],
     groups: ['Analyze command', 'Plan command', 'Convert command', 'Verify command', 'Build and check the CLI'],
     anchors: ['Support', 'Workflow', 'Get started'],
     matrixRegion: 'Conversion support matrix', matrixCaption: 'Supported conversion profiles',

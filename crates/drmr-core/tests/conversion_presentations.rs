@@ -17,6 +17,7 @@ fn converter() -> Converter {
         "packager",
         "ffmpeg",
     )
+    .with_decode(true)
 }
 fn source(path: &Path, audio: bool) {
     let mut cmd = std::process::Command::new("ffmpeg");
@@ -443,7 +444,13 @@ fn mixed_duration_sources(root: &Path) -> [LocalTrack; 2] {
 }
 
 fn complete_proof(proof: &drmr_core::conversion::VerificationReport) {
-    assert!(proof.passed && proof.media_verified);
+    assert!(
+        proof.passed
+            && (proof.checks.is_pass()
+                && proof
+                    .decode_evidence
+                    .satisfies(drmr_core::conversion::ValidationDepth::Decoded, proof.scope))
+    );
     assert_eq!(
         proof.checks.stream_metadata,
         drmr_core::conversion::CheckOutcome::Pass
@@ -451,7 +458,9 @@ fn complete_proof(proof: &drmr_core::conversion::VerificationReport) {
     assert!(
         proof.checks.packet_payloads_equal
             && proof.checks.packet_timing_equal
-            && proof.checks.decoded_content_equal
+            && proof
+                .decode_evidence
+                .satisfies(drmr_core::conversion::ValidationDepth::Decoded, proof.scope)
     );
     assert!(!proof.license_playback_verified);
 }
