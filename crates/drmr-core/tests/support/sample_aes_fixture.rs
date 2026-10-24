@@ -7,7 +7,7 @@
 //! Only public synthetic test keys and IVs are used.
 //! Cipher boundaries and PMT descriptors follow the Apple MPEG-2 Stream Encryption
 //! Format: <https://developer.apple.com/library/archive/documentation/AudioVideo/Conceptual/HLS_Sample_Encryption/Encryption/Encryption.html>.
-use aes::cipher::{Block, BlockEncryptMut as _, KeyIvInit as _};
+use aes::cipher::{BlockModeEncrypt as _, KeyIvInit as _};
 use drmr_core::{
     events::NoSink,
     toolrun::{RunOptions, Secrets, ToolRunner},
@@ -291,15 +291,13 @@ fn escape(bytes: &[u8], out: &mut Vec<u8>) {
     }
 }
 fn encrypt_blocks(bytes: &mut [u8], key: &[u8; 16], iv: &[u8; 16], skip: usize) {
-    let mut cipher = cbc::Encryptor::<aes::Aes128>::new_from_slices(key, iv).unwrap();
+    let mut cipher = cbc::Encryptor::<aes::Aes128>::new(key.into(), iv.into());
     let mut at = 0;
     while bytes.len() - at >= 16 {
         if skip != 0 && bytes.len() - at == 16 {
             break;
         }
-        cipher.encrypt_block_mut(Block::<aes::Aes128>::from_mut_slice(
-            &mut bytes[at..at + 16],
-        ));
+        cipher.encrypt_block((&mut bytes[at..at + 16]).try_into().unwrap());
         at += 16;
         at += skip.min(bytes.len() - at);
     }

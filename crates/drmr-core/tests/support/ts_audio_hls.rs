@@ -703,7 +703,7 @@ struct CbcResource {
 }
 
 fn cbc_plain_block(block: &[u8; 16], previous: &[u8; 16], key: &[u8; 16]) -> [u8; 16] {
-    use aes::cipher::{BlockDecrypt as _, KeyInit as _};
+    use aes::cipher::{BlockCipherDecrypt as _, KeyInit as _};
     let cipher = aes::Aes128::new_from_slice(key).unwrap();
     let mut plaintext = aes::cipher::Block::<aes::Aes128>::from(*block);
     cipher.decrypt_block(&mut plaintext);
@@ -712,7 +712,7 @@ fn cbc_plain_block(block: &[u8; 16], previous: &[u8; 16], key: &[u8; 16]) -> [u8
 
 #[test]
 fn audio_fmp4_hls_cbc_tail_oracle_checks_entire_padding_and_chaining() {
-    use aes::cipher::{BlockEncrypt as _, KeyInit as _};
+    use aes::cipher::{BlockCipherEncrypt as _, KeyInit as _};
     let key: [u8; 16] = hex::decode("2b7e151628aed2a6abf7158809cf4f3c")
         .unwrap()
         .try_into()
