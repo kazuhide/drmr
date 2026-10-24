@@ -97,9 +97,11 @@ fn run(command: &mut Command) -> Vec<u8> {
 fn fixture(rate: u32) -> Fixture {
     let directory = crate::native::private_tempdir().unwrap();
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../drmr/tests/fixtures/bbb/clip.mp4");
+    let coded = directory.path().join("coded");
+    crate::native::create_media_dir_all(&coded).unwrap();
     let mut parts = Vec::new();
     for kind in ["video", "audio"] {
-        let path = directory.path().join(format!("{kind}.mp4"));
+        let path = coded.join(format!("{kind}.mp4"));
         let mut command = Command::new("ffmpeg");
         command
             .args(["-v", "error", "-nostdin", "-threads", "1", "-i"])
@@ -147,7 +149,7 @@ fn fixture(rate: u32) -> Fixture {
             .arg(&path));
         let (init_bytes, fragments) =
             crate::mp4::split_fragmented(&std::fs::read(&path).unwrap()).unwrap();
-        let init = directory.path().join(format!("{kind}-init.mp4"));
+        let init = coded.join(format!("{kind}-init.mp4"));
         std::fs::write(&init, init_bytes).unwrap();
         let cuts = if kind == "video" {
             vec![0, 24, 84, fragments.len()]
@@ -158,7 +160,7 @@ fn fixture(rate: u32) -> Fixture {
             .windows(2)
             .enumerate()
             .map(|(ordinal, bounds)| {
-                let path = directory.path().join(format!("{kind}-{ordinal}.m4s"));
+                let path = coded.join(format!("{kind}-{ordinal}.m4s"));
                 std::fs::write(&path, fragments[bounds[0]..bounds[1]].concat()).unwrap();
                 path
             })

@@ -72,7 +72,7 @@ fn remote_files(original: &BTreeMap<String, Vec<u8>>) -> BTreeMap<String, Vec<u8
 }
 
 fn direct(root: &Path, input: &str, policy: Option<&Path>, default: &str) {
-    drmr_core::native::create_media_dir_all(root).unwrap();
+    drmr_core::native::create_private_dir_all(root).unwrap();
     let explicit = if default == "segments" {
         "stitch"
     } else {

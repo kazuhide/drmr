@@ -211,7 +211,7 @@ fn no_join_cancellation_and_foreign_files_are_preserved() {
         .write_all(b"<MPD><Period/></MPD>")
         .unwrap();
     let foreign = stage.path().join("dash-manifest.mpd");
-    crate::native::create_private_new(&foreign)
+    files::create_new(&foreign)
         .unwrap()
         .write_all(b"foreign")
         .unwrap();
@@ -228,7 +228,8 @@ fn snapshot_global_budgets_are_charged_before_oversized_resource_writes() {
         .unwrap()
         .write_all(b"five!")
         .unwrap();
-    let destination = root.path().join("destination");
+    let stage = crate::conversion::files::Stage::new(None).unwrap();
+    let destination = stage.path().join("destination");
     let mut budget = Budget {
         bytes: MAX_BYTES - 4,
         paths: 0,

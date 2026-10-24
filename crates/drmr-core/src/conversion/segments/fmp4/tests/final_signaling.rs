@@ -76,7 +76,7 @@ fn final_single_default_selection_checks_initialization_and_middle_and_final_med
                 .then(|| OutputKey::from_hex(OUTPUT_ID, OUTPUT_KEY).unwrap());
             if format == OutputFormat::Hls && target == TargetProtection::Cbcs {
                 let path = fixture.directory.path().join("identity.keys.json");
-                crate::conversion::files::create_new(&path).unwrap().write_all(
+                crate::native::create_private_new(&path).unwrap().write_all(
                     serde_json::to_string(&serde_json::json!({"schema_version":1,"output":{
                         "kid":OUTPUT_ID,"key":OUTPUT_KEY,"hls_key_uri":"https://example.invalid/key"
                     }})).unwrap().as_bytes()
@@ -218,7 +218,7 @@ fn final_fairplay_bundle_rejects_provider_records_in_middle_and_final_media() {
         .unwrap();
     let mut keys = BundleOperatorKeys::default();
     let key_file = fixture.directory.path().join("fairplay.keys.json");
-    crate::conversion::files::create_new(&key_file).unwrap().write_all(serde_json::to_string(&serde_json::json!({"schema_version":1,"output":{"kid":OUTPUT_ID,"key":OUTPUT_KEY,"hls_key_uri":"skd://synthetic/fairplay","signaling":{"system":"multi-drm","fairplay":true}}})).unwrap().as_bytes()).unwrap();
+    crate::native::create_private_new(&key_file).unwrap().write_all(serde_json::to_string(&serde_json::json!({"schema_version":1,"output":{"kid":OUTPUT_ID,"key":OUTPUT_KEY,"hls_key_uri":"skd://synthetic/fairplay","signaling":{"system":"multi-drm","fairplay":true}}})).unwrap().as_bytes()).unwrap();
     keys.outputs.insert(
         "fp".into(),
         crate::conversion::key_file::read(&key_file).unwrap(),

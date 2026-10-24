@@ -8,6 +8,10 @@ const SOURCE_KEY: &str = "101112131415161718191a1b1c1d1e1f";
 const OUTPUT_ID: &str = "404142434445464748494a4b4c4d4e4f";
 const OUTPUT_KEY: &str = "00112233445566778899aabbccddeeff";
 
+fn media_workspace() -> crate::conversion::files::Stage {
+    crate::conversion::files::Stage::new(None).unwrap()
+}
+
 fn run_tool(command: &mut Command) -> Vec<u8> {
     let result = command.output().unwrap();
     assert!(
@@ -244,11 +248,11 @@ fn assert_output_auxiliary(context: &SegmentInput, media: &Path, target: TargetP
 }
 
 fn structural_segment() -> (
-    crate::native::PrivateTempDir,
+    crate::conversion::files::Stage,
     std::path::PathBuf,
     std::path::PathBuf,
 ) {
-    let root = crate::native::private_tempdir().unwrap();
+    let root = media_workspace();
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../drmr/tests/fixtures/bbb/clip.mp4");
     let stop = Stop::new();
     let mut reader = read::Reader::open(&fixture, &stop, false).unwrap();
@@ -445,7 +449,7 @@ fn assert_target_initialization(context: &SegmentInput, path: &Path, target: Tar
 fn assert_matrix_target(source: &MatrixSource<'_>, directory: &Path, target: TargetProtection) {
     let stop = Stop::new();
     let key = super::super::OutputKey::from_hex(OUTPUT_ID, OUTPUT_KEY).unwrap();
-    std::fs::create_dir(directory).unwrap();
+    crate::native::create_media_dir_all(directory).unwrap();
     let output_init = directory.join("init.mp4");
     let writer =
         SegmentTransformer::new(source.init, &output_init, target, Some(&key), &stop).unwrap();
@@ -500,7 +504,7 @@ fn assert_matrix_target(source: &MatrixSource<'_>, directory: &Path, target: Tar
 
 #[test]
 fn muxed_avc_aac_all_encryption_pairs_preserve_uneven_resources_and_independent_packets() {
-    let root = crate::native::private_tempdir().unwrap();
+    let root = media_workspace();
     let stop = Stop::new();
     let (original_init, original_resources, expected) = muxed_fixture(root.path());
     let decoded = decoded_frames(&root.path().join("muxed.mp4"), None);
@@ -515,7 +519,7 @@ fn muxed_avc_aac_all_encryption_pairs_preserve_uneven_resources_and_independent_
         TargetProtection::Cbcs,
     ] {
         let source_directory = root.path().join(format!("source-{source_scheme:?}"));
-        std::fs::create_dir(&source_directory).unwrap();
+        crate::native::create_media_dir_all(&source_directory).unwrap();
         let source_init = source_directory.join("init.mp4");
         let source_writer = SegmentTransformer::new(
             &original_init,
@@ -599,7 +603,7 @@ fn shaka_source(fixture: &Path, output: &Path, scheme: &str, stream: &str) {
 
 #[test]
 fn independent_shaka_encrypted_resources_transform_to_every_supported_scheme() {
-    let root = crate::native::private_tempdir().unwrap();
+    let root = media_workspace();
     let stop = Stop::new();
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../drmr/tests/fixtures/bbb/clip.mp4");
     let output_key = super::super::OutputKey::from_hex(OUTPUT_ID, OUTPUT_KEY).unwrap();
@@ -610,7 +614,7 @@ fn independent_shaka_encrypted_resources_transform_to_every_supported_scheme() {
     for scheme in ["cenc", "cbcs"] {
         for stream in ["video", "audio"] {
             let directory = root.path().join(format!("{scheme}-{stream}"));
-            std::fs::create_dir(&directory).unwrap();
+            crate::native::create_media_dir_all(&directory).unwrap();
             let input_full = directory.join("shaka.mp4");
             shaka_source(&fixture, &input_full, scheme, stream);
             let expected = oracle(&input_full, Some((SOURCE_ID, SOURCE_KEY)));
@@ -633,7 +637,7 @@ fn independent_shaka_encrypted_resources_transform_to_every_supported_scheme() {
                 TargetProtection::Cbcs,
             ] {
                 let target_dir = directory.join(format!("target-{target:?}"));
-                std::fs::create_dir(&target_dir).unwrap();
+                crate::native::create_media_dir_all(&target_dir).unwrap();
                 let target_init = target_dir.join("init.mp4");
                 let writer =
                     SegmentTransformer::new(&init, &target_init, target, Some(&output_key), &stop)
@@ -738,7 +742,7 @@ fn resource_change_during_callbacks_is_not_published_as_complete_evidence() {
 
 #[test]
 fn invalid_codec_payload_and_missing_keys_remove_only_the_owned_incomplete_resource() {
-    let root = crate::native::private_tempdir().unwrap();
+    let root = media_workspace();
     let stop = Stop::new();
     let (init, resources, _) = muxed_fixture(root.path());
     let input = SegmentInput::new(&init, &stop).unwrap();
@@ -814,7 +818,7 @@ fn invalid_codec_payload_and_missing_keys_remove_only_the_owned_incomplete_resou
 
 #[test]
 fn one_transformer_rewrites_independent_resources_concurrently_without_changing_order() {
-    let root = crate::native::private_tempdir().unwrap();
+    let root = media_workspace();
     let stop = Stop::new();
     let (init, resources, expected) = muxed_fixture(root.path());
     let key = super::super::OutputKey::from_hex(OUTPUT_ID, OUTPUT_KEY).unwrap();

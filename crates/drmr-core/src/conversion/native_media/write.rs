@@ -630,7 +630,7 @@ mod tests {
     use super::*;
     #[test]
     fn failed_output_cleanup_preserves_a_replacement_file_after_closing_the_writer() {
-        let root = crate::native::private_tempdir().unwrap();
+        let root = crate::conversion::files::Stage::new(None).unwrap();
         let path = root.path().join("output.m4s");
         let mut output = Output::new(&path).unwrap();
         output.write(b"owned").unwrap();

@@ -50,6 +50,7 @@ pub use paths::resolve_path;
 pub use paths::validate_windows_relative_path;
 
 mod workspace;
+pub(crate) use workspace::open_media_update;
 #[cfg(windows)]
 pub use workspace::pin_media_directory;
 pub use workspace::{

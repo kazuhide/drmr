@@ -529,7 +529,7 @@ mod tests {
             (false, Some("SAMPLE-AES"), 5),
             (true, Some("SAMPLE-AES"), 6),
         ] {
-            let root = tempfile::tempdir().unwrap();
+            let root = files::Stage::new(None).unwrap();
             let mut part = fixture(
                 root.path(),
                 0,
@@ -563,7 +563,7 @@ mod tests {
 
     #[test]
     fn separate_audio_keeps_selection_metadata_codecs_and_aggregate_rates() {
-        let root = tempfile::tempdir().unwrap();
+        let root = files::Stage::new(None).unwrap();
         let mut video = fixture(root.path(), 0, true, &[1000, 2000], &["2", "2"]);
         video.metadata.audio_group = Some("stereo".into());
         let mut audio = fixture(root.path(), 1, true, &[100, 200], &["2", "2"]);
@@ -592,7 +592,7 @@ mod tests {
 
     #[test]
     fn unequal_renditions_share_one_target_and_use_its_peak_duration_windows() {
-        let root = tempfile::tempdir().unwrap();
+        let root = files::Stage::new(None).unwrap();
         let video = fixture(
             root.path(),
             0,
@@ -617,7 +617,7 @@ mod tests {
 
     #[test]
     fn key_rotation_is_written_in_order_without_redundant_tags() {
-        let root = tempfile::tempdir().unwrap();
+        let root = files::Stage::new(None).unwrap();
         let mut part = fixture(root.path(), 0, false, &[1, 1, 1, 1], &["2", "2", "2", "2"]);
         let first = "#EXT-X-KEY:METHOD=AES-128,URI=\"first\",IV=0x01";
         let second = "#EXT-X-KEY:METHOD=AES-128,URI=\"second\",IV=0x02";
@@ -634,16 +634,16 @@ mod tests {
 
     #[test]
     fn unsafe_paths_tags_and_cancellation_never_overwrite_foreign_files() {
-        let root = tempfile::tempdir().unwrap();
+        let root = files::Stage::new(None).unwrap();
         let mut part = fixture(root.path(), 0, false, &[1], &["2"]);
         part.resources[0].key_tag = Some("#EXT-X-KEY:METHOD=NONE\n#EXT-X-ENDLIST".into());
         assert!(write(root.path(), &[part], &Stop::default()).is_err());
         assert!(!root.path().join("master.m3u8").exists());
-        let root = tempfile::tempdir().unwrap();
+        let root = files::Stage::new(None).unwrap();
         let mut part = fixture(root.path(), 0, false, &[1], &["2"]);
         part.resources[0].path = PathBuf::from("/outside/segment.ts");
         assert!(write(root.path(), &[part], &Stop::default()).is_err());
-        let root = tempfile::tempdir().unwrap();
+        let root = files::Stage::new(None).unwrap();
         let part = fixture(root.path(), 0, false, &[1], &["2"]);
         fs::write(root.path().join("master.m3u8"), b"foreign").unwrap();
         assert!(write(root.path(), &[part], &Stop::default()).is_err());
@@ -703,7 +703,7 @@ mod tests {
                 .map(|value| format!("{}.{:03}", value / 1000, value % 1000))
                 .collect::<Vec<_>>();
             let texts = texts.iter().map(String::as_str).collect::<Vec<_>>();
-            let root = tempfile::tempdir().unwrap();
+            let root = files::Stage::new(None).unwrap();
             let part = fixture(root.path(), 0, false, &sizes, &texts);
             let actual = measure(
                 &part,
