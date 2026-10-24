@@ -472,10 +472,10 @@ pub fn convert_direct(args: &ConvertArgs) -> ExitCode {
         args.keys_file.as_ref(),
         progress,
     ) {
-        Ok(session) => session.with_processing(args.processing.unwrap_or_default()),
+        Ok(session) => session,
         Err(code) => return code,
     };
-    let outputs = match read_output_spec(
+    let mut outputs = match read_output_spec(
         args.outputs
             .as_deref()
             .expect("multiple-output mode was selected"),
@@ -483,6 +483,11 @@ pub fn convert_direct(args: &ConvertArgs) -> ExitCode {
         Ok(outputs) => outputs,
         Err(error) => return session.failed("convert", error, args.json),
     };
+    if let Some(default) = args.processing {
+        for output in &mut outputs {
+            output.processing.get_or_insert(default);
+        }
+    }
     let validators = tools(&args.hls_validator_bin, &args.dash_validator_bin);
     let output = args.output.as_deref().expect("clap requires the output");
     session.run("convert", args.json, args.measure, |converter| {

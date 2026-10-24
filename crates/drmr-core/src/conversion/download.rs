@@ -462,7 +462,10 @@ impl Converter {
             output_root,
             outputs,
         })?;
-        converter.execute_bundle_plan(&plan, keys, tools)
+        // The resolved child choices now own the intent; the creation default is not an override.
+        converter
+            .with_processing_clone(super::ProcessingMode::Auto)
+            .execute_bundle_plan(&plan, keys, tools)
     }
 }
 fn write_private(path: &Path, bytes: &[u8]) -> Result<std::fs::File, ConversionError> {
