@@ -57,9 +57,21 @@ impl<'a> Reader<'a> {
         Ok(bytes)
     }
     pub fn layout(&mut self) -> Result<Layout, ConversionError> {
+        self.layout_with_initialization(None)
+    }
+    pub fn resource_layout(&mut self, initialization: &Layout) -> Result<Layout, ConversionError> {
+        self.layout_with_initialization(Some(initialization))
+    }
+    pub fn expected_fingerprint(&self) -> Option<[u8; 32]> {
+        self.digest
+    }
+    fn layout_with_initialization(
+        &mut self,
+        initialization: Option<&Layout>,
+    ) -> Result<Layout, ConversionError> {
         let mut at = 0_u64;
-        let mut movie = None;
-        let mut movie_offset = 0;
+        let mut movie = initialization.map(|value| value.movie.clone());
+        let mut movie_offset = initialization.map_or(0, |value| value.movie_offset);
         let mut mdats = Vec::new();
         let mut moofs = Vec::new();
         while at < self.length {
