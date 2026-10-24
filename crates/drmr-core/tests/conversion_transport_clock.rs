@@ -154,6 +154,18 @@ fn convert(
     format: OutputFormat,
     target: TargetProtection,
 ) -> ConversionReport {
+    convert_at_depth(command, input, input_keys, output, format, target, false)
+}
+
+fn convert_at_depth(
+    command: &Converter,
+    input: &Path,
+    input_keys: &InputKeys,
+    output: &Path,
+    format: OutputFormat,
+    target: TargetProtection,
+    decoded: bool,
+) -> ConversionReport {
     let output_key = (target == TargetProtection::Cbcs)
         .then(|| OutputKey::from_hex(common::KID, common::KEY).unwrap());
     let (result, measurement) = command.measure(|command| {
@@ -171,11 +183,22 @@ fn convert(
         })
     });
     let report = result.unwrap();
-    assert_verified(&report.verification, false);
-    assert_native_tools(
-        &measurement,
-        report.processing.as_ref().unwrap().mode != Some(ProcessingMode::Segments),
-    );
+    assert_verified(&report.verification, decoded);
+    if decoded {
+        let measured = serde_json::to_value(&measurement).unwrap();
+        assert!(
+            measured["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|tool| { tool["tool"] == "ffmpeg" && tool["calls"].as_u64().unwrap() > 0 })
+        );
+    } else {
+        assert_native_tools(
+            &measurement,
+            report.processing.as_ref().unwrap().mode != Some(ProcessingMode::Segments),
+        );
+    }
     report
 }
 
@@ -288,7 +311,7 @@ fn media_resources(directory: &Path) -> Vec<PathBuf> {
             .parse::<u64>()
             .unwrap()
     });
-    assert!(!resources.is_empty());
+    assert_ne!(resources, [] as [PathBuf; 0]);
     resources
 }
 
@@ -420,6 +443,31 @@ fn repackaged_partial_aac_keeps_native_windows_and_complete_decoded_content() {
         verify(&stitch, &input, &manifest, &empty, false);
         analyze(&stitch, &manifest, &empty);
         verify(&decoded, &input, &manifest, &empty, true);
+        let intermediate = common::snapshot_tree(&output);
+        for additional_decode in [false, true] {
+            let depth = if additional_decode {
+                "decoded"
+            } else {
+                "native"
+            };
+            let repacked = root
+                .path()
+                .join(format!("partial-repacked-{}-{depth}", format.as_str()));
+            let command = if additional_decode { &decoded } else { &stitch };
+            convert_at_depth(
+                command,
+                &manifest,
+                &empty,
+                &repacked,
+                format,
+                TargetProtection::Clear,
+                additional_decode,
+            );
+            let repacked_manifest = entrypoint(&repacked, format);
+            verify(&stitch, &input, &repacked_manifest, &empty, false);
+            verify(&decoded, &input, &repacked_manifest, &empty, true);
+            assert_eq!(common::snapshot_tree(&output), intermediate);
+        }
     }
     assert_eq!(common::snapshot_tree(input.parent().unwrap()), original);
 }
