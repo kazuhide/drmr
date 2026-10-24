@@ -42,7 +42,7 @@ fn check(stop: &Stop) -> Result<(), ConversionError> {
     }
 }
 
-fn duration(text: &str) -> Result<u128, ConversionError> {
+pub(super) fn duration(text: &str) -> Result<u128, ConversionError> {
     let (whole, fraction) = text.split_once('.').unwrap_or((text, ""));
     if text.len() > 64
         || whole.is_empty()
@@ -187,6 +187,7 @@ fn measure(
     part: &HlsPart,
     directory: &Path,
     total: &mut u64,
+    target: u64,
     stop: &Stop,
 ) -> Result<Measured, ConversionError> {
     let mut prefix = Vec::with_capacity(part.resources.len() + 1);
@@ -215,8 +216,7 @@ fn measure(
             prior_bits.checked_add(bits).ok_or(BAD)?,
         ));
     }
-    let target = u64::try_from(longest.div_ceil(SCALE)).map_err(|_| BAD)?;
-    if target == 0 {
+    if target == 0 || longest > u128::from(target).checked_mul(SCALE).ok_or(BAD)? {
         return Err(BAD);
     }
     let target_time = u128::from(target).checked_mul(SCALE).ok_or(BAD)?;
@@ -288,6 +288,13 @@ pub(in crate::conversion) fn write(
     {
         return Err(BAD);
     }
+    let longest = parts
+        .iter()
+        .flat_map(|part| &part.resources)
+        .try_fold(0_u128, |longest, resource| {
+            duration(&resource.duration).map(|duration| longest.max(duration))
+        })?;
+    let target = u64::try_from(longest.div_ceil(SCALE)).map_err(|_| BAD)?;
     let mut total = 0;
     let mut measured = Vec::with_capacity(parts.len());
     for (index, part) in parts.iter().enumerate() {
@@ -308,6 +315,7 @@ pub(in crate::conversion) fn write(
             part,
             &root.join(format!("track-{index:04}")),
             &mut total,
+            target,
             stop,
         )?);
     }
@@ -552,6 +560,31 @@ mod tests {
     }
 
     #[test]
+    fn unequal_renditions_share_one_target_and_use_its_peak_duration_windows() {
+        let root = tempfile::tempdir().unwrap();
+        let video = fixture(
+            root.path(),
+            0,
+            true,
+            &[1000, 2000, 1200],
+            &["6.5", "2", "3"],
+        );
+        let mut audio = fixture(root.path(), 1, true, &[100, 200, 120], &["5.5", "3", "3"]);
+        audio.codecs = vec!["mp4a.40.2".into()];
+        audio.resolution = None;
+        write(root.path(), &[video, audio], &Stop::new()).unwrap();
+        for index in 0..2 {
+            let text = fs::read_to_string(root.path().join(format!("track-{index:04}/media.m3u8")))
+                .unwrap();
+            assert!(text.contains("#EXT-X-TARGETDURATION:7\n"), "{text}");
+        }
+        let master = fs::read_to_string(root.path().join("master.m3u8")).unwrap();
+        // Video's 2+3 second window: 3200*8/5 = 5120.
+        // Audio's 3+3 second window: 320*8/6 rounds up to 427.
+        assert!(master.contains("BANDWIDTH=5547,"), "{master}");
+    }
+
+    #[test]
     fn key_rotation_is_written_in_order_without_redundant_tags() {
         let root = tempfile::tempdir().unwrap();
         let mut part = fixture(root.path(), 0, false, &[1, 1, 1, 1], &["2", "2", "2", "2"]);
@@ -637,8 +670,14 @@ mod tests {
             let texts = texts.iter().map(String::as_str).collect::<Vec<_>>();
             let root = tempfile::tempdir().unwrap();
             let part = fixture(root.path(), 0, false, &sizes, &texts);
-            let actual =
-                measure(&part, &root.path().join("track-0000"), &mut 0, &Stop::new()).unwrap();
+            let actual = measure(
+                &part,
+                &root.path().join("track-0000"),
+                &mut 0,
+                target_ms / 1000,
+                &Stop::new(),
+            )
+            .unwrap();
             assert_eq!(
                 actual.peak, expected,
                 "count={count}, milliseconds={milliseconds:?}"
