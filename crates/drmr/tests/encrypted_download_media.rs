@@ -317,7 +317,7 @@ fn verified(report: &Value) {
 }
 
 fn decoded_bundle_plan(plan: &Value, outputs: usize) {
-    assert_eq!(plan["schema_version"], 4);
+    assert_eq!(plan["schema_version"], 6);
     assert_eq!(plan["required_depth"], "decoded");
     assert_eq!(plan["outputs"].as_array().unwrap().len(), outputs);
 }

@@ -134,8 +134,10 @@ impl InputPreparation {
 /// A successful handler supplies this description; it is not a saved execution instruction.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ActualProcessing {
-    pub mode: ProcessingMode,
-    pub boundaries: BoundaryHandling,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<ProcessingMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boundaries: Option<BoundaryHandling>,
     pub route: ProcessingRouteId,
     pub input_preparation: InputPreparation,
     pub reason_code: String,
@@ -146,27 +148,31 @@ pub struct ActualProcessing {
 impl ActualProcessing {
     pub fn new(route: ProcessingRouteId, input_preparation: InputPreparation) -> Self {
         Self {
-            mode: if matches!(
-                route,
-                ProcessingRouteId::Fmp4Segments | ProcessingRouteId::MpegTsSegments
-            ) {
-                ProcessingMode::Segments
-            } else {
-                ProcessingMode::Stitch
-            },
-            boundaries: if matches!(
-                route,
-                ProcessingRouteId::Fmp4Segments | ProcessingRouteId::MpegTsSegments
-            ) {
-                BoundaryHandling::Preserve
-            } else if matches!(
-                route,
-                ProcessingRouteId::ProgressiveMp4 | ProcessingRouteId::FragmentedMp4
-            ) {
-                BoundaryHandling::NotApplicable
-            } else {
-                BoundaryHandling::Resegment
-            },
+            mode: Some(
+                if matches!(
+                    route,
+                    ProcessingRouteId::Fmp4Segments | ProcessingRouteId::MpegTsSegments
+                ) {
+                    ProcessingMode::Segments
+                } else {
+                    ProcessingMode::Stitch
+                },
+            ),
+            boundaries: Some(
+                if matches!(
+                    route,
+                    ProcessingRouteId::Fmp4Segments | ProcessingRouteId::MpegTsSegments
+                ) {
+                    BoundaryHandling::Preserve
+                } else if matches!(
+                    route,
+                    ProcessingRouteId::ProgressiveMp4 | ProcessingRouteId::FragmentedMp4
+                ) {
+                    BoundaryHandling::NotApplicable
+                } else {
+                    BoundaryHandling::Resegment
+                },
+            ),
             route,
             input_preparation,
             reason_code: format!("{}-handler-completed", route.as_str()),
@@ -221,6 +227,24 @@ impl CandidateRoute {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_actual_processing_round_trips_without_inventing_boundary_evidence() {
+        let current = ActualProcessing::new(
+            ProcessingRouteId::Fmp4Segments,
+            InputPreparation::OriginalSegments,
+        );
+        let mut legacy = serde_json::to_value(&current).unwrap();
+        legacy.as_object_mut().unwrap().remove("mode");
+        legacy.as_object_mut().unwrap().remove("boundaries");
+        let parsed: ActualProcessing = serde_json::from_value(legacy.clone()).unwrap();
+        assert_eq!(serde_json::to_value(parsed).unwrap(), legacy);
+        assert_eq!(serde_json::to_value(&current).unwrap()["mode"], "segments");
+        assert_eq!(
+            serde_json::to_value(&current).unwrap()["boundaries"],
+            "preserve"
+        );
+    }
 
     #[test]
     fn conditional_routes_distinguish_native_minima_from_additional_work() {

@@ -45,7 +45,7 @@
     if (report.error || report.status === 'failed' || report.status === 'cancelled') return false;
     if (envelope.report_kind === 'plan') {
       var legacy = (report.schema_version === 1 || report.schema_version === 2) && !Object.prototype.hasOwnProperty.call(report, 'required_depth');
-      var current = (report.schema_version === 3 || report.schema_version === 4) && ['native', 'decoded'].indexOf(report.required_depth) !== -1;
+      var current = [3, 4, 5, 6].indexOf(report.schema_version) !== -1 && ['native', 'decoded'].indexOf(report.required_depth) !== -1;
       return (legacy || current) && typeof report.plan_id === 'string' && /^[a-f0-9]{64}$/.test(report.plan_id);
     }
     if (report.schema_version !== 1 && report.schema_version !== 2) return false;
@@ -148,6 +148,11 @@
     "output-exists-or-unsafe": "commonDestinationExists",
     "output-exists-or-publish-failed": "commonDestinationExists",
     "resource-budget": "commonResourceBudget",
+    "processing-segments-source-required": "commonUnsupported",
+    "processing-container-change-not-supported": "commonUnsupported",
+    "processing-profile-not-supported": "commonUnsupported",
+    "processing-plan-override-not-supported": "commonPlanFrozen",
+    "processing-selection-invalid": "commonPlanInvalid",
     "request-too-large": "commonResourceBudget",
     "cancelled": "commonInterrupted"
 };
@@ -293,7 +298,16 @@
           return h('tr', null, h('td', null, code(check.tool)), h('td', null, flag(check.passed)), h('td', { text: Number.isSafeInteger(check.checked_manifest_count) ? String(check.checked_manifest_count) : t('commonUnknown') }), h('td', { text: Number.isSafeInteger(check.warning_count) ? String(check.warning_count) : t('commonUnknown') }), h('td', null, check.observed_version ? code(check.observed_version) : word('span', 'commonNotChecked')));
         })));
       }
-      if (conversion.processing) section.appendChild(h('dl', { className: 'kv' }, word('dt', 'commonProcessing'), h('dd', null, code(conversion.processing.route))));
+      if (conversion.processing) {
+        var processing = conversion.processing;
+        var routes = ['progressive-mp4', 'fragmented-mp4', 'dash-presentation', 'fmp4-hls-presentation', 'mpeg-ts-hls', 'mpeg-ts-dash', 'mpeg-ts-sample-aes-hls', 'mpeg-ts-hls-ts', 'fmp4-segments', 'mpeg-ts-segments'];
+        var details = h('dl', { className: 'kv' }, word('dt', 'commonProcessing'), h('dd', null, code(routes.indexOf(processing.route) !== -1 ? processing.route : null)));
+        var mode = ['segments', 'stitch'].indexOf(processing.mode) !== -1 && { segments: 'commonProcessingSegments', stitch: 'commonProcessingStitch' }[processing.mode];
+        var boundaries = ['preserve', 'resegment', 'not-applicable'].indexOf(processing.boundaries) !== -1 && { preserve: 'commonBoundaryPreserve', resegment: 'commonBoundaryResegment', 'not-applicable': 'commonBoundaryNotApplicable' }[processing.boundaries];
+        if (mode) { details.setAttribute('data-common-processing-mode', processing.mode); details.appendChild(word('dt', 'commonProcessingMode')); details.appendChild(word('dd', mode)); }
+        if (boundaries) { details.setAttribute('data-common-processing-boundaries', processing.boundaries); details.appendChild(word('dt', 'commonBoundaries')); details.appendChild(word('dd', boundaries)); }
+        section.appendChild(details);
+      }
       return section;
     }
     function failureView(value) {

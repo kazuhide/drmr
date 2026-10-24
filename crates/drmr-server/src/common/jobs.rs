@@ -665,7 +665,7 @@ impl CommonService {
         let projected =
             projection::project(c.operation, c.schema, c.plan_id.as_deref(), &result.payload)?;
         if let Some(plan) = &c.expected_plan
-            && matches!(plan.schema, 2 | 4)
+            && matches!(plan.schema, 2 | 4 | 6)
             && projected.kind != "failure"
         {
             let ids = |v: &Value| -> Result<Vec<Value>> {
@@ -709,7 +709,29 @@ impl CommonService {
             .origin_analysis
             .as_ref()
             .and_then(|id| self.lock().analyses.get(id).map(|a| a.source_ref.clone()));
-        if payload["plan_id"] != plan.id || !matches!(plan.schema, 2 | 4) {
+        if payload["plan_id"] != plan.id || !matches!(plan.schema, 2 | 4 | 6) {
+            return Err(Error::new(503, "result-invalid"));
+        }
+        let expected_outputs = {
+            let state = self.lock();
+            let request = &state
+                .sessions
+                .get(&c.session)
+                .ok_or_else(unavailable)?
+                .requests
+                .get(&c.request)
+                .ok_or_else(unavailable)?
+                .request
+                .operation;
+            let Operation::Plan { outputs, .. } = request else {
+                return Err(unavailable());
+            };
+            outputs.clone()
+        };
+        let actual_outputs: Vec<drmr_core::conversion::plan::bundle::BundleOutputIntent> =
+            serde_json::from_value(plan.outputs.clone())
+                .map_err(|_| Error::new(503, "result-invalid"))?;
+        if actual_outputs != expected_outputs {
             return Err(Error::new(503, "result-invalid"));
         }
         let analysis = c

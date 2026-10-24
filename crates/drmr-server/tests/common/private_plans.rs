@@ -68,7 +68,7 @@ fn private_plan_bytes(input: &std::path::Path, output: &std::path::Path, schema:
         hls_keys: &HlsInputKeys::default(),
     };
     match schema {
-        1 | 3 => {
+        1 | 3 | 5 => {
             let mut plan = converter
                 .create_execution_plan(ExecutionPlanRequest {
                     input,
@@ -77,14 +77,17 @@ fn private_plan_bytes(input: &std::path::Path, output: &std::path::Path, schema:
                     target: TargetProtection::Clear,
                 })
                 .unwrap();
-            if schema == 1 {
-                plan.schema_version = 1;
-                plan.required_depth = None;
+            if schema != 5 {
+                plan.schema_version = schema;
+                if schema == 1 {
+                    plan.required_depth = None;
+                }
+                plan.processing = None;
                 plan.plan_id = legacy_single_id(&plan);
             }
             serde_json::to_vec_pretty(&plan).unwrap()
         }
-        2 | 4 => {
+        2 | 4 | 6 => {
             let mut plan = converter
                 .create_bundle_plan(BundlePlanRequest {
                     input,
@@ -99,9 +102,12 @@ fn private_plan_bytes(input: &std::path::Path, output: &std::path::Path, schema:
                     }],
                 })
                 .unwrap();
-            if schema == 2 {
-                plan.schema_version = 2;
-                plan.required_depth = None;
+            if schema != 6 {
+                plan.schema_version = schema;
+                if schema == 2 {
+                    plan.required_depth = None;
+                }
+                plan.processing = None;
                 plan.plan_id = legacy_bundle_id(&plan);
             }
             serde_json::to_vec_pretty(&plan).unwrap()
@@ -118,6 +124,8 @@ fn legacy_single_id(plan: &drmr_core::conversion::plan::ExecutionPlan) -> String
         source: &'a drmr_core::conversion::SourceInventory,
         source_format: drmr_core::inspection::OutputFormat,
         intent: &'a drmr_core::conversion::plan::OutputIntent,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        required_depth: Option<drmr_core::conversion::ValidationDepth>,
     }
     use sha2::Digest as _;
     hex::encode(sha2::Sha256::digest(
@@ -127,6 +135,7 @@ fn legacy_single_id(plan: &drmr_core::conversion::plan::ExecutionPlan) -> String
             source: &plan.source,
             source_format: plan.source_format,
             intent: &plan.intent,
+            required_depth: plan.required_depth,
         })
         .unwrap(),
     ))
@@ -141,6 +150,8 @@ fn legacy_bundle_id(plan: &drmr_core::conversion::plan::bundle::BundlePlan) -> S
         source_format: drmr_core::inspection::OutputFormat,
         output_root: &'a std::path::Path,
         outputs: &'a [drmr_core::conversion::plan::bundle::BundleOutputIntent],
+        #[serde(skip_serializing_if = "Option::is_none")]
+        required_depth: Option<drmr_core::conversion::ValidationDepth>,
     }
     use sha2::Digest as _;
     hex::encode(sha2::Sha256::digest(
@@ -151,6 +162,7 @@ fn legacy_bundle_id(plan: &drmr_core::conversion::plan::bundle::BundlePlan) -> S
             source_format: plan.source_format,
             output_root: &plan.output_root,
             outputs: &plan.outputs,
+            required_depth: plan.required_depth,
         })
         .unwrap(),
     ))
@@ -164,7 +176,7 @@ fn copy_plan_input(path: &std::path::Path) {
 
 #[test]
 fn private_saved_plan_imports_legacy_and_current_schemas_and_preserves_public_plan_selection() {
-    for schema in [1, 2, 3, 4] {
+    for schema in [1, 2, 3, 4, 5, 6] {
         let root = tempfile::tempdir().unwrap();
         let (input_root, output, private, server) = private_plan_service(root.path());
         let client = Client::new(&server.url());
@@ -240,6 +252,11 @@ fn private_saved_plan_imports_legacy_and_current_schemas_and_preserves_public_pl
                 if schema <= 2 { "decoded" } else { "native" }
             );
             assert_eq!(plan["plan_id"], expected["plan_id"]);
+            if schema >= 5 {
+                assert_eq!(plan["processing"], expected["processing"]);
+            } else {
+                assert!(plan.get("processing").is_none());
+            }
             let exported = client.get(&format!("/api/common/plans/{plan_ref}/export"));
             assert_eq!(exported.status, 200);
             assert_eq!(exported.body, bytes);

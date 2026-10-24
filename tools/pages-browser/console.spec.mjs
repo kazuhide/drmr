@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import { allowedConsoleRequest, consoleOrigin, fixtureOrigin, digest, consoleAssets } from './console-source.mjs';
-import { assertVerification as checks, decodeBadgeState, legacyPlan, planMinimumDepth } from './console-evidence.mjs';
+import { assertVerification as checks, decodeBadgeState, compatibilityPlan, legacyPlan, planMinimumDepth } from './console-evidence.mjs';
 
 const id = () => randomBytes(16).toString('hex');
 const privateValues = ['00112233445566778899aabbccddeeff', 'ffeeddccbbaa99887766554433221100',
@@ -128,6 +128,11 @@ async function renderedJob(page, job, { timeout = 15_000 } = {}) {
       const row = rows[index], block = host.locator('[data-common-output-index="' + index + '"]');
       if (row.id !== undefined) await expect(block).toHaveAttribute('data-common-output-id', row.id, { timeout });
       const verification = (row.conversion || row).verification;
+      const processing = (row.conversion || row).processing;
+      if (processing?.mode) {
+        await expect(block.locator('[data-common-processing-mode]')).toHaveAttribute('data-common-processing-mode', processing.mode);
+        await expect(block.locator('[data-common-processing-boundaries]')).toHaveAttribute('data-common-processing-boundaries', processing.boundaries);
+      }
       if (envelope.report_kind === 'verification') await check(block, 'output_matches_plan', booleanState(row.output_matches_plan));
       await verificationChecks(block, verification);
       if (Object.hasOwn(row, 'signaling')) await check(block, 'signaling', !row.signaling.systems.length ? 'not-requested' : booleanState(row.signaling.verified));
@@ -222,7 +227,7 @@ async function retainedPlanBytes(planId, expectedBytes) {
       else if (metadata.isFile() && name.endsWith('.json') && metadata.size < 32 * 1024 * 1024) {
         const bytes = await readFile(path);
         let value; try { value = JSON.parse(bytes.toString('utf8')); } catch { continue; }
-        if (value.plan_id === planId && value.source && [1, 2, 3, 4].includes(value.schema_version)) {
+        if (value.plan_id === planId && value.source && [1, 2, 3, 4, 5, 6].includes(value.schema_version)) {
           planMinimumDepth(value);
           expect(bytes.equals(expectedBytes)).toBe(true); matches.push(digest(bytes));
         }
@@ -237,31 +242,33 @@ test.beforeAll(async ({ request }, info) => {
   caps = await api(request, '/api/common/capabilities');
   expect(caps.schema_version).toBe(1); expect(caps.worker_policy).toEqual({ maximum: 4, automatic: true });
   const worker = 'worker-' + info.workerIndex;
-  importedPlans = Object.fromEntries([1, 2, 3, 4].map(version => ['v' + version, 'cli-v' + version + '-' + worker + '.plan.json']));
-  const saved = join(fixture.input, importedPlans.v3), destination = join(fixture.output, 'cli-v3-' + worker + '.mp4');
+  importedPlans = Object.fromEntries([1, 2, 3, 4, 5, 6].map(version => ['v' + version, 'cli-v' + version + '-' + worker + '.plan.json']));
+  const saved = join(fixture.input, importedPlans.v5), destination = join(fixture.output, 'cli-v5-' + worker + '.mp4');
   const planned = await cli(['plan', fixture.progressive, '--to', 'clear', '--format', 'mp4', '--output', destination, '--save', saved, '--json']);
-  expect(planned.report.schema_version).toBe(3); expect(planMinimumDepth(planned.report)).toBe('native');
+  expect(planned.report.schema_version).toBe(5); expect(planMinimumDepth(planned.report)).toBe('native');
   const legacySingle = legacyPlan(planned.report);
   await writeFile(join(fixture.input, importedPlans.v1), JSON.stringify(legacySingle), { flag: 'wx', mode: 0o600 });
+  await writeFile(join(fixture.input, importedPlans.v3), JSON.stringify(compatibilityPlan(planned.report, 3)), { flag: 'wx', mode: 0o600 });
   const converted = await cli(['convert', '--decode', '--plan', saved, '--json']); checks(converted.report.verification);
-  const named = join(fixture.root, 'cli-v4-' + worker + '.outputs.json'), savedV4 = join(fixture.input, importedPlans.v4);
+  const named = join(fixture.root, 'cli-v6-' + worker + '.outputs.json'), savedV6 = join(fixture.input, importedPlans.v6);
   await writeFile(named, JSON.stringify({ schema_version: 1, outputs: [
     { id: 'dash', format: 'dash', target: 'cbcs', drms: ['widevine', 'playready'], conformance: 'none' },
     { id: 'hls', format: 'hls', target: 'cbcs', drms: ['fairplay'], conformance: 'none' },
   ] }), { flag: 'wx', mode: 0o600 });
   const keys = join(fixture.config, 'keys.json');
-  const plannedV4 = await cli(['plan', '--decode', join(fixture.source, 'media.m3u8'), '--outputs', named,
-    '--output', join(fixture.output, 'cli-v4-' + worker), '--save', savedV4, '--keys-file', keys, '--json']);
-  expect(plannedV4.report.schema_version).toBe(4); expect(planMinimumDepth(plannedV4.report)).toBe('decoded');
-  const legacyBundle = legacyPlan(plannedV4.report);
+  const plannedV6 = await cli(['plan', '--decode', join(fixture.source, 'media.m3u8'), '--outputs', named,
+    '--output', join(fixture.output, 'cli-v6-' + worker), '--save', savedV6, '--keys-file', keys, '--json']);
+  expect(plannedV6.report.schema_version).toBe(6); expect(planMinimumDepth(plannedV6.report)).toBe('decoded');
+  const legacyBundle = legacyPlan(plannedV6.report);
   await writeFile(join(fixture.input, importedPlans.v2), JSON.stringify(legacyBundle), { flag: 'wx', mode: 0o600 });
-  const convertedV4 = await cli(['convert', '--plan', savedV4, '--keys-file', keys, '--json']);
-  for (const output of convertedV4.report.outputs) checks(output.conversion.verification);
+  await writeFile(join(fixture.input, importedPlans.v4), JSON.stringify(compatibilityPlan(plannedV6.report, 4)), { flag: 'wx', mode: 0o600 });
+  const convertedV6 = await cli(['convert', '--plan', savedV6, '--keys-file', keys, '--json']);
+  for (const output of convertedV6.report.outputs) checks(output.conversion.verification);
   await writeFile(join(process.env.PW_REPORT_ROOT, 'cli-import-setup-' + worker + '.json'), JSON.stringify({
     sourceHead: fixture.sourceHead, binarySha256: fixture.binarySha256, planId: planned.report.plan_id,
     plannedSha256: planned.sha256, convertedSha256: converted.sha256, verification: converted.report.verification,
     legacySinglePlanId: legacySingle.plan_id, legacyBundlePlanId: legacyBundle.plan_id,
-    v4: { planId: plannedV4.report.plan_id, plannedSha256: plannedV4.sha256, convertedSha256: convertedV4.sha256 } }, null, 2));
+    v6: { planId: plannedV6.report.plan_id, plannedSha256: plannedV6.sha256, convertedSha256: convertedV6.sha256 } }, null, 2));
 });
 test.beforeEach(async ({ page, context }) => {
   const record = { errors: [], console: [], assets: {}, responseErrors: [], privacyLeaks: [], jobs: [], submitted: [], selections: {} }, pending = [];
@@ -273,7 +280,10 @@ test.beforeEach(async ({ page, context }) => {
       const body = request.postDataJSON();
       expect(body.runtime.keys_ref).toBe(record.selections.keys || null);
       expect(body.runtime.decode).toBe(record.decode || false);
-      if (body.operation.kind === 'plan') expect(body.operation.output_parent_ref).toBe(record.selections['output-parent']);
+      if (body.operation.kind === 'plan') {
+        expect(body.operation.output_parent_ref).toBe(record.selections['output-parent']);
+        for (const output of body.operation.outputs) expect(['auto', 'segments', 'stitch']).toContain(output.processing);
+      } else expect(Object.hasOwn(body.operation, 'processing')).toBe(false);
       record.submitted.push({ requestId: body.request_id, sessionId: body.session_id, operation: body.operation.kind });
     }
     if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/common/sessions') {
@@ -351,6 +361,14 @@ for (const language of ['en', 'ja']) for (const width of [320, 599, 600, 601, 76
       width: document.documentElement.clientWidth, input: document.querySelector('#common-destination').getBoundingClientRect().toJSON() }));
     expect(layout.document).toBeLessThanOrEqual(layout.width + 1); expect(layout.input.width).toBeGreaterThan(100);
     await page.keyboard.press('Tab'); expect(await input.evaluate(element => document.activeElement !== element)).toBe(true);
+    const processing = page.locator('[data-common-field="processing"]').first();
+    await expect(processing).toHaveValue('auto');
+    await processing.focus(); await page.keyboard.press('ArrowDown'); await page.keyboard.press('Enter');
+    await expect(processing).toHaveValue('segments');
+    await expect(processing).toBeFocused();
+    await page.locator('#common-add-output').click();
+    await expect(page.locator('[data-common-field="processing"]').nth(1)).toHaveValue('auto');
+    await expect(processing).toHaveValue('segments');
     const accessibility = await new AxeBuilder({ page }).analyze(); expect(accessibility.violations).toEqual([]);
     await page.screenshot({ path: info.outputPath('common-' + language + '-' + width + '.png'), fullPage: true });
     await reportAttachment(info, 'layout-and-axe', { layout, violations: accessibility.violations, language, width });
@@ -368,15 +386,20 @@ for (const language of ['en', 'ja']) {
     expect(analysis.observedReport.report.input_admitted).toBe(true);
     checks(analysis.observedReport.report.verification, { scope: 'source-admission' });
     await configure(page, 'browser-' + language, encrypted);
-    const planned = await plan(page); expect(planned.value.plan_schema_version).toBe(4);
+    const planned = await plan(page); expect(planned.value.plan_schema_version).toBe(6);
     expect(planned.value.required_depth).toBe('decoded');
     expect(planned.value.outputs).toHaveLength(2);
+    expect(planned.value.processing).toHaveLength(2);
+    for (const choice of planned.value.processing) {
+      expect(choice.selection).toEqual({ requested: 'auto', resolved: 'stitch', boundaries: 'resegment', segment_duration_ms: 2000 });
+    }
+    await expect(page.locator('[data-common-plan-processing="stitch"]')).toHaveCount(2);
     const downloadPromise = page.waitForEvent('download'); await page.locator('#common-export').click();
     const download = await downloadPromise, bytes = await readFile(await download.path());
     const saved = join(fixture.input, 'browser-' + language + '.plan.json');
     await writeFile(saved, bytes, { flag: 'wx', mode: 0o600 });
     const parsed = JSON.parse(bytes.toString('utf8')); expect(parsed.plan_id).toBe(planned.value.plan_id);
-    expect(parsed.schema_version).toBe(4); expect(planMinimumDepth(parsed)).toBe('decoded');
+    expect(parsed.schema_version).toBe(6); expect(planMinimumDepth(parsed)).toBe('decoded');
     const retainedHashes = await retainedPlanBytes(planned.value.plan_id, bytes);
     const converted = await observedJob(page, '#common-convert', 'convert');
     const verified = await observedJob(page, '#common-verify', 'verify');
@@ -404,8 +427,8 @@ test('CLI version-one saved plan can be independently verified without conversio
   expect(pages.get(page).submitted.map(item => item.operation)).toEqual(['verify']);
 });
 
-test('a native version-three saved plan keeps unrequested decoding distinct and permits strengthening', async ({ page }) => {
-  await openSession(page, 'saved-plan', importedPlans.v3);
+for (const version of [3, 5]) test('a native version-' + version + ' saved plan keeps unrequested decoding distinct and permits strengthening', async ({ page }) => {
+  await openSession(page, 'saved-plan', importedPlans['v' + version]);
   const native = await observedJob(page, '#common-verify', 'verify');
   checks(native.observedReport.report.verification, { depth: 'native' });
   await requestDecode(page);
@@ -415,8 +438,8 @@ test('a native version-three saved plan keeps unrequested decoding distinct and 
   expect(pages.get(page).submitted.map(item => item.operation)).toEqual(['verify', 'verify']);
 });
 
-test('a version-four saved decode minimum survives an unchecked runtime option', async ({ page }) => {
-  await openSession(page, 'saved-plan', importedPlans.v4);
+for (const version of [4, 6]) test('a version-' + version + ' saved decode minimum survives an unchecked runtime option', async ({ page }) => {
+  await openSession(page, 'saved-plan', importedPlans['v' + version]);
   await pick(page, 'keys', 'keys.json');
   const verified = await observedJob(page, '#common-verify', 'verify');
   for (const output of verified.observedReport.report.outputs) checks(output.verification);

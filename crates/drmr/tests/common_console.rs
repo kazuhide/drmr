@@ -252,14 +252,20 @@ fn real_http_flow_saves_exports_executes_and_independently_verifies_the_same_cli
     ));
     assert_eq!(analysis["report"]["input_admitted"], true);
     let planned = client.job(&submit(2, json!({"kind":"plan","analysis_ref":analyzed["analysis_ref"],"output_parent_ref":parent_ref,"destination_name":"results","outputs":[
-        {"id":"dash","format":"dash","target":"clear","drms":[],"conformance":"none"},
-        {"id":"hls","format":"hls","target":"clear","drms":[],"conformance":"none"}
+        {"id":"dash","format":"dash","target":"clear","drms":[],"conformance":"none","processing":"auto"},
+        {"id":"hls","format":"hls","target":"clear","drms":[],"conformance":"none","processing":"stitch"}
     ]})), "succeeded");
     let plan_ref = planned["plan_ref"].clone();
     let plan = client.get(&format!("/api/common/plans/{}", plan_ref.as_str().unwrap()));
-    assert_eq!(plan["plan_schema_version"], 4);
+    assert_eq!(plan["plan_schema_version"], 6);
     assert_eq!(plan["required_depth"], "decoded");
     assert_eq!(plan["outputs"].as_array().unwrap().len(), 2);
+    assert_eq!(plan["outputs"][0]["processing"], "auto");
+    assert_eq!(plan["outputs"][1]["processing"], "stitch");
+    for choice in plan["processing"].as_array().unwrap() {
+        assert_eq!(choice["selection"]["resolved"], "stitch");
+        assert_eq!(choice["selection"]["boundaries"], "resegment");
+    }
     let exported = client.export_plan(plan_ref.as_str().unwrap());
     let saved = input.join("exported.plan.json");
     native::create_private_new(&saved)

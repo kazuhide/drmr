@@ -415,7 +415,7 @@ fn saved_plan(
         ],
         secrets,
     );
-    assert_eq!(planned["schema_version"], 4);
+    assert_eq!(planned["schema_version"], 6);
     assert_eq!(planned["required_depth"], "decoded");
     assert_eq!(planned["kind"], "execution-plan");
     assert_eq!(planned["outputs"].as_array().unwrap().len(), 2);

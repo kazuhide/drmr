@@ -197,7 +197,7 @@ table.common-outputs .btn { padding: 4px 6px; min-height: 36px; height: auto; fo
   .common-outputs tr { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px 10px; padding: 12px 0; border-bottom: 1px solid var(--line); }
   .common-outputs tr:first-child { padding-top: 0; }
   table.common-outputs td { display: block; padding: 0; border: 0; min-width: 0; }
-  .common-outputs td:nth-child(4) { grid-column: 1 / -1; }
+  .common-outputs td:nth-child(5) { grid-column: 1 / -1; }
   .common-outputs .common-cell-label { display: block; }
   .common-drm-choices { flex-direction: row; flex-wrap: wrap; gap: 8px; }
   .common-result-block .kv { grid-template-columns: minmax(0, 1fr); gap: 2px; }

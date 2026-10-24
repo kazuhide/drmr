@@ -471,10 +471,7 @@ fn execute_conversion(
         format
     } else {
         progress.mark("inspection");
-        inspection::inspect(source)
-            .map_err(|_| ConversionError("invalid-input-media"))?
-            .format
-            .into()
+        command.default_output_format(source)?
     };
     progress.mark("input-preparation");
     let request = ConversionRequest {
@@ -507,6 +504,7 @@ fn execute_conversion(
 }
 
 fn configured_format(
+    command: &Converter,
     args: &ConvertArgs,
     input: &crate::download_cli::Input,
     progress: &Progress,
@@ -515,12 +513,41 @@ fn configured_format(
         (_, Some(format)) => Ok(Some(format)),
         (crate::download_cli::Input::Local(path), None) => {
             progress.mark("inspection");
-            inspection::inspect(path)
-                .map(|report| Some(report.format.into()))
-                .map_err(|_| ConversionError("invalid-input-media"))
+            command.default_output_format(path).map(Some)
         }
         (crate::download_cli::Input::Url(_), None) => Ok(None),
     }
+}
+
+fn processing_text(
+    out: &mut impl Write,
+    processing: &inspection::ActualProcessing,
+) -> std::io::Result<()> {
+    use drmr_core::conversion::processing::BoundaryHandling;
+    if let Some(mode) = processing.mode {
+        writeln!(out, "Processing mode: {}", mode.as_str())?;
+    }
+    if let Some(boundaries) = processing.boundaries {
+        let description = match boundaries {
+            BoundaryHandling::Preserve => "original segment boundaries preserved",
+            BoundaryHandling::Resegment => "output segmented again",
+            BoundaryHandling::NotApplicable => "no output segmentation",
+        };
+        writeln!(out, "Segment boundaries: {description}")?;
+    }
+    writeln!(out, "Processing route: {}", processing.route.as_str())?;
+    writeln!(
+        out,
+        "Input preparation: {}",
+        processing.input_preparation.description()
+    )?;
+    writeln!(out, "Reason: {}", processing.explanation)?;
+    let tools = processing
+        .required_tools
+        .iter()
+        .map(|tool| tool.as_str())
+        .collect::<Vec<_>>();
+    writeln!(out, "Required tools: {}", tools.join(", "))
 }
 
 pub(crate) fn conversion_text(report: &ConversionReport) -> std::io::Result<()> {
@@ -533,19 +560,7 @@ pub(crate) fn conversion_text(report: &ConversionReport) -> std::io::Result<()> 
     )
     .and_then(|()| {
         if let Some(processing) = &report.processing {
-            writeln!(out, "Processing route: {}", processing.route.as_str())?;
-            writeln!(
-                out,
-                "Input preparation: {}",
-                processing.input_preparation.description()
-            )?;
-            writeln!(out, "Reason: {}", processing.explanation)?;
-            let tools = processing
-                .required_tools
-                .iter()
-                .map(|tool| tool.as_str())
-                .collect::<Vec<_>>();
-            writeln!(out, "Required tools: {}", tools.join(", "))?;
+            processing_text(&mut out, processing)?;
         }
         Ok(())
     })
@@ -612,10 +627,6 @@ pub fn convert(args: &ConvertArgs) -> ExitCode {
         Ok(keys) => keys,
         Err(cause) => return error("convert", cause, args.json, &progress, None),
     };
-    let local_format = match configured_format(args, &input, &progress) {
-        Ok(value) => value,
-        Err(cause) => return error("convert", cause, args.json, &progress, None),
-    };
     let converter = converter(
         &args.packager_bin,
         args.max_workers,
@@ -625,6 +636,10 @@ pub fn convert(args: &ConvertArgs) -> ExitCode {
     )
     .with_processing(args.processing.unwrap_or_default())
     .with_output_signaling(keys.signaling.clone());
+    let local_format = match configured_format(&converter, args, &input, &progress) {
+        Ok(value) => value,
+        Err(cause) => return error("convert", cause, args.json, &progress, None),
+    };
     let execute = |command: &Converter| {
         execute_conversion(
             command,
@@ -824,4 +839,43 @@ fn verification_result(
         progress.diagnostic("verify", "result-output-unavailable");
     }
     ExitCode::from(u8::from(result.is_err() || !report.passed))
+}
+
+#[cfg(test)]
+mod processing_summary_tests {
+    use super::*;
+
+    #[test]
+    fn resolved_mode_and_boundaries_are_printed_only_when_recorded() {
+        use inspection::{ActualProcessing, InputPreparation, ProcessingRouteId};
+        for (route, boundaries) in [
+            (
+                ProcessingRouteId::Fmp4Segments,
+                "original segment boundaries preserved",
+            ),
+            (
+                ProcessingRouteId::Fmp4HlsPresentation,
+                "output segmented again",
+            ),
+            (ProcessingRouteId::ProgressiveMp4, "no output segmentation"),
+        ] {
+            let mut actual = ActualProcessing::new(route, InputPreparation::CompleteFile);
+            let mut bytes = Vec::new();
+            processing_text(&mut bytes, &actual).unwrap();
+            let text = String::from_utf8(bytes).unwrap();
+            assert!(text.contains(&format!(
+                "Processing mode: {}",
+                actual.mode.unwrap().as_str()
+            )));
+            assert!(text.contains(&format!("Segment boundaries: {boundaries}")));
+            actual.mode = None;
+            actual.boundaries = None;
+            let mut bytes = Vec::new();
+            processing_text(&mut bytes, &actual).unwrap();
+            let text = String::from_utf8(bytes).unwrap();
+            assert!(!text.contains("Processing mode:"));
+            assert!(!text.contains("Segment boundaries:"));
+            assert!(text.contains(route.as_str()));
+        }
+    }
 }

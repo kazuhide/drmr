@@ -140,6 +140,36 @@ mod tests {
     use super::*;
 
     #[test]
+    fn plan_outputs_keep_independent_modes_and_reject_malformed_or_frozen_overrides() {
+        let value = json!({"kind":"plan","analysis_ref":"analysis","output_parent_ref":"parent",
+            "destination_name":"output","outputs":[
+                {"id":"hls","format":"hls-ts","target":"clear","drms":[],"processing":"segments"},
+                {"id":"dash","format":"dash","target":"clear","drms":[],"processing":"stitch"}]});
+        let operation: Operation = serde_json::from_value(value.clone()).unwrap();
+        let projected = serde_json::to_value(operation).unwrap();
+        assert_eq!(projected["outputs"][0]["processing"], "segments");
+        assert_eq!(projected["outputs"][1]["processing"], "stitch");
+        for invalid in [
+            Value::Null,
+            json!("tracks"),
+            json!("PRIVATE_MODE"),
+            json!({}),
+        ] {
+            let mut changed = value.clone();
+            changed["outputs"][0]["processing"] = invalid;
+            assert!(serde_json::from_value::<Operation>(changed).is_err());
+        }
+        for operation in ["convert", "verify"] {
+            assert!(
+                serde_json::from_value::<Operation>(
+                    json!({"kind":operation,"plan_ref":"plan","processing":"auto"})
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
     fn runtime_decode_defaults_to_native_and_is_part_of_request_identity() {
         let native = json!({"keys_ref":null,"max_workers":null});
         let parsed: Runtime = serde_json::from_value(native.clone()).unwrap();

@@ -504,7 +504,7 @@ fn url_analysis_saved_plan_execution_and_verification_use_the_retained_original_
     let on_disk: serde_json::Value = serde_json::from_slice(&saved).unwrap();
     assert_eq!(planned, on_disk);
     assert_eq!(planned["kind"], "execution-plan");
-    assert_eq!(planned["schema_version"], 3);
+    assert_eq!(planned["schema_version"], 5);
     assert_eq!(planned["required_depth"], "decoded");
     assert!(planned["plan_id"].as_str().is_some_and(|id| !id.is_empty()));
     let text = std::str::from_utf8(&saved).unwrap();

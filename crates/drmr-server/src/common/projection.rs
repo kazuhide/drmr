@@ -1,7 +1,12 @@
 //! Closed views of existing CLI reports. No raw result is an HTTP response.
+mod plan_view;
+#[cfg(test)]
+mod processing_tests;
+mod processing_view;
 use super::wire::{Error, Result};
 use crate::common_protocol::OperationName;
 use drmr_core::inspection::{ActualProcessing, Inspection, OutputFormat};
+use plan_view::project as plan;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, json};
 
@@ -194,6 +199,8 @@ fn processing(v: &Value, verification: &Value, input: &Value) -> Result<Value> {
     object(
         v,
         &[
+            "mode",
+            "boundaries",
             "route",
             "input_preparation",
             "reason_code",
@@ -202,13 +209,36 @@ fn processing(v: &Value, verification: &Value, input: &Value) -> Result<Value> {
         ],
     )?;
     let p: ActualProcessing = typed(v)?;
+    if matches!(
+        p.route,
+        ProcessingRouteId::Fmp4Segments | ProcessingRouteId::MpegTsSegments
+    ) && p.input_preparation != drmr_core::inspection::InputPreparation::OriginalSegments
+    {
+        return Err(bad());
+    }
     let mut expected = ActualProcessing::new(p.route, p.input_preparation);
+    if v.get("mode").is_some() != v.get("boundaries").is_some() {
+        return Err(bad());
+    }
+    if let Some(mode) = v.get("mode") {
+        text(mode, &["segments", "stitch"])?;
+        text(
+            &v["boundaries"],
+            &["preserve", "resegment", "not-applicable"],
+        )?;
+    } else {
+        expected.mode = None;
+        expected.boundaries = None;
+    }
     let decoded =
         verification["schema_version"] == 1 || verification["required_depth"] == "decoded";
     if decoded {
         expected
             .required_tools
             .splice(0..0, [RequiredTool::Ffmpeg, RequiredTool::Ffprobe]);
+        if p.route == ProcessingRouteId::MpegTsSegments {
+            expected.required_tools.push(RequiredTool::ShakaPackager);
+        }
     } else {
         let encrypted_mp4 = input["format"] == "mp4"
             && matches!(input["protection"].as_str(), Some("cenc" | "cbcs"));
@@ -647,74 +677,6 @@ fn analysis(v: &Value) -> Result<(Value, &'static str, bool)> {
         (out, "analysis", v["input_admitted"] == true && success)
     })
 }
-fn plan(v: &Value) -> Result<(Value, &'static str, bool)> {
-    Ok({
-        if v["kind"] != "execution-plan" {
-            return Err(bad());
-        }
-        let schema = integer(&v["schema_version"])?;
-        let mut out = if matches!(schema, 1 | 3) {
-            object(
-                v,
-                &[
-                    "kind",
-                    "schema_version",
-                    "plan_id",
-                    "source_format",
-                    "source",
-                    "intent",
-                    "measurements",
-                    "required_depth",
-                ],
-            )?;
-            object(&v["intent"], &["format", "target", "output"])?;
-            let _: drmr_core::conversion::plan::OutputIntent = typed(&v["intent"])?;
-            let mut out = select(v, &["kind", "schema_version", "plan_id", "source_format"]);
-            out["intent"] = select(&v["intent"], &["format", "target"]);
-            out
-        } else if matches!(schema, 2 | 4) {
-            object(
-                v,
-                &[
-                    "kind",
-                    "schema_version",
-                    "plan_id",
-                    "source_format",
-                    "source",
-                    "output_root",
-                    "outputs",
-                    "measurements",
-                    "required_depth",
-                ],
-            )?;
-            let _: Vec<drmr_core::conversion::plan::bundle::BundleOutputIntent> =
-                typed(&v["outputs"])?;
-            for o in v["outputs"].as_array().ok_or_else(bad)? {
-                object(o, &["id", "format", "target", "drms", "conformance"])?;
-            }
-            select(
-                v,
-                &[
-                    "kind",
-                    "schema_version",
-                    "plan_id",
-                    "source_format",
-                    "outputs",
-                ],
-            )
-        } else {
-            return Err(bad());
-        };
-        if schema >= 3 {
-            let _: drmr_core::conversion::ValidationDepth = typed(&v["required_depth"])?;
-            out["required_depth"] = v["required_depth"].clone();
-        } else if v.get("required_depth").is_some() {
-            return Err(bad());
-        }
-        let _: OutputFormat = typed(&v["source_format"])?;
-        (out, "plan", true)
-    })
-}
 fn single_conversion(v: &Value) -> Result<(Value, &'static str, bool)> {
     Ok({
         let out = conversion(v, true)?;
@@ -880,11 +842,11 @@ pub fn project(
     let (mut value, kind, success) = match operation {
         OperationName::Analyze => analysis(v)?,
         OperationName::Plan => plan(v)?,
-        OperationName::Convert if matches!(schema, Some(1 | 3)) => single_conversion(v)?,
-        OperationName::Convert | OperationName::Verify if matches!(schema, Some(2 | 4)) => {
+        OperationName::Convert if matches!(schema, Some(1 | 3 | 5)) => single_conversion(v)?,
+        OperationName::Convert | OperationName::Verify if matches!(schema, Some(2 | 4 | 6)) => {
             bundle(operation, v)?
         }
-        OperationName::Verify if matches!(schema, Some(1 | 3)) => single_verification(v)?,
+        OperationName::Verify if matches!(schema, Some(1 | 3 | 5)) => single_verification(v)?,
         _ => return Err(bad()),
     };
     if operation != OperationName::Analyze {
@@ -1569,6 +1531,11 @@ const FIXED_INSPECTION_TOKENS: &[&str] = &[
 ];
 
 const FAILURE_CODES: &[&str] = &[
+    "processing-segments-source-required",
+    "processing-container-change-not-supported",
+    "processing-profile-not-supported",
+    "processing-plan-override-not-supported",
+    "processing-selection-invalid",
     "audio-presentation-edit-not-supported",
     "cancelled",
     "cenc-hls-output-not-supported",
