@@ -70,6 +70,15 @@ The supported source contains one AAC-LC (AAC Low Complexity) audio track stored
 
 `convert` preserves that range for clear, `cenc`, and `cbcs` MP4 or DASH output, and clear, `cbcs`, or AES-128 fMP4 HLS output. Clear MP4 copies the original encoded tracks into a progressive file. The other outputs prepare complete tracks, package fragments, and retain each track's playback window in the resulting metadata. Joint encrypted MP4 combines only the qualified tracks from that original file. It keeps fragment-relative data offsets and assigns distinct track identifiers; it does not combine unrelated clips. Modified fragments do not advertise unqualified Common Media Application Format (CMAF) brands.
 
+Progressive copying and input decryption run in Rust. The writer copies the
+original into a private file and decrypts each sample at its original byte
+position. It restores clear sample types and replaces protection boxes with
+equal-sized padding boxes whose contents are zeroed. Sample and chunk locations,
+timestamps, playback edits and display settings therefore remain unchanged;
+this copy is not joined, resegmented or decoded. Complete media is streamed
+through bounded buffers. The original-to-result checks independently read every
+selected sample and its timing and playback range before publication.
+
 DASH and HLS are segmented again with a two-second target. Encoded audio frames remain complete even when the playback range ends inside the final frame. The final output's own edit, each segment's declared presentation interval, and the manifest's end must agree. DASH retains an explicit final period duration. Finite-window DASH and HLS durations use the exact presented sample bounds, rounded upward to nine decimal places only when decimal text is needed. A changed declaration must equal that calculated value; a one-sample edit is not accepted as playlist rounding. The ordinary nonfinite HLS profile retains its separate decimal-rounding rule described above. HLS initialization segments keep the zero movie and track durations required by [RFC 8216](https://www.rfc-editor.org/rfc/rfc8216.html#section-3.3); those headers are not used to invent the audio end.
 
 ### Additional decoding: every sample and each file's own window

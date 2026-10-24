@@ -114,11 +114,10 @@ cannot serve as cryptographic authentication of either.
 Native `analyze`, saved planning and ordinary `verify` need no FFmpeg, ffprobe
 or Shaka Packager for supported inputs. Conversion uses Shaka Packager on its
 packaging/encryption routes; qualified `segments` routes instead transform
-original resources and generate the manifests in Rust. Clear finite progressive MP4 can use a native
-copy. The edit-preserving encrypted finite progressive route retains an
-FFmpeg copy remux; this applies when preparing that encrypted source for MP4,
-DASH or fMP4 HLS. It rewrites the container without transcoding and is separate
-from verification. `--decode` requires compatible FFmpeg and ffprobe. For TS
+original resources and generate the manifests in Rust. Qualified finite
+progressive MP4 copying and decryption also run in Rust, retaining sample
+locations, clocks and playback edits. FFmpeg and ffprobe are used only for
+complete decoding. `--decode` requires compatible builds of both. For TS
 segment conversion, it also uses Shaka Packager to prepare decoder inputs;
 the additional decoded comparison retains the native boundary checks.
 External manifest validators remain separately requested tools.

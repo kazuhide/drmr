@@ -23,21 +23,32 @@ below; add their executable directories to `PATH`.
 Shaka Packager performs packaging and encryption on its supported conversion
 routes. Qualified `--processing segments` conversion uses Rust for TS-to-TS
 and fMP4-to-fMP4 processing, including HLS/DASH manifest generation, and needs
-none of those tools at native depth. Clear finite progressive MP4 can use a native copy; the edit-preserving
-encrypted finite progressive route retains an FFmpeg copy remux without
-transcoding. `--decode` requires FFmpeg and ffprobe for the additional complete
+none of those tools at native depth. Qualified finite progressive MP4 uses a
+native copy, including decryption of `cenc` or `cbcs` input. Its sample locations,
+clocks and playback edits remain unchanged. FFmpeg and ffprobe are used only
+when complete decoding is required. `--decode` requires both for the additional
 decoder checks. TS segment conversion with `--decode` also needs Shaka Packager
 for preparing the decoder inputs. See [verification depth](verification.md).
 
 The lower bounds describe the supported baseline, rather than the earliest version that might process a particular file. CI pins and checksum-verifies direct media-tool downloads. On macOS, FFmpeg comes from Homebrew and can change when its formula updates. The table records qualification builds; each platform report records the version actually used by that run. Newer builds must still provide the required options and complete packet timing; an increased version number does not replace the media checks.
 
-`doctor` profiles cover conversion and additional complete decoding, including tools not needed for native-only analysis or verification. They do not report the native minimum from a metadata-only route candidate. Discovery finds executables without launching tools. Add `--probe` to check their version banners and advertised options, and `--route progressive-mp4` (or another processing route) to select required tools. A newer version can still lack an option. MP4 structure checks run in the Rust executable. During conversion, incomplete timing or unsupported metadata causes an error. See [media processing](media-processing.md) and [conversion support](conversion-support.md) for the verified profiles and known tool behavior.
+`doctor` checks native conversion requirements by default. Select a processing
+route with `--route`; `progressive-mp4` and native segment routes require no
+external media tools, while packaging routes require Shaka Packager. The default
+`all` profile requires the tools used by any native conversion route. Add
+`--decode` to include complete-decoding requirements. Discovery finds executables
+without launching tools. Add `--probe` to check required tools' version banners
+and advertised options; optional tools are discovered but not launched. A newer
+version can still lack an option. These checks do not process media. MP4
+structure checks run in the Rust executable. See
+[media processing](media-processing.md) and [conversion support](conversion-support.md)
+for the verified profiles and known tool behavior.
 
 Decoded-content verification also requires FFmpeg's `data` and `hash` output
 formats, its `rawvideo` and `pcm_s16le` encoders, and the `thread_queue_size`
 option. These preserve every decoded
 picture and 16-bit audio sample used by the complete SHA-256 comparison;
-`doctor --probe` checks that the build advertises each component. The probe
+`doctor --probe --decode` checks that the build advertises each component. The probe
 does not decode a sample or establish compatibility with a particular input.
 
 Windows also needs the [Visual C++ runtime](windows.md#install-and-check-tools) used by its compiled executable. External media tools are installed separately from the CLI archive.

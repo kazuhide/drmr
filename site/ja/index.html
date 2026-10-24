@@ -183,7 +183,7 @@
           <p>ソースをチェックアウトしたディレクトリで実行します。</p>
           <pre role="group" tabindex="0" aria-label="CLIのビルドとツール確認"><code>cargo install --path crates/drmr --locked
 drmr --version
-drmr doctor --probe --route progressive-mp4</code></pre>
+drmr doctor --probe</code></pre>
           <p class="section-note"><code>doctor --probe</code> は外部ツールのバージョンと対応オプションを確認します。メディア自体の検証は行いません。</p>
           <a href="https://github.com/kazuhide/drmr#install">ソースからのインストール手順（英語）</a>
         </div>
@@ -193,7 +193,7 @@ drmr doctor --probe --route progressive-mp4</code></pre>
             <div><dt>FFmpeg / FFprobe</dt><dd>9.0.1以降</dd></div>
             <div><dt>Shaka Packager</dt><dd>3.8.0以降</dd></div>
           </dl>
-          <p>Rust の通常の解析・検証には外部メディアツールは不要です。変換のパッケージングは Shaka、<code>--decode</code> は FFmpeg/ffprobe を使います。暗号化された有限プログレッシブ MP4 の変換では FFmpeg のコンテナコピーも行います。</p>
+          <p>通常の解析・検証には外部メディアツールは不要です。パッケージングは Shaka、プログレッシブ MP4 のコピーと復号は Rust で行います。FFmpeg/ffprobe は <code>--decode</code> などで完全デコードが必要な場合にだけ使います。</p>
           <p><a href="https://github.com/kazuhide/drmr/blob/main/docs/requirements.md">動作要件とテスト済みバージョン（英語）</a><br><a href="https://github.com/kazuhide/drmr/blob/main/docs/windows.md">Windowsのセットアップ（英語）</a></p>
         </div>
       </div>

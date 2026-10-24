@@ -159,6 +159,7 @@ drmr verify --plan clear.plan.json --json
 <tr><th scope="row">cbcs</th><td>clear / cenc / cbcs</td><td>clear / cenc / cbcs</td><td>clear / cbcs / AES-128</td></tr>
 </tbody></table></div>
 <p>clear MP4 出力はプログレッシブのサンプル表を保持します。暗号化 MP4 出力はフラグメント化され、この条件を満たす映像・音声を一つのファイルに保持できます。DASH/HLS 出力は役割ごとのトラックに分けます。入力暗号化には各トラックの鍵が必要です。</p>
+<p>Rust が所有者専用の作業ファイルにコピーし、各サンプルを元の位置で復号します。暗号化情報の領域をゼロで埋め、サンプルの配置、時刻、再生範囲を保持します。FFmpeg、デコード、再セグメント化は使いません。</p>
 <p>複数の編集、先頭に空の編集を入れた遅延、速度変更、追加トラック、別ファイルの結合、鍵の切り替え、入力の DRM 初期化ヘッダーは、この変換プロファイルでは拒否します。cenc は検証済みの 8/16 バイトのサンプル IV、cbcs は検証済みの 16 バイト定数 IV とパターンなど、実装が確認できる配置に限ります。任意の暗号化 MP4 を受け入れるという意味ではありません。</p>
 <h3>TS の入力条件</h3>
 <p>TS 入力の対象は配信内容が確定した HLS です。番組構成が一つに固定されている必要があります。映像はプログレッシブ H.264 を一つ、音声は 44.1 kHz または 48 kHz の AAC-LC を一つまで含められます。同じ条件なら、音声のみの入力から DASH、fMP4 HLS、TS を出力することもできます。</p>
@@ -185,19 +186,19 @@ drmr --version
 <p><code>--locked</code> は Cargo.lock に記録した依存関係を使う指定です。Cargo.toml には依存ライブラリの基準バージョンと互換性の範囲を、Cargo.lock には検証した具体的な組み合わせを記録しています。依存ライブラリを更新した後も、最低要件の Rust と安定版 Rust の両方で CI の検査に通る必要があります。</p>
 <h3>外部メディアツール</h3>
 <div class="guide-table-scroll" role="region" aria-labelledby="table-8-title" tabindex="0"><table><caption id="table-8-title">外部メディアツール — 表 8</caption><thead><tr><th scope="col">実行ファイル</th><th scope="col">最低要件</th><th scope="col">用途</th></tr></thead><tbody>
-<tr><th scope="row"><code>ffmpeg</code> / <code>ffprobe</code></th><td>9.0.1</td><td>--decode による追加の完全デコード。FFmpeg は暗号化された有限プログレッシブ MP4 のコンテナコピーにも使用</td></tr>
+<tr><th scope="row"><code>ffmpeg</code> / <code>ffprobe</code></th><td>9.0.1</td><td>--decode による追加の完全デコード</td></tr>
 <tr><th scope="row"><code>packager</code></th><td>Shaka Packager 3.8.0</td><td>MP4 サンプル暗号化、格納形式の変更、セグメント化</td></tr>
 </tbody></table></div>
-<p>必要な実行ファイルを信頼できる配布元から入手し、シェルがプログラムを検索する PATH に追加してください。CLI アーカイブと Desktop バンドルには、これらのメディアツールは含まれません。Docker イメージには含まれます。</p>
-<p>最低要件より新しいバージョンでも、必要なオプションを備えていないビルドや、全パケットの時刻を出力できないビルドは使えません。Rust による通常の <code>analyze</code>・<code>plan --save</code>・<code>verify</code> には外部メディアツールは不要です。変換のパッケージングには Shaka Packager を使います。非暗号化の有限プログレッシブ MP4 は Rust でコピーし、暗号化入力の同経路では FFmpeg によるコンテナコピーを行います。これは再符号化や検証用のデコードではありません。</p>
+<p>必要な実行ファイルを信頼できる配布元から入手し、PATH（プログラムの検索先）に追加してください。メディアツールは CLI と Desktop に含まれず、Docker には含まれます。</p>
+<p>Rust による通常の <code>analyze</code>・<code>plan --save</code>・<code>verify</code> には外部メディアツールは不要です。パッケージングには Shaka Packager を使い、プログレッシブ MP4 のコピーと復号は Rust で行います。FFmpeg と ffprobe は、完全デコードが必要な場合にだけ使います。新しい版でも、必要なオプションや完全なパケット時刻を出せないビルドは使えません。</p>
 <h3>doctor の使い分け</h3>
-<p>doctor の既存プロファイルは、変換に加えて <code>--decode</code> による完全デコードも含むツール構成を確認します。通常の Rust 解析・検証に必要な最低要件とは別です。メタデータ計画の <code>required_tools</code> は Rust 既定処理の最低要件を示し、追加ツールの条件は <code>condition_codes</code> と説明に記録します。</p>
+<p><code>doctor</code> は既定で通常変換の要件を確認します。</p>
 <figure class="guide-example" aria-labelledby="example-4-title" data-code-language="sh"><figcaption id="example-4-title">例 4: sh</figcaption><pre tabindex="0"><code>drmr doctor
 drmr doctor --probe --route all --json
-drmr doctor --probe --route dash-presentation
+drmr doctor --probe --route dash-presentation --decode
 </code></pre></figure>
-<p>既定の <code>doctor</code> は実行ファイルの探索だけを行い、外部ツールを起動しません。<code>--probe</code> はバージョンとヘルプを、各呼び出し 3 秒、標準出力・標準エラー各 1 MiB の上限で確認します。生の出力はレポートに含めません。メディア、鍵、ライセンス、再生機器は検証しません。</p>
-<p><code>doctor</code> は Rust のメディア検査とは別に、外部ツールの準備を診断します。<code>--route</code> では、どの外部ツール構成を確認するかを選びます。<code>progressive-mp4</code> では FFmpeg と ffprobe、<code>all</code> では三つのツールすべてを確認します。他の処理経路では必要に応じて Shaka Packager を確認します。選んだ経路で使わないツールの検査は任意です。ただし、任意の検査でも起動したプロセスの終了を確認できない場合は、準備完了と判定しません。</p>
+<p>既定の <code>doctor</code> は実行ファイルの探索だけを行い、外部ツールを起動しません。<code>--probe</code> は必要なツールのバージョンとヘルプを、各呼び出し 3 秒、標準出力・標準エラー各 1 MiB の上限で確認します。任意のツールは探索のみで起動しません。生の出力はレポートに含めず、メディア、鍵、ライセンス、再生機器は検証しません。</p>
+<p><code>--route progressive-mp4</code> とセグメント単位の処理に外部ツールは不要です。パッケージングの経路と既定の <code>all</code> には Shaka Packager が必要です。<code>--decode</code> は FFmpeg/ffprobe と TS のデコード準備用ツールを追加します。メタデータ計画の <code>required_tools</code> は通常変換の最低要件、<code>condition_codes</code> は追加デコードの条件を示します。診断の <code>required</code> は選んだ条件に対応します。起動したプロセスの終了を確認できない場合は、準備完了と判定しません。</p>
 <p>レポートの <code>ready</code> は選んだ診断項目が通ったという意味です。<code>media_compatibility_checked</code> は false のままです。<code>path</code> は実際に解決した実行ファイルの場所です。GUI の起動環境とターミナルの PATH は異なることがあるため、Desktop 内の外部ツール確認も使ってください。</p>
 <p>参照（英語）: <a href="https://github.com/kazuhide/drmr/blob/main/docs/requirements.md">必要条件</a>、<a href="https://github.com/kazuhide/drmr/blob/main/docs/windows.md">Windows</a>。</p>
 </section>
@@ -322,7 +323,7 @@ chmod 700 config
 <tr><th scope="row">正常な結果・ジョブ履歴</th><td>コンテンツキーを含めない。KID は公開の識別情報として扱う</td></tr>
 <tr><th scope="row">診断に含まれる既知の秘密情報</th><td>認識した鍵・設定 IV・シグナリングと、それらの十六進、Base64、エスケープ表現などをマスクする</td></tr>
 <tr><th scope="row">パス・名前・メディアタグ</th><td>一律に秘密とはみなさない。成功レポートや一部診断に表示される</td></tr>
-<tr><th scope="row">外部プロセスの引数</th><td>FFmpeg や Shaka に平文の鍵を渡す経路がある。OS のプロセス情報から見える可能性がある</td></tr>
+<tr><th scope="row">外部プロセスの引数</th><td>Shaka や追加デコード時の FFmpeg に平文の鍵を渡す経路がある。OS のプロセス情報から見える可能性がある</td></tr>
 <tr><th scope="row">メモリ</th><td>通常のプロセスメモリに平文が載る。一部の Rust バッファは破棄時に消去するが、全コピーの消去は保証しない</td></tr>
 <tr><th scope="row">作業用ディスク</th><td>復号済みメディアや平文鍵ファイルを所有者専用の一時領域に書く経路がある。メモリ内だけの処理ではない</td></tr>
 <tr><th scope="row">通常終了後</th><td>drmr が作成した一時ファイルを削除する。強制終了した場合や子プロセスの終了を確認できない場合は残ることがある</td></tr>
@@ -2421,8 +2422,9 @@ cargo test --locked -p drmr-core --test conversion_bundle_encryption \
 <tr><th scope="row"><code>--json</code></th><td>一つの機械可読 JSON レポート</td></tr>
 <tr><th scope="row"><code>--probe</code></th><td>バージョンとヘルプに記載されたオプションを、各呼び出し三秒の上限で検査。既定は実行ファイルの探索のみ</td></tr>
 <tr><th scope="row"><code>--route PROFILE</code></th><td>確認するツールの組み合わせ。既定は all</td></tr>
+<tr><th scope="row"><code>--decode</code></th><td>完全デコードに必要なツールも確認する。既定は通常変換の要件のみ</td></tr>
 </tbody></table></div>
-<p>PROFILE に指定できるのは <code>all</code>、<code>progressive-mp4</code>、<code>fragmented-mp4</code>、<code>dash-presentation</code>、<code>fmp4-hls-presentation</code>、<code>mpeg-ts-hls</code>、<code>mpeg-ts-sample-aes-hls</code>、<code>mpeg-ts-hls-ts</code> です。変換結果に表示される処理経路名を、そのまま doctor に指定できるとは限りません。TS→DASH を含めてツール一式を診断する場合は all を使えます。</p>
+<p>PROFILE は <code>all</code>、<code>progressive-mp4</code>、<code>fragmented-mp4</code>、<code>dash-presentation</code>、<code>fmp4-hls-presentation</code>、<code>mpeg-ts-hls</code>、<code>mpeg-ts-sample-aes-hls</code>、<code>mpeg-ts-hls-ts</code>、<code>mpeg-ts-dash</code>、<code>fmp4-segments</code>、<code>mpeg-ts-segments</code> から選びます。</p>
 <h3>analyze</h3>
 <div class="guide-table-scroll" role="region" aria-labelledby="table-26-title" tabindex="0"><table><caption id="table-26-title">analyze — 表 26</caption><thead><tr><th scope="col">引数・オプション</th><th scope="col">意味・既定値</th></tr></thead><tbody>
 <tr><th scope="row"><code>INPUT</code></th><td>ローカル MP4・DASH・HLS、または HTTP(S) URL。原本全体の URL 取得には<a href="#url-input">対応条件</a>がある</td></tr>

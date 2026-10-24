@@ -72,7 +72,7 @@ The script builds the CLI from the same checkout, stages dependency license text
 
 Published packages that omit a license text require a version-pinned publisher fallback with a verified checksum. Unresolved or changed fallbacks stop packaging. CLI archives use the same notice collector and retain embedded Web asset licenses.
 
-The host checks the bundled CLI's SHA-256 before starting the server. Keep the two binaries together. Native analysis and verification need no external media tools. Install Shaka Packager for packaging routes, FFmpeg/ffprobe for additional complete decoding, and FFmpeg for encrypted finite progressive container copying. These tools are installed separately. Keys, downloaded media and operator configuration are not included in the application bundle.
+The host checks the bundled CLI's SHA-256 before starting the server. Keep the two binaries together. Native analysis and verification need no external media tools. Install Shaka Packager for packaging routes and FFmpeg/ffprobe for additional complete decoding. Progressive MP4 copying and decryption run in Rust. These tools are installed separately. Keys, downloaded media and operator configuration are not included in the application bundle.
 
 The Tauri configuration also describes native installer packaging. The build script does not sign, notarize or create an installer, and its output does not establish qualification on another operating system.
 
