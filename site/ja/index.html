@@ -157,13 +157,13 @@
     <section id="verification" class="section" aria-labelledby="verification-title">
       <div class="section-intro">
         <h2 id="verification-title">原本との比較項目</h2>
-        <p>ストリームの設定情報、エンコード済みパケットの内容、時刻、デコード結果の 4 項目で原本と変換結果を比較します。</p>
+        <p>Rust が原本と結果を独立に読み、全サンプルの内容、コーデック設定、時刻、対応する再生範囲を照合します。<code>--decode</code> で全体のデコードも追加できます。</p>
       </div>
       <dl class="evidence-list">
         <div><dt>ストリームの設定情報</dt><dd>コーデック、トラック構成、対応範囲内の再生設定を比較します。</dd></div>
         <div><dt>エンコード済みパケットの内容</dt><dd>配信形式や暗号化方式による差を処理したうえで、パケット内のエンコード済み映像・音声データを比較します。</dd></div>
         <div><dt>各パケットの時刻</dt><dd>各パケットの絶対的な表示時刻・デコード時刻・継続時間を許容誤差なしで比較します。</dd></div>
-        <div><dt>全体をデコードした映像・音声</dt><dd>対象のメディアを最初から最後までデコードし、得られた映像と音声を比較します。</dd></div>
+        <div><dt>追加の完全デコード</dt><dd><code>--decode</code> でメディア全体をデコードし、映像と音声も比較します。未要求のデコードは未検査と明記します。</dd></div>
       </dl>
       <div class="verification-boundary">
         <h3>メディアの検証で分かる範囲</h3>
@@ -193,7 +193,7 @@ drmr doctor --probe --route progressive-mp4</code></pre>
             <div><dt>FFmpeg / FFprobe</dt><dd>9.0.1以降</dd></div>
             <div><dt>Shaka Packager</dt><dd>3.8.0以降</dd></div>
           </dl>
-          <p>必要なツールは変換経路によって異なります。</p>
+          <p>Rust の通常の解析・検証には外部メディアツールは不要です。変換のパッケージングは Shaka、<code>--decode</code> は FFmpeg/ffprobe を使います。暗号化された有限プログレッシブ MP4 の変換では FFmpeg のコンテナコピーも行います。</p>
           <p><a href="https://github.com/kazuhide/drmr/blob/main/docs/requirements.md">動作要件とテスト済みバージョン（英語）</a><br><a href="https://github.com/kazuhide/drmr/blob/main/docs/windows.md">Windowsのセットアップ（英語）</a></p>
         </div>
       </div>

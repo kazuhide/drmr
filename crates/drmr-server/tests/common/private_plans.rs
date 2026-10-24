@@ -68,19 +68,24 @@ fn private_plan_bytes(input: &std::path::Path, output: &std::path::Path, schema:
         hls_keys: &HlsInputKeys::default(),
     };
     match schema {
-        1 => serde_json::to_vec_pretty(
-            &converter
+        1 | 3 => {
+            let mut plan = converter
                 .create_execution_plan(ExecutionPlanRequest {
                     input,
                     output,
                     format: Some(OutputFormat::Mp4),
                     target: TargetProtection::Clear,
                 })
-                .unwrap(),
-        )
-        .unwrap(),
-        2 => serde_json::to_vec_pretty(
-            &converter
+                .unwrap();
+            if schema == 1 {
+                plan.schema_version = 1;
+                plan.required_depth = None;
+                plan.plan_id = legacy_single_id(&plan);
+            }
+            serde_json::to_vec_pretty(&plan).unwrap()
+        }
+        2 | 4 => {
+            let mut plan = converter
                 .create_bundle_plan(BundlePlanRequest {
                     input,
                     output_root: output,
@@ -92,11 +97,62 @@ fn private_plan_bytes(input: &std::path::Path, output: &std::path::Path, schema:
                         conformance: ManifestValidation::None,
                     }],
                 })
-                .unwrap(),
-        )
-        .unwrap(),
+                .unwrap();
+            if schema == 2 {
+                plan.schema_version = 2;
+                plan.required_depth = None;
+                plan.plan_id = legacy_bundle_id(&plan);
+            }
+            serde_json::to_vec_pretty(&plan).unwrap()
+        }
         _ => panic!("unsupported test plan schema"),
     }
+}
+
+fn legacy_single_id(plan: &drmr_core::conversion::plan::ExecutionPlan) -> String {
+    #[derive(serde::Serialize)]
+    struct Identity<'a> {
+        kind: &'a str,
+        schema_version: u32,
+        source: &'a drmr_core::conversion::SourceInventory,
+        source_format: drmr_core::inspection::OutputFormat,
+        intent: &'a drmr_core::conversion::plan::OutputIntent,
+    }
+    use sha2::Digest as _;
+    hex::encode(sha2::Sha256::digest(
+        serde_json::to_vec(&Identity {
+            kind: &plan.kind,
+            schema_version: plan.schema_version,
+            source: &plan.source,
+            source_format: plan.source_format,
+            intent: &plan.intent,
+        })
+        .unwrap(),
+    ))
+}
+
+fn legacy_bundle_id(plan: &drmr_core::conversion::plan::bundle::BundlePlan) -> String {
+    #[derive(serde::Serialize)]
+    struct Identity<'a> {
+        kind: &'a str,
+        schema_version: u32,
+        source: &'a drmr_core::conversion::SourceInventory,
+        source_format: drmr_core::inspection::OutputFormat,
+        output_root: &'a std::path::Path,
+        outputs: &'a [drmr_core::conversion::plan::bundle::BundleOutputIntent],
+    }
+    use sha2::Digest as _;
+    hex::encode(sha2::Sha256::digest(
+        serde_json::to_vec(&Identity {
+            kind: &plan.kind,
+            schema_version: plan.schema_version,
+            source: &plan.source,
+            source_format: plan.source_format,
+            output_root: &plan.output_root,
+            outputs: &plan.outputs,
+        })
+        .unwrap(),
+    ))
 }
 
 fn copy_plan_input(path: &std::path::Path) {
@@ -106,8 +162,8 @@ fn copy_plan_input(path: &std::path::Path) {
 }
 
 #[test]
-fn private_saved_plan_imports_both_schemas_and_preserves_public_plan_selection() {
-    for schema in [1, 2] {
+fn private_saved_plan_imports_legacy_and_current_schemas_and_preserves_public_plan_selection() {
+    for schema in [1, 2, 3, 4] {
         let root = tempfile::tempdir().unwrap();
         let (input_root, output, private, server) = private_plan_service(root.path());
         let client = Client::new(&server.url());
@@ -178,6 +234,10 @@ fn private_saved_plan_imports_both_schemas_and_preserves_public_plan_selection()
             let plan_ref = session["plan_refs"][0].as_str().unwrap();
             let plan = client.get(&format!("/api/common/plans/{plan_ref}")).json();
             assert_eq!(plan["plan_schema_version"], schema);
+            assert_eq!(
+                plan["required_depth"],
+                if schema <= 2 { "decoded" } else { "native" }
+            );
             assert_eq!(plan["plan_id"], expected["plan_id"]);
             let exported = client.get(&format!("/api/common/plans/{plan_ref}/export"));
             assert_eq!(exported.status, 200);

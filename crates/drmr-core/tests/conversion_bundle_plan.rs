@@ -28,6 +28,7 @@ fn converter() -> Converter {
         "packager",
         "ffmpeg",
     )
+    .with_decode(true)
 }
 
 fn video(path: &Path) {
@@ -155,7 +156,11 @@ fn one_private_plan_publishes_and_independently_verifies_both_presentations() {
             outputs: &outputs(),
         })
         .unwrap();
-    assert_eq!(plan.schema_version, 2);
+    assert_eq!(plan.schema_version, 4);
+    assert_eq!(
+        plan.minimum_depth(),
+        drmr_core::conversion::ValidationDepth::Decoded
+    );
     let saved = root.path().join("bundle.plan.json");
     plan::write_bundle(&saved, &plan).unwrap();
     let SavedPlan::Bundle(loaded) = plan::read_saved(&saved).unwrap() else {

@@ -3,8 +3,8 @@ use super::{EXISTS, INVALID, KIND, LIMIT, UNSAFE, UNSUPPORTED, absolute, destina
 use crate::{
     conversion::{
         ConversionError, ConversionReport, ConversionRequest, Converter, DrmSystem, FrozenSource,
-        OutputSignaling, SourceInventory, SourceValidationPurpose, VerificationReport,
-        VerificationRequest, VerificationSource,
+        OutputSignaling, SourceInventory, SourceValidationPurpose, ValidationDepth,
+        VerificationReport, VerificationRequest, VerificationSource,
         conformance::{ManifestValidationReport, ManifestValidationTools},
         files, frozen,
         key_file::{BundleOperatorKeys, OperatorKeys},
@@ -44,7 +44,7 @@ pub struct BundleOutputIntent {
     pub conformance: ManifestValidation,
 }
 
-/// Version two fixes one new result directory and all requested media and DRM profiles.
+/// Bundle intent fixes one result directory, media profiles, and required verification depth.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BundlePlan {
@@ -55,6 +55,18 @@ pub struct BundlePlan {
     pub source_format: OutputFormat,
     pub output_root: PathBuf,
     pub outputs: Vec<BundleOutputIntent>,
+    #[serde(
+        default,
+        deserialize_with = "super::present_depth",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub required_depth: Option<ValidationDepth>,
+}
+impl BundlePlan {
+    /// Legacy version-two plans retain their original complete-decode requirement.
+    pub fn minimum_depth(&self) -> ValidationDepth {
+        self.required_depth.unwrap_or(ValidationDepth::Decoded)
+    }
 }
 
 impl std::fmt::Debug for BundlePlan {
@@ -141,12 +153,13 @@ impl Converter {
         }
         let mut plan = BundlePlan {
             kind: KIND.into(),
-            schema_version: 2,
+            schema_version: 4,
             plan_id: String::new(),
             source: frozen.inventory().clone(),
             source_format: qualified.actual_format,
             output_root,
             outputs,
+            required_depth: Some(self.backend.validation_depth),
         };
         plan.plan_id = identity(&plan)?;
         validate(&plan)?;
@@ -170,26 +183,15 @@ impl Converter {
         let frozen = FrozenSource::from_inventory(&plan.source, &self.backend.stop)
             .map_err(super::source_error)?;
         self.check_downloaded_inventory(frozen.inventory())?;
-        let command = self.using_frozen_source(&frozen);
+        let command = self.using_frozen_source(&frozen).with_decode(
+            self.backend.validation_depth.max(plan.minimum_depth()) == ValidationDepth::Decoded,
+        );
         let source = VerificationSource {
             input: frozen.entrypoint(),
             input_keys: &keys.input,
             hls_keys: &keys.hls_input,
         };
-        let qualified = command.validate_source(source, SourceValidationPurpose::Conversion)?;
-        if qualified.actual_format != plan.source_format
-            || plan
-                .outputs
-                .iter()
-                .any(|output| !qualified.eligible_formats.contains(&output.format))
-        {
-            return Err(UNSUPPORTED);
-        }
-        for output in &plan.outputs {
-            if !output.drms.is_empty() {
-                command.validate_drm_source(source, &output.drms, output.format, output.target)?;
-            }
-        }
+        command.validate_bundle_source(plan, source)?;
         let stage = files::UnpublishedStage::new(plan.output_root.parent())?;
         let empty = OperatorKeys::default();
         let mut outputs = Vec::with_capacity(plan.outputs.len());
@@ -258,10 +260,32 @@ impl Converter {
         stage.finish_publication();
         Ok(BundleConversionReport {
             kind: "bundle-conversion",
-            schema_version: 1,
+            schema_version: 2,
             plan_id: plan.plan_id.clone(),
             outputs,
         })
+    }
+
+    fn validate_bundle_source(
+        &self,
+        plan: &BundlePlan,
+        source: VerificationSource<'_>,
+    ) -> Result<(), ConversionError> {
+        let qualified = self.validate_source(source, SourceValidationPurpose::Conversion)?;
+        if qualified.actual_format != plan.source_format
+            || plan
+                .outputs
+                .iter()
+                .any(|output| !qualified.eligible_formats.contains(&output.format))
+        {
+            return Err(UNSUPPORTED);
+        }
+        for output in &plan.outputs {
+            if !output.drms.is_empty() {
+                self.validate_drm_source(source, &output.drms, output.format, output.target)?;
+            }
+        }
+        Ok(())
     }
 
     /// Reopen every current output and compare it with one freshly byte-bound original graph.
@@ -277,7 +301,9 @@ impl Converter {
         self.refuse_bundle_signaling()?;
         let original = FrozenSource::from_inventory(&plan.source, &self.backend.stop)
             .map_err(super::source_error)?;
-        let command = self.using_frozen_source(&original);
+        let command = self.using_frozen_source(&original).with_decode(
+            self.backend.validation_depth.max(plan.minimum_depth()) == ValidationDepth::Decoded,
+        );
         let source = VerificationSource {
             input: original.entrypoint(),
             input_keys: &keys.input,
@@ -327,7 +353,7 @@ impl Converter {
         });
         Ok(BundleVerificationReport {
             kind: "bundle-verification",
-            schema_version: 1,
+            schema_version: 2,
             plan_id: plan.plan_id.clone(),
             source_unchanged: true,
             passed,
@@ -554,6 +580,8 @@ struct Identity<'a> {
     source_format: OutputFormat,
     output_root: &'a Path,
     outputs: &'a [BundleOutputIntent],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    required_depth: Option<ValidationDepth>,
 }
 
 fn identity(plan: &BundlePlan) -> Result<String, ConversionError> {
@@ -564,6 +592,7 @@ fn identity(plan: &BundlePlan) -> Result<String, ConversionError> {
         source_format: plan.source_format,
         output_root: &plan.output_root,
         outputs: &plan.outputs,
+        required_depth: plan.required_depth,
     })
     .map_err(|_| INVALID)?;
     Ok(hex::encode(Sha256::digest(bytes)))
@@ -571,7 +600,10 @@ fn identity(plan: &BundlePlan) -> Result<String, ConversionError> {
 
 pub(super) fn validate(plan: &BundlePlan) -> Result<(), ConversionError> {
     if plan.kind != KIND
-        || plan.schema_version != 2
+        || !matches!(
+            (plan.schema_version, plan.required_depth),
+            (2, None) | (4, Some(_))
+        )
         || plan.plan_id.len() != 64
         || !plan
             .plan_id

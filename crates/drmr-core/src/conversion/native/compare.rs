@@ -1,0 +1,319 @@
+//! Native checks compare independently read original and output samples.
+use super::super::{
+    CheckOutcome, ConversionError, DecodeEvidence, VerificationChecks, VerificationReport,
+    VerificationScope, backend::Backend, ts,
+};
+use super::{Track, samples::Ratio};
+use std::path::Path;
+
+fn entry_equal(a: &Track, b: &Track) -> Result<bool, ConversionError> {
+    let x = &a.descriptor.sample_entry_metadata;
+    let y = &b.descriptor.sample_entry_metadata;
+    let aac = a.descriptor.decoder_config_kind == *b"esds"
+        && b.descriptor.decoder_config_kind == *b"esds";
+    let codec = a.descriptor.codec == b.descriptor.codec
+        || matches!(
+            (&a.descriptor.codec, &b.descriptor.codec),
+            (b"avc1", b"avc3") | (b"avc3", b"avc1") | (b"hvc1", b"hev1") | (b"hev1", b"hvc1")
+        );
+    Ok(a.descriptor.kind == b.descriptor.kind
+        && codec
+        && match (&a.config, &b.config) {
+            (Some(x), Some(y)) => x == y,
+            _ => {
+                a.descriptor.decoder_config_kind == b.descriptor.decoder_config_kind
+                    && a.descriptor.decoder_config == b.descriptor.decoder_config
+            }
+        }
+        && x.width == y.width
+        && x.height == y.height
+        && (aac || (x.channels == y.channels && x.sample_rate == y.sample_rate))
+        && x.sample_size == y.sample_size
+        && x.language.as_deref().unwrap_or("und") == y.language.as_deref().unwrap_or("und")
+        && x.display_matrix == y.display_matrix
+        && x.display_width == y.display_width
+        && x.display_height == y.display_height
+        && x.volume == y.volume
+        && x.layer == y.layer
+        && a.descriptor.media_header == b.descriptor.media_header
+        && x.track_flags & !4 == y.track_flags & !4
+        && (x.alternate_group == y.alternate_group
+            || (a.descriptor.kind == crate::inspection::TrackKind::Audio
+                && matches!(x.alternate_group, 0 | 1)
+                && matches!(y.alternate_group, 0 | 1)))
+        && super::semantics::aspect_ratio(&a.descriptor)?
+            == super::semantics::aspect_ratio(&b.descriptor)?
+        && semantic_boxes_equal(&x.boxes, &y.boxes))
+}
+
+fn semantic_boxes_equal(
+    a: &[super::super::native_media::SemanticBox],
+    b: &[super::super::native_media::SemanticBox],
+) -> bool {
+    let mut a: Vec<_> = a
+        .iter()
+        .filter(|node| node.kind != *b"pasp")
+        .map(|node| (&node.kind, node.payload.as_slice()))
+        .collect();
+    let mut b: Vec<_> = b
+        .iter()
+        .filter(|node| node.kind != *b"pasp")
+        .map(|node| (&node.kind, node.payload.as_slice()))
+        .collect();
+    a.sort_unstable();
+    b.sort_unstable();
+    a == b
+}
+
+fn report(metadata: bool, payload: bool, timing: bool) -> VerificationReport {
+    VerificationReport::new(
+        super::super::ValidationDepth::Native,
+        VerificationScope::Comparison,
+        VerificationChecks {
+            stream_metadata: if metadata {
+                CheckOutcome::Pass
+            } else {
+                CheckOutcome::Fail
+            },
+            packet_payloads_equal: payload,
+            packet_timing_equal: timing,
+        },
+        DecodeEvidence::not_requested(),
+    )
+}
+
+fn checked_window(
+    track: &Track,
+    fragmented: bool,
+    window: Option<super::super::finite::Window>,
+) -> Result<Option<super::super::finite::Window>, ConversionError> {
+    if let Some(window) = window {
+        let end = window
+            .start
+            .checked_add(window.duration)
+            .ok_or(ConversionError("presentation-window-not-supported"))?;
+        let end = Ratio::new(i128::from(end), u64::from(window.scale))?;
+        let start = Ratio::new(i128::from(window.start), u64::from(window.scale))?;
+        if end.compare(track.samples.end_pts)? == std::cmp::Ordering::Greater
+            || end.compare(track.samples.first_pts)? != std::cmp::Ordering::Greater
+            || start.compare(track.samples.end_pts)? != std::cmp::Ordering::Less
+        {
+            return Err(ConversionError("presentation-window-outside-media"));
+        }
+    } else if !track.descriptor.edits.is_empty() {
+        // A fragmented whole-track edit maps media clocks to presentation
+        // clocks without declaring a finite end. Retain that exact mapping;
+        // comparison must not interpret an unbounded edit as an identity edit.
+        let [edit] = track.descriptor.edits.as_slice() else {
+            return Err(ConversionError("native-presentation-window-not-supported"));
+        };
+        if edit.duration != 0
+            || edit.media_time < 0
+            || (edit.media_time != 0 && !fragmented)
+            || track
+                .samples
+                .presentation_offset
+                .compare(track.samples.end_pts)?
+                != std::cmp::Ordering::Less
+        {
+            return Err(ConversionError("native-presentation-window-not-supported"));
+        }
+    }
+    Ok(window)
+}
+
+impl Backend {
+    pub(in crate::conversion) fn native_verify_views(
+        &self,
+        source: super::super::verify::StreamView<'_>,
+        result: super::super::verify::StreamView<'_>,
+    ) -> Result<VerificationReport, ConversionError> {
+        let first = self.native_media(source.metadata, source.key)?;
+        let second = self.native_media(result.metadata, result.key)?;
+        let a = first
+            .tracks
+            .get(source.index)
+            .ok_or(ConversionError("stream-selector-mismatch"))?;
+        let b = second
+            .tracks
+            .get(result.index)
+            .ok_or(ConversionError("stream-selector-mismatch"))?;
+        let source_window = checked_window(
+            a,
+            first.movie.fragmented,
+            super::super::finite::window(source.metadata, source.index)?,
+        )?;
+        let result_window = checked_window(
+            b,
+            second.movie.fragmented,
+            super::super::finite::window(result.metadata, result.index)?,
+        )?;
+        let windows_equal = match (source_window, result_window) {
+            (Some(a), Some(b)) => a.equivalent(b),
+            (None, None) => true,
+            _ => false,
+        };
+        let metadata = entry_equal(a, b)?
+            && first.movie.rate == second.movie.rate
+            && first.movie.volume == second.movie.volume
+            && first.movie.matrix == second.movie.matrix;
+        let payload = a.samples.count == b.samples.count
+            && match (a.samples.canonical_payload, b.samples.canonical_payload) {
+                (Some(x), Some(y)) => x == y,
+                _ => a.samples.raw_payload == b.samples.raw_payload,
+            };
+        let timing = a.samples.count == b.samples.count
+            && a.samples.clocks_equal(&b.samples)
+            && a.samples.durations == b.samples.durations
+            && a.samples.sync_samples == b.samples.sync_samples
+            && a.samples.recovery == b.samples.recovery
+            && a.samples.presented_first_pts == b.samples.presented_first_pts
+            && a.samples.presented_end_pts == b.samples.presented_end_pts
+            && windows_equal
+            && super::super::progressive::presentation_windows_equal(
+                source.metadata,
+                result.metadata,
+            )?;
+        Ok(report(metadata, payload, timing))
+    }
+    pub(in crate::conversion) fn native_validate_mp4(
+        &self,
+        input: &Path,
+        index: usize,
+        keys: Option<super::super::keys::ProbeKeys<'_>>,
+    ) -> Result<VerificationReport, ConversionError> {
+        let media = self.native_media(input, keys)?;
+        let track = media
+            .tracks
+            .get(index)
+            .ok_or(ConversionError("stream-selector-mismatch"))?;
+        super::mp4_profile(&track.descriptor)?;
+        // Playback edits and controls are independently read, including the
+        // declared terminal audio selection. No comparison with a remux is used.
+        checked_window(
+            track,
+            media.movie.fragmented,
+            super::super::finite::window(input, index)?,
+        )?;
+        super::super::progressive::playback_controls_equal(input, index, input, index)?;
+        let mut report = report(true, true, true);
+        report.scope = VerificationScope::SourceAdmission;
+        report.refresh_passed();
+        Ok(report)
+    }
+    pub(in crate::conversion) fn native_verify_transport(
+        &self,
+        source: ts::View<'_>,
+        result: ts::View<'_>,
+    ) -> Result<VerificationReport, ConversionError> {
+        match (source.transport, result.transport) {
+            (false, false) => self.native_verify_views(
+                super::super::verify::StreamView {
+                    input: source.input,
+                    metadata: source.metadata,
+                    index: source.index,
+                    key: source.probe_keys(),
+                },
+                super::super::verify::StreamView {
+                    input: result.input,
+                    metadata: result.metadata,
+                    index: result.index,
+                    key: result.probe_keys(),
+                },
+            ),
+            (true, true) => {
+                let a = source
+                    .native
+                    .ok_or(ConversionError("ts-original-evidence-required"))?;
+                let b = result
+                    .native
+                    .ok_or(ConversionError("ts-original-evidence-required"))?;
+                a.validate()?;
+                b.validate()?;
+                let metadata = a.metadata()? == b.metadata()? && a.config == b.config;
+                let first = a.evidence()?;
+                let second = b.evidence()?;
+                Ok(report(
+                    metadata,
+                    first.payload_equal(&second),
+                    first.timing_equal(&second),
+                ))
+            }
+            (true, false) => self.native_transport_to_mp4(source, result),
+            (false, true) => self.native_transport_to_mp4(result, source),
+        }
+    }
+    fn native_transport_to_mp4(
+        &self,
+        source: ts::View<'_>,
+        result: ts::View<'_>,
+    ) -> Result<VerificationReport, ConversionError> {
+        let original = source
+            .native
+            .ok_or(ConversionError("ts-original-evidence-required"))?;
+        original.validate()?;
+        let original_metadata = original.metadata()?;
+        let evidence = original.evidence()?;
+        let timing = original.timing()?;
+        let media = self.native_media(result.metadata, result.probe_keys())?;
+        let track = media
+            .tracks
+            .get(result.index)
+            .ok_or(ConversionError("stream-selector-mismatch"))?;
+        let metadata = track.samples.transport_recovery_compatible
+            && super::semantics::transport_controls(&media.movie, &track.descriptor, original)?
+            && track.config.as_ref() == Some(&original.config)
+            && match original_metadata {
+                ts::canonical::TrackMetadata::Video(metadata) => {
+                    track.descriptor.decoder_config_kind == *b"avcC"
+                        && ts::avc::Configuration::from_avcc(&track.descriptor.decoder_config)?
+                            .0
+                            .metadata()
+                            == &metadata
+                }
+                ts::canonical::TrackMetadata::Audio {
+                    sample_rate,
+                    channels,
+                    ..
+                } => {
+                    let config = super::super::native_media::AacConfiguration::parse(
+                        &track.descriptor.decoder_config,
+                    )?;
+                    config.sample_rate == sample_rate && config.channels == u16::from(channels)
+                }
+            };
+        let payload = track.samples.count == evidence.count
+            && track.samples.canonical_payload == Some(evidence.payload_digest());
+        let window = checked_window(
+            track,
+            media.movie.fragmented,
+            super::super::finite::window(result.metadata, result.index)?,
+        )?;
+        let full_selection = match window {
+            Some(window) => {
+                Ratio::new(i128::from(window.start), u64::from(window.scale))?
+                    .subtract(track.samples.presentation_offset)?
+                    == Ratio::ticks(timing.first_pts, 90_000)?
+                    && Ratio::new(i128::from(window.duration), u64::from(window.scale))?
+                        == Ratio::new(
+                            i128::from(timing.end_pts) - i128::from(timing.first_pts),
+                            90_000,
+                        )?
+            }
+            None => true,
+        };
+        let composition_matches = track.samples.initial_composition_offset
+            == Ratio::new(
+                i128::from(timing.first_sample_pts) - i128::from(timing.first_dts),
+                90_000,
+            )?;
+        let clocks = full_selection
+            && composition_matches
+            && track.samples.transport_clocks == Some(evidence.clock_digest())
+            && track.samples.count == evidence.count
+            && track.samples.presented_first_pts == Ratio::ticks(timing.first_pts, 90_000)?
+            && track.samples.presented_end_pts == Ratio::ticks(timing.end_pts, 90_000)?
+            && track.samples.continuous_decode;
+        Ok(report(metadata, payload, clocks))
+    }
+}

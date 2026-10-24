@@ -41,7 +41,7 @@ enum Command {
     Version,
     /// Discover external tools or probe their versions and advertised options.
     #[command(
-        after_help = "Discovery checks executable files on the current launch PATH without running them.\n--probe executes bounded version/help checks; it never proves media compatibility.\n\nExamples:\n  drmr doctor\n  drmr doctor --probe --route progressive-mp4 --json\n\nExit codes: 0 selected checks passed for required tools; 1 a required check failed; 2 invalid arguments."
+        after_help = "Discovery checks executable files on the current launch PATH without running them.\n--probe executes bounded version/help checks; it never proves media compatibility.\nProfiles cover conversion and additional complete decoding (--decode), not only the native default. Native analysis, saved planning and verification need no external media tools.\n\nExamples:\n  drmr doctor\n  drmr doctor --probe --route progressive-mp4 --json\n\nExit codes: 0 selected checks passed for required tools; 1 a required check failed; 2 invalid arguments."
     )]
     Doctor {
         /// Print a machine-readable JSON report instead of a readable checklist.
@@ -50,7 +50,7 @@ enum Command {
         /// Execute bounded version and advertised-option checks (three seconds per call).
         #[arg(long)]
         probe: bool,
-        /// Check the tools required by this processing route; other tools are optional.
+        /// Check a route's complete tool set, including additional decoding; other tools are optional.
         #[arg(long, default_value = "all", value_parser = ["all", "progressive-mp4", "fragmented-mp4", "dash-presentation", "fmp4-hls-presentation", "mpeg-ts-hls", "mpeg-ts-sample-aes-hls", "mpeg-ts-hls-ts"])]
         route: String,
     },

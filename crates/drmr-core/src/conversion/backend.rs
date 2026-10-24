@@ -19,10 +19,29 @@ pub(super) struct Backend {
     pub ffmpeg: String,
     pub ffprobe: String,
     pub timeout: Duration,
+    pub validation_depth: super::ValidationDepth,
     pub measurement: Option<Arc<super::measurement::Measurements>>,
     pub activity: Option<Arc<dyn crate::events::Sink>>,
 }
 impl Backend {
+    pub fn processing(
+        &self,
+        route: crate::inspection::ProcessingRouteId,
+        preparation: crate::inspection::InputPreparation,
+        ffmpeg_copy: bool,
+    ) -> crate::inspection::ActualProcessing {
+        use crate::inspection::RequiredTool;
+        let mut report = crate::inspection::ActualProcessing::new(route, preparation);
+        if self.validation_depth == super::ValidationDepth::Decoded {
+            report
+                .required_tools
+                .splice(0..0, [RequiredTool::Ffmpeg, RequiredTool::Ffprobe]);
+        } else if ffmpeg_copy {
+            report.required_tools.insert(0, RequiredTool::Ffmpeg);
+        }
+        report
+    }
+
     pub fn task(&self, task: super::observation::Task) -> super::observation::Scope {
         super::observation::Scope::new(self.activity.as_ref(), task)
     }
@@ -252,13 +271,16 @@ impl Backend {
     ) -> Result<serde_json::Value, ConversionError> {
         self.profile_stream_keys_options(path, index, key, false)
     }
-    fn profile_stream_keys_options(
+    pub(super) fn profile_stream_keys_options(
         &self,
         path: &Path,
         index: usize,
         key: Option<super::keys::ProbeKeys<'_>>,
         unedited: bool,
     ) -> Result<serde_json::Value, ConversionError> {
+        if self.validation_depth == super::ValidationDepth::Native {
+            return self.native_profile(path, index);
+        }
         let mut argv = vec![
             self.ffprobe.clone(),
             "-v".into(),
@@ -273,7 +295,7 @@ impl Backend {
                 "stream=index,codec_name,codec_type,time_base,nb_read_packets,",
                 "sample_rate,channels,channel_layout,width,height,pix_fmt,sample_aspect_ratio,",
                 "color_range,color_space,color_transfer,color_primaries,chroma_location,field_order,",
-                "bits_per_raw_sample,extradata_hash:stream_tags=language:",
+                "bits_per_raw_sample,nal_length_size,extradata_hash:stream_tags=language:",
                 "stream_side_data=side_data_type,displaymatrix,rotation"
             ).into(),
             "-show_data_hash".into(),
@@ -295,6 +317,14 @@ impl Backend {
         }
         let value: serde_json::Value =
             serde_json::from_slice(&bytes).map_err(|_| ConversionError("invalid-media-probe"))?;
+        self.read_profile(path, index, &value)
+    }
+    fn read_profile(
+        &self,
+        path: &Path,
+        index: usize,
+        value: &serde_json::Value,
+    ) -> Result<serde_json::Value, ConversionError> {
         let streams = value
             .get("streams")
             .and_then(serde_json::Value::as_array)
@@ -338,6 +368,7 @@ impl Backend {
             "chroma_location",
             "field_order",
             "bits_per_raw_sample",
+            "nal_length_size",
             "extradata_hash",
         ] {
             profile.insert(name.into(), stream.get(name).cloned().unwrap_or_default());
@@ -392,7 +423,7 @@ impl Backend {
             unedited,
         )
     }
-    fn packets_stream_keys_options(
+    pub(super) fn packets_stream_keys_options(
         &self,
         path: &Path,
         index: usize,
@@ -649,6 +680,60 @@ mod packet_tests {
     use crate::events::{Record, Sink};
     use std::sync::atomic::{AtomicBool, Ordering};
 
+    #[test]
+    fn actual_processing_tools_follow_native_decode_and_container_copy_work() {
+        use crate::inspection::{InputPreparation, ProcessingRouteId, RequiredTool};
+        let runner = Arc::new(ToolRunner::new(
+            Arc::new(crate::toolrun::Secrets::new()),
+            Arc::new(crate::events::NoSink),
+        ));
+        let mut backend = crate::conversion::Converter::new(runner, "packager", "ffmpeg").backend;
+        for (route, minimum) in [
+            (ProcessingRouteId::ProgressiveMp4, vec![]),
+            (
+                ProcessingRouteId::FragmentedMp4,
+                vec![RequiredTool::ShakaPackager],
+            ),
+            (
+                ProcessingRouteId::DashPresentation,
+                vec![RequiredTool::ShakaPackager],
+            ),
+            (
+                ProcessingRouteId::MpegTsHlsTs,
+                vec![RequiredTool::ShakaPackager],
+            ),
+        ] {
+            backend.validation_depth = crate::conversion::ValidationDepth::Native;
+            assert_eq!(
+                backend
+                    .processing(route, InputPreparation::CompleteFile, false)
+                    .required_tools,
+                minimum
+            );
+            if route.can_copy_encrypted_finite_source() {
+                let mut copied = minimum.clone();
+                copied.insert(0, RequiredTool::Ffmpeg);
+                assert_eq!(
+                    backend
+                        .processing(route, InputPreparation::CompleteFile, true)
+                        .required_tools,
+                    copied
+                );
+            }
+            backend.validation_depth = crate::conversion::ValidationDepth::Decoded;
+            let mut decoded = vec![RequiredTool::Ffmpeg, RequiredTool::Ffprobe];
+            decoded.extend(minimum);
+            for copy in [false, true] {
+                assert_eq!(
+                    backend
+                        .processing(route, InputPreparation::CompleteFile, copy)
+                        .required_tools,
+                    decoded
+                );
+            }
+        }
+    }
+
     struct AfterProfile {
         state: std::path::PathBuf,
         response: drmr_test_support::ToolSpec,
@@ -733,6 +818,7 @@ mod packet_tests {
                 ffmpeg: String::new(),
                 ffprobe: tool.to_str().unwrap().into(),
                 timeout: Duration::from_secs(20),
+                validation_depth: crate::conversion::ValidationDepth::Decoded,
                 measurement: None,
                 activity: None,
             };

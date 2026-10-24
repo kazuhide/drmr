@@ -29,6 +29,7 @@ fn converter() -> Converter {
         "packager",
         "ffmpeg",
     )
+    .with_decode(true)
 }
 fn run(command: &mut Command) -> Vec<u8> {
     let result = command.output().unwrap();
@@ -190,12 +191,22 @@ fn identical_pictures_with_distinct_packets_verify_after_declaration_reordering(
     let text = std::fs::read_to_string(&result).unwrap();
     std::fs::write(&result, reverse_variants(&text)).unwrap();
     let verification = verify(&source, &result).unwrap();
-    assert!(verification.passed && verification.media_verified);
+    assert!(
+        verification.passed
+            && (verification.checks.is_pass()
+                && verification.decode_evidence.satisfies(
+                    drmr_core::conversion::ValidationDepth::Decoded,
+                    verification.scope
+                ))
+    );
     assert!(verification.checks.stream_metadata.is_pass());
     assert!(
         verification.checks.packet_payloads_equal
             && verification.checks.packet_timing_equal
-            && verification.checks.decoded_content_equal
+            && verification.decode_evidence.satisfies(
+                drmr_core::conversion::ValidationDepth::Decoded,
+                verification.scope
+            )
     );
     assert_tie_cancellation_propagates(&source, &result);
     let (path, mut bytes) = common::snapshot_tree(&candidate)

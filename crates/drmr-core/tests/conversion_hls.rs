@@ -14,6 +14,7 @@ fn converter() -> Converter {
         "packager",
         "ffmpeg",
     )
+    .with_decode(true)
 }
 fn video(path: &Path) {
     let status = std::process::Command::new("ffmpeg")
@@ -164,7 +165,8 @@ fn key_uri_iv_and_secret_never_reach_hls_conversion_records() {
         Arc::new(ToolRunner::new(Arc::new(Secrets::new()), sink.clone())),
         "packager",
         "ffmpeg",
-    );
+    )
+    .with_decode(true);
     converter
         .convert_hls_aes128(
             &source,

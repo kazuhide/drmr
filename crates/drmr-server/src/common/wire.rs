@@ -70,6 +70,8 @@ pub struct Runtime {
     pub keys_ref: Option<String>,
     #[serde(deserialize_with = "required_nullable")]
     pub max_workers: Option<u8>,
+    #[serde(default)]
+    pub decode: bool,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -136,6 +138,23 @@ pub fn unavailable() -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn runtime_decode_defaults_to_native_and_is_part_of_request_identity() {
+        let native = json!({"keys_ref":null,"max_workers":null});
+        let parsed: Runtime = serde_json::from_value(native.clone()).unwrap();
+        assert!(!parsed.decode);
+        let mut decoded = native.clone();
+        decoded["decode"] = json!(true);
+        let decoded: Runtime = serde_json::from_value(decoded).unwrap();
+        assert!(decoded.decode);
+        assert!(parsed != decoded);
+        for invalid in [Value::Null, json!("true"), json!(1)] {
+            let mut value = native.clone();
+            value["decode"] = invalid;
+            assert!(serde_json::from_value::<Runtime>(value).is_err());
+        }
+    }
 
     #[test]
     fn source_urls_refuse_retired_aliases_and_keep_strict_fields() {

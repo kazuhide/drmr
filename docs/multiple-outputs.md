@@ -9,7 +9,7 @@ transport-stream presentation can produce:
 - transport-stream HLS encrypted with `SAMPLE-AES`, with FairPlay information.
 
 Choose the outputs you need. The common `plan`, `convert`, and `verify` commands
-name every output explicitly.
+name every output explicitly. Native checks cover every selected sample, configuration, clock and supported playback window. Add `--decode` at saved planning to require complete decoding for every later execution and verification, or at runtime to strengthen the saved minimum. New named-output plans use schema 4; legacy schema 2 plans retain their decoded minimum. See [verification depth](verification.md).
 
 ## Describe the outputs
 

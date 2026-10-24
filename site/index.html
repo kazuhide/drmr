@@ -155,14 +155,14 @@
 
     <section id="verification" class="section" aria-labelledby="verification-title">
       <div class="section-intro">
-        <h2 id="verification-title">Four ways back to the original</h2>
-        <p>A matching manifest is not enough. Media verification compares the result with its original across four distinct kinds of evidence.</p>
+        <h2 id="verification-title">Native checks and optional complete decoding</h2>
+        <p>Rust independently compares every selected sample, codec configuration, clock and supported playback window with the original. Add <code>--decode</code> for complete decoding as an additional check.</p>
       </div>
       <dl class="evidence-list">
         <div><dt>Stream metadata</dt><dd>Compare the qualified codec, track configuration, and presentation properties.</dd></div>
         <div><dt>Encoded packet content</dt><dd>Compare coded media payloads while allowing the supported packaging and protection changes.</dd></div>
         <div><dt>Every packet’s timing</dt><dd>Compare absolute presentation time, decode time, and duration. No timing tolerance is used to hide a mismatch.</dd></div>
-        <div><dt>Complete decoded media</dt><dd>Decode the entire qualified presentation and compare the resulting pictures and audio.</dd></div>
+        <div><dt>Additional complete decoding</dt><dd><code>--decode</code> decodes the entire qualified presentation and compares the resulting pictures and audio. Unrequested decoding is reported explicitly.</dd></div>
       </dl>
       <div class="verification-boundary">
         <h3>Media proof has a boundary</h3>
@@ -192,7 +192,7 @@ drmr doctor --probe --route progressive-mp4</code></pre>
             <div><dt>FFmpeg / FFprobe</dt><dd>9.0.1 or newer</dd></div>
             <div><dt>Shaka Packager</dt><dd>3.8.0 or newer</dd></div>
           </dl>
-          <p>Required tools depend on the processing route.</p>
+          <p>Native analysis and verification need no external media tools. Conversion uses Shaka Packager on packaging routes; <code>--decode</code> adds FFmpeg/ffprobe. Encrypted finite progressive conversion also uses an FFmpeg container copy.</p>
           <p><a href="https://github.com/kazuhide/drmr/blob/main/docs/requirements.md">Requirements and tested versions</a><br><a href="https://github.com/kazuhide/drmr/blob/main/docs/windows.md">Windows setup</a></p>
         </div>
       </div>

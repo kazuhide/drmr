@@ -1,5 +1,12 @@
 # Conversion support
 
+Complete media admission requires the implemented AVC (H.264) or typed AAC
+profiles. Metadata-only recognition of HEVC, AV1, VP9, AC-3, E-AC-3, Opus or FLAC
+configuration is separate: complete operations refuse these unimplemented native
+profiles with `native-codec-profile-not-supported`, including with `--decode`.
+The container and encryption tables below remain subject to this codec/profile
+requirement; they do not qualify every codec the formats can contain.
+
 One qualified source can also produce [multiple named outputs](multiple-outputs.md)
 through the common CLI. Explicit multi-DRM output currently supports qualified
 clear HLS transport streams and the qualified clear MP4 profile: CBCS DASH with
@@ -8,7 +15,7 @@ These use separate runtime DRM settings and independently checked final
 manifests. Requested [external manifest validation](manifest-validation.md) is
 additional to native Rust manifest linting and the complete internal media checks.
 
-`drmr convert` processes local, completed on-demand media with keys supplied by its operator. It preserves encoded video/audio and verifies the result against the original source. The tables distinguish supported input profiles from tested protection routes. DRM license and device playback support are separate.
+`drmr convert` processes local, completed on-demand media with keys supplied by its operator. It preserves encoded video/audio and verifies the result against the original source. The tables distinguish supported input profiles from tested protection routes. Native Rust verification reads every selected sample, codec configuration, clock and supported playback window. Add `--decode` for complete source decoding and decoded comparison; it cannot bypass native refusals. Historical results below retain their recorded complete-decoding scope and do not establish qualification of a later source build. See [verification depth and evidence](verification.md). DRM license and device playback support are separate.
 
 For public-URL command examples, select an output protection in the
 [linked input/output matrix](https://kazuhide.github.io/drmr/#support). Each example
@@ -171,7 +178,7 @@ MP4 can use an edit list to specify which part of decoded audio should play. Thi
 
 The source must contain one AAC-LC (AAC Low Complexity) audio track stored as `mp4a`, with optional H.264 video stored as `avc1`, from the same complete progressive file. A single normal-rate audio edit must have a nonnegative start and a finite duration that converts exactly into audio clock units. Encrypted input requires every track key by identifier. The supported encryption layouts and presentation checks are described in [processing and verification](media-processing.md#finite-audio-presentation-windows). Multiple edits, initial empty edits, rate changes, extra tracks, combining different source files, key rotation, and input DRM initialization headers remain outside this profile.
 
-Clear MP4 output retains progressive sample tables. Encrypted MP4 output contains fragments and can retain both tracks from this qualified source in one file. DASH and fMP4 HLS use separate audio and video tracks with a two-second segment target. Each track keeps its original finite playback range; packet payloads, absolute clocks, complete decoded media, and playback settings must match before publication. Separate DASH/HLS source tracks are not combined into one MP4 by this feature.
+Clear MP4 output retains progressive sample tables. Encrypted MP4 output contains fragments and can retain both tracks from this qualified source in one file. DASH and fMP4 HLS use separate audio and video tracks with a two-second segment target. Each track keeps its original finite playback range; packet payloads, absolute clocks and playback settings must match before publication. Complete decoded media must also match when `--decode` is required. Separate DASH/HLS source tracks are not combined into one MP4 by this feature.
 
 For clear input and output, no key configuration is needed:
 

@@ -1,8 +1,6 @@
 //! Preserve a finite audio presentation by muxing its original progressive sample tables.
 //! Fragmenting first can discard the distinction between coded padding and presented samples.
-use super::{
-    ConversionError, ConversionReport, Converter, VerificationChecks, VerificationReport, audio,
-};
+use super::{ConversionError, ConversionReport, Converter, VerificationReport, audio};
 use crate::{
     inspection::{Inspection, Protection, TrackKind},
     mp4::{self, Mp4Box},
@@ -549,13 +547,14 @@ impl Converter {
         self.backend.checkpoint(&[&stage]);
         self.publish(&stage, &candidate, destination)?;
         Ok(Some(ConversionReport {
-            schema_version: 1,
+            schema_version: 2,
             input: input.clone(),
             output,
             verification,
-            processing: Some(crate::inspection::ActualProcessing::new(
+            processing: Some(self.backend.processing(
                 crate::inspection::ProcessingRouteId::ProgressiveMp4,
                 crate::inspection::InputPreparation::CompleteFile,
+                input.protection != Protection::Clear,
             )),
         }))
     }
@@ -578,34 +577,11 @@ impl Converter {
                 super::verify::StreamView::new(candidate, index, None),
             )
         })?;
-        let mut combined = VerificationChecks {
-            stream_metadata: super::CheckOutcome::Pass,
-            packet_payloads_equal: true,
-            packet_timing_equal: true,
-            decoded_content_equal: true,
-        };
-        for check in checks {
-            combined
-                .stream_metadata
-                .include(check.checks.stream_metadata);
-            combined.packet_payloads_equal &= check.checks.packet_payloads_equal;
-            combined.packet_timing_equal &= check.checks.packet_timing_equal;
-            combined.decoded_content_equal &= check.checks.decoded_content_equal;
-        }
-        Ok(VerificationReport {
-            schema_version: 1,
-            passed: combined.stream_metadata.is_pass()
-                && combined.packet_payloads_equal
-                && combined.packet_timing_equal
-                && combined.decoded_content_equal,
-            media_verified: combined.stream_metadata.is_pass()
-                && combined.packet_payloads_equal
-                && combined.packet_timing_equal
-                && combined.decoded_content_equal,
-            checks: combined,
-            license_playback_verified: false,
-            native_manifest: None,
-        })
+        Ok(VerificationReport::combine(
+            self.backend.validation_depth,
+            super::VerificationScope::Comparison,
+            checks,
+        ))
     }
     pub(super) fn progressive_codecs(
         &self,
@@ -636,6 +612,21 @@ impl Converter {
             if profile["codec_name"] != expected {
                 return Err(UNSUPPORTED);
             }
+        }
+        if self.backend.validation_depth == super::ValidationDepth::Native {
+            let movie = super::native_media::inspect(source, &self.backend.stop)?;
+            for track in &movie.tracks {
+                if track.kind == TrackKind::Audio
+                    && (track.decoder_config_kind != *b"esds"
+                        || track
+                            .decoder_config
+                            .first()
+                            .is_none_or(|byte| byte >> 3 != 2))
+                {
+                    return Err(UNSUPPORTED);
+                }
+            }
+            return Ok(());
         }
         // The AAC profile is queried separately so the established metadata comparison stays unchanged.
         let keyed = super::keys::KeyedArguments::new(
@@ -681,6 +672,11 @@ impl Converter {
         source_layout: &Layout,
         keys: Option<super::keys::ProbeKeys<'_>>,
     ) -> Result<(), ConversionError> {
+        if self.backend.validation_depth == super::ValidationDepth::Native && keys.is_none() {
+            // A complete clear presentation already carries the exact edit
+            // lists, sample tables and display controls that must be retained.
+            return super::copy_private(source, candidate);
+        }
         let mut argv = vec![
             self.backend.ffmpeg.clone(),
             "-v".into(),

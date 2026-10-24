@@ -196,6 +196,7 @@ pub(crate) fn run(path: &Path) -> ExitCode {
     };
     let keys = request.runtime.keys_file;
     let workers = request.runtime.max_workers;
+    let decode = request.runtime.decode;
     let tools = request.runtime.tools;
     let exit = match request.operation {
         ChildOperation::Analyze { source } => {
@@ -215,6 +216,7 @@ pub(crate) fn run(path: &Path) -> ExitCode {
                 keys_file: keys,
                 packager_bin: tools.packager_bin,
                 max_workers: workers,
+                decoding: convert_cli::DecodeOptions { decode },
                 json: true,
                 measure: false,
             })
@@ -235,6 +237,7 @@ pub(crate) fn run(path: &Path) -> ExitCode {
             keys_file: keys,
             packager_bin: Some(tools.packager_bin),
             max_workers: workers,
+            decode,
             measure: false,
         }),
         ChildOperation::Convert { plan_file } => convert_cli::convert(&convert_cli::ConvertArgs {
@@ -249,6 +252,7 @@ pub(crate) fn run(path: &Path) -> ExitCode {
             keys_file: keys,
             packager_bin: tools.packager_bin,
             max_workers: workers,
+            decode,
             hls_validator_bin: tools.hls_validator_bin,
             dash_validator_bin: tools.dash_validator_bin,
             json: true,
@@ -268,6 +272,7 @@ pub(crate) fn run(path: &Path) -> ExitCode {
             keys_file: keys,
             packager_bin: tools.packager_bin,
             max_workers: workers,
+            decode,
             json: true,
             measure: false,
         }),

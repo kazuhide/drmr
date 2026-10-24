@@ -17,6 +17,7 @@ fn converter() -> Converter {
         "packager",
         "ffmpeg",
     )
+    .with_decode(true)
 }
 #[test]
 fn complete_finite_audio_survives_all_nine_output_profiles() {
@@ -157,7 +158,12 @@ fn fixture_path(name: &str) -> std::path::PathBuf {
 }
 
 fn assert_verified(r: &drmr_core::conversion::VerificationReport) {
-    assert!(r.passed && r.media_verified);
+    assert!(
+        r.passed
+            && (r.checks.is_pass()
+                && r.decode_evidence
+                    .satisfies(drmr_core::conversion::ValidationDepth::Decoded, r.scope))
+    );
     assert!(!r.license_playback_verified);
     assert_eq!(
         serde_json::to_value(r).unwrap()["checks"]["stream_metadata"],
@@ -166,7 +172,8 @@ fn assert_verified(r: &drmr_core::conversion::VerificationReport) {
     assert!(
         r.checks.packet_payloads_equal
             && r.checks.packet_timing_equal
-            && r.checks.decoded_content_equal
+            && r.decode_evidence
+                .satisfies(drmr_core::conversion::ValidationDepth::Decoded, r.scope)
     );
 }
 
@@ -405,7 +412,8 @@ fn unsupported_cbcs_pattern_and_vector_size_are_refused_before_tools() {
             Arc::new(ToolRunner::new(Arc::new(Secrets::new()), events.clone())),
             "packager",
             "ffmpeg",
-        );
+        )
+        .with_decode(true);
         let source = d.path().join(format!("source-{offset}.mp4"));
         let output = d.path().join(format!("result-{offset}"));
         let mut bytes = original.clone();
@@ -612,7 +620,8 @@ fn cbcs_joint_auxiliary_corruption_and_swapped_role_keys_never_publish() {
             Arc::new(ToolRunner::new(Arc::new(Secrets::new()), events.clone())),
             "packager",
             "ffmpeg",
-        );
+        )
+        .with_decode(true);
         let output = d.path().join(format!("output-{index}"));
         assert!(
             converter

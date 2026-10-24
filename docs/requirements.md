@@ -8,16 +8,27 @@ CI derives the minimum version from that manifest and tests it alongside the lat
 
 ## Media tools
 
-Complete media checks and conversion use the tools below. Metadata-only analysis with `analyze --metadata-only` is built in and needs none of them. Add the executable directories to `PATH`. Use each tool at the supported lower bound or a newer compatible version:
+Native complete-media checks in `analyze`, `plan --save` and `verify` run in
+Rust for supported profiles and need none of the tools below. They read all
+selected samples, codec configuration, clocks and playback windows.
+`analyze --metadata-only` reads only metadata and remains a separate, bounded
+operation. Conversion routes and additional `--decode` checks use the tools
+below; add their executable directories to `PATH`.
 
 | Tool | Supported from | Builds used for the media qualification |
 | --- | --- | --- |
 | FFmpeg and ffprobe | 9.0.1 | macOS: 9.0.1; Linux and Windows: 9.0.2 |
 | Shaka Packager | 3.8.0 | 3.8.0 on all three platforms |
 
+Shaka Packager performs packaging and encryption on its supported conversion
+routes. Clear finite progressive MP4 can use a native copy; the edit-preserving
+encrypted finite progressive route retains an FFmpeg copy remux without
+transcoding. `--decode` requires FFmpeg and ffprobe for the additional complete
+decoder checks. See [verification depth](verification.md).
+
 The lower bounds describe the supported baseline, rather than the earliest version that might process a particular file. CI pins and checksum-verifies direct media-tool downloads. On macOS, FFmpeg comes from Homebrew and can change when its formula updates. The table records qualification builds; each platform report records the version actually used by that run. Newer builds must still provide the required options and complete packet timing; an increased version number does not replace the media checks.
 
-`doctor` discovers executables without launching tools. Add `--probe` to check their version banners and advertised options, and `--route progressive-mp4` (or another processing route) to select required tools. A newer version can still lack an option. MP4 structure checks run in the Rust executable. During conversion, incomplete timing or unsupported metadata causes an error. See [media processing](media-processing.md) and [conversion support](conversion-support.md) for the verified profiles and known tool behavior.
+`doctor` profiles cover conversion and additional complete decoding, including tools not needed for native-only analysis or verification. They do not report the native minimum from a metadata-only route candidate. Discovery finds executables without launching tools. Add `--probe` to check their version banners and advertised options, and `--route progressive-mp4` (or another processing route) to select required tools. A newer version can still lack an option. MP4 structure checks run in the Rust executable. During conversion, incomplete timing or unsupported metadata causes an error. See [media processing](media-processing.md) and [conversion support](conversion-support.md) for the verified profiles and known tool behavior.
 
 Decoded-content verification also requires FFmpeg's `data` and `hash` output
 formats, its `rawvideo` and `pcm_s16le` encoders, and the `thread_queue_size`
@@ -31,7 +42,8 @@ Windows also needs the [Visual C++ runtime](windows.md#install-and-check-tools) 
 ## Final-manifest checks
 
 Native HLS/DASH manifest linting is included in the Rust executable and needs no
-additional tools. The media tools above perform the complete media comparison. External checks
+additional tools. Native sample/content/timing checks and additional complete decoding
+retain separate evidence. External checks
 of final HLS playlists and DASH manifests are an additional, explicit choice.
 Use the [manifest validation guide](manifest-validation.md) for installation,
 supported tool versions, local DASH-IF assets, and runtime executable options.

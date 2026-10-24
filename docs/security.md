@@ -1,7 +1,7 @@
 # Keys and local security
 
 Multiple-output plans fix the output IDs, formats, protection schemes, DRM system
-selections and external manifest-check policies. Their runtime schema-version-2
+selections, minimum verification depth and external manifest-check policies. Their runtime schema-version-2
 key file keeps each output's keys and DRM information separate. PSSH, license
 addresses, FairPlay key addresses and initialization vectors are not stored in
 the plan or printed in result summaries. Generated manifests intentionally
@@ -18,6 +18,12 @@ successful media correspondence is a separate internal check. Executable paths
 and raw validator diagnostics are excluded from retained result summaries.
 
 drmr processes media with keys supplied by the operator. It does not obtain DRM licenses or isolate keys in secure hardware. Use a trusted operating-system account and trusted media tools.
+
+The supported media encryption modes are unauthenticated. Without an independent
+known clear reference, matching media under a supplied key does not authenticate
+that key or the original plaintext. Native correspondence does not establish
+complete decodability. `--decode` adds complete decoder checks; success provides
+no cryptographic authentication, license acquisition or device qualification.
 
 ## Where supplied information goes
 
@@ -100,7 +106,7 @@ reads the original and current result rather than trusting saved success claims.
 
 ### Process arguments and plaintext memory
 
-FFmpeg and Shaka Packager require plaintext keys for some supported operations. drmr passes those keys to child processes, including through command arguments. The operating system, sufficiently privileged processes, and process-inspection tools may observe those arguments or the process environment while the tool runs. Diagnostic masking does not hide live operating-system process information.
+Native validation holds supplied keys in ordinary Rust process memory and does not need FFmpeg/ffprobe processes. Conversion and additional `--decode` can invoke external tools. FFmpeg and Shaka Packager require plaintext keys for some supported operations. drmr passes those keys to child processes, including through command arguments. The operating system, sufficiently privileged processes, and process-inspection tools may observe those arguments or the process environment while the tool runs. Diagnostic masking does not hide live operating-system process information.
 
 Explicit DRM initialization metadata is passed to Shaka Packager through a
 private flag file instead of a command-line argument. The file can contain

@@ -155,6 +155,7 @@ fn metadata_rejects_complete_analysis_options_including_an_explicit_default_tool
         vec!["--keys-file", path.to_str().unwrap()],
         vec!["--packager-bin", "packager"],
         vec!["--max-workers", "1"],
+        vec!["--decode"],
         vec!["--measure"],
     ] {
         let output = command()

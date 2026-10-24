@@ -8,7 +8,7 @@ from pathlib import Path
 import platform
 import time
 
-from regression import FIXTURE, measured_run, private_json, run, verify_fixture
+from regression import FIXTURE, measured_run, private_json, require_media_verification, run, verify_fixture
 
 # Public fixture values, deliberately distinct between source and result roles.
 SOURCE_KID = "000102030405060708090a0b0c0d0e0f"
@@ -56,7 +56,7 @@ def convert(binary, source, protection, destination, keys, environment):
         processing.update({name: actual[name] for name in ("route", "input_preparation", "required_tools")})
 
     seconds, memory = measured_run(
-        [binary, "convert", source, "--to", protection, "--format", format_name,
+        [binary, "convert", "--decode", source, "--to", protection, "--format", format_name,
          "--output", destination, "--keys-file", keys, "--json"], environment, inspect_result)
     manifest = destination / ("master.m3u8" if format_name == "hls" else "manifest.mpd")
     assert manifest.is_file(), "conversion must publish a usable entry manifest"
@@ -91,14 +91,10 @@ def regression(binary, destination):
             result, elapsed, memory, processing = convert(binary, source, target,
                                                destination / name, keys, environment)
             started = time.perf_counter()
-            verification = json.loads(run([binary, "verify", result, "--source", source,
+            verification = json.loads(run([binary, "verify", "--decode", result, "--source", source,
                                             "--keys-file", keys, "--json"], environment))
             verification_seconds = time.perf_counter() - started
-            assert verification["passed"] is True and verification["media_verified"] is True
-            assert all(verification["checks"][check] is True for check in
-                       ("packet_payloads_equal", "packet_timing_equal", "decoded_content_equal"))
-            assert verification["checks"]["stream_metadata"] == "pass"
-            assert verification["license_playback_verified"] is False
+            require_media_verification(verification)
             rows.append({"input": source_protection, "output": target, "passed": True,
                          "conversion_seconds": elapsed, "verification_seconds": verification_seconds,
                          "memory": memory, "verification": verification, "processing": processing})

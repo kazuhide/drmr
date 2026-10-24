@@ -78,6 +78,7 @@ struct Intent {
     operation: ChildOperation,
     outputs: Option<Vec<drmr_core::conversion::plan::bundle::BundleOutputIntent>>,
     maximum: u8,
+    decode: bool,
 }
 struct Completion {
     id: String,
@@ -120,6 +121,7 @@ impl Intent {
             operation,
             outputs: None,
             maximum: 64,
+            decode: false,
         }
     }
 }
@@ -168,6 +170,7 @@ impl CommonService {
             plan: intent.plan.as_ref(),
             outputs: intent.outputs.as_deref(),
             maximum: intent.maximum,
+            decode: intent.decode,
         }) {
             return Err(self.admission_failed(&request, &token, Some(prepared), error));
         }
@@ -447,6 +450,7 @@ impl CommonService {
                 .map(|id| s.files.file(id, wire::Role::Keys))
                 .transpose()?;
             intent.maximum = request.runtime.max_workers.unwrap_or(maximum);
+            intent.decode = request.runtime.decode;
             intent
         };
         Ok(intent)
@@ -659,7 +663,7 @@ impl CommonService {
         let projected =
             projection::project(c.operation, c.schema, c.plan_id.as_deref(), &result.payload)?;
         if let Some(plan) = &c.expected_plan
-            && plan.schema == 2
+            && matches!(plan.schema, 2 | 4)
             && projected.kind != "failure"
         {
             let ids = |v: &Value| -> Result<Vec<Value>> {
@@ -703,7 +707,7 @@ impl CommonService {
             .origin_analysis
             .as_ref()
             .and_then(|id| self.lock().analyses.get(id).map(|a| a.source_ref.clone()));
-        if payload["plan_id"] != plan.id || plan.schema != 2 {
+        if payload["plan_id"] != plan.id || !matches!(plan.schema, 2 | 4) {
             return Err(Error::new(503, "result-invalid"));
         }
         let analysis = c

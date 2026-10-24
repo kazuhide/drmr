@@ -189,7 +189,8 @@ fn inspection(v: &Value) -> Result<Value> {
     }
     Ok(output)
 }
-fn processing(v: &Value) -> Result<Value> {
+fn processing(v: &Value, verification: &Value, input: &Value) -> Result<Value> {
+    use drmr_core::inspection::{ProcessingRouteId, RequiredTool};
     object(
         v,
         &[
@@ -201,7 +202,30 @@ fn processing(v: &Value) -> Result<Value> {
         ],
     )?;
     let p: ActualProcessing = typed(v)?;
-    if p != ActualProcessing::new(p.route, p.input_preparation) {
+    let mut expected = ActualProcessing::new(p.route, p.input_preparation);
+    let decoded =
+        verification["schema_version"] == 1 || verification["required_depth"] == "decoded";
+    if decoded {
+        expected
+            .required_tools
+            .splice(0..0, [RequiredTool::Ffmpeg, RequiredTool::Ffprobe]);
+    } else {
+        let encrypted_mp4 = input["format"] == "mp4"
+            && matches!(input["protection"].as_str(), Some("cenc" | "cbcs"));
+        let can_copy = encrypted_mp4
+            && matches!(
+                p.route,
+                ProcessingRouteId::ProgressiveMp4
+                    | ProcessingRouteId::FragmentedMp4
+                    | ProcessingRouteId::DashPresentation
+                    | ProcessingRouteId::Fmp4HlsPresentation
+            );
+        let copy_required = encrypted_mp4 && p.route == ProcessingRouteId::ProgressiveMp4;
+        if copy_required || (can_copy && p.required_tools.first() == Some(&RequiredTool::Ffmpeg)) {
+            expected.required_tools.insert(0, RequiredTool::Ffmpeg);
+        }
+    }
+    if p != expected {
         return Err(bad());
     }
     serde_json::to_value(p).map_err(|_| bad())
@@ -336,7 +360,7 @@ fn native(v: &Value) -> Result<Value> {
     output["coverage"] = coverage;
     Ok(output)
 }
-fn verification(v: &Value) -> Result<Value> {
+fn legacy_verification(v: &Value) -> Result<Value> {
     const F: &[&str] = &[
         "schema_version",
         "passed",
@@ -357,12 +381,72 @@ fn verification(v: &Value) -> Result<Value> {
     }
     Ok(output)
 }
+fn verification(v: &Value) -> Result<Value> {
+    const F: &[&str] = &[
+        "schema_version",
+        "required_depth",
+        "scope",
+        "passed",
+        "checks",
+        "decode_evidence",
+        "failure",
+        "license_playback_verified",
+        "native_manifest",
+    ];
+    if v["schema_version"] == 1 {
+        return legacy_verification(v);
+    }
+    object(v, F)?;
+    version(v, 2)?;
+    let depth: drmr_core::conversion::ValidationDepth = typed(&v["required_depth"])?;
+    let scope: drmr_core::conversion::VerificationScope = typed(&v["scope"])?;
+    let checks: drmr_core::conversion::VerificationChecks = typed(&v["checks"])?;
+    let decode: drmr_core::conversion::DecodeEvidence = typed(&v["decode_evidence"])?;
+    if let Some(failure) = v.get("failure") {
+        let _: drmr_core::conversion::VerificationFailure = typed(failure)?;
+    }
+    if boolean(&v["license_playback_verified"])? {
+        return Err(bad());
+    }
+    let mut out = select(v, F);
+    if let Some(manifest) = v.get("native_manifest") {
+        out["native_manifest"] = native(manifest)?;
+    }
+    let expected = checks.is_pass()
+        && decode.satisfies(depth, scope)
+        && v.get("failure").is_none()
+        && v.get("native_manifest").is_none_or(|n| {
+            n["errors"] == 0 && n["truncated"] == false && n["incomplete"] == false
+        });
+    if boolean(&v["passed"])? != expected {
+        return Err(bad());
+    }
+    Ok(out)
+}
 fn verified(v: &Value) -> bool {
+    if v["schema_version"] == 2 {
+        return v["passed"] == true && v.get("failure").is_none();
+    }
     v["passed"] == true
         && v["media_verified"] == true
         && checks_pass(&v["checks"])
         && v.get("native_manifest")
             .is_none_or(|n| n["errors"] == 0 && n["truncated"] == false && n["incomplete"] == false)
+}
+fn media_report_version(v: &Value) -> Result<()> {
+    match integer(&v["schema_version"])? {
+        1 | 2 => Ok(()),
+        _ => Err(bad()),
+    }
+}
+fn comparison_verification(v: &Value, parent_version: &Value) -> Result<Value> {
+    let out = verification(v)?;
+    if &v["schema_version"] != parent_version
+        || (v["schema_version"] == 2 && v["scope"] != "comparison")
+    {
+        return Err(bad());
+    }
+    Ok(out)
 }
 fn conversion(v: &Value, with_plan: bool) -> Result<Value> {
     const F: &[&str] = &[
@@ -375,7 +459,7 @@ fn conversion(v: &Value, with_plan: bool) -> Result<Value> {
         "measurements",
     ];
     object(v, F)?;
-    version(v, 1)?;
+    media_report_version(v)?;
     let mut output = select(
         v,
         if with_plan {
@@ -392,9 +476,9 @@ fn conversion(v: &Value, with_plan: bool) -> Result<Value> {
     );
     output["input"] = inspection(&v["input"])?;
     output["output"] = inspection(&v["output"])?;
-    output["verification"] = verification(&v["verification"])?;
+    output["verification"] = comparison_verification(&v["verification"], &v["schema_version"])?;
     if let Some(p) = v.get("processing") {
-        output["processing"] = processing(p)?;
+        output["processing"] = processing(p, &output["verification"], &output["input"])?;
     }
     Ok(output)
 }
@@ -494,7 +578,7 @@ fn failure(v: &Value, operation: OperationName) -> Result<Value> {
 }
 fn analysis(v: &Value) -> Result<(Value, &'static str, bool)> {
     Ok({
-        const F: &[&str] = &[
+        const LEGACY: &[&str] = &[
             "kind",
             "schema_version",
             "input_admitted",
@@ -508,8 +592,24 @@ fn analysis(v: &Value) -> Result<(Value, &'static str, bool)> {
             "download",
             "measurements",
         ];
-        object(v, F)?;
-        version(v, 1)?;
+        let current = LEGACY
+            .iter()
+            .map(|field| {
+                if *field == "input_checks" {
+                    "verification"
+                } else {
+                    *field
+                }
+            })
+            .collect::<Vec<_>>();
+        let schema = integer(&v["schema_version"])?;
+        let fields = match schema {
+            1 => LEGACY,
+            2 => current.as_slice(),
+            _ => return Err(bad()),
+        };
+        object(v, fields)?;
+        media_report_version(v)?;
         text(&v["kind"], &["input-analysis"])?;
         boolean(&v["input_admitted"])?;
         let _: OutputFormat = typed(&v["actual_format"])?;
@@ -532,14 +632,19 @@ fn analysis(v: &Value) -> Result<(Value, &'static str, bool)> {
             text(x, &["ts-empty-payload-padding", "hls-empty-cue-pair"])?;
             Ok(x.clone())
         })?;
-        let mut out = select(v, &F[..9]);
+        let mut out = select(v, &fields[..9]);
         out["input"] = inspection(&v["input"])?;
-        out["input_checks"] = checks(&v["input_checks"])?;
-        (
-            out,
-            "analysis",
-            v["input_admitted"] == true && checks_pass(&v["input_checks"]),
-        )
+        let success = if schema == 1 {
+            out["input_checks"] = checks(&v["input_checks"])?;
+            checks_pass(&v["input_checks"])
+        } else {
+            out["verification"] = verification(&v["verification"])?;
+            if v["verification"]["scope"] != "source-admission" {
+                return Err(bad());
+            }
+            verified(&out["verification"])
+        };
+        (out, "analysis", v["input_admitted"] == true && success)
     })
 }
 fn plan(v: &Value) -> Result<(Value, &'static str, bool)> {
@@ -548,7 +653,7 @@ fn plan(v: &Value) -> Result<(Value, &'static str, bool)> {
             return Err(bad());
         }
         let schema = integer(&v["schema_version"])?;
-        let out = if schema == 1 {
+        let mut out = if matches!(schema, 1 | 3) {
             object(
                 v,
                 &[
@@ -559,6 +664,7 @@ fn plan(v: &Value) -> Result<(Value, &'static str, bool)> {
                     "source",
                     "intent",
                     "measurements",
+                    "required_depth",
                 ],
             )?;
             object(&v["intent"], &["format", "target", "output"])?;
@@ -566,7 +672,7 @@ fn plan(v: &Value) -> Result<(Value, &'static str, bool)> {
             let mut out = select(v, &["kind", "schema_version", "plan_id", "source_format"]);
             out["intent"] = select(&v["intent"], &["format", "target"]);
             out
-        } else if schema == 2 {
+        } else if matches!(schema, 2 | 4) {
             object(
                 v,
                 &[
@@ -578,6 +684,7 @@ fn plan(v: &Value) -> Result<(Value, &'static str, bool)> {
                     "output_root",
                     "outputs",
                     "measurements",
+                    "required_depth",
                 ],
             )?;
             let _: Vec<drmr_core::conversion::plan::bundle::BundleOutputIntent> =
@@ -598,6 +705,12 @@ fn plan(v: &Value) -> Result<(Value, &'static str, bool)> {
         } else {
             return Err(bad());
         };
+        if schema >= 3 {
+            let _: drmr_core::conversion::ValidationDepth = typed(&v["required_depth"])?;
+            out["required_depth"] = v["required_depth"].clone();
+        } else if v.get("required_depth").is_some() {
+            return Err(bad());
+        }
         let _: OutputFormat = typed(&v["source_format"])?;
         (out, "plan", true)
     })
@@ -660,7 +773,7 @@ fn bundle(operation: OperationName, v: &Value) -> Result<(Value, &'static str, b
                 "measurements",
             ],
         )?;
-        version(v, 1)?;
+        media_report_version(v)?;
         let outputs = array(&v["outputs"], |o| bundle_output(o, verify))?;
         let mut out = select(
             v,
@@ -676,6 +789,18 @@ fn bundle(operation: OperationName, v: &Value) -> Result<(Value, &'static str, b
         let rows = out["outputs"].as_array().ok_or_else(bad)?;
         if !(1..=8).contains(&rows.len()) {
             return Err(bad());
+        }
+        for row in rows {
+            let media = if verify {
+                &row["verification"]
+            } else {
+                &row["conversion"]
+            };
+            if media["schema_version"] != v["schema_version"]
+                || (verify && media["schema_version"] == 2 && media["scope"] != "comparison")
+            {
+                return Err(bad());
+            }
         }
         let success = rows.iter().all(|o| {
             verified(if verify {
@@ -718,7 +843,7 @@ fn single_verification(v: &Value) -> Result<(Value, &'static str, bool)> {
                 "measurements",
             ],
         )?;
-        version(v, 1)?;
+        media_report_version(v)?;
         text(&v["kind"], &["plan-verification"])?;
         let mut out = select(
             v,
@@ -730,7 +855,7 @@ fn single_verification(v: &Value) -> Result<(Value, &'static str, bool)> {
                 "output_matches_plan",
             ],
         );
-        out["verification"] = verification(&v["verification"])?;
+        out["verification"] = comparison_verification(&v["verification"], &v["schema_version"])?;
         let success = boolean(&v["source_unchanged"])?
             && boolean(&v["output_matches_plan"])?
             && verified(&out["verification"]);
@@ -755,11 +880,11 @@ pub fn project(
     let (mut value, kind, success) = match operation {
         OperationName::Analyze => analysis(v)?,
         OperationName::Plan => plan(v)?,
-        OperationName::Convert if schema == Some(1) => single_conversion(v)?,
-        OperationName::Convert | OperationName::Verify if schema == Some(2) => {
+        OperationName::Convert if matches!(schema, Some(1 | 3)) => single_conversion(v)?,
+        OperationName::Convert | OperationName::Verify if matches!(schema, Some(2 | 4)) => {
             bundle(operation, v)?
         }
-        OperationName::Verify if schema == Some(1) => single_verification(v)?,
+        OperationName::Verify if matches!(schema, Some(1 | 3)) => single_verification(v)?,
         _ => return Err(bad()),
     };
     if operation != OperationName::Analyze {
@@ -790,6 +915,148 @@ fn safe_id(id: &str) -> bool {
         && b[0].is_ascii_alphanumeric()
         && b.iter()
             .all(|x| x.is_ascii_alphanumeric() || b"_-".contains(x))
+}
+
+#[cfg(test)]
+mod coverage_tests {
+    use super::*;
+
+    fn native_report() -> Value {
+        json!({"schema_version":2,"required_depth":"native","scope":"comparison","passed":true,
+            "checks":{"stream_metadata":"pass","packet_payloads_equal":true,"packet_timing_equal":true},
+            "decode_evidence":{"status":"not-checked","reason":"not-requested"},"license_playback_verified":false})
+    }
+
+    #[test]
+    fn native_and_decoded_report_evidence_cannot_be_confused() {
+        let native = native_report();
+        assert!(verified(&verification(&native).unwrap()));
+        let mut required = native.clone();
+        required["required_depth"] = json!("decoded");
+        assert!(verification(&required).is_err());
+        required["passed"] = json!(false);
+        assert!(!verified(&verification(&required).unwrap()));
+        required["passed"] = json!(true);
+        required["decode_evidence"] = json!({"status":"content-compared","equal":true});
+        assert!(verified(&verification(&required).unwrap()));
+        required["decode_evidence"] = json!({"status":"source-decoded"});
+        assert!(verification(&required).is_err());
+        required["scope"] = json!("source-admission");
+        assert!(verified(&verification(&required).unwrap()));
+    }
+
+    #[test]
+    fn obsolete_booleans_and_a_failed_child_cannot_authorize_native_success() {
+        let mut obsolete = native_report();
+        obsolete["media_verified"] = json!(true);
+        assert!(verification(&obsolete).is_err());
+        let mut obsolete = native_report();
+        obsolete["checks"]["decoded_content_equal"] = json!(true);
+        assert!(verification(&obsolete).is_err());
+        let mut failed = native_report();
+        failed["failure"] = json!("child-check-failed");
+        assert!(verification(&failed).is_err());
+        failed["passed"] = json!(false);
+        assert!(!verified(&verification(&failed).unwrap()));
+        let refused = project(OperationName::Analyze, None, None, &json!({
+            "schema_version":1,"command":"analyze","status":"failed",
+            "error":{"code":"native-codec-profile-not-supported","hint":"PRIVATE_TOOL_MARKER","last_activity":"verification"}
+        })).unwrap();
+        assert!(!refused.success);
+        assert_eq!(
+            refused.value["error"]["code"],
+            "native-codec-profile-not-supported"
+        );
+        assert!(!refused.value.to_string().contains("PRIVATE_TOOL_MARKER"));
+    }
+
+    #[test]
+    fn native_static_refusals_retain_their_code_without_private_detail_passthrough() {
+        for code in [
+            "invalid-avc-syntax",
+            "native-aac-clock-mismatch",
+            "native-aac-config-invalid",
+            "native-aac-config-not-supported",
+            "native-avc-access-unit-size-limit",
+            "native-avc-sync-sample-mismatch",
+            "native-cipher-counter-overflow",
+            "native-codec-configuration-not-supported",
+            "native-codec-profile-not-supported",
+            "native-media-clock-overflow",
+            "native-media-duration-mismatch",
+            "native-mp4-invalid",
+            "native-mp4-profile-not-supported",
+            "native-presentation-metadata-invalid",
+            "native-presentation-window-not-supported",
+            "native-sample-evidence-incomplete",
+            "native-sample-evidence-invalid",
+            "native-sample-protection-mismatch",
+            "native-source-changed",
+            "native-track-changed",
+            "native-video-dimensions-mismatch",
+            "presentation-window-outside-media",
+            "ts-aac-mp4-invalid",
+            "ts-aac-mp4-write-failed",
+            "ts-avc-picture-duration-not-supported",
+            "ts-avc-separate-colour-plane-not-supported",
+            "ts-avc-slice-groups-not-supported",
+            "ts-avc-slice-order-not-supported",
+            "ts-segment-evidence-incomplete",
+            "ts-segment-evidence-limit",
+            "ts-segment-evidence-missing",
+            "ts-segment-evidence-unfinished",
+            "ts-video-duration-clock-required",
+            "ts-video-reorder-limit",
+            "verification-native-evidence-required",
+        ] {
+            let payload = json!({"schema_version":1,"command":"analyze","status":"failed",
+                "error":{"code":code,"hint":"PRIVATE_NATIVE_DETAIL","last_activity":"verification"}});
+            let projected = project(OperationName::Analyze, None, None, &payload).unwrap();
+            assert!(!projected.success);
+            assert_eq!(projected.value["error"]["code"], code);
+            assert!(
+                !projected
+                    .value
+                    .to_string()
+                    .contains("PRIVATE_NATIVE_DETAIL")
+            );
+        }
+        for code in [
+            "native-private-sentinel",
+            "ts-private-sentinel",
+            "observer-stopped",
+        ] {
+            let payload = json!({"schema_version":1,"command":"analyze","status":"failed",
+                "error":{"code":code,"hint":"PRIVATE_NATIVE_DETAIL","last_activity":"verification"}});
+            assert!(project(OperationName::Analyze, None, None, &payload).is_err());
+        }
+    }
+
+    #[test]
+    fn processing_tools_keep_native_copy_decode_and_legacy_contracts_distinct() {
+        use drmr_core::inspection::{InputPreparation, ProcessingRouteId, RequiredTool};
+        let native = native_report();
+        let clear = json!({"format":"mp4","protection":"clear"});
+        let encrypted = json!({"format":"mp4","protection":"cenc"});
+        let mut actual = ActualProcessing::new(
+            ProcessingRouteId::ProgressiveMp4,
+            InputPreparation::CompleteFile,
+        );
+        let value = |report: &ActualProcessing| serde_json::to_value(report).unwrap();
+        assert!(processing(&value(&actual), &native, &clear).is_ok());
+        assert!(processing(&value(&actual), &native, &encrypted).is_err());
+        actual.required_tools = vec![RequiredTool::Ffmpeg];
+        assert!(processing(&value(&actual), &native, &encrypted).is_ok());
+        assert!(processing(&value(&actual), &native, &clear).is_err());
+        actual.required_tools.push(RequiredTool::Ffprobe);
+        assert!(processing(&value(&actual), &native, &encrypted).is_err());
+        let mut decoded = native.clone();
+        decoded["required_depth"] = json!("decoded");
+        assert!(processing(&value(&actual), &decoded, &clear).is_ok());
+        assert!(processing(&value(&actual), &json!({"schema_version":1}), &clear).is_ok());
+        actual.required_tools.clear();
+        assert!(processing(&value(&actual), &json!({"schema_version":1}), &clear).is_err());
+    }
 }
 
 const NATIVE_RULES: &[&str] = &[
@@ -1397,6 +1664,7 @@ const FAILURE_CODES: &[&str] = &[
     "input-protection-not-supported",
     "input-unreadable",
     "invalid-aes128-key",
+    "invalid-avc-syntax",
     "invalid-content-key",
     "invalid-encrypted-segment",
     "invalid-fetch-policy",
@@ -1462,7 +1730,27 @@ const FAILURE_CODES: &[&str] = &[
     "mp4-sample-descriptions-missing",
     "multi-track-mp4-output-not-supported",
     "multiple-mp4-movie-boxes",
+    "native-aac-clock-mismatch",
+    "native-aac-config-invalid",
+    "native-aac-config-not-supported",
+    "native-avc-access-unit-size-limit",
+    "native-avc-sync-sample-mismatch",
+    "native-cipher-counter-overflow",
+    "native-codec-configuration-not-supported",
+    "native-codec-profile-not-supported",
     "native-manifest-lint-failed",
+    "native-media-clock-overflow",
+    "native-media-duration-mismatch",
+    "native-mp4-invalid",
+    "native-mp4-profile-not-supported",
+    "native-presentation-metadata-invalid",
+    "native-presentation-window-not-supported",
+    "native-sample-evidence-incomplete",
+    "native-sample-evidence-invalid",
+    "native-sample-protection-mismatch",
+    "native-source-changed",
+    "native-track-changed",
+    "native-video-dimensions-mismatch",
     "output-exists-or-publish-failed",
     "output-exists-or-unsafe",
     "output-iv-not-used",
@@ -1496,6 +1784,7 @@ const FAILURE_CODES: &[&str] = &[
     "presentation-track-count-mismatch",
     "presentation-track-role-mismatch",
     "presentation-window-not-supported",
+    "presentation-window-outside-media",
     "private-file-permissions-failed",
     "private-files-not-supported-on-platform",
     "probe-result-size-limit",
@@ -1513,6 +1802,7 @@ const FAILURE_CODES: &[&str] = &[
     "segment-read-failed",
     "segment-write-failed",
     "single-track-mp4-required",
+    "source-decode-comparison-failed",
     "source-decryption-verification-failed",
     "source-graph-limit",
     "source-inventory-invalid",
@@ -1530,11 +1820,17 @@ const FAILURE_CODES: &[&str] = &[
     "temporary-workspace-unavailable",
     "track-count-limit",
     "track-role-mismatch",
+    "ts-aac-mp4-invalid",
+    "ts-aac-mp4-write-failed",
     "ts-aac-sample-rate-not-supported",
     "ts-access-unit-count-mismatch",
     "ts-access-unit-size-limit",
     "ts-adaptation-metadata-not-supported",
     "ts-audio-only-timing-proof-not-supported",
+    "ts-avc-picture-duration-not-supported",
+    "ts-avc-separate-colour-plane-not-supported",
+    "ts-avc-slice-groups-not-supported",
+    "ts-avc-slice-order-not-supported",
     "ts-clock-timescale-not-supported",
     "ts-clock-wrap-or-discontinuity-not-supported",
     "ts-codec-configuration-not-supported",
@@ -1568,17 +1864,25 @@ const FAILURE_CODES: &[&str] = &[
     "ts-sample-size-limit",
     "ts-section-crc-mismatch",
     "ts-segment-duration-mismatch",
+    "ts-segment-evidence-incomplete",
+    "ts-segment-evidence-limit",
+    "ts-segment-evidence-missing",
+    "ts-segment-evidence-unfinished",
     "ts-single-program-required",
     "ts-stream-count-mismatch",
     "ts-stream-descriptors-not-supported",
     "ts-stream-type-not-supported",
     "ts-transport-not-supported",
     "ts-undeclared-stream-not-supported",
+    "ts-video-duration-clock-required",
+    "ts-video-reorder-limit",
     "ts-wall-clock-metadata-not-supported",
     "unrecognized-input",
     "unsafe-local-path",
     "unsupported-path",
+    "verification-evidence-scope-mismatch",
     "verification-mismatch",
+    "verification-native-evidence-required",
     "verification-output-changed",
     "xml-doctype-forbidden",
 ];

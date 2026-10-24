@@ -137,6 +137,7 @@ fn maximum_widevine_metadata_preserves_complete_media_alone_and_with_playready()
             "packager",
             "ffmpeg",
         )
+        .with_decode(true)
     };
     for dual in [false, true] {
         let output = owner.path().join(format!("result-{dual}"));
@@ -191,10 +192,20 @@ fn maximum_widevine_metadata_preserves_complete_media_alone_and_with_playready()
                 },
             })
             .unwrap();
-        assert!(checked.passed && checked.media_verified);
+        assert!(
+            checked.passed
+                && (checked.checks.is_pass()
+                    && checked.decode_evidence.satisfies(
+                        drmr_core::conversion::ValidationDepth::Decoded,
+                        checked.scope
+                    ))
+        );
         assert!(checked.checks.packet_payloads_equal);
         assert!(checked.checks.packet_timing_equal);
-        assert!(checked.checks.decoded_content_equal);
+        assert!(checked.decode_evidence.satisfies(
+            drmr_core::conversion::ValidationDepth::Decoded,
+            checked.scope
+        ));
         assert!(!checked.license_playback_verified);
         assert_no_flagfiles(&output);
         assert_eq!(std::fs::read(&input).unwrap(), original);

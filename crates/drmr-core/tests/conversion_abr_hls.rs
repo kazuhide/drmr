@@ -52,6 +52,7 @@ fn converter() -> Converter {
         "packager",
         "ffmpeg",
     )
+    .with_decode(true)
 }
 fn run(command: &mut Command) {
     let output = command.output().unwrap();
@@ -129,12 +130,22 @@ fn fixture(root: &Path) -> PathBuf {
     path
 }
 fn proof(result: &drmr_core::conversion::VerificationReport) {
-    assert!(result.passed && result.media_verified);
+    assert!(
+        result.passed
+            && (result.checks.is_pass()
+                && result.decode_evidence.satisfies(
+                    drmr_core::conversion::ValidationDepth::Decoded,
+                    result.scope
+                ))
+    );
     assert!(result.checks.stream_metadata.is_pass());
     assert!(
         result.checks.packet_payloads_equal
             && result.checks.packet_timing_equal
-            && result.checks.decoded_content_equal
+            && result.decode_evidence.satisfies(
+                drmr_core::conversion::ValidationDepth::Decoded,
+                result.scope
+            )
     );
 }
 fn assert_english_manifest(manifest: &Path, format: OutputFormat) {
@@ -339,7 +350,8 @@ fn complete_video_source_checks_require_the_selected_decoder() {
         )),
         "packager",
         decoder.to_str().unwrap(),
-    );
+    )
+    .with_decode(true);
     let original = common::snapshot_tree(directory.path());
     assert!(
         converter

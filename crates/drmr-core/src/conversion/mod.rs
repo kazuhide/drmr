@@ -33,6 +33,8 @@ pub mod manifest_lint;
 pub use frozen::{FrozenSource, SourceFile, SourceInventory};
 mod hls;
 mod keys;
+mod native;
+mod native_media;
 mod signaling;
 pub use signaling::{DrmSystem, OutputSignaling};
 mod presentation;
@@ -58,7 +60,10 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-pub use verify::{CheckOutcome, VerificationChecks, VerificationReport};
+pub use verify::{
+    CheckOutcome, DecodeEvidence, DecodeNotCheckedReason, ValidationDepth, VerificationChecks,
+    VerificationFailure, VerificationReport, VerificationScope,
+};
 pub mod measurement;
 const MAX_MEDIA_BYTES: u64 = 16 * 1024 * 1024 * 1024;
 /// Fixed failure codes contain no paths, key material, or backend output.
@@ -125,11 +130,23 @@ impl Converter {
                 ffmpeg: ffmpeg.into(),
                 ffprobe: "ffprobe".into(),
                 timeout: Duration::from_hours(1),
+                validation_depth: ValidationDepth::Native,
                 measurement: None,
                 activity: None,
             },
         }
     }
+    /// Add complete decoding to the required native media checks.
+    #[must_use]
+    pub fn with_decode(mut self, decode: bool) -> Self {
+        self.backend.validation_depth = if decode {
+            ValidationDepth::Decoded
+        } else {
+            ValidationDepth::Native
+        };
+        self
+    }
+
     /// Observe fixed activity starts and scope closures, independently of optional measurements.
     /// Scopes can overlap or nest; closure is not proof of success. No paths, keys or arguments
     /// are supplied. The default converter does not emit these additional events.
@@ -387,13 +404,14 @@ impl Converter {
         self.backend.checkpoint(&[&workspace]);
         self.publish(&workspace, &candidate, &destination)?;
         Ok(ConversionReport {
-            schema_version: 1,
+            schema_version: 2,
             input: input_report,
             output: output_report,
             verification,
-            processing: Some(inspection::ActualProcessing::new(
+            processing: Some(self.backend.processing(
                 inspection::ProcessingRouteId::FragmentedMp4,
                 inspection::InputPreparation::CompleteFile,
+                false,
             )),
         })
     }

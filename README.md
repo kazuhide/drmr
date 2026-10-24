@@ -21,8 +21,8 @@ See [keys and local security](docs/security.md) for diagnostic masking, temporar
 Download a CLI archive for your operating system and processor from
 [GitHub Releases](https://github.com/kazuhide/drmr/releases), then follow the
 [archive and version checks](docs/releases.md#install-a-released-cli). Rust is
-only needed when building from source; external media tools are installed
-separately for either CLI installation method.
+only needed when building from source. Install external tools for the
+conversion routes or additional checks you use.
 
 To run the CLI with its media tools included, use the [Docker guide](docs/docker.md). It also covers the experimental local web console.
 
@@ -42,14 +42,22 @@ cargo build --release --locked -p drmr
 ./target/release/drmr --help
 ```
 
-Media processing uses these external tools. Follow their installation instructions and add their executable directories to `PATH`, the list of directories your shell searches for programs.
+Ordinary media checks in `analyze`, saved planning and `verify` run in Rust and
+need no external media tools for supported inputs. `--decode` adds complete
+decoding. Conversion and additional checks use the tools below. Add their
+executable directories to `PATH`, the directories your shell searches.
 
 | Executable | Supported from | Install | Purpose |
 | --- | --- | --- | --- |
-| `ffmpeg`, `ffprobe` | 9.0.1 | [FFmpeg](https://ffmpeg.org/download.html) | Process and inspect media |
+| `ffmpeg`, `ffprobe` | 9.0.1 | [FFmpeg](https://ffmpeg.org/download.html) | Additional complete decoding; FFmpeg also performs the encrypted finite progressive copy remux |
 | `packager` | 3.8.0 | [Shaka Packager](https://github.com/shaka-project/shaka-packager#readme) | Encrypt and package media |
 
-The Rust executable checks MP4 structure directly. These are supported lower bounds. The [requirements table](docs/requirements.md#media-tools) records the builds used for qualification and explains which CI tools are pinned. Some older FFmpeg builds omit packet durations needed for encrypted audio verification; drmr refuses incomplete timing evidence. See [media processing](docs/media-processing.md) for details.
+The Rust executable checks MP4 structure directly. These are supported lower bounds. The [requirements table](docs/requirements.md#media-tools) records the builds used for qualification and explains which CI tools are pinned. In the additional `--decode` path, some older FFmpeg builds omit packet durations needed for encrypted audio verification; drmr refuses incomplete timing evidence. See [media processing](docs/media-processing.md) for details.
+
+Native checks retain all selected samples, codec configuration, clocks and
+playback windows. They do not claim decoder execution. See
+[verification depth and report schemas](docs/verification.md) for `--decode`,
+the actual evidence reported, and legacy saved-plan requirements.
 
 For the full source test suite, install [Bento4](https://www.bento4.com/downloads/): `mp4dump` provides an independent reference for MP4 parser checks, and `mp4encrypt` generates encrypted test fixtures. These additional tools are used by development tests.
 

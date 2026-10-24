@@ -224,6 +224,7 @@ fn observed_capacity_refusal_is_structured_without_launching_packaging() {
     .unwrap();
     let result = Command::new(env!("CARGO_BIN_EXE_drmr"))
         .arg("convert")
+        .arg("--decode")
         .arg(&source)
         .args(["--to", "clear", "--format", "mp4", "--json", "--output"])
         .arg(&output)
@@ -275,7 +276,10 @@ fn longer_public_source_preserves_full_proof_and_progress_without_changing_succe
     );
     let converted: Value = serde_json::from_slice(&converted.stdout).unwrap();
     assert!(converted.get("status").is_none() && converted.get("error").is_none());
-    assert_eq!(converted["verification"]["media_verified"], true);
+    assert_eq!(
+        converted["verification"]["decode_evidence"],
+        serde_json::json!({"status":"content-compared","equal":true})
+    );
     let verified = invoke("verify", &source, &output, &[]);
     assert!(
         verified.status.success(),
@@ -319,7 +323,10 @@ fn a_verification_mismatch_retains_the_check_report_and_adds_safe_failure_fields
     assert_eq!(report["passed"], false);
     assert_eq!(report["media_verified"], false);
     assert!(report["checks"].is_object());
-    assert_eq!(report["checks"]["decoded_content_equal"], false);
+    assert_eq!(
+        report["decode_evidence"],
+        serde_json::json!({"status":"content-compared","equal":false})
+    );
     assert!(String::from_utf8_lossy(&result.stderr).contains("verify: verification-mismatch"));
 }
 

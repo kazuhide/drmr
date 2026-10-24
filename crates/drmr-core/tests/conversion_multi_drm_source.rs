@@ -23,7 +23,7 @@ fn runner() -> Arc<ToolRunner> {
     Arc::new(ToolRunner::new(Arc::new(Secrets::new()), Arc::new(NoSink)))
 }
 fn converter() -> Converter {
-    Converter::new(runner(), "packager", "ffmpeg")
+    Converter::new(runner(), "packager", "ffmpeg").with_decode(true)
 }
 fn pssh() -> Vec<u8> {
     drmr_core::playready::build_pssh_box(

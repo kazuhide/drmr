@@ -45,6 +45,7 @@ pub struct Preparation<'a> {
     pub plan: Option<&'a plans::Plan>,
     pub outputs: Option<&'a [drmr_core::conversion::plan::bundle::BundleOutputIntent]>,
     pub maximum: u8,
+    pub decode: bool,
 }
 impl Prepared {
     // Ownership exists before any file is created, including a failed partial configuration.
@@ -83,6 +84,7 @@ impl Prepared {
             plan,
             outputs,
             maximum,
+            decode,
         } = settings;
         let directory = &self.directory.path;
         let keys_file = copy(keys, &directory.join("keys.json"), 65_536, &mut self.copies)?;
@@ -111,6 +113,7 @@ impl Prepared {
             runtime: ChildRuntime {
                 keys_file,
                 max_workers: Some(maximum),
+                decode,
                 tools: OperatorTools::default(),
             },
             channels: ChildChannels {
@@ -321,6 +324,7 @@ mod tests {
             plan: None,
             outputs: None,
             maximum: 2,
+            decode: false,
         });
         assert_eq!(result.unwrap_err().code, "private-config-unavailable");
         let copy = prepared.directory.path.join("keys.json");

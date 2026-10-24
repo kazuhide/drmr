@@ -108,6 +108,7 @@ fn command(operation: &str, keys: &Path) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_drmr"));
     command
         .arg(operation)
+        .arg("--decode")
         .arg("--keys-file")
         .arg(keys)
         .args(["--max-workers", "1", "--json"]);
@@ -116,13 +117,12 @@ fn command(operation: &str, keys: &Path) -> Command {
 
 fn verified(value: &Value) {
     assert_eq!(value["passed"], true);
-    assert_eq!(value["media_verified"], true);
+    assert_eq!(
+        value["decode_evidence"],
+        serde_json::json!({"status":"content-compared","equal":true})
+    );
     assert_eq!(value["license_playback_verified"], false);
-    for name in [
-        "packet_payloads_equal",
-        "packet_timing_equal",
-        "decoded_content_equal",
-    ] {
+    for name in ["packet_payloads_equal", "packet_timing_equal"] {
         assert_eq!(value["checks"][name], true);
     }
 }
@@ -174,6 +174,7 @@ fn remote_files(original: &BTreeMap<PathBuf, Vec<u8>>) -> BTreeMap<String, Vec<u
 fn refuse_missing_and_wrong_keys(root: &Path, input: &Path) {
     let missing = Command::new(env!("CARGO_BIN_EXE_drmr"))
         .arg("analyze")
+        .arg("--decode")
         .arg(input)
         .arg("--json")
         .output()

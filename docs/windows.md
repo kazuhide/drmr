@@ -12,7 +12,7 @@ cargo build --release --locked -p drmr
 .\target\release\drmr.exe doctor
 ```
 
-The Windows CI archive contains `drmr.exe`, the license, and user documentation. Extract it to a local directory and add that directory to your user `PATH`, or invoke the executable by its full path. External tools are installed separately: FFmpeg (`ffmpeg.exe` and `ffprobe.exe`) and Shaka Packager (`packager.exe`). See the [installation links](../README.md#install). `doctor` discovers executables; it does not validate their versions.
+The Windows CI archive contains `drmr.exe`, the license, and user documentation. Extract it to a local directory and add that directory to your user `PATH`, or invoke the executable by its full path. Native analysis and verification need no external media tools. Conversion and optional `--decode` use separately installed tools as described in [requirements](requirements.md): FFmpeg (`ffmpeg.exe` and `ffprobe.exe`) and Shaka Packager (`packager.exe`). See the [installation links](../README.md#install). `doctor` discovers executables; it does not validate their versions.
 
 The CI-built executable imports `VCRUNTIME140.dll`. Install the [Microsoft Visual C++ x64 Redistributable](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist) if that runtime is not already available. CI prints the release executable's imported libraries before creating the archive.
 

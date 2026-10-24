@@ -7,7 +7,8 @@ supported HLS, static DASH and MP4 URLs within the documented acquisition profil
 
 For several outputs with separate DRM systems and final-manifest checks, use
 the [multiple-output workflow](multiple-outputs.md). The single-output examples
-below and their schema-version-1 plans remain supported.
+below create schema-version-3 plans. Legacy version-one plans remain readable
+with their original complete-decode minimum.
 
 ## 1. Analyze and retain the input
 
@@ -21,12 +22,13 @@ the complete presentation, retains its original manifests and media, and creates
 `source/input.mpd`; for an MP4 URL it is `source/input.mp4`. Pass that local path
 to the subsequent `plan` command. Format detection uses the response content,
 including for URLs without a filename extension. It checks all admitted tracks, source
-decryption when needed, encoded content, complete decoding, and timing evidence.
-This can take as much work as reading and decoding the whole asset; it is not a
+decryption when needed, every admitted compressed sample, codec configuration,
+playback windows and timing in Rust. Add `--decode` for complete source decoding.
+This reads the whole asset; it is not a
 quick check of the master playlist. A completed download survives a later media
 admission failure so that you can examine it locally.
 
-The JSON reports `input_admitted`, `input_checks`, the actual container in
+The version-two JSON reports `input_admitted`, typed `verification` evidence, the actual container in
 `actual_format`, protection in `track_protection`, and candidate output formats
 in `eligible_formats`. Input admission does not establish a converted result,
 license acquisition, or device playback. An unsupported profile returns failure
@@ -40,7 +42,7 @@ one uniform output protection scheme.
 
 `compatibility_notes` lists fixed codes when source admission applies a documented
 compatibility rule, such as empty TS padding or adjacent zero-duration HLS cue
-markers. These notes do not waive packet, decoding, or timing checks. See
+markers. These notes do not waive sample or timing checks, or requested decoding. See
 [transport-stream compatibility](media-processing.md#transport-stream-compatibility)
 for the accepted conditions and handling of the unchanged original.
 
@@ -67,9 +69,11 @@ origins, authentication, and transfer limits; the same options apply to `analyze
 drmr plan ./source/input.m3u8 --to cbcs --format dash --output ./result --save ./conversion.plan.json --json
 ```
 
-The saved plan has `kind: "execution-plan"` and `schema_version: 1`. It records
+The saved plan has `kind: "execution-plan"` and `schema_version: 3`. It records
 one output format and protection scheme, the new output location, and a SHA-256
-fingerprint and size for every referenced source file. The source is fully
+fingerprint and size for every referenced source file. `required_depth` is
+`native` by default; `--decode` saves `decoded`. This minimum is included in
+the plan ID and cannot be lowered at execution. The source is fully
 admitted again before saving. The plan itself is created privately and never
 overwrites an existing file. Keep the plan and result outside the saved source
 directory. For a single MP4, sibling plan and output files are allowed.
@@ -112,7 +116,9 @@ URLs, and external-tool commands are not serialized. Keys and optional signaling
 are supplied at execution time. A plan therefore does not pin a particular key
 identifier, key address, or license endpoint. Optional signaling must still meet
 its separately documented input and output profile. `--packager-bin`,
-`--max-workers`, `--json`, and `--measure` remain runtime options. Input, target,
+`--max-workers`, `--json`, and `--measure` remain runtime options. `--decode`
+can strengthen a saved minimum. Legacy single version-one and named-output
+version-two plans keep a decoded minimum. Input, target,
 format, output, and download overrides are refused with `--plan`.
 
 ## 4. Verify independently
@@ -128,6 +134,10 @@ track, and complete media correspondence. Success requires
 `verification.passed: true`. Replacing CBCS output with matching clear media
 fails the output-intent check even if the decoded content still matches. A
 conversion's earlier success report does not authorize this verification.
+Native checks compare all admitted samples and validated presentation metadata;
+`--decode` additionally compares complete decoded content. New reports explicitly
+distinguish an unrequested decode from actual decoder evidence. See
+[verification depth](verification.md) for the report and plan schema changes.
 
 The plan contains absolute local paths and is intended for reuse on the same
 machine. Moving the original or result requires creating a new plan. Treat plan

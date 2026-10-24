@@ -31,6 +31,7 @@ fn converter() -> Converter {
         "packager",
         "ffmpeg",
     )
+    .with_decode(true)
 }
 #[test]
 fn target_and_associated_iv_mismatches_fail_before_source_acquisition() {
@@ -351,11 +352,21 @@ fn aes_source(clear: &Path, root: &Path) -> std::path::PathBuf {
 }
 fn all_checks(report: &drmr_core::conversion::VerificationReport) {
     use drmr_core::conversion::CheckOutcome;
-    assert!(report.passed && report.media_verified);
+    assert!(
+        report.passed
+            && (report.checks.is_pass()
+                && report.decode_evidence.satisfies(
+                    drmr_core::conversion::ValidationDepth::Decoded,
+                    report.scope
+                ))
+    );
     assert_eq!(report.checks.stream_metadata, CheckOutcome::Pass);
     assert!(report.checks.packet_payloads_equal);
     assert!(report.checks.packet_timing_equal);
-    assert!(report.checks.decoded_content_equal);
+    assert!(report.decode_evidence.satisfies(
+        drmr_core::conversion::ValidationDepth::Decoded,
+        report.scope
+    ));
     assert!(!report.license_playback_verified);
 }
 fn original_counts(root: &Path, clear: &Path) -> (Option<u64>, Option<u64>) {
@@ -475,7 +486,8 @@ fn matrix_row(
         )),
         "packager",
         "ffmpeg",
-    );
+    )
+    .with_decode(true);
     let before = common::snapshot_tree(source.parent().unwrap());
     for material in output_materials() {
         let target = material.target;

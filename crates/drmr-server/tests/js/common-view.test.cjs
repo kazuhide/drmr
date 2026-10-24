@@ -56,6 +56,20 @@ test('polling and locale changes retain the exact editing nodes, draft values an
   assert.equal(h.find('common-output-1-id'), input); assert.equal(input.value, 'edited-output');
   assert.equal(h.document.activeElement, input);
 });
+test('the decode choice defaults off and survives polling before media submission', () => {
+  const h = harness(), decode = h.find('common-decode');
+  assert.ok(decode);
+  assert.equal(decode.checked, false);
+  assert.equal(decode.getAttribute('aria-describedby'), 'common-decode-help');
+  decode.checked = true; decode.focus(); decode.dispatch('change');
+  h.view.update(); h.setLanguage('ja'); h.view.translate();
+  assert.equal(h.find('common-decode'), decode);
+  assert.equal(decode.checked, true);
+  assert.equal(h.document.activeElement, decode);
+  h.find('common-analyze').dispatch('click');
+  assert.equal(h.sent.length, 1);
+  assert.equal(h.sent[0].runtime.decode, true);
+});
 test('an imported v1 plan supports later verification without analyze or reconversion', () => {
   const h = harness(true);
   assert.equal(h.find('common-analyze').disabled, true);

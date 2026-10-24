@@ -60,6 +60,21 @@ test('export links must be the exact same-origin attachment endpoint', async () 
   const api = load(() => Promise.resolve(plan));
   await assert.rejects(api.plan('plan_1'), { code: 'request-response-invalid' });
 });
+test('current saved plans require explicit coverage while legacy versions remain readable', async () => {
+  for (const schema of [1, 2, 3, 4]) {
+    const single = schema === 1 || schema === 3;
+    const plan = envelope({ plan_ref: 'plan_1', session_id: 'session_1', plan_id: 'b'.repeat(64), plan_schema_version: schema,
+      outputs: single ? [{ id: null, format: 'mp4', target: 'clear' }] : [{ id: 'clear', format: 'mp4', target: 'clear', drms: [], conformance: 'none' }],
+      destination_state: 'absent', export_url: '/api/common/plans/plan_1/export' });
+    if (schema >= 3) plan.required_depth = 'native';
+    const api = load(() => Promise.resolve(plan));
+    assert.equal((await api.plan('plan_1')).plan_schema_version, schema);
+    if (schema >= 3) {
+      delete plan.required_depth;
+      await assert.rejects(api.plan('plan_1'), { code: 'request-response-invalid' });
+    }
+  }
+});
 
 test('a retired HLS URL session response cannot be accepted as the common source contract', async () => {
   const response = envelope({ session_id: 'session_1', creation_request_id: 'a'.repeat(32), source: { kind: 'hls-url', label: 'Source URL' }, plan_refs: [], request_ids: [], requests_used: 0, active_request_id: null });

@@ -38,7 +38,16 @@ fn verify(
 }
 fn refused(result: Result<VerificationReport, drmr_core::conversion::ConversionError>) {
     match result {
-        Ok(report) => assert!(!report.passed && !report.media_verified),
+        Ok(report) => {
+            assert!(!report.passed);
+            assert!(
+                !report.checks.is_pass()
+                    || !report.decode_evidence.satisfies(
+                        drmr_core::conversion::ValidationDepth::Decoded,
+                        report.scope
+                    )
+            );
+        }
         Err(error) => assert!(
             !matches!(
                 error.0,
@@ -312,7 +321,8 @@ fn wrong_source_key_and_noncontiguous_sample_aes_audio_cannot_publish_ts_output(
         )),
         "packager",
         "ffmpeg",
-    );
+    )
+    .with_decode(true);
     assert_eq!(
         convert(
             &c,
@@ -434,7 +444,8 @@ fn master_audio_video_aliases_are_reconciled_independently_of_declaration_order(
         )),
         "packager",
         "ffmpeg",
-    );
+    )
+    .with_decode(true);
     let output = root.path().join("refused-output");
     let mut outcomes = Vec::new();
     for audio_uri in [uri.to_owned(), format!("./{uri}")] {
@@ -444,7 +455,16 @@ fn master_audio_video_aliases_are_reconciled_independently_of_declaration_order(
         for declarations in [format!("{variant}{audio}"), format!("{audio}{variant}")] {
             std::fs::write(&master, format!("#EXTM3U\n{declarations}")).unwrap();
             let result = verify(&c, &input, directory, &HlsInputKeys::default())
-                .map(|report| (report.passed, report.media_verified))
+                .map(|report| {
+                    (
+                        report.passed,
+                        (report.checks.is_pass()
+                            && report.decode_evidence.satisfies(
+                                drmr_core::conversion::ValidationDepth::Decoded,
+                                report.scope,
+                            )),
+                    )
+                })
                 .map_err(|error| error.0);
             outcomes.push(result);
             assert_eq!(

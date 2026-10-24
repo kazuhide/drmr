@@ -31,6 +31,9 @@ import zlib
 
 
 ROOT = Path(__file__).resolve().parents[1]
+EVIDENCE_SPEC = importlib.util.spec_from_file_location("media_evidence", ROOT / "tools/media_evidence.py")
+EVIDENCE = importlib.util.module_from_spec(EVIDENCE_SPEC)
+EVIDENCE_SPEC.loader.exec_module(EVIDENCE)
 SPEC = importlib.util.spec_from_file_location("verify_archive", ROOT / "tools/verify_archive.py")
 VERIFY = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(VERIFY)
@@ -458,12 +461,13 @@ def audio_evidence(report):
 
 
 def verification(report):
-    require(isinstance(report, dict) and type(report.get("schema_version")) is int and report.get("schema_version") == 1
+    current = EVIDENCE.v2_proof(report, require_decoded=True)
+    require(current is not None or (isinstance(report, dict) and type(report.get("schema_version")) is int and report.get("schema_version") == 1
             and report.get("passed") is True and report.get("media_verified") is True
-            and report.get("license_playback_verified") is False, "media-proof-invalid")
+            and report.get("license_playback_verified") is False), "media-proof-invalid")
     checks = report.get("checks")
-    require(isinstance(checks, dict) and checks.get("stream_metadata") == "pass"
-            and all(checks.get(name) is True for name in CHECKS), "media-proof-invalid")
+    require(current is not None or (isinstance(checks, dict) and checks.get("stream_metadata") == "pass"
+            and all(checks.get(name) is True for name in CHECKS)), "media-proof-invalid")
     native = report.get("native_manifest")
     require(isinstance(native, dict) and type(native.get("schema_version")) is int
             and native.get("schema_version") == 1 and native.get("scope") == "manifest-only"
@@ -473,10 +477,31 @@ def verification(report):
             and native.get("incomplete") is False and native.get("truncated") is False
             and type(native.get("document_count")) is int and native["document_count"] == 1,
             "manifest-proof-invalid")
+    if current is not None:
+        return current
     return {"media_verified": True, "license_playback_verified": False,
             "checks": {"stream_metadata": "pass", **{name: True for name in CHECKS}},
             "native_manifest": {name: native[name] for name in (
                 "schema_version", "scope", "profile", "errors", "warnings", "truncated", "incomplete", "document_count")}}
+
+
+def source_verification(report):
+    if not isinstance(report, dict) or type(report.get("schema_version")) is not int:
+        return False
+    if report.get("schema_version") == 2:
+        return EVIDENCE.v2_proof(report.get("verification"), scope="source-admission", require_decoded=True) is not None
+    checks = report.get("input_checks")
+    return (type(report.get("schema_version")) is int and report["schema_version"] == 1
+            and isinstance(checks, dict) and checks.get("stream_metadata") == "pass"
+            and all(checks.get(name) is True for name in CHECKS))
+
+
+def plan_depth(planned):
+    if not isinstance(planned, dict):
+        return False
+    return (type(planned.get("schema_version")) is int
+            and ((planned["schema_version"] == 1 and "required_depth" not in planned)
+                 or (planned["schema_version"] == 3 and planned.get("required_depth") == "decoded")))
 
 
 def doctor(report):
@@ -560,26 +585,24 @@ def media(cli, runner, source):
     before = graph_identity(presentation)
     source_path = presentation / "manifest.mpd"
     # Fixture preparation is separately compared against all original video.
-    prepared = verification(runner.json([cli, "verify", source_path, "--source", root / "video.mp4",
+    prepared = verification(runner.json([cli, "verify", "--decode", source_path, "--source", root / "video.mp4",
                                          "--max-workers", "1", "--json"], "prepared-source-verification"))
-    analyzed = runner.json([cli, "analyze", source_path, "--max-workers", "1", "--json"], "analyze")
+    analyzed = runner.json([cli, "analyze", "--decode", source_path, "--max-workers", "1", "--json"], "analyze")
     require(isinstance(analyzed, dict) and analyzed.get("kind") == "input-analysis"
-            and analyzed.get("schema_version") == 1 and analyzed.get("input_admitted") is True
+            and type(analyzed.get("schema_version")) is int and analyzed.get("schema_version") in (1, 2) and analyzed.get("input_admitted") is True
             and analyzed.get("actual_format") == "dash" and analyzed.get("track_protection") == ["clear"],
             "analysis-proof-invalid")
-    input_checks = analyzed.get("input_checks")
-    require(isinstance(input_checks, dict) and input_checks.get("stream_metadata") == "pass"
-            and all(input_checks.get(name) is True for name in CHECKS), "analysis-proof-invalid")
+    require(source_verification(analyzed), "analysis-proof-invalid")
     source_inventory = analyzed.get("source")
     require(isinstance(source_inventory, dict) and re.fullmatch(r"[0-9a-f]{64}", source_inventory.get("graph_digest", "")) is not None,
             "analysis-proof-invalid")
     plan_path = root / "conversion.plan.json"
     output = root / "converted"
-    planned = runner.json([cli, "plan", source_path, "--to", "cbcs", "--format", "dash", "--output", output,
+    planned = runner.json([cli, "plan", "--decode", source_path, "--to", "cbcs", "--format", "dash", "--output", output,
                            "--save", plan_path, "--max-workers", "1", "--json"], "plan")
     plan_bytes = read_regular(plan_path, 1024 * 1024)
     require(isinstance(planned, dict) and planned == load_json(plan_bytes)
-            and planned.get("kind") == "execution-plan" and planned.get("schema_version") == 1
+            and planned.get("kind") == "execution-plan" and plan_depth(planned)
             and re.fullmatch(r"[0-9a-f]{64}", planned.get("plan_id", "")) is not None
             and planned.get("source") == source_inventory and planned.get("source_format") == "dash",
             "plan-proof-invalid")
@@ -588,10 +611,10 @@ def media(cli, runner, source):
     runner.secrets = (key.encode("ascii"),)
     key_path = root / "keys.json"
     private_write(key_path, json.dumps({"schema_version": 1, "output": {"kid": secrets.token_hex(16), "key": key}}).encode("utf-8"))
-    converted = runner.json([cli, "convert", "--plan", plan_path, "--keys-file", key_path,
+    converted = runner.json([cli, "convert", "--decode", "--plan", plan_path, "--keys-file", key_path,
                              "--max-workers", "1", "--json"], "convert")
     converted_proof = conversion_proof(converted, planned["plan_id"])
-    verified = runner.json([cli, "verify", "--plan", plan_path, "--keys-file", key_path,
+    verified = runner.json([cli, "verify", "--decode", "--plan", plan_path, "--keys-file", key_path,
                             "--max-workers", "1", "--json"], "independent-verify")
     require(isinstance(verified, dict) and verified.get("plan_id") == planned["plan_id"]
             and verified.get("source_unchanged") is True and verified.get("output_matches_plan") is True,
@@ -605,7 +628,7 @@ def media(cli, runner, source):
             "input_format": "dash", "input_protection": "clear", "output_format": "dash", "output_protection": "cbcs",
             "segment_target_seconds": 2, "input_segments": 5, "source_graph": before,
             "cli_source_graph_sha256": source_inventory["graph_digest"],
-            "plan_schema_version": 1, "plan_id": planned["plan_id"],
+            "plan_schema_version": planned["schema_version"], "plan_id": planned["plan_id"],
             "plan_sha256": hashlib.sha256(plan_bytes).hexdigest(), "saved_original_and_plan_unchanged": True,
             "prepared_source_against_original_video": prepared, "conversion": converted_proof,
             "independent_verification": verified_proof, "output_graph": graph_identity(output)}
@@ -654,25 +677,23 @@ def audio_media(cli, runner, source):
         "-count_frames", "-show_packets", "-show_streams", "-show_entries",
         "stream=codec_name,profile,sample_rate,channels,time_base,nb_read_frames:packet=pts,dts,duration",
         "-of", "json", probe_source], "fixture-aac44100-probe"))
-    analyzed = runner.json([cli, "analyze", source_path, "--max-workers", "1", "--json"], "aac44100-analyze")
+    analyzed = runner.json([cli, "analyze", "--decode", source_path, "--max-workers", "1", "--json"], "aac44100-analyze")
     require(isinstance(analyzed, dict) and type(analyzed.get("schema_version")) is int
-            and analyzed.get("schema_version") == 1 and analyzed.get("kind") == "input-analysis"
+            and type(analyzed.get("schema_version")) is int and analyzed.get("schema_version") in (1, 2) and analyzed.get("kind") == "input-analysis"
             and analyzed.get("input_admitted") is True and analyzed.get("actual_format") == "hls-ts"
             and analyzed.get("track_protection") == ["clear"], "aac44100-analysis-proof-invalid")
-    input_checks = analyzed.get("input_checks")
-    require(isinstance(input_checks, dict) and input_checks.get("stream_metadata") == "pass"
-            and all(input_checks.get(name) is True for name in CHECKS), "aac44100-analysis-proof-invalid")
+    require(source_verification(analyzed), "aac44100-analysis-proof-invalid")
     source_inventory = analyzed.get("source")
     require(isinstance(source_inventory, dict)
             and re.fullmatch(r"[0-9a-f]{64}", source_inventory.get("graph_digest", "")) is not None,
             "aac44100-analysis-proof-invalid")
     plan_path = root / "aac44100.plan.json"
     output = root / "aac44100-converted"
-    planned = runner.json([cli, "plan", source_path, "--to", "cbcs", "--format", "dash", "--output", output,
+    planned = runner.json([cli, "plan", "--decode", source_path, "--to", "cbcs", "--format", "dash", "--output", output,
                            "--save", plan_path, "--max-workers", "1", "--json"], "aac44100-plan")
     plan_bytes = read_regular(plan_path, 1024 * 1024)
     require(isinstance(planned, dict) and planned == load_json(plan_bytes)
-            and type(planned.get("schema_version")) is int and planned.get("schema_version") == 1
+            and type(planned.get("schema_version")) is int and plan_depth(planned)
             and planned.get("kind") == "execution-plan"
             and re.fullmatch(r"[0-9a-f]{64}", planned.get("plan_id", "")) is not None
             and planned.get("source") == source_inventory and planned.get("source_format") == "hls-ts",
@@ -683,10 +704,10 @@ def audio_media(cli, runner, source):
     key_path = root / "aac44100-keys.json"
     private_write(key_path, json.dumps({"schema_version": 1, "output": {
         "kid": secrets.token_hex(16), "key": key}}).encode("utf-8"))
-    converted = runner.json([cli, "convert", "--plan", plan_path, "--keys-file", key_path,
+    converted = runner.json([cli, "convert", "--decode", "--plan", plan_path, "--keys-file", key_path,
                              "--max-workers", "1", "--json"], "aac44100-convert")
     converted_proof = audio_conversion_proof(converted, planned["plan_id"])
-    verified = runner.json([cli, "verify", "--plan", plan_path, "--keys-file", key_path,
+    verified = runner.json([cli, "verify", "--decode", "--plan", plan_path, "--keys-file", key_path,
                             "--max-workers", "1", "--json"], "aac44100-independent-verify")
     require(isinstance(verified, dict) and verified.get("plan_id") == planned["plan_id"]
             and verified.get("source_unchanged") is True and verified.get("output_matches_plan") is True,
@@ -700,7 +721,7 @@ def audio_media(cli, runner, source):
             "input_format": "hls-ts", "input_protection": "clear", "output_format": "dash", "output_protection": "cbcs",
             "segment_target_seconds": 2, "input_segments": len(resources), "source_audio": audio,
             "source_graph": before, "cli_source_graph_sha256": source_inventory["graph_digest"],
-            "plan_schema_version": 1, "plan_id": planned["plan_id"],
+            "plan_schema_version": planned["schema_version"], "plan_id": planned["plan_id"],
             "plan_sha256": hashlib.sha256(plan_bytes).hexdigest(), "saved_original_and_plan_unchanged": True,
             "conversion": converted_proof, "independent_verification": verified_proof,
             "output_graph": graph_identity(output)}

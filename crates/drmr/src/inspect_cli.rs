@@ -39,6 +39,9 @@ pub struct PlanArgs {
     /// Upper bound for simultaneous media work (1-64); default adapts to CPU and memory.
     #[arg(long, requires = "save", value_parser = clap::value_parser!(u8).range(1..=64))]
     pub max_workers: Option<u8>,
+    /// Also decode all media while saving the plan; later runs retain this minimum.
+    #[arg(long, requires = "save")]
+    pub decode: bool,
     /// Include numeric measurements in JSON; only available when saving a plan.
     #[arg(long, requires_all = ["json", "save"])]
     pub measure: bool,
@@ -195,8 +198,12 @@ fn text_plan(plan: &inspection::ConversionPlan) -> std::io::Result<()> {
             writeln!(out, "  {}", candidate.explanation)?;
             writeln!(
                 out,
-                "  Required tools: {}; conditions: {}",
-                tools.join(", "),
+                "  Native minimum tools: {}; conditions: {}",
+                if tools.is_empty() {
+                    "none".into()
+                } else {
+                    tools.join(", ")
+                },
                 candidate.condition_codes.join(", ")
             )?;
         }

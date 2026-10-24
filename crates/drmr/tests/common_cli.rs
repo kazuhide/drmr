@@ -22,7 +22,7 @@ fn setup() -> (PrivateTempDir, PathBuf) {
         "protocol_version":1,
         "nonce":"a".repeat(32),
         "operation":{"kind":"verify","plan_file":root.path().join("missing-private-marker.plan.json")},
-        "runtime":{"keys_file":null,"max_workers":2,"tools":{"packager_bin":"packager","hls_validator_bin":"mediastreamvalidator","dash_validator_bin":"php"}},
+        "runtime":{"decode":true,"keys_file":null,"max_workers":2,"tools":{"packager_bin":"packager","hls_validator_bin":"mediastreamvalidator","dash_validator_bin":"php"}},
         "channels":{"result_file":root.path().join("result.json"),"progress_file":root.path().join("progress.json")}
     });
     let mut file = native::create_private_new(&request).unwrap();
@@ -123,7 +123,7 @@ fn malformed_private_request_never_falls_back_to_stdout() {
 fn ordinary_json_output_keeps_the_public_cli_contract() {
     let root = native::private_tempdir().unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_drmr"))
-        .args(["verify", "--plan"])
+        .args(["verify", "--decode", "--plan"])
         .arg(root.path().join("missing.plan.json"))
         .arg("--json")
         .output()
@@ -189,7 +189,7 @@ fn all_four_handlers_share_one_saved_bundle_plan_and_fresh_media_evidence() {
         let mut request_file = native::create_private_new(&request).unwrap();
         serde_json::to_writer(&mut request_file, &json!({
             "protocol_version":1,"nonce":nonce,"operation":operation,
-            "runtime":{"keys_file":null,"max_workers":2,"tools":{"packager_bin":"packager","hls_validator_bin":"mediastreamvalidator","dash_validator_bin":"php"}},
+            "runtime":{"decode":true,"keys_file":null,"max_workers":2,"tools":{"packager_bin":"packager","hls_validator_bin":"mediastreamvalidator","dash_validator_bin":"php"}},
             "channels":{"result_file":job.join("result.json"),"progress_file":job.join("progress.json")}
         })).unwrap();
         drop(request_file);
@@ -219,7 +219,8 @@ fn all_four_handlers_share_one_saved_bundle_plan_and_fresh_media_evidence() {
         json!({"kind":"plan","input_file":source,"output_root":destination,"save_file":plan,"output_spec_file":specification}),
         0,
     );
-    assert_eq!(planned["schema_version"], 2);
+    assert_eq!(planned["schema_version"], 4);
+    assert_eq!(planned["required_depth"], "decoded");
     assert_eq!(planned["outputs"].as_array().unwrap().len(), 2);
     let saved_bytes = std::fs::read(&plan).unwrap();
     let converted = invoke(json!({"kind":"convert","plan_file":plan}), 0);
@@ -230,14 +231,13 @@ fn all_four_handlers_share_one_saved_bundle_plan_and_fresh_media_evidence() {
     for output in verified["outputs"].as_array().unwrap() {
         let proof = &output["verification"];
         assert_eq!(proof["passed"], true);
-        assert_eq!(proof["media_verified"], true);
+        assert_eq!(
+            proof["decode_evidence"],
+            serde_json::json!({"status":"content-compared","equal":true})
+        );
         assert_eq!(proof["license_playback_verified"], false);
         assert_eq!(proof["checks"]["stream_metadata"], "pass");
-        for name in [
-            "packet_payloads_equal",
-            "packet_timing_equal",
-            "decoded_content_equal",
-        ] {
+        for name in ["packet_payloads_equal", "packet_timing_equal"] {
             assert_eq!(proof["checks"][name], true);
         }
     }

@@ -54,12 +54,23 @@ impl ProcessingRouteId {
             }
         }
     }
+    /// Minimum tools for native conversion; conditional copying and decoding add tools.
     pub fn required_tools(self) -> Vec<RequiredTool> {
-        let mut tools = vec![RequiredTool::Ffmpeg, RequiredTool::Ffprobe];
-        if self != Self::ProgressiveMp4 {
-            tools.push(RequiredTool::ShakaPackager);
+        if self == Self::ProgressiveMp4 {
+            Vec::new()
+        } else {
+            vec![RequiredTool::ShakaPackager]
         }
-        tools
+    }
+
+    pub(crate) const fn can_copy_encrypted_finite_source(self) -> bool {
+        matches!(
+            self,
+            Self::ProgressiveMp4
+                | Self::FragmentedMp4
+                | Self::DashPresentation
+                | Self::Fmp4HlsPresentation
+        )
     }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -109,6 +120,7 @@ pub struct ActualProcessing {
     pub input_preparation: InputPreparation,
     pub reason_code: String,
     pub explanation: String,
+    /// Tools required at the actual depth, including any encrypted finite-source copy.
     pub required_tools: Vec<RequiredTool>,
 }
 impl ActualProcessing {
@@ -130,6 +142,7 @@ pub struct CandidateRoute {
     pub condition_codes: Vec<String>,
     pub reason_code: String,
     pub explanation: String,
+    /// Native minimum; `condition_codes` and explanation state additional tool requirements.
     pub required_tools: Vec<RequiredTool>,
 }
 impl CandidateRoute {
@@ -138,14 +151,72 @@ impl CandidateRoute {
         output_format: super::OutputFormat,
         condition: &'static str,
     ) -> Self {
+        let mut condition_codes = vec![
+            condition.into(),
+            "additional-complete-decoding-requires-ffmpeg-and-ffprobe".into(),
+        ];
+        let mut explanation = format!(
+            "{} Required tools list the native minimum. Additional complete decoding requires FFmpeg and ffprobe.",
+            route.explanation()
+        );
+        if route.can_copy_encrypted_finite_source() {
+            condition_codes.push("encrypted-finite-progressive-source-copy-requires-ffmpeg".into());
+            explanation.push_str(
+                " Copying an encrypted finite progressive source also requires FFmpeg for a container remux without transcoding.",
+            );
+        }
         Self {
             route,
             output_format,
             revalidation_required: true,
-            condition_codes: vec![condition.into()],
+            condition_codes,
             reason_code: format!("{}-candidate", route.as_str()),
-            explanation: route.explanation().into(),
+            explanation,
             required_tools: route.required_tools(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn conditional_routes_distinguish_native_minima_from_additional_work() {
+        for route in [
+            ProcessingRouteId::ProgressiveMp4,
+            ProcessingRouteId::FragmentedMp4,
+            ProcessingRouteId::DashPresentation,
+            ProcessingRouteId::Fmp4HlsPresentation,
+            ProcessingRouteId::MpegTsHls,
+            ProcessingRouteId::MpegTsDash,
+            ProcessingRouteId::MpegTsSampleAesHls,
+            ProcessingRouteId::MpegTsHlsTs,
+        ] {
+            let candidate = CandidateRoute::new(
+                route,
+                super::super::OutputFormat::Mp4,
+                "source-profile-must-pass",
+            );
+            assert_eq!(candidate.condition_codes[0], "source-profile-must-pass");
+            assert!(candidate.condition_codes.iter().any(|condition| {
+                condition == "additional-complete-decoding-requires-ffmpeg-and-ffprobe"
+            }));
+            assert_eq!(
+                candidate.condition_codes.iter().any(|condition| {
+                    condition == "encrypted-finite-progressive-source-copy-requires-ffmpeg"
+                }),
+                route.can_copy_encrypted_finite_source()
+            );
+            assert_eq!(
+                candidate.required_tools,
+                if route == ProcessingRouteId::ProgressiveMp4 {
+                    Vec::new()
+                } else {
+                    vec![RequiredTool::ShakaPackager]
+                }
+            );
+            assert!(candidate.revalidation_required);
         }
     }
 }

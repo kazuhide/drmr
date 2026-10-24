@@ -13,6 +13,7 @@ const LICENSE: &str = "https://example.invalid/license?operator=SYNTHETIC-PRIVAT
 fn cli(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_drmr"))
         .args(args)
+        .args(decode_option(args))
         .output()
         .unwrap()
 }
@@ -21,14 +22,13 @@ fn path(value: &Path) -> String {
 }
 fn verified(report: &serde_json::Value) {
     assert_eq!(report["passed"], true);
-    assert_eq!(report["media_verified"], true);
+    assert_eq!(
+        report["decode_evidence"],
+        serde_json::json!({"status":"content-compared","equal":true})
+    );
     assert_eq!(report["license_playback_verified"], false);
     assert_eq!(report["checks"]["stream_metadata"], "pass");
-    for check in [
-        "packet_payloads_equal",
-        "packet_timing_equal",
-        "decoded_content_equal",
-    ] {
+    for check in ["packet_payloads_equal", "packet_timing_equal"] {
         assert_eq!(report["checks"][check], true);
     }
 }
@@ -651,4 +651,15 @@ fn assert_video_count(input: &Path) {
     let profile: serde_json::Value = serde_json::from_slice(&probe.stdout).unwrap();
     assert_eq!(profile["streams"][0]["nb_read_packets"], "240");
     assert_eq!(profile["streams"][0]["nb_read_frames"], "240");
+}
+
+fn decode_option(arguments: &[&str]) -> Option<&'static str> {
+    (matches!(
+        arguments.first().copied(),
+        Some("analyze" | "plan" | "convert" | "verify")
+    ) && !arguments.contains(&"--decode")
+        && !arguments.contains(&"--metadata-only")
+        && !arguments.contains(&"--manifest-only")
+        && (arguments.first().copied() != Some("plan") || arguments.contains(&"--save")))
+    .then_some("--decode")
 }

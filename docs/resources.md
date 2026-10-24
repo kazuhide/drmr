@@ -32,7 +32,7 @@ The shared capacity is a point-in-time snapshot; memory pressure can change afte
 Pool recommendations take another snapshot at admission. Separate CLI processes do not
 share reservations. Batch processing currently runs one asset worker at a time.
 
-The media backend explicitly sets FFmpeg decoder, encoder, and filter thread counts to
+When external decoding is requested, the media backend explicitly sets FFmpeg decoder, encoder, and filter thread counts to
 one, and FFprobe decoder threads to one. One CPU token represents that codec allocation;
 tools may still create helper threads. Streamed decoded-media hashing holds the same
 reservation as commands that capture their output.
@@ -45,7 +45,7 @@ control group, or the unknown fallback. They contain no source paths or machine 
 
 `analyze` without `--metadata-only` checks complete source media. A URL operation
 first retains the original resources, then checks a private copy against their bytes,
-prepares tracks and checks encoded packets, decoded media and timing. Finishing
+prepares tracks and checks all selected encoded samples, codec configuration, clocks and playback windows in Rust. `--decode` additionally checks complete decoded media. Finishing
 the download does not finish the analysis. The progress history distinguishes
 acquisition from the later inspection, preparation and verification work.
 
@@ -69,6 +69,8 @@ For a quick look at MP4 metadata or HLS/DASH declarations, use
 `analyze --metadata-only`. It does not download complete media or run complete
 source checks, so its success does not establish conversion eligibility. See
 [analysis and progress](usage.md) for the two workflows.
+
+The measurements below retain their recorded source/tool scope. Historical complete-decoding measurements describe the additional `--decode` path, not the new native default. Compare runs only at the same verification depth.
 
 ## Native manifest work
 
@@ -368,7 +370,7 @@ python3 tools/prepare_bbb_benchmark.py --output /path/to/new-benchmark
 ```
 
 Then use `new-benchmark/source/manifest.mpd` with the measurement command above.
-Python 3.9+, FFmpeg and Shaka Packager are required. The destination must be new
+Python 3.9+ and the selected conversion tools are required. Add `--decode` to the measurement helper to require and record complete FFmpeg decoding on conversion and fresh verification; native-only and decoded runs are different workloads. The destination must be new
 and its parent must exist. Paths containing commas, dollar signs or line breaks are
 refused because Packager parses commas and expands dollar expressions in paths.
 A failed generation leaves

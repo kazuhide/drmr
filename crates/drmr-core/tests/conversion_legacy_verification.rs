@@ -27,7 +27,10 @@ fn keys() -> InputKeys {
 fn converter() -> (Converter, Arc<Collector>) {
     let events = Arc::new(Collector::default());
     let runner = Arc::new(ToolRunner::new(Arc::new(Secrets::new()), events.clone()));
-    (Converter::new(runner, "unused-packager", "ffmpeg"), events)
+    (
+        Converter::new(runner, "unused-packager", "ffmpeg").with_decode(true),
+        events,
+    )
 }
 fn audio(root: &Path) -> PathBuf {
     let output = root.join("audio-clear.mp4");
@@ -90,12 +93,22 @@ fn verification(c: &Converter, source: &Path, result: &Path, result_keys: &Input
     let before = std::fs::read(source).unwrap();
     let candidate = std::fs::read(result).unwrap();
     let direct = c.verify_mp4(source, &keys, result, result_keys).unwrap();
-    assert!(direct.passed && direct.media_verified);
+    assert!(
+        direct.passed
+            && (direct.checks.is_pass()
+                && direct.decode_evidence.satisfies(
+                    drmr_core::conversion::ValidationDepth::Decoded,
+                    direct.scope
+                ))
+    );
     assert!(!direct.license_playback_verified);
     assert!(direct.checks.stream_metadata.is_pass());
     assert!(direct.checks.packet_payloads_equal);
     assert!(direct.checks.packet_timing_equal);
-    assert!(direct.checks.decoded_content_equal);
+    assert!(direct.decode_evidence.satisfies(
+        drmr_core::conversion::ValidationDepth::Decoded,
+        direct.scope
+    ));
     let generic = c
         .verify(VerificationRequest {
             source: VerificationSource {
@@ -110,12 +123,22 @@ fn verification(c: &Converter, source: &Path, result: &Path, result_keys: &Input
             },
         })
         .unwrap();
-    assert!(generic.passed && generic.media_verified);
+    assert!(
+        generic.passed
+            && (generic.checks.is_pass()
+                && generic.decode_evidence.satisfies(
+                    drmr_core::conversion::ValidationDepth::Decoded,
+                    generic.scope
+                ))
+    );
     assert!(!generic.license_playback_verified);
     assert!(generic.checks.stream_metadata.is_pass());
     assert!(generic.checks.packet_payloads_equal);
     assert!(generic.checks.packet_timing_equal);
-    assert!(generic.checks.decoded_content_equal);
+    assert!(generic.decode_evidence.satisfies(
+        drmr_core::conversion::ValidationDepth::Decoded,
+        generic.scope
+    ));
     assert_eq!(std::fs::read(source).unwrap(), before);
     assert_eq!(std::fs::read(result).unwrap(), candidate);
 }
@@ -162,7 +185,14 @@ fn legacy_joint_cenc_with_one_shared_kid_and_pssh_keeps_generic_verification() {
                 },
             })
             .unwrap();
-        assert!(report.passed && report.media_verified);
+        assert!(
+            report.passed
+                && (report.checks.is_pass()
+                    && report.decode_evidence.satisfies(
+                        drmr_core::conversion::ValidationDepth::Decoded,
+                        report.scope
+                    ))
+        );
         assert!(!report.license_playback_verified);
     }
     assert_eq!(std::fs::read(source).unwrap(), before);
@@ -217,7 +247,14 @@ fn legacy_distinct_key_reference_and_clear_candidate_keep_existing_pssh_metadata
                 },
             })
             .unwrap();
-        assert!(report.passed && report.media_verified);
+        assert!(
+            report.passed
+                && (report.checks.is_pass()
+                    && report.decode_evidence.satisfies(
+                        drmr_core::conversion::ValidationDepth::Decoded,
+                        report.scope
+                    ))
+        );
         assert!(!report.license_playback_verified);
         assert_eq!(std::fs::read(source).unwrap(), before);
         assert_eq!(std::fs::read(result).unwrap(), candidate);
@@ -299,7 +336,14 @@ fn joint_mp4_verification_uses_keys_without_conversion_admission() {
     let report = c
         .verify_mp4(&source, &input_keys, &output, &InputKeys::default())
         .unwrap();
-    assert!(report.passed && report.media_verified);
+    assert!(
+        report.passed
+            && (report.checks.is_pass()
+                && report.decode_evidence.satisfies(
+                    drmr_core::conversion::ValidationDepth::Decoded,
+                    report.scope
+                ))
+    );
     assert!(!report.license_playback_verified);
     assert_eq!(std::fs::read(source).unwrap(), before);
     assert_eq!(std::fs::read(output).unwrap(), result);
@@ -335,11 +379,21 @@ fn qualified_cbcs_audio_converts_but_still_requires_its_original_key() {
         }
         .unwrap();
         let proof = report.verification;
-        assert!(proof.passed && proof.media_verified);
+        assert!(
+            proof.passed
+                && (proof.checks.is_pass()
+                    && proof
+                        .decode_evidence
+                        .satisfies(drmr_core::conversion::ValidationDepth::Decoded, proof.scope))
+        );
         assert!(proof.checks.stream_metadata.is_pass());
         assert!(proof.checks.packet_payloads_equal);
         assert!(proof.checks.packet_timing_equal);
-        assert!(proof.checks.decoded_content_equal);
+        assert!(
+            proof
+                .decode_evidence
+                .satisfies(drmr_core::conversion::ValidationDepth::Decoded, proof.scope)
+        );
         assert!(!proof.license_playback_verified);
         verification(&c, &source, &output, &InputKeys::default());
         assert!(

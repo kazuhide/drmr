@@ -7,13 +7,24 @@ for installation, stable interfaces and versioning.
 
 ### Changed
 
+- Use native Rust media validation by default for complete analysis, saved
+  planning, conversion and independent verification. Check every admitted
+  sample, codec configuration, clock and supported playback window; refuse
+  unsupported or incomplete evidence. Add `--decode` for complete decoding in
+  addition to those native checks.
+- Emit complete-media report schema 2 with explicit required depth, scope and
+  actual decode evidence. Save new single-output plans as schema 3 and named
+  outputs as schema 4 with their minimum depth bound to the plan ID. Legacy
+  plans 1/2 remain strict and retain a complete-decoding minimum. The common
+  Web/Desktop workflow shares this policy; operator key-file versions stay 1/2.
 - Compute complete decoded-content SHA-256 in Rust with processor acceleration
   where available, preserving the same decoded bytes and FFmpeg timestamp
   refusal checks. Decoded media is streamed instead of retained in memory.
 - Check prepared source tracks directly during complete input admission,
   avoiding repeated decoded-content matching against the same track set.
-  MPEG-TS input checks retain complete original-packet, decoded-content and
-  timing evidence; independent source/output verification remains separate.
+  MPEG-TS input checks retain complete original-packet and timing evidence;
+  requested decoding adds complete decoded-content evidence. Independent
+  source/output verification remains separate.
 - Keep terminal progress in one live status with a history of finished stages
   and their durations. Redirected text logs record stage changes and occasional
   updates instead of every observation; detailed JSON Lines remain available.

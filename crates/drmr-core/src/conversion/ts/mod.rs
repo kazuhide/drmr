@@ -1,7 +1,8 @@
 //! A deliberately narrow MPEG-TS input profile with independent original-media evidence.
 mod aac_mp4;
 mod admission;
-mod canonical;
+pub(in crate::conversion) mod avc;
+pub(in crate::conversion) mod canonical;
 mod clock;
 mod compatibility;
 mod frames;
@@ -16,12 +17,12 @@ use super::{
 };
 use crate::{inspection::TrackKind, toolrun::RunOptions};
 pub(super) use admission::Admission;
+pub(in crate::conversion) use canonical::Config as CanonicalConfig;
 pub(super) use canonical::Native as NativeEvidence;
 pub(super) use compatibility::demux_view;
 pub(super) use native::NativeScanner;
 pub(super) use projection::Projector;
 use std::{collections::BTreeMap, path::Path, sync::Arc};
-use zeroize::Zeroizing;
 
 pub(super) fn requires_native_audio_mp4(native: Option<&NativeEvidence>) -> bool {
     native.is_some_and(|anchor| {
@@ -41,9 +42,24 @@ pub(super) struct View<'a> {
     pub metadata: &'a Path,
     pub index: usize,
     pub key: Option<&'a ContentKey>,
+    pub all_keys: Option<&'a super::InputKeys>,
     pub transport: bool,
     pub native: Option<&'a NativeEvidence>,
     pub unedited: bool,
+}
+impl<'a> View<'a> {
+    pub fn with_all_keys(mut self, keys: &'a super::InputKeys) -> Self {
+        self.all_keys = Some(keys);
+        self
+    }
+    pub(in crate::conversion) fn probe_keys(self) -> Option<super::keys::ProbeKeys<'a>> {
+        if !self.transport
+            && let Some(keys) = self.all_keys
+        {
+            return Some(super::keys::ProbeKeys::All(keys));
+        }
+        self.key.map(super::keys::ProbeKeys::One)
+    }
 }
 fn require_audio_source_evidence(
     admission: &Admission,
@@ -64,8 +80,29 @@ impl Backend {
         let native = view
             .native
             .ok_or(ConversionError("ts-original-evidence-required"))?;
-        let profile =
-            self.profile_stream_options(view.input, view.index, view.key, view.unedited)?;
+        self.check_cancelled()?;
+        // Localization retains and guards the original resources. This anchor
+        // precedes normalization and remains authoritative at every depth.
+        native.validate()?;
+        native.metadata()?;
+        let timing = native.timing()?;
+        let evidence = native.evidence()?;
+        if evidence.count != timing.count
+            || evidence.count != native.count
+            || evidence.first_pts != timing.first_pts
+            || evidence.end_pts != timing.end_pts
+        {
+            return Err(ConversionError("ts-original-evidence-mismatch"));
+        }
+        if self.validation_depth == super::ValidationDepth::Native {
+            return self.check_cancelled();
+        }
+        let profile = self.profile_stream_keys_options(
+            view.input,
+            view.index,
+            view.probe_keys(),
+            view.unedited,
+        )?;
         let config = self.transport_config(view, &profile)?;
         Self::require_native_count(&profile, native.count)?;
         let units = self.access_units(view, &profile, config.clone())?;
@@ -132,8 +169,7 @@ impl Backend {
         if view.unedited {
             argv.splice(1..1, ["-ignore_editlist".into(), "1".into()]);
         }
-        let keyed =
-            super::keys::KeyedArguments::new(argv, view.key.map(super::keys::ProbeKeys::One));
+        let keyed = super::keys::KeyedArguments::new(argv, view.probe_keys());
         let secrets = keyed.secrets();
         let shown = ["ffmpeg".into(), "[arguments redacted]".into()];
         let options = RunOptions {
@@ -172,6 +208,37 @@ impl Backend {
         }
         Ok(())
     }
+    fn native_transport_streams(
+        &self,
+        admission: &Admission,
+        native: &BTreeMap<u16, Arc<NativeEvidence>>,
+    ) -> Result<Vec<(usize, TrackKind)>, ConversionError> {
+        self.check_cancelled()?;
+        if native.len() != admission.tracks.len() {
+            return Err(ConversionError("ts-stream-count-mismatch"));
+        }
+        let mut streams = Vec::new();
+        for (index, track) in admission.tracks.iter().enumerate() {
+            self.check_cancelled()?;
+            let anchor = native
+                .get(&track.pid)
+                .ok_or(ConversionError("ts-original-evidence-required"))?;
+            anchor.validate()?;
+            let metadata = anchor.metadata()?;
+            let timing = anchor.timing()?;
+            let evidence = anchor.evidence()?;
+            let kind_matches = matches!(
+                (track.kind, metadata),
+                (TrackKind::Video, canonical::TrackMetadata::Video(_))
+                    | (TrackKind::Audio, canonical::TrackMetadata::Audio { .. })
+            );
+            if !kind_matches || timing.count != evidence.count || anchor.count != evidence.count {
+                return Err(ConversionError("invalid-ts-streams"));
+            }
+            streams.push((index, track.kind));
+        }
+        Ok(streams)
+    }
     pub fn transport_streams(
         &self,
         path: &Path,
@@ -179,9 +246,12 @@ impl Backend {
         native: &BTreeMap<u16, Arc<NativeEvidence>>,
     ) -> Result<Vec<(usize, TrackKind)>, ConversionError> {
         admission.finish()?;
-        // Discovery is evidence-gated; the caller still binds every actual source
-        // packet and decoded sample before demuxing or normalizing the track.
+        // Discovery requires original access-unit evidence. Complete decode is
+        // an additional requested validation depth.
         require_audio_source_evidence(admission, native)?;
+        if self.validation_depth == super::ValidationDepth::Native {
+            return self.native_transport_streams(admission, native);
+        }
         let argv = vec![
             self.ffprobe.clone(),
             "-v".into(),
@@ -241,8 +311,15 @@ impl Backend {
         &self,
         view: View<'_>,
     ) -> Result<super::audio_presentation::AudioEvidence, ConversionError> {
-        let profile =
-            self.profile_stream_options(view.input, view.index, view.key, view.unedited)?;
+        if self.validation_depth == super::ValidationDepth::Native {
+            return self.native_audio_evidence(view);
+        }
+        let profile = self.profile_stream_keys_options(
+            view.input,
+            view.index,
+            view.probe_keys(),
+            view.unedited,
+        )?;
         let config = self.transport_config(view, &profile)?;
         let canonical::Config::Audio { sample_rate, .. } = config else {
             return Err(super::audio_presentation::MISMATCH);
@@ -273,6 +350,7 @@ impl Backend {
                     metadata: path,
                     index,
                     key: None,
+                    all_keys: None,
                     transport: true,
                     native: None,
                     unedited: false,
@@ -459,7 +537,9 @@ impl Backend {
                     "json".into(),
                     super::files::tool_path(view.metadata)?,
                 ];
-                let bytes = self.run(&argv, "ffprobe", &[])?;
+                let keyed = super::keys::KeyedArguments::new(argv, view.probe_keys());
+                let secrets = keyed.secrets();
+                let bytes = self.run(&keyed.argv, "ffprobe", &secrets)?;
                 if bytes.len() > 1024 * 1024 {
                     return Err(ConversionError("ts-codec-configuration-not-supported"));
                 }
@@ -488,11 +568,21 @@ impl Backend {
         profile: &serde_json::Value,
         config: canonical::Config,
     ) -> Result<canonical::Evidence, ConversionError> {
+        let nal_length_size =
+            if !view.transport && matches!(config, canonical::Config::Video { .. }) {
+                profile["nal_length_size"]
+                    .as_str()
+                    .and_then(|value| value.parse::<u8>().ok())
+                    .filter(|width| matches!(width, 1 | 2 | 4))
+                    .ok_or(ConversionError("ts-codec-configuration-not-supported"))?
+            } else {
+                0
+            };
         let expected = profile["nb_read_packets"]
             .as_str()
             .and_then(|s| s.parse().ok())
             .ok_or(ConversionError("media-packets-missing"))?;
-        let mut argv = Zeroizing::new(vec![
+        let mut argv = vec![
             self.ffprobe.clone(),
             "-v".into(),
             "error".into(),
@@ -506,18 +596,15 @@ impl Backend {
             "packet=stream_index,pts,dts,duration,data:packet_side_data=".into(),
             "-of".into(),
             "compact=p=1:nk=0".into(),
-        ]);
+        ];
         if view.unedited {
             argv.splice(1..1, ["-ignore_editlist".into(), "1".into()]);
         }
-        let secret = view.key.map(ContentKey::key_hex);
-        if let Some(key) = &secret {
-            argv.extend(["-decryption_key".into(), key.to_string()]);
-        }
         argv.push(super::files::tool_path(view.input)?);
-        let effective = Backend::effective_argv(&argv, "ffprobe");
+        let keyed = super::keys::KeyedArguments::new(argv, view.probe_keys());
+        let effective = Backend::effective_argv(&keyed.argv, "ffprobe");
         let shown = ["ffprobe".into(), "[arguments redacted]".into()];
-        let secrets: Vec<_> = secret.iter().map(|s| s.as_str()).collect();
+        let secrets = keyed.secrets();
         let options = RunOptions {
             stop: Some(&self.stop),
             argv_redacted: Some(&shown),
@@ -528,7 +615,13 @@ impl Backend {
             log_stdout: false,
             ..RunOptions::default()
         };
-        let mut parser = canonical::Parser::new(view.index, expected, view.transport, config);
+        let mut parser = canonical::Parser::new(
+            view.index,
+            expected,
+            view.transport,
+            config,
+            nal_length_size,
+        );
         let completed = self
             .runner
             .run_tool_streamed(&effective, "ffprobe", &options, |chunk| parser.push(chunk))
@@ -547,6 +640,7 @@ impl Backend {
         }
         parser.finish()
     }
+
     fn progressive_transport_frames(
         &self,
         view: View<'_>,
@@ -556,7 +650,7 @@ impl Backend {
             .as_str()
             .and_then(|s| s.parse().ok())
             .ok_or(ConversionError("media-packets-missing"))?;
-        let mut argv = Zeroizing::new(vec![
+        let mut argv = vec![
             self.ffprobe.clone(),
             "-v".into(),
             "error".into(),
@@ -569,15 +663,12 @@ impl Backend {
             "frame=interlaced_frame,top_field_first:frame_side_data=".into(),
             "-of".into(),
             "compact=p=1:nk=0".into(),
-        ]);
-        let secret = view.key.map(ContentKey::key_hex);
-        if let Some(key) = &secret {
-            argv.extend(["-decryption_key".into(), key.to_string()]);
-        }
+        ];
         argv.push(super::files::tool_path(view.input)?);
-        let effective = Self::effective_argv(&argv, "ffprobe");
+        let keyed = super::keys::KeyedArguments::new(argv, view.probe_keys());
+        let effective = Self::effective_argv(&keyed.argv, "ffprobe");
         let shown = ["ffprobe".into(), "[arguments redacted]".into()];
-        let secrets: Vec<_> = secret.iter().map(|s| s.as_str()).collect();
+        let secrets = keyed.secrets();
         let options = RunOptions {
             stop: Some(&self.stop),
             argv_redacted: Some(&shown),
@@ -611,12 +702,19 @@ impl Backend {
         result: View<'_>,
     ) -> Result<VerificationReport, ConversionError> {
         let _scope = self.scope(super::measurement::Phase::Verification);
-        let mut a =
-            self.profile_stream_options(source.input, source.index, source.key, source.unedited)?;
-        let mut b = self.profile_stream_options(
+        if self.validation_depth == super::ValidationDepth::Native {
+            return self.native_verify_transport(source, result);
+        }
+        let mut a = self.profile_stream_keys_options(
+            source.input,
+            source.index,
+            source.probe_keys(),
+            source.unedited,
+        )?;
+        let mut b = self.profile_stream_keys_options(
             result.metadata,
             result.index,
-            result.key,
+            result.probe_keys(),
             result.unedited,
         )?;
         let config_a = self.transport_config(source, &a)?;
@@ -635,12 +733,13 @@ impl Backend {
             }
         }
         // Codec configuration has its own exact, format-aware check above. All other fields remain exact.
-        a.as_object_mut()
-            .ok_or(ConversionError("invalid-media-probe"))?
-            .remove("extradata_hash");
-        b.as_object_mut()
-            .ok_or(ConversionError("invalid-media-probe"))?
-            .remove("extradata_hash");
+        for profile in [&mut a, &mut b] {
+            let profile = profile
+                .as_object_mut()
+                .ok_or(ConversionError("invalid-media-probe"))?;
+            profile.remove("extradata_hash");
+            profile.remove("nal_length_size");
+        }
         if matches!(config_a, canonical::Config::Video { .. }) {
             let source_frames = self.progressive_transport_frames(source, &a)?;
             let result_frames = self.progressive_transport_frames(result, &b)?;
@@ -660,37 +759,36 @@ impl Backend {
             // absolute PTS/DTS and the final end, without a time tolerance.
             units_a.timing_equal(&units_b)
         } else {
-            self.packets_stream_options(source.input, source.index, source.key, source.unedited)?
-                == self.packets_stream_options(
-                    result.input,
-                    result.index,
-                    result.key,
-                    result.unedited,
-                )?
+            self.packets_stream_keys_options(
+                source.input,
+                source.index,
+                source.probe_keys(),
+                source.unedited,
+            )? == self.packets_stream_keys_options(
+                result.input,
+                result.index,
+                result.probe_keys(),
+                result.unedited,
+            )?
         };
         let payload = units_a.payload_equal(&units_b);
-        let decoded = self.hash_stream_options(
+        let decoded = self.hash_stream_keys_options(
             source.input,
             source.index,
             false,
-            source.key,
+            source.probe_keys(),
             source.unedited,
-        )? == self.hash_stream_options(
+        )? == self.hash_stream_keys_options(
             result.input,
             result.index,
             false,
-            result.key,
+            result.probe_keys(),
             result.unedited,
         )?;
-        let passed = metadata && timing && payload && decoded;
-
-        Ok(VerificationReport {
-            schema_version: 1,
-            passed,
-            media_verified: passed,
-            license_playback_verified: false,
-            native_manifest: None,
-            checks: VerificationChecks {
+        Ok(VerificationReport::new(
+            self.validation_depth,
+            super::VerificationScope::Comparison,
+            VerificationChecks {
                 stream_metadata: if metadata {
                     CheckOutcome::Pass
                 } else {
@@ -698,19 +796,22 @@ impl Backend {
                 },
                 packet_timing_equal: timing,
                 packet_payloads_equal: payload,
-                decoded_content_equal: decoded,
             },
-        })
+            super::DecodeEvidence::ContentCompared { equal: decoded },
+        ))
     }
 }
 
-fn check_duration(declared: &str, ticks: i64) -> Result<(), ConversionError> {
+pub(in crate::conversion) fn check_duration(
+    declared: &str,
+    ticks: i64,
+) -> Result<(), ConversionError> {
     let ticks =
         u128::try_from(ticks).map_err(|_| ConversionError("ts-segment-duration-mismatch"))?;
     check_duration_ratio(declared, ticks, 90_000)
 }
 
-fn check_final_audio_duration(
+pub(in crate::conversion) fn check_final_audio_duration(
     declared: &str,
     ticks: i64,
     frames: u64,
@@ -799,6 +900,60 @@ pub(super) fn check_duration_ratio(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn views_keep_every_mp4_key_without_changing_original_transport_key_selection() {
+        use super::super::keys::ProbeKeys;
+        let keys = super::super::InputKeys::new(vec![
+            ContentKey::from_hex(
+                "000102030405060708090a0b0c0d0e0f",
+                "101112131415161718191a1b1c1d1e1f",
+            )
+            .unwrap(),
+            ContentKey::from_hex(
+                "303132333435363738393a3b3c3d3e3f",
+                "202122232425262728292a2b2c2d2e2f",
+            )
+            .unwrap(),
+        ])
+        .unwrap();
+        let dictionary = &keys;
+        let selected = &keys.keys[0];
+        let view = View {
+            input: Path::new("fixture.mp4"),
+            metadata: Path::new("fixture.mp4"),
+            index: 0,
+            key: Some(selected),
+            all_keys: None,
+            transport: false,
+            native: None,
+            unedited: true,
+        };
+        assert!(
+            matches!(view.probe_keys(), Some(ProbeKeys::One(key)) if std::ptr::eq(key, selected))
+        );
+        let all = view.with_all_keys(dictionary);
+        assert!(
+            matches!(all.probe_keys(), Some(ProbeKeys::All(value)) if std::ptr::eq(value, dictionary))
+        );
+        assert!(std::ptr::eq(all.key.unwrap(), selected));
+        let transport = View {
+            transport: true,
+            ..all
+        };
+        assert!(
+            matches!(transport.probe_keys(), Some(ProbeKeys::One(key)) if std::ptr::eq(key, selected))
+        );
+        let clear_transport = View {
+            key: None,
+            ..transport
+        };
+        assert!(clear_transport.probe_keys().is_none());
+        let unselected = View { key: None, ..all };
+        assert!(
+            matches!(unselected.probe_keys(), Some(ProbeKeys::All(value)) if std::ptr::eq(value, dictionary))
+        );
+    }
 
     #[test]
     fn fractional_aac_duration_uses_the_complete_sample_span() {

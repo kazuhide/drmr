@@ -62,6 +62,7 @@ fn controlled_packager(
         tool.to_str().unwrap(),
         "ffmpeg",
     )
+    .with_decode(true)
     .with_stop(stop.clone())
     .with_timeout(std::time::Duration::from_secs(15))
 }

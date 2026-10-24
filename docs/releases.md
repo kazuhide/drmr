@@ -68,7 +68,7 @@ drmr doctor --probe
 ```
 
 The reported version must match the release. A CLI archive does not need Rust
-installed. FFmpeg, ffprobe and Shaka Packager are installed separately;
+installed. Native analysis and verification need no external media tools. Shaka Packager is required by packaging routes; optional `--decode` needs FFmpeg and ffprobe, and encrypted finite progressive conversion retains an FFmpeg copy remux. Install those tools separately;
 see [requirements](requirements.md). `doctor` checks the selected tool setup,
 while a successful conversion and independent `verify` check the actual media.
 See the [four-step workflow](executable-plans.md) and
@@ -113,11 +113,11 @@ the documented CLI, rather than every implementation detail:
 - Valid saved execution plans using schema version 1 or 2 remain readable
   throughout 1.x. Plan versions describe JSON formats, not drmr releases.
 
-Saved-plan version 1 describes one output. Version 2 describes one to eight
-named outputs, each with its own format, protection, DRM selections and external
-manifest-check policy. Version 2 can also describe a single output. The console
-uses it for new plans when a runtime key file is needed.
-Both versions fix source fingerprints and output conditions while keeping key
+Legacy saved-plan version 1 describes one output; version 2 describes one to eight named outputs. Both remain strict and keep a minimum of complete decoded verification. New single-output plans use version 3 and named-output plans use version 4, including a one-output console list. They include `required_depth` in their identity. Execution and fresh verification may strengthen that minimum with `--decode`, but cannot lower it.
+
+New complete-media report version 2 states native checks, required depth and actual decode evidence. A `not-checked` decode result does not claim decoded equality. Legacy report version 1 keeps its original full-decode meaning. These report and plan changes do not change operator key-file versions.
+
+All saved-plan versions fix source fingerprints and output conditions while keeping key
 values and DRM initialization data separate. See
 [single-output plans](executable-plans.md) and [multiple outputs](multiple-outputs.md).
 

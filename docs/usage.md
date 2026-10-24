@@ -1,6 +1,6 @@
 # Using drmr
 
-Install `drmr` before following these examples. Metadata-only analysis needs no external media tools. Complete media checks and conversion require the tools on `PATH`; run `drmr doctor` to check them. The [Docker guide](docker.md) provides an alternative with those tools included. Commands process existing media; they do not encode new video qualities. For PowerShell examples and Windows file permissions, see the [Windows guide](windows.md).
+Install `drmr` before following these examples. Rust checks complete supported media by default. Native analysis and verification need no external media tools. Conversion uses Shaka Packager on packaging routes; encrypted finite progressive output also uses one FFmpeg container copy. Optional `--decode` adds complete FFmpeg decoding. Run `drmr doctor` to check installed external tools. The [Docker guide](docker.md) provides an alternative with those tools included. Commands process existing media; they do not encode new video qualities. For PowerShell examples and Windows file permissions, see the [Windows guide](windows.md).
 
 Use the [multiple-output workflow](multiple-outputs.md) to produce HLS for FairPlay
 and CBCS DASH for Widevine/PlayReady from one qualified source. It uses the same
@@ -13,6 +13,13 @@ For qualified local MP4, DASH, or HLS media, start with the common commands:
 `analyze --metadata-only` reads metadata, `analyze` checks complete source media, `plan` describes
 intent or saves one fixed conversion, `convert` writes new media, and `verify`
 compares a result with its original source.
+
+All four media operations require the native checks of every selected sample,
+codec configuration, clock and supported playback window. `--decode` adds
+complete source decoding or decoded source-to-result comparison. It does not
+replace native checks. See [verification depth and evidence](verification.md).
+Metadata-only analysis, planning without `--save`, and manifest-only verification
+refuse `--decode` because they do not perform complete media checks.
 
 For URL preflight, a saved executable plan, offline conversion, and independent
 verification, follow [analyze, save a plan, convert, and verify](executable-plans.md).
@@ -49,7 +56,7 @@ Remote HLS reads playlist declarations and needed child playlists; DASH reads th
 
 The [fetch policy](#convert-a-url) applies to remote metadata too, including allowed origins, authentication headers and resource limits. Metadata parser limits still apply when a policy allows larger downloads. Live HLS or dynamic DASH declarations may be readable, but this mode does not follow updates, establish a complete VOD asset or admit a conversion. Use normal `analyze URL --download-dir NEW_DIR` for full acquisition and media checks.
 
-`--metadata-only` refuses `--download-dir`, `--keys-file`, `--packager-bin`, `--max-workers` and `--measure`. `--fetch-policy` is accepted only with a URL. The former `inspect INPUT` command is removed; replace it with `analyze --metadata-only INPUT`. See the [pre-release migration](releases.md#pre-release-cli-consolidation).
+`--metadata-only` refuses `--download-dir`, `--keys-file`, `--packager-bin`, `--max-workers`, `--decode` and `--measure`. `--fetch-policy` is accepted only with a URL. The former `inspect INPUT` command is removed; replace it with `analyze --metadata-only INPUT`. See the [pre-release migration](releases.md#pre-release-cli-consolidation).
 
 `plan INPUT --to clear|cenc|cbcs|hls-aes128|hls-sample-aes` describes the requested operations and independent input/output key roles. `--format mp4|dash|hls|hls-ts` selects output packaging; comma-separated values are accepted. Omitting it retains the input format. An HLS AES-128 target requires `hls` or `hls-ts` output. SAMPLE-AES TS requires `hls-ts`. `cenc` and `cbcs` are refused with TS output. CENC output to HLS is currently rejected. Unsupported source protection or unresolved encryption is reported as incompatible, except that a consistent SAMPLE-AES declaration can produce conditional HLS routes. Those routes still require the appropriate keys, IVs, and actual media validation.
 
@@ -75,7 +82,7 @@ A qualified progressive MP4 with one AAC-LC audio track and optional H.264 video
 
 A narrow local MPEG transport stream input profile can produce clear, `cenc`, or `cbcs` DASH, and clear, `cbcs`, or AES-128 fragmented MP4 HLS. Use `--format hls-ts` to retain transport-stream packaging, including SAMPLE-AES encryption for FairPlay media. Other multiplexed MP4 output, live input, and unrestricted DASH/HLS profiles remain unsupported. See [conversion support](conversion-support.md) for the tested routes and [processing and verification](media-processing.md) for timing limits.
 
-`verify OUTPUT --source INPUT` independently compares the original source and result. It requires their respective keys when encrypted. Success means the stream metadata, encoded packets, decoded picture/sound, and packet timestamps match; it does not establish license acquisition or device playback. Use the generated `manifest.mpd` or `master.m3u8` as the output argument for a presentation. Both commands support `--json` for one versioned result object. Successful JSON reports keep their existing fields. Progress is separate, as described below.
+`verify OUTPUT --source INPUT` independently compares the original source and result. It requires their respective keys when encrypted. Success means the required native stream metadata, complete encoded content, packet clocks and playback windows match. `--decode` additionally requires complete decoded picture/sound equality. Neither depth establishes license acquisition or device playback. Use the generated `manifest.mpd` or `master.m3u8` as the output argument for a presentation. Both commands support `--json` for one versioned result object. New complete-media JSON reports use schema version 2 with explicit required depth, scope and decode evidence; metadata-only and manifest-only reports retain their separate schemas. Progress is separate, as described below.
 
 For an operational failure after a valid `convert` or `verify` command with `--json`, stdout contains one object with `schema_version: 1`, `command`, `status` (`failed` or `cancelled`), and `error` containing a fixed `code`, safe `hint`, and `last_activity` (a fixed label or `null`). A completed verification that finds a mismatch retains its existing `checks` and comparison fields and adds that failure description. With default `auto` progress and `--json`, stderr carries a fixed failure token and shows text progress only when it is a terminal. Exit codes remain `1` for processing or comparison failure, `2` for the existing configuration errors, and `130` for confirmed cancellation. Cleanup-unconfirmed failures remain failures, even if cancellation was requested. Clap argument parsing errors still use stderr and exit `2`, before this JSON command contract applies. If stdout itself cannot be written, a complete JSON object cannot be guaranteed: the command reports `result-output-unavailable` on stderr and exits `1`. No raw tool output, source URL, key, or operator path is added to progress or failure JSON. Successful URL conversion retains its explicit saved-source locations in the existing result.
 
@@ -363,7 +370,7 @@ The private configuration picker replaces file and folder names with numbered la
 
 URL sessions use a generic **Source URL** label. The server does not return the submitted URL to the page; credentials can occur in the path as well as in query parameters. The input field is cleared when submitted.
 
-Every newly saved plan is v2, including a one-output list. When supplying a key file, analyze accepts either schema; new plan creation and v2 plan conversion/verification use v2 keys. Imported v1 plans use v1 keys. See [multiple outputs](multiple-outputs.md) and the [key-file reference](https://kazuhide.github.io/drmr/guide/#cli-reference).
+Every newly saved console plan is v4, including a one-output list, and binds its minimum verification depth. The additional complete-decoding checkbox has the same meaning as CLI `--decode`; an imported plan can require it even when the checkbox is clear. When supplying a key file, analyze accepts either key-file schema; new console plan creation and named-output plan conversion/verification use v2 keys. Imported single-output v1/v3 plans use v1 keys. Legacy plan versions 1/2 retain a decoded minimum. See [multiple outputs](multiple-outputs.md) and the [key-file reference](https://kazuhide.github.io/drmr/guide/#cli-reference).
 
 The common workflow fixes a request identifier before submitting an operation. A lost reply is recovered by GET lookup of that exact request and job; a missing live receipt remains unknown. **Check status** never repeats the POST. Stop acknowledgment is separate from confirmed process cleanup, and unconfirmed cleanup retains the global execution slot. Selection and language changes do not release it.
 
@@ -385,7 +392,7 @@ Most commands return `0` for success, `1` for a failed operation or validation, 
 
 `doctor` discovers executable files on the current launch environment's `PATH` without executing them. Add `--probe` to run version and help checks with a three-second deadline per call and a 1 MiB output limit per stream. Raw tool output is excluded from the report. Discovery returns `0` when required tools are found; probing additionally requires recognized supported versions and the advertised options. A missing or failed required check returns `1`; invalid arguments return `2`.
 
-Use `--route progressive-mp4` for FFmpeg and ffprobe, or another route from [processing routes](processing-routes.md) to additionally require Shaka Packager. `--route all` (the default) checks all three tools. Unrelated tools remain optional, so an unsupported version or missing feature does not block the selected route. Unconfirmed process cleanup always blocks readiness, including an optional probe. For example:
+`doctor` profiles cover the complete conversion tool set including additional `--decode` requirements. They are separate from the native minimum declared by metadata-only candidates and from native analysis/verification. Use `--route progressive-mp4` for FFmpeg and ffprobe, or another route from [processing routes](processing-routes.md) to additionally require Shaka Packager. `--route all` (the default) checks all three tools. Unrelated tools remain optional, so an unsupported version or missing feature does not block the selected route. Unconfirmed process cleanup always blocks readiness, including an optional probe. For example:
 
 ```sh
 drmr doctor --probe --route progressive-mp4 --json
@@ -410,7 +417,7 @@ The same content and timing checks run in either mode. See [resource limits and
 measurements](resources.md) for the estimates and a repeatable comparison.
 
 Full `analyze` also performs work after the source download: it prepares tracks
-and checks encoded media, decoded content and timing. The worker count does not
+and checks all selected encoded samples, configuration, clocks and playback windows in Rust. `--decode` also checks complete decoded media. The worker count does not
 mean every stage runs concurrently. For a quick metadata or declaration check,
 use `analyze --metadata-only`; this does not establish that complete source media
 can be converted. See [full analysis time](resources.md#full-analysis-time).

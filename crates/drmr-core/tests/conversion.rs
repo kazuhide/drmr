@@ -12,7 +12,7 @@ fn runner() -> Arc<ToolRunner> {
     Arc::new(ToolRunner::new(Arc::new(Secrets::new()), Arc::new(NoSink)))
 }
 fn converter() -> Converter {
-    Converter::new(runner(), "packager", "ffmpeg")
+    Converter::new(runner(), "packager", "ffmpeg").with_decode(true)
 }
 fn input_keys(kid: &str, key: &str) -> InputKeys {
     InputKeys::new(vec![ContentKey::from_hex(kid, key).unwrap()]).unwrap()
@@ -99,7 +99,10 @@ fn real_mp4_clear_cenc_cbcs_nine_routes_use_independent_output_keys() {
                 serde_json::to_value(&report).unwrap()["processing"]["route"],
                 "fragmented-mp4"
             );
-            assert!(report.verification.checks.decoded_content_equal);
+            assert!(report.verification.decode_evidence.satisfies(
+                drmr_core::conversion::ValidationDepth::Decoded,
+                report.verification.scope
+            ));
             assert!(report.verification.checks.packet_payloads_equal);
             assert!(!report.verification.license_playback_verified);
             assert_eq!(
@@ -171,7 +174,10 @@ fn mismatched_media_does_not_pass_verification() {
         .verify_mp4(&a, &InputKeys::default(), &b, &InputKeys::default())
         .unwrap();
     assert!(!report.passed);
-    assert!(!report.checks.decoded_content_equal);
+    assert!(matches!(
+        report.decode_evidence,
+        drmr_core::conversion::DecodeEvidence::ContentCompared { equal: false }
+    ));
 }
 #[test]
 fn keys_never_reach_retained_tool_records_or_reports() {
@@ -180,7 +186,7 @@ fn keys_never_reach_retained_tool_records_or_reports() {
     video(&input, "testsrc2=size=64x64:rate=5");
     let sink = Arc::new(Collector::default());
     let runner = Arc::new(ToolRunner::new(Arc::new(Secrets::new()), sink.clone()));
-    let converter = Converter::new(runner, "packager", "ffmpeg");
+    let converter = Converter::new(runner, "packager", "ffmpeg").with_decode(true);
     let output = directory.path().join("output.mp4");
     let report = converter
         .convert_mp4(
@@ -329,11 +335,21 @@ fn missing_keys_fail_closed_and_finite_joint_tracks_are_independently_verified()
         .verify_mp4(&av, &source_keys, &output, &result_keys)
         .unwrap();
     for verified in [&report.verification, &fresh] {
-        assert!(verified.passed && verified.media_verified);
+        assert!(
+            verified.passed
+                && (verified.checks.is_pass()
+                    && verified.decode_evidence.satisfies(
+                        drmr_core::conversion::ValidationDepth::Decoded,
+                        verified.scope
+                    ))
+        );
         assert!(verified.checks.stream_metadata.is_pass());
         assert!(verified.checks.packet_payloads_equal);
         assert!(verified.checks.packet_timing_equal);
-        assert!(verified.checks.decoded_content_equal);
+        assert!(verified.decode_evidence.satisfies(
+            drmr_core::conversion::ValidationDepth::Decoded,
+            verified.scope
+        ));
         assert!(!verified.license_playback_verified);
     }
     assert_eq!(std::fs::read(&av).unwrap(), original);
@@ -550,7 +566,10 @@ fn middle_packet_timestamp_changes_fail_even_when_payloads_and_duration_match() 
         )
         .unwrap();
     assert!(report.checks.packet_payloads_equal);
-    assert!(report.checks.decoded_content_equal);
+    assert!(report.decode_evidence.satisfies(
+        drmr_core::conversion::ValidationDepth::Decoded,
+        report.scope
+    ));
     assert!(!report.checks.packet_timing_equal);
     assert!(!report.passed);
 }
@@ -634,11 +653,21 @@ fn progressive_aac_with_finite_tail_padding_preserves_the_complete_presentation(
         )
         .unwrap();
     for verified in [&report.verification, &fresh] {
-        assert!(verified.passed && verified.media_verified);
+        assert!(
+            verified.passed
+                && (verified.checks.is_pass()
+                    && verified.decode_evidence.satisfies(
+                        drmr_core::conversion::ValidationDepth::Decoded,
+                        verified.scope
+                    ))
+        );
         assert!(verified.checks.stream_metadata.is_pass());
         assert!(verified.checks.packet_payloads_equal);
         assert!(verified.checks.packet_timing_equal);
-        assert!(verified.checks.decoded_content_equal);
+        assert!(verified.decode_evidence.satisfies(
+            drmr_core::conversion::ValidationDepth::Decoded,
+            verified.scope
+        ));
         assert!(!verified.license_playback_verified);
     }
     assert_eq!(std::fs::read(&source).unwrap(), original);
@@ -697,7 +726,10 @@ fn a_changed_audio_sample_clock_cannot_pass_with_identical_silent_samples() {
     assert!(
         report.checks.packet_payloads_equal
             && report.checks.packet_timing_equal
-            && report.checks.decoded_content_equal
+            && report.decode_evidence.satisfies(
+                drmr_core::conversion::ValidationDepth::Decoded,
+                report.scope
+            )
     );
 }
 

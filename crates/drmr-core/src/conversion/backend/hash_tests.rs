@@ -21,6 +21,7 @@ fn backend(root: &Path, spec: &drmr_test_support::ToolSpec) -> Backend {
         ffmpeg: tool.to_str().unwrap().into(),
         ffprobe: String::new(),
         timeout: Duration::from_secs(20),
+        validation_depth: crate::conversion::ValidationDepth::Decoded,
         measurement: None,
         activity: None,
     }

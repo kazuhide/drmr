@@ -48,6 +48,7 @@ impl Session {
         as_json: bool,
         packager: &str,
         maximum: Option<u8>,
+        decode: bool,
         keys_file: Option<&PathBuf>,
     ) -> Result<Self, ExitCode> {
         let progress = Arc::new(Progress::new(!as_json));
@@ -66,6 +67,7 @@ impl Session {
         let converter = convert_cli::converter(
             packager,
             maximum,
+            decode,
             progress.clone(),
             cancellation.stop.clone(),
         );
@@ -113,6 +115,7 @@ pub fn save(args: &PlanArgs) -> ExitCode {
         args.json,
         args.packager_bin.as_deref().unwrap_or("packager"),
         args.max_workers,
+        args.decode,
         args.keys_file.as_ref(),
     ) {
         Ok(value) => value,
@@ -189,6 +192,7 @@ pub fn convert(args: &ConvertArgs, path: &Path) -> ExitCode {
         args.json,
         &args.packager_bin,
         args.max_workers,
+        args.decode,
         args.keys_file.as_ref(),
     ) {
         Ok(value) => value,
@@ -241,6 +245,7 @@ pub fn verify(args: &VerifyArgs, path: &Path) -> ExitCode {
         args.json,
         &args.packager_bin,
         args.max_workers,
+        args.decode,
         args.keys_file.as_ref(),
     ) {
         Ok(value) => value,

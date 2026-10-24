@@ -264,8 +264,12 @@ impl Backend {
         view: super::ts::View<'_>,
         range: AudioPresentation,
     ) -> Result<super::finite::Decoded, ConversionError> {
-        let profile =
-            self.profile_stream_options(view.input, view.index, view.key, view.unedited)?;
+        let profile = self.profile_stream_keys_options(
+            view.input,
+            view.index,
+            view.probe_keys(),
+            view.unedited,
+        )?;
         let channels = profile["channels"]
             .as_u64()
             .and_then(|n| u32::try_from(n).ok())
@@ -301,8 +305,7 @@ impl Backend {
             "f32le".into(),
             "-".into(),
         ]);
-        let keyed =
-            super::keys::KeyedArguments::new(argv, view.key.map(super::keys::ProbeKeys::One));
+        let keyed = super::keys::KeyedArguments::new(argv, view.probe_keys());
         let secrets = keyed.secrets();
         let shown = ["ffmpeg".into(), "[arguments redacted]".into()];
         let options = RunOptions {
@@ -406,6 +409,7 @@ pub(super) fn finish_transport_hls(
         metadata: &localized.combined,
         index,
         key: None,
+        all_keys: None,
         transport: true,
         native: None,
         unedited: false,
@@ -424,6 +428,7 @@ pub(super) fn finish_transport_hls(
             metadata: segment,
             index,
             key: None,
+            all_keys: None,
             transport: true,
             native: None,
             unedited: false,

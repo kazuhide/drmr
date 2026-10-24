@@ -57,10 +57,10 @@ class ResourceProgressTests(unittest.TestCase):
         result, checked, invoked = self.run_gate(raw)
         self.assertEqual(result["actual_cli_workers"], [2, 2])
         self.assertEqual(result["limits"], {"memory_bytes": 1024 ** 3, "cpus": 2})
-        self.assertEqual(invoked, [(["convert", "/input/dash/manifest.mpd", "--to", "clear", "--format", "dash",
+        self.assertEqual(invoked, [(["convert", "--decode", "/input/dash/manifest.mpd", "--to", "clear", "--format", "dash",
                                     "--output", "/work/resource-limited", "--progress", "json"], {"limited": True})])
         self.assertEqual(checked, [([], {"entry": "/qualifiers/container-resources", "limited": True}),
-                                  (["verify", "/work/resource-limited/manifest.mpd", "--source",
+                                  (["verify", "--decode", "/work/resource-limited/manifest.mpd", "--source",
                                     "/input/dash/manifest.mpd", "--json"], {"limited": True})])
         self.assertIs(result["independent_verification"]["passed"], True)
         rows = self.records()

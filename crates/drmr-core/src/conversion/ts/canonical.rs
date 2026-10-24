@@ -8,7 +8,7 @@ const MAX_PACKET: usize = 8 * 1024 * 1024;
 pub(super) const MEMORY: usize = 64 * 1024 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) enum Config {
+pub(in crate::conversion) enum Config {
     Video { sps: Vec<u8>, pps: Vec<u8> },
     Audio { channels: u8, sample_rate: u32 },
 }
@@ -30,25 +30,15 @@ impl Config {
         Self::video(&bytes, true)
     }
     pub fn video(data: &[u8], transport: bool) -> Result<Self, ConversionError> {
-        let parameters = if transport {
-            annex(data)?
-        } else {
-            if data.len() < 7 || data[0] != 1 || data[4] != 0xff || data[5] != 0xe1 {
-                return Err(CONFIG);
-            }
-            let mut at = 6;
-            let sps = length_unit(data, &mut at, 2)?;
-            if data.get(at) != Some(&1) {
-                return Err(CONFIG);
-            }
-            at += 1;
-            let pps = length_unit(data, &mut at, 2)?;
-            // AVC High-profile 4:2:0 eight-bit configuration, with no SPS extension.
-            if at != data.len() && data.get(at..) != Some(&[0xfd, 0xf8, 0xf8, 0]) {
-                return Err(CONFIG);
-            }
-            vec![sps, pps]
-        };
+        if !transport {
+            let (configuration, _) = super::avc::Configuration::from_avcc(data)?;
+            let (sps, pps) = configuration.parameter_sets();
+            return Ok(Self::Video {
+                sps: sps.to_vec(),
+                pps: pps.to_vec(),
+            });
+        }
+        let parameters = annex(data)?;
         if parameters.len() != 2
             || parameters[0]
                 .first()
@@ -102,10 +92,19 @@ impl Config {
             sample_rate,
         })
     }
-    fn units(
+    pub(in crate::conversion) fn units(
         &self,
         data: &[u8],
         transport: bool,
+        hash: &mut Sha256,
+    ) -> Result<(), ConversionError> {
+        self.units_with_width(data, transport, 4, hash)
+    }
+    pub(in crate::conversion) fn units_with_width(
+        &self,
+        data: &[u8],
+        transport: bool,
+        nal_length_size: u8,
         hash: &mut Sha256,
     ) -> Result<(), ConversionError> {
         match self {
@@ -113,10 +112,13 @@ impl Config {
                 let units = if transport {
                     annex(data)?
                 } else {
+                    if !matches!(nal_length_size, 1 | 2 | 4) {
+                        return Err(CONFIG);
+                    }
                     let mut units = Vec::new();
                     let mut at = 0;
                     while at < data.len() {
-                        units.push(length_unit(data, &mut at, 4)?);
+                        units.push(length_unit(data, &mut at, usize::from(nal_length_size))?);
                         if units.len() > 4096 {
                             return Err(BAD);
                         }
@@ -137,7 +139,7 @@ impl Config {
                         7 if *unit == sps.as_slice() => {}
                         8 if *unit == pps.as_slice() => {}
                         7 | 8 => return Err(CONFIG),
-                        9 if transport && at == 0 && unit.len() == 2 && unit[1] & 31 == 16 => {}
+                        9 if at == 0 && unit.len() == 2 && unit[1] & 31 == 16 => {}
                         9 => return Err(BAD),
                         1 | 5 | 6 | 10 | 11 | 12 => {
                             vcl |= matches!(kind, 1 | 5);
@@ -184,18 +186,23 @@ fn length_unit<'a>(
     width: usize,
 ) -> Result<&'a [u8], ConversionError> {
     let mut length = 0usize;
-    for &b in data.get(*at..*at + width).ok_or(BAD)? {
-        length = (length << 8) | usize::from(b);
+    let prefix_end = at.checked_add(width).ok_or(BAD)?;
+    for &b in data.get(*at..prefix_end).ok_or(BAD)? {
+        length = length
+            .checked_mul(256)
+            .and_then(|n| n.checked_add(usize::from(b)))
+            .ok_or(BAD)?;
     }
-    *at += width;
+    *at = prefix_end;
     if length == 0 {
         return Err(BAD);
     }
-    let unit = data.get(*at..*at + length).ok_or(BAD)?;
-    *at += length;
+    let end = at.checked_add(length).ok_or(BAD)?;
+    let unit = data.get(*at..end).ok_or(BAD)?;
+    *at = end;
     Ok(unit)
 }
-fn annex(data: &[u8]) -> Result<Vec<&[u8]>, ConversionError> {
+pub(in crate::conversion) fn annex(data: &[u8]) -> Result<Vec<&[u8]>, ConversionError> {
     let mut marks = Vec::new();
     let mut at = 0;
     while at + 3 <= data.len() {
@@ -292,14 +299,20 @@ fn hex_line(line: &[u8], output: &mut Vec<u8>) -> Result<(), ConversionError> {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub(super) struct Evidence {
-    pub(super) count: u64,
+pub(in crate::conversion) struct Evidence {
+    pub(in crate::conversion) count: u64,
     digest: [u8; 32],
     clocks: [u8; 32],
     pub first_pts: i64,
     pub end_pts: i64,
 }
 impl Evidence {
+    pub(in crate::conversion) fn payload_digest(&self) -> [u8; 32] {
+        self.digest
+    }
+    pub(in crate::conversion) fn clock_digest(&self) -> [u8; 32] {
+        self.clocks
+    }
     pub fn payload_equal(&self, other: &Self) -> bool {
         self.count == other.count && self.digest == other.digest
     }
@@ -312,26 +325,126 @@ impl Evidence {
 }
 /// Derived directly from decrypted original PES bytes, before transport repacking.
 pub(in crate::conversion) struct Native {
-    pub(super) config: Config,
-    pub(super) count: u64,
+    pub(in crate::conversion) config: Config,
+    pub(in crate::conversion) count: u64,
     hash: Sha256,
     clocks: Sha256,
+    validation: Result<Validation, ConversionError>,
+    whole: Span,
+    current_segment: Option<Span>,
+    segments: Vec<Span>,
+    failed: Option<ConversionError>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::conversion) enum TrackMetadata {
+    Video(super::avc::Metadata),
+    Audio {
+        sample_rate: u32,
+        channel_config: u8,
+        channels: u8,
+    },
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::conversion) struct Timing {
+    pub count: u64,
+    /// PTS of the first sample in decode order, independent of presentation order.
+    pub first_sample_pts: i64,
+    /// Minimum PTS across the span.
+    pub first_pts: i64,
+    pub max_pts: i64,
+    pub end_pts: i64,
+    pub first_dts: i64,
+    pub last_dts: i64,
+    pub terminal_duration: i64,
+    pub nominal_duration_numerator: u64,
+    pub nominal_duration_denominator: u32,
+    pub requires_manifest_duration: bool,
+    pub coded_samples: Option<u64>,
+}
+#[derive(Clone, Copy, Default)]
+struct Span {
+    count: u64,
+    first_sample_pts: i64,
+    min_pts: i64,
+    max_pts: i64,
+    first_dts: i64,
+    last_dts: i64,
+}
+impl Span {
+    fn record(&mut self, pts: i64, dts: i64) -> Result<(), ConversionError> {
+        if self.count == 0 {
+            self.first_sample_pts = pts;
+            self.min_pts = pts;
+            self.max_pts = pts;
+            self.first_dts = dts;
+        } else {
+            self.min_pts = self.min_pts.min(pts);
+            self.max_pts = self.max_pts.max(pts);
+        }
+        self.last_dts = dts;
+        self.count = self.count.checked_add(1).ok_or(BAD)?;
+        Ok(())
+    }
+}
+enum Validation {
+    Video {
+        config: Box<super::avc::Configuration>,
+        clock: Option<super::clock::Video>,
+    },
+    Audio(super::clock::Audio),
 }
 impl Native {
-    pub(super) fn new(config: Config) -> Self {
+    pub(in crate::conversion) fn new(config: Config) -> Self {
+        let validation = match &config {
+            Config::Video { sps, pps } => {
+                super::avc::Configuration::parse(sps, pps).and_then(|config| {
+                    let clock = config
+                        .metadata()
+                        .clock
+                        .map(super::clock::Video::new)
+                        .transpose()?;
+                    Ok(Validation::Video {
+                        config: Box::new(config),
+                        clock,
+                    })
+                })
+            }
+            Config::Audio { sample_rate, .. } => {
+                super::clock::Audio::new(*sample_rate).map(Validation::Audio)
+            }
+        };
         Self {
             config,
             count: 0,
             hash: Sha256::new(),
             clocks: Sha256::new(),
+            validation,
+            whole: Span::default(),
+            current_segment: None,
+            segments: Vec::new(),
+            failed: None,
         }
     }
-    pub(super) fn record(
+    pub(in crate::conversion) fn record(
         &mut self,
         bytes: &[u8],
         pts: i64,
         dts: i64,
     ) -> Result<(), ConversionError> {
+        if let Some(error) = self.failed {
+            return Err(error);
+        }
+        let result = self.record_checked(bytes, pts, dts);
+        if let Err(error) = result {
+            self.failed = Some(error);
+        }
+        result
+    }
+    fn record_checked(&mut self, bytes: &[u8], pts: i64, dts: i64) -> Result<(), ConversionError> {
+        if bytes.len() > MAX_PACKET {
+            return Err(ConversionError("ts-access-unit-size-limit"));
+        }
         if dts < 0 || pts < dts {
             return Err(BAD);
         }
@@ -340,17 +453,182 @@ impl Native {
         self.clocks.update(pts.to_be_bytes());
         self.clocks.update(dts.to_be_bytes());
         self.count = self.count.checked_add(1).ok_or(BAD)?;
+        self.whole.record(pts, dts)?;
+        self.current_segment
+            .get_or_insert_with(Span::default)
+            .record(pts, dts)?;
+        // Original-byte capture and codec qualification are distinct stages.
+        // Preserve the first syntax error and require it at every native
+        // metadata/timing accessor; failed qualification can never yield proof.
+        let validation = match &mut self.validation {
+            Ok(Validation::Video { config, clock }) => {
+                config.access_unit(&annex(bytes)?).and_then(|_| {
+                    if let Some(clock) = clock {
+                        clock.frame(pts, dts)?;
+                    }
+                    Ok(())
+                })
+            }
+            Ok(Validation::Audio(clock)) => clock
+                .begin(pts, dts)
+                .and_then(|()| clock.frame(pts, dts))
+                .map(|_| ()),
+            Err(error) => Err(*error),
+        };
+        if let Err(error) = validation {
+            self.validation = Err(error);
+        }
         Ok(())
     }
+    pub(in crate::conversion) fn begin_segment(&mut self) -> Result<(), ConversionError> {
+        if let Some(error) = self.failed {
+            return Err(error);
+        }
+        if self.current_segment.is_some() {
+            let error = ConversionError("ts-segment-evidence-unfinished");
+            self.failed = Some(error);
+            return Err(error);
+        }
+        self.current_segment = Some(Span::default());
+        Ok(())
+    }
+    pub(in crate::conversion) fn end_segment(&mut self) -> Result<(), ConversionError> {
+        if let Some(error) = self.failed {
+            return Err(error);
+        }
+        let Some(span) = self.current_segment.take().filter(|s| s.count != 0) else {
+            let error = ConversionError("ts-segment-evidence-missing");
+            self.failed = Some(error);
+            return Err(error);
+        };
+        if self.segments.len() >= 4096 {
+            let error = ConversionError("ts-segment-evidence-limit");
+            self.failed = Some(error);
+            return Err(error);
+        }
+        self.segments.push(span);
+        Ok(())
+    }
+    pub(in crate::conversion) fn validate(&self) -> Result<(), ConversionError> {
+        if let Some(error) = self.failed {
+            return Err(error);
+        }
+        if self.count == 0 || self.whole.count != self.count {
+            return Err(BAD);
+        }
+        match self.validation.as_ref().map_err(|e| *e)? {
+            Validation::Video {
+                clock: Some(clock), ..
+            } => clock.finish(),
+            Validation::Video { clock: None, .. } => {
+                Err(ConversionError("ts-video-duration-clock-required"))
+            }
+            Validation::Audio(_) => Ok(()),
+        }
+    }
+    pub(in crate::conversion) fn metadata(&self) -> Result<TrackMetadata, ConversionError> {
+        self.validate()?;
+        match (&self.config, self.validation.as_ref().map_err(|e| *e)?) {
+            (Config::Video { .. }, Validation::Video { config, .. }) => {
+                Ok(TrackMetadata::Video(config.metadata().clone()))
+            }
+            (
+                Config::Audio {
+                    channels,
+                    sample_rate,
+                },
+                Validation::Audio(_),
+            ) => Ok(TrackMetadata::Audio {
+                sample_rate: *sample_rate,
+                channel_config: *channels,
+                channels: if *channels == 7 { 8 } else { *channels },
+            }),
+            _ => Err(BAD),
+        }
+    }
+    fn span_timing(&self, span: Span) -> Result<Timing, ConversionError> {
+        if span.count == 0 {
+            return Err(BAD);
+        }
+        let (numerator, denominator, requires_manifest_duration, coded_samples) =
+            match self.metadata()? {
+                TrackMetadata::Video(metadata) => {
+                    let clock = metadata
+                        .clock
+                        .ok_or(ConversionError("ts-video-duration-clock-required"))?;
+                    (
+                        u64::from(clock.num_units_in_tick)
+                            .checked_mul(180_000)
+                            .ok_or(BAD)?,
+                        clock.time_scale,
+                        !clock.fixed_frame_rate,
+                        None,
+                    )
+                }
+                TrackMetadata::Audio { sample_rate, .. } => (
+                    1024 * 90_000,
+                    sample_rate,
+                    false,
+                    Some(span.count.checked_mul(1024).ok_or(BAD)?),
+                ),
+            };
+        let terminal_duration = match self.validation.as_ref().map_err(|e| *e)? {
+            Validation::Video {
+                clock: Some(clock), ..
+            } => clock.nominal_duration()?,
+            _ => i64::try_from(numerator / u64::from(denominator)).map_err(|_| BAD)?,
+        };
+        let end_pts = span.max_pts.checked_add(terminal_duration).ok_or(BAD)?;
+        Ok(Timing {
+            count: span.count,
+            first_sample_pts: span.first_sample_pts,
+            first_pts: span.min_pts,
+            max_pts: span.max_pts,
+            end_pts,
+            first_dts: span.first_dts,
+            last_dts: span.last_dts,
+            terminal_duration,
+            nominal_duration_numerator: numerator,
+            nominal_duration_denominator: denominator,
+            requires_manifest_duration,
+            coded_samples,
+        })
+    }
+    pub(in crate::conversion) fn timing(&self) -> Result<Timing, ConversionError> {
+        self.span_timing(self.whole)
+    }
+    pub(in crate::conversion) fn segment_timings(&self) -> Result<Vec<Timing>, ConversionError> {
+        self.validate()?;
+        if self.current_segment.is_some() {
+            return Err(ConversionError("ts-segment-evidence-unfinished"));
+        }
+        self.segments
+            .iter()
+            .map(|span| self.span_timing(*span))
+            .collect()
+    }
+    pub(in crate::conversion) fn evidence(&self) -> Result<Evidence, ConversionError> {
+        let timing = self.timing()?;
+        Ok(Evidence {
+            count: self.count,
+            digest: self.hash.clone().finalize().into(),
+            clocks: self.clocks.clone().finalize().into(),
+            first_pts: timing.first_pts,
+            end_pts: timing.end_pts,
+        })
+    }
     pub(super) fn same_as(&self, other: &Self) -> bool {
-        self.count != 0
+        self.failed.is_none()
+            && other.failed.is_none()
+            && self.count != 0
             && self.config == other.config
             && self.count == other.count
             && self.hash.clone().finalize() == other.hash.clone().finalize()
             && self.clocks.clone().finalize() == other.clocks.clone().finalize()
     }
     pub(super) fn matches(&self, config: &Config, evidence: &Evidence) -> bool {
-        self.count != 0
+        self.failed.is_none()
+            && self.count != 0
             && self.config == *config
             && self.count == evidence.count
             && self.hash.clone().finalize().as_slice() == evidence.digest
@@ -361,6 +639,7 @@ pub(super) struct Parser {
     index: usize,
     expected: u64,
     transport: bool,
+    nal_length_size: u8,
     config: Config,
     buffer: Vec<u8>,
     hash: Sha256,
@@ -374,7 +653,13 @@ pub(super) struct Parser {
 }
 
 impl Parser {
-    pub fn new(index: usize, expected: u64, transport: bool, config: Config) -> Self {
+    pub fn new(
+        index: usize,
+        expected: u64,
+        transport: bool,
+        config: Config,
+        nal_length_size: u8,
+    ) -> Self {
         let audio_clock = if transport
             && matches!(
                 config,
@@ -391,6 +676,7 @@ impl Parser {
             index,
             expected,
             transport,
+            nal_length_size,
             config,
             buffer: Vec::new(),
             hash: Sha256::new(),
@@ -479,7 +765,12 @@ impl Parser {
         self.end_pts = self.end_pts.max(pts.checked_add(duration).ok_or(BAD)?);
         let bytes = dump(data.strip_suffix('|').unwrap_or(data).as_bytes(), true)?;
         self.hash.update(b"access-unit");
-        self.config.units(&bytes, self.transport, &mut self.hash)?;
+        self.config.units_with_width(
+            &bytes,
+            self.transport,
+            self.nal_length_size,
+            &mut self.hash,
+        )?;
         self.clocks.update(pts.to_be_bytes());
         self.clocks.update(dts.to_be_bytes());
         self.count = self.count.checked_add(1).ok_or(BAD)?;
@@ -519,6 +810,176 @@ mod tests {
         config.units(data, ts, &mut hash)?;
         Ok(hash.finalize().to_vec())
     }
+    fn avcc_configurations() -> Vec<Vec<u8>> {
+        [
+            "01640015ffe1001a67640015ac4c220a0cfcf808800000030080000018078b1708c001000768e843044b22c0fdf8f800",
+            "016e000cffe1001a676e000ca6cd941419f9f011000003000100000300300f14299601000668ebe3cb22c0fdfafa00",
+            "017a000cffe1001a677a000cb6cd941419f8dc0440000003004000000c03c50a658001000668ebe3cb22c0fefafa00",
+            "01f4000cffe1001b67f4000c90d9b282833f1b80880000030008000003018078a14cb001000668ebe3c44844fffafa00",
+        ]
+        .map(|data| hex::decode(data).unwrap())
+        .into()
+    }
+    #[test]
+    fn avcc_canonical_configuration_preserves_high_profile_syntax_and_ignores_length_width() {
+        for avcc in avcc_configurations() {
+            let (strict, _) = super::super::avc::Configuration::from_avcc(&avcc).unwrap();
+            let (sps, pps) = strict.parameter_sets();
+            let transport = [&[0, 0, 0, 1][..], sps, &[0, 0, 1], pps].concat();
+            let expected = Config::video(&transport, true).unwrap();
+            for width in [1, 2, 4] {
+                let mut avcc = avcc.clone();
+                avcc[4] = 0xfc | (width - 1);
+                assert_eq!(Config::video(&avcc, false).unwrap(), expected);
+            }
+        }
+    }
+    #[test]
+    fn avcc_canonical_configuration_cannot_disagree_with_its_parameter_sets() {
+        for avcc in avcc_configurations() {
+            for at in [1, 2, 3, avcc.len() - 4, avcc.len() - 3, avcc.len() - 2] {
+                let mut changed = avcc.clone();
+                changed[at] ^= 1;
+                assert!(Config::video(&changed, false).is_err(), "byte {at}");
+            }
+            for width in [0xf8, 0xfe] {
+                let mut changed = avcc.clone();
+                changed[4] = width;
+                assert!(Config::video(&changed, false).is_err());
+            }
+            let mut changed = avcc.clone();
+            changed[8] |= 0x80;
+            assert!(Config::video(&changed, false).is_err());
+            let mut changed = avcc.clone();
+            changed.truncate(changed.len() - 1);
+            assert!(Config::video(&changed, false).is_err());
+        }
+        let fake = [
+            1, 100, 0, 31, 0xff, 0xe1, 0, 2, 0x67, 0x80, 1, 0, 2, 0x68, 0x80,
+        ];
+        assert!(Config::video(&fake, false).is_err());
+    }
+    fn canonical_video_row(data: &[u8]) -> String {
+        format!(
+            "packet|stream_index=0|pts=90000|dts=90000|duration=3750|data=\\n00000000: {}  ignored\\n|\n",
+            hex::encode(data)
+        )
+    }
+    #[test]
+    fn streamed_video_uses_explicit_container_lengths_without_changing_identity() {
+        let transport = [0, 0, 1, 6, 0x80, 0, 0, 1, 0x65, 0x80];
+        for avcc in avcc_configurations() {
+            let config = Config::video(&avcc, false).unwrap();
+            let mut source = Parser::new(0, 1, true, config.clone(), 0);
+            source
+                .push(canonical_video_row(&transport).as_bytes())
+                .unwrap();
+            let source = source.finish().unwrap();
+            for width in [1, 2, 4] {
+                let mut bytes = Vec::new();
+                for nal in [[6, 0x80], [0x65, 0x80]] {
+                    bytes.extend_from_slice(&2_u32.to_be_bytes()[4 - usize::from(width)..]);
+                    bytes.extend_from_slice(&nal);
+                }
+                for declared in [0, 1, 2, 3, 4, 5] {
+                    let mut parser = Parser::new(0, 1, false, config.clone(), declared);
+                    let result = parser.push(canonical_video_row(&bytes).as_bytes());
+                    if declared == width {
+                        result.unwrap();
+                        let observed = parser.finish().unwrap();
+                        assert!(source.payload_equal(&observed));
+                        assert!(source.timing_equal(&observed));
+                    } else {
+                        assert!(result.is_err(), "actual {width}, declared {declared}");
+                        assert!(parser.finish().is_err());
+                    }
+                }
+                let mut parser = Parser::new(0, 1, false, config.clone(), width);
+                bytes.pop();
+                assert!(parser.push(canonical_video_row(&bytes).as_bytes()).is_err());
+                assert!(parser.finish().is_err());
+            }
+        }
+    }
+    #[test]
+    fn spans_preserve_the_first_decode_order_pts_when_bframes_present_earlier() {
+        let mut whole = Span::default();
+        let mut segments = [Span::default(); 2];
+        for (index, pts) in [97_500, 90_000, 93_750, 101_250].into_iter().enumerate() {
+            let dts = 82_500 + i64::try_from(index).unwrap() * 3750;
+            whole.record(pts, dts).unwrap();
+            segments[index / 2].record(pts, dts).unwrap();
+        }
+        assert_eq!(whole.first_sample_pts, 97_500);
+        assert_eq!((whole.min_pts, whole.max_pts), (90_000, 101_250));
+        assert_eq!((whole.first_dts, whole.last_dts), (82_500, 93_750));
+        assert_eq!(whole.first_sample_pts - whole.first_dts, 15_000);
+        assert_eq!(segments[0].first_sample_pts, 97_500);
+        assert_eq!(
+            (segments[0].min_pts, segments[0].first_dts),
+            (90_000, 82_500)
+        );
+        assert_eq!(segments[1].first_sample_pts, 93_750);
+        assert_eq!(
+            (segments[1].min_pts, segments[1].first_dts),
+            (93_750, 90_000)
+        );
+        assert_eq!(whole.count, 4);
+        assert!(segments.iter().all(|span| span.count == 2));
+    }
+    #[test]
+    fn capture_failure_overflow_and_segment_limits_cannot_yield_native_proof() {
+        let config = Config::Audio {
+            channels: 2,
+            sample_rate: 48_000,
+        };
+        let frame = [0xff, 0xf1, 0x4c, 0x80, 1, 0x5f, 0xfc, 1, 0x34, 0x80];
+        for overflow in [false, true] {
+            let mut native = Native::new(config.clone());
+            if overflow {
+                native.count = u64::MAX;
+            }
+            assert!(
+                native
+                    .record(&frame, if overflow { 90_000 } else { -1 }, 90_000)
+                    .is_err()
+            );
+            assert!(native.record(&frame, 90_000, 90_000).is_err());
+            assert!(native.validate().is_err());
+            assert!(native.metadata().is_err());
+            assert!(native.timing().is_err());
+            assert!(native.evidence().is_err());
+        }
+        let mut native = Native::new(config);
+        for index in 0..4096 {
+            native.begin_segment().unwrap();
+            native
+                .record(&frame, 90_000 + index * 1920, 90_000 + index * 1920)
+                .unwrap();
+            native.end_segment().unwrap();
+        }
+        assert_eq!(native.timing().unwrap().first_sample_pts, 90_000);
+        let timings = native.segment_timings().unwrap();
+        assert_eq!(timings.len(), 4096);
+        for (index, timing) in timings.iter().enumerate() {
+            assert_eq!(
+                timing.first_sample_pts,
+                90_000 + i64::try_from(index).unwrap() * 1920
+            );
+            assert_eq!(timing.first_sample_pts, timing.first_pts);
+            assert_eq!(timing.first_sample_pts, timing.first_dts);
+        }
+        native.begin_segment().unwrap();
+        native
+            .record(&frame, 90_000 + 4096 * 1920, 90_000 + 4096 * 1920)
+            .unwrap();
+        assert_eq!(
+            native.end_segment().unwrap_err().0,
+            "ts-segment-evidence-limit"
+        );
+        assert!(native.segment_timings().is_err());
+        assert!(native.evidence().is_err());
+    }
     #[test]
     fn access_unit_identity_retains_sei_slices_order_and_every_nonframing_byte() {
         let ts = [
@@ -530,6 +991,15 @@ mod tests {
             digest(&video(), &ts, true).unwrap(),
             digest(&video(), &mp4, false).unwrap()
         );
+        let with_aud = [&[0, 0, 0, 2, 9, 0xf0][..], &mp4].concat();
+        assert_eq!(
+            digest(&video(), &with_aud, false).unwrap(),
+            digest(&video(), &mp4, false).unwrap()
+        );
+        for aud in [[0, 0, 0, 2, 9, 0], [0, 0, 0, 2, 0x69, 0xf0]] {
+            assert!(digest(&video(), &[&aud[..], &mp4].concat(), false).is_err());
+        }
+        assert!(digest(&video(), &[&mp4[..], &with_aud].concat(), false).is_err());
         for index in [5, 11] {
             let mut changed = mp4;
             changed[index] ^= 1;
@@ -619,6 +1089,7 @@ mod tests {
             rows.len() as u64,
             transport,
             Config::audio(&[0x12, 0x10]).unwrap(),
+            0,
         );
         for &(pts, duration) in rows {
             parser
@@ -673,7 +1144,7 @@ mod tests {
             false,
         );
         assert!(!source.timing_equal(&extended));
-        let mut parser = Parser::new(0, 1, true, Config::audio(&[0x12, 0x10]).unwrap());
+        let mut parser = Parser::new(0, 1, true, Config::audio(&[0x12, 0x10]).unwrap(), 0);
         assert!(
             parser
                 .push(audio_row(900_000, 2090, true).as_bytes())
@@ -711,7 +1182,7 @@ mod tests {
         let mut native = Native::new(video());
         native.record(&bytes, 90000, 90000).unwrap();
         let observed = |line: String| {
-            let mut parser = Parser::new(0, 1, false, video());
+            let mut parser = Parser::new(0, 1, false, video(), 4);
             parser.push(line.as_bytes()).unwrap();
             parser.finish().unwrap()
         };
@@ -730,13 +1201,13 @@ mod tests {
         let first = record(0, "90000", 90000, 3750);
         let second = record(0, "93750", 93750, 3750);
         for width in [1, 7, 4096] {
-            let mut parser = Parser::new(0, 2, false, video());
+            let mut parser = Parser::new(0, 2, false, video(), 4);
             for part in format!("{first}{second}").as_bytes().chunks(width) {
                 parser.push(part).unwrap();
             }
             parser.finish().unwrap();
         }
-        let mut parser = Parser::new(0, 2, false, video());
+        let mut parser = Parser::new(0, 2, false, video(), 4);
         parser
             .push(format!("{first}{second}").replace('\n', "\r\n").as_bytes())
             .unwrap();
@@ -749,14 +1220,14 @@ mod tests {
             first.trim_end().to_string(),
             format!("{first}{}", record(0, "97500", 97500, 3750)),
         ] {
-            let mut parser = Parser::new(0, 1, false, video());
+            let mut parser = Parser::new(0, 1, false, video(), 4);
             let _ = parser.push(bad.as_bytes());
             assert!(parser.finish().is_err());
         }
-        let mut parser = Parser::new(0, 2, false, video());
+        let mut parser = Parser::new(0, 2, false, video(), 4);
         let gap = format!("{first}{}", record(0, "97500", 97500, 3750));
         assert!(parser.push(gap.as_bytes()).is_err());
-        let mut parser = Parser::new(0, 2, false, video());
+        let mut parser = Parser::new(0, 2, false, video(), 4);
         parser.push(first.as_bytes()).unwrap();
         assert!(parser.finish().is_err());
     }

@@ -21,6 +21,7 @@ fn check(path: &Path, format: OutputFormat) -> Result<(), drmr_core::conversion:
         "must-not-run-packager",
         "must-not-run-ffmpeg",
     )
+    .with_decode(true)
     .verify_output_signaling(
         path,
         format,
@@ -196,7 +197,8 @@ fn actual_clear_and_aes_hls_outputs_verify_without_drm_on_native_paths() {
         Arc::new(ToolRunner::new(Arc::new(Secrets::new()), Arc::new(NoSink))),
         "packager",
         "ffmpeg",
-    );
+    )
+    .with_decode(true);
     let encryption = HlsOutputKey::new(
         "https://example.invalid/key",
         Aes128Key::from_hex("101112131415161718191a1b1c1d1e1f").unwrap(),
@@ -217,10 +219,20 @@ fn actual_clear_and_aes_hls_outputs_verify_without_drm_on_native_paths() {
                 hls_output_key: (target == TargetProtection::HlsAes128).then_some(&encryption),
             })
             .unwrap();
-        assert!(report.verification.passed && report.verification.media_verified);
+        assert!(
+            report.verification.passed
+                && (report.verification.checks.is_pass()
+                    && report.verification.decode_evidence.satisfies(
+                        drmr_core::conversion::ValidationDepth::Decoded,
+                        report.verification.scope
+                    ))
+        );
         assert!(report.verification.checks.packet_payloads_equal);
         assert!(report.verification.checks.packet_timing_equal);
-        assert!(report.verification.checks.decoded_content_equal);
+        assert!(report.verification.decode_evidence.satisfies(
+            drmr_core::conversion::ValidationDepth::Decoded,
+            report.verification.scope
+        ));
         assert_eq!(report.output.drm_systems, Vec::<String>::new());
         // fspath removes Windows' verbatim prefix, exercising an ordinary drive path in CI.
         let input = PathBuf::from(

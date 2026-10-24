@@ -156,7 +156,7 @@
       }));
       if (value.plan_ref) tasks.push(loadPlan(item, value.plan_ref, value.plan_id, owner.expectedOutputs).then(function (plan) {
         if (!current() || !plan) return;
-        if (plan.plan_id !== value.plan_id || (owner.kind === 'plan' && plan.plan_schema_version !== 2)) throw failure('response-binding-invalid');
+        if (plan.plan_id !== value.plan_id || (owner.kind === 'plan' && [2, 4].indexOf(plan.plan_schema_version) === -1)) throw failure('response-binding-invalid');
         item.plan = plan;
       }));
       if (value.report_ref) tasks.push(api.report(value.report_ref).then(function (report) {
@@ -200,7 +200,7 @@
       if (!canStart()) { if (item.session.requests_used >= 32) item.error = failure('request-limit-reached'); changed(); return; }
       if ((operation.kind === 'convert' || operation.kind === 'verify') && (!item.plan || item.plan.plan_ref !== operation.plan_ref)) { item.error = failure('invalid-request'); changed(); return; }
       var owner = { serverId: data.serverId, sessionId: item.session.session_id, requestId: id(), kind: operation.kind, jobId: null, planRef: operation.plan_ref || null, planId: operation.plan_ref ? item.plan.plan_id : null, revision: -1, phase: 'submitting', stop: 'none' };
-      var body = { schema_version: 1, server_id: data.serverId, session_id: owner.sessionId, request_id: owner.requestId, operation: JSON.parse(JSON.stringify(operation)), runtime: { keys_ref: runtime.keys_ref, max_workers: runtime.max_workers } };
+      var body = { schema_version: 1, server_id: data.serverId, session_id: owner.sessionId, request_id: owner.requestId, operation: JSON.parse(JSON.stringify(operation)), runtime: { keys_ref: runtime.keys_ref, max_workers: runtime.max_workers, decode: runtime.decode === true } };
       owner.expectedOutputs = operation.kind === 'plan' ? body.operation.outputs : null;
       data.owner = owner; mutationSequence++; item.attempt = owner; item.reports.delete(operation.kind); if (operation.kind === 'convert') item.reports.delete('verify'); item.report = null; item.error = null; item.outcome = null; item.lastJob = null; if (operation.kind === 'analyze') { item.analysis = null; item.plan = null; } if (operation.kind === 'plan') item.plan = null; changed();
       try { await acceptJob(owner, await api.submit(body)); }

@@ -1228,12 +1228,23 @@ fn refuse_range(
             error.0
         ),
         Ok(report) => {
-            assert!(!report.passed && !report.media_verified && !report.license_playback_verified);
+            assert!(!report.passed);
+            assert!(
+                !report.checks.is_pass()
+                    || !report.decode_evidence.satisfies(
+                        drmr_core::conversion::ValidationDepth::Decoded,
+                        report.scope
+                    )
+            );
+            assert!(!report.license_playback_verified);
             assert!(
                 !report.checks.stream_metadata.is_pass()
                     || !report.checks.packet_payloads_equal
                     || !report.checks.packet_timing_equal
-                    || !report.checks.decoded_content_equal
+                    || matches!(
+                        report.decode_evidence,
+                        drmr_core::conversion::DecodeEvidence::ContentCompared { equal: false }
+                    )
             );
         }
     }

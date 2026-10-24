@@ -301,13 +301,12 @@ fn success(output: &Output, operation: &'static str) -> Value {
 }
 fn verified(report: &Value) {
     assert_eq!(report["passed"], true);
-    assert_eq!(report["media_verified"], true);
+    assert_eq!(
+        report["decode_evidence"],
+        serde_json::json!({"status":"content-compared","equal":true})
+    );
     assert_eq!(report["license_playback_verified"], false);
-    for name in [
-        "packet_payloads_equal",
-        "packet_timing_equal",
-        "decoded_content_equal",
-    ] {
+    for name in ["packet_payloads_equal", "packet_timing_equal"] {
         assert_eq!(report["checks"][name], true);
     }
 }

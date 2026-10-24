@@ -29,6 +29,7 @@ fn converter() -> Converter {
         "packager",
         "ffmpeg",
     )
+    .with_decode(true)
 }
 
 fn source(path: &Path) {

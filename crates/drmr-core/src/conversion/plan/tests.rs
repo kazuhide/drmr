@@ -7,6 +7,7 @@ fn sample(root: &Path) -> ExecutionPlan {
     let mut plan = ExecutionPlan {
         kind: KIND.into(),
         schema_version: 1,
+        required_depth: None,
         plan_id: String::new(),
         source: frozen.inventory().clone(),
         source_format: OutputFormat::Mp4,
@@ -24,6 +25,35 @@ fn private_write(path: &Path, bytes: &[u8]) {
         .unwrap()
         .write_all(bytes)
         .unwrap();
+}
+
+#[test]
+fn required_depth_is_bound_in_new_plans_and_legacy_fields_stay_strict() {
+    let root = crate::native::private_tempdir().unwrap();
+    let mut plan = sample(root.path());
+    assert_eq!(plan.minimum_depth(), ValidationDepth::Decoded);
+    let legacy = serde_json::to_value(&plan).unwrap();
+    assert!(legacy.get("required_depth").is_none());
+    for value in [serde_json::Value::Null, serde_json::json!("native")] {
+        let mut invalid = legacy.clone();
+        invalid["required_depth"] = value;
+        let parsed = serde_json::from_value::<ExecutionPlan>(invalid);
+        assert!(parsed.is_err() || validate(&parsed.unwrap()).is_err());
+    }
+    plan.schema_version = 3;
+    plan.required_depth = Some(ValidationDepth::Native);
+    plan.plan_id = identity(&plan).unwrap();
+    validate(&plan).unwrap();
+    let native_id = plan.plan_id.clone();
+    plan.required_depth = Some(ValidationDepth::Decoded);
+    assert_eq!(validate(&plan).unwrap_err(), INVALID);
+    plan.plan_id = identity(&plan).unwrap();
+    assert_ne!(plan.plan_id, native_id);
+    validate(&plan).unwrap();
+    assert_eq!(
+        ValidationDepth::Native.max(plan.minimum_depth()),
+        ValidationDepth::Decoded
+    );
 }
 
 #[test]
