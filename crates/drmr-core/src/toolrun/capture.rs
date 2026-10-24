@@ -411,6 +411,160 @@ fn confirm_cleanup(
 mod lifecycle_tests {
     use super::*;
 
+    #[test]
+    fn media_payloads_are_consumed_but_never_retained_in_tool_records() {
+        use std::sync::Arc;
+        let payload = b"private encoded or decoded media payload";
+        for streamed in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let argv = response(
+                root.path(),
+                &drmr_test_support::ToolSpec {
+                    stdout: payload.to_vec(),
+                    ..Default::default()
+                },
+            );
+            let records = Arc::new(crate::events::Collector::default());
+            let runner = crate::toolrun::ToolRunner::new(
+                Arc::new(crate::toolrun::Secrets::new()),
+                records.clone(),
+            );
+            let options = RunOptions {
+                log_stdout: false,
+                ..RunOptions::default()
+            };
+            let mut consumed = Vec::new();
+            let result = if streamed {
+                runner.run_tool_streamed(&argv, "decoder", &options, |bytes| {
+                    consumed.extend_from_slice(bytes);
+                    Ok(())
+                })
+            } else {
+                runner.run_tool(&argv, "decoder", &options)
+            }
+            .unwrap();
+            assert_eq!(result.returncode, Some(0));
+            if streamed {
+                assert!(result.stdout.is_empty());
+                assert_eq!(consumed, payload);
+            } else {
+                assert_eq!(result.stdout, payload);
+            }
+            let records = records.records();
+            assert_eq!(records.len(), 2);
+            assert_eq!(records[0]["call_id"], records[1]["call_id"]);
+            assert!(
+                !serde_json::to_string(&records)
+                    .unwrap()
+                    .contains(std::str::from_utf8(payload).unwrap())
+            );
+        }
+    }
+
+    #[test]
+    fn streamed_decoders_cannot_start_without_shared_resource_admission() {
+        use std::sync::Arc;
+        let root = tempfile::tempdir().unwrap();
+        let ready = root.path().join("ready");
+        let argv = response(
+            root.path(),
+            &drmr_test_support::ToolSpec::default().with("ready_file", ready.to_str().unwrap()),
+        );
+        let records = Arc::new(crate::events::Collector::default());
+        let runner = crate::toolrun::ToolRunner::new(
+            Arc::new(crate::toolrun::Secrets::new()),
+            records.clone(),
+        )
+        .with_limiter(Arc::new(crate::resources::Limiter::new(0, u64::MAX)));
+        let error = runner
+            .run_tool_streamed(&argv, "decoder", &RunOptions::default(), |_| {
+                panic!("a denied decoder cannot produce media")
+            })
+            .unwrap_err();
+        assert_eq!(error.kind, "resource-budget");
+        assert!(!ready.exists());
+        let records = records.records();
+        assert_eq!(records.len(), 2);
+        assert!(records[1]["returncode"].is_null());
+    }
+
+    #[test]
+    fn cancelling_a_live_empty_stream_releases_its_actual_writer_lock() {
+        let root = tempfile::tempdir().unwrap();
+        let ready = root.path().join("ready");
+        let lock = root.path().join("writer.lock");
+        let mut argv = response(root.path(), &drmr_test_support::ToolSpec::default());
+        argv.extend([
+            "--fixture-lock".into(),
+            lock.to_str().unwrap().into(),
+            ready.to_str().unwrap().into(),
+        ]);
+        let stop = crate::concurrency::Stop::new();
+        let options = RunOptions {
+            timeout: Some(Duration::from_secs(10)),
+            stop: Some(&stop),
+            ..RunOptions::default()
+        };
+        let started = Instant::now();
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while !ready.is_file() {
+                    assert!(Instant::now() < deadline, "streamed writer did not start");
+                    std::thread::sleep(POLL);
+                }
+                stop.set();
+            });
+            let error = execute_streamed(&argv, &options, None, None, |_| {
+                panic!("the held writer has no stdout payload")
+            })
+            .unwrap_err();
+            assert_eq!(error.kind, "cancelled");
+        });
+        assert!(started.elapsed() < Duration::from_secs(5));
+        let released = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(lock)
+            .unwrap();
+        released.try_lock().unwrap();
+    }
+
+    #[test]
+    fn inherited_streamed_pipes_have_a_close_deadline_without_command_timeout() {
+        let python = if cfg!(windows) { "python" } else { "python3" };
+        let argv = vec![
+            python.into(), "-c".into(),
+            "import subprocess,sys; subprocess.Popen([sys.executable,'-c','import time;time.sleep(30)'])".into(),
+        ];
+        let started = Instant::now();
+        let error =
+            execute_streamed(&argv, &RunOptions::default(), None, None, |_| Ok(())).unwrap_err();
+        assert_eq!(error.kind, "pipe-timeout");
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn escaped_streamed_pipe_writers_cannot_strand_reader_threads() {
+        let root = tempfile::tempdir().unwrap();
+        let pid = root.path().join("escaped.pid");
+        let argv = vec![
+            "python3".into(), "-c".into(),
+            "import pathlib,subprocess,sys; child=subprocess.Popen([sys.executable,'-c','import time;time.sleep(10)'],start_new_session=True); pathlib.Path(sys.argv[1]).write_text(str(child.pid))".into(),
+            pid.to_str().unwrap().into(),
+        ];
+        let started = Instant::now();
+        let result = execute_streamed(&argv, &RunOptions::default(), None, None, |_| Ok(()));
+        let pid = std::fs::read_to_string(pid).unwrap().parse().unwrap();
+        let _ = rustix::process::kill_process(
+            rustix::process::Pid::from_raw(pid).unwrap(),
+            rustix::process::Signal::KILL,
+        );
+        assert_eq!(result.unwrap_err().kind, "pipe-timeout");
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
     fn response(root: &std::path::Path, spec: &drmr_test_support::ToolSpec) -> Vec<String> {
         let tool = drmr_test_support::install(&root.join("response"), spec).unwrap();
         vec![tool.to_str().unwrap().into()]

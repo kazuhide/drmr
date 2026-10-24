@@ -1,6 +1,6 @@
 //! Media probing, remuxing, timing, and decoded-content verification.
 //!
-//! The `MediaEngine` interface supports subprocess and native implementations.
+//! Native callers and reference implementations share the `MediaEngine` interface.
 //! Raw key files are private, secret values are hidden from debug output and wiped
 //! on drop, and key-bearing tool calls use the secure runner.
 
@@ -9,7 +9,6 @@ pub(crate) use files::{create_output_file, write_output_file};
 mod parse;
 mod playlist;
 pub mod python;
-mod subprocess;
 mod timing;
 
 pub use crate::mp4::{pssh_box_present, split_fragmented_mp4};
@@ -21,10 +20,6 @@ pub use parse::{
 pub use playlist::{
     extract_hls_iv_hex_values, localize_hls_master_http, localize_hls_media_playlist,
     localize_hls_media_playlist_http,
-};
-pub use subprocess::{
-    FFMPEG, FFPROBE, FRAMEMD5_MAX_OUTPUT_CHARS, MEDIA_MAX_OUTPUT_CHARS, MP4DUMP,
-    PROBE_MAX_OUTPUT_CHARS, Subprocess,
 };
 pub use timing::{default_timing_tolerance, same_timing};
 
@@ -257,7 +252,7 @@ impl PartialEq for FragmentBoundary {
 }
 
 /// Media operations used by source inspection and packaging.
-/// Subprocess and native implementations share the same interface and error categories.
+/// Media implementations share the same interface and error categories.
 pub trait MediaEngine: Send + Sync {
     /// `media::probe_packets`: one stream's packet timing.
     fn probe_packets(&self, path: &Path, stream_index: i64) -> Result<PacketInfo, MediaError>;

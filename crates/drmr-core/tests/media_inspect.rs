@@ -1,13 +1,15 @@
 //! Media probing and decoded-content inspection using synthetic media.
 
 mod common;
+#[path = "support/media_tools.rs"]
+mod media_tools;
 
 use drmr_core::events::{Collector, NoSink, Sink};
 use drmr_core::media::{
-    HexSecret, InitProbe, MediaEngine, MediaError, Subprocess, extract_hls_iv_hex_values,
-    localize_hls_master_http, localize_hls_media_playlist, localize_hls_media_playlist_http,
-    parse_fragment_boundary, parse_init_probe, parse_tenc_constant_iv_hex, python,
-    write_raw_key_file,
+    FragmentBoundary, HexSecret, InitProbe, MediaError, SegmentTiming, concatenate,
+    extract_hls_iv_hex_values, localize_hls_master_http, localize_hls_media_playlist,
+    localize_hls_media_playlist_http, parse_fragment_boundary, parse_init_probe,
+    parse_tenc_constant_iv_hex, python, segment_timing_from_probe, write_raw_key_file,
 };
 use drmr_core::toolrun::{REDACTED, Secrets, ToolRunner};
 use serde_json::{Value, json};
@@ -29,12 +31,183 @@ fn on_path(tool: &str) -> bool {
     found
 }
 
-fn engine_with(sink: Arc<dyn Sink>, secrets: Arc<Secrets>) -> Subprocess {
-    Subprocess::new(Arc::new(ToolRunner::new(secrets, sink)))
+struct ReferenceTools {
+    runner: ToolRunner,
+    mp4dump_bin: String,
 }
 
-fn engine() -> Subprocess {
+fn engine_with(sink: Arc<dyn Sink>, secrets: Arc<Secrets>) -> ReferenceTools {
+    ReferenceTools {
+        runner: ToolRunner::new(secrets, sink),
+        mp4dump_bin: "mp4dump".into(),
+    }
+}
+
+fn engine() -> ReferenceTools {
     engine_with(Arc::new(NoSink), Arc::new(Secrets::new()))
+}
+
+impl ReferenceTools {
+    fn tree(&self, path: &Path) -> Result<Value, MediaError> {
+        let output = media_tools::run(
+            &self.runner,
+            &[
+                &self.mp4dump_bin,
+                "--format",
+                "json",
+                path.to_str().unwrap(),
+            ],
+            true,
+        )?;
+        if output.returncode != Some(0) {
+            return Err(MediaError::Runtime("reference box reader failed".into()));
+        }
+        serde_json::from_slice(&output.stdout)
+            .map_err(|_| MediaError::Value("invalid reference JSON".into()))
+    }
+    fn compute_framemd5(&self, path: &Path) -> Result<String, MediaError> {
+        let output = media_tools::run(
+            &self.runner,
+            &[
+                "ffmpeg",
+                "-v",
+                "error",
+                "-threads",
+                "1",
+                "-i",
+                path.to_str().unwrap(),
+                "-threads",
+                "1",
+                "-f",
+                "framemd5",
+                "-",
+            ],
+            false,
+        )?;
+        if output.returncode != Some(0) {
+            return Err(MediaError::Runtime(format!(
+                "ffmpeg framemd5 failed for {}: reference decode failed",
+                path.display()
+            )));
+        }
+        Ok(String::from_utf8(output.stdout).unwrap())
+    }
+    fn probe_segment_timing(&self, path: &Path) -> Result<SegmentTiming, MediaError> {
+        let output = media_tools::run(
+            &self.runner,
+            &[
+                "ffprobe",
+                "-threads",
+                "1",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-show_entries",
+                "packet=pts_time",
+                "-of",
+                "json",
+                path.to_str().unwrap(),
+            ],
+            false,
+        )?;
+        if output.returncode != Some(0) {
+            return Err(MediaError::Runtime("reference timing probe failed".into()));
+        }
+        segment_timing_from_probe(&serde_json::from_slice(&output.stdout).unwrap())
+    }
+    fn read_tenc_constant_iv_hex(&self, path: &Path) -> Result<Option<HexSecret>, MediaError> {
+        parse_tenc_constant_iv_hex(&self.tree(path)?)
+    }
+    fn probe_init_segment(&self, path: &Path) -> Result<InitProbe, MediaError> {
+        parse_init_probe(&self.tree(path)?)
+    }
+    fn read_fragment_boundary(&self, path: &Path) -> Result<Option<FragmentBoundary>, MediaError> {
+        Ok(parse_fragment_boundary(&self.tree(path)?))
+    }
+    fn measure_segment_durations_s(
+        &self,
+        init: &Path,
+        segments: &[PathBuf],
+        scale: u64,
+    ) -> Result<Vec<f64>, MediaError> {
+        let Some(last) = segments.last() else {
+            return Ok(Vec::new());
+        };
+        let starts: Result<Vec<_>, MediaError> = segments
+            .iter()
+            .map(|path| {
+                let data = std::fs::read(path)?;
+                let boundary = drmr_core::mp4::fragment_boundary(&data)?.ok_or_else(|| {
+                    MediaError::Runtime(format!(
+                        "{} has no fragment (moof/tfdt/trun) metadata to measure",
+                        path.display()
+                    ))
+                })?;
+                Ok(boundary.base_media_decode_time.as_u64().unwrap())
+            })
+            .collect();
+        let starts = starts?;
+        let mut result: Vec<_> = starts
+            .windows(2)
+            .map(|pair| (pair[1] - pair[0]) as f64 / scale as f64)
+            .collect();
+        let temp = common::private_tempdir()?;
+        let joined = concatenate(
+            &[init.to_path_buf(), last.clone()],
+            &temp.path().join("tail.mp4"),
+        )?;
+        result.push(
+            self.probe_segment_timing(&joined)?.duration_s
+                - *starts.last().unwrap() as f64 / scale as f64,
+        );
+        Ok(result)
+    }
+    fn measure_durations(
+        &self,
+        init: &Path,
+        segments: &[PathBuf],
+        scale: u64,
+    ) -> Result<Vec<f64>, MediaError> {
+        self.measure_segment_durations_s(init, segments, scale)
+    }
+    fn decode_hls_media_playlist(
+        &self,
+        path: &Path,
+        output: &Path,
+        mode: &str,
+    ) -> Result<PathBuf, MediaError> {
+        drmr_core::native::create_private_dir_all(output.parent().unwrap())?;
+        drop(drmr_core::native::create_private_new(output)?);
+        #[cfg(windows)]
+        let _guard = drmr_core::native::pin_media_directory(output.parent().unwrap())?;
+        let mut args = vec![
+            "ffmpeg",
+            "-v",
+            "error",
+            "-y",
+            "-threads",
+            "1",
+            "-allowed_extensions",
+            "ALL",
+            "-i",
+            path.to_str().unwrap(),
+        ];
+        match mode {
+            "pcm" => args.extend(["-vn", "-f", "s16le", "-ac", "2", "-ar", "48000"]),
+            "framemd5" => args.extend(["-an", "-f", "framemd5"]),
+            _ => panic!("unsupported test oracle mode"),
+        }
+        args.extend(["-threads", "1", output.to_str().unwrap()]);
+        let result = media_tools::run(&self.runner, &args, false)?;
+        if result.returncode != Some(0) {
+            return Err(MediaError::Runtime(format!(
+                "ffmpeg SAMPLE-AES decode ({mode}) failed for {}",
+                path.file_name().unwrap().to_str().unwrap()
+            )));
+        }
+        Ok(output.to_path_buf())
+    }
 }
 
 fn run(argv: &[&str]) {

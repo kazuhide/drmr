@@ -197,24 +197,37 @@ fn unwinding_returns_reserved_tokens() {
 }
 
 #[test]
-fn streamed_decoding_uses_the_same_admission_pool_as_captured_tools() {
+fn captured_decoders_cannot_start_without_shared_resource_admission() {
     use drmr_core::events::{Collector, Sink};
-    use drmr_core::media::{MediaEngine, MediaError, Subprocess};
-    use drmr_core::toolrun::{Secrets, ToolRunner};
+    use drmr_core::toolrun::{RunOptions, Secrets, ToolRunner};
     let collector = Arc::new(Collector::default());
     let sink: Arc<dyn Sink> = collector.clone();
     let runner = Arc::new(
         ToolRunner::new(Arc::new(Secrets::new()), sink)
             .with_limiter(Arc::new(Limiter::new(0, u64::MAX))),
     );
-    let engine = Subprocess::new(runner);
-    let error = engine
-        .decoded_digest(std::path::Path::new("not-opened.mp4"), "video", 0)
+    let directory = tempfile::tempdir().unwrap();
+    let marker = directory.path().join("started");
+    let tool = drmr_test_support::install(
+        &directory.path().join("decoder"),
+        &drmr_test_support::ToolSpec::default().with("ready_file", marker.to_str().unwrap()),
+    )
+    .unwrap();
+    let error = runner
+        .run_tool(
+            &[tool.to_str().unwrap().into()],
+            "decoder",
+            &RunOptions::default(),
+        )
         .unwrap_err();
-    assert!(matches!(error, MediaError::Tool(error) if error.kind == "resource-budget"));
+    assert_eq!(error.kind, "resource-budget");
+    assert!(!marker.exists(), "a denied decoder cannot start");
+    let records = collector.records();
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0]["event"], "command");
     assert!(
-        collector.records().is_empty(),
-        "no command is started without a reservation"
+        records[1]["returncode"].is_null(),
+        "a command record describes denied intent, not a started child"
     );
 }
 
@@ -284,20 +297,23 @@ fn already_cancelled_tools_record_the_admission_failure_without_spawning() {
 #[test]
 fn captured_media_reports_the_output_limit_instead_of_tool_unavailability() {
     use drmr_core::events::NoSink;
-    use drmr_core::media::{MediaError, Subprocess};
-    use drmr_core::toolrun::{Secrets, ToolRunner};
+    use drmr_core::toolrun::{RunOptions, Secrets, ToolRunner};
     let runner = Arc::new(ToolRunner::new(Arc::new(Secrets::new()), Arc::new(NoSink)));
-    let error = Subprocess::new(runner)
-        .run_media(
+    let error = runner
+        .run_tool(
             &[
                 PYTHON.into(),
                 "-c".into(),
                 "print('x'*(20*1024*1024))".into(),
             ],
-            false,
+            "oversized-media-reference",
+            &RunOptions {
+                log_stdout: false,
+                ..RunOptions::default()
+            },
         )
         .unwrap_err();
-    assert!(matches!(error, MediaError::Hls(error) if error.token() == "media-output-limit"));
+    assert_eq!(error.kind, "output-limit");
 }
 
 #[test]

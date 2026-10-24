@@ -5,11 +5,13 @@
 //! on PATH (skipped otherwise). Synthetic KID / key / IV only.
 
 mod common;
+#[path = "support/media_tools.rs"]
+mod media_tools;
 
 use drmr_core::events::NoSink;
 use drmr_core::media::{
-    FragmentBoundary, HexSecret, MediaEngine, MediaError, Subprocess, parse_fragment_boundary,
-    parse_init_probe, parse_tenc_constant_iv_hex,
+    FragmentBoundary, HexSecret, MediaError, parse_fragment_boundary, parse_init_probe,
+    parse_tenc_constant_iv_hex,
 };
 use drmr_core::mp4::{
     self, Mp4Box, Pssh, Schm, Tenc, Tfdt, Trun, fourcc_text, parse_boxes, pssh_box_present,
@@ -64,11 +66,16 @@ fn on_path(tool: &str) -> bool {
     found
 }
 
-fn engine() -> Subprocess {
-    Subprocess::new(Arc::new(ToolRunner::new(
-        Arc::new(Secrets::new()),
-        Arc::new(NoSink),
-    )))
+fn reference_tree(path: &Path) -> Value {
+    let runner = ToolRunner::new(Arc::new(Secrets::with([KEY, IV])), Arc::new(NoSink));
+    let completed = media_tools::run(
+        &runner,
+        &["mp4dump", "--format", "json", path.to_str().unwrap()],
+        false,
+    )
+    .unwrap();
+    assert_eq!(completed.returncode, Some(0));
+    serde_json::from_slice(&completed.stdout).unwrap()
 }
 
 fn token(error: &MediaError) -> &str {
@@ -652,14 +659,13 @@ fn live_mp4dump_trees_equal_the_recorded_ones_and_the_native_reads() {
         eprintln!("skipped: mp4dump is not {recorded}");
         return;
     }
-    let engine = engine();
     let dir = common::private_tempdir().unwrap();
     for case in fixture["cases"].as_array().unwrap() {
         let name = case["name"].as_str().unwrap();
         let data = hex::decode(case["hex"].as_str().unwrap()).unwrap();
         let path = dir.path().join(format!("{name}.mp4"));
         std::fs::write(&path, &data).unwrap();
-        let tree = engine.box_tree(&path).unwrap();
+        let tree = reference_tree(&path);
         assert_eq!(tree, case["tree"], "{name}: mp4dump {recorded}");
         assert_reads(name, &data, &tree, case);
     }
@@ -720,7 +726,6 @@ fn native_readers_match_mp4dump_on_ffmpeg_and_bento4_output() {
         return;
     }
     let dir = common::private_tempdir().unwrap();
-    let engine = engine();
     let (init, segments) = synthetic_fragments(dir.path());
     let mut files = vec![init.clone()];
     files.extend(segments.iter().cloned());
@@ -752,7 +757,7 @@ fn native_readers_match_mp4dump_on_ffmpeg_and_bento4_output() {
     files.extend(encrypted.iter().cloned());
     for path in &files {
         let data = std::fs::read(path).unwrap();
-        let tree = engine.box_tree(path).unwrap();
+        let tree = reference_tree(path);
         let expected = json!({
             "init_probe": outcome(parse_init_probe(&tree).map(|p| probe_json(&p))),
             "tenc_constant_iv_hex": outcome(parse_tenc_constant_iv_hex(&tree).map(|iv| json!(iv.as_ref().map(HexSecret::expose)))),
