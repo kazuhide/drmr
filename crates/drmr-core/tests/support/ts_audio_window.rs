@@ -733,6 +733,118 @@ fn partial_aac_saved_hls_and_ts_routes_preserve_raw_and_presented_audio_separate
 }
 
 #[test]
+fn native_partial_aac_ts_outputs_bind_original_evidence_and_terminal_presentation() {
+    use drmr_core::conversion::{
+        DecodeEvidence, ProcessingMode, ValidationDepth, VerificationRequest, VerificationSource,
+    };
+    for profile in [AAC_44100, AAC_48000] {
+        let root = drmr_core::native::private_tempdir().unwrap();
+        let (source, _) = audio_sources_at_rate(root.path(), Some(profile.rate));
+        let packets = shorten_final_declaration(&source, profile);
+        let before = common::snapshot_tree(source.parent().unwrap());
+        let original = root.path().join("native-original.ts");
+        join_resources(&source, &original, false);
+        let raw = raw_audio(&original, false, profile);
+        for target in protected_targets(OutputFormat::HlsTs) {
+            let keys = native_partial_keys(target);
+            let command = converter()
+                .with_decode(false)
+                .with_processing(ProcessingMode::Stitch)
+                .with_output_signaling(keys.signaling.clone());
+            let output = root.path().join(format!("native-{}", target.as_str()));
+            let (converted, measurement) = command.measure(|command| {
+                command.convert(ConversionRequest {
+                    input: &source,
+                    output: &output,
+                    format: OutputFormat::HlsTs,
+                    target,
+                    input_keys: &keys.input,
+                    hls_input_keys: &keys.hls_input,
+                    output_key: None,
+                    hls_key_uri: None,
+                    hls_output_key: keys.hls_output.as_ref(),
+                })
+            });
+            let report = converted.unwrap();
+            assert!(report.verification.passed && report.verification.checks.is_pass());
+            assert_eq!(report.verification.required_depth, ValidationDepth::Native);
+            assert_eq!(
+                report.verification.decode_evidence,
+                DecodeEvidence::not_requested()
+            );
+            let measurement = serde_json::to_value(measurement).unwrap();
+            for tool in measurement["tools"].as_array().unwrap() {
+                if tool["tool"] != "packager" {
+                    assert_eq!(tool["calls"], 0);
+                }
+            }
+            let candidate = output.join("master.m3u8");
+            let output_keys = keys.output_hls_verification_keys().unwrap();
+            let checked = command
+                .verify(VerificationRequest {
+                    source: VerificationSource {
+                        input: &source,
+                        input_keys: &keys.input,
+                        hls_keys: &keys.hls_input,
+                    },
+                    output: VerificationSource {
+                        input: &candidate,
+                        input_keys: &keys.input,
+                        hls_keys: &output_keys,
+                    },
+                })
+                .unwrap();
+            assert!(checked.passed && checked.checks.is_pass());
+            assert_eq!(checked.required_depth, ValidationDepth::Native);
+            if target == TargetProtection::HlsSampleAes {
+                command
+                    .verify_output_signaling(&candidate, OutputFormat::HlsTs, target, &keys)
+                    .unwrap();
+                all_checks(
+                    &converter()
+                        .verify(VerificationRequest {
+                            source: VerificationSource {
+                                input: &source,
+                                input_keys: &keys.input,
+                                hls_keys: &keys.hls_input,
+                            },
+                            output: VerificationSource {
+                                input: &candidate,
+                                input_keys: &keys.input,
+                                hls_keys: &output_keys,
+                            },
+                        })
+                        .unwrap(),
+                );
+            }
+            assert_short_hls_presentation(&output, profile);
+            if target == TargetProtection::Clear {
+                assert_raw_result(&output, OutputFormat::HlsTs, profile, &packets, &raw);
+            }
+            assert_eq!(common::snapshot_tree(source.parent().unwrap()), before);
+        }
+    }
+}
+
+fn native_partial_keys(target: TargetProtection) -> drmr_core::conversion::key_file::OperatorKeys {
+    use drmr_core::conversion::{OutputSignaling, key_file::OperatorKeys};
+    let mut keys = OperatorKeys::default();
+    keys.hls_output = material(target).segment;
+    if target == TargetProtection::HlsSampleAes {
+        keys.hls_output = Some(
+            HlsOutputKey::new_with_iv(
+                "skd://public-fixture-native-partial",
+                Aes128Key::from_hex(OUTPUT_KEY).unwrap(),
+                SegmentIv::from_hex(OUTPUT_IV).unwrap(),
+            )
+            .unwrap(),
+        );
+        keys.signaling = Some(OutputSignaling::multi_drm(None, None, true).unwrap());
+    }
+    keys
+}
+
+#[test]
 fn partial_aac_48000_and_zero_origin_keep_the_same_canonical_edit_contract() {
     for zero_origin in [false, true] {
         for format in [OutputFormat::Hls, OutputFormat::Dash, OutputFormat::HlsTs] {

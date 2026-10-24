@@ -392,6 +392,42 @@ pub(super) fn finish_hls(root: &Path, tracks: usize, stop: &Stop) -> Result<(), 
     }
     Ok(())
 }
+fn transport_audio_timing(
+    localized: &super::hls::Localized,
+    backend: &Backend,
+) -> Result<(AudioEvidence, Vec<super::ts::canonical::Timing>), ConversionError> {
+    let admission = localized.transport.as_ref().ok_or(MISMATCH)?;
+    let [track] = admission.tracks.as_slice() else {
+        return Err(MISMATCH);
+    };
+    if track.kind != crate::inspection::TrackKind::Audio || localized.native.len() != 1 {
+        return Err(MISMATCH);
+    }
+    let native = localized
+        .native
+        .get(&track.pid)
+        .ok_or(ConversionError("ts-original-evidence-required"))?;
+    let evidence = backend.native_audio_evidence(super::ts::View {
+        input: &localized.combined,
+        metadata: &localized.combined,
+        index: 0,
+        key: None,
+        all_keys: None,
+        transport: true,
+        native: Some(native),
+        unedited: false,
+    })?;
+    let timings = native.segment_timings()?;
+    let count = timings
+        .iter()
+        .try_fold(0_u64, |count, timing| count.checked_add(timing.count))
+        .ok_or(MISMATCH)?;
+    if timings.len() != localized.transport_segments.len() || count != evidence.coded_frames {
+        return Err(MISMATCH);
+    }
+    Ok((evidence, timings))
+}
+
 pub(super) fn finish_transport_hls(
     root: &Path,
     ordinal: usize,
@@ -403,17 +439,10 @@ pub(super) fn finish_transport_hls(
     let directory = root.join(format!("track-{ordinal:04}"));
     let path = directory.join("media.m3u8");
     let localized = super::hls::localize(&path, owner.path(), keys, backend)?;
-    let index = 0;
-    let evidence = backend.audio_evidence(super::ts::View {
-        input: &localized.combined,
-        metadata: &localized.combined,
-        index,
-        key: None,
-        all_keys: None,
-        transport: true,
-        native: None,
-        unedited: false,
-    })?;
+    // Localization scans the final resources before any foreign demuxer. Use
+    // those complete native anchors at both depths; the caller independently
+    // compares and, when requested, decodes the final source/output pair.
+    let (evidence, timings) = transport_audio_timing(&localized, backend)?;
     if evidence != range.evidence {
         return Err(MISMATCH);
     }
@@ -422,22 +451,11 @@ pub(super) fn finish_transport_hls(
         .checked_sub(range.presented_samples)
         .ok_or(MISMATCH)?;
     let mut declarations = Vec::new();
-    for (ordinal, (segment, _)) in localized.transport_segments.iter().enumerate() {
-        let observed = backend.audio_evidence(super::ts::View {
-            input: segment,
-            metadata: segment,
-            index,
-            key: None,
-            all_keys: None,
-            transport: true,
-            native: None,
-            unedited: false,
-        })?;
-        if observed.sample_rate != evidence.sample_rate {
-            return Err(MISMATCH);
-        }
-        let samples = observed
-            .coded_samples()?
+    for (ordinal, timing) in timings.iter().enumerate() {
+        backend.check_cancelled()?;
+        let samples = timing
+            .coded_samples
+            .ok_or(MISMATCH)?
             .checked_sub(if ordinal + 1 == localized.transport_segments.len() {
                 tail
             } else {
@@ -467,6 +485,122 @@ pub(super) fn finish_transport_hls(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn partial_transport_output(root: &Path, rate: u32) -> AudioPresentation {
+        let directory = root.join("track-0000");
+        crate::native::create_media_dir_all(&directory).unwrap();
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../drmr/tests/fixtures/bbb/clip.mp4");
+        let generated = std::process::Command::new("ffmpeg")
+            .args(["-v", "error", "-nostdin", "-threads", "1", "-i"])
+            .arg(fixture)
+            .args(["-map", "0:a:0", "-c:a", "aac", "-threads", "1", "-ar"])
+            .arg(rate.to_string())
+            .args([
+                "-hls_time",
+                "2",
+                "-hls_playlist_type",
+                "vod",
+                "-hls_segment_filename",
+            ])
+            .arg(directory.join("segment-%d.ts"))
+            .arg(directory.join("media.m3u8"))
+            .output()
+            .unwrap();
+        assert!(generated.status.success());
+        let playlist = std::fs::read_to_string(directory.join("media.m3u8")).unwrap();
+        let mut scanner = super::super::ts::NativeScanner::new();
+        for name in playlist
+            .lines()
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        {
+            scanner
+                .segment(&directory.join(name), &Stop::new())
+                .unwrap();
+        }
+        let (admission, anchors) = scanner.finish().unwrap();
+        assert_eq!(admission.tracks.len(), 1);
+        let native = anchors.get(&admission.tracks[0].pid).unwrap();
+        let timing = native.timing().unwrap();
+        let evidence = AudioEvidence {
+            sample_rate: rate,
+            coded_frames: timing.count,
+            raw_first_pts: timing.first_pts,
+            raw_coded_end: timing.end_pts,
+        };
+        AudioPresentation::new(evidence, evidence.coded_samples().unwrap() - 784).unwrap()
+    }
+
+    #[test]
+    fn transport_finisher_retains_native_resource_evidence_without_tools_at_either_depth() {
+        use crate::{
+            conversion::Converter,
+            events::NoSink,
+            toolrun::{Secrets, ToolRunner},
+        };
+        use std::sync::Arc;
+        for rate in [44_100, 48_000] {
+            let owner = crate::native::private_tempdir().unwrap();
+            let range = partial_transport_output(owner.path(), rate);
+            let path = owner.path().join("track-0000/media.m3u8");
+            let resources: Vec<_> = std::fs::read_to_string(&path)
+                .unwrap()
+                .lines()
+                .filter(|line| !line.is_empty() && !line.starts_with('#'))
+                .map(|name| {
+                    let resource = path.parent().unwrap().join(name);
+                    let bytes = std::fs::read(&resource).unwrap();
+                    (resource, bytes)
+                })
+                .collect();
+            assert!(resources.len() > 1);
+            for decode in [false, true] {
+                let command = Converter::new(
+                    Arc::new(ToolRunner::new(
+                        Arc::new(Secrets::default()),
+                        Arc::new(NoSink),
+                    )),
+                    "missing-native-finisher-packager",
+                    "missing-native-finisher-ffmpeg",
+                )
+                .with_ffprobe("missing-native-finisher-ffprobe")
+                .with_decode(decode);
+                let (finished, measurement) = command.measure(|command| {
+                    finish_transport_hls(
+                        owner.path(),
+                        0,
+                        range,
+                        &super::super::HlsInputKeys::default(),
+                        &command.backend,
+                    )
+                });
+                finished.unwrap();
+                let measured = serde_json::to_value(measurement).unwrap();
+                for tool in measured["tools"].as_array().unwrap() {
+                    assert_eq!(tool["calls"], 0);
+                }
+                let text = std::fs::read_to_string(&path).unwrap();
+                assert_eq!(text.matches("#EXTINF:").count(), resources.len());
+                for (resource, original) in &resources {
+                    assert_eq!(&std::fs::read(resource).unwrap(), original);
+                }
+                let mut changed = range;
+                changed.evidence.coded_frames += 1;
+                assert_eq!(
+                    finish_transport_hls(
+                        owner.path(),
+                        0,
+                        changed,
+                        &super::super::HlsInputKeys::default(),
+                        &command.backend,
+                    )
+                    .unwrap_err(),
+                    MISMATCH,
+                );
+                assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+            }
+        }
+    }
 
     fn evidence(rate: u32) -> AudioEvidence {
         let frames = 432_u64;
