@@ -24,7 +24,7 @@ mod progressive;
 mod read;
 mod segment;
 pub(in crate::conversion) use segment::{
-    SegmentEvidence, SegmentInput, SegmentTrackEvidence,
+    SegmentEvidence, SegmentInput, SegmentReceipt, SegmentTrackEvidence,
 };
 #[cfg(test)]
 mod test_files;

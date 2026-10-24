@@ -29,6 +29,23 @@ pub(in crate::conversion) struct SegmentEvidence {
     pub tracks: Vec<SegmentTrackEvidence>,
 }
 
+/// Raw resource authority and semantic evidence from the same guarded sample read.
+#[derive(Clone, PartialEq, Eq)]
+pub(in crate::conversion) struct SegmentReceipt {
+    pub evidence: SegmentEvidence,
+    pub fingerprint: [u8; 32],
+    pub identity: FileIdentity,
+}
+impl std::fmt::Debug for SegmentReceipt {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SegmentReceipt")
+            .field("evidence", &self.evidence)
+            .field("fingerprint", &"[redacted]")
+            .field("identity", &"[bound]")
+            .finish()
+    }
+}
+
 /// Immutable initialization metadata can be shared by bounded resource workers.
 pub(in crate::conversion) struct SegmentInput {
     pub(super) layout: read::Layout,
@@ -113,13 +130,7 @@ impl SegmentInput {
         stop: &Stop,
         visitor: &mut impl FnMut(&TrackDescriptor, &SampleInfo, &[u8]) -> Result<(), ConversionError>,
     ) -> Result<Movie, ConversionError> {
-        let (mut reader, layout, initialization) = self.prepare(resource, keys, stop)?;
-        for track in &initialization.tracks {
-            super::visit_fragments(&mut reader, &layout, &initialization, track, keys, visitor)?;
-        }
-        reader.finish()?;
-        self.check_initialization(stop)?;
-        Ok(initialization.movie)
+        self.scan_with_evidence(resource, keys, stop, visitor).map(|(movie, _)| movie)
     }
     pub fn evidence(
         &self,
@@ -127,7 +138,20 @@ impl SegmentInput {
         keys: &InputKeys,
         stop: &Stop,
     ) -> Result<SegmentEvidence, ConversionError> {
+        self.scan_with_evidence(resource, keys, stop, &mut |_, _, _| Ok(()))
+            .map(|(_, receipt)| receipt.evidence)
+    }
+    /// The returned receipt describes exactly the guarded payload delivered to the visitor.
+    pub fn scan_with_evidence(
+        &self,
+        resource: &Path,
+        keys: &InputKeys,
+        stop: &Stop,
+        visitor: &mut impl FnMut(&TrackDescriptor, &SampleInfo, &[u8]) -> Result<(), ConversionError>,
+    ) -> Result<(Movie, SegmentReceipt), ConversionError> {
         let (mut reader, layout, initialization) = self.prepare(resource, keys, stop)?;
+        let fingerprint = reader.expected_fingerprint().ok_or(BAD)?;
+        let identity = FileIdentity::read(&reader.file).map_err(|_| BAD)?;
         let mut hashes = initialization
             .tracks
             .iter()
@@ -152,20 +176,22 @@ impl SegmentInput {
                 track,
                 keys,
                 &mut |descriptor, info, bytes| {
-                    hashes.get_mut(descriptor.index).ok_or(BAD)?.record(info, bytes)
+                    hashes.get_mut(descriptor.index).ok_or(BAD)?.record(info, bytes)?;
+                    visitor(descriptor, info, bytes)
                 },
             )?;
         }
         reader.finish()?;
         self.check_initialization(stop)?;
-        Ok(SegmentEvidence {
+        let evidence = SegmentEvidence {
             fragment_count: u64::try_from(layout.moofs.len()).map_err(|_| BAD)?,
             tracks: hashes
                 .into_iter()
                 .filter(|hash| hash.count != 0)
                 .map(TrackHash::finish)
                 .collect::<Result<_, _>>()?,
-        })
+        };
+        Ok((initialization.movie, SegmentReceipt { evidence, fingerprint, identity }))
     }
 }
 

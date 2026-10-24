@@ -98,3 +98,26 @@ fn changed_initialization_and_invalid_resource_refuse_before_plaintext_callbacks
     std::fs::write(&media, original).unwrap();
     assert!(input.evidence(&media, &InputKeys::default(), &stop).is_ok());
 }
+
+#[test]
+fn callback_receipt_binds_the_same_guarded_resource_samples() {
+    let (_root, init, media) = structural_segment();
+    let stop = Stop::new();
+    let input = SegmentInput::new(&init, &stop).unwrap();
+    let expected = input.evidence(&media, &InputKeys::default(), &stop).unwrap();
+    let mut counts = [0_u64; 2];
+    let (movie, actual) = input.scan_with_evidence(
+        &media, &InputKeys::default(), &stop, &mut |track, info, _| {
+            if info.is_last_chunk { counts[track.index] += 1; }
+            Ok(())
+        },
+    ).unwrap();
+    assert_eq!(actual.evidence, expected);
+    use sha2::Digest as _;
+    assert_eq!(actual.fingerprint, <[u8; 32]>::from(sha2::Sha256::digest(std::fs::read(&media).unwrap())));
+    let (_, repeated) = input.scan_with_evidence(&media, &InputKeys::default(), &stop, &mut |_, _, _| Ok(())).unwrap();
+    assert_eq!(actual, repeated);
+    assert_eq!(counts, [2, 1]);
+    assert_eq!(movie.tracks[0].sample_count, counts[0]);
+    assert_eq!(movie.tracks[1].sample_count, counts[1]);
+}
