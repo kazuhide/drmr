@@ -676,7 +676,6 @@ pub(super) fn convert(
         processing: Some(converter.backend.processing(
             inspection::ProcessingRouteId::MpegTsSegments,
             inspection::InputPreparation::OriginalSegments,
-            false,
         )),
     })
 }

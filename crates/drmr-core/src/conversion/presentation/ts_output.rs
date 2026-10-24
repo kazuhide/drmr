@@ -166,7 +166,6 @@ impl Converter {
                 } else {
                     inspection::InputPreparation::MpegTsDemux
                 },
-                false,
             )),
         })
     }

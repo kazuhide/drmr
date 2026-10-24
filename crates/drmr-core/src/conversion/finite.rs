@@ -463,7 +463,6 @@ impl super::Converter {
             processing: Some(self.backend.processing(
                 crate::inspection::ProcessingRouteId::FragmentedMp4,
                 crate::inspection::InputPreparation::CompleteFile,
-                input.protection != crate::inspection::Protection::Clear,
             )),
         })
     }

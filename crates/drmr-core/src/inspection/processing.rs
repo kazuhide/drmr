@@ -76,16 +76,6 @@ impl ProcessingRouteId {
             vec![RequiredTool::ShakaPackager]
         }
     }
-
-    pub(crate) const fn can_copy_encrypted_finite_source(self) -> bool {
-        matches!(
-            self,
-            Self::ProgressiveMp4
-                | Self::FragmentedMp4
-                | Self::DashPresentation
-                | Self::Fmp4HlsPresentation
-        )
-    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]

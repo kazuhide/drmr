@@ -924,7 +924,6 @@ impl Converter {
             processing: Some(self.backend.processing(
                 inspection::ProcessingRouteId::Fmp4HlsPresentation,
                 inspection::InputPreparation::CompleteFile,
-                false,
             )),
         })
     }

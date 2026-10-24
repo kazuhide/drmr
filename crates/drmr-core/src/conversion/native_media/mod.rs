@@ -22,6 +22,8 @@ mod fragment;
 mod groups;
 mod init;
 mod progressive;
+mod progressive_copy;
+pub(in crate::conversion) use progressive_copy::copy_progressive;
 mod read;
 mod segment;
 mod write;

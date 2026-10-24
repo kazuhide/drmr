@@ -334,6 +334,7 @@ impl Backend {
             range.evidence.sample_rate,
             channels,
         )?;
+        self.require_decode()?;
         let effective = Self::effective_argv(&keyed.argv, "ffmpeg");
         let result = self
             .runner
