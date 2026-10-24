@@ -1,10 +1,12 @@
 //! Complete finite presentations retain their declared playback windows in every output.
+mod common;
+
 use drmr_core::{
     conversion::{
         Aes128Key, ContentKey, ConversionRequest, Converter, HlsInputKeys, HlsOutputKey, InputKeys,
-        OutputKey, VerificationRequest, VerificationSource,
+        OutputKey, ValidationDepth, VerificationRequest, VerificationSource,
     },
-    events::NoSink,
+    events::{Collector, NoSink},
     inspection::{OutputFormat, TargetProtection},
     toolrun::{Secrets, ToolRunner},
 };
@@ -19,8 +21,162 @@ fn converter() -> Converter {
     )
     .with_decode(true)
 }
+
+#[test]
+fn native_finite_progressive_copy_needs_no_media_tools() {
+    let root = common::private_tempdir().unwrap();
+    let events = Arc::new(Collector::default());
+    let c = Converter::new(
+        Arc::new(ToolRunner::new(Arc::new(Secrets::new()), events.clone())),
+        root.path().join("absent-packager").to_string_lossy(),
+        root.path().join("absent-ffmpeg").to_string_lossy(),
+    )
+    .with_ffprobe(root.path().join("absent-ffprobe").to_string_lossy());
+    let input_keys = InputKeys::new(vec![
+        ContentKey::from_hex(
+            "000102030405060708090a0b0c0d0e0f",
+            "101112131415161718191a1b1c1d1e1f",
+        )
+        .unwrap(),
+        ContentKey::from_hex(
+            "303132333435363738393a3b3c3d3e3f",
+            "202122232425262728292a2b2c2d2e2f",
+        )
+        .unwrap(),
+    ])
+    .unwrap();
+    let empty = InputKeys::default();
+    let hls = HlsInputKeys::default();
+    let reference = fixture_path("clip.mp4");
+    for name in ["cenc-iv8.mp4", "cenc-iv16.mp4", "cbcs-joint.mp4"] {
+        let input = fixture_path(name);
+        let original = std::fs::read(&input).unwrap();
+        let output = root.path().join(format!("clear-{name}"));
+        let converted = c
+            .convert(ConversionRequest {
+                input: &input,
+                output: &output,
+                format: OutputFormat::Mp4,
+                target: TargetProtection::Clear,
+                input_keys: &input_keys,
+                hls_input_keys: &hls,
+                output_key: None,
+                hls_key_uri: None,
+                hls_output_key: None,
+            })
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        assert_native_verified(&converted.verification);
+        assert_eq!(
+            serde_json::to_value(&converted).unwrap()["processing"]["required_tools"],
+            serde_json::json!([])
+        );
+        // The independent clear original also catches a consistently wrong decrypt/write pair.
+        for (source, keys) in [(&input, &input_keys), (&reference, &empty)] {
+            let verified = c
+                .verify(VerificationRequest {
+                    source: VerificationSource {
+                        input: source,
+                        input_keys: keys,
+                        hls_keys: &hls,
+                    },
+                    output: VerificationSource {
+                        input: &output,
+                        input_keys: &empty,
+                        hls_keys: &hls,
+                    },
+                })
+                .unwrap_or_else(|error| panic!("{name}: independent verification: {error}"));
+            assert_native_verified(&verified);
+        }
+        let clear = std::fs::read(&output).unwrap();
+        assert_progressive_layout_unchanged(&original, &clear);
+        for node in drmr_core::mp4::walk(&drmr_core::mp4::parse_boxes(&clear).unwrap()) {
+            assert!(
+                !matches!(
+                    &node.kind(),
+                    b"encv" | b"enca" | b"sinf" | b"tenc" | b"senc" | b"saiz" | b"saio" | b"pssh"
+                ),
+                "{name}: retained encryption metadata: {:?}",
+                node.kind()
+            );
+        }
+        assert_eq!(std::fs::read(&input).unwrap(), original);
+    }
+    assert!(
+        events.records().iter().all(|record| {
+            record.get("stage").and_then(serde_json::Value::as_str) != Some("tool")
+        })
+    );
+}
+
+fn assert_native_verified(report: &drmr_core::conversion::VerificationReport) {
+    assert!(report.passed && report.checks.is_pass(), "{report:?}");
+    assert_eq!(
+        report.decode_evidence,
+        drmr_core::conversion::DecodeEvidence::not_requested()
+    );
+    assert!(!report.license_playback_verified);
+}
+
+fn assert_progressive_layout_unchanged(original: &[u8], clear: &[u8]) {
+    assert_eq!(original.len(), clear.len());
+    let roots = drmr_core::mp4::parse_boxes(original).unwrap();
+    let copied = drmr_core::mp4::parse_boxes(clear).unwrap();
+    assert_eq!(
+        roots.iter().map(|node| node.header).collect::<Vec<_>>(),
+        copied.iter().map(|node| node.header).collect::<Vec<_>>()
+    );
+    for node in drmr_core::mp4::walk(&roots) {
+        match &node.kind() {
+            b"mvhd" | b"tkhd" | b"mdhd" | b"elst" | b"stts" | b"ctts" | b"stsc" | b"stsz"
+            | b"stco" | b"co64" | b"stss" | b"sgpd" | b"sbgp" | b"avcC" | b"esds" => {
+                assert_eq!(node.header.bytes(original), node.header.bytes(clear));
+            }
+            b"sinf" | b"senc" | b"saiz" | b"saio" => {
+                assert_eq!(
+                    &clear[node.header.offset + 4..node.header.offset + 8],
+                    b"free"
+                );
+                assert!(node.header.payload(clear).iter().all(|byte| *byte == 0));
+            }
+            _ => {}
+        }
+    }
+}
+
 #[test]
 fn complete_finite_audio_survives_all_nine_output_profiles() {
+    finite_output_matrix(&converter(), ValidationDepth::Decoded);
+}
+
+#[test]
+fn native_finite_audio_survives_all_nine_output_profiles_without_decoder_tools() {
+    let root = common::private_tempdir().unwrap();
+    let events = Arc::new(Collector::default());
+    let c = Converter::new(
+        Arc::new(ToolRunner::new(Arc::new(Secrets::new()), events.clone())),
+        "packager",
+        root.path().join("absent-ffmpeg").to_string_lossy(),
+    )
+    .with_ffprobe(root.path().join("absent-ffprobe").to_string_lossy());
+    finite_output_matrix(&c, ValidationDepth::Native);
+    let records = events.records();
+    assert!(records.iter().any(|record| {
+        record.get("stage").and_then(serde_json::Value::as_str) == Some("tool")
+            && record.get("tool").and_then(serde_json::Value::as_str) == Some("packager")
+    }));
+    for record in records {
+        assert!(
+            !matches!(
+                record.get("tool").and_then(serde_json::Value::as_str),
+                Some("ffmpeg" | "ffprobe")
+            ),
+            "unexpected decoder tool: {record:?}"
+        );
+    }
+}
+
+fn finite_output_matrix(c: &Converter, depth: ValidationDepth) {
     let d = tempfile::tempdir().unwrap();
     let input = d.path().join("audio.mp4");
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../drmr/tests/fixtures/bbb/clip.mp4");
@@ -52,7 +208,6 @@ fn complete_finite_audio_survives_all_nine_output_profiles() {
         .output()
         .unwrap();
     assert!(result.status.success());
-    let c = converter();
     for (label, input, input_keys) in sources(input, protected_audio) {
         for (format, target) in [
             (OutputFormat::Mp4, TargetProtection::Clear),
@@ -69,11 +224,11 @@ fn complete_finite_audio_survives_all_nine_output_profiles() {
                 .path()
                 .join(format!("{label}-{}-{}", format.as_str(), target.as_str()));
             let original = std::fs::read(&input).unwrap();
-            run_profile(&c, &input, &input_keys, &output, format, target);
+            run_profile_at(c, &input, &input_keys, &output, format, target, depth);
             assert_eq!(std::fs::read(&input).unwrap(), original);
             println!(
                 "finite-output-cell {}",
-                serde_json::json!({"input":label,"format":format.as_str(),"target":target.as_str(),"all_four_checks":true,"fresh_verification":true,"source_immutable":true,"license_playback_verified":false})
+                serde_json::json!({"input":label,"format":format.as_str(),"target":target.as_str(),"depth":depth,"native_checks":true,"all_four_checks":depth == ValidationDepth::Decoded,"fresh_verification":true,"source_immutable":true,"license_playback_verified":false})
             );
         }
     }
@@ -185,6 +340,26 @@ fn run_profile(
     format: OutputFormat,
     target: TargetProtection,
 ) {
+    run_profile_at(
+        c,
+        input,
+        input_keys,
+        output,
+        format,
+        target,
+        ValidationDepth::Decoded,
+    );
+}
+
+fn run_profile_at(
+    c: &Converter,
+    input: &Path,
+    input_keys: &InputKeys,
+    output: &Path,
+    format: OutputFormat,
+    target: TargetProtection,
+    depth: ValidationDepth,
+) {
     let hls = HlsInputKeys::default();
     let key = OutputKey::from_hex(KID, KEY).unwrap();
     let aes = HlsOutputKey::new(
@@ -207,7 +382,10 @@ fn run_profile(
             hls_output_key: (target == TargetProtection::HlsAes128).then_some(&aes),
         })
         .unwrap_or_else(|error| panic!("{} {}: {}", format.as_str(), target.as_str(), error));
-    assert_verified(&report.verification);
+    match depth {
+        ValidationDepth::Native => assert_native_verified(&report.verification),
+        ValidationDepth::Decoded => assert_verified(&report.verification),
+    }
 
     let result = match format {
         OutputFormat::Mp4 => output.to_path_buf(),
@@ -244,7 +422,10 @@ fn run_profile(
         .unwrap_or_else(|error| {
             panic!("verify {} {}: {}", format.as_str(), target.as_str(), error)
         });
-    assert_verified(&verified);
+    match depth {
+        ValidationDepth::Native => assert_native_verified(&verified),
+        ValidationDepth::Decoded => assert_verified(&verified),
+    }
 }
 
 #[test]
