@@ -319,7 +319,7 @@ fn joined_output(directory: &Path, destination: &Path) {
     use std::io::Write as _;
     let media = media_resources(directory);
     let init = media[0].parent().unwrap().join("init.mp4");
-    let mut file = drmr_core::native::create_media_new(destination).unwrap();
+    let mut file = drmr_core::native::create_private_new(destination).unwrap();
     file.write_all(&fs::read(init).unwrap()).unwrap();
     for segment in media {
         file.write_all(&fs::read(segment).unwrap()).unwrap();
