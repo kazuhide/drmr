@@ -195,6 +195,10 @@ impl Samples {
         )?);
         Ok(self)
     }
+    pub(super) fn with_manifest_audio_clock(mut self) -> Result<Self, ConversionError> {
+        self.audio_clock = Some(super::audio_clock::AudioClock::manifested()?);
+        Ok(self)
+    }
     pub fn with_presentation_offset(mut self, offset: Ratio) -> Self {
         self.presentation_offset = offset;
         self

@@ -72,8 +72,9 @@ fn canonical(
     }
 }
 
-pub(super) fn accumulator(
+pub(super) fn accumulator_with_clock(
     descriptor: &native_media::TrackDescriptor,
+    clock: Option<super::ManifestAacClock>,
 ) -> Result<(Samples, Option<ts::CanonicalConfig>), ConversionError> {
     let canonical = canonical(descriptor)?;
     let config = canonical.as_ref().map(|(config, _)| config.clone());
@@ -81,7 +82,14 @@ pub(super) fn accumulator(
         .with_presentation_offset(presentation_offset(descriptor)?);
     if descriptor.decoder_config_kind == *b"esds" {
         let aac = native_media::AacConfiguration::parse(&descriptor.decoder_config)?;
-        samples = samples.with_audio_clock(aac.frame_samples, aac.sample_rate)?;
+        samples = if let Some(clock) = clock {
+            clock.check_track(descriptor)?;
+            samples.with_manifest_audio_clock()?
+        } else {
+            samples.with_audio_clock(aac.frame_samples, aac.sample_rate)?
+        };
+    } else if clock.is_some() {
+        return Err(ConversionError("native-clock-profile-mismatch"));
     }
     Ok((samples, config))
 }
@@ -92,8 +100,9 @@ impl Backend {
         input: &Path,
         index: usize,
         keys: Option<super::super::keys::ProbeKeys<'_>>,
+        clock: Option<super::ManifestAacClock>,
     ) -> Result<String, ConversionError> {
-        let media = self.native_media(input, keys)?;
+        let media = self.native_media_with_clock(input, keys, clock)?;
         let track = media
             .tracks
             .get(index)
@@ -108,6 +117,7 @@ impl Backend {
     pub(in crate::conversion) fn native_audio_evidence(
         &self,
         view: ts::View<'_>,
+        clock: Option<super::ManifestAacClock>,
     ) -> Result<super::super::audio_presentation::AudioEvidence, ConversionError> {
         if view.transport {
             let native = view
@@ -125,7 +135,7 @@ impl Backend {
                 raw_coded_end: timing.end_pts,
             });
         }
-        let media = self.native_media(view.metadata, view.probe_keys())?;
+        let media = self.native_media_with_clock(view.metadata, view.probe_keys(), clock)?;
         let track = media
             .tracks
             .get(view.index)
@@ -152,6 +162,14 @@ impl Backend {
         &self,
         input: &Path,
         keys: Option<super::super::keys::ProbeKeys<'_>>,
+    ) -> Result<Media, ConversionError> {
+        self.native_media_with_clock(input, keys, None)
+    }
+    pub(in crate::conversion::native) fn native_media_with_clock(
+        &self,
+        input: &Path,
+        keys: Option<super::super::keys::ProbeKeys<'_>>,
+        clock: Option<super::ManifestAacClock>,
     ) -> Result<Media, ConversionError> {
         let _permit = self
             .runner
@@ -197,7 +215,7 @@ impl Backend {
             if let std::collections::btree_map::Entry::Vacant(entry) =
                 pending.entry(descriptor.index)
             {
-                let (samples, config) = accumulator(descriptor)?;
+                let (samples, config) = accumulator_with_clock(descriptor, clock)?;
                 entry.insert((descriptor.clone(), samples, config));
             }
             let (seen, samples, _) = pending
@@ -210,6 +228,9 @@ impl Backend {
         })?;
         if pending.len() != movie.tracks.len() {
             return Err(ConversionError("native-sample-evidence-incomplete"));
+        }
+        if let Some(clock) = clock {
+            clock.check_movie(&movie)?;
         }
         let mut tracks = Vec::with_capacity(pending.len());
         for (index, (descriptor, samples, config)) in pending {

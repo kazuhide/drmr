@@ -48,10 +48,11 @@ pub(super) fn admit(
             .iter()
             .map(|resource| resource.path.clone())
             .collect::<Vec<_>>();
-        let native =
-            converter
-                .backend
-                .native_segmented_media(&part.initialization, &paths, keys)?;
+        let native = converter.backend.native_manifest_segmented_media(
+            &part.initialization,
+            &paths,
+            keys,
+        )?;
         if native.media.tracks.len() != 1 {
             return Err(ConversionError("hls-multiplexed-media-not-supported"));
         }
@@ -122,7 +123,7 @@ pub(super) fn qualify(
         } else {
             Vec::new()
         },
-        eligible_formats: eligible_formats(converter, presentation, &media)?,
+        eligible_formats: eligible_formats(converter, presentation, &media, keys)?,
         verification,
     })
 }
@@ -131,6 +132,7 @@ fn eligible_formats(
     converter: &Converter,
     presentation: &Presentation,
     media: &[native::SegmentedMedia],
+    keys: &InputKeys,
 ) -> Result<Vec<OutputFormat>, ConversionError> {
     let mut formats = Vec::new();
     if let [part] = presentation.parts.as_slice()
@@ -140,7 +142,9 @@ fn eligible_formats(
         let _permit = permit(converter)?;
         // Qualification describes all tool routes. A playback claim and explicit
         // audio selection still require a presentation output, as in stitch mode.
-        if conversion::audio_presentation::read_claim(&part.initialization)?.is_none() {
+        if conversion::audio_presentation::read_claim(&part.initialization)?.is_none()
+            && standalone_clock_supported(converter, part, &media[0], keys)?
+        {
             formats.push(OutputFormat::Mp4);
         }
     }
@@ -163,6 +167,30 @@ fn eligible_formats(
         formats.push(OutputFormat::Hls);
     }
     Ok(formats)
+}
+
+fn standalone_clock_supported(
+    converter: &Converter,
+    part: &super::source::Part,
+    media: &native::SegmentedMedia,
+    keys: &InputKeys,
+) -> Result<bool, ConversionError> {
+    if native::ManifestAacClock::qualify_manifest(&media.media.movie)?.is_none() {
+        return Ok(true);
+    }
+    let paths = part
+        .resources
+        .iter()
+        .map(|resource| resource.path.clone())
+        .collect::<Vec<_>>();
+    match converter
+        .backend
+        .native_segmented_media(&part.initialization, &paths, keys)
+    {
+        Ok(_) => Ok(true),
+        Err(ConversionError("native-aac-clock-mismatch")) => Ok(false),
+        Err(error) => Err(error),
+    }
 }
 
 pub(super) fn inspection(

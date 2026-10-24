@@ -52,7 +52,7 @@ struct Phase {
 /// Source admission only. Exact frame clocks are hashed separately and must
 /// match conversion results; this interval is never an output-equality tolerance.
 #[derive(Clone)]
-pub(super) struct Audio {
+pub(in crate::conversion) struct Audio {
     sample_rate: u32,
     frames: u64,
     next: Option<(i64, i64)>,
@@ -60,7 +60,7 @@ pub(super) struct Audio {
     dts_phase: Option<Phase>,
 }
 impl Audio {
-    pub(super) fn new(sample_rate: u32) -> Result<Self, ConversionError> {
+    pub(in crate::conversion) fn new(sample_rate: u32) -> Result<Self, ConversionError> {
         if !matches!(sample_rate, 44_100 | 48_000) {
             return Err(BAD);
         }
@@ -73,7 +73,11 @@ impl Audio {
         })
     }
 
-    pub(super) fn begin(&mut self, pts: i64, dts: i64) -> Result<(), ConversionError> {
+    pub(in crate::conversion) fn begin(
+        &mut self,
+        pts: i64,
+        dts: i64,
+    ) -> Result<(), ConversionError> {
         if dts < 0 || pts < dts {
             return Err(BAD);
         }
@@ -121,7 +125,11 @@ impl Audio {
         Ok(())
     }
 
-    pub(super) fn frame(&mut self, pts: i64, dts: i64) -> Result<(i64, i64), ConversionError> {
+    pub(in crate::conversion) fn frame(
+        &mut self,
+        pts: i64,
+        dts: i64,
+    ) -> Result<(i64, i64), ConversionError> {
         self.frames = self.frames.checked_add(1).ok_or(BAD)?;
         let following = (next(pts, self.sample_rate)?, next(dts, self.sample_rate)?);
         self.next = Some(following);

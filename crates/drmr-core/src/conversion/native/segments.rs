@@ -1,5 +1,5 @@
 //! Original resource boundaries supplement complete, continuously qualified track evidence.
-use super::media::{Media, Track, accumulator};
+use super::media::{Media, Track, accumulator_with_clock};
 use crate::conversion::{
     ConversionError, InputKeys,
     backend::Backend,
@@ -97,15 +97,19 @@ fn collect_counted(
     keys: &InputKeys,
     backend: &Backend,
     counted: Counted,
+    clock: Option<super::ManifestAacClock>,
 ) -> Result<SegmentedMedia, ConversionError> {
     if resources.len() != counted.receipts.len() {
         return Err(INCOMPLETE);
     }
     let mut movie = input.movie().clone();
+    if let Some(clock) = clock {
+        clock.check_movie(&movie)?;
+    }
     let mut pending = Vec::with_capacity(movie.tracks.len());
     for descriptor in &mut movie.tracks {
         descriptor.sample_count = *counted.totals.get(descriptor.index).ok_or(BAD)?;
-        let (samples, config) = accumulator(descriptor)?;
+        let (samples, config) = accumulator_with_clock(descriptor, clock)?;
         pending.push((samples, config));
     }
     let mut offsets = vec![0_u64; movie.tracks.len()];
@@ -183,7 +187,21 @@ impl Backend {
         self.check_cancelled()?;
         let input = SegmentInput::new(initialization, &self.stop)?;
         let counted = count_resources(&input, resources, keys, self)?;
-        collect_counted(&input, resources, keys, self, counted)
+        collect_counted(&input, resources, keys, self, counted, None)
+    }
+
+    /// The caller has resolved a supported static HLS/DASH resource graph.
+    pub(in crate::conversion) fn native_manifest_segmented_media(
+        &self,
+        initialization: &Path,
+        resources: &[PathBuf],
+        keys: &InputKeys,
+    ) -> Result<SegmentedMedia, ConversionError> {
+        self.check_cancelled()?;
+        let input = SegmentInput::new(initialization, &self.stop)?;
+        let clock = super::ManifestAacClock::qualify_manifest(input.movie())?;
+        let counted = count_resources(&input, resources, keys, self)?;
+        collect_counted(&input, resources, keys, self, counted, clock)
     }
 }
 

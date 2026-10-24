@@ -51,6 +51,42 @@ struct Prepared {
     playlist_reference: Option<PathBuf>,
     dash_reference: bool,
     audio_presentation: Option<super::audio_presentation::AudioPresentation>,
+    clock: Option<super::native::ManifestAacClock>,
+}
+
+/// Binds the private clock context to the exact public local-track selection.
+struct TrackClock {
+    source: PathBuf,
+    index: usize,
+    kind: TrackKind,
+    clock: Option<super::native::ManifestAacClock>,
+}
+impl TrackClock {
+    fn from_prepared(prepared: &Prepared) -> Self {
+        Self {
+            source: prepared.media.clone(),
+            index: prepared.index,
+            kind: prepared.report.tracks[0].kind,
+            clock: prepared.clock,
+        }
+    }
+    fn bind(&self, track: &LocalTrack, prepared: &mut Prepared) -> Result<(), ConversionError> {
+        if self.source != track.source || self.index != track.index || self.kind != track.kind {
+            return Err(ConversionError("native-clock-profile-mismatch"));
+        }
+        prepared.clock = self.clock;
+        Ok(())
+    }
+}
+
+fn manifested_clock(
+    path: &Path,
+    backend: &super::backend::Backend,
+) -> Result<Option<super::native::ManifestAacClock>, ConversionError> {
+    super::native::ManifestAacClock::qualify_manifest(&super::native_media::inspect(
+        path,
+        &backend.stop,
+    )?)
 }
 fn presentation_processing(
     backend: &super::backend::Backend,
@@ -107,9 +143,10 @@ impl Converter {
                 None,
                 None,
                 None,
+                None,
             );
         }
-        self.convert_tracks_inner(request, None, None, None)
+        self.convert_tracks_inner(request, None, None, None, None)
     }
     fn convert_tracks_inner(
         &self,
@@ -117,6 +154,7 @@ impl Converter {
         transport_stage: Option<&super::files::Stage>,
         metadata: Option<&[metadata::Metadata]>,
         presentations: Option<&[Option<super::audio_presentation::AudioPresentation>]>,
+        clocks: Option<&[TrackClock]>,
     ) -> Result<ConversionReport, ConversionError> {
         self.validate_signaling_tracks(&request, metadata.is_some())?;
         if request.format == OutputFormat::HlsTs {
@@ -131,7 +169,7 @@ impl Converter {
             .then(|| destination(request.output))
             .transpose()?;
         let work = workspace()?;
-        let (mut sources, clears) = self.normalize_tracks(&request, work.path())?;
+        let (mut sources, clears) = self.normalize_tracks(&request, work.path(), clocks)?;
         if let Some(ranges) = presentations {
             if ranges.len() != sources.len() {
                 return Err(super::audio_presentation::MISMATCH);
@@ -158,6 +196,13 @@ impl Converter {
             stage.path()
         };
         self.package_joint(&clears, package_root, &request)?;
+        if request.format == OutputFormat::Hls
+            && sources.len() == 1
+            && sources[0].report.tracks[0].kind == TrackKind::Audio
+            && sources[0].metadata.audio.is_none()
+        {
+            ts_output::single_audio_variant(package_root)?;
+        }
         self.finish_packaged_presentation(package_root, stage.path(), &sources, &request)?;
         let (mut verification, output_tracks, input_tracks) =
             self.verify_joint(&sources, &request, stage.path(), work.path())?;
@@ -408,7 +453,11 @@ impl Converter {
         &self,
         request: &TrackConversionRequest<'_>,
         work: &Path,
+        clocks: Option<&[TrackClock]>,
     ) -> Result<(Vec<Prepared>, Vec<PathBuf>), ConversionError> {
+        if clocks.is_some_and(|clocks| clocks.len() != request.tracks.len()) {
+            return Err(ConversionError("native-clock-profile-mismatch"));
+        }
         // Inspect all private snapshots before selecting a content-aware worker count.
         let mut sources = Vec::new();
         for (ordinal, track) in request.tracks.iter().enumerate() {
@@ -425,7 +474,10 @@ impl Converter {
             {
                 super::signaling::clear_mp4(&source, &self.backend.stop)?;
             }
-            let prepared = prepare(&source, track.index, track.kind, request.input_keys)?;
+            let mut prepared = prepare(&source, track.index, track.kind, request.input_keys)?;
+            if let Some(clocks) = clocks {
+                clocks[ordinal].bind(track, &mut prepared)?;
+            }
             if super::finite::has_audio(&source)? && !audio::movie(&source)?.fragmented {
                 let report = inspection::inspect(&source)
                     .map_err(|_| ConversionError("invalid-input-media"))?;
@@ -496,10 +548,11 @@ impl Converter {
                 &source.source,
                 source.index,
                 key_for(source, request.input_keys),
-            );
+            )
+            .with_clock(source.clock);
             let normalization = self.backend.verify_views(
                 a.with_all_keys(request.input_keys),
-                StreamView::new(&clear, 0, None),
+                StreamView::new(&clear, 0, None).with_clock(source.clock),
             )?;
             if !normalization.passed {
                 return Err(ConversionError("source-normalization-verification-failed"));
@@ -595,12 +648,6 @@ impl Converter {
             )?;
         }
         super::finite::manifest::finish(root, clear, request.format, &self.backend.stop)?;
-        if request.format == OutputFormat::Hls
-            && request.tracks.len() == 1
-            && request.tracks[0].kind == TrackKind::Audio
-        {
-            ts_output::single_audio_variant(root)?;
-        }
         if let Some(signaling) = &signaling {
             signaling.finish(
                 root,
@@ -799,6 +846,7 @@ fn prepare_for(
         playlist_reference: None,
         dash_reference: false,
         audio_presentation: None,
+        clock: None,
     })
 }
 fn key_for<'a>(source: &Prepared, keys: &'a InputKeys) -> Option<&'a ContentKey> {
@@ -1050,6 +1098,11 @@ impl Converter {
         if actual_format == OutputFormat::HlsTs {
             eligible_formats.push(OutputFormat::HlsTs);
         }
+        if eligible_formats.contains(&OutputFormat::Mp4)
+            && !self.standalone_clocks_supported(&prepared, input.input_keys)?
+        {
+            eligible_formats.retain(|format| *format != OutputFormat::Mp4);
+        }
         let verification = self.validate_prepared_sources(&prepared, input.input_keys)?;
         if !verification.passed {
             return Err(ConversionError("source-media-verification-failed"));
@@ -1083,10 +1136,11 @@ impl Converter {
                             .ok_or(ConversionError("ts-original-evidence-required"))?,
                     );
                 }
-                return self.backend.native_validate_mp4(
+                return self.backend.native_validate_mp4_with_clock(
                     &track.media,
                     track.index,
                     Some(super::keys::ProbeKeys::All(input_keys)),
+                    track.clock,
                 );
             }
             // Source admission checks each known track directly. Matching decoded
@@ -1112,6 +1166,45 @@ impl Converter {
                 .map(VerificationReport::into_source_admission)
                 .collect::<Result<Vec<_>, _>>()?,
         ))
+    }
+
+    fn standalone_clocks_supported(
+        &self,
+        prepared: &[Prepared],
+        keys: &InputKeys,
+    ) -> Result<bool, ConversionError> {
+        for track in prepared.iter().filter(|track| track.clock.is_some()) {
+            match self.backend.native_validate_mp4(
+                &track.media,
+                track.index,
+                Some(super::keys::ProbeKeys::All(keys)),
+            ) {
+                Ok(_) => {}
+                Err(ConversionError("native-aac-clock-mismatch")) => return Ok(false),
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(true)
+    }
+
+    fn validate_complete_clock_output(
+        &self,
+        request: &ConversionRequest<'_>,
+        prepared: &[Prepared],
+    ) -> Result<(), ConversionError> {
+        if request.format != OutputFormat::Mp4 {
+            return Ok(());
+        }
+        if prepared
+            .iter()
+            .any(|source| source.audio_presentation.is_some())
+        {
+            return Err(ConversionError("audio-presentation-range-not-supported"));
+        }
+        if !self.standalone_clocks_supported(prepared, request.input_keys)? {
+            return Err(ConversionError("mp4-output-clock-profile-not-supported"));
+        }
+        Ok(())
     }
 }
 impl Converter {
@@ -1176,6 +1269,7 @@ impl Converter {
                 &track.media,
                 track.index,
                 Some(super::keys::ProbeKeys::All(keys)),
+                track.clock,
             );
         }
         self.backend.hash_stream_keys_options(
@@ -1403,10 +1497,12 @@ impl Converter {
                 },
             );
         }
-        let a_view =
-            StreamView::new(&a.source, a.index, key_for(a, source_keys)).with_metadata(&a.media);
-        let b_view =
-            StreamView::new(&b.source, b.index, key_for(b, result_keys)).with_metadata(&b.media);
+        let a_view = StreamView::new(&a.source, a.index, key_for(a, source_keys))
+            .with_metadata(&a.media)
+            .with_clock(a.clock);
+        let b_view = StreamView::new(&b.source, b.index, key_for(b, result_keys))
+            .with_metadata(&b.media)
+            .with_clock(b.clock);
         self.backend.verify_views(
             a_view.with_all_keys(source_keys),
             b_view.with_all_keys(result_keys),
@@ -1582,6 +1678,11 @@ fn prepare_transport(
                 .push(SourceCompatibilityNote::TsEmptyPayloadPadding);
         }
         track.audio_presentation = audio_presentation.filter(|_| kind == TrackKind::Audio);
+        track.clock = native
+            .as_deref()
+            .map(super::native::ManifestAacClock::from_transport)
+            .transpose()?
+            .flatten();
         track.transport_native = native;
         track.transport_sample = localized.sample_transport;
         prepared.push(track);
@@ -1602,7 +1703,7 @@ fn bind_audio_presentation(
     // The canonical two-edit declaration selects part of the final AAC frame.
     // Inspect all coded frames in an owned raw copy before binding that selection.
     super::audio_presentation::strip_claim(&view, claim, &backend.stop)?;
-    let evidence = backend.audio_evidence(
+    let evidence = backend.audio_evidence_with_clock(
         super::ts::View {
             input: &view,
             metadata: &view,
@@ -1614,6 +1715,7 @@ fn bind_audio_presentation(
             unedited: true,
         }
         .with_all_keys(keys),
+        track.clock,
     )?;
     let range = claim.bind(evidence)?;
     if super::audio_presentation::read(&track.media, evidence)? != Some(range) {
@@ -1686,6 +1788,7 @@ fn prepare_presentation_mode(
                         input.input_keys,
                         purpose,
                     )?;
+                    prepared.clock = manifested_clock(&prepared.media, backend)?;
                     bind_audio_presentation(&mut prepared, backend, input.input_keys, stage)?;
                     prepared.metadata = metadata;
                     if prepared.metadata.audio.is_some() && track.kind != TrackKind::Audio {
@@ -1755,6 +1858,7 @@ fn prepare_hls_presentation(
             input.input_keys,
             purpose,
         )?;
+        track.clock = manifested_clock(&track.media, backend)?;
         bind_audio_presentation(&mut track, backend, input.input_keys, &directory)?;
         track.metadata = media.metadata.clone();
         if localized.empty_cue_pair {
@@ -2206,8 +2310,10 @@ impl Converter {
                 } else {
                     self.backend.verify_views(
                         StreamView::new(&source.source, source.index, key_for(source, input_keys))
-                            .with_metadata(&source.media),
-                        StreamView::new(&source.media, source.index, key_for(source, input_keys)),
+                            .with_metadata(&source.media)
+                            .with_clock(source.clock),
+                        StreamView::new(&source.media, source.index, key_for(source, input_keys))
+                            .with_clock(source.clock),
                     )?
                 };
                 if !verified.passed {
@@ -2316,12 +2422,9 @@ impl Converter {
             return self.convert_transport_output(&request, prepared, input_report, &work);
         }
         validate_prepared_output(&request, &prepared, transport)?;
-        if request.format == OutputFormat::Mp4
-            && prepared.iter().any(|p| p.audio_presentation.is_some())
-        {
-            return Err(ConversionError("audio-presentation-range-not-supported"));
-        }
+        self.validate_complete_clock_output(&request, &prepared)?;
         let presentations: Vec<_> = prepared.iter().map(|p| p.audio_presentation).collect();
+        let clocks: Vec<_> = prepared.iter().map(TrackClock::from_prepared).collect();
         let descriptions: Vec<_> = prepared.iter().map(|p| p.metadata.clone()).collect();
         let mut tracks = Vec::new();
         self.verify_source_tracks(&prepared, &mut tracks, request.input_keys)?;
@@ -2345,6 +2448,7 @@ impl Converter {
             stage.as_ref(),
             Some(&descriptions),
             Some(&presentations),
+            Some(&clocks),
         )?;
         if let (Some(candidate), Some(destination)) = (&candidate, &destination) {
             report.verification =

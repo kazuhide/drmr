@@ -292,8 +292,8 @@ impl Backend {
         source: super::super::verify::StreamView<'_>,
         result: super::super::verify::StreamView<'_>,
     ) -> Result<VerificationReport, ConversionError> {
-        let first = self.native_media(source.metadata, source.key)?;
-        let second = self.native_media(result.metadata, result.key)?;
+        let first = self.native_media_with_clock(source.metadata, source.key, source.clock)?;
+        let second = self.native_media_with_clock(result.metadata, result.key, result.clock)?;
         let a = first
             .tracks
             .get(source.index)
@@ -328,7 +328,19 @@ impl Backend {
         index: usize,
         keys: Option<super::super::keys::ProbeKeys<'_>>,
     ) -> Result<VerificationReport, ConversionError> {
-        let media = self.native_media(input, keys)?;
+        self.native_validate_mp4_with_clock(input, index, keys, None)
+    }
+    pub(in crate::conversion) fn native_validate_mp4_with_clock(
+        &self,
+        input: &Path,
+        index: usize,
+        keys: Option<super::super::keys::ProbeKeys<'_>>,
+        clock: Option<super::ManifestAacClock>,
+    ) -> Result<VerificationReport, ConversionError> {
+        let media = match clock {
+            Some(clock) => self.native_media_with_clock(input, keys, Some(clock))?,
+            None => self.native_media(input, keys)?,
+        };
         let track = media
             .tracks
             .get(index)
@@ -352,6 +364,15 @@ impl Backend {
         source: ts::View<'_>,
         result: ts::View<'_>,
     ) -> Result<VerificationReport, ConversionError> {
+        self.native_verify_transport_with_clock(source, result, None, None)
+    }
+    pub(in crate::conversion) fn native_verify_transport_with_clock(
+        &self,
+        source: ts::View<'_>,
+        result: ts::View<'_>,
+        source_clock: Option<super::ManifestAacClock>,
+        result_clock: Option<super::ManifestAacClock>,
+    ) -> Result<VerificationReport, ConversionError> {
         match (source.transport, result.transport) {
             (false, false) => self.native_verify_views(
                 super::super::verify::StreamView {
@@ -359,12 +380,14 @@ impl Backend {
                     metadata: source.metadata,
                     index: source.index,
                     key: source.probe_keys(),
+                    clock: source_clock,
                 },
                 super::super::verify::StreamView {
                     input: result.input,
                     metadata: result.metadata,
                     index: result.index,
                     key: result.probe_keys(),
+                    clock: result_clock,
                 },
             ),
             (true, true) => {
@@ -401,7 +424,11 @@ impl Backend {
         let original_metadata = original.metadata()?;
         let evidence = original.evidence()?;
         let timing = original.timing()?;
-        let media = self.native_media(result.metadata, result.probe_keys())?;
+        let media = self.native_media_with_clock(
+            result.metadata,
+            result.probe_keys(),
+            super::ManifestAacClock::from_transport(original)?,
+        )?;
         let track = media
             .tracks
             .get(result.index)

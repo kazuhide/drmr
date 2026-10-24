@@ -27,6 +27,7 @@ pub(super) use projection::Projector;
 pub(in crate::conversion) use segment_encrypt::SegmentEncryptor;
 use std::{collections::BTreeMap, path::Path, sync::Arc};
 
+pub(in crate::conversion) use clock::Audio as TransportAudioClock;
 pub(super) fn requires_native_audio_mp4(native: Option<&NativeEvidence>) -> bool {
     native.is_some_and(|anchor| {
         matches!(
@@ -314,8 +315,15 @@ impl Backend {
         &self,
         view: View<'_>,
     ) -> Result<super::audio_presentation::AudioEvidence, ConversionError> {
+        self.audio_evidence_with_clock(view, None)
+    }
+    pub(super) fn audio_evidence_with_clock(
+        &self,
+        view: View<'_>,
+        clock: Option<super::native::ManifestAacClock>,
+    ) -> Result<super::audio_presentation::AudioEvidence, ConversionError> {
         if self.validation_depth == super::ValidationDepth::Native {
-            return self.native_audio_evidence(view);
+            return self.native_audio_evidence(view, clock);
         }
         let profile = self.profile_stream_keys_options(
             view.input,
@@ -704,10 +712,35 @@ impl Backend {
         source: View<'_>,
         result: View<'_>,
     ) -> Result<VerificationReport, ConversionError> {
+        self.verify_transport_with_clock(source, result, None, None)
+    }
+    pub(super) fn verify_transport_with_clock(
+        &self,
+        source: View<'_>,
+        result: View<'_>,
+        source_clock: Option<super::native::ManifestAacClock>,
+        result_clock: Option<super::native::ManifestAacClock>,
+    ) -> Result<VerificationReport, ConversionError> {
         let _scope = self.scope(super::measurement::Phase::Verification);
         if self.validation_depth == super::ValidationDepth::Native {
-            return self.native_verify_transport(source, result);
+            if source_clock.is_none() && result_clock.is_none() {
+                return self.native_verify_transport(source, result);
+            }
+            return self.native_verify_transport_with_clock(
+                source,
+                result,
+                source_clock,
+                result_clock,
+            );
         }
+        self.verify_transport_decoded(source, result)
+    }
+
+    fn verify_transport_decoded(
+        &self,
+        source: View<'_>,
+        result: View<'_>,
+    ) -> Result<VerificationReport, ConversionError> {
         let mut a = self.profile_stream_keys_options(
             source.input,
             source.index,

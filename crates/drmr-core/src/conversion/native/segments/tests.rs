@@ -466,7 +466,8 @@ fn raw_resource_changes_between_count_and_sample_passes_do_not_publish_evidence(
             &source.resources,
             &keys,
             backend,
-            counted
+            counted,
+            None,
         )),
         ConversionError("native-source-changed")
     );
@@ -498,7 +499,8 @@ fn changed_initialization_identity_is_refused_even_when_the_bytes_are_equal() {
             &source.resources,
             &keys,
             backend,
-            counted
+            counted,
+            None,
         )),
         ConversionError("native-source-changed")
     );

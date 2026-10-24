@@ -490,7 +490,11 @@ pub(in crate::conversion) fn pair(a: &Metadata, b: &Metadata) -> Result<(), Conv
                 && source.autoselect.unwrap_or(false) != target.autoselect.unwrap_or(false))
             || (a.origin == Origin::Hls
                 && b.origin == Origin::Hls
-                && (source.group != target.group || source.channels != target.channels))
+                && (source.group != target.group
+                    || source
+                        .channels
+                        .as_ref()
+                        .is_some_and(|count| target.channels.as_ref() != Some(count))))
         {
             return Err(BAD);
         }
@@ -538,6 +542,7 @@ pub(super) fn materialize(
     backend: &super::super::backend::Backend,
     keys: &super::InputKeys,
 ) -> Result<(), ConversionError> {
+    materialize_dash_channels(tracks, backend, keys)?;
     if !tracks
         .iter()
         .any(|t| t.report.tracks[0].kind == super::TrackKind::Video)
@@ -552,15 +557,7 @@ pub(super) fn materialize(
     for (index, track) in tracks.iter_mut().enumerate() {
         if track.report.tracks[0].kind == super::TrackKind::Audio && track.metadata.audio.is_none()
         {
-            let profile = backend.profile_stream_keys(
-                &track.media,
-                track.index,
-                if track.source_dictionary {
-                    Some(super::super::keys::ProbeKeys::All(keys))
-                } else {
-                    super::key_for(track, keys).map(super::super::keys::ProbeKeys::One)
-                },
-            )?;
+            let profile = materialization_profile(track, backend, keys)?;
             track.metadata.audio = Some(Rendition {
                 group: "default-audio-group".into(),
                 name: Some(format!("stream_{index}")),
@@ -574,9 +571,73 @@ pub(super) fn materialize(
     Ok(())
 }
 
+fn materialization_profile(
+    track: &Prepared,
+    backend: &super::super::backend::Backend,
+    keys: &super::InputKeys,
+) -> Result<serde_json::Value, ConversionError> {
+    backend.profile_stream_keys(
+        &track.media,
+        track.index,
+        if track.source_dictionary {
+            Some(super::super::keys::ProbeKeys::All(keys))
+        } else {
+            super::key_for(track, keys).map(super::super::keys::ProbeKeys::One)
+        },
+    )
+}
+
+/// Recover a generated mono/stereo declaration from the actual codec after a DASH roundtrip.
+fn materialize_dash_channels(
+    tracks: &mut [Prepared],
+    backend: &super::super::backend::Backend,
+    keys: &super::InputKeys,
+) -> Result<(), ConversionError> {
+    for track in tracks {
+        if track.metadata.origin == Origin::Dash
+            && track
+                .metadata
+                .audio
+                .as_ref()
+                .is_some_and(|audio| audio.channels.is_none())
+        {
+            let profile = materialization_profile(track, backend, keys)?;
+            if let Some(count @ 1..=2) = profile["channels"].as_u64() {
+                track.metadata.audio.as_mut().ok_or(BAD)?.channels = Some(count.to_string());
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unspecified_hls_channels_can_gain_a_validated_count_without_losing_explicit_assertions() {
+        let declared = "TYPE=AUDIO,GROUP-ID=\"audio\",NAME=\"Main\",DEFAULT=YES,AUTOSELECT=YES";
+        let metadata = |suffix: &str| Metadata {
+            origin: Origin::Hls,
+            audio: Some(
+                Rendition::hls(&hls::attributes(&format!("{declared}{suffix}")).unwrap()).unwrap(),
+            ),
+            ..Metadata::default()
+        };
+        let unspecified = metadata("");
+        let stereo = metadata(",CHANNELS=\"2\"");
+        pair(&unspecified, &stereo).unwrap();
+        validate_profile_value(&stereo, &serde_json::json!({"channels":2})).unwrap();
+        assert_eq!(pair(&stereo, &unspecified).unwrap_err(), BAD);
+        assert_eq!(
+            pair(&stereo, &metadata(",CHANNELS=\"1\"")).unwrap_err(),
+            BAD
+        );
+        assert_eq!(
+            validate_profile_value(&stereo, &serde_json::json!({"channels":1})).unwrap_err(),
+            BAD
+        );
+    }
 
     #[test]
     fn generated_hls_omits_undefined_language_and_preserves_named_languages() {
