@@ -398,6 +398,7 @@ impl Converter {
             frozen_source: self.frozen_source.clone(),
             planned_destination: self.planned_destination.clone(),
             output_signaling: self.output_signaling.clone(),
+            processing_mode: self.processing_mode,
         };
         converter.convert(ConversionRequest {
             input: source.entrypoint(),
@@ -450,6 +451,7 @@ impl Converter {
             frozen_source: self.frozen_source.clone(),
             planned_destination: self.planned_destination.clone(),
             output_signaling: self.output_signaling.clone(),
+            processing_mode: self.processing_mode,
         };
         let plan = converter.create_bundle_plan(super::plan::bundle::BundlePlanRequest {
             input: super::VerificationSource {

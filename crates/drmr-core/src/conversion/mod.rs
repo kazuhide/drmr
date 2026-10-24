@@ -21,6 +21,8 @@ mod finite;
 pub mod key_file;
 mod observation;
 mod packets;
+pub mod processing;
+pub use processing::ProcessingMode;
 pub mod plan;
 pub use aes128::{
     Aes128Key, HlsInputKeys, HlsOutputKey, SegmentIv, decrypt_segment, encrypt_segment,
@@ -105,6 +107,7 @@ impl std::fmt::Debug for LocalTrack {
 /// Explicit backend configuration; no executable is selected from source metadata.
 pub struct Converter {
     backend: Backend,
+    processing_mode: ProcessingMode,
     maximum_workers: Option<usize>,
     downloaded: Option<Arc<download::Seal>>,
     frozen_source: Vec<Arc<frozen::OriginalGuard>>,
@@ -118,6 +121,7 @@ impl Converter {
         ffmpeg: impl Into<String>,
     ) -> Self {
         Self {
+            processing_mode: ProcessingMode::Auto,
             maximum_workers: None,
             downloaded: None,
             frozen_source: Vec::new(),
@@ -135,6 +139,12 @@ impl Converter {
                 activity: None,
             },
         }
+    }
+    /// Select how source media is processed; saved plans retain their resolved choice.
+    #[must_use]
+    pub fn with_processing(mut self, processing: ProcessingMode) -> Self {
+        self.processing_mode = processing;
+        self
     }
     /// Add complete decoding to the required native media checks.
     #[must_use]
@@ -167,6 +177,7 @@ impl Converter {
         backend.measurement = Some(Arc::clone(&measurement));
         let command = Self {
             backend,
+            processing_mode: self.processing_mode,
             maximum_workers: self.maximum_workers,
             downloaded: self.downloaded.clone(),
             frozen_source: self.frozen_source.clone(),
