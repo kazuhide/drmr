@@ -1,4 +1,4 @@
-//! Bounded Apple HLS sample decryption without changing elementary-stream framing.
+//! Bounded Apple HLS sample encryption and decryption.
 //!
 //! The cipher boundaries follow Apple's MPEG-2 Stream Encryption Format, sections 2.2
 //! and 2.3.1.1. Transport headers, timestamps, key selection, and descriptors belong
@@ -7,7 +7,7 @@
 //! Each call processes at most eight MiB; callers check cancellation
 //! and hold their resource permit before and after this bounded operation.
 use super::super::{Aes128Key, ConversionError, SegmentIv};
-use aes::cipher::{Block, BlockDecryptMut as _, KeyIvInit as _};
+use aes::cipher::{Block, BlockDecryptMut as _, BlockEncryptMut as _, KeyIvInit as _};
 use zeroize::Zeroizing;
 
 const MAX_BYTES: usize = 8 * 1024 * 1024;
@@ -90,6 +90,132 @@ fn decrypt_blocks(
         at += skip.min(bytes.len() - at);
     }
     Ok(())
+}
+fn encrypt_blocks(
+    bytes: &mut [u8],
+    key: &Aes128Key,
+    iv: &SegmentIv,
+    skip: usize,
+) -> Result<(), ConversionError> {
+    let mut cipher = cbc::Encryptor::<aes::Aes128>::new_from_slices(key.0.as_ref(), iv.0.as_ref())
+        .map_err(|_| INVALID)?;
+    let mut at = 0;
+    while bytes.len() - at >= 16 {
+        if skip != 0 && bytes.len() - at == 16 {
+            break;
+        }
+        cipher.encrypt_block_mut(Block::<aes::Aes128>::from_mut_slice(
+            &mut bytes[at..at + 16],
+        ));
+        at += 16;
+        at += skip.min(bytes.len() - at);
+    }
+    Ok(())
+}
+
+/// Protect already escaped Annex-B NAL units, adding the required outer escapes.
+pub(super) fn encrypt_h264_annex_b(
+    bytes: &[u8],
+    key: &Aes128Key,
+    iv: &SegmentIv,
+) -> Result<Zeroizing<Vec<u8>>, ConversionError> {
+    if bytes.len() > MAX_BYTES {
+        return Err(LIMIT);
+    }
+    if bytes.is_empty() {
+        return Err(INVALID);
+    }
+    // A second escape layer can grow by at most one byte per two input bytes.
+    // Reserve its complete bounded capacity before retaining any plaintext.
+    let capacity = bytes
+        .len()
+        .saturating_add(bytes.len() / 2 + 1)
+        .min(MAX_BYTES);
+    let mut out = Zeroizing::new(Vec::new());
+    out.try_reserve_exact(capacity).map_err(|_| LIMIT)?;
+    let mut at = 0;
+    while at < bytes.len() {
+        let width = start_code(bytes, at).ok_or(INVALID)?;
+        let begin = at.checked_add(width).ok_or(INVALID)?;
+        let next = next_start(bytes, begin);
+        let mut end = next;
+        while end > begin && bytes[end - 1] == 0 {
+            end -= 1;
+        }
+        let nal = bytes
+            .get(begin..end)
+            .filter(|n| !n.is_empty())
+            .ok_or(INVALID)?;
+        let kind = nal[0] & 31;
+        if nal[0] & 0x80 != 0 || !(1..=23).contains(&kind) {
+            return Err(INVALID);
+        }
+        extend_bounded(&mut out, &bytes[at..begin])?;
+        let mut protected = output(nal)?;
+        append_nal(nal, false, &mut protected)?;
+        if matches!(kind, 1 | 5) && nal.len() > 48 {
+            encrypt_blocks(&mut protected[32..], key, iv, 144)?;
+            let mut zeros = 0;
+            for &byte in protected.iter() {
+                if zeros == 2 && byte <= 3 {
+                    extend_bounded(&mut out, &[3])?;
+                    zeros = 0;
+                }
+                extend_bounded(&mut out, &[byte])?;
+                zeros = if byte == 0 { zeros + 1 } else { 0 };
+            }
+        } else {
+            extend_bounded(&mut out, &protected)?;
+        }
+        extend_bounded(&mut out, &bytes[end..next])?;
+        at = next;
+    }
+    Ok(out)
+}
+
+fn extend_bounded(out: &mut Vec<u8>, bytes: &[u8]) -> Result<(), ConversionError> {
+    let needed = out.len().checked_add(bytes.len()).ok_or(LIMIT)?;
+    if needed > out.capacity() || needed > MAX_BYTES {
+        return Err(LIMIT);
+    }
+    out.extend_from_slice(bytes);
+    Ok(())
+}
+
+/// Protect complete AAC-LC ADTS frames, resetting CBC at every frame boundary.
+pub(super) fn encrypt_aac_adts(
+    bytes: &[u8],
+    key: &Aes128Key,
+    iv: &SegmentIv,
+) -> Result<Zeroizing<Vec<u8>>, ConversionError> {
+    let mut out = output(bytes)?;
+    out.extend_from_slice(bytes);
+    let mut at = 0;
+    let mut configuration = None;
+    while at < out.len() {
+        let h = out
+            .get(at..at.checked_add(7).ok_or(INVALID)?)
+            .ok_or(INVALID)?;
+        let current = super::canonical::Config::audio_adts(h).map_err(|_| INVALID)?;
+        if configuration.as_ref().is_some_and(|old| old != &current) {
+            return Err(INVALID);
+        }
+        configuration = Some(current);
+        let length =
+            (usize::from(h[3] & 3) << 11) | (usize::from(h[4]) << 3) | usize::from(h[5] >> 5);
+        if length <= 7 {
+            return Err(INVALID);
+        }
+        let end = at
+            .checked_add(length)
+            .filter(|n| *n <= out.len())
+            .ok_or(INVALID)?;
+        if length > 23 {
+            encrypt_blocks(&mut out[at + 23..end], key, iv, 0)?;
+        }
+        at = end;
+    }
+    Ok(out)
 }
 /// Decrypt complete Annex-B bytes, preserving start codes, non-VCL units, and inner escapes.
 pub(super) fn decrypt_h264_annex_b(
@@ -197,6 +323,67 @@ mod tests {
             Aes128Key::from_hex(KEY).unwrap(),
             SegmentIv::from_hex(IV).unwrap(),
         )
+    }
+    #[test]
+    fn encryption_matches_independent_nist_aac_vectors_at_both_rates() {
+        let (key, iv) = parameters();
+        let mut plain = vec![0x55; 16];
+        plain.extend(hex::decode(PLAIN).unwrap());
+        plain.extend([0x66; 9]);
+        let mut cipher = vec![0x55; 16];
+        cipher.extend(hex::decode(CIPHER).unwrap());
+        cipher.extend([0x66; 9]);
+        for rate_index in [3, 4] {
+            let mut original = adts(&plain);
+            let mut expected = adts(&cipher);
+            original[2] = (original[2] & !0x3c) | (rate_index << 2);
+            expected[2] = (expected[2] & !0x3c) | (rate_index << 2);
+            let original = [original.clone(), original].concat();
+            let expected = [expected.clone(), expected].concat();
+            assert_eq!(
+                encrypt_aac_adts(&original, &key, &iv).unwrap().as_slice(),
+                expected
+            );
+        }
+    }
+    #[test]
+    fn encryption_matches_independent_nist_avc_vectors_across_skips() {
+        let (key, iv) = parameters();
+        let plain = hex::decode(PLAIN).unwrap();
+        let cipher = hex::decode(CIPHER).unwrap();
+        let mut original = vec![0x55; 32 + 3 * 160 + 17];
+        original[0] = 0x65;
+        let mut expected = original.clone();
+        for (index, block) in cipher.as_chunks::<16>().0.iter().enumerate() {
+            let at = 32 + index * 160;
+            original[at..at + 16].copy_from_slice(&plain[index * 16..index * 16 + 16]);
+            expected[at..at + 16].copy_from_slice(block);
+        }
+        let original = [[0, 0, 1].as_slice(), &original].concat();
+        let expected = [[0, 0, 1].as_slice(), &expected].concat();
+        assert_eq!(
+            encrypt_h264_annex_b(&original, &key, &iv)
+                .unwrap()
+                .as_slice(),
+            expected
+        );
+    }
+    #[test]
+    fn encryption_inserts_outer_escapes_without_losing_original_bytes() {
+        let (key, iv) = parameters();
+        let mut block = [0; 16];
+        decrypt_blocks(&mut block, &key, &iv, 0).unwrap();
+        let mut original = vec![0, 0, 1, 0x65];
+        original.extend([0x55; 31]);
+        original.extend(block);
+        original.push(0x55);
+        let cipher = encrypt_h264_annex_b(&original, &key, &iv).unwrap();
+        assert!(cipher.len() > original.len());
+        assert!(cipher.windows(3).any(|x| x == [0, 0, 3]));
+        assert_eq!(
+            decrypt_h264_annex_b(&cipher, &key, &iv).unwrap().as_slice(),
+            original
+        );
     }
     fn adts(payload: &[u8]) -> Vec<u8> {
         let length = payload.len() + 7;
@@ -321,6 +508,7 @@ mod tests {
     #[test]
     fn malformed_or_oversized_elementary_streams_refuse_without_partial_plaintext() {
         let (key, iv) = parameters();
+        assert_eq!(encrypt_h264_annex_b(&[], &key, &iv).unwrap_err(), INVALID);
         for data in [
             vec![],
             vec![0x65],
@@ -330,6 +518,7 @@ mod tests {
             [vec![0, 0, 1, 0x65], vec![0x55; 50], vec![0, 0, 3]].concat(),
         ] {
             assert!(decrypt_h264_annex_b(&data, &key, &iv).is_err());
+            assert!(encrypt_h264_annex_b(&data, &key, &iv).is_err());
         }
         for data in [vec![], vec![0xff; 6], adts(&[]), {
             let mut frame = adts(&[0x55; 32]);
@@ -337,6 +526,7 @@ mod tests {
             frame
         }] {
             assert!(decrypt_aac_adts(&data, &key, &iv).is_err());
+            assert!(encrypt_aac_adts(&data, &key, &iv).is_err());
         }
         for (at, mask, replacement) in [
             (1, 255, 0xf0),
@@ -347,6 +537,7 @@ mod tests {
             let mut frame = adts(&[0x55; 32]);
             frame[at] = (frame[at] & !mask) | replacement;
             assert_eq!(decrypt_aac_adts(&frame, &key, &iv).unwrap_err(), INVALID);
+            assert_eq!(encrypt_aac_adts(&frame, &key, &iv).unwrap_err(), INVALID);
         }
         let first = adts(&[0x55; 32]);
         let mut other_rate = first.clone();
@@ -367,7 +558,15 @@ mod tests {
             "ts-sample-size-limit"
         );
         assert_eq!(
+            encrypt_h264_annex_b(&data, &key, &iv).unwrap_err().0,
+            "ts-sample-size-limit"
+        );
+        assert_eq!(
             decrypt_aac_adts(&data, &key, &iv).unwrap_err().0,
+            "ts-sample-size-limit"
+        );
+        assert_eq!(
+            encrypt_aac_adts(&data, &key, &iv).unwrap_err().0,
             "ts-sample-size-limit"
         );
     }
@@ -585,6 +784,13 @@ mod tests {
             );
             let actual = decrypt_h264_annex_b(&encrypted[b..], &key, &iv).unwrap();
             assert_eq!(
+                encrypt_h264_annex_b(&plain[a..], &key, &iv)
+                    .unwrap()
+                    .as_slice(),
+                &encrypted[b..],
+                "independent Shaka encryption at {index}"
+            );
+            assert_eq!(
                 actual.as_slice(),
                 &plain[a..],
                 "complete original ES at {index}"
@@ -730,6 +936,11 @@ mod tests {
             );
             changed += usize::from(plain[a..] != encrypted[b..]);
             let actual = decrypt_aac_adts(&encrypted[b..], &key, &iv).unwrap();
+            assert_eq!(
+                encrypt_aac_adts(&plain[a..], &key, &iv).unwrap().as_slice(),
+                &encrypted[b..],
+                "independent Shaka AAC encryption at {index}"
+            );
             assert_eq!(
                 actual.as_slice(),
                 &plain[a..],

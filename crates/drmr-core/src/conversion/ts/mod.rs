@@ -10,6 +10,7 @@ mod native;
 mod preparation;
 mod projection;
 mod sample_aes;
+mod segment_encrypt;
 mod source_admission;
 use super::{
     CheckOutcome, ContentKey, ConversionError, VerificationChecks, VerificationReport,
@@ -23,6 +24,7 @@ pub(in crate::conversion) use clock::next as next_audio_clock;
 pub(super) use compatibility::demux_view;
 pub(super) use native::NativeScanner;
 pub(super) use projection::Projector;
+pub(in crate::conversion) use segment_encrypt::SegmentEncryptor;
 use std::{collections::BTreeMap, path::Path, sync::Arc};
 
 pub(super) fn requires_native_audio_mp4(native: Option<&NativeEvidence>) -> bool {
