@@ -36,6 +36,15 @@ fn finish_child(h: &support::Harness, index: usize, job: &Value, payload: &Value
 }
 
 fn analyze_source(h: &support::Harness) -> Value {
+    let payload = source_analysis_payload(h);
+    h.cli.hold();
+    let job = support::start_analysis(h, 'a');
+    let ended = finish_child(h, 0, &job, &payload);
+    assert_eq!(ended["state"], "succeeded", "{ended}");
+    ended
+}
+
+fn source_analysis_payload(h: &support::Harness) -> Value {
     // The supervised child is synthetic: this exercises plan admission, not media qualification.
     let source = h.input.join("source.m3u8");
     std::fs::write(
@@ -50,14 +59,19 @@ fn analyze_source(h: &support::Harness) -> Value {
     payload["input"]["format"] = json!("hls");
     payload["actual_format"] = json!("hls-ts");
     payload["eligible_formats"] = json!(["hls-ts"]);
-    h.cli.hold();
-    let job = support::start_analysis(h, 'a');
-    let ended = finish_child(h, 0, &job, &payload);
-    assert_eq!(ended["state"], "succeeded", "{ended}");
-    ended
+    payload
 }
 
 fn start_plan(h: &support::Harness, analyzed: &Value, outputs: &Value) -> Value {
+    start_plan_decode(h, analyzed, outputs, false)
+}
+
+fn start_plan_decode(
+    h: &support::Harness,
+    analyzed: &Value,
+    outputs: &Value,
+    decode: bool,
+) -> Value {
     let capabilities = h.client.get("/api/common/capabilities").json();
     let root = capabilities["roots"]
         .as_array()
@@ -79,7 +93,7 @@ fn start_plan(h: &support::Harness, analyzed: &Value, outputs: &Value) -> Value 
         "session_id":analyzed["session_id"],"request_id":"b".repeat(32),
         "operation":{"kind":"plan","analysis_ref":analyzed["analysis_ref"],
             "output_parent_ref":parent["output_parent_ref"],"destination_name":"results",
-            "outputs":outputs},"runtime":{"keys_ref":null,"max_workers":1}}),
+            "outputs":outputs},"runtime":{"keys_ref":null,"max_workers":1,"decode":decode}}),
     );
     assert_eq!(reply.status, 202, "{}", reply.text());
     reply.json()

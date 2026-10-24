@@ -4,6 +4,11 @@ use drmr_core::{
     inspection::{ActualProcessing, InputPreparation, ProcessingRouteId, RequiredTool},
 };
 
+#[path = "plan_report_intent.rs"]
+mod plan_intent;
+#[path = "plan_report_depth.rs"]
+mod report_depth;
+
 fn choice(requested: ProcessingMode) -> ProcessingSelection {
     let segments = requested == ProcessingMode::Segments;
     ProcessingSelection {
@@ -55,6 +60,33 @@ fn assert_result(h: &support::Harness, ended: &Value, expected: &Value, accepted
 }
 
 fn check_new_plan_report(mutate: impl FnOnce(&mut Value), mixed: bool, accepted: bool) {
+    check_new_plan_schema(6, mutate, mixed, accepted);
+}
+
+fn check_new_plan_schema(
+    schema: u32,
+    mutate: impl FnOnce(&mut Value),
+    mixed: bool,
+    accepted: bool,
+) {
+    check_new_plan_minimum(
+        schema,
+        ValidationDepth::Native,
+        false,
+        mutate,
+        mixed,
+        accepted,
+    );
+}
+
+fn check_new_plan_minimum(
+    schema: u32,
+    minimum: ValidationDepth,
+    decode: bool,
+    mutate: impl FnOnce(&mut Value),
+    mixed: bool,
+    accepted: bool,
+) {
     let h = support::Harness::new();
     let analyzed = analyze_source(&h);
     let mut outputs = json!([
@@ -68,10 +100,31 @@ fn check_new_plan_report(mutate: impl FnOnce(&mut Value), mixed: bool, accepted:
     if mixed {
         outputs[1]["processing"] = json!(second);
     }
-    let started = start_plan(&h, &analyzed, &outputs);
-    let plan = returned_plan(&h, outputs, [ProcessingMode::Auto, second]);
+    let started = start_plan_decode(&h, &analyzed, &outputs, decode);
+    let mut plan = returned_plan(&h, outputs, [ProcessingMode::Auto, second]);
     let request = child_request(&h.cli, 1);
+    assert_eq!(request["runtime"]["decode"], decode);
     let path = Path::new(request["operation"]["save_file"].as_str().unwrap());
+    if schema != 6 || minimum != ValidationDepth::Native {
+        plan.schema_version = schema;
+        plan.required_depth = (schema > 2).then_some(minimum);
+        if schema != 6 {
+            plan.processing = None;
+        }
+        let identity = BundleIdentity {
+            kind: &plan.kind,
+            schema_version: schema,
+            source: &plan.source,
+            source_format: plan.source_format,
+            output_root: &plan.output_root,
+            outputs: &plan.outputs,
+            required_depth: plan.required_depth,
+            processing: plan.processing.as_deref(),
+        };
+        plan.plan_id = hex::encode(Sha256::digest(serde_json::to_vec(&identity).unwrap()));
+        support::write_private(path, serde_json::to_vec(&plan).unwrap()).unwrap();
+        drmr_core::conversion::plan::read_saved(path).unwrap();
+    }
     let before = std::fs::read(path).unwrap();
     let mut payload = serde_json::to_value(&plan).unwrap();
     mutate(&mut payload);
@@ -218,6 +271,10 @@ fn saved_plan(
 }
 
 fn start_saved_operation(h: &support::Harness, operation: &str) -> Value {
+    start_saved_operation_decode(h, operation, false)
+}
+
+fn start_saved_operation_decode(h: &support::Harness, operation: &str, decode: bool) -> Value {
     let cap = h.client.get("/api/common/capabilities").json();
     let root = cap["roots"]
         .as_array()
@@ -251,7 +308,7 @@ fn start_saved_operation(h: &support::Harness, operation: &str) -> Value {
         &json!({"schema_version":1,
         "server_id":cap["server_id"],"session_id":session["session_id"],"request_id":"d".repeat(32),
         "operation":{"kind":operation,"plan_ref":session["plan_refs"][0]},
-        "runtime":{"keys_ref":null,"max_workers":1}}),
+        "runtime":{"keys_ref":null,"max_workers":1,"decode":decode}}),
     );
     assert_eq!(started.status, 202, "{}", started.text());
     started.json()
@@ -315,6 +372,23 @@ fn conversion_report(h: &support::Harness, plan: &Value, depth: ValidationDepth)
         json!({"kind":"bundle-conversion","schema_version":if schema == 2 {1} else {2},
             "plan_id":plan["plan_id"],"outputs":outputs})
     }
+}
+
+fn verification_report(mut report: Value) -> Value {
+    if report.get("outputs").is_some() {
+        report["kind"] = json!("bundle-verification");
+        report["passed"] = json!(true);
+        for output in report["outputs"].as_array_mut().unwrap() {
+            output["verification"] = output["conversion"]["verification"].clone();
+            output["output_matches_plan"] = json!(true);
+            output.as_object_mut().unwrap().remove("conversion");
+        }
+    } else {
+        report = json!({"kind":"plan-verification","schema_version":report["schema_version"],
+            "plan_id":report["plan_id"],"output_matches_plan":true,"verification":report["verification"]});
+    }
+    report["source_unchanged"] = json!(true);
+    report
 }
 
 fn selected_conversion(report: &mut Value) -> &mut Value {
@@ -476,20 +550,8 @@ fn saved_verification_keeps_absent_processing_and_the_closed_report_schema() {
                 ProcessingMode::Segments,
             );
             let started = start_saved_operation(&h, "verify");
-            let mut report = conversion_report(&h, &plan, ValidationDepth::Native);
-            if schema == 6 {
-                report["kind"] = json!("bundle-verification");
-                report["passed"] = json!(true);
-                for output in report["outputs"].as_array_mut().unwrap() {
-                    output["verification"] = output["conversion"]["verification"].clone();
-                    output["output_matches_plan"] = json!(true);
-                    output.as_object_mut().unwrap().remove("conversion");
-                }
-            } else {
-                report = json!({"kind":"plan-verification","schema_version":2,"plan_id":plan["plan_id"],
-                    "output_matches_plan":true,"verification":report["verification"]});
-            }
-            report["source_unchanged"] = json!(true);
+            let mut report =
+                verification_report(conversion_report(&h, &plan, ValidationDepth::Native));
             if unexpected_processing {
                 report["processing"] = actual(true, ValidationDepth::Native);
             }

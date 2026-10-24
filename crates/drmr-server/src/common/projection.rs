@@ -7,7 +7,7 @@ mod processing_view;
 use super::wire::{Error, Result};
 use crate::common_protocol::OperationName;
 use drmr_core::inspection::{ActualProcessing, Inspection, OutputFormat};
-pub(super) use plan_binding::bind_plan;
+pub(super) use plan_binding::{bind_analysis_depth, bind_plan};
 use plan_view::project as plan;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, json};

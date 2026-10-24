@@ -1,9 +1,9 @@
-//! Bind public processing evidence to the immutable, validated saved selection.
+//! Bind public reports to immutable saved intent and the requested evidence floor.
 use super::{Result, Value, bad, typed};
 use crate::{common::plans::Plan, common_protocol::OperationName};
 use drmr_core::{
     conversion::{
-        ProcessingMode,
+        ProcessingMode, ValidationDepth,
         plan::bundle::OutputProcessing,
         processing::{BoundaryHandling, ProcessingSelection},
     },
@@ -13,24 +13,17 @@ use drmr_core::{
 pub(in crate::common) fn bind_plan(
     plan: &Plan,
     operation: OperationName,
+    requested: ValidationDepth,
     report: &Value,
 ) -> Result<()> {
     if operation == OperationName::Plan {
-        if report["schema_version"] != plan.schema {
+        if plan.required_depth < requested {
             return Err(bad());
         }
-        let same = match plan.schema {
-            5 => {
-                typed::<ProcessingSelection>(plan.processing.as_ref().ok_or_else(bad)?)?
-                    == typed::<ProcessingSelection>(&report["processing"])?
-            }
-            6 => {
-                typed::<Vec<OutputProcessing>>(plan.processing.as_ref().ok_or_else(bad)?)?
-                    == typed::<Vec<OutputProcessing>>(&report["processing"])?
-            }
-            _ => report.get("processing").is_none(),
-        };
-        return same.then_some(()).ok_or_else(bad);
+        let saved: Value = serde_json::from_slice(&plan.read()?).map_err(|_| bad())?;
+        return (super::plan_view::project(&saved)?.0 == super::plan_view::project(report)?.0)
+            .then_some(())
+            .ok_or_else(bad);
     }
     let outputs = plan.outputs.as_array().ok_or_else(bad)?;
     let bundle = matches!(plan.schema, 2 | 4 | 6);
@@ -58,6 +51,7 @@ pub(in crate::common) fn bind_plan(
         } else {
             row
         };
+        bind_depth(&media["verification"], requested.max(plan.required_depth))?;
         if operation == OperationName::Convert || media.get("processing").is_some() {
             bind_actual(
                 media.get("processing"),
@@ -67,6 +61,30 @@ pub(in crate::common) fn bind_plan(
         }
     }
     Ok(())
+}
+
+pub(in crate::common) fn bind_analysis_depth(
+    report: &Value,
+    requested: ValidationDepth,
+) -> Result<()> {
+    bind_depth(
+        if report["schema_version"] == 1 {
+            report
+        } else {
+            &report["verification"]
+        },
+        requested,
+    )
+}
+
+fn bind_depth(proof: &Value, minimum: ValidationDepth) -> Result<()> {
+    // The closed projection already checked the proof's schema and evidence scope.
+    let reported = if proof["schema_version"] == 1 {
+        ValidationDepth::Decoded
+    } else {
+        typed(&proof["required_depth"])?
+    };
+    (reported >= minimum).then_some(()).ok_or_else(bad)
 }
 
 fn saved_selections(plan: &Plan, count: usize) -> Result<Vec<Option<ProcessingSelection>>> {

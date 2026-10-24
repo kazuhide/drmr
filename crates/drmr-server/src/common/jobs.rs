@@ -12,7 +12,7 @@ use crate::{
     jobs::JobError,
     pyutil,
 };
-use drmr_core::conversion::{SourceInventory, plan::bundle::OutputProcessing};
+use drmr_core::conversion::{SourceInventory, ValidationDepth, plan::bundle::OutputProcessing};
 use serde_json::{Value, json};
 use std::{sync::Arc, time::Duration};
 
@@ -667,7 +667,9 @@ impl CommonService {
         if let Some(plan) = &c.expected_plan
             && projected.kind != "failure"
         {
-            projection::bind_plan(plan, c.operation, &result.payload)?;
+            projection::bind_plan(plan, c.operation, self.requested_depth(c)?, &result.payload)?;
+        } else if c.operation == OperationName::Analyze && projected.kind != "failure" {
+            projection::bind_analysis_depth(&result.payload, self.requested_depth(c)?)?;
         }
         let plan = if c.operation == OperationName::Plan && projected.success {
             Some(self.validate_new_plan(c, &result.payload)?)
@@ -686,6 +688,22 @@ impl CommonService {
             payload_version: result.payload["schema_version"].clone(),
         })
     }
+    fn requested_depth(&self, c: &Completion) -> Result<ValidationDepth> {
+        let state = self.lock();
+        let request = &state
+            .sessions
+            .get(&c.session)
+            .ok_or_else(unavailable)?
+            .requests
+            .get(&c.request)
+            .ok_or_else(unavailable)?
+            .request;
+        Ok(if request.runtime.decode {
+            ValidationDepth::Decoded
+        } else {
+            ValidationDepth::Native
+        })
+    }
     fn validate_new_plan(&self, c: &Completion, payload: &Value) -> Result<plans::Plan> {
         let ChildOperation::Plan { save_file, .. } = &c.prepared.operation else {
             return Err(unavailable());
@@ -702,7 +720,7 @@ impl CommonService {
         if payload["plan_id"] != plan.id || !matches!(plan.schema, 2 | 4 | 6) {
             return Err(Error::new(503, "result-invalid"));
         }
-        projection::bind_plan(&plan, c.operation, payload)?;
+        projection::bind_plan(&plan, c.operation, self.requested_depth(c)?, payload)?;
         let expected_outputs = {
             let state = self.lock();
             let request = &state
