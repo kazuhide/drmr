@@ -287,6 +287,46 @@ impl Playlist {
         self.reference.push_str("#EXT-X-KEY:METHOD=NONE\n");
         Ok(clear.to_path_buf())
     }
+    fn decrypt_aes_resource(
+        &mut self,
+        copied: &Path,
+        stage: &Path,
+        key: &super::Aes128Key,
+        iv: Option<&SegmentIv>,
+        map: bool,
+    ) -> Result<PathBuf, ConversionError> {
+        let derived;
+        let iv = if let Some(iv) = iv {
+            iv
+        } else {
+            if map {
+                return Err(ConversionError("hls-encrypted-map-explicit-iv-required"));
+            }
+            derived = SegmentIv::for_sequence(
+                self.sequence
+                    .checked_add(self.count)
+                    .ok_or(ConversionError("hls-media-sequence-overflow"))?,
+            );
+            &derived
+        };
+        let key_name = format!("key-{:04}.bin", self.resources);
+        private_new(&stage.join(&key_name))?
+            .write_all(key.0.as_ref())
+            .map_err(|_| ConversionError("temporary-key-write-failed"))?;
+        writeln!(
+            self.reference,
+            "#EXT-X-KEY:METHOD=AES-128,URI=\"{key_name}\",IV=0x{}",
+            hex::encode(iv.0.as_ref())
+        )
+        .expect("writing a string cannot fail");
+        let clear = stage.join(format!("clear-{:04}", self.resources));
+        if self.combined.is_some() {
+            super::decrypt_segment(copied, &clear, key, iv)?;
+        } else {
+            super::aes128::decrypt_segment_with_stop(copied, &clear, key, iv, &self.stop)?;
+        }
+        Ok(clear)
+    }
     fn resource(
         &mut self,
         root: &Path,
@@ -329,37 +369,7 @@ impl Playlist {
                 reference_name = format!("clear-{:04}.ts", self.resources);
                 self.decrypt_samples(&copied, &stage.join(&reference_name), sample)?
             } else if let Some(key) = cipher.key {
-                let derived;
-                let iv = if let Some(iv) = &cipher.iv {
-                    iv
-                } else {
-                    if map {
-                        return Err(ConversionError("hls-encrypted-map-explicit-iv-required"));
-                    }
-                    derived = SegmentIv::for_sequence(
-                        self.sequence
-                            .checked_add(self.count)
-                            .ok_or(ConversionError("hls-media-sequence-overflow"))?,
-                    );
-                    &derived
-                };
-                let key_name = format!("key-{:04}.bin", self.resources);
-                private_new(&stage.join(&key_name))?
-                    .write_all(key.0.as_ref())
-                    .map_err(|_| ConversionError("temporary-key-write-failed"))?;
-                writeln!(
-                    self.reference,
-                    "#EXT-X-KEY:METHOD=AES-128,URI=\"{key_name}\",IV=0x{}",
-                    hex::encode(iv.0.as_ref())
-                )
-                .expect("writing a string cannot fail");
-                let clear = stage.join(format!("clear-{:04}", self.resources));
-                if self.combined.is_some() {
-                    super::decrypt_segment(&copied, &clear, key, iv)?;
-                } else {
-                    super::aes128::decrypt_segment_with_stop(&copied, &clear, key, iv, &self.stop)?;
-                }
-                clear
+                self.decrypt_aes_resource(&copied, stage, key, cipher.iv.as_ref(), map)?
             } else {
                 if self.sample_projection.is_some() {
                     return Err(ConversionError("ts-mixed-protection-not-supported"));

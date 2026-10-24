@@ -73,6 +73,15 @@ available. `--decode` still requires native admission and cannot bypass this
 refusal. Container and encryption support tables do not qualify every codec
 that those formats can carry.
 
+When a saved plan selects `segments`, verification also compares each original
+resource's sample membership, fragment grouping and absolute clocks with the
+corresponding result. Moving unchanged samples between resources therefore
+fails the boundary check. HLS durations, DASH timelines, audio playback ranges
+and final manifests are checked separately. File names and ciphertext bytes
+can change when encryption records or transport packets are rewritten; the
+boundary guarantee concerns the samples and their times. A `stitch` plan permits
+new boundaries while retaining the content and playback checks above.
+
 For AVC in transport streams, Rust checks SPS/PPS parameter sets, VUI metadata,
 every slice header, original access-unit content and clocks, and original
 playlist durations. Parameter sets describe how slices are interpreted; VUI
@@ -104,11 +113,14 @@ cannot serve as cryptographic authentication of either.
 
 Native `analyze`, saved planning and ordinary `verify` need no FFmpeg, ffprobe
 or Shaka Packager for supported inputs. Conversion uses Shaka Packager on its
-packaging/encryption routes. Clear finite progressive MP4 can use a native
+packaging/encryption routes; qualified `segments` routes instead transform
+original resources and generate the manifests in Rust. Clear finite progressive MP4 can use a native
 copy. The edit-preserving encrypted finite progressive route retains an
 FFmpeg copy remux; this applies when preparing that encrypted source for MP4,
 DASH or fMP4 HLS. It rewrites the container without transcoding and is separate
-from verification. `--decode` requires compatible FFmpeg and ffprobe.
+from verification. `--decode` requires compatible FFmpeg and ffprobe. For TS
+segment conversion, it also uses Shaka Packager to prepare decoder inputs;
+the additional decoded comparison retains the native boundary checks.
 External manifest validators remain separately requested tools.
 
 ## Reports state the evidence actually obtained

@@ -178,7 +178,13 @@ impl Converter {
         let destination = destination::OutputGuard::new(&output_root)?;
         let frozen = FrozenSource::capture(request.input.input, &self.backend.stop)?;
         self.check_downloaded_inventory(frozen.inventory())?;
-        let command = self.using_frozen_source(&frozen);
+        let command = self
+            .using_frozen_source(&frozen)
+            .with_processing(source_processing(
+                outputs
+                    .iter()
+                    .map(|output| output.processing.unwrap_or(self.processing_mode)),
+            ));
         let source = super::rebound(request.input, &frozen);
         let qualified = command.validate_source(source, SourceValidationPurpose::Conversion)?;
         for output in &outputs {
@@ -288,7 +294,7 @@ impl Converter {
             let entrypoint = result_entrypoint(stage.path(), output);
             let bound = FrozenSource::capture(&entrypoint, &self.backend.stop)?;
             let (matches, verification) =
-                command.bundle_media(source, bound.entrypoint(), output, output_keys)?;
+                child.bundle_media(source, bound.entrypoint(), output, output_keys)?;
             if !matches || !verification.passed {
                 return Err(ConversionError("verification-mismatch"));
             }
@@ -328,7 +334,12 @@ impl Converter {
         plan: &BundlePlan,
         source: VerificationSource<'_>,
     ) -> Result<(), ConversionError> {
-        let qualified = self.validate_source(source, SourceValidationPurpose::Conversion)?;
+        let command = self.with_processing_clone(source_processing(
+            plan.outputs
+                .iter()
+                .map(|output| plan.processing_mode(&output.id)),
+        ));
+        let qualified = command.validate_source(source, SourceValidationPurpose::Conversion)?;
         if qualified.actual_format != plan.source_format
             || plan
                 .outputs
@@ -339,7 +350,7 @@ impl Converter {
         }
         for output in &plan.outputs {
             if !output.drms.is_empty() {
-                self.validate_drm_source(source, &output.drms, output.format, output.target)?;
+                command.validate_drm_source(source, &output.drms, output.format, output.target)?;
             }
         }
         Ok(())
@@ -538,6 +549,18 @@ fn result_entrypoint(root: &Path, intent: &BundleOutputIntent) -> PathBuf {
         OutputFormat::Mp4 => output,
         OutputFormat::Dash => output.join("manifest.mpd"),
         OutputFormat::Hls | OutputFormat::HlsTs => output.join("master.m3u8"),
+    }
+}
+
+fn source_processing(modes: impl Iterator<Item = ProcessingMode>) -> ProcessingMode {
+    // Native segment admission also qualifies the source for a sibling stitch output.
+    if modes
+        .into_iter()
+        .any(|mode| mode == ProcessingMode::Segments)
+    {
+        ProcessingMode::Segments
+    } else {
+        ProcessingMode::Stitch
     }
 }
 

@@ -214,9 +214,13 @@ impl Converter {
             rebound(request.input, &frozen),
             SourceValidationPurpose::Conversion,
         )?;
-        let format = request
-            .format
-            .unwrap_or_else(|| OutputFormat::from(qualified.input.format));
+        let format = request.format.unwrap_or_else(|| {
+            if self.processing_mode == ProcessingMode::Segments {
+                qualified.actual_format
+            } else {
+                qualified.input.format.into()
+            }
+        });
         if !qualified.eligible_formats.contains(&format) || !supported(format, request.target) {
             return Err(UNSUPPORTED);
         }

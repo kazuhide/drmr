@@ -403,6 +403,35 @@ pub(super) fn source_references(bytes: &[u8]) -> Result<Vec<PathBuf>, Conversion
     Ok(resources)
 }
 
+fn snapshot_initialization(
+    original: &Path,
+    stage: &Path,
+    resource_directory: &Path,
+    capture: &mut Capture<'_>,
+    combined: Option<&mut File>,
+    total: &mut u64,
+) -> Result<(super::timing::FragmentClock, Option<PathBuf>), ConversionError> {
+    if let Some(joined) = combined {
+        let clock = append(
+            original,
+            stage,
+            joined,
+            total,
+            super::timing::FragmentClock::read,
+        )?;
+        Ok((clock, None))
+    } else {
+        let copied = resource_directory.join("initialization.mp4");
+        capture.budget.snapshot(
+            original,
+            &copied,
+            capture.stop.ok_or(error("dash-snapshot-mode-invalid"))?,
+        )?;
+        let clock = super::timing::FragmentClock::read(&copied)?;
+        Ok((clock, Some(copied)))
+    }
+}
+
 fn snapshot_representation(
     representation: Node<'_, '_>,
     declared: Protection,
@@ -440,26 +469,14 @@ fn snapshot_representation(
         &base,
         &initialization_uri(representation, &templates, values[0])?,
     )?;
-    let mut initialization = None;
-    let mut clock = if let Some(joined) = combined.as_mut() {
-        append(
-            &original_initialization,
-            stage,
-            joined,
-            &mut total,
-            super::timing::FragmentClock::read,
-        )?
-    } else {
-        let copied = resource_directory.join("initialization.mp4");
-        capture.budget.snapshot(
-            &original_initialization,
-            &copied,
-            capture.stop.ok_or(error("dash-snapshot-mode-invalid"))?,
-        )?;
-        let clock = super::timing::FragmentClock::read(&copied)?;
-        initialization = Some(copied);
-        clock
-    };
+    let (mut clock, initialization) = snapshot_initialization(
+        &original_initialization,
+        stage,
+        &resource_directory,
+        capture,
+        combined.as_mut(),
+        &mut total,
+    )?;
     let scale = integer(attribute(&templates, "timescale"), 1)?;
     let mut seen = HashSet::new();
     let mut resources = Vec::new();

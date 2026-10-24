@@ -1838,6 +1838,19 @@ fn validate_variant(attrs: &crate::m3u8::Attributes) -> Result<(), ConversionErr
     }
     Ok(())
 }
+fn variant_role(attrs: &crate::m3u8::Attributes) -> Option<TrackKind> {
+    attrs.get("CODECS").map(|codecs| {
+        if !codecs.is_empty()
+            && codecs
+                .split(',')
+                .all(|codec| codec.trim().starts_with("mp4a."))
+        {
+            TrackKind::Audio
+        } else {
+            TrackKind::Video
+        }
+    })
+}
 pub(in crate::conversion) fn hls_media_paths(
     path: &Path,
 ) -> Result<Vec<MediaPath>, ConversionError> {
@@ -1905,17 +1918,7 @@ pub(in crate::conversion) fn hls_media_paths(
                 return Err(ConversionError("track-count-limit"));
             }
             pending_metadata = Some(metadata::variant(&attrs)?);
-            pending_role = attrs.get("CODECS").map(|codecs| {
-                if !codecs.is_empty()
-                    && codecs
-                        .split(',')
-                        .all(|codec| codec.trim().starts_with("mp4a."))
-                {
-                    TrackKind::Audio
-                } else {
-                    TrackKind::Video
-                }
-            });
+            pending_role = variant_role(&attrs);
             variant_groups.push(attrs.get("AUDIO").map(str::to_owned));
             pending = true;
         } else if !line.starts_with('#') {
