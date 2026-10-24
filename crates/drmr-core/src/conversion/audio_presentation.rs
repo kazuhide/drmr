@@ -407,16 +407,19 @@ fn transport_audio_timing(
         .native
         .get(&track.pid)
         .ok_or(ConversionError("ts-original-evidence-required"))?;
-    let evidence = backend.native_audio_evidence(super::ts::View {
-        input: &localized.combined,
-        metadata: &localized.combined,
-        index: 0,
-        key: None,
-        all_keys: None,
-        transport: true,
-        native: Some(native),
-        unedited: false,
-    })?;
+    let evidence = backend.native_audio_evidence(
+        super::ts::View {
+            input: &localized.combined,
+            metadata: &localized.combined,
+            index: 0,
+            key: None,
+            all_keys: None,
+            transport: true,
+            native: Some(native),
+            unedited: false,
+        },
+        None,
+    )?;
     let timings = native.segment_timings()?;
     let count = timings
         .iter()

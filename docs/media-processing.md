@@ -120,6 +120,8 @@ omitted selection flag is interpreted according to
 Profiles with alternative audio groups, inconsistent video/audio associations,
 or unsupported selection declarations are refused.
 
+HLS written from DASH can add a mono or stereo `CHANNELS` attribute from the checked AAC configuration. An explicit source channel declaration must be retained and match the actual media; when the source omitted it, verification allows this checked addition.
+
 For a supported presentation with one audio rendition, DASH output maps its
 language to `lang`, its name to `Label`, and its default preference to the
 author's `selectionPriority` (2 for preferred, 1 otherwise). Every video quality
@@ -201,7 +203,9 @@ The 44.1 kHz handling below is included in the 1.0.1 source. The immutable v1.0.
 
 The sample rate describes decoded audio samples per second. The container's clock describes timestamp units; the two need not be equal. MPEG-TS uses 90,000 ticks per second. A 1,024-sample AAC frame occupies exactly 1,920 ticks at 48 kHz, but about 2,089.796 ticks at 44.1 kHz. Integer timestamps therefore need rounding at 44.1 kHz. Adding 2,089 ticks for every frame would accumulate drift.
 
-The source reader retains each PES timestamp and calculates the clocks of its enclosed AAC frames at the actual sample rate. Source admission accounts for rounding a PES timestamp and then a frame timestamp to integer ticks. It checks one consistent clock progression over the entire track, rather than accepting a new error allowance for every packet. Once admitted, every original frame timestamp is fixed. Conversion and independent verification require exact equality with those timestamps; there is no output timing tolerance.
+The source reader retains each packetized elementary stream (PES) timestamp and calculates the clocks of its enclosed AAC frames at the actual sample rate. Source admission accounts for rounding a PES timestamp and then a frame timestamp to integer ticks. It checks one consistent clock progression over the entire track, rather than accepting a new error allowance for every packet. Once admitted, every original frame timestamp is fixed. Conversion and independent verification require exact equality with those timestamps; there is no output timing tolerance.
+
+Static HLS and DASH can retain these transport clocks in fragmented MP4. After resolving the manifest, drmr recognizes the supported single-track AAC-LC profile with 44.1 kHz audio and a 90 kHz media clock, and applies the same bounded rounding model across the complete track. The clock state continues across all resources. This checks whether an input's timing is supported; source-to-output comparison still requires every original frame, timestamp and playback bound to match exactly. Standalone MP4 keeps its usual clock checks, and an MP4 output must pass those checks before publication. This is a current drmr validation boundary; MP4 can represent the retained timestamps.
 
 For 44.1 kHz input, a Rust AAC reader copies the validated frames into a private fragmented MP4 before Shaka Packager creates the final HLS or DASH segments, or TS output. The MP4 media clock remains 90 kHz, while its audio sample entry and AudioSpecificConfig decoder settings retain 44,100 samples per second and the original channel configuration. Keeping these separate preserves every original presentation time (PTS) and decode time (DTS). AAC payloads, frame count, and decoded samples are unchanged. Only the transport headers are replaced; no audio is re-encoded. The writer holds at most 128 frames, with at most approximately 1 MiB of encoded audio, before writing a fragment.
 
