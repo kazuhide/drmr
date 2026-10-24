@@ -13,8 +13,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 const TOOLS: [(&str, &str, &str); 3] = [
-    ("ffmpeg", "media processing (FFmpeg)", "9.0.1"),
-    ("ffprobe", "media inspection (FFmpeg)", "9.0.1"),
+    ("ffmpeg", "additional complete decoding (FFmpeg)", "9.0.1"),
+    ("ffprobe", "additional decoder inspection (FFmpeg)", "9.0.1"),
     (
         "packager",
         "media encryption and packaging (Shaka Packager)",
@@ -37,18 +37,26 @@ impl Profile {
             "dash-presentation",
             "fmp4-hls-presentation",
             "mpeg-ts-hls",
+            "mpeg-ts-dash",
             "mpeg-ts-sample-aes-hls",
             "mpeg-ts-hls-ts",
+            "fmp4-segments",
+            "mpeg-ts-segments",
         ]
         .into_iter()
         .find(|name| *name == value)
         .map(Self)
     }
 
-    fn required(self, tool: &str) -> bool {
+    fn required(self, tool: &str, depth: crate::conversion::ValidationDepth) -> bool {
         match tool {
-            "packager" => self.0 != "progressive-mp4",
-            _ => true,
+            "packager" => match self.0 {
+                "progressive-mp4" | "fmp4-segments" => false,
+                "mpeg-ts-segments" => depth == crate::conversion::ValidationDepth::Decoded,
+                _ => true,
+            },
+            "ffmpeg" | "ffprobe" => depth == crate::conversion::ValidationDepth::Decoded,
+            _ => false,
         }
     }
 }
@@ -136,6 +144,7 @@ impl DiagnosticReport {
 /// keeps its separate existing deadline. No window or media processing is started.
 pub struct DiagnosticSession {
     profile: Profile,
+    depth: crate::conversion::ValidationDepth,
     probe: bool,
     cleanup: Arc<CleanupOwner>,
     runner: ToolRunner,
@@ -156,12 +165,21 @@ impl DiagnosticSession {
             .with_cleanup_owner(Arc::clone(&cleanup));
         Self {
             profile,
+            depth: crate::conversion::ValidationDepth::Native,
             probe,
             cleanup,
             runner,
             stop: crate::concurrency::Stop::new(),
             state: Mutex::new(SessionState::default()),
         }
+    }
+
+    /// Include dependencies used by explicitly requested complete decoding.
+    /// The default checks only the selected route's native conversion requirements.
+    #[must_use]
+    pub fn with_validation_depth(mut self, depth: crate::conversion::ValidationDepth) -> Self {
+        self.depth = depth;
+        self
     }
 
     /// Use the caller's termination signal before the diagnostic worker starts.
@@ -318,7 +336,7 @@ fn diagnose(
                 purpose,
                 minimum_version,
                 available,
-                required: profile.required(name),
+                required: profile.required(name, session.depth),
                 path: resolved.filter(|_| representable),
                 path_status: if !representable {
                     "not-utf8"
@@ -337,9 +355,10 @@ fn diagnose(
                     Some("probe-path-not-utf8")
                 },
             };
-            if probe && (session.stop.is_set() || session.cleanup.has_pending()) {
+            if probe && tool.required && (session.stop.is_set() || session.cleanup.has_pending()) {
                 tool.failure_code = Some("probe-not-started");
             } else if probe
+                && tool.required
                 && tool.available
                 && tool.failure_code.is_none()
                 && let Err(code) = run_probe(runner, &mut tool, &session.stop)
@@ -487,14 +506,7 @@ fn probe_features(
     let (help, features): (String, &[&'static str]) = match tool.name {
         "ffmpeg" => (
             format!(
-                "{}\n{}\n{}",
-                output(
-                    runner,
-                    tool,
-                    &["-hide_banner", "-h", "muxer=mp4"],
-                    false,
-                    stop
-                )?,
+                "{}\n{}",
                 output(
                     runner,
                     tool,
@@ -504,12 +516,7 @@ fn probe_features(
                 )?,
                 output(runner, tool, &["-hide_banner", "-h", "long"], false, stop)?
             ),
-            &[
-                "encryption_scheme",
-                "decryption_key",
-                "decryption_keys",
-                "thread_queue_size",
-            ],
+            &["decryption_key", "decryption_keys", "thread_queue_size"],
         ),
         "ffprobe" => (
             output(runner, tool, &["-hide_banner", "-h", "full"], false, stop)?,
@@ -595,8 +602,61 @@ mod tests {
     use super::*;
     use std::time::Instant;
 
+    #[test]
+    fn route_requirements_add_decoder_tools_only_at_explicit_decoded_depth() {
+        use crate::conversion::ValidationDepth;
+        for (route, native_packager, decoded_packager) in [
+            ("all", true, true),
+            ("progressive-mp4", false, false),
+            ("fragmented-mp4", true, true),
+            ("dash-presentation", true, true),
+            ("fmp4-hls-presentation", true, true),
+            ("mpeg-ts-hls", true, true),
+            ("mpeg-ts-dash", true, true),
+            ("mpeg-ts-sample-aes-hls", true, true),
+            ("mpeg-ts-hls-ts", true, true),
+            ("fmp4-segments", false, false),
+            ("mpeg-ts-segments", false, true),
+        ] {
+            let profile = Profile::parse(route).unwrap();
+            for (depth, packager) in [
+                (ValidationDepth::Native, native_packager),
+                (ValidationDepth::Decoded, decoded_packager),
+            ] {
+                let session = DiagnosticSession::new(profile, true).with_validation_depth(depth);
+                let report = session
+                    .run_with(None, |_, _, _| panic!("absent tools must not run"))
+                    .unwrap();
+                assert_eq!(report.tools[0].required, depth == ValidationDepth::Decoded);
+                assert_eq!(report.tools[1].required, depth == ValidationDepth::Decoded);
+                assert_eq!(report.tools[2].required, packager);
+                assert_eq!(report.ready, depth == ValidationDepth::Native && !packager);
+            }
+        }
+    }
+
+    #[test]
+    fn native_probe_never_launches_discovered_optional_decoders() {
+        let root = tempfile::tempdir().unwrap();
+        fixtures(root.path());
+        let session = DiagnosticSession::new(Profile::parse("progressive-mp4").unwrap(), true);
+        let report = session
+            .run_with(Some(root.path().as_os_str()), |_, _, _| {
+                panic!("native progressive copying needs no external tool")
+            })
+            .unwrap();
+        assert!(report.ready);
+        assert!(report.tools.iter().all(|tool| !tool.required));
+        for tool in &report.tools[..2] {
+            assert!(tool.available);
+            assert_eq!(tool.version_status, "not-checked");
+            assert_eq!(tool.feature_status, "not-checked");
+        }
+    }
+
     fn isolated_session(profile: Profile) -> DiagnosticSession {
-        let mut session = DiagnosticSession::new(profile, true);
+        let mut session = DiagnosticSession::new(profile, true)
+            .with_validation_depth(crate::conversion::ValidationDepth::Decoded);
         // Isolate fixture admission from unrelated parallel media tests while
         // preserving the actual session runner and its shared cleanup owner.
         session.runner = session

@@ -3,7 +3,7 @@
 use drmr_core::tool_diagnostics::{DiagnosticSession, Profile};
 use std::{io::Write as _, process::ExitCode};
 
-pub fn run(as_json: bool, probe: bool, route: &str) -> ExitCode {
+pub fn run(as_json: bool, probe: bool, decode: bool, route: &str) -> ExitCode {
     let progress = std::sync::Arc::new(crate::progress::Progress::new(!as_json));
     progress.mark("tool-check");
     let cancellation = if probe {
@@ -20,6 +20,11 @@ pub fn run(as_json: bool, probe: bool, route: &str) -> ExitCode {
     };
     let mut session =
         DiagnosticSession::new(Profile::parse(route).expect("validated route"), probe)
+            .with_validation_depth(if decode {
+                drmr_core::conversion::ValidationDepth::Decoded
+            } else {
+                drmr_core::conversion::ValidationDepth::Native
+            })
             .with_activity_sink(progress.clone());
     if let Some(cancellation) = &cancellation {
         session = session.with_stop(cancellation.stop.clone());

@@ -41,7 +41,7 @@ enum Command {
     Version,
     /// Discover external tools or probe their versions and advertised options.
     #[command(
-        after_help = "Discovery checks executable files on the current launch PATH without running them.\n--probe executes bounded version/help checks; it never proves media compatibility.\nProfiles cover conversion and additional complete decoding (--decode), not only the native default. Native analysis, saved planning and verification need no external media tools.\n\nExamples:\n  drmr doctor\n  drmr doctor --probe --route progressive-mp4 --json\n\nExit codes: 0 selected checks passed for required tools; 1 a required check failed; 2 invalid arguments."
+        after_help = "Discovery checks executable files on the current launch PATH without running them.\n--probe executes bounded version/help checks for required tools; it never proves media compatibility.\nThe default checks native conversion requirements. Add --decode to require FFmpeg and ffprobe for additional complete decoding. Native analysis, saved planning and verification need no external media tools.\n\nExamples:\n  drmr doctor\n  drmr doctor --probe --route progressive-mp4 --json\n  drmr doctor --probe --decode --route progressive-mp4 --json\n\nExit codes: 0 selected checks passed for required tools; 1 a required check failed; 2 invalid arguments."
     )]
     Doctor {
         /// Print a machine-readable JSON report instead of a readable checklist.
@@ -50,8 +50,11 @@ enum Command {
         /// Execute bounded version and advertised-option checks (three seconds per call).
         #[arg(long)]
         probe: bool,
-        /// Check a route's complete tool set, including additional decoding; other tools are optional.
-        #[arg(long, default_value = "all", value_parser = ["all", "progressive-mp4", "fragmented-mp4", "dash-presentation", "fmp4-hls-presentation", "mpeg-ts-hls", "mpeg-ts-sample-aes-hls", "mpeg-ts-hls-ts"])]
+        /// Include dependencies for additional complete decoding.
+        #[arg(long)]
+        decode: bool,
+        /// Check a route's native tools, adding decoder tools with --decode; other tools are optional.
+        #[arg(long, default_value = "all", value_parser = ["all", "progressive-mp4", "fragmented-mp4", "dash-presentation", "fmp4-hls-presentation", "mpeg-ts-hls", "mpeg-ts-dash", "mpeg-ts-sample-aes-hls", "mpeg-ts-hls-ts", "fmp4-segments", "mpeg-ts-segments"])]
         route: String,
     },
     /// Read metadata or check complete MP4, DASH, or HLS input media.
@@ -114,7 +117,12 @@ fn main() -> ExitCode {
             println!("drmr {}", drmr_core::VERSION);
             ExitCode::SUCCESS
         }
-        Command::Doctor { json, probe, route } => doctor::run(json, probe, &route),
+        Command::Doctor {
+            json,
+            probe,
+            decode,
+            route,
+        } => doctor::run(json, probe, decode, &route),
         Command::Analyze(args) => analyze_cli::analyze(&args),
         Command::Convert(args) => convert_cli::convert(&args),
         Command::Verify(args) => convert_cli::verify(&args),

@@ -65,7 +65,7 @@ impl ProcessingRouteId {
             }
         }
     }
-    /// Minimum tools for native conversion; conditional copying and decoding add tools.
+    /// Minimum tools for native conversion; additional decoding adds tools.
     pub fn required_tools(self) -> Vec<RequiredTool> {
         if matches!(
             self,
@@ -142,7 +142,7 @@ pub struct ActualProcessing {
     pub input_preparation: InputPreparation,
     pub reason_code: String,
     pub explanation: String,
-    /// Tools required at the actual depth, including any encrypted finite-source copy.
+    /// Tools required at the actual verification depth.
     pub required_tools: Vec<RequiredTool>,
 }
 impl ActualProcessing {
@@ -198,20 +198,14 @@ impl CandidateRoute {
         output_format: super::OutputFormat,
         condition: &'static str,
     ) -> Self {
-        let mut condition_codes = vec![
+        let condition_codes = vec![
             condition.into(),
             "additional-complete-decoding-requires-ffmpeg-and-ffprobe".into(),
         ];
-        let mut explanation = format!(
+        let explanation = format!(
             "{} Required tools list the native minimum. Additional complete decoding requires FFmpeg and ffprobe.",
             route.explanation()
         );
-        if route.can_copy_encrypted_finite_source() {
-            condition_codes.push("encrypted-finite-progressive-source-copy-requires-ffmpeg".into());
-            explanation.push_str(
-                " Copying an encrypted finite progressive source also requires FFmpeg for a container remux without transcoding.",
-            );
-        }
         Self {
             route,
             output_format,
@@ -227,6 +221,36 @@ impl CandidateRoute {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_candidates_never_require_an_external_copy_remux() {
+        for route in [
+            ProcessingRouteId::ProgressiveMp4,
+            ProcessingRouteId::FragmentedMp4,
+            ProcessingRouteId::DashPresentation,
+            ProcessingRouteId::Fmp4HlsPresentation,
+            ProcessingRouteId::MpegTsHls,
+            ProcessingRouteId::MpegTsDash,
+            ProcessingRouteId::MpegTsSampleAesHls,
+            ProcessingRouteId::MpegTsHlsTs,
+            ProcessingRouteId::Fmp4Segments,
+            ProcessingRouteId::MpegTsSegments,
+        ] {
+            let candidate = CandidateRoute::new(
+                route,
+                super::super::OutputFormat::Mp4,
+                "source-profile-must-pass",
+            );
+            assert_eq!(candidate.condition_codes.len(), 2, "{route:?}");
+            assert!(
+                candidate
+                    .required_tools
+                    .iter()
+                    .all(|tool| { !matches!(tool, RequiredTool::Ffmpeg | RequiredTool::Ffprobe) })
+            );
+            assert!(!candidate.explanation.contains("remux"));
+        }
+    }
 
     #[test]
     fn legacy_actual_processing_round_trips_without_inventing_boundary_evidence() {
@@ -267,12 +291,7 @@ mod tests {
             assert!(candidate.condition_codes.iter().any(|condition| {
                 condition == "additional-complete-decoding-requires-ffmpeg-and-ffprobe"
             }));
-            assert_eq!(
-                candidate.condition_codes.iter().any(|condition| {
-                    condition == "encrypted-finite-progressive-source-copy-requires-ffmpeg"
-                }),
-                route.can_copy_encrypted_finite_source()
-            );
+            assert_eq!(candidate.condition_codes.len(), 2);
             assert_eq!(
                 candidate.required_tools,
                 if route == ProcessingRouteId::ProgressiveMp4 {
