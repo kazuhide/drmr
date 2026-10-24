@@ -83,6 +83,7 @@ fn candidate(c: &Converter, parent: &Path, destination: &Path) -> Stage {
             Some(&stage),
             None,
             None,
+            None,
         )
         .unwrap();
     assert!(

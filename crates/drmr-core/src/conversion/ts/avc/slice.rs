@@ -24,6 +24,7 @@ pub(super) struct Header {
     pub picture: Picture,
     pub slice_type: u32,
     pub all_slices_same_type: bool,
+    pub clear_bytes: usize,
 }
 pub(super) fn parse(nal: &[u8], sps: &Sps, pps: &Pps) -> Result<Header, ConversionError> {
     let kind = nal.first().map(|n| n & 31).ok_or(BAD)?;
@@ -32,7 +33,7 @@ pub(super) fn parse(nal: &[u8], sps: &Sps, pps: &Pps) -> Result<Header, Conversi
     }
     let rbsp = bits::rbsp(nal, kind)?;
     let b = &mut Bits::new(&rbsp);
-    let header = picture_header(b, nal, sps, pps)?;
+    let mut header = picture_header(b, nal, sps, pps)?;
     let slice_type = header.slice_type;
     if slice_type == 1 {
         b.flag()?;
@@ -108,6 +109,22 @@ pub(super) fn parse(nal: &[u8], sps: &Sps, pps: &Pps) -> Result<Header, Conversi
     if b.remaining() == 0 {
         return Err(BAD);
     }
+    // Map the byte-rounded RBSP header back to the original escaped NAL bytes.
+    // The one-byte NAL header is also clear in Common Encryption subsamples.
+    let mut remaining = b.position().div_ceil(8);
+    let mut at = 1;
+    let mut zeros = 0;
+    while remaining != 0 {
+        let byte = *nal.get(at).ok_or(BAD)?;
+        at += 1;
+        if zeros == 2 && byte == 3 {
+            zeros = 0;
+            continue;
+        }
+        zeros = if byte == 0 { zeros + 1 } else { 0 };
+        remaining -= 1;
+    }
+    header.clear_bytes = at;
     let zero_bytes = rbsp.iter().rev().take_while(|n| **n == 0).count();
     if zero_bytes != 0 && (!pps.cabac() || zero_bytes % 2 != 0) {
         return Err(BAD);
@@ -189,6 +206,7 @@ fn picture_header(
         first_mb,
         slice_type,
         all_slices_same_type: declared_slice_type >= 5,
+        clear_bytes: 0,
         picture: Picture {
             frame_num,
             pps_id,

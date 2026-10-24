@@ -133,6 +133,7 @@ fn outputs() -> Vec<BundleOutputIntent> {
     ]
     .into_iter()
     .map(|(id, format, target, drms)| BundleOutputIntent {
+        processing: None,
         id: id.into(),
         format,
         target,
@@ -225,7 +226,11 @@ fn single_transport_plan(id: &str, target: TargetProtection) {
     let saved = root.path().join("single.plan.json");
     plan::write_new(&saved, &plan).unwrap();
     let loaded = plan::read(&saved).unwrap();
-    assert_eq!(loaded.schema_version, 3);
+    assert_eq!(loaded.schema_version, 5);
+    assert_eq!(
+        loaded.processing_mode(),
+        drmr_core::conversion::ProcessingMode::Stitch
+    );
     assert_eq!(
         loaded.minimum_depth(),
         drmr_core::conversion::ValidationDepth::Decoded

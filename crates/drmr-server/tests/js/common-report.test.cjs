@@ -151,6 +151,23 @@ test('known failure codes have focused guidance without exposing arbitrary serve
   assert.equal(r.errorInfo({ code: 'manifest-validator-unavailable' }).key, 'commonValidatorUnavailable');
   assert.equal(r.errorInfo({ code: 'private-sentinel', hint: 'secret' }).code, null);
 });
+
+test('resolved processing is rendered from fixed labels and legacy absence stays unclaimed', () => {
+  const processing = { route: 'fmp4-segments', mode: 'segments', boundaries: 'preserve' };
+  const r = renderer();
+  r.render({ report_kind: 'conversion', operation: 'convert', report: { schema_version: 2, processing, verification: nativeVerification() } });
+  assert.match(r.text(), /commonProcessingSegments/); assert.match(r.text(), /commonBoundaryPreserve/);
+  assert.equal(r.all(r.host).find(node => node.getAttribute?.('data-common-processing-mode')).getAttribute('data-common-processing-mode'), 'segments');
+  for (const value of ['PRIVATE_VALUE', '__proto__']) {
+    const text = renderResult({ report_kind: 'conversion', report: { schema_version: 2,
+      processing: { route: value, mode: value, boundaries: value }, verification: nativeVerification() } });
+    assert.ok(!text.includes(value)); assert.ok(!text.includes('commonBoundaryPreserve'));
+  }
+  const legacy = renderResult({ report_kind: 'conversion', report: { schema_version: 2,
+    processing: { route: 'fmp4-hls-presentation' }, verification: nativeVerification() } });
+  assert.ok(!legacy.includes('commonBoundaryResegment'));
+  assert.ok(!legacy.includes('commonProcessingStitch'));
+});
 function renderer() {
   class Element {
     constructor(tag) { this.tagName = tag; this.nodeType = 1; this.children = []; this.dataset = {}; this.textContent = ''; this.attrs = new Map(); }

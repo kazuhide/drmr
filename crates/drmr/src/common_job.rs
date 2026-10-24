@@ -194,11 +194,23 @@ pub(crate) fn run(path: &Path) -> ExitCode {
         eprintln!("drmr: invalid common job request");
         return ExitCode::from(2);
     };
+    let exit = invoke(request);
+    if CONTEXT
+        .get()
+        .is_none_or(|context| !context.result_written.load(Ordering::Acquire))
+    {
+        eprintln!("drmr: common job result unavailable");
+        return ExitCode::from(1);
+    }
+    exit
+}
+
+fn invoke(request: ChildRequest) -> ExitCode {
     let keys = request.runtime.keys_file;
     let workers = request.runtime.max_workers;
     let decode = request.runtime.decode;
     let tools = request.runtime.tools;
-    let exit = match request.operation {
+    match request.operation {
         ChildOperation::Analyze { source } => {
             let (input, download_dir, fetch_policy) = match source {
                 ChildSource::Local { input_file } => (input_file, None, None),
@@ -226,10 +238,12 @@ pub(crate) fn run(path: &Path) -> ExitCode {
             output_root,
             save_file,
             output_spec_file,
+            processing,
         } => inspect_cli::plan(&inspect_cli::PlanArgs {
             input: input_file,
             to: None,
             format: Vec::new(),
+            processing,
             json: true,
             save: Some(save_file),
             outputs: Some(output_spec_file),
@@ -240,13 +254,17 @@ pub(crate) fn run(path: &Path) -> ExitCode {
             decode,
             measure: false,
         }),
-        ChildOperation::Convert { plan_file } => convert_cli::convert(&convert_cli::ConvertArgs {
+        ChildOperation::Convert {
+            plan_file,
+            processing,
+        } => convert_cli::convert(&convert_cli::ConvertArgs {
             input: None,
             plan: Some(plan_file),
             download_dir: None,
             fetch_policy: None,
             to: None,
             format: None,
+            processing,
             outputs: None,
             output: None,
             keys_file: keys,
@@ -276,15 +294,7 @@ pub(crate) fn run(path: &Path) -> ExitCode {
             json: true,
             measure: false,
         }),
-    };
-    if CONTEXT
-        .get()
-        .is_none_or(|context| !context.result_written.load(Ordering::Acquire))
-    {
-        eprintln!("drmr: common job result unavailable");
-        return ExitCode::from(1);
     }
-    exit
 }
 
 #[cfg(test)]

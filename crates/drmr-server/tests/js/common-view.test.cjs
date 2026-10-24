@@ -70,6 +70,39 @@ test('the decode choice defaults off and survives polling before media submissio
   assert.equal(h.sent.length, 1);
   assert.equal(h.sent[0].runtime.decode, true);
 });
+
+test('each output processing selector survives polling, translates and invalidates the saved plan', () => {
+  const h = harness(false, true), select = h.find('common-output-1-processing');
+  assert.ok(select); assert.equal(select.tagName, 'select'); assert.equal(select.value, 'auto');
+  assert.deepEqual(select.children.map(option => option.value), ['auto', 'segments', 'stitch']);
+  select.value = 'segments'; select.focus(); select.dispatch('change');
+  h.view.update(); h.setLanguage('ja'); h.view.translate();
+  assert.equal(h.find('common-output-1-processing'), select);
+  assert.equal(select.value, 'segments'); assert.equal(h.document.activeElement, select);
+  h.find('common-add-output').dispatch('click');
+  assert.equal(h.find('common-output-1-processing').value, 'segments');
+  assert.equal(h.find('common-output-2-processing').value, 'auto');
+  assert.ok(select.getAttribute('aria-label').includes('1'));
+  assert.ok(select.getAttribute('aria-describedby'));
+  h.record.plan = { plan_ref: 'old' };
+  select.value = 'stitch'; select.dispatch('change');
+  assert.equal(h.record.plan, null);
+});
+
+test('a saved processing choice is displayed without adding conversion overrides', () => {
+  const h = harness(true, true);
+  h.record.plan.plan_schema_version = 6;
+  h.record.plan.required_depth = 'native';
+  h.record.plan.destination_state = 'absent';
+  h.record.plan.outputs = [{ id: 'hls', format: 'hls-ts', target: 'clear', drms: [], conformance: 'none', processing: 'segments' }];
+  h.record.plan.processing = [{ id: 'hls', selection: { requested: 'segments', resolved: 'segments', boundaries: 'preserve', segment_duration_ms: null } }];
+  h.view.update();
+  const text = h.descendants(h.host).map(node => node.textContent).join(' ');
+  assert.ok(text.includes('Segments'));
+  assert.ok(text.includes('Original segment boundaries are preserved'));
+  h.find('common-convert').dispatch('click');
+  assert.deepEqual(JSON.parse(JSON.stringify(h.sent[0].operation)), { kind: 'convert', plan_ref: 'plan_1' });
+});
 test('an imported v1 plan supports later verification without analyze or reconversion', () => {
   const h = harness(true);
   assert.equal(h.find('common-analyze').disabled, true);

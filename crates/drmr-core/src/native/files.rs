@@ -145,7 +145,7 @@ pub fn open_private_shared_read(path: &Path) -> io::Result<File> {
     open_private(path, false, true)
 }
 
-fn open_private(path: &Path, write: bool, shared_writer: bool) -> io::Result<File> {
+pub(super) fn open_private(path: &Path, write: bool, shared_writer: bool) -> io::Result<File> {
     #[cfg(unix)]
     let _ = shared_writer;
     #[cfg(unix)]

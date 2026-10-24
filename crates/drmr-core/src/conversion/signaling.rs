@@ -431,7 +431,48 @@ fn clear_metadata_tree(
 }
 
 impl super::Converter {
-    /// Independently check the current manifest and initialization records against operator
+    /// Validate final native output records against the same private graph used for media checks.
+    pub(in crate::conversion) fn verify_segment_signaling(
+        &self,
+        frozen: &super::FrozenSource,
+        format: OutputFormat,
+        target: TargetProtection,
+        key: Option<&OutputKey>,
+        uri: Option<&str>,
+        hls: Option<&super::HlsOutputKey>,
+    ) -> Result<(), ConversionError> {
+        self.backend.check_cancelled()?;
+        if let Some(signaling) = &self.output_signaling {
+            signaling.validate_profile(format, target)?;
+            if format == OutputFormat::Dash {
+                let key = key.ok_or(INVALID)?;
+                let records = if signaling.is_multi() {
+                    signaling.multi_objects(key)?
+                } else {
+                    records::MultiObjects::legacy_playready(signaling.objects(key)?)
+                };
+                records.finish(frozen, key, &self.backend.stop)?;
+            } else {
+                records::fairplay(
+                    frozen,
+                    &records::FairPlayProfile {
+                        format,
+                        target,
+                        uri: uri
+                            .or_else(|| hls.map(super::HlsOutputKey::key_uri))
+                            .ok_or(INVALID)?,
+                        key,
+                        hls_key: hls,
+                    },
+                    &self.backend.stop,
+                )?;
+            }
+        } else {
+            records::unrequested(frozen, target, key, &self.backend.stop)?;
+        }
+        frozen.check_original()
+    }
+    /// Independently check the current manifest and all referenced records against operator
     /// metadata. Media comparison and license playback are separate verification domains.
     pub fn verify_output_signaling(
         &self,
@@ -448,42 +489,16 @@ impl super::Converter {
                 MISMATCH
             }
         })?;
-        let input = frozen.entrypoint();
-        let Some(signaling) = &keys.signaling else {
-            return records::unrequested(&frozen, target, keys.output.as_ref());
-        };
-        signaling.validate_profile(format, target)?;
-        if signaling.is_multi() {
-            if format == OutputFormat::Dash {
-                let key = keys.output.as_ref().ok_or(INVALID)?;
-                signaling.multi_objects(key)?.finish(input, key)
-            } else {
-                records::fairplay(
-                    input,
-                    format,
-                    target,
-                    keys.hls_output_uri().ok_or(INVALID)?,
-                    keys.output.as_ref(),
-                    keys.hls_output.as_ref(),
-                )
-            }?;
-            return frozen.check_original().map_err(|error| {
-                if error.0 == "cancelled" {
-                    error
-                } else {
-                    MISMATCH
-                }
-            });
-        }
-        let key = keys.output.as_ref().ok_or(INVALID)?;
-        records::MultiObjects::legacy_playready(signaling.objects(key)?).finish(input, key)?;
-        frozen.check_original().map_err(|error| {
-            if error.0 == "cancelled" {
-                error
-            } else {
-                MISMATCH
-            }
-        })
+        let mut command = self.with_processing_clone(self.processing_mode);
+        command.output_signaling = keys.signaling.clone().map(std::sync::Arc::new);
+        command.verify_segment_signaling(
+            &frozen,
+            format,
+            target,
+            keys.output.as_ref(),
+            keys.hls_output_uri(),
+            keys.hls_output.as_ref(),
+        )
     }
     pub(super) fn validate_signaling_codec(
         &self,
@@ -611,29 +626,16 @@ impl super::Converter {
         uri: Option<&str>,
         hls: Option<&super::HlsOutputKey>,
     ) -> Result<(), ConversionError> {
-        let Some(signaling) = self
-            .output_signaling
-            .as_ref()
-            .filter(|value| value.is_multi())
-        else {
+        if self.output_signaling.is_none() {
             return Ok(());
-        };
-        if format == OutputFormat::Dash {
-            let key = key.ok_or(INVALID)?;
-            signaling
-                .multi_objects(key)?
-                .finish(&root.join("manifest.mpd"), key)
-        } else {
-            records::fairplay(
-                &root.join("master.m3u8"),
-                format,
-                target,
-                uri.or_else(|| hls.map(super::HlsOutputKey::key_uri))
-                    .ok_or(INVALID)?,
-                key,
-                hls,
-            )
         }
+        let entrypoint = root.join(if format == OutputFormat::Dash {
+            "manifest.mpd"
+        } else {
+            "master.m3u8"
+        });
+        let frozen = super::FrozenSource::capture(&entrypoint, &self.backend.stop)?;
+        self.verify_segment_signaling(&frozen, format, target, key, uri, hls)
     }
 }
 

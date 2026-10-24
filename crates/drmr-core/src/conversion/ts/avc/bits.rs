@@ -53,6 +53,9 @@ impl<'a> Bits<'a> {
     pub fn remaining(&self) -> usize {
         self.data.len() * 8 - self.at
     }
+    pub fn position(&self) -> usize {
+        self.at
+    }
     pub fn more_rbsp_data(&self) -> bool {
         let mut at = self.at;
         if at >= self.data.len() * 8 || (self.data[at / 8] >> (7 - at % 8)) & 1 == 0 {

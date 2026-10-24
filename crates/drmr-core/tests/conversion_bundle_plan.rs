@@ -62,6 +62,7 @@ fn outputs() -> Vec<BundleOutputIntent> {
     [OutputFormat::Dash, OutputFormat::Hls]
         .into_iter()
         .map(|format| BundleOutputIntent {
+            processing: None,
             id: format.as_str().to_owned(),
             format,
             target: TargetProtection::Clear,
@@ -156,7 +157,13 @@ fn one_private_plan_publishes_and_independently_verifies_both_presentations() {
             outputs: &outputs(),
         })
         .unwrap();
-    assert_eq!(plan.schema_version, 4);
+    assert_eq!(plan.schema_version, 6);
+    assert!(
+        plan.outputs
+            .iter()
+            .all(|output| plan.processing_mode(&output.id)
+                == drmr_core::conversion::ProcessingMode::Stitch)
+    );
     assert_eq!(
         plan.minimum_depth(),
         drmr_core::conversion::ValidationDepth::Decoded
@@ -164,7 +171,7 @@ fn one_private_plan_publishes_and_independently_verifies_both_presentations() {
     let saved = root.path().join("bundle.plan.json");
     plan::write_bundle(&saved, &plan).unwrap();
     let SavedPlan::Bundle(loaded) = plan::read_saved(&saved).unwrap() else {
-        panic!("version two plan was not dispatched to the bundle schema");
+        panic!("the saved plan was not dispatched to the bundle schema");
     };
     assert_eq!(loaded, plan);
     assert!(!output.exists());

@@ -221,7 +221,7 @@ def regression(binary, destination):
     planned = execute("planning", ["plan", "--decode", source, "--outputs", outputs, "--output", output,
                                     "--save", plan_path, "--max-workers", "2", "--json"])
     plan_bytes = plan_path.read_bytes()
-    assert planned == json.loads(plan_bytes) and planned["schema_version"] == 4
+    assert planned == json.loads(plan_bytes) and planned["schema_version"] == 6
     assert planned["required_depth"] == "decoded"
     assert planned["kind"] == "execution-plan" and len(planned["outputs"]) == 2
     assert not output.exists()

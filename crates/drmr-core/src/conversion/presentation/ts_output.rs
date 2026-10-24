@@ -93,7 +93,10 @@ impl Converter {
             crate::inspection::OutputFormat::HlsTs,
             &sources,
         )?;
-        if sources.len() == 1 && sources[0].report.tracks[0].kind == TrackKind::Audio {
+        if sources.len() == 1
+            && sources[0].report.tracks[0].kind == TrackKind::Audio
+            && sources[0].metadata.audio.is_none()
+        {
             single_audio_variant(package_root)?;
         }
         if request.target == TargetProtection::HlsAes128 {

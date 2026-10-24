@@ -85,6 +85,7 @@ impl Converter {
             frozen_source: self.frozen_source.clone(),
             planned_destination: Some(Arc::new(guard)),
             output_signaling: self.output_signaling.clone(),
+            processing_mode: self.processing_mode,
         }
     }
     pub(in crate::conversion) fn check_plan_destination(&self) -> Result<(), ConversionError> {

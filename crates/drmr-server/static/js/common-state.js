@@ -40,7 +40,7 @@
     }
     function planBinding(item, value, ref) { return same(value) && value.session_id === item.session.session_id && value.plan_ref === ref; }
     function outputKey(outputs) {
-      return JSON.stringify(outputs.map(function (output) { return [output.id, output.format, output.target, (output.drms || []).slice().sort(), output.conformance || 'none']; }).sort(function (a, b) { return a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0; }));
+      return JSON.stringify(outputs.map(function (output) { return [output.id, output.format, output.target, (output.drms || []).slice().sort(), output.conformance || 'none', output.processing == null ? null : output.processing]; }).sort(function (a, b) { return a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0; }));
     }
     function loadPlan(item, ref, planId, expectedOutputs) {
       var server = data.serverId;
@@ -156,7 +156,7 @@
       }));
       if (value.plan_ref) tasks.push(loadPlan(item, value.plan_ref, value.plan_id, owner.expectedOutputs).then(function (plan) {
         if (!current() || !plan) return;
-        if (plan.plan_id !== value.plan_id || (owner.kind === 'plan' && [2, 4].indexOf(plan.plan_schema_version) === -1)) throw failure('response-binding-invalid');
+        if (plan.plan_id !== value.plan_id || (owner.kind === 'plan' && [2, 4, 6].indexOf(plan.plan_schema_version) === -1)) throw failure('response-binding-invalid');
         item.plan = plan;
       }));
       if (value.report_ref) tasks.push(api.report(value.report_ref).then(function (report) {

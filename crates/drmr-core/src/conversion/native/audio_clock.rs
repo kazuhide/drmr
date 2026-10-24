@@ -3,6 +3,78 @@ use super::super::{ConversionError, native_media::SampleInfo};
 const BAD: ConversionError = ConversionError("native-aac-clock-mismatch");
 
 pub(super) struct AudioClock {
+    kind: ClockKind,
+}
+enum ClockKind {
+    Strict(StrictClock),
+    Manifested(ManifestedClock),
+}
+struct ManifestedClock {
+    strict: Option<StrictClock>,
+    transport: Option<super::super::ts::TransportAudioClock>,
+    ordinal: u64,
+    composition: Option<i128>,
+}
+impl AudioClock {
+    pub fn new(samples: u16, rate: u32, scale: u32) -> Result<Self, ConversionError> {
+        Ok(Self {
+            kind: ClockKind::Strict(StrictClock::new(samples, rate, scale)?),
+        })
+    }
+    pub(super) fn manifested() -> Result<Self, ConversionError> {
+        Ok(Self {
+            kind: ClockKind::Manifested(ManifestedClock {
+                strict: Some(StrictClock::new(1024, 44_100, 90_000)?),
+                transport: Some(super::super::ts::TransportAudioClock::new(44_100)?),
+                ordinal: 0,
+                composition: None,
+            }),
+        })
+    }
+    pub fn record(&mut self, info: &SampleInfo, last: bool) -> Result<(), ConversionError> {
+        match &mut self.kind {
+            ClockKind::Strict(clock) => clock.record(info, last),
+            ClockKind::Manifested(clock) => clock.record(info, last),
+        }
+    }
+}
+impl ManifestedClock {
+    fn record(&mut self, info: &SampleInfo, last: bool) -> Result<(), ConversionError> {
+        let composition = i128::from(info.pts) - i128::from(info.dts);
+        if info.ordinal != self.ordinal
+            || self.composition.is_some_and(|old| old != composition)
+            || info.duration == 0
+            || (last && info.duration > 2090)
+        {
+            return Err(BAD);
+        }
+        self.composition = Some(composition);
+        self.ordinal = self.ordinal.checked_add(1).ok_or(BAD)?;
+        // Candidates survive for the complete logical track. A failed model is
+        // never restarted at a resource boundary or replaced for a single sample.
+        if self
+            .strict
+            .as_mut()
+            .is_some_and(|clock| clock.record(info, last).is_err())
+        {
+            self.strict = None;
+        }
+        if self.transport.as_mut().is_some_and(|clock| {
+            clock
+                .begin(info.pts, info.dts)
+                .and_then(|()| clock.frame(info.pts, info.dts).map(|_| ()))
+                .is_err()
+        }) {
+            self.transport = None;
+        }
+        if self.strict.is_none() && self.transport.is_none() {
+            return Err(BAD);
+        }
+        Ok(())
+    }
+}
+
+struct StrictClock {
     step: i128,
     rate: i128,
     first: Option<(i64, i64)>,
@@ -11,7 +83,7 @@ pub(super) struct AudioClock {
     transport: bool,
     observed: Option<(u64, i64)>,
 }
-impl AudioClock {
+impl StrictClock {
     pub fn new(samples: u16, rate: u32, scale: u32) -> Result<Self, ConversionError> {
         if samples == 0 || rate == 0 || scale == 0 {
             return Err(BAD);

@@ -4,10 +4,19 @@ Encryption protects media samples. DRM signaling tells a player which license sy
 and key identifier to use. The common `convert` command can generate and check both
 the encrypted media and the corresponding DASH or HLS manifests.
 
-This profile accepts completed video-on-demand **clear HLS with MPEG-TS segments**
+The default `auto` and explicit `stitch` routes accept completed video-on-demand **clear HLS with MPEG-TS segments**
 and the existing qualified **clear MP4** profile: H.264 video with optional AAC
 audio. It does not accept existing DRM records or unknown
 MP4 initialization metadata for replacement. It does not contact a license server.
+
+With `--processing segments`, supported original fMP4 resources can instead
+produce fMP4 DASH or HLS with the requested DRM records. Supported TS resources
+can produce TS HLS with FairPlay declarations. These paths accept their
+qualified clear or encrypted source profiles with separately supplied input
+keys. They preserve segment membership and replace the protection records in
+new output files; they never modify the originals. Container changes still use
+`stitch`. The supported codecs, playback windows and record checks remain
+mandatory; recognizing an input DRM system alone does not qualify its media.
 
 ## Supported outputs
 
@@ -73,7 +82,7 @@ are generated from `kid` and the license URL. The same generated PSSH and PlayRe
 Object (PRO) data are used in initialization files and the MPD. These operations do
 not generate provider-specific Widevine policy data or validate license responses.
 
-Explicit DASH PSSH data is passed to Shaka Packager through its
+On `stitch` routes, explicit DASH PSSH data is passed to Shaka Packager through its
 [`--flagfile` facility](https://github.com/shaka-project/shaka-packager/blob/v3.8.0/packager/app/packager_main.cc),
 using a separate owner-protected temporary file. This avoids command-line size
 limits for large metadata. The file is checked before and after packaging, is
@@ -82,6 +91,8 @@ workspace. Uncertain filesystem entries are retained if the workspace is replace
 The file is never included in the output directory. The temporary directory
 path must not contain a comma, because the flag-file option treats commas as
 file-name separators; such a path is refused before packaging.
+Native `segments` routes write the validated records directly to new MP4
+initialization files and the MPD, then reopen and check that output graph.
 
 Omit `widevine_pssh` or `playready_license_url` to select only one system. At least
 one must remain. Do not select FairPlay for the DASH output.
@@ -146,11 +157,15 @@ the license service has been checked.
 ## What is checked
 
 Conversion checks the final output before publication. DASH checks include the
-actual referenced initialization files, the exact selected PSSH set, key
+actual referenced initialization and media files, the exact selected PSSH set, key
 identifiers, encryption scheme, XML namespaces, and generated PlayReady PRO/PSSH
 agreement. HLS checks every referenced media playlist and its FairPlay method,
 key address, key-format declaration, initialization metadata, and declared vector
-when present.
+when present. A DASH media resource may repeat a selected provider's exact
+initialization PSSH once per provider. Different records, additional systems,
+and duplicate records are rejected. FairPlay fragmented-MP4 HLS has no PSSH
+records in either its initialization or media files. These checks read bounded
+metadata and skip media-data payloads; they do not load an entire segment into memory.
 
 FairPlay media playlists require one valid `EXT-X-VERSION` declaration: at least
 6 for ordinary fragmented-MP4 HLS using `EXT-X-MAP`, or at least 5 for MPEG-TS.
@@ -167,6 +182,8 @@ This record identifies encryption keys by identifier; it does not contain the
 content keys or provider-specific policy data. drmr accepts only its generated
 single-key form here: version 1, zero flags, the selected output KID and an empty
 data field. The MPD, initialization files and actual track protection must agree.
+Common records are accepted in initialization files declaring that selected track;
+they are not accepted in a separate media fragment without that track declaration.
 This output check does not relax source admission or authorize arbitrary provider
 records. It does not mark service-specific signaling or license playback as verified.
 
@@ -175,16 +192,20 @@ Library callers can independently reopen an existing result with
 reads a fresh, byte-bound output graph and verifies its current records against
 the operator settings. Call `Converter::verify` separately for full source/result
 media comparison. A prior conversion report does not authorize either check.
-The single-output CLI `verify` repeats these signaling checks when its protected
-key file explicitly selects a signaling profile. It checks the same byte-bound
+The single-output CLI `verify` repeats these signaling checks for current saved
+plans, including when no provider is selected. Older saved single-output plans
+retain their original behavior when no signaling profile is supplied. It checks the same byte-bound
 output as its complete media comparison. A [multiple-output saved plan](multiple-outputs.md)
 also fixes the selected DRM systems and reports each output's media, DRM,
 native manifest linting, and optional external manifest checks separately.
 
 Whole-file AES-128 encryption can make resource bytes opaque. The native metadata
 check examines the final manifest and readable initialization and provider records;
-it does not prove that provider data is absent inside ciphertext. Decryption and
-complete source/result media comparison remain separate checks.
+the standalone signaling method cannot prove that provider data is absent inside
+ciphertext. The `segments` conversion and media-verification routes also check
+the actual decrypted initialization and media resources and retain guards for
+both their plaintext and the original ciphertext. Complete source/result media
+comparison remains a separate check.
 
 The existing `{"system":"playready","license_url":"..."}` setting retains its
 qualified clear-MP4-to-CBCS-DASH profile. It is not silently expanded to other inputs.

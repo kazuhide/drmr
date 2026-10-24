@@ -58,9 +58,13 @@ pub enum ChildOperation {
         output_root: PathBuf,
         save_file: PathBuf,
         output_spec_file: PathBuf,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        processing: Option<drmr_core::conversion::ProcessingMode>,
     },
     Convert {
         plan_file: PathBuf,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        processing: Option<drmr_core::conversion::ProcessingMode>,
     },
     Verify {
         plan_file: PathBuf,
@@ -149,12 +153,15 @@ impl ChildRequest {
                 output_root,
                 save_file,
                 output_spec_file,
+                ..
             } => [input_file, output_root, save_file, output_spec_file]
                 .iter()
                 .all(|p| absolute(p)),
-            ChildOperation::Convert { plan_file } | ChildOperation::Verify { plan_file } => {
-                absolute(plan_file)
-            }
+            ChildOperation::Convert {
+                plan_file,
+                processing,
+            } => absolute(plan_file) && processing.is_none(),
+            ChildOperation::Verify { plan_file } => absolute(plan_file),
         };
         if self.protocol_version != 1
             || !correlation_id(&self.nonce)
@@ -372,6 +379,65 @@ mod tests {
         }
         let raw = br#"{"kind":"verify","plan_file":"/plan.json","overwrite":true}"#;
         assert!(decode::<ChildOperation>(raw, REQUEST_LIMIT).is_err());
+    }
+    #[test]
+    fn plan_processing_modes_roundtrip_and_omission_retains_the_original_wire_shape() {
+        let root = std::env::temp_dir().join("processing-protocol");
+        let base = serde_json::json!({
+            "kind": "plan",
+            "input_file": root.join("source.m3u8"),
+            "output_root": root.join("output"),
+            "save_file": root.join("plan.json"),
+            "output_spec_file": root.join("outputs.json")
+        });
+        let parsed: ChildOperation =
+            decode(&serde_json::to_vec(&base).unwrap(), REQUEST_LIMIT).unwrap();
+        assert_eq!(serde_json::to_value(parsed).unwrap(), base);
+        for mode in ["auto", "segments", "stitch"] {
+            let mut value = base.clone();
+            value["processing"] = mode.into();
+            let parsed: ChildOperation =
+                decode(&serde_json::to_vec(&value).unwrap(), REQUEST_LIMIT).unwrap();
+            assert_eq!(serde_json::to_value(parsed).unwrap(), value);
+        }
+        let mut unknown = base;
+        unknown["processing"] = "tracks".into();
+        assert!(
+            decode::<ChildOperation>(&serde_json::to_vec(&unknown).unwrap(), REQUEST_LIMIT)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn saved_conversion_processing_overrides_are_rejected_before_cli_construction() {
+        let root = std::env::temp_dir().join("processing-protocol");
+        let request_file = root.join("request.json");
+        let base = serde_json::json!({
+            "protocol_version": 1,
+            "nonce": "a".repeat(32),
+            "operation": { "kind": "convert", "plan_file": root.join("plan.json") },
+            "runtime": { "keys_file": null, "max_workers": null, "tools": {
+                "packager_bin": "packager", "hls_validator_bin": "mediastreamvalidator",
+                "dash_validator_bin": "php"
+            } },
+            "channels": { "result_file": root.join("result.json"),
+                "progress_file": root.join("progress.json") }
+        });
+        let parsed: ChildRequest =
+            decode(&serde_json::to_vec(&base).unwrap(), REQUEST_LIMIT).unwrap();
+        assert!(parsed.validate(&request_file).is_ok());
+        assert!(
+            serde_json::to_value(parsed).unwrap()["operation"]
+                .get("processing")
+                .is_none()
+        );
+        for mode in ["auto", "segments", "stitch"] {
+            let mut value = base.clone();
+            value["operation"]["processing"] = mode.into();
+            let parsed: ChildRequest =
+                decode(&serde_json::to_vec(&value).unwrap(), REQUEST_LIMIT).unwrap();
+            assert_eq!(parsed.validate(&request_file), Err(ProtocolError::Invalid));
+        }
     }
     #[test]
     fn progress_cannot_cross_an_operation_or_publish_arbitrary_activity() {

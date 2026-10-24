@@ -7,8 +7,8 @@ supported HLS, static DASH and MP4 URLs within the documented acquisition profil
 
 For several outputs with separate DRM systems and final-manifest checks, use
 the [multiple-output workflow](multiple-outputs.md). The single-output examples
-below create schema-version-3 plans. Legacy version-one plans remain readable
-with their original complete-decode minimum.
+below create schema-version-5 plans. Legacy version-one and version-three plans
+remain readable with their recorded validation and packaging behavior.
 
 ## 1. Analyze and retain the input
 
@@ -69,7 +69,7 @@ origins, authentication, and transfer limits; the same options apply to `analyze
 drmr plan ./source/input.m3u8 --to cbcs --format dash --output ./result --save ./conversion.plan.json --json
 ```
 
-The saved plan has `kind: "execution-plan"` and `schema_version: 3`. It records
+The saved plan has `kind: "execution-plan"` and `schema_version: 5`. It records
 one output format and protection scheme, the new output location, and a SHA-256
 fingerprint and size for every referenced source file. `required_depth` is
 `native` by default; `--decode` saves `decoded`. This minimum is included in
@@ -77,6 +77,13 @@ the plan ID and cannot be lowered at execution. The source is fully
 admitted again before saving. The plan itself is created privately and never
 overwrites an existing file. Keep the plan and result outside the saved source
 directory. For a single MP4, sibling plan and output files are allowed.
+
+Add `--processing segments` to preserve original boundaries in a supported
+matching-container conversion, or `--processing stitch` to prepare complete tracks
+and package the requested output. HLS/DASH output from `stitch` is segmented again.
+The default is `auto`. The plan's `processing` selection records `requested`,
+`resolved` and `boundaries`; the choice is included in its ID. Explicit unsupported
+modes are refused. See [processing modes](usage.md#select-a-processing-mode).
 
 On Unix, use a trusted output and plan parent owned by your user with no group
 or other-user write permission. Protected shared temporary directories have a
@@ -118,8 +125,9 @@ identifier, key address, or license endpoint. Optional signaling must still meet
 its separately documented input and output profile. `--packager-bin`,
 `--max-workers`, `--json`, and `--measure` remain runtime options. `--decode`
 can strengthen a saved minimum. Legacy single version-one and named-output
-version-two plans keep a decoded minimum. Input, target,
-format, output, and download overrides are refused with `--plan`.
+version-two plans keep a decoded minimum. Version-three and version-four plans
+retain their saved depth and original complete-track packaging behavior. Input,
+target, format, processing, output, and download overrides are refused with `--plan`.
 
 ## 4. Verify independently
 

@@ -221,6 +221,7 @@ impl super::Converter {
             frozen_source: guards,
             planned_destination: self.planned_destination.clone(),
             output_signaling: self.output_signaling.clone(),
+            processing_mode: self.processing_mode,
         }
     }
     pub(super) fn check_frozen_source(&self) -> Result<(), ConversionError> {

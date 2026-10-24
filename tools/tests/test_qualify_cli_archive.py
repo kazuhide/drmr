@@ -25,6 +25,26 @@ SPEC.loader.exec_module(module)
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_current_plan_requires_saved_decoding_and_resolved_stitch_boundaries(self):
+        current = {"schema_version": 5, "required_depth": "decoded", "processing": {
+            "requested": "auto", "resolved": "stitch", "boundaries": "resegment", "segment_duration_ms": 2000}}
+        self.assertTrue(module.plan_depth(current))
+        for change in [
+                lambda p: p.update(required_depth="native"),
+                lambda p: p.pop("processing"),
+                lambda p: p["processing"].update(resolved="auto"),
+                lambda p: p["processing"].update(boundaries="preserve"),
+                lambda p: p["processing"].update(segment_duration_ms=2000.0),
+                lambda p: p["processing"].update(segment_duration_ms=None),
+                lambda p: p["processing"].update(unrecognized=True)]:
+            altered = copy.deepcopy(current)
+            change(altered)
+            with self.subTest(plan=altered):
+                self.assertFalse(module.plan_depth(altered))
+        self.assertTrue(module.plan_depth({"schema_version": 1}))
+        self.assertTrue(module.plan_depth({"schema_version": 3, "required_depth": "decoded"}))
+        self.assertFalse(module.plan_depth({"schema_version": 3, "required_depth": "native"}))
+
     def audio_probe(self):
         return {"streams": [{"codec_name": "aac", "profile": "LC", "sample_rate": "44100",
                              "channels": 2, "time_base": "1/90000", "nb_read_frames": "432"}],

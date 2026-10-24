@@ -9,3 +9,5 @@ keys*.env
 /crates/drmr-desktop/binaries/
 /crates/drmr-desktop/bundle-resources/
 /crates/drmr-desktop/gen/schemas/
+
+__pycache__/

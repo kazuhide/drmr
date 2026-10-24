@@ -11,12 +11,32 @@ Original local file or manifest resources
   -> new output, published only after verification
 ```
 
-The progressive MP4 route copies the original encoded tracks directly, retaining their finite presentation window. Other routes prepare complete tracks before packaging new fragments and preserve qualified playback windows in the resulting metadata. They do not transcrypt each original segment independently.
+The progressive MP4 route copies the original encoded tracks directly, retaining their finite presentation window. The complete-track routes below prepare media before packaging new fragments and preserve qualified playback windows in the resulting metadata.
+
+## Select the processing unit
+
+`plan --save` and direct `convert` accept `--processing auto|segments|stitch`.
+`segments` uses supported original resources and retains their sample membership,
+timestamps and boundaries. `stitch` prepares complete tracks and packages the
+requested output; HLS/DASH output is segmented again, while MP4 output is a file.
+`auto` resolves a qualified route without changing the existing default packaging
+behavior. An explicitly requested mode never silently changes to another mode.
+
+New single-output plans use schema 5 and named-output plans use schema 6. Both
+fix the requested and resolved modes and boundary guarantee. `convert --plan`
+refuses `--processing`; create a new plan to change it. Native segment processing
+needs no per-segment media subprocess. Additional `--decode` can still prepare
+complete tracks for decoding; the existing TS decoding preparation also needs
+Shaka Packager. It does not replace native checks. Actual reports state `mode`
+and `boundaries` separately from the handler identifier. See
+[processing and timing](media-processing.md#generic-conversion-and-timing-limits).
 
 ## Route conditions
 
 | Identifier | Conditions and behavior | Required external tools |
 | --- | --- | --- |
+| `fmp4-segments` | Supported original fMP4 resources with their sample grouping, clocks and segment boundaries retained; encryption and initialization metadata are rewritten natively. | None at native depth |
+| `mpeg-ts-segments` | Supported original TS resources with each segment's frames and clocks retained; native encryption updates TS signaling and packet layout as needed. | None at native depth |
 | `progressive-mp4` | Qualified clear, `cenc`, or `cbcs` progressive AAC-LC, optionally with H.264 from the same file, to clear MP4. Direct copying preserves the finite audio end. | None for clear native copy; FFmpeg copy remux for encrypted finite input |
 | `fragmented-mp4` | One supported track, or qualified finite audio and optional video from the same progressive source, to clear, `cenc`, or `cbcs` MP4. Shaka Packager creates fragments; qualified finite playback windows are preserved. | Shaka Packager; also FFmpeg for encrypted finite progressive input |
 | `dash-presentation` | Supported complete local tracks to static DASH. Source manifest resources are localized and assembled into tracks before new segmentation. | Shaka Packager; also FFmpeg for encrypted finite progressive input |
@@ -26,7 +46,8 @@ The progressive MP4 route copies the original encoded tracks directly, retaining
 | `mpeg-ts-dash` | Supported clear, AES-128, or SAMPLE-AES TS input to clear, `cenc`, or `cbcs` static DASH. Video, audio, or both retain their original frame and clock evidence; the final MPD and referenced media are read again before publication. | Shaka Packager |
 | `mpeg-ts-hls-ts` | Supported original TS input to TS HLS, with clear, whole-resource AES-128, or SAMPLE-AES protection. Original frame and clock evidence qualifies the private reference; final playlists are compared against it. | Shaka Packager |
 
-The table describes native conversion. Add FFmpeg and ffprobe for `--decode`;
+The table describes native conversion. Add FFmpeg and ffprobe for `--decode`,
+and Shaka Packager for existing TS complete-decoding preparation;
 native analysis and verification need none of these tools. Decode evidence is
 additional to every required native check. See [verification depth](verification.md).
 

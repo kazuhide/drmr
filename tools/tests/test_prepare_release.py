@@ -268,6 +268,14 @@ class ReleasePacket(unittest.TestCase):
             self.assertEqual(len(media["stages"]), 18)
             self.assertEqual(media["metadata_analysis"], previous["metadata_analysis"])
 
+    def test_current_single_plan_version_is_accepted_for_both_media_proofs(self):
+        for _, artifact, _, _ in PREPARE.TARGETS:
+            def current_plan(report):
+                report["media"]["plan_schema_version"] = 5
+                report["aac_44100"]["plan_schema_version"] = 5
+            self.client.report(artifact, "cli-media-qualification.json", current_plan)
+        self.assertTrue(self.prepare()["success"])
+
     def test_metadata_analysis_is_mandatory_exact_and_does_not_claim_media_admission(self):
         entries = dict(self.client.entries["drmr-Linux-X64"])
         archive = json.loads(entries["cli-archive-verification.json"])

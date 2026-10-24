@@ -30,22 +30,28 @@ pub(super) fn read(
 /// A declaration is not evidence of the coded count, payloads, clocks or decoded samples.
 pub(super) fn read_claim(path: &Path) -> Result<Option<AudioClaim>, ConversionError> {
     let mut source = Source::open(path, false, None)?;
-    let boxes = mp4::parse_boxes(&source.movie).map_err(|_| BAD)?;
+    let Some((claim, track_id)) = claim_from_movie(&source.movie)? else {
+        return Ok(None);
+    };
+    source.validate_fragments(track_id, None)?;
+    source.check_identity(path, false)?;
+    Ok(Some(claim))
+}
+
+pub(super) fn claim_from_movie(bytes: &[u8]) -> Result<Option<(AudioClaim, u32)>, ConversionError> {
+    let boxes = mp4::parse_boxes(bytes).map_err(|_| BAD)?;
     let movie = only_movie(&boxes)?;
-    if !single_fragmented_audio(movie, &source.movie)? {
+    if !single_fragmented_audio(movie, bytes)? {
         // Other track layouts keep their existing edit parser and refusal policy.
         return Ok(None);
     }
-    let Some(edit) = special_edit(movie, &source.movie)? else {
+    let Some(edit) = special_edit(movie, bytes)? else {
         // Ordinary progressive edits and no-edit tracks retain their existing
         // dispatch before any requirements of this new fragmented profile apply.
         return Ok(None);
     };
-    let layout = Layout::read(movie, &source.movie)?;
-    source.validate_fragments(layout.track_id, None)?;
-    let claim = declaration(edit, &source.movie, layout)?;
-    source.check_identity(path, false)?;
-    Ok(Some(claim))
+    let layout = Layout::read(movie, bytes)?;
+    Ok(Some((declaration(edit, bytes, layout)?, layout.track_id)))
 }
 
 fn single_fragmented_audio(movie: &Mp4Box, bytes: &[u8]) -> Result<bool, ConversionError> {
@@ -90,14 +96,13 @@ pub(super) fn restore(
     rewrite(path, source, &replacement, layout.track_id, stop)
 }
 
-pub(super) fn strip(
+/// Remove only a canonical declaration from an owned copy, without treating it as coded evidence.
+pub(super) fn strip_claim(
     path: &Path,
-    presentation: AudioPresentation,
+    claim: AudioClaim,
     stop: &Stop,
 ) -> Result<(), ConversionError> {
     check_stop(stop)?;
-    let presentation =
-        AudioPresentation::new(presentation.evidence, presentation.presented_samples)?;
     let mut source = Source::open(path, true, Some(stop))?;
     let boxes = mp4::parse_boxes(&source.movie).map_err(|_| BAD)?;
     let movie = only_movie(&boxes)?;
@@ -105,7 +110,7 @@ pub(super) fn strip(
     source.validate_fragments(layout.track_id, Some(stop))?;
     let edits = edit_box(layout.track)?.ok_or(BAD)?;
     let edit = canonical_edit(edits, &source.movie)?;
-    if declaration(edit, &source.movie, layout)?.bind(presentation.evidence)? != presentation {
+    if declaration(edit, &source.movie, layout)? != claim {
         return Err(BAD);
     }
     let replacement = rewrite_movie(&source.movie, movie, None, None)?;
@@ -717,7 +722,7 @@ fn read_span(file: &mut File, span: &Span, limit: u64) -> Result<Vec<u8>, Conver
     }
     Ok(bytes)
 }
-fn validate_fragment(bytes: &[u8], track_id: u32) -> Result<(), ConversionError> {
+pub(super) fn validate_fragment(bytes: &[u8], track_id: u32) -> Result<(), ConversionError> {
     let boxes = mp4::parse_boxes(bytes).map_err(|_| BAD)?;
     let [fragment] = boxes.as_slice() else {
         return Err(BAD);
@@ -1127,7 +1132,7 @@ mod tests {
                 }
                 restore(&path, expected, &Stop::new()).unwrap();
                 assert_eq!(std::fs::read(&path).unwrap(), actual);
-                strip(&path, expected, &Stop::new()).unwrap();
+                strip_claim(&path, expected.claim(), &Stop::new()).unwrap();
                 assert_eq!(read_claim(&path).unwrap(), None);
                 assert_eq!(media_bytes(&std::fs::read(&path).unwrap()), media);
             }
@@ -1182,7 +1187,7 @@ mod tests {
                 "presentation-window-not-supported"
             );
             assert!(restore(&path, expected, &Stop::new()).is_err());
-            assert!(strip(&path, expected, &Stop::new()).is_err());
+            assert!(strip_claim(&path, expected.claim(), &Stop::new()).is_err());
             assert_eq!(std::fs::read(&path).unwrap(), candidate);
         }
     }
@@ -1256,7 +1261,7 @@ mod tests {
         std::fs::write(&path, &valid).unwrap();
         let wrong =
             AudioPresentation::new(expected.evidence, expected.presented_samples - 1).unwrap();
-        assert!(strip(&path, wrong, &Stop::new()).is_err());
+        assert!(strip_claim(&path, wrong.claim(), &Stop::new()).is_err());
         assert_eq!(std::fs::read(&path).unwrap(), valid);
         let mut wrong_evidence = expected.evidence;
         wrong_evidence.sample_rate = 48_000;

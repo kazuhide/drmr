@@ -497,11 +497,20 @@ def source_verification(report):
 
 
 def plan_depth(planned):
-    if not isinstance(planned, dict):
+    if not isinstance(planned, dict) or type(planned.get("schema_version")) is not int:
         return False
-    return (type(planned.get("schema_version")) is int
-            and ((planned["schema_version"] == 1 and "required_depth" not in planned)
-                 or (planned["schema_version"] == 3 and planned.get("required_depth") == "decoded")))
+    if planned["schema_version"] == 1:
+        return "required_depth" not in planned
+    if planned.get("required_depth") != "decoded":
+        return False
+    if planned["schema_version"] == 3:
+        return True
+    processing = planned.get("processing")
+    return (planned["schema_version"] == 5 and isinstance(processing, dict)
+            and set(processing) == {"requested", "resolved", "boundaries", "segment_duration_ms"}
+            and processing["requested"] in ("auto", "stitch") and processing["resolved"] == "stitch"
+            and processing["boundaries"] == "resegment"
+            and type(processing["segment_duration_ms"]) is int and processing["segment_duration_ms"] == 2000)
 
 
 def doctor(report):

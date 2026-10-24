@@ -169,3 +169,19 @@ test('a new plan cannot substitute other output conditions under the accepted jo
   await h.state.submit({ kind: 'plan', analysis_ref: 'analysis_1', output_parent_ref: 'parent_1', destination_name: 'result', outputs: [output] }, { keys_ref: null, max_workers: null });
   assert.equal(h.state.selected().outcome, 'unavailable'); assert.equal(h.state.selected().plan, null);
 });
+
+test('new processing plans bind each requested mode before becoming executable', async () => {
+  for (const substitute of [false, true]) {
+    const output = { id: 'clear', format: 'mp4', target: 'clear', drms: [], conformance: 'none', processing: 'stitch' };
+    const plan = env({ plan_ref: 'plan_1', session_id: sid, plan_id: pid, plan_schema_version: 6, required_depth: 'native',
+      outputs: [{ ...output, processing: substitute ? 'auto' : 'stitch' }],
+      processing: [{ id: 'clear', selection: { requested: substitute ? 'auto' : 'stitch', resolved: 'stitch', boundaries: 'not-applicable', segment_duration_ms: null } }],
+      destination_state: 'absent', export_url: '/api/common/plans/plan_1/export' });
+    const h = await harness({ submit: async () => job({ operation: 'plan', state: 'succeeded', revision: 1, supervision_confirmed: true, cleanup_confirmed: true, exit_code: 0, plan_ref: 'plan_1', plan_id: pid, report_ref: 'report_1' }),
+      plan: async () => plan,
+      report: async () => env({ report_ref: 'report_1', session_id: sid, job_id: 'job_1', request_id: rid, operation: 'plan', analysis_ref: null, plan_ref: 'plan_1', plan_id: pid, report_kind: 'plan', report_schema_version: 6, report: { schema_version: 6, plan_id: pid, required_depth: 'native', processing: plan.processing } }) });
+    await h.state.submit({ kind: 'plan', analysis_ref: 'analysis_1', output_parent_ref: 'parent_1', destination_name: 'result', outputs: [output] }, { keys_ref: null, max_workers: null });
+    assert.equal(h.state.selected().outcome, substitute ? 'unavailable' : 'succeeded');
+    assert.equal(h.state.selected().plan === null, substitute);
+  }
+});

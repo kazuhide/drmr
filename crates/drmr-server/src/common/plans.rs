@@ -28,6 +28,7 @@ pub struct Plan {
     pub schema: u32,
     pub required_depth: drmr_core::conversion::ValidationDepth,
     pub outputs: Value,
+    pub processing: Option<Value>,
     pub destination: PathBuf,
     pub destinations: Vec<PathBuf>,
     pub source_entrypoint: PathBuf,
@@ -43,7 +44,11 @@ impl Plan {
         Ok(b)
     }
     pub fn view(&self) -> Value {
-        json!({"plan_ref":self.reference,"session_id":self.session,"plan_id":self.id,"plan_schema_version":self.schema,"required_depth":self.required_depth,"outputs":self.outputs,"destination_state":destination_state(&self.destination,&self.destinations),"export_url":format!("/api/common/plans/{}/export",self.reference)})
+        let mut view = json!({"plan_ref":self.reference,"session_id":self.session,"plan_id":self.id,"plan_schema_version":self.schema,"required_depth":self.required_depth,"outputs":self.outputs,"destination_state":destination_state(&self.destination,&self.destinations),"export_url":format!("/api/common/plans/{}/export",self.reference)});
+        if let Some(processing) = &self.processing {
+            view["processing"] = processing.clone();
+        }
+        view
     }
 }
 pub fn digest(bytes: &[u8]) -> String {
@@ -75,6 +80,10 @@ pub fn load(path: &Path, files: &Files, session: &str, reference: String) -> Res
         SavedPlan::Single(p) => p.minimum_depth(),
         SavedPlan::Bundle(p) => p.minimum_depth(),
     };
+    let processing = match &saved {
+        SavedPlan::Single(plan) => plan.processing.map(|selection| json!(selection)),
+        SavedPlan::Bundle(plan) => plan.processing.as_ref().map(|choices| json!(choices)),
+    };
     let destinations = match &saved {
         SavedPlan::Single(p) => vec![p.intent.output.clone()],
         SavedPlan::Bundle(p) => p
@@ -101,6 +110,7 @@ pub fn load(path: &Path, files: &Files, session: &str, reference: String) -> Res
         schema,
         required_depth,
         outputs,
+        processing,
         destination,
         destinations,
         source_entrypoint: source.root.join(&source.entrypoint),

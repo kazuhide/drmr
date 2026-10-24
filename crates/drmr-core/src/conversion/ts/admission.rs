@@ -365,6 +365,59 @@ impl Admission {
         clear.extend(crc(&clear).to_be_bytes());
         Ok(clear)
     }
+    pub(super) fn sample_pmt(&self, audio: Option<[u8; 2]>) -> Result<Vec<u8>, ConversionError> {
+        if self.sample_aes
+            || self
+                .tracks
+                .iter()
+                .any(|track| track.kind == TrackKind::Audio)
+                != audio.is_some()
+        {
+            return Err(BAD);
+        }
+        if let Some(configuration) = audio {
+            super::canonical::Config::audio(&configuration)?;
+        }
+        let data = self.pmt.as_ref().ok_or(BAD)?;
+        let mut encrypted = data[..12].to_vec();
+        let mut at = 12;
+        while at < data.len() - 4 {
+            let head = data.get(at..at + 5).ok_or(BAD)?;
+            at += 5;
+            let n = (usize::from(head[3] & 15) << 8) | usize::from(head[4]);
+            let language = data.get(at..at + n).ok_or(BAD)?;
+            at += n;
+            let mut descriptors = language.to_vec();
+            let stream_type = match head[0] {
+                0x1b => {
+                    descriptors.extend_from_slice(b"\x0f\x04zavc");
+                    0xdb
+                }
+                0x0f => {
+                    descriptors.extend_from_slice(b"\x0f\x04aacd\x05\x0eapadzaac\0\0\x01\x02");
+                    descriptors.extend_from_slice(&audio.ok_or(BAD)?);
+                    0xcf
+                }
+                _ => return Err(BAD),
+            };
+            encrypted.extend_from_slice(&[
+                stream_type,
+                head[1],
+                head[2],
+                0xf0,
+                u8::try_from(descriptors.len()).map_err(|_| BAD)?,
+            ]);
+            encrypted.extend_from_slice(&descriptors);
+        }
+        if at != data.len() - 4 || encrypted.len() + 4 > 182 {
+            return Err(ConversionError("ts-encrypted-pmt-must-fit-one-packet"));
+        }
+        let section_length = encrypted.len() + 1;
+        encrypted[1] = 0xb0 | u8::try_from(section_length >> 8).map_err(|_| BAD)?;
+        encrypted[2] = u8::try_from(section_length & 255).map_err(|_| BAD)?;
+        encrypted.extend(crc(&encrypted).to_be_bytes());
+        Ok(encrypted)
+    }
     pub fn segment(&mut self, path: &Path, stop: &Stop) -> Result<(), ConversionError> {
         self.segment_pat = false;
         self.segment_pmt = false;

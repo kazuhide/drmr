@@ -45,6 +45,7 @@ pub(super) fn transport(
             native.metadata()?;
             native.timing()?;
             native.evidence()?;
+            let clock = super::super::native::ManifestAacClock::from_transport(&native)?;
             let report = Inspection::new(
                 InputFormat::Mp4,
                 Evidence::ContainerMetadata,
@@ -87,6 +88,7 @@ pub(super) fn transport(
                 playlist_reference: None,
                 dash_reference: false,
                 audio_presentation: audio_presentation.filter(|_| kind == TrackKind::Audio),
+                clock,
             })
         })
         .collect()
@@ -101,7 +103,7 @@ impl Converter {
         result_keys: &InputKeys,
     ) -> Result<VerificationReport, ConversionError> {
         let mut report = if a.transport_index.is_some() || b.transport_index.is_some() {
-            self.backend.native_verify_transport(
+            self.backend.native_verify_transport_with_clock(
                 super::super::ts::View {
                     input: &a.source,
                     metadata: &a.media,
@@ -124,14 +126,18 @@ impl Converter {
                     unedited: b.audio_presentation.is_some(),
                 }
                 .with_all_keys(result_keys),
+                a.clock,
+                b.clock,
             )?
         } else {
             self.backend.native_verify_views(
                 StreamView::new(&a.source, a.index, key_for(a, source_keys))
                     .with_metadata(&a.media)
+                    .with_clock(a.clock)
                     .with_all_keys(source_keys),
                 StreamView::new(&b.source, b.index, key_for(b, result_keys))
                     .with_metadata(&b.media)
+                    .with_clock(b.clock)
                     .with_all_keys(result_keys),
             )?
         };
