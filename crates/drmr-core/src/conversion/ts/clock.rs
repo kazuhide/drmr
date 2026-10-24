@@ -17,7 +17,7 @@ fn nearest(numerator: i128, denominator: i128) -> Result<i128, ConversionError> 
 /// Advance one decoded AAC frame using the absolute rational clock phase.
 /// This is the integer rounding rule used by `FFprobe`'s stable audio clock;
 /// repeatedly adding the truncated packet duration would accumulate drift.
-pub(super) fn next(ticks: i64, sample_rate: u32) -> Result<i64, ConversionError> {
+pub(in crate::conversion) fn next(ticks: i64, sample_rate: u32) -> Result<i64, ConversionError> {
     if ticks < 0 || !matches!(sample_rate, 44_100 | 48_000) {
         return Err(BAD);
     }

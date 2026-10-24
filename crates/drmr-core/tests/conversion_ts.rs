@@ -492,11 +492,46 @@ fn complete_frame_evidence_rejects_an_interlaced_source_or_actual_hls_result() {
             acquisition_report(result),
             proxy_roles(&audit)
         );
-        assert_profile_omission(&audit, role);
+        assert_progressive_omission(&proxy, &input, &clear_result, &keys, &hls, &audit, role);
     }
     for (path, before) in originals {
         assert_eq!(common::snapshot_tree(path), before);
     }
+}
+
+fn assert_progressive_omission(
+    proxy: &Path,
+    source: &Path,
+    result: &Path,
+    keys: &InputKeys,
+    hls: &HlsInputKeys,
+    audit: &Path,
+    role: &str,
+) {
+    // Native slice headers refuse the interlaced fixture before decoded
+    // profile fallback. Exercise that fallback independently on the clean
+    // pair so each role still proves an actual omitted-field query.
+    let verified = converter()
+        .with_ffprobe(proxy.to_str().unwrap())
+        .verify(VerificationRequest {
+            source: VerificationSource {
+                input: source,
+                input_keys: keys,
+                hls_keys: hls,
+            },
+            output: VerificationSource {
+                input: result,
+                input_keys: keys,
+                hls_keys: hls,
+            },
+        })
+        .unwrap();
+    assert!(verified.passed);
+    assert!(verified.decode_evidence.satisfies(
+        drmr_core::conversion::ValidationDepth::Decoded,
+        verified.scope
+    ));
+    assert_profile_omission(audit, role);
 }
 
 fn remove_json_field(value: &mut serde_json::Value, key: &str) -> usize {

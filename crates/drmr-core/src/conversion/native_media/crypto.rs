@@ -111,7 +111,7 @@ impl Cipher {
                 if !final_chunk && !bytes.len().is_multiple_of(16) {
                     return Err(BAD);
                 }
-                for block in bytes.chunks_exact_mut(16) {
+                for block in bytes.as_chunks_mut::<16>().0 {
                     if self.block % (self.crypt + self.skip) < self.crypt {
                         let mut original = Zeroizing::new([0; 16]);
                         original.copy_from_slice(block);

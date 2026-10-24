@@ -310,7 +310,9 @@ impl Writer {
             self.flag(false);
         }
         self.0
-            .chunks_exact(8)
+            .as_chunks::<8>()
+            .0
+            .iter()
             .map(|chunk| {
                 chunk
                     .iter()

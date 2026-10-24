@@ -1384,16 +1384,16 @@ impl Converter {
                 .with_all_keys(source_keys),
                 super::ts::View {
                     input: result_input,
-                    // HLS carries its private key URI; DASH uses the independent output key.
+                    // This HLS decoder reads its private key URI. MP4/DASH
+                    // discovery instead needs the complete track-key dictionary.
                     metadata: result_input,
                     index: b.index,
                     key: result_key,
-                    all_keys: None,
+                    all_keys: b.playlist_reference.is_none().then_some(result_keys),
                     transport: false,
                     native: None,
                     unedited: false,
-                }
-                .with_all_keys(result_keys),
+                },
             );
         }
         let a_view =

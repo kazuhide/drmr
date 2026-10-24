@@ -43,6 +43,8 @@ edit in fragmented MP4 has no declared end; it can still have a nonzero clock
 offset. Rust applies that offset to every sample before comparing presentation
 times, while retaining the raw clocks and the independently declared range.
 This accepts valid B-frame alignment and detects an edit-only timing change.
+The single rate-one edit and its zero-duration meaning are described in the
+[W3C ISO BMFF byte-stream note](https://www.w3.org/TR/2024/NOTE-mse-byte-stream-format-isobmff-20240723/#initialization-segments).
 Known movie, track and media durations are checked against their respective
 sample or playback evidence; a zero header duration remains unknown.
 
@@ -58,6 +60,9 @@ Unknown mandatory structures, incomplete sample evidence and unsupported
 profiles cause refusal. Selecting the default does not permit missing samples,
 invented clocks, ignored playback edits, or truncated validation output.
 An identified codec name or configuration box alone is not codec qualification.
+Full MP4 admission also refuses unmodeled track apertures (`tapt`), track
+references (`tref`) and extended-language controls (`elng`). Metadata-only
+identification does not qualify those playback or selection semantics.
 
 Complete media admission currently accepts the implemented AVC (H.264) and
 typed AAC profiles. Recognizing HEVC, AV1, VP9, AC-3, E-AC-3, Opus or FLAC

@@ -19,6 +19,7 @@ use crate::{inspection::TrackKind, toolrun::RunOptions};
 pub(super) use admission::Admission;
 pub(in crate::conversion) use canonical::Config as CanonicalConfig;
 pub(super) use canonical::Native as NativeEvidence;
+pub(in crate::conversion) use clock::next as next_audio_clock;
 pub(super) use compatibility::demux_view;
 pub(super) use native::NativeScanner;
 pub(super) use projection::Projector;

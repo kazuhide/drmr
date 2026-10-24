@@ -266,6 +266,11 @@ fn unconfirmed_cleanup_retains_the_flags_and_preserves_the_callers_owner_and_sin
     let sink = Arc::new(Collector::default());
     let observer = Arc::new(Collector::default());
     let runner = ToolRunner::new(Arc::new(Secrets::new()), sink.clone())
+        // Test cleanup after spawn independently of unrelated process-wide admission.
+        .with_limiter(Arc::new(crate::resources::Limiter::new(
+            1,
+            512 * 1024 * 1024,
+        )))
         .with_cleanup_owner(owner.clone())
         .with_path(temp.path().as_os_str())
         .observed(observer.clone());
@@ -280,6 +285,8 @@ fn unconfirmed_cleanup_retains_the_flags_and_preserves_the_callers_owner_and_sin
             assert_eq!(protected.runner.path(), Some(temp.path().as_os_str()));
             let (_, actual_owner) = protected.runner.ensuring_cleanup_owner();
             assert!(Arc::ptr_eq(&owner, &actual_owner));
+            assert_eq!(protected.runner.native_capacity(), (1, 512 * 1024 * 1024));
+            let mut cleanup_calls = 0;
             let failed = protected.runner.run_tool_injected_cleanup_with_receipt(
                 argv,
                 &RunOptions {
@@ -288,6 +295,7 @@ fn unconfirmed_cleanup_retains_the_flags_and_preserves_the_callers_owner_and_sin
                 },
                 receipt,
                 |_| {
+                    cleanup_calls += 1;
                     let deadline = Instant::now() + Duration::from_secs(5);
                     while !ready.is_file() && Instant::now() < deadline {
                         std::thread::sleep(Duration::from_millis(1));
@@ -296,6 +304,11 @@ fn unconfirmed_cleanup_retains_the_flags_and_preserves_the_callers_owner_and_sin
                     assert!(native::open_private_read(&path).is_ok());
                     Err(std::io::Error::other("injected cleanup uncertainty"))
                 },
+            );
+            assert_eq!(cleanup_calls, 1, "the admitted child's cleanup must run");
+            assert_eq!(
+                failed.as_ref().err().map(|error| error.kind),
+                Some("cleanup-unconfirmed")
             );
             assert!(owner.has_pending());
             assert!(path.exists());
@@ -312,6 +325,72 @@ fn unconfirmed_cleanup_retains_the_flags_and_preserves_the_callers_owner_and_sin
     assert_cleaned(&path);
     assert!(sink.records().len() >= 2);
     assert_eq!(sink.records(), observer.records());
+}
+
+#[test]
+fn admission_timeout_never_runs_cleanup_or_retains_an_unspawned_child() {
+    let temp = native::private_tempdir().unwrap();
+    let ready = temp.path().join("must-not-start");
+    let program = drmr_test_support::install(
+        &temp.path().join("response"),
+        &drmr_test_support::ToolSpec::default().with("ready_file", ready.to_str().unwrap()),
+    )
+    .unwrap();
+    let owner = Arc::new(CleanupOwner::new());
+    let limiter = Arc::new(crate::resources::Limiter::new(1, 512 * 1024 * 1024));
+    let occupied = limiter
+        .acquire(
+            crate::resources::Claim {
+                cpu_threads: 1,
+                memory_bytes: 1,
+            },
+            None,
+            None,
+        )
+        .unwrap();
+    let runner = ToolRunner::new(Arc::new(Secrets::new()), Arc::new(NoSink))
+        .with_limiter(limiter)
+        .with_cleanup_owner(owner.clone());
+    let backend = Converter::new(Arc::new(runner), "unused", "unused").backend;
+    let mut path = PathBuf::new();
+    let mut cleanup_calls = 0;
+    let result = run_with(
+        &backend,
+        &[program.to_str().unwrap().into()],
+        "00aaff",
+        |protected, argv, receipt| {
+            path = flag_path(argv).to_owned();
+            let failed = protected.runner.run_tool_injected_cleanup_with_receipt(
+                argv,
+                &RunOptions {
+                    timeout: Some(Duration::from_millis(100)),
+                    ..RunOptions::default()
+                },
+                receipt,
+                |_| {
+                    cleanup_calls += 1;
+                    Err(std::io::Error::other("cleanup cannot run before spawn"))
+                },
+            );
+            assert_eq!(
+                failed.as_ref().err().map(|error| error.kind),
+                Some("timeout")
+            );
+            assert_eq!(cleanup_calls, 0);
+            assert!(!ready.exists());
+            assert!(!owner.has_pending());
+            assert!(path.is_file());
+            failed
+                .map(|result| result.stdout)
+                .map_err(|error| tool_error(&error))
+        },
+    );
+    drop(occupied);
+    assert_eq!(result.err(), Some(ConversionError("media-tool-timeout")));
+    assert_eq!(cleanup_calls, 0);
+    assert!(!ready.exists());
+    assert!(!owner.has_pending());
+    assert_cleaned(&path);
 }
 
 #[test]
@@ -387,6 +466,11 @@ fn denied_shared_admission_does_not_reap_an_unrelated_retained_tree() {
     let owner = Arc::new(CleanupOwner::new());
     let runner = Arc::new(
         ToolRunner::new(Arc::new(Secrets::new()), Arc::new(NoSink))
+            // The initial retained fixture must not time out in an unrelated admission queue.
+            .with_limiter(Arc::new(crate::resources::Limiter::new(
+                1,
+                512 * 1024 * 1024,
+            )))
             .with_cleanup_owner(owner.clone()),
     );
     let mut started = false;

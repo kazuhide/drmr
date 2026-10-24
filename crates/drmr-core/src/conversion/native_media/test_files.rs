@@ -152,3 +152,74 @@ pub(super) fn interleaved_fragments(layout: &read::Layout, duplicate_header: boo
     ]
     .concat()
 }
+
+/// Insert a control while leaving the clear fixture's sample tables and media offsets intact.
+fn with_track_control(data: &[u8], container: [u8; 4], control: &[u8]) -> Vec<u8> {
+    fn rewrite(node: &Mp4Box, data: &[u8], track: usize, target: usize, control: &[u8]) -> Vec<u8> {
+        if node.kind() != *b"moov" && node.header.offset != track && node.header.offset != target {
+            return node.header.bytes(data).to_vec();
+        }
+        let mut payload: Vec<u8> = node
+            .children
+            .iter()
+            .flat_map(|child| rewrite(child, data, track, target, control))
+            .collect();
+        if node.header.offset == target {
+            payload.extend(control);
+        }
+        boxed(node.kind(), &payload)
+    }
+    let nodes = mp4::parse_boxes(data).unwrap();
+    let movie = read::one(&nodes, *b"moov").unwrap();
+    let track = movie
+        .children
+        .iter()
+        .find(|node| node.kind() == *b"trak")
+        .unwrap();
+    let media = read::one(&track.children, *b"mdia").unwrap();
+    assert_eq!(
+        read::one(&media.children, *b"hdlr")
+            .unwrap()
+            .header
+            .payload(data)
+            .get(8..12),
+        Some(b"vide".as_slice())
+    );
+    let target = match &container {
+        b"trak" => track,
+        b"mdia" => media,
+        _ => panic!("fixture mutation target"),
+    };
+    let replacement = rewrite(
+        movie,
+        data,
+        track.header.offset,
+        target.header.offset,
+        control,
+    );
+    // Keep the old moov's size occupied by padding, so no mdat offset changes.
+    let padding = boxed(*b"free", &vec![0; movie.header.size - 8]);
+    let mut changed = data.to_vec();
+    changed[movie.header.offset..movie.header.offset + movie.header.size].copy_from_slice(&padding);
+    changed.extend(replacement);
+    for media in nodes.iter().filter(|node| node.kind() == *b"mdat") {
+        assert_eq!(media.header.bytes(&changed), media.header.bytes(data));
+    }
+    changed
+}
+
+pub(super) fn with_track_aperture(data: &[u8]) -> Vec<u8> {
+    let mut dimensions = vec![0; 4];
+    dimensions.extend((160_u32 << 16).to_be_bytes());
+    dimensions.extend((90_u32 << 16).to_be_bytes());
+    with_track_control(
+        data,
+        *b"trak",
+        &boxed(*b"tapt", &boxed(*b"clef", &dimensions)),
+    )
+}
+
+pub(super) fn with_extended_language(data: &[u8]) -> Vec<u8> {
+    let payload = [&[0; 4][..], b"en-US\0"].concat();
+    with_track_control(data, *b"mdia", &boxed(*b"elng", &payload))
+}

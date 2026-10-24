@@ -355,7 +355,12 @@ fn payload(
         }],
     };
     let encryption = sample.encryption.as_ref().unwrap_or(&clear);
-    let mut buffer = Zeroizing::new(vec![0; CHUNK_BYTES]);
+    let mut buffer = Zeroizing::new(vec![
+        0;
+        usize::try_from(sample.info.size)
+            .map_err(|_| BAD)?
+            .min(CHUNK_BYTES)
+    ]);
     let mut position = 0_u32;
     for span in &encryption.subsamples {
         if let Some(cipher) = &mut cipher {

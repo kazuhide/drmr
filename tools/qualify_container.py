@@ -547,7 +547,7 @@ def resources(image):
             "available_memory_bytes": memory if type(memory) is int and 0 <= memory < 2 ** 63 else None})
     status, stdout, stderr = image.invoke([
         "convert", "--decode", "/input/dash/manifest.mpd", "--to", "clear", "--format", "dash",
-        "--output", "/work/resource-limited", "--progress", "json"], limited=True)
+        "--output", "/work/resource-limited", "--progress", "json", "--json"], limited=True)
     failure = {"exit_code": status if type(status) is int and -(2 ** 31) <= status < 2 ** 32 else None,
                "stdout_sha256": hashlib.sha256(stdout).hexdigest(),
                "stderr_sha256": hashlib.sha256(stderr).hexdigest()}
@@ -557,7 +557,21 @@ def resources(image):
         workers = resource_workers(stderr)
     except Refusal as error:
         raise Refusal(str(error), failure) from None
-    if b"Verified stream metadata, packet payloads, decoded content, and packet timing." not in stdout:
+    try:
+        converted = load_json(stdout)
+    except Refusal:
+        raise Refusal("container-resource-cli-failed", failure) from None
+    fields = {"schema_version", "input", "output", "verification"}
+    proof_fields = {"schema_version", "required_depth", "scope", "passed", "checks", "decode_evidence",
+                    "license_playback_verified", "native_manifest"}
+    conversion_proof = converted.get("verification") if isinstance(converted, dict) else None
+    if (not isinstance(converted, dict) or not fields.issubset(converted)
+            or set(converted) - fields - {"processing"}
+            or type(converted["schema_version"]) is not int or converted["schema_version"] != 2
+            or not isinstance(converted["input"], dict) or not isinstance(converted["output"], dict)
+            or not isinstance(conversion_proof, dict) or set(conversion_proof) != proof_fields
+            or EVIDENCE.v2_proof(conversion_proof, require_decoded=True) is None
+            or conversion_proof["native_manifest"]["profile"] != "dash-static-manifest"):
         raise Refusal("container-resource-cli-failed", failure)
     verified = load_json(image.checked([
         "verify", "--decode", "/work/resource-limited/manifest.mpd", "--source", "/input/dash/manifest.mpd", "--json"], limited=True))

@@ -159,7 +159,7 @@ impl Mapping {
         let total = count(p, at, at + 4, 8)?;
         let mut entries = Vec::with_capacity(total);
         let mut end = 0_u64;
-        for row in p[at + 4..].chunks_exact(8) {
+        for row in p[at + 4..].as_chunks::<8>().0 {
             let count = integer(row, 0)?;
             if count == 0 {
                 return Err(BAD);

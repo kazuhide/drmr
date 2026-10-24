@@ -239,7 +239,7 @@ fn defaults(
     let mut defaults = std::collections::BTreeMap::new();
     if let Some(mvex) = optional(&moov.children, *b"mvex")? {
         for node in &mvex.children {
-            if node.kind() == *b"mehd" {
+            if matches!(&node.kind(), b"mehd" | b"free" | b"skip") {
                 continue;
             }
             if node.kind() != *b"trex" {
@@ -315,11 +315,12 @@ fn media_header(
 ) -> Result<super::MediaHeader, ConversionError> {
     let sound = optional(&minf.children, *b"smhd")?;
     let video = optional(&minf.children, *b"vmhd")?;
-    if minf
-        .children
-        .iter()
-        .any(|node| !matches!(&node.kind(), b"smhd" | b"vmhd" | b"dinf" | b"stbl"))
-    {
+    if minf.children.iter().any(|node| {
+        !matches!(
+            &node.kind(),
+            b"smhd" | b"vmhd" | b"dinf" | b"stbl" | b"free" | b"skip"
+        )
+    }) {
         return Err(UNSUPPORTED);
     }
     match (kind, sound, video) {
@@ -433,6 +434,28 @@ fn track(
         groups,
     })
 }
+/// Reject unmodeled playback controls at semantic container boundaries.
+fn semantic_children(container: &Mp4Box) -> Result<(), ConversionError> {
+    let known: &[[u8; 4]] = match &container.kind() {
+        b"moov" => &[
+            *b"mvhd", *b"trak", *b"mvex", *b"iods", *b"pssh", *b"udta", *b"meta",
+        ],
+        b"trak" => &[
+            *b"tkhd", *b"mdia", *b"edts", *b"senc", *b"saiz", *b"saio", *b"udta", *b"meta",
+        ],
+        b"mdia" => &[*b"mdhd", *b"hdlr", *b"minf"],
+        b"minf" => &[*b"smhd", *b"vmhd", *b"dinf", *b"stbl"],
+        b"dinf" => &[*b"dref"],
+        b"mvex" => &[*b"mehd", *b"trex"],
+        _ => return Ok(()),
+    };
+    for child in &container.children {
+        if !known.contains(&child.kind()) && !matches!(&child.kind(), b"free" | b"skip") {
+            return Err(UNSUPPORTED);
+        }
+    }
+    Ok(())
+}
 fn census(moov: &Mp4Box, tracks: &[Track]) -> Result<(), ConversionError> {
     // A moov/udta meta box describes the file (for example static ID32 tags), not
     // a timed media track. Its descriptive tags are outside sample preservation;
@@ -473,6 +496,7 @@ fn census(moov: &Mp4Box, tracks: &[Track]) -> Result<(), ConversionError> {
         }
     }
     for node in mp4::walk(std::slice::from_ref(moov)) {
+        semantic_children(node)?;
         if matches!(
             &node.kind(),
             b"sinf"
@@ -672,6 +696,64 @@ mod tests {
             vec![0; 13],
         ] {
             assert!(header(TrackKind::Video, &[boxed(*b"vmhd", &payload)]).is_err());
+        }
+    }
+    fn container_children(kind: [u8; 4], children: &[[u8; 4]]) -> Result<(), ConversionError> {
+        let children: Vec<u8> = children
+            .iter()
+            .flat_map(|kind| boxed(*kind, if kind == b"meta" { &[0; 4] } else { &[] }))
+            .collect();
+        let data = boxed(kind, &children);
+        let nodes = mp4::parse_boxes(&data).unwrap();
+        semantic_children(&nodes[0])
+    }
+
+    #[test]
+    fn semantic_container_whitelists_accept_recognized_child_kinds_and_padding() {
+        for (parent, children) in [
+            (
+                *b"moov",
+                vec![
+                    *b"mvhd", *b"trak", *b"mvex", *b"iods", *b"pssh", *b"udta", *b"meta",
+                ],
+            ),
+            (
+                *b"trak",
+                vec![
+                    *b"tkhd", *b"mdia", *b"edts", *b"senc", *b"saiz", *b"saio", *b"udta", *b"meta",
+                ],
+            ),
+            (*b"mdia", vec![*b"mdhd", *b"hdlr", *b"minf"]),
+            (*b"minf", vec![*b"smhd", *b"vmhd", *b"dinf", *b"stbl"]),
+            (*b"dinf", vec![*b"dref"]),
+            (*b"mvex", vec![*b"mehd", *b"trex"]),
+        ] {
+            container_children(parent, &children).unwrap();
+            container_children(parent, &[*b"free", *b"skip"]).unwrap();
+        }
+    }
+
+    #[test]
+    fn unknown_or_misplaced_semantic_children_are_refused_at_each_container_boundary() {
+        for parent in [*b"moov", *b"trak", *b"mdia", *b"minf", *b"dinf", *b"mvex"] {
+            assert_eq!(
+                container_children(parent, &[*b"zzzz"]).unwrap_err(),
+                UNSUPPORTED
+            );
+        }
+        for (parent, child) in [
+            (*b"trak", *b"tapt"),
+            (*b"trak", *b"tref"),
+            (*b"mdia", *b"elng"),
+            (*b"moov", *b"clef"),
+            (*b"minf", *b"tapt"),
+            (*b"dinf", *b"pssh"),
+            (*b"mvex", *b"leva"),
+        ] {
+            assert_eq!(
+                container_children(parent, &[child]).unwrap_err(),
+                UNSUPPORTED
+            );
         }
     }
 }

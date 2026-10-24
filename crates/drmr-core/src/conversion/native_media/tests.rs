@@ -561,3 +561,85 @@ fn signed_track_layer_is_retained_separately_from_alternate_group_and_volume() {
     );
     assert_eq!(init.movie.tracks[0].sample_entry_metadata.volume, 0);
 }
+
+#[test]
+fn unsupported_track_controls_are_refused_before_reader_payload_visitation() {
+    let root = crate::native::private_tempdir().unwrap();
+    let input = root.path().join("controls.mp4");
+    let original = std::fs::read(fixture()).unwrap();
+    for changed in [
+        super::test_files::with_track_aperture(&original),
+        super::test_files::with_extended_language(&original),
+    ] {
+        std::fs::write(&input, changed).unwrap();
+        let mut callbacks = 0;
+        let result = scan(
+            &input,
+            &InputKeys::default(),
+            &Stop::new(),
+            &mut |_, _, _| {
+                callbacks += 1;
+                Ok(())
+            },
+        );
+        let Err(error) = result else {
+            panic!("unsupported controls reached a complete reader scan");
+        };
+        assert_eq!(error, UNSUPPORTED);
+        assert_eq!(callbacks, 0);
+    }
+}
+
+#[test]
+fn unsupported_track_controls_cannot_pass_full_native_source_admission() {
+    use crate::{
+        events::Collector,
+        toolrun::{Secrets, ToolRunner},
+    };
+    use std::sync::Arc;
+    let events = Arc::new(Collector::default());
+    let runner = Arc::new(ToolRunner::new(Arc::new(Secrets::new()), events.clone()));
+    let converter =
+        super::super::Converter::new(runner, "must-not-run-packager", "must-not-run-ffmpeg");
+    let root = crate::native::private_tempdir().unwrap();
+    let input = root.path().join("controls.mp4");
+    let original = std::fs::read(fixture()).unwrap();
+    let empty = InputKeys::default();
+    let hls = super::super::HlsInputKeys::default();
+    let original_input = fixture();
+    let admitted = converter
+        .validate_source(
+            super::super::VerificationSource {
+                input: &original_input,
+                input_keys: &empty,
+                hls_keys: &hls,
+            },
+            super::super::SourceValidationPurpose::Conversion,
+        )
+        .unwrap();
+    assert!(admitted.verification.passed);
+    for changed in [
+        super::test_files::with_track_aperture(&original),
+        super::test_files::with_extended_language(&original),
+    ] {
+        std::fs::write(&input, changed).unwrap();
+        let result = converter.validate_source(
+            super::super::VerificationSource {
+                input: &input,
+                input_keys: &empty,
+                hls_keys: &hls,
+            },
+            super::super::SourceValidationPurpose::Conversion,
+        );
+        let Err(error) = result else {
+            panic!("unsupported controls passed full native admission");
+        };
+        assert_eq!(error, UNSUPPORTED);
+    }
+    assert!(
+        events
+            .records()
+            .iter()
+            .all(|record| record.get("stage").and_then(serde_json::Value::as_str) != Some("tool"))
+    );
+}

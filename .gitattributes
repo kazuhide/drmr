@@ -7,7 +7,9 @@ tools/desktop-licenses/** -text
 # Preserve the exact reviewed publisher source and backport on all checkouts.
 vendor/glib/** -text
 
-# Keep deterministic guide output and its four generation inputs byte-stable.
+# Keep published HTML and guide generation inputs byte-stable on all platforms.
+site/index.html text eol=lf
+site/ja/index.html text eol=lf
 site/guide/index.html text eol=lf
 site/ja/guide/index.html text eol=lf
 tools/build_guide_site.py text eol=lf

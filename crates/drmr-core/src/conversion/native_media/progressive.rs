@@ -79,7 +79,7 @@ fn clocks<'a>(
     count(stts, 4, 8, 8)?;
     let mut counted = 0_u64;
     let mut duration = 0_u64;
-    for row in stts[8..].chunks_exact(8) {
+    for row in stts[8..].as_chunks::<8>().0 {
         check_stop(stop)?;
         let samples = integer(row, 0)?;
         let delta = integer(row, 4)?;
@@ -110,7 +110,7 @@ fn clocks<'a>(
         full(ctts, version, 0)?;
         count(ctts, 4, 8, 8)?;
         let mut entries = 0_u64;
-        for row in ctts[8..].chunks_exact(8) {
+        for row in ctts[8..].as_chunks::<8>().0 {
             check_stop(stop)?;
             let samples = integer(row, 0)?;
             if samples == 0 {
@@ -136,7 +136,7 @@ fn dependencies<'a>(
         full(stss, 0, 0)?;
         count(stss, 4, 8, 4)?;
         let mut previous = 0;
-        for row in stss[8..].chunks_exact(4) {
+        for row in stss[8..].as_chunks::<4>().0 {
             let sample = integer(row, 0)?;
             if sample <= previous || sample as usize > total {
                 return Err(BAD);
@@ -204,7 +204,7 @@ impl<'a> Tables<'a> {
             return Err(BAD);
         }
         let mut previous = 0;
-        for row in map[8..].chunks_exact(12) {
+        for row in map[8..].as_chunks::<12>().0 {
             let first = integer(row, 0)?;
             if first <= previous
                 || first as usize > chunk_count

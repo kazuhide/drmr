@@ -137,7 +137,7 @@ fn color(data: &[u8]) -> Result<(), ConversionError> {
                 .checked_mul(12)
                 .and_then(|n| n.checked_add(132))
                 .ok_or(BAD)?;
-            for tag in profile.get(132..end).ok_or(BAD)?.chunks_exact(12) {
+            for tag in profile.get(132..end).ok_or(BAD)?.as_chunks::<12>().0 {
                 let offset = usize::try_from(integer(tag, 4)?).map_err(|_| BAD)?;
                 let size = usize::try_from(integer(tag, 8)?).map_err(|_| BAD)?;
                 if offset < end
