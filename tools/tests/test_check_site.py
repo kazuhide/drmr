@@ -100,7 +100,7 @@ class Site(unittest.TestCase):
         path = self.site / "index.html"
         value = path.read_text(encoding="utf-8")
         self.assertIn(original, value)
-        path.write_text(value.replace(original, replacement, 1), encoding="utf-8")
+        path.write_bytes(value.replace(original, replacement, 1).encode("utf-8"))
 
     def test_actual_site_is_small_self_contained_and_mount_independent(self):
         result = self.check()
@@ -150,7 +150,7 @@ class Site(unittest.TestCase):
         template = self.repo / "tools/templates/guide.html"
         original = template.read_text(encoding="utf-8")
         self.assertIn(old, original)
-        template.write_text(original.replace(old, new), encoding="utf-8")
+        template.write_bytes(original.replace(old, new).encode("utf-8"))
         spec = importlib.util.spec_from_file_location("guide_builder_fixture", self.repo / "tools/build_guide_site.py")
         builder = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(builder)
@@ -179,10 +179,9 @@ class Site(unittest.TestCase):
     def test_conversion_example_generator_is_provenance_bound(self):
         helper = self.repo / "tools/conversion_examples.py"
         original = helper.read_text(encoding="utf-8")
-        helper.write_text(original + '\n_original_markdown = markdown\n'
+        helper.write_bytes((original + '\n_original_markdown = markdown\n'
                           'def markdown(locale):\n'
-                          '    return _original_markdown(locale).replace("drmr analyze", "drmr version")\n',
-                          encoding="utf-8")
+                          '    return _original_markdown(locale).replace("drmr analyze", "drmr version")\n').encode("utf-8"))
         with self.assertRaisesRegex(CHECK.Failure, "site-guide-generated"):
             self.check()
 
@@ -199,7 +198,7 @@ class Site(unittest.TestCase):
             path = self.site / origin
             value = path.read_text(encoding="utf-8")
             value = re.sub(r'<table\b[^>]*class="conversion-matrix"[\s\S]*?</table>', '', value)
-            path.write_text(value, encoding="utf-8")
+            path.write_bytes(value.encode("utf-8"))
         with self.assertRaisesRegex(CHECK.Failure, "site-conversion-matrix"):
             self.check()
 
@@ -217,7 +216,7 @@ class Site(unittest.TestCase):
     def test_canonical_and_reciprocal_alternates_are_required(self):
         path = self.site / "index.html"
         original = path.read_text(encoding="utf-8")
-        path.write_text(re.sub(r'\s*<link rel="canonical"[^>]+>', '', original), encoding="utf-8")
+        path.write_bytes(re.sub(r'\s*<link rel="canonical"[^>]+>', '', original).encode("utf-8"))
         with self.assertRaisesRegex(CHECK.Failure, "site-language-links"):
             self.check()
 
@@ -239,10 +238,10 @@ class Site(unittest.TestCase):
                                 ('../assets/fonts/LICENSE-ibm-plex.txt', '../../outside.txt', "site-reference")):
             with self.subTest(token=token):
                 self.assertIn(old, original)
-                path.write_text(original.replace(old, new, 1), encoding="utf-8")
+                path.write_bytes(original.replace(old, new, 1).encode("utf-8"))
                 with self.assertRaisesRegex(CHECK.Failure, token):
                     self.check()
-        path.write_text(original, encoding="utf-8")
+        path.write_bytes(original.encode("utf-8"))
 
     def test_wrong_or_duplicate_alternates_and_language_switch_are_refused(self):
         path = self.site / "index.html"
@@ -250,7 +249,7 @@ class Site(unittest.TestCase):
         for value in (original.replace('hreflang="ja"', 'hreflang="en"', 1),
                       original.replace('https://kazuhide.github.io/drmr/ja/', 'https://example.com/ja/', 1),
                       original.replace('href="./ja/"', 'href="#main"', 1)):
-            path.write_text(value, encoding="utf-8")
+            path.write_bytes(value.encode("utf-8"))
             with self.assertRaisesRegex(CHECK.Failure, "site-language-links"):
                 self.check()
 
@@ -298,7 +297,7 @@ class Site(unittest.TestCase):
         with self.assertRaisesRegex(CHECK.Failure, "site-file-set"):
             self.check()
         shutil.copyfile(SOURCE / "site/assets/drmr.svg", self.site / "assets/drmr.svg")
-        (self.site / "keys.json").write_text("{}", encoding="utf-8")
+        (self.site / "keys.json").write_bytes("{}".encode("utf-8"))
         with self.assertRaisesRegex(CHECK.Failure, "site-file-set"):
             self.check()
 
@@ -364,17 +363,17 @@ class Site(unittest.TestCase):
         original = path.read_text(encoding="utf-8")
         for reference in ("../README.md", "./%2e%2e/README.md", "/assets/site.css", "//example.com/a.css"):
             with self.subTest(reference=reference):
-                path.write_text(original.replace("./assets/site.css", reference), encoding="utf-8")
+                path.write_bytes(original.replace("./assets/site.css", reference).encode("utf-8"))
                 with self.assertRaisesRegex(CHECK.Failure, "site-reference"):
                     self.check()
 
     def test_css_font_escape_and_external_import_are_refused(self):
         path = self.site / "assets/site.css"
         original = path.read_text(encoding="utf-8")
-        path.write_text(original.replace("./fonts/ibm-plex-sans-latin-400-normal.woff2", "../../outside.woff2"), encoding="utf-8")
+        path.write_bytes(original.replace("./fonts/ibm-plex-sans-latin-400-normal.woff2", "../../outside.woff2").encode("utf-8"))
         with self.assertRaisesRegex(CHECK.Failure, "site-reference"):
             self.check()
-        path.write_text(original + '\n@import "https://example.com/style.css";', encoding="utf-8")
+        path.write_bytes((original + '\n@import "https://example.com/style.css";').encode("utf-8"))
         with self.assertRaisesRegex(CHECK.Failure, "site-active-content"):
             self.check()
 
@@ -383,7 +382,7 @@ class Site(unittest.TestCase):
         original = path.read_text(encoding="utf-8")
         for injected in ('<script src="https://example.com/a.js"></script>', '<img src="./assets/drmr.svg" onload="fetch(1)">', '<form></form>', '<div id="main"></div>'):
             with self.subTest(injected=injected):
-                path.write_text(original.replace("</body>", injected + "</body>"), encoding="utf-8")
+                path.write_bytes(original.replace("</body>", injected + "</body>").encode("utf-8"))
                 with self.assertRaises(CHECK.Failure):
                     self.check()
 
@@ -400,7 +399,7 @@ class Site(unittest.TestCase):
                                 ('height="32" alt=""', 'height="32"', "site-image-semantics")):
             with self.subTest(token=token):
                 self.assertIn(old, original)
-                path.write_text(original.replace(old, new, 1), encoding="utf-8")
+                path.write_bytes(original.replace(old, new, 1).encode("utf-8"))
                 with self.assertRaisesRegex(CHECK.Failure, token):
                     self.check()
 
@@ -435,8 +434,8 @@ class Site(unittest.TestCase):
             with self.subTest(language=language):
                 source = self.repo / ("site-content/guide/" + language + ".md")
                 reference = canonical + "#cli-reference"
-                source.write_text(source.read_text(encoding="utf-8") +
-                                  "\n[CLI chapter details](" + reference + ")\n", encoding="utf-8")
+                source.write_bytes((source.read_text(encoding="utf-8") +
+                                  "\n[CLI chapter details](" + reference + ")\n").encode("utf-8"))
                 self.regenerate_guide_fixture()
                 self.assertIn('href="' + reference + '"', (self.site / output).read_text(encoding="utf-8"))
                 self.assertEqual(self.check()["guides"][output]["chapters"], 18)
@@ -457,12 +456,12 @@ class Site(unittest.TestCase):
             for pattern in cases:
                 reference = pattern.format(canonical=canonical, other=other)
                 with self.subTest(language=language, reference=reference):
-                    source.write_text(original + "\n[Chapter details](" + reference + ")\n", encoding="utf-8")
+                    source.write_bytes((original + "\n[Chapter details](" + reference + ")\n").encode("utf-8"))
                     self.regenerate_guide_fixture()
                     self.assertIn('href="' + reference + '"', (self.site / output).read_text(encoding="utf-8"))
                     with self.assertRaisesRegex(CHECK.Failure, "site-guide-reference"):
                         self.check()
-            source.write_text(original, encoding="utf-8")
+            source.write_bytes(original.encode("utf-8"))
             self.regenerate_guide_fixture()
 
     def test_regeneration_keeps_primary_reference_count_set_and_location_strict(self):
@@ -480,7 +479,7 @@ class Site(unittest.TestCase):
         )
         for changed in mutations:
             with self.subTest(changed=changed[-100:]):
-                source.write_text(changed, encoding="utf-8")
+                source.write_bytes(changed.encode("utf-8"))
                 self.regenerate_guide_fixture()
                 with self.assertRaisesRegex(CHECK.Failure, "site-guide-reference"):
                     self.check()
