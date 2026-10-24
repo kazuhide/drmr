@@ -1,6 +1,7 @@
 //! Fragmented MP4 resources keep their original sample membership and presentation clocks.
 mod manifest;
 mod proof;
+mod signaling;
 mod source;
 
 use super::source::HlsSource;
@@ -133,6 +134,8 @@ fn convert(
         request.hls_key_uri,
         request.hls_output_key,
     )?;
+    let plaintext_signaling =
+        signaling::verify_plaintext(converter, &candidate_presentation, &outputs)?;
     let native = proof::compare(
         converter,
         &presentation,
@@ -173,6 +176,7 @@ fn convert(
     converter.publish_directory_checked(&stage, &destination, || {
         source.check_original()?;
         candidate.check_original()?;
+        plaintext_signaling.check()?;
         checked.check(converter)
     })?;
     Ok(ConversionReport {
@@ -199,6 +203,7 @@ pub(super) fn verify(
     let second = output.presentation(converter)?;
     let sources = proof::admit(converter, &first, request.source.input_keys)?;
     let outputs = proof::admit(converter, &second, request.output.input_keys)?;
+    let plaintext_signaling = signaling::verify_plaintext(converter, &second, &outputs)?;
     let native = proof::compare(converter, &first, &sources, &second, &outputs)?;
     let mut report = if converter.backend.validation_depth == ValidationDepth::Decoded {
         let mut decoded = converter
@@ -225,6 +230,7 @@ pub(super) fn verify(
     }
     source.check_original()?;
     output.check_original()?;
+    plaintext_signaling.check()?;
     Ok(report)
 }
 

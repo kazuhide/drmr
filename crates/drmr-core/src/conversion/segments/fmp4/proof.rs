@@ -122,9 +122,47 @@ pub(super) fn qualify(
         } else {
             Vec::new()
         },
-        eligible_formats: vec![OutputFormat::Dash, OutputFormat::Hls],
+        eligible_formats: eligible_formats(converter, presentation, &media)?,
         verification,
     })
+}
+
+fn eligible_formats(
+    converter: &Converter,
+    presentation: &Presentation,
+    media: &[native::SegmentedMedia],
+) -> Result<Vec<OutputFormat>, ConversionError> {
+    let mut formats = Vec::new();
+    if let [part] = presentation.parts.as_slice()
+        && part.metadata.audio.is_none()
+        && part.metadata.audio_group.is_none()
+    {
+        let _permit = permit(converter)?;
+        // Qualification describes all tool routes. A playback claim and explicit
+        // audio selection still require a presentation output, as in stitch mode.
+        if conversion::audio_presentation::read_claim(&part.initialization)?.is_none() {
+            formats.push(OutputFormat::Mp4);
+        }
+    }
+    if presentation
+        .parts
+        .iter()
+        .filter(|part| part.metadata.audio.is_some())
+        .count()
+        <= 1
+    {
+        formats.push(OutputFormat::Dash);
+    }
+    if media
+        .iter()
+        .flat_map(|part| &part.media.tracks)
+        .filter(|track| track.descriptor.kind == TrackKind::Audio)
+        .count()
+        <= 1
+    {
+        formats.push(OutputFormat::Hls);
+    }
+    Ok(formats)
 }
 
 pub(super) fn inspection(
