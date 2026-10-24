@@ -445,7 +445,7 @@ mod lifecycle_tests {
             .unwrap();
             assert_eq!(result.returncode, Some(0));
             if streamed {
-                assert!(result.stdout.is_empty());
+                assert_eq!(result.stdout, [] as [u8; 0]);
                 assert_eq!(consumed, payload);
             } else {
                 assert_eq!(result.stdout, payload);
