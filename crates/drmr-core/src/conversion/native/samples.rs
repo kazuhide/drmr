@@ -1,6 +1,6 @@
 //! Bounded sample digests keep packet boundaries and exact rational clocks.
 use super::super::{ConversionError, native_media::SampleInfo, ts::CanonicalConfig};
-use sha2::{Digest as _, Sha256};
+use crate::sha256::Sha256;
 use std::cmp::Ordering;
 use zeroize::Zeroizing;
 
@@ -357,19 +357,19 @@ impl Samples {
         }
         Ok(SampleEvidence {
             count: self.count,
-            raw_payload: self.raw.finalize().into(),
-            canonical_payload: self.canonical.map(|(_, _, hash)| hash.finalize().into()),
-            clocks: self.clocks.finalize().into(),
-            presentation_clocks: self.presentation_clocks.finalize().into(),
+            raw_payload: self.raw.finalize(),
+            canonical_payload: self.canonical.map(|(_, _, hash)| hash.finalize()),
+            clocks: self.clocks.finalize(),
+            presentation_clocks: self.presentation_clocks.finalize(),
             presentation_offset: self.presentation_offset,
-            transport_clocks: self.transport_clocks.map(|hash| hash.finalize().into()),
-            durations: self.durations.finalize().into(),
+            transport_clocks: self.transport_clocks.map(Sha256::finalize),
+            durations: self.durations.finalize(),
             coded_duration: Ratio::new(
                 i128::try_from(self.duration_ticks).map_err(|_| OVERFLOW)?,
                 u64::from(self.scale),
             )?,
-            sync_samples: self.sync.finalize().into(),
-            recovery: self.recovery.finalize().into(),
+            sync_samples: self.sync.finalize(),
+            recovery: self.recovery.finalize(),
             transport_recovery_compatible: self.transport_recovery_compatible,
             initial_composition_offset: self.initial_composition_offset.ok_or(BAD)?,
             first_pts: self.first_pts.ok_or(BAD)?,

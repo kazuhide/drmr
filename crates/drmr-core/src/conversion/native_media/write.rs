@@ -2,12 +2,12 @@
 use super::{
     BAD, ConversionError, MAX_METADATA_BYTES, Scheme, TrackDescriptor, crypto, encrypt, init, read,
 };
+use crate::sha256::Sha256;
 use crate::{
     concurrency::Stop,
     mp4::{self, Mp4Box},
     native::FileIdentity,
 };
-use sha2::{Digest as _, Sha256};
 use std::{
     fs::File,
     io::Write as _,
@@ -618,7 +618,7 @@ impl<'a> SampleWriter<'a> {
         if !self.pending.is_empty() {
             self.output.write(&self.pending)?;
         }
-        if <[u8; 32]>::from(self.hash.finalize()) != self.plan.digest {
+        if self.hash.finalize() != self.plan.digest {
             return Err(ConversionError("native-source-changed"));
         }
         Ok(())
