@@ -12,6 +12,7 @@ pub mod mp4;
 pub mod playready;
 pub mod pycompat;
 pub mod resources;
+mod sha256;
 pub mod source;
 pub mod tool_diagnostics;
 pub mod toolrun;

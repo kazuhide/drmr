@@ -3,8 +3,8 @@ use super::{
     BAD, CHUNK_BYTES, ConversionError, InputKeys, MAX_METADATA_BYTES, Movie, SampleInfo,
     TrackDescriptor, UNSUPPORTED, catalogue, fragment, init, read,
 };
+use crate::sha256::Sha256;
 use crate::{concurrency::Stop, native::FileIdentity};
-use sha2::{Digest as _, Sha256};
 use std::path::{Path, PathBuf};
 use zeroize::Zeroizing;
 
@@ -512,7 +512,7 @@ impl<'a> SegmentTransformer<'a> {
             info,
             iv,
             spans,
-            digest: digest.finalize().into(),
+            digest: digest.finalize(),
         })
     }
     fn write_payload(
@@ -697,9 +697,9 @@ impl TrackHash {
             end_dts: self.end_dts,
             first_pts: self.first_pts,
             end_pts: self.end_pts,
-            payload: self.payload.finalize().into(),
-            samples: self.samples.finalize().into(),
-            grouping: self.grouping.finalize().into(),
+            payload: self.payload.finalize(),
+            samples: self.samples.finalize(),
+            grouping: self.grouping.finalize(),
         })
     }
 }

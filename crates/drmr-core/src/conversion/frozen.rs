@@ -531,7 +531,7 @@ fn transfer(
     after_chunk: &mut impl FnMut(u64),
 ) -> Result<(String, u64), ConversionError> {
     let mut bytes = 0u64;
-    let mut hash = Sha256::new();
+    let mut hash = crate::sha256::Sha256::new();
     let mut buffer = vec![0; 64 * 1024];
     loop {
         cancelled(stop)?;

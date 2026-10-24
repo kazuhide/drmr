@@ -118,7 +118,7 @@ fn digest(
     if input.metadata().map_err(|_| CHANGED)?.len() != expected_size {
         return Err(CHANGED);
     }
-    let mut hash = Sha256::new();
+    let mut hash = crate::sha256::Sha256::new();
     let mut size = 0u64;
     let mut buffer = vec![0; 64 * 1024];
     loop {
@@ -127,7 +127,7 @@ fn digest(
         }
         let count = input.read(&mut buffer).map_err(|_| CHANGED)?;
         if count == 0 {
-            return Ok((hash.finalize().into(), size));
+            return Ok((hash.finalize(), size));
         }
         size = size
             .checked_add(count as u64)
