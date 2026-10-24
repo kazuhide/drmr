@@ -566,24 +566,8 @@ fn isolated_manifest_test(name: &str) -> bool {
     command
         .args(["--exact", name, "--nocapture"])
         .env(MARKER, name)
-        .env("TMPDIR", workspace.path())
-        .stdin(std::process::Stdio::null());
-    let mut child = crate::native::ManagedChild::spawn(command, true).unwrap();
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
-    let status = loop {
-        if let Some(status) = child.try_wait().unwrap() {
-            break Some(status);
-        }
-        if std::time::Instant::now() >= deadline {
-            break None;
-        }
-        std::thread::sleep(Duration::from_millis(1));
-    };
-    child.finish().unwrap();
-    assert!(
-        status.is_some_and(|status| status.success()),
-        "manifest validation fixture failed or blocked"
-    );
+        .env("TMPDIR", workspace.path());
+    crate::test_harness::run(command, name, Duration::from_secs(10));
     true
 }
 
