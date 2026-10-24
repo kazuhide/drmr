@@ -8,12 +8,15 @@ The container and encryption tables below remain subject to this codec/profile
 requirement; they do not qualify every codec the formats can contain.
 
 One qualified source can also produce [multiple named outputs](multiple-outputs.md)
-through the common CLI. Explicit multi-DRM output currently supports qualified
+through the common CLI. The `auto` and `stitch` multi-DRM routes support qualified
 clear HLS transport streams and the qualified clear MP4 profile: CBCS DASH with
 Widevine/PlayReady, CBCS fMP4 HLS with FairPlay, or SAMPLE-AES TS HLS with FairPlay.
 These use separate runtime DRM settings and independently checked final
 manifests. Requested [external manifest validation](manifest-validation.md) is
 additional to native Rust manifest linting and the complete internal media checks.
+Native `segments` routes also accept qualified known-key encrypted TS or fMP4
+for the corresponding same-container DRM outputs. See the
+[processing-specific DRM conditions](drm-signaling.md).
 
 `drmr convert` processes local, completed on-demand media with keys supplied by its operator. It preserves encoded video/audio and verifies the result against the original source. The tables distinguish supported input profiles from tested protection routes. Native Rust verification reads every selected sample, codec configuration, clock and supported playback window. Add `--decode` for complete source decoding and decoded comparison; it cannot bypass native refusals. Historical results below retain their recorded complete-decoding scope and do not establish qualification of a later source build. See [verification depth and evidence](verification.md). DRM license and device playback support are separate.
 
@@ -330,16 +333,19 @@ A passing short fixture does not qualify arbitrary broadcast streams or codecs.
 
 ## Explicit DRM signaling
 
-The common converter supports a separate `multi-drm` profile for qualified clear
+The default `auto` and explicit `stitch` converter support a `multi-drm` profile for qualified clear
 MPEG-TS HLS and clear MP4 sources. Fragmented MP4 DASH can carry Widevine,
 PlayReady, or both with CBCS encryption; fragmented MP4 HLS and SAMPLE-AES TS HLS
 can carry FairPlay declarations. TS output requires a supported TS source.
+With `segments`, supported clear or known-key encrypted TS/fMP4 sources can
+generate the corresponding DRM output while retaining the source container and
+sample boundaries.
 See [DRM signaling](drm-signaling.md) for exact source restrictions, protected
 runtime settings, native output checks, and license/playback boundaries.
 
 ## Explicit PlayReady signaling
 
-Generic `convert` supports an opt-in PlayReady profile: qualified clear MP4 with
+With `auto` or `stitch`, generic `convert` supports an opt-in PlayReady profile: qualified clear MP4 with
 H.264 video and optional AAC audio, from one complete source file, to CBCS DASH
 with one output KID. Set `output.signaling` in the protected operator JSON as
 shown in [usage](usage.md#separate-input-and-output-keys). Other layouts and

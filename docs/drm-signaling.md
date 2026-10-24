@@ -4,10 +4,19 @@ Encryption protects media samples. DRM signaling tells a player which license sy
 and key identifier to use. The common `convert` command can generate and check both
 the encrypted media and the corresponding DASH or HLS manifests.
 
-This profile accepts completed video-on-demand **clear HLS with MPEG-TS segments**
+The default `auto` and explicit `stitch` routes accept completed video-on-demand **clear HLS with MPEG-TS segments**
 and the existing qualified **clear MP4** profile: H.264 video with optional AAC
 audio. It does not accept existing DRM records or unknown
 MP4 initialization metadata for replacement. It does not contact a license server.
+
+With `--processing segments`, supported original fMP4 resources can instead
+produce fMP4 DASH or HLS with the requested DRM records. Supported TS resources
+can produce TS HLS with FairPlay declarations. These paths accept their
+qualified clear or encrypted source profiles with separately supplied input
+keys. They preserve segment membership and replace the protection records in
+new output files; they never modify the originals. Container changes still use
+`stitch`. The supported codecs, playback windows and record checks remain
+mandatory; recognizing an input DRM system alone does not qualify its media.
 
 ## Supported outputs
 
@@ -73,7 +82,7 @@ are generated from `kid` and the license URL. The same generated PSSH and PlayRe
 Object (PRO) data are used in initialization files and the MPD. These operations do
 not generate provider-specific Widevine policy data or validate license responses.
 
-Explicit DASH PSSH data is passed to Shaka Packager through its
+On `stitch` routes, explicit DASH PSSH data is passed to Shaka Packager through its
 [`--flagfile` facility](https://github.com/shaka-project/shaka-packager/blob/v3.8.0/packager/app/packager_main.cc),
 using a separate owner-protected temporary file. This avoids command-line size
 limits for large metadata. The file is checked before and after packaging, is
@@ -82,6 +91,8 @@ workspace. Uncertain filesystem entries are retained if the workspace is replace
 The file is never included in the output directory. The temporary directory
 path must not contain a comma, because the flag-file option treats commas as
 file-name separators; such a path is refused before packaging.
+Native `segments` routes write the validated records directly to new MP4
+initialization files and the MPD, then reopen and check that output graph.
 
 Omit `widevine_pssh` or `playready_license_url` to select only one system. At least
 one must remain. Do not select FairPlay for the DASH output.

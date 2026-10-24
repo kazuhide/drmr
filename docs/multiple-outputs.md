@@ -147,10 +147,14 @@ identifier. Output key domains are independent; choose each one explicitly.
 For encrypted source media, the shared `input` object uses the same `keys` and
 `hls_keys` fields as the [single-output key file](usage.md#separate-input-and-output-keys).
 
-The new explicit multi-DRM profile admits supported clear HLS transport streams
+The `auto` and `stitch` multi-DRM profile admits supported clear HLS transport streams
 and the qualified clear MP4 profile. Other source layouts or existing DRM
 metadata are refused by this profile. Existing conversions without explicit DRM
 information retain their [documented source profiles](conversion-support.md).
+For `segments` outputs, supported clear or known-key encrypted TS can produce
+TS FairPlay, while supported fMP4 can produce fMP4 HLS FairPlay or CBCS DASH
+with Widevine/PlayReady. Source and output containers must match. See the
+[DRM source conditions](drm-signaling.md).
 
 ## Analyze, save, execute, and verify
 
@@ -160,9 +164,9 @@ drmr plan ./source/input.m3u8 --outputs ./outputs.json --output ./result --save 
 ```
 
 The same acquisition command accepts a supported MP4 or static DASH URL; use
-`source/input.mp4` or `source/input.mpd` for the plan. Explicit multi-DRM output
-still requires its qualified clear TS HLS or clear MP4 source. Download support
-does not widen that media profile. See [URL input](conversion-support.md#url-input).
+`source/input.mp4` or `source/input.mpd` for the plan. Acquisition does not
+widen the chosen processing route's media profile. See
+[URL input](conversion-support.md#url-input).
 
 The output list describes the requested outputs. The saved execution plan fixes
 the qualified original files, their sizes and SHA-256 fingerprints, the result

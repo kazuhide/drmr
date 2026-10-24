@@ -143,8 +143,8 @@ drmr verify --plan clear.plan.json --json
 </tbody></table></div>
 <p>fMP4 メディアプレイリストは一つの音声または映像トラックを持つ必要があります。マスタープレイリストで別々の映像・音声プレイリストを関連付ける構成は扱えます。保持できない言語・選択情報や、混在した音声グループの関連付けは拒否します。</p>
 <h3>出力一覧で DRM を明示する場合</h3>
-<p>出力ごとに DRM を指定する変換は、対応条件を満たす clear HLS/TS と従来の条件付き clear MP4 を入力にできます。このプロファイルでは、既存の DRM 初期化情報を含む入力や、それ以外の構成の入力は拒否します。DRM 情報を明示的に指定しない変換には、引き続き上表の対応範囲が適用されます。</p>
-<div class="guide-table-scroll" role="region" aria-labelledby="table-6-title" tabindex="0"><table><caption id="table-6-title">出力一覧で DRM を明示する場合 — 表 6</caption><thead><tr><th scope="col">出力一覧の format と target</th><th scope="col">DRM システム</th><th scope="col">このプロファイルの入力</th></tr></thead><tbody>
+<p>下表は <code>auto</code>・<code>stitch</code> の入力条件です。この経路では既存の DRM 初期化情報を含む入力を拒否します。<code>segments</code> では、対応する clear または既知の鍵を持つ暗号化 fMP4 から、下表の DRM を指定した fMP4 DASH/HLS を作成できます。TS からは TS FairPlay を作成できます。入力と出力のコンテナ形式は同じにします。</p>
+<div class="guide-table-scroll" role="region" aria-labelledby="table-6-title" tabindex="0"><table><caption id="table-6-title">出力一覧で DRM を明示する場合 — 表 6</caption><thead><tr><th scope="col">出力一覧の format と target</th><th scope="col">DRM システム</th><th scope="col">auto・stitch の入力</th></tr></thead><tbody>
 <tr><th scope="row"><code>dash</code>、<code>cbcs</code></th><td>Widevine、PlayReady、または両方</td><td>対応する clear HLS/TS または clear MP4</td></tr>
 <tr><th scope="row"><code>hls</code>、<code>cbcs</code></th><td>FairPlay</td><td>対応する clear HLS/TS または clear MP4</td></tr>
 <tr><th scope="row"><code>hls-ts</code>、<code>hls-sample-aes</code></th><td>FairPlay</td><td>対応する clear HLS/TS</td></tr>
@@ -316,7 +316,7 @@ chmod 700 config
 }
 </code></pre></figure>
 <p>TS の SAMPLE-AES では、鍵に対応する IV を実行時の鍵設定に明示します。MP4 用の KID は指定しません。プレイリストの <code>IV</code> 属性が省略されていても、設定で渡した IV を使ってメディアを検証します。プレイリストにも IV がある場合は、両方の値が一致する必要があります。fMP4 FairPlay では、初期化セグメントのトラック暗号化情報 <code>tenc</code> に必要な定数 IV が含まれていれば、プレイリストの IV 属性を省略できます。IV 属性の省略だけでは、暗号化されているかどうかを判定しません。</p>
-<p>ファイルの版番号は役割ごとに異なります。出力一覧の JSON は version 1、複数出力の鍵ファイルは version 2 です。新しく保存する実行用計画は単一出力が version 5、名前付き出力が version 6 です。鍵ファイルの版番号は 1・2 のままです。旧 version 1・2 の計画は読み込みに対応し、完全デコードを最低条件として保持します。鍵ファイルが共有入力鍵を持てることは、明示的な複数 DRM 出力で暗号化入力を受け入れるという意味ではありません。</p>
+<p>ファイルの版番号は役割ごとに異なります。出力一覧は version 1・2（出力別の処理方式を指定）、鍵ファイルは 1・2、保存計画は単一出力が 5、名前付き出力が 6 です。旧計画も元の検査条件を維持して読み込めます。</p>
 <h3>ログ、メモリ、一時ファイル</h3>
 <div class="guide-table-scroll" role="region" aria-labelledby="table-9-title" tabindex="0"><table><caption id="table-9-title">ログ、メモリ、一時ファイル — 表 9</caption><thead><tr><th scope="col">情報・場所</th><th scope="col">実装上の扱いと限界</th></tr></thead><tbody>
 <tr><th scope="row">正常な結果・ジョブ履歴</th><td>コンテンツキーを含めない。KID は公開の識別情報として扱う</td></tr>
@@ -491,7 +491,7 @@ drmr verify clear-ts/master.m3u8 --source encrypted-ts/media.m3u8 \
 </code></pre></figure>
 <p>SAMPLE-AES TS は入力・出力の両方に対応しています。これらは既知の鍵でのメディア変換で、FairPlay のライセンス取得を行いません。</p>
 <h3>PlayReady の明示シグナリング</h3>
-<p>対応する clear MP4 から CBCS DASH を作る場合に限り、次のように signaling を持つ出力設定を使えます。鍵はご自身の値へ置き換えてください。</p>
+<p><code>auto</code>・<code>stitch</code> では、対応する clear MP4 から CBCS DASH を作る場合に使えます。<code>segments</code> の入力条件は第3章を参照してください。次の signaling を持つ出力設定を使い、鍵はご自身の値へ置き換えてください。</p>
 <figure class="guide-example" aria-labelledby="example-32-title" data-code-language="json"><figcaption id="example-32-title">例 32: json</figcaption><pre tabindex="0"><code>{
   "schema_version": 1,
   "output": {
@@ -545,7 +545,7 @@ drmr convert --plan multi.plan.json \
 drmr verify --plan multi.plan.json \
   --keys-file config/multi-keys.json --json
 </code></pre></figure>
-<p>一度保存した原本をすべての出力に使います。URL 取得は他の対応入力も扱えますが、出力ごとに DRM を明示する変換には、第3章の表に示した条件を満たす clear TS HLS または clear MP4 が必要です。URL から取得できる形式すべてを、この DRM 変換の入力に使えるわけではありません。</p>
+<p>保存した一つの原本をすべての出力に使います。URL からの取得後も、第3章で説明した処理方式ごとの DRM 入力条件が適用されます。</p>
 <p>取得と変換を一回のコマンドで行い、計画ファイルを保存しない使い方は次のとおりです。</p>
 <figure class="guide-example" aria-labelledby="example-36-title" data-code-language="sh"><figcaption id="example-36-title">例 36: sh</figcaption><pre tabindex="0"><code>drmr convert "https://example.com/vod/master.m3u8" \
   --download-dir ./multi-source --outputs outputs.json \

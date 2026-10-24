@@ -117,9 +117,9 @@ Each fMP4 media playlist must contain one video or audio track. A master can ass
 
 ## Explicit DRM profiles in an output list
 
-The initial explicit multi-DRM profiles accept supported clear HLS/TS or the existing qualified clear MP4 profile. Existing source DRM initialization metadata and other source layouts are refused by these profiles. This additional restriction does not change the other conversion profiles in the tables above.
+The table describes `auto`/`stitch` DRM inputs; those routes refuse existing input DRM records. With `segments`, supported clear or known-key encrypted fMP4 can instead produce fMP4 DASH/HLS with the listed DRM systems, and supported TS can produce TS FairPlay. The container stays the same.
 
-| Output list format and target | DRM systems | Input for this explicit profile |
+| Output list format and target | DRM systems | Input with auto/stitch |
 | --- | --- | --- |
 | `dash`, `cbcs` | Widevine, PlayReady, or both | Qualified clear HLS/TS or clear MP4 |
 | `hls`, `cbcs` | FairPlay | Qualified clear HLS/TS or clear MP4 |
@@ -356,7 +356,7 @@ For a FairPlay TS output named `hls-ts`, replace the HLS entry with this member 
 
 TS SAMPLE-AES requires the associated IV in the runtime key configuration and uses no MP4 KID. Its playlist may omit the `IV` attribute when the associated IV is supplied separately; an explicitly declared conflicting IV is refused. For fMP4 FairPlay, a playlist IV can also be absent when the initialization segment's track-encryption metadata (`tenc`) supplies the required constant IV. The actual media and IV declarations are checked, rather than assuming that an omitted playlist attribute means unencrypted media.
 
-The file schemas serve different roles: the public output recipe uses version 1, the private multi-output key file uses version 2, new saved multi-output execution plans use version 6, and new single-output plans use version 5. Key-file versions remain 1 and 2. Legacy execution plans 1 and 2 remain readable with a complete-decoding minimum. This does not extend the initial explicit multi-DRM input profile to encrypted sources.
+File versions differ: output recipes use 1 or 2 (per-output processing), key files 1 or 2, and new saved plans 5 (single) or 6 (named outputs). Earlier plans remain readable with their original verification minimum.
 
 ## Logs, memory and temporary files
 
@@ -596,7 +596,7 @@ Supply output key/IV/URI or source URI/IV mappings as applicable. Clear, AES-128
 
 ## Explicit PlayReady signaling
 
-This opt-in generic-conversion profile produces CBCS DASH from a qualified clear MP4 source. Supply the output key identifier (KID), key, and license URL as shown below. drmr generates the PlayReady Object (PRO) and Protection System Specific Header (PSSH), then checks their consistency in the initialization segments and DASH manifest. Source DRM initialization metadata is refused by conversion.
+This `auto`/`stitch` profile produces CBCS DASH from a qualified clear MP4 source and refuses source DRM records. The `segments` source conditions are in chapter 3. Supply the output key identifier (KID), key and license URL below. drmr generates the PlayReady Object (PRO) and Protection System Specific Header (PSSH), then checks the initialization segments and DASH manifest.
 
 ```json
 {
@@ -666,7 +666,7 @@ drmr verify --plan multi.plan.json \
   --keys-file config/multi-keys.json --json
 ```
 
-One retained source is used by all outputs. URL acquisition also supports the other documented input profiles, but explicit multi-DRM conversion still requires a qualified clear TS HLS or clear MP4 source. Acquisition support does not extend that output profile. For one acquisition-and-conversion command without saving a plan:
+All outputs use one retained source. Acquisition does not extend the processing route's DRM input conditions in chapter 3. For direct acquisition and conversion:
 
 ```sh
 drmr convert "https://example.com/vod/master.m3u8" \
@@ -1475,7 +1475,7 @@ All public commands accept `-h` / `--help`; `drmr help COMMAND` also displays he
 
 `FILE` is a local filename supplied after the option, not inline JSON. `PATH` can name a file or directory as the row specifies. Relative option paths are resolved from the directory where you run the command. `NEW_FILE`, `NEW_PATH` and `NEW_DIR` name destinations that must be new; the workflow determines when they are written. Replace these placeholders with your paths; a `.json` extension does not make different configuration schemas interchangeable.
 
-For example, `--fetch-policy config/fetch.json` reads the [Fetch policy JSON in chapter 8](https://kazuhide.github.io/drmr/guide/#url-input). `--keys-file config/keys.json` reads the [private key JSON examples in chapter 5](https://kazuhide.github.io/drmr/guide/#key-configuration): version 1 uses `input` and one `output`, while version 2 shares `input` and names each result under `outputs`. Full `analyze` validates either schema and uses only its source keys; `--metadata-only` refuses key files. `--outputs` and named-output version-2/4 saved plans require version-2 key JSON even when the output list has one entry; the older single-result mode uses version 1.
+For example, `--fetch-policy config/fetch.json` reads the [Fetch policy JSON in chapter 8](https://kazuhide.github.io/drmr/guide/#url-input). `--keys-file config/keys.json` reads the [private key JSON examples in chapter 5](https://kazuhide.github.io/drmr/guide/#key-configuration): version 1 uses `input` and one `output`, while version 2 shares `input` and names each result under `outputs`. Full `analyze` validates either schema and uses only its source keys; `--metadata-only` refuses key files. `--outputs` and named-output version-2/4/6 saved plans require version-2 key JSON even when the output list has one entry; the older single-result mode uses version 1.
 
 For common commands, `--packager-bin "./tools/packager"` selects one installed executable. A Windows example is `--packager-bin "C:\Media Tools\packager.exe"`. Quote paths containing spaces and supply only the program name/path, without a shell command or appended arguments. The default `packager` is found on the launch environment's PATH; CLI archives and Desktop bundles do not include it. See [Media tools in chapter 4](https://kazuhide.github.io/drmr/guide/#installation).
 
