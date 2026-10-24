@@ -6,7 +6,10 @@ use crate::{
     conversion::{self, SegmentIv, native, native_media::SegmentTransformer},
     inspection::{OutputFormat, TargetProtection, TrackKind},
 };
-use std::path::{Path, PathBuf};
+use std::{
+    io::Write as _,
+    path::{Path, PathBuf},
+};
 use zeroize::Zeroizing;
 
 pub(super) fn validate_request(
@@ -194,142 +197,167 @@ pub(super) fn transform(
     };
     let mut parts = Vec::with_capacity(source.parts.len());
     for (ordinal, part) in source.parts.iter().enumerate() {
-        converter.backend.check_cancelled()?;
         let directory = package_root.join(format!("track-{ordinal:04}"));
-        conversion::files::create_dir(&directory)?;
-        let initialization = directory.join("init.mp4");
-        let transformer = {
-            let _permit = proof::permit(converter)?;
-            SegmentTransformer::new(
-                &part.initialization,
-                &initialization,
-                if request.target == TargetProtection::HlsAes128 {
-                    TargetProtection::Clear
-                } else {
-                    request.target
-                },
-                request.output_key,
-                &converter.backend.stop,
-            )?
-        };
-        let resources = converter.run_tracks(part.resources.len(), |index| {
-            let _permit = proof::permit(converter)?;
-            let resource = &part.resources[index];
-            let path = directory.join(format!("seg_{}.m4s", resource.dash.number));
-            let evidence = transformer.rewrite_segment(
-                &resource.path,
-                &path,
-                request.input_keys,
-                &converter.backend.stop,
-            )?;
-            if admitted
-                .get(ordinal)
-                .and_then(|media| media.boundaries.get(index))
-                != Some(&evidence)
-            {
-                return Err(ConversionError("native-source-changed"));
-            }
-            Ok(path)
-        })?;
-        drop(transformer);
-        let (codecs, resolution) = {
-            let _permit = proof::permit(converter)?;
-            initialization::finish(converter, &initialization, request)?;
-            let descriptor = &admitted[ordinal].media.tracks[0].descriptor;
-            let profile = native::mp4_profile(descriptor)?;
-            let resolution = if descriptor.kind == TrackKind::Video {
-                Some((
-                    profile["width"]
-                        .as_u64()
-                        .ok_or(ConversionError("presentation-metadata-mismatch"))?,
-                    profile["height"]
-                        .as_u64()
-                        .ok_or(ConversionError("presentation-metadata-mismatch"))?,
-                ))
-            } else {
-                None
-            };
-            (codecs(&admitted[ordinal])?, resolution)
-        };
-        let bandwidth = bandwidth(&resources, &admitted[ordinal])?;
-        parts.push(OutputPart {
-            initialization,
-            resources,
-            codecs,
-            resolution,
-            bandwidth,
-        });
+        parts.push(transform_part(
+            converter,
+            part,
+            &admitted[ordinal],
+            request,
+            &directory,
+        )?);
     }
     if request.format == OutputFormat::Dash {
         return dash_output::write(converter, output, source, &parts, request);
     }
-    let initial_tag = key_tag(converter, request)?;
     let hls_parts = source
         .parts
         .iter()
         .zip(&parts)
         .enumerate()
         .map(|(ordinal, (source, part))| {
-            let mut initialization = part.initialization.clone();
-            let mut initial_key_tag = initial_tag.clone();
-            let mut resources = Vec::with_capacity(part.resources.len());
-            let directory = output.join(format!("track-{ordinal:04}"));
-            if let Some(key) = request.hls_output_key {
-                conversion::files::create_dir(&directory)?;
-                let iv = SegmentIv::random()?;
-                initialization = directory.join("init.mp4");
-                conversion::aes128::encrypt_segment_with_stop(
-                    &part.initialization,
-                    &initialization,
-                    &key.key,
-                    &iv,
-                    &converter.backend.stop,
-                )?;
-                initial_key_tag = Some(aes_tag(key, &iv));
-            }
-            for (resource, original) in part.resources.iter().zip(&source.resources) {
-                let (path, key_tag) = if let Some(key) = request.hls_output_key {
-                    let iv = SegmentIv::random()?;
-                    let path = directory.join(
-                        resource
-                            .file_name()
-                            .ok_or(ConversionError("output-staging-failed"))?,
-                    );
-                    conversion::aes128::encrypt_segment_with_stop(
-                        resource,
-                        &path,
-                        &key.key,
-                        &iv,
-                        &converter.backend.stop,
-                    )?;
-                    (path, Some(aes_tag(key, &iv)))
-                } else {
-                    (resource.clone(), None)
-                };
-                resources.push(super::super::manifest_hls::HlsResource {
-                    path,
-                    duration: original.duration.clone(),
-                    key_tag,
-                });
-            }
-            Ok(super::super::manifest_hls::HlsPart {
-                initialization: Some(initialization),
-                resources,
-                codecs: part.codecs.clone(),
-                resolution: part.resolution,
-                metadata: source.metadata.clone(),
-                initial_key_tag,
-            })
+            hls_part(
+                converter,
+                source,
+                part,
+                request,
+                &output.join(format!("track-{ordinal:04}")),
+            )
         })
         .collect::<Result<Vec<_>, ConversionError>>()?;
     super::super::manifest_hls::write(output, &hls_parts, &converter.backend.stop)
+}
+
+fn transform_part(
+    converter: &Converter,
+    part: &super::source::Part,
+    admitted: &native::SegmentedMedia,
+    request: &ConversionRequest<'_>,
+    directory: &Path,
+) -> Result<OutputPart, ConversionError> {
+    converter.backend.check_cancelled()?;
+    conversion::files::create_dir(directory)?;
+    let initialization = directory.join("init.mp4");
+    let transformer = {
+        let _permit = proof::permit(converter)?;
+        SegmentTransformer::new(
+            &part.initialization,
+            &initialization,
+            if request.target == TargetProtection::HlsAes128 {
+                TargetProtection::Clear
+            } else {
+                request.target
+            },
+            request.output_key,
+            &converter.backend.stop,
+        )?
+    };
+    let resources = converter.run_tracks(part.resources.len(), |index| {
+        let _permit = proof::permit(converter)?;
+        let resource = &part.resources[index];
+        let path = directory.join(format!("seg_{}.m4s", resource.dash.number));
+        let evidence = transformer.rewrite_segment(
+            &resource.path,
+            &path,
+            request.input_keys,
+            &converter.backend.stop,
+        )?;
+        if admitted.boundaries.get(index) != Some(&evidence) {
+            return Err(ConversionError("native-source-changed"));
+        }
+        Ok(path)
+    })?;
+    drop(transformer);
+    let (codecs, resolution) = {
+        let _permit = proof::permit(converter)?;
+        initialization::finish(converter, &initialization, request)?;
+        let descriptor = &admitted.media.tracks[0].descriptor;
+        let profile = native::mp4_profile(descriptor)?;
+        let resolution = if descriptor.kind == TrackKind::Video {
+            Some((
+                profile["width"]
+                    .as_u64()
+                    .ok_or(ConversionError("presentation-metadata-mismatch"))?,
+                profile["height"]
+                    .as_u64()
+                    .ok_or(ConversionError("presentation-metadata-mismatch"))?,
+            ))
+        } else {
+            None
+        };
+        (codecs(admitted)?, resolution)
+    };
+    let bandwidth = bandwidth(&resources, admitted)?;
+    Ok(OutputPart {
+        initialization,
+        resources,
+        codecs,
+        resolution,
+        bandwidth,
+    })
+}
+
+fn hls_part(
+    converter: &Converter,
+    source: &super::source::Part,
+    part: &OutputPart,
+    request: &ConversionRequest<'_>,
+    directory: &Path,
+) -> Result<super::super::manifest_hls::HlsPart, ConversionError> {
+    let mut initialization = part.initialization.clone();
+    let mut initial_key_tag = key_tag(converter, request)?;
+    let mut resources = Vec::with_capacity(part.resources.len());
+    if let Some(key) = request.hls_output_key {
+        conversion::files::create_dir(directory)?;
+        let iv = SegmentIv::random()?;
+        initialization = directory.join("init.mp4");
+        conversion::aes128::encrypt_segment_with_stop(
+            &part.initialization,
+            &initialization,
+            &key.key,
+            &iv,
+            &converter.backend.stop,
+        )?;
+        initial_key_tag = Some(aes_tag(key, &iv));
+    }
+    for (resource, original) in part.resources.iter().zip(&source.resources) {
+        let (path, key_tag) = if let Some(key) = request.hls_output_key {
+            let iv = SegmentIv::random()?;
+            let path = directory.join(
+                resource
+                    .file_name()
+                    .ok_or(ConversionError("output-staging-failed"))?,
+            );
+            conversion::aes128::encrypt_segment_with_stop(
+                resource,
+                &path,
+                &key.key,
+                &iv,
+                &converter.backend.stop,
+            )?;
+            (path, Some(aes_tag(key, &iv)))
+        } else {
+            (resource.clone(), None)
+        };
+        resources.push(super::super::manifest_hls::HlsResource {
+            path,
+            duration: original.duration.clone(),
+            key_tag,
+        });
+    }
+    Ok(super::super::manifest_hls::HlsPart {
+        initialization: Some(initialization),
+        resources,
+        codecs: part.codecs.clone(),
+        resolution: part.resolution,
+        metadata: source.metadata.clone(),
+        initial_key_tag,
+    })
 }
 
 fn write(path: &Path, text: &str) -> Result<(), ConversionError> {
     if text.len() as u64 > crate::inspection::MAX_MANIFEST_BYTES {
         return Err(ConversionError("manifest-size-limit"));
     }
-    use std::io::Write as _;
     let mut output = conversion::files::create_new(path)?;
     output
         .write_all(text.as_bytes())

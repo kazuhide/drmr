@@ -1,4 +1,5 @@
 use super::*;
+use std::io::Write as _;
 
 #[test]
 fn wrong_keys_and_foreign_destinations_do_not_publish_or_overwrite() {
@@ -267,7 +268,6 @@ fn a_changed_original_is_rejected_before_final_publication() {
     )
     .unwrap();
     let path = input.parent().unwrap().join("track-0000/seg_1.m4s");
-    use std::io::Write as _;
     std::fs::OpenOptions::new()
         .append(true)
         .open(path)

@@ -78,11 +78,8 @@ pub(super) fn admit(
     Ok(media)
 }
 
-fn protection(
-    part: &super::source::Part,
-    media: &native::SegmentedMedia,
-) -> Result<SourceProtection, ConversionError> {
-    Ok(match part.outer {
+fn protection(part: &super::source::Part, media: &native::SegmentedMedia) -> SourceProtection {
+    match part.outer {
         Protection::HlsAes128 => SourceProtection::HlsAes128,
         Protection::Mixed => SourceProtection::Mixed,
         _ => match media.media.tracks[0].descriptor.protection.scheme {
@@ -90,7 +87,7 @@ fn protection(
             conversion::native_media::Scheme::Cenc => SourceProtection::Cenc,
             conversion::native_media::Scheme::Cbcs => SourceProtection::Cbcs,
         },
-    })
+    }
 }
 
 pub(super) fn qualify(
@@ -119,7 +116,7 @@ pub(super) fn qualify(
             .iter()
             .zip(&media)
             .map(|(part, native)| protection(part, native))
-            .collect::<Result<_, _>>()?,
+            .collect(),
         compatibility_notes: if presentation.parts.iter().any(|part| part.empty_cue_pair) {
             vec![SourceCompatibilityNote::HlsEmptyCuePair]
         } else {
@@ -244,7 +241,7 @@ pub(super) fn bind_output(
         return Err(ConversionError("output-protection-mismatch"));
     }
     for (part, media) in presentation.parts.iter().zip(media) {
-        if !protection(part, media)?.matches_target(request.target) {
+        if !protection(part, media).matches_target(request.target) {
             return Err(ConversionError("output-protection-mismatch"));
         }
         if let Some(key) = request.output_key {

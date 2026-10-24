@@ -47,34 +47,7 @@ pub(super) fn finish(
     input
         .read_exact(&mut bytes)
         .map_err(|_| ConversionError("output-staging-failed"))?;
-    let nodes = mp4::parse_boxes(&bytes).map_err(|_| ConversionError("invalid-output-media"))?;
-    let mut rewritten = Zeroizing::new(Vec::new());
-    for node in &nodes {
-        if node.kind() == *b"pssh" {
-            continue;
-        }
-        if node.kind() == *b"moov" {
-            let mut payload = Zeroizing::new(Vec::new());
-            for child in &node.children {
-                if child.kind() != *b"pssh" {
-                    payload.extend_from_slice(child.header.bytes(&bytes));
-                }
-            }
-            payload.extend_from_slice(&replacement);
-            rewritten.extend(
-                u32::try_from(payload.len() + 8)
-                    .map_err(|_| ConversionError("resource-budget"))?
-                    .to_be_bytes(),
-            );
-            rewritten.extend(b"moov");
-            rewritten.extend_from_slice(&payload);
-        } else {
-            rewritten.extend_from_slice(node.header.bytes(&bytes));
-        }
-    }
-    if rewritten.len() > 16 * 1024 * 1024 {
-        return Err(ConversionError("resource-budget"));
-    }
+    let rewritten = replace_records(&bytes, &replacement)?;
     converter.backend.check_cancelled()?;
     input
         .seek(SeekFrom::Start(0))
@@ -126,4 +99,39 @@ pub(super) fn finish(
         return Err(ConversionError("native-source-changed"));
     }
     Ok(())
+}
+
+fn replace_records(
+    bytes: &[u8],
+    replacement: &[u8],
+) -> Result<Zeroizing<Vec<u8>>, ConversionError> {
+    let nodes = mp4::parse_boxes(bytes).map_err(|_| ConversionError("invalid-output-media"))?;
+    let mut rewritten = Zeroizing::new(Vec::new());
+    for node in &nodes {
+        if node.kind() == *b"pssh" {
+            continue;
+        }
+        if node.kind() == *b"moov" {
+            let mut payload = Zeroizing::new(Vec::new());
+            for child in &node.children {
+                if child.kind() != *b"pssh" {
+                    payload.extend_from_slice(child.header.bytes(bytes));
+                }
+            }
+            payload.extend_from_slice(replacement);
+            rewritten.extend(
+                u32::try_from(payload.len() + 8)
+                    .map_err(|_| ConversionError("resource-budget"))?
+                    .to_be_bytes(),
+            );
+            rewritten.extend(b"moov");
+            rewritten.extend_from_slice(&payload);
+        } else {
+            rewritten.extend_from_slice(node.header.bytes(bytes));
+        }
+    }
+    if rewritten.len() > 16 * 1024 * 1024 {
+        return Err(ConversionError("resource-budget"));
+    }
+    Ok(rewritten)
 }

@@ -74,7 +74,7 @@ pub(super) fn convert_hls(
 ) -> Result<ConversionReport, ConversionError> {
     converter.backend.check_cancelled()?;
     let presentation = source::hls(converter, &source)?;
-    convert(converter, request, Source::Hls(source), presentation)
+    convert(converter, request, &Source::Hls(source), presentation)
 }
 
 pub(super) fn convert_dash(
@@ -88,13 +88,13 @@ pub(super) fn convert_dash(
     };
     let source = DashSource::load(converter, input)?;
     let presentation = source.presentation.clone();
-    convert(converter, request, Source::Dash(source), presentation)
+    convert(converter, request, &Source::Dash(source), presentation)
 }
 
 fn convert(
     converter: &Converter,
     request: ConversionRequest<'_>,
-    source: Source,
+    source: &Source,
     presentation: Presentation,
 ) -> Result<ConversionReport, ConversionError> {
     converter.backend.check_cancelled()?;

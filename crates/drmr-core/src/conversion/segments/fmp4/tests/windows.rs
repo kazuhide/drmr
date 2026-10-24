@@ -3,7 +3,10 @@ use super::*;
 fn finite_initialization(bytes: &[u8], duration: u32) -> Vec<u8> {
     fn boxed(kind: [u8; 4], payload: &[u8]) -> Vec<u8> {
         [
-            (payload.len() as u32 + 8).to_be_bytes().as_slice(),
+            u32::try_from(payload.len() + 8)
+                .unwrap()
+                .to_be_bytes()
+                .as_slice(),
             &kind,
             payload,
         ]

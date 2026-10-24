@@ -176,7 +176,6 @@ fn manifest_fixture(
     let root = fixture.directory.path().join(name);
     crate::conversion::files::create_dir(&root).unwrap();
     let key = OutputKey::from_hex(SOURCE_ID, SOURCE_KEY).unwrap();
-    let empty = InputKeys::default();
     let mut hls = Vec::new();
     let mut graph_parts = Vec::new();
     let mut output_parts = Vec::new();
@@ -194,53 +193,12 @@ fn manifest_fixture(
             &converter.backend.stop,
         )
         .unwrap();
-        let mut resources = Vec::new();
-        let mut source_resources = Vec::new();
-        let mut clock = crate::conversion::timing::FragmentClock::read(&init).unwrap();
-        for (index, source) in original.iter().enumerate() {
-            let path = directory.join(format!("seg_{}.m4s", index + 1));
-            transformer
-                .rewrite_segment(source, &path, &empty, &converter.backend.stop)
-                .unwrap();
-            let (time, ticks, timescale) = clock.dash_segment(&path).unwrap();
-            let duration = crate::conversion::finite::manifest::seconds(ticks, timescale).unwrap();
-            source_resources.push(super::source::Resource {
-                path: path.clone(),
-                duration: duration.clone(),
-                dash: crate::conversion::dash::SegmentBoundary {
-                    number: index as u64 + 1,
-                    time,
-                    duration: ticks,
-                    timescale,
-                },
-            });
-            resources.push(super::super::manifest_hls::HlsResource {
-                path,
-                duration,
-                key_tag: None,
-            });
-        }
-        let metadata = if audio {
-            crate::conversion::presentation::metadata::Metadata {
-                origin: crate::conversion::presentation::metadata::Origin::Hls,
-                audio: Some(crate::conversion::presentation::metadata::Rendition {
-                    group: "main-audio".into(),
-                    name: Some("English".into()),
-                    language: "en".into(),
-                    is_default: Some(true),
-                    autoselect: Some(true),
-                    channels: Some("2".into()),
-                }),
-                ..Default::default()
-            }
-        } else {
-            crate::conversion::presentation::metadata::Metadata {
-                origin: crate::conversion::presentation::metadata::Origin::Hls,
-                audio_group: (fixture.parts.len() > 1).then_some("main-audio".into()),
-                resolution: Some((96, 54)),
-                ..Default::default()
-            }
-        };
+        let FixtureResources {
+            hls: resources,
+            source: source_resources,
+            window,
+        } = fixture_resources(&converter, &transformer, &init, original, &directory);
+        let metadata = fixture_metadata(audio, fixture.parts.len() > 1);
         let codecs = if audio {
             vec!["mp4a.40.2".into()]
         } else {
@@ -258,7 +216,6 @@ fn manifest_fixture(
                 }
             ))
         };
-        let (first, end, scale) = clock.presentation_window().unwrap();
         graph_parts.push(super::source::Part {
             initialization: init.clone(),
             resources: source_resources,
@@ -269,11 +226,7 @@ fn manifest_fixture(
                 TrackKind::Video
             }),
             outer: crate::inspection::Protection::Clear,
-            window: crate::conversion::dash::Window {
-                origin: (first, scale),
-                first: (first, scale),
-                end: (end, scale),
-            },
+            window,
             empty_cue_pair: false,
         });
         let paths = resources
@@ -307,41 +260,7 @@ fn manifest_fixture(
         super::super::manifest_hls::write(&root, &hls, &converter.backend.stop).unwrap();
         root.join("master.m3u8")
     } else {
-        let origin = graph_parts
-            .iter()
-            .map(|part| part.window.first)
-            .min_by(|a, b| {
-                (u128::from(a.0) * u128::from(b.1)).cmp(&(u128::from(b.0) * u128::from(a.1)))
-            })
-            .unwrap();
-        for part in &mut graph_parts {
-            part.window.origin = origin;
-        }
-        let graph = super::source::Presentation {
-            report: crate::inspection::Inspection::new(
-                crate::inspection::InputFormat::Dash,
-                crate::inspection::Evidence::Manifest,
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-            ),
-            format: OutputFormat::Dash,
-            parts: graph_parts,
-        };
-        let request = ConversionRequest {
-            input: Path::new("synthetic"),
-            output: &root,
-            format,
-            target: scheme,
-            input_keys: &empty,
-            hls_input_keys: &HlsInputKeys::default(),
-            output_key: (scheme != TargetProtection::Clear).then_some(&key),
-            hls_key_uri: None,
-            hls_output_key: None,
-        };
-        super::manifest::dash_output::write(&converter, &root, &graph, &output_parts, &request)
-            .unwrap();
-        root.join("manifest.mpd")
+        finish_fixture_dash(&converter, &root, graph_parts, &output_parts, scheme, &key)
     }
 }
 
@@ -354,40 +273,44 @@ fn assert_no_tools(events: &Collector) {
     );
 }
 
-#[test]
-fn original_hls_and_dash_cipher_pairs_keep_membership_and_manifest_selection_without_tools() {
-    let fixture = fixture(44_100);
-    let empty = InputKeys::default();
-    let source_keys = InputKeys::new(vec![
-        crate::conversion::ContentKey::from_hex(SOURCE_ID, SOURCE_KEY).unwrap(),
-    ])
-    .unwrap();
-    let output_key = OutputKey::from_hex(OUTPUT_ID, OUTPUT_KEY).unwrap();
-    let hls_output = crate::conversion::HlsOutputKey::new(
-        "https://example.invalid/key",
-        crate::conversion::Aes128Key::from_hex(OUTPUT_KEY).unwrap(),
-    )
-    .unwrap();
-    let empty_hls = HlsInputKeys::default();
-    let aes_hls = HlsInputKeys::new(vec![(
-        "https://example.invalid/source-key".into(),
-        crate::conversion::Aes128Key::from_hex(SOURCE_KEY).unwrap(),
-    )])
-    .unwrap();
-    let expected = fixture
-        .parts
-        .iter()
-        .map(|(_, _, path)| {
-            (
-                std::fs::read(path).unwrap(),
-                packets(path, None),
-                decoded(path, None),
-            )
-        })
-        .collect::<Vec<_>>();
-    let mut cases = 0;
-    for source_format in [OutputFormat::Hls, OutputFormat::Dash] {
-        let schemes = if source_format == OutputFormat::Hls {
+struct Oracle {
+    original: Vec<u8>,
+    packets: serde_json::Value,
+    decoded: Vec<u8>,
+}
+struct MatrixKeys {
+    empty: InputKeys,
+    source: InputKeys,
+    output: OutputKey,
+    hls_output: crate::conversion::HlsOutputKey,
+    empty_hls: HlsInputKeys,
+    aes_hls: HlsInputKeys,
+}
+fn matrix_keys() -> MatrixKeys {
+    MatrixKeys {
+        empty: InputKeys::default(),
+        source: InputKeys::new(vec![
+            crate::conversion::ContentKey::from_hex(SOURCE_ID, SOURCE_KEY).unwrap(),
+        ])
+        .unwrap(),
+        output: OutputKey::from_hex(OUTPUT_ID, OUTPUT_KEY).unwrap(),
+        hls_output: crate::conversion::HlsOutputKey::new(
+            "https://example.invalid/key",
+            crate::conversion::Aes128Key::from_hex(OUTPUT_KEY).unwrap(),
+        )
+        .unwrap(),
+        empty_hls: HlsInputKeys::default(),
+        aes_hls: HlsInputKeys::new(vec![(
+            "https://example.invalid/source-key".into(),
+            crate::conversion::Aes128Key::from_hex(SOURCE_KEY).unwrap(),
+        )])
+        .unwrap(),
+    }
+}
+fn matrix_sources(fixture: &Fixture) -> Vec<(OutputFormat, TargetProtection, PathBuf)> {
+    let mut sources = Vec::new();
+    for format in [OutputFormat::Hls, OutputFormat::Dash] {
+        let schemes = if format == OutputFormat::Hls {
             vec![
                 TargetProtection::Clear,
                 TargetProtection::Cenc,
@@ -401,210 +324,231 @@ fn original_hls_and_dash_cipher_pairs_keep_membership_and_manifest_selection_wit
                 TargetProtection::Cbcs,
             ]
         };
-        for source_scheme in schemes {
-            let name = format!(
-                "source-{}-{}",
-                source_format.as_str(),
-                source_scheme.as_str()
-            );
-            let input = if source_scheme == TargetProtection::HlsAes128 {
-                aes_fixture(&fixture, &name)
+        for scheme in schemes {
+            let name = format!("source-{}-{}", format.as_str(), scheme.as_str());
+            let path = if scheme == TargetProtection::HlsAes128 {
+                aes_fixture(fixture, &name)
             } else {
-                manifest_fixture(&fixture, source_scheme, source_format, &name)
+                manifest_fixture(fixture, scheme, format, &name)
             };
-            let input_keys = if matches!(
-                source_scheme,
-                TargetProtection::Clear | TargetProtection::HlsAes128
-            ) {
-                &empty
-            } else {
-                &source_keys
-            };
-            let source_hls = if source_scheme == TargetProtection::HlsAes128 {
-                &aes_hls
-            } else {
-                &empty_hls
-            };
-            for (format, targets) in [
-                (
-                    OutputFormat::Dash,
-                    vec![
-                        TargetProtection::Clear,
-                        TargetProtection::Cenc,
-                        TargetProtection::Cbcs,
-                    ],
-                ),
-                (
-                    OutputFormat::Hls,
-                    vec![
-                        TargetProtection::Clear,
-                        TargetProtection::Cbcs,
-                        TargetProtection::HlsAes128,
-                    ],
-                ),
-            ] {
-                for target in targets {
-                    let (converter, events) = converter();
-                    let output = fixture.directory.path().join(format!(
-                        "output-{}-{}-{}-{}",
-                        source_format.as_str(),
-                        source_scheme.as_str(),
-                        format.as_str(),
-                        target.as_str()
-                    ));
-                    let request = ConversionRequest {
-                        input: &input,
-                        output: &output,
-                        format,
-                        target,
-                        input_keys,
-                        hls_input_keys: source_hls,
-                        output_key: matches!(
-                            target,
-                            TargetProtection::Cenc | TargetProtection::Cbcs
-                        )
-                        .then_some(&output_key),
-                        hls_key_uri: (format == OutputFormat::Hls
-                            && target == TargetProtection::Cbcs)
-                            .then_some("https://example.invalid/key"),
-                        hls_output_key: (target == TargetProtection::HlsAes128)
-                            .then_some(&hls_output),
-                    };
-                    let report = if source_format == OutputFormat::Hls {
-                        let source = super::super::source::HlsSource::load(
-                            &converter,
-                            VerificationSource {
-                                input: &input,
-                                input_keys,
-                                hls_keys: source_hls,
-                            },
-                        )
-                        .unwrap();
-                        let qualified = qualify_hls(
-                            &converter,
-                            &source,
-                            VerificationSource {
-                                input: &input,
-                                input_keys,
-                                hls_keys: source_hls,
-                            },
-                            SourceValidationPurpose::Conversion,
-                        )
-                        .unwrap();
-                        assert!(qualified.verification.passed);
-                        assert_eq!(qualified.actual_format, OutputFormat::Hls);
-                        if source_scheme == TargetProtection::HlsAes128 {
-                            assert!(
-                                qualified
-                                    .track_protection
-                                    .iter()
-                                    .all(|protection| *protection
-                                        == crate::conversion::SourceProtection::HlsAes128)
-                            );
-                        }
-                        convert_hls(&converter, request, source)
-                    } else {
-                        convert_dash(&converter, request)
-                    }
-                    .unwrap_or_else(|error| {
-                        panic!(
-                            "{} {} to {} {}: {}",
-                            source_format.as_str(),
-                            source_scheme.as_str(),
-                            format.as_str(),
-                            target.as_str(),
-                            error.0
-                        )
-                    });
-                    assert!(report.verification.passed);
-                    assert!(
-                        report
-                            .verification
-                            .native_manifest
-                            .as_ref()
-                            .unwrap()
-                            .is_clean_for_scope()
-                    );
-                    assert_eq!(
-                        report.processing.as_ref().unwrap().route,
-                        crate::inspection::ProcessingRouteId::Fmp4Segments
-                    );
-                    assert!(
-                        report
-                            .processing
-                            .as_ref()
-                            .unwrap()
-                            .required_tools
-                            .is_empty()
-                    );
-                    let output_keys = super::proof::output_keys(request.output_key).unwrap();
-                    let hls_keys = super::proof::output_hls_keys(request.hls_output_key).unwrap();
-                    let result = super::super::source::entrypoint(&output, format);
-                    assert!(
-                        verify(
-                            &converter,
-                            VerificationRequest {
-                                source: VerificationSource {
-                                    input: &input,
-                                    input_keys,
-                                    hls_keys: source_hls
-                                },
-                                output: VerificationSource {
-                                    input: &result,
-                                    input_keys: &output_keys,
-                                    hls_keys: &hls_keys
-                                }
-                            }
-                        )
-                        .unwrap()
-                        .passed
-                    );
-                    let snapshot = super::source::Source::load(
-                        &converter,
-                        VerificationSource {
-                            input: &result,
-                            input_keys: &output_keys,
-                            hls_keys: &hls_keys,
-                        },
-                    )
-                    .unwrap();
-                    let actual = snapshot.presentation(&converter).unwrap();
-                    for part in &actual.parts {
-                        let inspection = crate::inspection::inspect(&part.initialization).unwrap();
-                        let index = if inspection.tracks[0].kind == TrackKind::Video {
-                            0
-                        } else {
-                            1
-                        };
-                        let joined = fixture.directory.path().join("oracle.mp4");
-                        let mut file = std::fs::File::create(&joined).unwrap();
-                        for path in std::iter::once(&part.initialization)
-                            .chain(part.resources.iter().map(|resource| &resource.path))
-                        {
-                            std::io::copy(&mut std::fs::File::open(path).unwrap(), &mut file)
-                                .unwrap();
-                        }
-                        drop(file);
-                        let oracle_key =
-                            matches!(target, TargetProtection::Cenc | TargetProtection::Cbcs)
-                                .then_some((OUTPUT_ID, OUTPUT_KEY));
-                        assert_eq!(expected[index].1, packets(&joined, oracle_key));
-                        assert_eq!(expected[index].2, decoded(&joined, oracle_key));
-                        std::fs::remove_file(joined).unwrap();
-                    }
-                    assert_no_tools(&events);
-                    cases += 1;
-                }
+            sources.push((format, scheme, path));
+        }
+    }
+    sources
+}
+
+#[test]
+fn original_hls_and_dash_cipher_pairs_keep_membership_and_manifest_selection_without_tools() {
+    let fixture = fixture(44_100);
+    let keys = matrix_keys();
+    let expected = fixture
+        .parts
+        .iter()
+        .map(|(_, _, path)| Oracle {
+            original: std::fs::read(path).unwrap(),
+            packets: packets(path, None),
+            decoded: decoded(path, None),
+        })
+        .collect::<Vec<_>>();
+    let mut cases = 0;
+    for (source_format, source_scheme, input) in matrix_sources(&fixture) {
+        let input_keys = if matches!(
+            source_scheme,
+            TargetProtection::Clear | TargetProtection::HlsAes128
+        ) {
+            &keys.empty
+        } else {
+            &keys.source
+        };
+        let hls_input_keys = if source_scheme == TargetProtection::HlsAes128 {
+            &keys.aes_hls
+        } else {
+            &keys.empty_hls
+        };
+        for (format, targets) in [
+            (
+                OutputFormat::Dash,
+                vec![
+                    TargetProtection::Clear,
+                    TargetProtection::Cenc,
+                    TargetProtection::Cbcs,
+                ],
+            ),
+            (
+                OutputFormat::Hls,
+                vec![
+                    TargetProtection::Clear,
+                    TargetProtection::Cbcs,
+                    TargetProtection::HlsAes128,
+                ],
+            ),
+        ] {
+            for target in targets {
+                let output = fixture.directory.path().join(format!(
+                    "output-{}-{}-{}-{}",
+                    source_format.as_str(),
+                    source_scheme.as_str(),
+                    format.as_str(),
+                    target.as_str()
+                ));
+                let request = ConversionRequest {
+                    input: &input,
+                    output: &output,
+                    format,
+                    target,
+                    input_keys,
+                    hls_input_keys,
+                    output_key: matches!(target, TargetProtection::Cenc | TargetProtection::Cbcs)
+                        .then_some(&keys.output),
+                    hls_key_uri: (format == OutputFormat::Hls && target == TargetProtection::Cbcs)
+                        .then_some("https://example.invalid/key"),
+                    hls_output_key: (target == TargetProtection::HlsAes128)
+                        .then_some(&keys.hls_output),
+                };
+                assert_matrix_case(&fixture, &expected, request, source_format, source_scheme);
+                cases += 1;
             }
         }
     }
     assert_eq!(cases, 42);
-    for ((_, _, path), (before, _, _)) in fixture.parts.iter().zip(expected) {
-        assert_eq!(std::fs::read(path).unwrap(), before);
+    for ((_, _, path), oracle) in fixture.parts.iter().zip(expected) {
+        assert_eq!(std::fs::read(path).unwrap(), oracle.original);
     }
     eprintln!(
         "verified {cases} native conversions against independent packet and complete decoded-content oracles"
     );
+}
+
+fn execute_matrix_case(
+    converter: &Converter,
+    request: ConversionRequest<'_>,
+    source_format: OutputFormat,
+    source_scheme: TargetProtection,
+) -> crate::conversion::ConversionReport {
+    let report = if source_format == OutputFormat::Hls {
+        let input = VerificationSource {
+            input: request.input,
+            input_keys: request.input_keys,
+            hls_keys: request.hls_input_keys,
+        };
+        let source = super::super::source::HlsSource::load(converter, input).unwrap();
+        let qualified = qualify_hls(
+            converter,
+            &source,
+            input,
+            SourceValidationPurpose::Conversion,
+        )
+        .unwrap();
+        assert!(qualified.verification.passed);
+        assert_eq!(qualified.actual_format, OutputFormat::Hls);
+        if source_scheme == TargetProtection::HlsAes128 {
+            assert!(qualified.track_protection.iter().all(|protection| *protection == crate::conversion::SourceProtection::HlsAes128));
+        }
+        convert_hls(converter, request, source)
+    } else {
+        convert_dash(converter, request)
+    };
+    report.unwrap_or_else(|error| {
+        panic!(
+            "{} {} to {} {}: {}",
+            source_format.as_str(),
+            source_scheme.as_str(),
+            request.format.as_str(),
+            request.target.as_str(),
+            error.0
+        )
+    })
+}
+
+fn assert_matrix_case(
+    fixture: &Fixture,
+    expected: &[Oracle],
+    request: ConversionRequest<'_>,
+    source_format: OutputFormat,
+    source_scheme: TargetProtection,
+) {
+    let (converter, events) = converter();
+    let report = execute_matrix_case(&converter, request, source_format, source_scheme);
+    assert!(report.verification.passed);
+    assert!(
+        report
+            .verification
+            .native_manifest
+            .as_ref()
+            .unwrap()
+            .is_clean_for_scope()
+    );
+    assert_eq!(
+        report.processing.as_ref().unwrap().route,
+        crate::inspection::ProcessingRouteId::Fmp4Segments
+    );
+    assert!(
+        report
+            .processing
+            .as_ref()
+            .unwrap()
+            .required_tools
+            .is_empty()
+    );
+    let output_keys = super::proof::output_keys(request.output_key).unwrap();
+    let hls_keys = super::proof::output_hls_keys(request.hls_output_key).unwrap();
+    let result = super::super::source::entrypoint(request.output, request.format);
+    assert!(
+        verify(
+            &converter,
+            VerificationRequest {
+                source: VerificationSource {
+                    input: request.input,
+                    input_keys: request.input_keys,
+                    hls_keys: request.hls_input_keys
+                },
+                output: VerificationSource {
+                    input: &result,
+                    input_keys: &output_keys,
+                    hls_keys: &hls_keys
+                },
+            }
+        )
+        .unwrap()
+        .passed
+    );
+    let snapshot = super::source::Source::load(
+        &converter,
+        VerificationSource {
+            input: &result,
+            input_keys: &output_keys,
+            hls_keys: &hls_keys,
+        },
+    )
+    .unwrap();
+    let actual = snapshot.presentation(&converter).unwrap();
+    assert_matrix_oracles(fixture, expected, &actual, request.target);
+    assert_no_tools(&events);
+}
+
+fn assert_matrix_oracles(
+    fixture: &Fixture,
+    expected: &[Oracle],
+    actual: &super::source::Presentation,
+    target: TargetProtection,
+) {
+    for part in &actual.parts {
+        let inspection = crate::inspection::inspect(&part.initialization).unwrap();
+        let index = usize::from(inspection.tracks[0].kind != TrackKind::Video);
+        let joined = fixture.directory.path().join("oracle.mp4");
+        let mut file = std::fs::File::create(&joined).unwrap();
+        for path in std::iter::once(&part.initialization)
+            .chain(part.resources.iter().map(|resource| &resource.path))
+        {
+            std::io::copy(&mut std::fs::File::open(path).unwrap(), &mut file).unwrap();
+        }
+        drop(file);
+        let key = matches!(target, TargetProtection::Cenc | TargetProtection::Cbcs)
+            .then_some((OUTPUT_ID, OUTPUT_KEY));
+        assert_eq!(expected[index].packets, packets(&joined, key));
+        assert_eq!(expected[index].decoded, decoded(&joined, key));
+        std::fs::remove_file(joined).unwrap();
+    }
 }
 
 fn aes_fixture(fixture: &Fixture, name: &str) -> PathBuf {
@@ -700,4 +644,131 @@ fn decoded(path: &Path, key: Option<(&str, &str)>) -> Vec<u8> {
         "sha256",
         "-",
     ]))
+}
+
+fn fixture_metadata(
+    audio: bool,
+    separate: bool,
+) -> crate::conversion::presentation::metadata::Metadata {
+    if audio {
+        crate::conversion::presentation::metadata::Metadata {
+            origin: crate::conversion::presentation::metadata::Origin::Hls,
+            audio: Some(crate::conversion::presentation::metadata::Rendition {
+                group: "main-audio".into(),
+                name: Some("English".into()),
+                language: "en".into(),
+                is_default: Some(true),
+                autoselect: Some(true),
+                channels: Some("2".into()),
+            }),
+            ..Default::default()
+        }
+    } else {
+        crate::conversion::presentation::metadata::Metadata {
+            origin: crate::conversion::presentation::metadata::Origin::Hls,
+            audio_group: separate.then_some("main-audio".into()),
+            resolution: Some((96, 54)),
+            ..Default::default()
+        }
+    }
+}
+
+struct FixtureResources {
+    hls: Vec<super::super::manifest_hls::HlsResource>,
+    source: Vec<super::source::Resource>,
+    window: crate::conversion::dash::Window,
+}
+fn fixture_resources(
+    converter: &Converter,
+    transformer: &SegmentTransformer<'_>,
+    init: &Path,
+    original: &[PathBuf],
+    directory: &Path,
+) -> FixtureResources {
+    let mut resources = Vec::new();
+    let mut source_resources = Vec::new();
+    let mut clock = crate::conversion::timing::FragmentClock::read(init).unwrap();
+    for (index, source) in original.iter().enumerate() {
+        let path = directory.join(format!("seg_{}.m4s", index + 1));
+        transformer
+            .rewrite_segment(
+                source,
+                &path,
+                &InputKeys::default(),
+                &converter.backend.stop,
+            )
+            .unwrap();
+        let (time, ticks, timescale) = clock.dash_segment(&path).unwrap();
+        let duration = crate::conversion::finite::manifest::seconds(ticks, timescale).unwrap();
+        source_resources.push(super::source::Resource {
+            path: path.clone(),
+            duration: duration.clone(),
+            dash: crate::conversion::dash::SegmentBoundary {
+                number: index as u64 + 1,
+                time,
+                duration: ticks,
+                timescale,
+            },
+        });
+        resources.push(super::super::manifest_hls::HlsResource {
+            path,
+            duration,
+            key_tag: None,
+        });
+    }
+
+    let (first, end, scale) = clock.presentation_window().unwrap();
+    FixtureResources {
+        hls: resources,
+        source: source_resources,
+        window: crate::conversion::dash::Window {
+            origin: (first, scale),
+            first: (first, scale),
+            end: (end, scale),
+        },
+    }
+}
+fn finish_fixture_dash(
+    converter: &Converter,
+    root: &Path,
+    mut graph_parts: Vec<super::source::Part>,
+    output_parts: &[super::manifest::OutputPart],
+    scheme: TargetProtection,
+    key: &OutputKey,
+) -> PathBuf {
+    let empty = InputKeys::default();
+    let origin = graph_parts
+        .iter()
+        .map(|part| part.window.first)
+        .min_by(|a, b| {
+            (u128::from(a.0) * u128::from(b.1)).cmp(&(u128::from(b.0) * u128::from(a.1)))
+        })
+        .unwrap();
+    for part in &mut graph_parts {
+        part.window.origin = origin;
+    }
+    let graph = super::source::Presentation {
+        report: crate::inspection::Inspection::new(
+            crate::inspection::InputFormat::Dash,
+            crate::inspection::Evidence::Manifest,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        ),
+        format: OutputFormat::Dash,
+        parts: graph_parts,
+    };
+    let request = ConversionRequest {
+        input: Path::new("synthetic"),
+        output: root,
+        format: OutputFormat::Dash,
+        target: scheme,
+        input_keys: &empty,
+        hls_input_keys: &HlsInputKeys::default(),
+        output_key: (scheme != TargetProtection::Clear).then_some(key),
+        hls_key_uri: None,
+        hls_output_key: None,
+    };
+    super::manifest::dash_output::write(converter, root, &graph, output_parts, &request).unwrap();
+    root.join("manifest.mpd")
 }
