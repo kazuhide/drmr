@@ -15,6 +15,8 @@ use std::{
 use zeroize::Zeroizing;
 
 mod common;
+mod graph;
+mod media;
 
 const DASH: &str = "urn:mpeg:dash:schema:mpd:2011";
 const CENC: &str = "urn:mpeg:cenc:2013";
@@ -122,7 +124,13 @@ impl MultiObjects {
         }
         values
     }
-    fn init(&self, path: &Path, key: &OutputKey) -> Result<(), ConversionError> {
+    fn init(
+        &self,
+        path: &Path,
+        key: &OutputKey,
+        stop: &crate::concurrency::Stop,
+    ) -> Result<(), ConversionError> {
+        super::cancelled(stop)?;
         let data = read_bounded(path)?;
         let boxes = mp4::parse_boxes(&data).map_err(|_| MISMATCH)?;
         let nodes = mp4::walk(&boxes);
@@ -140,6 +148,7 @@ impl MultiObjects {
             .map(|value| value.as_slice())
             .chain(self.playready.iter().map(|value| value.bytes.as_slice()))
         {
+            super::cancelled(stop)?;
             if pssh
                 .iter()
                 .filter(|node| node.header.bytes(&data) == bytes)
@@ -218,7 +227,16 @@ impl MultiObjects {
         }
         Ok(expected)
     }
-    pub fn finish(&self, input: &Path, key: &OutputKey) -> Result<(), ConversionError> {
+    pub fn finish(
+        &self,
+        frozen: &super::super::FrozenSource,
+        key: &OutputKey,
+        stop: &crate::concurrency::Stop,
+    ) -> Result<(), ConversionError> {
+        super::cancelled(stop)?;
+        let input = frozen.entrypoint();
+        let mut graph = graph::Resources::new(frozen, stop)?;
+        graph.assign(input, graph::Role::Manifest)?;
         let root = input.parent().ok_or(MISMATCH)?;
         let data = read_bounded(input)?;
         let text = std::str::from_utf8(&data).map_err(|_| MISMATCH)?;
@@ -233,6 +251,7 @@ impl MultiObjects {
             .descendants()
             .filter(|node| node.has_tag_name((DASH, "AdaptationSet")))
         {
+            super::cancelled(stop)?;
             sets += 1;
             let reps: Vec<_> = set
                 .children()
@@ -243,12 +262,14 @@ impl MultiObjects {
             }
             declarations += self.protection(set, key)?;
             for rep in reps {
+                super::cancelled(stop)?;
                 let path = super::super::dash::initialization_reference(root, rep)
                     .map_err(|_| MISMATCH)?;
                 if !resources.insert(path.clone()) {
                     return Err(MISMATCH);
                 }
-                self.init(&path, key)?;
+                graph.assign(&path, graph::Role::Initialization)?;
+                self.init(&path, key, stop)?;
             }
         }
         if resources.is_empty()
@@ -272,7 +293,12 @@ impl MultiObjects {
         {
             return Err(MISMATCH);
         }
-        Ok(())
+        graph.dash_media(stop)?;
+        graph.complete()?;
+        for path in graph.media() {
+            media::check(path, media::Selection::Providers(self), stop)?;
+        }
+        unchanged(frozen)
     }
 }
 fn provider<'a, 'input>(
@@ -324,14 +350,25 @@ fn init_key(data: &[u8], key: &OutputKey) -> Result<(), ConversionError> {
     Ok(())
 }
 
+pub(super) struct FairPlayProfile<'a> {
+    pub format: OutputFormat,
+    pub target: TargetProtection,
+    pub uri: &'a str,
+    pub key: Option<&'a OutputKey>,
+    pub hls_key: Option<&'a super::super::HlsOutputKey>,
+}
+
 pub(super) fn fairplay(
-    input: &Path,
-    format: OutputFormat,
-    target: TargetProtection,
-    uri: &str,
-    key: Option<&OutputKey>,
-    hls_key: Option<&super::super::HlsOutputKey>,
+    frozen: &super::super::FrozenSource,
+    profile: &FairPlayProfile<'_>,
+    stop: &crate::concurrency::Stop,
 ) -> Result<(), ConversionError> {
+    super::cancelled(stop)?;
+    let format = profile.format;
+    let uri = profile.uri;
+    let input = frozen.entrypoint();
+    let mut graph = graph::Resources::new(frozen, stop)?;
+    graph.assign(input, graph::Role::Manifest)?;
     if !valid_fairplay_uri(uri) {
         return Err(super::INVALID);
     }
@@ -346,6 +383,7 @@ pub(super) fn fairplay(
     let mut variant = false;
     let mut session_keys = Vec::new();
     for line in text.lines().map(str::trim) {
+        super::cancelled(stop)?;
         if line.starts_with("#EXT-X-KEY:") {
             return Err(MISMATCH);
         }
@@ -371,73 +409,110 @@ pub(super) fn fairplay(
     }
     version(text, 5, !session_keys.is_empty())?;
     for path in playlists {
-        let data = read_bounded(&path)?;
-        let text = std::str::from_utf8(&data).map_err(|_| MISMATCH)?;
-        version(text, if format == OutputFormat::Hls { 6 } else { 5 }, true)?;
-        let mut keys = 0;
-        let mut media = 0;
-        let mut maps = 0;
-        let expected_iv = playlist_iv(&path, text, format, target, key, hls_key)?;
-        for value in &session_keys {
+        fairplay_playlist(&path, profile, &session_keys, &mut graph, stop)?;
+    }
+    graph.complete()?;
+    for path in graph.media() {
+        if format == OutputFormat::Hls {
+            media::check(path, media::Selection::FairPlay, stop)?;
+        } else {
+            no_provider_media(path, false, profile.target, profile.key, stop)?;
+        }
+    }
+    unchanged(frozen)
+}
+fn fairplay_playlist(
+    path: &Path,
+    profile: &FairPlayProfile<'_>,
+    session_keys: &[&str],
+    graph: &mut graph::Resources,
+    stop: &crate::concurrency::Stop,
+) -> Result<(), ConversionError> {
+    let format = profile.format;
+    let uri = profile.uri;
+    super::cancelled(stop)?;
+    graph.assign(path, graph::Role::Manifest)?;
+    let data = read_bounded(path)?;
+    let text = std::str::from_utf8(&data).map_err(|_| MISMATCH)?;
+    version(text, if format == OutputFormat::Hls { 6 } else { 5 }, true)?;
+    let mut keys = 0;
+    let mut media = 0;
+    let mut maps = 0;
+    let expected_iv = playlist_iv(path, text, profile, graph, stop)?;
+    for value in session_keys {
+        super::cancelled(stop)?;
+        declaration(
+            value,
+            uri,
+            expected_iv.as_deref().map(String::as_str),
+            false,
+        )?;
+    }
+    for line in text.lines().map(str::trim) {
+        super::cancelled(stop)?;
+        if let Some(value) = line.strip_prefix("#EXT-X-KEY:") {
+            if media != 0 {
+                return Err(MISMATCH);
+            }
             declaration(
                 value,
                 uri,
                 expected_iv.as_deref().map(String::as_str),
                 false,
             )?;
-        }
-        for line in text.lines().map(str::trim) {
-            if let Some(value) = line.strip_prefix("#EXT-X-KEY:") {
-                if media != 0 {
-                    return Err(MISMATCH);
-                }
-                declaration(
-                    value,
-                    uri,
-                    expected_iv.as_deref().map(String::as_str),
-                    false,
-                )?;
-                keys += 1;
-            } else if line.starts_with("#EXT-X-MAP:") {
-                if format != OutputFormat::Hls || media != 0 || maps != 0 {
-                    return Err(MISMATCH);
-                }
-                maps += 1;
-            } else if !line.is_empty() && !line.starts_with('#') {
-                if keys != 1 || format == OutputFormat::Hls && maps != 1 {
-                    return Err(MISMATCH);
-                }
-                media += 1;
+            keys += 1;
+        } else if line.starts_with("#EXT-X-MAP:") {
+            if format != OutputFormat::Hls || media != 0 || maps != 0 {
+                return Err(MISMATCH);
             }
+            maps += 1;
+        } else if !line.is_empty() && !line.starts_with('#') {
+            if keys != 1 || format == OutputFormat::Hls && maps != 1 {
+                return Err(MISMATCH);
+            }
+            graph.assign(
+                &resource(path.parent().ok_or(MISMATCH)?, line)?,
+                graph::Role::Media,
+            )?;
+            media += 1;
         }
-        if keys != 1 || media == 0 {
-            return Err(MISMATCH);
-        }
+    }
+    if keys != 1 || media == 0 {
+        return Err(MISMATCH);
     }
     Ok(())
 }
 fn playlist_iv(
     path: &Path,
     text: &str,
-    format: OutputFormat,
-    target: TargetProtection,
-    key: Option<&OutputKey>,
-    hls_key: Option<&super::super::HlsOutputKey>,
+    profile: &FairPlayProfile<'_>,
+    graph: &mut graph::Resources,
+    stop: &crate::concurrency::Stop,
 ) -> Result<Option<Zeroizing<String>>, ConversionError> {
+    let FairPlayProfile {
+        format,
+        target,
+        key,
+        hls_key,
+        ..
+    } = *profile;
     let mut maps = 0;
     let mut expected_iv = None;
     if format == OutputFormat::Hls {
         let key = key.ok_or(super::INVALID)?;
         for line in text.lines().map(str::trim) {
+            super::cancelled(stop)?;
             if let Some(value) = line.strip_prefix("#EXT-X-MAP:") {
                 let attrs = super::super::hls::attributes(value).map_err(|_| MISMATCH)?;
                 if attrs.get("BYTERANGE").is_some() {
                     return Err(MISMATCH);
                 }
-                let init = read_bounded(&resource(
+                let initialization = resource(
                     path.parent().ok_or(MISMATCH)?,
                     attrs.get("URI").ok_or(MISMATCH)?,
-                )?)?;
+                )?;
+                graph.assign(&initialization, graph::Role::Initialization)?;
+                let init = read_bounded(&initialization)?;
                 let boxes = mp4::parse_boxes(&init).map_err(|_| MISMATCH)?;
                 if mp4::walk(&boxes)
                     .iter()
@@ -545,15 +620,18 @@ pub(super) fn unrequested(
     frozen: &super::super::FrozenSource,
     target: TargetProtection,
     key: Option<&OutputKey>,
+    stop: &crate::concurrency::Stop,
 ) -> Result<(), ConversionError> {
-    unrequested_at(frozen, frozen.entrypoint(), target, key)
+    unrequested_at(frozen, frozen.entrypoint(), target, key, stop)
 }
 fn unrequested_at(
     frozen: &super::super::FrozenSource,
     entrypoint: &Path,
     target: TargetProtection,
     key: Option<&OutputKey>,
+    stop: &crate::concurrency::Stop,
 ) -> Result<(), ConversionError> {
+    super::cancelled(stop)?;
     // Match resolver results, including Windows' canonical verbatim prefix, in one namespace.
     let entrypoint = entrypoint.canonicalize().map_err(|_| MISMATCH)?;
     let mut root = entrypoint.clone();
@@ -565,6 +643,7 @@ fn unrequested_at(
     let mut encrypted = BTreeSet::new();
     let mut pending = vec![entrypoint.clone()];
     while let Some(path) = pending.pop() {
+        super::cancelled(stop)?;
         if manifests.contains(&path) {
             continue;
         }
@@ -579,7 +658,7 @@ fn unrequested_at(
             .map_err(|_| MISMATCH)?
             .trim_start_matches('\u{feff}');
         if hls {
-            let resources = unrequested_hls(&path, text)?;
+            let resources = unrequested_hls(&path, text, stop)?;
             encrypted.extend(resources.encrypted);
             pending.extend(resources.playlists);
         } else if path == entrypoint {
@@ -593,15 +672,25 @@ fn unrequested_at(
         }
     }
     for file in &frozen.inventory().files {
+        super::cancelled(stop)?;
         let path = root.join(&file.path).canonicalize().map_err(|_| MISMATCH)?;
         if !path.starts_with(&root) {
             return Err(MISMATCH);
         }
         if !manifests.contains(&path) {
-            no_provider_media(&path, encrypted.contains(&path), target, key)?;
+            no_provider_media(&path, encrypted.contains(&path), target, key, stop)?;
         }
     }
-    frozen.check_original().map_err(|_| MISMATCH)
+    unchanged(frozen)
+}
+fn unchanged(frozen: &super::super::FrozenSource) -> Result<(), ConversionError> {
+    frozen.check_original().map_err(|error| {
+        if error.0 == "cancelled" {
+            error
+        } else {
+            MISMATCH
+        }
+    })
 }
 fn manifest_kind(path: &Path) -> Result<Option<bool>, ConversionError> {
     let mut prefix = [0; 512];
@@ -624,7 +713,11 @@ struct HlsResources {
     encrypted: BTreeSet<PathBuf>,
     playlists: BTreeSet<PathBuf>,
 }
-fn unrequested_hls(path: &Path, text: &str) -> Result<HlsResources, ConversionError> {
+fn unrequested_hls(
+    path: &Path,
+    text: &str,
+    stop: &crate::concurrency::Stop,
+) -> Result<HlsResources, ConversionError> {
     let root = path.parent().ok_or(MISMATCH)?;
     let master = text
         .lines()
@@ -633,6 +726,7 @@ fn unrequested_hls(path: &Path, text: &str) -> Result<HlsResources, ConversionEr
     let mut resources = HlsResources::default();
     let mut whole_encryption = false;
     for line in text.lines().map(str::trim) {
+        super::cancelled(stop)?;
         if let Some(value) = line
             .strip_prefix("#EXT-X-KEY:")
             .or_else(|| line.strip_prefix("#EXT-X-SESSION-KEY:"))
@@ -675,7 +769,9 @@ fn no_provider_media(
     whole_encryption: bool,
     target: TargetProtection,
     key: Option<&OutputKey>,
+    stop: &crate::concurrency::Stop,
 ) -> Result<(), ConversionError> {
+    super::cancelled(stop)?;
     let mut file = File::open(path).map_err(|_| MISMATCH)?;
     let mut prefix = [0; 3 * 188];
     let length = file.read(&mut prefix).map_err(|_| MISMATCH)?;
@@ -683,8 +779,8 @@ fn no_provider_media(
     // Opaque whole-file AES-128 bytes have no readable provider metadata. A box
     // sequence is still checked, including readable boxes before an invalid trailer.
     if whole_encryption {
-        return if readable_box_sequence(path)? {
-            no_provider_boxes(path, target, key)
+        return if readable_box_sequence(path, stop)? {
+            no_provider_boxes(path, target, key, stop)
         } else {
             Ok(())
         };
@@ -693,19 +789,23 @@ fn no_provider_media(
     if bytes != 0
         && bytes.is_multiple_of(188)
         && prefix[..length].chunks(188).all(|packet| packet[0] == 0x47)
-        && !readable_box_sequence(path)?
+        && !readable_box_sequence(path, stop)?
     {
         return Ok(());
     }
-    no_provider_boxes(path, target, key)
+    no_provider_boxes(path, target, key, stop)
 }
-fn readable_box_sequence(path: &Path) -> Result<bool, ConversionError> {
+fn readable_box_sequence(
+    path: &Path,
+    stop: &crate::concurrency::Stop,
+) -> Result<bool, ConversionError> {
     let mut file = File::open(path).map_err(|_| MISMATCH)?;
     let length = file.metadata().map_err(|_| MISMATCH)?.len();
     let mut at = 0u64;
     let mut readable = false;
     let mut count = 0;
     while at < length {
+        super::cancelled(stop)?;
         count += 1;
         if count > 100_000 {
             return Err(MISMATCH);
@@ -745,78 +845,9 @@ fn no_provider_boxes(
     path: &Path,
     target: TargetProtection,
     key: Option<&OutputKey>,
+    stop: &crate::concurrency::Stop,
 ) -> Result<(), ConversionError> {
-    let mut common_records = 0;
-    let mut encrypted_tracks = 0;
-    let mut file = File::open(path).map_err(|_| MISMATCH)?;
-    let length = file.metadata().map_err(|_| MISMATCH)?.len();
-    let mut at = 0u64;
-    let mut count = 0;
-    while at < length {
-        count += 1;
-        if count > 100_000 {
-            return Err(MISMATCH);
-        }
-        let mut header = [0; 8];
-        file.read_exact(&mut header).map_err(|_| MISMATCH)?;
-        let mut bytes = Zeroizing::new(header.to_vec());
-        let size = match u32::from_be_bytes(header[..4].try_into().unwrap()) {
-            0 => length - at,
-            1 => {
-                let mut wide = [0; 8];
-                file.read_exact(&mut wide).map_err(|_| MISMATCH)?;
-                bytes.extend(wide);
-                u64::from_be_bytes(wide)
-            }
-            value => u64::from(value),
-        };
-        if size < bytes.len() as u64 || size > length - at {
-            return Err(MISMATCH);
-        }
-        if matches!(&header[4..], b"moov" | b"moof" | b"pssh" | b"uuid") {
-            if size > super::LIMIT as u64 {
-                return Err(MISMATCH);
-            }
-            let begin = bytes.len();
-            bytes.resize(usize::try_from(size).map_err(|_| MISMATCH)?, 0);
-            file.read_exact(&mut bytes[begin..]).map_err(|_| MISMATCH)?;
-            let boxes = mp4::parse_boxes(&bytes).map_err(|_| MISMATCH)?;
-            for node in mp4::walk(&boxes) {
-                if node.kind() == *b"uuid" {
-                    return Err(MISMATCH);
-                }
-                if node.kind() == *b"pssh" {
-                    common::payload(node.header.payload(&bytes), common::key(target, key)?)?;
-                    common_records += 1;
-                    if common_records > 1 {
-                        return Err(MISMATCH);
-                    }
-                } else if node.kind() == *b"tenc" {
-                    let expected = common::key(target, key)?;
-                    let track = mp4::Tenc::parse(node.header.payload(&bytes)).ok_or(MISMATCH)?;
-                    if track.default_is_protected != 1 || track.default_kid != expected.0.id {
-                        return Err(MISMATCH);
-                    }
-                    encrypted_tracks += 1;
-                } else if node.kind() == *b"schm" {
-                    common::key(target, key)?;
-                    let scheme = node.header.payload(&bytes);
-                    if scheme.len() != 12
-                        || scheme[..4] != [0; 4]
-                        || scheme.get(4..8) != Some(target.as_str().as_bytes())
-                    {
-                        return Err(MISMATCH);
-                    }
-                }
-            }
-        }
-        at += size;
-        file.seek(SeekFrom::Start(at)).map_err(|_| MISMATCH)?;
-    }
-    if common_records != 0 && encrypted_tracks == 0 {
-        return Err(MISMATCH);
-    }
-    Ok(())
+    media::check(path, media::Selection::Default { target, key }, stop)
 }
 
 #[cfg(test)]
@@ -849,7 +880,13 @@ mod tests {
         let frozen =
             super::super::super::FrozenSource::capture(&master, &crate::concurrency::Stop::new())
                 .unwrap();
-        unrequested(&frozen, TargetProtection::HlsAes128, None).unwrap();
+        unrequested(
+            &frozen,
+            TargetProtection::HlsAes128,
+            None,
+            &crate::concurrency::Stop::new(),
+        )
+        .unwrap();
         let alias = owner.path().join("snapshot-alias");
         std::os::unix::fs::symlink(frozen.entrypoint().parent().unwrap(), &alias).unwrap();
         unrequested_at(
@@ -857,6 +894,7 @@ mod tests {
             &alias.join(&frozen.inventory().entrypoint),
             TargetProtection::HlsAes128,
             None,
+            &crate::concurrency::Stop::new(),
         )
         .unwrap();
         frozen.check_original().unwrap();

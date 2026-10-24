@@ -336,7 +336,7 @@ impl Converter {
                 .iter()
                 .all(|protection| protection.matches_target(plan.intent.target));
         let verification = command.verify(VerificationRequest { source, output })?;
-        if keys.signaling.is_some() {
+        if plan.schema_version == 5 || keys.signaling.is_some() {
             command.verify_output_signaling(
                 result.entrypoint(),
                 plan.intent.format,

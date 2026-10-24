@@ -157,11 +157,15 @@ the license service has been checked.
 ## What is checked
 
 Conversion checks the final output before publication. DASH checks include the
-actual referenced initialization files, the exact selected PSSH set, key
+actual referenced initialization and media files, the exact selected PSSH set, key
 identifiers, encryption scheme, XML namespaces, and generated PlayReady PRO/PSSH
 agreement. HLS checks every referenced media playlist and its FairPlay method,
 key address, key-format declaration, initialization metadata, and declared vector
-when present.
+when present. A DASH media resource may repeat a selected provider's exact
+initialization PSSH once per provider. Different records, additional systems,
+and duplicate records are rejected. FairPlay fragmented-MP4 HLS has no PSSH
+records in either its initialization or media files. These checks read bounded
+metadata and skip media-data payloads; they do not load an entire segment into memory.
 
 FairPlay media playlists require one valid `EXT-X-VERSION` declaration: at least
 6 for ordinary fragmented-MP4 HLS using `EXT-X-MAP`, or at least 5 for MPEG-TS.
@@ -178,6 +182,8 @@ This record identifies encryption keys by identifier; it does not contain the
 content keys or provider-specific policy data. drmr accepts only its generated
 single-key form here: version 1, zero flags, the selected output KID and an empty
 data field. The MPD, initialization files and actual track protection must agree.
+Common records are accepted in initialization files declaring that selected track;
+they are not accepted in a separate media fragment without that track declaration.
 This output check does not relax source admission or authorize arbitrary provider
 records. It does not mark service-specific signaling or license playback as verified.
 
@@ -186,16 +192,20 @@ Library callers can independently reopen an existing result with
 reads a fresh, byte-bound output graph and verifies its current records against
 the operator settings. Call `Converter::verify` separately for full source/result
 media comparison. A prior conversion report does not authorize either check.
-The single-output CLI `verify` repeats these signaling checks when its protected
-key file explicitly selects a signaling profile. It checks the same byte-bound
+The single-output CLI `verify` repeats these signaling checks for current saved
+plans, including when no provider is selected. Older saved single-output plans
+retain their original behavior when no signaling profile is supplied. It checks the same byte-bound
 output as its complete media comparison. A [multiple-output saved plan](multiple-outputs.md)
 also fixes the selected DRM systems and reports each output's media, DRM,
 native manifest linting, and optional external manifest checks separately.
 
 Whole-file AES-128 encryption can make resource bytes opaque. The native metadata
 check examines the final manifest and readable initialization and provider records;
-it does not prove that provider data is absent inside ciphertext. Decryption and
-complete source/result media comparison remain separate checks.
+the standalone signaling method cannot prove that provider data is absent inside
+ciphertext. The `segments` conversion and media-verification routes also check
+the actual decrypted initialization and media resources and retain guards for
+both their plaintext and the original ciphertext. Complete source/result media
+comparison remains a separate check.
 
 The existing `{"system":"playready","license_url":"..."}` setting retains its
 qualified clear-MP4-to-CBCS-DASH profile. It is not silently expanded to other inputs.
