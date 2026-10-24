@@ -355,6 +355,7 @@ fn audio_fmp4_hls_negative_oracle_rejects_operational_and_unknown_failures() {
         "manifest-segment-duration-mismatch",
         "hls-complete-vod-required",
         "ts-original-access-unit-count-mismatch",
+        "native-media-duration-mismatch",
         "fragment-timeline-gap-or-overlap",
         "media-tool-failed",
         "invalid-encrypted-segment",
@@ -452,7 +453,8 @@ fn audio_fmp4_hls_rejects_changed_duration_end_resources_payload_and_decode_cloc
         ),
         (
             "missing-segment",
-            "ts-original-access-unit-count-mismatch",
+            // The remaining fragments no longer satisfy the init's declared duration.
+            "native-media-duration-mismatch",
             missing.join("\n") + "\n",
         ),
         (
