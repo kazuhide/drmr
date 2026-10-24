@@ -7,16 +7,25 @@ for installation, stable interfaces and versioning.
 
 ### Changed
 
+- Add `--processing auto|segments|stitch` to saved planning and direct conversion,
+  with per-output choices in the shared CLI, Web and Desktop workflow. Native
+  TS and fragmented-MP4 routes can re-encrypt original resources while retaining
+  every sample's segment membership and clocks. `stitch` prepares complete
+  tracks and packages the requested output; HLS and DASH are segmented again.
+- Save resolved processing and boundary guarantees in new single-output plan
+  schema 5 and named-output schema 6. Existing plan schemas 1–4 retain their
+  identities and verification minimums. Output recipe schema 2 adds per-output
+  processing; operator key-file schemas remain unchanged.
 - Use native Rust media validation by default for complete analysis, saved
   planning, conversion and independent verification. Check every admitted
   sample, codec configuration, clock and supported playback window; refuse
   unsupported or incomplete evidence. Add `--decode` for complete decoding in
   addition to those native checks.
 - Emit complete-media report schema 2 with explicit required depth, scope and
-  actual decode evidence. Save new single-output plans as schema 3 and named
-  outputs as schema 4 with their minimum depth bound to the plan ID. Legacy
-  plans 1/2 remain strict and retain a complete-decoding minimum. The common
-  Web/Desktop workflow shares this policy; operator key-file versions stay 1/2.
+  actual decode evidence. Plans bind their minimum depth to the plan ID. Legacy
+  plans 1/2 remain strict and retain a complete-decoding minimum; plans 3/4 keep
+  their saved depth and complete-track packaging. The common Web/Desktop
+  workflow shares this policy; operator key-file versions stay 1/2.
 - Compute complete decoded-content SHA-256 in Rust with processor acceleration
   where available, preserving the same decoded bytes and FFmpeg timestamp
   refusal checks. Decoded media is streamed instead of retained in memory.

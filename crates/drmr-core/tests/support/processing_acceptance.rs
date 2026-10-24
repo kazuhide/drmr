@@ -173,8 +173,8 @@ pub fn assert_processing(
     boundaries: BoundaryHandling,
 ) {
     let actual = report.processing.as_ref().expect("completed route report");
-    assert_eq!(actual.mode, mode);
-    assert_eq!(actual.boundaries, boundaries);
+    assert_eq!(actual.mode, Some(mode));
+    assert_eq!(actual.boundaries, Some(boundaries));
     if report.verification.required_depth == ValidationDepth::Native
         && mode == ProcessingMode::Segments
     {
