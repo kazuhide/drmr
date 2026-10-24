@@ -12,11 +12,11 @@ fn earlier(a: Rational, b: Rational) -> bool {
 fn equal(a: Rational, b: Rational) -> bool {
     u128::from(a.0) * u128::from(b.1) == u128::from(b.0) * u128::from(a.1)
 }
-#[derive(Clone, Copy)]
-pub(super) struct Window {
-    origin: Rational,
-    first: Rational,
-    end: Rational,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::conversion) struct Window {
+    pub(in crate::conversion) origin: Rational,
+    pub(in crate::conversion) first: Rational,
+    pub(in crate::conversion) end: Rational,
 }
 impl Window {
     pub(super) fn read(

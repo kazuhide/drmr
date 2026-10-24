@@ -1,19 +1,37 @@
 //! Confined local static DASH snapshots; manifests never select executables or network access.
 
 use super::{ConversionError, LocalTrack};
+mod segments;
 mod window;
 use crate::inspection::{self, Protection, TrackKind};
 use roxmltree::{Document, Node};
+use segments::{Budget, checkpoint};
+pub(super) use segments::{SegmentBoundary, Segmented, SegmentedRepresentation};
 use std::collections::HashSet;
 use std::fmt::Write as _;
 use std::fs::{self, File};
 use std::path::{Component, Path, PathBuf};
+pub(super) use window::Window;
 pub(super) use window::finish_transport;
 
 pub(super) const DASH_NS: &str = "urn:mpeg:dash:schema:mpd:2011";
 pub(super) const MAX_SEGMENTS: usize = 100_000;
 pub(super) const MAX_TRACKS: usize = 64;
 const MAX_BYTES: u64 = 16 * 1024 * 1024 * 1024;
+
+enum CapturedRepresentation {
+    Joined(LocalTrack),
+    Segments(SegmentedRepresentation),
+}
+struct Completed {
+    manifest: PathBuf,
+    report: inspection::Inspection,
+    representations: Vec<CapturedRepresentation>,
+}
+struct Capture<'a> {
+    stop: Option<&'a crate::concurrency::Stop>,
+    budget: &'a mut Budget,
+}
 
 fn error(code: &'static str) -> ConversionError {
     ConversionError(code)
@@ -392,7 +410,9 @@ fn snapshot_representation(
     stage: &Path,
     index: usize,
     remaining: usize,
-) -> Result<(LocalTrack, usize, window::Window), ConversionError> {
+    capture: &mut Capture<'_>,
+) -> Result<(CapturedRepresentation, usize, window::Window), ConversionError> {
+    checkpoint(capture.stop)?;
     if !matches!(
         declared,
         Protection::Clear | Protection::Cenc | Protection::Cbcs
@@ -405,24 +425,46 @@ fn snapshot_representation(
     let media = attribute(&templates, "media").ok_or(error("dash-media-template-required"))?;
     let id = representation.attribute("id").unwrap_or("");
     let bandwidth = representation.attribute("bandwidth").unwrap_or("");
-    let source = stage.join(format!("dash-track-{index}.mp4"));
-    let mut combined = private_new(&source)?;
+    let source = capture
+        .stop
+        .is_none()
+        .then(|| stage.join(format!("dash-track-{index}.mp4")));
+    let mut combined = source.as_deref().map(private_new).transpose()?;
+    let resource_directory = stage.join(format!("dash-representation-{index:04}"));
+    if capture.stop.is_some() {
+        super::files::create_dir(&resource_directory)?;
+    }
     let mut total = 0;
-    let initialization = reference(
+    let original_initialization = reference(
         directory,
         &base,
         &initialization_uri(representation, &templates, values[0])?,
     )?;
-    let mut clock = append(
-        &initialization,
-        stage,
-        &mut combined,
-        &mut total,
-        super::timing::FragmentClock::read,
-    )?;
+    let mut initialization = None;
+    let mut clock = if let Some(joined) = combined.as_mut() {
+        append(
+            &original_initialization,
+            stage,
+            joined,
+            &mut total,
+            super::timing::FragmentClock::read,
+        )?
+    } else {
+        let copied = resource_directory.join("initialization.mp4");
+        capture.budget.snapshot(
+            &original_initialization,
+            &copied,
+            capture.stop.ok_or(error("dash-snapshot-mode-invalid"))?,
+        )?;
+        let clock = super::timing::FragmentClock::read(&copied)?;
+        initialization = Some(copied);
+        clock
+    };
     let scale = integer(attribute(&templates, "timescale"), 1)?;
     let mut seen = HashSet::new();
-    for (number, time, duration) in values {
+    let mut resources = Vec::new();
+    for (ordinal, (number, time, duration)) in values.into_iter().enumerate() {
+        checkpoint(capture.stop)?;
         let segment = reference(
             directory,
             &base,
@@ -431,16 +473,39 @@ fn snapshot_representation(
         if !seen.insert(segment.clone()) {
             return Err(error("dash-repeated-resource-not-supported"));
         }
-        append(&segment, stage, &mut combined, &mut total, |piece| {
-            clock.check_dash(piece, time, duration, scale)
-        })?;
+        if let Some(joined) = combined.as_mut() {
+            append(&segment, stage, joined, &mut total, |piece| {
+                clock.check_dash(piece, time, duration, scale)
+            })?;
+        } else {
+            let copied = resource_directory.join(format!("segment-{ordinal:08}.m4s"));
+            capture.budget.snapshot(
+                &segment,
+                &copied,
+                capture.stop.ok_or(error("dash-snapshot-mode-invalid"))?,
+            )?;
+            clock.check_dash(&copied, time, duration, scale)?;
+            resources.push((
+                copied,
+                SegmentBoundary {
+                    number,
+                    time,
+                    duration,
+                    timescale: scale,
+                },
+            ));
+        }
     }
     let window = window::Window::read(&templates, clock.presentation_window()?)?;
-    combined
-        .sync_all()
-        .map_err(|_| error("media-copy-failed"))?;
-    drop(combined);
-    let actual = inspection::inspect(&source).map_err(|_| error("dash-invalid-staged-media"))?;
+    if let Some(joined) = combined.take() {
+        joined.sync_all().map_err(|_| error("media-copy-failed"))?;
+        drop(joined);
+    }
+    let observed = source
+        .as_deref()
+        .or(initialization.as_deref())
+        .ok_or(error("dash-initialization-required"))?;
+    let actual = inspection::inspect(observed).map_err(|_| error("dash-invalid-staged-media"))?;
     if actual.tracks.len() != 1 || actual.protection != declared {
         return Err(error("dash-media-protection-mismatch"));
     }
@@ -448,26 +513,76 @@ fn snapshot_representation(
     if !matches!(kind, TrackKind::Video | TrackKind::Audio) {
         return Err(error("dash-media-track-not-supported"));
     }
-    Ok((
-        LocalTrack {
+    let representation = if let Some(source) = source {
+        CapturedRepresentation::Joined(LocalTrack {
             source,
             kind,
             index: 0,
-        },
-        used,
-        window,
-    ))
+        })
+    } else {
+        CapturedRepresentation::Segments(SegmentedRepresentation {
+            initialization: initialization.ok_or(error("dash-initialization-required"))?,
+            resources,
+            window,
+            kind,
+            protection: actual.protection,
+        })
+    };
+    Ok((representation, used, window))
 }
 
 /// Snapshot only a finite, single-period `SegmentTemplate` presentation inside its local root.
 /// The returned role is observed from staged initialization metadata, never trusted XML.
 pub(crate) fn snapshot_dash(path: &Path, stage: &Path) -> Result<Vec<LocalTrack>, ConversionError> {
+    snapshot(path, stage, None)?
+        .representations
+        .into_iter()
+        .map(|representation| match representation {
+            CapturedRepresentation::Joined(track) => Ok(track),
+            CapturedRepresentation::Segments(_) => Err(error("dash-snapshot-mode-invalid")),
+        })
+        .collect()
+}
+
+/// Retain qualified original resources and exact timeline units without joining tracks.
+pub(super) fn snapshot_segments(
+    path: &Path,
+    stage: &Path,
+    stop: &crate::concurrency::Stop,
+) -> Result<Segmented, ConversionError> {
+    let captured = snapshot(path, stage, Some(stop))?;
+    let representations = captured
+        .representations
+        .into_iter()
+        .map(|representation| match representation {
+            CapturedRepresentation::Segments(track) => Ok(track),
+            CapturedRepresentation::Joined(_) => Err(error("dash-snapshot-mode-invalid")),
+        })
+        .collect::<Result<_, _>>()?;
+    Ok(Segmented {
+        manifest: captured.manifest,
+        report: captured.report,
+        representations,
+    })
+}
+
+fn snapshot(
+    path: &Path,
+    stage: &Path,
+    stop: Option<&crate::concurrency::Stop>,
+) -> Result<Completed, ConversionError> {
+    checkpoint(stop)?;
     let metadata = fs::symlink_metadata(path).map_err(|_| error("input-unreadable"))?;
     if !metadata.is_file() || metadata.len() > inspection::MAX_MANIFEST_BYTES {
         return Err(error("dash-manifest-unreadable-or-too-large"));
     }
     let manifest = stage.join("dash-manifest.mpd");
-    super::copy_private(path, &manifest)?;
+    let mut budget = Budget::default();
+    if let Some(stop) = stop {
+        budget.snapshot(path, &manifest, stop)?;
+    } else {
+        super::copy_private(path, &manifest)?;
+    }
     let bytes = inspection::read_manifest(&manifest)
         .map_err(|_| error("dash-manifest-unreadable-or-too-large"))?;
     let declared = inspection::inspect(&manifest).map_err(|_| error("dash-inspection-failed"))?;
@@ -514,9 +629,12 @@ pub(crate) fn snapshot_dash(path: &Path, stage: &Path) -> Result<Vec<LocalTrack>
     let mut tracks = Vec::new();
     let mut segments = 0;
     let mut windows = window::Presentation::default();
-    for (index, (representation, declared)) in
-        representations.into_iter().zip(declared.tracks).enumerate()
+    for (index, (representation, declared)) in representations
+        .into_iter()
+        .zip(&declared.tracks)
+        .enumerate()
     {
+        checkpoint(stop)?;
         let (track, used, track_window) = snapshot_representation(
             representation,
             declared.protection,
@@ -524,6 +642,10 @@ pub(crate) fn snapshot_dash(path: &Path, stage: &Path) -> Result<Vec<LocalTrack>
             stage,
             index,
             MAX_SEGMENTS - segments,
+            &mut Capture {
+                stop,
+                budget: &mut budget,
+            },
         )?;
         tracks.push(track);
         segments += used;
@@ -544,7 +666,11 @@ pub(crate) fn snapshot_dash(path: &Path, stage: &Path) -> Result<Vec<LocalTrack>
     {
         windows.check_duration(value)?;
     }
-    Ok(tracks)
+    Ok(Completed {
+        manifest,
+        report: declared,
+        representations: tracks,
+    })
 }
 
 pub(super) fn decimal_duration(value: &str) -> Result<(u64, u64), ConversionError> {
@@ -677,6 +803,16 @@ mod tests {
         );
         let stage = super::super::files::Stage::new(None).unwrap();
         let tracks = snapshot_dash(&manifest, stage.path()).unwrap();
+        let segment_stage = super::super::files::Stage::new(None).unwrap();
+        let segmented = snapshot_segments(
+            &manifest,
+            segment_stage.path(),
+            &crate::concurrency::Stop::new(),
+        )
+        .unwrap();
+        assert_eq!(segmented.representations.len(), 2);
+        assert!(segmented.manifest.is_file());
+        assert_eq!(segmented.report.tracks.len(), 2);
         assert_eq!(tracks.len(), 2);
         assert_eq!(
             tracks.iter().map(|track| track.kind).collect::<Vec<_>>(),
@@ -690,6 +826,44 @@ mod tests {
             );
             assert_eq!(track.index, 0);
         }
+        for (track, representation) in tracks.iter().zip(&segmented.representations) {
+            assert_eq!(track.kind, representation.kind);
+            assert_eq!(representation.protection, Protection::Clear);
+            assert!(
+                representation
+                    .initialization
+                    .starts_with(segment_stage.path())
+            );
+            assert!(representation.initialization.is_file());
+            let mut clock =
+                super::super::timing::FragmentClock::read(&representation.initialization).unwrap();
+            let mut original = fs::read(&representation.initialization).unwrap();
+            for (index, (resource, boundary)) in representation.resources.iter().enumerate() {
+                assert!(resource.starts_with(segment_stage.path()));
+                assert_eq!(boundary.number, u64::try_from(index + 1).unwrap());
+                assert!(boundary.duration > 0 && boundary.timescale > 0);
+                let (time, duration, scale) = clock.dash_segment(resource).unwrap();
+                assert_eq!(
+                    u128::from(time) * u128::from(boundary.timescale),
+                    u128::from(boundary.time) * u128::from(scale)
+                );
+                assert_eq!(
+                    u128::from(duration) * u128::from(boundary.timescale),
+                    u128::from(boundary.duration) * u128::from(scale)
+                );
+                if index > 0 {
+                    let previous = representation.resources[index - 1].1;
+                    assert_eq!(boundary.time, previous.time + previous.duration);
+                }
+                original.extend(fs::read(resource).unwrap());
+            }
+            assert_eq!(original, fs::read(&track.source).unwrap());
+            let (first, end, scale) = clock.presentation_window().unwrap();
+            assert_eq!(representation.window.first, (first, scale));
+            assert_eq!(representation.window.end, (end, scale));
+        }
+        assert!(!segment_stage.path().join("dash-track-0.mp4").exists());
+        assert!(!segment_stage.path().join("dash-track-1.mp4").exists());
         assert_eq!(
             std::fs::read_dir(&media).unwrap().count(),
             3,
@@ -716,6 +890,16 @@ mod tests {
                 snapshot_dash(&manifest, denied.path()).unwrap_err().0,
                 "dash-presentation-metadata-not-supported"
             );
+            let denied_segments = super::super::files::Stage::new(None).unwrap();
+            let error = match snapshot_segments(
+                &manifest,
+                denied_segments.path(),
+                &crate::concurrency::Stop::new(),
+            ) {
+                Ok(_) => panic!("unsupported metadata was accepted"),
+                Err(error) => error,
+            };
+            assert_eq!(error.0, "dash-presentation-metadata-not-supported");
         }
     }
 
