@@ -14,7 +14,7 @@ use std::{
 fn fixture() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../drmr/tests/fixtures/bbb/clip.mp4")
 }
-fn converter() -> (Converter, Arc<Collector>) {
+pub(super) fn converter() -> (Converter, Arc<Collector>) {
     let events = Arc::new(Collector::default());
     let runner = Arc::new(ToolRunner::new(Arc::new(Secrets::new()), events.clone()));
     (
@@ -23,7 +23,7 @@ fn converter() -> (Converter, Arc<Collector>) {
     )
 }
 
-fn short_audio_transport(root: &Path) -> PathBuf {
+pub(super) fn short_audio_transport(root: &Path) -> PathBuf {
     let encoded = root.join("encoded.ts");
     let status = std::process::Command::new("ffmpeg")
         .args(["-v", "error", "-nostdin", "-i"])

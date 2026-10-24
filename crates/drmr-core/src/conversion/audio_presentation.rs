@@ -111,7 +111,7 @@ impl AudioPresentation {
     pub(super) fn movie_end(self) -> Result<(u64, u32), ConversionError> {
         self.claim().end()
     }
-    fn claim(self) -> AudioClaim {
+    pub(super) fn claim(self) -> AudioClaim {
         AudioClaim {
             sample_rate: self.evidence.sample_rate,
             raw_first_pts: self.evidence.raw_first_pts,
@@ -150,6 +150,12 @@ impl AudioPresentation {
 }
 pub(super) fn read_claim(path: &Path) -> Result<Option<AudioClaim>, ConversionError> {
     edit::read_claim(path)
+}
+pub(super) fn guarded_claim(bytes: &[u8]) -> Result<Option<(AudioClaim, u32)>, ConversionError> {
+    edit::claim_from_movie(bytes)
+}
+pub(super) fn guarded_fragment(bytes: &[u8], track_id: u32) -> Result<(), ConversionError> {
+    edit::validate_fragment(bytes, track_id)
 }
 pub(super) fn read(
     path: &Path,

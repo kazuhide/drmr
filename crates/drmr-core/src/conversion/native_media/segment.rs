@@ -223,6 +223,7 @@ impl SegmentInput {
                 &initialization,
                 track,
                 keys,
+                &mut |_, _| Ok(()),
                 &mut |descriptor, info, bytes| {
                     hashes
                         .get_mut(descriptor.index)

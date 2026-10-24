@@ -1,5 +1,6 @@
 //! Original-media sample evidence and independent native preservation checks.
 mod audio_clock;
+mod audio_projection;
 mod clock_profile;
 mod compare;
 mod duration_headers;

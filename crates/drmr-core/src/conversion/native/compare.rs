@@ -233,6 +233,35 @@ fn compare_tracks(
 }
 
 impl Backend {
+    pub(in crate::conversion) fn native_verify_audio_projection(
+        &self,
+        source: super::super::verify::StreamView<'_>,
+        result: super::super::verify::StreamView<'_>,
+        expected: super::super::audio_presentation::AudioPresentation,
+    ) -> Result<VerificationReport, ConversionError> {
+        let projection = super::audio_projection::AudioProjection::new(expected)?;
+        let first = self.native_media_projected(
+            source.metadata,
+            source.key,
+            source.clock,
+            Some(&projection),
+        )?;
+        let second = self.native_media_with_clock(result.metadata, result.key, result.clock)?;
+        let a = first
+            .tracks
+            .get(source.index)
+            .ok_or(ConversionError("stream-selector-mismatch"))?;
+        let b = second
+            .tracks
+            .get(result.index)
+            .ok_or(ConversionError("stream-selector-mismatch"))?;
+        let result_window = checked_window(
+            b,
+            second.movie.fragmented,
+            super::super::finite::window(result.metadata, result.index)?,
+        )?;
+        compare_tracks(&first, a, None, &second, b, result_window)
+    }
     pub(in crate::conversion) fn native_admit_segmented(
         &self,
         media: &super::SegmentedMedia,

@@ -2268,20 +2268,7 @@ impl Converter {
         for source in prepared {
             if source.source != source.media {
                 let verified = if source.audio_presentation.is_some() {
-                    self.backend.verify_transport(
-                        raw_audio_view(source, input_keys),
-                        super::ts::View {
-                            input: &source.media,
-                            metadata: &source.media,
-                            index: source.index,
-                            key: key_for(source, input_keys),
-                            all_keys: None,
-                            transport: false,
-                            native: None,
-                            unedited: true,
-                        }
-                        .with_all_keys(input_keys),
-                    )?
+                    self.verify_audio_projection(source, input_keys)?
                 } else if let Some(index) = source.transport_index {
                     self.backend.verify_transport(
                         super::ts::View {
@@ -2327,6 +2314,55 @@ impl Converter {
             });
         }
         Ok(())
+    }
+
+    fn verify_audio_projection(
+        &self,
+        source: &Prepared,
+        keys: &InputKeys,
+    ) -> Result<VerificationReport, ConversionError> {
+        let _scope = self.backend.scope(super::measurement::Phase::Verification);
+        let original = raw_audio_view(source, keys);
+        let raw = super::ts::View {
+            input: &source.media,
+            metadata: &source.media,
+            index: source.index,
+            key: key_for(source, keys),
+            all_keys: Some(keys),
+            transport: false,
+            native: None,
+            unedited: true,
+        };
+        let native = if source.transport_index.is_some() {
+            self.backend.native_verify_transport_with_clock(
+                original,
+                raw,
+                source.clock,
+                source.clock,
+            )?
+        } else {
+            let original = StreamView::new(&source.source, source.index, key_for(source, keys))
+                .with_all_keys(keys)
+                .with_clock(source.clock);
+            let raw = StreamView::new(&source.media, source.index, key_for(source, keys))
+                .with_all_keys(keys)
+                .with_clock(source.clock);
+            self.backend.native_verify_audio_projection(
+                original,
+                raw,
+                source
+                    .audio_presentation
+                    .ok_or(super::audio_presentation::MISMATCH)?,
+            )?
+        };
+        if self.backend.validation_depth == super::ValidationDepth::Native {
+            return Ok(native);
+        }
+        let mut decoded =
+            self.backend
+                .verify_transport_with_clock(original, raw, source.clock, source.clock)?;
+        decoded.require_native(&native)?;
+        Ok(decoded)
     }
     fn verify_transport_output(
         &self,
