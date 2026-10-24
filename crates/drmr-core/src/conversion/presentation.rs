@@ -1594,13 +1594,18 @@ fn bind_audio_presentation(
     keys: &InputKeys,
     directory: &Path,
 ) -> Result<(), ConversionError> {
-    if super::audio_presentation::read_claim(&track.media)?.is_none() {
+    let Some(claim) = super::audio_presentation::read_claim(&track.media)? else {
         return Ok(());
-    }
+    };
+    let view = directory.join(format!("raw-audio-{}.mp4", track.index));
+    copy_private(&track.media, &view)?;
+    // The canonical two-edit declaration selects part of the final AAC frame.
+    // Inspect all coded frames in an owned raw copy before binding that selection.
+    super::audio_presentation::strip_claim(&view, claim, &backend.stop)?;
     let evidence = backend.audio_evidence(
         super::ts::View {
-            input: &track.media,
-            metadata: &track.media,
+            input: &view,
+            metadata: &view,
             index: track.index,
             key: key_for(track, keys),
             all_keys: None,
@@ -1610,11 +1615,10 @@ fn bind_audio_presentation(
         }
         .with_all_keys(keys),
     )?;
-    let range = super::audio_presentation::read(&track.media, evidence)?
-        .ok_or(super::audio_presentation::MISMATCH)?;
-    let view = directory.join(format!("raw-audio-{}.mp4", track.index));
-    copy_private(&track.media, &view)?;
-    super::audio_presentation::strip(&view, range, &backend.stop)?;
+    let range = claim.bind(evidence)?;
+    if super::audio_presentation::read(&track.media, evidence)? != Some(range) {
+        return Err(super::audio_presentation::MISMATCH);
+    }
     track.audio_presentation = Some(range);
     track.media = view;
     Ok(())

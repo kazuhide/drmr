@@ -90,14 +90,13 @@ pub(super) fn restore(
     rewrite(path, source, &replacement, layout.track_id, stop)
 }
 
-pub(super) fn strip(
+/// Remove only a canonical declaration from an owned copy, without treating it as coded evidence.
+pub(super) fn strip_claim(
     path: &Path,
-    presentation: AudioPresentation,
+    claim: AudioClaim,
     stop: &Stop,
 ) -> Result<(), ConversionError> {
     check_stop(stop)?;
-    let presentation =
-        AudioPresentation::new(presentation.evidence, presentation.presented_samples)?;
     let mut source = Source::open(path, true, Some(stop))?;
     let boxes = mp4::parse_boxes(&source.movie).map_err(|_| BAD)?;
     let movie = only_movie(&boxes)?;
@@ -105,7 +104,7 @@ pub(super) fn strip(
     source.validate_fragments(layout.track_id, Some(stop))?;
     let edits = edit_box(layout.track)?.ok_or(BAD)?;
     let edit = canonical_edit(edits, &source.movie)?;
-    if declaration(edit, &source.movie, layout)?.bind(presentation.evidence)? != presentation {
+    if declaration(edit, &source.movie, layout)? != claim {
         return Err(BAD);
     }
     let replacement = rewrite_movie(&source.movie, movie, None, None)?;
@@ -1127,7 +1126,7 @@ mod tests {
                 }
                 restore(&path, expected, &Stop::new()).unwrap();
                 assert_eq!(std::fs::read(&path).unwrap(), actual);
-                strip(&path, expected, &Stop::new()).unwrap();
+                strip_claim(&path, expected.claim(), &Stop::new()).unwrap();
                 assert_eq!(read_claim(&path).unwrap(), None);
                 assert_eq!(media_bytes(&std::fs::read(&path).unwrap()), media);
             }
@@ -1182,7 +1181,7 @@ mod tests {
                 "presentation-window-not-supported"
             );
             assert!(restore(&path, expected, &Stop::new()).is_err());
-            assert!(strip(&path, expected, &Stop::new()).is_err());
+            assert!(strip_claim(&path, expected.claim(), &Stop::new()).is_err());
             assert_eq!(std::fs::read(&path).unwrap(), candidate);
         }
     }
@@ -1256,7 +1255,7 @@ mod tests {
         std::fs::write(&path, &valid).unwrap();
         let wrong =
             AudioPresentation::new(expected.evidence, expected.presented_samples - 1).unwrap();
-        assert!(strip(&path, wrong, &Stop::new()).is_err());
+        assert!(strip_claim(&path, wrong.claim(), &Stop::new()).is_err());
         assert_eq!(std::fs::read(&path).unwrap(), valid);
         let mut wrong_evidence = expected.evidence;
         wrong_evidence.sample_rate = 48_000;

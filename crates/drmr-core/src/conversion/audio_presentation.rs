@@ -164,12 +164,12 @@ pub(super) fn restore(
 ) -> Result<(), ConversionError> {
     edit::restore(path, presentation, stop)
 }
-pub(super) fn strip(
+pub(super) fn strip_claim(
     path: &Path,
-    presentation: AudioPresentation,
+    claim: AudioClaim,
     stop: &Stop,
 ) -> Result<(), ConversionError> {
-    edit::strip(path, presentation, stop)
+    edit::strip_claim(path, claim, stop)
 }
 /// The unique output spelling is derived from integer presentation bounds.
 pub(super) fn seconds(numerator: u128, denominator: u128) -> Result<String, ConversionError> {
