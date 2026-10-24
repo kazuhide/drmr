@@ -13,6 +13,9 @@ use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 use std::path::Path;
 
+#[path = "processing_reports.rs"]
+mod report_binding;
+
 fn child_request(cli: &support::FakeCli, index: usize) -> Value {
     let args = cli.argv(index);
     let request = &args
@@ -90,7 +93,9 @@ struct BundleIdentity<'a> {
     source_format: OutputFormat,
     output_root: &'a Path,
     outputs: &'a [BundleOutputIntent],
+    #[serde(skip_serializing_if = "Option::is_none")]
     required_depth: Option<ValidationDepth>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     processing: Option<&'a [OutputProcessing]>,
 }
 

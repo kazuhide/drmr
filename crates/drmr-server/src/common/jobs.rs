@@ -665,19 +665,9 @@ impl CommonService {
         let projected =
             projection::project(c.operation, c.schema, c.plan_id.as_deref(), &result.payload)?;
         if let Some(plan) = &c.expected_plan
-            && matches!(plan.schema, 2 | 4 | 6)
             && projected.kind != "failure"
         {
-            let ids = |v: &Value| -> Result<Vec<Value>> {
-                Ok(v.as_array()
-                    .ok_or_else(unavailable)?
-                    .iter()
-                    .map(|o| o["id"].clone())
-                    .collect())
-            };
-            if ids(&plan.outputs)? != ids(&result.payload["outputs"])? {
-                return Err(Error::new(503, "result-invalid"));
-            }
+            projection::bind_plan(plan, c.operation, &result.payload)?;
         }
         let plan = if c.operation == OperationName::Plan && projected.success {
             Some(self.validate_new_plan(c, &result.payload)?)
@@ -712,6 +702,7 @@ impl CommonService {
         if payload["plan_id"] != plan.id || !matches!(plan.schema, 2 | 4 | 6) {
             return Err(Error::new(503, "result-invalid"));
         }
+        projection::bind_plan(&plan, c.operation, payload)?;
         let expected_outputs = {
             let state = self.lock();
             let request = &state

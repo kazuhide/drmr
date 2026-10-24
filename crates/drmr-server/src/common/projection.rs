@@ -1,4 +1,5 @@
 //! Closed views of existing CLI reports. No raw result is an HTTP response.
+mod plan_binding;
 mod plan_view;
 #[cfg(test)]
 mod processing_tests;
@@ -6,6 +7,7 @@ mod processing_view;
 use super::wire::{Error, Result};
 use crate::common_protocol::OperationName;
 use drmr_core::inspection::{ActualProcessing, Inspection, OutputFormat};
+pub(super) use plan_binding::bind_plan;
 use plan_view::project as plan;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, json};
