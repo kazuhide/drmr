@@ -2,7 +2,7 @@
 
 use crate::convert_cli::{self, Progress};
 use clap::Args;
-use drmr_core::conversion::ConversionError;
+use drmr_core::conversion::{ConversionError, ProcessingMode};
 use drmr_core::inspection::{self, Inspection, OutputFormat, TargetProtection};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -18,6 +18,10 @@ pub struct PlanArgs {
     /// Output packaging: mp4, dash, hls, hls-ts, or a comma-separated list.
     #[arg(long, value_delimiter = ',')]
     pub format: Vec<OutputFormat>,
+    /// Processing mode: segments keeps source boundaries; stitch joins media before packaging.
+    /// HLS/DASH output from stitch is segmented again. Default: auto.
+    #[arg(long, value_enum, requires = "save")]
+    pub processing: Option<ProcessingMode>,
     /// Print the versioned JSON plan without executing any conversion.
     #[arg(long)]
     pub json: bool,

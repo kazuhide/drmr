@@ -3,7 +3,7 @@ use crate::convert_cli::{self, ConvertArgs, Progress, VerifyArgs};
 use crate::download_cli::Input;
 use crate::inspect_cli::PlanArgs;
 use drmr_core::conversion::{
-    ConversionError, Converter, VerificationSource,
+    ConversionError, Converter, ProcessingMode, VerificationSource,
     conformance::ManifestValidationTools,
     key_file::{self, BundleOperatorKeys},
     plan::{
@@ -103,6 +103,11 @@ impl Session {
 
     fn failed(&self, command: &str, error: ConversionError, json: bool) -> ExitCode {
         convert_cli::error(command, error, json, &self.progress, None)
+    }
+
+    fn with_processing(mut self, processing: ProcessingMode) -> Self {
+        self.converter = self.converter.with_processing(processing);
+        self
     }
 
     fn run(
@@ -371,7 +376,7 @@ pub fn save(args: &PlanArgs) -> ExitCode {
         args.decode,
         args.keys_file.as_ref(),
     ) {
-        Ok(session) => session,
+        Ok(session) => session.with_processing(args.processing.unwrap_or_default()),
         Err(code) => return code,
     };
     let outputs = match read_output_spec(
@@ -467,7 +472,7 @@ pub fn convert_direct(args: &ConvertArgs) -> ExitCode {
         args.keys_file.as_ref(),
         progress,
     ) {
-        Ok(session) => session,
+        Ok(session) => session.with_processing(args.processing.unwrap_or_default()),
         Err(code) => return code,
     };
     let outputs = match read_output_spec(

@@ -215,6 +215,7 @@ fn prepare_operation(
             input_file,
             output_root,
             save_file,
+            processing,
             ..
         } => {
             let output_spec_file = directory.join("output-spec.json");
@@ -230,6 +231,7 @@ fn prepare_operation(
                 output_root,
                 save_file,
                 output_spec_file,
+                processing,
             }
         }
         ChildOperation::Analyze {
@@ -243,11 +245,18 @@ fn prepare_operation(
                 fetch_policy_file: fetch_policy,
             },
         },
+        ChildOperation::Convert {
+            processing: Some(_),
+            ..
+        } => return Err(Error::new(400, "processing-plan-override-not-supported")),
         ChildOperation::Convert { .. } | ChildOperation::Verify { .. } => {
             let plan_file = directory.join("plan.json");
             write_owned(&plan_file, &plan.ok_or_else(unavailable)?.read()?, copies)?;
             if matches!(operation, ChildOperation::Convert { .. }) {
-                ChildOperation::Convert { plan_file }
+                ChildOperation::Convert {
+                    plan_file,
+                    processing: None,
+                }
             } else {
                 ChildOperation::Verify { plan_file }
             }

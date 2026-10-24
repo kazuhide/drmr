@@ -2,7 +2,7 @@
 use crate::convert_cli::{self, ConvertArgs, Progress, VerifyArgs};
 use crate::inspect_cli::PlanArgs;
 use drmr_core::conversion::{
-    ConversionError, Converter, VerificationSource,
+    ConversionError, Converter, ProcessingMode, VerificationSource,
     key_file::OperatorKeys,
     plan::{self, ExecutionPlanRequest},
 };
@@ -83,6 +83,11 @@ impl Session {
         convert_cli::error(command, cause, as_json, &self.progress, None)
     }
 
+    fn with_processing(mut self, processing: ProcessingMode) -> Self {
+        self.converter = self.converter.with_processing(processing);
+        self
+    }
+
     fn finish(&self, command: &str, as_json: bool) -> Result<(), ExitCode> {
         if self.cancellation.stop.is_set() {
             return Err(self.failed(command, ConversionError("cancelled"), as_json));
@@ -118,7 +123,7 @@ pub fn save(args: &PlanArgs) -> ExitCode {
         args.decode,
         args.keys_file.as_ref(),
     ) {
-        Ok(value) => value,
+        Ok(value) => value.with_processing(args.processing.unwrap_or_default()),
         Err(code) => return code,
     };
     let input = args.input.as_path();

@@ -524,6 +524,7 @@ impl CommonService {
             output_root: destination,
             save_file: self.retained.join("plans").join(format!("{nonce}.json")),
             output_spec_file: self.private.join(nonce).join("output-spec.json"),
+            processing: None,
         });
         intent.input = Some(a.source.clone());
         intent.analysis = Some(a.id.clone());
@@ -551,6 +552,7 @@ impl CommonService {
         let operation = if convert {
             ChildOperation::Convert {
                 plan_file: p.binding.path.clone(),
+                processing: None,
             }
         } else {
             ChildOperation::Verify {

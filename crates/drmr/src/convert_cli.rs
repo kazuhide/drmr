@@ -3,8 +3,8 @@
 pub(crate) use crate::progress::Progress;
 use clap::Args;
 use drmr_core::conversion::{
-    ConversionError, ConversionReport, ConversionRequest, Converter, VerificationReport,
-    VerificationRequest, VerificationSource,
+    ConversionError, ConversionReport, ConversionRequest, Converter, ProcessingMode,
+    VerificationReport, VerificationRequest, VerificationSource,
     key_file::{self, OperatorKeys},
     measurement::MeasurementReport,
 };
@@ -59,6 +59,10 @@ pub struct ConvertArgs {
     /// Output format: mp4, dash, hls (fragmented MP4), or hls-ts.
     #[arg(long)]
     pub format: Option<OutputFormat>,
+    /// Processing mode: segments keeps source boundaries; stitch joins media before packaging.
+    /// HLS/DASH output from stitch is segmented again. Default: auto.
+    #[arg(long, value_enum, conflicts_with = "plan")]
+    pub processing: Option<ProcessingMode>,
     /// JSON output list; publish all verified results together in one new directory.
     #[arg(long, conflicts_with_all = ["plan", "to", "format"])]
     pub outputs: Option<PathBuf>,
@@ -185,6 +189,24 @@ fn manifest_error_hint(code: &str) -> Option<&'static str> {
     }
 }
 
+fn processing_error_hint(code: &str) -> Option<&'static str> {
+    match code {
+        "processing-segments-source-required" => Some(
+            "Segments mode requires a supported segmented HLS or DASH input. Use --processing auto or stitch for a single MP4 input.",
+        ),
+        "processing-container-change-not-supported" => Some(
+            "Use --processing auto or stitch for this container change. Segments mode requires a supported matching input and output container.",
+        ),
+        "processing-profile-not-supported" => Some(
+            "The requested mode does not support this input/output profile. Review docs/media-processing.md and select an available route.",
+        ),
+        "processing-plan-override-not-supported" => Some(
+            "Execute the saved plan without --processing, or save a new plan with the intended mode.",
+        ),
+        _ => None,
+    }
+}
+
 fn error_hint(code: &str) -> Option<&'static str> {
     match code {
         "key-file-invalid" => Some(
@@ -276,7 +298,8 @@ fn error_hint(code: &str) -> Option<&'static str> {
         "packet-timing-unavailable" => Some(
             "Use an FFmpeg build that supplies complete packet timestamps and durations. See docs/media-processing.md.",
         ),
-        _ => manifest_error_hint(code)
+        _ => processing_error_hint(code)
+            .or_else(|| manifest_error_hint(code))
             .or_else(|| crate::bundle_cli::error_hint(code))
             .or_else(|| crate::plan_cli::error_hint(code)),
     }
@@ -539,9 +562,24 @@ pub(crate) fn conversion_text(report: &ConversionReport) -> std::io::Result<()> 
     })
 }
 
+fn convert_saved(args: &ConvertArgs, path: &std::path::Path) -> ExitCode {
+    if args.processing.is_some() {
+        let progress = Progress::new(!args.json);
+        progress.mark("configuration");
+        return error(
+            "convert",
+            ConversionError("processing-plan-override-not-supported"),
+            args.json,
+            &progress,
+            Some(2),
+        );
+    }
+    crate::plan_cli::convert(args, path)
+}
+
 pub fn convert(args: &ConvertArgs) -> ExitCode {
     if let Some(path) = &args.plan {
-        return crate::plan_cli::convert(args, path);
+        return convert_saved(args, path);
     }
     if args.outputs.is_some() {
         return crate::bundle_cli::convert_direct(args);
@@ -585,6 +623,7 @@ pub fn convert(args: &ConvertArgs) -> ExitCode {
         progress.clone(),
         cancellation.stop.clone(),
     )
+    .with_processing(args.processing.unwrap_or_default())
     .with_output_signaling(keys.signaling.clone());
     let execute = |command: &Converter| {
         execute_conversion(
