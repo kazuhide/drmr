@@ -93,6 +93,10 @@ impl HlsSource {
     pub fn check_original(&self) -> Result<(), ConversionError> {
         self.frozen.check_original()
     }
+    pub fn frozen(&self) -> &FrozenSource {
+        &self.frozen
+    }
+
     pub fn entrypoint(&self) -> &Path {
         self.frozen.entrypoint()
     }
