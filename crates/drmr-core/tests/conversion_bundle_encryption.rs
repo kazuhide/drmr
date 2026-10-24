@@ -133,6 +133,7 @@ fn outputs() -> Vec<BundleOutputIntent> {
     ]
     .into_iter()
     .map(|(id, format, target, drms)| BundleOutputIntent {
+        processing: None,
         id: id.into(),
         format,
         target,

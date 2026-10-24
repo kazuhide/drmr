@@ -7,7 +7,9 @@ use super::{
     ConversionError, ConversionReport, ConversionRequest, Converter, FrozenSource,
     SourceCompatibilityNote, SourceInventory, SourceProtection, SourceQualification,
     SourceValidationPurpose, ValidationDepth, VerificationReport, VerificationRequest,
-    VerificationSource, files, frozen, key_file::OperatorKeys,
+    VerificationSource, files, frozen,
+    key_file::OperatorKeys,
+    processing::{ProcessingMode, ProcessingSelection},
 };
 use crate::inspection::{Inspection, OutputFormat, TargetProtection};
 use serde::{Deserialize, Serialize};
@@ -53,12 +55,12 @@ pub fn read_saved(path: &Path) -> Result<SavedPlan, ConversionError> {
         return Err(INVALID);
     }
     match header.schema_version {
-        1 | 3 => {
+        1 | 3 | 5 => {
             let plan = serde_json::from_slice(&bytes).map_err(|_| INVALID)?;
             validate(&plan)?;
             Ok(SavedPlan::Single(plan))
         }
-        2 | 4 => {
+        2 | 4 | 6 => {
             let plan = serde_json::from_slice(&bytes).map_err(|_| INVALID)?;
             bundle::validate(&plan)?;
             Ok(SavedPlan::Bundle(plan))
@@ -97,12 +99,28 @@ pub struct ExecutionPlan {
         skip_serializing_if = "Option::is_none"
     )]
     pub required_depth: Option<ValidationDepth>,
+    #[serde(
+        default,
+        deserialize_with = "present_processing",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub processing: Option<ProcessingSelection>,
 }
 impl ExecutionPlan {
     /// Legacy version-one plans retain their original complete-decode requirement.
     pub fn minimum_depth(&self) -> ValidationDepth {
         self.required_depth.unwrap_or(ValidationDepth::Decoded)
     }
+    pub fn processing_mode(&self) -> ProcessingMode {
+        self.processing
+            .map_or(ProcessingMode::Stitch, |choice| choice.resolved)
+    }
+}
+
+fn present_processing<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<ProcessingSelection>, D::Error> {
+    ProcessingSelection::deserialize(deserializer).map(Some)
 }
 
 pub(super) fn present_depth<'de, D: serde::Deserializer<'de>>(
@@ -204,7 +222,7 @@ impl Converter {
         }
         let mut plan = ExecutionPlan {
             kind: KIND.into(),
-            schema_version: 3,
+            schema_version: 5,
             plan_id: String::new(),
             source: frozen.inventory().clone(),
             source_format: qualified.actual_format,
@@ -214,6 +232,11 @@ impl Converter {
                 output,
             },
             required_depth: Some(self.backend.validation_depth),
+            processing: Some(ProcessingSelection::resolve(
+                self.processing_mode,
+                qualified.actual_format,
+                format,
+            )?),
         };
         check_output_location(&plan)?;
         plan.plan_id = identity(&plan)?;
@@ -230,6 +253,7 @@ impl Converter {
         keys: &OperatorKeys,
     ) -> Result<ConversionReport, ConversionError> {
         validate(plan)?;
+        self.check_saved_processing(plan.processing_mode())?;
         self.backend.check_cancelled()?;
         if super::destination(&plan.intent.output)? != plan.intent.output {
             return Err(UNSAFE);
@@ -239,6 +263,7 @@ impl Converter {
             FrozenSource::from_inventory(&plan.source, &self.backend.stop).map_err(source_error)?;
         let mut command = self
             .using_frozen_source(&frozen)
+            .with_processing(plan.processing_mode())
             .with_decode(
                 self.backend.validation_depth.max(plan.minimum_depth()) == ValidationDepth::Decoded,
             )
@@ -278,13 +303,17 @@ impl Converter {
         keys: &OperatorKeys,
     ) -> Result<PlanVerificationReport, ConversionError> {
         validate(plan)?;
+        self.check_saved_processing(plan.processing_mode())?;
         self.backend.check_cancelled()?;
         let original =
             FrozenSource::from_inventory(&plan.source, &self.backend.stop).map_err(source_error)?;
         let result = FrozenSource::capture(&result_entrypoint(plan), &self.backend.stop)?;
-        let command = self.using_frozen_source(&original).with_decode(
-            self.backend.validation_depth.max(plan.minimum_depth()) == ValidationDepth::Decoded,
-        );
+        let command = self
+            .using_frozen_source(&original)
+            .with_processing(plan.processing_mode())
+            .with_decode(
+                self.backend.validation_depth.max(plan.minimum_depth()) == ValidationDepth::Decoded,
+            );
         let output_keys = keys.output_verification_keys()?;
         let output_hls_keys = keys.output_hls_verification_keys()?;
         let source = VerificationSource {
@@ -389,6 +418,8 @@ struct Identity<'a> {
     intent: &'a OutputIntent,
     #[serde(skip_serializing_if = "Option::is_none")]
     required_depth: Option<ValidationDepth>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    processing: Option<ProcessingSelection>,
 }
 fn identity(plan: &ExecutionPlan) -> Result<String, ConversionError> {
     let bytes = serde_json::to_vec(&Identity {
@@ -398,6 +429,7 @@ fn identity(plan: &ExecutionPlan) -> Result<String, ConversionError> {
         source_format: plan.source_format,
         intent: &plan.intent,
         required_depth: plan.required_depth,
+        processing: plan.processing,
     })
     .map_err(|_| INVALID)?;
     Ok(hex::encode(Sha256::digest(bytes)))
@@ -405,8 +437,8 @@ fn identity(plan: &ExecutionPlan) -> Result<String, ConversionError> {
 fn validate(plan: &ExecutionPlan) -> Result<(), ConversionError> {
     if plan.kind != KIND
         || !matches!(
-            (plan.schema_version, plan.required_depth),
-            (1, None) | (3, Some(_))
+            (plan.schema_version, plan.required_depth, plan.processing),
+            (1, None, None) | (3, Some(_), None) | (5, Some(_), Some(_))
         )
         || plan.plan_id.len() != 64
         || !plan
@@ -419,6 +451,11 @@ fn validate(plan: &ExecutionPlan) -> Result<(), ConversionError> {
         return Err(INVALID);
     }
     frozen::validate(&plan.source).map_err(|_| INVALID)?;
+    if let Some(choice) = plan.processing {
+        choice
+            .validate(plan.source_format, plan.intent.format)
+            .map_err(|_| INVALID)?;
+    }
     if identity(plan)? != plan.plan_id {
         return Err(INVALID);
     }

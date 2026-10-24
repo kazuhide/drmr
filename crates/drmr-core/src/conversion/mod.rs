@@ -37,6 +37,7 @@ mod hls;
 mod keys;
 mod native;
 mod native_media;
+mod segments;
 mod signaling;
 pub use signaling::{DrmSystem, OutputSignaling};
 mod presentation;

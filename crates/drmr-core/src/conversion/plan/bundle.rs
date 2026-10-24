@@ -8,6 +8,7 @@ use crate::{
         conformance::{ManifestValidationReport, ManifestValidationTools},
         files, frozen,
         key_file::{BundleOperatorKeys, OperatorKeys},
+        processing::{ProcessingMode, ProcessingSelection},
     },
     inspection::{OutputFormat, TargetProtection},
 };
@@ -42,6 +43,31 @@ pub struct BundleOutputIntent {
     pub drms: Vec<DrmSystem>,
     #[serde(default)]
     pub conformance: ManifestValidation,
+    #[serde(
+        default,
+        deserialize_with = "present_mode",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub processing: Option<ProcessingMode>,
+}
+
+fn present_mode<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<ProcessingMode>, D::Error> {
+    ProcessingMode::deserialize(deserializer).map(Some)
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OutputProcessing {
+    pub id: String,
+    pub selection: ProcessingSelection,
+}
+
+fn present_processing<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Vec<OutputProcessing>>, D::Error> {
+    Vec::<OutputProcessing>::deserialize(deserializer).map(Some)
 }
 
 /// Bundle intent fixes one result directory, media profiles, and required verification depth.
@@ -61,11 +87,23 @@ pub struct BundlePlan {
         skip_serializing_if = "Option::is_none"
     )]
     pub required_depth: Option<ValidationDepth>,
+    #[serde(
+        default,
+        deserialize_with = "present_processing",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub processing: Option<Vec<OutputProcessing>>,
 }
 impl BundlePlan {
     /// Legacy version-two plans retain their original complete-decode requirement.
     pub fn minimum_depth(&self) -> ValidationDepth {
         self.required_depth.unwrap_or(ValidationDepth::Decoded)
+    }
+    pub fn processing_mode(&self, id: &str) -> ProcessingMode {
+        self.processing
+            .as_ref()
+            .and_then(|choices| choices.iter().find(|choice| choice.id == id))
+            .map_or(ProcessingMode::Stitch, |choice| choice.selection.resolved)
     }
 }
 
@@ -153,11 +191,26 @@ impl Converter {
         }
         let mut plan = BundlePlan {
             kind: KIND.into(),
-            schema_version: 4,
+            schema_version: 6,
             plan_id: String::new(),
             source: frozen.inventory().clone(),
             source_format: qualified.actual_format,
             output_root,
+            processing: Some(
+                outputs
+                    .iter()
+                    .map(|output| {
+                        Ok(OutputProcessing {
+                            id: output.id.clone(),
+                            selection: ProcessingSelection::resolve(
+                                output.processing.unwrap_or(self.processing_mode),
+                                qualified.actual_format,
+                                output.format,
+                            )?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, ConversionError>>()?,
+            ),
             outputs,
             required_depth: Some(self.backend.validation_depth),
         };
@@ -176,6 +229,9 @@ impl Converter {
         tools: &ManifestValidationTools,
     ) -> Result<BundleConversionReport, ConversionError> {
         validate(plan)?;
+        for output in &plan.outputs {
+            self.check_saved_processing(plan.processing_mode(&output.id))?;
+        }
         validate_keys(plan, keys)?;
         self.backend.check_cancelled()?;
         self.refuse_bundle_signaling()?;
@@ -207,6 +263,7 @@ impl Converter {
             let guard = destination::OutputGuard::for_bundle_child(&path, &destination)?;
             let child = command
                 .using_plan_destination(guard)
+                .with_processing(plan.processing_mode(&output.id))
                 .with_output_signaling(output_keys.signaling.clone());
             let mut conversion = child
                 .convert(ConversionRequest {
@@ -296,6 +353,9 @@ impl Converter {
         tools: &ManifestValidationTools,
     ) -> Result<BundleVerificationReport, ConversionError> {
         validate(plan)?;
+        for output in &plan.outputs {
+            self.check_saved_processing(plan.processing_mode(&output.id))?;
+        }
         validate_keys(plan, keys)?;
         self.backend.check_cancelled()?;
         self.refuse_bundle_signaling()?;
@@ -324,8 +384,9 @@ impl Converter {
         for (intent, result) in plan.outputs.iter().zip(&frozen_results) {
             self.backend.check_cancelled()?;
             let output_keys = keys.outputs.get(&intent.id).unwrap_or(&empty);
+            let child = command.with_processing_clone(plan.processing_mode(&intent.id));
             let (output_matches_plan, verification) =
-                command.bundle_media(source, result.entrypoint(), intent, output_keys)?;
+                child.bundle_media(source, result.entrypoint(), intent, output_keys)?;
             let signaling = command.bundle_signaling(result.entrypoint(), intent, output_keys)?;
             let conformance = command.bundle_conformance(result.entrypoint(), intent, tools)?;
             original.check_original().map_err(super::source_error)?;
@@ -443,7 +504,13 @@ pub fn read_output_spec(path: &Path) -> Result<Vec<BundleOutputIntent>, Conversi
         return Err(ERROR);
     }
     let spec: Specification = serde_json::from_slice(&bytes).map_err(|_| ERROR)?;
-    if spec.schema_version != 1 {
+    if !matches!(spec.schema_version, 1 | 2)
+        || (spec.schema_version == 1
+            && spec
+                .outputs
+                .iter()
+                .any(|output| output.processing.is_some()))
+    {
         return Err(ERROR);
     }
     normalized(&spec.outputs).map_err(|_| ERROR)
@@ -582,6 +649,8 @@ struct Identity<'a> {
     outputs: &'a [BundleOutputIntent],
     #[serde(skip_serializing_if = "Option::is_none")]
     required_depth: Option<ValidationDepth>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    processing: Option<&'a [OutputProcessing]>,
 }
 
 fn identity(plan: &BundlePlan) -> Result<String, ConversionError> {
@@ -593,6 +662,7 @@ fn identity(plan: &BundlePlan) -> Result<String, ConversionError> {
         output_root: &plan.output_root,
         outputs: &plan.outputs,
         required_depth: plan.required_depth,
+        processing: plan.processing.as_deref(),
     })
     .map_err(|_| INVALID)?;
     Ok(hex::encode(Sha256::digest(bytes)))
@@ -601,8 +671,12 @@ fn identity(plan: &BundlePlan) -> Result<String, ConversionError> {
 pub(super) fn validate(plan: &BundlePlan) -> Result<(), ConversionError> {
     if plan.kind != KIND
         || !matches!(
-            (plan.schema_version, plan.required_depth),
-            (2, None) | (4, Some(_))
+            (
+                plan.schema_version,
+                plan.required_depth,
+                plan.processing.is_some()
+            ),
+            (2, None, false) | (4, Some(_), false) | (6, Some(_), true)
         )
         || plan.plan_id.len() != 64
         || !plan
@@ -615,6 +689,30 @@ pub(super) fn validate(plan: &BundlePlan) -> Result<(), ConversionError> {
     }
     frozen::validate(&plan.source).map_err(|_| INVALID)?;
     validate_outputs(&plan.outputs)?;
+    if let Some(choices) = &plan.processing {
+        if choices.len() != plan.outputs.len() {
+            return Err(INVALID);
+        }
+        for (choice, output) in choices.iter().zip(&plan.outputs) {
+            if choice.id != output.id
+                || output
+                    .processing
+                    .is_some_and(|mode| mode != choice.selection.requested)
+            {
+                return Err(INVALID);
+            }
+            choice
+                .selection
+                .validate(plan.source_format, output.format)
+                .map_err(|_| INVALID)?;
+        }
+    } else if plan
+        .outputs
+        .iter()
+        .any(|output| output.processing.is_some())
+    {
+        return Err(INVALID);
+    }
     if identity(plan)? != plan.plan_id {
         return Err(INVALID);
     }

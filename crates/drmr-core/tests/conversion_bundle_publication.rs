@@ -144,6 +144,7 @@ fn refuse_changed_output(point: MutationPoint) {
     let outputs: Vec<_> = [OutputFormat::Dash, OutputFormat::Hls]
         .into_iter()
         .map(|format| BundleOutputIntent {
+            processing: None,
             id: format.as_str().into(),
             format,
             target: TargetProtection::Clear,
@@ -259,6 +260,7 @@ fn dash_plan(input: &Path, output: &Path) -> drmr_core::conversion::plan::bundle
             },
             output_root: output,
             outputs: &[BundleOutputIntent {
+                processing: None,
                 id: "dash".into(),
                 format: OutputFormat::Dash,
                 target: TargetProtection::Clear,

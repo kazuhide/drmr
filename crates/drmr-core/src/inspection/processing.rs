@@ -1,4 +1,5 @@
 //! Fixed processing descriptions shared by candidate plans and successful execution reports.
+use crate::conversion::processing::{BoundaryHandling, ProcessingMode};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -12,6 +13,8 @@ pub enum ProcessingRouteId {
     MpegTsDash,
     MpegTsSampleAesHls,
     MpegTsHlsTs,
+    Fmp4Segments,
+    MpegTsSegments,
 }
 impl ProcessingRouteId {
     pub const fn as_str(self) -> &'static str {
@@ -24,6 +27,8 @@ impl ProcessingRouteId {
             Self::MpegTsDash => "mpeg-ts-dash",
             Self::MpegTsSampleAesHls => "mpeg-ts-sample-aes-hls",
             Self::MpegTsHlsTs => "mpeg-ts-hls-ts",
+            Self::Fmp4Segments => "fmp4-segments",
+            Self::MpegTsSegments => "mpeg-ts-segments",
         }
     }
     pub const fn explanation(self) -> &'static str {
@@ -52,11 +57,20 @@ impl ProcessingRouteId {
             Self::MpegTsSampleAesHls => {
                 "Validate the original SAMPLE-AES transport streams, decrypt encoded frames with supplied keys and initialization vectors, verify every decrypted frame and original timestamp, then package fragmented MP4 HLS and compare its actual playlists with the original media."
             }
+            Self::Fmp4Segments => {
+                "Process original fragmented MP4 resources with the requested protection, retain every sample and original resource boundary, then verify the final manifests and media independently."
+            }
+            Self::MpegTsSegments => {
+                "Process original transport-stream resources with the requested protection, retain their encoded frames, clocks and segment boundaries, then verify the final playlists and media independently."
+            }
         }
     }
     /// Minimum tools for native conversion; conditional copying and decoding add tools.
     pub fn required_tools(self) -> Vec<RequiredTool> {
-        if self == Self::ProgressiveMp4 {
+        if matches!(
+            self,
+            Self::ProgressiveMp4 | Self::Fmp4Segments | Self::MpegTsSegments
+        ) {
             Vec::new()
         } else {
             vec![RequiredTool::ShakaPackager]
@@ -98,6 +112,7 @@ pub enum InputPreparation {
     MpegTsDemux,
     MpegTsSampleAesDecrypt,
     LocalTrackFiles,
+    OriginalSegments,
 }
 impl InputPreparation {
     pub const fn description(self) -> &'static str {
@@ -110,12 +125,17 @@ impl InputPreparation {
                 "local SAMPLE-AES transport streams decrypted and checked against original packet evidence before track demultiplexing"
             }
             Self::LocalTrackFiles => "the supplied complete local track files",
+            Self::OriginalSegments => {
+                "the original media resources with their existing segment boundaries"
+            }
         }
     }
 }
 /// A successful handler supplies this description; it is not a saved execution instruction.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ActualProcessing {
+    pub mode: ProcessingMode,
+    pub boundaries: BoundaryHandling,
     pub route: ProcessingRouteId,
     pub input_preparation: InputPreparation,
     pub reason_code: String,
@@ -126,6 +146,27 @@ pub struct ActualProcessing {
 impl ActualProcessing {
     pub fn new(route: ProcessingRouteId, input_preparation: InputPreparation) -> Self {
         Self {
+            mode: if matches!(
+                route,
+                ProcessingRouteId::Fmp4Segments | ProcessingRouteId::MpegTsSegments
+            ) {
+                ProcessingMode::Segments
+            } else {
+                ProcessingMode::Stitch
+            },
+            boundaries: if matches!(
+                route,
+                ProcessingRouteId::Fmp4Segments | ProcessingRouteId::MpegTsSegments
+            ) {
+                BoundaryHandling::Preserve
+            } else if matches!(
+                route,
+                ProcessingRouteId::ProgressiveMp4 | ProcessingRouteId::FragmentedMp4
+            ) {
+                BoundaryHandling::NotApplicable
+            } else {
+                BoundaryHandling::Resegment
+            },
             route,
             input_preparation,
             reason_code: format!("{}-handler-completed", route.as_str()),

@@ -62,6 +62,7 @@ fn outputs() -> Vec<BundleOutputIntent> {
     [OutputFormat::Dash, OutputFormat::Hls]
         .into_iter()
         .map(|format| BundleOutputIntent {
+            processing: None,
             id: format.as_str().to_owned(),
             format,
             target: TargetProtection::Clear,

@@ -36,6 +36,9 @@ impl Backend {
             report
                 .required_tools
                 .splice(0..0, [RequiredTool::Ffmpeg, RequiredTool::Ffprobe]);
+            if route == crate::inspection::ProcessingRouteId::MpegTsSegments {
+                report.required_tools.push(RequiredTool::ShakaPackager);
+            }
         } else if ffmpeg_copy {
             report.required_tools.insert(0, RequiredTool::Ffmpeg);
         }

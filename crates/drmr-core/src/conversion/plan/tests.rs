@@ -5,6 +5,7 @@ fn sample(root: &Path) -> ExecutionPlan {
     std::fs::write(&input, b"\0\0\0\x18ftypisom original data").unwrap();
     let frozen = FrozenSource::capture(&input, &crate::concurrency::Stop::new()).unwrap();
     let mut plan = ExecutionPlan {
+        processing: None,
         kind: KIND.into(),
         schema_version: 1,
         required_depth: None,
@@ -25,6 +26,47 @@ fn private_write(path: &Path, bytes: &[u8]) {
         .unwrap()
         .write_all(bytes)
         .unwrap();
+}
+
+#[test]
+fn processing_is_required_and_identity_bound_only_in_version_five() {
+    let root = crate::native::private_tempdir().unwrap();
+    let mut value = serde_json::to_value(sample(root.path())).unwrap();
+    value["schema_version"] = serde_json::json!(5);
+    value["required_depth"] = serde_json::json!("native");
+    value["processing"] = serde_json::json!({
+        "requested":"auto", "resolved":"stitch", "boundaries":"resegment", "segment_duration_ms":2000
+    });
+    let parsed = serde_json::from_value::<ExecutionPlan>(value.clone());
+    assert!(
+        parsed.is_ok(),
+        "version-five processing must be a supported schema"
+    );
+    let mut plan = parsed.unwrap();
+    plan.plan_id = identity(&plan).unwrap();
+    validate(&plan).unwrap();
+    let path = root.path().join("processing.plan.json");
+    write_new(&path, &plan).unwrap();
+    assert_eq!(read_saved(&path).unwrap(), SavedPlan::Single(plan.clone()));
+    let encoded = serde_json::to_value(&plan).unwrap();
+    for replacement in [
+        serde_json::Value::Null,
+        serde_json::json!({
+            "requested":"segments", "resolved":"stitch", "boundaries":"resegment", "segment_duration_ms":2000
+        }),
+    ] {
+        let mut invalid = encoded.clone();
+        invalid["processing"] = replacement;
+        let parsed = serde_json::from_value::<ExecutionPlan>(invalid);
+        assert!(parsed.is_err() || validate(&parsed.unwrap()).is_err());
+    }
+    let mut missing = encoded;
+    missing.as_object_mut().unwrap().remove("processing");
+    let parsed = serde_json::from_value::<ExecutionPlan>(missing);
+    assert!(parsed.is_err() || validate(&parsed.unwrap()).is_err());
+    plan.schema_version = 3;
+    plan.plan_id = identity(&plan).unwrap();
+    assert_eq!(validate(&plan).unwrap_err(), INVALID);
 }
 
 #[test]

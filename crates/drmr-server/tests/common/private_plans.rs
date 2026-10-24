@@ -90,6 +90,7 @@ fn private_plan_bytes(input: &std::path::Path, output: &std::path::Path, schema:
                     input,
                     output_root: output,
                     outputs: &[BundleOutputIntent {
+                        processing: None,
                         id: "clear".into(),
                         format: OutputFormat::Mp4,
                         target: TargetProtection::Clear,

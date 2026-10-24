@@ -1810,11 +1810,11 @@ fn apply_transport_metadata(
     Ok(())
 }
 #[derive(Debug)]
-struct MediaPath {
-    path: PathBuf,
-    role: Option<TrackKind>,
-    variants: usize,
-    metadata: metadata::Metadata,
+pub(in crate::conversion) struct MediaPath {
+    pub path: PathBuf,
+    pub role: Option<TrackKind>,
+    pub variants: usize,
+    pub metadata: metadata::Metadata,
 }
 fn validate_variant(attrs: &crate::m3u8::Attributes) -> Result<(), ConversionError> {
     if attrs.iter().any(|(name, _)| {
@@ -1834,7 +1834,9 @@ fn validate_variant(attrs: &crate::m3u8::Attributes) -> Result<(), ConversionErr
     }
     Ok(())
 }
-fn hls_media_paths(path: &Path) -> Result<Vec<MediaPath>, ConversionError> {
+pub(in crate::conversion) fn hls_media_paths(
+    path: &Path,
+) -> Result<Vec<MediaPath>, ConversionError> {
     let bytes = super::files::read_manifest(path)
         .map_err(|_| ConversionError("hls-manifest-unreadable-or-too-large"))?;
     let text = std::str::from_utf8(&bytes).map_err(|_| ConversionError("hls-invalid-utf8"))?;
