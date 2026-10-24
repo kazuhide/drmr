@@ -590,3 +590,70 @@ fn legacy_saved_conversions_keep_absent_actual_processing_semantics() {
         );
     }
 }
+
+fn check_legacy_segment_route(schema: u32, route: ProcessingRouteId) {
+    check_saved_report(
+        schema,
+        ValidationDepth::Native,
+        |report| {
+            let mut processing = json!(ActualProcessing::new(
+                route,
+                InputPreparation::OriginalSegments
+            ));
+            let fields = processing.as_object_mut().unwrap();
+            fields.remove("mode");
+            fields.remove("boundaries");
+            selected_conversion(report)["processing"] = processing;
+        },
+        false,
+    );
+}
+
+#[test]
+fn legacy_single_native_plan_refuses_mpeg_ts_segments_without_guarantees() {
+    check_legacy_segment_route(3, ProcessingRouteId::MpegTsSegments);
+}
+
+#[test]
+fn legacy_bundle_native_plan_refuses_mpeg_ts_segments_without_guarantees() {
+    check_legacy_segment_route(4, ProcessingRouteId::MpegTsSegments);
+}
+
+#[test]
+fn legacy_single_native_plan_refuses_fmp4_segments_without_guarantees() {
+    check_legacy_segment_route(3, ProcessingRouteId::Fmp4Segments);
+}
+
+#[test]
+fn legacy_bundle_native_plan_refuses_fmp4_segments_without_guarantees() {
+    check_legacy_segment_route(4, ProcessingRouteId::Fmp4Segments);
+}
+
+#[test]
+fn genuine_legacy_routes_keep_absent_guarantees_at_native_and_decoded_depths() {
+    for schema in [1, 2, 3, 4] {
+        let depth = if schema <= 2 {
+            ValidationDepth::Decoded
+        } else {
+            ValidationDepth::Native
+        };
+        check_saved_report(
+            schema,
+            depth,
+            |report| {
+                let mut processing = actual(false, depth);
+                let fields = processing.as_object_mut().unwrap();
+                fields.remove("mode");
+                fields.remove("boundaries");
+                if let Some(outputs) = report.get_mut("outputs").and_then(Value::as_array_mut) {
+                    for output in outputs {
+                        output["conversion"]["processing"] = processing.clone();
+                    }
+                } else {
+                    report["processing"] = processing;
+                }
+            },
+            true,
+        );
+    }
+}

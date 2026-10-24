@@ -7,7 +7,7 @@ use drmr_core::{
         plan::bundle::OutputProcessing,
         processing::{BoundaryHandling, ProcessingSelection},
     },
-    inspection::{ActualProcessing, OutputFormat},
+    inspection::{ActualProcessing, OutputFormat, ProcessingRouteId},
 };
 
 pub(in crate::common) fn bind_plan(
@@ -114,7 +114,13 @@ fn bind_actual(
     let actual: ActualProcessing = typed(value)?;
     // Legacy plans execute Stitch, but an old report's absent guarantees stay absent.
     if selection.is_none() && actual.mode.is_none() && actual.boundaries.is_none() {
-        return Ok(());
+        // Segment-only routes did not exist before explicit processing guarantees.
+        return (!matches!(
+            actual.route,
+            ProcessingRouteId::Fmp4Segments | ProcessingRouteId::MpegTsSegments
+        ))
+        .then_some(())
+        .ok_or_else(bad);
     }
     let mode = selection.map_or(ProcessingMode::Stitch, |choice| choice.resolved);
     let boundaries = selection.map_or(
