@@ -114,6 +114,10 @@ impl Configuration {
     pub fn parameter_sets(&self) -> (&[u8], &[u8]) {
         (&self.sps_bytes, &self.pps_bytes)
     }
+    /// Byte-rounded slice-header extent in the original escaped NAL, including its header.
+    pub fn slice_header_bytes(&self, nal: &[u8]) -> Result<usize, ConversionError> {
+        Ok(slice::parse(nal, &self.sps, &self.pps)?.clear_bytes)
+    }
     pub fn length_prefixed_access_unit(
         &self,
         data: &[u8],

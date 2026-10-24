@@ -16,6 +16,7 @@ mod aac;
 mod auxiliary;
 pub(in crate::conversion) use aac::AacConfiguration;
 mod crypto;
+mod encrypt;
 mod entry;
 mod fragment;
 mod groups;
@@ -23,15 +24,16 @@ mod init;
 mod progressive;
 mod read;
 mod segment;
+mod write;
 pub(in crate::conversion) use segment::{
-    SegmentEvidence, SegmentInput, SegmentReceipt, SegmentTrackEvidence,
+    SegmentEvidence, SegmentInput, SegmentReceipt, SegmentTrackEvidence, SegmentTransformer,
 };
+#[cfg(test)]
+mod segment_tests;
 #[cfg(test)]
 mod test_files;
 #[cfg(test)]
 mod tests;
-#[cfg(test)]
-mod segment_tests;
 
 pub(in crate::conversion) const CHUNK_BYTES: usize = 64 * 1024;
 const MAX_METADATA_BYTES: usize = 16 * 1024 * 1024;
