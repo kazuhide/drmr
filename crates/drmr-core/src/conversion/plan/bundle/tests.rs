@@ -3,6 +3,7 @@ use crate::conversion::plan::{self, SavedPlan};
 
 fn intent(id: &str) -> BundleOutputIntent {
     BundleOutputIntent {
+        processing: None,
         id: id.into(),
         format: OutputFormat::Dash,
         target: TargetProtection::Clear,
@@ -16,6 +17,7 @@ fn sample(root: &Path) -> BundlePlan {
     std::fs::write(&input, b"\0\0\0\x18ftypisom original data").unwrap();
     let frozen = FrozenSource::capture(&input, &crate::concurrency::Stop::new()).unwrap();
     let mut plan = BundlePlan {
+        processing: None,
         kind: KIND.into(),
         schema_version: 2,
         required_depth: None,
@@ -34,6 +36,57 @@ fn private_write(path: &Path, bytes: &[u8]) {
         .unwrap()
         .write_all(bytes)
         .unwrap();
+}
+
+#[test]
+fn version_six_binds_one_resolved_processing_choice_per_output() {
+    let root = crate::native::private_tempdir().unwrap();
+    let mut value = serde_json::to_value(sample(root.path())).unwrap();
+    value["schema_version"] = serde_json::json!(6);
+    value["required_depth"] = serde_json::json!("native");
+    value["processing"] = serde_json::json!([
+        {"id":"dash", "selection":{"requested":"auto", "resolved":"stitch", "boundaries":"resegment", "segment_duration_ms":2000}},
+        {"id":"alternate", "selection":{"requested":"stitch", "resolved":"stitch", "boundaries":"resegment", "segment_duration_ms":2000}}
+    ]);
+    let parsed = serde_json::from_value::<BundlePlan>(value);
+    assert!(
+        parsed.is_ok(),
+        "version-six processing must be a supported schema"
+    );
+    let mut plan = parsed.unwrap();
+    plan.plan_id = identity(&plan).unwrap();
+    validate(&plan).unwrap();
+    let saved = root.path().join("processing.bundle.json");
+    plan::write_bundle(&saved, &plan).unwrap();
+    assert_eq!(
+        plan::read_saved(&saved).unwrap(),
+        SavedPlan::Bundle(plan.clone())
+    );
+    let mut missing = serde_json::to_value(&plan).unwrap();
+    missing["processing"].as_array_mut().unwrap().pop();
+    assert!(validate(&serde_json::from_value(missing).unwrap()).is_err());
+    let mut changed = serde_json::to_value(&plan).unwrap();
+    changed["processing"][0]["selection"]["requested"] = "stitch".into();
+    assert!(validate(&serde_json::from_value(changed).unwrap()).is_err());
+    plan.schema_version = 4;
+    plan.plan_id = identity(&plan).unwrap();
+    assert_eq!(validate(&plan).unwrap_err(), INVALID);
+}
+
+#[test]
+fn output_spec_version_two_accepts_per_output_processing_without_changing_version_one() {
+    let root = crate::native::private_tempdir().unwrap();
+    let body = |version| {
+        serde_json::json!({"schema_version":version,"outputs":[{
+            "id":"dash", "format":"dash", "target":"clear", "drms":[], "processing":"stitch"
+        }]})
+    };
+    let new = root.path().join("outputs-v2.json");
+    std::fs::write(&new, serde_json::to_vec(&body(2)).unwrap()).unwrap();
+    assert!(read_output_spec(&new).is_ok());
+    let old = root.path().join("outputs-v1.json");
+    std::fs::write(&old, serde_json::to_vec(&body(1)).unwrap()).unwrap();
+    assert_eq!(read_output_spec(&old).unwrap_err().0, "output-spec-invalid");
 }
 
 #[test]
@@ -80,6 +133,7 @@ fn strict_saved_dispatch_accepts_both_schemas_and_preserves_private_no_replace()
     assert_eq!(std::fs::read(&path).unwrap(), original);
     assert!(plan::read(&path).is_err());
     let mut legacy = plan::ExecutionPlan {
+        processing: None,
         kind: KIND.into(),
         schema_version: 1,
         required_depth: None,

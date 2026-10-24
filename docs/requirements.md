@@ -21,10 +21,13 @@ below; add their executable directories to `PATH`.
 | Shaka Packager | 3.8.0 | 3.8.0 on all three platforms |
 
 Shaka Packager performs packaging and encryption on its supported conversion
-routes. Clear finite progressive MP4 can use a native copy; the edit-preserving
+routes. Qualified `--processing segments` conversion uses Rust for TS-to-TS
+and fMP4-to-fMP4 processing, including HLS/DASH manifest generation, and needs
+none of those tools at native depth. Clear finite progressive MP4 can use a native copy; the edit-preserving
 encrypted finite progressive route retains an FFmpeg copy remux without
 transcoding. `--decode` requires FFmpeg and ffprobe for the additional complete
-decoder checks. See [verification depth](verification.md).
+decoder checks. TS segment conversion with `--decode` also needs Shaka Packager
+for preparing the decoder inputs. See [verification depth](verification.md).
 
 The lower bounds describe the supported baseline, rather than the earliest version that might process a particular file. CI pins and checksum-verifies direct media-tool downloads. On macOS, FFmpeg comes from Homebrew and can change when its formula updates. The table records qualification builds; each platform report records the version actually used by that run. Newer builds must still provide the required options and complete packet timing; an increased version number does not replace the media checks.
 

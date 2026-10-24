@@ -490,3 +490,62 @@ fn master_audio_video_aliases_are_reconciled_independently_of_declaration_order(
         "source bytes must remain unchanged"
     );
 }
+
+#[test]
+fn aliased_audio_renditions_are_qualified_from_native_media_without_codec_hints() {
+    use drmr_core::conversion::{ProcessingMode, SourceValidationPurpose};
+    let root = drmr_core::native::private_tempdir().unwrap();
+    for kind in ["audio", "video"] {
+        let input = if kind == "audio" {
+            super::audio_sources(&root.path().join(kind)).0
+        } else {
+            shaka_source(&root.path().join(kind), kind, false)
+        };
+        let directory = input.parent().unwrap();
+        let uri = input.file_name().unwrap().to_str().unwrap();
+        let master = directory.join("master.m3u8");
+        for audio_uri in [uri.to_owned(), format!("./{uri}")] {
+            let audio = format!(
+                "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"g\",NAME=\"stream_0\",URI=\"{audio_uri}\"\n"
+            );
+            let variant = format!("#EXT-X-STREAM-INF:BANDWIDTH=100000,AUDIO=\"g\"\n{uri}\n");
+            for declarations in [format!("{variant}{audio}"), format!("{audio}{variant}")] {
+                std::fs::write(&master, format!("#EXTM3U\n{declarations}")).unwrap();
+                let original = common::snapshot_tree(directory);
+                for mode in [ProcessingMode::Stitch, ProcessingMode::Segments] {
+                    let command = Converter::new(
+                        Arc::new(ToolRunner::new(
+                            Arc::new(Secrets::default()),
+                            Arc::new(super::NoSink),
+                        )),
+                        "must-not-use-packager",
+                        "must-not-use-ffmpeg",
+                    )
+                    .with_ffprobe("must-not-use-ffprobe")
+                    .with_processing(mode);
+                    let qualified = command.validate_source(
+                        VerificationSource {
+                            input: &master,
+                            input_keys: &InputKeys::default(),
+                            hls_keys: &HlsInputKeys::default(),
+                        },
+                        SourceValidationPurpose::Conversion,
+                    );
+                    if kind == "audio" {
+                        let report = qualified.unwrap();
+                        assert!(report.verification.passed);
+                        assert!(report.verification.checks.is_pass());
+                        assert_eq!(report.actual_format, OutputFormat::HlsTs);
+                        assert_eq!(report.track_protection.len(), 1);
+                    } else {
+                        assert_eq!(
+                            qualified.unwrap_err().0,
+                            "hls-audio-association-not-supported"
+                        );
+                    }
+                    assert_eq!(common::snapshot_tree(directory), original);
+                }
+            }
+        }
+    }
+}

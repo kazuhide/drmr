@@ -360,13 +360,10 @@ impl FragmentClock {
             u64::from(self.scale),
         ))
     }
-    pub fn check_dash(
-        &mut self,
-        path: &Path,
-        time: u64,
-        duration: u64,
-        scale: u64,
-    ) -> Result<(), ConversionError> {
+    /// Return the exact DASH timeline interval accepted by `check_dash`.
+    /// Unedited media uses decode-time bounds; a finite playback edit uses its
+    /// clipped presentation bounds. Common presentation origin is separate.
+    pub(super) fn dash_segment(&mut self, path: &Path) -> Result<(u64, u64, u64), ConversionError> {
         let (base, total) = self.measure(path)?;
         let (base, total) = if self.finite.is_some() {
             let first = self.segment_first.ok_or(BAD)?;
@@ -379,9 +376,19 @@ impl FragmentClock {
             let base = base.saturating_sub(self.trim);
             (base, end.checked_sub(base).ok_or(BAD)?)
         };
-        if u128::from(base) * u128::from(scale) != u128::from(time) * u128::from(self.scale)
+        Ok((base, total, u64::from(self.scale)))
+    }
+    pub fn check_dash(
+        &mut self,
+        path: &Path,
+        time: u64,
+        duration: u64,
+        scale: u64,
+    ) -> Result<(), ConversionError> {
+        let (base, total, media_scale) = self.dash_segment(path)?;
+        if u128::from(base) * u128::from(scale) != u128::from(time) * u128::from(media_scale)
             || u128::from(total) * u128::from(scale)
-                != u128::from(duration) * u128::from(self.scale)
+                != u128::from(duration) * u128::from(media_scale)
         {
             return Err(ConversionError("manifest-fragment-timeline-mismatch"));
         }

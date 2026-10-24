@@ -27,8 +27,27 @@ pub(super) struct Localized {
     pub sample_transport: bool,
     pub empty_cue_pair: bool,
 }
+/// Retained media resources before any whole-track concatenation. Sample-encrypted
+/// fMP4 remains encrypted; outer AES-128 and TS SAMPLE-AES are projected to clear.
+pub(super) struct Segmented {
+    pub initialization: Option<PathBuf>,
+    pub resources: Vec<(PathBuf, String)>,
+    pub reference: PathBuf,
+    pub playlist: PathBuf,
+    pub report: Inspection,
+    pub transport: Option<super::ts::Admission>,
+    pub native: std::collections::BTreeMap<u16, std::sync::Arc<super::ts::NativeEvidence>>,
+    pub sample_transport: bool,
+    pub empty_cue_pair: bool,
+}
+struct Completed {
+    combined: Option<PathBuf>,
+    segmented: Segmented,
+}
 struct Playlist {
-    combined: File,
+    combined: Option<File>,
+    initialization: Option<PathBuf>,
+    media_resources: Vec<(PathBuf, String)>,
     reference: String,
     sequence: u64,
     count: u64,
@@ -93,6 +112,50 @@ pub(super) fn attributes(value: &str) -> Result<crate::m3u8::Attributes, Convers
 }
 fn private_new(path: &Path) -> Result<File, ConversionError> {
     super::files::create_new(path)
+}
+fn snapshot_segment(
+    source: &Path,
+    destination: &Path,
+    stop: &crate::concurrency::Stop,
+) -> Result<(), ConversionError> {
+    let cancelled = || {
+        if stop.is_set() {
+            Err(ConversionError("cancelled"))
+        } else {
+            Ok(())
+        }
+    };
+    cancelled()?;
+    let metadata = fs::symlink_metadata(source).map_err(|_| ConversionError("input-unreadable"))?;
+    if !metadata.is_file()
+        || metadata.file_type().is_symlink()
+        || metadata.len() > super::MAX_MEDIA_BYTES
+    {
+        return Err(ConversionError("input-not-regular-or-too-large"));
+    }
+    let mut input = super::files::regular_input(source)?;
+    super::validate_held_input(&input)?;
+    let mut output = private_new(destination)?;
+    let mut bytes = zeroize::Zeroizing::new(vec![0; 64 * 1024]);
+    let mut count = 0u64;
+    loop {
+        cancelled()?;
+        let n = input
+            .read(&mut bytes)
+            .map_err(|_| ConversionError("media-copy-failed"))?;
+        if n == 0 {
+            break;
+        }
+        count = count
+            .checked_add(u64::try_from(n).map_err(|_| ConversionError("media-size-limit"))?)
+            .filter(|n| *n <= super::MAX_MEDIA_BYTES)
+            .ok_or(ConversionError("media-size-limit"))?;
+        cancelled()?;
+        output
+            .write_all(&bytes[..n])
+            .map_err(|_| ConversionError("media-copy-failed"))?;
+    }
+    cancelled()
 }
 pub(super) fn local_resource(root: &Path, uri: &str) -> Result<PathBuf, ConversionError> {
     if uri.is_empty()
@@ -224,6 +287,46 @@ impl Playlist {
         self.reference.push_str("#EXT-X-KEY:METHOD=NONE\n");
         Ok(clear.to_path_buf())
     }
+    fn decrypt_aes_resource(
+        &mut self,
+        copied: &Path,
+        stage: &Path,
+        key: &super::Aes128Key,
+        iv: Option<&SegmentIv>,
+        map: bool,
+    ) -> Result<PathBuf, ConversionError> {
+        let derived;
+        let iv = if let Some(iv) = iv {
+            iv
+        } else {
+            if map {
+                return Err(ConversionError("hls-encrypted-map-explicit-iv-required"));
+            }
+            derived = SegmentIv::for_sequence(
+                self.sequence
+                    .checked_add(self.count)
+                    .ok_or(ConversionError("hls-media-sequence-overflow"))?,
+            );
+            &derived
+        };
+        let key_name = format!("key-{:04}.bin", self.resources);
+        private_new(&stage.join(&key_name))?
+            .write_all(key.0.as_ref())
+            .map_err(|_| ConversionError("temporary-key-write-failed"))?;
+        writeln!(
+            self.reference,
+            "#EXT-X-KEY:METHOD=AES-128,URI=\"{key_name}\",IV=0x{}",
+            hex::encode(iv.0.as_ref())
+        )
+        .expect("writing a string cannot fail");
+        let clear = stage.join(format!("clear-{:04}", self.resources));
+        if self.combined.is_some() {
+            super::decrypt_segment(copied, &clear, key, iv)?;
+        } else {
+            super::aes128::decrypt_segment_with_stop(copied, &clear, key, iv, &self.stop)?;
+        }
+        Ok(clear)
+    }
     fn resource(
         &mut self,
         root: &Path,
@@ -252,7 +355,11 @@ impl Playlist {
             }
         );
         let copied = stage.join(&name);
-        super::copy_private(&original, &copied)?;
+        if self.combined.is_some() {
+            super::copy_private(&original, &copied)?;
+        } else {
+            snapshot_segment(&original, &copied, &self.stop)?;
+        }
         let snapshot =
             File::open(&copied).map_err(|_| ConversionError("hls-resource-unreadable"))?;
         charge_snapshot(&snapshot, &mut self.bytes, super::MAX_MEDIA_BYTES)?;
@@ -262,33 +369,7 @@ impl Playlist {
                 reference_name = format!("clear-{:04}.ts", self.resources);
                 self.decrypt_samples(&copied, &stage.join(&reference_name), sample)?
             } else if let Some(key) = cipher.key {
-                let derived;
-                let iv = if let Some(iv) = &cipher.iv {
-                    iv
-                } else {
-                    if map {
-                        return Err(ConversionError("hls-encrypted-map-explicit-iv-required"));
-                    }
-                    derived = SegmentIv::for_sequence(
-                        self.sequence
-                            .checked_add(self.count)
-                            .ok_or(ConversionError("hls-media-sequence-overflow"))?,
-                    );
-                    &derived
-                };
-                let key_name = format!("key-{:04}.bin", self.resources);
-                private_new(&stage.join(&key_name))?
-                    .write_all(key.0.as_ref())
-                    .map_err(|_| ConversionError("temporary-key-write-failed"))?;
-                writeln!(
-                    self.reference,
-                    "#EXT-X-KEY:METHOD=AES-128,URI=\"{key_name}\",IV=0x{}",
-                    hex::encode(iv.0.as_ref())
-                )
-                .expect("writing a string cannot fail");
-                let clear = stage.join(format!("clear-{:04}", self.resources));
-                super::decrypt_segment(&copied, &clear, key, iv)?;
-                clear
+                self.decrypt_aes_resource(&copied, stage, key, cipher.iv.as_ref(), map)?
             } else {
                 if self.sample_projection.is_some() {
                     return Err(ConversionError("ts-mixed-protection-not-supported"));
@@ -298,6 +379,7 @@ impl Playlist {
             };
         if map {
             self.clock = Some(super::timing::FragmentClock::read(&plaintext)?);
+            self.initialization = Some(plaintext.clone());
         } else if self.clock.is_some() {
             self.clock
                 .as_mut()
@@ -310,17 +392,22 @@ impl Playlist {
             self.transport_segments
                 .push((plaintext.clone(), self.duration_text.clone()));
         }
-        let mut input =
-            File::open(plaintext).map_err(|_| ConversionError("hls-resource-unreadable"))?;
-        let combined_size = self
-            .combined
-            .metadata()
-            .map_err(|_| ConversionError("media-copy-failed"))?
-            .len();
-        let remaining = super::MAX_MEDIA_BYTES
-            .checked_sub(combined_size)
-            .ok_or(ConversionError("media-size-limit"))?;
-        append_bounded(&mut input, &mut self.combined, remaining)?;
+        if !map {
+            self.media_resources
+                .push((plaintext.clone(), self.duration_text.clone()));
+        }
+        if let Some(combined) = self.combined.as_mut() {
+            let mut input =
+                File::open(&plaintext).map_err(|_| ConversionError("hls-resource-unreadable"))?;
+            let combined_size = combined
+                .metadata()
+                .map_err(|_| ConversionError("media-copy-failed"))?
+                .len();
+            let remaining = super::MAX_MEDIA_BYTES
+                .checked_sub(combined_size)
+                .ok_or(ConversionError("media-size-limit"))?;
+            append_bounded(&mut input, combined, remaining)?;
+        }
         Ok(reference_name)
     }
 }
@@ -558,9 +645,13 @@ impl Localizer<'_> {
         }
         Ok(())
     }
-    fn finish(self, path: &Path, mut combined: PathBuf) -> Result<Localized, ConversionError> {
+    fn finish(
+        self,
+        path: &Path,
+        mut combined: Option<PathBuf>,
+    ) -> Result<Completed, ConversionError> {
         self.empty_cue.finish()?;
-        let playlist = self.playlist;
+        let mut playlist = self.playlist;
         if !playlist.ended
             || playlist.pending_duration
             || playlist.count == 0
@@ -568,16 +659,17 @@ impl Localizer<'_> {
         {
             return Err(ConversionError("hls-complete-vod-required"));
         }
-        playlist
-            .combined
-            .sync_all()
-            .map_err(|_| ConversionError("media-copy-failed"))?;
-        drop(playlist.combined);
-        if playlist.transport.is_some() {
+        if let Some(file) = playlist.combined.take() {
+            file.sync_all()
+                .map_err(|_| ConversionError("media-copy-failed"))?;
+            drop(file);
+        }
+        if playlist.transport.is_some()
+            && let Some(joined) = &combined
+        {
             let raw = self.stage.join("combined.ts");
-            fs::rename(&combined, &raw)
-                .map_err(|_| ConversionError("temporary-file-unavailable"))?;
-            combined = raw;
+            fs::rename(joined, &raw).map_err(|_| ConversionError("temporary-file-unavailable"))?;
+            combined = Some(raw);
         }
         if let Some(clock) = &playlist.clock {
             clock.presentation_window()?;
@@ -590,8 +682,13 @@ impl Localizer<'_> {
             None
         } else {
             Some(
-                inspection::inspect(&combined)
-                    .map_err(|_| ConversionError("invalid-localized-hls-media"))?,
+                inspection::inspect(
+                    combined
+                        .as_deref()
+                        .or(playlist.initialization.as_deref())
+                        .ok_or(ConversionError("hls-map-required"))?,
+                )
+                .map_err(|_| ConversionError("invalid-localized-hls-media"))?,
             )
         };
         if self.saw_aes
@@ -616,7 +713,7 @@ impl Localizer<'_> {
         let reference = if self.saw_aes || playlist.transport.is_some() {
             playlist_path.clone()
         } else {
-            combined.clone()
+            combined.clone().unwrap_or_else(|| playlist_path.clone())
         };
         let report =
             inspection::inspect(path).map_err(|_| ConversionError("hls-inspection-failed"))?;
@@ -628,16 +725,19 @@ impl Localizer<'_> {
             &playlist.stop,
             playlist.timeout,
         )?;
-        Ok(Localized {
+        Ok(Completed {
             combined,
-            reference,
-            playlist: playlist_path,
-            report,
-            transport: playlist.transport,
-            transport_segments: playlist.transport_segments,
-            native,
-            sample_transport,
-            empty_cue_pair: self.empty_cue.seen(),
+            segmented: Segmented {
+                initialization: playlist.initialization,
+                resources: playlist.media_resources,
+                reference,
+                playlist: playlist_path,
+                report,
+                transport: playlist.transport,
+                native,
+                sample_transport,
+                empty_cue_pair: self.empty_cue.seen(),
+            },
         })
     }
 }
@@ -647,6 +747,47 @@ pub(super) fn localize(
     keys: &HlsInputKeys,
     backend: &super::backend::Backend,
 ) -> Result<Localized, ConversionError> {
+    let Completed {
+        combined,
+        segmented,
+    } = localize_with(path, stage, keys, backend, true)?;
+    let transport_segments = if segmented.transport.is_some() {
+        segmented.resources
+    } else {
+        Vec::new()
+    };
+    Ok(Localized {
+        combined: combined.ok_or(ConversionError("hls-joined-media-required"))?,
+        reference: segmented.reference,
+        playlist: segmented.playlist,
+        report: segmented.report,
+        transport: segmented.transport,
+        transport_segments,
+        native: segmented.native,
+        sample_transport: segmented.sample_transport,
+        empty_cue_pair: segmented.empty_cue_pair,
+    })
+}
+
+pub(super) fn localize_segments(
+    path: &Path,
+    stage: &Path,
+    keys: &HlsInputKeys,
+    backend: &super::backend::Backend,
+) -> Result<Segmented, ConversionError> {
+    Ok(localize_with(path, stage, keys, backend, false)?.segmented)
+}
+
+fn localize_with(
+    path: &Path,
+    stage: &Path,
+    keys: &HlsInputKeys,
+    backend: &super::backend::Backend,
+    join: bool,
+) -> Result<Completed, ConversionError> {
+    if !join {
+        backend.check_cancelled()?;
+    }
     let metadata = fs::symlink_metadata(path).map_err(|_| ConversionError("input-unreadable"))?;
     if !metadata.is_file() || metadata.file_type().is_symlink() {
         return Err(ConversionError("input-not-regular-file"));
@@ -669,9 +810,11 @@ pub(super) fn localize(
     if lines.next() != Some("#EXTM3U") {
         return Err(ConversionError("hls-invalid-header"));
     }
-    let combined = stage.join("combined.mp4");
+    let combined = join.then(|| stage.join("combined.mp4"));
     let playlist = Playlist {
-        combined: private_new(&combined)?,
+        combined: combined.as_deref().map(private_new).transpose()?,
+        initialization: None,
+        media_resources: Vec::new(),
         reference: "#EXTM3U\n#EXT-X-VERSION:7\n".into(),
         sequence: 0,
         count: 0,
@@ -990,6 +1133,333 @@ pub(super) fn sample_reference(
 #[cfg(test)]
 mod resource_tests {
     use super::*;
+
+    fn fixture_tool(program: &str, arguments: Vec<String>) {
+        use crate::{
+            events::NoSink,
+            toolrun::{RunOptions, Secrets, ToolRunner},
+        };
+        let runner = ToolRunner::new(
+            std::sync::Arc::new(Secrets::default()),
+            std::sync::Arc::new(NoSink),
+        );
+        let argv = std::iter::once(program.to_owned())
+            .chain(arguments)
+            .collect::<Vec<_>>();
+        let shown = [program.to_owned(), "[fixture arguments redacted]".into()];
+        let result = runner
+            .run_tool(
+                &argv,
+                program,
+                &RunOptions {
+                    timeout: Some(std::time::Duration::from_secs(30)),
+                    argv_redacted: Some(&shown),
+                    log_stdout: false,
+                    max_output_chars: 0,
+                    ..RunOptions::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            result.returncode,
+            Some(0),
+            "required fixture tool failed: {program}"
+        );
+    }
+
+    fn no_tool_backend() -> super::super::backend::Backend {
+        use crate::{
+            events::NoSink,
+            toolrun::{Secrets, ToolRunner},
+        };
+        let runner = std::sync::Arc::new(ToolRunner::new(
+            std::sync::Arc::new(Secrets::default()),
+            std::sync::Arc::new(NoSink),
+        ));
+        Converter::new(runner, "must-not-run-packager", "must-not-run-ffmpeg")
+            .with_ffprobe("must-not-run-ffprobe")
+            .backend
+    }
+
+    fn clear_fixture(directory: &Path, transport: bool) -> PathBuf {
+        super::super::files::create_dir(directory).unwrap();
+        let input =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../drmr/tests/fixtures/bbb/clip.mp4");
+        let output = directory.join("media.m3u8");
+        if transport {
+            fixture_tool(
+                "ffmpeg",
+                vec![
+                    "-v".into(),
+                    "error".into(),
+                    "-nostdin".into(),
+                    "-threads".into(),
+                    "1".into(),
+                    "-i".into(),
+                    super::super::files::tool_path(&input).unwrap(),
+                    "-map".into(),
+                    "0:v:0".into(),
+                    "-map".into(),
+                    "0:a:0".into(),
+                    "-c".into(),
+                    "copy".into(),
+                    "-hls_time".into(),
+                    "2".into(),
+                    "-hls_playlist_type".into(),
+                    "vod".into(),
+                    "-hls_segment_filename".into(),
+                    super::super::files::tool_path(&directory.join("segment-%03d.ts")).unwrap(),
+                    super::super::files::tool_path(&output).unwrap(),
+                ],
+            );
+        } else {
+            fixture_tool(
+                "packager",
+                vec![
+                    format!(
+                        "input={},stream=video,init_segment={},segment_template={},playlist_name=media.m3u8",
+                        super::super::files::tool_path(&input).unwrap(),
+                        super::super::files::tool_path(&directory.join("init.mp4")).unwrap(),
+                        super::super::files::tool_path(&directory.join("segment-$Number$.m4s"))
+                            .unwrap()
+                    ),
+                    "--segment_duration".into(),
+                    "2".into(),
+                    "--fragment_duration".into(),
+                    "2".into(),
+                    "--mp4_reset_initial_composition_offset_to_zero=false".into(),
+                    "--hls_master_playlist_output".into(),
+                    super::super::files::tool_path(&directory.join("master.m3u8")).unwrap(),
+                ],
+            );
+        }
+        output
+    }
+
+    #[test]
+    fn segment_localization_retains_resources_without_a_joined_file() {
+        use sha2::{Digest as _, Sha256};
+        for (transport, aes) in [(true, false), (false, false), (false, true)] {
+            let root = super::super::files::Stage::new(None).unwrap();
+            let clear_dir = root.path().join("clear");
+            let clear = clear_fixture(&clear_dir, transport);
+            let source = if aes {
+                let encrypted = root.path().join("encrypted");
+                super::super::files::create_dir(&encrypted).unwrap();
+                let key = HlsOutputKey::new(
+                    "https://operator.invalid/fixture",
+                    Aes128Key::from_hex("101112131415161718191a1b1c1d1e1f").unwrap(),
+                )
+                .unwrap();
+                encrypt_media(&clear_dir, &encrypted, &key).unwrap();
+                encrypted.join("media.m3u8")
+            } else {
+                clear.clone()
+            };
+            let source_before = Sha256::digest(fs::read(&source).unwrap());
+            let keys = if aes {
+                HlsInputKeys::new(vec![(
+                    "https://operator.invalid/fixture".into(),
+                    Aes128Key::from_hex("101112131415161718191a1b1c1d1e1f").unwrap(),
+                )])
+                .unwrap()
+            } else {
+                HlsInputKeys::default()
+            };
+            let directory = root.path().join("segments");
+            super::super::files::create_dir(&directory).unwrap();
+            let segmented =
+                localize_segments(&source, &directory, &keys, &no_tool_backend()).unwrap();
+            assert!(!directory.join("combined.mp4").exists());
+            assert!(!directory.join("combined.ts").exists());
+            assert_eq!(segmented.initialization.is_some(), !transport);
+            assert_eq!(segmented.transport.is_some(), transport);
+            assert_eq!(segmented.native.len(), if transport { 2 } else { 0 });
+            assert!(segmented.playlist.is_file());
+            assert!(segmented.reference.is_file());
+            let clear_text = fs::read_to_string(&clear).unwrap();
+            let media = clear_text
+                .lines()
+                .filter(|line| !line.is_empty() && !line.starts_with('#'))
+                .map(|name| clear_dir.join(name))
+                .collect::<Vec<_>>();
+            let durations = clear_text
+                .lines()
+                .filter_map(|line| line.strip_prefix("#EXTINF:"))
+                .map(|value| value.split_once(',').unwrap().0)
+                .collect::<Vec<_>>();
+            assert_eq!(segmented.resources.len(), media.len());
+            for ((resource, duration), (original, expected_duration)) in
+                segmented.resources.iter().zip(media.iter().zip(durations))
+            {
+                assert_eq!(fs::read(resource).unwrap(), fs::read(original).unwrap());
+                assert_eq!(duration, expected_duration);
+            }
+            let legacy_stage = root.path().join("legacy");
+            super::super::files::create_dir(&legacy_stage).unwrap();
+            let legacy = localize(&source, &legacy_stage, &keys, &no_tool_backend()).unwrap();
+            assert!(legacy.combined.is_file());
+            let mut expected = Vec::new();
+            if let Some(initialization) = &segmented.initialization {
+                expected.extend(fs::read(initialization).unwrap());
+            }
+            for (resource, _) in &segmented.resources {
+                expected.extend(fs::read(resource).unwrap());
+            }
+            assert_eq!(fs::read(&legacy.combined).unwrap(), expected);
+            assert_eq!(legacy.report.protection, segmented.report.protection);
+            assert_eq!(Sha256::digest(fs::read(&source).unwrap()), source_before);
+        }
+    }
+
+    #[test]
+    fn segment_localization_preserves_original_sample_aes_evidence_across_key_rotation() {
+        let root = super::super::files::Stage::new(None).unwrap();
+        let clear_dir = root.path().join("clear");
+        let clear = clear_fixture(&clear_dir, true);
+        let encrypted = root.path().join("encrypted");
+        super::super::files::create_dir(&encrypted).unwrap();
+        let key_text = [
+            "101112131415161718191a1b1c1d1e1f",
+            "202122232425262728292a2b2c2d2e2f",
+        ];
+        let iv_text = [
+            "303132333435363738393a3b3c3d3e3f",
+            "404142434445464748494a4b4c4d4e4f",
+        ];
+        let uri = [
+            "https://operator.invalid/sample-0",
+            "https://operator.invalid/sample-1",
+        ];
+        let keys = key_text.map(|key| Aes128Key::from_hex(key).unwrap());
+        let ivs = iv_text.map(|iv| SegmentIv::from_hex(iv).unwrap());
+        let mut encoder = super::super::ts::SegmentEncryptor::new();
+        let mut scanner = super::super::ts::NativeScanner::new();
+        let stop = crate::concurrency::Stop::new();
+        let mut playlist = String::new();
+        let mut count = 0;
+        for line in fs::read_to_string(clear).unwrap().lines() {
+            if line.starts_with("#EXT-X-VERSION:") {
+                playlist.push_str("#EXT-X-VERSION:5\n");
+            } else if line.is_empty() || line.starts_with('#') {
+                writeln!(playlist, "{line}").unwrap();
+            } else {
+                let index = count % 2;
+                let source = clear_dir.join(line);
+                scanner.segment(&source, &stop).unwrap();
+                encoder
+                    .encrypt_segment(
+                        &source,
+                        &encrypted.join(line),
+                        &keys[index],
+                        &ivs[index],
+                        &stop,
+                    )
+                    .unwrap();
+                writeln!(
+                    playlist,
+                    "#EXT-X-KEY:METHOD=SAMPLE-AES,URI=\"{}\",IV=0x{}\n{line}",
+                    uri[index], iv_text[index]
+                )
+                .unwrap();
+                count += 1;
+            }
+        }
+        assert!(count >= 2);
+        encoder.finish().unwrap();
+        let input = encrypted.join("media.m3u8");
+        private_new(&input)
+            .unwrap()
+            .write_all(playlist.as_bytes())
+            .unwrap();
+        let input_keys = HlsInputKeys::new(
+            uri.into_iter()
+                .zip(key_text)
+                .map(|(uri, key)| (uri.into(), Aes128Key::from_hex(key).unwrap()))
+                .collect(),
+        )
+        .unwrap();
+        let output = root.path().join("localized");
+        super::super::files::create_dir(&output).unwrap();
+        let result = localize_segments(&input, &output, &input_keys, &no_tool_backend()).unwrap();
+        assert!(result.sample_transport);
+        assert!(result.initialization.is_none());
+        assert!(!output.join("combined.mp4").exists());
+        assert!(!output.join("combined.ts").exists());
+        let (_, expected) = scanner.finish().unwrap();
+        assert_eq!(result.resources.len(), count);
+        assert_eq!(expected.len(), result.native.len());
+        for (id, native) in expected {
+            let actual = &result.native[&id];
+            assert_eq!(native.config, actual.config);
+            let a = native.evidence().unwrap();
+            let b = actual.evidence().unwrap();
+            assert!(a.payload_equal(&b));
+            assert!(a.timing_equal(&b));
+            assert_eq!(
+                native.segment_timings().unwrap().len(),
+                actual.segment_timings().unwrap().len()
+            );
+        }
+    }
+
+    #[test]
+    fn segment_localization_keeps_strict_refusals_and_honors_preexisting_cancellation() {
+        let root = super::super::files::Stage::new(None).unwrap();
+        for (index, (tag, reason)) in [
+            (
+                "#EXT-X-BYTERANGE:188@0",
+                "hls-byte-ranges-not-yet-supported",
+            ),
+            (
+                "#EXT-X-DISCONTINUITY",
+                "hls-presentation-feature-not-supported",
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let source = root.path().join(format!("invalid-{index}.m3u8"));
+            private_new(&source).unwrap().write_all(format!("#EXTM3U\n#EXT-X-TARGETDURATION:2\n{tag}\n#EXTINF:2.0,\nmissing.ts\n#EXT-X-ENDLIST\n").as_bytes()).unwrap();
+            for join in [false, true] {
+                let output = root.path().join(format!("invalid-{index}-{join}"));
+                super::super::files::create_dir(&output).unwrap();
+                let Err(error) = localize_with(
+                    &source,
+                    &output,
+                    &HlsInputKeys::default(),
+                    &no_tool_backend(),
+                    join,
+                ) else {
+                    panic!("unsupported manifest was accepted");
+                };
+                assert_eq!(error.0, reason);
+            }
+        }
+        let source = root.path().join("cancelled.m3u8");
+        private_new(&source)
+            .unwrap()
+            .write_all(b"#EXTM3U\n")
+            .unwrap();
+        let output = root.path().join("cancelled");
+        super::super::files::create_dir(&output).unwrap();
+        let backend = no_tool_backend();
+        backend.stop.set();
+        let Err(error) = localize_segments(&source, &output, &HlsInputKeys::default(), &backend)
+        else {
+            panic!("cancelled localization succeeded");
+        };
+        assert_eq!(error.0, "cancelled");
+        assert_eq!(fs::read_dir(&output).unwrap().count(), 0);
+        let copy = output.join("copy");
+        assert_eq!(
+            snapshot_segment(&source, &copy, &backend.stop)
+                .unwrap_err()
+                .0,
+            "cancelled"
+        );
+        assert!(!copy.exists());
+    }
 
     #[test]
     fn transport_aes_outputs_ts_resources_without_an_mp4_map() {

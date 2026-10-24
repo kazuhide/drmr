@@ -21,6 +21,8 @@ mod finite;
 pub mod key_file;
 mod observation;
 mod packets;
+pub mod processing;
+pub use processing::ProcessingMode;
 pub mod plan;
 pub use aes128::{
     Aes128Key, HlsInputKeys, HlsOutputKey, SegmentIv, decrypt_segment, encrypt_segment,
@@ -35,6 +37,7 @@ mod hls;
 mod keys;
 mod native;
 mod native_media;
+mod segments;
 mod signaling;
 pub use signaling::{DrmSystem, OutputSignaling};
 mod presentation;
@@ -105,6 +108,7 @@ impl std::fmt::Debug for LocalTrack {
 /// Explicit backend configuration; no executable is selected from source metadata.
 pub struct Converter {
     backend: Backend,
+    processing_mode: ProcessingMode,
     maximum_workers: Option<usize>,
     downloaded: Option<Arc<download::Seal>>,
     frozen_source: Vec<Arc<frozen::OriginalGuard>>,
@@ -118,6 +122,7 @@ impl Converter {
         ffmpeg: impl Into<String>,
     ) -> Self {
         Self {
+            processing_mode: ProcessingMode::Auto,
             maximum_workers: None,
             downloaded: None,
             frozen_source: Vec::new(),
@@ -135,6 +140,12 @@ impl Converter {
                 activity: None,
             },
         }
+    }
+    /// Select how source media is processed; saved plans retain their resolved choice.
+    #[must_use]
+    pub fn with_processing(mut self, processing: ProcessingMode) -> Self {
+        self.processing_mode = processing;
+        self
     }
     /// Add complete decoding to the required native media checks.
     #[must_use]
@@ -167,6 +178,7 @@ impl Converter {
         backend.measurement = Some(Arc::clone(&measurement));
         let command = Self {
             backend,
+            processing_mode: self.processing_mode,
             maximum_workers: self.maximum_workers,
             downloaded: self.downloaded.clone(),
             frozen_source: self.frozen_source.clone(),
@@ -262,6 +274,19 @@ impl Converter {
         input_keys: &InputKeys,
         output_key: &HlsOutputKey,
     ) -> Result<ConversionReport, ConversionError> {
+        if self.processing_mode == ProcessingMode::Segments {
+            return self.convert(ConversionRequest {
+                input,
+                output,
+                format: inspection::OutputFormat::Hls,
+                target: TargetProtection::HlsAes128,
+                input_keys,
+                hls_input_keys: &HlsInputKeys::default(),
+                output_key: None,
+                hls_key_uri: None,
+                hls_output_key: Some(output_key),
+            });
+        }
         self.hls_output(input, output, input_keys, output_key)
     }
     pub fn convert_hls_to_hls_aes128(
@@ -273,6 +298,19 @@ impl Converter {
         output_key: &HlsOutputKey,
     ) -> Result<ConversionReport, ConversionError> {
         self.refuse_signaling()?;
+        if self.processing_mode == ProcessingMode::Segments {
+            return self.convert(ConversionRequest {
+                input,
+                output,
+                format: inspection::OutputFormat::Hls,
+                target: TargetProtection::HlsAes128,
+                input_keys,
+                hls_input_keys: hls_keys,
+                output_key: None,
+                hls_key_uri: None,
+                hls_output_key: Some(output_key),
+            });
+        }
         if output_key.associated_iv().is_some() {
             return Err(ConversionError("output-iv-not-used"));
         }
@@ -306,6 +344,9 @@ impl Converter {
         output_key: Option<&OutputKey>,
     ) -> Result<ConversionReport, ConversionError> {
         self.refuse_signaling()?;
+        if self.processing_mode == ProcessingMode::Segments {
+            return Err(ConversionError("processing-container-change-not-supported"));
+        }
         self.hls_input(input, output, target, input_keys, hls_keys, output_key)
     }
     pub fn convert_mp4(
@@ -317,6 +358,7 @@ impl Converter {
         output_key: Option<&OutputKey>,
     ) -> Result<ConversionReport, ConversionError> {
         self.refuse_signaling()?;
+        self.check_complete_file_processing()?;
         if target == TargetProtection::HlsSampleAes {
             return Err(ConversionError("target-requires-ts-output"));
         }
@@ -422,6 +464,7 @@ impl Converter {
         output: &Path,
         output_keys: &InputKeys,
     ) -> Result<VerificationReport, ConversionError> {
+        self.check_complete_file_processing()?;
         let workspace = workspace()?;
         let source = workspace.path().join("source.mp4");
         let result = workspace.path().join("result.mp4");

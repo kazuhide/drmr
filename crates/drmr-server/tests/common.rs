@@ -2,6 +2,8 @@ mod support;
 
 #[path = "common/private_plans.rs"]
 mod private_plans;
+#[path = "common/processing_requests.rs"]
+mod processing_requests;
 
 use drmr_server::{ServerConfig, spawn};
 use serde_json::Value;

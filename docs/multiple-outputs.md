@@ -9,7 +9,7 @@ transport-stream presentation can produce:
 - transport-stream HLS encrypted with `SAMPLE-AES`, with FairPlay information.
 
 Choose the outputs you need. The common `plan`, `convert`, and `verify` commands
-name every output explicitly. Native checks cover every selected sample, configuration, clock and supported playback window. Add `--decode` at saved planning to require complete decoding for every later execution and verification, or at runtime to strengthen the saved minimum. New named-output plans use schema 4; legacy schema 2 plans retain their decoded minimum. See [verification depth](verification.md).
+name every output explicitly. Native checks cover every selected sample, configuration, clock and supported playback window. Add `--decode` at saved planning to require complete decoding for every later execution and verification, or at runtime to strengthen the saved minimum. New named-output plans use schema 6; legacy schema 2 plans retain their decoded minimum and schema 4 plans retain their saved depth. See [verification depth](verification.md).
 
 ## Describe the outputs
 
@@ -61,6 +61,28 @@ Each `id` names one subdirectory of the result. Use one to 32 lowercase ASCII
 characters, starting with a letter and continuing with letters, digits, or
 hyphens. Up to eight outputs are accepted. Duplicate IDs, unknown fields,
 unsupported combinations, and arbitrary child paths are refused.
+
+### Select processing for each output
+
+`--processing` supplies one default for the output list. To choose different
+modes, use output-recipe schema 2 and set `processing` on individual outputs:
+
+```json
+{
+  "schema_version": 2,
+  "outputs": [
+    {"id":"hls-ts","format":"hls-ts","target":"hls-sample-aes","drms":["fairplay"],"processing":"segments"},
+    {"id":"dash","format":"dash","target":"cbcs","drms":["widevine","playready"],"processing":"stitch"}
+  ]
+}
+```
+
+For a qualified clear TS source, this requests HLS TS at its original segment
+boundaries and DASH fMP4 with new segmentation. `segments` preserves sample
+membership and clocks; `stitch` joins when needed and packages the selected
+format. `auto` selects a qualified route. Omitted per-output values use the CLI
+default. Recipe schema 1 remains supported and refuses the new `processing`
+field. These recipe versions are separate from the private key-file versions.
 
 ## Keep runtime keys separate
 
@@ -125,10 +147,14 @@ identifier. Output key domains are independent; choose each one explicitly.
 For encrypted source media, the shared `input` object uses the same `keys` and
 `hls_keys` fields as the [single-output key file](usage.md#separate-input-and-output-keys).
 
-The new explicit multi-DRM profile admits supported clear HLS transport streams
+The `auto` and `stitch` multi-DRM profile admits supported clear HLS transport streams
 and the qualified clear MP4 profile. Other source layouts or existing DRM
 metadata are refused by this profile. Existing conversions without explicit DRM
 information retain their [documented source profiles](conversion-support.md).
+For `segments` outputs, supported clear or known-key encrypted TS can produce
+TS FairPlay, while supported fMP4 can produce fMP4 HLS FairPlay or CBCS DASH
+with Widevine/PlayReady. Source and output containers must match. See the
+[DRM source conditions](drm-signaling.md).
 
 ## Analyze, save, execute, and verify
 
@@ -138,14 +164,16 @@ drmr plan ./source/input.m3u8 --outputs ./outputs.json --output ./result --save 
 ```
 
 The same acquisition command accepts a supported MP4 or static DASH URL; use
-`source/input.mp4` or `source/input.mpd` for the plan. Explicit multi-DRM output
-still requires its qualified clear TS HLS or clear MP4 source. Download support
-does not widen that media profile. See [URL input](conversion-support.md#url-input).
+`source/input.mp4` or `source/input.mpd` for the plan. Acquisition does not
+widen the chosen processing route's media profile. See
+[URL input](conversion-support.md#url-input).
 
 The output list describes the requested outputs. The saved execution plan fixes
 the qualified original files, their sizes and SHA-256 fingerprints, the result
 directory, every output format and protection scheme, the DRM system selections,
-and each external manifest-check policy. It does not fix a particular key,
+each external manifest-check policy, and the requested/resolved processing and
+boundary behavior for every output. The root `processing` list associates each
+output ID with its saved selection. It does not fix a particular key,
 license address, or key address; those remain runtime settings.
 
 After preparing the key file, run:

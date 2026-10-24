@@ -86,7 +86,7 @@
     var analysis = h('section', { className: 'common-section', 'aria-labelledby': 'common-analysis-title' }, word('h2', 'commonAnalysis', { id: 'common-analysis-title' }), h('div', { className: 'actions' }, analyze), analysisReport);
     var outputBody = h('tbody');
     var outputTable = h('div', { className: 'common-output-wrap' }, h('table', { className: 'data common-outputs' },
-      h('thead', null, h('tr', null, ['commonOutputId', 'commonFormat', 'commonProtection', 'commonDrms', 'commonConformance', 'commonActions'].map(function (key) { return word('th', key, { scope: 'col' }); }))), outputBody));
+      h('thead', null, h('tr', null, ['commonOutputId', 'commonFormat', 'commonProtection', 'commonProcessingMode', 'commonDrms', 'commonConformance', 'commonActions'].map(function (key) { return word('th', key, { scope: 'col' }); }))), outputBody));
     var add = button('common-add-output', 'commonAddOutput', function () { if (!draft || rows.length >= 8) return; addRow({ id: 'output-' + (rows.length + 1), format: 'mp4', target: 'clear', drms: [], conformance: 'none' }); dirty(); });
     var parent = selectionField('commonOutputParent', 'output-parent', function () { return draft && draft.parent; }, function (v) { if (draft) { draft.parent = v; dirty(); } }, 'commonDestinationHelp');
     var destination = h('input', { id: 'common-destination', autocomplete: 'off', spellcheck: 'false', maxlength: '32', oninput: function () { if (draft) { draft.destination = destination.value; dirty(); } } });
@@ -99,7 +99,7 @@
     }, true);
     var outputs = h('section', { className: 'common-section', 'aria-labelledby': 'common-outputs-title' },
       word('h2', 'commonOutputs', { id: 'common-outputs-title' }), word('p', 'commonOutputsHelp', { className: 'help' }),
-      outputTable, h('div', { className: 'actions' }, add), word('p', 'commonOutputNameHelp', { id: 'common-output-name-help', className: 'help' }),
+      outputTable, h('div', { className: 'actions' }, add), word('p', 'commonProcessingHelp', { id: 'common-processing-help', className: 'help' }), word('p', 'commonOutputNameHelp', { id: 'common-output-name-help', className: 'help' }),
       parent.node, field('commonDestination', destination, 'commonDestinationHelp'), outputError, h('div', { className: 'actions' }, savePlan));
     var planSelect = h('select', { id: 'common-plan-select', onchange: function () { draft.dirty = false; model.usePlan(planSelect.value); update(); } });
     var planSelectField = field('commonPlanSelect', planSelect);
@@ -140,7 +140,7 @@
     }
     function runtimeValue() { return { keys_ref: draft && draft.keys ? draft.keys.ref : null, max_workers: workers.value.trim() === '' ? null : Number(workers.value), decode: decode.checked }; }
     function validRuntime() { var value = runtimeValue().max_workers, cap = model.snapshot().capabilities; return value === null || Number.isInteger(value) && value >= 1 && value <= (cap ? cap.worker_policy.maximum : 0); }
-    function outputValues() { return rows.map(function (row) { return { id: row.id.value, format: row.format.value, target: row.target.value, drms: row.drms.filter(function (drm) { return drm.control.checked; }).map(function (drm) { return drm.value; }), conformance: row.conformance.value }; }); }
+    function outputValues() { return rows.map(function (row) { return { id: row.id.value, format: row.format.value, target: row.target.value, processing: row.processing.value, drms: row.drms.filter(function (drm) { return drm.control.checked; }).map(function (drm) { return drm.value; }), conformance: row.conformance.value }; }); }
     function signature() { return JSON.stringify({ parent: draft && draft.parent && draft.parent.ref, destination: destination.value, outputs: outputValues() }); }
     function validOutputs() {
       var values = outputValues(), names = new Set();
@@ -157,11 +157,12 @@
         element.addEventListener(key === 'id' ? 'input' : 'change', dirty);
         row[key] = element;
         var label = h('span', { className: 'common-cell-label' }), td = h('td', null, h('label', { className: 'field' }, label, element));
-        cells.push({ node: td, label: label, key: { id: 'commonOutputId', format: 'commonFormat', target: 'commonProtection', conformance: 'commonConformance' }[key], control: element }); return td;
+        cells.push({ node: td, label: label, key: { id: 'commonOutputId', format: 'commonFormat', target: 'commonProtection', processing: 'commonProcessingMode', conformance: 'commonConformance' }[key], control: element }); return td;
       }
       var id = h('input', { autocomplete: 'off', spellcheck: 'false', maxlength: '32', value: value.id, 'aria-describedby': 'common-output-name-help' });
       var format = h('select', null, options([{ value: 'mp4', key: 'commonFormatMp4' }, { value: 'dash', key: 'commonFormatDash' }, { value: 'hls', key: 'commonFormatHls' }, { value: 'hls-ts', key: 'commonFormatHlsTs' }])); format.value = value.format;
       var target = h('select', null, options(['clear', 'cenc', 'cbcs', 'hls-aes128', 'hls-sample-aes'])); target.value = value.target;
+      var processing = h('select', { 'aria-describedby': 'common-processing-help' }, options([{ value: 'auto', key: 'commonProcessingAuto' }, { value: 'segments', key: 'commonProcessingSegments' }, { value: 'stitch', key: 'commonProcessingStitch' }])); processing.value = value.processing || 'auto';
       var conformance = h('select', null, options([{ value: 'none', key: 'commonNone' }, { value: 'required', key: 'commonRequired' }])); conformance.value = value.conformance;
       row.drms = [{ value: 'widevine', label: 'Widevine' }, { value: 'playready', label: 'PlayReady' }, { value: 'fairplay', label: 'FairPlay' }].map(function (drm) {
         drm.control = h('input', { type: 'checkbox', 'data-common-drm': drm.value, checked: value.drms.indexOf(drm.value) !== -1, onchange: dirty });
@@ -173,7 +174,7 @@
         var index = rows.indexOf(row); rows.splice(index, 1); row.node.remove(); dirty(); rowLabels();
         var next = rows[Math.min(index, rows.length - 1)]; if (next) next.id.focus();
       });
-      row.node = h('tr', { dataset: { outputRow: String(serial) } }, control('id', id), control('format', format), control('target', target), drmCell, control('conformance', conformance), h('td', null, remove));
+      row.node = h('tr', { dataset: { outputRow: String(serial) } }, control('id', id), control('format', format), control('target', target), control('processing', processing), drmCell, control('conformance', conformance), h('td', null, remove));
       row.cells = cells; row.remove = remove;
       rows.push(row); outputBody.appendChild(row.node); rowLabels();
     }
@@ -215,7 +216,13 @@
         planInfo.dataset.plan = key;
         UI.replace(planInfo, value ? [word('dt', 'commonPlanId'), h('dd', { className: 'mono', text: value.plan_id }), word('dt', 'commonPlanVersion'), h('dd', { text: 'v' + value.plan_schema_version }), word('dt', 'commonRequiredCoverage'), h('dd', null, word('span', value.required_depth === 'native' ? 'commonNativeCoverage' : 'commonDecodedCoverage'))] : []);
         UI.replace(planOutputs, value ? h('ul', { className: 'common-plan-outputs' }, value.outputs.map(function (output) {
-          return h('li', null, output.id === null ? word('span', 'commonSingleOutput') : h('code', { text: output.id }), h('span', { text: output.format + ' · ' + output.target }), [2, 4].indexOf(value.plan_schema_version) !== -1 ? h('span', null, word('span', 'commonDrms'), ': ', (output.drms || []).length ? h('span', { text: output.drms.join(', ') }) : word('span', 'commonNotRequested')) : null, [2, 4].indexOf(value.plan_schema_version) !== -1 ? h('span', null, word('span', 'commonConformance'), ': ', word('span', output.conformance === 'required' ? 'commonRequired' : 'commonNotRequested')) : null);
+          var choices = Array.isArray(value.processing) ? value.processing : [];
+          var match = choices.find(function (row) { return row.id === output.id; });
+          var choice = value.plan_schema_version === 5 ? value.processing : value.plan_schema_version === 6 && match && match.selection;
+          if (!choice || ['segments', 'stitch'].indexOf(choice.resolved) === -1 || ['preserve', 'resegment', 'not-applicable'].indexOf(choice.boundaries) === -1) choice = null;
+          return h('li', null, output.id === null ? word('span', 'commonSingleOutput') : h('code', { text: output.id }), h('span', { text: output.format + ' · ' + output.target }), [2, 4, 6].indexOf(value.plan_schema_version) !== -1 ? h('span', null, word('span', 'commonDrms'), ': ', (output.drms || []).length ? h('span', { text: output.drms.join(', ') }) : word('span', 'commonNotRequested')) : null, [2, 4, 6].indexOf(value.plan_schema_version) !== -1 ? h('span', null, word('span', 'commonConformance'), ': ', word('span', output.conformance === 'required' ? 'commonRequired' : 'commonNotRequested')) : null,
+            choice ? h('span', null, word('span', 'commonRequestedProcessing'), ': ', word('span', ['auto', 'segments', 'stitch'].indexOf(choice.requested) !== -1 ? { auto: 'commonProcessingAuto', segments: 'commonProcessingSegments', stitch: 'commonProcessingStitch' }[choice.requested] : 'commonUnknown')) : null,
+            choice ? h('span', { 'data-common-plan-processing': choice.resolved }, word('span', 'commonProcessingMode'), ': ', word('span', { segments: 'commonProcessingSegments', stitch: 'commonProcessingStitch' }[choice.resolved] || 'commonUnknown'), ' · ', word('span', { preserve: 'commonBoundaryPreserve', resegment: 'commonBoundaryResegment', 'not-applicable': 'commonBoundaryNotApplicable' }[choice.boundaries] || 'commonUnknown')) : word('span', 'commonProcessingUnrecorded'));
         })) : null);
       }
       var destinationKey = value ? { absent: 'commonDestinationAbsent', present: 'commonDestinationPresent', mixed: 'commonDestinationMixed', unavailable: 'commonDestinationUnavailable' }[value.destination_state] : 'commonPlanNone';

@@ -81,3 +81,27 @@ test('a retired HLS URL session response cannot be accepted as the common source
   const api = load(() => Promise.resolve(response));
   await assert.rejects(api.session('session_1'), { code: 'request-response-invalid' });
 });
+
+test('saved schemas five and six require complete fixed processing selections', async () => {
+  for (const schema of [5, 6]) {
+    const selection = { requested: 'auto', resolved: 'stitch', boundaries: 'resegment', segment_duration_ms: 2000 };
+    const plan = envelope({ plan_ref: 'plan_1', session_id: 'session_1', plan_id: 'b'.repeat(64), plan_schema_version: schema,
+      required_depth: 'native', outputs: [{ id: schema === 5 ? null : 'hls', format: 'hls', target: 'clear', drms: [], conformance: 'none' }],
+      processing: schema === 5 ? selection : [{ id: 'hls', selection }],
+      destination_state: 'absent', export_url: '/api/common/plans/plan_1/export' });
+    assert.equal((await load(() => Promise.resolve(plan)).plan('plan_1')).plan_schema_version, schema);
+    for (const field of ['requested', 'resolved', 'boundaries', 'segment_duration_ms']) {
+      const changed = structuredClone(plan), item = schema === 5 ? changed.processing : changed.processing[0].selection;
+      item[field] = 'PRIVATE_PROCESSING';
+      await assert.rejects(load(() => Promise.resolve(changed)).plan('plan_1'), { code: 'request-response-invalid' });
+    }
+    const missing = structuredClone(plan); delete missing.processing;
+    await assert.rejects(load(() => Promise.resolve(missing)).plan('plan_1'), { code: 'request-response-invalid' });
+    if (schema === 6) {
+      const duplicate = structuredClone(plan); duplicate.processing.push(duplicate.processing[0]);
+      await assert.rejects(load(() => Promise.resolve(duplicate)).plan('plan_1'), { code: 'request-response-invalid' });
+      const different = structuredClone(plan); different.processing[0].id = 'other';
+      await assert.rejects(load(() => Promise.resolve(different)).plan('plan_1'), { code: 'request-response-invalid' });
+    }
+  }
+});

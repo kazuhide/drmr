@@ -220,6 +220,10 @@ pub(super) fn create_new(path: &Path) -> io::Result<File> {
     open_file(path, true)
 }
 
+pub(super) fn open_existing(path: &Path) -> io::Result<File> {
+    open_file(path, false)
+}
+
 pub(super) fn create_or_truncate(path: &Path) -> io::Result<File> {
     let absolute = std::path::absolute(path)?;
     let parent = absolute.parent().ok_or_else(invalid)?;

@@ -175,7 +175,7 @@ pub fn encrypt_segment(
     key: &Aes128Key,
     iv: &SegmentIv,
 ) -> Result<(), ConversionError> {
-    file_transform(source, destination, key, iv, true)
+    file_transform(source, destination, key, iv, true, None)
 }
 /// Decrypt one resource; invalid length or PKCS#7 padding publishes no plaintext.
 pub fn decrypt_segment(
@@ -184,7 +184,50 @@ pub fn decrypt_segment(
     key: &Aes128Key,
     iv: &SegmentIv,
 ) -> Result<(), ConversionError> {
-    file_transform(source, destination, key, iv, false)
+    file_transform(source, destination, key, iv, false, None)
+}
+pub(super) fn encrypt_segment_with_stop(
+    source: &Path,
+    destination: &Path,
+    key: &Aes128Key,
+    iv: &SegmentIv,
+    stop: &crate::concurrency::Stop,
+) -> Result<(), ConversionError> {
+    file_transform(source, destination, key, iv, true, Some(stop))
+}
+pub(super) fn decrypt_segment_with_stop(
+    source: &Path,
+    destination: &Path,
+    key: &Aes128Key,
+    iv: &SegmentIv,
+    stop: &crate::concurrency::Stop,
+) -> Result<(), ConversionError> {
+    file_transform(source, destination, key, iv, false, Some(stop))
+}
+
+fn cancelled(stop: Option<&crate::concurrency::Stop>) -> Result<(), ConversionError> {
+    if stop.is_some_and(crate::concurrency::Stop::is_set) {
+        return Err(ConversionError("cancelled"));
+    }
+    Ok(())
+}
+
+struct StoppableReader<'a, R> {
+    input: R,
+    stop: Option<&'a crate::concurrency::Stop>,
+    remaining: usize,
+}
+impl<R: Read> Read for StoppableReader<'_, R> {
+    fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+        if self.remaining == 0 {
+            cancelled(self.stop).map_err(std::io::Error::other)?;
+            self.remaining = IO_BUFFER;
+        }
+        let length = bytes.len().min(self.remaining);
+        let count = self.input.read(&mut bytes[..length])?;
+        self.remaining -= count;
+        Ok(count)
+    }
 }
 fn file_transform(
     source: &Path,
@@ -192,11 +235,29 @@ fn file_transform(
     key: &Aes128Key,
     iv: &SegmentIv,
     encrypt: bool,
+    stop: Option<&crate::concurrency::Stop>,
 ) -> Result<(), ConversionError> {
+    cancelled(stop)?;
     let destination = super::destination(destination)?;
     let workspace = super::workspace()?;
     let snapshot = workspace.path().join("source");
-    super::copy_private(source, &snapshot)?;
+    if stop.is_some() {
+        let source = super::files::regular_input(source)?;
+        super::validate_held_input(&source)?;
+        let mut reader = StoppableReader {
+            input: source.take(super::MAX_MEDIA_BYTES + 1),
+            stop,
+            remaining: 0,
+        };
+        let mut output = super::files::create_new(&snapshot)?;
+        let copied = std::io::copy(&mut reader, &mut output);
+        cancelled(stop)?;
+        if copied.map_err(|_| ConversionError("media-copy-failed"))? > super::MAX_MEDIA_BYTES {
+            return Err(ConversionError("media-size-limit"));
+        }
+    } else {
+        super::copy_private(source, &snapshot)?;
+    }
     let candidate = workspace.path().join("candidate");
     let file = super::files::create_new(&candidate)?;
     let mut output = BufWriter::with_capacity(IO_BUFFER, file);
@@ -204,11 +265,18 @@ fn file_transform(
         IO_BUFFER,
         File::open(snapshot).map_err(|_| ConversionError("segment-read-failed"))?,
     );
-    if encrypt {
-        encrypt_stream(&mut input, &mut output, key, iv)?;
+    let mut input = StoppableReader {
+        input: &mut input,
+        stop,
+        remaining: 0,
+    };
+    let transformed = if encrypt {
+        encrypt_stream(&mut input, &mut output, key, iv)
     } else {
-        decrypt_stream(&mut input, &mut output, key, iv)?;
-    }
+        decrypt_stream(&mut input, &mut output, key, iv)
+    };
+    cancelled(stop)?;
+    transformed?;
     output
         .flush()
         .map_err(|_| ConversionError("segment-write-failed"))?;
@@ -217,6 +285,7 @@ fn file_transform(
         .sync_all()
         .map_err(|_| ConversionError("segment-write-failed"))?;
     drop(output);
+    cancelled(stop)?;
     super::publish(&candidate, &destination)
 }
 fn read_block(input: &mut impl Read, block: &mut [u8; 16]) -> Result<usize, ConversionError> {
@@ -307,6 +376,62 @@ mod tests {
         }
     }
     struct FailingWriter;
+    #[test]
+    fn cancelled_resource_work_preserves_an_existing_destination() {
+        let root = super::super::workspace().unwrap();
+        let source = root.path().join("source");
+        let destination = root.path().join("foreign");
+        std::fs::write(&source, b"source bytes").unwrap();
+        std::fs::write(&destination, b"foreign bytes").unwrap();
+        let key = Aes128Key::from_hex("42424242424242424242424242424242").unwrap();
+        let iv = SegmentIv::for_sequence(1);
+        let stop = crate::concurrency::Stop::new();
+        stop.set();
+        assert_eq!(
+            encrypt_segment_with_stop(&source, &destination, &key, &iv, &stop)
+                .unwrap_err()
+                .0,
+            "cancelled"
+        );
+        assert_eq!(
+            decrypt_segment_with_stop(&source, &destination, &key, &iv, &stop)
+                .unwrap_err()
+                .0,
+            "cancelled"
+        );
+        assert_eq!(std::fs::read(&destination).unwrap(), b"foreign bytes");
+        assert_eq!(std::fs::read(&source).unwrap(), b"source bytes");
+    }
+    #[test]
+    fn cancellation_is_checked_within_one_io_chunk() {
+        struct Trip<'a> {
+            bytes: std::io::Cursor<Vec<u8>>,
+            stop: &'a crate::concurrency::Stop,
+        }
+        impl Read for Trip<'_> {
+            fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+                let count = self.bytes.read(bytes)?;
+                if self.bytes.position() >= IO_BUFFER as u64 {
+                    self.stop.set();
+                }
+                Ok(count)
+            }
+        }
+        let stop = crate::concurrency::Stop::new();
+        let input = Trip {
+            bytes: std::io::Cursor::new(vec![1; IO_BUFFER * 2]),
+            stop: &stop,
+        };
+        let mut checked = StoppableReader {
+            input,
+            stop: Some(&stop),
+            remaining: 0,
+        };
+        let mut output = Vec::new();
+        assert!(std::io::copy(&mut checked, &mut output).is_err());
+        assert_eq!(output.len(), IO_BUFFER);
+        assert!(stop.is_set());
+    }
     impl Write for FailingWriter {
         fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
             Err(std::io::Error::other("synthetic failure"))

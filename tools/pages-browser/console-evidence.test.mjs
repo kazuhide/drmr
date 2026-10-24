@@ -46,11 +46,17 @@ test('console plan fixtures preserve legacy minimum decoding and hash the origin
   const bundle = { kind: 'execution-plan', schema_version: 4, plan_id: 'c'.repeat(64), source,
     source_format: 'mp4', output_root: 'result', outputs: [{ id: 'dash', format: 'dash', target: 'clear', drms: [], conformance: 'none' }],
     required_depth: 'decoded' };
-  for (const current of [single, bundle]) {
+  const selection = { requested: 'auto', resolved: 'stitch', boundaries: 'not-applicable', segment_duration_ms: null };
+  const currentSingle = { ...single, schema_version: 5, processing: selection };
+  const currentBundle = { ...bundle, schema_version: 6, outputs: [{ ...bundle.outputs[0], processing: 'auto' }],
+    processing: [{ id: 'dash', selection: { ...selection, boundaries: 'resegment', segment_duration_ms: 2000 } }] };
+  for (const current of [single, bundle, currentSingle, currentBundle]) {
     const before = structuredClone(current), legacy = legacyPlan(current);
     assert.deepEqual(current, before);
-    assert.equal(legacy.schema_version, current.schema_version - 2);
+    assert.equal(legacy.schema_version, current.schema_version % 2 === 1 ? 1 : 2);
     assert.equal(Object.hasOwn(legacy, 'required_depth'), false);
+    assert.equal(Object.hasOwn(legacy, 'processing'), false);
+    if (legacy.outputs) assert.ok(legacy.outputs.every(output => !Object.hasOwn(output, 'processing')));
     assert.equal(planMinimumDepth(legacy), 'decoded');
     assert.equal(planMinimumDepth(current), current.required_depth);
     const { plan_id: ignored, ...identity } = legacy;

@@ -16,12 +16,20 @@ mod aac;
 mod auxiliary;
 pub(in crate::conversion) use aac::AacConfiguration;
 mod crypto;
+mod encrypt;
 mod entry;
 mod fragment;
 mod groups;
 mod init;
 mod progressive;
 mod read;
+mod segment;
+mod write;
+pub(in crate::conversion) use segment::{
+    SegmentEvidence, SegmentInput, SegmentReceipt, SegmentTrackEvidence, SegmentTransformer,
+};
+#[cfg(test)]
+mod segment_tests;
 #[cfg(test)]
 mod test_files;
 #[cfg(test)]
@@ -407,12 +415,14 @@ fn visit_fragments(
     init: &init::Initialization,
     track: &init::Track,
     keys: &InputKeys,
+    metadata: &mut impl FnMut(&Movie, MetadataPart<'_>) -> Result<(), ConversionError>,
     visitor: &mut impl FnMut(&TrackDescriptor, &SampleInfo, &[u8]) -> Result<(), ConversionError>,
 ) -> Result<(), ConversionError> {
     let stop = reader.stop;
     let mut ordinal = 0_u64;
     for range in &layout.moofs {
         let fragment = fragment::parse(reader, range, layout, init)?;
+        metadata(&init.movie, MetadataPart::Fragment(&fragment.bytes))?;
         for part in fragment
             .tracks
             .iter()
@@ -517,10 +527,28 @@ pub(in crate::conversion) fn scan(
     stop: &Stop,
     visitor: &mut impl FnMut(&TrackDescriptor, &SampleInfo, &[u8]) -> Result<(), ConversionError>,
 ) -> Result<Movie, ConversionError> {
+    scan_with_metadata(input, keys, stop, &mut |_, _| Ok(()), visitor)
+}
+
+/// Metadata comes from the same guarded bytes used to interpret and visit samples.
+#[derive(Clone, Copy)]
+pub(in crate::conversion) enum MetadataPart<'a> {
+    Movie(&'a [u8]),
+    Fragment(&'a [u8]),
+}
+
+pub(in crate::conversion) fn scan_with_metadata(
+    input: &Path,
+    keys: &InputKeys,
+    stop: &Stop,
+    metadata: &mut impl FnMut(&Movie, MetadataPart<'_>) -> Result<(), ConversionError>,
+    visitor: &mut impl FnMut(&TrackDescriptor, &SampleInfo, &[u8]) -> Result<(), ConversionError>,
+) -> Result<Movie, ConversionError> {
     let mut reader = read::Reader::open(input, stop, true)?;
     let layout = reader.layout()?;
     let mut init = init::parse(&layout)?;
     catalogue(&mut reader, &layout, &mut init)?;
+    metadata(&init.movie, MetadataPart::Movie(&layout.movie))?;
     if init
         .movie
         .tracks
@@ -538,7 +566,7 @@ pub(in crate::conversion) fn scan(
     }
     for track in &init.tracks {
         if init.movie.fragmented {
-            visit_fragments(&mut reader, &layout, &init, track, keys, visitor)?;
+            visit_fragments(&mut reader, &layout, &init, track, keys, metadata, visitor)?;
         } else {
             visit_progressive(&mut reader, &layout, track, keys, visitor)?;
         }

@@ -16,3 +16,10 @@ tools/build_guide_site.py text eol=lf
 tools/templates/guide.html text eol=lf
 site-content/guide/en.md text eol=lf
 site-content/guide/ja.md text eol=lf
+
+# Keep every text asset in the published payload independent of checkout defaults.
+site/assets/*.css text eol=lf
+site/assets/drmr.svg text eol=lf
+site/assets/fonts/*.txt -text
+crates/drmr-server/static/vendor/fonts/*.txt -text
+crates/drmr-desktop/icons/icon.svg text eol=lf

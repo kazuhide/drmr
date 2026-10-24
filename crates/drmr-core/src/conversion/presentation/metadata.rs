@@ -6,21 +6,21 @@ const BAD: ConversionError = ConversionError("presentation-metadata-mismatch");
 const UNSUPPORTED: ConversionError = ConversionError("presentation-selection-not-representable");
 const DASH_NS: &str = "urn:mpeg:dash:schema:mpd:2011";
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(super) enum Origin {
+pub(in crate::conversion) enum Origin {
     #[default]
     Container,
     Hls,
     Dash,
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(super) struct Metadata {
+pub(in crate::conversion) struct Metadata {
     pub origin: Origin,
     pub audio: Option<Rendition>,
     pub audio_group: Option<String>,
     pub resolution: Option<(u64, u64)>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct Rendition {
+pub(in crate::conversion) struct Rendition {
     pub group: String,
     pub name: Option<String>,
     pub language: String,
@@ -159,17 +159,28 @@ pub(super) fn validate_profile(
         } else {
             backend.profile_stream(&track.media, track.index, key)?
         };
-        if let Some((width, height)) = track.metadata.resolution
-            && (profile["width"].as_u64() != Some(width)
-                || profile["height"].as_u64() != Some(height))
-        {
-            return Err(BAD);
-        }
-        if channels.is_some_and(|expected| {
+        validate_profile_value(&track.metadata, &profile)?;
+    }
+    Ok(())
+}
+pub(in crate::conversion) fn validate_profile_value(
+    metadata: &Metadata,
+    profile: &serde_json::Value,
+) -> Result<(), ConversionError> {
+    if let Some((width, height)) = metadata.resolution
+        && (profile["width"].as_u64() != Some(width) || profile["height"].as_u64() != Some(height))
+    {
+        return Err(BAD);
+    }
+    if metadata
+        .audio
+        .as_ref()
+        .and_then(|audio| audio.channels.as_ref())
+        .is_some_and(|expected| {
             profile["channels"].as_u64().map(|n| n.to_string()).as_ref() != Some(expected)
-        }) {
-            return Err(BAD);
-        }
+        })
+    {
+        return Err(BAD);
     }
     Ok(())
 }
@@ -198,7 +209,10 @@ fn ordinal(uri: &str, count: usize) -> Result<usize, ConversionError> {
         .filter(|n| *n < count)
         .ok_or(BAD)
 }
-fn hls_declaration(a: &Rendition, uri: &str) -> Result<String, ConversionError> {
+pub(in crate::conversion) fn hls_declaration(
+    a: &Rendition,
+    uri: &str,
+) -> Result<String, ConversionError> {
     let name = a.name.as_deref().unwrap_or("Audio");
     let mut declaration = format!(
         "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID={},NAME={}",
@@ -460,7 +474,7 @@ pub(super) fn dash(rep: roxmltree::Node<'_, '_>) -> Result<Metadata, ConversionE
     }
     Ok(result)
 }
-pub(super) fn pair(a: &Metadata, b: &Metadata) -> Result<(), ConversionError> {
+pub(in crate::conversion) fn pair(a: &Metadata, b: &Metadata) -> Result<(), ConversionError> {
     if let Some(source) = &a.audio {
         let target = b.audio.as_ref().ok_or(BAD)?;
         if source.language != target.language
@@ -476,7 +490,11 @@ pub(super) fn pair(a: &Metadata, b: &Metadata) -> Result<(), ConversionError> {
                 && source.autoselect.unwrap_or(false) != target.autoselect.unwrap_or(false))
             || (a.origin == Origin::Hls
                 && b.origin == Origin::Hls
-                && (source.group != target.group || source.channels != target.channels))
+                && (source.group != target.group
+                    || source
+                        .channels
+                        .as_ref()
+                        .is_some_and(|count| target.channels.as_ref() != Some(count))))
         {
             return Err(BAD);
         }
@@ -490,7 +508,7 @@ pub(super) fn pair(a: &Metadata, b: &Metadata) -> Result<(), ConversionError> {
     Ok(())
 }
 
-pub(super) fn read_dash(path: &Path) -> Result<Vec<Metadata>, ConversionError> {
+pub(in crate::conversion) fn read_dash(path: &Path) -> Result<Vec<Metadata>, ConversionError> {
     let bytes = super::super::files::read_manifest(path)?;
     let text = std::str::from_utf8(&bytes).map_err(|_| BAD)?;
     let document = roxmltree::Document::parse(text).map_err(|_| BAD)?;
@@ -524,6 +542,7 @@ pub(super) fn materialize(
     backend: &super::super::backend::Backend,
     keys: &super::InputKeys,
 ) -> Result<(), ConversionError> {
+    materialize_dash_channels(tracks, backend, keys)?;
     if !tracks
         .iter()
         .any(|t| t.report.tracks[0].kind == super::TrackKind::Video)
@@ -538,15 +557,7 @@ pub(super) fn materialize(
     for (index, track) in tracks.iter_mut().enumerate() {
         if track.report.tracks[0].kind == super::TrackKind::Audio && track.metadata.audio.is_none()
         {
-            let profile = backend.profile_stream_keys(
-                &track.media,
-                track.index,
-                if track.source_dictionary {
-                    Some(super::super::keys::ProbeKeys::All(keys))
-                } else {
-                    super::key_for(track, keys).map(super::super::keys::ProbeKeys::One)
-                },
-            )?;
+            let profile = materialization_profile(track, backend, keys)?;
             track.metadata.audio = Some(Rendition {
                 group: "default-audio-group".into(),
                 name: Some(format!("stream_{index}")),
@@ -560,9 +571,73 @@ pub(super) fn materialize(
     Ok(())
 }
 
+fn materialization_profile(
+    track: &Prepared,
+    backend: &super::super::backend::Backend,
+    keys: &super::InputKeys,
+) -> Result<serde_json::Value, ConversionError> {
+    backend.profile_stream_keys(
+        &track.media,
+        track.index,
+        if track.source_dictionary {
+            Some(super::super::keys::ProbeKeys::All(keys))
+        } else {
+            super::key_for(track, keys).map(super::super::keys::ProbeKeys::One)
+        },
+    )
+}
+
+/// Recover a generated mono/stereo declaration from the actual codec after a DASH roundtrip.
+fn materialize_dash_channels(
+    tracks: &mut [Prepared],
+    backend: &super::super::backend::Backend,
+    keys: &super::InputKeys,
+) -> Result<(), ConversionError> {
+    for track in tracks {
+        if track.metadata.origin == Origin::Dash
+            && track
+                .metadata
+                .audio
+                .as_ref()
+                .is_some_and(|audio| audio.channels.is_none())
+        {
+            let profile = materialization_profile(track, backend, keys)?;
+            if let Some(count @ 1..=2) = profile["channels"].as_u64() {
+                track.metadata.audio.as_mut().ok_or(BAD)?.channels = Some(count.to_string());
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unspecified_hls_channels_can_gain_a_validated_count_without_losing_explicit_assertions() {
+        let declared = "TYPE=AUDIO,GROUP-ID=\"audio\",NAME=\"Main\",DEFAULT=YES,AUTOSELECT=YES";
+        let metadata = |suffix: &str| Metadata {
+            origin: Origin::Hls,
+            audio: Some(
+                Rendition::hls(&hls::attributes(&format!("{declared}{suffix}")).unwrap()).unwrap(),
+            ),
+            ..Metadata::default()
+        };
+        let unspecified = metadata("");
+        let stereo = metadata(",CHANNELS=\"2\"");
+        pair(&unspecified, &stereo).unwrap();
+        validate_profile_value(&stereo, &serde_json::json!({"channels":2})).unwrap();
+        assert_eq!(pair(&stereo, &unspecified).unwrap_err(), BAD);
+        assert_eq!(
+            pair(&stereo, &metadata(",CHANNELS=\"1\"")).unwrap_err(),
+            BAD
+        );
+        assert_eq!(
+            validate_profile_value(&stereo, &serde_json::json!({"channels":1})).unwrap_err(),
+            BAD
+        );
+    }
 
     #[test]
     fn generated_hls_omits_undefined_language_and_preserves_named_languages() {

@@ -53,6 +53,19 @@ pub fn create_media_new(path: &Path) -> io::Result<fs::File> {
     }
 }
 
+/// Open existing protected media for an identity-checked update. This never creates
+/// or truncates a file; the caller must compare its held identity and bytes before writing.
+pub(crate) fn open_media_update(path: &Path) -> io::Result<fs::File> {
+    #[cfg(windows)]
+    {
+        windows::open_existing(path)
+    }
+    #[cfg(unix)]
+    {
+        super::files::open_private(path, true, false)
+    }
+}
+
 /// Prepare a private parent and create a strict media file, or validate and
 /// truncate an existing private file. Strict and prepared media parents are
 /// accepted. The media parent is retained while the target is opened. Links and
@@ -149,4 +162,43 @@ fn walk(root: &Path, mut visit: impl FnMut(&Path, bool) -> io::Result<()>) -> io
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Read as _, Write as _};
+
+    #[test]
+    fn existing_media_update_preserves_bytes_and_does_not_create_missing_files() {
+        let owner = crate::native::private_tempdir().unwrap();
+        let root = owner.path().join("media");
+        create_media_dir_all(&root).unwrap();
+        let path = root.join("init.mp4");
+        create_media_new(&path)
+            .unwrap()
+            .write_all(b"original")
+            .unwrap();
+        let identity =
+            crate::native::FileIdentity::read(&std::fs::File::open(&path).unwrap()).unwrap();
+        let mut file = open_media_update(&path).unwrap();
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes).unwrap();
+        assert_eq!(bytes, b"original");
+        assert!(crate::native::FileIdentity::read(&file).unwrap() == identity);
+        drop(file);
+        let absent = root.join("missing.mp4");
+        assert!(open_media_update(&absent).is_err());
+        assert!(!absent.exists());
+        #[cfg(windows)]
+        {
+            let secret = root.join("keys.json");
+            assert!(crate::native::create_private_new(&secret).is_err());
+            assert!(!secret.exists());
+        }
+        let alias = root.join("alias.mp4");
+        std::fs::hard_link(&path, &alias).unwrap();
+        assert!(open_media_update(&alias).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"original");
+    }
 }

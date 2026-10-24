@@ -12,7 +12,7 @@ use crate::{
     jobs::JobError,
     pyutil,
 };
-use drmr_core::conversion::SourceInventory;
+use drmr_core::conversion::{SourceInventory, ValidationDepth, plan::bundle::OutputProcessing};
 use serde_json::{Value, json};
 use std::{sync::Arc, time::Duration};
 
@@ -524,6 +524,7 @@ impl CommonService {
             output_root: destination,
             save_file: self.retained.join("plans").join(format!("{nonce}.json")),
             output_spec_file: self.private.join(nonce).join("output-spec.json"),
+            processing: None,
         });
         intent.input = Some(a.source.clone());
         intent.analysis = Some(a.id.clone());
@@ -551,6 +552,7 @@ impl CommonService {
         let operation = if convert {
             ChildOperation::Convert {
                 plan_file: p.binding.path.clone(),
+                processing: None,
             }
         } else {
             ChildOperation::Verify {
@@ -663,19 +665,11 @@ impl CommonService {
         let projected =
             projection::project(c.operation, c.schema, c.plan_id.as_deref(), &result.payload)?;
         if let Some(plan) = &c.expected_plan
-            && matches!(plan.schema, 2 | 4)
             && projected.kind != "failure"
         {
-            let ids = |v: &Value| -> Result<Vec<Value>> {
-                Ok(v.as_array()
-                    .ok_or_else(unavailable)?
-                    .iter()
-                    .map(|o| o["id"].clone())
-                    .collect())
-            };
-            if ids(&plan.outputs)? != ids(&result.payload["outputs"])? {
-                return Err(Error::new(503, "result-invalid"));
-            }
+            projection::bind_plan(plan, c.operation, self.requested_depth(c)?, &result.payload)?;
+        } else if c.operation == OperationName::Analyze && projected.kind != "failure" {
+            projection::bind_analysis_depth(&result.payload, self.requested_depth(c)?)?;
         }
         let plan = if c.operation == OperationName::Plan && projected.success {
             Some(self.validate_new_plan(c, &result.payload)?)
@@ -694,6 +688,22 @@ impl CommonService {
             payload_version: result.payload["schema_version"].clone(),
         })
     }
+    fn requested_depth(&self, c: &Completion) -> Result<ValidationDepth> {
+        let state = self.lock();
+        let request = &state
+            .sessions
+            .get(&c.session)
+            .ok_or_else(unavailable)?
+            .requests
+            .get(&c.request)
+            .ok_or_else(unavailable)?
+            .request;
+        Ok(if request.runtime.decode {
+            ValidationDepth::Decoded
+        } else {
+            ValidationDepth::Native
+        })
+    }
     fn validate_new_plan(&self, c: &Completion, payload: &Value) -> Result<plans::Plan> {
         let ChildOperation::Plan { save_file, .. } = &c.prepared.operation else {
             return Err(unavailable());
@@ -707,8 +717,51 @@ impl CommonService {
             .origin_analysis
             .as_ref()
             .and_then(|id| self.lock().analyses.get(id).map(|a| a.source_ref.clone()));
-        if payload["plan_id"] != plan.id || !matches!(plan.schema, 2 | 4) {
+        if payload["plan_id"] != plan.id || !matches!(plan.schema, 2 | 4 | 6) {
             return Err(Error::new(503, "result-invalid"));
+        }
+        projection::bind_plan(&plan, c.operation, self.requested_depth(c)?, payload)?;
+        let expected_outputs = {
+            let state = self.lock();
+            let request = &state
+                .sessions
+                .get(&c.session)
+                .ok_or_else(unavailable)?
+                .requests
+                .get(&c.request)
+                .ok_or_else(unavailable)?
+                .request
+                .operation;
+            let Operation::Plan { outputs, .. } = request else {
+                return Err(unavailable());
+            };
+            outputs.clone()
+        };
+        let actual_outputs: Vec<drmr_core::conversion::plan::bundle::BundleOutputIntent> =
+            serde_json::from_value(plan.outputs.clone())
+                .map_err(|_| Error::new(503, "result-invalid"))?;
+        if actual_outputs != expected_outputs {
+            return Err(Error::new(503, "result-invalid"));
+        }
+        // Common jobs set no global mode, so an omitted output mode requests Auto.
+        if plan.schema == 6 {
+            let choices: Vec<OutputProcessing> = serde_json::from_value(
+                plan.processing
+                    .clone()
+                    .ok_or_else(|| Error::new(503, "result-invalid"))?,
+            )
+            .map_err(|_| Error::new(503, "result-invalid"))?;
+            if choices.len() != expected_outputs.len()
+                || choices
+                    .iter()
+                    .zip(&expected_outputs)
+                    .any(|(choice, output)| {
+                        choice.id != output.id
+                            || choice.selection.requested != output.processing.unwrap_or_default()
+                    })
+            {
+                return Err(Error::new(503, "result-invalid"));
+            }
         }
         let analysis = c
             .expected_inventory

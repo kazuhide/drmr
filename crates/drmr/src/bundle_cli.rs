@@ -3,7 +3,7 @@ use crate::convert_cli::{self, ConvertArgs, Progress, VerifyArgs};
 use crate::download_cli::Input;
 use crate::inspect_cli::PlanArgs;
 use drmr_core::conversion::{
-    ConversionError, Converter, VerificationSource,
+    ConversionError, Converter, ProcessingMode, VerificationSource,
     conformance::ManifestValidationTools,
     key_file::{self, BundleOperatorKeys},
     plan::{
@@ -20,7 +20,7 @@ use std::sync::Arc;
 pub(crate) fn error_hint(code: &str) -> Option<&'static str> {
     match code {
         "output-spec-invalid" => Some(
-            "Use a schema-version-1 output list with unique safe IDs and supported format, protection, DRM systems and manifest-check policy.",
+            "Use a version-1 output recipe, or version 2 for per-output processing, with unique safe IDs and supported format, protection, DRM systems and manifest-check policy.",
         ),
         "execution-plan-output-keys-mismatch" => Some(
             "Match schema-version-2 output key entries to the encrypted output IDs; omit clear outputs and unused entries.",
@@ -103,6 +103,11 @@ impl Session {
 
     fn failed(&self, command: &str, error: ConversionError, json: bool) -> ExitCode {
         convert_cli::error(command, error, json, &self.progress, None)
+    }
+
+    fn with_processing(mut self, processing: ProcessingMode) -> Self {
+        self.converter = self.converter.with_processing(processing);
+        self
     }
 
     fn run(
@@ -371,7 +376,7 @@ pub fn save(args: &PlanArgs) -> ExitCode {
         args.decode,
         args.keys_file.as_ref(),
     ) {
-        Ok(session) => session,
+        Ok(session) => session.with_processing(args.processing.unwrap_or_default()),
         Err(code) => return code,
     };
     let outputs = match read_output_spec(
@@ -470,7 +475,7 @@ pub fn convert_direct(args: &ConvertArgs) -> ExitCode {
         Ok(session) => session,
         Err(code) => return code,
     };
-    let outputs = match read_output_spec(
+    let mut outputs = match read_output_spec(
         args.outputs
             .as_deref()
             .expect("multiple-output mode was selected"),
@@ -478,6 +483,11 @@ pub fn convert_direct(args: &ConvertArgs) -> ExitCode {
         Ok(outputs) => outputs,
         Err(error) => return session.failed("convert", error, args.json),
     };
+    if let Some(default) = args.processing {
+        for output in &mut outputs {
+            output.processing.get_or_insert(default);
+        }
+    }
     let validators = tools(&args.hls_validator_bin, &args.dash_validator_bin);
     let output = args.output.as_deref().expect("clap requires the output");
     session.run("convert", args.json, args.measure, |converter| {

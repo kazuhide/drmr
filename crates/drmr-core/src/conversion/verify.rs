@@ -18,6 +18,7 @@ pub(super) struct StreamView<'a> {
     pub(in crate::conversion) metadata: &'a Path,
     pub(in crate::conversion) index: usize,
     pub(in crate::conversion) key: Option<super::keys::ProbeKeys<'a>>,
+    pub(in crate::conversion) clock: Option<super::native::ManifestAacClock>,
 }
 impl<'a> StreamView<'a> {
     pub fn new(input: &'a Path, index: usize, key: Option<&'a ContentKey>) -> Self {
@@ -26,6 +27,7 @@ impl<'a> StreamView<'a> {
             metadata: input,
             index,
             key: key.map(super::keys::ProbeKeys::One),
+            clock: None,
         }
     }
     pub fn with_all_keys(mut self, keys: &'a super::InputKeys) -> Self {
@@ -34,6 +36,10 @@ impl<'a> StreamView<'a> {
     }
     pub fn with_metadata(mut self, metadata: &'a Path) -> Self {
         self.metadata = metadata;
+        self
+    }
+    pub fn with_clock(mut self, clock: Option<super::native::ManifestAacClock>) -> Self {
+        self.clock = clock;
         self
     }
 }

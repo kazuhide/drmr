@@ -14,13 +14,128 @@ use std::{
 fn fixture() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../drmr/tests/fixtures/bbb/clip.mp4")
 }
-fn converter() -> (Converter, Arc<Collector>) {
+pub(super) fn converter() -> (Converter, Arc<Collector>) {
     let events = Arc::new(Collector::default());
     let runner = Arc::new(ToolRunner::new(Arc::new(Secrets::new()), events.clone()));
     (
         Converter::new(runner, "must-not-run-packager", "must-not-run-ffmpeg"),
         events,
     )
+}
+
+pub(super) fn short_audio_transport(root: &Path) -> PathBuf {
+    let encoded = root.join("encoded.ts");
+    let status = std::process::Command::new("ffmpeg")
+        .args(["-v", "error", "-nostdin", "-i"])
+        .arg(fixture())
+        .args([
+            "-map", "0:a:0", "-vn", "-c:a", "aac", "-ar", "44100", "-t", "1.05", "-f", "mpegts",
+        ])
+        .arg(&encoded)
+        .output()
+        .unwrap();
+    assert!(
+        status.status.success(),
+        "short licensed AAC fixture generation failed"
+    );
+    let packaged = std::process::Command::new("packager")
+        .arg(format!(
+            "input={},stream=audio,segment_template={}/part-$Number$.ts,playlist_name=media.m3u8",
+            encoded.display(),
+            root.display()
+        ))
+        .arg("--hls_master_playlist_output")
+        .arg(root.join("master.m3u8"))
+        .args([
+            "--segment_duration",
+            "2",
+            "--transport_stream_timestamp_offset_ms",
+            "0",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        packaged.status.success(),
+        "short AAC transport repackaging failed"
+    );
+    let playlist = std::fs::read_to_string(root.join("media.m3u8")).unwrap();
+    let combined = root.join("combined.ts");
+    let mut file = super::super::files::create_new(&combined).unwrap();
+    for name in playlist
+        .lines()
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+    {
+        use std::io::Write as _;
+        file.write_all(&std::fs::read(root.join(name)).unwrap())
+            .unwrap();
+    }
+    combined
+}
+
+#[test]
+fn repackaged_short_aac_clocks_survive_native_demux_without_media_tools() {
+    let root = super::super::files::Stage::new(None).unwrap();
+    let source = short_audio_transport(root.path());
+    let stop = crate::concurrency::Stop::new();
+    let mut scanner = ts::NativeScanner::new();
+    let mut original = Vec::new();
+    scanner
+        .segment_with(&source, &stop, &mut |_, kind, bytes, pts, dts| {
+            assert_eq!(kind, crate::inspection::TrackKind::Audio);
+            original.push((pts, dts, bytes[7..].to_vec()));
+            Ok(())
+        })
+        .unwrap();
+    let (_, native) = scanner.finish().unwrap();
+    assert_eq!(native.len(), 1);
+    let anchor = native.values().next().unwrap();
+    anchor.validate().unwrap();
+    assert_eq!(anchor.count, 47);
+    let output = root.path().join("demux.mp4");
+    let (converter, _) = converter();
+    converter
+        .backend
+        .demux_transport(
+            &source,
+            crate::inspection::TrackKind::Audio,
+            &output,
+            Some(anchor),
+        )
+        .unwrap();
+    let mut seen = Vec::new();
+    let movie = super::super::native_media::scan(
+        &output,
+        &InputKeys::default(),
+        &stop,
+        &mut |_, info, bytes| {
+            seen.push((info.pts, info.dts, info.duration, bytes.to_vec()));
+            Ok(())
+        },
+    )
+    .unwrap();
+    assert_eq!(movie.tracks.len(), 1);
+    assert_eq!(movie.tracks[0].timescale, 90_000);
+    assert_eq!(seen.len(), original.len());
+    for (index, (pts, dts, duration, payload)) in seen.iter().enumerate() {
+        assert_eq!((*pts, *dts), (original[index].0, original[index].1));
+        assert_eq!(payload, &original[index].2);
+        let expected = original.get(index + 1).map_or(2089, |next| next.0 - pts);
+        assert_eq!(i64::from(*duration), expected);
+    }
+    assert_eq!(
+        converter
+            .backend
+            .native_validate_mp4(&output, 0, None)
+            .unwrap_err()
+            .0,
+        "native-aac-clock-mismatch"
+    );
+    let clock = super::ManifestAacClock::from_transport(anchor).unwrap();
+    assert!(clock.is_some());
+    converter
+        .backend
+        .native_validate_mp4_with_clock(&output, 0, None, clock)
+        .unwrap();
 }
 #[test]
 fn complete_progressive_source_and_original_comparison_need_no_media_tool() {

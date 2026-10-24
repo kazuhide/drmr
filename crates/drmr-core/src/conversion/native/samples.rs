@@ -9,7 +9,7 @@ const OVERFLOW: ConversionError = ConversionError("native-media-clock-overflow")
 const MAX_CANONICAL_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct Ratio {
+pub(in crate::conversion) struct Ratio {
     pub numerator: i128,
     pub denominator: u64,
 }
@@ -74,7 +74,7 @@ impl Ratio {
     }
 }
 
-pub(super) struct SampleEvidence {
+pub(in crate::conversion) struct SampleEvidence {
     pub count: u64,
     pub raw_payload: [u8; 32],
     pub canonical_payload: Option<[u8; 32]>,
@@ -193,6 +193,10 @@ impl Samples {
         self.audio_clock = Some(super::audio_clock::AudioClock::new(
             samples, rate, self.scale,
         )?);
+        Ok(self)
+    }
+    pub(super) fn with_manifest_audio_clock(mut self) -> Result<Self, ConversionError> {
+        self.audio_clock = Some(super::audio_clock::AudioClock::manifested()?);
         Ok(self)
     }
     pub fn with_presentation_offset(mut self, offset: Ratio) -> Self {

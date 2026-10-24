@@ -121,14 +121,208 @@ fn checked_window(
     Ok(window)
 }
 
+fn fragmented_window(
+    movie: &super::media::Media,
+    track: &Track,
+) -> Result<Option<super::super::finite::Window>, ConversionError> {
+    let descriptor = &track.descriptor;
+    let candidate = match descriptor.edits.as_slice() {
+        [] => None,
+        [edit] if edit.media_time < 0 || edit.rate_integer != 1 || edit.rate_fraction != 0 => {
+            return Err(ConversionError("presentation-window-not-supported"));
+        }
+        [edit] if edit.duration == 0 => None,
+        [edit] => {
+            let ticks = u128::from(edit.duration)
+                .checked_mul(u128::from(descriptor.timescale))
+                .ok_or(ConversionError("presentation-window-not-supported"))?;
+            let scale = movie.movie.timescale;
+            if scale == 0 || !ticks.is_multiple_of(u128::from(scale)) {
+                return Err(ConversionError("presentation-window-not-supported"));
+            }
+            Some(super::super::finite::Window {
+                start: u64::try_from(edit.media_time)
+                    .map_err(|_| ConversionError("presentation-window-not-supported"))?,
+                duration: u64::try_from(ticks / u128::from(scale))
+                    .map_err(|_| ConversionError("presentation-window-not-supported"))?,
+                scale: descriptor.timescale,
+                audio: descriptor.kind == crate::inspection::TrackKind::Audio,
+            })
+        }
+        _ => return Err(ConversionError("native-presentation-window-not-supported")),
+    };
+    checked_window(track, movie.movie.fragmented, candidate)
+}
+
+fn admitted_controls(media: &super::media::Media, track: &Track) -> Result<(), ConversionError> {
+    let entry = &track.descriptor.sample_entry_metadata;
+    let audio = track.descriptor.kind == crate::inspection::TrackKind::Audio;
+    if media.movie.rate != 1 << 16
+        || media.movie.volume != 0x100
+        || !matches!(entry.track_flags, 3 | 7)
+        || !(entry.alternate_group == 0 || (audio && entry.alternate_group == 1))
+        || entry.volume != if audio { 0x100 } else { 0 }
+    {
+        return Err(ConversionError("presentation-window-not-supported"));
+    }
+    Ok(())
+}
+
+fn boundaries_equal(a: &super::SegmentedMedia, b: &super::SegmentedMedia) -> bool {
+    a.boundaries.len() == b.boundaries.len()
+        && a.boundaries.iter().zip(&b.boundaries).all(|(a, b)| {
+            a.fragment_count == b.fragment_count
+                && a.tracks.len() == b.tracks.len()
+                && a.tracks.iter().zip(&b.tracks).all(|(a, b)| {
+                    let mut a = a.clone();
+                    let mut b = b.clone();
+                    // Packet content is a separate outcome from the exact
+                    // resource-local clocks, sample grouping and boundaries.
+                    a.payload = [0; 32];
+                    b.payload = [0; 32];
+                    a == b
+                })
+        })
+}
+
+fn compare_tracks(
+    first: &super::media::Media,
+    a: &Track,
+    source_window: Option<super::super::finite::Window>,
+    second: &super::media::Media,
+    b: &Track,
+    result_window: Option<super::super::finite::Window>,
+) -> Result<VerificationReport, ConversionError> {
+    let windows_equal = match (source_window, result_window) {
+        (Some(a), Some(b)) => a.equivalent(b),
+        (None, None) => true,
+        _ => false,
+    };
+    let matrices_equal = if a.descriptor.kind == crate::inspection::TrackKind::Video {
+        super::semantics::display_matrix(
+            &first.movie.matrix,
+            &a.descriptor.sample_entry_metadata.display_matrix,
+        )? == super::semantics::display_matrix(
+            &second.movie.matrix,
+            &b.descriptor.sample_entry_metadata.display_matrix,
+        )?
+    } else {
+        // A movie's coordinate transform does not affect sound. Preserve
+        // the audio track's own raw matrix rather than applying that transform.
+        a.descriptor.sample_entry_metadata.display_matrix
+            == b.descriptor.sample_entry_metadata.display_matrix
+    };
+    let metadata = entry_equal(a, b)?
+        && first.movie.rate == second.movie.rate
+        && first.movie.volume == second.movie.volume
+        && matrices_equal;
+    let payload = a.samples.count == b.samples.count
+        && match (a.samples.canonical_payload, b.samples.canonical_payload) {
+            (Some(x), Some(y)) => x == y,
+            _ => a.samples.raw_payload == b.samples.raw_payload,
+        };
+    let timing = a.samples.count == b.samples.count
+        && a.samples.clocks_equal(&b.samples)
+        && a.samples.durations == b.samples.durations
+        && a.samples.sync_samples == b.samples.sync_samples
+        && a.samples.recovery == b.samples.recovery
+        && a.samples.presented_first_pts == b.samples.presented_first_pts
+        && a.samples.presented_end_pts == b.samples.presented_end_pts
+        && windows_equal;
+    Ok(report(metadata, payload, timing))
+}
+
 impl Backend {
+    pub(in crate::conversion) fn native_verify_audio_projection(
+        &self,
+        source: super::super::verify::StreamView<'_>,
+        result: super::super::verify::StreamView<'_>,
+        expected: super::super::audio_presentation::AudioPresentation,
+    ) -> Result<VerificationReport, ConversionError> {
+        let projection = super::audio_projection::AudioProjection::new(expected)?;
+        let first = self.native_media_projected(
+            source.metadata,
+            source.key,
+            source.clock,
+            Some(&projection),
+        )?;
+        let second = self.native_media_with_clock(result.metadata, result.key, result.clock)?;
+        let a = first
+            .tracks
+            .get(source.index)
+            .ok_or(ConversionError("stream-selector-mismatch"))?;
+        let b = second
+            .tracks
+            .get(result.index)
+            .ok_or(ConversionError("stream-selector-mismatch"))?;
+        let result_window = checked_window(
+            b,
+            second.movie.fragmented,
+            super::super::finite::window(result.metadata, result.index)?,
+        )?;
+        compare_tracks(&first, a, None, &second, b, result_window)
+    }
+    pub(in crate::conversion) fn native_admit_segmented(
+        &self,
+        media: &super::SegmentedMedia,
+    ) -> Result<VerificationReport, ConversionError> {
+        self.check_cancelled()?;
+        if !media.media.movie.fragmented
+            || media.media.tracks.is_empty()
+            || media.boundaries.is_empty()
+        {
+            return Err(ConversionError("native-sample-evidence-incomplete"));
+        }
+        for track in &media.media.tracks {
+            super::mp4_profile(&track.descriptor)?;
+            fragmented_window(&media.media, track)?;
+            admitted_controls(&media.media, track)?;
+        }
+        let mut result = report(true, true, true);
+        result.scope = VerificationScope::SourceAdmission;
+        result.refresh_passed();
+        Ok(result)
+    }
+
+    pub(in crate::conversion) fn native_verify_segmented(
+        &self,
+        source: &super::SegmentedMedia,
+        output: &super::SegmentedMedia,
+    ) -> Result<VerificationReport, ConversionError> {
+        self.check_cancelled()?;
+        let a = &source.media;
+        let b = &output.media;
+        if a.tracks.len() != b.tracks.len() || a.tracks.is_empty() {
+            return Ok(report(false, false, false));
+        }
+        let mut metadata = true;
+        let mut payload = true;
+        let mut timing = boundaries_equal(source, output);
+        for (first, second) in a.tracks.iter().zip(&b.tracks) {
+            let compared = compare_tracks(
+                a,
+                first,
+                fragmented_window(a, first)?,
+                b,
+                second,
+                fragmented_window(b, second)?,
+            )?;
+            metadata &= compared.checks.stream_metadata.is_pass();
+            payload &= compared.checks.packet_payloads_equal
+                && first.samples.raw_payload == second.samples.raw_payload;
+            timing &= compared.checks.packet_timing_equal;
+        }
+        self.check_cancelled()?;
+        Ok(report(metadata, payload, timing))
+    }
+
     pub(in crate::conversion) fn native_verify_views(
         &self,
         source: super::super::verify::StreamView<'_>,
         result: super::super::verify::StreamView<'_>,
     ) -> Result<VerificationReport, ConversionError> {
-        let first = self.native_media(source.metadata, source.key)?;
-        let second = self.native_media(result.metadata, result.key)?;
+        let first = self.native_media_with_clock(source.metadata, source.key, source.clock)?;
+        let second = self.native_media_with_clock(result.metadata, result.key, result.clock)?;
         let a = first
             .tracks
             .get(source.index)
@@ -147,47 +341,15 @@ impl Backend {
             second.movie.fragmented,
             super::super::finite::window(result.metadata, result.index)?,
         )?;
-        let windows_equal = match (source_window, result_window) {
-            (Some(a), Some(b)) => a.equivalent(b),
-            (None, None) => true,
-            _ => false,
-        };
-        let matrices_equal = if a.descriptor.kind == crate::inspection::TrackKind::Video {
-            super::semantics::display_matrix(
-                &first.movie.matrix,
-                &a.descriptor.sample_entry_metadata.display_matrix,
-            )? == super::semantics::display_matrix(
-                &second.movie.matrix,
-                &b.descriptor.sample_entry_metadata.display_matrix,
-            )?
-        } else {
-            // A movie's coordinate transform does not affect sound. Preserve
-            // the audio track's own raw matrix rather than applying that transform.
-            a.descriptor.sample_entry_metadata.display_matrix
-                == b.descriptor.sample_entry_metadata.display_matrix
-        };
-        let metadata = entry_equal(a, b)?
-            && first.movie.rate == second.movie.rate
-            && first.movie.volume == second.movie.volume
-            && matrices_equal;
-        let payload = a.samples.count == b.samples.count
-            && match (a.samples.canonical_payload, b.samples.canonical_payload) {
-                (Some(x), Some(y)) => x == y,
-                _ => a.samples.raw_payload == b.samples.raw_payload,
-            };
-        let timing = a.samples.count == b.samples.count
-            && a.samples.clocks_equal(&b.samples)
-            && a.samples.durations == b.samples.durations
-            && a.samples.sync_samples == b.samples.sync_samples
-            && a.samples.recovery == b.samples.recovery
-            && a.samples.presented_first_pts == b.samples.presented_first_pts
-            && a.samples.presented_end_pts == b.samples.presented_end_pts
-            && windows_equal
-            && super::super::progressive::presentation_windows_equal(
+        let mut result_report =
+            compare_tracks(&first, a, source_window, &second, b, result_window)?;
+        result_report.checks.packet_timing_equal &=
+            super::super::progressive::presentation_windows_equal(
                 source.metadata,
                 result.metadata,
             )?;
-        Ok(report(metadata, payload, timing))
+        result_report.refresh_passed();
+        Ok(result_report)
     }
     pub(in crate::conversion) fn native_validate_mp4(
         &self,
@@ -195,7 +357,19 @@ impl Backend {
         index: usize,
         keys: Option<super::super::keys::ProbeKeys<'_>>,
     ) -> Result<VerificationReport, ConversionError> {
-        let media = self.native_media(input, keys)?;
+        self.native_validate_mp4_with_clock(input, index, keys, None)
+    }
+    pub(in crate::conversion) fn native_validate_mp4_with_clock(
+        &self,
+        input: &Path,
+        index: usize,
+        keys: Option<super::super::keys::ProbeKeys<'_>>,
+        clock: Option<super::ManifestAacClock>,
+    ) -> Result<VerificationReport, ConversionError> {
+        let media = match clock {
+            Some(clock) => self.native_media_with_clock(input, keys, Some(clock))?,
+            None => self.native_media(input, keys)?,
+        };
         let track = media
             .tracks
             .get(index)
@@ -219,6 +393,15 @@ impl Backend {
         source: ts::View<'_>,
         result: ts::View<'_>,
     ) -> Result<VerificationReport, ConversionError> {
+        self.native_verify_transport_with_clock(source, result, None, None)
+    }
+    pub(in crate::conversion) fn native_verify_transport_with_clock(
+        &self,
+        source: ts::View<'_>,
+        result: ts::View<'_>,
+        source_clock: Option<super::ManifestAacClock>,
+        result_clock: Option<super::ManifestAacClock>,
+    ) -> Result<VerificationReport, ConversionError> {
         match (source.transport, result.transport) {
             (false, false) => self.native_verify_views(
                 super::super::verify::StreamView {
@@ -226,12 +409,14 @@ impl Backend {
                     metadata: source.metadata,
                     index: source.index,
                     key: source.probe_keys(),
+                    clock: source_clock,
                 },
                 super::super::verify::StreamView {
                     input: result.input,
                     metadata: result.metadata,
                     index: result.index,
                     key: result.probe_keys(),
+                    clock: result_clock,
                 },
             ),
             (true, true) => {
@@ -268,7 +453,11 @@ impl Backend {
         let original_metadata = original.metadata()?;
         let evidence = original.evidence()?;
         let timing = original.timing()?;
-        let media = self.native_media(result.metadata, result.probe_keys())?;
+        let media = self.native_media_with_clock(
+            result.metadata,
+            result.probe_keys(),
+            super::ManifestAacClock::from_transport(original)?,
+        )?;
         let track = media
             .tracks
             .get(result.index)

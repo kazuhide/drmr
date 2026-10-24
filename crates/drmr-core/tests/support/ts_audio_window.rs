@@ -726,10 +726,253 @@ fn final_partial_aac_presentation_survives_saved_dash_conversion_without_droppin
 }
 
 #[test]
+fn native_partial_aac_dash_keeps_complete_coded_audio_and_exact_declared_end() {
+    native_partial_route(AAC_44100, false, OutputFormat::Dash);
+}
+
+#[test]
+fn native_partial_aac_endpoints_keep_exact_ranges_and_refuse_one_tick_changes() {
+    for profile in [AAC_44100, AAC_48000] {
+        for final_samples in [1, 240, 1023] {
+            for zero_origin in [false, true] {
+                if zero_origin && profile.rate != 48_000 {
+                    continue;
+                }
+                for format in [OutputFormat::Hls, OutputFormat::Dash] {
+                    native_partial_route(
+                        AudioProfile {
+                            final_samples,
+                            ..profile
+                        },
+                        zero_origin,
+                        format,
+                    );
+                }
+            }
+        }
+    }
+}
+
+fn native_window_converter(packager: &str) -> Converter {
+    Converter::new(
+        Arc::new(ToolRunner::new(
+            Arc::new(Secrets::default()),
+            Arc::new(NoSink),
+        )),
+        packager,
+        "must-not-run-ffmpeg",
+    )
+    .with_ffprobe("must-not-run-ffprobe")
+    .with_processing(drmr_core::conversion::ProcessingMode::Stitch)
+}
+
+fn assert_native_window_proof(report: &drmr_core::conversion::VerificationReport) {
+    assert!(report.passed);
+    assert_eq!(
+        report.required_depth,
+        drmr_core::conversion::ValidationDepth::Native
+    );
+    assert_eq!(
+        report.decode_evidence,
+        drmr_core::conversion::DecodeEvidence::not_requested()
+    );
+}
+
+fn native_partial_route(profile: AudioProfile, zero_origin: bool, format: OutputFormat) {
+    use drmr_core::conversion::{VerificationRequest, VerificationSource};
+    let root = drmr_core::native::private_tempdir().unwrap();
+    let source = if zero_origin {
+        zero_origin_audio_source(&root.path().join("zero"))
+    } else {
+        audio_sources_at_rate(root.path(), Some(profile.rate)).0
+    };
+    let packets = shorten_final_declaration(&source, profile);
+    let source_before = common::snapshot_tree(source.parent().unwrap());
+    let original = root.path().join("original.ts");
+    join_resources(&source, &original, false);
+    let media = raw_audio(&original, false, profile);
+    let empty = InputKeys::default();
+    let hls = HlsInputKeys::default();
+    let native = native_window_converter("packager");
+    let output = root.path().join("native-output");
+    let report = native
+        .convert(ConversionRequest {
+            input: &source,
+            output: &output,
+            format,
+            target: TargetProtection::Clear,
+            input_keys: &empty,
+            hls_input_keys: &hls,
+            output_key: None,
+            hls_key_uri: None,
+            hls_output_key: None,
+        })
+        .unwrap();
+    assert_native_window_proof(&report.verification);
+    let fresh = native_window_converter("must-not-run-packager");
+    let verify = || {
+        fresh.verify(VerificationRequest {
+            source: VerificationSource {
+                input: &source,
+                input_keys: &empty,
+                hls_keys: &hls,
+            },
+            output: VerificationSource {
+                input: &result_manifest(&output, format),
+                input_keys: &empty,
+                hls_keys: &hls,
+            },
+        })
+    };
+    let verified = verify().unwrap();
+    assert_native_window_proof(&verified);
+    assert_raw_result(&output, format, profile, &packets, &media);
+    let init = output.join("track-0000/init.mp4");
+    let bytes = std::fs::read(&init).unwrap();
+    for (label, mutated) in edit_mutations(&bytes, profile) {
+        println!(
+            "native-audio-window: rate={} final={} zero={zero_origin} format={} mutation={label}",
+            profile.rate,
+            profile.final_samples,
+            format.as_str()
+        );
+        std::fs::write(&init, mutated).unwrap();
+        let expected = if profile.final_samples == 1023
+            && format == OutputFormat::Dash
+            && label == "one-sample-regular-edit"
+        {
+            // A complete final frame is not this terminal-partial declaration.
+            "audio-presentation-range-not-supported"
+        } else {
+            edit_refusal_code(label, format)
+        };
+        refuse_range(verify(), &[expected]);
+        std::fs::write(&init, &bytes).unwrap();
+        assert!(verify().unwrap().passed, "restored {label}");
+    }
+    assert_eq!(
+        common::snapshot_tree(source.parent().unwrap()),
+        source_before
+    );
+}
+
+#[test]
 fn partial_aac_saved_hls_and_ts_routes_preserve_raw_and_presented_audio_separately() {
     for format in [OutputFormat::Hls, OutputFormat::HlsTs] {
         saved_clear_route(AAC_44100, false, format);
     }
+}
+
+#[test]
+fn native_partial_aac_ts_outputs_bind_original_evidence_and_terminal_presentation() {
+    use drmr_core::conversion::{
+        DecodeEvidence, ProcessingMode, ValidationDepth, VerificationRequest, VerificationSource,
+    };
+    for profile in [AAC_44100, AAC_48000] {
+        let root = drmr_core::native::private_tempdir().unwrap();
+        let (source, _) = audio_sources_at_rate(root.path(), Some(profile.rate));
+        let packets = shorten_final_declaration(&source, profile);
+        let before = common::snapshot_tree(source.parent().unwrap());
+        let original = root.path().join("native-original.ts");
+        join_resources(&source, &original, false);
+        let raw = raw_audio(&original, false, profile);
+        for target in protected_targets(OutputFormat::HlsTs) {
+            let keys = native_partial_keys(target);
+            let command = converter()
+                .with_decode(false)
+                .with_processing(ProcessingMode::Stitch)
+                .with_output_signaling(keys.signaling.clone());
+            let output = root.path().join(format!("native-{}", target.as_str()));
+            let (converted, measurement) = command.measure(|command| {
+                command.convert(ConversionRequest {
+                    input: &source,
+                    output: &output,
+                    format: OutputFormat::HlsTs,
+                    target,
+                    input_keys: &keys.input,
+                    hls_input_keys: &keys.hls_input,
+                    output_key: None,
+                    hls_key_uri: None,
+                    hls_output_key: keys.hls_output.as_ref(),
+                })
+            });
+            let report = converted.unwrap();
+            assert!(report.verification.passed && report.verification.checks.is_pass());
+            assert_eq!(report.verification.required_depth, ValidationDepth::Native);
+            assert_eq!(
+                report.verification.decode_evidence,
+                DecodeEvidence::not_requested()
+            );
+            let measurement = serde_json::to_value(measurement).unwrap();
+            for tool in measurement["tools"].as_array().unwrap() {
+                if tool["tool"] != "packager" {
+                    assert_eq!(tool["calls"], 0);
+                }
+            }
+            let candidate = output.join("master.m3u8");
+            let output_keys = keys.output_hls_verification_keys().unwrap();
+            let checked = command
+                .verify(VerificationRequest {
+                    source: VerificationSource {
+                        input: &source,
+                        input_keys: &keys.input,
+                        hls_keys: &keys.hls_input,
+                    },
+                    output: VerificationSource {
+                        input: &candidate,
+                        input_keys: &keys.input,
+                        hls_keys: &output_keys,
+                    },
+                })
+                .unwrap();
+            assert!(checked.passed && checked.checks.is_pass());
+            assert_eq!(checked.required_depth, ValidationDepth::Native);
+            if target == TargetProtection::HlsSampleAes {
+                command
+                    .verify_output_signaling(&candidate, OutputFormat::HlsTs, target, &keys)
+                    .unwrap();
+                all_checks(
+                    &converter()
+                        .verify(VerificationRequest {
+                            source: VerificationSource {
+                                input: &source,
+                                input_keys: &keys.input,
+                                hls_keys: &keys.hls_input,
+                            },
+                            output: VerificationSource {
+                                input: &candidate,
+                                input_keys: &keys.input,
+                                hls_keys: &output_keys,
+                            },
+                        })
+                        .unwrap(),
+                );
+            }
+            assert_short_hls_presentation(&output, profile);
+            if target == TargetProtection::Clear {
+                assert_raw_result(&output, OutputFormat::HlsTs, profile, &packets, &raw);
+            }
+            assert_eq!(common::snapshot_tree(source.parent().unwrap()), before);
+        }
+    }
+}
+
+fn native_partial_keys(target: TargetProtection) -> drmr_core::conversion::key_file::OperatorKeys {
+    use drmr_core::conversion::{OutputSignaling, key_file::OperatorKeys};
+    let mut keys = OperatorKeys::default();
+    keys.hls_output = material(target).segment;
+    if target == TargetProtection::HlsSampleAes {
+        keys.hls_output = Some(
+            HlsOutputKey::new_with_iv(
+                "skd://public-fixture-native-partial",
+                Aes128Key::from_hex(OUTPUT_KEY).unwrap(),
+                SegmentIv::from_hex(OUTPUT_IV).unwrap(),
+            )
+            .unwrap(),
+        );
+        keys.signaling = Some(OutputSignaling::multi_drm(None, None, true).unwrap());
+    }
+    keys
 }
 
 #[test]

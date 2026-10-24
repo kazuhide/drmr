@@ -215,10 +215,11 @@ fn prepare_operation(
             input_file,
             output_root,
             save_file,
+            processing,
             ..
         } => {
             let output_spec_file = directory.join("output-spec.json");
-            let bytes = serde_json::to_vec(&serde_json::json!({"schema_version":1,
+            let bytes = serde_json::to_vec(&serde_json::json!({"schema_version":2,
                 "outputs":outputs.ok_or_else(unavailable)?}))
             .map_err(|_| unavailable())?;
             if bytes.len() > 65_536 {
@@ -230,6 +231,7 @@ fn prepare_operation(
                 output_root,
                 save_file,
                 output_spec_file,
+                processing,
             }
         }
         ChildOperation::Analyze {
@@ -243,11 +245,18 @@ fn prepare_operation(
                 fetch_policy_file: fetch_policy,
             },
         },
+        ChildOperation::Convert {
+            processing: Some(_),
+            ..
+        } => return Err(Error::new(400, "processing-plan-override-not-supported")),
         ChildOperation::Convert { .. } | ChildOperation::Verify { .. } => {
             let plan_file = directory.join("plan.json");
             write_owned(&plan_file, &plan.ok_or_else(unavailable)?.read()?, copies)?;
             if matches!(operation, ChildOperation::Convert { .. }) {
-                ChildOperation::Convert { plan_file }
+                ChildOperation::Convert {
+                    plan_file,
+                    processing: None,
+                }
             } else {
                 ChildOperation::Verify { plan_file }
             }
@@ -297,6 +306,48 @@ fn copy(
 mod tests {
     use super::*;
     use std::{io::Write as _, os::unix::fs::PermissionsExt};
+
+    #[test]
+    fn child_output_recipe_keeps_per_output_modes_in_schema_two() {
+        let root = native::private_tempdir().unwrap();
+        let directory = root.path().canonicalize().unwrap();
+        let outputs: Vec<drmr_core::conversion::plan::bundle::BundleOutputIntent> =
+            serde_json::from_value(serde_json::json!([
+                {"id":"hls","format":"hls-ts","target":"clear","drms":[],"processing":"segments"},
+                {"id":"dash","format":"dash","target":"clear","drms":[],"processing":"stitch"}
+            ]))
+            .unwrap();
+        let mut copies = Vec::new();
+        let operation = prepare_operation(
+            ChildOperation::Plan {
+                input_file: directory.join("input.m3u8"),
+                output_root: directory.join("output"),
+                save_file: directory.join("plan.json"),
+                output_spec_file: directory.join("unused.json"),
+                processing: None,
+            },
+            &directory,
+            None,
+            Some(&outputs),
+            None,
+            &mut copies,
+        )
+        .unwrap();
+        let ChildOperation::Plan {
+            output_spec_file, ..
+        } = operation
+        else {
+            panic!("plan changed operation")
+        };
+        let recipe =
+            drmr_core::conversion::plan::bundle::read_output_spec(&output_spec_file).unwrap();
+        assert_eq!(recipe, outputs);
+        let bytes = read_private(&BoundPath::capture(&output_spec_file).unwrap(), 65_536).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["schema_version"], 2);
+        assert_eq!(value["outputs"][0]["processing"], "segments");
+        assert_eq!(value["outputs"][1]["processing"], "stitch");
+    }
     #[test]
     fn partial_configuration_remains_owned_through_cleanup_failure_and_recovery() {
         let root = native::private_tempdir().unwrap();
