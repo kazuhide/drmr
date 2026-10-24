@@ -8,7 +8,10 @@ use std::any::Any;
 use std::collections::VecDeque;
 use std::fmt;
 use std::panic::{self, AssertUnwindSafe};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::{
+    Arc, Condvar, Mutex, MutexGuard, PoisonError,
+    atomic::{AtomicBool, Ordering},
+};
 use std::thread::Scope;
 use std::time::{Duration, Instant};
 
@@ -28,7 +31,14 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 /// (`concurrency.Stop`, a `threading.Event`). Clones share the flag.
 #[derive(Clone, Default)]
 pub struct Stop {
-    inner: Arc<(Mutex<bool>, Condvar)>,
+    inner: Arc<StopState>,
+}
+
+#[derive(Default)]
+struct StopState {
+    set: AtomicBool,
+    wait_gate: Mutex<()>,
+    changed: Condvar,
 }
 
 impl fmt::Debug for Stop {
@@ -45,32 +55,41 @@ impl Stop {
 
     /// Set the flag and wake every waiter.
     pub fn set(&self) {
-        let (flag, changed) = &*self.inner;
-        *lock(flag) = true;
-        changed.notify_all();
+        // Serialize with the waiter's predicate check and sleep registration.
+        // Polling readers use only the atomic, while this gate prevents a lost wakeup.
+        let _guard = lock(&self.inner.wait_gate);
+        self.inner.set.store(true, Ordering::Release);
+        self.inner.changed.notify_all();
     }
 
     /// Whether the flag is set.
     pub fn is_set(&self) -> bool {
-        *lock(&self.inner.0)
+        self.inner.set.load(Ordering::Acquire)
     }
 
     /// Block until the flag is set or `timeout` passes (`None`: no limit); returns whether it
     /// is set.
     pub fn wait(&self, timeout: Option<Duration>) -> bool {
-        let (flag, changed) = &*self.inner;
-        let mut set = lock(flag);
+        let mut guard = lock(&self.inner.wait_gate);
         let deadline = timeout.map(|limit| Instant::now() + limit);
-        while !*set {
+        while !self.is_set() {
             match deadline {
-                None => set = changed.wait(set).unwrap_or_else(PoisonError::into_inner),
+                None => {
+                    guard = self
+                        .inner
+                        .changed
+                        .wait(guard)
+                        .unwrap_or_else(PoisonError::into_inner);
+                }
                 Some(deadline) => {
                     let now = Instant::now();
                     if now >= deadline {
                         return false;
                     }
-                    set = changed
-                        .wait_timeout(set, deadline - now)
+                    guard = self
+                        .inner
+                        .changed
+                        .wait_timeout(guard, deadline - now)
                         .unwrap_or_else(PoisonError::into_inner)
                         .0;
                 }
@@ -570,5 +589,96 @@ fn wait_window<T, E>(tasks: &[Task<Result<T, E>>]) {
             .wait_timeout(guard, Duration::from_millis(50))
             .unwrap_or_else(PoisonError::into_inner)
             .0;
+    }
+}
+
+#[cfg(test)]
+mod stop_tests {
+    use super::*;
+    use std::sync::{
+        Barrier,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    #[test]
+    fn zero_timeout_does_not_set_the_flag_and_clones_share_the_signal() {
+        let stop = Stop::new();
+        let clone = stop.clone();
+        assert!(!stop.is_set());
+        assert!(!clone.wait(Some(Duration::ZERO)));
+        assert!(!stop.is_set());
+        clone.set();
+        stop.set();
+        assert!(stop.is_set());
+        assert!(clone.wait(None));
+        assert!(stop.wait(Some(Duration::ZERO)));
+    }
+
+    #[test]
+    fn setting_during_wait_registration_wakes_every_waiter() {
+        const WAITERS: usize = 8;
+        const SETTERS: usize = 3;
+        for _ in 0..32 {
+            let stop = Stop::new();
+            let start = Barrier::new(WAITERS + SETTERS + 1);
+            std::thread::scope(|scope| {
+                let waiters = (0..WAITERS)
+                    .map(|_| {
+                        scope.spawn(|| {
+                            start.wait();
+                            stop.wait(Some(Duration::from_secs(5)))
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                let setters = (0..SETTERS)
+                    .map(|_| {
+                        scope.spawn(|| {
+                            start.wait();
+                            std::thread::yield_now();
+                            stop.set();
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                start.wait();
+                for waiter in waiters {
+                    assert!(waiter.join().unwrap());
+                }
+                for setter in setters {
+                    setter.join().unwrap();
+                }
+            });
+            assert!(stop.is_set());
+        }
+    }
+
+    #[test]
+    fn an_expired_wait_does_not_consume_a_later_signal() {
+        let stop = Stop::new();
+        assert!(!stop.wait(Some(Duration::from_millis(1))));
+        std::thread::scope(|scope| {
+            scope.spawn(|| stop.set());
+            assert!(stop.wait(Some(Duration::from_secs(5))));
+        });
+        assert!(stop.wait(None));
+    }
+
+    #[test]
+    fn observing_the_signal_publishes_writes_before_set() {
+        for _ in 0..32 {
+            let stop = Stop::new();
+            let published = AtomicUsize::new(0);
+            std::thread::scope(|scope| {
+                scope.spawn(|| {
+                    published.store(42, Ordering::Relaxed);
+                    stop.set();
+                });
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while !stop.is_set() {
+                    assert!(Instant::now() < deadline, "the setter did not complete");
+                    std::thread::yield_now();
+                }
+                assert_eq!(published.load(Ordering::Relaxed), 42);
+            });
+        }
     }
 }
