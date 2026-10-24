@@ -57,7 +57,13 @@ fn wrong_keys_and_foreign_destinations_do_not_publish_or_overwrite() {
 
 #[test]
 fn unauthenticated_cipher_keys_need_an_independent_reference_or_optional_decode_evidence() {
-    let fixture = fixture(48_000);
+    let mut fixture = fixture(48_000);
+    // AAC configuration and sample framing do not authenticate encrypted entropy data.
+    // Wrong AVC plaintext can instead trip syntax checks, depending on the source IV.
+    fixture.parts.retain(|(init, _, _)| {
+        crate::inspection::inspect(init).unwrap().tracks[0].kind == TrackKind::Audio
+    });
+    assert_eq!(fixture.parts.len(), 1);
     let input = manifest_fixture(
         &fixture,
         TargetProtection::Cenc,
@@ -89,6 +95,29 @@ fn unauthenticated_cipher_keys_need_an_independent_reference_or_optional_decode_
         crate::conversion::DecodeEvidence::not_requested()
     );
     assert_no_tools(&events);
+    let correct_keys = InputKeys::new(vec![
+        crate::conversion::ContentKey::from_hex(SOURCE_ID, SOURCE_KEY).unwrap(),
+    ])
+    .unwrap();
+    assert!(
+        verify(
+            &converter,
+            VerificationRequest {
+                source: VerificationSource {
+                    input: &input,
+                    input_keys: &correct_keys,
+                    hls_keys: &hls
+                },
+                output: VerificationSource {
+                    input: &output.join("manifest.mpd"),
+                    input_keys: &InputKeys::default(),
+                    hls_keys: &hls
+                },
+            }
+        )
+        .is_err(),
+        "an independently keyed reference must reject the wrong plaintext"
+    );
     let decoded_output = fixture.directory.path().join("wrong-key-decoded");
     // Complete decoding rejects this fixture; it is not a cryptographic key-authentication claim.
     let converter = Converter::new(
