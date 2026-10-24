@@ -280,13 +280,14 @@ fn all_transport_encryptions_preserve_original_boundaries_clocks_and_native_cont
                         .unwrap()
                         .is_clean_for_scope()
                 );
-                assert!(
+                assert_eq!(
                     result
                         .processing
                         .as_ref()
                         .unwrap()
                         .required_tools
-                        .is_empty()
+                        .as_slice(),
+                    []
                 );
                 let result_keys = if target == TargetProtection::Clear {
                     HlsInputKeys::default()
@@ -567,6 +568,112 @@ fn equal_whole_track_content_cannot_hide_changed_resource_membership() {
             },
             output: VerificationSource {
                 input: &output,
+                input_keys: &input_keys,
+                hls_keys: &keys,
+            },
+        },
+    )
+    .unwrap();
+    assert!(!report.passed);
+    assert!(!report.checks.packet_payloads_equal);
+    assert!(!report.checks.packet_timing_equal);
+}
+
+fn merged_prefix_variant(resources: &[(PathBuf, String)], root: &Path, prefix: usize) {
+    files::create_dir(root).unwrap();
+    let mut merged = Vec::new();
+    let mut duration = 0_u128;
+    for (path, text) in &resources[..prefix] {
+        merged.extend_from_slice(&std::fs::read(path).unwrap());
+        duration += manifest_hls::duration(text).unwrap();
+    }
+    std::fs::write(root.join("first.ts"), merged).unwrap();
+    let duration =
+        super::super::super::audio_presentation::seconds(duration, 1_000_000_000_000_000_000)
+            .unwrap();
+    let mut manifest = format!(
+        "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:6\n#EXT-X-PLAYLIST-TYPE:VOD\n#EXTINF:{duration},\nfirst.ts\n"
+    );
+    for (index, (path, duration)) in resources.iter().enumerate().skip(prefix) {
+        let name = format!("part-{index}.ts");
+        std::fs::copy(path, root.join(&name)).unwrap();
+        writeln!(manifest, "#EXTINF:{duration},\n{name}").unwrap();
+    }
+    manifest.push_str("#EXT-X-ENDLIST\n");
+    std::fs::write(root.join("media.m3u8"), manifest).unwrap();
+}
+
+fn variant_master(root: &Path, name: &str, variants: &[&str]) -> PathBuf {
+    let mut manifest = "#EXTM3U\n#EXT-X-VERSION:3\n".to_owned();
+    for variant in variants {
+        writeln!(
+            manifest,
+            "#EXT-X-STREAM-INF:BANDWIDTH=1000000,CODECS=\"avc1.640015\"\n{variant}/media.m3u8"
+        )
+        .unwrap();
+    }
+    let path = root.join(name);
+    std::fs::write(&path, manifest).unwrap();
+    path
+}
+
+#[test]
+fn identical_video_variants_match_complete_boundaries_independently_of_master_order() {
+    let root = crate::native::private_tempdir().unwrap();
+    let original = fixture(&root.path().join("original"), 48_000, true, false, false);
+    let converter = converter();
+    let keys = HlsInputKeys::default();
+    let input_keys = InputKeys::default();
+    let original = load(&converter, &original, &keys);
+    let resources = &original.parts[0].media.resources;
+    assert_eq!(resources.len(), 5);
+    for (name, prefix) in [("two-second", 1), ("four-second", 2), ("six-second", 3)] {
+        merged_prefix_variant(resources, &root.path().join(name), prefix);
+    }
+    let first = variant_master(root.path(), "source.m3u8", &["two-second", "four-second"]);
+    let reversed = variant_master(root.path(), "reversed.m3u8", &["four-second", "two-second"]);
+    let no_exact = variant_master(root.path(), "no-exact.m3u8", &["four-second", "six-second"]);
+    let source = load(&converter, &first, &keys);
+    let output = load(&converter, &reversed, &keys);
+    assert_eq!(source.parts[0].media.resources.len(), 5);
+    assert_eq!(source.parts[1].media.resources.len(), 4);
+    assert_eq!(output.parts[0].media.resources.len(), 4);
+    for (a, b) in source.parts.iter().zip(&output.parts) {
+        let a = a.media.native.values().next().unwrap();
+        let b = b.media.native.values().next().unwrap();
+        assert!(a.evidence().unwrap().payload_equal(&b.evidence().unwrap()));
+        assert!(a.evidence().unwrap().timing_equal(&b.evidence().unwrap()));
+        assert_ne!(a.segment_timings().unwrap(), b.segment_timings().unwrap());
+    }
+    let source_input = VerificationSource {
+        input: &first,
+        input_keys: &input_keys,
+        hls_keys: &keys,
+    };
+    let report = verify(
+        &converter,
+        &source,
+        &output,
+        VerificationRequest {
+            source: source_input,
+            output: VerificationSource {
+                input: &reversed,
+                input_keys: &input_keys,
+                hls_keys: &keys,
+            },
+        },
+    )
+    .unwrap();
+    assert!(report.passed);
+    let wrong = load(&converter, &no_exact, &keys);
+    let report = verify(
+        &converter,
+        &source,
+        &wrong,
+        VerificationRequest {
+            source: source_input,
+            output: VerificationSource {
+                input: &no_exact,
                 input_keys: &input_keys,
                 hls_keys: &keys,
             },

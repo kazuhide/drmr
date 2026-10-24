@@ -208,6 +208,56 @@ fn content_pair(a: &Admitted<'_>, b: &Admitted<'_>) -> Result<bool, ConversionEr
     Ok(true)
 }
 
+fn compare_pair(
+    converter: &Converter,
+    first: &Admitted<'_>,
+    second: &Admitted<'_>,
+) -> Result<VerificationReport, ConversionError> {
+    let mut reports = Vec::new();
+    metadata::pair(
+        &first.part.declaration.metadata,
+        &second.part.declaration.metadata,
+    )?;
+    let declarations = first.part.media.resources.len() == second.part.media.resources.len()
+        && first
+            .part
+            .media
+            .resources
+            .iter()
+            .zip(&second.part.media.resources)
+            .all(|((_, a), (_, b))| {
+                manifest_hls::duration(a).ok() == manifest_hls::duration(b).ok()
+            });
+    for (first_index, kind, original) in &first.tracks {
+        let (second_index, _, result) = second
+            .tracks
+            .iter()
+            .find(|(_, other, _)| other == kind)
+            .ok_or(LAYOUT)?;
+        let mut report = converter.backend.native_verify_transport(
+            view(first, *first_index, original),
+            view(second, *second_index, result),
+        )?;
+        let original_boundaries = original.segment_timings()?;
+        let result_boundaries = result.segment_timings()?;
+        report.checks.packet_payloads_equal &= original_boundaries.len() == result_boundaries.len()
+            && original_boundaries
+                .iter()
+                .zip(&result_boundaries)
+                .all(|(a, b)| a.count == b.count);
+        report.checks.packet_timing_equal &= original_boundaries == result_boundaries
+            && declarations
+            && first.window == second.window;
+        report.refresh_passed();
+        reports.push(report);
+    }
+    Ok(VerificationReport::combine(
+        ValidationDepth::Native,
+        super::super::VerificationScope::Comparison,
+        reports,
+    ))
+}
+
 fn compare(
     converter: &Converter,
     source: &HlsSource,
@@ -225,7 +275,9 @@ fn compare(
     for first in &a {
         converter.backend.check_cancelled()?;
         let mut found = None;
+        let mut failed = None;
         for (index, second) in b.iter().enumerate() {
+            converter.backend.check_cancelled()?;
             if available[index]
                 && content_pair(first, second)?
                 && metadata::pair(
@@ -234,51 +286,22 @@ fn compare(
                 )
                 .is_ok()
             {
-                found = Some(index);
-                break;
+                let proof = compare_pair(converter, first, second)?;
+                if proof.passed {
+                    found = Some((index, proof));
+                    break;
+                }
+                if failed.is_none() {
+                    failed = Some(proof);
+                }
             }
         }
-        let index = found.ok_or(ConversionError("presentation-track-content-mismatch"))?;
+        let Some((index, proof)) = found else {
+            reports.push(failed.ok_or(ConversionError("presentation-track-content-mismatch"))?);
+            break;
+        };
         available[index] = false;
-        let second = &b[index];
-        metadata::pair(
-            &first.part.declaration.metadata,
-            &second.part.declaration.metadata,
-        )?;
-        let declarations = first.part.media.resources.len() == second.part.media.resources.len()
-            && first
-                .part
-                .media
-                .resources
-                .iter()
-                .zip(&second.part.media.resources)
-                .all(|((_, a), (_, b))| {
-                    manifest_hls::duration(a).ok() == manifest_hls::duration(b).ok()
-                });
-        for (first_index, kind, original) in &first.tracks {
-            let (second_index, _, result) = second
-                .tracks
-                .iter()
-                .find(|(_, other, _)| other == kind)
-                .ok_or(LAYOUT)?;
-            let mut report = converter.backend.native_verify_transport(
-                view(first, *first_index, original),
-                view(second, *second_index, result),
-            )?;
-            let original_boundaries = original.segment_timings()?;
-            let result_boundaries = result.segment_timings()?;
-            report.checks.packet_payloads_equal &= original_boundaries.len()
-                == result_boundaries.len()
-                && original_boundaries
-                    .iter()
-                    .zip(&result_boundaries)
-                    .all(|(a, b)| a.count == b.count);
-            report.checks.packet_timing_equal &= original_boundaries == result_boundaries
-                && declarations
-                && first.window == second.window;
-            report.refresh_passed();
-            reports.push(report);
-        }
+        reports.push(proof);
     }
     let native = VerificationReport::combine(
         ValidationDepth::Native,
