@@ -12,7 +12,7 @@ use crate::{
     jobs::JobError,
     pyutil,
 };
-use drmr_core::conversion::SourceInventory;
+use drmr_core::conversion::{SourceInventory, plan::bundle::OutputProcessing};
 use serde_json::{Value, json};
 use std::{sync::Arc, time::Duration};
 
@@ -733,6 +733,26 @@ impl CommonService {
                 .map_err(|_| Error::new(503, "result-invalid"))?;
         if actual_outputs != expected_outputs {
             return Err(Error::new(503, "result-invalid"));
+        }
+        // Common jobs set no global mode, so an omitted output mode requests Auto.
+        if plan.schema == 6 {
+            let choices: Vec<OutputProcessing> = serde_json::from_value(
+                plan.processing
+                    .clone()
+                    .ok_or_else(|| Error::new(503, "result-invalid"))?,
+            )
+            .map_err(|_| Error::new(503, "result-invalid"))?;
+            if choices.len() != expected_outputs.len()
+                || choices
+                    .iter()
+                    .zip(&expected_outputs)
+                    .any(|(choice, output)| {
+                        choice.id != output.id
+                            || choice.selection.requested != output.processing.unwrap_or_default()
+                    })
+            {
+                return Err(Error::new(503, "result-invalid"));
+            }
         }
         let analysis = c
             .expected_inventory
