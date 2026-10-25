@@ -39,7 +39,7 @@ impl<'a> Execution<'a> {
             .runner
             .registered_workload()
             .unwrap_or_default();
-        let contexts = retained::<T>(plan, workload)?;
+        let contexts = retained::<T>(plan, workload, command.backend.validation_depth)?;
         let hardware = Hardware::detect();
         #[cfg(test)]
         let hardware = self.hardware.unwrap_or(hardware);
@@ -47,7 +47,7 @@ impl<'a> Execution<'a> {
             hardware,
             workload,
             command.maximum_workers,
-            command.backend.runner.native_capacity(),
+            command.backend.runner.context_capacity(),
             plan.outputs.len(),
             &contexts,
         )?;
@@ -90,7 +90,11 @@ impl<'a> Execution<'a> {
     }
 }
 
-fn retained<T>(plan: &BundlePlan, workload: Workload) -> Result<Contexts, ConversionError> {
+fn retained<T>(
+    plan: &BundlePlan,
+    workload: Workload,
+    depth: crate::conversion::ValidationDepth,
+) -> Result<Contexts, ConversionError> {
     let bad = ConversionError("resource-budget");
     let tracks = u64::try_from(workload.tracks.max(1)).map_err(|_| bad)?;
     let mut shared = frozen::retained_inventory_bytes(&plan.source)?
@@ -122,6 +126,14 @@ fn retained<T>(plan: &BundlePlan, workload: Workload) -> Result<Contexts, Conver
         ),
         ..workload
     };
+    // Decoded TS canonical probes can reserve the largest stdout capture. Use
+    // that conservative bound for decoded work, including mixed output routes.
+    // Native work never starts those probes and retains its existing estimate.
+    let stdout_bytes = if depth == crate::conversion::ValidationDepth::Decoded {
+        crate::toolrun::MAX_CAPTURE_BYTES
+    } else {
+        crate::toolrun::DEFAULT_STDOUT_BYTES
+    };
     Ok(Contexts {
         shared,
         // Each pipeline can retain prepared source and candidate track contexts.
@@ -129,10 +141,7 @@ fn retained<T>(plan: &BundlePlan, workload: Workload) -> Result<Contexts, Conver
         // Native fMP4 rewrite is the largest fixed native claim. Tool working
         // sets retain the registered dimensions and at least the whole-file window.
         leaf: leaf_workload
-            .estimated_child_bytes(
-                crate::toolrun::DEFAULT_STDOUT_BYTES,
-                crate::toolrun::DEFAULT_STDERR_BYTES,
-            )
+            .estimated_child_bytes(stdout_bytes, crate::toolrun::DEFAULT_STDERR_BYTES)
             .max(NATIVE_LEAF_BYTES),
     })
 }

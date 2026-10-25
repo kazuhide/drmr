@@ -61,6 +61,12 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 impl Limiter {
+    /// Configured ceiling for coordinators that queue a new retained context.
+    /// Leaf work uses `capacity` after all retained state has been deducted.
+    pub(crate) fn configured_capacity(&self) -> (usize, u64) {
+        (self.cpu_threads, self.memory_bytes)
+    }
+
     /// Leaf ceiling after retained contexts, excluding transient child reservations.
     pub(crate) fn capacity(&self) -> (usize, u64) {
         let used = lock(&self.used);
