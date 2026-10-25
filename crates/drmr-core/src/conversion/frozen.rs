@@ -1,4 +1,5 @@
 //! Byte-bound private input graphs for saved conversion intent.
+mod directories;
 mod graph;
 
 use super::{ConversionError, files};
@@ -83,6 +84,7 @@ impl FrozenSource {
         let entrypoint = PathBuf::from(input.file_name().ok_or(INVALID)?);
         let root_identity = directory_identity(&root)?;
         let stage = files::Stage::new(None)?;
+        let mut directories = directories::Directories::new(stage.path())?;
         let mut copied = BTreeMap::new();
         let mut identities = BTreeMap::new();
         let mut total = 0u64;
@@ -98,7 +100,7 @@ impl FrozenSource {
                     .ok_or(LIMIT)?;
                 let (file, identity) = copy_object(
                     &root,
-                    stage.path(),
+                    &mut directories,
                     path,
                     None,
                     MAX_GRAPH_BYTES - total,
@@ -114,6 +116,7 @@ impl FrozenSource {
             }
             Ok(())
         })?;
+        directories.finish(stop)?;
         let mut inventory = SourceInventory {
             schema_version: 1,
             root,
@@ -155,11 +158,12 @@ impl FrozenSource {
         validate(inventory)?;
         let root_identity = directory_identity(&inventory.root)?;
         let stage = files::Stage::new(None)?;
+        let mut directories = directories::Directories::new(stage.path())?;
         let mut identities = BTreeMap::new();
         for file in &inventory.files {
             let (_, identity) = copy_object(
                 &inventory.root,
-                stage.path(),
+                &mut directories,
                 &file.path,
                 Some(file),
                 file.bytes,
@@ -168,6 +172,7 @@ impl FrozenSource {
             )?;
             identities.insert(file.path.clone(), identity);
         }
+        directories.finish(stop)?;
         let mut referenced = std::collections::BTreeSet::new();
         graph::walk(stage.path(), &inventory.entrypoint, stop, |path| {
             if !identities.contains_key(path) {
@@ -484,7 +489,7 @@ fn open_confined(root: &Path, relative_path: &Path) -> Result<File, ConversionEr
 }
 fn copy_object(
     root: &Path,
-    stage: &Path,
+    directories: &mut directories::Directories<'_>,
     relative_path: &Path,
     expected: Option<&SourceFile>,
     remaining: u64,
@@ -501,8 +506,7 @@ fn copy_object(
     if expected.is_some_and(|file| file.bytes != size) {
         return Err(CHANGED);
     }
-    let destination = stage.join(relative_path);
-    files::create_dir(destination.parent().ok_or(INVALID)?)?;
+    let destination = directories.prepare(relative_path)?;
     let mut output = files::create_new(&destination)?;
     let (sha256, bytes) = transfer(&mut input, &mut output, stop, size, &mut |bytes| {
         after_chunk(relative_path, bytes);
