@@ -3,7 +3,8 @@ use super::{
     ConversionError, MediaPath, Path, Prepared, Protection, SourceCompatibilityNote,
     SourceProtection, SourceValidationPurpose, TrackKind, VerificationSource,
     apply_transport_metadata, bind_audio_presentation, hls, hls_media_paths, inspection, key_for,
-    manifested_clock, metadata, native_preparation, prepare_for, prepare_transport,
+    manifested_clock, metadata, native_preparation, prepare_for, prepare_native_hls_transport,
+    prepare_transport, validate_transport_roles,
 };
 
 struct Preparation<'a, 'keys> {
@@ -145,16 +146,19 @@ impl Preparation<'_, '_> {
         let directory = self.stage.join(format!("track-{ordinal:04}"));
         super::super::files::create_dir(&directory)
             .map_err(|_| ConversionError("temporary-workspace-unavailable"))?;
+        if let Some(prepared) = prepare_native_hls_transport(
+            input,
+            media,
+            &directory,
+            backend,
+            normalize,
+            self.renditions,
+        )? {
+            return Ok(prepared);
+        }
         let localized = hls::localize(&media.path, &directory, input.hls_keys, backend)?;
         if let Some(admission) = &localized.transport {
-            media.validate_audio_variant(admission.tracks.iter().map(|track| track.kind))?;
-            if (self.renditions != 1 && admission.tracks.len() != 1)
-                || media.role.is_some_and(|kind| {
-                    admission.tracks.len() != 1 || admission.tracks[0].kind != kind
-                })
-            {
-                return Err(ConversionError("ts-presentation-layout-not-supported"));
-            }
+            validate_transport_roles(media, admission, self.renditions)?;
             let mut prepared = if backend.validation_depth == super::super::ValidationDepth::Native
                 && !normalize
             {

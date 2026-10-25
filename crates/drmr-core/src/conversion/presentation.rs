@@ -1803,10 +1803,82 @@ fn prepare_hls_presentation(
 ) -> Result<Vec<Prepared>, ConversionError> {
     hls_preparation::prepare(input, stage, backend, maximum_workers, purpose, normalize)
 }
+fn prepare_native_hls_transport(
+    input: &VerificationSource<'_>,
+    media: &MediaPath,
+    directory: &Path,
+    backend: &super::backend::Backend,
+    normalize: bool,
+    renditions: usize,
+) -> Result<Option<Vec<Prepared>>, ConversionError> {
+    if backend.validation_depth != super::ValidationDepth::Native || normalize {
+        return Ok(None);
+    }
+    let Some(localized) =
+        hls::localize_native_transport(&media.path, directory, input.hls_keys, backend)?
+    else {
+        return Ok(None);
+    };
+    let admission = localized
+        .transport
+        .as_ref()
+        .ok_or(ConversionError("ts-original-evidence-required"))?;
+    validate_transport_roles(media, admission, renditions)?;
+    let mut prepared = native_preparation::transport_segments(&localized, admission, backend)?;
+    apply_transport_metadata_values(
+        &mut prepared,
+        media,
+        transport_protection(localized.sample_transport, localized.report.protection),
+        localized.empty_cue_pair,
+        backend,
+        input.input_keys,
+    )?;
+    Ok(Some(prepared))
+}
+fn validate_transport_roles(
+    media: &MediaPath,
+    admission: &super::ts::Admission,
+    renditions: usize,
+) -> Result<(), ConversionError> {
+    media.validate_audio_variant(admission.tracks.iter().map(|track| track.kind))?;
+    if (renditions != 1 && admission.tracks.len() != 1)
+        || media
+            .role
+            .is_some_and(|kind| admission.tracks.len() != 1 || admission.tracks[0].kind != kind)
+    {
+        return Err(ConversionError("ts-presentation-layout-not-supported"));
+    }
+    Ok(())
+}
+fn transport_protection(sample: bool, declared: Protection) -> SourceProtection {
+    match (sample, declared) {
+        (true, _) => SourceProtection::HlsSampleAes,
+        (_, Protection::HlsAes128) => SourceProtection::HlsAes128,
+        (_, Protection::Mixed) => SourceProtection::Mixed,
+        _ => SourceProtection::Clear,
+    }
+}
 fn apply_transport_metadata(
     prepared: &mut [Prepared],
     media: &MediaPath,
     localized: &hls::Localized,
+    backend: &super::backend::Backend,
+    keys: &InputKeys,
+) -> Result<(), ConversionError> {
+    apply_transport_metadata_values(
+        prepared,
+        media,
+        transport_protection(localized.sample_transport, localized.report.protection),
+        localized.empty_cue_pair,
+        backend,
+        keys,
+    )
+}
+fn apply_transport_metadata_values(
+    prepared: &mut [Prepared],
+    media: &MediaPath,
+    protection: SourceProtection,
+    empty_cue_pair: bool,
     backend: &super::backend::Backend,
     keys: &InputKeys,
 ) -> Result<(), ConversionError> {
@@ -1816,17 +1888,12 @@ fn apply_transport_metadata(
         if track.report.tracks[0].kind == TrackKind::Audio {
             track.metadata.resolution = None;
         }
-        if localized.empty_cue_pair {
+        if empty_cue_pair {
             track
                 .compatibility
                 .push(SourceCompatibilityNote::HlsEmptyCuePair);
         }
-        track.outer_protection = match (localized.sample_transport, localized.report.protection) {
-            (true, _) => SourceProtection::HlsSampleAes,
-            (_, Protection::HlsAes128) => SourceProtection::HlsAes128,
-            (_, Protection::Mixed) => SourceProtection::Mixed,
-            _ => SourceProtection::Clear,
-        };
+        track.outer_protection = protection;
         metadata::validate_profile(track, backend, key_for(track, keys))?;
     }
     Ok(())
