@@ -7,6 +7,10 @@ for installation, stable interfaces and versioning.
 
 ### Changed
 
+- Select processor acceleration for AES encryption and media SHA-256 checksums
+  at runtime, with a software fallback on other supported processors. Keep
+  complete source, sample, timing and output checks at the selected verification
+  depth.
 - Write qualified encrypted progressive MP4 to clear MP4 in Rust, preserving
   every encoded sample, timestamp and playback edit. Native analysis, planning,
   conversion and verification need no FFmpeg or ffprobe; those tools are used
