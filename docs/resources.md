@@ -1,5 +1,8 @@
 # Resource limits and measurements
 
+See [analysis performance](performance.md) for the measured implementation history,
+source revisions and worker comparisons.
+
 `--max-workers` is an upper bound. The subprocess backend can choose fewer workers when
 the media or available memory makes that safer. It also shares subprocess reservations
 between track, segment, and source-probe pools in the same process.

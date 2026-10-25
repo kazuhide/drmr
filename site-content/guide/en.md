@@ -914,7 +914,7 @@ rotating-order rounds, separate from conversion time. Our media tests were pause
 other host processes were not isolated. See the linked resource guide for the
 separate allocation and process-memory observations.
 
-See [resources and measurements](https://github.com/kazuhide/drmr/blob/main/docs/resources.md).
+See [performance history](https://github.com/kazuhide/drmr/blob/main/docs/performance.md) and [resources and measurements](https://github.com/kazuhide/drmr/blob/main/docs/resources.md).
 
 # 11. Docker with media tools
 
