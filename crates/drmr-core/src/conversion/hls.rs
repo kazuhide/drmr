@@ -1419,7 +1419,7 @@ mod resource_tests {
             assert_eq!(view.native.len(), joined.native.len());
             for (pid, native) in view.native {
                 let previous = &joined.native[&pid];
-                assert!(native.config == previous.config);
+                assert_eq!(native.config, previous.config);
                 assert_eq!(native.metadata().unwrap(), previous.metadata().unwrap());
                 assert_eq!(native.evidence().unwrap(), previous.evidence().unwrap());
                 assert_eq!(native.timing().unwrap(), previous.timing().unwrap());

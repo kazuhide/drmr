@@ -283,7 +283,7 @@ mod copied_segments {
         let (new_admission, new) = new.finish().unwrap();
         assert!(old_admission == new_admission);
         assert!(old[&256].same_as(&new[&256]));
-        assert!(old[&256].config == new[&256].config);
+        assert_eq!(old[&256].config, new[&256].config);
     }
 
     #[test]
@@ -329,7 +329,7 @@ mod copied_segments {
             );
             for (pid, anchor) in old {
                 assert!(anchor.same_as(&new[&pid]));
-                assert!(anchor.config == new[&pid].config);
+                assert_eq!(anchor.config, new[&pid].config);
                 assert_eq!(anchor.count, new[&pid].count);
                 assert_eq!(anchor.metadata().unwrap(), new[&pid].metadata().unwrap());
                 assert_eq!(anchor.timing().unwrap(), new[&pid].timing().unwrap());
