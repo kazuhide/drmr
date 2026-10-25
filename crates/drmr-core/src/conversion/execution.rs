@@ -4,6 +4,59 @@ use crate::concurrency::{Pool, Unit, UnitError, run_ordered};
 use crate::resources::{Budget, Hardware, Workload};
 use std::path::Path;
 
+fn resource_budget(
+    hardware: Hardware,
+    workload: Workload,
+    resources: usize,
+    maximum: Option<usize>,
+) -> Result<Budget, ConversionError> {
+    let mut budget = Budget::choose(hardware, workload, maximum)
+        .map_err(|_| ConversionError("resource-budget"))?;
+    budget.workers = budget.workers.min(resources.max(1));
+    Ok(budget)
+}
+
+fn retained_bytes<T>(units: usize, metadata: u64) -> Result<u64, ConversionError> {
+    let bad = ConversionError("resource-budget");
+    // A growing result Vec can retain twice its length. Each pending task also
+    // owns queue/future/callback state; the bounded window caps that charge.
+    let results = units
+        .checked_mul(std::mem::size_of::<T>())
+        .and_then(|bytes| bytes.checked_mul(2))
+        .ok_or(bad)?;
+    let pending = units
+        .min(crate::concurrency::MAX_PENDING_TASKS)
+        .checked_mul(8 * 1024)
+        .ok_or(bad)?;
+    metadata
+        .checked_add(u64::try_from(results).map_err(|_| bad)?)
+        .and_then(|bytes| bytes.checked_add(u64::try_from(pending).ok()?))
+        .ok_or(bad)
+}
+
+fn scheduling_budget<T>(
+    hardware: Hardware,
+    workload: Workload,
+    units: usize,
+    metadata: u64,
+    maximum: Option<usize>,
+    capacity: (usize, u64),
+) -> Result<Budget, ConversionError> {
+    let mut budget = resource_budget(hardware, workload, units, maximum)?;
+    budget.cpu_tokens = budget.cpu_tokens.min(capacity.0);
+    budget.memory_tokens_bytes = budget
+        .memory_tokens_bytes
+        .min(capacity.1)
+        .saturating_sub(retained_bytes::<T>(units, metadata)?);
+    let memory_workers = usize::try_from(budget.memory_tokens_bytes / budget.estimated_child_bytes)
+        .unwrap_or(usize::MAX);
+    budget.workers = budget.workers.min(budget.cpu_tokens).min(memory_workers);
+    if budget.workers == 0 {
+        return Err(ConversionError("resource-budget"));
+    }
+    Ok(budget)
+}
+
 impl UnitError for ConversionError {
     fn cancelled() -> Self {
         Self("cancelled")
@@ -26,29 +79,46 @@ impl Converter {
         tracks: usize,
         unit: impl Fn(usize) -> Result<T, ConversionError> + Sync,
     ) -> Result<Vec<T>, ConversionError> {
+        self.run_units(tracks, tracks, 0, unit)
+    }
+
+    /// Unit count controls queueing, while only actual retained tracks are charged
+    /// as track contexts. Caller-owned resource/result payloads have a byte charge.
+    pub(super) fn run_units<T: Send>(
+        &self,
+        units: usize,
+        retained_tracks: usize,
+        metadata_bytes: u64,
+        unit: impl Fn(usize) -> Result<T, ConversionError> + Sync,
+    ) -> Result<Vec<T>, ConversionError> {
         self.backend.check_cancelled()?;
-        if tracks == 0 {
+        if units == 0 {
             return Ok(Vec::new());
         }
         let known = self.backend.runner.registered_workload();
         let mut workload = known.unwrap_or_default();
-        workload.tracks = workload.tracks.max(tracks);
+        workload.tracks = workload.tracks.max(retained_tracks);
         if known.is_some() {
             self.backend.runner.register_workload(workload);
         }
-        let mut budget = Budget::choose(Hardware::detect(), workload, self.maximum_workers)
-            .map_err(|_| ConversionError("resource-budget"))?;
-        budget.workers = budget.workers.min(tracks);
+        let budget = scheduling_budget::<T>(
+            Hardware::detect(),
+            workload,
+            units,
+            metadata_bytes,
+            self.maximum_workers,
+            self.backend.runner.native_capacity(),
+        )?;
         self.backend.runner.note_resource_budget(&budget);
         let execute = |ordinal| {
             let result = unit(ordinal);
             if result.is_ok() {
-                self.backend.completed_work_unit(ordinal, tracks);
+                self.backend.completed_work_unit(ordinal, units);
             }
             result
         };
         if budget.workers == 1 {
-            return (0..tracks)
+            return (0..units)
                 .map(|ordinal| {
                     self.backend.check_cancelled()?;
                     execute(ordinal)
@@ -57,7 +127,7 @@ impl Converter {
         }
         std::thread::scope(|scope| {
             let pool = Pool::new(scope, budget.workers);
-            let units = (0..tracks).map(|ordinal| {
+            let units = (0..units).map(|ordinal| {
                 let unit = &execute;
                 Box::new(move || {
                     self.backend.check_cancelled()?;
@@ -104,6 +174,88 @@ fn profile_workload(profile: &serde_json::Value, size: u64) -> Workload {
 mod tests {
     use super::*;
     use crate::resources::MemorySource;
+    use std::path::PathBuf;
+
+    #[test]
+    fn two_hundred_resources_do_not_become_two_hundred_resident_tracks() {
+        let hardware = Hardware::from_observations(8, Some(2 * 1024 * 1024 * 1024), None);
+        let workload = Workload {
+            max_pixels: Some(1920 * 1080),
+            input_buffer_bytes: Some(64 * 1024),
+            tracks: 1,
+        };
+        for maximum in [Some(1), Some(2), Some(4), None] {
+            let short = resource_budget(hardware, workload, 5, maximum).unwrap();
+            let long = resource_budget(hardware, workload, 200, maximum).unwrap();
+            assert_eq!(short.memory_tokens_bytes, long.memory_tokens_bytes);
+            assert!(long.workers > 0 && long.workers <= maximum.unwrap_or(32));
+        }
+    }
+
+    #[test]
+    fn resource_results_and_pending_state_still_reduce_available_memory() {
+        let hardware = Hardware::from_observations(8, Some(2 * 1024 * 1024 * 1024), None);
+        let workload = Workload {
+            max_pixels: Some(1920 * 1080),
+            input_buffer_bytes: Some(64 * 1024),
+            tracks: 1,
+        };
+        for units in [5, 200, 2000] {
+            let base = resource_budget(hardware, workload, units, Some(4)).unwrap();
+            let budget = scheduling_budget::<PathBuf>(
+                hardware,
+                workload,
+                units,
+                4096,
+                Some(4),
+                (4, u64::MAX),
+            )
+            .unwrap();
+            assert_eq!(
+                base.memory_tokens_bytes - budget.memory_tokens_bytes,
+                retained_bytes::<PathBuf>(units, 4096).unwrap()
+            );
+            assert!(budget.workers > 0 && budget.workers <= 4);
+        }
+        assert!(retained_bytes::<u64>(usize::MAX, 0).is_err());
+        assert!(retained_bytes::<u8>(1, u64::MAX).is_err());
+        assert!(
+            scheduling_budget::<u64>(hardware, workload, 200, u64::MAX, Some(1), (1, u64::MAX))
+                .is_err()
+        );
+        assert!(scheduling_budget::<u64>(hardware, workload, 200, 0, Some(1), (1, 1)).is_err());
+    }
+
+    #[test]
+    fn resource_scheduling_never_registers_its_unit_count_as_tracks() {
+        let converter = converter(crate::concurrency::Stop::new());
+        converter.backend.runner.register_workload(Workload {
+            max_pixels: Some(0),
+            input_buffer_bytes: Some(64 * 1024),
+            tracks: 1,
+        });
+        let results = converter.run_units(200, 1, 1024, Ok).unwrap();
+        assert_eq!(results, (0..200).collect::<Vec<_>>());
+        assert_eq!(
+            converter
+                .backend
+                .runner
+                .registered_workload()
+                .unwrap()
+                .tracks,
+            1
+        );
+        converter.run_tracks(2, |_| Ok(())).unwrap();
+        assert_eq!(
+            converter
+                .backend
+                .runner
+                .registered_workload()
+                .unwrap()
+                .tracks,
+            2
+        );
+    }
     fn converter(stop: crate::concurrency::Stop) -> Converter {
         Converter::new(
             std::sync::Arc::new(crate::toolrun::ToolRunner::new(
