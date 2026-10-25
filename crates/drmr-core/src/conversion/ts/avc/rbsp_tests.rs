@@ -134,6 +134,20 @@ fn dense_escapes_reset_input_zeros_and_still_validate_the_tail() {
 }
 
 #[test]
+fn sparse_and_adjacent_escape_runs_match_the_scalar_reference() {
+    for gap in 0..=40 {
+        let mut nal = vec![0x65, 0, 0, 3, 0, 0x55];
+        nal.resize(nal.len() + gap, 0x55);
+        nal.extend_from_slice(&[0, 0, 3, 1, 0x55, 0, 0, 3, 0, 0, 3, 3, 0x55, 0, 0]);
+        assert_eq!(
+            rbsp(&nal, 5).map(|body| body.to_vec()),
+            scalar_rbsp(&nal, 5),
+            "gap: {gap}"
+        );
+    }
+}
+
+#[test]
 fn late_invalid_escapes_fail_even_after_an_owned_prefix_was_created() {
     for escaped in [false, true] {
         for boundary in [15, 16, 17, 31, 32, 33, 63, 64, 65, 65_535, 65_536, 65_537] {
