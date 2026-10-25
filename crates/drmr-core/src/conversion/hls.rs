@@ -44,8 +44,20 @@ struct Completed {
     combined: Option<PathBuf>,
     segmented: Segmented,
 }
+#[derive(Clone, Copy)]
+enum Localization {
+    Joined,
+    Segments,
+    NativeTransport,
+}
+impl Localization {
+    fn joined(self) -> bool {
+        matches!(self, Self::Joined)
+    }
+}
 struct Playlist {
     combined: Option<File>,
+    localization: Localization,
     initialization: Option<PathBuf>,
     media_resources: Vec<(PathBuf, String)>,
     reference: String,
@@ -355,10 +367,11 @@ impl Playlist {
             }
         );
         let copied = stage.join(&name);
-        if self.combined.is_some() {
-            super::copy_private(&original, &copied)?;
-        } else {
-            snapshot_segment(&original, &copied, &self.stop)?;
+        match self.localization {
+            Localization::Joined | Localization::NativeTransport => {
+                super::copy_private(&original, &copied)?;
+            }
+            Localization::Segments => snapshot_segment(&original, &copied, &self.stop)?,
         }
         let snapshot =
             File::open(&copied).map_err(|_| ConversionError("hls-resource-unreadable"))?;
@@ -750,7 +763,7 @@ pub(super) fn localize(
     let Completed {
         combined,
         segmented,
-    } = localize_with(path, stage, keys, backend, true)?;
+    } = localize_with(path, stage, keys, backend, Localization::Joined)?;
     let transport_segments = if segmented.transport.is_some() {
         segmented.resources
     } else {
@@ -775,7 +788,36 @@ pub(super) fn localize_segments(
     keys: &HlsInputKeys,
     backend: &super::backend::Backend,
 ) -> Result<Segmented, ConversionError> {
-    Ok(localize_with(path, stage, keys, backend, false)?.segmented)
+    Ok(localize_with(path, stage, keys, backend, Localization::Segments)?.segmented)
+}
+
+/// Native transport checks use all retained resources and their original boundaries.
+/// Normalization, complete decoding and fragmented MP4 still use joined media.
+pub(super) fn localize_native_transport(
+    path: &Path,
+    stage: &Path,
+    keys: &HlsInputKeys,
+    backend: &super::backend::Backend,
+) -> Result<Option<Segmented>, ConversionError> {
+    backend.check_cancelled()?;
+    if backend.validation_depth != super::ValidationDepth::Native {
+        return Ok(None);
+    }
+    let bytes = super::files::read_manifest(path)
+        .map_err(|_| ConversionError("hls-manifest-unreadable-or-too-large"))?;
+    let text = std::str::from_utf8(&bytes).map_err(|_| ConversionError("hls-invalid-utf8"))?;
+    if text
+        .trim_start_matches('\u{feff}')
+        .lines()
+        .any(|line| line.trim().split(':').next() == Some("#EXT-X-MAP"))
+    {
+        return Ok(None);
+    }
+    let completed = localize_with(path, stage, keys, backend, Localization::NativeTransport)?;
+    if completed.segmented.transport.is_none() {
+        return Err(ConversionError("ts-original-evidence-required"));
+    }
+    Ok(Some(completed.segmented))
 }
 
 fn localize_with(
@@ -783,9 +825,9 @@ fn localize_with(
     stage: &Path,
     keys: &HlsInputKeys,
     backend: &super::backend::Backend,
-    join: bool,
+    localization: Localization,
 ) -> Result<Completed, ConversionError> {
-    if !join {
+    if !localization.joined() {
         backend.check_cancelled()?;
     }
     let metadata = fs::symlink_metadata(path).map_err(|_| ConversionError("input-unreadable"))?;
@@ -810,9 +852,10 @@ fn localize_with(
     if lines.next() != Some("#EXTM3U") {
         return Err(ConversionError("hls-invalid-header"));
     }
-    let combined = join.then(|| stage.join("combined.mp4"));
+    let combined = localization.joined().then(|| stage.join("combined.mp4"));
     let playlist = Playlist {
         combined: combined.as_deref().map(private_new).transpose()?,
+        localization,
         initialization: None,
         media_resources: Vec::new(),
         reference: "#EXTM3U\n#EXT-X-VERSION:7\n".into(),
@@ -1236,6 +1279,95 @@ mod resource_tests {
     }
 
     #[test]
+    fn native_transport_view_preserves_resources_and_evidence_without_joining() {
+        for encrypted in [false, true] {
+            let root = super::super::files::Stage::new(None).unwrap();
+            let clear_dir = root.path().join("clear");
+            let clear = clear_fixture(&clear_dir, true);
+            let (source, keys) = if encrypted {
+                let output = root.path().join("encrypted");
+                super::super::files::create_dir(&output).unwrap();
+                let key = HlsOutputKey::new(
+                    "https://operator.invalid/fixture",
+                    Aes128Key::from_hex("101112131415161718191a1b1c1d1e1f").unwrap(),
+                )
+                .unwrap();
+                encrypt_media(&clear_dir, &output, &key).unwrap();
+                (
+                    output.join("media.m3u8"),
+                    HlsInputKeys::new(vec![(
+                        "https://operator.invalid/fixture".into(),
+                        Aes128Key::from_hex("101112131415161718191a1b1c1d1e1f").unwrap(),
+                    )])
+                    .unwrap(),
+                )
+            } else {
+                (clear, HlsInputKeys::default())
+            };
+            let joined_dir = root.path().join("joined");
+            let view_dir = root.path().join("view");
+            for directory in [&joined_dir, &view_dir] {
+                super::super::files::create_dir(directory).unwrap();
+            }
+            let backend = no_tool_backend();
+            let joined = localize(&source, &joined_dir, &keys, &backend).unwrap();
+            let view = localize_native_transport(&source, &view_dir, &keys, &backend)
+                .unwrap()
+                .unwrap();
+            assert!(joined.combined.is_file());
+            assert!(!view_dir.join("combined.mp4").exists());
+            assert!(!view_dir.join("combined.ts").exists());
+            assert!(view.reference.is_file());
+            assert!(view.transport.is_some());
+            assert_eq!(view.resources.len(), joined.transport_segments.len());
+            assert_eq!(view.report, joined.report);
+            assert_eq!(view.sample_transport, joined.sample_transport);
+            for ((path, duration), (old_path, old_duration)) in
+                view.resources.iter().zip(&joined.transport_segments)
+            {
+                assert_eq!(fs::read(path).unwrap(), fs::read(old_path).unwrap());
+                assert_eq!(duration, old_duration);
+            }
+            assert_eq!(view.native.len(), joined.native.len());
+            for (pid, native) in view.native {
+                let previous = &joined.native[&pid];
+                assert!(native.config == previous.config);
+                assert_eq!(native.metadata().unwrap(), previous.metadata().unwrap());
+                assert_eq!(native.evidence().unwrap(), previous.evidence().unwrap());
+                assert_eq!(native.timing().unwrap(), previous.timing().unwrap());
+                assert_eq!(
+                    native.segment_timings().unwrap(),
+                    previous.segment_timings().unwrap()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn native_transport_view_keeps_fragmented_and_decoded_inputs_on_the_joined_path() {
+        let root = super::super::files::Stage::new(None).unwrap();
+        let source = clear_fixture(&root.path().join("source"), false);
+        let directory = root.path().join("view");
+        super::super::files::create_dir(&directory).unwrap();
+        let backend = no_tool_backend();
+        assert!(
+            localize_native_transport(&source, &directory, &HlsInputKeys::default(), &backend)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(fs::read_dir(&directory).unwrap().count(), 0);
+        let transport = clear_fixture(&root.path().join("transport"), true);
+        let mut decoded = backend;
+        decoded.validation_depth = super::super::ValidationDepth::Decoded;
+        assert!(
+            localize_native_transport(&transport, &directory, &HlsInputKeys::default(), &decoded)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(fs::read_dir(&directory).unwrap().count(), 0);
+    }
+
+    #[test]
     fn segment_localization_retains_resources_without_a_joined_file() {
         use sha2::{Digest as _, Sha256};
         for (transport, aes) in [(true, false), (false, false), (false, true)] {
@@ -1420,15 +1552,22 @@ mod resource_tests {
         {
             let source = root.path().join(format!("invalid-{index}.m3u8"));
             private_new(&source).unwrap().write_all(format!("#EXTM3U\n#EXT-X-TARGETDURATION:2\n{tag}\n#EXTINF:2.0,\nmissing.ts\n#EXT-X-ENDLIST\n").as_bytes()).unwrap();
-            for join in [false, true] {
-                let output = root.path().join(format!("invalid-{index}-{join}"));
+            for (mode_index, mode) in [
+                Localization::Segments,
+                Localization::Joined,
+                Localization::NativeTransport,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let output = root.path().join(format!("invalid-{index}-{mode_index}"));
                 super::super::files::create_dir(&output).unwrap();
                 let Err(error) = localize_with(
                     &source,
                     &output,
                     &HlsInputKeys::default(),
                     &no_tool_backend(),
-                    join,
+                    mode,
                 ) else {
                     panic!("unsupported manifest was accepted");
                 };

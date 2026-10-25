@@ -130,8 +130,8 @@ fn muxed_transport_source_has_native_admission_with_original_segment_checks() {
     let (converter, events) = converter();
     let keys = InputKeys::default();
     let hls = HlsInputKeys::default();
-    let report = converter
-        .validate_source(
+    let (report, measurements) = converter.measure(|converter| {
+        converter.validate_source(
             VerificationSource {
                 input: &playlist,
                 input_keys: &keys,
@@ -139,13 +139,29 @@ fn muxed_transport_source_has_native_admission_with_original_segment_checks() {
             },
             SourceValidationPurpose::Conversion,
         )
-        .unwrap();
+    });
+    let report = report.unwrap();
     assert!(report.verification.passed);
     assert_eq!(
         report.verification.decode_evidence,
         DecodeEvidence::not_requested()
     );
     assert_eq!(report.track_protection.len(), 2);
+    let segment_bytes: u64 = std::fs::read_dir(root.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|extension| extension == "ts"))
+        .map(|path| path.metadata().unwrap().len())
+        .sum();
+    assert!(segment_bytes > 0);
+    let observed = serde_json::to_value(measurements).unwrap();
+    let staged_bytes = observed["workspace"]["checkpoint_regular_file_bytes_max"]
+        .as_u64()
+        .unwrap();
+    assert!(
+        staged_bytes < 2 * segment_bytes,
+        "native source checks materialized a redundant joined transport"
+    );
     assert!(
         events
             .records()

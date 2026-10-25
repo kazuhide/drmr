@@ -10,7 +10,43 @@ pub(super) fn transport(
     admission: &super::super::ts::Admission,
     backend: &super::super::backend::Backend,
 ) -> Result<Vec<Prepared>, ConversionError> {
-    let streams = backend.transport_streams(&localized.combined, admission, &localized.native)?;
+    transport_view(
+        &localized.combined,
+        &localized.transport_segments,
+        &localized.native,
+        localized.sample_transport,
+        admission,
+        backend,
+    )
+}
+
+pub(super) fn transport_segments(
+    localized: &hls::Segmented,
+    admission: &super::super::ts::Admission,
+    backend: &super::super::backend::Backend,
+) -> Result<Vec<Prepared>, ConversionError> {
+    if backend.validation_depth != super::super::ValidationDepth::Native {
+        return Err(ConversionError("native-view-requires-native-validation"));
+    }
+    transport_view(
+        &localized.reference,
+        &localized.resources,
+        &localized.native,
+        localized.sample_transport,
+        admission,
+        backend,
+    )
+}
+
+fn transport_view(
+    source: &std::path::Path,
+    resources: &[(std::path::PathBuf, String)],
+    anchors: &std::collections::BTreeMap<u16, std::sync::Arc<super::super::ts::NativeEvidence>>,
+    sample_transport: bool,
+    admission: &super::super::ts::Admission,
+    backend: &super::super::backend::Backend,
+) -> Result<Vec<Prepared>, ConversionError> {
+    let streams = backend.transport_streams(source, admission, anchors)?;
     let clock_index = streams
         .iter()
         .find(|(_, kind)| *kind == TrackKind::Video)
@@ -22,11 +58,10 @@ pub(super) fn transport(
         .ok_or(ConversionError("ts-stream-count-mismatch"))?
         .pid;
     let audio_presentation = super::super::native::durations::transport(
-        localized
-            .native
+        anchors
             .get(&pid)
             .ok_or(ConversionError("ts-original-evidence-required"))?,
-        &localized.transport_segments,
+        resources,
     )?;
     streams
         .into_iter()
@@ -36,8 +71,7 @@ pub(super) fn transport(
                 .get(index)
                 .ok_or(ConversionError("ts-stream-count-mismatch"))?
                 .pid;
-            let native = localized
-                .native
+            let native = anchors
                 .get(&pid)
                 .cloned()
                 .ok_or(ConversionError("ts-original-evidence-required"))?;
@@ -76,15 +110,15 @@ pub(super) fn transport(
                     Vec::new()
                 },
                 source_dictionary: false,
-                source: localized.combined.clone(),
-                media: localized.combined.clone(),
+                source: source.to_path_buf(),
+                media: source.to_path_buf(),
                 index,
                 report,
                 key_id: None,
                 transport_index: Some(index),
                 transport_demux_view: None,
                 transport_native: Some(native),
-                transport_sample: localized.sample_transport,
+                transport_sample: sample_transport,
                 playlist_reference: None,
                 dash_reference: false,
                 audio_presentation: audio_presentation.filter(|_| kind == TrackKind::Audio),
