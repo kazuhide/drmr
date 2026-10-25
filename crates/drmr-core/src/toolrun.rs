@@ -612,6 +612,18 @@ impl ToolRunner {
         )
     }
 
+    /// Plan a new coordinator against its configured ceiling, then queue its
+    /// retained reservation. Other commands' live contexts are not a refusal.
+    pub(crate) fn context_capacity(&self) -> (usize, u64) {
+        let (cpu, memory) = self.limiter.configured_capacity();
+        (
+            self.cpu_scope
+                .as_ref()
+                .map_or(cpu, |scope| cpu.min(scope.limit())),
+            memory,
+        )
+    }
+
     /// Account for bounded in-process media work in this runner's admission pool.
     /// Callers release this permit before invoking a tool that acquires its own.
     pub(crate) fn native_permit(

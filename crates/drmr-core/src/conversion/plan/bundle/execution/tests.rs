@@ -19,6 +19,7 @@ use std::{
     },
     time::Duration,
 };
+mod memory_tests;
 
 fn converter(cpus: usize, memory: u64, stop: Stop) -> Converter {
     Converter::new(
@@ -104,7 +105,12 @@ fn two_gib_two_output_budget_keeps_metadata_charges_and_scales_workers() {
         input_buffer_bytes: Some(64 * 1024),
         tracks: 1,
     };
-    let contexts = retained::<usize>(&plan(2), workload).unwrap();
+    let contexts = retained::<usize>(
+        &plan(2),
+        workload,
+        crate::conversion::ValidationDepth::Native,
+    )
+    .unwrap();
     assert!(contexts.shared >= 2 * frozen::retained_inventory_bound(false).unwrap());
     assert_eq!(contexts.worker, 2 * TRACK_RESIDENCY_BYTES);
     for maximum in [Some(1), Some(2), Some(4), None] {
@@ -124,7 +130,8 @@ fn two_gib_two_output_budget_keeps_metadata_charges_and_scales_workers() {
         input_buffer_bytes: Some(64 * 1024 * 1024),
         ..workload
     };
-    let larger = retained::<usize>(&plan(2), larger).unwrap();
+    let larger =
+        retained::<usize>(&plan(2), larger, crate::conversion::ValidationDepth::Native).unwrap();
     assert!(
         larger.shared > contexts.shared
             && larger.worker > contexts.worker
