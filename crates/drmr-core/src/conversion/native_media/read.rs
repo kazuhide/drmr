@@ -2,12 +2,14 @@ use super::{BAD, CHUNK_BYTES, ConversionError, MAX_METADATA_BYTES, UNSUPPORTED};
 use crate::sha256::Sha256;
 use crate::{concurrency::Stop, mp4::Mp4Box, native::FileIdentity};
 use std::{
-    fs::File,
     io::{Read as _, Seek as _, SeekFrom},
     ops::Range,
     path::{Path, PathBuf},
 };
 use zeroize::{Zeroize as _, Zeroizing};
+
+mod positioned;
+use positioned::PositionedInput;
 
 #[derive(Default)]
 pub(super) struct PayloadBuffer {
@@ -40,7 +42,7 @@ impl PayloadBuffer {
 }
 
 pub(super) struct Reader<'a> {
-    pub file: File,
+    pub file: PositionedInput,
     pub length: u64,
     pub stop: &'a Stop,
     pub scratch: PayloadBuffer,
@@ -61,7 +63,7 @@ impl<'a> Reader<'a> {
         let identity = FileIdentity::read(&file).map_err(|_| BAD)?;
         let length = file.metadata().map_err(|_| BAD)?.len();
         let mut reader = Self {
-            file,
+            file: PositionedInput::new(file),
             length,
             stop,
             scratch: PayloadBuffer::default(),
@@ -308,6 +310,62 @@ pub(super) fn disjoint(ranges: &mut [Range<u64>]) -> Result<(), ConversionError>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs::File;
+
+    #[test]
+    fn adjacent_sample_reads_keep_the_cursor_without_repeating_a_seek() {
+        let root = crate::native::private_tempdir().unwrap();
+        let path = root.path().join("samples");
+        std::fs::write(&path, (0_u8..=255).cycle().take(4096).collect::<Vec<_>>()).unwrap();
+        let mut input = PositionedInput::new(File::open(path).unwrap());
+        let mut bytes = [0; 32];
+        for ordinal in 0..32_u64 {
+            assert_eq!(
+                input.seek(SeekFrom::Start(ordinal * 32)).unwrap(),
+                ordinal * 32
+            );
+            input.read_exact(&mut bytes).unwrap();
+            for (index, byte) in bytes.iter().enumerate() {
+                assert_eq!(
+                    *byte,
+                    u8::try_from((ordinal * 32 + index as u64) % 256).unwrap()
+                );
+            }
+        }
+        assert_eq!(input.seeks, 0);
+        assert_eq!(input.reads, 32);
+        input.seek(SeekFrom::Start(2048)).unwrap();
+        input.read_exact(&mut bytes).unwrap();
+        assert_eq!(input.seeks, 1);
+        assert_eq!(input.position, Some(2080));
+        assert_eq!(input.seek(SeekFrom::Current(-32)).unwrap(), 2048);
+        assert_eq!(input.seeks, 2);
+        input.seek(SeekFrom::Start(2048)).unwrap();
+        assert_eq!(input.seeks, 2);
+        input.seek(SeekFrom::End(-16)).unwrap();
+        assert_eq!(input.position, Some(4080));
+        input.read_exact(&mut bytes[..16]).unwrap();
+        assert_eq!(input.position, Some(4096));
+        assert!(input.read_exact(&mut bytes[..1]).is_err());
+        assert_eq!(input.position, Some(4096));
+        input.seek(SeekFrom::Start(0)).unwrap();
+        assert_eq!(input.position, Some(0));
+    }
+
+    #[test]
+    fn failed_reads_and_seeks_require_a_fresh_absolute_position() {
+        let root = crate::native::private_tempdir().unwrap();
+        let path = root.path().join("write-only");
+        let mut input = PositionedInput::new(File::create(path).unwrap());
+        assert!(input.read(&mut [0; 1]).is_err());
+        assert_eq!(input.position, None);
+        assert_eq!(input.seek(SeekFrom::Start(0)).unwrap(), 0);
+        assert_eq!(input.seeks, 1);
+        assert!(input.seek(SeekFrom::Current(-1)).is_err());
+        assert_eq!(input.position, None);
+        assert_eq!(input.seek(SeekFrom::Start(0)).unwrap(), 0);
+        assert_eq!(input.seeks, 3);
+    }
 
     #[test]
     fn payload_scratch_is_bounded_reused_and_wiped_on_success_and_error() {
