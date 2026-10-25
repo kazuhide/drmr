@@ -67,6 +67,7 @@ struct Playlist {
     bytes: u64,
     has_map: bool,
     transport: Option<super::ts::Admission>,
+    native_scanner: Option<super::ts::NativeScanner>,
     stop: crate::concurrency::Stop,
     ended: bool,
     pending_duration: bool,
@@ -214,6 +215,7 @@ pub(super) fn local_resource(root: &Path, uri: &str) -> Result<PathBuf, Conversi
 impl Playlist {
     fn native_evidence(
         projection: Option<super::ts::Projector>,
+        admitted: Option<super::ts::NativeScanner>,
         segments: &[(PathBuf, String)],
         runner: &crate::toolrun::ToolRunner,
         stop: &crate::concurrency::Stop,
@@ -230,6 +232,14 @@ impl Playlist {
             .transpose()?;
         if segments.is_empty() {
             return Ok(std::collections::BTreeMap::new());
+        }
+        if let Some(scanner) = admitted {
+            let (_, clear_native) = scanner.finish()?;
+            return Ok(original
+                .unwrap_or(clear_native)
+                .into_iter()
+                .map(|(id, anchor)| (id, std::sync::Arc::new(anchor)))
+                .collect());
         }
         let _permit = runner
             .native_permit(
@@ -261,6 +271,79 @@ impl Playlist {
             .into_iter()
             .map(|(id, anchor)| (id, std::sync::Arc::new(anchor)))
             .collect())
+    }
+    fn native_permit(&self) -> Result<crate::resources::Permit, ConversionError> {
+        self.runner
+            .native_permit(
+                crate::resources::Claim {
+                    cpu_threads: 1,
+                    memory_bytes: 128 * 1024 * 1024,
+                },
+                &self.stop,
+                self.timeout,
+            )
+            .map_err(|error| match error {
+                crate::resources::ReservationError::Insufficient => {
+                    ConversionError("resource-budget")
+                }
+                crate::resources::ReservationError::Cancelled => ConversionError("cancelled"),
+                crate::resources::ReservationError::Timeout => {
+                    ConversionError("media-tool-timeout")
+                }
+            })
+    }
+    fn copy_resource(
+        &mut self,
+        original: &Path,
+        copied: &Path,
+        cipher: &Cipher<'_>,
+        map: bool,
+    ) -> Result<bool, ConversionError> {
+        if self.native_scanner.is_some()
+            && !map
+            && !self.has_map
+            && cipher.key.is_none()
+            && cipher.sample.is_none()
+        {
+            let _permit = self.native_permit()?;
+            self.native_scanner
+                .as_mut()
+                .ok_or(ConversionError("ts-original-evidence-required"))?
+                .copy_segment(original, copied, &self.stop)?;
+            Ok(true)
+        } else {
+            match self.localization {
+                Localization::Joined => super::copy_private(original, copied)?,
+                Localization::Segments | Localization::NativeTransport => {
+                    snapshot_segment(original, copied, &self.stop)?;
+                }
+            }
+            Ok(false)
+        }
+    }
+    fn admit_transport(&mut self, plaintext: &Path, scanned: bool) -> Result<(), ConversionError> {
+        if self.native_scanner.is_some() {
+            if !scanned {
+                // Decryption has released its own permit before this reservation.
+                let _permit = self.native_permit()?;
+                self.native_scanner
+                    .as_mut()
+                    .ok_or(ConversionError("ts-original-evidence-required"))?
+                    .segment(plaintext, &self.stop)?;
+            }
+            self.transport = Some(
+                self.native_scanner
+                    .as_ref()
+                    .ok_or(ConversionError("ts-original-evidence-required"))?
+                    .admission()
+                    .clone(),
+            );
+        } else {
+            self.transport
+                .get_or_insert_with(Default::default)
+                .segment(plaintext, &self.stop)?;
+        }
+        Ok(())
     }
     fn decrypt_samples(
         &mut self,
@@ -367,12 +450,7 @@ impl Playlist {
             }
         );
         let copied = stage.join(&name);
-        match self.localization {
-            Localization::Joined | Localization::NativeTransport => {
-                super::copy_private(&original, &copied)?;
-            }
-            Localization::Segments => snapshot_segment(&original, &copied, &self.stop)?,
-        }
+        let scanned = self.copy_resource(&original, &copied, cipher, map)?;
         let snapshot =
             File::open(&copied).map_err(|_| ConversionError("hls-resource-unreadable"))?;
         charge_snapshot(&snapshot, &mut self.bytes, super::MAX_MEDIA_BYTES)?;
@@ -399,9 +477,7 @@ impl Playlist {
                 .ok_or(ConversionError("hls-map-required"))?
                 .check(&plaintext, self.declared_duration)?;
         } else {
-            self.transport
-                .get_or_insert_with(Default::default)
-                .segment(&plaintext, &self.stop)?;
+            self.admit_transport(&plaintext, scanned)?;
             self.transport_segments
                 .push((plaintext.clone(), self.duration_text.clone()));
         }
@@ -733,6 +809,7 @@ impl Localizer<'_> {
         let sample_transport = playlist.sample_projection.is_some();
         let native = Playlist::native_evidence(
             playlist.sample_projection,
+            playlist.native_scanner,
             &playlist.transport_segments,
             &playlist.runner,
             &playlist.stop,
@@ -865,6 +942,8 @@ fn localize_with(
         bytes: 0,
         has_map: false,
         transport: None,
+        native_scanner: matches!(localization, Localization::NativeTransport)
+            .then(super::ts::NativeScanner::new),
         stop: backend.stop.clone(),
         ended: false,
         pending_duration: false,
@@ -1214,10 +1293,16 @@ mod resource_tests {
             events::NoSink,
             toolrun::{Secrets, ToolRunner},
         };
-        let runner = std::sync::Arc::new(ToolRunner::new(
-            std::sync::Arc::new(Secrets::default()),
-            std::sync::Arc::new(NoSink),
-        ));
+        let runner = std::sync::Arc::new(
+            ToolRunner::new(
+                std::sync::Arc::new(Secrets::default()),
+                std::sync::Arc::new(NoSink),
+            )
+            .with_limiter(std::sync::Arc::new(crate::resources::Limiter::new(
+                1,
+                256 * 1024 * 1024,
+            ))),
+        );
         Converter::new(runner, "must-not-run-packager", "must-not-run-ffmpeg")
             .with_ffprobe("must-not-run-ffprobe")
             .backend
@@ -1280,11 +1365,11 @@ mod resource_tests {
 
     #[test]
     fn native_transport_view_preserves_resources_and_evidence_without_joining() {
-        for encrypted in [false, true] {
+        for encryption in [0, 1, 2] {
             let root = super::super::files::Stage::new(None).unwrap();
             let clear_dir = root.path().join("clear");
             let clear = clear_fixture(&clear_dir, true);
-            let (source, keys) = if encrypted {
+            let (source, keys) = if encryption != 0 {
                 let output = root.path().join("encrypted");
                 super::super::files::create_dir(&output).unwrap();
                 let key = HlsOutputKey::new(
@@ -1293,6 +1378,9 @@ mod resource_tests {
                 )
                 .unwrap();
                 encrypt_media(&clear_dir, &output, &key).unwrap();
+                if encryption == 2 {
+                    alternate_clear_segments(&clear_dir, &output);
+                }
                 (
                     output.join("media.m3u8"),
                     HlsInputKeys::new(vec![(
@@ -1341,6 +1429,30 @@ mod resource_tests {
                 );
             }
         }
+    }
+
+    fn alternate_clear_segments(clear: &Path, encrypted: &Path) {
+        let originals = fs::read_to_string(clear.join("media.m3u8"))
+            .unwrap()
+            .lines()
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            .map(|line| clear.join(line))
+            .collect::<Vec<_>>();
+        let manifest = encrypted.join("media.m3u8");
+        let mut text = String::new();
+        let mut count = 0;
+        for line in fs::read_to_string(&manifest).unwrap().lines() {
+            if !line.is_empty() && !line.starts_with('#') {
+                if count % 2 == 0 {
+                    fs::copy(&originals[count], encrypted.join(line)).unwrap();
+                    text.push_str("#EXT-X-KEY:METHOD=NONE\n");
+                }
+                count += 1;
+            }
+            writeln!(text, "{line}").unwrap();
+        }
+        assert!(count >= 2);
+        fs::write(manifest, text).unwrap();
     }
 
     #[test]
@@ -1510,27 +1622,36 @@ mod resource_tests {
                 .collect(),
         )
         .unwrap();
-        let output = root.path().join("localized");
-        super::super::files::create_dir(&output).unwrap();
-        let result = localize_segments(&input, &output, &input_keys, &no_tool_backend()).unwrap();
-        assert!(result.sample_transport);
-        assert!(result.initialization.is_none());
-        assert!(!output.join("combined.mp4").exists());
-        assert!(!output.join("combined.ts").exists());
         let (_, expected) = scanner.finish().unwrap();
-        assert_eq!(result.resources.len(), count);
-        assert_eq!(expected.len(), result.native.len());
-        for (id, native) in expected {
-            let actual = &result.native[&id];
-            assert_eq!(native.config, actual.config);
-            let a = native.evidence().unwrap();
-            let b = actual.evidence().unwrap();
-            assert!(a.payload_equal(&b));
-            assert!(a.timing_equal(&b));
-            assert_eq!(
-                native.segment_timings().unwrap().len(),
-                actual.segment_timings().unwrap().len()
-            );
+        for mode in ["segments", "native"] {
+            let output = root.path().join(mode);
+            super::super::files::create_dir(&output).unwrap();
+            let backend = no_tool_backend();
+            let result = if mode == "native" {
+                localize_native_transport(&input, &output, &input_keys, &backend)
+                    .unwrap()
+                    .unwrap()
+            } else {
+                localize_segments(&input, &output, &input_keys, &backend).unwrap()
+            };
+            assert!(result.sample_transport);
+            assert!(result.initialization.is_none());
+            assert!(!output.join("combined.mp4").exists());
+            assert!(!output.join("combined.ts").exists());
+            assert_eq!(result.resources.len(), count);
+            assert_eq!(expected.len(), result.native.len());
+            for (id, native) in &expected {
+                let actual = &result.native[id];
+                assert_eq!(native.config, actual.config);
+                let a = native.evidence().unwrap();
+                let b = actual.evidence().unwrap();
+                assert!(a.payload_equal(&b));
+                assert!(a.timing_equal(&b));
+                assert_eq!(
+                    native.segment_timings().unwrap().len(),
+                    actual.segment_timings().unwrap().len()
+                );
+            }
         }
     }
 
