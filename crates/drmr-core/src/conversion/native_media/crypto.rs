@@ -1,6 +1,6 @@
 //! CENC counter and CBCS pattern processing over exact sample subsample ranges.
 use super::{BAD, ConversionError, Scheme, UNSUPPORTED};
-use aes::cipher::{BlockCipherDecrypt as _, BlockCipherEncrypt as _, KeyInit as _};
+use aes::cipher::{BlockCipherEncrypt as _, KeyInit as _};
 use zeroize::Zeroizing;
 
 const BATCH_BLOCKS: usize = 32;
@@ -151,44 +151,43 @@ impl Cipher {
         Ok(())
     }
     fn transform_cbcs(&mut self, bytes: &mut [u8]) -> Result<(), ConversionError> {
-        let mut blocks = Zeroizing::new([aes::Block::default(); BATCH_BLOCKS]);
-        let mut offsets = [0; BATCH_BLOCKS];
-        let mut at = 0;
-        while bytes.len() - at >= 16 {
-            let mut count = 0;
-            let mut failure = None;
-            while count < BATCH_BLOCKS && bytes.len() - at >= 16 {
-                if self.block % (self.crypt + self.skip) < self.crypt {
-                    offsets[count] = at;
-                    blocks[count].copy_from_slice(&bytes[at..at + 16]);
-                    count += 1;
-                }
-                at += 16;
-                if let Some(next) = self.block.checked_add(1) {
+        use aes::cipher::{BlockModeDecrypt as _, InnerIvInit as _, IvState as _};
+        let mut cipher =
+            cbc::Decryptor::<&aes::Aes128>::inner_iv_init(&self.aes, (&*self.previous).into());
+        let (blocks, _) = aes::Block::slice_as_chunks_mut(bytes);
+        let mut result = Ok(());
+        if self.skip == 0 {
+            for batch in blocks.chunks_mut(BATCH_BLOCKS) {
+                // Include the block processed before a counter-overflow refusal,
+                // exactly as the scalar path does; leave later bytes untouched.
+                let available = (usize::MAX - self.block).saturating_add(1);
+                let count = batch.len().min(available);
+                cipher.decrypt_blocks(&mut batch[..count]);
+                if let Some(next) = self.block.checked_add(count) {
                     self.block = next;
                 } else {
-                    failure = Some(BAD);
+                    self.block = usize::MAX;
+                    result = Err(BAD);
                     break;
                 }
             }
-            self.aes.decrypt_blocks(&mut blocks[..count]);
-            for (offset, clear) in offsets[..count].iter().zip(&blocks[..count]) {
-                let block = &mut bytes[*offset..*offset + 16];
-                let mut original = Zeroizing::new([0; 16]);
-                original.copy_from_slice(block);
-                for ((value, decrypted), previous) in
-                    block.iter_mut().zip(clear).zip(self.previous.iter())
-                {
-                    *value = decrypted ^ previous;
+        } else {
+            // Sparse patterns avoid gathering and scattering isolated blocks.
+            for block in blocks {
+                if self.block % (self.crypt + self.skip) < self.crypt {
+                    cipher.decrypt_block(block);
                 }
-                self.previous.copy_from_slice(original.as_ref());
-            }
-            if let Some(error) = failure {
-                return Err(error);
+                if let Some(next) = self.block.checked_add(1) {
+                    self.block = next;
+                } else {
+                    result = Err(BAD);
+                    break;
+                }
             }
         }
+        self.previous.copy_from_slice(cipher.iv_state().as_slice());
         // The final incomplete cipher block is clear and never changes CBC state.
-        Ok(())
+        result
     }
     pub fn transform(
         &mut self,
@@ -212,6 +211,7 @@ impl Cipher {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aes::cipher::BlockCipherDecrypt as _;
 
     #[test]
     fn aes_known_answer_and_context_wiping_are_retained() {
