@@ -7,12 +7,43 @@ use std::{
     ops::Range,
     path::{Path, PathBuf},
 };
-use zeroize::Zeroizing;
+use zeroize::{Zeroize as _, Zeroizing};
+
+#[derive(Default)]
+pub(super) struct PayloadBuffer {
+    bytes: Zeroizing<Vec<u8>>,
+}
+pub(super) struct PayloadChunk<'a> {
+    pub bytes: &'a mut [u8],
+}
+impl Drop for PayloadChunk<'_> {
+    fn drop(&mut self) {
+        self.bytes.zeroize();
+    }
+}
+impl PayloadBuffer {
+    pub fn chunk(&mut self, length: usize) -> Result<PayloadChunk<'_>, ConversionError> {
+        if length > CHUNK_BYTES {
+            return Err(BAD);
+        }
+        if length != 0 && self.bytes.is_empty() {
+            // Reserve the entire lifetime bound before retaining any plaintext.
+            self.bytes
+                .try_reserve_exact(CHUNK_BYTES)
+                .map_err(|_| ConversionError("resource-budget"))?;
+            self.bytes.resize(CHUNK_BYTES, 0);
+        }
+        Ok(PayloadChunk {
+            bytes: &mut self.bytes[..length],
+        })
+    }
+}
 
 pub(super) struct Reader<'a> {
     pub file: File,
     pub length: u64,
     pub stop: &'a Stop,
+    pub scratch: PayloadBuffer,
     path: PathBuf,
     identity: FileIdentity,
     digest: Option<[u8; 32]>,
@@ -33,6 +64,7 @@ impl<'a> Reader<'a> {
             file,
             length,
             stop,
+            scratch: PayloadBuffer::default(),
             path: path.into(),
             identity,
             digest: None,
@@ -134,12 +166,12 @@ impl<'a> Reader<'a> {
     }
     fn fingerprint(&mut self) -> Result<[u8; 32], ConversionError> {
         self.file.seek(SeekFrom::Start(0)).map_err(|_| BAD)?;
-        let mut buffer = Zeroizing::new(vec![0; CHUNK_BYTES]);
+        let buffer = self.scratch.chunk(CHUNK_BYTES)?;
         let mut digest = Sha256::new();
         let mut total = 0_u64;
         loop {
             check_stop(self.stop)?;
-            let read = self.file.read(&mut buffer).map_err(|_| BAD)?;
+            let read = self.file.read(buffer.bytes).map_err(|_| BAD)?;
             if read == 0 {
                 break;
             }
@@ -147,7 +179,7 @@ impl<'a> Reader<'a> {
                 .checked_add(read as u64)
                 .filter(|n| *n <= self.length)
                 .ok_or(BAD)?;
-            digest.update(&buffer[..read]);
+            digest.update(&buffer.bytes[..read]);
         }
         if total != self.length {
             return Err(BAD);
@@ -276,6 +308,31 @@ pub(super) fn disjoint(ranges: &mut [Range<u64>]) -> Result<(), ConversionError>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn payload_scratch_is_bounded_reused_and_wiped_on_success_and_error() {
+        let mut scratch = PayloadBuffer::default();
+        assert!(scratch.chunk(0).unwrap().bytes.is_empty());
+        assert!(scratch.bytes.is_empty());
+        let address;
+        {
+            let chunk = scratch.chunk(17).unwrap();
+            address = chunk.bytes.as_ptr();
+            chunk.bytes.fill(0x55);
+        }
+        assert_eq!(scratch.bytes.len(), CHUNK_BYTES);
+        assert!(scratch.bytes.iter().all(|byte| *byte == 0));
+        let failure = (|| -> Result<(), ConversionError> {
+            let chunk = scratch.chunk(CHUNK_BYTES)?;
+            assert_eq!(chunk.bytes.as_ptr(), address);
+            chunk.bytes.fill(0x77);
+            Err(BAD)
+        })();
+        assert_eq!(failure, Err(BAD));
+        assert!(scratch.bytes.iter().all(|byte| *byte == 0));
+        assert!(matches!(scratch.chunk(CHUNK_BYTES + 1), Err(BAD)));
+        assert_eq!(scratch.chunk(1).unwrap().bytes.as_ptr(), address);
+    }
 
     #[test]
     fn only_the_empty_conventional_wide_box_is_neutral_top_level_padding() {

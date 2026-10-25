@@ -11,7 +11,6 @@ use std::{
     io::{Read as _, Seek as _, SeekFrom},
     path::Path,
 };
-use zeroize::Zeroizing;
 mod aac;
 mod auxiliary;
 pub(in crate::conversion) use aac::AacConfiguration;
@@ -357,22 +356,23 @@ fn payload(
         .file
         .seek(SeekFrom::Start(sample.info.range.start))
         .map_err(|_| BAD)?;
-    let clear = crypto::SampleEncryption {
-        iv: Zeroizing::new(Vec::new()),
-        subsamples: vec![crypto::Subsample {
-            clear: sample.info.size,
-            encrypted: 0,
-        }],
+    let clear = crypto::Subsample {
+        clear: sample.info.size,
+        encrypted: 0,
     };
-    let encryption = sample.encryption.as_ref().unwrap_or(&clear);
-    let mut buffer = Zeroizing::new(vec![
-        0;
+    let subsamples = sample
+        .encryption
+        .as_ref()
+        .map_or(std::slice::from_ref(&clear), |encryption| {
+            encryption.subsamples.as_slice()
+        });
+    let buffer = reader.scratch.chunk(
         usize::try_from(sample.info.size)
             .map_err(|_| BAD)?
-            .min(CHUNK_BYTES)
-    ]);
+            .min(CHUNK_BYTES),
+    )?;
     let mut position = 0_u32;
-    for span in &encryption.subsamples {
+    for span in subsamples {
         if let Some(cipher) = &mut cipher {
             cipher.begin_subsample();
         }
@@ -383,7 +383,7 @@ fn payload(
                 let length = usize::try_from(remaining)
                     .map_err(|_| BAD)?
                     .min(CHUNK_BYTES);
-                let bytes = &mut buffer[..length];
+                let bytes = &mut buffer.bytes[..length];
                 reader.file.read_exact(bytes).map_err(|_| BAD)?;
                 if encrypted {
                     cipher
