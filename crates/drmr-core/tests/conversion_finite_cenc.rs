@@ -846,6 +846,8 @@ fn cancellation_of_the_additional_decoder_drains_its_descendant_before_returning
         let runner = Arc::new(ToolRunner::new(Arc::new(Secrets::new()), events.clone()));
         let c = Converter::new(runner, "unused-packager", tool.to_str().unwrap())
             .with_decode(true)
+            .with_max_workers(Some(1))
+            .unwrap()
             .with_stop(child_stop);
         let result = convert(&c, &worker_source, &worker_output, &complete_keys());
         (result, events.records())
