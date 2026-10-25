@@ -105,10 +105,11 @@ fn aggregate_byte_budget_is_checked_before_any_source_is_copied() {
         LIMIT
     );
     let stage = files::Stage::new(None).unwrap();
+    let mut directories = directories::Directories::new(stage.path()).unwrap();
     let mut chunks = 0;
     let result = copy_object(
         &inventory.root,
-        stage.path(),
+        &mut directories,
         Path::new("segment.ts"),
         None,
         0,
