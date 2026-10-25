@@ -10,6 +10,8 @@ use zeroize::{Zeroize as _, Zeroizing};
 
 mod positioned;
 use positioned::PositionedInput;
+mod sample;
+pub(super) use sample::SampleInput;
 
 #[derive(Default)]
 pub(super) struct PayloadBuffer {
@@ -46,6 +48,7 @@ pub(super) struct Reader<'a> {
     pub length: u64,
     pub stop: &'a Stop,
     pub scratch: PayloadBuffer,
+    pub sample_window: PayloadBuffer,
     path: PathBuf,
     identity: FileIdentity,
     digest: Option<[u8; 32]>,
@@ -67,6 +70,7 @@ impl<'a> Reader<'a> {
             length,
             stop,
             scratch: PayloadBuffer::default(),
+            sample_window: PayloadBuffer::default(),
             path: path.into(),
             identity,
             digest: None,
