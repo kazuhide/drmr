@@ -170,6 +170,95 @@ fn buffered_encrypted_samples_preserve_callback_failure_and_cancellation() {
     assert_eq!(std::fs::read(source).unwrap(), before);
 }
 
+#[cfg(unix)]
+fn first_encrypted_sample_prefix(source: &Path) -> u64 {
+    let stop = Stop::new();
+    let mut reader = read::Reader::open(source, &stop, false).unwrap();
+    let layout = reader.layout().unwrap();
+    let mut initialization = init::parse(&layout).unwrap();
+    catalogue(&mut reader, &layout, &mut initialization).unwrap();
+    let track = &initialization.tracks[0];
+    let tables = progressive::Tables::parse(track, &layout.movie, &layout.mdats, &stop).unwrap();
+    let mut first = None;
+    tables
+        .walk(&stop, |info| {
+            if first.is_none() {
+                first = Some(info);
+            }
+            Ok(())
+        })
+        .unwrap();
+    let info = first.unwrap();
+    let mut auxiliary = auxiliary::Auxiliary::new(
+        &track.auxiliary,
+        &layout.movie,
+        track.encryption.as_ref().unwrap(),
+        tables.count,
+        layout.movie_offset,
+        0,
+    )
+    .unwrap();
+    let encryption = auxiliary.next(info.size).unwrap();
+    let clear = encryption.subsamples[0].clear;
+    assert!(clear > 0 && clear + 8 < info.size);
+    reader.finish().unwrap();
+    info.range.start + u64::from(clear) + 8
+}
+
+#[cfg(unix)]
+#[test]
+fn later_sample_truncation_does_not_hide_the_first_callback_error_or_cancellation() {
+    let fixture = fixture().with_file_name("cenc-iv8.mp4");
+    let prefix = first_encrypted_sample_prefix(&fixture);
+    let owner = crate::native::private_tempdir().unwrap();
+    let source = owner.path().join("changed-after-metadata.mp4");
+    for action in ["error", "cancel", "continue"] {
+        std::fs::copy(&fixture, &source).unwrap();
+        let stop = Stop::new();
+        let mut metadata_reached = false;
+        let mut callbacks = 0;
+        let result = scan_with_metadata(
+            &source,
+            &keys(),
+            &stop,
+            &mut |_, part| {
+                assert!(matches!(part, MetadataPart::Movie(_)));
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .open(&source)
+                    .unwrap()
+                    .set_len(prefix)
+                    .unwrap();
+                metadata_reached = true;
+                Ok(())
+            },
+            &mut |_, info, bytes| {
+                callbacks += 1;
+                assert_eq!(info.chunk_offset, 0);
+                assert!(bytes.len() < usize::try_from(info.size).unwrap());
+                match action {
+                    "error" => Err(ConversionError("callback-refused")),
+                    "cancel" => {
+                        stop.set();
+                        Ok(())
+                    }
+                    "continue" => Ok(()),
+                    _ => unreachable!(),
+                }
+            },
+        );
+        assert!(metadata_reached);
+        assert_eq!(callbacks, 1, "{action}");
+        let expected = match action {
+            "error" => ConversionError("callback-refused"),
+            "cancel" => ConversionError("cancelled"),
+            "continue" => BAD,
+            _ => unreachable!(),
+        };
+        assert_eq!(result.unwrap_err(), expected, "{action}");
+    }
+}
+
 #[test]
 fn shaka_cenc_and_cbcs_video_audio_with_distinct_keys_match_independent_decryption() {
     let root = crate::native::private_tempdir().unwrap();
