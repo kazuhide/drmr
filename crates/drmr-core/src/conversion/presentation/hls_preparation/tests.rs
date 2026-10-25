@@ -18,7 +18,9 @@ use std::{
 fn converter(cpus: usize, stop: Stop) -> Converter {
     let runner = ToolRunner::new(Arc::new(Secrets::new()), Arc::new(crate::events::NoSink))
         .with_limiter(Arc::new(Limiter::new(cpus, 4 * 1024 * 1024 * 1024)));
-    Converter::new(Arc::new(runner), "packager", "ffmpeg").with_stop(stop)
+    let mut converter = Converter::new(Arc::new(runner), "packager", "ffmpeg").with_stop(stop);
+    converter.backend = preparation_backend(&converter.backend, Some(cpus));
+    converter
 }
 
 fn hardware() -> Hardware {
@@ -91,9 +93,12 @@ fn later_failure_waits_for_earlier_work_and_does_not_poison_the_caller() {
     let scheduler = Scheduler::observed(&converter.backend, Some(2), hardware());
     let (failed, observed) = mpsc::sync_channel(1);
     let observed = Mutex::new(observed);
+    let (first_started, first_observed) = mpsc::sync_channel(1);
+    let first_observed = Mutex::new(first_observed);
     let drained = AtomicBool::new(false);
     let result = collect::<()>(&scheduler, &paths(2), |ordinal| {
         if ordinal == 0 {
+            first_started.send(()).unwrap();
             observed
                 .lock()
                 .unwrap()
@@ -102,6 +107,11 @@ fn later_failure_waits_for_earlier_work_and_does_not_poison_the_caller() {
             drained.store(true, Ordering::Release);
             Err(ConversionError("first-rendition-failed"))
         } else {
+            first_observed
+                .lock()
+                .unwrap()
+                .recv_timeout(Duration::from_secs(2))
+                .map_err(|_| ConversionError("first-rendition-not-started"))?;
             failed.send(()).unwrap();
             Err(ConversionError("second-rendition-failed"))
         }
