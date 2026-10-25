@@ -268,9 +268,9 @@ fn file_transform(
         let length = input
             .metadata()
             .map_err(|_| ConversionError("segment-read-failed"))?
-            .len()
-            .min((IO_BUFFER + 16) as u64);
-        usize::try_from(length).map_err(|_| ConversionError("segment-read-failed"))?
+            .len();
+        // Unrepresentable lengths still select the bounded batch path.
+        usize::try_from(length).unwrap_or(usize::MAX)
     };
     let mut input = BufReader::with_capacity(IO_BUFFER, input);
     let mut input = StoppableReader {
@@ -341,13 +341,13 @@ fn decrypt_stream(
     iv: &SegmentIv,
     ciphertext_length_hint: usize,
 ) -> Result<(), ConversionError> {
+    // The hint selects an implementation; actual EOF still establishes padding.
+    if ciphertext_length_hint <= IO_BUFFER + 16 {
+        return decrypt_stream_small(input, output, key, iv);
+    }
     let mut cipher = cbc::Decryptor::<aes::Aes128>::new((&*key.0).into(), (&*iv.0).into());
-    // The hint only sizes the buffer; actual EOF still establishes the padding boundary.
-    let buffer_size = ciphertext_length_hint
-        .clamp(32, IO_BUFFER + 16)
-        .next_multiple_of(16);
-    let chunk_size = buffer_size - 16;
-    let mut buffer = Zeroizing::new(vec![0u8; buffer_size]);
+    // Hold one ciphertext block back until EOF establishes its padding boundary.
+    let mut buffer = Zeroizing::new(vec![0u8; IO_BUFFER + 16]);
     let mut used = 0;
     loop {
         while used < buffer.len() {
@@ -370,13 +370,47 @@ fn decrypt_stream(
                 .map_err(|_| ConversionError("segment-write-failed"))?;
             return Ok(());
         }
-        let (blocks, _) = aes::Block::slice_as_chunks_mut(&mut buffer[..chunk_size]);
+        let (blocks, _) = aes::Block::slice_as_chunks_mut(&mut buffer[..IO_BUFFER]);
         cipher.decrypt_blocks(blocks);
         output
-            .write_all(&buffer[..chunk_size])
+            .write_all(&buffer[..IO_BUFFER])
             .map_err(|_| ConversionError("segment-write-failed"))?;
-        buffer.copy_within(chunk_size.., 0);
+        buffer.copy_within(IO_BUFFER.., 0);
         used = 16;
+    }
+}
+fn decrypt_stream_small(
+    input: &mut impl Read,
+    output: &mut impl Write,
+    key: &Aes128Key,
+    iv: &SegmentIv,
+) -> Result<(), ConversionError> {
+    let mut cipher = cbc::Decryptor::<aes::Aes128>::new((&*key.0).into(), (&*iv.0).into());
+    let mut block = Zeroizing::new([0u8; 16]);
+    if read_block(input, &mut block)? != 16 {
+        return Err(ConversionError("invalid-encrypted-segment"));
+    }
+    let mut next = Zeroizing::new([0u8; 16]);
+    loop {
+        match read_block(input, &mut next)? {
+            0 => {
+                let plaintext = cipher
+                    .decrypt_padded::<Pkcs7>(block.as_mut())
+                    .map_err(|_| ConversionError("invalid-encrypted-segment"))?;
+                output
+                    .write_all(plaintext)
+                    .map_err(|_| ConversionError("segment-write-failed"))?;
+                return Ok(());
+            }
+            16 => {
+                cipher.decrypt_block((&mut *block).into());
+                output
+                    .write_all(block.as_ref())
+                    .map_err(|_| ConversionError("segment-write-failed"))?;
+                block.copy_from_slice(next.as_ref());
+            }
+            _ => return Err(ConversionError("invalid-encrypted-segment")),
+        }
     }
 }
 
@@ -456,16 +490,17 @@ mod tests {
             )
             .unwrap();
             assert_eq!(output.bytes, original, "length={length}");
-            // A small buffer can emit its retained final plaintext block separately.
-            assert!(
-                output.calls <= (encrypted.len() / IO_BUFFER + 1).max(2),
-                "length={length}, writes={}",
-                output.calls
-            );
+            if encrypted.len() > IO_BUFFER + 16 {
+                assert!(
+                    output.calls <= encrypted.len() / IO_BUFFER + 1,
+                    "length={length}, writes={}",
+                    output.calls
+                );
+            }
         }
     }
     #[test]
-    fn small_cbc_resources_size_the_read_buffer_to_the_ciphertext() {
+    fn small_cbc_resources_keep_read_requests_within_one_block() {
         struct CountReads<'a> {
             bytes: &'a [u8],
             largest_request: usize,
@@ -478,7 +513,7 @@ mod tests {
         }
         let key = Aes128Key::from_hex("42424242424242424242424242424242").unwrap();
         let iv = SegmentIv::for_sequence(1);
-        for length in [417, 16 * 1024] {
+        for length in [417, 16 * 1024, IO_BUFFER, IO_BUFFER + 15] {
             let original = vec![0x55; length];
             let mut encrypted = Vec::new();
             encrypt_stream(&mut original.as_slice(), &mut encrypted, &key, &iv).unwrap();
@@ -490,7 +525,7 @@ mod tests {
             decrypt_stream(&mut input, &mut output, &key, &iv, encrypted.len()).unwrap();
             assert_eq!(output, original);
             assert!(
-                input.largest_request <= encrypted.len(),
+                input.largest_request <= 16,
                 "length={length}, largest request={}",
                 input.largest_request
             );
@@ -581,16 +616,18 @@ mod tests {
             encrypt_stream(&mut ShortReader(source), &mut FailingWriter, &key, &iv),
             Err(ConversionError("segment-write-failed"))
         );
-        assert_eq!(
-            decrypt_stream(
-                &mut ShortReader(&encrypted),
-                &mut FailingWriter,
-                &key,
-                &iv,
-                encrypted.len()
-            ),
-            Err(ConversionError("segment-write-failed"))
-        );
+        for hint in [encrypted.len(), usize::MAX] {
+            assert_eq!(
+                decrypt_stream(
+                    &mut ShortReader(&encrypted),
+                    &mut FailingWriter,
+                    &key,
+                    &iv,
+                    hint,
+                ),
+                Err(ConversionError("segment-write-failed"))
+            );
+        }
     }
     #[test]
     fn interrupted_short_reads_preserve_chaining_across_batches() {
@@ -615,13 +652,15 @@ mod tests {
             .collect::<Vec<_>>();
         let mut encrypted = Vec::new();
         encrypt_stream(&mut original.as_slice(), &mut encrypted, &key, &iv).unwrap();
-        let mut input = InterruptedReader {
-            input: ShortReader(&encrypted),
-            interrupt: false,
-        };
-        let mut output = Vec::new();
-        decrypt_stream(&mut input, &mut output, &key, &iv, encrypted.len()).unwrap();
-        assert_eq!(output, original);
+        for hint in [0, encrypted.len()] {
+            let mut input = InterruptedReader {
+                input: ShortReader(&encrypted),
+                interrupt: false,
+            };
+            let mut output = Vec::new();
+            decrypt_stream(&mut input, &mut output, &key, &iv, hint).unwrap();
+            assert_eq!(output, original, "hint={hint}");
+        }
     }
     #[test]
     fn partial_reads_followed_by_errors_are_not_treated_as_eof() {
@@ -667,32 +706,34 @@ mod tests {
     fn ciphertext_length_hints_do_not_replace_eof_or_padding_checks() {
         let key = Aes128Key::from_hex("42424242424242424242424242424242").unwrap();
         let iv = SegmentIv::for_sequence(1);
-        let original = vec![0x55; IO_BUFFER + 31];
-        let mut encrypted = Vec::new();
-        encrypt_stream(&mut original.as_slice(), &mut encrypted, &key, &iv).unwrap();
-        let end = encrypted.len();
-        let mut bad_padding = encrypted.clone();
-        // The final block has one padding byte; make that byte zero.
-        bad_padding[end - 17] ^= 1;
-        let mut extra_byte = encrypted.clone();
-        extra_byte.push(0);
-        for hint in [0, 1, 16, 31, 32, 33, 417, 16 * 1024, end, usize::MAX] {
-            let mut output = Vec::new();
-            decrypt_stream(&mut ShortReader(&encrypted), &mut output, &key, &iv, hint).unwrap();
-            assert_eq!(output, original, "hint={hint}");
-            for bytes in [
-                &[][..],
-                &encrypted[..end - 1],
-                &encrypted[..end - 16],
-                bad_padding.as_slice(),
-                extra_byte.as_slice(),
-            ] {
-                assert_eq!(
-                    decrypt_stream(&mut ShortReader(bytes), &mut Vec::new(), &key, &iv, hint,),
-                    Err(ConversionError("invalid-encrypted-segment")),
-                    "hint={hint}, length={}",
-                    bytes.len()
-                );
+        for length in [417, IO_BUFFER + 31] {
+            let original = vec![0x55; length];
+            let mut encrypted = Vec::new();
+            encrypt_stream(&mut original.as_slice(), &mut encrypted, &key, &iv).unwrap();
+            let end = encrypted.len();
+            let mut bad_padding = encrypted.clone();
+            // Change the previous CBC block so the final padding byte becomes zero.
+            bad_padding[end - 17] ^= u8::try_from(16 - length % 16).unwrap();
+            let mut extra_byte = encrypted.clone();
+            extra_byte.push(0);
+            for hint in [0, 1, 16, 31, 32, 33, 417, 16 * 1024, end, usize::MAX] {
+                let mut output = Vec::new();
+                decrypt_stream(&mut ShortReader(&encrypted), &mut output, &key, &iv, hint).unwrap();
+                assert_eq!(output, original, "length={length}, hint={hint}");
+                for bytes in [
+                    &[][..],
+                    &encrypted[..end - 1],
+                    &encrypted[..end - 16],
+                    bad_padding.as_slice(),
+                    extra_byte.as_slice(),
+                ] {
+                    assert_eq!(
+                        decrypt_stream(&mut ShortReader(bytes), &mut Vec::new(), &key, &iv, hint),
+                        Err(ConversionError("invalid-encrypted-segment")),
+                        "hint={hint}, length={}",
+                        bytes.len()
+                    );
+                }
             }
         }
     }
