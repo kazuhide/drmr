@@ -80,22 +80,13 @@ fn decrypt_blocks(bytes: &mut [u8], key: &Aes128Key, iv: &SegmentIv, skip: usize
         }
         return;
     }
-    let mut blocks = Zeroizing::new([aes::Block::default(); BATCH_BLOCKS]);
-    let mut offsets = [0; BATCH_BLOCKS];
+    // Keep sparse H.264 blocks in place instead of gathering a temporary batch.
     let mut at = 0;
     while bytes.len() - at > 16 {
-        let mut count = 0;
-        while count < BATCH_BLOCKS && bytes.len() - at > 16 {
-            offsets[count] = at;
-            blocks[count].copy_from_slice(&bytes[at..at + 16]);
-            count += 1;
-            at += 16;
-            at += skip.min(bytes.len() - at);
-        }
-        cipher.decrypt_blocks(&mut blocks[..count]);
-        for (offset, block) in offsets[..count].iter().zip(&blocks[..count]) {
-            bytes[*offset..*offset + 16].copy_from_slice(block);
-        }
+        let (blocks, _) = aes::Block::slice_as_chunks_mut(&mut bytes[at..at + 16]);
+        cipher.decrypt_block(&mut blocks[0]);
+        at += 16;
+        at += skip.min(bytes.len() - at);
     }
 }
 fn encrypt_blocks(
