@@ -1,6 +1,7 @@
 use super::*;
 use crate::conversion::{ContentKey, native_media};
 use crate::mp4::Mp4Box;
+use sha2::{Digest as _, Sha256};
 use std::{fs, ops::Range};
 
 fn fixture(name: &str) -> std::path::PathBuf {

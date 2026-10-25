@@ -128,7 +128,7 @@ impl DashSource {
         input: VerificationSource<'_>,
     ) -> Result<Self, ConversionError> {
         converter.backend.check_cancelled()?;
-        let frozen = FrozenSource::capture(input.input, &converter.backend.stop)?;
+        let frozen = converter.capture_source(input.input)?;
         let workspace = crate::conversion::workspace()?;
         let captured = dash::snapshot_segments(
             frozen.entrypoint(),

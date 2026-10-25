@@ -1,6 +1,6 @@
 use super::{BAD, CHUNK_BYTES, ConversionError, MAX_METADATA_BYTES, UNSUPPORTED};
+use crate::sha256::Sha256;
 use crate::{concurrency::Stop, mp4::Mp4Box, native::FileIdentity};
-use sha2::{Digest as _, Sha256};
 use std::{
     fs::File,
     io::{Read as _, Seek as _, SeekFrom},
@@ -152,7 +152,7 @@ impl<'a> Reader<'a> {
         if total != self.length {
             return Err(BAD);
         }
-        Ok(digest.finalize().into())
+        Ok(digest.finalize())
     }
     pub fn finish(mut self) -> Result<(), ConversionError> {
         check_stop(self.stop)?;

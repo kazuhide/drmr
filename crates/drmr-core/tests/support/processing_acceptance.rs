@@ -1,5 +1,5 @@
 //! Test-only media generation and independent HLS resource checks.
-use aes::cipher::{BlockDecryptMut as _, KeyIvInit as _, block_padding::Pkcs7};
+use aes::cipher::{BlockModeDecrypt as _, KeyIvInit as _, block_padding::Pkcs7};
 use drmr_core::{
     conversion::{
         Aes128Key, ConversionReport, Converter, DecodeEvidence, HlsOutputKey, ProcessingMode,
@@ -242,7 +242,7 @@ pub fn assert_original_segments(input: &Path, output: &Path, encrypted: bool) {
                 .iv
                 .expect("encrypted resource must declare its key domain");
             cbc::Decryptor::<aes::Aes128>::new(&AES_KEY.into(), &iv.into())
-                .decrypt_padded_mut::<Pkcs7>(&mut bytes)
+                .decrypt_padded::<Pkcs7>(&mut bytes)
                 .unwrap()
         } else {
             assert!(after.iv.is_none());

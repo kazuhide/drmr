@@ -7,8 +7,8 @@ use super::{
     BAD, CHUNK_BYTES, ConversionError, InputKeys, UNSUPPORTED, catalogue, init, read,
     visit_progressive,
 };
+use crate::sha256::Sha256;
 use crate::{concurrency::Stop, mp4};
-use sha2::{Digest as _, Sha256};
 use std::{
     io::{Read as _, Seek as _, SeekFrom, Write as _},
     path::Path,
@@ -101,7 +101,7 @@ pub(in crate::conversion) fn copy_progressive(
         output.write_all(&buffer[..size]).map_err(|_| IO_ERROR)?;
         remaining -= size as u64;
     }
-    if Some(digest.finalize().into()) != reader.expected_fingerprint() {
+    if Some(digest.finalize()) != reader.expected_fingerprint() {
         return Err(ConversionError("native-source-changed"));
     }
     for track in &init.tracks {

@@ -26,7 +26,7 @@ impl HlsSource {
         let _scope = converter
             .backend
             .scope(super::super::measurement::Phase::InputPreparation);
-        let frozen = FrozenSource::capture(input.input, &converter.backend.stop)?;
+        let frozen = converter.capture_source(input.input)?;
         let report = inspection::inspect(frozen.entrypoint())
             .map_err(|_| ConversionError("input-inspection-failed"))?;
         if report.format != InputFormat::Hls {

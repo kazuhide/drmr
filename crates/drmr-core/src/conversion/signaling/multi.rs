@@ -198,7 +198,7 @@ impl crate::conversion::Converter {
     ) -> Result<(), ConversionError> {
         profile(systems, format, target)?;
         self.backend.check_cancelled()?;
-        let frozen = crate::conversion::FrozenSource::capture(source.input, &self.backend.stop)?;
+        let frozen = self.capture_source(source.input)?;
         let command = self.using_frozen_source(&frozen);
         command.validate_drm_source_inner(
             crate::conversion::VerificationSource {

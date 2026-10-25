@@ -1,6 +1,6 @@
 //! Canonical access units retain every byte except validated container framing.
 use super::super::ConversionError;
-use sha2::{Digest as _, Sha256};
+use crate::sha256::Sha256;
 
 const BAD: ConversionError = ConversionError("invalid-ts-access-unit-evidence");
 const CONFIG: ConversionError = ConversionError("ts-codec-configuration-not-supported");
@@ -611,8 +611,8 @@ impl Native {
         let timing = self.timing()?;
         Ok(Evidence {
             count: self.count,
-            digest: self.hash.clone().finalize().into(),
-            clocks: self.clocks.clone().finalize().into(),
+            digest: self.hash.clone().finalize(),
+            clocks: self.clocks.clone().finalize(),
             first_pts: timing.first_pts,
             end_pts: timing.end_pts,
         })
@@ -788,8 +788,8 @@ impl Parser {
         }
         Ok(Evidence {
             count: self.count,
-            digest: self.hash.finalize().into(),
-            clocks: self.clocks.finalize().into(),
+            digest: self.hash.finalize(),
+            clocks: self.clocks.finalize(),
             first_pts: self.first_pts.ok_or(BAD)?,
             end_pts: self.end_pts,
         })

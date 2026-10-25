@@ -482,7 +482,7 @@ impl super::Converter {
         keys: &super::key_file::OperatorKeys,
     ) -> Result<(), ConversionError> {
         self.backend.check_cancelled()?;
-        let frozen = super::FrozenSource::capture(input, &self.backend.stop).map_err(|error| {
+        let frozen = self.capture_source(input).map_err(|error| {
             if error.0 == "cancelled" {
                 error
             } else {
@@ -634,7 +634,7 @@ impl super::Converter {
         } else {
             "master.m3u8"
         });
-        let frozen = super::FrozenSource::capture(&entrypoint, &self.backend.stop)?;
+        let frozen = self.capture_source(&entrypoint)?;
         self.verify_segment_signaling(&frozen, format, target, key, uri, hls)
     }
 }

@@ -123,7 +123,7 @@ impl Converter {
             {
                 return Err(super::signaling::UNSUPPORTED);
             }
-            let frozen = super::FrozenSource::capture(&first.source, &self.backend.stop)?;
+            let frozen = self.capture_source(&first.source)?;
             let tracks: Vec<_> = request
                 .tracks
                 .iter()
@@ -2402,7 +2402,7 @@ impl Converter {
             .is_some_and(|value| value.is_multi())
         {
             self.backend.check_cancelled()?;
-            let frozen = super::FrozenSource::capture(request.input, &self.backend.stop)?;
+            let frozen = self.capture_source(request.input)?;
             return self
                 .using_frozen_source(&frozen)
                 .convert_inner(ConversionRequest {

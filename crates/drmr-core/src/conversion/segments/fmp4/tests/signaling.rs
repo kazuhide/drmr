@@ -1,6 +1,63 @@
 use super::*;
 
 #[test]
+fn whole_resource_aes_signaling_and_source_guards_complete_with_one_cpu_token() {
+    let fixture = fixture(48_000);
+    let input = manifest_fixture(
+        &fixture,
+        TargetProtection::Clear,
+        OutputFormat::Hls,
+        "source",
+    );
+    let events = Arc::new(Collector::default());
+    let runner = Arc::new(
+        ToolRunner::new(Arc::new(Secrets::new()), events.clone()).with_limiter(Arc::new(
+            crate::resources::Limiter::new(1, 512 * 1024 * 1024),
+        )),
+    );
+    let converter = Converter::new(runner, "must-not-run-packager", "must-not-run-ffmpeg")
+        .with_timeout(std::time::Duration::from_secs(2));
+    let original = converter.capture_source(&input).unwrap();
+    let output = fixture.directory.path().join("single-token");
+    let empty = InputKeys::default();
+    let hls = HlsInputKeys::default();
+    let key = crate::conversion::HlsOutputKey::new(
+        "https://example.invalid/key",
+        crate::conversion::Aes128Key::from_hex(OUTPUT_KEY).unwrap(),
+    )
+    .unwrap();
+    let source = super::super::super::source::HlsSource::load(
+        &converter,
+        VerificationSource {
+            input: &input,
+            input_keys: &empty,
+            hls_keys: &hls,
+        },
+    )
+    .unwrap();
+    let report = convert_hls(
+        &converter,
+        ConversionRequest {
+            input: &input,
+            output: &output,
+            format: OutputFormat::Hls,
+            target: TargetProtection::HlsAes128,
+            input_keys: &empty,
+            hls_input_keys: &hls,
+            output_key: None,
+            hls_key_uri: None,
+            hls_output_key: Some(&key),
+        },
+        source,
+    )
+    .unwrap();
+    assert!(report.verification.passed);
+    assert!(output.join("master.m3u8").is_file());
+    original.check_original().unwrap();
+    assert_no_tools(&events);
+}
+
+#[test]
 fn rekeyed_dash_replaces_provider_records_using_the_generated_output_key() {
     let fixture = fixture(48_000);
     let input = manifest_fixture(

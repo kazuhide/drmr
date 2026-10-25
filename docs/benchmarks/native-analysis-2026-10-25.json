@@ -1,0 +1,509 @@
+{
+  "schema_version": 1,
+  "input": {
+    "type": "retained clear MPEG-TS HLS VOD",
+    "referenced_files": 708,
+    "referenced_bytes": 857417309,
+    "video_renditions": 6,
+    "audio_tracks": 1,
+    "duration": "approximately ten minutes"
+  },
+  "historical": {
+    "environment": {
+      "os": "macOS 27.0.1",
+      "architecture": "arm64",
+      "logical_cpus": 10,
+      "rust": "1.95.0",
+      "profile": "release",
+      "ffmpeg": "9.0.2",
+      "ffprobe": "9.0.2",
+      "packager": "3.8.0"
+    },
+    "timing_method": "Darwin /usr/bin/time -p -l",
+    "worker_setting": "automatic; track work was already parallel",
+    "records": [
+      {
+        "source_commit": "794fea033dbcc3d6408f9ed519a3d49803879203",
+        "source_tree": "b3779bcf473c150344b6fbc8f8b4d88ce532d71a",
+        "mode": "complete-decoding default",
+        "runs": 1,
+        "wall_seconds": 229.79,
+        "user_cpu_seconds": 702.91,
+        "system_cpu_seconds": 96.97,
+        "reported_max_resident_bytes": 136921088,
+        "media_tool_calls": {
+          "ffmpeg": 13,
+          "ffprobe": 2075,
+          "packager": 6
+        },
+        "passed": true,
+        "input_admitted": true
+      },
+      {
+        "source_commit": "c1f16506a2936c0d4ee3b7cf7fd14dbcd2a72fde",
+        "source_tree": "0a290085def68a6193a1b6d6f1c0a742a1cf6248",
+        "mode": "native default",
+        "runs": 1,
+        "wall_seconds": 16.43,
+        "user_cpu_seconds": 8.54,
+        "system_cpu_seconds": 3.13,
+        "reported_max_resident_bytes": 13697024,
+        "media_tool_calls": {
+          "ffmpeg": 0,
+          "ffprobe": 0,
+          "packager": 0
+        },
+        "passed": true,
+        "input_admitted": true
+      }
+    ],
+    "complete_decode_control_seconds": 223.3,
+    "complete_decode_control_runs": 1
+  },
+  "native_evolution": {
+    "date": "2026-10-25",
+    "environment": {
+      "os": "macOS 27.0.1",
+      "processor": "Apple M5",
+      "logical_cpus": 10,
+      "physical_memory_bytes": 34359738368,
+      "rust": "1.95.0",
+      "profile": "release"
+    },
+    "timing_method": "monotonic command wall time and Darwin wait4 rusage",
+    "worker_setting": "automatic",
+    "execution_order": [
+      [
+        "baseline",
+        "a_cpu",
+        "b_directories",
+        "c_parallel"
+      ],
+      [
+        "a_cpu",
+        "b_directories",
+        "c_parallel",
+        "baseline"
+      ],
+      [
+        "b_directories",
+        "c_parallel",
+        "baseline",
+        "a_cpu"
+      ]
+    ],
+    "all_reports_equal_except_measurements": true,
+    "successful_runs": 12,
+    "media_tool_calls_per_run": {
+      "ffmpeg": 0,
+      "ffprobe": 0,
+      "packager": 0
+    },
+    "stages": {
+      "baseline": {
+        "source": "b03514df0bcd69cbf1a33a47200ef7d2b1555429",
+        "binary_sha256": "418a1e72b6b5f3e9d4a3b0de8c9a4d0c37344565513bcef53a2695dd7b4f7938",
+        "median_wall_seconds": 21.129761665999993,
+        "min_wall_seconds": 14.412816458,
+        "max_wall_seconds": 21.543163250000006,
+        "median_cpu_seconds": 14.716336,
+        "max_rss_bytes": 14827520,
+        "samples": [
+          {
+            "wall_seconds": 14.412816458,
+            "user_seconds": 8.005779,
+            "system_seconds": 2.426642,
+            "max_rss_bytes": 13172736,
+            "load_before": [
+              3.39404296875,
+              5.57470703125,
+              6.85546875
+            ],
+            "load_after": [
+              3.48681640625,
+              5.5224609375,
+              6.8212890625
+            ],
+            "exit_code": 0,
+            "passed": true
+          },
+          {
+            "wall_seconds": 21.543163250000006,
+            "user_seconds": 11.268637,
+            "system_seconds": 3.867577,
+            "max_rss_bytes": 14827520,
+            "load_before": [
+              17.552734375,
+              8.49755859375,
+              7.7958984375
+            ],
+            "load_after": [
+              24.796875,
+              10.6806640625,
+              8.59130859375
+            ],
+            "exit_code": 0,
+            "passed": true
+          },
+          {
+            "wall_seconds": 21.129761665999993,
+            "user_seconds": 10.949961,
+            "system_seconds": 3.766375,
+            "max_rss_bytes": 13910016,
+            "load_before": [
+              55.64013671875,
+              18.853515625,
+              11.5849609375
+            ],
+            "load_after": [
+              76.3671875,
+              26.021484375,
+              14.32763671875
+            ],
+            "exit_code": 0,
+            "passed": true
+          }
+        ]
+      },
+      "a_cpu": {
+        "source": "22917a7710a1aa041641b9fb9ae18ff5dd0d9bbf",
+        "binary_sha256": "b769f9ba56147926264fdd82a907f373354a60a46efc5b95aa5197adc70b670b",
+        "median_wall_seconds": 10.344580624999992,
+        "min_wall_seconds": 9.407299875,
+        "max_wall_seconds": 12.732005999999998,
+        "median_cpu_seconds": 6.930175,
+        "max_rss_bytes": 16252928,
+        "samples": [
+          {
+            "wall_seconds": 9.407299875,
+            "user_seconds": 3.401315,
+            "system_seconds": 2.234589,
+            "max_rss_bytes": 14532608,
+            "load_before": [
+              3.48681640625,
+              5.5224609375,
+              6.8212890625
+            ],
+            "load_after": [
+              3.63916015625,
+              5.48828125,
+              6.7939453125
+            ],
+            "exit_code": 0,
+            "passed": true
+          },
+          {
+            "wall_seconds": 12.732005999999998,
+            "user_seconds": 4.330826,
+            "system_seconds": 3.326827,
+            "max_rss_bytes": 16252928,
+            "load_before": [
+              4.88720703125,
+              5.62451171875,
+              6.81005859375
+            ],
+            "load_after": [
+              7.66015625,
+              6.1982421875,
+              6.9931640625
+            ],
+            "exit_code": 0,
+            "passed": true
+          },
+          {
+            "wall_seconds": 10.344580624999992,
+            "user_seconds": 3.778946,
+            "system_seconds": 3.151229,
+            "max_rss_bytes": 15253504,
+            "load_before": [
+              76.3671875,
+              26.021484375,
+              14.32763671875
+            ],
+            "load_after": [
+              67.6044921875,
+              25.81884765625,
+              14.39306640625
+            ],
+            "exit_code": 0,
+            "passed": true
+          }
+        ]
+      },
+      "b_directories": {
+        "source": "2c7e9f7bf0644fc4b78c0a663f2bb5751ab93254",
+        "binary_sha256": "3e7163f6e48d1dcbda6c01690f8565bb5d166a5771b2bceb3e5899e2bd354a14",
+        "median_wall_seconds": 11.276455417000001,
+        "min_wall_seconds": 8.802669416999997,
+        "max_wall_seconds": 11.927019208999994,
+        "median_cpu_seconds": 6.582168,
+        "max_rss_bytes": 16760832,
+        "samples": [
+          {
+            "wall_seconds": 8.802669416999997,
+            "user_seconds": 3.30633,
+            "system_seconds": 1.841251,
+            "max_rss_bytes": 14548992,
+            "load_before": [
+              3.63916015625,
+              5.48828125,
+              6.7939453125
+            ],
+            "load_after": [
+              3.6142578125,
+              5.42236328125,
+              6.7548828125
+            ],
+            "exit_code": 0,
+            "passed": true
+          },
+          {
+            "wall_seconds": 11.276455417000001,
+            "user_seconds": 4.090396,
+            "system_seconds": 2.491772,
+            "max_rss_bytes": 16760832,
+            "load_before": [
+              7.66015625,
+              6.1982421875,
+              6.9931640625
+            ],
+            "load_after": [
+              12.19921875,
+              7.2001953125,
+              7.33837890625
+            ],
+            "exit_code": 0,
+            "passed": true
+          },
+          {
+            "wall_seconds": 11.927019208999994,
+            "user_seconds": 4.219009,
+            "system_seconds": 2.548537,
+            "max_rss_bytes": 15532032,
+            "load_before": [
+              24.796875,
+              10.6806640625,
+              8.59130859375
+            ],
+            "load_after": [
+              37.56689453125,
+              14.1904296875,
+              9.87890625
+            ],
+            "exit_code": 0,
+            "passed": true
+          }
+        ]
+      },
+      "c_parallel": {
+        "source": "9bd7e6c1e89335018f954e09637ac8e64b1ea047",
+        "binary_sha256": "715482720ca0561fabdb2a554445e49fad77b261df6bf2bc5baa2d5f5eb40625",
+        "median_wall_seconds": 10.421037709000004,
+        "min_wall_seconds": 9.660064665999997,
+        "max_wall_seconds": 10.657213791999993,
+        "median_cpu_seconds": 7.406769,
+        "max_rss_bytes": 15892480,
+        "samples": [
+          {
+            "wall_seconds": 9.660064665999997,
+            "user_seconds": 4.211834,
+            "system_seconds": 3.194935,
+            "max_rss_bytes": 15892480,
+            "load_before": [
+              3.6142578125,
+              5.42236328125,
+              6.7548828125
+            ],
+            "load_after": [
+              4.88720703125,
+              5.62451171875,
+              6.81005859375
+            ],
+            "exit_code": 0,
+            "passed": true
+          },
+          {
+            "wall_seconds": 10.657213791999993,
+            "user_seconds": 4.279668,
+            "system_seconds": 3.130588,
+            "max_rss_bytes": 15876096,
+            "load_before": [
+              12.19921875,
+              7.2001953125,
+              7.33837890625
+            ],
+            "load_after": [
+              17.552734375,
+              8.49755859375,
+              7.7958984375
+            ],
+            "exit_code": 0,
+            "passed": true
+          },
+          {
+            "wall_seconds": 10.421037709000004,
+            "user_seconds": 4.220289,
+            "system_seconds": 3.012828,
+            "max_rss_bytes": 15417344,
+            "load_before": [
+              37.56689453125,
+              14.1904296875,
+              9.87890625
+            ],
+            "load_after": [
+              55.64013671875,
+              18.853515625,
+              11.5849609375
+            ],
+            "exit_code": 0,
+            "passed": true
+          }
+        ]
+      }
+    }
+  },
+  "worker_comparison": {
+    "separate_measurement_batch": true,
+    "verification_depth": "native",
+    "workers_are_upper_bounds": true,
+    "all_reports_equal_except_measurements": true,
+    "results": {
+      "auto": {
+        "source_commit": "f5f3c571a4cc10284edf59ecfca5f2cc14a98edf",
+        "median_wall_seconds": 6.983593708000001,
+        "median_cpu_seconds": 6.409916,
+        "max_rss_bytes": 15679488,
+        "samples": [
+          {
+            "wall_seconds": 7.565471333,
+            "user_seconds": 3.603798,
+            "system_seconds": 2.819541,
+            "max_rss_bytes": 15679488,
+            "exit_code": 0,
+            "passed": true
+          },
+          {
+            "wall_seconds": 6.909915125000001,
+            "user_seconds": 3.548675,
+            "system_seconds": 2.749246,
+            "max_rss_bytes": 15613952,
+            "exit_code": 0,
+            "passed": true
+          },
+          {
+            "wall_seconds": 6.983593708000001,
+            "user_seconds": 3.546819,
+            "system_seconds": 2.863097,
+            "max_rss_bytes": 15564800,
+            "exit_code": 0,
+            "passed": true
+          }
+        ]
+      },
+      "1": {
+        "source_commit": "f5f3c571a4cc10284edf59ecfca5f2cc14a98edf",
+        "median_wall_seconds": 8.558546542000002,
+        "median_cpu_seconds": 5.3169509999999995,
+        "max_rss_bytes": 15400960,
+        "samples": [
+          {
+            "wall_seconds": 8.744546957999987,
+            "user_seconds": 3.429967,
+            "system_seconds": 1.886984,
+            "max_rss_bytes": 14532608,
+            "exit_code": 0,
+            "passed": true
+          },
+          {
+            "wall_seconds": 8.426441832999998,
+            "user_seconds": 3.279379,
+            "system_seconds": 1.796705,
+            "max_rss_bytes": 14385152,
+            "exit_code": 0,
+            "passed": true
+          },
+          {
+            "wall_seconds": 8.558546542000002,
+            "user_seconds": 3.396002,
+            "system_seconds": 1.930497,
+            "max_rss_bytes": 15400960,
+            "exit_code": 0,
+            "passed": true
+          }
+        ]
+      },
+      "2": {
+        "source_commit": "f5f3c571a4cc10284edf59ecfca5f2cc14a98edf",
+        "median_wall_seconds": 7.864224250000007,
+        "median_cpu_seconds": 5.455862,
+        "max_rss_bytes": 15974400,
+        "samples": [
+          {
+            "wall_seconds": 7.864224250000007,
+            "user_seconds": 3.43486,
+            "system_seconds": 2.016384,
+            "max_rss_bytes": 15941632,
+            "exit_code": 0,
+            "passed": true
+          },
+          {
+            "wall_seconds": 7.300946500000009,
+            "user_seconds": 3.532278,
+            "system_seconds": 1.923584,
+            "max_rss_bytes": 15925248,
+            "exit_code": 0,
+            "passed": true
+          },
+          {
+            "wall_seconds": 8.080885125000009,
+            "user_seconds": 3.633332,
+            "system_seconds": 2.22724,
+            "max_rss_bytes": 15974400,
+            "exit_code": 0,
+            "passed": true
+          }
+        ]
+      },
+      "4": {
+        "source_commit": "f5f3c571a4cc10284edf59ecfca5f2cc14a98edf",
+        "median_wall_seconds": 7.484559458000007,
+        "median_cpu_seconds": 5.761108,
+        "max_rss_bytes": 17170432,
+        "samples": [
+          {
+            "wall_seconds": 7.484559458000007,
+            "user_seconds": 3.576663,
+            "system_seconds": 2.242539,
+            "max_rss_bytes": 16236544,
+            "exit_code": 0,
+            "passed": true
+          },
+          {
+            "wall_seconds": 7.4273019170000225,
+            "user_seconds": 3.5400139999999998,
+            "system_seconds": 2.221094,
+            "max_rss_bytes": 17170432,
+            "exit_code": 0,
+            "passed": true
+          },
+          {
+            "wall_seconds": 7.539240333999999,
+            "user_seconds": 3.572865,
+            "system_seconds": 2.177529,
+            "max_rss_bytes": 16957440,
+            "exit_code": 0,
+            "passed": true
+          }
+        ]
+      }
+    }
+  },
+  "limitations": [
+    "Network acquisition excluded",
+    "Other host work was not isolated",
+    "Filesystem caches were uncontrolled",
+    "Historical observations are single runs",
+    "Reported RSS is not a simultaneous sum of a process tree",
+    "No DRM device or license-server playback qualification"
+  ]
+}

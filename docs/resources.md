@@ -1,5 +1,8 @@
 # Resource limits and measurements
 
+See [analysis performance](performance.md) for the measured implementation history,
+source revisions and worker comparisons.
+
 `--max-workers` is an upper bound. The subprocess backend can choose fewer workers when
 the media or available memory makes that safer. It also shares subprocess reservations
 between track, segment, and source-probe pools in the same process.
@@ -43,6 +46,11 @@ control group, or the unknown fallback. They contain no source paths or machine 
 
 ## Full analysis time
 
+Large media checksums use SHA-256, a fixed-size fingerprint of the bytes.
+Hashing and AES encryption select processor acceleration at runtime where it is
+supported, with a software fallback. Source builds need no processor-specific
+compiler flags. The same complete byte, sample and timing checks remain required.
+
 `analyze` without `--metadata-only` checks complete source media. A URL operation
 first retains the original resources, then checks a private copy against their bytes,
 prepares tracks and checks all selected encoded samples, codec configuration, clocks and playback windows in Rust. `--decode` additionally checks complete decoded media. Finishing
@@ -64,6 +72,13 @@ of compact results, then checks duration and clock boundaries in the original
 playlist order. Each media playlist is prepared in turn. This pool does not
 parallelize every stage or split a complete-track decode, and all source media
 checks remain required.
+
+Source preparation also copies and fingerprints independent media files in
+parallel within the shared CPU, memory and worker limits. Manifest discovery
+follows the declarations in dependency order. Each copy uses a 64 KiB streaming
+buffer; bounded file and path metadata also consume memory. Original-file
+checks use the same admission limits, and all active workers finish before
+failure cleanup can remove the private copies.
 
 For a quick look at MP4 metadata or HLS/DASH declarations, use
 `analyze --metadata-only`. It does not download complete media or run complete

@@ -1991,7 +1991,7 @@ drmr verify result/manifest.mpd --source source.mpd \
 <p>短い十秒アセットの時間は、起動処理やキャッシュの影響を受けます。メモリのサンプリング値は真の最大値ではありません。比較する場合は、原本・ツール版・ビルド設定・ワーカー上限・ホスト負荷を揃え、まず同じ完全検証が通ることを確認してください。</p>
 <p>内蔵ライブラリの検査速度を測るため、ソース <a href="https://github.com/kazuhide/drmr/commit/c1458e7deea5b31118073c682d799f60c8f4e8b5"><code>c1458e7d</code></a> を Rust 1.99 の release ビルドで実行しました。環境は論理 CPU 10 個、メモリ 32 GiB の macOS ARM64 です。2026年10月21日の測定では、マスタープレイリストと、各1000セグメントのメディアプレイリスト64本を検査する時間が、逐次処理で 14.50 ms、自動選択された10ワーカーで 3.37 ms でした。どちらの検査レポートも一致しました。小さい入力は1ワーカーで処理します。</p>
 <p>30000項目の DASH タイムラインでは逐次処理が 5.22 ms、自動選択が 5.27 ms となり、並列化で速くならない入力もありました。これらは実行順を変えて三回測った中央値で、変換時間ではなくライブラリによる検査全体の時間です。測定には作成した検査用データを使いました。同時に実行していた本プロジェクトのメディア試験は停止しましたが、ホスト上の他の処理までは分離していません。追加のメモリ確保量とプロセスのメモリ使用量は別々に測定しており、詳細はリンク先に記載しています。</p>
-<p>参照（英語）: <a href="https://github.com/kazuhide/drmr/blob/main/docs/resources.md">資源制限と測定方法</a>。</p>
+<p>参照（英語）: <a href="https://github.com/kazuhide/drmr/blob/main/docs/performance.md">性能測定の記録</a>。</p>
 </section>
 <section class="guide-chapter" id="docker" data-guide-chapter="docker" aria-labelledby="docker-title"><h2 id="docker-title">11. Docker による実行</h2><a class="guide-chapter-switch" href="../../guide/#docker" lang="en" hreflang="en">English</a>
 <h3>イメージのビルド</h3>
