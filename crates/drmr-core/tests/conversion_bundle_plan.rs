@@ -218,6 +218,64 @@ fn one_private_plan_publishes_and_independently_verifies_both_presentations() {
 }
 
 #[test]
+fn native_bundle_contexts_leave_one_cpu_for_nested_media_and_manifest_checks() {
+    let root = drmr_core::native::private_tempdir().unwrap();
+    let input = root.path().join("source.mp4");
+    video(&input);
+    let original = std::fs::read(&input).unwrap();
+    for cpus in [1, 2] {
+        let runner = ToolRunner::new(Arc::new(Secrets::new()), Arc::new(NoSink)).with_limiter(
+            Arc::new(drmr_core::resources::Limiter::new(cpus, 1024 * 1024 * 1024)),
+        );
+        let command = Converter::new(Arc::new(runner), "packager", "missing-ffmpeg")
+            .with_ffprobe("missing-ffprobe")
+            .with_max_workers(Some(4))
+            .unwrap()
+            .with_timeout(std::time::Duration::from_secs(5));
+        let output = root.path().join(format!("result-{cpus}"));
+        let plan = command
+            .create_bundle_plan(BundlePlanRequest {
+                input: VerificationSource {
+                    input: &input,
+                    input_keys: &InputKeys::default(),
+                    hls_keys: &HlsInputKeys::default(),
+                },
+                output_root: &output,
+                outputs: &outputs(),
+            })
+            .unwrap();
+        let keys = BundleOperatorKeys::default();
+        let tools = ManifestValidationTools::default();
+        let converted = command.execute_bundle_plan(&plan, &keys, &tools).unwrap();
+        assert_eq!(converted.outputs.len(), 2);
+        for child in &converted.outputs {
+            let verification = &child.conversion.verification;
+            assert!(verification.passed && verification.checks.is_pass());
+            assert_eq!(
+                verification.required_depth,
+                drmr_core::conversion::ValidationDepth::Native
+            );
+            assert_eq!(
+                verification.decode_evidence,
+                drmr_core::conversion::DecodeEvidence::not_requested()
+            );
+        }
+        let verified = command.verify_bundle_plan(&plan, &keys, &tools).unwrap();
+        assert!(verified.passed && verified.source_unchanged);
+        assert_eq!(
+            verified
+                .outputs
+                .iter()
+                .map(|child| child.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["dash", "hls"]
+        );
+        assert_eq!(std::fs::read(&input).unwrap(), original);
+        assert_no_stages(root.path());
+    }
+}
+
+#[test]
 fn failure_of_the_second_required_manifest_check_publishes_neither_result() {
     let root = drmr_core::native::private_tempdir().unwrap();
     let input = root.path().join("source.mp4");
