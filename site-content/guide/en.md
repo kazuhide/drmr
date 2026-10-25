@@ -1,6 +1,6 @@
 ---
 title: User guide
-updated: 2026-10-25
+updated: 2026-10-26
 version: 1.0.1
 ---
 
