@@ -10,13 +10,19 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Need {
+    DiscoveryNow,
+    Resource,
+}
+
 pub(super) fn walk(
     stage: &Path,
     entrypoint: &Path,
     stop: &Stop,
-    mut ready: impl FnMut(&Path) -> Result<(), ConversionError>,
+    mut ready: impl FnMut(&Path, Need) -> Result<(), ConversionError>,
 ) -> Result<(), ConversionError> {
-    ready(entrypoint)?;
+    ready(entrypoint, Need::DiscoveryNow)?;
     let mut prefix = [0u8; 64];
     let count = super::super::files::regular_input(&stage.join(entrypoint))?
         .read(&mut prefix)
@@ -32,7 +38,7 @@ pub(super) fn walk(
             for path in super::super::dash::source_references(&bytes)? {
                 cancelled(stop)?;
                 let path = normalize(&path)?;
-                ready(&path)?;
+                ready(&path, Need::Resource)?;
             }
             Ok(())
         }
@@ -77,7 +83,7 @@ fn hls(
     stage: &Path,
     manifest: &Path,
     stop: &Stop,
-    ready: &mut impl FnMut(&Path) -> Result<(), ConversionError>,
+    ready: &mut impl FnMut(&Path, Need) -> Result<(), ConversionError>,
     seen: &mut BTreeSet<PathBuf>,
     depth: usize,
 ) -> Result<(), ConversionError> {
@@ -131,7 +137,14 @@ fn hls(
                 return Err(LIMIT);
             }
             let path = reference(base, &uri)?;
-            ready(&path)?;
+            ready(
+                &path,
+                if child {
+                    Need::DiscoveryNow
+                } else {
+                    Need::Resource
+                },
+            )?;
             if child {
                 hls(stage, &path, stop, ready, seen, depth + 1)?;
             }

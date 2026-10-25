@@ -1,9 +1,7 @@
 //! Outer AES ciphertext and its localized plaintext need separate metadata guards.
 use super::{ConversionError, Converter, Presentation, proof};
 use crate::{
-    conversion::{
-        FrozenSource, ProcessingMode, files, frozen::OriginalGuard, native, native_media::Scheme,
-    },
+    conversion::{ProcessingMode, files, frozen::OriginalGuard, native, native_media::Scheme},
     inspection::{OutputFormat, Protection, TargetProtection},
 };
 use std::{fmt::Write as _, io::Write as _, path::Path, sync::Arc};
@@ -42,9 +40,11 @@ pub(super) fn verify_plaintext(
         {
             continue;
         }
-        let _permit = proof::permit(converter)?;
-        let path = project(converter, part)?;
-        let frozen = FrozenSource::capture(&path, &converter.backend.stop)?;
+        let path = {
+            let _permit = proof::permit(converter)?;
+            project(converter, part)?
+        };
+        let frozen = converter.capture_source(&path)?;
         let mut clear = converter.with_processing_clone(ProcessingMode::Segments);
         // Whole-resource AES output has no requested inner DRM domain. Original
         // encrypted input signaling is deliberately outside this output check.
