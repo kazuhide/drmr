@@ -43,6 +43,11 @@ control group, or the unknown fallback. They contain no source paths or machine 
 
 ## Full analysis time
 
+Large media checksums use SHA-256, a fixed-size fingerprint of the bytes.
+Hashing and AES encryption select processor acceleration at runtime where it is
+supported, with a software fallback. Source builds need no processor-specific
+compiler flags. The same complete byte, sample and timing checks remain required.
+
 `analyze` without `--metadata-only` checks complete source media. A URL operation
 first retains the original resources, then checks a private copy against their bytes,
 prepares tracks and checks all selected encoded samples, codec configuration, clocks and playback windows in Rust. `--decode` additionally checks complete decoded media. Finishing
