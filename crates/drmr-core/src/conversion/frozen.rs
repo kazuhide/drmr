@@ -87,7 +87,7 @@ impl FrozenSource {
         capture::from_inventory(inventory, stop, execution::Execution::default(), &|_, _| {})
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     fn from_inventory_observed(
         inventory: &SourceInventory,
         stop: &Stop,
