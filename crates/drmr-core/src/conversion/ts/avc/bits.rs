@@ -118,6 +118,7 @@ pub(super) fn rbsp(nal: &[u8], kind: u8) -> Result<Rbsp<'_>, ConversionError> {
     let mut bytes: Option<zeroize::Zeroizing<Vec<u8>>> = None;
     let mut copied = 1;
     let mut at = 1;
+    let mut nearby_escapes = 0;
     let pairs = memchr::memmem::Finder::new(&[0, 0]);
     while at < nal.len() {
         let remaining = &nal[at..];
@@ -146,14 +147,43 @@ pub(super) fn rbsp(nal: &[u8], kind: u8) -> Result<Rbsp<'_>, ConversionError> {
                 }
                 bytes.extend_from_slice(&nal[copied..end]);
                 copied = end + 1;
+                nearby_escapes = if pair < skip { nearby_escapes + 1 } else { 0 };
+                if nearby_escapes == 4 {
+                    break;
+                }
             }
-            _ => {}
+            _ => nearby_escapes = 0,
         }
         // An escape resets the input-layer zero count; its successor starts a new run.
         at = end + 1;
     }
     if let Some(mut bytes) = bytes {
-        bytes.extend_from_slice(&nal[copied..]);
+        if nearby_escapes == 4 {
+            // The removed escape resets zeros; dense suffixes need no further searches.
+            let mut zeros = 0;
+            let mut at = copied;
+            while at < nal.len() {
+                let byte = nal[at];
+                if zeros >= 2 {
+                    if byte == 3 {
+                        if nal.get(at + 1).is_none_or(|n| *n > 3) {
+                            return Err(BAD);
+                        }
+                        zeros = 0;
+                        at += 1;
+                        continue;
+                    }
+                    if byte <= 2 {
+                        return Err(BAD);
+                    }
+                }
+                bytes.push(byte);
+                zeros = if byte == 0 { zeros + 1 } else { 0 };
+                at += 1;
+            }
+        } else {
+            bytes.extend_from_slice(&nal[copied..]);
+        }
         Ok(Rbsp::Owned(bytes))
     } else {
         Ok(Rbsp::Borrowed(&nal[1..]))
