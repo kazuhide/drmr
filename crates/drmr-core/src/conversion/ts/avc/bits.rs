@@ -117,10 +117,9 @@ pub(super) fn rbsp(nal: &[u8], kind: u8) -> Result<Rbsp<'_>, ConversionError> {
     }
     let mut bytes: Option<zeroize::Zeroizing<Vec<u8>>> = None;
     let mut copied = 1;
-    let mut at = 1;
-    let pairs = memchr::memmem::Finder::new(&[0, 0]);
-    while let Some(pair) = pairs.find(&nal[at..]) {
-        let end = at + pair + 2;
+    // Valid pairs end at EOF or precede a nonzero byte, so matches cannot overlap.
+    for pair in memchr::memmem::find_iter(&nal[1..], &[0, 0]) {
+        let end = pair + 3;
         match nal.get(end) {
             None => break,
             Some(0..=2) => return Err(BAD),
@@ -138,8 +137,6 @@ pub(super) fn rbsp(nal: &[u8], kind: u8) -> Result<Rbsp<'_>, ConversionError> {
             }
             _ => {}
         }
-        // An escape resets the input-layer zero count; its successor starts a new run.
-        at = end + 1;
     }
     if let Some(mut bytes) = bytes {
         bytes.extend_from_slice(&nal[copied..]);

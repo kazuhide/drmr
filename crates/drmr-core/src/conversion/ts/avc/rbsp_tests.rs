@@ -111,6 +111,29 @@ fn valid_escapes_at_every_search_alignment_remove_exactly_one_layer() {
 }
 
 #[test]
+fn dense_escapes_reset_input_zeros_and_still_validate_the_tail() {
+    for next in 0..=3 {
+        let mut nal = vec![0x65];
+        let mut expected = Vec::new();
+        for _ in 0..16_384 {
+            nal.extend_from_slice(&[0, 0, 3]);
+            expected.extend_from_slice(&[0, 0]);
+        }
+        nal.extend_from_slice(&[next, 0x55, 0, 0]);
+        expected.extend_from_slice(&[next, 0x55, 0, 0]);
+        assert_eq!(&*rbsp(&nal, 5).unwrap(), expected);
+        assert_eq!(scalar_rbsp(&nal, 5).unwrap(), expected);
+
+        for tail in [&[0][..], &[1], &[2], &[3], &[3, 4]] {
+            let mut invalid = nal.clone();
+            invalid.extend_from_slice(tail);
+            assert_eq!(rbsp(&invalid, 5).err(), Some(BAD));
+            assert_eq!(scalar_rbsp(&invalid, 5).err(), Some(BAD));
+        }
+    }
+}
+
+#[test]
 fn late_invalid_escapes_fail_even_after_an_owned_prefix_was_created() {
     for escaped in [false, true] {
         for boundary in [15, 16, 17, 31, 32, 33, 63, 64, 65, 65_535, 65_536, 65_537] {
