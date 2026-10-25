@@ -356,12 +356,14 @@ struct Queue<'scope> {
     closed: bool,
 }
 
+type SharedQueue<'scope> = Arc<(Mutex<Queue<'scope>>, Condvar)>;
+
 /// A bounded pool of worker threads inside a [`std::thread::scope`], taking units in
 /// submission order (`ThreadPoolExecutor(max_workers=…)`). Units may borrow from the scope's
 /// environment. Dropping the pool shuts it down without cancelling (`shutdown(wait=True)`):
 /// the queued units still run, and the scope joins the workers.
 pub struct Pool<'scope> {
-    shared: Arc<(Mutex<Queue<'scope>>, Condvar)>,
+    shared: SharedQueue<'scope>,
 }
 
 impl fmt::Debug for Pool<'_> {
@@ -377,18 +379,27 @@ impl fmt::Debug for Pool<'_> {
 impl<'scope> Pool<'scope> {
     /// A pool of `workers` threads (at least one) spawned in `scope`.
     pub fn new<'env>(scope: &'scope Scope<'scope, 'env>, workers: usize) -> Self {
-        let shared = Arc::new((
-            Mutex::new(Queue {
-                units: VecDeque::new(),
-                closed: false,
-            }),
-            Condvar::new(),
-        ));
-        for _ in 0..workers.max(1) {
-            let shared = Arc::clone(&shared);
+        Self::spawn_with(workers, |shared| {
             scope.spawn(move || work(&shared));
+        })
+    }
+
+    fn spawn_with(workers: usize, mut spawn: impl FnMut(SharedQueue<'scope>)) -> Self {
+        // Own shutdown before spawning: a later spawn can panic after earlier
+        // workers have started waiting, and scope must still be able to join them.
+        let pool = Self {
+            shared: Arc::new((
+                Mutex::new(Queue {
+                    units: VecDeque::new(),
+                    closed: false,
+                }),
+                Condvar::new(),
+            )),
+        };
+        for _ in 0..workers.max(1) {
+            spawn(Arc::clone(&pool.shared));
         }
-        Pool { shared }
+        pool
     }
 
     /// Queue `unit`; a worker runs it once every unit submitted before it has started.
@@ -430,6 +441,10 @@ impl<'scope> Pool<'scope> {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "concurrency/pool_tests.rs"]
+mod pool_tests;
 
 impl Drop for Pool<'_> {
     fn drop(&mut self) {
