@@ -106,7 +106,15 @@ reads the original and current result rather than trusting saved success claims.
 
 ### Process arguments and plaintext memory
 
-Native validation holds supplied keys in ordinary Rust process memory and does not need FFmpeg/ffprobe processes. Conversion and additional `--decode` can invoke external tools. FFmpeg and Shaka Packager require plaintext keys for some supported operations. drmr passes those keys to child processes, including through command arguments. The operating system, sufficiently privileged processes, and process-inspection tools may observe those arguments or the process environment while the tool runs. Diagnostic masking does not hide live operating-system process information.
+Native validation and progressive MP4 decryption hold supplied keys in ordinary
+Rust process memory and do not need FFmpeg/ffprobe processes. Conversion can
+invoke Shaka Packager; FFmpeg and ffprobe are used only for complete decoding,
+selected with `--decode` or required by a saved plan. FFmpeg and Shaka Packager
+require plaintext keys for some supported operations. drmr passes those keys to
+child processes, including through command arguments. The operating system,
+sufficiently privileged processes, and process-inspection tools may observe
+those arguments or the process environment while the tool runs. Diagnostic
+masking does not hide live operating-system process information.
 
 Explicit DRM initialization metadata is passed to Shaka Packager through a
 private flag file instead of a command-line argument. The file can contain
@@ -119,6 +127,11 @@ Keys also exist in ordinary process memory. Sensitive Rust key buffers and sever
 ## Temporary files and cleanup
 
 Some verification paths write decrypted media and plaintext key files into private temporary directories. Processing is therefore not memory-only. Raw key-file writes refuse unsafe existing destinations instead of following a symbolic link or repairing public permissions after opening a file.
+
+Native progressive decryption also writes a private clear-media copy. It does
+not pass keys to a media subprocess; it replaces the removed protection metadata
+with zeroed padding. This does not erase the encrypted original or make clear
+media suitable for public storage. Keep working directories and results private.
 
 Temporary DRM flag files are created exclusively with private permissions.
 Their directory, file identity and contents are checked around tool execution.

@@ -49,7 +49,7 @@ executable directories to `PATH`, the directories your shell searches.
 
 | Executable | Supported from | Install | Purpose |
 | --- | --- | --- | --- |
-| `ffmpeg`, `ffprobe` | 9.0.1 | [FFmpeg](https://ffmpeg.org/download.html) | Additional complete decoding; FFmpeg also performs the encrypted finite progressive copy remux |
+| `ffmpeg`, `ffprobe` | 9.0.1 | [FFmpeg](https://ffmpeg.org/download.html) | Additional complete decoding with `--decode` |
 | `packager` | 3.8.0 | [Shaka Packager](https://github.com/shaka-project/shaka-packager#readme) | Encrypt and package media |
 
 The Rust executable checks MP4 structure directly. These are supported lower bounds. The [requirements table](docs/requirements.md#media-tools) records the builds used for qualification and explains which CI tools are pinned. In the additional `--decode` path, some older FFmpeg builds omit packet durations needed for encrypted audio verification; drmr refuses incomplete timing evidence. See [media processing](docs/media-processing.md) for details.
@@ -106,7 +106,7 @@ separately, and add `--external-validator` for Apple or DASH-IF checks.
 See [manifest validation](docs/manifest-validation.md) for rule coverage,
 report scopes, and optional tool setup.
 
-`doctor` discovers executable files without running them. Use `drmr doctor --probe --route progressive-mp4` to check versions and advertised options for a selected processing route. The report shows the actual resolved paths and distinguishes required tools from optional tools. These checks do not prove that a particular asset can be processed.
+`doctor` discovers executable files without running them. Use `drmr doctor --probe --route dash-presentation` to check the native conversion tools for a selected route; add `--decode` to check the additional decoder tools. The report shows the actual resolved paths and distinguishes required tools from optional tools. These checks do not prove that a particular asset can be processed.
 
 Use `convert INPUT --to ... --format ... --output ...` with a protected key configuration, then `verify OUTPUT --source INPUT` for independent comparison. See [conversion support](docs/conversion-support.md) for the tested protection routes, TS output options, and precise input profiles.
 
@@ -129,7 +129,7 @@ drmr packages supplied media and signaling. It does not provide a DRM license se
 
 | Command | Purpose |
 | --- | --- |
-| `doctor` | Discover tools; add `--probe` for version and option checks, or `--json` for scripts |
+| `doctor` | Discover native conversion tools; add `--decode` for decoder requirements, `--probe` for version/option checks, or `--json` for scripts |
 | `analyze` | Read local or URL metadata with `--metadata-only`; otherwise check complete local media or retain and check a supported URL with `--download-dir`; encrypted full checks use `--keys-file` |
 | `plan` | Describe conditional intent; add `--save` and `--output` for an executable plan; `--outputs` selects named outputs |
 | `convert` | Convert media directly or execute a saved plan with `--plan`; `--outputs` selects several outputs without saving a plan |

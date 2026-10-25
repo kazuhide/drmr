@@ -141,6 +141,8 @@ The complete progressive source must contain one AAC-LC audio track (`mp4a`), op
 
 Clear MP4 retains progressive sample tables. Encrypted MP4 is fragmented and can retain the two qualified tracks in one file. DASH/HLS uses separate tracks. Every encrypted source track needs its own key mapping.
 
+Rust writes a private copy, decrypting each sample at its original position. Clear sample types and zeroed padding replace protection metadata. Sample positions, clocks and playback edits stay unchanged. No FFmpeg, decoding or new segmentation is needed.
+
 Multiple edits, initial empty edits, rate changes, extra tracks, unrelated-file combinations, key rotation and input DRM initialization headers are refused by conversion. CENC accepts supported 8/16-byte sample-IV layouts; CBCS accepts supported 16-byte constant-IV and pattern layouts. This does not admit arbitrary encrypted MP4.
 
 ## TS admission
@@ -187,22 +189,22 @@ cargo build --release --locked -p drmr
 
 | Executable | Supported minimum | Purpose |
 | --- | --- | --- |
-| `ffmpeg` / `ffprobe` | 9.0.1 | Additional complete decoding with --decode; FFmpeg also performs the encrypted finite progressive container copy |
+| `ffmpeg` / `ffprobe` | 9.0.1 | Additional complete decoding with --decode |
 | `packager` | Shaka Packager 3.8.0 | Sample encryption, container changes and segmentation |
 
-Obtain trusted tool distributions and put the executables on PATH. CLI archives and Desktop bundles do not include the media tools; the Docker image does. A newer version still needs the required options and complete packet clocks. Native `analyze`, `plan --save` and `verify` need no external media tools. Conversion uses Shaka Packager on packaging routes. Clear finite progressive MP4 uses a native copy; its encrypted input route retains an FFmpeg copy remux, without transcoding. That container rewrite is separate from verification.
+Obtain trusted tools and put their executables on PATH. CLI and Desktop do not bundle them; Docker does. Native `analyze`, `plan --save` and `verify` need no external media tools. Conversion uses Shaka Packager on packaging routes; progressive MP4 copying and decryption run in Rust. FFmpeg and ffprobe are used only when complete decoding is required. Their builds must provide the required options and complete packet clocks.
 
 ## Discovery versus probing
 
 ```sh
 drmr doctor
 drmr doctor --probe --route all --json
-drmr doctor --probe --route dash-presentation
+drmr doctor --probe --route dash-presentation --decode
 ```
 
-Default `doctor` discovers paths without executing tools. `--probe` checks version and help output with a three-second budget per call and 1 MiB per stdout/stderr stream. Raw output is not included in the report. It does not validate media, keys, licenses or playback devices.
+Default `doctor` discovers paths without executing tools. `--probe` checks required tools' version and help output, with three seconds per call and 1 MiB per stdout/stderr stream. Optional tools are not launched. Raw output is omitted. Media, keys, licenses and playback devices are not validated.
 
-`doctor` profiles cover conversion and additional complete decoding, including tools not needed by native analysis or verification. Candidate `required_tools` instead lists the native minimum, with extra work stated in `condition_codes` and its explanation. `--route` chooses its required tool set. `progressive-mp4` needs FFmpeg/ffprobe; `all` checks all three tools. Other routes inspect Packager as needed. Unrelated tools may be optional, but unconfirmed process cleanup prevents readiness even for an optional probe. `ready` means the selected diagnostics passed; `media_compatibility_checked` stays false. Desktop and terminal launch environments may have different PATH values.
+`doctor` checks native conversion requirements by default. `progressive-mp4` and segment routes need no external tools; packaging routes and the default `all` require Shaka Packager. `--decode` adds FFmpeg/ffprobe and TS decoder preparation tools. Metadata plans list native tools in `required_tools` and decoding conditions in `condition_codes`. Each diagnostic tool's `required` reflects the selection. Unconfirmed process cleanup prevents readiness. `ready` covers these diagnostics; `media_compatibility_checked` stays false. Desktop and terminal PATH values may differ.
 
 See [requirements](https://github.com/kazuhide/drmr/blob/main/docs/requirements.md) and [Windows](https://github.com/kazuhide/drmr/blob/main/docs/windows.md).
 
@@ -1494,8 +1496,9 @@ drmr convert original.mp4 --to cbcs --format mp4 \
 | `--json` | One machine-readable diagnostic object |
 | `--probe` | Bounded version/help/advertised-options checks; default is discovery only |
 | `--route PROFILE` | Required tool set, default `all` |
+| `--decode` | Include complete-decoding tool requirements; default checks native conversion tools |
 
-PROFILE is `all`, `progressive-mp4`, `fragmented-mp4`, `dash-presentation`, `fmp4-hls-presentation`, `mpeg-ts-hls`, `mpeg-ts-sample-aes-hls` or `mpeg-ts-hls-ts`. Output route names are not automatically valid doctor values; use `all` to include the tool set for TS-DASH.
+PROFILE is `all`, `progressive-mp4`, `fragmented-mp4`, `dash-presentation`, `fmp4-hls-presentation`, `mpeg-ts-hls`, `mpeg-ts-sample-aes-hls`, `mpeg-ts-hls-ts`, `mpeg-ts-dash`, `fmp4-segments` or `mpeg-ts-segments`.
 
 ## analyze
 

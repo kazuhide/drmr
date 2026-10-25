@@ -196,7 +196,7 @@ fn inspection(v: &Value) -> Result<Value> {
     }
     Ok(output)
 }
-fn processing(v: &Value, verification: &Value, input: &Value) -> Result<Value> {
+fn processing(v: &Value, verification: &Value) -> Result<Value> {
     use drmr_core::inspection::{ProcessingRouteId, RequiredTool};
     object(
         v,
@@ -240,21 +240,6 @@ fn processing(v: &Value, verification: &Value, input: &Value) -> Result<Value> {
             .splice(0..0, [RequiredTool::Ffmpeg, RequiredTool::Ffprobe]);
         if p.route == ProcessingRouteId::MpegTsSegments {
             expected.required_tools.push(RequiredTool::ShakaPackager);
-        }
-    } else {
-        let encrypted_mp4 = input["format"] == "mp4"
-            && matches!(input["protection"].as_str(), Some("cenc" | "cbcs"));
-        let can_copy = encrypted_mp4
-            && matches!(
-                p.route,
-                ProcessingRouteId::ProgressiveMp4
-                    | ProcessingRouteId::FragmentedMp4
-                    | ProcessingRouteId::DashPresentation
-                    | ProcessingRouteId::Fmp4HlsPresentation
-            );
-        let copy_required = encrypted_mp4 && p.route == ProcessingRouteId::ProgressiveMp4;
-        if copy_required || (can_copy && p.required_tools.first() == Some(&RequiredTool::Ffmpeg)) {
-            expected.required_tools.insert(0, RequiredTool::Ffmpeg);
         }
     }
     if p != expected {
@@ -510,7 +495,7 @@ fn conversion(v: &Value, with_plan: bool) -> Result<Value> {
     output["output"] = inspection(&v["output"])?;
     output["verification"] = comparison_verification(&v["verification"], &v["schema_version"])?;
     if let Some(p) = v.get("processing") {
-        output["processing"] = processing(p, &output["verification"], &output["input"])?;
+        output["processing"] = processing(p, &output["verification"])?;
     }
     Ok(output)
 }
@@ -997,29 +982,53 @@ mod coverage_tests {
     }
 
     #[test]
+    fn native_encrypted_progressive_conversion_projects_without_decoder_tools() {
+        use drmr_core::inspection::{InputPreparation, ProcessingRouteId};
+        let fixtures =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../drmr/tests/fixtures/bbb");
+        let actual = ActualProcessing::new(
+            ProcessingRouteId::ProgressiveMp4,
+            InputPreparation::CompleteFile,
+        );
+        for name in ["cenc-iv8.mp4", "cbcs-joint.mp4"] {
+            let input = drmr_core::inspection::inspect(&fixtures.join(name)).unwrap();
+            let output = drmr_core::inspection::inspect(&fixtures.join("clip.mp4")).unwrap();
+            let payload = json!({
+                "schema_version":2,
+                "input":input,
+                "output":output,
+                "verification":native_report(),
+                "processing":actual,
+            });
+            let projected = conversion(&payload, false).unwrap();
+            assert!(verified(&projected["verification"]));
+            assert_eq!(projected["processing"]["required_tools"], json!([]));
+            let mut invalid = payload.clone();
+            invalid["processing"]["required_tools"] = json!(["ffmpeg"]);
+            assert!(conversion(&invalid, false).is_err());
+        }
+    }
+
+    #[test]
     fn processing_tools_keep_native_copy_decode_and_legacy_contracts_distinct() {
         use drmr_core::inspection::{InputPreparation, ProcessingRouteId, RequiredTool};
         let native = native_report();
-        let clear = json!({"format":"mp4","protection":"clear"});
-        let encrypted = json!({"format":"mp4","protection":"cenc"});
         let mut actual = ActualProcessing::new(
             ProcessingRouteId::ProgressiveMp4,
             InputPreparation::CompleteFile,
         );
         let value = |report: &ActualProcessing| serde_json::to_value(report).unwrap();
-        assert!(processing(&value(&actual), &native, &clear).is_ok());
-        assert!(processing(&value(&actual), &native, &encrypted).is_err());
+        assert!(processing(&value(&actual), &native).is_ok());
         actual.required_tools = vec![RequiredTool::Ffmpeg];
-        assert!(processing(&value(&actual), &native, &encrypted).is_ok());
-        assert!(processing(&value(&actual), &native, &clear).is_err());
+        assert!(processing(&value(&actual), &native).is_err());
         actual.required_tools.push(RequiredTool::Ffprobe);
-        assert!(processing(&value(&actual), &native, &encrypted).is_err());
+        assert!(processing(&value(&actual), &native).is_err());
         let mut decoded = native.clone();
         decoded["required_depth"] = json!("decoded");
-        assert!(processing(&value(&actual), &decoded, &clear).is_ok());
-        assert!(processing(&value(&actual), &json!({"schema_version":1}), &clear).is_ok());
+        assert!(processing(&value(&actual), &decoded).is_ok());
+        assert!(processing(&value(&actual), &json!({"schema_version":1})).is_ok());
         actual.required_tools.clear();
-        assert!(processing(&value(&actual), &json!({"schema_version":1}), &clear).is_err());
+        assert!(processing(&value(&actual), &json!({"schema_version":1})).is_err());
     }
 }
 

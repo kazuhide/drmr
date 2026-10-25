@@ -28,7 +28,6 @@ impl Backend {
         &self,
         route: crate::inspection::ProcessingRouteId,
         preparation: crate::inspection::InputPreparation,
-        ffmpeg_copy: bool,
     ) -> crate::inspection::ActualProcessing {
         use crate::inspection::RequiredTool;
         let mut report = crate::inspection::ActualProcessing::new(route, preparation);
@@ -39,8 +38,6 @@ impl Backend {
             if route == crate::inspection::ProcessingRouteId::MpegTsSegments {
                 report.required_tools.push(RequiredTool::ShakaPackager);
             }
-        } else if ffmpeg_copy {
-            report.required_tools.insert(0, RequiredTool::Ffmpeg);
         }
         report
     }
@@ -73,6 +70,13 @@ impl Backend {
             Ok(())
         }
     }
+    pub(super) fn require_decode(&self) -> Result<(), ConversionError> {
+        if self.validation_depth == super::ValidationDepth::Decoded {
+            Ok(())
+        } else {
+            Err(ConversionError("decoder-tool-requires-decode"))
+        }
+    }
     pub fn run(
         &self,
         argv: &[String],
@@ -89,6 +93,9 @@ impl Backend {
         receipt: &mut Option<crate::toolrun::CleanupReceipt>,
     ) -> Result<Vec<u8>, ConversionError> {
         self.check_cancelled()?;
+        if matches!(tool, "ffmpeg" | "ffprobe") {
+            self.require_decode()?;
+        }
         let effective = Self::effective_argv(argv, tool);
         let shown = vec![tool.to_string(), "[arguments redacted]".into()];
         let options = RunOptions {
@@ -461,6 +468,7 @@ impl Backend {
         let keyed = super::keys::KeyedArguments::new(argv, key);
         let argv = &keyed.argv;
         let secrets = keyed.secrets();
+        self.require_decode()?;
         let effective = Self::effective_argv(argv, "ffprobe");
         let shown = ["ffprobe".into(), "[arguments redacted]".into()];
         let options = RunOptions {
@@ -648,6 +656,7 @@ impl Backend {
         };
         self.check_cancelled()?;
         let mut pcm = super::finite::Pcm::new(window, format.0, format.1)?;
+        self.require_decode()?;
         let complete = self
             .runner
             .run_tool_streamed(&keyed.argv, "ffmpeg", &options, |bytes| pcm.push(bytes))
@@ -684,7 +693,28 @@ mod packet_tests {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     #[test]
-    fn actual_processing_tools_follow_native_decode_and_container_copy_work() {
+    fn native_depth_refuses_decoder_tools_before_process_launch() {
+        let events = Arc::new(crate::events::Collector::default());
+        let runner = Arc::new(ToolRunner::new(
+            Arc::new(crate::toolrun::Secrets::new()),
+            events.clone(),
+        ));
+        let converter = crate::conversion::Converter::new(runner, "missing", "missing");
+        for tool in ["ffmpeg", "ffprobe"] {
+            assert_eq!(
+                converter
+                    .backend
+                    .run(&["missing".into()], tool, &[])
+                    .unwrap_err(),
+                ConversionError("decoder-tool-requires-decode")
+            );
+        }
+        assert_eq!(events.records(), []);
+        assert!(converter.with_decode(true).backend.require_decode().is_ok());
+    }
+
+    #[test]
+    fn actual_processing_tools_require_ffmpeg_only_for_complete_decoding() {
         use crate::inspection::{InputPreparation, ProcessingRouteId, RequiredTool};
         let runner = Arc::new(ToolRunner::new(
             Arc::new(crate::toolrun::Secrets::new()),
@@ -709,31 +739,19 @@ mod packet_tests {
             backend.validation_depth = crate::conversion::ValidationDepth::Native;
             assert_eq!(
                 backend
-                    .processing(route, InputPreparation::CompleteFile, false)
+                    .processing(route, InputPreparation::CompleteFile)
                     .required_tools,
                 minimum
             );
-            if route.can_copy_encrypted_finite_source() {
-                let mut copied = minimum.clone();
-                copied.insert(0, RequiredTool::Ffmpeg);
-                assert_eq!(
-                    backend
-                        .processing(route, InputPreparation::CompleteFile, true)
-                        .required_tools,
-                    copied
-                );
-            }
             backend.validation_depth = crate::conversion::ValidationDepth::Decoded;
             let mut decoded = vec![RequiredTool::Ffmpeg, RequiredTool::Ffprobe];
             decoded.extend(minimum);
-            for copy in [false, true] {
-                assert_eq!(
-                    backend
-                        .processing(route, InputPreparation::CompleteFile, copy)
-                        .required_tools,
-                    decoded
-                );
-            }
+            assert_eq!(
+                backend
+                    .processing(route, InputPreparation::CompleteFile)
+                    .required_tools,
+                decoded
+            );
         }
     }
 

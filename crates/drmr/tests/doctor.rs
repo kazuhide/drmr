@@ -51,7 +51,7 @@ fn missing_dependencies_report_failure_as_json_without_environment_values() {
     );
     for tool in tools {
         assert_eq!(tool["available"], false);
-        assert_eq!(tool["required"], true);
+        assert_eq!(tool["required"], tool["name"] == "packager");
     }
     let text = String::from_utf8(output.stdout).unwrap();
     assert!(!text.contains("secret-must-not-appear"));
@@ -85,15 +85,80 @@ fn discovery_lists_only_current_runtime_dependencies_without_running_them() {
 #[test]
 fn selected_route_does_not_require_unrelated_tools() {
     let directory = tempfile::tempdir().unwrap();
-    for name in ["ffmpeg", "ffprobe"] {
-        fixture_tool(directory.path(), name, true);
-    }
     let output = doctor(directory.path(), &["--route", "progressive-mp4", "--json"]);
     assert_eq!(output.status.code(), Some(0));
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(report["ready"], true);
     assert_eq!(report["mode"], "discovery");
+    for tool in report["tools"].as_array().unwrap() {
+        assert_eq!(tool["required"], false);
+        assert_eq!(tool["available"], false);
+    }
+}
+
+#[test]
+fn native_routes_do_not_require_decoder_executables() {
+    for (route, needs_packager) in [
+        ("all", true),
+        ("progressive-mp4", false),
+        ("fragmented-mp4", true),
+        ("dash-presentation", true),
+        ("fmp4-hls-presentation", true),
+        ("mpeg-ts-hls", true),
+        ("mpeg-ts-dash", true),
+        ("mpeg-ts-sample-aes-hls", true),
+        ("mpeg-ts-hls-ts", true),
+        ("fmp4-segments", false),
+        ("mpeg-ts-segments", false),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        if needs_packager {
+            fixture_tool(directory.path(), "packager", true);
+        }
+        let output = doctor(directory.path(), &["--route", route, "--json"]);
+        assert_eq!(output.status.code(), Some(0), "{route}: {output:?}");
+        let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["ready"], true);
+        assert_eq!(report["tools"][0]["required"], false);
+        assert_eq!(report["tools"][1]["required"], false);
+        assert_eq!(report["tools"][2]["required"], needs_packager);
+    }
+}
+
+#[test]
+fn native_probe_skips_optional_decoder_executables_and_decode_makes_them_required() {
+    let directory = tempfile::tempdir().unwrap();
+    fixture_tool(directory.path(), "ffmpeg", true);
+    fixture_tool(directory.path(), "ffprobe", true);
+    let native = doctor(
+        directory.path(),
+        &["--probe", "--route", "progressive-mp4", "--json"],
+    );
+    assert_eq!(native.status.code(), Some(0), "{native:?}");
+    let report: Value = serde_json::from_slice(&native.stdout).unwrap();
+    assert_eq!(report["ready"], true);
+    for tool in &report["tools"].as_array().unwrap()[..2] {
+        assert_eq!(tool["available"], true);
+        assert_eq!(tool["required"], false);
+        assert_eq!(tool["version_status"], "not-checked");
+        assert_eq!(tool["feature_status"], "not-checked");
+    }
+    let decoded = doctor(
+        directory.path(),
+        &["--decode", "--route", "progressive-mp4", "--json"],
+    );
+    assert_eq!(decoded.status.code(), Some(0));
+    let report: Value = serde_json::from_slice(&decoded.stdout).unwrap();
+    assert_eq!(report["tools"][0]["required"], true);
+    assert_eq!(report["tools"][1]["required"], true);
     assert_eq!(report["tools"][2]["required"], false);
+
+    let absent = tempfile::tempdir().unwrap();
+    let decoded = doctor(
+        absent.path(),
+        &["--decode", "--route", "progressive-mp4", "--json"],
+    );
+    assert_eq!(decoded.status.code(), Some(1));
 }
 
 fn probing_tool(directory: &Path, name: &str, version: &str, options: &str) {
@@ -160,7 +225,13 @@ fn decoded_comparison_requires_both_muxers_and_both_default_encoders() {
         );
         let output = doctor(
             directory.path(),
-            &["--probe", "--route", "progressive-mp4", "--json"],
+            &[
+                "--probe",
+                "--decode",
+                "--route",
+                "progressive-mp4",
+                "--json",
+            ],
         );
         let report: Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(output.status.code(), Some(1), "missing {missing}: {report}");
@@ -201,7 +272,7 @@ fn complete_probe_requires_only_the_three_runtime_tools() {
         "v3.8.0",
         "--enable_raw_key_encryption\n--enable_raw_key_decryption\n--protection_scheme\n--segment_duration\n--mpd_output\n--hls_master_playlist_output",
     );
-    let output = doctor(directory.path(), &["--probe", "--json"]);
+    let output = doctor(directory.path(), &["--probe", "--decode", "--json"]);
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(report["ready"], true);
@@ -228,7 +299,13 @@ fn explicit_probe_reports_resolved_paths_versions_and_required_features() {
     );
     let output = doctor(
         directory.path(),
-        &["--probe", "--route", "progressive-mp4", "--json"],
+        &[
+            "--probe",
+            "--decode",
+            "--route",
+            "progressive-mp4",
+            "--json",
+        ],
     );
     assert_eq!(
         output.status.code(),
@@ -276,7 +353,13 @@ fn release_tag_banners_are_recognized_without_guessing_unversioned_builds() {
         }
         let output = doctor(
             directory.path(),
-            &["--probe", "--route", "progressive-mp4", "--json"],
+            &[
+                "--probe",
+                "--decode",
+                "--route",
+                "progressive-mp4",
+                "--json",
+            ],
         );
         assert_eq!(output.status.code(), Some(i32::from(status != "supported")));
         let report: Value = serde_json::from_slice(&output.stdout).unwrap();
@@ -301,7 +384,14 @@ fn release_tag_banners_are_recognized_without_guessing_unversioned_builds() {
 #[test]
 fn installed_tools_pass_the_actual_progressive_route_probe() {
     let output = Command::new(env!("CARGO_BIN_EXE_drmr"))
-        .args(["doctor", "--probe", "--route", "progressive-mp4", "--json"])
+        .args([
+            "doctor",
+            "--probe",
+            "--decode",
+            "--route",
+            "progressive-mp4",
+            "--json",
+        ])
         .env("DRM_KEY", "real-probe-secret-must-not-appear")
         .output()
         .unwrap();
@@ -329,7 +419,6 @@ fn installed_tools_pass_the_actual_progressive_route_probe() {
         assert_eq!(tool["failure_code"], Value::Null);
         let expected: &[&str] = if name == "ffmpeg" {
             &[
-                "encryption_scheme",
                 "decryption_key",
                 "decryption_keys",
                 "data_muxer",
@@ -381,7 +470,13 @@ fn keyed_routes_require_the_plural_kid_dictionary_option_in_both_tools() {
         }
         let output = doctor(
             directory.path(),
-            &["--probe", "--route", "progressive-mp4", "--json"],
+            &[
+                "--probe",
+                "--decode",
+                "--route",
+                "progressive-mp4",
+                "--json",
+            ],
         );
         let report: Value = serde_json::from_slice(&output.stdout).unwrap();
         let index = usize::from(lacking == "ffprobe");
@@ -432,7 +527,13 @@ fn an_old_version_and_missing_options_are_separate_failures() {
         probing_pair(directory.path(), version, options);
         let output = doctor(
             directory.path(),
-            &["--probe", "--route", "progressive-mp4", "--json"],
+            &[
+                "--probe",
+                "--decode",
+                "--route",
+                "progressive-mp4",
+                "--json",
+            ],
         );
         assert_eq!(output.status.code(), Some(1));
         let report: Value = serde_json::from_slice(&output.stdout).unwrap();
@@ -462,7 +563,13 @@ fn probes_bound_hanging_and_oversized_version_output() {
         let started = std::time::Instant::now();
         let output = doctor(
             directory.path(),
-            &["--probe", "--route", "progressive-mp4", "--json"],
+            &[
+                "--probe",
+                "--decode",
+                "--route",
+                "progressive-mp4",
+                "--json",
+            ],
         );
         assert!(started.elapsed() < std::time::Duration::from_secs(7));
         assert_eq!(output.status.code(), Some(1));
@@ -523,7 +630,7 @@ fn directories_and_non_executable_files_do_not_count_as_available() {
     fixture_tool(directory.path(), "ffprobe", false);
     fixture_tool(directory.path(), "packager", true);
     let output = doctor(directory.path(), &["--json"]);
-    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.status.code(), Some(0));
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
     let tools = report["tools"].as_array().unwrap();
     assert_eq!(tools[0]["available"], false);

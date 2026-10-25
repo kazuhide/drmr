@@ -186,6 +186,7 @@ impl Backend {
             log_stdout: false,
             ..RunOptions::default()
         };
+        self.require_decode()?;
         let effective = Self::effective_argv(&keyed.argv, "ffmpeg");
         let mut count = 0_u64;
         let completed = self
@@ -607,6 +608,7 @@ impl Backend {
         }
         argv.push(super::files::tool_path(view.input)?);
         let keyed = super::keys::KeyedArguments::new(argv, view.probe_keys());
+        self.require_decode()?;
         let effective = Backend::effective_argv(&keyed.argv, "ffprobe");
         let shown = ["ffprobe".into(), "[arguments redacted]".into()];
         let secrets = keyed.secrets();
@@ -671,6 +673,7 @@ impl Backend {
         ];
         argv.push(super::files::tool_path(view.input)?);
         let keyed = super::keys::KeyedArguments::new(argv, view.probe_keys());
+        self.require_decode()?;
         let effective = Self::effective_argv(&keyed.argv, "ffprobe");
         let shown = ["ffprobe".into(), "[arguments redacted]".into()];
         let secrets = keyed.secrets();

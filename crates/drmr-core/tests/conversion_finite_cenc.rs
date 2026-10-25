@@ -782,17 +782,47 @@ fn exclusive_lock(path: &Path) -> std::io::Result<std::fs::File> {
     Ok(file)
 }
 
+fn assert_additional_decoder_arguments(arguments: &str) {
+    let arguments = arguments.lines().collect::<Vec<_>>();
+    assert!(
+        arguments
+            .windows(2)
+            .any(|pair| pair == ["-decryption_keys", dictionary().as_str()])
+    );
+    assert!(
+        arguments
+            .windows(2)
+            .any(|pair| { pair[0] == "-map" && matches!(pair[1], "0:0" | "0:1") })
+    );
+    assert!(
+        arguments
+            .windows(2)
+            .any(|pair| { pair == ["-c:v", "rawvideo"] || pair == ["-c:a", "pcm_f32le"] })
+    );
+    assert!(
+        arguments
+            .windows(2)
+            .any(|pair| { pair == ["-f", "data"] || pair == ["-f", "f32le"] })
+    );
+    assert!(matches!(arguments.last(), Some(&"-" | &"pipe:2")));
+    assert!(
+        !arguments
+            .iter()
+            .any(|argument| matches!(*argument, "copy" | "-copyts" | "-movie_timescale"))
+    );
+}
+
 #[test]
-fn cancellation_of_the_direct_mux_drains_its_descendant_before_returning() {
+fn cancellation_of_the_additional_decoder_drains_its_descendant_before_returning() {
     use drmr_core::concurrency::Stop;
     use std::time::{Duration, Instant};
     let root = common::private_tempdir().unwrap();
     let ready = root.path().join("ready");
     let lock = root.path().join("held.lock");
-    let argv = root.path().join("mux-argv");
+    let argv = root.path().join("decoder-argv");
     let release = root.path().join("release");
     let tool = drmr_test_support::install(
-        &root.path().join("mux"),
+        &root.path().join("decoder"),
         &drmr_test_support::ToolSpec::default()
             .with("argv_file", argv.to_str().unwrap())
             .with(
@@ -816,6 +846,8 @@ fn cancellation_of_the_direct_mux_drains_its_descendant_before_returning() {
         let runner = Arc::new(ToolRunner::new(Arc::new(Secrets::new()), events.clone()));
         let c = Converter::new(runner, "unused-packager", tool.to_str().unwrap())
             .with_decode(true)
+            .with_max_workers(Some(1))
+            .unwrap()
             .with_stop(child_stop);
         let result = convert(&c, &worker_source, &worker_output, &complete_keys());
         (result, events.records())
@@ -826,28 +858,47 @@ fn cancellation_of_the_direct_mux_drains_its_descendant_before_returning() {
     }
     let became_ready = ready.is_file();
     let held = became_ready && exclusive_lock(&lock).is_err();
+    let arguments = std::fs::read_to_string(&argv);
+    let original_decoder_input = arguments.as_ref().is_ok_and(|arguments| {
+        arguments
+            .lines()
+            .collect::<Vec<_>>()
+            .windows(2)
+            .any(|pair| {
+                pair[0] == "-i" && std::fs::read(pair[1]).is_ok_and(|bytes| bytes == before)
+            })
+    });
     // Always cancel and join, including fixture-readiness failures.
     stop.set();
     let (result, events) = worker.join().unwrap();
     let token = result.as_ref().err().map(|error| error.0);
     assert!(
         became_ready && held,
-        "direct mux did not reach its held descendant barrier; result={token:?}"
+        "additional decoder did not reach its held descendant barrier; result={token:?}"
     );
     assert_eq!(token, Some("cancelled"));
     let _released = exclusive_lock(&lock)
         .expect("descendant must release its lock before cancellation returns");
-    let arguments = std::fs::read_to_string(&argv).unwrap();
-    assert!(arguments.lines().any(|s| s == "-decryption_keys"));
-    assert!(arguments.lines().any(|s| s == "-copyts"));
-    assert!(arguments.lines().any(|s| s == "-movie_timescale"));
     assert!(
-        Path::new(arguments.lines().last().unwrap())
-            .extension()
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("mp4"))
+        original_decoder_input,
+        "decoder must read the complete original media"
     );
+    let arguments = arguments.unwrap();
+    assert_additional_decoder_arguments(&arguments);
     assert!(!output.exists());
     assert_eq!(std::fs::read(source).unwrap(), before);
+    let commands = events
+        .iter()
+        .filter(|record| record.get("event").and_then(Value::as_str) == Some("command"))
+        .filter(|record| record.get("tool").and_then(Value::as_str) == Some("ffmpeg"))
+        .collect::<Vec<_>>();
+    assert_ne!(commands, [] as [&drmr_core::events::Record; 0]);
+    for command in commands {
+        assert_eq!(
+            command["argv"],
+            serde_json::json!(["ffmpeg", "[arguments redacted]"])
+        );
+    }
     let diagnostics = format!("{events:?}");
     for secret in [VIDEO_KEY, AUDIO_KEY, &dictionary()] {
         assert!(!diagnostics.contains(secret));

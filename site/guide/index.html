@@ -155,6 +155,7 @@ drmr verify --plan clear.plan.json --json
 <tr><th scope="row">cbcs</th><td>clear / cenc / cbcs</td><td>clear / cenc / cbcs</td><td>clear / cbcs / AES-128</td></tr>
 </tbody></table></div>
 <p>Clear MP4 retains progressive sample tables. Encrypted MP4 is fragmented and can retain the two qualified tracks in one file. DASH/HLS uses separate tracks. Every encrypted source track needs its own key mapping.</p>
+<p>Rust writes a private copy, decrypting each sample at its original position. Clear sample types and zeroed padding replace protection metadata. Sample positions, clocks and playback edits stay unchanged. No FFmpeg, decoding or new segmentation is needed.</p>
 <p>Multiple edits, initial empty edits, rate changes, extra tracks, unrelated-file combinations, key rotation and input DRM initialization headers are refused by conversion. CENC accepts supported 8/16-byte sample-IV layouts; CBCS accepts supported 16-byte constant-IV and pattern layouts. This does not admit arbitrary encrypted MP4.</p>
 <h3>TS admission</h3>
 <p>The TS profile uses one fixed program, one progressive H.264 video stream with optional 44.1 or 48 kHz AAC-LC audio. DASH, fMP4 HLS and TS output also accept audio-only input under the same single-program, 44.1 or 48 kHz AAC-LC conditions.</p>
@@ -180,17 +181,17 @@ drmr --version
 <p><code>--locked</code> uses the dependency versions in <code>Cargo.lock</code>. <code>Cargo.toml</code> declares compatible dependency ranges; the lockfile records one concrete combination. Dependency updates still need minimum-Rust and stable qualification.</p>
 <h3>Media tools</h3>
 <div class="guide-table-scroll" role="region" aria-labelledby="table-8-title" tabindex="0"><table><caption id="table-8-title">Media tools — Table 8</caption><thead><tr><th scope="col">Executable</th><th scope="col">Supported minimum</th><th scope="col">Purpose</th></tr></thead><tbody>
-<tr><th scope="row"><code>ffmpeg</code> / <code>ffprobe</code></th><td>9.0.1</td><td>Additional complete decoding with --decode; FFmpeg also performs the encrypted finite progressive container copy</td></tr>
+<tr><th scope="row"><code>ffmpeg</code> / <code>ffprobe</code></th><td>9.0.1</td><td>Additional complete decoding with --decode</td></tr>
 <tr><th scope="row"><code>packager</code></th><td>Shaka Packager 3.8.0</td><td>Sample encryption, container changes and segmentation</td></tr>
 </tbody></table></div>
-<p>Obtain trusted tool distributions and put the executables on PATH. CLI archives and Desktop bundles do not include the media tools; the Docker image does. A newer version still needs the required options and complete packet clocks. Native <code>analyze</code>, <code>plan --save</code> and <code>verify</code> need no external media tools. Conversion uses Shaka Packager on packaging routes. Clear finite progressive MP4 uses a native copy; its encrypted input route retains an FFmpeg copy remux, without transcoding. That container rewrite is separate from verification.</p>
+<p>Obtain trusted tools and put their executables on PATH. CLI and Desktop do not bundle them; Docker does. Native <code>analyze</code>, <code>plan --save</code> and <code>verify</code> need no external media tools. Conversion uses Shaka Packager on packaging routes; progressive MP4 copying and decryption run in Rust. FFmpeg and ffprobe are used only when complete decoding is required. Their builds must provide the required options and complete packet clocks.</p>
 <h3>Discovery versus probing</h3>
 <figure class="guide-example" aria-labelledby="example-4-title" data-code-language="sh"><figcaption id="example-4-title">Example 4: sh</figcaption><pre tabindex="0"><code>drmr doctor
 drmr doctor --probe --route all --json
-drmr doctor --probe --route dash-presentation
+drmr doctor --probe --route dash-presentation --decode
 </code></pre></figure>
-<p>Default <code>doctor</code> discovers paths without executing tools. <code>--probe</code> checks version and help output with a three-second budget per call and 1 MiB per stdout/stderr stream. Raw output is not included in the report. It does not validate media, keys, licenses or playback devices.</p>
-<p><code>doctor</code> profiles cover conversion and additional complete decoding, including tools not needed by native analysis or verification. Candidate <code>required_tools</code> instead lists the native minimum, with extra work stated in <code>condition_codes</code> and its explanation. <code>--route</code> chooses its required tool set. <code>progressive-mp4</code> needs FFmpeg/ffprobe; <code>all</code> checks all three tools. Other routes inspect Packager as needed. Unrelated tools may be optional, but unconfirmed process cleanup prevents readiness even for an optional probe. <code>ready</code> means the selected diagnostics passed; <code>media_compatibility_checked</code> stays false. Desktop and terminal launch environments may have different PATH values.</p>
+<p>Default <code>doctor</code> discovers paths without executing tools. <code>--probe</code> checks required tools&#x27; version and help output, with three seconds per call and 1 MiB per stdout/stderr stream. Optional tools are not launched. Raw output is omitted. Media, keys, licenses and playback devices are not validated.</p>
+<p><code>doctor</code> checks native conversion requirements by default. <code>progressive-mp4</code> and segment routes need no external tools; packaging routes and the default <code>all</code> require Shaka Packager. <code>--decode</code> adds FFmpeg/ffprobe and TS decoder preparation tools. Metadata plans list native tools in <code>required_tools</code> and decoding conditions in <code>condition_codes</code>. Each diagnostic tool&#x27;s <code>required</code> reflects the selection. Unconfirmed process cleanup prevents readiness. <code>ready</code> covers these diagnostics; <code>media_compatibility_checked</code> stays false. Desktop and terminal PATH values may differ.</p>
 <p>See <a href="https://github.com/kazuhide/drmr/blob/main/docs/requirements.md">requirements</a> and <a href="https://github.com/kazuhide/drmr/blob/main/docs/windows.md">Windows</a>.</p>
 </section>
 <section class="guide-chapter" id="key-configuration" data-guide-chapter="key-configuration" aria-labelledby="key-configuration-title"><h2 id="key-configuration-title">5. Key configuration and confidentiality</h2><a class="guide-chapter-switch" href="../ja/guide/#key-configuration" lang="ja" hreflang="ja">日本語</a>
@@ -2343,8 +2344,9 @@ cargo test --locked -p drmr-core --test conversion_bundle_encryption \
 <tr><th scope="row"><code>--json</code></th><td>One machine-readable diagnostic object</td></tr>
 <tr><th scope="row"><code>--probe</code></th><td>Bounded version/help/advertised-options checks; default is discovery only</td></tr>
 <tr><th scope="row"><code>--route PROFILE</code></th><td>Required tool set, default <code>all</code></td></tr>
+<tr><th scope="row"><code>--decode</code></th><td>Include complete-decoding tool requirements; default checks native conversion tools</td></tr>
 </tbody></table></div>
-<p>PROFILE is <code>all</code>, <code>progressive-mp4</code>, <code>fragmented-mp4</code>, <code>dash-presentation</code>, <code>fmp4-hls-presentation</code>, <code>mpeg-ts-hls</code>, <code>mpeg-ts-sample-aes-hls</code> or <code>mpeg-ts-hls-ts</code>. Output route names are not automatically valid doctor values; use <code>all</code> to include the tool set for TS-DASH.</p>
+<p>PROFILE is <code>all</code>, <code>progressive-mp4</code>, <code>fragmented-mp4</code>, <code>dash-presentation</code>, <code>fmp4-hls-presentation</code>, <code>mpeg-ts-hls</code>, <code>mpeg-ts-sample-aes-hls</code>, <code>mpeg-ts-hls-ts</code>, <code>mpeg-ts-dash</code>, <code>fmp4-segments</code> or <code>mpeg-ts-segments</code>.</p>
 <h3>analyze</h3>
 <div class="guide-table-scroll" role="region" aria-labelledby="table-22-title" tabindex="0"><table><caption id="table-22-title">analyze — Table 22</caption><thead><tr><th scope="col">Argument/option</th><th scope="col">Meaning</th></tr></thead><tbody>
 <tr><th scope="row"><code>INPUT</code></th><td>Local MP4, DASH or HLS, or HTTP(S) URL; full URL analysis has the <a href="#url-input">acquisition profiles</a></td></tr>

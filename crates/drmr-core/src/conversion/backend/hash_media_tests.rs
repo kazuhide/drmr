@@ -12,6 +12,7 @@ fn backend() -> Backend {
         "packager",
         "ffmpeg",
     )
+    .with_decode(true)
     .with_timeout(Duration::from_secs(30))
     .backend
 }

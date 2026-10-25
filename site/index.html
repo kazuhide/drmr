@@ -182,7 +182,7 @@
           <p>From a source checkout:</p>
           <pre role="group" tabindex="0" aria-label="Build and check the CLI"><code>cargo install --path crates/drmr --locked
 drmr --version
-drmr doctor --probe --route progressive-mp4</code></pre>
+drmr doctor --probe</code></pre>
           <p class="section-note">The probe checks tool versions and advertised options. It does not verify a media asset.</p>
           <a href="https://github.com/kazuhide/drmr#install">Source installation instructions</a>
         </div>
@@ -192,7 +192,7 @@ drmr doctor --probe --route progressive-mp4</code></pre>
             <div><dt>FFmpeg / FFprobe</dt><dd>9.0.1 or newer</dd></div>
             <div><dt>Shaka Packager</dt><dd>3.8.0 or newer</dd></div>
           </dl>
-          <p>Native analysis and verification need no external media tools. Conversion uses Shaka Packager on packaging routes; <code>--decode</code> adds FFmpeg/ffprobe. Encrypted finite progressive conversion also uses an FFmpeg container copy.</p>
+          <p>Native analysis and verification need no external media tools. Packaging routes use Shaka Packager; progressive MP4 copying and decryption run in Rust. FFmpeg/ffprobe are used only for complete decoding, added with <code>--decode</code>.</p>
           <p><a href="https://github.com/kazuhide/drmr/blob/main/docs/requirements.md">Requirements and tested versions</a><br><a href="https://github.com/kazuhide/drmr/blob/main/docs/windows.md">Windows setup</a></p>
         </div>
       </div>

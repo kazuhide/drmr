@@ -373,25 +373,3 @@ pub fn segment_timing_from_probe(data: &Value) -> Result<SegmentTiming, MediaErr
         packet_count,
     })
 }
-
-/// `json.loads(bytes)`: UTF-8 (a UTF-8 byte-order mark allowed, as Python's encoding
-/// detection allows it); any failure is the `ValueError` `json.JSONDecodeError` is.
-pub(super) fn json_loads_bytes(data: &[u8]) -> Result<Value, MediaError> {
-    let data = data.strip_prefix(b"\xef\xbb\xbf").unwrap_or(data);
-    serde_json::from_slice(data).map_err(|error| MediaError::Value(json_error_text(&error)))
-}
-
-/// `json.loads(str)`: a byte-order mark is an error.
-pub(super) fn json_loads_str(text: &str) -> Result<Value, MediaError> {
-    serde_json::from_str(text).map_err(|error| MediaError::Value(json_error_text(&error)))
-}
-
-/// The decode error without any quoted input (the input may be a tool's dump of key boxes).
-fn json_error_text(error: &serde_json::Error) -> String {
-    format!(
-        "invalid JSON from the tool: {:?} at line {} column {}",
-        error.classify(),
-        error.line(),
-        error.column()
-    )
-}

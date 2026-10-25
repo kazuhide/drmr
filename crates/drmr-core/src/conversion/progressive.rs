@@ -468,7 +468,7 @@ impl Converter {
         let probe =
             (input.protection != Protection::Clear).then_some(super::keys::ProbeKeys::All(keys));
         self.progressive_codecs(source, input, probe)?;
-        self.mux_progressive(source, candidate, input.tracks.len(), &original, probe)?;
+        self.mux_progressive(source, candidate, keys)?;
         let actual = crate::inspection::inspect(candidate).map_err(|_| UNSUPPORTED)?;
         super::cenc::clear(&audio::movie(candidate)?)?;
         if actual.protection != Protection::Clear
@@ -515,13 +515,7 @@ impl Converter {
         let stage = super::workspace()?;
         let candidate = stage.path().join("progressive.mp4");
         let packaging = self.backend.scope(super::measurement::Phase::Packaging);
-        self.mux_progressive(
-            source,
-            &candidate,
-            input.tracks.len(),
-            &source_layout,
-            source_keys,
-        )?;
+        self.mux_progressive(source, &candidate, keys)?;
         drop(packaging);
         super::private_file_mode(&candidate)?;
         let output = crate::inspection::inspect(&candidate)
@@ -554,7 +548,6 @@ impl Converter {
             processing: Some(self.backend.processing(
                 crate::inspection::ProcessingRouteId::ProgressiveMp4,
                 crate::inspection::InputPreparation::CompleteFile,
-                input.protection != Protection::Clear,
             )),
         }))
     }
@@ -668,53 +661,9 @@ impl Converter {
         &self,
         source: &Path,
         candidate: &Path,
-        tracks: usize,
-        source_layout: &Layout,
-        keys: Option<super::keys::ProbeKeys<'_>>,
+        keys: &super::InputKeys,
     ) -> Result<(), ConversionError> {
-        if self.backend.validation_depth == super::ValidationDepth::Native && keys.is_none() {
-            // A complete clear presentation already carries the exact edit
-            // lists, sample tables and display controls that must be retained.
-            return super::copy_private(source, candidate);
-        }
-        let mut argv = vec![
-            self.backend.ffmpeg.clone(),
-            "-v".into(),
-            "error".into(),
-            "-nostdin".into(),
-            "-xerror".into(),
-            "-threads".into(),
-            "1".into(),
-            "-filter_threads".into(),
-            "1".into(),
-            "-filter_complex_threads".into(),
-            "1".into(),
-            "-copyts".into(),
-            "-protocol_whitelist".into(),
-            "file,crypto".into(),
-            "-i".into(),
-            super::files::tool_path(source)?,
-        ];
-        for index in 0..tracks {
-            argv.extend(["-map".into(), format!("0:{index}")]);
-        }
-        argv.extend([
-            "-c".into(),
-            "copy".into(),
-            "-avoid_negative_ts".into(),
-            "disabled".into(),
-            "-use_editlist".into(),
-            "1".into(),
-            "-movie_timescale".into(),
-            source_layout.movie_timescale.to_string(),
-        ]);
-        if let Some(scale) = source_layout.video_timescale {
-            argv.extend(["-video_track_timescale".into(), scale.to_string()]);
-        }
-        argv.push(super::files::tool_path(candidate)?);
-        let keyed = super::keys::KeyedArguments::new(argv, keys);
-        self.backend.run(&keyed.argv, "ffmpeg", &keyed.secrets())?;
-        Ok(())
+        super::native_media::copy_progressive(source, candidate, keys, &self.backend.stop)
     }
 }
 

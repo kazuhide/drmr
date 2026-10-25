@@ -1,12 +1,14 @@
 //! Media parsing, exact packet timing, and subprocess operations on synthetic clips.
 
 mod common;
+#[path = "support/media_tools.rs"]
+mod media_tools;
 
 use drmr_core::events::NoSink;
 use drmr_core::media::{
-    MediaEngine, MediaError, PacketInfo, Subprocess, codec_from_init, concatenate,
-    default_timing_tolerance, packets_from_probe, payload_hashes_from_probe, payloads_from_probe,
-    same_timing, segment_timing_from_probe,
+    HlsMediaError, MediaError, PacketInfo, codec_from_init, concatenate, default_timing_tolerance,
+    packets_from_probe, payload_hashes_from_probe, payloads_from_probe, same_timing,
+    segment_timing_from_probe,
 };
 use drmr_core::toolrun::{Secrets, ToolRunner};
 use num_bigint::BigInt;
@@ -91,11 +93,61 @@ fn ffmpeg_major_is_read_from_distribution_and_upstream_version_lines() {
     assert_eq!(ffmpeg_major_of(""), None);
 }
 
-fn engine() -> Subprocess {
-    Subprocess::new(Arc::new(ToolRunner::new(
-        Arc::new(Secrets::new()),
-        Arc::new(NoSink),
-    )))
+fn reference_packets(path: &Path, stream: i64) -> Result<PacketInfo, MediaError> {
+    let runner = ToolRunner::new(Arc::new(Secrets::new()), Arc::new(NoSink));
+    let completed = media_tools::run(
+        &runner,
+        &[
+            "ffprobe",
+            "-threads",
+            "1",
+            "-v",
+            "error",
+            "-show_streams",
+            "-show_packets",
+            "-of",
+            "json",
+            path.to_str().unwrap(),
+        ],
+        false,
+    )?;
+    assert_eq!(completed.returncode, Some(0));
+    packets_from_probe(&serde_json::from_slice(&completed.stdout).unwrap(), stream)
+}
+
+fn reference_digest(path: &Path, stream: i64) -> Result<String, MediaError> {
+    let runner = ToolRunner::new(Arc::new(Secrets::new()), Arc::new(NoSink));
+    let completed = media_tools::run(
+        &runner,
+        &[
+            "ffmpeg",
+            "-v",
+            "error",
+            "-threads",
+            "1",
+            "-i",
+            path.to_str().unwrap(),
+            "-map",
+            &format!("0:{stream}"),
+            "-threads",
+            "1",
+            "-f",
+            "hash",
+            "-hash",
+            "sha256",
+            "-",
+        ],
+        false,
+    )?;
+    if completed.returncode != Some(0) {
+        return Err(HlsMediaError::new("media-decode-failed").into());
+    }
+    Ok(String::from_utf8(completed.stdout)
+        .unwrap()
+        .trim()
+        .strip_prefix("SHA256=")
+        .unwrap()
+        .to_owned())
 }
 
 fn ratio(numerator: i64, denominator: i64) -> BigRational {
@@ -657,47 +709,12 @@ fn probe_packets_keeps_the_partial_final_aac_packet() {
         &dir.path().join("tail.mp4"),
     )
     .unwrap();
-    let Some(original) = probe_or_skip(engine().probe_packets(&tail, 1), &tail) else {
+    let Some(original) = probe_or_skip(reference_packets(&tail, 1), &tail) else {
         return;
     };
     assert_eq!(original.timescale, 48_000);
     // The regression ADTS cannot preserve: a partial final AAC packet, not padded to 1024.
     assert_eq!(*original.durations.last().unwrap(), 512);
-}
-
-#[test]
-fn normalized_segments_keep_their_timing_shifted_by_two_seconds() {
-    if !(on_path("ffmpeg") && on_path("ffprobe")) {
-        return;
-    }
-    let dir = common::private_tempdir().unwrap();
-    hls_fmp4(dir.path(), "libx264");
-    let source = concatenate(
-        &[dir.path().join("init.mp4"), dir.path().join("source1.m4s")],
-        &dir.path().join("source_1.mp4"),
-    )
-    .unwrap();
-    let engine = engine();
-    let shift = ratio(2, 1);
-    for (stream, content_type, suffix) in [(0, "video", "ts"), (1, "audio", "mp4")] {
-        let Some(before) = probe_or_skip(engine.probe_packets(&source, stream), &source) else {
-            return;
-        };
-        let normalized = engine
-            .normalize_segment(
-                &source,
-                &dir.path().join(format!("normalized_{stream}.{suffix}")),
-                stream,
-                &shift,
-                content_type,
-            )
-            .unwrap();
-        let after = engine.probe_packets(&normalized, 0).unwrap();
-        assert!(
-            same_timing(&before, &after, &shift, None).unwrap(),
-            "{content_type}: {before:?} -> {after:?}"
-        );
-    }
 }
 
 #[test]
@@ -738,20 +755,14 @@ fn decoded_digests_compare_content_not_files() {
     let (a, b) = (make("a.mp4", "testsrc"), make("b.mp4", "testsrc2"));
     let copy = dir.path().join("copy.mp4");
     std::fs::copy(&a, &copy).unwrap();
-    let engine = engine();
-    let video = engine.decoded_digest(&a, "video", 0).unwrap();
+    let video = reference_digest(&a, 0).unwrap();
     assert_eq!(video.len(), 64);
-    assert_eq!(video, engine.decoded_digest(&copy, "video", 0).unwrap());
-    assert_ne!(video, engine.decoded_digest(&b, "video", 0).unwrap());
-    let audio = engine.decoded_digest(&a, "audio", 1).unwrap();
+    assert_eq!(video, reference_digest(&copy, 0).unwrap());
+    assert_ne!(video, reference_digest(&b, 0).unwrap());
+    let audio = reference_digest(&a, 1).unwrap();
+    assert_eq!(audio, reference_digest(&b, 1).unwrap(), "the same sine");
     assert_eq!(
-        audio,
-        engine.decoded_digest(&b, "audio", 1).unwrap(),
-        "the same sine"
-    );
-    assert_eq!(
-        engine
-            .decoded_digest(&dir.path().join("absent.mp4"), "video", 0)
+        reference_digest(&dir.path().join("absent.mp4"), 0)
             .unwrap_err()
             .hls_token(),
         Some("media-decode-failed")

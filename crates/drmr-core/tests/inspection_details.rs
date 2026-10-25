@@ -216,13 +216,12 @@ fn finite_candidates_show_tool_requirements_without_claiming_selection() {
         .unwrap();
     assert_eq!(progressive["revalidation_required"], true);
     assert_eq!(progressive["required_tools"], serde_json::json!([]));
-    assert!(
-        progressive["condition_codes"]
-            .as_array()
-            .unwrap()
-            .contains(&serde_json::json!(
-                "encrypted-finite-progressive-source-copy-requires-ffmpeg"
-            ))
+    assert_eq!(
+        progressive["condition_codes"],
+        serde_json::json!([
+            "finite-progressive-profile-must-pass",
+            "additional-complete-decoding-requires-ffmpeg-and-ffprobe"
+        ])
     );
     assert!(
         progressive["condition_codes"]

@@ -57,6 +57,7 @@ impl Backend {
             ..RunOptions::default()
         };
         self.check_cancelled()?;
+        self.require_decode()?;
         let effective = Self::effective_argv(&keyed.argv, "ffmpeg");
         let mut hash = ring::digest::Context::new(&ring::digest::SHA256);
         let completed = self

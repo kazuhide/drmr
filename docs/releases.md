@@ -68,7 +68,7 @@ drmr doctor --probe
 ```
 
 The reported version must match the release. A CLI archive does not need Rust
-installed. Native analysis and verification need no external media tools. Shaka Packager is required by packaging routes; optional `--decode` needs FFmpeg and ffprobe, and encrypted finite progressive conversion retains an FFmpeg copy remux. Install those tools separately;
+installed. In the current source, native analysis and verification need no external media tools. Shaka Packager is required by packaging routes; optional `--decode` needs FFmpeg and ffprobe. Progressive MP4 copying and decryption run in Rust. Install the tools required by your release and workflow separately;
 see [requirements](requirements.md). `doctor` checks the selected tool setup,
 while a successful conversion and independent `verify` check the actual media.
 See the [four-step workflow](executable-plans.md) and

@@ -453,7 +453,6 @@ impl Converter {
             processing: Some(self.backend.processing(
                 inspection::ProcessingRouteId::FragmentedMp4,
                 inspection::InputPreparation::CompleteFile,
-                false,
             )),
         })
     }

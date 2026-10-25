@@ -1,15 +1,13 @@
-//! Media probing, remuxing, timing, and decoded-content verification.
+//! Shared media metadata, packet timing, playlist localization, and parsing.
 //!
-//! The `MediaEngine` interface supports subprocess and native implementations.
-//! Raw key files are private, secret values are hidden from debug output and wiped
-//! on drop, and key-bearing tool calls use the secure runner.
+//! Raw key files are private, and secret values are hidden from debug output
+//! and wiped on drop.
 
 mod files;
-pub(crate) use files::{create_output_file, write_output_file};
+pub(crate) use files::write_output_file;
 mod parse;
 mod playlist;
 pub mod python;
-mod subprocess;
 mod timing;
 
 pub use crate::mp4::{pssh_box_present, split_fragmented_mp4};
@@ -22,16 +20,10 @@ pub use playlist::{
     extract_hls_iv_hex_values, localize_hls_master_http, localize_hls_media_playlist,
     localize_hls_media_playlist_http,
 };
-pub use subprocess::{
-    FFMPEG, FFPROBE, FRAMEMD5_MAX_OUTPUT_CHARS, MEDIA_MAX_OUTPUT_CHARS, MP4DUMP,
-    PROBE_MAX_OUTPUT_CHARS, Subprocess,
-};
 pub use timing::{default_timing_tolerance, same_timing};
 
-use num_rational::BigRational;
 use serde_json::Value;
 use std::fmt;
-use std::path::{Path, PathBuf};
 use zeroize::Zeroizing;
 
 /// `media::HlsMediaError`: a classification token (`media-tool-failed`,
@@ -253,120 +245,5 @@ impl PartialEq for FragmentBoundary {
     fn eq(&self, other: &Self) -> bool {
         python::py_eq(&self.base_media_decode_time, &other.base_media_decode_time)
             && python::py_eq(&self.sample_count, &other.sample_count)
-    }
-}
-
-/// Media operations used by source inspection and packaging.
-/// Subprocess and native implementations share the same interface and error categories.
-pub trait MediaEngine: Send + Sync {
-    /// `media::probe_packets`: one stream's packet timing.
-    fn probe_packets(&self, path: &Path, stream_index: i64) -> Result<PacketInfo, MediaError>;
-
-    /// `media::packet_payloads`: one stream's packet payloads (never logged).
-    fn packet_payloads(&self, path: &Path, stream_index: i64) -> Result<Vec<Vec<u8>>, MediaError>;
-
-    /// The SHA-256 payload digests ffprobe reports per packet of one stream (the
-    /// `-show_data_hash sha256` call of `subtitle payload verification`), as printed (`SHA256:<hex>`).
-    // `subtitle payload verification`'s local `payloads(location, stream)` runs this ffprobe call
-    // through `run_media`; native
-    // engine can answer it. Compare the lists with `==` (ffprobe prints strings).
-    fn packet_payload_hashes(
-        &self,
-        path: &Path,
-        stream_index: i64,
-    ) -> Result<Vec<Value>, MediaError>;
-
-    /// `media::normalize_segment`: re-mux one stream with the transport `offset` (seconds).
-    fn normalize_segment(
-        &self,
-        path: &Path,
-        destination: &Path,
-        stream_index: i64,
-        offset: &BigRational,
-        content_type: &str,
-    ) -> Result<PathBuf, MediaError>;
-
-    /// `media::decoded_digest`: SHA-256 hex of the decoded stream (PCM for audio, frame
-    /// sizes and hashes otherwise).
-    fn decoded_digest(
-        &self,
-        path: &Path,
-        content_type: &str,
-        stream_index: i64,
-    ) -> Result<String, MediaError>;
-
-    /// The mp4dump `--format json` box tree of a file (`initialization segment validation`'s
-    /// `run_media(["mp4dump", …])`, bytes mode).
-    // Initialization validation reads the tenc pattern from this tree (the first
-    // `tenc`'s `default_crypt_byte_block` / `default_skip_byte_block`, 0 when absent);
-    // `mp4::tenc_pattern` gives the same pair from the bytes for the native engine.
-    fn box_tree(&self, path: &Path) -> Result<Value, MediaError>;
-
-    /// `media::compute_framemd5`: ffmpeg's framemd5 report text.
-    fn compute_framemd5(&self, path: &Path) -> Result<String, MediaError>;
-
-    /// `media::probe_segment_timing`.
-    fn probe_segment_timing(&self, path: &Path) -> Result<SegmentTiming, MediaError>;
-
-    /// `media::read_tenc_constant_iv_hex`.
-    fn read_tenc_constant_iv_hex(
-        &self,
-        init_segment_path: &Path,
-    ) -> Result<Option<HexSecret>, MediaError>;
-
-    /// `media::probe_init_segment`.
-    fn probe_init_segment(&self, init_segment_path: &Path) -> Result<InitProbe, MediaError>;
-
-    /// `media::read_fragment_boundary`.
-    fn read_fragment_boundary(
-        &self,
-        segment_path: &Path,
-    ) -> Result<Option<FragmentBoundary>, MediaError>;
-
-    /// `media::decode_media_to_pcm`: canonical PCM (`s16le`, stereo, 48 kHz).
-    fn decode_media_to_pcm(
-        &self,
-        input_path: &Path,
-        output_path: &Path,
-    ) -> Result<PathBuf, MediaError>;
-
-    /// `media::decode_hls_media_playlist` (`mode` `pcm` or `framemd5`; anything else is
-    /// Python's `ValueError`).
-    fn decode_hls_media_playlist(
-        &self,
-        localized_playlist_path: &Path,
-        output_path: &Path,
-        mode: &str,
-    ) -> Result<PathBuf, MediaError>;
-
-    /// `media::measure_segment_durations_s`: each fragment's duration in seconds — the
-    /// `tfdt` differences, and the last one from ffprobe's duration of `init || last segment`.
-    fn measure_segment_durations_s(
-        &self,
-        init_path: &Path,
-        segment_paths: &[PathBuf],
-        timescale: i64,
-    ) -> Result<Vec<f64>, MediaError> {
-        timing::measure_segment_durations_s(self, init_path, segment_paths, timescale)
-    }
-
-    /// Alias for [`MediaEngine::compute_framemd5`].
-    fn framemd5(&self, path: &Path) -> Result<String, MediaError> {
-        self.compute_framemd5(path)
-    }
-
-    /// Alias for [`MediaEngine::decode_media_to_pcm`].
-    fn decode_pcm(&self, input_path: &Path, output_path: &Path) -> Result<PathBuf, MediaError> {
-        self.decode_media_to_pcm(input_path, output_path)
-    }
-
-    /// Alias for [`MediaEngine::measure_segment_durations_s`].
-    fn measure_durations(
-        &self,
-        init_path: &Path,
-        segment_paths: &[PathBuf],
-        timescale: i64,
-    ) -> Result<Vec<f64>, MediaError> {
-        self.measure_segment_durations_s(init_path, segment_paths, timescale)
     }
 }

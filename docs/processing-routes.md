@@ -37,10 +37,10 @@ and `boundaries` separately from the handler identifier. See
 | --- | --- | --- |
 | `fmp4-segments` | Supported original fMP4 resources with their sample grouping, clocks and segment boundaries retained; encryption and initialization metadata are rewritten natively. | None at native depth |
 | `mpeg-ts-segments` | Supported original TS resources with each segment's frames and clocks retained; native encryption updates TS signaling and packet layout as needed. | None at native depth |
-| `progressive-mp4` | Qualified clear, `cenc`, or `cbcs` progressive AAC-LC, optionally with H.264 from the same file, to clear MP4. Direct copying preserves the finite audio end. | None for clear native copy; FFmpeg copy remux for encrypted finite input |
-| `fragmented-mp4` | One supported track, or qualified finite audio and optional video from the same progressive source, to clear, `cenc`, or `cbcs` MP4. Shaka Packager creates fragments; qualified finite playback windows are preserved. | Shaka Packager; also FFmpeg for encrypted finite progressive input |
-| `dash-presentation` | Supported complete local tracks to static DASH. Source manifest resources are localized and assembled into tracks before new segmentation. | Shaka Packager; also FFmpeg for encrypted finite progressive input |
-| `fmp4-hls-presentation` | Supported complete tracks to fragmented MP4 HLS. Sample encryption applies within media samples; HLS AES-128 separately encrypts each complete output resource. | Shaka Packager; also FFmpeg for encrypted finite progressive input |
+| `progressive-mp4` | Qualified clear, `cenc`, or `cbcs` progressive AAC-LC, optionally with H.264 from the same file, to clear MP4. Native copying and decryption preserve the finite audio end. | None at native depth |
+| `fragmented-mp4` | One supported track, or qualified finite audio and optional video from the same progressive source, to clear, `cenc`, or `cbcs` MP4. Shaka Packager creates fragments; qualified finite playback windows are preserved. | Shaka Packager |
+| `dash-presentation` | Supported complete local tracks to static DASH. Source manifest resources are localized and assembled into tracks before new segmentation. | Shaka Packager |
+| `fmp4-hls-presentation` | Supported complete tracks to fragmented MP4 HLS. Sample encryption applies within media samples; HLS AES-128 separately encrypts each complete output resource. | Shaka Packager |
 | `mpeg-ts-hls` | The narrow local MPEG transport stream profile to fragmented MP4 HLS. Tracks are demultiplexed, and the actual final playlists are checked against the original transport streams. | Shaka Packager |
 | `mpeg-ts-sample-aes-hls` | Known-key SAMPLE-AES transport streams to fragmented MP4 HLS. Decrypted encoded frames and original clocks are checked before packaging; final playlists are verified against the original encrypted source. | Shaka Packager |
 | `mpeg-ts-dash` | Supported clear, AES-128, or SAMPLE-AES TS input to clear, `cenc`, or `cbcs` static DASH. Video, audio, or both retain their original frame and clock evidence; the final MPD and referenced media are read again before publication. | Shaka Packager |
@@ -55,15 +55,14 @@ These are dependency requirements, not a report that tools are installed or were
 
 Metadata-only candidate `required_tools` lists the native minimum. Its
 `condition_codes` and explanation state additional requirements:
-`additional-complete-decoding-requires-ffmpeg-and-ffprobe` applies to `--decode`,
-and `encrypted-finite-progressive-source-copy-requires-ffmpeg` applies when that
-source profile needs an edit-preserving container copy. Actual processing
-reports list the tools required by the selected depth and actual copy path.
-Native analysis and verification are distinct from these conversion tool sets.
+`additional-complete-decoding-requires-ffmpeg-and-ffprobe` applies to complete
+decoding. Actual processing reports list the tools required by the selected
+depth. Native analysis and verification are distinct from these conversion
+tool sets.
 
 ### progressive-mp4
 
-Complete original MP4 → direct encoded-track copy with its presentation edits → every original track checked → new clear MP4. No Shaka Packager step is used.
+Complete original MP4 → native copy and decryption when needed, retaining its presentation edits → every original track checked → new clear MP4. No external media tool is used at native depth. See [finite MP4 processing](media-processing.md#finite-audio-presentation-windows).
 
 ### fragmented-mp4
 

@@ -91,7 +91,6 @@ fn manifested_clock(
 fn presentation_processing(
     backend: &super::backend::Backend,
     format: OutputFormat,
-    ffmpeg_copy: bool,
 ) -> inspection::ActualProcessing {
     backend.processing(
         if format == OutputFormat::Dash {
@@ -100,7 +99,6 @@ fn presentation_processing(
             inspection::ProcessingRouteId::Fmp4HlsPresentation
         },
         inspection::InputPreparation::LocalTrackFiles,
-        ffmpeg_copy,
     )
 }
 impl Converter {
@@ -246,13 +244,7 @@ impl Converter {
             input,
             output,
             verification,
-            processing: Some(presentation_processing(
-                &self.backend,
-                request.format,
-                sources
-                    .iter()
-                    .any(|source| source.source_dictionary && source.key_id.is_some()),
-            )),
+            processing: Some(presentation_processing(&self.backend, request.format)),
         })
     }
     fn finish_packaged_presentation(
@@ -1568,7 +1560,6 @@ fn describe_transport(
         } else {
             inspection::InputPreparation::MpegTsDemux
         },
-        false,
     ));
 }
 fn encrypt_packaged_hls(

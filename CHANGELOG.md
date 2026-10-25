@@ -7,6 +7,11 @@ for installation, stable interfaces and versioning.
 
 ### Changed
 
+- Write qualified encrypted progressive MP4 to clear MP4 in Rust, preserving
+  every encoded sample, timestamp and playback edit. Native analysis, planning,
+  conversion and verification need no FFmpeg or ffprobe; those tools are used
+  only for additional complete decoding. `doctor` checks native conversion
+  requirements by default; add `--decode` to check decoder requirements too.
 - Add `--processing auto|segments|stitch` to saved planning and direct conversion,
   with per-output choices in the shared CLI, Web and Desktop workflow. Native
   TS and fragmented-MP4 routes can re-encrypt original resources while retaining
@@ -44,6 +49,11 @@ for installation, stable interfaces and versioning.
 - Read independent TS segment metadata and encoded frames in parallel within
   worker limits, while retaining ordered duration and clock checks and keeping
   only a bounded set of compact results in memory.
+
+### Removed
+
+- Remove the unused subprocess media adapter and its engine interface. Current
+  CLI, Web and Desktop processing uses the common native conversion workflow.
 
 ## [1.0.1] - 2026-10-23
 

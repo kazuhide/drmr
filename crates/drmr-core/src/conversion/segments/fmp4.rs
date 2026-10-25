@@ -187,7 +187,6 @@ fn convert(
         processing: Some(converter.backend.processing(
             ProcessingRouteId::Fmp4Segments,
             InputPreparation::OriginalSegments,
-            false,
         )),
     })
 }
