@@ -6,10 +6,10 @@ mod media_tools;
 
 use drmr_core::events::{Collector, NoSink, Sink};
 use drmr_core::media::{
-    FragmentBoundary, HexSecret, InitProbe, MediaError, SegmentTiming, concatenate,
-    extract_hls_iv_hex_values, localize_hls_master_http, localize_hls_media_playlist,
-    localize_hls_media_playlist_http, parse_fragment_boundary, parse_init_probe,
-    parse_tenc_constant_iv_hex, python, segment_timing_from_probe, write_raw_key_file,
+    FragmentBoundary, HexSecret, InitProbe, MediaError, SegmentTiming, extract_hls_iv_hex_values,
+    localize_hls_master_http, localize_hls_media_playlist, localize_hls_media_playlist_http,
+    parse_fragment_boundary, parse_init_probe, parse_tenc_constant_iv_hex, python,
+    segment_timing_from_probe, write_raw_key_file,
 };
 use drmr_core::toolrun::{REDACTED, Secrets, ToolRunner};
 use serde_json::{Value, json};
@@ -124,52 +124,6 @@ impl ReferenceTools {
     }
     fn read_fragment_boundary(&self, path: &Path) -> Result<Option<FragmentBoundary>, MediaError> {
         Ok(parse_fragment_boundary(&self.tree(path)?))
-    }
-    fn measure_segment_durations_s(
-        &self,
-        init: &Path,
-        segments: &[PathBuf],
-        scale: u64,
-    ) -> Result<Vec<f64>, MediaError> {
-        let Some(last) = segments.last() else {
-            return Ok(Vec::new());
-        };
-        let starts: Result<Vec<_>, MediaError> = segments
-            .iter()
-            .map(|path| {
-                let data = std::fs::read(path)?;
-                let boundary = drmr_core::mp4::fragment_boundary(&data)?.ok_or_else(|| {
-                    MediaError::Runtime(format!(
-                        "{} has no fragment (moof/tfdt/trun) metadata to measure",
-                        path.display()
-                    ))
-                })?;
-                Ok(boundary.base_media_decode_time.as_u64().unwrap())
-            })
-            .collect();
-        let starts = starts?;
-        let mut result: Vec<_> = starts
-            .windows(2)
-            .map(|pair| (pair[1] - pair[0]) as f64 / scale as f64)
-            .collect();
-        let temp = common::private_tempdir()?;
-        let joined = concatenate(
-            &[init.to_path_buf(), last.clone()],
-            &temp.path().join("tail.mp4"),
-        )?;
-        result.push(
-            self.probe_segment_timing(&joined)?.duration_s
-                - *starts.last().unwrap() as f64 / scale as f64,
-        );
-        Ok(result)
-    }
-    fn measure_durations(
-        &self,
-        init: &Path,
-        segments: &[PathBuf],
-        scale: u64,
-    ) -> Result<Vec<f64>, MediaError> {
-        self.measure_segment_durations_s(init, segments, scale)
     }
     fn decode_hls_media_playlist(
         &self,
@@ -1026,79 +980,6 @@ fn raw_key_file_refuses_a_readable_file_before_an_open_reader_can_observe_the_ke
     let after = std::fs::metadata(&path).unwrap();
     assert_eq!((after.dev(), after.ino()), (before.dev(), before.ino()));
     assert_eq!(after.permissions().mode(), before.permissions().mode());
-}
-
-/// The init and segments of a synthetic fragmented video, split with the Python rules.
-fn fragments(dir: &Path) -> (PathBuf, Vec<PathBuf>) {
-    let source = dir.join("av.mp4");
-    run(&[
-        "ffmpeg",
-        "-v",
-        "error",
-        "-y",
-        "-f",
-        "lavfi",
-        "-i",
-        "testsrc=duration=3:size=64x64:rate=5",
-        "-c:v",
-        "libx264",
-        "-g",
-        "5",
-        "-movflags",
-        "+frag_keyframe+empty_moov+default_base_moof",
-        source.to_str().unwrap(),
-    ]);
-    let init = dir.join("init.mp4");
-    let media = drmr_core::media::split_fragmented_mp4(&source, &init).unwrap();
-    let segments = media
-        .iter()
-        .enumerate()
-        .map(|(index, bytes)| {
-            let path = dir.join(format!("seg_{index}.m4s"));
-            std::fs::write(&path, bytes).unwrap();
-            path
-        })
-        .collect();
-    (init, segments)
-}
-
-#[test]
-fn segment_durations_are_tfdt_steps_and_the_last_ends_at_ffprobes_duration() {
-    if !(on_path("ffmpeg") && on_path("ffprobe") && on_path("mp4dump")) {
-        return;
-    }
-    let dir = common::private_tempdir().unwrap();
-    let (init, segments) = fragments(dir.path());
-    let engine = engine();
-    let durations = engine
-        .measure_segment_durations_s(&init, &segments, 10_240)
-        .unwrap();
-    assert_eq!(durations.len(), segments.len());
-    assert!(
-        durations[..durations.len() - 1]
-            .iter()
-            .all(|d| (*d - 1.0).abs() < 1e-12),
-        "{durations:?}"
-    );
-    assert!(
-        (durations.last().unwrap() - 1.0).abs() < 0.05,
-        "{durations:?}"
-    );
-    assert_eq!(
-        engine.measure_durations(&init, &[], 10_240).unwrap(),
-        Vec::<f64>::new()
-    );
-    let error = engine
-        .measure_segment_durations_s(&init, std::slice::from_ref(&init), 10_240)
-        .unwrap_err();
-    assert!(error.is_runtime_error());
-    assert_eq!(
-        error.to_string(),
-        format!(
-            "{} has no fragment (moof/tfdt/trun) metadata to measure",
-            python::path_str(&init).unwrap()
-        )
-    );
 }
 
 /// An HLS rendition of `clear` (AAC in TS, 2 s segments), AES-128 encrypted when `keyinfo`

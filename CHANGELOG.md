@@ -50,6 +50,11 @@ for installation, stable interfaces and versioning.
   worker limits, while retaining ordered duration and clock checks and keeping
   only a bounded set of compact results in memory.
 
+### Removed
+
+- Remove the unused subprocess media adapter and its engine interface. Current
+  CLI, Web and Desktop processing uses the common native conversion workflow.
+
 ## [1.0.1] - 2026-10-23
 
 Pre-release update for AAC in MPEG transport streams, key-free metadata
