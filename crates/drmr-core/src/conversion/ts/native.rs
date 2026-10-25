@@ -8,8 +8,9 @@ use super::{
     canonical, clock,
 };
 use crate::{concurrency::Stop, inspection::TrackKind};
-use std::{collections::BTreeMap, io::Read as _, path::Path};
+use std::{collections::BTreeMap, path::Path};
 use zeroize::Zeroizing;
+mod receipt;
 
 const BAD: ConversionError = ConversionError("ts-original-evidence-invalid");
 const LIMIT: ConversionError = ConversionError("ts-original-pending-limit");
@@ -57,6 +58,7 @@ pub(in crate::conversion) struct NativeScanner {
     native: BTreeMap<u16, canonical::Native>,
     audio_clocks: BTreeMap<u16, clock::Audio>,
     failed: Option<ConversionError>,
+    receipt_context: std::sync::Arc<()>,
 }
 impl NativeScanner {
     pub fn new() -> Self {
@@ -65,7 +67,77 @@ impl NativeScanner {
             native: BTreeMap::new(),
             audio_clocks: BTreeMap::new(),
             failed: None,
+            receipt_context: std::sync::Arc::new(()),
         }
+    }
+    pub fn admission(&self) -> &Admission {
+        &self.admission
+    }
+    /// Admit an exclusive private copy once, then bind native evidence to its bytes.
+    pub fn copy_segment(
+        &mut self,
+        source: &Path,
+        destination: &Path,
+        stop: &Stop,
+    ) -> Result<(), ConversionError> {
+        self.copy_segment_with(source, destination, stop, &mut |_, _, _, _, _| Ok(()))
+    }
+    fn copy_segment_with<F>(
+        &mut self,
+        source: &Path,
+        destination: &Path,
+        stop: &Stop,
+        observer: &mut F,
+    ) -> Result<(), ConversionError>
+    where
+        F: FnMut(u16, TrackKind, &[u8], i64, i64) -> Result<(), ConversionError>,
+    {
+        if let Some(error) = self.failed {
+            return Err(error);
+        }
+        let receipt = match receipt::Receipt::copy(
+            &self.admission,
+            &self.receipt_context,
+            source,
+            destination,
+            stop,
+        ) {
+            Ok(receipt) => receipt,
+            Err(error) => {
+                self.failed = Some(error);
+                return Err(error);
+            }
+        };
+        self.scan_receipt(receipt, stop, observer)
+    }
+    fn scan_receipt<F>(
+        &mut self,
+        receipt: receipt::Receipt,
+        stop: &Stop,
+        observer: &mut F,
+    ) -> Result<(), ConversionError>
+    where
+        F: FnMut(u16, TrackKind, &[u8], i64, i64) -> Result<(), ConversionError>,
+    {
+        if let Some(error) = self.failed {
+            return Err(error);
+        }
+        let result = (|| {
+            if !receipt.matches(&self.admission, &self.receipt_context) {
+                return Err(BAD);
+            }
+            let checked = receipt.open(stop)?;
+            let length = receipt.length();
+            let mut input = std::io::BufReader::with_capacity(64 * 1024, checked);
+            self.scan_payload(&mut input, length, &receipt.after.tracks, stop, observer)?;
+            receipt.verify(input.into_inner(), stop)?;
+            self.admission = receipt.accept();
+            Ok(())
+        })();
+        if let Err(error) = result {
+            self.failed = Some(error);
+        }
+        result
     }
     pub fn segment(&mut self, path: &Path, stop: &Stop) -> Result<(), ConversionError> {
         self.segment_with(path, stop, &mut |_, _, _, _, _| Ok(()))
@@ -100,10 +172,29 @@ impl NativeScanner {
         // Each segment is independently admitted before its bytes can seed an
         // anchor. Admission retains program, counters and raw PES clock state.
         self.admission.segment(path, stop)?;
+        let tracks = self.admission.tracks.clone();
+        self.scan_payload(
+            &mut std::io::BufReader::new(file),
+            length,
+            &tracks,
+            stop,
+            observer,
+        )
+    }
+    fn scan_payload<F>(
+        &mut self,
+        input: &mut impl std::io::Read,
+        length: u64,
+        tracks: &[admission::Track],
+        stop: &Stop,
+        observer: &mut F,
+    ) -> Result<(), ConversionError>
+    where
+        F: FnMut(u16, TrackKind, &[u8], i64, i64) -> Result<(), ConversionError>,
+    {
         for native in self.native.values_mut() {
             native.begin_segment()?;
         }
-        let mut input = std::io::BufReader::new(file);
         let mut pending = BTreeMap::<u16, Pending>::new();
         let mut packet = [0; 188];
         for slot in 0..length / 188 {
@@ -118,13 +209,7 @@ impl NativeScanner {
                 continue;
             }
             let id = (u16::from(packet[1] & 31) << 8) | u16::from(packet[2]);
-            let Some(kind) = self
-                .admission
-                .tracks
-                .iter()
-                .find(|t| t.pid == id)
-                .map(|t| t.kind)
-            else {
+            let Some(kind) = tracks.iter().find(|t| t.pid == id).map(|t| t.kind) else {
                 continue;
             };
             let at = if packet[3] & 0x20 == 0 {
@@ -164,13 +249,7 @@ impl NativeScanner {
             }
         }
         for (id, pes) in pending {
-            let kind = self
-                .admission
-                .tracks
-                .iter()
-                .find(|t| t.pid == id)
-                .ok_or(BAD)?
-                .kind;
+            let kind = tracks.iter().find(|t| t.pid == id).ok_or(BAD)?.kind;
             self.record(id, kind, &pes.bytes, stop, observer)?;
         }
         for native in self.native.values_mut() {
@@ -266,6 +345,7 @@ mod tests {
     use super::*;
     use crate::inspection::TrackKind;
     use std::{fmt::Write as _, io::Write as _, path::PathBuf};
+    include!("native/copy_tests.rs");
     fn section(mut bytes: Vec<u8>) -> Vec<u8> {
         let size = bytes.len() + 1;
         bytes[1] = (bytes[1] & 0xf0) | u8::try_from(size >> 8).unwrap();
