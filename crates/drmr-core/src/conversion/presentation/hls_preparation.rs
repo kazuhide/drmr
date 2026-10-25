@@ -25,17 +25,18 @@ pub(super) fn prepare(
     purpose: SourceValidationPurpose,
     normalize: bool,
 ) -> Result<Vec<Prepared>, ConversionError> {
+    let backend = preparation_backend(backend, maximum_workers);
     let paths = hls_media_paths(input.input)?;
     let preparation = Preparation {
         input,
         stage,
-        backend,
+        backend: &backend,
         maximum_workers,
         purpose,
         normalize,
         renditions: paths.len(),
     };
-    let scheduler = super::super::execution::Scheduler::new(backend, maximum_workers);
+    let scheduler = super::super::execution::Scheduler::new(&backend, maximum_workers);
     let tracks = collect(&scheduler, &paths, |ordinal| {
         preparation.rendition(ordinal, &paths[ordinal])
     })?;
@@ -50,7 +51,26 @@ pub(super) fn prepare(
     {
         return Err(ConversionError("ts-presentation-layout-not-supported"));
     }
+    if let Some(mut workload) = backend.runner.registered_workload() {
+        workload.tracks = workload.tracks.max(tracks.len());
+        backend.runner.register_workload(workload);
+    }
     Ok(tracks)
+}
+
+fn preparation_backend(
+    backend: &super::super::backend::Backend,
+    maximum_workers: Option<usize>,
+) -> super::super::backend::Backend {
+    let mut scoped = backend.clone();
+    // Every rendition and its nested segment probes share this command's cap.
+    // An existing bundle cohort is inherited; other commands keep their capacity.
+    scoped.runner = std::sync::Arc::new(
+        backend
+            .runner
+            .cohort(maximum_workers.unwrap_or(crate::concurrency::DEFAULT_WORKERS_CAP)),
+    );
+    scoped
 }
 
 fn collect<T: Send>(
@@ -205,6 +225,8 @@ impl Preparation<'_, '_> {
     }
 }
 
+#[cfg(test)]
+mod cohort_tests;
 #[cfg(test)]
 mod media_tests;
 #[cfg(test)]

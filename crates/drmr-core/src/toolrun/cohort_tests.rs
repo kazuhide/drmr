@@ -155,3 +155,60 @@ fn a_shared_admission_timeout_does_not_retain_a_cohort_ticket() {
             .unwrap(),
     );
 }
+
+#[test]
+fn cohort_workload_updates_reach_the_command_without_joining_independent_forks() {
+    let base = runner();
+    let initial = Workload {
+        max_pixels: Some(1280 * 720),
+        input_buffer_bytes: Some(64 * 1024),
+        tracks: 1,
+    };
+    base.register_workload(initial);
+    let observed = base.observed(Arc::new(crate::events::NoSink));
+    let (cleanup, owner) = base.ensuring_cleanup_owner();
+    let scoped = base.cohort(2);
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            scoped.register_workload(Workload {
+                max_pixels: Some(1920 * 1080),
+                input_buffer_bytes: Some(128 * 1024),
+                tracks: 4,
+            });
+        });
+        scope.spawn(|| {
+            scoped.register_workload(Workload {
+                max_pixels: Some(0),
+                input_buffer_bytes: Some(32 * 1024),
+                tracks: 1,
+            });
+        });
+    });
+    let merged = base.registered_workload().unwrap();
+    assert_eq!(merged.max_pixels, Some(1920 * 1080));
+    assert_eq!(merged.input_buffer_bytes, Some(128 * 1024));
+    assert_eq!(merged.tracks, 4);
+    for independent in [&observed, &cleanup] {
+        let unchanged = independent.registered_workload().unwrap();
+        assert_eq!(unchanged.max_pixels, initial.max_pixels);
+        assert_eq!(unchanged.input_buffer_bytes, initial.input_buffer_bytes);
+        assert_eq!(unchanged.tracks, initial.tracks);
+    }
+    let cleanup_scope = cleanup.cohort(1);
+    cleanup_scope.register_workload(Workload {
+        max_pixels: Some(3840 * 2160),
+        ..initial
+    });
+    assert_eq!(
+        cleanup.registered_workload().unwrap().max_pixels,
+        Some(3840 * 2160)
+    );
+    assert_eq!(
+        base.registered_workload().unwrap().max_pixels,
+        Some(1920 * 1080)
+    );
+    assert!(Arc::ptr_eq(
+        cleanup_scope.cleanup_owner.as_ref().unwrap(),
+        &owner
+    ));
+}

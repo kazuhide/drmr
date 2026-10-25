@@ -489,7 +489,7 @@ pub struct ToolRunner {
     path: Option<OsString>,
     limiter: Arc<Limiter>,
     cpu_scope: Option<Arc<crate::resources::CpuScope>>,
-    workload: RwLock<Option<Workload>>,
+    workload: Arc<RwLock<Option<Workload>>>,
     cleanup_owner: Option<Arc<CleanupOwner>>,
 }
 
@@ -504,7 +504,7 @@ impl ToolRunner {
             path: None,
             limiter: process_limiter(),
             cpu_scope: None,
-            workload: RwLock::new(None),
+            workload: Arc::new(RwLock::new(None)),
             cleanup_owner: None,
         }
     }
@@ -518,7 +518,7 @@ impl ToolRunner {
             path: self.path.clone(),
             limiter: Arc::clone(&self.limiter),
             cpu_scope: self.cpu_scope.clone(),
-            workload: RwLock::new(self.registered_workload()),
+            workload: Arc::new(RwLock::new(self.registered_workload())),
             cleanup_owner: self.cleanup_owner.clone(),
         }
     }
@@ -537,7 +537,7 @@ impl ToolRunner {
             path: self.path.clone(),
             limiter: Arc::clone(&self.limiter),
             cpu_scope: self.cpu_scope.clone(),
-            workload: RwLock::new(self.registered_workload()),
+            workload: Arc::new(RwLock::new(self.registered_workload())),
             cleanup_owner: Some(Arc::clone(&owner)),
         };
         (runner, owner)
@@ -595,7 +595,9 @@ impl ToolRunner {
             path: self.path.clone(),
             limiter: Arc::clone(&self.limiter),
             cpu_scope: Some(scope),
-            workload: RwLock::new(self.registered_workload()),
+            // A CPU scope belongs to this command, including metadata observed
+            // inside it. Independent observed/cleanup forks still take snapshots.
+            workload: Arc::clone(&self.workload),
             cleanup_owner: self.cleanup_owner.clone(),
         }
     }
