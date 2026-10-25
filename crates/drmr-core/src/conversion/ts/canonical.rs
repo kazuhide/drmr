@@ -108,7 +108,7 @@ impl Config {
         hash: &mut Sha256,
     ) -> Result<(), ConversionError> {
         match self {
-            Self::Video { sps, pps } => {
+            Self::Video { .. } => {
                 let units = if transport {
                     annex(data)?
                 } else {
@@ -125,35 +125,7 @@ impl Config {
                     }
                     units
                 };
-                let mut count = 0_u64;
-                let mut vcl = false;
-                for (at, unit) in units.iter().enumerate() {
-                    let kind = unit[0] & 31;
-                    if unit[0] & 0x80 != 0
-                        || (matches!(kind, 5 | 7 | 8) && unit[0] & 0x60 == 0)
-                        || (matches!(kind, 6 | 9 | 10 | 11 | 12) && unit[0] & 0x60 != 0)
-                    {
-                        return Err(BAD);
-                    }
-                    match kind {
-                        7 if *unit == sps.as_slice() => {}
-                        8 if *unit == pps.as_slice() => {}
-                        7 | 8 => return Err(CONFIG),
-                        9 if at == 0 && unit.len() == 2 && unit[1] & 31 == 16 => {}
-                        9 => return Err(BAD),
-                        1 | 5 | 6 | 10 | 11 | 12 => {
-                            vcl |= matches!(kind, 1 | 5);
-                            count += 1;
-                            hash.update(u64::try_from(unit.len()).map_err(|_| BAD)?.to_be_bytes());
-                            hash.update(unit);
-                        }
-                        _ => return Err(ConversionError("ts-nal-type-not-supported")),
-                    }
-                }
-                if !vcl {
-                    return Err(BAD);
-                }
-                hash.update(count.to_be_bytes());
+                self.video_units(&units, hash)?;
             }
             Self::Audio { .. } => {
                 let raw = if transport {
@@ -177,6 +149,42 @@ impl Config {
                 hash.update(raw);
             }
         }
+        Ok(())
+    }
+    fn video_units(&self, units: &[&[u8]], hash: &mut Sha256) -> Result<(), ConversionError> {
+        let Self::Video { sps, pps } = self else {
+            return Err(CONFIG);
+        };
+        let mut count = 0_u64;
+        let mut vcl = false;
+        for (at, unit) in units.iter().enumerate() {
+            let first = *unit.first().ok_or(BAD)?;
+            let kind = first & 31;
+            if first & 0x80 != 0
+                || (matches!(kind, 5 | 7 | 8) && first & 0x60 == 0)
+                || (matches!(kind, 6 | 9 | 10 | 11 | 12) && first & 0x60 != 0)
+            {
+                return Err(BAD);
+            }
+            match kind {
+                7 if *unit == sps.as_slice() => {}
+                8 if *unit == pps.as_slice() => {}
+                7 | 8 => return Err(CONFIG),
+                9 if at == 0 && unit.len() == 2 && unit[1] & 31 == 16 => {}
+                9 => return Err(BAD),
+                1 | 5 | 6 | 10 | 11 | 12 => {
+                    vcl |= matches!(kind, 1 | 5);
+                    count += 1;
+                    hash.update(u64::try_from(unit.len()).map_err(|_| BAD)?.to_be_bytes());
+                    hash.update(unit);
+                }
+                _ => return Err(ConversionError("ts-nal-type-not-supported")),
+            }
+        }
+        if !vcl {
+            return Err(BAD);
+        }
+        hash.update(count.to_be_bytes());
         Ok(())
     }
 }
@@ -237,6 +245,10 @@ pub(in crate::conversion) fn annex(data: &[u8]) -> Result<Vec<&[u8]>, Conversion
     }
     Ok(units)
 }
+
+#[cfg(test)]
+#[path = "canonical/annex_tests.rs"]
+mod annex_tests;
 
 /// Decode `FFprobe`'s hex display, never its non-authoritative ASCII rendering.
 pub(super) fn dump(data: &[u8], escaped: bool) -> Result<Vec<u8>, ConversionError> {
@@ -448,8 +460,15 @@ impl Native {
         if dts < 0 || pts < dts {
             return Err(BAD);
         }
+        let units = matches!(&self.config, Config::Video { .. })
+            .then(|| annex(bytes))
+            .transpose()?;
         self.hash.update(b"access-unit");
-        self.config.units(bytes, true, &mut self.hash)?;
+        if let Some(units) = &units {
+            self.config.video_units(units, &mut self.hash)?;
+        } else {
+            self.config.units(bytes, true, &mut self.hash)?;
+        }
         self.clocks.update(pts.to_be_bytes());
         self.clocks.update(dts.to_be_bytes());
         self.count = self.count.checked_add(1).ok_or(BAD)?;
@@ -461,14 +480,14 @@ impl Native {
         // Preserve the first syntax error and require it at every native
         // metadata/timing accessor; failed qualification can never yield proof.
         let validation = match &mut self.validation {
-            Ok(Validation::Video { config, clock }) => {
-                config.access_unit(&annex(bytes)?).and_then(|_| {
+            Ok(Validation::Video { config, clock }) => config
+                .access_unit(units.as_deref().ok_or(BAD)?)
+                .and_then(|_| {
                     if let Some(clock) = clock {
                         clock.frame(pts, dts)?;
                     }
                     Ok(())
-                })
-            }
+                }),
             Ok(Validation::Audio(clock)) => clock
                 .begin(pts, dts)
                 .and_then(|()| clock.frame(pts, dts))
