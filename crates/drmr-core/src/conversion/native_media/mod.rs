@@ -320,6 +320,17 @@ struct Payload<'a> {
     info: SampleInfo,
     encryption: Option<crypto::SampleEncryption>,
 }
+fn buffered_sample(sample: &SampleInfo, length: u64, spans: &[crypto::Subsample]) -> bool {
+    sample.range.end <= length
+        && sample.range.end.checked_sub(sample.range.start) == Some(u64::from(sample.size))
+        && spans
+            .iter()
+            .flat_map(|span| [span.clear, span.encrypted])
+            .filter(|size| *size != 0)
+            .take(2)
+            .count()
+            == 2
+}
 fn payload(
     reader: &mut read::Reader<'_>,
     keys: &InputKeys,
@@ -371,6 +382,12 @@ fn payload(
             .map_err(|_| BAD)?
             .min(CHUNK_BYTES),
     )?;
+    let mut input = read::SampleInput::new(
+        &mut reader.file,
+        &mut reader.sample_window,
+        usize::try_from(sample.info.size).map_err(|_| BAD)?,
+        sample.encryption.is_some() && buffered_sample(&sample.info, reader.length, subsamples),
+    )?;
     let mut position = 0_u32;
     for span in subsamples {
         if let Some(cipher) = &mut cipher {
@@ -384,7 +401,7 @@ fn payload(
                     .map_err(|_| BAD)?
                     .min(CHUNK_BYTES);
                 let bytes = &mut buffer.bytes[..length];
-                reader.file.read_exact(bytes).map_err(|_| BAD)?;
+                input.read_exact(bytes).map_err(|_| BAD)?;
                 if encrypted {
                     cipher
                         .as_mut()

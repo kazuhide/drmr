@@ -142,6 +142,35 @@ fn existing_progressive_cenc_iv8_iv16_and_cbcs_joint_audio_match_independent_dec
 }
 
 #[test]
+fn buffered_encrypted_samples_preserve_callback_failure_and_cancellation() {
+    let source = fixture().with_file_name("cenc-iv8.mp4");
+    let before = std::fs::read(&source).unwrap();
+    for cancel in [false, true] {
+        let stop = Stop::new();
+        let mut calls = 0;
+        let result = scan(&source, &keys(), &stop, &mut |_, info, bytes| {
+            calls += 1;
+            assert_eq!(info.chunk_offset, 0);
+            assert!(bytes.len() < usize::try_from(info.size).unwrap());
+            if cancel {
+                stop.set();
+                Ok(())
+            } else {
+                Err(ConversionError("callback-refused"))
+            }
+        });
+        assert_eq!(calls, 1);
+        let expected = if cancel {
+            "cancelled"
+        } else {
+            "callback-refused"
+        };
+        assert!(matches!(result, Err(error) if error.0 == expected));
+    }
+    assert_eq!(std::fs::read(source).unwrap(), before);
+}
+
+#[test]
 fn shaka_cenc_and_cbcs_video_audio_with_distinct_keys_match_independent_decryption() {
     let root = crate::native::private_tempdir().unwrap();
     for scheme in ["cenc", "cbcs"] {
