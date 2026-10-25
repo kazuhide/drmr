@@ -374,7 +374,7 @@ mod tests {
     #[test]
     fn payload_scratch_is_bounded_reused_and_wiped_on_success_and_error() {
         let mut scratch = PayloadBuffer::default();
-        assert!(scratch.chunk(0).unwrap().bytes.is_empty());
+        assert_eq!(scratch.chunk(0).unwrap().bytes, [0u8; 0]);
         assert!(scratch.bytes.is_empty());
         let address;
         {
