@@ -5,7 +5,15 @@ use crate::{
     resources::Limiter,
     toolrun::{Secrets, ToolRunner},
 };
-use std::{fs, path::PathBuf, sync::Arc};
+use std::{
+    fs,
+    path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
+    time::{Duration, Instant},
+};
 
 fn source(root: &Path) -> PathBuf {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../drmr/tests/fixtures/bbb/clip.mp4");
@@ -166,4 +174,91 @@ fn decoded_renditions_keep_original_evidence_and_observations_after_the_scope_ex
     for (path, bytes) in original {
         assert_eq!(fs::read(path).unwrap(), bytes);
     }
+}
+
+struct ToolAdmissionGate {
+    nested: AtomicBool,
+    held: AtomicUsize,
+    release: Stop,
+}
+
+impl crate::events::Sink for ToolAdmissionGate {
+    fn emit(&self, record: &crate::events::Record) {
+        if record.get("task").and_then(serde_json::Value::as_str) == Some("ts-preparation")
+            && record.get("state").and_then(serde_json::Value::as_str) == Some("started")
+        {
+            self.nested.store(true, Ordering::Release);
+        }
+        if self.nested.load(Ordering::Acquire)
+            && !self.release.is_set()
+            && record.get("event").and_then(serde_json::Value::as_str) == Some("tool-output")
+        {
+            // ToolRunner emits this record while its actual subprocess reservation
+            // is still held. Keep it live so a missing shared ceiling is observable.
+            self.held.fetch_add(1, Ordering::Release);
+            self.release.wait(Some(Duration::from_secs(5)));
+        }
+    }
+}
+
+#[test]
+fn actual_decoded_preparation_caps_nested_tool_admission_across_renditions() {
+    let owner = crate::native::private_tempdir().unwrap();
+    let input = source(owner.path());
+    let keys = InputKeys::default();
+    let hls_keys = super::super::super::HlsInputKeys::default();
+    let input = VerificationSource {
+        input: &input,
+        input_keys: &keys,
+        hls_keys: &hls_keys,
+    };
+    let gate = Arc::new(ToolAdmissionGate {
+        nested: AtomicBool::new(false),
+        held: AtomicUsize::new(0),
+        release: Stop::new(),
+    });
+    let runner = ToolRunner::new(Arc::new(Secrets::new()), Arc::new(crate::events::NoSink))
+        .with_limiter(Arc::new(Limiter::new(4, 4 * 1024 * 1024 * 1024)))
+        .observed(gate.clone());
+    let mut converter = Converter::new(Arc::new(runner), "packager", "ffmpeg").with_decode(true);
+    converter.backend.activity = Some(gate.clone());
+    let stage = workspace().unwrap();
+    std::thread::scope(|scope| {
+        let worker = scope.spawn(|| {
+            prepare(
+                &input,
+                stage.path(),
+                &converter.backend,
+                Some(2),
+                SourceValidationPurpose::Verification,
+                false,
+            )
+        });
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while gate.held.load(Ordering::Acquire) < 2 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        std::thread::sleep(Duration::from_millis(350));
+        let admitted = gate.held.load(Ordering::Acquire);
+        gate.release.set();
+        let prepared = worker.join().unwrap().unwrap();
+        assert_eq!(
+            admitted, 2,
+            "actual nested HLS probes exceeded --max-workers=2"
+        );
+        assert_eq!(prepared.len(), 2);
+        for track in &prepared {
+            assert!(
+                track
+                    .transport_native
+                    .as_ref()
+                    .unwrap()
+                    .segment_timings()
+                    .unwrap()
+                    .len()
+                    >= 2
+            );
+        }
+    });
+    assert_eq!(converter.backend.runner.native_capacity().0, 4);
 }
