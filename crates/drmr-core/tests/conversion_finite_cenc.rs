@@ -890,7 +890,7 @@ fn cancellation_of_the_additional_decoder_drains_its_descendant_before_returning
         .filter(|record| record.get("event").and_then(Value::as_str) == Some("command"))
         .filter(|record| record.get("tool").and_then(Value::as_str) == Some("ffmpeg"))
         .collect::<Vec<_>>();
-    assert!(!commands.is_empty());
+    assert_ne!(commands, [] as [&Value; 0]);
     for command in commands {
         assert_eq!(
             command["argv"],
