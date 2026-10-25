@@ -1,4 +1,5 @@
 //! Joint, codec-preserving presentations with independent evidence for every source stream.
+mod hls_preparation;
 pub(in crate::conversion) mod metadata;
 mod native_preparation;
 #[cfg(test)]
@@ -1800,98 +1801,7 @@ fn prepare_hls_presentation(
     purpose: SourceValidationPurpose,
     normalize: bool,
 ) -> Result<Vec<Prepared>, ConversionError> {
-    let paths = hls_media_paths(input.input)?;
-    let mut tracks = Vec::new();
-    for (ordinal, media) in paths.iter().enumerate() {
-        let directory = stage.join(format!("track-{ordinal:04}"));
-        super::files::create_dir(&directory)
-            .map_err(|_| ConversionError("temporary-workspace-unavailable"))?;
-        let localized = hls::localize(&media.path, &directory, input.hls_keys, backend)?;
-        if let Some(admission) = &localized.transport {
-            media.validate_audio_variant(admission.tracks.iter().map(|track| track.kind))?;
-            if (paths.len() != 1 && admission.tracks.len() != 1)
-                || media.role.is_some_and(|kind| {
-                    admission.tracks.len() != 1 || admission.tracks[0].kind != kind
-                })
-            {
-                return Err(ConversionError("ts-presentation-layout-not-supported"));
-            }
-            let mut prepared =
-                if backend.validation_depth == super::ValidationDepth::Native && !normalize {
-                    native_preparation::transport(&localized, admission, backend)?
-                } else {
-                    prepare_transport(
-                        &localized,
-                        admission,
-                        &directory,
-                        input.input_keys,
-                        backend,
-                        maximum_workers,
-                    )?
-                };
-            apply_transport_metadata(&mut prepared, media, &localized, backend, input.input_keys)?;
-            tracks.extend(prepared);
-            continue;
-        }
-        let actual = inspection::inspect(&localized.combined)
-            .map_err(|_| ConversionError("invalid-localized-hls-media"))?;
-        media.validate_audio_variant(actual.tracks.iter().map(|track| track.kind))?;
-        if actual.tracks.len() != 1 {
-            return Err(ConversionError("hls-multiplexed-media-not-supported"));
-        }
-        if media.role.is_some_and(|kind| kind != actual.tracks[0].kind) {
-            return Err(ConversionError("track-role-mismatch"));
-        }
-        let mut track = prepare_for(
-            &localized.combined,
-            0,
-            actual.tracks[0].kind,
-            input.input_keys,
-            purpose,
-        )?;
-        track.clock = manifested_clock(&track.media, backend)?;
-        bind_audio_presentation(&mut track, backend, input.input_keys, &directory)?;
-        track.metadata = media.metadata.clone();
-        if localized.empty_cue_pair {
-            track
-                .compatibility
-                .push(SourceCompatibilityNote::HlsEmptyCuePair);
-        }
-        match localized.report.protection {
-            Protection::HlsAes128 => track.outer_protection = SourceProtection::HlsAes128,
-            Protection::Mixed => track.outer_protection = SourceProtection::Mixed,
-            _ => {}
-        }
-        metadata::validate_profile(&track, backend, key_for(&track, input.input_keys))?;
-        track.playlist_reference = if track.key_id.is_none() {
-            Some(localized.playlist.clone())
-        } else if actual.protection == Protection::Cbcs {
-            Some(hls::sample_reference(
-                &localized.playlist,
-                key_for(&track, input.input_keys).ok_or(ConversionError("input-key-required"))?,
-            )?)
-        } else {
-            None
-        };
-        track.source = if track.audio_presentation.is_some() {
-            localized.combined
-        } else {
-            localized.reference
-        };
-        tracks.push(track);
-    }
-    if tracks.len() > 64
-        || tracks
-            .iter()
-            .filter(|p| p.report.tracks[0].kind == TrackKind::Audio)
-            .count()
-            > 1
-        || (tracks.iter().any(|track| track.transport_index.is_some())
-            && tracks.iter().any(|track| track.transport_index.is_none()))
-    {
-        return Err(ConversionError("ts-presentation-layout-not-supported"));
-    }
-    Ok(tracks)
+    hls_preparation::prepare(input, stage, backend, maximum_workers, purpose, normalize)
 }
 fn apply_transport_metadata(
     prepared: &mut [Prepared],

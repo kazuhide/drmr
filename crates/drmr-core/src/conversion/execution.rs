@@ -91,6 +91,47 @@ impl Converter {
         metadata_bytes: u64,
         unit: impl Fn(usize) -> Result<T, ConversionError> + Sync,
     ) -> Result<Vec<T>, ConversionError> {
+        Scheduler::new(&self.backend, self.maximum_workers).run(
+            units,
+            retained_tracks,
+            metadata_bytes,
+            unit,
+        )
+    }
+}
+
+pub(super) struct Scheduler<'a> {
+    backend: &'a super::backend::Backend,
+    maximum_workers: Option<usize>,
+    hardware: Hardware,
+}
+impl<'a> Scheduler<'a> {
+    pub fn new(backend: &'a super::backend::Backend, maximum_workers: Option<usize>) -> Self {
+        Self {
+            backend,
+            maximum_workers,
+            hardware: Hardware::detect(),
+        }
+    }
+    #[cfg(test)]
+    pub fn observed(
+        backend: &'a super::backend::Backend,
+        maximum_workers: Option<usize>,
+        hardware: Hardware,
+    ) -> Self {
+        Self {
+            backend,
+            maximum_workers,
+            hardware,
+        }
+    }
+    pub fn run<T: Send>(
+        &self,
+        units: usize,
+        retained_tracks: usize,
+        metadata_bytes: u64,
+        unit: impl Fn(usize) -> Result<T, ConversionError> + Sync,
+    ) -> Result<Vec<T>, ConversionError> {
         self.backend.check_cancelled()?;
         if units == 0 {
             return Ok(Vec::new());
@@ -102,7 +143,7 @@ impl Converter {
             self.backend.runner.register_workload(workload);
         }
         let budget = scheduling_budget::<T>(
-            Hardware::detect(),
+            self.hardware,
             workload,
             units,
             metadata_bytes,
