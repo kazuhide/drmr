@@ -6,10 +6,63 @@ enum Source<'a> {
     Direct(&'a mut PositionedInput),
     Window {
         input: &'a mut PositionedInput,
-        bytes: PayloadChunk<'a>,
-        at: usize,
-        loaded: bool,
+        window: Window<'a>,
     },
+}
+
+struct Window<'a> {
+    bytes: PayloadChunk<'a>,
+    at: usize,
+    available: usize,
+    loaded: bool,
+    pending: Option<io::Error>,
+}
+impl<'a> Window<'a> {
+    fn new(bytes: PayloadChunk<'a>) -> Self {
+        Self {
+            bytes,
+            at: 0,
+            available: 0,
+            loaded: false,
+            pending: None,
+        }
+    }
+    fn fill(&mut self, input: &mut impl Read) {
+        self.loaded = true;
+        while self.available < self.bytes.bytes.len() {
+            match input.read(&mut self.bytes.bytes[self.available..]) {
+                Ok(0) => break,
+                Ok(count) => self.available += count,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(error) => {
+                    self.pending = Some(error);
+                    break;
+                }
+            }
+        }
+        // Preserve only bytes reported as valid by Read. A failed read may have
+        // touched its output without reporting any additional valid prefix.
+        self.bytes.bytes[self.available..].zeroize();
+    }
+    fn read(&mut self, input: &mut impl Read, output: &mut [u8]) -> io::Result<usize> {
+        if output.is_empty() {
+            return Ok(0);
+        }
+        if !self.loaded {
+            self.fill(input);
+        }
+        if self.at == self.available {
+            // Later I/O failure must not hide an earlier logical read/callback.
+            // Once reported, the window remains exhausted and never refills.
+            return self.pending.take().map_or(Ok(0), Err);
+        }
+        let length = output.len().min(self.available - self.at);
+        let source = &mut self.bytes.bytes[self.at..self.at + length];
+        output[..length].copy_from_slice(source);
+        source.zeroize();
+        self.at += length;
+        Ok(length)
+    }
 }
 
 /// Batch only the current, already qualified sample's raw input bytes.
@@ -27,9 +80,7 @@ impl<'a> SampleInput<'a> {
         let source = if split && (1..=CHUNK_BYTES).contains(&size) {
             Source::Window {
                 input,
-                bytes: storage.chunk(size)?,
-                at: 0,
-                loaded: false,
+                window: Window::new(storage.chunk(size)?),
             }
         } else {
             Source::Direct(input)
@@ -41,31 +92,7 @@ impl Read for SampleInput<'_> {
     fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
         match &mut self.source {
             Source::Direct(input) => input.read(output),
-            Source::Window {
-                input,
-                bytes,
-                at,
-                loaded,
-            } => {
-                if output.is_empty() {
-                    return Ok(0);
-                }
-                if !*loaded {
-                    *loaded = true;
-                    if let Err(error) = input.read_exact(bytes.bytes) {
-                        // A failed fill cannot retry from a new physical offset.
-                        *at = bytes.bytes.len();
-                        bytes.bytes.zeroize();
-                        return Err(error);
-                    }
-                }
-                let length = output.len().min(bytes.bytes.len() - *at);
-                let source = &mut bytes.bytes[*at..*at + length];
-                output[..length].copy_from_slice(source);
-                source.zeroize();
-                *at += length;
-                Ok(length)
-            }
+            Source::Window { input, window } => window.read(input, output),
         }
     }
 }
@@ -92,13 +119,13 @@ mod tests {
         {
             let mut sample = SampleInput::new(&mut file, &mut storage, 32, true).unwrap();
             sample.read_exact(&mut output[..3]).unwrap();
-            let Source::Window { bytes, at, .. } = &sample.source else {
+            let Source::Window { window, .. } = &sample.source else {
                 panic!("window required")
             };
-            assert_eq!(bytes.bytes.len(), 32);
-            assert_eq!(*at, 3);
-            assert!(bytes.bytes[..3].iter().all(|byte| *byte == 0));
-            assert_eq!(&bytes.bytes[3..], &(3_u8..32).collect::<Vec<_>>());
+            assert_eq!(window.bytes.bytes.len(), 32);
+            assert_eq!(window.at, 3);
+            assert!(window.bytes.bytes[..3].iter().all(|byte| *byte == 0));
+            assert_eq!(&window.bytes.bytes[3..], &(3_u8..32).collect::<Vec<_>>());
             sample.read_exact(&mut output[3..10]).unwrap();
             sample.read_exact(&mut output[10..]).unwrap();
             assert_eq!(sample.read(&mut [0; 1]).unwrap(), 0);
@@ -133,7 +160,7 @@ mod tests {
     }
 
     #[test]
-    fn sample_window_is_wiped_on_error_panic_and_short_read_without_touching_unused_storage() {
+    fn sample_window_is_wiped_on_error_or_panic_without_touching_unused_storage() {
         let (_owner, mut file) = input(CHUNK_BYTES);
         let mut storage = PayloadBuffer::default();
         {
@@ -146,10 +173,10 @@ mod tests {
         let failure = (|| -> Result<(), super::super::ConversionError> {
             let mut sample = SampleInput::new(&mut file, &mut storage, 17, true)?;
             sample.read_exact(&mut [0; 1]).unwrap();
-            let Source::Window { bytes, .. } = &sample.source else {
+            let Source::Window { window, .. } = &sample.source else {
                 panic!("window required")
             };
-            assert_eq!(bytes.bytes.len(), 17);
+            assert_eq!(window.bytes.bytes.len(), 17);
             Err(super::super::BAD)
         })();
         assert_eq!(failure, Err(super::super::BAD));
@@ -163,25 +190,82 @@ mod tests {
         }));
         assert!(panic.is_err());
         assert!(storage.bytes.iter().all(|byte| *byte == 0));
-        file.seek(std::io::SeekFrom::End(-8)).unwrap();
-        let mut output = [0xff; 3];
-        {
-            let mut sample = SampleInput::new(&mut file, &mut storage, 17, true).unwrap();
-            assert!(sample.read_exact(&mut output).is_err());
-            let calls = match &sample.source {
-                Source::Window { input, bytes, .. } => {
-                    assert!(bytes.bytes.iter().all(|byte| *byte == 0));
-                    input.reads
+    }
+
+    #[test]
+    fn truncated_current_sample_delivers_its_available_subsamples_before_eof() {
+        for buffered in [false, true] {
+            let (_owner, mut file) = input(8);
+            let mut storage = PayloadBuffer::default();
+            let mut output = [0xff; 8];
+            {
+                let mut sample = SampleInput::new(&mut file, &mut storage, 17, buffered).unwrap();
+                sample.read_exact(&mut output[..3]).unwrap();
+                sample.read_exact(&mut output[3..5]).unwrap();
+                sample.read_exact(&mut output[5..]).unwrap();
+                assert_eq!(
+                    sample.read_exact(&mut [0; 1]).unwrap_err().kind(),
+                    io::ErrorKind::UnexpectedEof
+                );
+                if buffered {
+                    let Source::Window { input, .. } = &sample.source else {
+                        panic!("window required")
+                    };
+                    let calls = input.reads;
+                    assert_eq!(sample.read(&mut [0; 1]).unwrap(), 0);
+                    let Source::Window { input, .. } = &sample.source else {
+                        panic!("window required")
+                    };
+                    assert_eq!(input.reads, calls);
                 }
-                Source::Direct(_) => panic!("window required"),
-            };
-            assert_eq!(sample.read(&mut output).unwrap(), 0);
-            let Source::Window { input, .. } = &sample.source else {
-                panic!("window required")
-            };
-            assert_eq!(input.reads, calls);
+            }
+            assert_eq!(output, [0, 1, 2, 3, 4, 5, 6, 7]);
+            assert!(storage.bytes.iter().all(|byte| *byte == 0));
         }
-        assert_eq!(output, [0xff; 3]);
+    }
+
+    #[test]
+    fn available_prefix_precedes_a_late_io_error_and_interrupted_fill_is_retried() {
+        struct PrefixThenError {
+            calls: usize,
+        }
+        impl Read for PrefixThenError {
+            fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
+                self.calls += 1;
+                match self.calls {
+                    1 => Err(io::ErrorKind::Interrupted.into()),
+                    2 => {
+                        output[..8].copy_from_slice(&[0, 1, 2, 3, 4, 5, 6, 7]);
+                        Ok(8)
+                    }
+                    _ => {
+                        output.fill(0xaa);
+                        Err(io::ErrorKind::PermissionDenied.into())
+                    }
+                }
+            }
+        }
+        let mut input = PrefixThenError { calls: 0 };
+        let mut storage = PayloadBuffer::default();
+        let mut output = [0xff; 8];
+        {
+            let mut window = Window::new(storage.chunk(17).unwrap());
+            assert_eq!(window.read(&mut input, &mut []).unwrap(), 0);
+            assert_eq!(input.calls, 0);
+            assert_eq!(window.read(&mut input, &mut output[..3]).unwrap(), 3);
+            assert_eq!(input.calls, 3);
+            assert!(window.bytes.bytes[..3].iter().all(|byte| *byte == 0));
+            assert!(window.bytes.bytes[8..].iter().all(|byte| *byte == 0));
+            assert_eq!(window.read(&mut input, &mut output[3..]).unwrap(), 5);
+            assert_eq!(
+                window.read(&mut input, &mut [0; 1]).unwrap_err().kind(),
+                io::ErrorKind::PermissionDenied
+            );
+            assert_eq!(window.read(&mut input, &mut [0; 1]).unwrap(), 0);
+            assert_eq!(input.calls, 3);
+            assert!(window.bytes.bytes.iter().all(|byte| *byte == 0));
+        }
+        assert_eq!(output, [0, 1, 2, 3, 4, 5, 6, 7]);
         assert!(storage.bytes.iter().all(|byte| *byte == 0));
     }
 }
