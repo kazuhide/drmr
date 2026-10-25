@@ -112,7 +112,9 @@ impl Cipher {
             if generated != 0 {
                 self.aes.encrypt_blocks(&mut streams[..generated]);
                 for (block, stream) in bytes[processed..processed + generated * 16]
-                    .chunks_exact_mut(16)
+                    .as_chunks_mut::<16>()
+                    .0
+                    .iter_mut()
                     .zip(&streams[..generated])
                 {
                     for (byte, mask) in block.iter_mut().zip(stream) {
@@ -403,10 +405,15 @@ mod tests {
                     }
                     let mut previous = <[u8; 16]>::try_from(iv.as_slice()).unwrap();
                     let crypt = usize::from(crypt.max(1));
-                    for (index, block) in expected[at..end].chunks_exact_mut(16).enumerate() {
+                    for (index, block) in expected[at..end]
+                        .as_chunks_mut::<16>()
+                        .0
+                        .iter_mut()
+                        .enumerate()
+                    {
                         if index % (crypt + usize::from(skip)) < crypt {
-                            let original = <[u8; 16]>::try_from(&*block).unwrap();
-                            aes.decrypt_block(block.try_into().unwrap());
+                            let original = *block;
+                            aes.decrypt_block(block.into());
                             for (byte, previous) in block.iter_mut().zip(previous) {
                                 *byte ^= previous;
                             }
