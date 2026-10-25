@@ -32,7 +32,7 @@ the initial implementation entirely single-threaded would be inaccurate.
 
 The recorded environment was macOS 27.0.1, ARM64, ten logical CPUs and Rust 1.95.0
 release builds, with FFmpeg/ffprobe 9.0.2 and Shaka Packager 3.8.0.
-Darwin §time -p -l§ supplied wall and CPU time. Its reported maximum resident-set
+Darwin `time -p -l` supplied wall and CPU time. Its reported maximum resident-set
 values were 136,921,088 and 13,697,024 bytes, respectively. Those values are not
 a simultaneous sum of memory across the process tree.
 
@@ -66,7 +66,7 @@ A MiB is 1,048,576 bytes.
 All twelve analyses passed, started no media tools, and produced identical
 reports after removing the measurement fields. Original files retained their
 bytes. Timing surrounded each whole CLI invocation, including its cleanup;
-Darwin §wait4§ supplied CPU and peak resident-memory counters.
+Darwin `wait4` supplied CPU and peak resident-memory counters.
 
 Other work continued on the host, and filesystem caches were uncontrolled.
 The ranges overlap among optimized builds: this batch does not establish
