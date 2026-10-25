@@ -23,7 +23,7 @@ impl Directories {
         let root = root.canonicalize().map_err(|_| UNSAFE)?;
         let identity = directory_identity(&root).map_err(|_| UNSAFE)?;
         Ok(Self {
-            identities: BTreeMap::from([(root.clone(), identity)]),
+            identities: BTreeMap::from([(PathBuf::new(), identity)]),
             root,
         })
     }
@@ -32,14 +32,25 @@ impl Directories {
         relative(relative_path)?;
         let destination = self.root.join(relative_path);
         let parent = destination.parent().ok_or(UNSAFE)?;
-        if !self.identities.contains_key(parent) {
+        let relative_parent = relative_path.parent().ok_or(UNSAFE)?;
+        if !self.identities.contains_key(relative_parent) {
             files::create_dir(parent)?;
             self.identities.insert(
-                parent.to_path_buf(),
+                relative_parent.to_path_buf(),
                 directory_identity(parent).map_err(|_| UNSAFE)?,
             );
         }
-        if Some(&directory_identity(parent).map_err(|_| UNSAFE)?) != self.identities.get(parent) {
+        self.prepared(relative_path)
+    }
+
+    pub fn prepared(&self, relative_path: &Path) -> Result<PathBuf, ConversionError> {
+        relative(relative_path)?;
+        let destination = self.root.join(relative_path);
+        let parent = destination.parent().ok_or(UNSAFE)?;
+        let relative_parent = relative_path.parent().ok_or(UNSAFE)?;
+        if Some(&directory_identity(parent).map_err(|_| UNSAFE)?)
+            != self.identities.get(relative_parent)
+        {
             return Err(UNSAFE);
         }
         Ok(destination)
@@ -48,7 +59,7 @@ impl Directories {
     pub fn finish(&self, stop: &Stop) -> Result<(), ConversionError> {
         for (path, identity) in &self.identities {
             cancelled(stop)?;
-            if directory_identity(path).map_err(|_| UNSAFE)? != *identity {
+            if directory_identity(&self.root.join(path)).map_err(|_| UNSAFE)? != *identity {
                 return Err(UNSAFE);
             }
         }
@@ -140,5 +151,22 @@ mod tests {
         assert_eq!(std::fs::read(&second).unwrap(), b"second");
         std::fs::remove_file(link).unwrap();
         directories.finish(&Stop::new()).unwrap();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn canonicalization_never_adopts_a_symlink_to_a_valid_private_stage() {
+        let stage = files::Stage::new(None).unwrap();
+        let alias_root = tempfile::tempdir().unwrap();
+        let alias = alias_root.path().join("alias");
+        let file = stage.path().join("retained.ts");
+        files::create_new(&file)
+            .unwrap()
+            .write_all(b"retained")
+            .unwrap();
+        std::os::unix::fs::symlink(stage.path(), &alias).unwrap();
+        assert_eq!(Directories::new(&alias).err(), Some(UNSAFE));
+        assert_eq!(std::fs::read(file).unwrap(), b"retained");
+        files::seal(stage.path()).unwrap();
     }
 }

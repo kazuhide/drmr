@@ -1,6 +1,9 @@
 //! Byte-bound private input graphs for saved conversion intent.
+mod capture;
 mod directories;
+mod execution;
 mod graph;
+mod io;
 
 use super::{ConversionError, files};
 use crate::{concurrency::Stop, native::FileIdentity};
@@ -9,7 +12,6 @@ use sha2::{Digest as _, Sha256};
 use std::{
     collections::BTreeMap,
     fs::File,
-    io::Read as _,
     path::{Component, Path, PathBuf},
     sync::Arc,
 };
@@ -74,71 +76,7 @@ impl std::fmt::Debug for FrozenSource {
 impl FrozenSource {
     /// Capture only the input's finite local resource graph, leaving unrelated files alone.
     pub fn capture(input: &Path, stop: &Stop) -> Result<Self, ConversionError> {
-        cancelled(stop)?;
-        let metadata = std::fs::symlink_metadata(input).map_err(|_| CHANGED)?;
-        if !metadata.is_file() || unsafe_link(&metadata) {
-            return Err(INVALID);
-        }
-        let input = input.canonicalize().map_err(|_| CHANGED)?;
-        let root = input.parent().ok_or(INVALID)?.to_path_buf();
-        let entrypoint = PathBuf::from(input.file_name().ok_or(INVALID)?);
-        let root_identity = directory_identity(&root)?;
-        let stage = files::Stage::new(None)?;
-        let mut directories = directories::Directories::new(stage.path())?;
-        let mut copied = BTreeMap::new();
-        let mut identities = BTreeMap::new();
-        let mut total = 0u64;
-        let mut path_bytes = 0usize;
-        graph::walk(stage.path(), &entrypoint, stop, |path| {
-            if !copied.contains_key(path) {
-                if copied.len() >= MAX_FILES {
-                    return Err(LIMIT);
-                }
-                path_bytes = path_bytes
-                    .checked_add(path.as_os_str().len())
-                    .filter(|bytes| *bytes <= MAX_PATH_BYTES)
-                    .ok_or(LIMIT)?;
-                let (file, identity) = copy_object(
-                    &root,
-                    &mut directories,
-                    path,
-                    None,
-                    MAX_GRAPH_BYTES - total,
-                    stop,
-                    &mut |_, _| {},
-                )?;
-                total = total
-                    .checked_add(file.bytes)
-                    .filter(|size| *size <= MAX_GRAPH_BYTES)
-                    .ok_or(LIMIT)?;
-                identities.insert(path.to_path_buf(), identity);
-                copied.insert(path.to_path_buf(), file);
-            }
-            Ok(())
-        })?;
-        directories.finish(stop)?;
-        let mut inventory = SourceInventory {
-            schema_version: 1,
-            root,
-            entrypoint,
-            files: copied.into_values().collect(),
-            graph_digest: String::new(),
-        };
-        inventory.graph_digest = graph_digest(&inventory)?;
-        validate(&inventory)?;
-        let original = Arc::new(OriginalGuard {
-            inventory,
-            root_identity,
-            identities,
-            stop: stop.clone(),
-        });
-        original.check()?;
-        let entrypoint = stage.path().join(&original.inventory.entrypoint);
-        Ok(Self {
-            _stage: stage,
-            entrypoint,
-            original,
-        })
+        capture::capture(input, stop, execution::Execution::default(), &|_, _| {})
     }
 
     /// Reopen untrusted saved inventory into fresh copies, checking the copied bytes before use.
@@ -146,57 +84,22 @@ impl FrozenSource {
         inventory: &SourceInventory,
         stop: &Stop,
     ) -> Result<Self, ConversionError> {
-        Self::from_inventory_observed(inventory, stop, |_, _| {})
+        capture::from_inventory(inventory, stop, execution::Execution::default(), &|_, _| {})
     }
 
+    #[cfg(test)]
     fn from_inventory_observed(
         inventory: &SourceInventory,
         stop: &Stop,
-        mut after_chunk: impl FnMut(&Path, u64),
+        after_chunk: impl FnMut(&Path, u64) + Send,
     ) -> Result<Self, ConversionError> {
-        cancelled(stop)?;
-        validate(inventory)?;
-        let root_identity = directory_identity(&inventory.root)?;
-        let stage = files::Stage::new(None)?;
-        let mut directories = directories::Directories::new(stage.path())?;
-        let mut identities = BTreeMap::new();
-        for file in &inventory.files {
-            let (_, identity) = copy_object(
-                &inventory.root,
-                &mut directories,
-                &file.path,
-                Some(file),
-                file.bytes,
-                stop,
-                &mut after_chunk,
-            )?;
-            identities.insert(file.path.clone(), identity);
-        }
-        directories.finish(stop)?;
-        let mut referenced = std::collections::BTreeSet::new();
-        graph::walk(stage.path(), &inventory.entrypoint, stop, |path| {
-            if !identities.contains_key(path) {
-                return Err(INVALID);
-            }
-            referenced.insert(path.to_path_buf());
-            Ok(())
-        })?;
-        if referenced.len() != inventory.files.len() {
-            return Err(INVALID);
-        }
-        let original = Arc::new(OriginalGuard {
-            inventory: inventory.clone(),
-            root_identity,
-            identities,
-            stop: stop.clone(),
-        });
-        original.check()?;
-        let entrypoint = stage.path().join(&original.inventory.entrypoint);
-        Ok(Self {
-            _stage: stage,
-            entrypoint,
-            original,
-        })
+        let observer = std::sync::Mutex::new(after_chunk);
+        capture::from_inventory(
+            inventory,
+            stop,
+            execution::Execution::default(),
+            &|path, bytes| (observer.lock().unwrap())(path, bytes),
+        )
     }
 
     pub fn entrypoint(&self) -> &Path {
@@ -215,6 +118,26 @@ impl FrozenSource {
 }
 
 impl super::Converter {
+    pub(super) fn capture_source(&self, input: &Path) -> Result<FrozenSource, ConversionError> {
+        capture::capture(
+            input,
+            &self.backend.stop,
+            execution::Execution::for_converter(self),
+            &|_, _| {},
+        )
+    }
+    pub(super) fn reopen_source(
+        &self,
+        inventory: &SourceInventory,
+    ) -> Result<FrozenSource, ConversionError> {
+        capture::from_inventory(
+            inventory,
+            &self.backend.stop,
+            execution::Execution::for_converter(self),
+            &|_, _| {},
+        )
+    }
+
     /// Carry original-source checks through measurements and final atomic publication.
     pub(super) fn using_frozen_source(&self, source: &FrozenSource) -> Self {
         let mut guards = self.frozen_source.clone();
@@ -241,6 +164,7 @@ pub(super) struct OriginalGuard {
     root_identity: FileIdentity,
     identities: BTreeMap<PathBuf, FileIdentity>,
     stop: Stop,
+    execution: execution::Execution,
 }
 impl OriginalGuard {
     pub(super) fn check(&self) -> Result<(), ConversionError> {
@@ -248,22 +172,27 @@ impl OriginalGuard {
         if directory_identity(&self.inventory.root)? != self.root_identity {
             return Err(CHANGED);
         }
-        for expected in &self.inventory.files {
-            let mut file = open_confined(&self.inventory.root, &expected.path)?;
-            if FileIdentity::read(&file).map_err(|_| CHANGED)? != self.identities[&expected.path] {
-                return Err(CHANGED);
-            }
-            let (hash, bytes) = transfer(
-                &mut file,
-                &mut std::io::sink(),
-                &self.stop,
-                expected.bytes,
-                &mut |_| {},
-            )?;
-            if bytes != expected.bytes || hash != expected.sha256 {
-                return Err(CHANGED);
-            }
-        }
+        self.execution
+            .run(&self.stop, self.inventory.files.len(), |index, control| {
+                let expected = &self.inventory.files[index];
+                let mut file = open_confined(&self.inventory.root, &expected.path)?;
+                if FileIdentity::read(&file).map_err(|_| CHANGED)?
+                    != self.identities[&expected.path]
+                {
+                    return Err(CHANGED);
+                }
+                let (hash, bytes) = io::transfer(
+                    &mut file,
+                    &mut std::io::sink(),
+                    control,
+                    expected.bytes,
+                    &mut |_| {},
+                )?;
+                if bytes != expected.bytes || hash != expected.sha256 {
+                    return Err(CHANGED);
+                }
+                Ok(())
+            })?;
         if directory_identity(&self.inventory.root)? != self.root_identity {
             return Err(CHANGED);
         }
@@ -377,13 +306,7 @@ pub(super) fn validate(inventory: &SourceInventory) -> Result<(), ConversionErro
         {
             return Err(INVALID);
         }
-        let alias: String = file
-            .path
-            .to_str()
-            .ok_or(INVALID)?
-            .nfc()
-            .flat_map(char::to_lowercase)
-            .collect();
+        let alias = path_alias(&file.path)?;
         if !aliases.insert(alias) {
             return Err(INVALID);
         }
@@ -402,6 +325,14 @@ pub(super) fn validate(inventory: &SourceInventory) -> Result<(), ConversionErro
         return Err(INVALID);
     }
     Ok(())
+}
+fn path_alias(path: &Path) -> Result<String, ConversionError> {
+    Ok(path
+        .to_str()
+        .ok_or(INVALID)?
+        .nfc()
+        .flat_map(char::to_lowercase)
+        .collect())
 }
 fn graph_digest(inventory: &SourceInventory) -> Result<String, ConversionError> {
     let mut hash = Sha256::new();
@@ -487,72 +418,10 @@ fn open_confined(root: &Path, relative_path: &Path) -> Result<File, ConversionEr
     }
     Ok(file)
 }
-fn copy_object(
-    root: &Path,
-    directories: &mut directories::Directories,
-    relative_path: &Path,
-    expected: Option<&SourceFile>,
-    remaining: u64,
-    stop: &Stop,
-    after_chunk: &mut impl FnMut(&Path, u64),
-) -> Result<(SourceFile, FileIdentity), ConversionError> {
-    cancelled(stop)?;
-    let mut input = open_confined(root, relative_path)?;
-    let identity = FileIdentity::read(&input).map_err(|_| CHANGED)?;
-    let size = input.metadata().map_err(|_| CHANGED)?.len();
-    if size > remaining {
-        return Err(LIMIT);
-    }
-    if expected.is_some_and(|file| file.bytes != size) {
-        return Err(CHANGED);
-    }
-    let destination = directories.prepare(relative_path)?;
-    let mut output = files::create_new(&destination)?;
-    let (sha256, bytes) = transfer(&mut input, &mut output, stop, size, &mut |bytes| {
-        after_chunk(relative_path, bytes);
-    })?;
-    output.sync_all().map_err(|_| CHANGED)?;
-    if bytes != size || expected.is_some_and(|file| file.sha256 != sha256) {
-        return Err(CHANGED);
-    }
-    if FileIdentity::read(&open_confined(root, relative_path)?).map_err(|_| CHANGED)? != identity {
-        return Err(CHANGED);
-    }
-    Ok((
-        SourceFile {
-            path: relative_path.to_path_buf(),
-            bytes,
-            sha256,
-        },
-        identity,
-    ))
-}
-fn transfer(
-    input: &mut File,
-    output: &mut impl std::io::Write,
-    stop: &Stop,
-    maximum: u64,
-    after_chunk: &mut impl FnMut(u64),
-) -> Result<(String, u64), ConversionError> {
-    let mut bytes = 0u64;
-    let mut hash = crate::sha256::Sha256::new();
-    let mut buffer = vec![0; 64 * 1024];
-    loop {
-        cancelled(stop)?;
-        let count = input.read(&mut buffer).map_err(|_| CHANGED)?;
-        if count == 0 {
-            break;
-        }
-        bytes = bytes
-            .checked_add(count as u64)
-            .filter(|bytes| *bytes <= maximum && *bytes <= super::MAX_MEDIA_BYTES)
-            .ok_or(CHANGED)?;
-        output.write_all(&buffer[..count]).map_err(|_| CHANGED)?;
-        hash.update(&buffer[..count]);
-        after_chunk(bytes);
-    }
-    Ok((hex::encode(hash.finalize()), bytes))
-}
+#[cfg(test)]
+use io::copy_object;
 
+#[cfg(test)]
+mod parallel_tests;
 #[cfg(test)]
 mod tests;

@@ -1,8 +1,10 @@
 //! One byte-bound source and one atomic destination for several independently checked outputs.
 use super::{EXISTS, INVALID, KIND, LIMIT, UNSAFE, UNSUPPORTED, absolute, destination};
+#[cfg(test)]
+use crate::conversion::FrozenSource;
 use crate::{
     conversion::{
-        ConversionError, ConversionReport, ConversionRequest, Converter, DrmSystem, FrozenSource,
+        ConversionError, ConversionReport, ConversionRequest, Converter, DrmSystem,
         OutputSignaling, SourceInventory, SourceValidationPurpose, ValidationDepth,
         VerificationReport, VerificationRequest, VerificationSource,
         conformance::{ManifestValidationReport, ManifestValidationTools},
@@ -176,7 +178,7 @@ impl Converter {
         let outputs = normalized(request.outputs)?;
         let output_root = super::super::destination(request.output_root).map_err(|_| UNSAFE)?;
         let destination = destination::OutputGuard::new(&output_root)?;
-        let frozen = FrozenSource::capture(request.input.input, &self.backend.stop)?;
+        let frozen = self.capture_source(request.input.input)?;
         self.check_downloaded_inventory(frozen.inventory())?;
         let command = self
             .using_frozen_source(&frozen)
@@ -243,7 +245,8 @@ impl Converter {
         self.backend.check_cancelled()?;
         self.refuse_bundle_signaling()?;
         let destination = destination::OutputGuard::new(&plan.output_root)?;
-        let frozen = FrozenSource::from_inventory(&plan.source, &self.backend.stop)
+        let frozen = self
+            .reopen_source(&plan.source)
             .map_err(super::source_error)?;
         self.check_downloaded_inventory(frozen.inventory())?;
         let command = self.using_frozen_source(&frozen).with_decode(
@@ -293,7 +296,7 @@ impl Converter {
             command.check_downloaded()?;
             frozen.check_original().map_err(super::source_error)?;
             let entrypoint = result_entrypoint(stage.path(), output);
-            let bound = FrozenSource::capture(&entrypoint, &self.backend.stop)?;
+            let bound = self.capture_source(&entrypoint)?;
             let (matches, verification) =
                 child.bundle_media(source, bound.entrypoint(), output, output_keys)?;
             if !matches || !verification.passed {
@@ -373,7 +376,8 @@ impl Converter {
         validate_keys(plan, keys)?;
         self.backend.check_cancelled()?;
         self.refuse_bundle_signaling()?;
-        let original = FrozenSource::from_inventory(&plan.source, &self.backend.stop)
+        let original = self
+            .reopen_source(&plan.source)
             .map_err(super::source_error)?;
         let command = self.using_frozen_source(&original).with_decode(
             self.backend.validation_depth.max(plan.minimum_depth()) == ValidationDepth::Decoded,
@@ -387,12 +391,7 @@ impl Converter {
         let frozen_results = plan
             .outputs
             .iter()
-            .map(|intent| {
-                FrozenSource::capture(
-                    &result_entrypoint(&plan.output_root, intent),
-                    &self.backend.stop,
-                )
-            })
+            .map(|intent| self.capture_source(&result_entrypoint(&plan.output_root, intent)))
             .collect::<Result<Vec<_>, _>>()?;
         let mut results = Vec::with_capacity(plan.outputs.len());
         for (intent, result) in plan.outputs.iter().zip(&frozen_results) {

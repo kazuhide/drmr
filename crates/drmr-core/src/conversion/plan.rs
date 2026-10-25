@@ -180,7 +180,7 @@ impl Converter {
         &self,
         source: VerificationSource<'_>,
     ) -> Result<InputAnalysis, ConversionError> {
-        let frozen = FrozenSource::capture(source.input, &self.backend.stop)?;
+        let frozen = self.capture_source(source.input)?;
         let command = self.using_frozen_source(&frozen);
         let qualified = command.validate_source(
             rebound(source, &frozen),
@@ -208,7 +208,7 @@ impl Converter {
         self.backend.check_cancelled()?;
         let output = super::destination(request.output).map_err(|_| UNSAFE)?;
         let destination = destination::OutputGuard::new(&output)?;
-        let frozen = FrozenSource::capture(request.input.input, &self.backend.stop)?;
+        let frozen = self.capture_source(request.input.input)?;
         let command = self.using_frozen_source(&frozen);
         let qualified = command.validate_source(
             rebound(request.input, &frozen),
@@ -261,8 +261,7 @@ impl Converter {
             return Err(UNSAFE);
         }
         let destination = destination::OutputGuard::new(&plan.intent.output)?;
-        let frozen =
-            FrozenSource::from_inventory(&plan.source, &self.backend.stop).map_err(source_error)?;
+        let frozen = self.reopen_source(&plan.source).map_err(source_error)?;
         let mut command = self
             .using_frozen_source(&frozen)
             .with_processing(plan.processing_mode())
@@ -307,9 +306,8 @@ impl Converter {
         validate(plan)?;
         self.check_saved_processing(plan.processing_mode())?;
         self.backend.check_cancelled()?;
-        let original =
-            FrozenSource::from_inventory(&plan.source, &self.backend.stop).map_err(source_error)?;
-        let result = FrozenSource::capture(&result_entrypoint(plan), &self.backend.stop)?;
+        let original = self.reopen_source(&plan.source).map_err(source_error)?;
+        let result = self.capture_source(&result_entrypoint(plan))?;
         let command = self
             .using_frozen_source(&original)
             .with_processing(plan.processing_mode())
