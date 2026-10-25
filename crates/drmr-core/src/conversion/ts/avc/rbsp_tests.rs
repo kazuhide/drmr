@@ -148,6 +148,31 @@ fn sparse_and_adjacent_escape_runs_match_the_scalar_reference() {
 }
 
 #[test]
+fn dense_prefixes_match_scalar_for_every_short_suffix() {
+    const ALPHABET: [u8; 5] = [0, 1, 2, 3, 4];
+    for escapes in 3..=5 {
+        let mut prefix = vec![0x65];
+        for _ in 0..escapes {
+            prefix.extend_from_slice(&[0, 0, 3]);
+        }
+        for length in 0..=6 {
+            for mut pattern in 0..5_usize.pow(length) {
+                let mut nal = prefix.clone();
+                for _ in 0..length {
+                    nal.push(ALPHABET[pattern % 5]);
+                    pattern /= 5;
+                }
+                assert_eq!(
+                    rbsp(&nal, 5).map(|body| body.to_vec()),
+                    scalar_rbsp(&nal, 5),
+                    "{nal:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn late_invalid_escapes_fail_even_after_an_owned_prefix_was_created() {
     for escaped in [false, true] {
         for boundary in [15, 16, 17, 31, 32, 33, 63, 64, 65, 65_535, 65_536, 65_537] {
@@ -182,6 +207,8 @@ fn the_full_nal_size_limit_is_checked_before_borrowing_or_copying() {
     nal[end - 4..].copy_from_slice(&[0, 0, 3, 4]);
     assert_eq!(rbsp(&nal, 5).err(), Some(BAD));
     nal[1..5].copy_from_slice(&[0, 0, 3, 0]);
+    assert_eq!(rbsp(&nal, 5).err(), Some(BAD));
+    nal[1..14].copy_from_slice(&[0, 0, 3, 0, 0, 3, 0, 0, 3, 0, 0, 3, 0]);
     assert_eq!(rbsp(&nal, 5).err(), Some(BAD));
     nal.push(0x80);
     assert_eq!(
