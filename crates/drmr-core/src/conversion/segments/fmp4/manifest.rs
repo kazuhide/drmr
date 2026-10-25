@@ -251,21 +251,26 @@ fn transform_part(
             &converter.backend.stop,
         )?
     };
-    let resources = converter.run_tracks(part.resources.len(), |index| {
-        let _permit = proof::permit(converter)?;
-        let resource = &part.resources[index];
-        let path = directory.join(format!("seg_{}.m4s", resource.dash.number));
-        let evidence = transformer.rewrite_segment(
-            &resource.path,
-            &path,
-            request.input_keys,
-            &converter.backend.stop,
-        )?;
-        if admitted.boundaries.get(index) != Some(&evidence) {
-            return Err(ConversionError("native-source-changed"));
-        }
-        Ok(path)
-    })?;
+    let resources = converter.run_units(
+        part.resources.len(),
+        admitted.media.tracks.len(),
+        resource_metadata(part, directory)?,
+        |index| {
+            let _permit = proof::permit(converter)?;
+            let resource = &part.resources[index];
+            let path = directory.join(format!("seg_{}.m4s", resource.dash.number));
+            let evidence = transformer.rewrite_segment(
+                &resource.path,
+                &path,
+                request.input_keys,
+                &converter.backend.stop,
+            )?;
+            if admitted.boundaries.get(index) != Some(&evidence) {
+                return Err(ConversionError("native-source-changed"));
+            }
+            Ok(path)
+        },
+    )?;
     drop(transformer);
     let (codecs, resolution) = {
         let _permit = proof::permit(converter)?;
@@ -294,6 +299,33 @@ fn transform_part(
         resolution,
         bandwidth,
     })
+}
+
+fn resource_metadata(part: &super::source::Part, directory: &Path) -> Result<u64, ConversionError> {
+    let bad = ConversionError("resource-budget");
+    let mut bytes = part
+        .resources
+        .capacity()
+        .checked_mul(std::mem::size_of::<super::source::Resource>())
+        .ok_or(bad)?;
+    for resource in &part.resources {
+        // Include retained input strings and the growing PathBuf returned for
+        // each generated segment (u64 number plus fixed filename punctuation).
+        bytes = bytes
+            .checked_add(resource.path.capacity())
+            .and_then(|bytes| bytes.checked_add(resource.duration.capacity()))
+            .and_then(|bytes| {
+                bytes.checked_add(
+                    directory
+                        .as_os_str()
+                        .len()
+                        .checked_add(32)?
+                        .checked_mul(2)?,
+                )
+            })
+            .ok_or(bad)?;
+    }
+    u64::try_from(bytes).map_err(|_| bad)
 }
 
 fn hls_part(
