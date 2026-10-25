@@ -4,6 +4,8 @@ mod directories;
 mod execution;
 mod graph;
 mod io;
+mod retention;
+pub(super) use retention::{retained_inventory_bound, retained_inventory_bytes};
 
 use super::{ConversionError, files};
 use crate::{concurrency::Stop, native::FileIdentity};

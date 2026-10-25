@@ -3,13 +3,16 @@
 use crate::toolrun::{DEFAULT_STDERR_BYTES, DEFAULT_STDOUT_BYTES, MAX_CAPTURE_BYTES};
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 
+mod cpu_scope;
 mod limiter;
+pub(crate) use cpu_scope::{CpuPermit, CpuScope};
+pub(crate) use limiter::ContextPermit;
 pub use limiter::{Claim, Limiter, Permit, ReservationError, process_limiter};
 
 const MIB: u64 = 1024 * 1024;
 const UNKNOWN_MEMORY_BYTES: u64 = 512 * MIB;
 const MINIMUM_HEADROOM_BYTES: u64 = 256 * MIB;
-const TRACK_RESIDENCY_BYTES: u64 = 8 * MIB;
+pub(crate) const TRACK_RESIDENCY_BYTES: u64 = 8 * MIB;
 
 /// Where the available-memory observation came from. No machine identifiers are collected.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
