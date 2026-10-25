@@ -510,6 +510,31 @@ class OwnedFilesTests(unittest.TestCase):
             extraction.assert_not_called()
             execution.assert_not_called()
 
+    def test_archive_dependency_probe_requests_complete_decoding(self):
+        archive = self.root / "candidate.tar.gz"
+        archive.write_bytes(b"candidate")
+        cli = self.root / "verified-drmr"
+        proof = {"success": True, "binaries": {"drmr": {"sha256": "a" * 64}}}
+        source = SimpleNamespace(head="b" * 40, tree="c" * 40)
+        with patch.object(module, "require_native"), patch.object(module, "require_version"), \
+                patch.object(module.VERIFY, "Source", return_value=source), \
+                patch.object(module.VERIFY, "metadata", return_value={}), \
+                patch.object(module.VERIFY, "build_expectation", return_value={}), \
+                patch.object(module.VERIFY, "qualify", return_value=proof), \
+                patch.object(module, "extract_cli", return_value=cli), \
+                patch.object(module, "Runner") as execution:
+            execution.return_value.run.return_value = b"drmr 1.0.0\n"
+            execution.return_value.json.side_effect = module.Refusal("probe-reached")
+            with self.assertRaisesRegex(module.Refusal, "^probe-reached$"):
+                module.qualify(archive, "x86_64-unknown-linux-gnu", "1.0.0", self.root)
+            arguments, stage, timeout = execution.return_value.json.call_args.args
+            self.assertEqual(arguments[0], cli)
+            self.assertEqual(arguments[1:3], ["doctor", "--probe"])
+            self.assertIn("--decode", arguments)
+            self.assertEqual(arguments[arguments.index("--route") + 1], "all")
+            self.assertIn("--json", arguments)
+            self.assertEqual((stage, timeout), ("doctor", 120))
+
     def test_corrupt_compression_has_only_a_fixed_diagnostic(self):
         archive = self.root / "malformed-private-marker.tar.gz"
         archive.write_bytes(b"not a compressed archive")

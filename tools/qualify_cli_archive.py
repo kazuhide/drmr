@@ -755,7 +755,7 @@ def qualify(archive_path, target, version, source_path):
         runner = Runner(workspace.path)
         require(runner.run([cli, "--version"], "version", 20).strip() == ("drmr " + version).encode("ascii"),
                 "binary-version-mismatch")
-        tools = doctor(runner.json([cli, "doctor", "--probe", "--route", "all", "--json"], "doctor", 120))
+        tools = doctor(runner.json([cli, "doctor", "--probe", "--decode", "--route", "all", "--json"], "doctor", 120))
         proof = media(cli, runner, source)
         audio = audio_media(cli, runner, source)
         metadata = metadata_analysis(cli, runner, workspace.path / "dash/manifest.mpd")
