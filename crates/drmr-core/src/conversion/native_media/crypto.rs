@@ -150,6 +150,46 @@ impl Cipher {
         }
         Ok(())
     }
+    fn transform_cbcs(&mut self, bytes: &mut [u8]) -> Result<(), ConversionError> {
+        let mut blocks = Zeroizing::new([aes::Block::default(); BATCH_BLOCKS]);
+        let mut offsets = [0; BATCH_BLOCKS];
+        let mut at = 0;
+        while bytes.len() - at >= 16 {
+            let mut count = 0;
+            let mut failure = None;
+            while count < BATCH_BLOCKS && bytes.len() - at >= 16 {
+                if self.block % (self.crypt + self.skip) < self.crypt {
+                    offsets[count] = at;
+                    blocks[count].copy_from_slice(&bytes[at..at + 16]);
+                    count += 1;
+                }
+                at += 16;
+                if let Some(next) = self.block.checked_add(1) {
+                    self.block = next;
+                } else {
+                    failure = Some(BAD);
+                    break;
+                }
+            }
+            self.aes.decrypt_blocks(&mut blocks[..count]);
+            for (offset, clear) in offsets[..count].iter().zip(&blocks[..count]) {
+                let block = &mut bytes[*offset..*offset + 16];
+                let mut original = Zeroizing::new([0; 16]);
+                original.copy_from_slice(block);
+                for ((value, decrypted), previous) in
+                    block.iter_mut().zip(clear).zip(self.previous.iter())
+                {
+                    *value = decrypted ^ previous;
+                }
+                self.previous.copy_from_slice(original.as_ref());
+            }
+            if let Some(error) = failure {
+                return Err(error);
+            }
+        }
+        // The final incomplete cipher block is clear and never changes CBC state.
+        Ok(())
+    }
     pub fn transform(
         &mut self,
         bytes: &mut [u8],
@@ -161,19 +201,7 @@ impl Cipher {
                 if !final_chunk && !bytes.len().is_multiple_of(16) {
                     return Err(BAD);
                 }
-                for block in bytes.as_chunks_mut::<16>().0 {
-                    if self.block % (self.crypt + self.skip) < self.crypt {
-                        let mut original = Zeroizing::new([0; 16]);
-                        original.copy_from_slice(block);
-                        self.aes.decrypt_block((&mut *block).into());
-                        for (value, previous) in block.iter_mut().zip(self.previous.iter()) {
-                            *value ^= previous;
-                        }
-                        self.previous.copy_from_slice(original.as_ref());
-                    }
-                    self.block = self.block.checked_add(1).ok_or(BAD)?;
-                }
-                // The final incomplete cipher block is clear and never changes CBC state.
+                self.transform_cbcs(bytes)?;
             }
             Scheme::Clear => return Err(BAD),
         }
@@ -350,6 +378,60 @@ mod tests {
                 assert_eq!(&actual[48..], &[0x5a; 17]);
             }
         }
+    }
+    #[test]
+    fn cbcs_batches_equal_scalar_chaining_across_patterns_chunks_and_subsamples() {
+        let iv = bytes("000102030405060708090a0b0c0d0e0f");
+        let aes = aes::Aes128::new((&key()).into());
+        for (crypt, skip) in [(0, 0), (1, 9), (5, 5), (255, 255), (255, 0)] {
+            for chunk in [16, 32, 496, 512, 528, 4096] {
+                let mut actual = (0..32_799)
+                    .map(|i| u8::try_from(i % 251).unwrap())
+                    .collect::<Vec<_>>();
+                let mut expected = actual.clone();
+                let mut cipher = Cipher::new(&key(), &iv, Scheme::Cbcs, crypt, skip).unwrap();
+                let mut at = 0;
+                for (clear, protected) in [(3, 17), (9, 1031), (0, 31_733)] {
+                    at += clear;
+                    let end = (at + protected).min(actual.len());
+                    cipher.begin_subsample();
+                    let length = end - at;
+                    for (index, part) in actual[at..end].chunks_mut(chunk).enumerate() {
+                        cipher
+                            .transform(part, (index + 1) * chunk >= length)
+                            .unwrap();
+                    }
+                    let mut previous = <[u8; 16]>::try_from(iv.as_slice()).unwrap();
+                    let crypt = usize::from(crypt.max(1));
+                    for (index, block) in expected[at..end].chunks_exact_mut(16).enumerate() {
+                        if index % (crypt + usize::from(skip)) < crypt {
+                            let original = <[u8; 16]>::try_from(&*block).unwrap();
+                            aes.decrypt_block(block.try_into().unwrap());
+                            for (byte, previous) in block.iter_mut().zip(previous) {
+                                *byte ^= previous;
+                            }
+                            previous = original;
+                        }
+                    }
+                    at = end;
+                }
+                assert_eq!(actual, expected, "pattern={crypt}:{skip}, chunk={chunk}");
+            }
+        }
+    }
+    #[test]
+    fn cbcs_batch_counter_overflow_keeps_only_the_preceding_valid_transformation() {
+        use aes::cipher::{BlockModeDecrypt as _, KeyIvInit as _};
+        let iv = [0x31; 16];
+        let mut cipher = Cipher::new(&key(), &iv, Scheme::Cbcs, 1, 0).unwrap();
+        cipher.block = usize::MAX - 1;
+        let mut actual = [0x55; 48];
+        let mut expected = actual;
+        let mut scalar = cbc::Decryptor::<aes::Aes128>::new((&key()).into(), (&iv).into());
+        scalar.decrypt_block((&mut expected[..16]).try_into().unwrap());
+        scalar.decrypt_block((&mut expected[16..32]).try_into().unwrap());
+        assert_eq!(cipher.transform(&mut actual, true), Err(BAD));
+        assert_eq!(actual, expected);
     }
     #[test]
     fn nist_sp800_38a_f5_ctr_retains_partial_blocks_across_chunks_and_clear_subsamples() {

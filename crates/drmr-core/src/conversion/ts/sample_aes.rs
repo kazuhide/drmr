@@ -11,6 +11,7 @@ use aes::cipher::{BlockModeDecrypt as _, BlockModeEncrypt as _, KeyIvInit as _};
 use zeroize::Zeroizing;
 
 const MAX_BYTES: usize = 8 * 1024 * 1024;
+const BATCH_BLOCKS: usize = 32;
 const INVALID: ConversionError = ConversionError("ts-sample-encryption-invalid");
 const LIMIT: ConversionError = ConversionError("ts-sample-size-limit");
 
@@ -70,23 +71,32 @@ fn append_nal(bytes: &[u8], strip_outer: bool, out: &mut Vec<u8>) -> Result<(), 
     }
     Ok(())
 }
-fn decrypt_blocks(
-    bytes: &mut [u8],
-    key: &Aes128Key,
-    iv: &SegmentIv,
-    skip: usize,
-) -> Result<(), ConversionError> {
+fn decrypt_blocks(bytes: &mut [u8], key: &Aes128Key, iv: &SegmentIv, skip: usize) {
     let mut cipher = cbc::Decryptor::<aes::Aes128>::new((&*key.0).into(), (&*iv.0).into());
-    let mut at = 0;
-    while bytes.len() - at >= 16 {
-        if skip != 0 && bytes.len() - at == 16 {
-            break;
+    if skip == 0 {
+        let (blocks, _) = aes::Block::slice_as_chunks_mut(bytes);
+        for batch in blocks.chunks_mut(BATCH_BLOCKS) {
+            cipher.decrypt_blocks(batch);
         }
-        cipher.decrypt_block((&mut bytes[at..at + 16]).try_into().map_err(|_| INVALID)?);
-        at += 16;
-        at += skip.min(bytes.len() - at);
+        return;
     }
-    Ok(())
+    let mut blocks = Zeroizing::new([aes::Block::default(); BATCH_BLOCKS]);
+    let mut offsets = [0; BATCH_BLOCKS];
+    let mut at = 0;
+    while bytes.len() - at > 16 {
+        let mut count = 0;
+        while count < BATCH_BLOCKS && bytes.len() - at > 16 {
+            offsets[count] = at;
+            blocks[count].copy_from_slice(&bytes[at..at + 16]);
+            count += 1;
+            at += 16;
+            at += skip.min(bytes.len() - at);
+        }
+        cipher.decrypt_blocks(&mut blocks[..count]);
+        for (offset, block) in offsets[..count].iter().zip(&blocks[..count]) {
+            bytes[*offset..*offset + 16].copy_from_slice(block);
+        }
+    }
 }
 fn encrypt_blocks(
     bytes: &mut [u8],
@@ -247,7 +257,7 @@ pub(super) fn decrypt_h264_annex_b(
             let leader = output_begin.checked_add(32).ok_or(INVALID)?;
             let encrypted = out.get_mut(leader..).ok_or(INVALID)?;
             // The last complete 16-byte block is clear when no byte follows it.
-            decrypt_blocks(encrypted, key, iv, 144)?;
+            decrypt_blocks(encrypted, key, iv, 144);
         }
         out.extend_from_slice(&bytes[end..next]);
         at = next;
@@ -286,7 +296,7 @@ pub(super) fn decrypt_aac_adts(
             .filter(|end| *end <= out.len())
             .ok_or(INVALID)?;
         if length > 23 {
-            decrypt_blocks(&mut out[at + 23..end], key, iv, 0)?;
+            decrypt_blocks(&mut out[at + 23..end], key, iv, 0);
         }
         at = end;
     }
@@ -317,6 +327,36 @@ mod tests {
             Aes128Key::from_hex(KEY).unwrap(),
             SegmentIv::from_hex(IV).unwrap(),
         )
+    }
+    #[test]
+    fn decrypt_batches_match_a_scalar_cbc_oracle_across_batch_skip_and_tail_boundaries() {
+        use aes::cipher::{BlockCipherDecrypt as _, KeyInit as _};
+        let (key, iv) = parameters();
+        let aes = aes::Aes128::new((&*key.0).into());
+        for skip in [0, 144] {
+            for length in (0..=33).chain([511, 512, 513, 5119, 5120, 5121, 8191, 100_001]) {
+                let mut actual = (0..length)
+                    .map(|i| u8::try_from(i % 251).unwrap())
+                    .collect::<Vec<_>>();
+                let mut expected = actual.clone();
+                let mut previous = *iv.0;
+                for at in (0..length).step_by(16 + skip) {
+                    let remaining = length - at;
+                    if remaining < 16 || (skip != 0 && remaining == 16) {
+                        break;
+                    }
+                    let block = &mut expected[at..at + 16];
+                    let original = <[u8; 16]>::try_from(&*block).unwrap();
+                    aes.decrypt_block(block.try_into().unwrap());
+                    for (byte, mask) in block.iter_mut().zip(previous) {
+                        *byte ^= mask;
+                    }
+                    previous = original;
+                }
+                decrypt_blocks(&mut actual, &key, &iv, skip);
+                assert_eq!(actual, expected, "length={length}, skip={skip}");
+            }
+        }
     }
     #[test]
     fn encryption_matches_independent_nist_aac_vectors_at_both_rates() {
@@ -366,7 +406,7 @@ mod tests {
     fn encryption_inserts_outer_escapes_without_losing_original_bytes() {
         let (key, iv) = parameters();
         let mut block = [0; 16];
-        decrypt_blocks(&mut block, &key, &iv, 0).unwrap();
+        decrypt_blocks(&mut block, &key, &iv, 0);
         let mut original = vec![0, 0, 1, 0x65];
         original.extend([0x55; 31]);
         original.extend(block);

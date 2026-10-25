@@ -333,31 +333,37 @@ fn decrypt_stream(
     iv: &SegmentIv,
 ) -> Result<(), ConversionError> {
     let mut cipher = cbc::Decryptor::<aes::Aes128>::new((&*key.0).into(), (&*iv.0).into());
-    let mut block = Zeroizing::new([0u8; 16]);
-    if read_block(input, &mut block)? != 16 {
-        return Err(ConversionError("invalid-encrypted-segment"));
-    }
-    let mut next = Zeroizing::new([0u8; 16]);
+    // Hold one ciphertext block back until EOF establishes its padding boundary.
+    let mut buffer = Zeroizing::new(vec![0u8; IO_BUFFER + 16]);
+    let mut used = 0;
     loop {
-        match read_block(input, &mut next)? {
-            0 => {
-                let plaintext = cipher
-                    .decrypt_padded::<Pkcs7>(block.as_mut())
-                    .map_err(|_| ConversionError("invalid-encrypted-segment"))?;
-                output
-                    .write_all(plaintext)
-                    .map_err(|_| ConversionError("segment-write-failed"))?;
-                return Ok(());
+        while used < buffer.len() {
+            match input.read(&mut buffer[used..]) {
+                Ok(0) => break,
+                Ok(count) => used += count,
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(_) => return Err(ConversionError("segment-read-failed")),
             }
-            16 => {
-                cipher.decrypt_block((&mut *block).into());
-                output
-                    .write_all(block.as_ref())
-                    .map_err(|_| ConversionError("segment-write-failed"))?;
-                block.copy_from_slice(next.as_ref());
-            }
-            _ => return Err(ConversionError("invalid-encrypted-segment")),
         }
+        if used < buffer.len() {
+            if used == 0 || !used.is_multiple_of(16) {
+                return Err(ConversionError("invalid-encrypted-segment"));
+            }
+            let plaintext = cipher
+                .decrypt_padded::<Pkcs7>(&mut buffer[..used])
+                .map_err(|_| ConversionError("invalid-encrypted-segment"))?;
+            output
+                .write_all(plaintext)
+                .map_err(|_| ConversionError("segment-write-failed"))?;
+            return Ok(());
+        }
+        let (blocks, _) = aes::Block::slice_as_chunks_mut(&mut buffer[..IO_BUFFER]);
+        cipher.decrypt_blocks(blocks);
+        output
+            .write_all(&buffer[..IO_BUFFER])
+            .map_err(|_| ConversionError("segment-write-failed"))?;
+        buffer.copy_within(IO_BUFFER.., 0);
+        used = 16;
     }
 }
 
@@ -374,6 +380,57 @@ mod tests {
         }
     }
     struct FailingWriter;
+    #[test]
+    fn cbc_decryption_batches_output_while_retaining_the_final_padding_block() {
+        struct CountWrites {
+            bytes: Vec<u8>,
+            calls: usize,
+        }
+        impl Write for CountWrites {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.calls += 1;
+                self.bytes.extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let key = Aes128Key::from_hex("2b7e151628aed2a6abf7158809cf4f3c").unwrap();
+        let iv = SegmentIv::from_hex("000102030405060708090a0b0c0d0e0f").unwrap();
+        for length in [
+            0,
+            1,
+            15,
+            16,
+            17,
+            IO_BUFFER - 1,
+            IO_BUFFER,
+            IO_BUFFER * 2 + 31,
+        ] {
+            let original = (0..length)
+                .map(|i| u8::try_from(i % 251).unwrap())
+                .collect::<Vec<_>>();
+            // The independent mode implementation supplies a padded CBC oracle.
+            let mut encrypted = original.clone();
+            encrypted.resize((length / 16 + 1) * 16, 0);
+            let cipher = cbc::Encryptor::<aes::Aes128>::new((&*key.0).into(), (&*iv.0).into());
+            let encrypted = cipher
+                .encrypt_padded::<Pkcs7>(&mut encrypted, length)
+                .unwrap();
+            let mut output = CountWrites {
+                bytes: Vec::new(),
+                calls: 0,
+            };
+            decrypt_stream(&mut ShortReader(encrypted), &mut output, &key, &iv).unwrap();
+            assert_eq!(output.bytes, original, "length={length}");
+            assert!(
+                output.calls <= encrypted.len() / IO_BUFFER + 1,
+                "length={length}, writes={}",
+                output.calls
+            );
+        }
+    }
     #[test]
     fn cancelled_resource_work_preserves_an_existing_destination() {
         let root = super::super::workspace().unwrap();
@@ -452,6 +509,79 @@ mod tests {
             encrypt_stream(&mut ShortReader(source), &mut FailingWriter, &key, &iv),
             Err(ConversionError("segment-write-failed"))
         );
+        assert_eq!(
+            decrypt_stream(&mut ShortReader(&encrypted), &mut FailingWriter, &key, &iv),
+            Err(ConversionError("segment-write-failed"))
+        );
+    }
+    #[test]
+    fn cbc_batches_refuse_truncation_and_bad_padding_without_publishing_plaintext() {
+        let key = Aes128Key::from_hex("42424242424242424242424242424242").unwrap();
+        let iv = SegmentIv::for_sequence(1);
+        let root = super::super::workspace().unwrap();
+        let source = root.path().join("ciphertext");
+        let destination = root.path().join("plaintext");
+        let mut encrypted = Vec::new();
+        encrypt_stream(
+            &mut &vec![0x55; IO_BUFFER + 19][..],
+            &mut encrypted,
+            &key,
+            &iv,
+        )
+        .unwrap();
+        let original = encrypted.clone();
+        // Change the previous CBC block so the final padding byte becomes zero.
+        let end = encrypted.len();
+        encrypted[end - 17] ^= 0x0d;
+        for bytes in [
+            &[][..],
+            &original[..15],
+            &original[..end - 1],
+            encrypted.as_slice(),
+        ] {
+            std::fs::write(&source, bytes).unwrap();
+            assert_eq!(
+                decrypt_segment(&source, &destination, &key, &iv),
+                Err(ConversionError("invalid-encrypted-segment"))
+            );
+            assert!(!destination.exists());
+            assert_eq!(std::fs::read(&source).unwrap(), bytes);
+        }
+    }
+    #[test]
+    fn cbc_decryption_observes_cancellation_before_reading_beyond_one_io_chunk() {
+        struct Trip<'a> {
+            stop: &'a crate::concurrency::Stop,
+            read: usize,
+        }
+        impl Read for Trip<'_> {
+            fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+                bytes.fill(0x55);
+                self.read += bytes.len();
+                if self.read >= IO_BUFFER {
+                    self.stop.set();
+                }
+                Ok(bytes.len())
+            }
+        }
+        let key = Aes128Key::from_hex("42424242424242424242424242424242").unwrap();
+        let iv = SegmentIv::for_sequence(1);
+        let stop = crate::concurrency::Stop::new();
+        let mut input = StoppableReader {
+            input: Trip {
+                stop: &stop,
+                read: 0,
+            },
+            stop: Some(&stop),
+            remaining: 0,
+        };
+        let mut output = Vec::new();
+        assert_eq!(
+            decrypt_stream(&mut input, &mut output, &key, &iv),
+            Err(ConversionError("segment-read-failed"))
+        );
+        assert_eq!(input.input.read, IO_BUFFER);
+        assert!(output.is_empty());
     }
     #[test]
     fn sequence_iv_is_a_zero_padded_128_bit_big_endian_integer() {
