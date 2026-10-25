@@ -218,3 +218,37 @@ impl Receipt {
         self.after
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn held_source_size_and_path_identity_guards_detect_changes() {
+        let owner = crate::native::private_tempdir().unwrap();
+        let root = owner.path().join("media");
+        crate::native::create_media_dir_all(&root).unwrap();
+        for change in ["shorter", "longer", "replacement"] {
+            let source = root.join(format!("{change}.ts"));
+            crate::native::create_media_new(&source)
+                .unwrap()
+                .write_all(&[0x55; 188])
+                .unwrap();
+            // The standard handle permits the adversarial updates on Windows;
+            // production regular_input also denies write/delete sharing there.
+            let held = File::open(&source).unwrap();
+            let identity = FileIdentity::read(&held).unwrap();
+            unchanged(&source, &held, identity, 188).unwrap();
+            match change {
+                "shorter" => std::fs::write(&source, [0x55; 187]).unwrap(),
+                "longer" => std::fs::write(&source, [0x55; 189]).unwrap(),
+                "replacement" => {
+                    std::fs::rename(&source, root.join("displaced.ts")).unwrap();
+                    std::fs::write(&source, [0x55; 188]).unwrap();
+                }
+                _ => unreachable!(),
+            }
+            assert_eq!(unchanged(&source, &held, identity, 188), Err(BAD));
+        }
+    }
+}

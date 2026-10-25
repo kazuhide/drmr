@@ -331,7 +331,129 @@ mod copied_segments {
                 assert!(anchor.same_as(&new[&pid]));
                 assert!(anchor.config == new[&pid].config);
                 assert_eq!(anchor.count, new[&pid].count);
+                assert_eq!(anchor.metadata().unwrap(), new[&pid].metadata().unwrap());
+                assert_eq!(anchor.timing().unwrap(), new[&pid].timing().unwrap());
+                assert_eq!(anchor.evidence().unwrap(), new[&pid].evidence().unwrap());
+                assert_eq!(
+                    anchor.segment_timings().unwrap(),
+                    new[&pid].segment_timings().unwrap()
+                );
             }
         }
+    }
+
+    #[test]
+    fn the_receipt_binds_null_packet_bytes_that_native_evidence_does_not_include() {
+        let (_owner, root) = root();
+        let source = resource(&root, "source.ts", 90_000, &[frame(1)], 0);
+        let mut bytes = std::fs::read(&source).unwrap();
+        bytes.extend(packet(0x1fff, false, 0, &[0x55; 16], false));
+        std::fs::write(&source, &bytes).unwrap();
+        let destination = root.join("copied.ts");
+        let mut scanner = NativeScanner::new();
+        let before = scanner.admission.clone();
+        let receipt = admitted(&scanner, &source, &destination);
+        *bytes.last_mut().unwrap() ^= 1;
+        std::fs::write(&destination, &bytes).unwrap();
+        let error = scanner
+            .scan_receipt(receipt, &Stop::new(), &mut |_, _, _, _, _| Ok(()))
+            .unwrap_err();
+        assert!(scanner.admission == before);
+        assert!(!destination.exists());
+        assert_poisoned(scanner, &source, &root.join("retry.ts"), error);
+    }
+
+    #[test]
+    fn partial_copy_reads_cannot_satisfy_the_whole_byte_receipt() {
+        use std::io::Read as _;
+        let (_owner, root) = root();
+        let source = resource(&root, "source.ts", 90_000, &[frame(1)], 0);
+        let destination = root.join("copied.ts");
+        let scanner = NativeScanner::new();
+        let receipt = admitted(&scanner, &source, &destination);
+        let mut checked = receipt.open(&Stop::new()).unwrap();
+        checked.read_exact(&mut [0; 188]).unwrap();
+        assert!(receipt.verify(checked, &Stop::new()).is_err());
+        drop(receipt);
+        assert!(!destination.exists());
+    }
+
+    #[test]
+    fn cancellation_inside_native_visitation_does_not_commit_admission_or_partial_evidence() {
+        let (_owner, root) = root();
+        let source = resource(&root, "source.ts", 90_000, &[frame(1), frame(2)], 0);
+        let destination = root.join("copied.ts");
+        let stop = Stop::new();
+        let mut scanner = NativeScanner::new();
+        let before = scanner.admission.clone();
+        let mut calls = 0;
+        assert_eq!(
+            scanner.copy_segment_with(&source, &destination, &stop, &mut |_, _, _, _, _| {
+                calls += 1;
+                stop.set();
+                Ok(())
+            }),
+            Err(ConversionError("cancelled"))
+        );
+        assert_eq!(calls, 1);
+        assert!(scanner.admission == before);
+        assert!(!destination.exists());
+        assert_poisoned(
+            scanner,
+            &source,
+            &root.join("retry.ts"),
+            ConversionError("cancelled"),
+        );
+    }
+
+    #[test]
+    fn incomplete_transport_copies_are_refused_before_visitation() {
+        let (_owner, root) = root();
+        let complete = resource(&root, "complete.ts", 90_000, &[frame(1)], 0);
+        let original = std::fs::read(&complete).unwrap();
+        for length in [0, 1, 187, original.len() - 1] {
+            let source = root.join(format!("partial-{length}.ts"));
+            let destination = root.join(format!("copy-{length}.ts"));
+            std::fs::write(&source, &original[..length]).unwrap();
+            let mut scanner = NativeScanner::new();
+            let error = scanner
+                .copy_segment_with(&source, &destination, &Stop::new(), &mut |_, _, _, _, _| {
+                    panic!("truncated observer")
+                })
+                .unwrap_err();
+            assert!(!destination.exists());
+            assert_eq!(std::fs::read(&source).unwrap(), original[..length]);
+            assert_poisoned(
+                scanner,
+                &source,
+                &root.join(format!("retry-{length}.ts")),
+                error,
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_path_replaced_during_native_read_is_preserved_and_cannot_commit_the_old_copy() {
+        let (_owner, root) = root();
+        let source = resource(&root, "source.ts", 90_000, &[frame(1)], 0);
+        let destination = root.join("copied.ts");
+        let displaced = root.join("displaced.ts");
+        let mut scanner = NativeScanner::new();
+        let before = scanner.admission.clone();
+        let error = scanner
+            .copy_segment_with(&source, &destination, &Stop::new(), &mut |_, _, _, _, _| {
+                std::fs::rename(&destination, &displaced).unwrap();
+                std::fs::write(&destination, b"foreign file").unwrap();
+                Ok(())
+            })
+            .unwrap_err();
+        assert!(scanner.admission == before);
+        assert_eq!(std::fs::read(&destination).unwrap(), b"foreign file");
+        assert_eq!(
+            std::fs::read(&source).unwrap(),
+            std::fs::read(displaced).unwrap()
+        );
+        assert_poisoned(scanner, &source, &root.join("retry.ts"), error);
     }
 }
