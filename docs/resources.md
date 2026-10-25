@@ -70,6 +70,13 @@ playlist order. Each media playlist is prepared in turn. This pool does not
 parallelize every stage or split a complete-track decode, and all source media
 checks remain required.
 
+Source preparation also copies and fingerprints independent media files in
+parallel within the shared CPU, memory and worker limits. Manifest discovery
+follows the declarations in dependency order. Each copy uses a 64 KiB streaming
+buffer; bounded file and path metadata also consume memory. Original-file
+checks use the same admission limits, and all active workers finish before
+failure cleanup can remove the private copies.
+
 For a quick look at MP4 metadata or HLS/DASH declarations, use
 `analyze --metadata-only`. It does not download complete media or run complete
 source checks, so its success does not establish conversion eligibility. See
