@@ -212,18 +212,14 @@ fn length_unit<'a>(
 }
 pub(in crate::conversion) fn annex(data: &[u8]) -> Result<Vec<&[u8]>, ConversionError> {
     let mut marks = Vec::new();
-    let mut at = 0;
-    while at + 3 <= data.len() {
-        let width = if data.get(at..at + 4) == Some(&[0, 0, 0, 1]) {
-            4
-        } else if data.get(at..at + 3) == Some(&[0, 0, 1]) {
-            3
+    for prefix in memchr::memmem::find_iter(data, &[0, 0, 1]) {
+        // A preceding zero belongs to the four-byte start code, not the NAL.
+        let start = if prefix > 0 && data[prefix - 1] == 0 {
+            prefix - 1
         } else {
-            at += 1;
-            continue;
+            prefix
         };
-        marks.push((at, at + width));
-        at += width;
+        marks.push((start, prefix + 3));
         if marks.len() > 4096 {
             return Err(BAD);
         }
