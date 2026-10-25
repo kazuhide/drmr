@@ -87,7 +87,7 @@ impl ReferenceTools {
         if output.returncode != Some(0) {
             return Err(MediaError::Runtime(format!(
                 "ffmpeg framemd5 failed for {}: reference decode failed",
-                path.display()
+                python::path_str(path)?
             )));
         }
         Ok(String::from_utf8(output.stdout).unwrap())
