@@ -489,7 +489,7 @@ fn open_confined(root: &Path, relative_path: &Path) -> Result<File, ConversionEr
 }
 fn copy_object(
     root: &Path,
-    directories: &mut directories::Directories<'_>,
+    directories: &mut directories::Directories,
     relative_path: &Path,
     expected: Option<&SourceFile>,
     remaining: u64,

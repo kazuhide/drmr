@@ -1,25 +1,30 @@
 //! Prepare each private parent once and retain its identity through the final census.
 use super::{
     ConversionError, FileIdentity, Path, PathBuf, Stop, cancelled, directory_identity, files,
-    relative,
+    relative, unsafe_link,
 };
 use std::collections::BTreeMap;
 
 const UNSAFE: ConversionError = ConversionError("temporary-file-unavailable");
 
-pub(super) struct Directories<'a> {
-    root: &'a Path,
+pub(super) struct Directories {
+    root: PathBuf,
     identities: BTreeMap<PathBuf, FileIdentity>,
 }
 
-impl<'a> Directories<'a> {
-    pub fn new(root: &'a Path) -> Result<Self, ConversionError> {
+impl Directories {
+    pub fn new(root: &Path) -> Result<Self, ConversionError> {
+        let metadata = std::fs::symlink_metadata(root).map_err(|_| UNSAFE)?;
+        if !metadata.is_dir() || unsafe_link(&metadata) {
+            return Err(UNSAFE);
+        }
+        // Windows stages can use a normal drive path while canonicalize returns
+        // its verbatim form. Original-source roots still require canonical paths.
+        let root = root.canonicalize().map_err(|_| UNSAFE)?;
+        let identity = directory_identity(&root).map_err(|_| UNSAFE)?;
         Ok(Self {
+            identities: BTreeMap::from([(root.clone(), identity)]),
             root,
-            identities: BTreeMap::from([(
-                root.to_path_buf(),
-                directory_identity(root).map_err(|_| UNSAFE)?,
-            )]),
         })
     }
 
@@ -49,7 +54,7 @@ impl<'a> Directories<'a> {
         }
         // Reusing a parent never bypasses the complete private-file census.
         // Every writer has closed before the caller reaches this barrier.
-        files::seal(self.root)
+        files::seal(&self.root)
     }
 }
 
@@ -57,6 +62,44 @@ impl<'a> Directories<'a> {
 mod tests {
     use super::*;
     use std::io::Write as _;
+
+    #[test]
+    fn absolute_stage_roots_are_stored_canonically() {
+        let stage = files::Stage::new(None).unwrap();
+        assert!(stage.path().is_absolute());
+        let mut directories = Directories::new(stage.path()).unwrap();
+        assert_eq!(directories.root, stage.path().canonicalize().unwrap());
+        let file = directories.prepare(Path::new("variant/first.ts")).unwrap();
+        files::create_new(&file)
+            .unwrap()
+            .write_all(b"first")
+            .unwrap();
+        directories.finish(&Stop::new()).unwrap();
+        assert_eq!(std::fs::read(file).unwrap(), b"first");
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn normal_windows_stage_paths_accept_their_verbatim_identity() {
+        let stage = files::Stage::new(None).unwrap();
+        let canonical = stage.path().canonicalize().unwrap();
+        let normal = PathBuf::from(canonical.to_str().unwrap().strip_prefix(r"\\?\").unwrap());
+        assert!(normal.is_absolute());
+        assert_ne!(normal, canonical);
+        assert_eq!(
+            directory_identity(&normal).err().unwrap(),
+            super::super::CHANGED
+        );
+        let mut directories = Directories::new(&normal).unwrap();
+        assert_eq!(directories.root, canonical);
+        let file = directories.prepare(Path::new("first.ts")).unwrap();
+        files::create_new(&file)
+            .unwrap()
+            .write_all(b"first")
+            .unwrap();
+        directories.finish(&Stop::new()).unwrap();
+        assert_eq!(std::fs::read(file).unwrap(), b"first");
+    }
 
     #[test]
     fn parent_replacement_is_not_accepted_by_a_preparation_cache() {
