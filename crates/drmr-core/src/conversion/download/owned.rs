@@ -389,8 +389,25 @@ fn relative(path: &Path) -> Result<(), ConversionError> {
         return Err(UNSAFE);
     }
     #[cfg(windows)]
-    crate::native::validate_windows_relative_path(path.to_str().ok_or(UNSAFE)?)
-        .map_err(|_| UNSAFE)?;
+    {
+        // Inventory traversal joins native paths. Treat native separators at
+        // this internal boundary while retaining the logical spelling refusals.
+        if path
+            .to_str()
+            .ok_or(UNSAFE)?
+            .split(['/', '\\'])
+            .any(|part| matches!(part, "" | "." | ".."))
+        {
+            return Err(UNSAFE);
+        }
+        for component in path.components() {
+            let Component::Normal(name) = component else {
+                return Err(UNSAFE);
+            };
+            crate::native::validate_windows_relative_path(name.to_str().ok_or(UNSAFE)?)
+                .map_err(|_| UNSAFE)?;
+        }
+    }
     Ok(())
 }
 fn destination(path: &Path) -> Result<PathBuf, ConversionError> {
@@ -539,7 +556,8 @@ mod tests {
         let owned = OwnedDownload::reserve_source(&parent.path().join("source")).unwrap();
         let stage = files::Stage::new(Some(parent.path())).unwrap();
         let pending = stage.path().join("entrypoint");
-        let writer = super::super::write_private(&pending, b"unchanged pending original").unwrap();
+        let mut writer = crate::native::create_media_new(&pending).unwrap();
+        writer.write_all(b"unchanged pending original").unwrap();
         let created = identity(&writer).unwrap();
         drop(writer);
         owned.accounting.lock().unwrap().maximum = 0;
@@ -559,6 +577,38 @@ mod tests {
             std::fs::read(pending).unwrap(),
             b"unchanged pending original"
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_joined_paths_preserve_logical_component_confinement() {
+        for path in [
+            PathBuf::from("video/1080p/segment.ts"),
+            Path::new("video").join("1080p").join("segment.ts"),
+        ] {
+            relative(&path).unwrap();
+        }
+        for path in [
+            "video/./1080p",
+            "video//1080p",
+            "video/1080p/",
+            r"video\\1080p",
+            "video/../outside",
+            r"C:\outside",
+            r"\outside",
+            "video/CON",
+            "video/con.txt",
+            "video/COM1",
+            "video/part:secret",
+            "video/trailing.",
+            "video/a?b",
+        ] {
+            assert!(
+                relative(Path::new(path)).is_err(),
+                "unsafe internal path accepted"
+            );
+        }
+        assert!(crate::native::validate_windows_relative_path(r"video\1080p").is_err());
     }
 
     fn file(owned: &OwnedDownload, relative: &str, bytes: &[u8]) {

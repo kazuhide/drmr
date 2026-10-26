@@ -14,6 +14,13 @@ pub fn pin_media_directory(path: &Path) -> io::Result<super::PrivateDirectoryGua
     windows::pin(path)
 }
 
+/// Create beneath strict scratch, promote only the created object, then move it
+/// without replacing an existing media child. Retain it through identity capture.
+#[cfg(windows)]
+pub(crate) fn create_media_dir_new(scratch: &Path, path: &Path) -> io::Result<fs::File> {
+    windows::create_dir_new(scratch, path)
+}
+
 /// Prepare an owner-only media directory with inheritance for external outputs.
 /// Existing entries must already satisfy the workspace policy; unsafe entries are
 /// refused before any permission changes. Secret configuration files use the

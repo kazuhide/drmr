@@ -137,6 +137,84 @@ pub(super) fn pin(path: &Path) -> io::Result<crate::native::PrivateDirectoryGuar
     Ok(guard)
 }
 
+pub(super) fn create_dir_new(scratch: &Path, path: &Path) -> io::Result<File> {
+    create_dir_new_after_creation(scratch, path, |_| {})
+}
+
+fn create_dir_new_after_creation(
+    scratch: &Path,
+    path: &Path,
+    after_creation: impl FnOnce(&Path),
+) -> io::Result<File> {
+    use std::os::windows::io::AsHandle as _;
+    let absolute = std::path::absolute(path)?;
+    let parent = absolute.parent().ok_or_else(invalid)?;
+    let name = absolute.file_name().ok_or_else(invalid)?;
+    crate::native::validate_windows_relative_path(name.to_str().ok_or_else(invalid)?)?;
+    let _ancestors = crate::native::files::pin_directory_path(parent)?;
+    let scratch = std::path::absolute(scratch)?;
+    let _scratch_ancestors = crate::native::files::pin_directory_path(&scratch)?;
+    match std::fs::symlink_metadata(&absolute) {
+        Ok(_) => return Err(io::ErrorKind::AlreadyExists.into()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    let policy = Policy::new()?;
+    let parent_handle = open(parent)?;
+    policy.verify(&parent_handle, true, true)?;
+    let descriptor = GetSecurityInfo(
+        &parent_handle,
+        SeObjectType::SE_FILE_OBJECT,
+        SecurityInformation::Dacl,
+    )?;
+    if ace_text(&descriptor)?.1 != policy.media_ace {
+        return Err(invalid());
+    }
+    let mut random = [0; 16];
+    getrandom::fill(&mut random)
+        .map_err(|_| io::Error::other("secure random source unavailable"))?;
+    let name = format!(".drmr-media-dir-{}", hex::encode(random));
+    let creator = private_fs::PrivateDir::open(&scratch).map_err(|_| invalid())?;
+    // PrivateDir::create_dir returns the NT creation handle with an owner-only
+    // descriptor. Capture its identity before any pathname can be substituted.
+    let created = creator.create_dir(&name).map_err(|_| invalid())?;
+    let mut child = File::from(created.as_handle().try_clone_to_owned()?);
+    let identity = crate::native::FileIdentity::read(&child)?;
+    let pending = scratch.join(name);
+    after_creation(&pending);
+    let current = OpenOptions::new()
+        .access_mode(0x81)
+        .share_mode(7)
+        .custom_flags(0x0220_0000)
+        .security_qos_flags(0x0001_0000)
+        .open(&pending)?;
+    if crate::native::FileIdentity::read(&current)? != identity {
+        return Err(invalid());
+    }
+    drop(current);
+    policy.verify(&child, true, true)?;
+    policy.set(&mut child, true)?;
+    // MoveFileEx can open the parent for write access. Keep the no-delete
+    // ancestor guards, but release this read-only-sharing validation handle.
+    drop(parent_handle);
+    winsafe::MoveFileEx(
+        pending.to_str().ok_or_else(invalid)?,
+        Some(absolute.to_str().ok_or_else(invalid)?),
+        winsafe::co::MOVEFILE::default(),
+    )
+    .map_err(|error| io::Error::from_raw_os_error(error.raw().cast_signed()))?;
+    // Creation handles carry DELETE access; close every clone before acquiring
+    // the final no-delete pin. A replacement is never adopted or cleaned up.
+    drop(created);
+    drop(child);
+    let retained = open(&absolute)?;
+    if crate::native::FileIdentity::read(&retained)? != identity {
+        return Err(invalid());
+    }
+    policy.verify(&retained, true, true)?;
+    Ok(retained)
+}
+
 pub(super) fn create(path: &Path) -> io::Result<()> {
     let absolute = std::path::absolute(path)?;
     let path = absolute.as_path();
@@ -320,6 +398,64 @@ fn open_file_after_validation(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exclusive_media_child_creation_preserves_guards_and_existing_entries() {
+        use std::io::Write as _;
+        let root = crate::native::private_tempdir().unwrap();
+        let parent = root.path().join("media");
+        create(&parent).unwrap();
+        let held_parent = pin(&parent).unwrap();
+        let child_path = parent.join("video");
+        let child = create_dir_new(root.path(), &child_path).unwrap();
+        let identity = crate::native::FileIdentity::read(&child).unwrap();
+        assert!(std::fs::rename(&parent, root.path().join("moved")).is_err());
+        assert!(std::fs::rename(&child_path, parent.join("replaced")).is_err());
+        let media = child_path.join("segment.m4s");
+        let mut writer = create_new(&media).unwrap();
+        writer.write_all(b"owner-only media").unwrap();
+        private_fs::verify(&writer).unwrap();
+        drop(writer);
+        let failure = create_dir_new(root.path(), &child_path).unwrap_err();
+        assert_eq!(failure.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(std::fs::read(&media).unwrap(), b"owner-only media");
+        assert!(crate::native::create_private_new(&child_path.join("secret")).is_err());
+        assert!(!child_path.join("secret").exists());
+        assert!(
+            crate::native::FileIdentity::read(&open(&child_path).unwrap()).unwrap() == identity
+        );
+        replacement_after_media_child_creation_is_never_adopted(root.path(), &parent);
+        drop(child);
+        drop(held_parent);
+        std::fs::rename(&parent, root.path().join("moved")).unwrap();
+    }
+
+    fn replacement_after_media_child_creation_is_never_adopted(scratch: &Path, parent: &Path) {
+        use std::io::Write as _;
+        let target = parent.join("raced-child");
+        let original = scratch.join("retained-original");
+        let mut replaced = std::path::PathBuf::new();
+        let result = create_dir_new_after_creation(scratch, &target, |pending| {
+            std::fs::rename(pending, &original).unwrap();
+            crate::native::create_private_dir_new(pending).unwrap();
+            crate::native::create_private_new(&pending.join("foreign.txt"))
+                .unwrap()
+                .write_all(b"foreign sentinel")
+                .unwrap();
+            replaced = pending.to_path_buf();
+        });
+        assert!(result.is_err());
+        assert!(!target.exists());
+        assert_eq!(
+            std::fs::read(replaced.join("foreign.txt")).unwrap(),
+            b"foreign sentinel"
+        );
+        assert!(
+            private_fs::PrivateDir::open(&replaced).is_ok(),
+            "foreign ACL changed"
+        );
+        assert!(original.is_dir());
+    }
 
     #[test]
     fn a_higher_media_ancestor_stays_pinned_through_writable_leaf_acquisition() {

@@ -160,9 +160,18 @@ impl<'a> StageRelocation<'a> {
                 )
                 .map_err(|_| PUBLISH_ERROR)?;
                 #[cfg(windows)]
-                native::create_private_dir_new(&self.stage.path().join(path))
-                    .map_err(|_| PUBLISH_ERROR)?;
+                let created = native::create_media_dir_new(
+                    self.stage.private_root(),
+                    &self.stage.path().join(path),
+                )
+                .map_err(|_| PUBLISH_ERROR)?;
                 self.capture_directory(path)?;
+                #[cfg(windows)]
+                if native::FileIdentity::read(&created).map_err(|_| PUBLISH_ERROR)?
+                    != self.directories.get(path).ok_or(PUBLISH_ERROR)?.identity
+                {
+                    return Err(PUBLISH_ERROR);
+                }
             }
         }
         self.check_directory(relative.parent().ok_or(PUBLISH_ERROR)?)

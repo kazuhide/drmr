@@ -45,6 +45,66 @@ class EvidenceTests(unittest.TestCase):
         self.assertTrue(module.plan_depth({"schema_version": 3, "required_depth": "decoded"}))
         self.assertFalse(module.plan_depth({"schema_version": 3, "required_depth": "native"}))
 
+    def schema_seven_plan(self, source_format):
+        source, kind, playlist = {
+            "dash": ("manifest.mpd", "video", "playlist-0000.m3u8"),
+            "hls-ts": ("media.m3u8", "audio", "media.m3u8"),
+        }[source_format]
+        return module.load_json(json.dumps({
+            "schema_version": 7, "required_depth": "decoded", "source_format": source_format,
+            "processing": {"requested": "auto", "resolved": "stitch",
+                           "boundaries": "resegment", "segment_duration_ms": 2000},
+            "output_options": {"layout": {"mode": "source", "tracks": [{
+                "output_ordinal": 0, "source": source, "selector": 0, "kind": kind,
+                "media_directory": "", "playlist": playlist, "generated_stem": "track-0000-",
+            }]}, "dash_addressing": "template"},
+        }).encode())
+
+    def test_schema_seven_accepts_both_serialized_fixture_layouts(self):
+        for source_format in ("dash", "hls-ts"):
+            with self.subTest(source_format=source_format):
+                self.assertTrue(module.plan_depth(self.schema_seven_plan(source_format)))
+
+    def test_schema_seven_refuses_changed_depth_processing_or_output_options(self):
+        changes = [
+            lambda p: p.update(schema_version=9),
+            lambda p: p.update(schema_version=True),
+            lambda p: p.update(required_depth="native"),
+            lambda p: p.update(source_format="mp4"),
+            lambda p: p.update(source_format=[]),
+            lambda p: p.update(source_format=None),
+            lambda p: p.pop("processing"),
+            lambda p: p["processing"].update(requested="stitch"),
+            lambda p: p["processing"].update(resolved="segments"),
+            lambda p: p["processing"].update(boundaries="preserve"),
+            lambda p: p["processing"].update(segment_duration_ms=2000.0),
+            lambda p: p["processing"].update(segment_duration_ms=6000),
+            lambda p: p["processing"].update(unrecognized=True),
+            lambda p: p.pop("output_options"),
+            lambda p: p.update(output_options=None),
+            lambda p: p["output_options"].update(dash_addressing="template-timeline"),
+            lambda p: p["output_options"].update(unrecognized=True),
+            lambda p: p["output_options"].pop("layout"),
+            lambda p: p["output_options"]["layout"].update(mode="normalized"),
+            lambda p: p["output_options"]["layout"].update(unrecognized=True),
+            lambda p: p["output_options"]["layout"].update(tracks=[]),
+            lambda p: p["output_options"]["layout"]["tracks"].append(
+                copy.deepcopy(p["output_options"]["layout"]["tracks"][0])),
+        ]
+        for field, value in (
+                ("output_ordinal", False), ("selector", False), ("source", "other.mpd"),
+                ("kind", "text"), ("media_directory", "track-0000"),
+                ("playlist", "other.m3u8"), ("generated_stem", "other-"),
+                ("unrecognized", True)):
+            changes.append(lambda p, field=field, value=value:
+                           p["output_options"]["layout"]["tracks"][0].update({field: value}))
+        for source_format in ("dash", "hls-ts"):
+            for index, change in enumerate(changes):
+                altered = self.schema_seven_plan(source_format)
+                change(altered)
+                with self.subTest(source_format=source_format, mutation=index):
+                    self.assertFalse(module.plan_depth(altered))
+
     def audio_probe(self):
         return {"streams": [{"codec_name": "aac", "profile": "LC", "sample_rate": "44100",
                              "channels": 2, "time_base": "1/90000", "nb_read_frames": "432"}],

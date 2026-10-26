@@ -11,6 +11,7 @@ fn source(root: &Path) -> PathBuf {
     std::fs::create_dir(root).unwrap();
     let path = root.join("media.m3u8");
     let result = std::process::Command::new("ffmpeg")
+        .current_dir(root)
         .args([
             "-v",
             "error",
@@ -31,12 +32,17 @@ fn source(root: &Path) -> PathBuf {
             "vod",
             "-hls_segment_filename",
         ])
-        .arg(root.join("segment-%d.m4s"))
-        .arg(&path)
+        .arg("segment-%d.m4s")
+        .arg("media.m3u8")
         .output()
         .unwrap();
     assert!(result.status.success(), "AAC fixture generation failed");
     let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.contains("#EXT-X-MAP:URI=\"init.mp4\""));
+    assert!(
+        root.join("init.mp4").is_file(),
+        "fixture initialization is missing"
+    );
     assert!(text.contains("#EXT-X-TARGETDURATION:6\n"));
     assert!(
         text.lines()

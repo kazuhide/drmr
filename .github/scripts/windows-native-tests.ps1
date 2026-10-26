@@ -96,6 +96,27 @@ foreach ($pattern in @('test_check_release.py', 'test_prepare_release.py', 'test
     if ($LASTEXITCODE -ne 0) { throw 'Ordinary-user release helper checks failed' }
 }
 $executables = Get-Content (Join-Path $PSScriptRoot 'executables.json') | ConvertFrom-Json
+# Catch directory-layout regressions before the longer real-media matrix. These
+# run with the same ordinary user, native binary and ACL policy as the full suite.
+$coreExecutables = @($executables | Where-Object {
+    [IO.Path]::GetFileName($_) -match '^drmr_core-[0-9a-f]+\.exe$'
+})
+if ($coreExecutables.Count -ne 1) { throw 'The native core unit-test binary is ambiguous' }
+$coreExecutable = $coreExecutables[0]
+$layoutChecks = @(
+    'native::workspace::windows::tests::exclusive_media_child_creation_preserves_guards_and_existing_entries',
+    'conversion::layout::stage::tests::re_layout_moves_media_without_copying_and_rewrites_actual_hls_paths',
+    'conversion::download::layout_tests::source_download_keeps_nested_paths_and_child_relative_uris',
+    'conversion::download::owned::tests::entrypoint_publication_is_prepaid_before_moving_the_pending_original'
+)
+foreach ($check in $layoutChecks) {
+    $listing = & $coreExecutable --list --exact $check
+    if ($LASTEXITCODE -ne 0 -or $listing -notcontains "${check}: test") {
+        throw 'A required early layout test is missing'
+    }
+    & $coreExecutable --exact $check --nocapture
+    if ($LASTEXITCODE -ne 0) { throw 'An early ordinary-user layout test failed' }
+}
 $failed = $false
 foreach ($executable in $executables) {
     Write-Output "Running $executable"
