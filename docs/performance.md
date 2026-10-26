@@ -147,7 +147,7 @@ Their contents match the recorded Git tree, and their modification and metadata
 change times precede the original build. The retained original build output
 matches the frozen binary's SHA-256 and recorded modification time. This binding
 relies on retained filesystem metadata and artifacts; it does not provide a
-build-time clean-tree log or a hermetic rebuild. The numeric report records the
+build-time clean-tree log or a fully isolated rebuild. The numeric report records the
 method and its limits.
 
 All builds used Rust 1.95.0 release mode on a macOS ARM64 host with ten logical
