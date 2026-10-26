@@ -142,6 +142,14 @@ unchanged, and only the master playlist is adjusted to select tracks. The
 seven-track view uses the full original presentation. These views differ in both
 media size and track count, so each baseline is compared with its matching view.
 
+The baseline source was checked retrospectively against all 933 tracked files.
+Their contents match the recorded Git tree, and their modification and metadata
+change times precede the original build. The retained original build output
+matches the frozen binary's SHA-256 and recorded modification time. This binding
+relies on retained filesystem metadata and artifacts; it does not provide a
+build-time clean-tree log or a hermetic rebuild. The numeric report records the
+method and its limits.
+
 All builds used Rust 1.95.0 release mode on a macOS ARM64 host with ten logical
 CPUs. Three rounds rotated the binary, view and worker-setting order, producing
 72 complete analyses. Every report matched within its view after removing
@@ -218,19 +226,16 @@ regressions check complete output and refusal behavior. Input construction,
 CLI I/O and complete source admission are outside these parser loops.
 
 The MP4 reader uses a bounded reusable buffer, caches its current file position
-and reads small encrypted subsample windows together. A diagnostic over the same
-three independent oracle tests observed 17 reader instances:
+and reads small encrypted subsample windows together. A separate diagnostic over
+three independent oracle tests recorded 17 reader instances, 6,533 Rust
+`File::read` calls and 900 `File::seek` calls.
 
-| Reader stage | Rust `File::read` calls | Rust `File::seek` calls |
-| --- | ---: | ---: |
-| Cached position | 8,663 | 900 |
-| Bounded sample window | 6,533 | 900 |
-
-These count Rust file operations within that test corpus. They are not operating
-system syscall counts or whole-command I/O measurements. Buffer-reuse regressions
-check the owned scratch storage; no global allocation-count reduction is claimed.
-The numeric report records the measured revisions and confirms that the relevant
-production source bytes are unchanged in the integrated candidate.
+These counts describe that revision and test corpus; they do not quantify an I/O
+reduction. They are not operating-system syscall counts or whole-command I/O
+measurements. Buffer-reuse regressions check the owned scratch storage; no global
+allocation-count reduction is claimed. The numeric report identifies the measured
+revision and confirms that the relevant production source bytes are unchanged in
+the integrated candidate.
 
 ## Compare your own retained input
 

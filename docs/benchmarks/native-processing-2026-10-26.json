@@ -78,6 +78,26 @@
       "unchanged": true
     }
   ],
+  "baseline_source_binding": {
+    "method": "Retrospective full-tree source census, recovered original build invocation, and retained binary identity.",
+    "revision": "3fa08d5f9bf5a507c240b2543b7eacfef1e9379b",
+    "tree": "71f319f138bb2319a532b8c6b8674cee64575c2d",
+    "binary_sha256": "715482720ca0561fabdb2a554445e49fad77b261df6bf2bc5baa2d5f5eb40625",
+    "original_build_start_utc": "2026-10-25T10:13:46.624Z",
+    "original_build_exit_code": 0,
+    "original_build_invocation_recovered": true,
+    "current_tracked_source_files": 933,
+    "current_source_blobs_match_recorded_tree": true,
+    "files_with_mtime_or_ctime_after_original_build_start": 0,
+    "retained_original_binary_matches_frozen_sha256": true,
+    "retained_original_binary_mtime_matches_recorded_value": true,
+    "source_census_sha256": "46457b5c07810be4b96fafe7627b2ebed040d69e106a913838777976b5685897",
+    "limits": [
+      "The source census and file timestamp checks were collected retrospectively.",
+      "This binding relies on retained filesystem metadata and build artifacts.",
+      "It does not supply a contemporaneous build-time clean-tree log or a hermetic rebuild."
+    ]
+  },
   "parser_cli": {
     "binaries": {
       "baseline": {
@@ -3395,14 +3415,10 @@
     "coverage": "17 Reader instances in the same three existing independent oracle tests; includes fingerprints, metadata, EOF and media reads",
     "candidate_revision": "147a9e192e51b8999711ed8ac1a43519ba6d6e34",
     "measured_revision": "4dadd9df91da3ed495d6ec527e0f1cf1409406a0",
+    "measured_tree": "37e5340a31ad217de4f17179b94eefef3af257c0",
+    "source_inventory_before_sha256": "f888a05d1b90de8724c59c0ecac40636ecf279242d3488a28fbe20cfb1f3c7e3",
+    "source_inventory_after_sha256": "f888a05d1b90de8724c59c0ecac40636ecf279242d3488a28fbe20cfb1f3c7e3",
     "rows": [
-      {
-        "stage": "cached_position",
-        "revision": "f4b82490a34e3b16884318a30f9aa3c703d2d685",
-        "reader_instances": 17,
-        "reads": 8663,
-        "seeks": 900
-      },
       {
         "stage": "bounded_sample_window",
         "revision": "4dadd9df91da3ed495d6ec527e0f1cf1409406a0",
@@ -3414,7 +3430,7 @@
     "limits": [
       "Counts are Rust File calls, not operating-system syscalls or whole CLI I/O.",
       "Reader buffer reuse is separately tested; no global allocation-count claim is made.",
-      "The legacy pre-cache log has no recorded revision binding and is omitted."
+      "These counts describe this measured revision; no I/O reduction is inferred from them."
     ]
   },
   "overall_limits": [
