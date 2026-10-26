@@ -110,7 +110,7 @@ report scopes, and optional tool setup.
 
 Use `convert INPUT --to ... --format ... --output ...` with a protected key configuration, then `verify OUTPUT --source INPUT` for independent comparison. See [conversion support](docs/conversion-support.md) for the tested protection routes, TS output options, and precise input profiles.
 
-For a supported HLS, static DASH or MP4 URL, use `convert URL --download-dir ./source` with the target and output options below. The saved source can be reused offline. DASH acquisition requires one static Period, SegmentTemplate addressing and an explicit finite SegmentTimeline; live input, byte ranges and other DASH addressing profiles are outside this acquisition profile. See the [usage guide](docs/usage.md) for configuration examples, key handling, and output.
+For a supported HLS, static DASH or MP4 URL, use `convert URL --download-dir ./source` with the target and output options below. The saved source can be reused offline. DASH acquisition accepts one static Period with finite duration or timeline templates, explicit lists, or supported flat single-file indexes. Supported DASH byte ranges retain the complete referenced object; HLS byte ranges, live input and hierarchical or external DASH indexes are refused. New downloads and segmented outputs retain source-relative media directories. See [DASH references](docs/dash-addressing.md) and the [usage guide](docs/usage.md) for conditions, configuration examples, and output.
 
 The common converter can also write explicit Widevine/PlayReady DASH and
 FairPlay HLS information for qualified clear transport-stream HLS and clear MP4.

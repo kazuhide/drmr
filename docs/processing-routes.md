@@ -19,11 +19,12 @@ The progressive MP4 route copies the original encoded tracks directly, retaining
 `segments` uses supported original resources and retains their sample membership,
 timestamps and boundaries. `stitch` prepares complete tracks and packages the
 requested output; HLS/DASH output is segmented again, while MP4 output is a file.
-`auto` resolves a qualified route without changing the existing default packaging
-behavior. An explicitly requested mode never silently changes to another mode.
+`auto` resolves a qualified route for the input and requested output. An explicitly requested mode never silently changes to another mode.
 
-New single-output plans use schema 5 and named-output plans use schema 6. Both
-fix the requested and resolved modes and boundary guarantee. `convert --plan`
+New single-output plans use schema 7 and named-output plans use schema 8. Both
+fix the requested and resolved modes, boundary guarantee, source-relative
+placement and DASH reference form. Earlier schemas 1–6 keep their exact saved
+packaging requests and previous placement. `convert --plan`
 refuses `--processing`; create a new plan to change it. Native segment processing
 needs no per-segment media subprocess. Additional `--decode` can still prepare
 complete tracks for decoding; the existing TS decoding preparation also needs

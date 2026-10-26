@@ -110,6 +110,19 @@ pub(super) fn qualify(
         return Err(ConversionError("source-media-verification-failed"));
     }
     Ok(SourceQualification {
+        hls_timing: None,
+        layout_tracks: media
+            .iter()
+            .enumerate()
+            .map(|(ordinal, part)| conversion::layout::QualifiedTrack {
+                kind: part.media.tracks[0].descriptor.kind,
+                selector: if presentation.format == OutputFormat::Dash {
+                    ordinal
+                } else {
+                    0
+                },
+            })
+            .collect(),
         input: presentation.report.clone(),
         actual_format: presentation.format,
         track_protection: presentation

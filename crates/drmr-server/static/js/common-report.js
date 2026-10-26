@@ -45,7 +45,7 @@
     if (report.error || report.status === 'failed' || report.status === 'cancelled') return false;
     if (envelope.report_kind === 'plan') {
       var legacy = (report.schema_version === 1 || report.schema_version === 2) && !Object.prototype.hasOwnProperty.call(report, 'required_depth');
-      var current = [3, 4, 5, 6].indexOf(report.schema_version) !== -1 && ['native', 'decoded'].indexOf(report.required_depth) !== -1;
+      var current = [3, 4, 5, 6, 7, 8].indexOf(report.schema_version) !== -1 && ['native', 'decoded'].indexOf(report.required_depth) !== -1;
       return (legacy || current) && typeof report.plan_id === 'string' && /^[a-f0-9]{64}$/.test(report.plan_id);
     }
     if (report.schema_version !== 1 && report.schema_version !== 2) return false;
@@ -60,6 +60,22 @@
     return false;
   }
   var ERROR_KEYS = {
+    "source-layout-path-unsafe": "commonUnsupported",
+    "source-layout-collision": "commonUnsupported",
+    "source-layout-not-supported": "commonUnsupported",
+    "output-options-invalid": "commonPlanInvalid",
+    "execution-plan-output-options-changed": "commonPlanInvalid",
+    "dash-addressing-requires-dash": "commonInvalid",
+    "dash-addressing-source-not-supported": "commonUnsupported",
+    "dash-nominal-duration-not-representable": "commonDashTimelineRequired",
+    "dash-nominal-time-template-not-supported": "commonUnsupported",
+    "dash-indexed-absolute-fragment-offset-not-supported": "commonUnsupported",
+    "dash-index-sap-not-supported": "commonUnsupported",
+    "dash-index-timeline-not-representable": "commonUnsupported",
+    "dash-index-not-representable": "commonUnsupported",
+    "dash-index-timescale-not-supported": "commonUnsupported",
+    "dash-presentation-origin-timescale-not-supported": "commonUnsupported",
+    "dash-indexed-output-collision": "commonUnsupported",
     "invalid-avc-syntax": "commonVerificationFailed",
     "native-aac-clock-mismatch": "commonVerificationFailed",
     "native-aac-config-invalid": "commonVerificationFailed",

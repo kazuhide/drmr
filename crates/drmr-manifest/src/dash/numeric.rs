@@ -20,6 +20,17 @@ pub(super) fn boolean(value: &str) -> Option<bool> {
     }
 }
 
+/// XML Schema integer has an unbounded signed value space. Overflow is an
+/// execution limit, distinct from a malformed lexical declaration.
+pub(super) fn signed(value: &str) -> Parsed<i128> {
+    let value = value.trim_matches([' ', '\t', '\r', '\n']);
+    let digits = value.strip_prefix(['+', '-']).unwrap_or(value);
+    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Parsed::Invalid;
+    }
+    value.parse().map_or(Parsed::Unsupported, Parsed::Value)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Parsed<T> {
     Value(T),

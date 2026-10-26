@@ -1,6 +1,7 @@
 //! Original segment processing keeps resource membership separate from cipher metadata.
 mod fmp4;
 mod manifest_hls;
+pub(in crate::conversion) use manifest_hls::rates as hls_rates;
 mod source;
 mod transport;
 

@@ -68,7 +68,7 @@ fn private_plan_bytes(input: &std::path::Path, output: &std::path::Path, schema:
         hls_keys: &HlsInputKeys::default(),
     };
     match schema {
-        1 | 3 | 5 => {
+        1 | 3 | 5 | 7 => {
             let mut plan = converter
                 .create_execution_plan(ExecutionPlanRequest {
                     input,
@@ -77,23 +77,29 @@ fn private_plan_bytes(input: &std::path::Path, output: &std::path::Path, schema:
                     target: TargetProtection::Clear,
                 })
                 .unwrap();
-            if schema != 5 {
-                plan.schema_version = schema;
-                if schema == 1 {
-                    plan.required_depth = None;
-                }
+            plan.schema_version = schema;
+            if schema < 7 {
+                plan.output_options = None;
+            }
+            if schema == 1 {
+                plan.required_depth = None;
+            }
+            if schema < 5 {
                 plan.processing = None;
+            }
+            if schema < 7 {
                 plan.plan_id = legacy_single_id(&plan);
             }
             serde_json::to_vec_pretty(&plan).unwrap()
         }
-        2 | 4 | 6 => {
+        2 | 4 | 6 | 8 => {
             let mut plan = converter
                 .create_bundle_plan(BundlePlanRequest {
                     input,
                     output_root: output,
                     outputs: &[BundleOutputIntent {
                         processing: None,
+                        dash_addressing: None,
                         id: "clear".into(),
                         format: OutputFormat::Mp4,
                         target: TargetProtection::Clear,
@@ -102,12 +108,17 @@ fn private_plan_bytes(input: &std::path::Path, output: &std::path::Path, schema:
                     }],
                 })
                 .unwrap();
-            if schema != 6 {
-                plan.schema_version = schema;
-                if schema == 2 {
-                    plan.required_depth = None;
-                }
+            plan.schema_version = schema;
+            if schema < 8 {
+                plan.output_options = None;
+            }
+            if schema == 2 {
+                plan.required_depth = None;
+            }
+            if schema < 6 {
                 plan.processing = None;
+            }
+            if schema < 8 {
                 plan.plan_id = legacy_bundle_id(&plan);
             }
             serde_json::to_vec_pretty(&plan).unwrap()
@@ -126,6 +137,8 @@ fn legacy_single_id(plan: &drmr_core::conversion::plan::ExecutionPlan) -> String
         intent: &'a drmr_core::conversion::plan::OutputIntent,
         #[serde(skip_serializing_if = "Option::is_none")]
         required_depth: Option<drmr_core::conversion::ValidationDepth>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        processing: Option<drmr_core::conversion::processing::ProcessingSelection>,
     }
     use sha2::Digest as _;
     hex::encode(sha2::Sha256::digest(
@@ -136,6 +149,7 @@ fn legacy_single_id(plan: &drmr_core::conversion::plan::ExecutionPlan) -> String
             source_format: plan.source_format,
             intent: &plan.intent,
             required_depth: plan.required_depth,
+            processing: plan.processing,
         })
         .unwrap(),
     ))
@@ -152,6 +166,8 @@ fn legacy_bundle_id(plan: &drmr_core::conversion::plan::bundle::BundlePlan) -> S
         outputs: &'a [drmr_core::conversion::plan::bundle::BundleOutputIntent],
         #[serde(skip_serializing_if = "Option::is_none")]
         required_depth: Option<drmr_core::conversion::ValidationDepth>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        processing: Option<&'a [drmr_core::conversion::plan::bundle::OutputProcessing]>,
     }
     use sha2::Digest as _;
     hex::encode(sha2::Sha256::digest(
@@ -163,6 +179,7 @@ fn legacy_bundle_id(plan: &drmr_core::conversion::plan::bundle::BundlePlan) -> S
             output_root: &plan.output_root,
             outputs: &plan.outputs,
             required_depth: plan.required_depth,
+            processing: plan.processing.as_deref(),
         })
         .unwrap(),
     ))
@@ -176,7 +193,7 @@ fn copy_plan_input(path: &std::path::Path) {
 
 #[test]
 fn private_saved_plan_imports_legacy_and_current_schemas_and_preserves_public_plan_selection() {
-    for schema in [1, 2, 3, 4, 5, 6] {
+    for schema in [1, 2, 3, 4, 5, 6, 7, 8] {
         let root = tempfile::tempdir().unwrap();
         let (input_root, output, private, server) = private_plan_service(root.path());
         let client = Client::new(&server.url());

@@ -99,7 +99,7 @@
     }, true);
     var outputs = h('section', { className: 'common-section', 'aria-labelledby': 'common-outputs-title' },
       word('h2', 'commonOutputs', { id: 'common-outputs-title' }), word('p', 'commonOutputsHelp', { className: 'help' }),
-      outputTable, h('div', { className: 'actions' }, add), word('p', 'commonProcessingHelp', { id: 'common-processing-help', className: 'help' }), word('p', 'commonOutputNameHelp', { id: 'common-output-name-help', className: 'help' }),
+      outputTable, h('div', { className: 'actions' }, add), word('p', 'commonProcessingHelp', { id: 'common-processing-help', className: 'help' }), word('p', 'commonDashAddressingHelp', { id: 'common-dash-addressing-help', className: 'help' }), word('p', 'commonOutputNameHelp', { id: 'common-output-name-help', className: 'help' }),
       parent.node, field('commonDestination', destination, 'commonDestinationHelp'), outputError, h('div', { className: 'actions' }, savePlan));
     var planSelect = h('select', { id: 'common-plan-select', onchange: function () { draft.dirty = false; model.usePlan(planSelect.value); update(); } });
     var planSelectField = field('commonPlanSelect', planSelect);
@@ -140,7 +140,7 @@
     }
     function runtimeValue() { return { keys_ref: draft && draft.keys ? draft.keys.ref : null, max_workers: workers.value.trim() === '' ? null : Number(workers.value), decode: decode.checked }; }
     function validRuntime() { var value = runtimeValue().max_workers, cap = model.snapshot().capabilities; return value === null || Number.isInteger(value) && value >= 1 && value <= (cap ? cap.worker_policy.maximum : 0); }
-    function outputValues() { return rows.map(function (row) { return { id: row.id.value, format: row.format.value, target: row.target.value, processing: row.processing.value, drms: row.drms.filter(function (drm) { return drm.control.checked; }).map(function (drm) { return drm.value; }), conformance: row.conformance.value }; }); }
+    function outputValues(keepDashChoice) { return rows.map(function (row) { var output = { id: row.id.value, format: row.format.value, target: row.target.value, processing: row.processing.value, drms: row.drms.filter(function (drm) { return drm.control.checked; }).map(function (drm) { return drm.value; }), conformance: row.conformance.value }; if (keepDashChoice || output.format === 'dash') output.dash_addressing = row['dash-addressing'].value; return output; }); }
     function signature() { return JSON.stringify({ parent: draft && draft.parent && draft.parent.ref, destination: destination.value, outputs: outputValues() }); }
     function validOutputs() {
       var values = outputValues(), names = new Set();
@@ -149,38 +149,42 @@
         names.add(output.id); return true;
       });
     }
-    function dirty() { if (!draft) return; draft.values = outputValues(); draft.dirty = true; model.invalidatePlan(); update(); }
+    function dirty() { if (!draft) return; draft.values = outputValues(true); draft.dirty = true; model.invalidatePlan(); rowLabels(); update(); }
     function addRow(value) {
       var serial = ++rowSequence, row = {}, cells = [];
-      function control(key, element) {
+      function control(key, element, cell) {
         element.setAttribute('id', 'common-output-' + serial + '-' + key); element.setAttribute('data-common-field', key);
         element.addEventListener(key === 'id' ? 'input' : 'change', dirty);
         row[key] = element;
-        var label = h('span', { className: 'common-cell-label' }), td = h('td', null, h('label', { className: 'field' }, label, element));
-        cells.push({ node: td, label: label, key: { id: 'commonOutputId', format: 'commonFormat', target: 'commonProtection', processing: 'commonProcessingMode', conformance: 'commonConformance' }[key], control: element }); return td;
+        var label = h('span', { className: key === 'dash-addressing' ? 'common-cell-label common-addressing-label' : 'common-cell-label' }), field = h('label', { className: 'field' }, label, element), td = cell || h('td');
+        td.appendChild(field);
+        cells.push({ node: td, field: field, label: label, key: { id: 'commonOutputId', format: 'commonFormat', target: 'commonProtection', processing: 'commonProcessingMode', 'dash-addressing': 'commonDashAddressing', conformance: 'commonConformance' }[key], control: element }); return td;
       }
       var id = h('input', { autocomplete: 'off', spellcheck: 'false', maxlength: '32', value: value.id, 'aria-describedby': 'common-output-name-help' });
       var format = h('select', null, options([{ value: 'mp4', key: 'commonFormatMp4' }, { value: 'dash', key: 'commonFormatDash' }, { value: 'hls', key: 'commonFormatHls' }, { value: 'hls-ts', key: 'commonFormatHlsTs' }])); format.value = value.format;
       var target = h('select', null, options(['clear', 'cenc', 'cbcs', 'hls-aes128', 'hls-sample-aes'])); target.value = value.target;
       var processing = h('select', { 'aria-describedby': 'common-processing-help' }, options([{ value: 'auto', key: 'commonProcessingAuto' }, { value: 'segments', key: 'commonProcessingSegments' }, { value: 'stitch', key: 'commonProcessingStitch' }])); processing.value = value.processing || 'auto';
+      var addressing = h('select', { 'aria-describedby': 'common-dash-addressing-help' }, options([{ value: 'template', key: 'commonDashTemplate' }, { value: 'template-timeline', key: 'commonDashTimeline' }, { value: 'list', key: 'commonDashList' }, { value: 'base', key: 'commonDashBase' }])); addressing.value = value.dash_addressing || 'template';
       var conformance = h('select', null, options([{ value: 'none', key: 'commonNone' }, { value: 'required', key: 'commonRequired' }])); conformance.value = value.conformance;
       row.drms = [{ value: 'widevine', label: 'Widevine' }, { value: 'playready', label: 'PlayReady' }, { value: 'fairplay', label: 'FairPlay' }].map(function (drm) {
         drm.control = h('input', { type: 'checkbox', 'data-common-drm': drm.value, checked: value.drms.indexOf(drm.value) !== -1, onchange: dirty });
         return drm;
       });
-      var drmCell = h('td', null, word('span', 'commonDrms', { className: 'common-cell-label' }), h('div', { className: 'common-drm-choices' }, row.drms.map(function (drm) { return h('label', null, drm.control, h('span', { text: drm.label })); })));
+      var drmCell = h('td', { className: 'common-output-drms' }, word('span', 'commonDrms', { className: 'common-cell-label' }), h('div', { className: 'common-drm-choices' }, row.drms.map(function (drm) { return h('label', null, drm.control, h('span', { text: drm.label })); })));
       var remove = button(null, 'close', function () {
         if (rows.length <= 1) return;
         var index = rows.indexOf(row); rows.splice(index, 1); row.node.remove(); dirty(); rowLabels();
         var next = rows[Math.min(index, rows.length - 1)]; if (next) next.id.focus();
       });
-      row.node = h('tr', { dataset: { outputRow: String(serial) } }, control('id', id), control('format', format), control('target', target), control('processing', processing), drmCell, control('conformance', conformance), h('td', null, remove));
+      var packagingCell = control('processing', processing); packagingCell.className = 'common-output-packaging';
+      control('dash-addressing', addressing, packagingCell);
+      row.node = h('tr', { dataset: { outputRow: String(serial) } }, control('id', id), control('format', format), control('target', target), packagingCell, drmCell, control('conformance', conformance), h('td', null, remove));
       row.cells = cells; row.remove = remove;
       rows.push(row); outputBody.appendChild(row.node); rowLabels();
     }
     function rowLabels() {
       rows.forEach(function (row, index) {
-        row.cells.forEach(function (cell) { UI.setText(cell.label, t(cell.key)); cell.control.setAttribute('aria-label', t('commonRowField', { n: index + 1, field: t(cell.key) })); });
+        row.cells.forEach(function (cell) { UI.setText(cell.label, t(cell.key)); cell.control.setAttribute('aria-label', t('commonRowField', { n: index + 1, field: t(cell.key) })); Array.prototype.forEach.call(cell.control.children, function (option) { if (option.dataset && option.dataset.i18n) UI.setText(option, t(option.dataset.i18n)); }); if (cell.control === row['dash-addressing']) { cell.field.hidden = cell.control.hidden = cell.control.disabled = row.format.value !== 'dash'; } });
         row.drms.forEach(function (drm) { drm.control.setAttribute('aria-label', t('commonRowField', { n: index + 1, field: drm.label })); });
         UI.setText(row.remove, t('commonRemoveOutput', { n: index + 1 })); row.remove.disabled = rows.length <= 1;
       });
@@ -189,7 +193,7 @@
     function selectDraft(item) {
       var next = item ? item.session.session_id : null;
       if (currentId === next) return;
-      if (draft) draft.values = outputValues();
+      if (draft) draft.values = outputValues(true);
       currentId = next; rows = []; UI.replace(outputBody); reportViews.clear();
       if (!next) { draft = null; return; }
       if (!drafts.has(next)) drafts.set(next, defaultDraft());
@@ -218,9 +222,14 @@
         UI.replace(planOutputs, value ? h('ul', { className: 'common-plan-outputs' }, value.outputs.map(function (output) {
           var choices = Array.isArray(value.processing) ? value.processing : [];
           var match = choices.find(function (row) { return row.id === output.id; });
-          var choice = value.plan_schema_version === 5 ? value.processing : value.plan_schema_version === 6 && match && match.selection;
+          var choice = [5, 7].indexOf(value.plan_schema_version) !== -1 ? value.processing : [6, 8].indexOf(value.plan_schema_version) !== -1 && match && match.selection;
+          var frozen = Array.isArray(value.output_options) ? value.output_options.find(function (row) { return row.id === output.id; }) : null;
+          var selected = value.plan_schema_version === 7 ? value.output_options : frozen && frozen.options;
+          var layout = selected ? selected.layout : output.format === 'mp4' ? 'not-applicable' : 'previous-saved';
           if (!choice || ['segments', 'stitch'].indexOf(choice.resolved) === -1 || ['preserve', 'resegment', 'not-applicable'].indexOf(choice.boundaries) === -1) choice = null;
-          return h('li', null, output.id === null ? word('span', 'commonSingleOutput') : h('code', { text: output.id }), h('span', { text: output.format + ' · ' + output.target }), [2, 4, 6].indexOf(value.plan_schema_version) !== -1 ? h('span', null, word('span', 'commonDrms'), ': ', (output.drms || []).length ? h('span', { text: output.drms.join(', ') }) : word('span', 'commonNotRequested')) : null, [2, 4, 6].indexOf(value.plan_schema_version) !== -1 ? h('span', null, word('span', 'commonConformance'), ': ', word('span', output.conformance === 'required' ? 'commonRequired' : 'commonNotRequested')) : null,
+          return h('li', null, output.id === null ? word('span', 'commonSingleOutput') : h('code', { text: output.id }), h('span', { text: output.format + ' · ' + output.target }), [2, 4, 6, 8].indexOf(value.plan_schema_version) !== -1 ? h('span', null, word('span', 'commonDrms'), ': ', (output.drms || []).length ? h('span', { text: output.drms.join(', ') }) : word('span', 'commonNotRequested')) : null, [2, 4, 6, 8].indexOf(value.plan_schema_version) !== -1 ? h('span', null, word('span', 'commonConformance'), ': ', word('span', output.conformance === 'required' ? 'commonRequired' : 'commonNotRequested')) : null,
+            word('span', { source: 'commonLayoutSource', 'previous-saved': 'commonLayoutPrevious', 'not-applicable': 'commonBoundaryNotApplicable' }[layout] || 'commonUnknown'),
+            selected && selected.dash_addressing ? word('span', { template: 'commonDashTemplate', 'template-timeline': 'commonDashTimeline', list: 'commonDashList', base: 'commonDashBase' }[selected.dash_addressing] || 'commonUnknown') : null,
             choice ? h('span', null, word('span', 'commonRequestedProcessing'), ': ', word('span', ['auto', 'segments', 'stitch'].indexOf(choice.requested) !== -1 ? { auto: 'commonProcessingAuto', segments: 'commonProcessingSegments', stitch: 'commonProcessingStitch' }[choice.requested] : 'commonUnknown')) : null,
             choice ? h('span', { 'data-common-plan-processing': choice.resolved }, word('span', 'commonProcessingMode'), ': ', word('span', { segments: 'commonProcessingSegments', stitch: 'commonProcessingStitch' }[choice.resolved] || 'commonUnknown'), ' · ', word('span', { preserve: 'commonBoundaryPreserve', resegment: 'commonBoundaryResegment', 'not-applicable': 'commonBoundaryNotApplicable' }[choice.boundaries] || 'commonUnknown')) : word('span', 'commonProcessingUnrecorded'));
         })) : null);

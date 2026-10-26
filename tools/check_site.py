@@ -470,7 +470,7 @@ def validate_guide(text, language):
     examples = list(article.descendants("figure"))
     require(examples, "site-guide-code")
     for index, example in enumerate(examples, 1):
-        label = "example-" + str(index) + "-title"
+        label = "ex" + str(index)
         require(example.attrs.get("class") == "guide-example" and "role" not in example.attrs
                 and example.attrs.get("aria-labelledby") == label
                 and example.attrs.get("data-code-language") in ("sh", "bash", "powershell", "json", "text")

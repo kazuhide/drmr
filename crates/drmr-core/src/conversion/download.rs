@@ -3,15 +3,18 @@
 mod bundle_tests;
 mod dash;
 mod input;
+#[cfg(test)]
+mod layout_tests;
 use input::{Acquired, Entrypoint};
 mod owned;
 pub(super) mod stream;
+use super::layout::{LayoutMode, UrlPathMapper, path_text, path_uri};
 use owned::OwnedDownload;
 
 use super::{ConversionError, ConversionReport, ConversionRequest, Converter, files};
 use crate::{
     concurrency::{Pool, Stop, Unit, run_ordered},
-    resources::{Budget, Claim, Hardware, Workload},
+    resources::{Budget, Claim, ContextPermit, Hardware, Workload},
     source::{self, FetchPolicy, Fetcher, playlist},
 };
 use sha2::{Digest as _, Sha256};
@@ -27,6 +30,12 @@ const INVALID: ConversionError = ConversionError("download-source-not-supported"
 const IO: ConversionError = ConversionError("download-source-unavailable");
 const CHANGED: ConversionError = ConversionError("download-source-changed");
 const GRAPH_BYTES: usize = 128 * 1024 * 1024;
+
+#[derive(Clone, Copy)]
+struct AcquisitionOptions {
+    hls_only: bool,
+    layout_mode: LayoutMode,
+}
 
 /// A complete retained source graph. Debug deliberately omits URLs and filesystem names.
 pub struct DownloadedSource {
@@ -61,12 +70,20 @@ pub(super) struct Seal {
     owned: OwnedDownload,
     files: BTreeMap<PathBuf, ([u8; 32], u64)>,
     entrypoint: &'static str,
+    retained_bytes: u64,
+    _retained: Option<ContextPermit>,
 }
 impl Seal {
     fn check(&self, stop: &Stop) -> Result<(), ConversionError> {
         self.owned.check_registered().map_err(|_| CHANGED)?;
         let mut names = Vec::new();
-        inventory(self.owned.path(), Path::new(""), &mut names, &mut 0)?;
+        inventory(
+            &self.owned,
+            Path::new(""),
+            &mut names,
+            &mut 0,
+            self.owned.registered_count().map_err(|_| CHANGED)?,
+        )?;
         names.sort();
         if names.len() != self.files.len() {
             return Err(CHANGED);
@@ -78,36 +95,43 @@ impl Seal {
                 return Err(CHANGED);
             }
         }
-        Ok(())
+        self.owned.check_registered().map_err(|_| CHANGED)
     }
 }
 fn inventory(
-    root: &Path,
+    owned: &OwnedDownload,
     relative: &Path,
     names: &mut Vec<PathBuf>,
     count: &mut usize,
+    limit: usize,
 ) -> Result<(), ConversionError> {
-    let entries = std::fs::read_dir(root.join(relative)).map_err(|_| CHANGED)?;
+    if relative.components().count() > 64 {
+        return Err(CHANGED);
+    }
+    let _held = owned
+        .open_registered_directory(relative)
+        .map_err(|_| CHANGED)?;
+    let entries = std::fs::read_dir(owned.path().join(relative)).map_err(|_| CHANGED)?;
     for entry in entries {
         *count = count
             .checked_add(1)
-            .filter(|count| *count <= 100_010)
+            .filter(|count| *count <= limit)
             .ok_or(CHANGED)?;
         let entry = entry.map_err(|_| CHANGED)?;
         let name = relative.join(entry.file_name());
         let kind = entry.file_type().map_err(|_| CHANGED)?;
-        if kind.is_dir()
-            && relative.as_os_str().is_empty()
-            && matches!(entry.file_name().to_str(), Some("raw" | "media"))
-        {
-            inventory(root, &name, names, count)?;
+        if kind.is_dir() {
+            inventory(owned, &name, names, count, limit)?;
         } else if kind.is_file() {
             names.push(name);
         } else {
             return Err(CHANGED);
         }
     }
-    Ok(())
+    owned
+        .open_registered_directory(relative)
+        .map(|_| ())
+        .map_err(|_| CHANGED)
 }
 fn digest(
     path: &Path,
@@ -145,6 +169,35 @@ pub fn preflight_download_output(output: &Path) -> Result<(), ConversionError> {
 }
 
 impl Converter {
+    /// Bind a retained source's seal and memory residency to subsequent operations.
+    /// Use the returned converter for analysis, planning, or conversion while the
+    /// source remains retained. Rebinding the same handle does not charge it twice.
+    pub fn using_downloaded_source(
+        &self,
+        source: &DownloadedSource,
+    ) -> Result<Self, ConversionError> {
+        source.check(&self.backend.stop)?;
+        let mut command = self.with_processing_clone(self.processing_mode);
+        if let Some(bound) = &self.downloaded {
+            if !Arc::ptr_eq(bound, &source.seal) {
+                return Err(CHANGED);
+            }
+        } else {
+            command.backend = self.downloaded_backend(&source.seal);
+            command.downloaded = Some(source.seal.clone());
+        }
+        Ok(command)
+    }
+
+    fn downloaded_backend(&self, seal: &Seal) -> super::backend::Backend {
+        let mut backend = self.backend.clone();
+        backend.runner = Arc::new(
+            backend
+                .runner
+                .within_context(seal.retained_bytes, backend.runner.manifest_capacity().1),
+        );
+        backend
+    }
     /// Retain a complete supported MP4, DASH, or HLS source for local analysis.
     pub fn acquire_source(
         &self,
@@ -193,6 +246,25 @@ impl Converter {
         policy: &FetchPolicy,
         hls_only: bool,
     ) -> Result<DownloadedSource, ConversionError> {
+        self.acquire_source_layout_inner(
+            url,
+            directory,
+            output,
+            policy,
+            AcquisitionOptions {
+                hls_only,
+                layout_mode: self.layout_mode(),
+            },
+        )
+    }
+    fn acquire_source_layout_inner(
+        &self,
+        url: &str,
+        directory: &Path,
+        output: Option<&Path>,
+        policy: &FetchPolicy,
+        options: AcquisitionOptions,
+    ) -> Result<DownloadedSource, ConversionError> {
         let _scope = self
             .backend
             .scope(super::measurement::Phase::InputPreparation);
@@ -223,21 +295,7 @@ impl Converter {
             .map_err(|_| ConversionError("invalid-fetch-policy"))?;
         policy.max_playlist_bytes = policy.max_playlist_bytes.min(4 * 1024 * 1024);
         let budget = self.acquisition_budget(&policy)?;
-        let _permit = self
-            .backend
-            .runner
-            .native_permit(
-                Claim {
-                    cpu_threads: budget.workers,
-                    memory_bytes: 256 * 1024 * 1024,
-                },
-                &self.backend.stop,
-                self.backend.timeout,
-            )
-            .map_err(|error| match error {
-                crate::resources::ReservationError::Cancelled => ConversionError("cancelled"),
-                _ => ConversionError("resource-budget"),
-            })?;
+        let (mut retained, _permit) = self.acquisition_permits(budget.workers)?;
         let mut owned = match output {
             Some(output) => OwnedDownload::reserve(directory, output)?,
             None => OwnedDownload::reserve_source(directory)?,
@@ -247,11 +305,15 @@ impl Converter {
             &policy,
             budget.workers,
             &owned,
-            hls_only,
             progress.as_ref(),
+            options,
         );
         match result {
             Ok(acquired) => {
+                let retained_bytes = owned.retained_bytes()?;
+                retained
+                    .shrink(retained_bytes)
+                    .map_err(|_| ConversionError("resource-budget"))?;
                 // Publish the admission entrypoint only after all workers have joined.
                 let mut pending = match acquired.contents.prepare(owned.path().parent()) {
                     Ok(pending) => pending,
@@ -264,6 +326,8 @@ impl Converter {
                     owned,
                     files: acquired.files,
                     entrypoint: acquired.entrypoint,
+                    retained_bytes,
+                    _retained: Some(retained),
                 };
                 let commit = (|| {
                     seal.check(&self.backend.stop)?;
@@ -298,6 +362,40 @@ impl Converter {
             }
         }
     }
+    fn acquisition_permits(
+        &self,
+        workers: usize,
+    ) -> Result<(ContextPermit, crate::resources::Permit), ConversionError> {
+        let retained = self
+            .backend
+            .runner
+            .retain_context(
+                GRAPH_BYTES as u64,
+                GRAPH_BYTES as u64,
+                &self.backend.stop,
+                self.backend.timeout,
+            )
+            .map_err(|error| match error {
+                crate::resources::ReservationError::Cancelled => ConversionError("cancelled"),
+                _ => ConversionError("resource-budget"),
+            })?;
+        let transient = self
+            .backend
+            .runner
+            .native_permit(
+                Claim {
+                    cpu_threads: workers,
+                    memory_bytes: GRAPH_BYTES as u64,
+                },
+                &self.backend.stop,
+                self.backend.timeout,
+            )
+            .map_err(|error| match error {
+                crate::resources::ReservationError::Cancelled => ConversionError("cancelled"),
+                _ => ConversionError("resource-budget"),
+            })?;
+        Ok((retained, transient))
+    }
     fn acquisition_budget(&self, policy: &FetchPolicy) -> Result<Budget, ConversionError> {
         let capacity = self.backend.runner.native_capacity();
         let mut budget = Budget::choose(
@@ -320,10 +418,19 @@ impl Converter {
         policy: &FetchPolicy,
         workers: usize,
         owned: &OwnedDownload,
-        hls_only: bool,
         progress: Option<&Arc<source::progress::Progress>>,
+        options: AcquisitionOptions,
     ) -> Result<Acquired, ConversionError> {
-        for name in ["raw", "media"] {
+        // Content detection chooses one of these after streaming the root. Pay
+        // their bounded metadata before creating any retained or pending file.
+        for name in ["input.m3u8", "input.mpd", "input.mp4"] {
+            owned.prepay_file(Path::new(name))?;
+        }
+        for name in if options.layout_mode == LayoutMode::Normalized {
+            vec!["raw", "media"]
+        } else {
+            vec!["raw"]
+        } {
             owned.create_dir(Path::new(name))?;
         }
         let abort = Stop::new();
@@ -351,9 +458,11 @@ impl Converter {
             expected: BTreeMap::new(),
             root_projection: Vec::new(),
             playlist_count: 0,
+            layout_mode: options.layout_mode,
+            mapper: None,
         };
         let result = (|| {
-            let (entrypoint, contents) = if hls_only {
+            let (entrypoint, contents) = if options.hls_only {
                 graph.playlist(url, true)?;
                 (
                     "input.m3u8",
@@ -362,10 +471,12 @@ impl Converter {
             } else {
                 graph.entrypoint(url)?
             };
+            owned.prepay_file(Path::new(entrypoint))?;
             if let Some(progress) = progress {
                 progress.discovered(graph.resources.len());
             }
             graph.fetch_media(workers, &abort)?;
+            graph.check_acquired_limits(entrypoint, &contents)?;
             let index = serde_json::to_vec(&graph.records).map_err(|_| IO)?;
             graph.save("raw/index.json", &index)?;
             Ok(Acquired {
@@ -384,22 +495,13 @@ impl Converter {
         source: &DownloadedSource,
         request: ConversionRequest<'_>,
     ) -> Result<ConversionReport, ConversionError> {
-        source.seal.check(&self.backend.stop)?;
+        let converter = self.using_downloaded_source(source)?;
         if request.input.canonicalize().map_err(|_| CHANGED)?
             != source.entrypoint.canonicalize().map_err(|_| CHANGED)?
         {
             return Err(CHANGED);
         }
         source.seal.owned.check_output(request.output)?;
-        let converter = Self {
-            backend: self.backend.clone(),
-            maximum_workers: self.maximum_workers,
-            downloaded: Some(source.seal.clone()),
-            frozen_source: self.frozen_source.clone(),
-            planned_destination: self.planned_destination.clone(),
-            output_signaling: self.output_signaling.clone(),
-            processing_mode: self.processing_mode,
-        };
         converter.convert(ConversionRequest {
             input: source.entrypoint(),
             ..request
@@ -417,18 +519,28 @@ impl Converter {
         &self,
         inventory: &super::SourceInventory,
     ) -> Result<(), ConversionError> {
-        if let Some(seal) = &self.downloaded {
-            seal.check(&self.backend.stop)?;
-            if inventory.root != seal.owned.path().canonicalize().map_err(|_| CHANGED)?
-                || inventory.entrypoint != Path::new(seal.entrypoint)
-                || inventory.files.iter().any(|file| {
-                    seal.files.get(&file.path).is_none_or(|(hash, size)| {
-                        *size != file.bytes || hex::encode(hash) != file.sha256
-                    })
+        self.check_downloaded()?;
+        self.check_downloaded_inventory_binding(inventory)
+    }
+
+    /// Compare captured bytes with the stored receipt without another media read.
+    /// Analysis and single planning bracket this comparison with their source checks.
+    pub(super) fn check_downloaded_inventory_binding(
+        &self,
+        inventory: &super::SourceInventory,
+    ) -> Result<(), ConversionError> {
+        let Some(seal) = &self.downloaded else {
+            return Ok(());
+        };
+        if inventory.root != seal.owned.path().canonicalize().map_err(|_| CHANGED)?
+            || inventory.entrypoint != Path::new(seal.entrypoint)
+            || inventory.files.iter().any(|file| {
+                seal.files.get(&file.path).is_none_or(|(hash, size)| {
+                    *size != file.bytes || hex::encode(hash) != file.sha256
                 })
-            {
-                return Err(CHANGED);
-            }
+            })
+        {
+            return Err(CHANGED);
         }
         Ok(())
     }
@@ -442,17 +554,8 @@ impl Converter {
         keys: &super::key_file::BundleOperatorKeys,
         tools: &super::conformance::ManifestValidationTools,
     ) -> Result<super::plan::bundle::BundleConversionReport, ConversionError> {
-        source.seal.check(&self.backend.stop)?;
+        let converter = self.using_downloaded_source(source)?;
         source.seal.owned.check_output(output_root)?;
-        let converter = Self {
-            backend: self.backend.clone(),
-            maximum_workers: self.maximum_workers,
-            downloaded: Some(source.seal.clone()),
-            frozen_source: self.frozen_source.clone(),
-            planned_destination: self.planned_destination.clone(),
-            output_signaling: self.output_signaling.clone(),
-            processing_mode: self.processing_mode,
-        };
         let plan = converter.create_bundle_plan(super::plan::bundle::BundlePlanRequest {
             input: super::VerificationSource {
                 input: source.entrypoint(),
@@ -481,6 +584,7 @@ fn write_registered(
     bytes: &[u8],
     before_register: impl FnOnce(&Path),
 ) -> Result<(), ConversionError> {
+    owned.prepay_file(name)?;
     let path = owned.path().join(name);
     let writer = write_private(&path, bytes)?;
     let created = crate::native::FileIdentity::read(&writer).map_err(|_| IO)?;
@@ -501,6 +605,7 @@ fn publish_entrypoint(
     ) {
         return Err(INVALID);
     }
+    owned.prepay_file(name)?;
     let destination = owned.path().join(name);
     files::atomic_move(pending, &destination)?;
     before_register(&destination);
@@ -537,6 +642,8 @@ struct Graph<'a> {
     root_projection: Vec<u8>,
     records: Vec<serde_json::Value>,
     resources: Vec<Resource>,
+    layout_mode: LayoutMode,
+    mapper: Option<UrlPathMapper>,
 }
 struct Resource {
     url: String,
@@ -578,6 +685,7 @@ impl Graph<'_> {
         // Shared parsers retain fully resolved references. Bound that temporary
         // expansion before invoking them, including duplicate references.
         let expanded = expanded_references(lines, effective, self.fetcher.stop())?;
+        self.owned.check_expansion(expanded.saturating_mul(8))?;
         if self
             .text_bytes
             .checked_add(expanded)
@@ -592,13 +700,25 @@ impl Graph<'_> {
         Ok(())
     }
     fn save(&mut self, name: &str, bytes: &[u8]) -> Result<(), ConversionError> {
+        self.owned.create_parents(Path::new(name))?;
         write_registered(self.owned, Path::new(name), bytes, |_| {})?;
         self.expected
             .insert(PathBuf::from(name), bytes_digest(bytes));
         Ok(())
     }
 
+    fn local_name(&mut self, url: &str, fallback: &str) -> Result<String, ConversionError> {
+        let mapper = self.mapper.as_mut().ok_or(INVALID)?;
+        let before = mapper.retained_bytes();
+        let owned = self.owned;
+        let path = mapper.map_admitted(url, fallback, &mut |extra| owned.charge_graph(extra))?;
+        let extra = mapper.retained_bytes().checked_sub(before).ok_or(INVALID)?;
+        self.weight = self.weight.checked_add(extra).ok_or(INVALID)?;
+        path_text(&path)
+    }
+
     fn charge(&mut self, count: usize) -> Result<(), ConversionError> {
+        self.owned.charge_graph(count)?;
         self.weight = self
             .weight
             .checked_add(count)
@@ -636,6 +756,9 @@ impl Graph<'_> {
                 }
             })?;
         valid_url(&effective)?;
+        if root {
+            self.mapper = Some(UrlPathMapper::new(&effective, self.layout_mode)?);
+        }
         self.text_charge(
             body.len()
                 .saturating_add(url.len())
@@ -662,7 +785,7 @@ impl Graph<'_> {
         let local = if root {
             "input.m3u8".into()
         } else {
-            format!("p{id:06}.m3u8")
+            self.local_name(url, &format!("p{id:06}.m3u8"))?
         };
         let node = Playlist {
             local: local.clone(),
@@ -687,7 +810,12 @@ impl Graph<'_> {
         } else {
             self.plan_media(&lines, &effective)?;
         }
-        let projected = self.rewrite(&body, &effective, master)?;
+        let projected = self.rewrite(&body, &effective, master, Path::new(&local))?;
+        if projected.len() as u64 > self.policy.max_playlist_bytes {
+            return Err(INVALID);
+        }
+        self.text_charge(projected.len())?;
+        self.charge(projected.len())?;
         if root {
             self.root_projection = projected;
         } else {
@@ -747,7 +875,8 @@ impl Graph<'_> {
         self.admit_node()?;
         self.text_charge(url.len())?;
         self.charge(url.len().saturating_mul(8) + 1024)?;
-        let local = format!("media/r{:06}.{extension}", self.media.len());
+        let local = self.local_name(url, &format!("media/r{:06}.{extension}", self.media.len()))?;
+        self.owned.create_parents(Path::new(&local))?;
         valid_url(url)?;
         self.resources.push(Resource {
             url: url.into(),
@@ -803,6 +932,7 @@ impl Graph<'_> {
         body: &[u8],
         effective: &str,
         master: bool,
+        local: &Path,
     ) -> Result<Vec<u8>, ConversionError> {
         let text = std::str::from_utf8(body).map_err(|_| INVALID)?;
         let mut result = Vec::new();
@@ -842,7 +972,10 @@ impl Graph<'_> {
                 }
                 .ok_or(INVALID)?;
                 result.extend_from_slice(&raw.as_bytes()[..start]);
-                result.extend_from_slice(target.as_bytes());
+                let relative = Path::new(target)
+                    .strip_prefix(local.parent().ok_or(INVALID)?)
+                    .map_err(|_| ConversionError("source-layout-not-supported"))?;
+                result.extend_from_slice(path_uri(relative)?.as_bytes());
                 result.extend_from_slice(&raw.as_bytes()[start + length..]);
             } else {
                 result.extend_from_slice(raw.as_bytes());
@@ -985,6 +1118,39 @@ mod tests {
         events::NoSink,
         toolrun::{Secrets, ToolRunner},
     };
+
+    #[test]
+    fn retained_source_seals_accept_registered_nested_layouts() {
+        let parent = crate::native::private_tempdir().unwrap();
+        let owned = OwnedDownload::reserve_source(&parent.path().join("source")).unwrap();
+        owned.create_dir(Path::new("video")).unwrap();
+        owned.create_dir(Path::new("video/1080p")).unwrap();
+        let path = Path::new("video/1080p/segment.ts");
+        write_registered(&owned, path, b"retained media", |_| {}).unwrap();
+        let seal = Seal {
+            retained_bytes: owned.retained_bytes().unwrap(),
+            _retained: None,
+            owned,
+            entrypoint: "input.m3u8",
+            files: BTreeMap::from([(path.to_path_buf(), bytes_digest(b"retained media"))]),
+        };
+        seal.check(&Stop::new()).unwrap();
+    }
+
+    #[test]
+    fn retained_source_seals_refuse_unregistered_empty_directories() {
+        let parent = crate::native::private_tempdir().unwrap();
+        let owned = OwnedDownload::reserve_source(&parent.path().join("source")).unwrap();
+        let seal = Seal {
+            retained_bytes: owned.retained_bytes().unwrap(),
+            _retained: None,
+            owned,
+            entrypoint: "input.m3u8",
+            files: BTreeMap::new(),
+        };
+        std::fs::create_dir(seal.owned.path().join("unregistered")).unwrap();
+        assert_eq!(seal.check(&Stop::new()).unwrap_err(), CHANGED);
+    }
 
     fn replace_before_registration(path: &Path, original: &Path) {
         std::fs::rename(path, original).unwrap();
@@ -1137,6 +1303,7 @@ mod tests {
             let output = parent.path().join("output");
             let mut owned =
                 OwnedDownload::reserve(&parent.path().join("download"), &output).unwrap();
+            owned.prepay_file(Path::new("original")).unwrap();
             let original = owned.path().join("original");
             let writer = write_private(&original, b"immutable source").unwrap();
             let created = crate::native::FileIdentity::read(&writer).unwrap();
@@ -1144,6 +1311,8 @@ mod tests {
             owned.register_file(Path::new("original"), created).unwrap();
             owned.retain();
             let seal = Arc::new(Seal {
+                retained_bytes: owned.retained_bytes().unwrap(),
+                _retained: None,
                 owned,
                 entrypoint: "input.m3u8",
                 files: BTreeMap::from([(

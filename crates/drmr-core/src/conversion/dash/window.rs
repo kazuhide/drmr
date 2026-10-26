@@ -108,6 +108,7 @@ fn observed_window(
     rep: Node<'_, '_>,
     directory: &Path,
     remaining: usize,
+    stop: &crate::concurrency::Stop,
 ) -> Result<(Window, usize), ConversionError> {
     let (base, templates) = representation_scopes(rep)?;
     let values = sequence(&templates, remaining)?;
@@ -124,6 +125,9 @@ fn observed_window(
     let mut clock = crate::conversion::timing::FragmentClock::read(&initialization)?;
     let scale = integer(attribute(&templates, "timescale"), 1)?;
     for &(number, time, duration) in &values {
+        if stop.is_set() {
+            return Err(error("cancelled"));
+        }
         let path = reference(
             directory,
             &base,
@@ -141,7 +145,29 @@ fn observed_window(
 /// No sample bytes, decode/composition timestamps, or `SegmentTimeline` entries are changed.
 pub(in crate::conversion) fn finish_transport(path: &Path) -> Result<(), ConversionError> {
     let bytes = crate::conversion::files::read_manifest(path)?;
-    let text = std::str::from_utf8(&bytes).map_err(|_| error("dash-invalid-xml"))?;
+    let result = finish_transport_projection(
+        &bytes,
+        path.parent().ok_or(error("output-staging-failed"))?,
+        &crate::concurrency::Stop::new(),
+    )?;
+    crate::conversion::private_file_mode(path)?;
+    let mut file = crate::native::create_media_or_truncate(path)
+        .map_err(|_| error("output-staging-failed"))?;
+    file.write_all(result.as_bytes())
+        .map_err(|_| error("output-staging-failed"))?;
+    file.sync_all().map_err(|_| error("output-staging-failed"))
+}
+
+/// Reuse exact coded bounds while allowing an owner-bound caller to publish the metadata.
+pub(in crate::conversion) fn finish_transport_projection(
+    bytes: &[u8],
+    directory: &Path,
+    stop: &crate::concurrency::Stop,
+) -> Result<String, ConversionError> {
+    if stop.is_set() {
+        return Err(error("cancelled"));
+    }
+    let text = std::str::from_utf8(bytes).map_err(|_| error("dash-invalid-xml"))?;
     let doc = roxmltree::Document::parse_with_options(
         text,
         roxmltree::ParsingOptions {
@@ -152,9 +178,7 @@ pub(in crate::conversion) fn finish_transport(path: &Path) -> Result<(), Convers
     .map_err(|_| error("dash-invalid-xml"))?;
     let root = doc.root_element();
     let period = one(root, "Period")?.ok_or(error("dash-single-period-required"))?;
-    let directory = path
-        .parent()
-        .ok_or(error("output-staging-failed"))?
+    let directory = directory
         .canonicalize()
         .map_err(|_| error("output-staging-failed"))?;
     let mut presentation = Presentation::default();
@@ -167,7 +191,10 @@ pub(in crate::conversion) fn finish_transport(path: &Path) -> Result<(), Convers
         return Err(error("dash-track-limit-or-structure-not-supported"));
     }
     for &rep in &representations {
-        let (window, count) = observed_window(rep, &directory, super::MAX_SEGMENTS - used)?;
+        if stop.is_set() {
+            return Err(error("cancelled"));
+        }
+        let (window, count) = observed_window(rep, &directory, super::MAX_SEGMENTS - used, stop)?;
         used += count;
         presentation.include(window)?;
     }
@@ -201,12 +228,7 @@ pub(in crate::conversion) fn finish_transport(path: &Path) -> Result<(), Convers
     for (range, value) in edits {
         result.replace_range(range, &value);
     }
-    crate::conversion::private_file_mode(path)?;
-    let mut file = crate::native::create_media_or_truncate(path)
-        .map_err(|_| error("output-staging-failed"))?;
-    file.write_all(result.as_bytes())
-        .map_err(|_| error("output-staging-failed"))?;
-    file.sync_all().map_err(|_| error("output-staging-failed"))
+    Ok(result)
 }
 #[cfg(test)]
 mod tests {

@@ -717,7 +717,7 @@ impl CommonService {
             .origin_analysis
             .as_ref()
             .and_then(|id| self.lock().analyses.get(id).map(|a| a.source_ref.clone()));
-        if payload["plan_id"] != plan.id || !matches!(plan.schema, 2 | 4 | 6) {
+        if payload["plan_id"] != plan.id || plan.schema != 8 {
             return Err(Error::new(503, "result-invalid"));
         }
         projection::bind_plan(&plan, c.operation, self.requested_depth(c)?, payload)?;
@@ -743,8 +743,15 @@ impl CommonService {
         if actual_outputs != expected_outputs {
             return Err(Error::new(503, "result-invalid"));
         }
+        let expected_options: Vec<_> = expected_outputs.iter().map(|output| {
+            let dash = (output.format == drmr_core::inspection::OutputFormat::Dash).then(|| output.dash_addressing.unwrap_or(drmr_core::conversion::dash_addressing::DashAddressing::TemplateDuration));
+            serde_json::json!({"id":output.id,"options":{"layout":if output.format == drmr_core::inspection::OutputFormat::Mp4 {"not-applicable"} else {"source"},"dash_addressing":dash}})
+        }).collect();
+        if plan.output_options.as_ref() != Some(&serde_json::json!(expected_options)) {
+            return Err(Error::new(503, "result-invalid"));
+        }
         // Common jobs set no global mode, so an omitted output mode requests Auto.
-        if plan.schema == 6 {
+        if plan.schema == 8 {
             let choices: Vec<OutputProcessing> = serde_json::from_value(
                 plan.processing
                     .clone()

@@ -5,6 +5,7 @@ use clap::Args;
 use drmr_core::conversion::{
     ConversionError, ConversionReport, ConversionRequest, Converter, ProcessingMode,
     VerificationReport, VerificationRequest, VerificationSource,
+    dash_addressing::DashAddressing,
     key_file::{self, OperatorKeys},
     measurement::MeasurementReport,
 };
@@ -63,6 +64,9 @@ pub struct ConvertArgs {
     /// HLS/DASH output from stitch is segmented again. Default: auto.
     #[arg(long, value_enum, conflicts_with = "plan")]
     pub processing: Option<ProcessingMode>,
+    /// DASH segment references for new output; default: template. Source directories are retained.
+    #[arg(long, value_enum, conflicts_with = "plan")]
+    pub dash_addressing: Option<DashAddressing>,
     /// JSON output list; publish all verified results together in one new directory.
     #[arg(long, conflicts_with_all = ["plan", "to", "format"])]
     pub outputs: Option<PathBuf>,
@@ -176,6 +180,9 @@ pub(crate) fn converter(
 
 fn manifest_error_hint(code: &str) -> Option<&'static str> {
     match code {
+        "dash-nominal-duration-not-representable" => Some(
+            "The retained segment boundaries cannot use duration-based DASH addressing. Create a new plan using --dash-addressing template-timeline.",
+        ),
         "external-validator-required" => Some(
             "Use --external-validator with --manifest-only to request an external engine; executable paths only configure that request.",
         ),
@@ -473,6 +480,7 @@ fn execute_conversion(
         progress.mark("inspection");
         command.default_output_format(source)?
     };
+    crate::output_cli::validate(args.dash_addressing, [format])?;
     progress.mark("input-preparation");
     let request = ConversionRequest {
         input: source,
@@ -578,7 +586,7 @@ pub(crate) fn conversion_text(report: &ConversionReport) -> std::io::Result<()> 
 }
 
 fn convert_saved(args: &ConvertArgs, path: &std::path::Path) -> ExitCode {
-    if args.processing.is_some() {
+    if args.processing.is_some() || args.dash_addressing.is_some() {
         let progress = Progress::new(!args.json);
         progress.mark("configuration");
         return error(
@@ -627,12 +635,15 @@ pub fn convert(args: &ConvertArgs) -> ExitCode {
         Ok(keys) => keys,
         Err(cause) => return error("convert", cause, args.json, &progress, None),
     };
-    let converter = converter(
-        &args.packager_bin,
-        args.max_workers,
-        args.decode,
-        progress.clone(),
-        cancellation.stop.clone(),
+    let converter = crate::output_cli::configure(
+        converter(
+            &args.packager_bin,
+            args.max_workers,
+            args.decode,
+            progress.clone(),
+            cancellation.stop.clone(),
+        ),
+        args.dash_addressing,
     )
     .with_processing(args.processing.unwrap_or_default())
     .with_output_signaling(keys.signaling.clone());
@@ -844,6 +855,16 @@ fn verification_result(
 #[cfg(test)]
 mod processing_summary_tests {
     use super::*;
+
+    #[test]
+    fn unrepresentable_nominal_dash_recommends_a_new_timeline_plan() {
+        assert_eq!(
+            error_hint("dash-nominal-duration-not-representable"),
+            Some(
+                "The retained segment boundaries cannot use duration-based DASH addressing. Create a new plan using --dash-addressing template-timeline."
+            )
+        );
+    }
 
     #[test]
     fn resolved_mode_and_boundaries_are_printed_only_when_recorded() {

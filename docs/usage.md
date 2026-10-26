@@ -36,7 +36,7 @@ Use `--processing auto|segments|stitch` with direct `convert` or `plan --save`:
 
 | Mode | Behavior |
 | --- | --- |
-| `auto` | Select a qualified route for the input and requested output. Omitting the option retains the existing packaging behavior. |
+| `auto` | Select a qualified route for the input and requested output. This is the default when the option is omitted. |
 | `segments` | Process the original segments, retaining their sample membership, timestamps and boundaries. This requires a supported segmented source and matching media containers. |
 | `stitch` | Join source segments when needed, then package the media in the requested output format. MP4 output is a file; HLS/DASH output is segmented again. Original segment boundaries are not retained. |
 
@@ -50,13 +50,48 @@ drmr verify --plan conversion.plan.json
 ```
 
 For TS to fragmented MP4 DASH, select `--processing stitch` instead. The output
-format and protection remain separate `--format` and `--to` choices. HLS/DASH
-resegmentation uses a two-second target; actual cuts follow media frame boundaries.
+format and protection remain separate `--format` and `--to` choices. A newly
+planned HLS/DASH output inherits the admitted HLS source's common
+`EXT-X-TARGETDURATION`; a six-second source therefore supplies a six-second
+selected bound. The actual packaging request also follows the admitted video
+resource cadence when it is shorter; see [segment timing](media-processing.md#generic-conversion-and-timing-limits).
+Different audio/video target declarations are refused with
+`hls-target-duration-mismatch`. MP4 and DASH inputs retain the two-second fallback.
+Actual cuts follow sample clocks, video access points and audio-frame boundaries;
+the first or last segment can be shorter. `stitch` does not preserve the original
+boundary schedule. Existing plans keep their recorded duration, including the
+historical two-second target; create a new plan to inherit a source target.
 An explicitly selected mode that cannot satisfy the profile is refused rather
 than replaced. Saved plans fix the selected mode and boundary behavior, so
 `convert --plan` refuses `--processing`, including `auto`. No mode changes the
 required native checks or the meaning of `--decode`. See
 [processing and timing](media-processing.md#generic-conversion-and-timing-limits).
+
+## Resource directories
+
+New downloads and segmented outputs retain the [source directory structure](source-layout.md).
+For example, media in `video/1080p/` stays in that directory. Generated filenames
+can change, and several tracks sharing a directory use distinct filename prefixes.
+Old saved plans retain their previous placement.
+
+## Select DASH references
+
+Use `--dash-addressing template|template-timeline|list|base` with direct `convert`
+or `plan --save`. The default `template` uses numbered segments and a nominal
+duration. `template-timeline` records exact boundaries, `list` names every
+resource, and `base` writes one indexed fragmented MP4 per rendition. This option
+applies only to DASH outputs. For example:
+
+```sh
+drmr plan source/input.m3u8 --to clear --format dash --dash-addressing list \
+  --output result --save conversion.plan.json
+drmr convert --plan conversion.plan.json
+drmr verify --plan conversion.plan.json
+```
+
+The saved plan fixes this choice; `convert --plan` refuses an addressing override.
+For several outputs, use the [schema-3 output list](multiple-outputs.md#select-dash-references-for-each-output).
+See [DASH references and timing](dash-addressing.md) for each form's conditions.
 
 ## Read metadata and plan a conversion
 
@@ -171,7 +206,7 @@ resources and creates a local entrypoint before conversion and verification:
 | URL input | Retained entrypoint | Acquisition conditions |
 | --- | --- | --- |
 | MP4 | `source/input.mp4` | One complete MP4 within the local media profiles |
-| DASH | `source/input.mpd` | Static MPD with one `Period`, `SegmentTemplate` and an explicit finite `SegmentTimeline` |
+| DASH | `source/input.mpd` | One static `Period`, finite template or list references, or a supported single-file index |
 | HLS | `source/input.m3u8` | Completed TS/fMP4 playlists within the supported input profiles |
 
 The same URL input and `--download-dir` options work with normal `analyze` when you want
@@ -182,7 +217,7 @@ Use the corresponding local entrypoint for `plan` and offline reuse. The separat
 
 For DASH, drmr saves every referenced initialization and media file and creates a
 local MPD. Only resource addressing is localized; protection declarations,
-PSSH DRM initialization data and the explicit timeline are preserved. Original
+PSSH DRM initialization data and timing declarations are preserved. Original
 manifest bytes remain separate. Local HLS playlists localize media references
 and resolve relative key identifiers against the effective remote playlist
 address. Encrypted media and initialization bytes are retained without
@@ -205,8 +240,8 @@ timing, and saved-source integrity checks pass.
 The [input table](conversion-support.md#url-input) states the qualified container
 and encryption combinations, including encrypted MP4/DASH and completed HLS
 with clear, AES-128 or sample-encrypted media. The same local codec, track,
-encryption and timing restrictions still apply. Live input, byte ranges,
-multiple DASH periods, `SegmentList`, `SegmentBase`, duration-only DASH templates
+encryption and timing restrictions still apply. Live input, HLS byte ranges,
+multiple DASH periods, hierarchical or external DASH indexes
 and negative timeline repeats remain outside this acquisition profile.
 
 Supply known input keys through `--keys-file` for full `analyze`, source checks when
@@ -398,7 +433,7 @@ The private configuration picker replaces file and folder names with numbered la
 
 URL sessions use a generic **Source URL** label. The server does not return the submitted URL to the page; credentials can occur in the path as well as in query parameters. The input field is cleared when submitted.
 
-Every newly saved console plan is v6, including a one-output list, and binds its processing mode, boundary guarantee and minimum verification depth. The additional complete-decoding checkbox has the same meaning as CLI `--decode`; an imported plan can require it even when the checkbox is clear. When supplying a key file, analyze accepts either key-file schema; new console plan creation and named-output plan conversion/verification use v2 keys. Imported single-output v1/v3/v5 plans use v1 keys. Legacy plan versions 1/2 retain a decoded minimum. See [multiple outputs](multiple-outputs.md) and the [key-file reference](https://kazuhide.github.io/drmr/guide/#cli-reference).
+Every newly saved console plan is v8, including a one-output list, and binds its processing, boundary behavior, source directories, DASH references and minimum verification depth. The additional complete-decoding checkbox has the same meaning as CLI `--decode`; an imported plan can require it even when the checkbox is clear. When supplying a key file, analyze accepts either key-file schema; new console plan creation and named-output plan conversion/verification use v2 keys. Imported single-output v1/v3/v5/v7 plans use v1 keys. Legacy plan versions 1/2 retain a decoded minimum. See [multiple outputs](multiple-outputs.md) and the [key-file reference](https://kazuhide.github.io/drmr/guide/#cli-reference).
 
 The common workflow fixes a request identifier before submitting an operation. A lost reply is recovered by GET lookup of that exact request and job; a missing live receipt remains unknown. **Check status** never repeats the POST. Stop acknowledgment is separate from confirmed process cleanup, and unconfirmed cleanup retains the global execution slot. Selection and language changes do not release it.
 

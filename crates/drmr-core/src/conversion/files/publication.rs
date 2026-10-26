@@ -226,7 +226,7 @@ pub(super) fn create_media(parent: &File) -> Result<File, ConversionError> {
     open_entry(parent, "media".as_ref(), Path::new("media"), true)
 }
 
-fn open_entry(
+pub(super) fn open_entry(
     parent: &File,
     name: &std::ffi::OsStr,
     path: &Path,

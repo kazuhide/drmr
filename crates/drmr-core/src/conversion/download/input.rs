@@ -49,6 +49,26 @@ impl Entrypoint {
     }
 }
 impl Graph<'_> {
+    pub(super) fn check_acquired_limits(
+        &self,
+        entrypoint: &str,
+        contents: &Entrypoint,
+    ) -> Result<(), ConversionError> {
+        if entrypoint == "input.mpd" {
+            let Entrypoint::Projection(projection) = contents else {
+                return Err(INVALID);
+            };
+            crate::conversion::dash::check_acquired_limits(
+                self.owned.path(),
+                projection,
+                usize::try_from(self.policy.max_segments_per_track.min(100_000))
+                    .map_err(|_| INVALID)?,
+                self.fetcher.stop(),
+            )?;
+        }
+        Ok(())
+    }
+
     pub(super) fn entrypoint(
         &mut self,
         url: &str,
@@ -136,6 +156,8 @@ impl Graph<'_> {
             .unwrap_or(100_000)
             .saturating_sub(1)
             .min(99_999);
+        let mut mapper =
+            crate::conversion::layout::UrlPathMapper::new(&received.effective, self.layout_mode)?;
         let plan = dash::plan(
             body,
             &received.effective,
@@ -143,7 +165,10 @@ impl Graph<'_> {
             usize::try_from(max_resources).map_err(|_| INVALID)?,
             usize::try_from(self.policy.max_segments_per_track.min(100_000))
                 .map_err(|_| INVALID)?,
+            &mut mapper,
+            &mut |bytes| self.charge(bytes),
         )?;
+        self.mapper = Some(mapper);
         self.save("raw/r000000.mpd", body)?;
         self.records.push(serde_json::json!({
             "kind":"manifest", "requested":url, "effective":received.effective,
@@ -154,7 +179,7 @@ impl Graph<'_> {
         for resource in plan.resources {
             self.admit_node()?;
             self.text_charge(resource.url.len())?;
-            self.charge(resource.url.len().saturating_mul(8) + 1024)?;
+            self.owned.create_parents(Path::new(&resource.path))?;
             self.resources.push(resource);
         }
         Ok(("input.mpd", Entrypoint::Projection(plan.projection)))

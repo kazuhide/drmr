@@ -62,8 +62,8 @@ def recipe_fixture(language="en", first_example=1):
                 code = "\n\n".join(groups)
                 content.append('<h3 id="' + identifier + '" tabindex="-1">' + heading + '</h3>'
                                '<p><a href="#recipe-setup">Prepare the key configuration</a></p>'
-                               '<figure class="guide-example" data-code-language="sh" aria-labelledby="example-' + str(example) + '-title">'
-                               '<figcaption id="example-' + str(example) + '-title">Complete URL conversion example</figcaption>'
+                               '<figure class="guide-example" data-code-language="sh" aria-labelledby="ex' + str(example) + '">'
+                               '<figcaption id="ex' + str(example) + '">Complete URL conversion example</figcaption>'
                                '<pre tabindex="0"><code>' + escape(code) + '</code></pre></figure>')
                 example += 1
     return "".join(content)
@@ -643,8 +643,8 @@ class GuideMarkup(unittest.TestCase):
         for name in CHECK.GUIDE_CHAPTERS:
             body = "<p>Complete chapter content with a bounded, meaningful explanation.</p>"
             if name == "introduction":
-                body += ('<figure class="guide-example" data-code-language="sh" aria-labelledby="example-1-title">'
-                         '<figcaption id="example-1-title">Read media metadata</figcaption>'
+                body += ('<figure class="guide-example" data-code-language="sh" aria-labelledby="ex1">'
+                         '<figcaption id="ex1">Read media metadata</figcaption>'
                          '<pre tabindex="0"><code>drmr analyze source.mp4 --metadata-only</code></pre></figure>'
                          '<div class="guide-table-scroll" role="region" aria-labelledby="table-1-title" tabindex="0">'
                          '<table><caption id="table-1-title">Known profiles</caption><thead><tr><th scope="col">Input</th></tr></thead>'
@@ -681,7 +681,7 @@ class GuideMarkup(unittest.TestCase):
                          {"chapters": 18, "code_examples": 46, "tables": 1, "conversion_examples": 45})
         for old, new in [('data-guide-chapter="verification"', 'data-guide-chapter="missing"'),
                          ('href="#verification"', 'href="#missing"'), ('tabindex="0"', ''),
-                         ('aria-labelledby="example-1-title"', ''), ('data-code-language="sh"', 'data-code-language="unknown"'), ('scope="row"', '')]:
+                         ('aria-labelledby="ex1"', ''), ('data-code-language="sh"', 'data-code-language="unknown"'), ('scope="row"', '')]:
             with self.subTest(old=old), self.assertRaises(CHECK.Failure):
                 CHECK.validate_guide(original.replace(old, new, 1), "en")
 

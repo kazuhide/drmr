@@ -102,6 +102,26 @@ impl HlsSource {
         })
     }
 
+    pub(super) fn finish_hls_target(
+        &self,
+        converter: &Converter,
+        root: &Path,
+    ) -> Result<(), ConversionError> {
+        converter.backend.check_cancelled()?;
+        if !converter.inherits_hls_target() {
+            return Ok(());
+        }
+        let target = super::super::processing::segment_target::from_seconds(
+            self.parts.iter().map(|part| part.media.target_seconds),
+        )?;
+        super::super::processing::segment_target::finish_hls(
+            root,
+            self.parts.len(),
+            target,
+            &converter.backend.stop,
+        )
+    }
+
     pub fn check_original(&self) -> Result<(), ConversionError> {
         self.frozen.check_original()
     }

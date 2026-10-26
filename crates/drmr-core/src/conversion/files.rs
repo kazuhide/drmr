@@ -9,7 +9,9 @@ use std::{
 };
 
 mod publication;
+mod relocation;
 pub(super) use publication::PublicationSource;
+pub(in crate::conversion) use relocation::StageRelocation;
 #[cfg(unix)]
 mod unix_cleanup;
 #[cfg(unix)]

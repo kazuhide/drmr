@@ -1,7 +1,6 @@
 //! Key-free metadata analysis or complete source admission with retained remote input.
 use crate::convert_cli::{self, Progress};
 use clap::Args;
-use drmr_core::concurrency::Stop;
 use drmr_core::conversion::{
     ConversionError, Converter, SourceCompatibilityNote, VerificationSource,
     key_file::OperatorKeys, plan::InputAnalysis,
@@ -21,7 +20,7 @@ pub struct AnalyzeArgs {
     /// Read metadata without keys, media tools, complete media checks, or retained URL input.
     #[arg(long, conflicts_with_all = ["download_dir", "keys_file", "packager_bin", "max_workers", "decode", "measure"])]
     pub metadata_only: bool,
-    /// New private original directory; required for complete URL analysis.
+    /// New private original directory; required for complete URL analysis. Source directories are retained.
     #[arg(long)]
     pub download_dir: Option<PathBuf>,
     /// Private settings for allowed origins, authentication, and bounded retrieval.
@@ -126,7 +125,6 @@ fn execute_analysis(
     policy: Option<&drmr_core::source::FetchPolicy>,
     keys: &OperatorKeys,
     progress: &Progress,
-    stop: &Stop,
 ) -> Result<(InputAnalysis, Option<serde_json::Value>), ConversionError> {
     let downloaded = match input {
         crate::download_cli::Input::Local(_) => None,
@@ -143,9 +141,11 @@ fn execute_analysis(
             )
         }
     };
-    if let Some(source) = &downloaded {
-        source.check(stop)?;
-    }
+    let bound = downloaded
+        .as_ref()
+        .map(|source| command.using_downloaded_source(source))
+        .transpose()?;
+    let command = bound.as_ref().unwrap_or(command);
     let source = downloaded
         .as_ref()
         .map_or_else(|| args.input.as_path(), |source| source.entrypoint());
@@ -155,9 +155,6 @@ fn execute_analysis(
         input_keys: &keys.input,
         hls_keys: &keys.hls_input,
     })?;
-    if let Some(source) = &downloaded {
-        source.check(stop)?;
-    }
     let download = downloaded.as_ref().map(|source| {
         serde_json::json!({
             "directory": source.directory().to_string_lossy(),
@@ -282,17 +279,10 @@ pub fn analyze(args: &AnalyzeArgs) -> ExitCode {
         args.decoding.decode,
         progress.clone(),
         cancellation.stop.clone(),
-    );
+    )
+    .with_new_output_defaults();
     let execute = |command: &Converter| {
-        execute_analysis(
-            command,
-            args,
-            &input,
-            policy.as_ref(),
-            &keys,
-            &progress,
-            &cancellation.stop,
-        )
+        execute_analysis(command, args, &input, policy.as_ref(), &keys, &progress)
     };
     let (result, measurement) = if args.measure {
         let (result, measurement) = converter.measure(execute);

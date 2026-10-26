@@ -1,7 +1,7 @@
 //! Independent rendition preparation; segment/clock validation stays ordered per rendition.
 use super::{
     ConversionError, MediaPath, Path, Prepared, Protection, SourceCompatibilityNote,
-    SourceProtection, SourceValidationPurpose, TrackKind, VerificationSource,
+    SourceProtection, SourceValidationPurpose, TrackKind, VerificationSource, apply_hls_target,
     apply_transport_metadata, bind_audio_presentation, hls, hls_media_paths, inspection, key_for,
     manifested_clock, metadata, native_preparation, prepare_for, prepare_native_hls_transport,
     prepare_transport, validate_transport_roles,
@@ -174,6 +174,7 @@ impl Preparation<'_, '_> {
                 )?
             };
             apply_transport_metadata(&mut prepared, media, &localized, backend, input.input_keys)?;
+            apply_hls_target(&mut prepared, localized.target_seconds);
             return Ok(prepared);
         }
         let actual = inspection::inspect(&localized.combined)
@@ -195,6 +196,10 @@ impl Preparation<'_, '_> {
         track.clock = manifested_clock(&track.media, backend)?;
         bind_audio_presentation(&mut track, backend, input.input_keys, &directory)?;
         track.metadata = media.metadata.clone();
+        track.hls_target_seconds = Some(localized.target_seconds);
+        if actual.tracks[0].kind == TrackKind::Video {
+            track.hls_video_segment_ms = localized.maximum_segment_ms;
+        }
         if localized.empty_cue_pair {
             track
                 .compatibility

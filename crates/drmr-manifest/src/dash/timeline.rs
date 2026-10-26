@@ -10,6 +10,7 @@ use roxmltree::Node;
 #[derive(Clone, Copy, Default)]
 pub(super) struct Facts {
     pub terminal: Option<Run>,
+    pub segments: Option<u128>,
 }
 
 /// Parse and check structural runs once. Terminal runs retain only their scalar
@@ -18,6 +19,7 @@ pub(super) fn check(timeline: Node<'_, '_>, sink: &mut DiagnosticSink<'_>) -> Fa
     let mut facts = Facts::default();
     let mut cursor = Some(0_u128);
     let mut count = 0;
+    let mut segments = Some(0_u128);
     let mut entries = timeline
         .children()
         .filter(|node| node.has_tag_name((NS, "S")))
@@ -37,6 +39,7 @@ pub(super) fn check(timeline: Node<'_, '_>, sink: &mut DiagnosticSink<'_>) -> Fa
         check_entry(sink, valid, entry);
         if !valid {
             cursor = None;
+            segments = None;
             continue;
         }
         let Some(length) = length else {
@@ -45,6 +48,11 @@ pub(super) fn check(timeline: Node<'_, '_>, sink: &mut DiagnosticSink<'_>) -> Fa
         let start = time.flatten().map(u128::from).or(cursor);
         match repeated {
             Parsed::Value(Some(repeats)) => {
+                segments = segments.and_then(|total| {
+                    repeats
+                        .checked_add(1)
+                        .and_then(|count| total.checked_add(count))
+                });
                 cursor = start.and_then(|start| {
                     repeats
                         .checked_add(1)
@@ -76,6 +84,7 @@ pub(super) fn check(timeline: Node<'_, '_>, sink: &mut DiagnosticSink<'_>) -> Fa
                     .and_then(|next| next.attribute("t"))
                     .and_then(|value| unsigned(value, u64::MAX))
                     .map(u128::from);
+                segments = forward_segments(segments, start, cursor, length);
                 if start.zip(cursor).is_none_or(|(start, end)| end <= start) {
                     not_checked(
                         sink,
@@ -87,15 +96,38 @@ pub(super) fn check(timeline: Node<'_, '_>, sink: &mut DiagnosticSink<'_>) -> Fa
                     super::check(sink, "DASH-TIMELINE-ARITHMETIC", true, span(entry));
                 }
             }
-            Parsed::Unsupported => not_checked(
-                sink,
-                "DASH-TIMELINE-ARITHMETIC",
-                NotCheckedReason::ResourceLimit,
-                span(entry),
-            ),
+            Parsed::Unsupported => {
+                segments = None;
+                not_checked(
+                    sink,
+                    "DASH-TIMELINE-ARITHMETIC",
+                    NotCheckedReason::ResourceLimit,
+                    span(entry),
+                );
+            }
             Parsed::Invalid => {}
         }
     }
+    check_count(count, timeline, sink);
+    facts.segments = segments;
+    facts
+}
+
+fn forward_segments(
+    total: Option<u128>,
+    start: Option<u128>,
+    end: Option<u128>,
+    length: u64,
+) -> Option<u128> {
+    let (start, end) = start.zip(end)?;
+    let distance = end.checked_sub(start)?;
+    if distance % u128::from(length) != 0 {
+        return None;
+    }
+    total?.checked_add(distance / u128::from(length))
+}
+
+fn check_count(count: u32, timeline: Node<'_, '_>, sink: &mut DiagnosticSink<'_>) {
     if count == 0 {
         not_checked(
             sink,
@@ -106,7 +138,6 @@ pub(super) fn check(timeline: Node<'_, '_>, sink: &mut DiagnosticSink<'_>) -> Fa
     } else {
         super::check(sink, "DASH-TIMELINE-ENTRIES", true, span(timeline));
     }
-    facts
 }
 
 fn check_entry(sink: &mut DiagnosticSink<'_>, valid: bool, entry: Node<'_, '_>) {

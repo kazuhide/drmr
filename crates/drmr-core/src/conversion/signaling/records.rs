@@ -24,6 +24,42 @@ const PR: &str = "urn:uuid:9a04f079-9840-4286-ab92-e65be0885f95";
 const WV: &str = "urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed";
 const COMMON: &str = "urn:mpeg:dash:mp4protection:2011";
 
+fn read_slice(
+    path: &Path,
+    range: Option<(u64, u64)>,
+    stop: &crate::concurrency::Stop,
+) -> Result<Zeroizing<Vec<u8>>, ConversionError> {
+    let Some((start, end)) = range else {
+        return read_bounded(path);
+    };
+    super::cancelled(stop)?;
+    let mut input = super::super::files::regular_input(path).map_err(|_| MISMATCH)?;
+    let identity = crate::native::FileIdentity::read(&input).map_err(|_| MISMATCH)?;
+    let length = input.metadata().map_err(|_| MISMATCH)?.len();
+    let count = end
+        .checked_sub(start)
+        .and_then(|n| n.checked_add(1))
+        .and_then(|n| usize::try_from(n).ok())
+        .filter(|n| *n <= super::LIMIT && end < length)
+        .ok_or(MISMATCH)?;
+    input.seek(SeekFrom::Start(start)).map_err(|_| MISMATCH)?;
+    let mut bytes = Zeroizing::new(vec![0; count]);
+    for chunk in bytes.chunks_mut(65_536) {
+        super::cancelled(stop)?;
+        input.read_exact(chunk).map_err(|_| MISMATCH)?;
+    }
+    if input.metadata().map_err(|_| MISMATCH)?.len() != length
+        || crate::native::FileIdentity::read(
+            &super::super::files::regular_input(path).map_err(|_| MISMATCH)?,
+        )
+        .map_err(|_| MISMATCH)?
+            != identity
+    {
+        return Err(MISMATCH);
+    }
+    Ok(bytes)
+}
+
 /// Generated provider records have no diagnostic representation of their contents.
 pub(in crate::conversion) struct SegmentRecords {
     pub initialization: Zeroizing<Vec<u8>>,
@@ -127,11 +163,12 @@ impl MultiObjects {
     fn init(
         &self,
         path: &Path,
+        range: Option<(u64, u64)>,
         key: &OutputKey,
         stop: &crate::concurrency::Stop,
     ) -> Result<(), ConversionError> {
         super::cancelled(stop)?;
-        let data = read_bounded(path)?;
+        let data = read_slice(path, range, stop)?;
         let boxes = mp4::parse_boxes(&data).map_err(|_| MISMATCH)?;
         let nodes = mp4::walk(&boxes);
         let pssh: Vec<_> = nodes
@@ -245,6 +282,7 @@ impl MultiObjects {
             return Err(MISMATCH);
         }
         let mut resources = BTreeSet::new();
+        let mut media = BTreeSet::new();
         let mut declarations = 0;
         let mut sets = 0;
         for set in document
@@ -263,13 +301,17 @@ impl MultiObjects {
             declarations += self.protection(set, key)?;
             for rep in reps {
                 super::cancelled(stop)?;
-                let path = super::super::dash::initialization_reference(root, rep)
-                    .map_err(|_| MISMATCH)?;
-                if !resources.insert(path.clone()) {
+                let (initialization, segments) =
+                    super::super::dash::record_resources(root, rep, stop).map_err(|_| MISMATCH)?;
+                if !resources.insert(initialization.clone()) {
                     return Err(MISMATCH);
                 }
-                graph.assign(&path, graph::Role::Initialization)?;
-                self.init(&path, key, stop)?;
+                graph.assign(&initialization.path, graph::Role::DashObject)?;
+                self.init(&initialization.path, initialization.range, key, stop)?;
+                for segment in segments {
+                    graph.assign(&segment.path, graph::Role::DashObject)?;
+                    media.insert(segment);
+                }
             }
         }
         if resources.is_empty()
@@ -293,10 +335,14 @@ impl MultiObjects {
         {
             return Err(MISMATCH);
         }
-        graph.dash_media(stop)?;
         graph.complete()?;
-        for path in graph.media() {
-            media::check(path, media::Selection::Providers(self), stop)?;
+        for resource in media {
+            media::check_range(
+                &resource.path,
+                resource.range,
+                media::Selection::Providers(self),
+                stop,
+            )?;
         }
         unchanged(frozen)
     }
@@ -641,6 +687,7 @@ fn unrequested_at(
     let root = root.canonicalize().map_err(|_| MISMATCH)?;
     let mut manifests = BTreeSet::new();
     let mut encrypted = BTreeSet::new();
+    let mut dash_objects = BTreeSet::new();
     let mut pending = vec![entrypoint.clone()];
     while let Some(path) = pending.pop() {
         super::cancelled(stop)?;
@@ -663,6 +710,35 @@ fn unrequested_at(
             pending.extend(resources.playlists);
         } else if path == entrypoint {
             common::dash(text, target, key)?;
+            let document = roxmltree::Document::parse(text).map_err(|_| MISMATCH)?;
+            let parent = path.parent().ok_or(MISMATCH)?;
+            let mut slices = BTreeSet::new();
+            for rep in document
+                .descendants()
+                .filter(|node| node.has_tag_name((DASH, "Representation")))
+            {
+                let (initialization, media) =
+                    super::super::dash::record_resources(parent, rep, stop)
+                        .map_err(|_| MISMATCH)?;
+                for resource in std::iter::once(initialization).chain(media) {
+                    if slices.len() >= 100_064 {
+                        return Err(MISMATCH);
+                    }
+                    dash_objects.insert(resource.path.clone());
+                    slices.insert(resource);
+                }
+            }
+            if slices.is_empty() {
+                return Err(MISMATCH);
+            }
+            for resource in slices {
+                media::check_range(
+                    &resource.path,
+                    resource.range,
+                    media::Selection::Default { target, key },
+                    stop,
+                )?;
+            }
         } else {
             return Err(MISMATCH);
         }
@@ -677,7 +753,7 @@ fn unrequested_at(
         if !path.starts_with(&root) {
             return Err(MISMATCH);
         }
-        if !manifests.contains(&path) {
+        if !manifests.contains(&path) && !dash_objects.contains(&path) {
             no_provider_media(&path, encrypted.contains(&path), target, key, stop)?;
         }
     }

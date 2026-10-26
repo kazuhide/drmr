@@ -218,6 +218,16 @@ fn verify_exported_plan(saved: &Path, plan_id: &str) {
     assert_eq!(independently_verified["passed"], true);
 }
 
+fn assert_source_options(plan: &Value) {
+    assert_eq!(
+        plan["output_options"],
+        json!([
+            {"id":"dash","options":{"layout":"source","dash_addressing":"template"}},
+            {"id":"hls","options":{"layout":"source","dash_addressing":null}}
+        ])
+    );
+}
+
 #[test]
 fn real_http_flow_saves_exports_executes_and_independently_verifies_the_same_cli_plan() {
     let root = native::private_tempdir().unwrap();
@@ -257,11 +267,12 @@ fn real_http_flow_saves_exports_executes_and_independently_verifies_the_same_cli
     ]})), "succeeded");
     let plan_ref = planned["plan_ref"].clone();
     let plan = client.get(&format!("/api/common/plans/{}", plan_ref.as_str().unwrap()));
-    assert_eq!(plan["plan_schema_version"], 6);
+    assert_eq!(plan["plan_schema_version"], 8);
     assert_eq!(plan["required_depth"], "decoded");
     assert_eq!(plan["outputs"].as_array().unwrap().len(), 2);
     assert_eq!(plan["outputs"][0]["processing"], "auto");
     assert_eq!(plan["outputs"][1]["processing"], "stitch");
+    assert_source_options(&plan);
     for choice in plan["processing"].as_array().unwrap() {
         assert_eq!(choice["selection"]["resolved"], "stitch");
         assert_eq!(choice["selection"]["boundaries"], "resegment");

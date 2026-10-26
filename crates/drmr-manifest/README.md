@@ -23,9 +23,12 @@ assert_eq!(report.errors, 0);
 `HlsBaseManifest` uses RFC 8216 manifest rules. `AppleVodManifest` adds separately
 identified Apple VOD authoring requirements. `DashStaticManifest` checks static
 MPD structure, supported typed attributes, representation identities, inherited
-`SegmentTemplate` addressing and checked `SegmentTimeline` arithmetic. Its schema
-facts are pinned to the fifth-edition schema shipped with DASH-IF Conformance
-v3.1.0; it does not claim full XSD or Schematron equivalence. The DASH-IF restricted
+`SegmentTemplate`, `SegmentList` and indexed `SegmentBase` addressing, and checked
+`SegmentTimeline` arithmetic. Existing general attribute facts remain pinned to
+the fifth-edition schema shipped with DASH-IF Conformance v3.1.0. Additional
+addressing facts use MPEG's sixth-edition schema, including unsigned 64-bit
+segment numbers; duration and timescale remain unsigned 32-bit values. This is
+not full XSD or Schematron equivalence. The DASH-IF restricted
 timing model's additional constraints are not silently imposed on base DASH.
 Finite runs use checked integer arithmetic. Negative runs require a positive
 forward next-entry boundary or an exactly resolved Period duration. Terminal
@@ -33,6 +36,25 @@ counts use rational duration, effective timescale and presentation time offset;
 fractional endpoints use a ceiling count without enumerating segments. Missing,
 unsupported or unrepresentable context remains unresolved in scope. These checks
 do not assert full media-to-Period timing alignment.
+Lists check finite URL counts against their explicit timeline, nominal duration
+or declared final segment number.
+This native profile applies signed `eptDelta` only to nominal addressing and
+refuses it with a timeline.
+Same-kind declarations inherit fields and children; a different addressing kind
+resets that inheritance. Range-only Lists need one effective object `BaseURL`.
+Indexed Base checks initialization/index declarations and disjoint closed ranges
+when initialization uses the indexed object. List range indexes check overlap for the same literal resource,
+including inherited initialization ranges. URI aliases, file extents, actual
+sample clocks and the contents of the index remain caller-provided media evidence.
+Nominal counts do not apply timing tolerance to explicit timelines. Syntactically
+valid integers or ranges exceeding bounded arithmetic remain unresolved.
+Nominal addressing can declare `presentationDuration` as its own finite presented
+endpoint relative to `presentationTimeOffset`, in the MPD timescale. That endpoint
+must lie within the Period. An explicit `endNumber` fixes the finite count;
+otherwise the count uses the ceiling of the own extent minus `eptDelta`, divided
+by nominal duration. Every nominal segment start must precede the own endpoint.
+These checks do not require all representations to end at the longest Period
+endpoint. Actual sample coverage and nominal edge tolerances need media evidence.
 The native profile requires unambiguous representation identities within a Period.
 Repeated IDs leave identity-dependent conclusions unresolved: the manifest alone
 cannot prove the functional equivalence exception. They are not classified as a
@@ -112,6 +134,9 @@ DOM in the same admitted CPU budget. Pools never nest. Inherited template facts
 and timeline structure are checked once. Terminal arithmetic is reused for each
 unique active timeline, Period, timescale and presentation time offset. HLS graph
 checks reuse compact child facts and key indexes without reparsing child documents.
+Inherited List resource indexes are constructed once; initialization overlap
+queries use their ordered interval maps. Effective `BaseURL` facts are computed
+once per scope rather than rescanning an ancestor's representations for each leaf.
 
 Diagnostics are bounded before position computation. Worker sinks share a lazy
 line/scalar index and merge deterministically; reports preserve caller input order
@@ -124,6 +149,7 @@ Rules are independently authored from [RFC 8216](https://www.rfc-editor.org/rfc/
 [W3C XML](https://www.w3.org/TR/REC-xml/) and
 [XML Schema 1.0 datatypes](https://www.w3.org/TR/2004/REC-xmlschema-2-20041028/),
 [pinned DASH schema facts](https://github.com/Dash-Industry-Forum/DASH-IF-Conformance/blob/v3.1.0/resources/xsd/DASH5th.xsd),
+additional [MPEG addressing schema facts](https://github.com/MPEGGroup/DASHSchema/blob/6th-Ed/DASH-MPD.xsd),
 and [DASH-IF timing guidance](https://dashif.org/Guidelines-TimingModel/).
 No DASH-IF engine code or schema assets are copied into this MIT crate.
 

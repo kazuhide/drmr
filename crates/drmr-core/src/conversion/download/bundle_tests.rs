@@ -15,6 +15,7 @@ fn sealed_source(parent: &Path) -> (Converter, PathBuf, PathBuf, Vec<u8>) {
         ("input.m3u8", manifest.as_slice()),
         ("media/segment.ts", media.as_slice()),
     ] {
+        owned.prepay_file(Path::new(name)).unwrap();
         let writer = write_private(&owned.path().join(name), bytes).unwrap();
         let identity = crate::native::FileIdentity::read(&writer).unwrap();
         drop(writer);
@@ -30,6 +31,8 @@ fn sealed_source(parent: &Path) -> (Converter, PathBuf, PathBuf, Vec<u8>) {
         "unused",
     );
     converter.downloaded = Some(Arc::new(Seal {
+        retained_bytes: owned.retained_bytes().unwrap(),
+        _retained: None,
         owned,
         files: expected,
         entrypoint: "input.m3u8",

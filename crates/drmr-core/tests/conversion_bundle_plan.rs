@@ -62,6 +62,7 @@ fn outputs() -> Vec<BundleOutputIntent> {
     [OutputFormat::Dash, OutputFormat::Hls]
         .into_iter()
         .map(|format| BundleOutputIntent {
+            dash_addressing: None,
             processing: None,
             id: format.as_str().to_owned(),
             format,
@@ -157,7 +158,7 @@ fn one_private_plan_publishes_and_independently_verifies_both_presentations() {
             outputs: &outputs(),
         })
         .unwrap();
-    assert_eq!(plan.schema_version, 6);
+    assert_eq!(plan.schema_version, 8);
     assert!(
         plan.outputs
             .iter()

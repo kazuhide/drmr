@@ -1,4 +1,6 @@
 //! Explicit `PlayReady` metadata is qualified independently of media decryption.
+#[path = "support/numbered_dash.rs"]
+mod numbered_dash;
 use std::{
     io::Write as _,
     path::Path,
@@ -282,27 +284,12 @@ fn decoded_audio_samples(input: &Path) -> u64 {
 }
 
 fn independently_decrypted_track(output: &Path, index: usize) -> std::path::PathBuf {
-    let directory = output.join(format!("track-{index:04}"));
-    let mut segments: Vec<_> = std::fs::read_dir(&directory)
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .filter(|path| path.extension().is_some_and(|extension| extension == "m4s"))
-        .collect();
-    segments.sort_by_key(|path| {
-        path.file_stem()
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .strip_prefix("seg_")
-            .unwrap()
-            .parse::<u64>()
-            .unwrap()
-    });
+    let (initialization, segments) = numbered_dash::resources(output, index);
     assert_ne!(segments.len(), 0);
     let root = output.parent().unwrap();
     let encrypted = root.join(format!("independent-encrypted-{index}.mp4"));
     let mut joined = drmr_core::native::create_media_new(&encrypted).unwrap();
-    for resource in std::iter::once(directory.join("init.mp4")).chain(segments) {
+    for resource in std::iter::once(initialization).chain(segments) {
         std::io::copy(&mut std::fs::File::open(resource).unwrap(), &mut joined).unwrap();
     }
     drop(joined);
@@ -415,7 +402,7 @@ fn period_end_cannot_hide_the_original_tail(
     let report: serde_json::Value = serde_json::from_slice(&rejected.stdout).unwrap();
     assert_eq!(
         report["error"]["code"],
-        "dash-presentation-duration-mismatch"
+        "dash-representation-duration-outside-period"
     );
     std::fs::write(&manifest, original).unwrap();
     let restored = fresh_verification(input, output, keys);
@@ -591,7 +578,7 @@ fn assert_signaling(output: &Path, audio: bool) -> drmr_core::playready::PlayRea
     assert!(manifest.contains(&format!("<cenc:pssh>{}</cenc:pssh>", objects.pssh_b64)));
     assert!(manifest.contains(&format!("<mspr:pro>{}</mspr:pro>", objects.pro_b64)));
     for track in 0..if audio { 2 } else { 1 } {
-        let init = std::fs::read(output.join(format!("track-{track:04}/init.mp4"))).unwrap();
+        let init = std::fs::read(numbered_dash::resources(output, track).0).unwrap();
         let boxes = drmr_core::mp4::parse_boxes(&init).unwrap();
         let pssh: Vec<_> = drmr_core::mp4::walk(&boxes)
             .into_iter()
@@ -600,11 +587,7 @@ fn assert_signaling(output: &Path, audio: bool) -> drmr_core::playready::PlayRea
         assert_eq!(pssh.len(), 1);
         assert_eq!(pssh[0].header.bytes(&init), objects.pssh_box);
     }
-    let video_segments = std::fs::read_dir(output.join("track-0000"))
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .filter(|path| path.extension().is_some_and(|ext| ext == "m4s"))
-        .count();
+    let video_segments = numbered_dash::resources(output, 0).1.len();
     assert_eq!(video_segments, 5);
     let parsed = drmr_core::playready::parse_pro(&objects.pro_b64).unwrap();
     assert_eq!(parsed.version, "4.3.0.0");

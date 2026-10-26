@@ -1,6 +1,10 @@
 //! Closed views of existing CLI reports. No raw result is an HTTP response.
+mod output_options_view;
 mod plan_binding;
 mod plan_view;
+pub(super) use output_options_view::saved as saved_output_options;
+#[cfg(test)]
+mod output_options_tests;
 #[cfg(test)]
 mod processing_tests;
 mod processing_view;
@@ -829,11 +833,11 @@ pub fn project(
     let (mut value, kind, success) = match operation {
         OperationName::Analyze => analysis(v)?,
         OperationName::Plan => plan(v)?,
-        OperationName::Convert if matches!(schema, Some(1 | 3 | 5)) => single_conversion(v)?,
-        OperationName::Convert | OperationName::Verify if matches!(schema, Some(2 | 4 | 6)) => {
+        OperationName::Convert if matches!(schema, Some(1 | 3 | 5 | 7)) => single_conversion(v)?,
+        OperationName::Convert | OperationName::Verify if matches!(schema, Some(2 | 4 | 6 | 8)) => {
             bundle(operation, v)?
         }
-        OperationName::Verify if matches!(schema, Some(1 | 3 | 5)) => single_verification(v)?,
+        OperationName::Verify if matches!(schema, Some(1 | 3 | 5 | 7)) => single_verification(v)?,
         _ => return Err(bad()),
     };
     if operation != OperationName::Analyze {
@@ -1033,6 +1037,13 @@ mod coverage_tests {
 }
 
 const NATIVE_RULES: &[&str] = &[
+    "DASH-ADDRESSING-TIMESCALE",
+    "DASH-ADDRESSING-INTEGERS",
+    "DASH-LIST-SEGMENTS",
+    "DASH-ADDRESSING-RANGES",
+    "DASH-BASE-ADDRESSING",
+    "DASH-NOMINAL-TIMING",
+    "DASH-SEGMENT-NUMBERS",
     "APPLE-HLS-AUDIO-DESCRIPTION",
     "APPLE-HLS-AVERAGE-BANDWIDTH",
     "APPLE-HLS-HD-VARIANTS",
@@ -1154,6 +1165,13 @@ const NATIVE_RULES: &[&str] = &[
 ];
 
 const NATIVE_MESSAGES: &[&str] = &[
+    "DASH-ADDRESSING-TIMESCALE",
+    "DASH-ADDRESSING-INTEGERS",
+    "DASH-LIST-SEGMENTS",
+    "DASH-ADDRESSING-RANGES",
+    "DASH-BASE-ADDRESSING",
+    "DASH-NOMINAL-TIMING",
+    "DASH-SEGMENT-NUMBERS",
     "APPLE-HLS-AUDIO-DESCRIPTION",
     "APPLE-HLS-AVERAGE-BANDWIDTH",
     "APPLE-HLS-HD-VARIANTS",
@@ -1363,6 +1381,7 @@ const NATIVE_MESSAGES: &[&str] = &[
 ];
 
 const NATIVE_URLS: &[&str] = &[
+    "https://github.com/MPEGGroup/DASHSchema/blob/6th-Ed/DASH-MPD.xsd",
     "https://conformance.dashif.org/faq",
     "https://dashif.org/Guidelines-TimingModel/",
     "https://developer.apple.com/streaming/hls-authoring-specification-for-apple-devices.html",
@@ -1377,6 +1396,8 @@ const NATIVE_URLS: &[&str] = &[
 ];
 
 const NATIVE_SECTIONS: &[&str] = &[
+    "SegmentBaseType, MultipleSegmentBaseType, SegmentListType, SegmentURLType",
+    "18.4 Simple addressing; finite reference counts and nominal timing",
     "1 Format; 4 Common SystemID and PSSH Box Format",
     "2 Documents",
     "2.1.3 Including Track Encryption Box Fields in the MPD; 2.2.5 KID Byte Order",
@@ -1429,6 +1450,8 @@ const NATIVE_SECTIONS: &[&str] = &[
 ];
 
 const NATIVE_REVISIONS: &[&str] = &[
+    "2026-10-26.1",
+    "MPEG DASH sixth-edition schema",
     "2026-10-21.1",
     "Commit Snapshot 2024-10-24",
     "DASH-IF v3.1.0 fifth-edition schema",
@@ -1542,6 +1565,22 @@ const FIXED_INSPECTION_TOKENS: &[&str] = &[
 ];
 
 const FAILURE_CODES: &[&str] = &[
+    "source-layout-path-unsafe",
+    "source-layout-collision",
+    "source-layout-not-supported",
+    "output-options-invalid",
+    "execution-plan-output-options-changed",
+    "dash-addressing-requires-dash",
+    "dash-addressing-source-not-supported",
+    "dash-nominal-duration-not-representable",
+    "dash-nominal-time-template-not-supported",
+    "dash-indexed-absolute-fragment-offset-not-supported",
+    "dash-index-sap-not-supported",
+    "dash-index-timeline-not-representable",
+    "dash-index-not-representable",
+    "dash-index-timescale-not-supported",
+    "dash-presentation-origin-timescale-not-supported",
+    "dash-indexed-output-collision",
     "processing-segments-source-required",
     "processing-container-change-not-supported",
     "processing-profile-not-supported",
@@ -1573,7 +1612,6 @@ const FAILURE_CODES: &[&str] = &[
     "fetch-policy-invalid",
     "finite-audio-tail-not-supported",
     "fragment-metadata-size-limit",
-    "fragment-presentation-edit-not-supported",
     "fragment-presentation-window-incomplete",
     "fragment-timeline-gap-or-overlap",
     "fragment-timing-not-supported",
@@ -1596,6 +1634,7 @@ const FAILURE_CODES: &[&str] = &[
     "hls-invalid-media-sequence",
     "hls-invalid-media-type",
     "hls-invalid-target-duration",
+    "hls-target-duration-mismatch",
     "hls-invalid-utf8",
     "hls-key-format-not-supported",
     "hls-key-iv-conflict",

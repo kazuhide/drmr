@@ -7,6 +7,20 @@ for installation, stable interfaces and versioning.
 
 ### Changed
 
+- Keep source-relative media directories in new URL downloads and segmented
+  outputs, including shared directories with distinct filenames. Existing saved
+  plans retain their recorded placement.
+- Select numbered duration templates, exact timelines, explicit lists or indexed
+  single-file DASH output with `--dash-addressing`. Accept the supported finite
+  forms as local or URL inputs and verify the final references and media.
+- Retain the common HLS target-duration bound in new segmented outputs. Derive
+  a safe repackaging request from admitted video intervals, save that request,
+  and keep existing plans' fixed settings. Retain the original HLS bound only
+  after checking all final durations; recalculate master bandwidth from final
+  bytes and the declared bound.
+- Apply MP4 playback-time offsets to DASH references, presentation durations and
+  indexes. Segment stitched AAC relative to its own start, then restore its
+  original timestamps before the complete source-to-output checks.
 - Copy and fingerprint independent source files in parallel within the shared
   worker and memory limits. Discover manifests in order, verify the complete
   retained source graph, and drain active workers before failure cleanup.
@@ -24,10 +38,12 @@ for installation, stable interfaces and versioning.
   TS and fragmented-MP4 routes can re-encrypt original resources while retaining
   every sample's segment membership and clocks. `stitch` prepares complete
   tracks and packages the requested output; HLS and DASH are segmented again.
-- Save resolved processing and boundary guarantees in new single-output plan
-  schema 5 and named-output schema 6. Existing plan schemas 1–4 retain their
-  identities and verification minimums. Output recipe schema 2 adds per-output
-  processing; operator key-file schemas remain unchanged.
+- Save resolved processing, boundary guarantees, source directories and DASH
+  references in new single-output plan schema 7 and named-output schema 8.
+  Existing plan schemas 1–6 retain their identities, processing settings and
+  verification minimums. Output recipe schema 3 adds per-output DASH references
+  alongside processing choices; recipe schemas 1/2 and operator key-file schemas
+  remain unchanged.
 - Use native Rust media validation by default for complete analysis, saved
   planning, conversion and independent verification. Check every admitted
   sample, codec configuration, clock and supported playback window; refuse

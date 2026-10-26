@@ -11,6 +11,8 @@ pub(super) enum Role {
     Manifest,
     Initialization,
     Media,
+    /// Explicit DASH initialization/media slices may share one indexed object.
+    DashObject,
 }
 
 pub(super) struct Resources {
@@ -42,17 +44,6 @@ impl Resources {
             return Err(MISMATCH);
         }
         *previous = Some(role);
-        Ok(())
-    }
-
-    /// DASH's captured finite template expansion already enumerates all media references.
-    pub fn dash_media(&mut self, stop: &Stop) -> Result<(), ConversionError> {
-        for role in self.files.values_mut() {
-            super::super::cancelled(stop)?;
-            if role.is_none() {
-                *role = Some(Role::Media);
-            }
-        }
         Ok(())
     }
 

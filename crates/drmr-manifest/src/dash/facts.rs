@@ -1,6 +1,6 @@
 use super::{
-    NS, attributes, check, duration_check, inheritance::EffectiveTemplate, not_checked,
-    numeric::unsigned, period, protection, span, terminal, timeline,
+    NS, addressing, attributes, check, duration_check, inheritance::EffectiveAddressing,
+    not_checked, numeric::unsigned, period, protection, span, terminal, timeline,
 };
 use crate::{DiagnosticSink, LintContext, NotCheckedReason};
 use roxmltree::Node;
@@ -15,8 +15,13 @@ pub(super) enum Job<'a, 'input> {
     Representation {
         node: Node<'a, 'input>,
         template: Option<usize>,
+        duration: terminal::PeriodDuration,
+        timeline: Option<usize>,
+        list: Option<usize>,
+        base: addressing::BaseContext,
     },
     Template(usize),
+    List(usize),
     Timeline(usize),
     Terminal(usize),
 }
@@ -35,14 +40,16 @@ type ContextKey = (usize, Option<u32>, Option<u64>, Option<u64>);
 #[derive(Default)]
 struct Registrations {
     timelines: BTreeMap<u32, usize>,
+    lists: BTreeMap<u32, usize>,
     contexts: BTreeSet<ContextKey>,
 }
 
 #[derive(Default)]
 struct Scopes {
     ends: Vec<usize>,
-    templates: Vec<(usize, Option<usize>)>,
+    addressings: Vec<(usize, Option<usize>)>,
     periods: Vec<(usize, u32)>,
+    bases: Vec<(usize, addressing::BaseContext)>,
 }
 impl Scopes {
     fn enter(&mut self, node: Node<'_, '_>, maximum: usize) -> bool {
@@ -51,11 +58,11 @@ impl Scopes {
             self.ends.pop();
         }
         while self
-            .templates
+            .addressings
             .last()
             .is_some_and(|(end, _)| *end <= range.start)
         {
-            self.templates.pop();
+            self.addressings.pop();
         }
         while self
             .periods
@@ -64,17 +71,40 @@ impl Scopes {
         {
             self.periods.pop();
         }
+        while self
+            .bases
+            .last()
+            .is_some_and(|(end, _)| *end <= range.start)
+        {
+            self.bases.pop();
+        }
         if self.ends.len() >= maximum {
             return false;
         }
         self.ends.push(range.end);
         true
     }
+    fn base(&mut self, node: Node<'_, '_>) {
+        if matches!(
+            node.tag_name().name(),
+            "MPD" | "Period" | "AdaptationSet" | "Representation"
+        ) {
+            let inherited = self
+                .bases
+                .last()
+                .map_or_else(addressing::BaseContext::default, |(_, context)| *context);
+            self.bases.push((
+                node.range().end,
+                addressing::BaseContext::inherit(node, inherited),
+            ));
+        }
+    }
 }
 pub(super) struct Inventory<'a, 'input> {
     pub jobs: Vec<Job<'a, 'input>>,
-    templates: Vec<EffectiveTemplate<'a, 'input>>,
+    addressings: Vec<EffectiveAddressing<'a, 'input>>,
     timelines: Vec<Timeline<'a, 'input>>,
+    lists: Vec<addressing::List<'a, 'input>>,
     terminals: Vec<Terminal>,
 }
 impl<'a, 'input> Inventory<'a, 'input> {
@@ -85,8 +115,9 @@ impl<'a, 'input> Inventory<'a, 'input> {
     ) -> Option<Self> {
         let mut inventory = Self {
             jobs: Vec::new(),
-            templates: Vec::new(),
+            addressings: Vec::new(),
             timelines: Vec::new(),
+            lists: Vec::new(),
             terminals: Vec::new(),
         };
         let durations = period::durations(root);
@@ -120,14 +151,18 @@ impl<'a, 'input> Inventory<'a, 'input> {
                 inventory.jobs.push(Job::Element(node));
                 continue;
             }
-            let mut selected = scopes.templates.last().and_then(|(_, selected)| *selected);
+            let mut selected = scopes
+                .addressings
+                .last()
+                .and_then(|(_, selected)| *selected);
             let name = node.tag_name().name();
+            scopes.base(node);
             if name == "Period" {
                 scopes.periods.push((node.range().end, node.id().get()));
             }
             if matches!(name, "Period" | "AdaptationSet" | "Representation") {
-                selected = inventory.add_template(node, selected);
-                scopes.templates.push((node.range().end, selected));
+                selected = inventory.add_addressing(node, selected);
+                scopes.addressings.push((node.range().end, selected));
             }
             match name {
                 "Representation" => {
@@ -135,15 +170,29 @@ impl<'a, 'input> Inventory<'a, 'input> {
                     if let Some(location) = duplicate_identity(node, &mut ids) {
                         duplicate = Some(location);
                     }
-                    inventory.jobs.push(Job::Representation {
-                        node,
-                        template: selected,
-                    });
                     let period = scopes.periods.last().map(|(_, id)| *id);
                     let duration = period
                         .and_then(|id| durations.get(&id))
                         .copied()
                         .unwrap_or(Err(NotCheckedReason::InvalidPrerequisite));
+                    let (timeline_node, urls_node) = selected.map_or((None, None), |index| {
+                        let selected = &inventory.addressings[index];
+                        (selected.timeline, selected.urls)
+                    });
+                    let timeline =
+                        timeline_node.map(|node| inventory.add_timeline(node, &mut registrations));
+                    let list = urls_node.map(|node| inventory.add_list(node, &mut registrations));
+                    inventory.jobs.push(Job::Representation {
+                        node,
+                        template: selected,
+                        duration,
+                        timeline,
+                        list,
+                        base: scopes
+                            .bases
+                            .last()
+                            .map_or_else(addressing::BaseContext::default, |(_, context)| *context),
+                    });
                     inventory.add_terminal(selected, period, duration, &mut registrations);
                 }
                 "SegmentTimeline" => {
@@ -180,6 +229,18 @@ impl<'a, 'input> Inventory<'a, 'input> {
             })
     }
 
+    fn add_list(&mut self, node: Node<'a, 'input>, registrations: &mut Registrations) -> usize {
+        *registrations
+            .lists
+            .entry(node.id().get())
+            .or_insert_with(|| {
+                let index = self.lists.len();
+                self.lists.push(addressing::List::new(node));
+                self.jobs.push(Job::List(index));
+                index
+            })
+    }
+
     fn add_terminal(
         &mut self,
         selected: Option<usize>,
@@ -187,23 +248,24 @@ impl<'a, 'input> Inventory<'a, 'input> {
         duration: terminal::PeriodDuration,
         registrations: &mut Registrations,
     ) {
-        let Some(template) = selected.map(|index| self.templates[index]) else {
+        let Some(template) = selected.map(|index| &self.addressings[index]) else {
             return;
         };
         let Some(node) = template.timeline else {
             return;
         };
+        let (timescale, offset) = (template.timescale, template.offset);
         let timeline = self.add_timeline(node, registrations);
         if registrations
             .contexts
-            .insert((timeline, period, template.timescale, template.offset))
+            .insert((timeline, period, timescale, offset))
         {
             let index = self.terminals.len();
             self.terminals.push(Terminal {
                 timeline,
                 duration,
-                timescale: template.timescale,
-                offset: template.offset,
+                timescale,
+                offset,
             });
             self.jobs.push(Job::Terminal(index));
         }
@@ -217,17 +279,24 @@ impl<'a, 'input> Inventory<'a, 'input> {
         })
     }
 
-    fn add_template(&mut self, owner: Node<'a, 'input>, inherited: Option<usize>) -> Option<usize> {
-        let Some(node) = owner
-            .children()
-            .find(|child| child.has_tag_name((NS, "SegmentTemplate")))
-        else {
+    fn add_addressing(
+        &mut self,
+        owner: Node<'a, 'input>,
+        inherited: Option<usize>,
+    ) -> Option<usize> {
+        let Some(node) = owner.children().find(|child| {
+            child.tag_name().namespace() == Some(NS)
+                && matches!(
+                    child.tag_name().name(),
+                    "SegmentTemplate" | "SegmentList" | "SegmentBase"
+                )
+        }) else {
             return inherited;
         };
         let template =
-            EffectiveTemplate::inherit(node, inherited.map(|index| self.templates[index]));
-        let index = self.templates.len();
-        self.templates.push(template);
+            EffectiveAddressing::inherit(node, inherited.map(|index| &self.addressings[index]));
+        let index = self.addressings.len();
+        self.addressings.push(template);
         self.jobs.push(Job::Template(index));
         Some(index)
     }
@@ -235,7 +304,8 @@ impl<'a, 'input> Inventory<'a, 'input> {
     pub fn check(&self, job: Job<'a, 'input>, sink: &mut DiagnosticSink<'_>) {
         match job {
             Job::Element(node) => element(node, sink),
-            Job::Template(index) => self.templates[index].check(sink),
+            Job::Template(index) => self.addressings[index].check(sink),
+            Job::List(index) => self.lists[index].check(sink),
             Job::Timeline(index) => {
                 self.timeline(index, sink);
             }
@@ -251,7 +321,14 @@ impl<'a, 'input> Inventory<'a, 'input> {
                     );
                 }
             }
-            Job::Representation { node, template } => {
+            Job::Representation {
+                node,
+                template,
+                duration,
+                timeline,
+                list,
+                base,
+            } => {
                 element(node, sink);
                 let valid = node
                     .attribute("id")
@@ -264,12 +341,23 @@ impl<'a, 'input> Inventory<'a, 'input> {
                         .parent()
                         .is_some_and(|parent| parent.has_tag_name((NS, "AdaptationSet")));
                 check(sink, "DASH-REPRESENTATION-ATTRIBUTES", valid, span(node));
-                if template.is_none_or(|index| !self.templates[index].complete()) {
+                if template.is_none_or(|index| !self.addressings[index].complete()) {
                     not_checked(
                         sink,
                         "DASH-ADDRESSING-COVERAGE",
                         NotCheckedReason::UnsupportedFeature,
                         span(node),
+                    );
+                }
+                if let Some(selected) = template {
+                    addressing::representation(
+                        &self.addressings[selected],
+                        node,
+                        duration,
+                        timeline.map(|index| self.timeline(index, sink)),
+                        list.map(|index| &self.lists[index]),
+                        base,
+                        sink,
                     );
                 }
             }
@@ -303,6 +391,7 @@ fn element(node: Node<'_, '_>, sink: &mut DiagnosticSink<'_>) {
         return;
     }
     attributes::check(node, sink);
+    addressing::element(node, sink);
     let name = node.tag_name().name();
     if matches!(name, "Period" | "AdaptationSet" | "Representation") {
         let count = node
@@ -332,12 +421,6 @@ fn element(node: Node<'_, '_>, sink: &mut DiagnosticSink<'_>) {
                 }
             }
         }
-        "SegmentBase" | "SegmentList" | "SegmentURL" => not_checked(
-            sink,
-            "DASH-ADDRESSING-COVERAGE",
-            NotCheckedReason::UnsupportedFeature,
-            span(node),
-        ),
         _ => {}
     }
 }

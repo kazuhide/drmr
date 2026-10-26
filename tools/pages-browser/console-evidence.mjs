@@ -37,20 +37,31 @@ export function decodeBadgeState(report) {
 
 export function planMinimumDepth(plan) {
   assert.equal(plan.kind, 'execution-plan');
-  assert.ok([1, 2, 3, 4, 5, 6].includes(plan.schema_version));
+  assert.ok([1, 2, 3, 4, 5, 6, 7, 8].includes(plan.schema_version));
   if (plan.schema_version < 3) {
     assert.equal(Object.hasOwn(plan, 'required_depth'), false);
     return 'decoded';
   }
   assert.ok(['native', 'decoded'].includes(plan.required_depth));
   if (plan.schema_version >= 5) {
-    const selections = plan.schema_version === 5 ? [plan.processing] : plan.processing?.map(row => row.selection);
+    const selections = plan.schema_version % 2 === 1 ? [plan.processing] : plan.processing?.map(row => row.selection);
     assert.ok(Array.isArray(selections) && selections.length > 0);
     for (const selection of selections) {
       assert.ok(selection && ['auto', 'segments', 'stitch'].includes(selection.requested));
       assert.ok(['segments', 'stitch'].includes(selection.resolved));
       assert.ok(['preserve', 'resegment', 'not-applicable'].includes(selection.boundaries));
       assert.ok(selection.requested === 'auto' || selection.requested === selection.resolved);
+    }
+  }
+  if (plan.schema_version >= 7) {
+    const single = plan.schema_version === 7, options = single ? [plan.output_options] : plan.output_options?.map(row => row.options);
+    assert.ok(Array.isArray(options) && options.length === (single ? 1 : plan.outputs.length));
+    for (const [index, option] of options.entries()) {
+      assert.ok(option && typeof option === 'object' && !Array.isArray(option));
+      const format = single ? plan.intent.format : plan.outputs[index].format;
+      if (!single) assert.equal(plan.output_options[index].id, plan.outputs[index].id);
+      if (format === 'dash') assert.ok(['template', 'template-timeline', 'list', 'base'].includes(option.dash_addressing));
+      else assert.equal(Object.hasOwn(option, 'dash_addressing'), false);
     }
   }
   return plan.required_depth;
@@ -64,14 +75,15 @@ export function legacyPlan(current) {
 }
 export function compatibilityPlan(current, schemaVersion) {
   planMinimumDepth(current);
-  assert.ok([3, 4, 5, 6].includes(current.schema_version));
+  assert.ok([3, 4, 5, 6, 7, 8].includes(current.schema_version));
   const single = current.schema_version % 2 === 1;
-  assert.ok((single ? [1, 3] : [2, 4]).includes(schemaVersion));
+  assert.ok((single ? [1, 3, 5] : [2, 4, 6]).includes(schemaVersion) && schemaVersion <= current.schema_version);
   const plan = { kind: current.kind, schema_version: schemaVersion, plan_id: '',
     source: current.source, source_format: current.source_format };
   if (single) plan.intent = current.intent;
-  else { plan.output_root = current.output_root; plan.outputs = current.outputs.map(({ processing: ignored, ...output }) => output); }
+  else { plan.output_root = current.output_root; plan.outputs = current.outputs.map(({ processing, dash_addressing: ignored, ...output }) => schemaVersion >= 6 && processing !== undefined ? { ...output, processing } : output); }
   if (schemaVersion >= 3) plan.required_depth = current.required_depth;
+  if (schemaVersion >= 5) plan.processing = current.processing;
   const { plan_id: ignored, ...identity } = plan;
   plan.plan_id = createHash('sha256').update(JSON.stringify(identity)).digest('hex');
   return plan;

@@ -7,6 +7,7 @@ use std::{
     path::Path,
 };
 const BAD: ConversionError = ConversionError("fragment-timing-not-supported");
+type Interval = (u64, u64, u64);
 fn integer(data: &[u8], offset: usize) -> Result<u32, ConversionError> {
     Ok(u32::from_be_bytes(
         data.get(offset..offset + 4)
@@ -70,11 +71,14 @@ fn unique(nodes: &[Mp4Box], kind: [u8; 4]) -> Result<&Mp4Box, ConversionError> {
     }
     Ok(node)
 }
-/// One actual track's decode timeline, reused across its consecutive media segments.
+/// One track's coded continuity and movie-presentation clocks across consecutive segments.
 pub(super) struct FragmentClock {
     track_id: u32,
     scale: u32,
     default_duration: u32,
+    default_flags: u32,
+    segment_sync: Option<bool>,
+    relative_data: bool,
     trim: u64,
     next: Option<u64>,
     finite: Option<super::finite::Window>,
@@ -116,34 +120,34 @@ impl FragmentClock {
             },
         )?;
         let mut default_duration = 0;
+        let mut default_flags = 0;
         if let Some(mvex) = moov.children.iter().find(|n| n.kind() == *b"mvex") {
             let trex = unique(&mvex.children, *b"trex")?.header.payload(&data);
             if integer(trex, 4)? != track_id {
                 return Err(BAD);
             }
             default_duration = integer(trex, 12)?;
+            default_flags = integer(trex, 20)?;
         }
         let audio_claim = super::audio_presentation::read_claim(path)?;
+        unique(&mdia.children, *b"hdlr")?;
         let mut trim = 0;
-        if unique(&mdia.children, *b"hdlr")?
-            .header
-            .payload(&data)
-            .get(8..12)
-            == Some(b"soun")
-            && audio_claim.is_none()
+        // A zero-duration rate-one edit still maps composition time to movie time.
+        // https://www.w3.org/TR/mse-byte-stream-format-isobmff/#initialization-segments
+        if audio_claim.is_none()
             && let Some(edts) = trak.children.iter().find(|n| n.kind() == *b"edts")
         {
             let elst = unique(&edts.children, *b"elst")?.header.payload(&data);
             let width = match elst.first() {
                 Some(0) => 4,
                 Some(1) => 8,
-                _ => return Err(ConversionError("fragment-presentation-edit-not-supported")),
+                _ => return Err(ConversionError("presentation-window-not-supported")),
             };
             if elst.get(1..4) != Some(&[0, 0, 0])
                 || integer(elst, 4)? != 1
                 || elst.get(8 + width * 2..) != Some(&[0, 1, 0, 0])
             {
-                return Err(ConversionError("fragment-presentation-edit-not-supported"));
+                return Err(ConversionError("presentation-window-not-supported"));
             }
             let value = if width == 4 {
                 i64::from(i32::from_be_bytes(
@@ -158,6 +162,9 @@ impl FragmentClock {
             track_id,
             scale,
             default_duration,
+            default_flags,
+            segment_sync: None,
+            relative_data: true,
             trim,
             next: None,
             finite: if audio_claim.is_some() {
@@ -178,6 +185,8 @@ impl FragmentClock {
     fn measure(&mut self, path: &Path) -> Result<(u64, u64), ConversionError> {
         self.segment_first = None;
         self.segment_end = 0;
+        self.segment_sync = None;
+        self.relative_data = true;
         let data = metadata(path)?;
         let nodes = mp4::parse_boxes(&data).map_err(|_| BAD)?;
         let mut total = 0u64;
@@ -189,6 +198,7 @@ impl FragmentClock {
                 return Err(BAD);
             }
             let flags = integer(tfhd, 0)? & 0x00ff_ffff;
+            self.relative_data &= flags & 1 == 0;
             let mut at = 8usize;
             if flags & 1 != 0 {
                 at += 8;
@@ -197,9 +207,19 @@ impl FragmentClock {
                 at += 4;
             }
             let default = if flags & 8 != 0 {
-                integer(tfhd, at)?
+                let value = integer(tfhd, at)?;
+                at += 4;
+                value
             } else {
                 self.default_duration
+            };
+            if flags & 16 != 0 {
+                at += 4;
+            }
+            let default_flags = if flags & 32 != 0 {
+                integer(tfhd, at)?
+            } else {
+                self.default_flags
             };
             let tfdt = unique(&traf.children, *b"tfdt")?.header.payload(&data);
             let base = match tfdt.first() {
@@ -220,6 +240,7 @@ impl FragmentClock {
                     .checked_add(self.measure_run(
                         trun.header.payload(&data),
                         default,
+                        default_flags,
                         base,
                         &mut duration,
                     )?)
@@ -238,6 +259,7 @@ impl FragmentClock {
         &mut self,
         payload: &[u8],
         default: u32,
+        default_flags: u32,
         base: u64,
         duration: &mut u64,
     ) -> Result<usize, ConversionError> {
@@ -254,10 +276,14 @@ impl FragmentClock {
         if flags & 1 != 0 {
             at += 4;
         }
-        if flags & 4 != 0 {
+        let first_flags = if flags & 4 != 0 {
+            let value = integer(payload, at)?;
             at += 4;
-        }
-        for _ in 0..samples {
+            Some(value)
+        } else {
+            None
+        };
+        for ordinal in 0..samples {
             let d = if flags & 256 != 0 {
                 let value = integer(payload, at)?;
                 at += 4;
@@ -268,12 +294,21 @@ impl FragmentClock {
             if d == 0 {
                 return Err(BAD);
             }
-            for flag in [512, 1024] {
-                if flags & flag != 0 {
-                    integer(payload, at)?;
-                    at += 4;
-                }
+            if flags & 512 != 0 {
+                integer(payload, at)?;
+                at += 4;
             }
+            let sample_flags = if flags & 1024 != 0 {
+                let value = integer(payload, at)?;
+                at += 4;
+                value
+            } else if ordinal == 0 {
+                first_flags.unwrap_or(default_flags)
+            } else {
+                default_flags
+            };
+            self.segment_sync
+                .get_or_insert(sample_flags & 0x0001_0000 == 0 && (sample_flags >> 24) & 3 != 1);
             let offset = if flags & 2048 != 0 {
                 let value = integer(payload, at)?;
                 at += 4;
@@ -351,6 +386,9 @@ impl FragmentClock {
         path: &Path,
     ) -> Result<(u64, u64, u64), ConversionError> {
         self.measure(path)?;
+        self.measured_presentation()
+    }
+    fn measured_presentation(&self) -> Result<(u64, u64, u64), ConversionError> {
         if let Some(claim) = self.audio_claim {
             return claim.interval(self.segment_first.ok_or(BAD)?, self.segment_end);
         }
@@ -360,23 +398,40 @@ impl FragmentClock {
             u64::from(self.scale),
         ))
     }
-    /// Return the exact DASH timeline interval accepted by `check_dash`.
-    /// Unedited media uses decode-time bounds; a finite playback edit uses its
-    /// clipped presentation bounds. Common presentation origin is separate.
+    /// Read once, retaining both coded DASH bounds and the visible presentation window.
+    pub(super) fn dash_clocks(
+        &mut self,
+        path: &Path,
+    ) -> Result<(Interval, Interval), ConversionError> {
+        let declared = self.dash_segment(path)?;
+        Ok((declared, self.measured_presentation()?))
+    }
+    pub(super) fn identity(&self) -> (u32, u32) {
+        (self.track_id, self.scale)
+    }
+    pub(super) fn starts_with_sync(&self) -> bool {
+        self.segment_sync == Some(true)
+    }
+    pub(super) fn relocatable(&self) -> bool {
+        self.relative_data
+    }
+    pub(super) fn last_segment_interval(&self) -> Option<(u64, u64)> {
+        self.segment_first.and_then(|first| {
+            self.segment_end
+                .checked_sub(first)
+                .filter(|ticks| *ticks > 0)
+                .map(|ticks| (ticks, u64::from(self.scale)))
+        })
+    }
+    /// Return the exact DASH interval in the movie's presentation clock.
+    /// Rate-one edits apply to video and audio composition timestamps. Terminal
+    /// AAC claims retain their complete coded interval here; their visible end
+    /// is checked separately by `presentation_window`.
     pub(super) fn dash_segment(&mut self, path: &Path) -> Result<(u64, u64, u64), ConversionError> {
-        let (base, total) = self.measure(path)?;
-        let (base, total) = if self.finite.is_some() {
-            let first = self.segment_first.ok_or(BAD)?;
-            (first, self.segment_end.checked_sub(first).ok_or(BAD)?)
-        } else {
-            let end = base
-                .checked_add(total)
-                .ok_or(BAD)?
-                .saturating_sub(self.trim);
-            let base = base.saturating_sub(self.trim);
-            (base, end.checked_sub(base).ok_or(BAD)?)
-        };
-        Ok((base, total, u64::from(self.scale)))
+        self.measure(path)?;
+        let first = self.segment_first.ok_or(BAD)?;
+        let duration = self.segment_end.checked_sub(first).ok_or(BAD)?;
+        Ok((first, duration, u64::from(self.scale)))
     }
     pub fn check_dash(
         &mut self,
@@ -450,6 +505,9 @@ mod tests {
             track_id: 1,
             scale: 90_000,
             default_duration: 0,
+            default_flags: 0,
+            segment_sync: None,
+            relative_data: true,
             trim,
             next: None,
             finite: None,
@@ -478,7 +536,7 @@ mod tests {
         let mut duration = 0;
         let negative = u32::from_be_bytes((-20_i32).to_be_bytes());
         assert_eq!(
-            c.measure_run(&run(1, &[50, negative], 10), 0, 100, &mut duration)
+            c.measure_run(&run(1, &[50, negative], 10), 0, 0, 100, &mut duration)
                 .unwrap(),
             2
         );
@@ -486,7 +544,7 @@ mod tests {
         assert_eq!(c.presentation_window().unwrap(), (90, 160, 90_000));
         let mut unsigned = clock(0);
         unsigned
-            .measure_run(&run(0, &[negative], 10), 0, 100, &mut 0)
+            .measure_run(&run(0, &[negative], 10), 0, 0, 100, &mut 0)
             .unwrap();
         assert_eq!(
             unsigned.presentation_window().unwrap().0,
@@ -494,14 +552,19 @@ mod tests {
         );
         assert!(
             clock(0)
-                .measure_run(&run(2, &[0], 10), 0, 100, &mut 0)
+                .measure_run(&run(2, &[0], 10), 0, 0, 100, &mut 0)
                 .is_err()
         );
     }
     #[test]
     fn priming_edit_is_applied_once_and_excluded_coded_intervals_do_not_set_origin() {
         let mut c = clock(1024);
-        c.measure_run(&run(0, &[0, 0], 1024), 0, 0, &mut 0).unwrap();
+        c.measure_run(&run(0, &[0, 0], 1024), 0, 0, 0, &mut 0)
+            .unwrap();
         assert_eq!(c.presentation_window().unwrap(), (0, 1024, 90_000));
     }
 }
+
+#[cfg(test)]
+#[path = "timing/edit_tests.rs"]
+mod edit_tests;

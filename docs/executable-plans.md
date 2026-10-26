@@ -7,7 +7,7 @@ supported HLS, static DASH and MP4 URLs within the documented acquisition profil
 
 For several outputs with separate DRM systems and final-manifest checks, use
 the [multiple-output workflow](multiple-outputs.md). The single-output examples
-below create schema-version-5 plans. Legacy version-one and version-three plans
+below create schema-version-7 plans. Legacy version-one and version-three plans
 remain readable with their recorded validation and packaging behavior.
 
 ## 1. Analyze and retain the input
@@ -54,12 +54,13 @@ URL reads retain no original for a saved plan; use full analysis above to save
 and admit the source.
 
 The URL acquisition profile accepts the HLS, static DASH and MP4 profiles in the
-[input table](conversion-support.md#url-input). DASH needs one Period,
-`SegmentTemplate` and an explicit finite `SegmentTimeline`. Acquisition retains
+[input table](conversion-support.md#url-input). DASH needs one static Period and
+finite template, list or single-file index references. Acquisition retains
 ciphertext; existing local admission uses the supplied source keys.
 Relative key identifiers are resolved against the effective playlist URL and
 matched to the protected key configuration without retrieving key URLs. Live
-input, byte ranges and other DASH addressing profiles are not acquired. See
+input, HLS byte ranges, hierarchical or external DASH indexes, and unsupported
+manifest features are not acquired. See [DASH references](dash-addressing.md) and
 [fetch settings](usage.md#optional-fetch-settings) for explicit additional
 origins, authentication, and transfer limits; the same options apply to `analyze`.
 
@@ -69,7 +70,7 @@ origins, authentication, and transfer limits; the same options apply to `analyze
 drmr plan ./source/input.m3u8 --to cbcs --format dash --output ./result --save ./conversion.plan.json --json
 ```
 
-The saved plan has `kind: "execution-plan"` and `schema_version: 5`. It records
+The saved plan has `kind: "execution-plan"` and `schema_version: 7`. It records
 one output format and protection scheme, the new output location, and a SHA-256
 fingerprint and size for every referenced source file. `required_depth` is
 `native` by default; `--decode` saves `decoded`. This minimum is included in
@@ -84,6 +85,13 @@ and package the requested output. HLS/DASH output from `stitch` is segmented aga
 The default is `auto`. The plan's `processing` selection records `requested`,
 `resolved` and `boundaries`; the choice is included in its ID. Explicit unsupported
 modes are refused. See [processing modes](usage.md#select-a-processing-mode).
+
+New plans retain the resolved [source directories](source-layout.md) and the
+[DASH reference form](dash-addressing.md) in `output_options`. For DASH, the
+default is `template`; select `--dash-addressing template-timeline`, `list` or
+`base` when saving. The setting changes resource references,
+not the encryption scheme. Execution and verification use the saved choice and
+check the actual final manifest and resource placement.
 
 On Unix, use a trusted output and plan parent owned by your user with no group
 or other-user write permission. Protected shared temporary directories have a
@@ -127,7 +135,10 @@ its separately documented input and output profile. `--packager-bin`,
 can strengthen a saved minimum. Legacy single version-one and named-output
 version-two plans keep a decoded minimum. Version-three and version-four plans
 retain their saved depth and original complete-track packaging behavior. Input,
-target, format, processing, output, and download overrides are refused with `--plan`.
+target, format, processing, DASH addressing, output, and download overrides are refused with `--plan`.
+Versions 5/6 retain their saved processing choices and previous output placement.
+Versions 7/8 additionally bind output placement and DASH addressing. Create a new
+plan to use the current defaults; loading a plan never replaces its saved choices.
 
 ## 4. Verify independently
 

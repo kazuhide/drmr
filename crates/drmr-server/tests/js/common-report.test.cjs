@@ -89,6 +89,22 @@ test('unrequested DRM signaling and external checks do not create pass evidence'
 });
 
 const nativeFailureCodes = [
+  "source-layout-path-unsafe",
+  "source-layout-collision",
+  "source-layout-not-supported",
+  "output-options-invalid",
+  "execution-plan-output-options-changed",
+  "dash-addressing-requires-dash",
+  "dash-addressing-source-not-supported",
+  "dash-nominal-duration-not-representable",
+  "dash-nominal-time-template-not-supported",
+  "dash-indexed-absolute-fragment-offset-not-supported",
+  "dash-index-sap-not-supported",
+  "dash-index-timeline-not-representable",
+  "dash-index-not-representable",
+  "dash-index-timescale-not-supported",
+  "dash-presentation-origin-timescale-not-supported",
+  "dash-indexed-output-collision",
   "invalid-avc-syntax",
   "native-aac-clock-mismatch",
   "native-aac-config-invalid",
@@ -139,7 +155,7 @@ test('native refusal codes stay closed and visible across Rust and JavaScript', 
     assert.ok(text.includes(code), code);
     assert.ok(!text.includes('PRIVATE_NATIVE_DETAIL'));
   }
-  for (const code of ['native-private-sentinel', 'ts-private-sentinel', 'observer-stopped', 'native-source-changed/private', 'x'.repeat(129)]) {
+  for (const code of ['native-private-sentinel', 'source-layout-private-sentinel', 'dash-private-sentinel', 'ts-private-sentinel', 'observer-stopped', 'native-source-changed/private', 'x'.repeat(129)]) {
     assert.equal(r.errorInfo({ code, hint: 'PRIVATE_NATIVE_DETAIL' }).code, null);
   }
 });
@@ -149,6 +165,8 @@ test('known failure codes have focused guidance without exposing arbitrary serve
   assert.equal(r.errorInfo({ code: 'execution-plan-source-changed', hint: 'secret' }).key, 'commonSourceChanged');
   assert.equal(r.errorInfo({ code: 'invalid-encrypted-segment', hint: 'secret' }).key, 'commonDecryptionFailed');
   assert.equal(r.errorInfo({ code: 'manifest-validator-unavailable' }).key, 'commonValidatorUnavailable');
+  assert.equal(r.errorInfo({ code: 'dash-nominal-duration-not-representable', hint: 'secret' }).key, 'commonDashTimelineRequired');
+  assert.equal(r.errorInfo({ code: 'source-layout-collision', hint: 'secret' }).key, 'commonUnsupported');
   assert.equal(r.errorInfo({ code: 'private-sentinel', hint: 'secret' }).code, null);
 });
 

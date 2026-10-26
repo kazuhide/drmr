@@ -173,15 +173,34 @@ test('a new plan cannot substitute other output conditions under the accepted jo
 test('new processing plans bind each requested mode before becoming executable', async () => {
   for (const substitute of [false, true]) {
     const output = { id: 'clear', format: 'mp4', target: 'clear', drms: [], conformance: 'none', processing: 'stitch' };
-    const plan = env({ plan_ref: 'plan_1', session_id: sid, plan_id: pid, plan_schema_version: 6, required_depth: 'native',
+    const plan = env({ plan_ref: 'plan_1', session_id: sid, plan_id: pid, plan_schema_version: 8, required_depth: 'native',
       outputs: [{ ...output, processing: substitute ? 'auto' : 'stitch' }],
       processing: [{ id: 'clear', selection: { requested: substitute ? 'auto' : 'stitch', resolved: 'stitch', boundaries: 'not-applicable', segment_duration_ms: null } }],
+      output_options: [{ id: 'clear', options: { layout: 'not-applicable', dash_addressing: null } }],
       destination_state: 'absent', export_url: '/api/common/plans/plan_1/export' });
     const h = await harness({ submit: async () => job({ operation: 'plan', state: 'succeeded', revision: 1, supervision_confirmed: true, cleanup_confirmed: true, exit_code: 0, plan_ref: 'plan_1', plan_id: pid, report_ref: 'report_1' }),
       plan: async () => plan,
-      report: async () => env({ report_ref: 'report_1', session_id: sid, job_id: 'job_1', request_id: rid, operation: 'plan', analysis_ref: null, plan_ref: 'plan_1', plan_id: pid, report_kind: 'plan', report_schema_version: 6, report: { schema_version: 6, plan_id: pid, required_depth: 'native', processing: plan.processing } }) });
+      report: async () => env({ report_ref: 'report_1', session_id: sid, job_id: 'job_1', request_id: rid, operation: 'plan', analysis_ref: null, plan_ref: 'plan_1', plan_id: pid, report_kind: 'plan', report_schema_version: 8, report: { schema_version: 8, plan_id: pid, required_depth: 'native', processing: plan.processing } }) });
     await h.state.submit({ kind: 'plan', analysis_ref: 'analysis_1', output_parent_ref: 'parent_1', destination_name: 'result', outputs: [output] }, { keys_ref: null, max_workers: null });
     assert.equal(h.state.selected().outcome, substitute ? 'unavailable' : 'succeeded');
     assert.equal(h.state.selected().plan === null, substitute);
+  }
+});
+
+
+test('new plans bind the DASH choice and automatic source layout before execution', async () => {
+  for (const substitute of ['none', 'mode', 'layout', 'legacy-schema']) {
+    const output = { id: 'dash', format: 'dash', target: 'clear', drms: [], conformance: 'none', processing: 'stitch', dash_addressing: 'list' };
+    const options = { layout: substitute === 'layout' ? 'previous-saved' : 'source', dash_addressing: substitute === 'mode' ? 'base' : 'list' };
+    const plan = env({ plan_ref: 'plan_1', session_id: sid, plan_id: pid, plan_schema_version: substitute === 'legacy-schema' ? 6 : 8, required_depth: 'native',
+      outputs: [{ ...output, dash_addressing: options.dash_addressing }],
+      processing: [{ id: 'dash', selection: { requested: 'stitch', resolved: 'stitch', boundaries: 'resegment', segment_duration_ms: 6000 } }],
+      output_options: [{ id: 'dash', options }], destination_state: 'absent', export_url: '/api/common/plans/plan_1/export' });
+    const h = await harness({ submit: async () => job({ operation: 'plan', state: 'succeeded', revision: 1, supervision_confirmed: true, cleanup_confirmed: true, exit_code: 0, plan_ref: 'plan_1', plan_id: pid, report_ref: 'report_1' }),
+      plan: async () => plan,
+      report: async () => env({ report_ref: 'report_1', session_id: sid, job_id: 'job_1', request_id: rid, operation: 'plan', analysis_ref: null, plan_ref: 'plan_1', plan_id: pid, report_kind: 'plan', report_schema_version: plan.plan_schema_version, report: { schema_version: plan.plan_schema_version, plan_id: pid, required_depth: 'native', processing: plan.processing } }) });
+    await h.state.submit({ kind: 'plan', analysis_ref: 'analysis_1', output_parent_ref: 'parent_1', destination_name: 'result', outputs: [output] }, { keys_ref: null, max_workers: null });
+    assert.equal(h.state.selected().outcome, substitute === 'none' ? 'succeeded' : 'unavailable', substitute);
+    assert.equal(h.state.selected().plan === null, substitute !== 'none', substitute);
   }
 });

@@ -123,6 +123,8 @@ fn transport_view(
                 dash_reference: false,
                 audio_presentation: audio_presentation.filter(|_| kind == TrackKind::Audio),
                 clock,
+                hls_target_seconds: None,
+                hls_video_segment_ms: None,
             })
         })
         .collect()

@@ -1,8 +1,23 @@
 //! Confined local static DASH snapshots; manifests never select executables or network access.
 
 use super::{ConversionError, LocalTrack};
+pub(super) mod addressing;
+mod index;
+mod nominal;
+mod policy;
+mod relocate;
+mod resources;
 mod segments;
+mod verify;
 mod window;
+pub(in crate::conversion) use policy::rewrite_output;
+pub(in crate::conversion) use relocate::relocate_output;
+pub(in crate::conversion) use resources::{check_acquired_limits, record_resources};
+pub(crate) use verify::verify_output_addressing;
+#[cfg(test)]
+mod addressing_tests;
+#[cfg(test)]
+mod policy_tests;
 use crate::inspection::{self, Protection, TrackKind};
 use roxmltree::{Document, Node};
 use segments::{Budget, checkpoint};
@@ -13,11 +28,36 @@ use std::fs::{self, File};
 use std::path::{Component, Path, PathBuf};
 pub(super) use window::Window;
 pub(super) use window::finish_transport;
+pub(in crate::conversion) use window::finish_transport_projection;
 
 pub(super) const DASH_NS: &str = "urn:mpeg:dash:schema:mpd:2011";
 pub(super) const MAX_SEGMENTS: usize = 100_000;
 pub(super) const MAX_TRACKS: usize = 64;
 const MAX_BYTES: u64 = 16 * 1024 * 1024 * 1024;
+
+/// Validate a staged flat index before an owned metadata-only clock adjustment.
+pub(in crate::conversion) fn staged_index_scale(
+    bytes: &[u8],
+    start: u64,
+    file_bytes: u64,
+    track: u32,
+) -> Result<u64, ConversionError> {
+    let end = start
+        .checked_add(bytes.len() as u64)
+        .and_then(|end| end.checked_sub(1))
+        .ok_or(error("dash-invalid-index"))?;
+    let parsed = index::parse(
+        bytes,
+        addressing::ByteRange { start, end },
+        file_bytes,
+        "media.mp4",
+        MAX_SEGMENTS,
+    )?;
+    if parsed.reference_id != track {
+        return Err(error("dash-index-track-or-timescale-mismatch"));
+    }
+    Ok(parsed.timescale)
+}
 
 enum CapturedRepresentation {
     Joined(LocalTrack),
@@ -227,36 +267,6 @@ fn private_new(path: &Path) -> Result<File, ConversionError> {
     super::files::create_new(path)
 }
 
-fn append<T>(
-    source: &Path,
-    stage: &Path,
-    output: &mut File,
-    total: &mut u64,
-    validate: impl FnOnce(&Path) -> Result<T, ConversionError>,
-) -> Result<T, ConversionError> {
-    let piece = stage.join("dash-piece");
-    super::copy_private(source, &piece)?;
-    let validated = validate(&piece)?;
-    let size = piece
-        .metadata()
-        .map_err(|_| error("media-copy-failed"))?
-        .len();
-    if size > MAX_BYTES.saturating_sub(*total) {
-        return Err(error("dash-media-size-limit"));
-    }
-    let copied = std::io::copy(
-        &mut File::open(&piece).map_err(|_| error("media-copy-failed"))?,
-        output,
-    )
-    .map_err(|_| error("media-copy-failed"))?;
-    if copied != size {
-        return Err(error("media-copy-failed"));
-    }
-    *total += copied;
-    fs::remove_file(piece).map_err(|_| error("media-copy-failed"))?;
-    Ok(validated)
-}
-
 /// Apply the same presentation and addressing admission before local or remote resolution.
 pub(super) fn validated_scopes<'a>(
     representation: Node<'a, 'a>,
@@ -287,8 +297,12 @@ pub(super) fn validated_scopes<'a>(
         {
             return Err(error("dash-presentation-metadata-not-supported"));
         }
-        if one(scope, "SegmentList")?.is_some() || one(scope, "SegmentBase")?.is_some() {
-            return Err(error("dash-addressing-not-supported"));
+        let mut count = 0;
+        for name in ["SegmentTemplate", "SegmentList", "SegmentBase"] {
+            count += usize::from(one(scope, name)?.is_some());
+        }
+        if count > 1 {
+            return Err(error("dash-addressing-ambiguous"));
         }
     }
     Ok(scopes)
@@ -308,37 +322,6 @@ fn representation_scopes<'a>(
         }
     }
     Ok((base, templates))
-}
-
-pub(super) fn initialization_uri<'a>(
-    representation: Node<'a, 'a>,
-    templates: &[Node<'a, 'a>],
-    first: (u64, u64, u64),
-) -> Result<String, ConversionError> {
-    expand(
-        attribute(templates, "initialization").ok_or(error("dash-initialization-required"))?,
-        representation.attribute("id").unwrap_or(""),
-        representation.attribute("bandwidth").unwrap_or(""),
-        first.0,
-        first.1,
-    )
-}
-
-/// Resolve the initialization with the same inherited scopes and URI rules as the source graph.
-pub(super) fn initialization_reference(
-    root: &Path,
-    representation: Node<'_, '_>,
-) -> Result<PathBuf, ConversionError> {
-    let (base, templates) = representation_scopes(representation)?;
-    let values = sequence(&templates, MAX_SEGMENTS)?;
-    let root = root
-        .canonicalize()
-        .map_err(|_| error("dash-resource-unreadable"))?;
-    reference(
-        &root,
-        &base,
-        &initialization_uri(representation, &templates, values[0])?,
-    )
 }
 
 /// Enumerate the finite local resources from already-frozen manifest bytes.
@@ -379,57 +362,91 @@ pub(super) fn source_references(bytes: &[u8]) -> Result<Vec<PathBuf>, Conversion
         Ok::<_, ConversionError>(())
     };
     let mut remaining = MAX_SEGMENTS;
+    let mut retained = HashSet::new();
     for representation in representations {
-        let (base, templates) = representation_scopes(representation)?;
-        let values = sequence(&templates, remaining)?;
-        remaining -= values.len();
-        let media = attribute(&templates, "media").ok_or(error("dash-media-template-required"))?;
-        let id = representation.attribute("id").unwrap_or("");
-        let bandwidth = representation.attribute("bandwidth").unwrap_or("");
-        add(base.join(relative(&initialization_uri(
-            representation,
-            &templates,
-            values[0],
-        )?)?))?;
-        let mut seen = HashSet::new();
-        for (number, time, _) in values {
-            let path = base.join(relative(&expand(media, id, bandwidth, number, time)?)?);
-            if !seen.insert(path.clone()) {
-                return Err(error("dash-repeated-resource-not-supported"));
+        let resolved = addressing::resolve(representation, remaining)?;
+        remaining = remaining.saturating_sub(resolved.segments.len());
+        for resource in std::iter::once(&resolved.initialization)
+            .chain(resolved.segments.iter().map(|segment| &segment.resource))
+            .chain(resolved.index.iter())
+        {
+            let path = resolved.base.join(relative(&resource.uri)?);
+            if retained.insert(path.clone()) {
+                add(path)?;
             }
-            add(path)?;
         }
     }
     Ok(resources)
 }
 
-fn snapshot_initialization(
-    original: &Path,
-    stage: &Path,
-    resource_directory: &Path,
-    capture: &mut Capture<'_>,
-    combined: Option<&mut File>,
-    total: &mut u64,
-) -> Result<(super::timing::FragmentClock, Option<PathBuf>), ConversionError> {
-    if let Some(joined) = combined {
-        let clock = append(
-            original,
-            stage,
-            joined,
-            total,
-            super::timing::FragmentClock::read,
-        )?;
-        Ok((clock, None))
-    } else {
-        let copied = resource_directory.join("initialization.mp4");
-        capture.budget.snapshot(
-            original,
-            &copied,
-            capture.stop.ok_or(error("dash-snapshot-mode-invalid"))?,
-        )?;
-        let clock = super::timing::FragmentClock::read(&copied)?;
-        Ok((clock, Some(copied)))
+/// Ordered media-object paths for already qualified source-layout planning; no media is read.
+pub(in crate::conversion) fn layout_resources(
+    path: &Path,
+    stop: &crate::concurrency::Stop,
+) -> Result<Vec<Vec<PathBuf>>, ConversionError> {
+    layout_resource_paths(path, stop, false)
+}
+
+/// Final output placement includes initialization, unlike source media-parent inference.
+pub(in crate::conversion) fn layout_output_resources(
+    path: &Path,
+    stop: &crate::concurrency::Stop,
+) -> Result<Vec<Vec<PathBuf>>, ConversionError> {
+    layout_resource_paths(path, stop, true)
+}
+
+fn layout_resource_paths(
+    path: &Path,
+    stop: &crate::concurrency::Stop,
+    include_initialization: bool,
+) -> Result<Vec<Vec<PathBuf>>, ConversionError> {
+    checkpoint(Some(stop))?;
+    let bytes = super::files::read_manifest(path)?;
+    let text = std::str::from_utf8(&bytes).map_err(|_| error("dash-invalid-xml"))?;
+    let doc = Document::parse_with_options(
+        text,
+        roxmltree::ParsingOptions {
+            nodes_limit: 20_000,
+            ..Default::default()
+        },
+    )
+    .map_err(|_| error("dash-invalid-xml"))?;
+    let root = doc.root_element();
+    let period = one(root, "Period")?.ok_or(error("dash-single-period-required"))?;
+    let mut rows = Vec::new();
+    let mut remaining = MAX_SEGMENTS;
+    for rep in children(period, "AdaptationSet")
+        .into_iter()
+        .flat_map(|set| children(set, "Representation"))
+    {
+        checkpoint(Some(stop))?;
+        let resolved = addressing::resolve(rep, remaining)?;
+        remaining = remaining.saturating_sub(resolved.segments.len());
+        let mut row = Vec::new();
+        let mut seen = HashSet::new();
+        let base = resolved.kind == addressing::Kind::Base;
+        let initialization = (include_initialization || base).then_some(&resolved.initialization);
+        for resource in initialization.into_iter().chain(
+            resolved
+                .segments
+                .iter()
+                .filter(|_| !base)
+                .map(|segment| &segment.resource),
+        ) {
+            let path = resolved.base.join(relative(&resource.uri)?);
+            if seen.insert(path.clone()) {
+                row.push(path);
+            }
+        }
+        rows.push(row);
+        if rows.len() > MAX_TRACKS {
+            return Err(error("dash-track-limit-or-structure-not-supported"));
+        }
     }
+    if rows.is_empty() {
+        return Err(error("dash-track-limit-or-structure-not-supported"));
+    }
+    Ok(rows)
 }
 
 fn captured_representation(
@@ -484,76 +501,83 @@ fn snapshot_representation(
     ) {
         return Err(error("dash-protection-unresolved-or-not-supported"));
     }
-    let (base, templates) = representation_scopes(representation)?;
-    let values = sequence(&templates, remaining)?;
-    let used = values.len();
-    let media = attribute(&templates, "media").ok_or(error("dash-media-template-required"))?;
-    let id = representation.attribute("id").unwrap_or("");
-    let bandwidth = representation.attribute("bandwidth").unwrap_or("");
+    let mut resolved = addressing::resolve(representation, remaining)?;
+    let fallback_stop = crate::concurrency::Stop::new();
+    let stop = capture.stop.unwrap_or(&fallback_stop);
+    let resource_directory = stage.join(format!("dash-representation-{index:04}"));
+    super::files::create_dir(&resource_directory)?;
+    let locate =
+        |resource: &addressing::Resource| reference(directory, &resolved.base, &resource.uri);
+    let original_initialization = locate(&resolved.initialization)?;
+    let copied_initialization = resource_directory.join("initialization.mp4");
+    capture.budget.snapshot_range(
+        &original_initialization,
+        &copied_initialization,
+        resolved.initialization.range,
+        stop,
+    )?;
+    let mut clock = super::timing::FragmentClock::read(&copied_initialization)?;
+    self::index::resolve(directory, &mut resolved, clock.identity(), remaining, stop)?;
+    let used = resolved.segments.len();
     let source = capture
         .stop
         .is_none()
         .then(|| stage.join(format!("dash-track-{index}.mp4")));
     let mut combined = source.as_deref().map(private_new).transpose()?;
-    let resource_directory = stage.join(format!("dash-representation-{index:04}"));
-    if capture.stop.is_some() {
-        super::files::create_dir(&resource_directory)?;
+    if let Some(joined) = combined.as_mut() {
+        let mut initialization = super::files::regular_input(&copied_initialization)?;
+        std::io::copy(&mut initialization, joined).map_err(|_| error("media-copy-failed"))?;
     }
-    let mut total = 0;
-    let original_initialization = reference(
-        directory,
-        &base,
-        &initialization_uri(representation, &templates, values[0])?,
-    )?;
-    let (mut clock, initialization) = snapshot_initialization(
-        &original_initialization,
-        stage,
-        &resource_directory,
-        capture,
-        combined.as_mut(),
-        &mut total,
-    )?;
-    let scale = integer(attribute(&templates, "timescale"), 1)?;
-    let mut seen = HashSet::new();
-    let mut resources = Vec::new();
-    for (ordinal, (number, time, duration)) in values.into_iter().enumerate() {
+    let mut resources = Vec::with_capacity(if combined.is_some() { 0 } else { used });
+    for (ordinal, segment) in resolved.segments.iter().enumerate() {
         checkpoint(capture.stop)?;
-        let segment = reference(
-            directory,
-            &base,
-            &expand(media, id, bandwidth, number, time)?,
-        )?;
-        if !seen.insert(segment.clone()) {
-            return Err(error("dash-repeated-resource-not-supported"));
-        }
+        let original = reference(directory, &resolved.base, &segment.resource.uri)?;
+        let copied = resource_directory.join(format!("segment-{ordinal:08}.m4s"));
+        capture
+            .budget
+            .snapshot_range(&original, &copied, segment.resource.range, stop)?;
+        let decode = segments::check_clock(&resolved, segment, &mut clock, &copied, ordinal)?;
         if let Some(joined) = combined.as_mut() {
-            append(&segment, stage, joined, &mut total, |piece| {
-                clock.check_dash(piece, time, duration, scale)
-            })?;
+            std::io::copy(&mut super::files::regular_input(&copied)?, joined)
+                .map_err(|_| error("media-copy-failed"))?;
+            fs::remove_file(&copied).map_err(|_| error("media-copy-failed"))?;
         } else {
-            let copied = resource_directory.join(format!("segment-{ordinal:08}.m4s"));
-            capture.budget.snapshot(
-                &segment,
-                &copied,
-                capture.stop.ok_or(error("dash-snapshot-mode-invalid"))?,
-            )?;
-            clock.check_dash(&copied, time, duration, scale)?;
+            // Store actual decode intervals even when the public MPD uses nominal or index timing.
             resources.push((
                 copied,
                 SegmentBoundary {
-                    number,
-                    time,
-                    duration,
-                    timescale: scale,
+                    number: segment.number,
+                    time: decode.0,
+                    duration: decode.1,
+                    timescale: decode.2,
                 },
             ));
         }
     }
-    let window = window::Window::read(&templates, clock.presentation_window()?)?;
+    let actual = clock.presentation_window()?;
+    if let Some(duration) = resolved.presentation_duration {
+        let end = resolved
+            .offset
+            .checked_add(duration)
+            .ok_or(error("dash-template-number-overflow"))?;
+        if u128::from(actual.1) * u128::from(resolved.timescale)
+            != u128::from(end) * u128::from(actual.2)
+        {
+            return Err(error("dash-representation-duration-mismatch"));
+        }
+    }
+    let window = window::Window {
+        origin: (resolved.offset, resolved.timescale),
+        first: (actual.0, actual.2),
+        end: (actual.1, actual.2),
+    };
     if let Some(joined) = combined.take() {
         joined.sync_all().map_err(|_| error("media-copy-failed"))?;
         drop(joined);
+        fs::remove_file(&copied_initialization).map_err(|_| error("media-copy-failed"))?;
     }
+    let initialization = source.is_none().then_some(copied_initialization);
+
     let representation =
         captured_representation(source, initialization, resources, declared, window)?;
     Ok((representation, used, window))

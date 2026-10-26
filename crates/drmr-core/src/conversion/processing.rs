@@ -1,4 +1,5 @@
 //! Processing intent is separate from container selection and encryption protection.
+pub(in crate::conversion) mod segment_target;
 
 use super::ConversionError;
 use crate::inspection::OutputFormat;
@@ -45,6 +46,7 @@ pub struct ProcessingSelection {
     pub requested: ProcessingMode,
     pub resolved: ProcessingMode,
     pub boundaries: BoundaryHandling,
+    /// Exact Shaka Packager request in milliseconds, separate from an HLS duration bound.
     pub segment_duration_ms: Option<u32>,
 }
 
@@ -89,9 +91,12 @@ impl ProcessingSelection {
             return Err(INVALID);
         }
         let expected = Self::resolve(self.resolved, source, output).map_err(|_| INVALID)?;
-        if self.boundaries != expected.boundaries
-            || self.segment_duration_ms != expected.segment_duration_ms
-        {
+        let valid_duration = if expected.segment_duration_ms.is_some() {
+            self.segment_duration_ms.is_some_and(|value| value > 0)
+        } else {
+            self.segment_duration_ms.is_none()
+        };
+        if self.boundaries != expected.boundaries || !valid_duration {
             return Err(INVALID);
         }
         Ok(())
@@ -117,6 +122,59 @@ fn segment_container(source: OutputFormat, output: OutputFormat) -> Result<(), C
 }
 
 impl super::Converter {
+    pub(in crate::conversion) fn resolve_processing(
+        &self,
+        timing: Option<segment_target::HlsTiming>,
+        requested: ProcessingMode,
+        source: OutputFormat,
+        output: OutputFormat,
+    ) -> Result<ProcessingSelection, ConversionError> {
+        let mut selection = ProcessingSelection::resolve(requested, source, output)?;
+        if selection.segment_duration_ms.is_some() {
+            selection.segment_duration_ms = Some(self.segment_duration_ms.unwrap_or_else(|| {
+                timing.map_or(segment_target::HISTORICAL_MS, |timing| timing.request_ms)
+            }));
+        }
+        Ok(selection)
+    }
+
+    pub(in crate::conversion) fn with_saved_processing(
+        mut self,
+        selection: Option<ProcessingSelection>,
+    ) -> Self {
+        self.hls_target_policy = segment_target::HlsTargetPolicy::Legacy;
+        self.source_hls_target_ms = None;
+        self.processing_mode = selection.map_or(ProcessingMode::Stitch, |choice| choice.resolved);
+        // Schemas without an explicit selection keep historical packaging rather
+        // than silently adopting the current source-inheritance default.
+        self.segment_duration_ms = Some(
+            selection
+                .and_then(|choice| choice.segment_duration_ms)
+                .unwrap_or(segment_target::HISTORICAL_MS),
+        );
+        self
+    }
+
+    pub(in crate::conversion) fn with_plan_processing(
+        self,
+        selection: Option<ProcessingSelection>,
+        current: bool,
+    ) -> Self {
+        let mut command = self.with_saved_processing(selection);
+        if current {
+            command.hls_target_policy = segment_target::HlsTargetPolicy::SavedCurrent;
+        }
+        command
+    }
+
+    pub(in crate::conversion) fn segment_target_argument(&self) -> Result<String, ConversionError> {
+        segment_target::argument(self.packaging_segment_duration_ms())
+    }
+
+    pub(in crate::conversion) fn packaging_segment_duration_ms(&self) -> u32 {
+        self.segment_duration_ms
+            .unwrap_or(segment_target::HISTORICAL_MS)
+    }
     /// Infer an omitted output format from bounded local metadata.
     /// Forced segment processing retains the declared HLS container type. This
     /// choice does not replace native admission of the actual media resources.
@@ -157,6 +215,10 @@ impl super::Converter {
         Self {
             backend: self.backend.clone(),
             processing_mode: mode,
+            segment_duration_ms: self.segment_duration_ms,
+            output_options: self.output_options.clone(),
+            source_hls_target_ms: self.source_hls_target_ms,
+            hls_target_policy: self.hls_target_policy,
             maximum_workers: self.maximum_workers,
             downloaded: self.downloaded.clone(),
             frozen_source: self.frozen_source.clone(),
@@ -307,7 +369,7 @@ mod tests {
     }
 
     #[test]
-    fn automatic_requests_keep_the_existing_resegmentation_default() {
+    fn format_resolution_keeps_the_historical_fallback_until_the_source_is_bound() {
         let selection = ProcessingSelection::resolve(
             ProcessingMode::Auto,
             OutputFormat::Hls,

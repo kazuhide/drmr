@@ -215,7 +215,12 @@ impl Backend {
         super::private_file_mode(Path::new(&output))?;
         Ok(())
     }
-    pub fn package_hls(&self, input: &Path, output: &Path) -> Result<(), ConversionError> {
+    pub fn package_hls(
+        &self,
+        input: &Path,
+        output: &Path,
+        duration_ms: u32,
+    ) -> Result<(), ConversionError> {
         super::audio::require_supported_audio(input, 0)?;
         let input = super::files::tool_path(input)?;
         let output = super::files::tool_path(output)?;
@@ -229,7 +234,7 @@ impl Backend {
                 "input={input},stream=0,init_segment={output}/init.mp4,segment_template={output}/seg_$Number$.m4s,playlist_name=media.m3u8"
             ),
             "--segment_duration".into(),
-            "2".into(),
+            super::processing::segment_target::argument(duration_ms)?,
             "--hls_playlist_type".into(),
             "VOD".into(),
             "--hls_master_playlist_output".into(),

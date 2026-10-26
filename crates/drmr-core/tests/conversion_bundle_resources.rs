@@ -128,6 +128,7 @@ fn fresh_public_bundle_verifications_queue_for_a_large_valid_control_manifest() 
             },
             output_root: &root.path().join("result"),
             outputs: &[BundleOutputIntent {
+                dash_addressing: None,
                 id: "hls".into(),
                 format: OutputFormat::Hls,
                 target: TargetProtection::Clear,

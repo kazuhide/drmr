@@ -46,7 +46,6 @@ pub fn is_supervised_cli() -> bool {
 mod paths;
 pub use paths::resolve_path;
 
-#[cfg(windows)]
 pub use paths::validate_windows_relative_path;
 
 mod workspace;

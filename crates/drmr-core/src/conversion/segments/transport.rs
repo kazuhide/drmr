@@ -167,6 +167,21 @@ pub(super) fn qualify(
     }
     source.check_original()?;
     Ok(SourceQualification {
+        hls_timing: if matches!(purpose, SourceValidationPurpose::Conversion)
+            && converter.inherits_hls_target()
+        {
+            Some(hls_timing(converter, &admitted)?)
+        } else {
+            None
+        },
+        layout_tracks: admitted
+            .iter()
+            .flat_map(|part| &part.tracks)
+            .map(|(index, kind, _)| super::super::layout::QualifiedTrack {
+                kind: *kind,
+                selector: *index,
+            })
+            .collect(),
         input: source.report.clone(),
         actual_format: OutputFormat::HlsTs,
         track_protection,
@@ -174,6 +189,23 @@ pub(super) fn qualify(
         eligible_formats: vec![OutputFormat::Dash, OutputFormat::Hls, OutputFormat::HlsTs],
         verification,
     })
+}
+
+fn hls_timing(
+    converter: &Converter,
+    admitted: &[Admitted<'_>],
+) -> Result<super::super::processing::segment_target::HlsTiming, ConversionError> {
+    use super::super::processing::segment_target::{HlsTiming, cadence};
+    let video = admitted
+        .iter()
+        .flat_map(|part| &part.tracks)
+        .filter(|(_, kind, _)| *kind == TrackKind::Video)
+        .map(|(_, _, native)| cadence::transport(native, &converter.backend.stop))
+        .collect::<Result<Vec<_>, _>>()?;
+    HlsTiming::from_admitted(
+        admitted.iter().map(|part| part.part.media.target_seconds),
+        video,
+    )
 }
 
 fn view<'a>(
@@ -267,6 +299,21 @@ fn compare(
     let _scope = converter.backend.scope(Phase::Verification);
     let a = admitted(converter, source)?;
     let b = admitted(converter, output)?;
+    let facts = a
+        .iter()
+        .flat_map(|part| &part.tracks)
+        .map(|(index, kind, _)| super::super::layout::QualifiedTrack {
+            kind: *kind,
+            selector: *index,
+        })
+        .collect::<Vec<_>>();
+    converter.check_admitted_output_options(
+        source.entrypoint(),
+        source.report.format,
+        &facts,
+        output.format,
+        ProcessingMode::Segments,
+    )?;
     if a.len() != b.len() {
         return Err(ConversionError("presentation-track-count-mismatch"));
     }
@@ -308,24 +355,20 @@ fn compare(
         super::super::VerificationScope::Comparison,
         reports,
     );
-    if converter.backend.validation_depth == ValidationDepth::Decoded {
-        let mut decoded = converter
-            .with_processing_clone(ProcessingMode::Stitch)
-            .verify(VerificationRequest {
-                source: VerificationSource {
-                    input: source.entrypoint(),
-                    ..request.source
-                },
-                output: VerificationSource {
-                    input: output.entrypoint(),
-                    ..request.output
-                },
-            })?;
-        decoded.require_native(&native)?;
-        Ok(decoded)
-    } else {
-        Ok(native)
-    }
+    converter.verify_admitted_segments(
+        VerificationRequest {
+            source: VerificationSource {
+                input: source.entrypoint(),
+                ..request.source
+            },
+            output: VerificationSource {
+                input: output.entrypoint(),
+                ..request.output
+            },
+        },
+        output.format,
+        native,
+    )
 }
 
 pub(super) fn verify(
@@ -580,6 +623,20 @@ fn output_keys(
     Ok(keys)
 }
 
+fn require_target(
+    qualified: &SourceQualification,
+    target: TargetProtection,
+) -> Result<(), ConversionError> {
+    if qualified
+        .track_protection
+        .iter()
+        .any(|protection| !protection.matches_target(target))
+    {
+        return Err(ConversionError("output-protection-mismatch"));
+    }
+    Ok(())
+}
+
 pub(super) fn convert(
     converter: &Converter,
     request: ConversionRequest<'_>,
@@ -594,12 +651,20 @@ pub(super) fn convert(
         input_keys: request.input_keys,
         hls_keys: request.hls_input_keys,
     };
-    qualify(
+    let qualified = qualify(
         &native_converter,
         &source,
         input,
         SourceValidationPurpose::Conversion,
     )?;
+    let options = converter.resolved_output_options(
+        source.entrypoint(),
+        &qualified,
+        request.format,
+        ProcessingMode::Segments,
+    )?;
+    let command = converter.using_output_options(Some(&options));
+    let converter = &command;
     let destination = super::super::destination(request.output)?;
     let stage = converter.output_stage(&destination)?;
     {
@@ -622,6 +687,8 @@ pub(super) fn convert(
             request.hls_key_uri,
             request.hls_output_key,
         )?;
+        source.finish_hls_target(converter, stage.path())?;
+        converter.finish_output_options(&stage, request.format)?;
         files::seal(stage.path())?;
     }
     let manifest = stage.path().join("master.m3u8");
@@ -641,13 +708,7 @@ pub(super) fn convert(
         output_input,
         SourceValidationPurpose::Verification,
     )?;
-    if qualified
-        .track_protection
-        .iter()
-        .any(|protection| !protection.matches_target(request.target))
-    {
-        return Err(ConversionError("output-protection-mismatch"));
-    }
+    require_target(&qualified, request.target)?;
     let mut verification = compare(
         converter,
         &source,

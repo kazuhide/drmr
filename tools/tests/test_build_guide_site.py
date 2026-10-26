@@ -21,10 +21,10 @@ class GuideBuilderTests(unittest.TestCase):
         for route, page in pages.items():
             html = page.decode()
             self.assertEqual(html.count('data-guide-chapter='), 18)
-            self.assertIn('<figure class="guide-example" aria-labelledby="example-1-title" data-code-language="sh">', html)
+            self.assertIn('<figure class="guide-example" aria-labelledby=ex1 data-code-language=sh>', html)
             self.assertNotIn('role="group"', html)
             self.assertIn('<caption id="table-1-title">', html)
-            self.assertIn('scope="row"', html)
+            self.assertIn('scope=row', html)
             for chapter in builder.CHAPTER_IDS:
                 self.assertIn(f'href="#{chapter}"', html)
                 other = "../ja/guide/" if route == "guide/index.html" else "../../guide/"
@@ -76,7 +76,7 @@ class GuideBuilderTests(unittest.TestCase):
             with self.subTest(target=target), self.assertRaises(ValueError):
                 builder.inline('[Bad](' + target + ')')
         output = builder.body('## MP4 → DASH / cbcs {#recipe-mp4-dash-cbcs}', 'en')
-        self.assertEqual(output, '<h3 id="recipe-mp4-dash-cbcs" tabindex="-1">MP4 → DASH / cbcs</h3>')
+        self.assertEqual(output, '<h3 id="recipe-mp4-dash-cbcs" tabindex=-1>MP4 → DASH / cbcs</h3>')
 
     def test_example_generation_reads_source_even_when_an_old_bytecode_cache_looks_current(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -117,6 +117,37 @@ class GuideBuilderTests(unittest.TestCase):
         self.assertIn("'&lt;/code&gt;&lt;script&gt;bad&lt;/script&gt;&amp;quot;", output)
         self.assertNotIn('<script>', output)
         self.assertEqual(output.count('</code>'), 1)
+
+    def test_compact_code_retains_literal_conjunctions_and_hostile_entity_text(self):
+        code = 'drmr --version &&\nprintf \'&&quot; &notit; <script>bad</script>\'\n'
+        output = builder.body('```sh\n' + code + '```', 'en')
+
+        class CodeText(HTMLParser):
+            def __init__(self):
+                super().__init__(convert_charrefs=True)
+                self.inside = False
+                self.code = ''
+                self.tags = []
+
+            def handle_starttag(self, tag, attrs):
+                self.tags.append(tag)
+                if tag == 'code':
+                    self.inside = True
+
+            def handle_endtag(self, tag):
+                if tag == 'code':
+                    self.inside = False
+
+            def handle_data(self, text):
+                if self.inside:
+                    self.code += text
+
+        parser = CodeText()
+        parser.feed(output)
+        self.assertEqual(parser.code, code)
+        self.assertNotIn('script', parser.tags)
+        self.assertIn(' &&\n', output)
+        self.assertIn('&amp;&amp;quot;', output)
 
     def test_malformed_tables_and_unclosed_fences_are_refused(self):
         for source in ['| a | b |\n| --- | --- |\n| one |\n', '```sh\necho nope\n', '- \n']:

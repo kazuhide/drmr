@@ -3,7 +3,9 @@ use super::*;
 use crate::conversion::{
     DrmSystem, OutputSignaling,
     conformance::ManifestValidationTools,
+    dash_addressing::DashAddressing,
     key_file::{BundleOperatorKeys, OperatorKeys},
+    output_options::OutputOptions,
     plan::{
         ExecutionPlanRequest,
         bundle::{BundleOutputIntent, BundlePlanRequest, ManifestValidation},
@@ -70,7 +72,15 @@ fn final_single_default_selection_checks_initialization_and_middle_and_final_med
                     target,
                 })
                 .unwrap();
-            assert_eq!(plan.schema_version, 5);
+            assert_eq!(plan.schema_version, 7);
+            assert_eq!(
+                plan.output_options,
+                Some(OutputOptions {
+                    layout: None,
+                    dash_addressing: (format == OutputFormat::Dash)
+                        .then_some(DashAddressing::Template),
+                })
+            );
             let mut keys = OperatorKeys::default();
             keys.output = (target != TargetProtection::Clear)
                 .then(|| OutputKey::from_hex(OUTPUT_ID, OUTPUT_KEY).unwrap());
@@ -123,6 +133,7 @@ fn final_widevine_bundle_checks_selected_and_foreign_records_in_every_media_reso
     let empty = InputKeys::default();
     let hls = HlsInputKeys::default();
     let outputs = [BundleOutputIntent {
+        dash_addressing: None,
         id: "wv".into(),
         format: OutputFormat::Dash,
         target: TargetProtection::Cbcs,
@@ -198,6 +209,7 @@ fn final_fairplay_bundle_rejects_provider_records_in_middle_and_final_media() {
     let empty = InputKeys::default();
     let hls = HlsInputKeys::default();
     let outputs = [BundleOutputIntent {
+        dash_addressing: None,
         id: "fp".into(),
         format: OutputFormat::Hls,
         target: TargetProtection::Cbcs,

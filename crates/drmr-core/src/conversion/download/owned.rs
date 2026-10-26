@@ -12,9 +12,11 @@ const CLEANUP: ConversionError = ConversionError("download-cleanup-unconfirmed")
 const OUTPUT_EXISTS: ConversionError = ConversionError("output-exists-or-unsafe");
 
 use crate::native::FileIdentity as Identity;
+mod accounting;
+use accounting::Accounting;
 #[derive(Clone, Copy)]
 struct Entry {
-    identity: Identity,
+    identity: Option<Identity>,
     directory: bool,
 }
 
@@ -27,6 +29,7 @@ pub(super) struct OwnedDownload {
     #[cfg(windows)]
     _ancestors: Vec<File>,
     entries: Mutex<BTreeMap<PathBuf, Entry>>,
+    accounting: Mutex<Accounting>,
     retained: bool,
     attempted: bool,
     cleaned: bool,
@@ -40,6 +43,7 @@ impl OwnedDownload {
     }
     fn reserve_inner(download: &Path, output: Option<&Path>) -> Result<Self, ConversionError> {
         let path = destination(download)?;
+        let accounting = Accounting::new(path.capacity())?;
         let output = output.map(destination).transpose()?;
         match std::fs::symlink_metadata(&path) {
             Ok(_) => return Err(ConversionError("download-directory-exists")),
@@ -71,6 +75,7 @@ impl OwnedDownload {
             #[cfg(windows)]
             _ancestors: ancestors,
             entries: Mutex::new(BTreeMap::new()),
+            accounting: Mutex::new(accounting),
             retained: false,
             attempted: false,
             cleaned: false,
@@ -96,6 +101,7 @@ impl OwnedDownload {
     }
     pub(super) fn create_dir(&self, path: &Path) -> Result<(), ConversionError> {
         relative(path)?;
+        self.prepay(path, true)?;
         self.check_identity()?;
         let stage = files::Stage::new(Some(&self.path))?;
         let pending = stage.private_root().join("directory");
@@ -103,6 +109,74 @@ impl OwnedDownload {
         let created = identity(&open_dir(&pending)?)?;
         files::publish_directory(&pending, &self.path.join(path), None)?;
         self.register(path, true, created)
+    }
+    pub(super) fn create_parents(&self, file: &Path) -> Result<(), ConversionError> {
+        relative(file)?;
+        self.prepay_file(file)?;
+        self.check_identity()?;
+        let parents = file
+            .ancestors()
+            .skip(1)
+            .filter(|path| !path.as_os_str().is_empty())
+            .collect::<Vec<_>>();
+        for parent in parents.into_iter().rev() {
+            let known = self
+                .entries
+                .lock()
+                .map_err(|_| UNSAFE)?
+                .get(parent)
+                .is_some_and(|entry| entry.identity.is_some());
+            if known {
+                self.open_registered_directory(parent)?;
+            } else {
+                self.create_dir(parent)?;
+            }
+        }
+        Ok(())
+    }
+    pub(super) fn prepay_file(&self, path: &Path) -> Result<(), ConversionError> {
+        self.prepay(path, false)
+    }
+    fn prepay(&self, path: &Path, directory: bool) -> Result<(), ConversionError> {
+        relative(path)?;
+        let mut entries = self.entries.lock().map_err(|_| UNSAFE)?;
+        for ancestor in path.ancestors().filter(|p| !p.as_os_str().is_empty()) {
+            if entries
+                .get(ancestor)
+                .is_some_and(|entry| entry.directory != (ancestor != path || directory))
+            {
+                return Err(UNSAFE);
+            }
+        }
+        let mut paths = path
+            .ancestors()
+            .filter(|p| !p.as_os_str().is_empty())
+            .filter(|p| !entries.contains_key(*p))
+            .map(|p| (p.to_path_buf(), p != path || directory))
+            .collect::<Vec<_>>();
+        self.accounting
+            .lock()
+            .map_err(|_| UNSAFE)?
+            .prepay(&self.path, &paths)?;
+        for (path, directory) in paths.drain(..) {
+            entries.insert(
+                path,
+                Entry {
+                    identity: None,
+                    directory,
+                },
+            );
+        }
+        Ok(())
+    }
+    pub(super) fn charge_graph(&self, bytes: usize) -> Result<(), ConversionError> {
+        self.accounting.lock().map_err(|_| UNSAFE)?.graph(bytes)
+    }
+    pub(super) fn check_expansion(&self, bytes: usize) -> Result<(), ConversionError> {
+        self.accounting.lock().map_err(|_| UNSAFE)?.expansion(bytes)
+    }
+    pub(super) fn retained_bytes(&self) -> Result<u64, ConversionError> {
+        self.accounting.lock().map_err(|_| UNSAFE)?.finish()
     }
     fn register(
         &self,
@@ -114,7 +188,10 @@ impl OwnedDownload {
         self.check_identity()?;
         let mut entries = self.entries.lock().map_err(|_| UNSAFE)?;
         self.check_parents(path, &entries)?;
-        if entries.contains_key(path) {
+        if entries
+            .get(path)
+            .is_none_or(|entry| entry.identity.is_some() || entry.directory != directory)
+        {
             return Err(UNSAFE);
         }
         let file = if directory {
@@ -129,7 +206,7 @@ impl OwnedDownload {
         entries.insert(
             path.to_path_buf(),
             Entry {
-                identity: current,
+                identity: Some(current),
                 directory,
             },
         );
@@ -176,18 +253,47 @@ impl OwnedDownload {
     pub(super) fn check_registered(&self) -> Result<(), ConversionError> {
         self.check_identity()?;
         let entries = self.entries.lock().map_err(|_| UNSAFE)?;
-        for (path, entry) in &*entries {
+        for (path, entry) in entries.iter().filter(|(_, entry)| entry.identity.is_some()) {
             self.check_parents(path, &entries)?;
             let file = if entry.directory {
                 open_dir(&self.path.join(path))?
             } else {
                 crate::native::open_private_read(&self.path.join(path)).map_err(|_| UNSAFE)?
             };
-            if identity(&file)? != entry.identity {
+            if Some(identity(&file)?) != entry.identity {
                 return Err(UNSAFE);
             }
         }
         Ok(())
+    }
+    pub(super) fn registered_count(&self) -> Result<usize, ConversionError> {
+        Ok(self
+            .entries
+            .lock()
+            .map_err(|_| UNSAFE)?
+            .values()
+            .filter(|e| e.identity.is_some())
+            .count())
+    }
+    /// Retain the registered directory while traversing its entries. Unknown directories
+    /// are never adopted, including empty directories omitted from the file digest set.
+    pub(super) fn open_registered_directory(&self, path: &Path) -> Result<File, ConversionError> {
+        self.check_identity()?;
+        if path.as_os_str().is_empty() {
+            return open_dir(&self.path);
+        }
+        relative(path)?;
+        let entries = self.entries.lock().map_err(|_| UNSAFE)?;
+        self.check_parents(path, &entries)?;
+        let expected = entries
+            .get(path)
+            .filter(|entry| entry.directory && entry.identity.is_some())
+            .ok_or(UNSAFE)?;
+        let directory = open_dir(&self.path.join(path))?;
+        if Some(identity(&directory)?) != expected.identity {
+            return Err(UNSAFE);
+        }
+        Ok(directory)
     }
     fn check_parents(
         &self,
@@ -201,9 +307,9 @@ impl OwnedDownload {
         {
             let entry = entries
                 .get(parent)
-                .filter(|entry| entry.directory)
+                .filter(|entry| entry.directory && entry.identity.is_some())
                 .ok_or(UNSAFE)?;
-            if identity(&open_dir(&self.path.join(parent))?)? != entry.identity {
+            if Some(identity(&open_dir(&self.path.join(parent))?)?) != entry.identity {
                 return Err(UNSAFE);
             }
         }
@@ -220,7 +326,10 @@ impl OwnedDownload {
         self.attempted = true;
         self.check_identity().map_err(|_| CLEANUP)?;
         let entries = self.entries.lock().map_err(|_| CLEANUP)?;
-        let mut order: Vec<_> = entries.iter().collect();
+        let mut order: Vec<_> = entries
+            .iter()
+            .filter(|(_, entry)| entry.identity.is_some())
+            .collect();
         order.sort_by_key(|(path, _)| std::cmp::Reverse(path.components().count()));
         let mut complete = true;
         for (relative, entry) in order {
@@ -235,8 +344,7 @@ impl OwnedDownload {
                 crate::native::open_private_read(&path).map_err(|_| UNSAFE)
             };
             let matches = self.check_parents(relative, &entries).is_ok()
-                && current.as_ref().ok().and_then(|file| identity(file).ok())
-                    == Some(entry.identity);
+                && current.as_ref().ok().and_then(|file| identity(file).ok()) == entry.identity;
             drop(current);
             if !matches {
                 complete = false;
@@ -378,7 +486,83 @@ mod tests {
     use super::*;
     use std::io::Write as _;
 
+    #[test]
+    fn a_prepaid_directory_cannot_be_reused_as_a_cheaper_file_reservation() {
+        let parent = crate::native::private_tempdir().unwrap();
+        let owned = OwnedDownload::reserve_source(&parent.path().join("source")).unwrap();
+        owned.prepay(Path::new("video"), true).unwrap();
+        assert_eq!(owned.prepay_file(Path::new("video")).unwrap_err(), UNSAFE);
+        assert!(!owned.path().join("video").exists());
+    }
+
+    #[test]
+    fn metadata_quota_precedes_every_parent_and_leaf_creation() {
+        let parent = crate::native::private_tempdir().unwrap();
+        let owned = OwnedDownload::reserve_source(&parent.path().join("source")).unwrap();
+        let baseline = usize::try_from(owned.retained_bytes().unwrap()).unwrap();
+        owned
+            .charge_graph(super::super::GRAPH_BYTES - baseline)
+            .unwrap();
+        assert_eq!(
+            owned
+                .create_parents(Path::new("video/deep/segment.ts"))
+                .unwrap_err(),
+            ConversionError("download-graph-limit")
+        );
+        assert_eq!(std::fs::read_dir(owned.path()).unwrap().count(), 0);
+        assert!(owned.entries.lock().unwrap().is_empty());
+        assert_eq!(
+            super::super::write_registered(&owned, Path::new("input.m3u8"), b"original", |_| {})
+                .unwrap_err(),
+            ConversionError("download-graph-limit")
+        );
+        assert!(!owned.path().join("input.m3u8").exists());
+    }
+
+    #[test]
+    fn prepaid_creation_identity_is_registered_without_a_second_quota_request() {
+        let parent = crate::native::private_tempdir().unwrap();
+        let owned = OwnedDownload::reserve_source(&parent.path().join("source")).unwrap();
+        let name = Path::new("original.mp4");
+        owned.prepay_file(name).unwrap();
+        let file = crate::native::create_private_new(&owned.path().join(name)).unwrap();
+        let created = identity(&file).unwrap();
+        drop(file);
+        owned.accounting.lock().unwrap().maximum = 0;
+        owned.register_file(name, created).unwrap();
+        owned.check_registered().unwrap();
+    }
+
+    #[test]
+    fn entrypoint_publication_is_prepaid_before_moving_the_pending_original() {
+        let parent = crate::native::private_tempdir().unwrap();
+        let owned = OwnedDownload::reserve_source(&parent.path().join("source")).unwrap();
+        let stage = files::Stage::new(Some(parent.path())).unwrap();
+        let pending = stage.path().join("entrypoint");
+        let writer = super::super::write_private(&pending, b"unchanged pending original").unwrap();
+        let created = identity(&writer).unwrap();
+        drop(writer);
+        owned.accounting.lock().unwrap().maximum = 0;
+        assert_eq!(
+            super::super::publish_entrypoint(
+                &owned,
+                Path::new("input.mp4"),
+                &pending,
+                created,
+                |_| {}
+            )
+            .unwrap_err(),
+            ConversionError("download-graph-limit")
+        );
+        assert!(!owned.path().join("input.mp4").exists());
+        assert_eq!(
+            std::fs::read(pending).unwrap(),
+            b"unchanged pending original"
+        );
+    }
+
     fn file(owned: &OwnedDownload, relative: &str, bytes: &[u8]) {
+        owned.prepay_file(Path::new(relative)).unwrap();
         let mut writer = crate::native::create_private_new(&owned.path().join(relative)).unwrap();
         let created = identity(&writer).unwrap();
         writer.write_all(bytes).unwrap();

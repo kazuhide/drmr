@@ -129,6 +129,7 @@ pub fn output(
     processing: Option<ProcessingMode>,
 ) -> BundleOutputIntent {
     BundleOutputIntent {
+        dash_addressing: None,
         id: id.into(),
         format,
         target,

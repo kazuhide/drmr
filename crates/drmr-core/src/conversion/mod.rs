@@ -16,10 +16,14 @@ mod audio;
 mod audio_presentation;
 mod backend;
 pub(crate) mod dash;
+pub mod dash_addressing;
 mod execution;
 mod finite;
 pub mod key_file;
+pub mod layout;
 mod observation;
+pub mod output_options;
+mod packaging_clock;
 mod packets;
 pub mod processing;
 pub use processing::ProcessingMode;
@@ -109,6 +113,10 @@ impl std::fmt::Debug for LocalTrack {
 pub struct Converter {
     backend: Backend,
     processing_mode: ProcessingMode,
+    segment_duration_ms: Option<u32>,
+    output_options: output_options::OutputState,
+    source_hls_target_ms: Option<u32>,
+    hls_target_policy: processing::segment_target::HlsTargetPolicy,
     maximum_workers: Option<usize>,
     downloaded: Option<Arc<download::Seal>>,
     frozen_source: Vec<Arc<frozen::OriginalGuard>>,
@@ -123,6 +131,10 @@ impl Converter {
     ) -> Self {
         Self {
             processing_mode: ProcessingMode::Auto,
+            segment_duration_ms: None,
+            output_options: output_options::OutputState::default(),
+            source_hls_target_ms: None,
+            hls_target_policy: processing::segment_target::HlsTargetPolicy::Fresh,
             maximum_workers: None,
             downloaded: None,
             frozen_source: Vec::new(),
@@ -179,6 +191,10 @@ impl Converter {
         let command = Self {
             backend,
             processing_mode: self.processing_mode,
+            segment_duration_ms: self.segment_duration_ms,
+            output_options: self.output_options.clone(),
+            source_hls_target_ms: self.source_hls_target_ms,
+            hls_target_policy: self.hls_target_policy,
             maximum_workers: self.maximum_workers,
             downloaded: self.downloaded.clone(),
             frozen_source: self.frozen_source.clone(),
@@ -329,7 +345,16 @@ impl Converter {
         if !check.passed {
             return Err(ConversionError("source-decryption-verification-failed"));
         }
-        let mut report = self.hls_output(&localized.combined, output, input_keys, output_key)?;
+        let video = (actual.tracks.len() == 1
+            && actual.tracks[0].kind == inspection::TrackKind::Video)
+            .then_some(localized.maximum_segment_ms)
+            .flatten();
+        let timing = processing::segment_target::HlsTiming::from_admitted(
+            [localized.target_seconds],
+            [video],
+        )?;
+        let command = self.using_hls_timing(Some(timing));
+        let mut report = command.hls_output(&localized.combined, output, input_keys, output_key)?;
         report.input = localized.report;
         report.describe_preparation(inspection::InputPreparation::LocalHlsResources);
         Ok(report)

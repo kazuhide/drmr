@@ -6,6 +6,7 @@ use crate::{
     toolrun::{Secrets, ToolRunner},
 };
 use sha2::Digest as _;
+use std::io::Write as _;
 use std::sync::Arc;
 
 fn converter() -> Converter {
