@@ -91,37 +91,105 @@ impl<'a> Bits<'a> {
     }
 }
 
-/// Validate emulation prevention before dropping bytes. Plaintext-bearing
-/// allocations are erased, including malformed NAL units and early returns.
-pub(super) fn rbsp(nal: &[u8], kind: u8) -> Result<zeroize::Zeroizing<Vec<u8>>, ConversionError> {
+pub(super) enum Rbsp<'a> {
+    Borrowed(&'a [u8]),
+    Owned(zeroize::Zeroizing<Vec<u8>>),
+}
+impl std::ops::Deref for Rbsp<'_> {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Borrowed(bytes) => bytes,
+            Self::Owned(bytes) => bytes,
+        }
+    }
+}
+
+/// Validate every emulation-prevention sequence before borrowing or removing bytes.
+/// Only removal allocates; owned storage is erased on drop, including failed validation.
+pub(super) fn rbsp(nal: &[u8], kind: u8) -> Result<Rbsp<'_>, ConversionError> {
     if nal.len() > 8 * 1024 * 1024 {
         return Err(ConversionError("ts-access-unit-size-limit"));
     }
     if nal.len() < 2 || nal[0] & 0x9f != kind || (matches!(kind, 5 | 7 | 8) && nal[0] & 0x60 == 0) {
         return Err(BAD);
     }
-    let mut bytes = zeroize::Zeroizing::new(Vec::new());
-    bytes.try_reserve_exact(nal.len() - 1).map_err(|_| BAD)?;
-    let mut zeros = 0;
+    let mut bytes: Option<zeroize::Zeroizing<Vec<u8>>> = None;
+    let mut copied = 1;
     let mut at = 1;
+    let mut nearby_escapes = 0;
+    let pairs = memchr::memmem::Finder::new(&[0, 0]);
     while at < nal.len() {
-        let byte = nal[at];
-        if zeros >= 2 {
-            if byte == 3 {
-                if nal.get(at + 1).is_none_or(|n| *n > 3) {
+        let remaining = &nal[at..];
+        // Check nearby pairs directly; overlap the distant search by one byte.
+        let nearby = remaining.len().min(16);
+        let skip = nearby.saturating_sub(1);
+        let Some(pair) = remaining[..nearby]
+            .windows(2)
+            .position(|pair| pair == [0, 0])
+            .or_else(|| pairs.find(&remaining[skip..]).map(|pair| pair + skip))
+        else {
+            break;
+        };
+        let end = at + pair + 2;
+        match nal.get(end) {
+            None => break,
+            Some(0..=2) => return Err(BAD),
+            Some(3) => {
+                if nal.get(end + 1).is_none_or(|n| *n > 3) {
                     return Err(BAD);
                 }
-                zeros = 0;
-                at += 1;
-                continue;
+                let bytes = bytes.get_or_insert_with(|| zeroize::Zeroizing::new(Vec::new()));
+                if bytes.capacity() == 0 {
+                    // Reserve before copying plaintext; removing escapes only shrinks it.
+                    bytes.try_reserve_exact(nal.len() - 1).map_err(|_| BAD)?;
+                }
+                bytes.extend_from_slice(&nal[copied..end]);
+                copied = end + 1;
+                nearby_escapes = if pair < skip { nearby_escapes + 1 } else { 0 };
+                if nearby_escapes == 4 {
+                    break;
+                }
             }
-            if byte <= 2 {
-                return Err(BAD);
-            }
+            _ => nearby_escapes = 0,
         }
-        bytes.push(byte);
-        zeros = if byte == 0 { zeros + 1 } else { 0 };
-        at += 1;
+        // An escape resets the input-layer zero count; its successor starts a new run.
+        at = end + 1;
     }
-    Ok(bytes)
+    if let Some(mut bytes) = bytes {
+        if nearby_escapes == 4 {
+            // The removed escape resets zeros; dense suffixes need no further searches.
+            let mut zeros = 0;
+            let mut at = copied;
+            while at < nal.len() {
+                let byte = nal[at];
+                if zeros >= 2 {
+                    if byte == 3 {
+                        if nal.get(at + 1).is_none_or(|n| *n > 3) {
+                            return Err(BAD);
+                        }
+                        zeros = 0;
+                        at += 1;
+                        continue;
+                    }
+                    if byte <= 2 {
+                        return Err(BAD);
+                    }
+                }
+                bytes.push(byte);
+                zeros = if byte == 0 { zeros + 1 } else { 0 };
+                at += 1;
+            }
+        } else {
+            bytes.extend_from_slice(&nal[copied..]);
+        }
+        Ok(Rbsp::Owned(bytes))
+    } else {
+        Ok(Rbsp::Borrowed(&nal[1..]))
+    }
 }
+
+#[cfg(test)]
+#[path = "rbsp_tests.rs"]
+mod tests;

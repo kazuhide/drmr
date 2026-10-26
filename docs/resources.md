@@ -40,6 +40,39 @@ one, and FFprobe decoder threads to one. One CPU token represents that codec all
 tools may still create helper threads. Streamed decoded-media hashing holds the same
 reservation as commands that capture their output.
 
+The worker maximum applies across nested pools belonging to one command. Preparing
+several HLS renditions does not multiply that maximum by the number of renditions.
+Independent commands in the same process retain their own worker maximums and share
+the process allocation. Temporary occupancy makes a fitting request wait; a request
+larger than its configured allocation fails without starting work.
+
+Multi-output plans can process independent outputs concurrently. Their source and
+output file metadata and prepared track state consume a separate retained memory
+reservation, without holding CPU tokens while child work waits. Once output processing
+is admitted, that reservation remains held through final source checks, publication,
+cancellation and workspace cleanup.
+
+Source reopening and discovery run before this coordinator reservation, under their
+own bounded capture and discovery limits. Source file metadata kept while a call
+waits is not charged to this additional reservation. Applications embedding drmr
+should limit the number of queued conversion and verification calls.
+
+Generated manifests have no final byte count before packaging. A multi-output
+conversion therefore preserves the remaining memory allocation for its own child
+work. Another such conversion in the same process may wait until it finishes;
+the admitted command's outputs, renditions and segments can still run concurrently.
+Children that cannot fit alongside their own retained state fail immediately.
+
+Fresh verification of an existing multi-output result first inventories only the
+HLS playlists or DASH manifest and derives the native linter's minimum working set
+from their actual sizes and reference counts. Media and key addresses are not fetched in this
+preflight. The temporary discovery state is released before waiting for the retained
+reservation. Verification then captures the outputs and checks that every
+manifest's relative path and complete bytes still match the preflight. A changed
+graph is refused before the larger lint allocation. Known small graphs can therefore
+be verified by independent commands concurrently. Parsing still respects the worker
+maximum and the command's reserved memory headroom.
+
 Structured `resource-budget` records show chosen workers, child thread allocation,
 CPU tokens, estimated memory tokens, and whether memory came from the host, the process
 control group, or the unknown fallback. They contain no source paths or machine IDs.
@@ -69,7 +102,8 @@ times must not be added together as command wall time.
 TS preparation collects metadata and encoded-frame evidence from independent
 segments in parallel within the worker limit. It retains only a bounded window
 of compact results, then checks duration and clock boundaries in the original
-playlist order. Each media playlist is prepared in turn. This pool does not
+playlist order. Independent media playlists can be prepared concurrently under the
+same command-wide worker ceiling. This pool does not
 parallelize every stage or split a complete-track decode, and all source media
 checks remain required.
 

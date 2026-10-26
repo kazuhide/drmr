@@ -88,7 +88,7 @@ fn hls(
     depth: usize,
 ) -> Result<(), ConversionError> {
     cancelled(stop)?;
-    if depth > 1 || seen.len() >= 65 {
+    if depth > 1 || seen.len() >= super::MAX_MANIFESTS {
         return Err(LIMIT);
     }
     if !seen.insert(manifest.to_path_buf()) {
