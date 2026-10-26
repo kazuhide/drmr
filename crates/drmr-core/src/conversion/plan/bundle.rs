@@ -1,12 +1,14 @@
 //! One byte-bound source and one atomic destination for several independently checked outputs.
+mod execution;
+mod outputs;
 use super::{EXISTS, INVALID, KIND, LIMIT, UNSAFE, UNSUPPORTED, absolute, destination};
 #[cfg(test)]
 use crate::conversion::FrozenSource;
 use crate::{
     conversion::{
-        ConversionError, ConversionReport, ConversionRequest, Converter, DrmSystem,
-        OutputSignaling, SourceInventory, SourceValidationPurpose, ValidationDepth,
-        VerificationReport, VerificationRequest, VerificationSource,
+        ConversionError, ConversionReport, Converter, DrmSystem, OutputSignaling, SourceInventory,
+        SourceValidationPurpose, ValidationDepth, VerificationReport, VerificationRequest,
+        VerificationSource,
         conformance::{ManifestValidationReport, ManifestValidationTools},
         files, frozen,
         key_file::{BundleOperatorKeys, OperatorKeys},
@@ -189,6 +191,7 @@ impl Converter {
             ));
         let source = super::rebound(request.input, &frozen);
         let qualified = command.validate_source(source, SourceValidationPurpose::Conversion)?;
+        self.register_bundle_tracks(qualified.track_protection.len());
         let processing = outputs
             .iter()
             .map(|output| {
@@ -237,6 +240,19 @@ impl Converter {
         keys: &BundleOperatorKeys,
         tools: &ManifestValidationTools,
     ) -> Result<BundleConversionReport, ConversionError> {
+        self.bundle_cohort()
+            .execute_bundle_plan_inner(plan, keys, tools)
+    }
+
+    fn execute_bundle_plan_inner(
+        &self,
+        plan: &BundlePlan,
+        keys: &BundleOperatorKeys,
+        tools: &ManifestValidationTools,
+    ) -> Result<BundleConversionReport, ConversionError> {
+        // Declared before every owned source/stage so all cleanup, including
+        // failure and unwind, finishes before its retained bytes are returned.
+        let _retained;
         validate(plan)?;
         for output in &plan.outputs {
             self.check_saved_processing(plan.processing_mode(&output.id))?;
@@ -259,61 +275,26 @@ impl Converter {
         };
         command.validate_bundle_source(plan, source)?;
         let stage = files::UnpublishedStage::new(plan.output_root.parent())?;
-        let empty = OperatorKeys::default();
-        let mut outputs = Vec::with_capacity(plan.outputs.len());
-        let mut completed = Vec::with_capacity(plan.outputs.len());
-        for output in &plan.outputs {
-            self.backend.check_cancelled()?;
-            destination.check()?;
-            if output.format == OutputFormat::Mp4 {
-                files::create_dir(&stage.path().join(&output.id))?;
-            }
-            let path = child_output(stage.path(), output);
-            let output_keys = keys.outputs.get(&output.id).unwrap_or(&empty);
-            let guard = destination::OutputGuard::for_bundle_child(&path, &destination)?;
-            let child = command
-                .using_plan_destination(guard)
-                .with_processing(plan.processing_mode(&output.id))
-                .with_output_signaling(output_keys.signaling.clone());
-            let mut conversion = child
-                .convert(ConversionRequest {
-                    input: frozen.entrypoint(),
-                    output: &path,
-                    format: output.format,
-                    target: output.target,
-                    input_keys: &keys.input,
-                    hls_input_keys: &keys.hls_input,
-                    output_key: output_keys.output.as_ref(),
-                    hls_key_uri: output_keys
-                        .output
-                        .as_ref()
-                        .and_then(|_| output_keys.hls_output_uri()),
-                    hls_output_key: output_keys.hls_output.as_ref(),
-                })
-                .map_err(super::source_error)?;
-            self.backend.check_cancelled()?;
-            destination.check()?;
-            command.check_downloaded()?;
-            frozen.check_original().map_err(super::source_error)?;
-            let entrypoint = result_entrypoint(stage.path(), output);
-            let bound = self.capture_source(&entrypoint)?;
-            let (matches, verification) =
-                child.bundle_media(source, bound.entrypoint(), output, output_keys)?;
-            if !matches || !verification.passed {
-                return Err(ConversionError("verification-mismatch"));
-            }
-            conversion.verification = verification;
-            let signaling = command.bundle_signaling(bound.entrypoint(), output, output_keys)?;
-            let conformance = command.bundle_conformance(bound.entrypoint(), output, tools)?;
-            bound.check_original().map_err(output_error)?;
-            completed.push(bound);
-            outputs.push(BundleConversionOutput {
-                id: output.id.clone(),
-                conversion,
-                signaling,
-                conformance,
-            });
-        }
+        let (execution, retained) = execution::Execution::new(&command)
+            .prepare::<(frozen::FrozenSource, BundleConversionOutput)>(plan, None)?;
+        _retained = retained;
+        let pipeline = outputs::Conversion {
+            owner: self,
+            command: &execution.command,
+            plan,
+            keys,
+            tools,
+            destination: &destination,
+            frozen: &frozen,
+            stage: &stage,
+        };
+        let completed = execution.run(plan, |ordinal| pipeline.run(ordinal));
+        // The pool has drained here. A redirected parent can make several child
+        // paths unreadable; retain the namespace refusal rather than whichever
+        // media-read error happens to win the ordered child result.
+        destination.check()?;
+        let completed = completed?;
+        let (completed, outputs): (Vec<_>, Vec<_>) = completed.into_iter().unzip();
         self.backend.check_cancelled()?;
         frozen.check_original().map_err(super::source_error)?;
         command
@@ -344,6 +325,7 @@ impl Converter {
                 .map(|output| plan.processing_mode(&output.id)),
         ));
         let qualified = command.validate_source(source, SourceValidationPurpose::Conversion)?;
+        self.register_bundle_tracks(qualified.track_protection.len());
         if qualified.actual_format != plan.source_format
             || plan
                 .outputs
@@ -369,6 +351,17 @@ impl Converter {
         keys: &BundleOperatorKeys,
         tools: &ManifestValidationTools,
     ) -> Result<BundleVerificationReport, ConversionError> {
+        self.bundle_cohort()
+            .verify_bundle_plan_inner(plan, keys, tools)
+    }
+
+    fn verify_bundle_plan_inner(
+        &self,
+        plan: &BundlePlan,
+        keys: &BundleOperatorKeys,
+        tools: &ManifestValidationTools,
+    ) -> Result<BundleVerificationReport, ConversionError> {
+        let _retained;
         validate(plan)?;
         for output in &plan.outputs {
             self.check_saved_processing(plan.processing_mode(&output.id))?;
@@ -387,31 +380,35 @@ impl Converter {
             input_keys: &keys.input,
             hls_keys: &keys.hls_input,
         };
-        let empty = OperatorKeys::default();
-        let frozen_results = plan
-            .outputs
-            .iter()
-            .map(|intent| self.capture_source(&result_entrypoint(&plan.output_root, intent)))
-            .collect::<Result<Vec<_>, _>>()?;
-        let mut results = Vec::with_capacity(plan.outputs.len());
-        for (intent, result) in plan.outputs.iter().zip(&frozen_results) {
-            self.backend.check_cancelled()?;
-            let output_keys = keys.outputs.get(&intent.id).unwrap_or(&empty);
-            let child = command.with_processing_clone(plan.processing_mode(&intent.id));
-            let (output_matches_plan, verification) =
-                child.bundle_media(source, result.entrypoint(), intent, output_keys)?;
-            let signaling = command.bundle_signaling(result.entrypoint(), intent, output_keys)?;
-            let conformance = command.bundle_conformance(result.entrypoint(), intent, tools)?;
-            original.check_original().map_err(super::source_error)?;
-            result.check_original().map_err(output_error)?;
-            results.push(BundleVerificationOutput {
-                id: intent.id.clone(),
-                output_matches_plan,
-                verification,
-                signaling,
-                conformance,
-            });
-        }
+        // Scheduling needs actual track state even for a freshly reopened plan.
+        // Native pre-admission does not add another complete decode to decoded verification.
+        let qualified = command
+            .with_processing_clone(source_processing(
+                plan.outputs
+                    .iter()
+                    .map(|output| plan.processing_mode(&output.id)),
+            ))
+            .with_decode(false)
+            .validate_source(source, SourceValidationPurpose::Verification)?;
+        command.register_bundle_tracks(qualified.track_protection.len());
+        let manifests = outputs::ManifestDemands::capture(&command, plan)?;
+        let (execution, retained) =
+            execution::Execution::new(&command)
+                .prepare::<(frozen::FrozenSource, BundleVerificationOutput)>(
+                    plan,
+                    Some(&manifests),
+                )?;
+        _retained = retained;
+        let pipeline = outputs::Verification {
+            command: &execution.command,
+            plan,
+            keys,
+            tools,
+            original: &original,
+            manifests: &manifests,
+        };
+        let results = execution.run(plan, |ordinal| pipeline.run(ordinal))?;
+        let (frozen_results, results): (Vec<_>, Vec<_>) = results.into_iter().unzip();
         original.check_original().map_err(super::source_error)?;
         for result in &frozen_results {
             result.check_original().map_err(output_error)?;
@@ -441,6 +438,27 @@ impl Converter {
         } else {
             Ok(())
         }
+    }
+
+    fn bundle_cohort(&self) -> Self {
+        let mut command = self.with_processing_clone(self.processing_mode);
+        command.backend.runner = std::sync::Arc::new(
+            self.backend.runner.cohort(
+                self.maximum_workers
+                    .unwrap_or(crate::concurrency::DEFAULT_WORKERS_CAP),
+            ),
+        );
+        command
+    }
+
+    fn register_bundle_tracks(&self, tracks: usize) {
+        let mut workload = self
+            .backend
+            .runner
+            .registered_workload()
+            .unwrap_or_default();
+        workload.tracks = workload.tracks.max(tracks);
+        self.backend.runner.register_workload(workload);
     }
 
     fn bundle_media(

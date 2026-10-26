@@ -4,6 +4,9 @@ mod directories;
 mod execution;
 mod graph;
 mod io;
+mod retention;
+pub(super) use execution::MEMORY_BYTES as DISCOVERY_BYTES;
+pub(super) use retention::{retained_inventory_bound, retained_inventory_bytes};
 
 use super::{ConversionError, files};
 use crate::{concurrency::Stop, native::FileIdentity};
@@ -21,9 +24,25 @@ const INVALID: ConversionError = ConversionError("source-inventory-invalid");
 const CHANGED: ConversionError = ConversionError("planned-source-changed");
 const LIMIT: ConversionError = ConversionError("source-graph-limit");
 const MAX_FILES: usize = 100_130;
+pub(super) const MAX_MANIFESTS: usize = 65;
 const MAX_DEPTH: usize = 128;
 const MAX_GRAPH_BYTES: u64 = super::MAX_MEDIA_BYTES;
 const MAX_PATH_BYTES: usize = 16 * 1024 * 1024;
+
+pub(super) fn walk_manifests(
+    root: &Path,
+    entrypoint: &Path,
+    stop: &Stop,
+    mut ready: impl FnMut(&Path) -> Result<(), ConversionError>,
+) -> Result<(), ConversionError> {
+    graph::walk(root, entrypoint, stop, |path, need| {
+        if need == graph::Need::DiscoveryNow {
+            ready(path)
+        } else {
+            Ok(())
+        }
+    })
+}
 
 /// One source object. Paths are confined to the inventory root and contain no URL.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]

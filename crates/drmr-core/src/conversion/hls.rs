@@ -44,8 +44,20 @@ struct Completed {
     combined: Option<PathBuf>,
     segmented: Segmented,
 }
+#[derive(Clone, Copy)]
+enum Localization {
+    Joined,
+    Segments,
+    NativeTransport,
+}
+impl Localization {
+    fn joined(self) -> bool {
+        matches!(self, Self::Joined)
+    }
+}
 struct Playlist {
     combined: Option<File>,
+    localization: Localization,
     initialization: Option<PathBuf>,
     media_resources: Vec<(PathBuf, String)>,
     reference: String,
@@ -55,6 +67,7 @@ struct Playlist {
     bytes: u64,
     has_map: bool,
     transport: Option<super::ts::Admission>,
+    native_scanner: Option<super::ts::NativeScanner>,
     stop: crate::concurrency::Stop,
     ended: bool,
     pending_duration: bool,
@@ -202,6 +215,7 @@ pub(super) fn local_resource(root: &Path, uri: &str) -> Result<PathBuf, Conversi
 impl Playlist {
     fn native_evidence(
         projection: Option<super::ts::Projector>,
+        admitted: Option<super::ts::NativeScanner>,
         segments: &[(PathBuf, String)],
         runner: &crate::toolrun::ToolRunner,
         stop: &crate::concurrency::Stop,
@@ -218,6 +232,14 @@ impl Playlist {
             .transpose()?;
         if segments.is_empty() {
             return Ok(std::collections::BTreeMap::new());
+        }
+        if let Some(scanner) = admitted {
+            let (_, clear_native) = scanner.finish()?;
+            return Ok(original
+                .unwrap_or(clear_native)
+                .into_iter()
+                .map(|(id, anchor)| (id, std::sync::Arc::new(anchor)))
+                .collect());
         }
         let _permit = runner
             .native_permit(
@@ -249,6 +271,79 @@ impl Playlist {
             .into_iter()
             .map(|(id, anchor)| (id, std::sync::Arc::new(anchor)))
             .collect())
+    }
+    fn native_permit(&self) -> Result<crate::resources::Permit, ConversionError> {
+        self.runner
+            .native_permit(
+                crate::resources::Claim {
+                    cpu_threads: 1,
+                    memory_bytes: 128 * 1024 * 1024,
+                },
+                &self.stop,
+                self.timeout,
+            )
+            .map_err(|error| match error {
+                crate::resources::ReservationError::Insufficient => {
+                    ConversionError("resource-budget")
+                }
+                crate::resources::ReservationError::Cancelled => ConversionError("cancelled"),
+                crate::resources::ReservationError::Timeout => {
+                    ConversionError("media-tool-timeout")
+                }
+            })
+    }
+    fn copy_resource(
+        &mut self,
+        original: &Path,
+        copied: &Path,
+        cipher: &Cipher<'_>,
+        map: bool,
+    ) -> Result<bool, ConversionError> {
+        if self.native_scanner.is_some()
+            && !map
+            && !self.has_map
+            && cipher.key.is_none()
+            && cipher.sample.is_none()
+        {
+            let _permit = self.native_permit()?;
+            self.native_scanner
+                .as_mut()
+                .ok_or(ConversionError("ts-original-evidence-required"))?
+                .copy_segment(original, copied, &self.stop)?;
+            Ok(true)
+        } else {
+            match self.localization {
+                Localization::Joined => super::copy_private(original, copied)?,
+                Localization::Segments | Localization::NativeTransport => {
+                    snapshot_segment(original, copied, &self.stop)?;
+                }
+            }
+            Ok(false)
+        }
+    }
+    fn admit_transport(&mut self, plaintext: &Path, scanned: bool) -> Result<(), ConversionError> {
+        if self.native_scanner.is_some() {
+            if !scanned {
+                // Decryption has released its own permit before this reservation.
+                let _permit = self.native_permit()?;
+                self.native_scanner
+                    .as_mut()
+                    .ok_or(ConversionError("ts-original-evidence-required"))?
+                    .segment(plaintext, &self.stop)?;
+            }
+            self.transport = Some(
+                self.native_scanner
+                    .as_ref()
+                    .ok_or(ConversionError("ts-original-evidence-required"))?
+                    .admission()
+                    .clone(),
+            );
+        } else {
+            self.transport
+                .get_or_insert_with(Default::default)
+                .segment(plaintext, &self.stop)?;
+        }
+        Ok(())
     }
     fn decrypt_samples(
         &mut self,
@@ -355,11 +450,7 @@ impl Playlist {
             }
         );
         let copied = stage.join(&name);
-        if self.combined.is_some() {
-            super::copy_private(&original, &copied)?;
-        } else {
-            snapshot_segment(&original, &copied, &self.stop)?;
-        }
+        let scanned = self.copy_resource(&original, &copied, cipher, map)?;
         let snapshot =
             File::open(&copied).map_err(|_| ConversionError("hls-resource-unreadable"))?;
         charge_snapshot(&snapshot, &mut self.bytes, super::MAX_MEDIA_BYTES)?;
@@ -386,9 +477,7 @@ impl Playlist {
                 .ok_or(ConversionError("hls-map-required"))?
                 .check(&plaintext, self.declared_duration)?;
         } else {
-            self.transport
-                .get_or_insert_with(Default::default)
-                .segment(&plaintext, &self.stop)?;
+            self.admit_transport(&plaintext, scanned)?;
             self.transport_segments
                 .push((plaintext.clone(), self.duration_text.clone()));
         }
@@ -720,6 +809,7 @@ impl Localizer<'_> {
         let sample_transport = playlist.sample_projection.is_some();
         let native = Playlist::native_evidence(
             playlist.sample_projection,
+            playlist.native_scanner,
             &playlist.transport_segments,
             &playlist.runner,
             &playlist.stop,
@@ -750,7 +840,7 @@ pub(super) fn localize(
     let Completed {
         combined,
         segmented,
-    } = localize_with(path, stage, keys, backend, true)?;
+    } = localize_with(path, stage, keys, backend, Localization::Joined)?;
     let transport_segments = if segmented.transport.is_some() {
         segmented.resources
     } else {
@@ -775,7 +865,36 @@ pub(super) fn localize_segments(
     keys: &HlsInputKeys,
     backend: &super::backend::Backend,
 ) -> Result<Segmented, ConversionError> {
-    Ok(localize_with(path, stage, keys, backend, false)?.segmented)
+    Ok(localize_with(path, stage, keys, backend, Localization::Segments)?.segmented)
+}
+
+/// Native transport checks use all retained resources and their original boundaries.
+/// Normalization, complete decoding and fragmented MP4 still use joined media.
+pub(super) fn localize_native_transport(
+    path: &Path,
+    stage: &Path,
+    keys: &HlsInputKeys,
+    backend: &super::backend::Backend,
+) -> Result<Option<Segmented>, ConversionError> {
+    backend.check_cancelled()?;
+    if backend.validation_depth != super::ValidationDepth::Native {
+        return Ok(None);
+    }
+    let bytes = super::files::read_manifest(path)
+        .map_err(|_| ConversionError("hls-manifest-unreadable-or-too-large"))?;
+    let text = std::str::from_utf8(&bytes).map_err(|_| ConversionError("hls-invalid-utf8"))?;
+    if text
+        .trim_start_matches('\u{feff}')
+        .lines()
+        .any(|line| line.trim().split(':').next() == Some("#EXT-X-MAP"))
+    {
+        return Ok(None);
+    }
+    let completed = localize_with(path, stage, keys, backend, Localization::NativeTransport)?;
+    if completed.segmented.transport.is_none() {
+        return Err(ConversionError("ts-original-evidence-required"));
+    }
+    Ok(Some(completed.segmented))
 }
 
 fn localize_with(
@@ -783,9 +902,9 @@ fn localize_with(
     stage: &Path,
     keys: &HlsInputKeys,
     backend: &super::backend::Backend,
-    join: bool,
+    localization: Localization,
 ) -> Result<Completed, ConversionError> {
-    if !join {
+    if !localization.joined() {
         backend.check_cancelled()?;
     }
     let metadata = fs::symlink_metadata(path).map_err(|_| ConversionError("input-unreadable"))?;
@@ -810,9 +929,10 @@ fn localize_with(
     if lines.next() != Some("#EXTM3U") {
         return Err(ConversionError("hls-invalid-header"));
     }
-    let combined = join.then(|| stage.join("combined.mp4"));
+    let combined = localization.joined().then(|| stage.join("combined.mp4"));
     let playlist = Playlist {
         combined: combined.as_deref().map(private_new).transpose()?,
+        localization,
         initialization: None,
         media_resources: Vec::new(),
         reference: "#EXTM3U\n#EXT-X-VERSION:7\n".into(),
@@ -822,6 +942,8 @@ fn localize_with(
         bytes: 0,
         has_map: false,
         transport: None,
+        native_scanner: matches!(localization, Localization::NativeTransport)
+            .then(super::ts::NativeScanner::new),
         stop: backend.stop.clone(),
         ended: false,
         pending_duration: false,
@@ -1171,10 +1293,16 @@ mod resource_tests {
             events::NoSink,
             toolrun::{Secrets, ToolRunner},
         };
-        let runner = std::sync::Arc::new(ToolRunner::new(
-            std::sync::Arc::new(Secrets::default()),
-            std::sync::Arc::new(NoSink),
-        ));
+        let runner = std::sync::Arc::new(
+            ToolRunner::new(
+                std::sync::Arc::new(Secrets::default()),
+                std::sync::Arc::new(NoSink),
+            )
+            .with_limiter(std::sync::Arc::new(crate::resources::Limiter::new(
+                1,
+                256 * 1024 * 1024,
+            ))),
+        );
         Converter::new(runner, "must-not-run-packager", "must-not-run-ffmpeg")
             .with_ffprobe("must-not-run-ffprobe")
             .backend
@@ -1233,6 +1361,122 @@ mod resource_tests {
             );
         }
         output
+    }
+
+    #[test]
+    fn native_transport_view_preserves_resources_and_evidence_without_joining() {
+        for encryption in [0, 1, 2] {
+            let root = super::super::files::Stage::new(None).unwrap();
+            let clear_dir = root.path().join("clear");
+            let clear = clear_fixture(&clear_dir, true);
+            let (source, keys) = if encryption != 0 {
+                let output = root.path().join("encrypted");
+                super::super::files::create_dir(&output).unwrap();
+                let key = HlsOutputKey::new(
+                    "https://operator.invalid/fixture",
+                    Aes128Key::from_hex("101112131415161718191a1b1c1d1e1f").unwrap(),
+                )
+                .unwrap();
+                encrypt_media(&clear_dir, &output, &key).unwrap();
+                if encryption == 2 {
+                    alternate_clear_segments(&clear_dir, &output);
+                }
+                (
+                    output.join("media.m3u8"),
+                    HlsInputKeys::new(vec![(
+                        "https://operator.invalid/fixture".into(),
+                        Aes128Key::from_hex("101112131415161718191a1b1c1d1e1f").unwrap(),
+                    )])
+                    .unwrap(),
+                )
+            } else {
+                (clear, HlsInputKeys::default())
+            };
+            let joined_dir = root.path().join("joined");
+            let view_dir = root.path().join("view");
+            for directory in [&joined_dir, &view_dir] {
+                super::super::files::create_dir(directory).unwrap();
+            }
+            let backend = no_tool_backend();
+            let joined = localize(&source, &joined_dir, &keys, &backend).unwrap();
+            let view = localize_native_transport(&source, &view_dir, &keys, &backend)
+                .unwrap()
+                .unwrap();
+            assert!(joined.combined.is_file());
+            assert!(!view_dir.join("combined.mp4").exists());
+            assert!(!view_dir.join("combined.ts").exists());
+            assert!(view.reference.is_file());
+            assert!(view.transport.is_some());
+            assert_eq!(view.resources.len(), joined.transport_segments.len());
+            assert_eq!(view.report, joined.report);
+            assert_eq!(view.sample_transport, joined.sample_transport);
+            for ((path, duration), (old_path, old_duration)) in
+                view.resources.iter().zip(&joined.transport_segments)
+            {
+                assert_eq!(fs::read(path).unwrap(), fs::read(old_path).unwrap());
+                assert_eq!(duration, old_duration);
+            }
+            assert_eq!(view.native.len(), joined.native.len());
+            for (pid, native) in view.native {
+                let previous = &joined.native[&pid];
+                assert_eq!(native.config, previous.config);
+                assert_eq!(native.metadata().unwrap(), previous.metadata().unwrap());
+                assert_eq!(native.evidence().unwrap(), previous.evidence().unwrap());
+                assert_eq!(native.timing().unwrap(), previous.timing().unwrap());
+                assert_eq!(
+                    native.segment_timings().unwrap(),
+                    previous.segment_timings().unwrap()
+                );
+            }
+        }
+    }
+
+    fn alternate_clear_segments(clear: &Path, encrypted: &Path) {
+        let originals = fs::read_to_string(clear.join("media.m3u8"))
+            .unwrap()
+            .lines()
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            .map(|line| clear.join(line))
+            .collect::<Vec<_>>();
+        let manifest = encrypted.join("media.m3u8");
+        let mut text = String::new();
+        let mut count = 0;
+        for line in fs::read_to_string(&manifest).unwrap().lines() {
+            if !line.is_empty() && !line.starts_with('#') {
+                if count % 2 == 0 {
+                    fs::copy(&originals[count], encrypted.join(line)).unwrap();
+                    text.push_str("#EXT-X-KEY:METHOD=NONE\n");
+                }
+                count += 1;
+            }
+            writeln!(text, "{line}").unwrap();
+        }
+        assert!(count >= 2);
+        fs::write(manifest, text).unwrap();
+    }
+
+    #[test]
+    fn native_transport_view_keeps_fragmented_and_decoded_inputs_on_the_joined_path() {
+        let root = super::super::files::Stage::new(None).unwrap();
+        let source = clear_fixture(&root.path().join("source"), false);
+        let directory = root.path().join("view");
+        super::super::files::create_dir(&directory).unwrap();
+        let backend = no_tool_backend();
+        assert!(
+            localize_native_transport(&source, &directory, &HlsInputKeys::default(), &backend)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(fs::read_dir(&directory).unwrap().count(), 0);
+        let transport = clear_fixture(&root.path().join("transport"), true);
+        let mut decoded = backend;
+        decoded.validation_depth = super::super::ValidationDepth::Decoded;
+        assert!(
+            localize_native_transport(&transport, &directory, &HlsInputKeys::default(), &decoded)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(fs::read_dir(&directory).unwrap().count(), 0);
     }
 
     #[test]
@@ -1378,27 +1622,36 @@ mod resource_tests {
                 .collect(),
         )
         .unwrap();
-        let output = root.path().join("localized");
-        super::super::files::create_dir(&output).unwrap();
-        let result = localize_segments(&input, &output, &input_keys, &no_tool_backend()).unwrap();
-        assert!(result.sample_transport);
-        assert!(result.initialization.is_none());
-        assert!(!output.join("combined.mp4").exists());
-        assert!(!output.join("combined.ts").exists());
         let (_, expected) = scanner.finish().unwrap();
-        assert_eq!(result.resources.len(), count);
-        assert_eq!(expected.len(), result.native.len());
-        for (id, native) in expected {
-            let actual = &result.native[&id];
-            assert_eq!(native.config, actual.config);
-            let a = native.evidence().unwrap();
-            let b = actual.evidence().unwrap();
-            assert!(a.payload_equal(&b));
-            assert!(a.timing_equal(&b));
-            assert_eq!(
-                native.segment_timings().unwrap().len(),
-                actual.segment_timings().unwrap().len()
-            );
+        for mode in ["segments", "native"] {
+            let output = root.path().join(mode);
+            super::super::files::create_dir(&output).unwrap();
+            let backend = no_tool_backend();
+            let result = if mode == "native" {
+                localize_native_transport(&input, &output, &input_keys, &backend)
+                    .unwrap()
+                    .unwrap()
+            } else {
+                localize_segments(&input, &output, &input_keys, &backend).unwrap()
+            };
+            assert!(result.sample_transport);
+            assert!(result.initialization.is_none());
+            assert!(!output.join("combined.mp4").exists());
+            assert!(!output.join("combined.ts").exists());
+            assert_eq!(result.resources.len(), count);
+            assert_eq!(expected.len(), result.native.len());
+            for (id, native) in &expected {
+                let actual = &result.native[id];
+                assert_eq!(native.config, actual.config);
+                let a = native.evidence().unwrap();
+                let b = actual.evidence().unwrap();
+                assert!(a.payload_equal(&b));
+                assert!(a.timing_equal(&b));
+                assert_eq!(
+                    native.segment_timings().unwrap().len(),
+                    actual.segment_timings().unwrap().len()
+                );
+            }
         }
     }
 
@@ -1420,15 +1673,22 @@ mod resource_tests {
         {
             let source = root.path().join(format!("invalid-{index}.m3u8"));
             private_new(&source).unwrap().write_all(format!("#EXTM3U\n#EXT-X-TARGETDURATION:2\n{tag}\n#EXTINF:2.0,\nmissing.ts\n#EXT-X-ENDLIST\n").as_bytes()).unwrap();
-            for join in [false, true] {
-                let output = root.path().join(format!("invalid-{index}-{join}"));
+            for (mode_index, mode) in [
+                Localization::Segments,
+                Localization::Joined,
+                Localization::NativeTransport,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let output = root.path().join(format!("invalid-{index}-{mode_index}"));
                 super::super::files::create_dir(&output).unwrap();
                 let Err(error) = localize_with(
                     &source,
                     &output,
                     &HlsInputKeys::default(),
                     &no_tool_backend(),
-                    join,
+                    mode,
                 ) else {
                     panic!("unsupported manifest was accepted");
                 };

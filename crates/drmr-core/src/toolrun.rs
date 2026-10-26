@@ -77,6 +77,8 @@ pub const MAX_CAPTURE_BYTES: usize = 64 * 1024 * 1024;
 
 mod capture;
 mod cleanup;
+#[cfg(test)]
+mod cohort_tests;
 pub use cleanup::CleanupOwner;
 pub(crate) use cleanup::CleanupReceipt;
 /// Shorter strings would redact unrelated text; keys and IVs are 32 hex characters.
@@ -486,8 +488,16 @@ pub struct ToolRunner {
     observer: Option<Arc<dyn Sink>>,
     path: Option<OsString>,
     limiter: Arc<Limiter>,
-    workload: RwLock<Option<Workload>>,
+    cpu_scope: Option<Arc<crate::resources::CpuScope>>,
+    memory_scope: Option<MemoryScope>,
+    workload: Arc<RwLock<Option<Workload>>>,
     cleanup_owner: Option<Arc<CleanupOwner>>,
+}
+
+#[derive(Clone, Copy)]
+struct MemoryScope {
+    leaf_ceiling: u64,
+    manifest_ceiling: u64,
 }
 
 impl ToolRunner {
@@ -500,7 +510,9 @@ impl ToolRunner {
             observer: None,
             path: None,
             limiter: process_limiter(),
-            workload: RwLock::new(None),
+            cpu_scope: None,
+            memory_scope: None,
+            workload: Arc::new(RwLock::new(None)),
             cleanup_owner: None,
         }
     }
@@ -513,7 +525,9 @@ impl ToolRunner {
             observer: Some(observer),
             path: self.path.clone(),
             limiter: Arc::clone(&self.limiter),
-            workload: RwLock::new(self.registered_workload()),
+            cpu_scope: self.cpu_scope.clone(),
+            memory_scope: self.memory_scope,
+            workload: Arc::new(RwLock::new(self.registered_workload())),
             cleanup_owner: self.cleanup_owner.clone(),
         }
     }
@@ -531,7 +545,9 @@ impl ToolRunner {
             observer: self.observer.clone(),
             path: self.path.clone(),
             limiter: Arc::clone(&self.limiter),
-            workload: RwLock::new(self.registered_workload()),
+            cpu_scope: self.cpu_scope.clone(),
+            memory_scope: self.memory_scope,
+            workload: Arc::new(RwLock::new(self.registered_workload())),
             cleanup_owner: Some(Arc::clone(&owner)),
         };
         (runner, owner)
@@ -572,9 +588,68 @@ impl ToolRunner {
         self.limiter = limiter;
         self
     }
-    /// The enclosing allocation's ceiling for bounded in-process scheduling.
+
+    pub(crate) fn cohort(&self, maximum_workers: usize) -> Self {
+        let scope = self
+            .cpu_scope
+            .as_ref()
+            .filter(|scope| scope.limit() <= maximum_workers)
+            .cloned()
+            .unwrap_or_else(|| {
+                crate::resources::CpuScope::new(maximum_workers, self.cpu_scope.clone())
+            });
+        Self {
+            secrets: Arc::clone(&self.secrets),
+            sink: Arc::clone(&self.sink),
+            observer: self.observer.clone(),
+            path: self.path.clone(),
+            limiter: Arc::clone(&self.limiter),
+            cpu_scope: Some(scope),
+            memory_scope: self.memory_scope,
+            // A CPU scope belongs to this command, including metadata observed
+            // inside it. Independent observed/cleanup forks still take snapshots.
+            workload: Arc::clone(&self.workload),
+            cleanup_owner: self.cleanup_owner.clone(),
+        }
+    }
+    /// The enclosing allocation's configured ceiling. Other commands' retained
+    /// state affects queued admission, never permanent claim eligibility.
     pub(crate) fn native_capacity(&self) -> (usize, u64) {
-        self.limiter.capacity()
+        let (cpu, memory) = self.limiter.configured_capacity();
+        (
+            self.cpu_scope
+                .as_ref()
+                .map_or(cpu, |scope| cpu.min(scope.limit())),
+            self.memory_scope
+                .map_or(memory, |scope| memory.min(scope.leaf_ceiling)),
+        )
+    }
+
+    /// Own retained state is permanent for this command's children. Other
+    /// commands keep the full configured ceiling and wait in shared admission.
+    pub(crate) fn within_context(&self, bytes: u64, manifest: u64) -> Self {
+        let mut scoped = self.cohort(self.native_capacity().0);
+        let ceiling = self.native_capacity().1.saturating_sub(bytes);
+        scoped.memory_scope = Some(MemoryScope {
+            leaf_ceiling: ceiling,
+            manifest_ceiling: ceiling.min(manifest),
+        });
+        scoped
+    }
+
+    pub(crate) fn manifest_capacity(&self) -> (usize, u64) {
+        let (cpu, memory) = self.native_capacity();
+        (
+            cpu,
+            self.memory_scope
+                .map_or(memory, |scope| memory.min(scope.manifest_ceiling)),
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn retained_capacity(&self) -> (usize, u64) {
+        let (cpu, memory) = self.limiter.capacity();
+        (self.native_capacity().0.min(cpu), memory)
     }
 
     /// Account for bounded in-process media work in this runner's admission pool.
@@ -585,7 +660,48 @@ impl ToolRunner {
         stop: &Stop,
         timeout: Duration,
     ) -> Result<Permit, crate::resources::ReservationError> {
-        self.limiter.acquire(claim, Some(stop), Some(timeout))
+        self.reserve_claim(claim, Some(stop), Some(timeout))
+    }
+
+    fn reserve_claim(
+        &self,
+        claim: Claim,
+        stop: Option<&Stop>,
+        timeout: Option<Duration>,
+    ) -> Result<Permit, crate::resources::ReservationError> {
+        let capacity = self.native_capacity();
+        if claim.cpu_threads == 0
+            || claim.cpu_threads > capacity.0
+            || claim.memory_bytes > capacity.1
+        {
+            return Err(crate::resources::ReservationError::Insufficient);
+        }
+        let started = Instant::now();
+        // Wait for the cohort before taking a process-wide token. A blocked
+        // command cannot prevent another cohort from using the shared capacity.
+        let cpu = self
+            .cpu_scope
+            .as_ref()
+            .map(|scope| scope.acquire(claim.cpu_threads, stop, timeout))
+            .transpose()?;
+        self.limiter
+            .acquire(
+                claim,
+                stop,
+                timeout.map(|limit| limit.saturating_sub(started.elapsed())),
+            )
+            .map(|permit| permit.with_cpu_scope(cpu))
+    }
+
+    /// Reserve enclosing metadata without consuming a child's CPU token.
+    pub(crate) fn retain_context(
+        &self,
+        bytes: u64,
+        leaf_floor: u64,
+        stop: &Stop,
+        timeout: Duration,
+    ) -> Result<crate::resources::ContextPermit, crate::resources::ReservationError> {
+        self.limiter.retain(bytes, leaf_floor, stop, timeout)
     }
 
     /// The conservative observation currently registered for this runner.
@@ -644,20 +760,19 @@ impl ToolRunner {
             (Some(current), None) => current,
             (None, call) => call.unwrap_or_default(),
         };
-        self.limiter
-            .acquire(
-                Claim::for_workload(workload, options.max_stdout_bytes, options.max_stderr_bytes),
-                options.stop,
-                options.timeout,
-            )
-            .map_err(|error| ToolError {
-                tool: tool.to_owned(),
-                kind: match error {
-                    crate::resources::ReservationError::Insufficient => "resource-budget",
-                    crate::resources::ReservationError::Cancelled => "cancelled",
-                    crate::resources::ReservationError::Timeout => "timeout",
-                },
-            })
+        self.reserve_claim(
+            Claim::for_workload(workload, options.max_stdout_bytes, options.max_stderr_bytes),
+            options.stop,
+            options.timeout,
+        )
+        .map_err(|error| ToolError {
+            tool: tool.to_owned(),
+            kind: match error {
+                crate::resources::ReservationError::Insufficient => "resource-budget",
+                crate::resources::ReservationError::Cancelled => "cancelled",
+                crate::resources::ReservationError::Timeout => "timeout",
+            },
+        })
     }
 
     /// The shared registry.

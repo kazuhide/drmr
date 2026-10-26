@@ -23,7 +23,7 @@ pub(in crate::conversion) struct Track {
     pub kind: TrackKind,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default, PartialEq, Eq)]
 struct Section {
     bytes: Vec<u8>,
 }
@@ -124,7 +124,7 @@ fn section_header(data: &[u8], table: u8) -> Result<(), ConversionError> {
     Ok(())
 }
 
-#[derive(Default)]
+#[derive(Clone, Default, PartialEq, Eq)]
 struct Pes {
     header: Vec<u8>,
     waiting: bool,
@@ -292,7 +292,7 @@ fn sample_descriptors(kind: TrackKind, data: &[u8]) -> Result<Option<[u8; 2]>, C
 }
 
 /// State spans all resources: segment boundaries cannot reset counters or the program.
-#[derive(Default)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub(in crate::conversion) struct Admission {
     sample_aes: bool,
     empty_payload_padding: usize,
@@ -423,10 +423,19 @@ impl Admission {
         self.segment_pmt = false;
         let mut file = File::open(path).map_err(|_| BAD)?;
         let size = file.metadata().map_err(|_| BAD)?.len();
-        if size == 0 || size % 188 != 0 {
+        self.segment_reader(&mut std::io::BufReader::new(&mut file), size, stop)
+    }
+    pub(super) fn segment_reader(
+        &mut self,
+        reader: &mut impl Read,
+        size: u64,
+        stop: &Stop,
+    ) -> Result<(), ConversionError> {
+        self.segment_pat = false;
+        self.segment_pmt = false;
+        if size == 0 || !size.is_multiple_of(188) {
             return Err(BAD);
         }
-        let mut reader = std::io::BufReader::new(&mut file);
         let mut packet = [0; 188];
         for _ in 0..size / 188 {
             if stop.is_set() {

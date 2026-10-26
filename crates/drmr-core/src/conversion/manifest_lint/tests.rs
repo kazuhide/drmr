@@ -9,6 +9,7 @@ use std::{
     sync::{Arc, mpsc},
     time::Duration,
 };
+mod sizing_tests;
 
 fn converter(limiter: Arc<Limiter>) -> Converter {
     Converter::new(

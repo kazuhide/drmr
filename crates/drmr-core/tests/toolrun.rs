@@ -6,6 +6,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, STANDARD_NO_PAD, URL_SAFE};
 use drmr_core::canonical::Dumps;
 use drmr_core::events::{Collector, JsonLinesWriter, NoSink, Record};
+use drmr_core::resources::Limiter;
 use drmr_core::toolrun::{
     REDACTED, RunOptions, SecretRegistry, Secrets, ToolError, ToolRunner, bounded, patterns_for,
 };
@@ -404,11 +405,17 @@ fn output_consumed_as_data_is_not_logged() {
 
 #[test]
 fn timeout_and_spawn_failures_raise_tool_errors_without_the_argv() {
-    let (runner, collector, _) = runner();
+    let collector = Arc::new(Collector::default());
+    // A shared-pool admission timeout would not exercise child termination.
+    let runner = ToolRunner::new(Arc::new(Secrets::new()), collector.clone())
+        .with_limiter(Arc::new(Limiter::new(1, 4 * 1024 * 1024 * 1024)));
+    // Installation spawns and syncs a native executable. Keep it and its cleanup
+    // outside the elapsed-time assertion.
+    let sleeping = sleeping_response(5_000);
     let start = Instant::now();
     let error = runner
         .run_tool(
-            &sleeping_response(5_000),
+            &sleeping,
             "packager",
             &RunOptions {
                 timeout: Some(Duration::from_millis(200)),
@@ -436,7 +443,7 @@ fn timeout_and_spawn_failures_raise_tool_errors_without_the_argv() {
     assert_eq!(records[1]["call_id"], records[0]["call_id"]);
     let error = runner
         .run_tool(
-            &sleeping_response(5_000),
+            &sleeping,
             "packager",
             &RunOptions {
                 timeout: Some(Duration::from_secs(1)),
