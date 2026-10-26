@@ -424,7 +424,6 @@ impl<'a> StageRelocation<'a> {
 #[cfg(all(test, windows))]
 mod tests {
     use super::*;
-    use std::io::Write as _;
     use std::os::windows::fs::OpenOptionsExt as _;
     use windows_permissions::constants::{SeObjectType, SecurityInformation};
     use windows_permissions::wrappers::{
