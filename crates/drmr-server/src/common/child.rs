@@ -219,7 +219,7 @@ fn prepare_operation(
             ..
         } => {
             let output_spec_file = directory.join("output-spec.json");
-            let bytes = serde_json::to_vec(&serde_json::json!({"schema_version":2,
+            let bytes = serde_json::to_vec(&serde_json::json!({"schema_version":3,
                 "outputs":outputs.ok_or_else(unavailable)?}))
             .map_err(|_| unavailable())?;
             if bytes.len() > 65_536 {
@@ -308,13 +308,13 @@ mod tests {
     use std::{io::Write as _, os::unix::fs::PermissionsExt};
 
     #[test]
-    fn child_output_recipe_keeps_per_output_modes_in_schema_two() {
+    fn child_output_recipe_keeps_per_output_modes_and_addressing_in_schema_three() {
         let root = native::private_tempdir().unwrap();
         let directory = root.path().canonicalize().unwrap();
         let outputs: Vec<drmr_core::conversion::plan::bundle::BundleOutputIntent> =
             serde_json::from_value(serde_json::json!([
                 {"id":"hls","format":"hls-ts","target":"clear","drms":[],"processing":"segments"},
-                {"id":"dash","format":"dash","target":"clear","drms":[],"processing":"stitch"}
+                {"id":"dash","format":"dash","target":"clear","drms":[],"processing":"stitch","dash_addressing":"list"}
             ]))
             .unwrap();
         let mut copies = Vec::new();
@@ -344,9 +344,10 @@ mod tests {
         assert_eq!(recipe, outputs);
         let bytes = read_private(&BoundPath::capture(&output_spec_file).unwrap(), 65_536).unwrap();
         let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(value["schema_version"], 2);
+        assert_eq!(value["schema_version"], 3);
         assert_eq!(value["outputs"][0]["processing"], "segments");
         assert_eq!(value["outputs"][1]["processing"], "stitch");
+        assert_eq!(value["outputs"][1]["dash_addressing"], "list");
     }
     #[test]
     fn partial_configuration_remains_owned_through_cleanup_failure_and_recovery() {

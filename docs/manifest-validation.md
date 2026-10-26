@@ -132,8 +132,27 @@ normalization of the media.
 
 ## DASH
 
-Native typed rules use the pinned fifth-edition schema and XML Schema 1.0
-datatype rules. In particular, `xs:unsignedInt` and `xs:unsignedLong` collapse
+Native checks support inherited `SegmentTemplate`, `SegmentList` and indexed
+`SegmentBase`. Lists check URL counts against exact timelines or nominal segment
+durations, and closed ranges for the same literal resource must not overlap.
+Range-only Lists require a single effective object `BaseURL`. Base checks
+initialization and index declarations. Actual file extents, index contents,
+sample clocks and any URI aliases need the separate native media verifier.
+Nominal timing arithmetic never relaxes the checks for an explicit timeline.
+
+Existing general typed rules use the pinned fifth-edition schema. Additional
+addressing facts use the [MPEG sixth-edition schema](https://github.com/MPEGGroup/DASHSchema/blob/6th-Ed/DASH-MPD.xsd):
+`startNumber` and `endNumber` are unsigned 64-bit integers, while `duration` and
+`timescale` are unsigned 32-bit integers. This native profile applies signed
+`eptDelta` to nominal addressing. `presentationDuration` declares a representation's
+own presented endpoint relative to `presentationTimeOffset`, in the MPD timescale.
+It must lie within the Period. An explicit `endNumber` fixes the finite reference
+count; without it, the count is derived from that own extent and nominal duration.
+Each nominal start must precede the own endpoint. These manifest checks do not
+require tracks of unequal duration to reach the longest Period endpoint; the
+media verifier must still prove their actual samples, clocks and nominal edges.
+Bounded arithmetic overflow leaves the dependent rule unresolved. Existing XML
+Schema 1.0 datatype rules remain unchanged. In particular, `xs:unsignedInt` and `xs:unsignedLong` collapse
 XML whitespace before lexical validation, so ` 1 ` has the same value as `1`.
 The qualification environment's PHP 8.5.7 / libxml 2.9.14 schema engine rejected
 eight such boundary cases. Those differences were resolved against

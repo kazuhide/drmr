@@ -226,7 +226,7 @@ pub(super) fn create_media(parent: &File) -> Result<File, ConversionError> {
     open_entry(parent, "media".as_ref(), Path::new("media"), true)
 }
 
-fn open_entry(
+pub(super) fn open_entry(
     parent: &File,
     name: &std::ffi::OsStr,
     path: &Path,
@@ -283,7 +283,8 @@ fn open_entry(
 pub(super) fn open_directory(path: &Path, allow_delete: bool) -> Result<File, ConversionError> {
     use std::os::windows::fs::{MetadataExt as _, OpenOptionsExt as _};
     let file = super::OpenOptions::new()
-        .access_mode(0x81)
+        // Directory identity pins also support owner/ACL queries at native moves.
+        .access_mode(0x0002_0081)
         .share_mode(if allow_delete { 7 } else { 3 })
         .custom_flags(0x0220_0000)
         .security_qos_flags(0x0001_0000)

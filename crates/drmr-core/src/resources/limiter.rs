@@ -190,6 +190,25 @@ pub(crate) struct ContextPermit {
     id: u64,
 }
 
+impl ContextPermit {
+    /// Release discarded metadata without waiting or acquiring a CPU token.
+    /// A live retained context can never grow through this operation.
+    pub(crate) fn shrink(&mut self, bytes: u64) -> Result<(), ReservationError> {
+        let mut used = lock(&self.limiter.used);
+        let (previous, _) = used
+            .contexts
+            .get_mut(&self.id)
+            .expect("live retained context");
+        let released = previous
+            .checked_sub(bytes)
+            .ok_or(ReservationError::Insufficient)?;
+        *previous = bytes;
+        used.context_bytes -= released;
+        self.limiter.available.notify_all();
+        Ok(())
+    }
+}
+
 impl Drop for ContextPermit {
     fn drop(&mut self) {
         let mut used = lock(&self.limiter.used);

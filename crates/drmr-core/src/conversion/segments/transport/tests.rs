@@ -421,6 +421,43 @@ fn cancelled_or_existing_destinations_never_publish_partial_output() {
     assert!(!output.exists());
 }
 
+fn align_separate_audio_fixture(
+    converter: &Converter,
+    request: ConversionRequest<'_>,
+    target_seconds: u64,
+) -> HlsSource {
+    // The independently generated fixtures initially advertise different AV
+    // bounds. Refuse that graph, then make the positive fixture conformant
+    // without changing any segment or its declared duration.
+    let source = load(converter, request.input, request.hls_input_keys);
+    assert_eq!(
+        convert(converter, request, source).err().unwrap().0,
+        "hls-target-duration-mismatch"
+    );
+    assert!(!request.output.exists());
+    let audio = request.input.parent().unwrap().join("audio/media.m3u8");
+    let text = std::fs::read_to_string(&audio).unwrap();
+    assert!(text.contains("#EXT-X-TARGETDURATION:2\n"));
+    std::fs::write(
+        &audio,
+        text.replace(
+            "#EXT-X-TARGETDURATION:2\n",
+            &format!("#EXT-X-TARGETDURATION:{target_seconds}\n"),
+        ),
+    )
+    .unwrap();
+    let source = load(converter, request.input, request.hls_input_keys);
+    assert_eq!(
+        source
+            .parts
+            .iter()
+            .map(|part| part.media.target_seconds)
+            .collect::<Vec<_>>(),
+        [target_seconds; 2]
+    );
+    source
+}
+
 #[test]
 fn separate_audio_retains_language_selection_resolution_and_channels() {
     let root = crate::native::private_tempdir().unwrap();
@@ -431,6 +468,8 @@ fn separate_audio_retains_language_selection_resolution_and_channels() {
     let converter = converter();
     let empty = HlsInputKeys::default();
     let video_source = load(&converter, &video, &empty);
+    let target_seconds = video_source.parts[0].media.target_seconds;
+    assert!(target_seconds > 2);
     let metadata = video_source.parts[0]
         .media
         .native
@@ -444,7 +483,6 @@ fn separate_audio_retains_language_selection_resolution_and_channels() {
     };
     let master = original.join("master.m3u8");
     std::fs::write(&master, format!("#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"stereo\",NAME=\"English\",LANGUAGE=\"en\",DEFAULT=YES,AUTOSELECT=YES,CHANNELS=\"2\",URI=\"audio/media.m3u8\"\n#EXT-X-STREAM-INF:BANDWIDTH=1000000,CODECS=\"avc1.{:02x}{:02x}{:02x},mp4a.40.2\",RESOLUTION={}x{},AUDIO=\"stereo\"\nvideo/media.m3u8\n", video.profile_idc, video.constraint_flags, video.level_idc, video.width, video.height)).unwrap();
-    let source = load(&converter, &master, &empty);
     let output = root.path().join("encrypted");
     let key = output_key(true);
     let input_keys = InputKeys::default();
@@ -459,6 +497,7 @@ fn separate_audio_retains_language_selection_resolution_and_channels() {
         hls_key_uri: None,
         hls_output_key: Some(&key),
     };
+    let source = align_separate_audio_fixture(&converter, request, target_seconds);
     let report = convert(&converter, request, load(&converter, &master, &empty)).unwrap();
     assert!(report.verification.passed);
     let keys = hls_keys(true);

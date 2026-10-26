@@ -1,10 +1,11 @@
 use super::*;
 
-fn sample(root: &Path) -> ExecutionPlan {
+pub(super) fn sample(root: &Path) -> ExecutionPlan {
     let input = root.join("source.mp4");
     std::fs::write(&input, b"\0\0\0\x18ftypisom original data").unwrap();
     let frozen = FrozenSource::capture(&input, &crate::concurrency::Stop::new()).unwrap();
     let mut plan = ExecutionPlan {
+        output_options: None,
         processing: None,
         kind: KIND.into(),
         schema_version: 1,
@@ -49,6 +50,22 @@ fn processing_is_required_and_identity_bound_only_in_version_five() {
     write_new(&path, &plan).unwrap();
     assert_eq!(read_saved(&path).unwrap(), SavedPlan::Single(plan.clone()));
     let encoded = serde_json::to_value(&plan).unwrap();
+    let old_bytes = serde_json::to_vec(&plan).unwrap();
+    let old_id = plan.plan_id.clone();
+    let mut inherited = plan.clone();
+    inherited.processing.as_mut().unwrap().segment_duration_ms = Some(6000);
+    assert_eq!(validate(&inherited).unwrap_err(), INVALID);
+    inherited.plan_id = identity(&inherited).unwrap();
+    validate(&inherited).unwrap();
+    assert_ne!(inherited.plan_id, old_id);
+    let inherited_path = root.path().join("inherited.plan.json");
+    write_new(&inherited_path, &inherited).unwrap();
+    assert_eq!(
+        read_saved(&inherited_path).unwrap(),
+        SavedPlan::Single(inherited)
+    );
+    assert_eq!(serde_json::to_vec(&plan).unwrap(), old_bytes);
+    assert_eq!(identity(&plan).unwrap(), old_id);
     for replacement in [
         serde_json::Value::Null,
         serde_json::json!({

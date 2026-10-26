@@ -39,10 +39,10 @@ def inline(text):
         plain = text[position:match.start()]
         if any(char in plain for char in "<`[]*"):
             raise ValueError("guide-inline-syntax")
-        result.append(escape(plain))
+        result.append(escape(plain, quote=False))
         code, label, target, strong = match.groups()
         if code is not None:
-            result.append("<code>" + escape(code) + "</code>")
+            result.append("<code>" + escape(code, quote=False) + "</code>")
         elif label is not None:
             parsed = urlsplit(target)
             fragment = re.fullmatch(r"#[a-z][a-z0-9-]{0,100}", target)
@@ -51,12 +51,12 @@ def inline(text):
                 raise ValueError("guide-link")
             result.append('<a href="' + escape(target, quote=True) + '">' + inline(label) + "</a>")
         else:
-            result.append("<strong>" + escape(strong) + "</strong>")
+            result.append("<strong>" + escape(strong, quote=False) + "</strong>")
         position = match.end()
     tail = text[position:]
     if any(char in tail for char in "<`[]*"):
         raise ValueError("guide-inline-syntax")
-    result.append(escape(tail))
+    result.append(escape(tail, quote=False))
     return "".join(result)
 
 
@@ -98,8 +98,10 @@ def body(source, locale):
             if end == len(lines) or end == i + 1:
                 raise ValueError("guide-code-fence")
             example += 1
-            label = f"example-{example}-title"
+            label = f"ex{example}"
             code = escape("\n".join(lines[i + 1:end]) + "\n", quote=False)
+            # A conjunction followed by whitespace cannot begin an HTML character reference.
+            code = re.sub(r"&amp;&amp;(?=\s)", "&&", code)
             output.append(f'<figure class="guide-example" aria-labelledby="{label}" data-code-language="{language}">'
                           f'<figcaption id="{label}">{labels["example"]} {example}: {language}</figcaption>'
                           f'<pre tabindex="0"><code>{code}</code></pre></figure>')
@@ -172,7 +174,10 @@ def body(source, locale):
         output.append("<p>" + inline(" ".join(paragraph)) + "</p>")
     if chapter:
         output.append("</section>")
-    return "\n".join(output)
+    # Compact only actual tags; literal code and all visible text are unchanged.
+    tags = re.compile(r'<[a-z][^<>]*>')
+    attributes = re.compile(r'(aria-labelledby|scope|tabindex|data-code-language|lang|hreflang)="([A-Za-z0-9_-]+)"')
+    return tags.sub(lambda tag: attributes.sub(r'\1=\2', tag[0]), "".join(output))
 
 
 def expand_examples(source, locale, repository_root):

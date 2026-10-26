@@ -24,13 +24,19 @@ The [W3C MP4 encryption description](https://www.w3.org/TR/eme-stream-mp4/) expl
 A typical AAC-LC audio frame contains 1,024 samples. At 48,000 samples per second, one frame lasts about 21.333 milliseconds. Two seconds therefore contain 93.75 frames. At 44,100 samples per second, one frame lasts about 23.220 milliseconds and two seconds contain about 86.133 frames. A packager must place the boundary on a complete frame, so audio segment durations can alternate around a two-second video target.
 
 The segment target and the integer `EXT-X-TARGETDURATION` declaration have different
-roles. RFC 8216 compares each `EXTINF` duration after rounding it to the nearest
-integer. drmr derives a conservative track bound by rounding final segment
-durations upward. Common conversion applies the largest generated audio/video
-bound to each media playlist. For example, separate bounds of 2 and 3 become 3.
-The encoded segments and their `EXTINF` durations are preserved. Independent
-verification reads the final declarations and rejects inconsistent bounds. This
-follows [RFC 8216 section 6.2.4](https://www.rfc-editor.org/rfc/rfc8216.html#section-6.2.4),
+roles. [RFC 8216 section 4.3.3.1](https://www.rfc-editor.org/rfc/rfc8216.html#section-4.3.3.1)
+compares each `EXTINF` duration after rounding it to the nearest integer.
+For original-segment processing, and when stitching with the source HLS
+target, drmr checks every final segment against that bound and retains it
+in every generated media playlist. For
+example, 6.013977778 seconds fits a target of 6; 6.5 seconds does not. The
+check compares decimal digits exactly and leaves the actual durations and
+encoded media unchanged. If a new segment cannot fit the inherited bound,
+conversion stops before publication. Other sources and older plans with a
+different packaging target retain the generated conservative bound. Common
+conversion applies the largest such audio/video bound to each media playlist.
+Independent verification reads the final declarations and rejects inconsistent
+bounds. This follows [RFC 8216 section 6.2.4](https://www.rfc-editor.org/rfc/rfc8216.html#section-6.2.4),
 which separately allows target-duration exceptions for VOD subtitles and I-frame
 playlists.
 
@@ -40,9 +46,54 @@ Audio can also carry encoder priming: samples decoded at the beginning that shou
 
 ## Generic conversion and timing limits
 
-`--processing` selects `auto`, `segments`, or `stitch` when converting directly or saving a plan. `auto` selects a qualified route and retains the existing packaging behavior when omitted. The saved plan records the requested and resolved modes plus the boundary guarantee; execution cannot override them.
+`--processing` selects `auto`, `segments`, or `stitch` when converting directly or saving a plan. `auto` selects a qualified route and is the default when omitted. The saved plan records the requested and resolved modes plus the boundary guarantee; execution cannot override them.
 
-`stitch` prepares complete tracks before packaging. Local DASH initialization data and fragments are assembled in timeline order. HLS AES-128 resources are decrypted separately before assembly; their padding and cipher state cannot be treated as one encrypted stream. SAMPLE-AES TS is decrypted in Rust. Shaka Packager packages the prepared tracks into the requested output: a supported MP4 file, or HLS/DASH segmented again at a two-second target. HLS AES-128 is applied to each resulting resource with a fresh initialization vector and padding. This route uses whole-track temporary disk files and does not retain original segment boundaries.
+`stitch` prepares complete tracks before packaging. Local DASH initialization data and fragments are assembled in timeline order. HLS AES-128 resources are decrypted separately before assembly; their padding and cipher state cannot be treated as one encrypted stream. SAMPLE-AES TS is decrypted in Rust. Shaka Packager packages the prepared tracks into the requested output: a supported MP4 file, or HLS/DASH segmented again at its resolved target. HLS AES-128 is applied to each resulting resource with a fresh initialization vector and padding. This route uses whole-track temporary disk files and does not retain original segment boundaries.
+
+For a newly created plan or direct conversion from HLS, the common admitted
+`EXT-X-TARGETDURATION` is retained as the selected bound. This declaration is
+separate from the usual video segment length. For example, video segments can
+last 2.000 seconds while fractional AAC durations make the conservative common
+declaration 3. Asking a packager for three-second segments can then move a
+video cut to the next four-second access point and exceed that source bound.
+For HLS and DASH output, drmr measures the longest original resource interval
+for each selected video stream using admitted sample clocks. It selects a
+packaging request no larger than those intervals or the inherited bound. Two-second video under
+a bound of 3 therefore uses a two-second request; six-second video under a bound
+of 6 keeps a six-second request. Audio-only input uses the selected bound.
+HLS output retains the original declaration and must pass its final duration
+proof. DASH declarations describe the resulting sample intervals.
+All selected audio/video media playlists must agree, as required by
+[RFC 8216 section 6.2.4](https://www.rfc-editor.org/rfc/rfc8216.html#section-6.2.4).
+Missing, invalid or overflowing values, and conflicting declarations, are
+refused. MP4 and DASH sources retain a two-second fallback because this route
+does not infer a nominal packaging target from their sample or timeline lengths.
+New saved plans, versions 7/8, store the exact packaging request in
+`segment_duration_ms`. Execution passes that value unchanged and derives the
+separate HLS bound from the same byte-bound source. Versions 1–6 retain their
+original behavior: two seconds for implicit selections, or the exact explicitly
+saved request, with generated HLS headers. They do not adopt the
+new bound-inheritance policy, even when a saved request happens to equal the
+source declaration. Create a new plan to use the current selection policy.
+Milliseconds are stored as a positive 32-bit integer; a measured video interval
+is rounded downward so the request cannot move just beyond an access point.
+
+The target does not promise identical segment boundaries. Shaka's
+[consistent chunking algorithm](https://github.com/shaka-project/shaka-packager/blob/v3.8.0/packager/media/chunking/chunking_handler.h)
+uses the absolute sample clock and the next permitted access point. A nonzero
+source origin can leave a partial first segment, and the final segment can be
+shorter. To avoid an unintended short first audio segment, `stitch` temporarily
+projects the first coded sample in the private audio packaging input to time
+zero. After packaging, drmr restores the input byte for byte and restores the
+original absolute clocks in the output, before applying playback windows,
+writing final manifests and independently comparing the complete media. The
+retained source is unchanged. `segments` keeps the original sample membership
+and does not perform this projection. Audio cuts retain complete frames.
+Matching targets therefore do not
+establish identical audio/video cut positions; every original sample, timestamp
+and relative audio/video offset must still pass the independent media checks.
+Use a qualified `segments` route when retaining sample membership and original
+boundaries is required.
 
 `segments` converts supported matching media containers at the original segment boundaries. Rust preserves each segment's sample membership, raw presentation/decode clocks and duration while updating encryption metadata, data locations and manifest declarations. Custom keyframes and unequal segment durations are retained; encrypted resource byte sizes can change. Native processing and boundary verification read the original resources without assembling a whole-track intermediate. Segment boundaries do not make media state independent: TS continuity, timestamps and frame assembly remain ordered checks across resources. An unsupported container change or source profile is refused, with no silent switch to `stitch`.
 
@@ -56,11 +107,26 @@ Silent audio has the same sample bytes at different sample rates, so decoded-byt
 
 Presentation times determine when content is displayed; decode times determine when a decoder must process it. Comparing absolute times across all tracks also detects changes to relative audio/video timing. Manifest timeline declarations are checked separately from media bytes. DASH compares times exactly in their declared clock units. HLS segment durations allow the greater of one media-clock tick or about one millisecond for decimal playlist rounding; this does not relax the exact packet timing comparison.
 
+MP4 edit lists map encoded sample clocks onto movie presentation time. A
+normal-rate single edit with a duration of zero applies to all subsequent
+fragmented media; it does not declare an empty presentation. drmr applies the
+admitted audio and video edits when checking DASH intervals, total duration
+and single-file indexes, while comparing original packet clocks separately.
+Ignoring a video edit can otherwise offset every manifest interval even when
+the compressed samples are unchanged. See the
+[W3C initialization-segment rules](https://www.w3.org/TR/mse-byte-stream-format-isobmff/#initialization-segments).
+
 For generated static DASH, the common presentation starts at the earliest presented sample and ends at the latest presented sample across all tracks. The final period and presentation durations round that exact interval upward to nine decimal places. This changes only its decimal representation; compressed payloads and packet clocks remain unchanged. An open-ended fragmented source can therefore produce a period slightly longer than its nominal ten-second duration. A source with a finite audio playback window has different presentation bounds, as described below.
 
 The [joint audio/video regression](https://github.com/kazuhide/drmr/blob/main/crates/drmr/tests/conversion_signaling.rs) independently decrypts the complete output tracks and checks all 240 video packets, 470 AAC packets, their clocks, and the complete decoded media, including 481,280 audio samples per channel. Fresh verification rejects shortening the manifest to ten seconds even when its media resources are unchanged.
 
 Video with reordered pictures can start with a composition offset: the difference between a picture's decode and presentation times. Shaka Packager 3.8.0 normally resets the initial offset. That changes presentation times even when packet content matches. drmr explicitly disables this reset and tests a source with reordered pictures against its original timestamps. See the [pinned packager source](https://github.com/shaka-project/shaka-packager/tree/v3.8.0/packager/media/formats/mp4).
+
+New downloads and conversions retain the source's relative media directories,
+independently of the processing mode. Older saved plans keep their recorded
+placement. See
+[retaining source directories](source-layout.md) for retained downloads,
+generated filenames and the supported source-relative output layout.
 
 ## Finite audio presentation windows
 
@@ -112,7 +178,7 @@ The [finite-output regression](https://github.com/kazuhide/drmr/blob/main/crates
 
 ## Generic resource limits
 
-Generic conversion is deliberately bounded: at most 16 GiB per staged track, 64 tracks, and 100,000 referenced DASH segments. Exceeding a limit fails rather than reporting partial verification. The first local DASH profile is a static, single-period presentation with finite, nonnegative, continuous `SegmentTimeline` entries, a shared presentation offset matching the earliest presented sample, and relative resources confined to the manifest directory. Live/dynamic input, multiple periods, byte ranges, alternate addressing, event declarations and presentation metadata that cannot be preserved are refused. The fragmented MP4 HLS profile uses completed, local playlists; unsupported rendition metadata and discontinuities are refused. An external audio group must apply consistently to every video variant; mixed associations are refused. Percent-encoded local resource paths are decoded once before confinement checks, so they select the URI target rather than a similarly named literal file. In-band MP4 event messages are also refused until their preservation is supported. These limits describe drmr's implementation, not limits of the formats.
+Generic conversion is deliberately bounded: at most 16 GiB per staged track, 64 tracks, and 100,000 referenced DASH segments. Exceeding a limit fails rather than reporting partial verification. Local DASH accepts one static Period with finite nominal-duration templates, explicit timelines, lists, or supported flat single-file indexes. Resources must remain confined to the manifest directory; declared timing and the shared presentation origin must agree with actual media. Lists can use separate objects or disjoint byte ranges in one object. Live/dynamic input, multiple periods, hierarchical or external indexes, event declarations and presentation metadata that cannot be preserved are refused. The fragmented MP4 HLS profile uses completed, local playlists; byte ranges, unsupported rendition metadata and discontinuities are refused. An external audio group must apply consistently to every video variant; mixed associations are refused. Percent-encoded local resource paths are decoded once before confinement checks, so they select the URI target rather than a similarly named literal file. In-band MP4 event messages are also refused until their preservation is supported. See [DASH references](dash-addressing.md) for the addressing and range conditions. These limits describe drmr's implementation, not limits of the formats.
 
 ### Multiple qualities and audio declarations
 
@@ -169,9 +235,10 @@ For a supported HLS, static DASH or MP4 URL, `analyze` and direct `convert` reta
 the complete source in the chosen download directory. Content detection selects
 `input.m3u8`, `input.mpd` or `input.mp4` as the local entrypoint. HLS localization
 preserves playlist declarations, duration text, sequence numbers and rendition
-associations. DASH localization preserves protection declarations, PSSH and the
-explicit finite timeline while pointing at the downloaded initialization and
-media resources. Original manifest bytes are retained separately. MP4 bytes are
+associations. DASH localization preserves protection declarations, PSSH, finite
+resource timing and supported byte ranges while pointing at the downloaded
+initialization and media resources. Original manifest bytes are retained
+separately. MP4 bytes are
 saved unchanged. The source is not reconstructed from a probe summary, which
 could lose those facts. See the [URL input profile](conversion-support.md#url-input)
 for the accepted manifest addressing and media conditions.
@@ -191,6 +258,14 @@ count at 100,000, and planned text and URL metadata at 16 MiB. URI expansion is
 checked before constructing the reference graph. Fetch settings can impose
 additional lower limits; increasing a setting does not bypass the profile. Resource
 bodies stream to private files rather than being retained together in memory.
+
+The acquisition graph, preserved paths and ancestor directories, file-ownership
+records, and overlapping verification inventories share a 128 MiB metadata
+ceiling. Admission accounts for retained metadata before creating files and
+keeps that memory charged while the downloaded source is in use. Deep or long
+paths can reach this ceiling before the resource-count limit. Worker buffers
+and transient acquisition state have a separate bounded reservation; raising a
+fetch-policy resource limit does not remove these memory limits.
 
 ## MPEG transport stream input
 
@@ -232,7 +307,7 @@ The complete encoded track, every raw PTS/DTS, all decoded samples and the coded
 
 For fMP4 HLS and DASH, the final initialization segment records this range in a standard MP4 edit list: an empty edit retains the original timeline origin, followed by a normal-speed edit for the presented samples. Its movie clock can express both 90 kHz transport ticks and individual audio samples exactly; the media clock remains 90 kHz. Movie and track duration headers remain zero. drmr writes these edits after packaging. Before checking all coded frames or repackaging, it removes only this recognized declaration from a private copy. It then binds the declared playback range to the checked frame counts and clocks, and rechecks the original declaration. This also avoids the packager rounding its timestamp adjustment. The input and final output retain their edits. Unsupported edit lists still fail.
 
-HLS declarations are calculated from the output's own playback bounds. DASH retains the complete coded `SegmentTimeline`; its common period covers the maximum presented end across all tracks, including when audio ends before video. TS output records the shortened range in the final playlist declaration. Fresh verification independently reconstructs the output range and compares all coded media and the independently established native playback bounds. `--decode` also compares complete raw and presented PCM samples. This does not establish DRM-device playback or general support for arbitrary MP4 edits. drmr currently validates this edit profile together with an HLS or DASH manifest. Standalone MP4 admission and output with this edit profile require a separate verification route and are refused.
+HLS declarations are calculated from the output's own playback bounds. DASH keeps the complete coded timing and writes the selected reference form; its common period covers the maximum presented end across all tracks, including when audio ends before video. A nominal template must satisfy the additional timing proof in [DASH references](dash-addressing.md). TS output records the shortened range in the final playlist declaration. Fresh verification independently reconstructs the output range and compares all coded media and the independently established native playback bounds. `--decode` also compares complete raw and presented PCM samples. This does not establish DRM-device playback or general support for arbitrary MP4 edits. drmr currently validates this edit profile together with an HLS or DASH manifest. Standalone MP4 admission and output with this edit profile require a separate verification route and are refused.
 
 Creating a transport stream from a progressive MP4 can itself change audio trimming or padding. This route proves identity to the supplied transport-stream presentation, not to an earlier file from which it was created. All existing staged-size, resource-budget, timeout, cancellation, and confirmed-process-cleanup limits still apply. Access-unit evidence is streamed with an 8 MiB per-packet limit and a charged 64 MiB reader bound; a malformed, oversized, incomplete, or unsuccessful read fails rather than returning a partial proof.
 
@@ -244,7 +319,7 @@ AAC frames contain 1,024 samples in this profile. A frame lasts about 21.333 mil
 
 ### DASH output from transport streams
 
-MPEG-TS timestamps often start above zero. DASH uses a presentation-time offset to map media clocks onto the manifest's playback timeline. Audio can begin before the first video picture; choosing that picture as the common start would hide the earlier audio. drmr chooses the earliest original presentation time across all tracks as the shared start. It preserves the original media timestamps and relative audio/video timing, checks each fragment against the manifest's integer segment timeline, and reads the final manifest again before publication. It does not move each track independently to zero.
+MPEG-TS timestamps often start above zero. DASH uses a presentation-time offset to map media clocks onto the manifest's playback timeline. Audio can begin before the first video picture; choosing that picture as the common start would hide the earlier audio. drmr chooses the earliest original presentation time across all tracks as the shared start. It preserves the original media timestamps and relative audio/video timing, checks each fragment against the selected manifest reference form, and reads the final manifest again before publication. The final output does not independently reset each track's timeline to zero.
 
 An AAC track can end between two decimal fractions that a manifest can express. For example, transport clocks count 90,000 ticks per second, so some exact durations contain a repeating decimal. drmr keeps segment and packet times as exact integers or rational values. It represents the final DASH period duration by rounding its exact latest track end upward to nine decimal places, a difference of less than one nanosecond. The declared duration must equal that calculated value; this is an XML representation rule, not a packet-timing tolerance. Audio and video keep their own complete durations.
 
@@ -299,7 +374,7 @@ or lose frames at a boundary.
 
 Shaka Packager produces separate video and audio TS playlists when both roles
 are present. drmr writes a master playlist that preserves their association.
-Video segments target two seconds. Audio boundaries follow complete frames and
+Both tracks use the resolved segment target. Audio boundaries follow complete frames and
 can differ in both duration and number of segments. The full presentation and
 the original relative audio/video timing must still match exactly.
 

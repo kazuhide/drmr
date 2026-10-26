@@ -7,12 +7,14 @@ use crate::conversion::FrozenSource;
 use crate::{
     conversion::{
         ConversionError, ConversionReport, Converter, DrmSystem, OutputSignaling, SourceInventory,
-        SourceValidationPurpose, ValidationDepth, VerificationReport, VerificationRequest,
-        VerificationSource,
+        SourceQualification, SourceValidationPurpose, ValidationDepth, VerificationReport,
+        VerificationRequest, VerificationSource,
         conformance::{ManifestValidationReport, ManifestValidationTools},
+        dash_addressing::DashAddressing,
         files, frozen,
         key_file::{BundleOperatorKeys, OperatorKeys},
-        processing::{ProcessingMode, ProcessingSelection},
+        output_options::OutputOptions,
+        processing::{ProcessingMode, ProcessingSelection, segment_target::HlsTargetPolicy},
     },
     inspection::{OutputFormat, TargetProtection},
 };
@@ -53,6 +55,18 @@ pub struct BundleOutputIntent {
         skip_serializing_if = "Option::is_none"
     )]
     pub processing: Option<ProcessingMode>,
+    #[serde(
+        default,
+        deserialize_with = "present_addressing",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub dash_addressing: Option<DashAddressing>,
+}
+
+fn present_addressing<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<DashAddressing>, D::Error> {
+    DashAddressing::deserialize(deserializer).map(Some)
 }
 
 fn present_mode<'de, D: serde::Deserializer<'de>>(
@@ -66,6 +80,19 @@ fn present_mode<'de, D: serde::Deserializer<'de>>(
 pub struct OutputProcessing {
     pub id: String,
     pub selection: ProcessingSelection,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OutputSettings {
+    pub id: String,
+    pub options: OutputOptions,
+}
+
+fn present_options<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Vec<OutputSettings>>, D::Error> {
+    Vec::<OutputSettings>::deserialize(deserializer).map(Some)
 }
 
 fn present_processing<'de, D: serde::Deserializer<'de>>(
@@ -97,6 +124,12 @@ pub struct BundlePlan {
         skip_serializing_if = "Option::is_none"
     )]
     pub processing: Option<Vec<OutputProcessing>>,
+    #[serde(
+        default,
+        deserialize_with = "present_options",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub output_options: Option<Vec<OutputSettings>>,
 }
 impl BundlePlan {
     /// Legacy version-two plans retain their original complete-decode requirement.
@@ -108,6 +141,18 @@ impl BundlePlan {
             .as_ref()
             .and_then(|choices| choices.iter().find(|choice| choice.id == id))
             .map_or(ProcessingMode::Stitch, |choice| choice.selection.resolved)
+    }
+    pub(super) fn processing_selection(&self, id: &str) -> Option<ProcessingSelection> {
+        self.processing
+            .as_ref()
+            .and_then(|choices| choices.iter().find(|choice| choice.id == id))
+            .map(|choice| choice.selection)
+    }
+    pub(super) fn output_options(&self, id: &str) -> Option<&OutputOptions> {
+        self.output_options
+            .as_ref()
+            .and_then(|settings| settings.iter().find(|setting| setting.id == id))
+            .map(|setting| &setting.options)
     }
 }
 
@@ -197,7 +242,8 @@ impl Converter {
             .map(|output| {
                 Ok(OutputProcessing {
                     id: output.id.clone(),
-                    selection: ProcessingSelection::resolve(
+                    selection: command.resolve_processing(
+                        qualified.hls_timing,
                         output.processing.unwrap_or(self.processing_mode),
                         qualified.actual_format,
                         output.format,
@@ -215,9 +261,16 @@ impl Converter {
                     .validate_drm_source(source, &output.drms, output.format, output.target)?;
             }
         }
+        let output_options = resolve_output_settings(
+            &command,
+            frozen.entrypoint(),
+            &qualified,
+            &outputs,
+            &processing,
+        )?;
         let mut plan = BundlePlan {
             kind: KIND.into(),
-            schema_version: 6,
+            schema_version: 8,
             plan_id: String::new(),
             source: frozen.inventory().clone(),
             source_format: qualified.actual_format,
@@ -225,6 +278,7 @@ impl Converter {
             processing: Some(processing),
             outputs,
             required_depth: Some(self.backend.validation_depth),
+            output_options: Some(output_options),
         };
         plan.plan_id = identity(&plan)?;
         validate(&plan)?;
@@ -319,11 +373,18 @@ impl Converter {
         plan: &BundlePlan,
         source: VerificationSource<'_>,
     ) -> Result<(), ConversionError> {
-        let command = self.with_processing_clone(source_processing(
+        let mut command = self.with_processing_clone(source_processing(
             plan.outputs
                 .iter()
                 .map(|output| plan.processing_mode(&output.id)),
         ));
+        // Common admission precedes per-output replay and must use the same generation's policy.
+        command.hls_target_policy = if plan.schema_version >= 8 {
+            HlsTargetPolicy::SavedCurrent
+        } else {
+            HlsTargetPolicy::Legacy
+        };
+        command.source_hls_target_ms = None;
         let qualified = command.validate_source(source, SourceValidationPurpose::Conversion)?;
         self.register_bundle_tracks(qualified.track_protection.len());
         if qualified.actual_format != plan.source_format
@@ -334,6 +395,7 @@ impl Converter {
         {
             return Err(UNSUPPORTED);
         }
+        revalidate_output_settings(&command, plan, source.input, &qualified)?;
         for output in &plan.outputs {
             if !output.drms.is_empty() {
                 command
@@ -391,6 +453,7 @@ impl Converter {
             .with_decode(false)
             .validate_source(source, SourceValidationPurpose::Verification)?;
         command.register_bundle_tracks(qualified.track_protection.len());
+        revalidate_output_settings(&command, plan, source.input, &qualified)?;
         let manifests = outputs::ManifestDemands::capture(&command, plan)?;
         let (execution, retained) =
             execution::Execution::new(&command)
@@ -535,12 +598,17 @@ pub fn read_output_spec(path: &Path) -> Result<Vec<BundleOutputIntent>, Conversi
         return Err(ERROR);
     }
     let spec: Specification = serde_json::from_slice(&bytes).map_err(|_| ERROR)?;
-    if !matches!(spec.schema_version, 1 | 2)
+    if !matches!(spec.schema_version, 1..=3)
         || (spec.schema_version == 1
             && spec
                 .outputs
                 .iter()
                 .any(|output| output.processing.is_some()))
+        || spec.schema_version < 3
+            && spec
+                .outputs
+                .iter()
+                .any(|output| output.dash_addressing.is_some())
     {
         return Err(ERROR);
     }
@@ -584,6 +652,56 @@ fn source_processing(modes: impl Iterator<Item = ProcessingMode>) -> ProcessingM
     }
 }
 
+fn resolve_output_settings(
+    command: &Converter,
+    input: &Path,
+    qualified: &SourceQualification,
+    outputs: &[BundleOutputIntent],
+    processing: &[OutputProcessing],
+) -> Result<Vec<OutputSettings>, ConversionError> {
+    outputs
+        .iter()
+        .zip(processing)
+        .map(|(output, processing)| {
+            let mut child = command.with_processing_clone(processing.selection.resolved);
+            if let Some(addressing) = output.dash_addressing {
+                child = child.with_dash_addressing(addressing);
+            }
+            Ok(OutputSettings {
+                id: output.id.clone(),
+                options: child.resolved_output_options(
+                    input,
+                    qualified,
+                    output.format,
+                    processing.selection.resolved,
+                )?,
+            })
+        })
+        .collect()
+}
+
+fn revalidate_output_settings(
+    command: &Converter,
+    plan: &BundlePlan,
+    input: &Path,
+    qualified: &SourceQualification,
+) -> Result<(), ConversionError> {
+    for output in &plan.outputs {
+        let child = command
+            .with_processing_clone(plan.processing_mode(&output.id))
+            .using_output_options(plan.output_options(&output.id));
+        super::revalidate_options(
+            &child,
+            input,
+            qualified,
+            output.format,
+            plan.processing_mode(&output.id),
+            plan.output_options(&output.id),
+        )?;
+    }
+    Ok(())
+}
+
 fn normalized(outputs: &[BundleOutputIntent]) -> Result<Vec<BundleOutputIntent>, ConversionError> {
     if outputs.is_empty()
         || outputs.len() > MAX_OUTPUTS
@@ -615,6 +733,7 @@ fn validate_outputs(outputs: &[BundleOutputIntent]) -> Result<(), ConversionErro
             || (output.conformance == ManifestValidation::Required
                 && output.format == OutputFormat::Mp4)
             || !drm_profile(output)
+            || output.format != OutputFormat::Dash && output.dash_addressing.is_some()
         {
             return Err(INVALID);
         }
@@ -694,6 +813,8 @@ struct Identity<'a> {
     required_depth: Option<ValidationDepth>,
     #[serde(skip_serializing_if = "Option::is_none")]
     processing: Option<&'a [OutputProcessing]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output_options: Option<&'a [OutputSettings]>,
 }
 
 fn identity(plan: &BundlePlan) -> Result<String, ConversionError> {
@@ -706,6 +827,7 @@ fn identity(plan: &BundlePlan) -> Result<String, ConversionError> {
         outputs: &plan.outputs,
         required_depth: plan.required_depth,
         processing: plan.processing.as_deref(),
+        output_options: plan.output_options.as_deref(),
     })
     .map_err(|_| INVALID)?;
     Ok(hex::encode(Sha256::digest(bytes)))
@@ -717,9 +839,13 @@ pub(super) fn validate(plan: &BundlePlan) -> Result<(), ConversionError> {
             (
                 plan.schema_version,
                 plan.required_depth,
-                plan.processing.is_some()
+                plan.processing.is_some(),
+                plan.output_options.is_some()
             ),
-            (2, None, false) | (4, Some(_), false) | (6, Some(_), true)
+            (2, None, false, false)
+                | (4, Some(_), false, false)
+                | (6, Some(_), true, false)
+                | (8, Some(_), true, true)
         )
         || plan.plan_id.len() != 64
         || !plan
@@ -732,6 +858,14 @@ pub(super) fn validate(plan: &BundlePlan) -> Result<(), ConversionError> {
     }
     frozen::validate(&plan.source).map_err(|_| INVALID)?;
     validate_outputs(&plan.outputs)?;
+    if plan.schema_version < 8
+        && plan
+            .outputs
+            .iter()
+            .any(|output| output.dash_addressing.is_some())
+    {
+        return Err(INVALID);
+    }
     if let Some(choices) = &plan.processing {
         if choices.len() != plan.outputs.len() {
             return Err(INVALID);
@@ -755,6 +889,27 @@ pub(super) fn validate(plan: &BundlePlan) -> Result<(), ConversionError> {
         .any(|output| output.processing.is_some())
     {
         return Err(INVALID);
+    }
+    if let Some(settings) = &plan.output_options {
+        if settings.len() != plan.outputs.len() {
+            return Err(INVALID);
+        }
+        for (setting, output) in settings.iter().zip(&plan.outputs) {
+            if setting.id != output.id
+                || output
+                    .dash_addressing
+                    .is_some_and(|value| Some(value) != setting.options.dash_addressing)
+            {
+                return Err(INVALID);
+            }
+            super::validate_options(
+                &setting.options,
+                &plan.source,
+                plan.source_format,
+                output.format,
+                plan.processing_mode(&output.id),
+            )?;
+        }
     }
     if identity(plan)? != plan.plan_id {
         return Err(INVALID);
@@ -816,5 +971,7 @@ pub(super) fn write_new(path: &Path, plan: &BundlePlan) -> Result<(), Conversion
     })
 }
 
+#[cfg(test)]
+mod options_tests;
 #[cfg(test)]
 mod tests;

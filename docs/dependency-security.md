@@ -15,9 +15,15 @@ The complete dependency paths, resolved features and target kinds are retained i
 
 A direct GLib 0.20 upgrade would change the GTK3 type family used by the current Linux WebView dependencies. A switch to `proc-macro-error2` does not resolve maintenance exposure: [RUSTSEC-2026-0173](https://rustsec.org/advisories/RUSTSEC-2026-0173) also identifies it as unmaintained. Reevaluate when the WebView/GTK dependency family offers a compatible maintained path, when either advisory changes, or whenever the locked graph changes. Do not replace either package with an unreviewed fork solely to silence a warning.
 
+## Windows source-layout preparation
+
+When preparing outputs that retain source directories, Windows builds use a pinned source extension to `private-fs 0.2.1`. Directory creation, media relocation and removal of staging entries use already-opened object handles. Replacing a source pathname therefore cannot select a different object for those operations. drmr checks ownership, access controls and recorded file identities before requesting the change. The final publication step uses its separate staging checks. Key and authentication files retain the strict private-directory policy.
+
+All 31 publisher files, the three modified source files and the original archive checksum are checked against `tools/backports/private-fs-0.2.1.json`. The extension reuses the package's native rename and deletion operations. The Windows suite checks replacement after identity validation, occupied destinations, invalid names and nonempty directories as an ordinary user. The package's MIT and Apache license texts remain in distribution notices.
+
 ## Reproduce the checks
 
-Use the supported Rust toolchain and cached locked dependency sources. Verify the complete backport and exercise its real string iterator under optimization:
+Use the supported Rust toolchain and cached locked dependency sources. Verify both complete source patches and exercise the GLib string iterator under optimization:
 
 ```sh
 python3 tools/verify_backports.py
@@ -36,6 +42,6 @@ python3 tools/audit_dependencies.py --database /path/to/advisory-db \
 
 The native mitigation gate requires Linux x64. Omitting `--native-regression` permits inspection elsewhere but leaves GLib's mitigation pending and returns failure for the Linux Desktop scope.
 
-`cargo-audit` skips the path-vendored GLib package. For discovery, the script additionally audits a temporary lock file that restores only GLib's exact publisher registry identity and archive checksum. It retains **both** raw audit results, both input hashes and the separate normalized input. The normalized result is not presented as an audit of the actual lock file. Backport verification and runtime regression remain independent requirements.
+`cargo-audit` skips path-vendored packages. For discovery, the script additionally audits a temporary lock file that restores the exact publisher registry identities and archive checksums of the reviewed `glib 0.18.5` and `private-fs 0.2.1` sources. It retains **both** raw audit results, both input hashes and the separate normalized input. The normalized result is not presented as an audit of the actual lock file. Source verification and native runtime regression remain independent requirements.
 
 CI summaries label the known maintenance exposure and source mitigation explicitly. The policy accepts only these documented dispositions; new advisories and unresolved findings remain failures. A passing advisory gate does not establish distribution signing, GUI behavior, media verification or license compliance.

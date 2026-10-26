@@ -2,6 +2,8 @@
 pub mod bundle;
 pub(super) mod destination;
 #[cfg(test)]
+mod options_tests;
+#[cfg(test)]
 mod tests;
 use super::{
     ConversionError, ConversionReport, ConversionRequest, Converter, FrozenSource,
@@ -9,6 +11,7 @@ use super::{
     SourceValidationPurpose, ValidationDepth, VerificationReport, VerificationRequest,
     VerificationSource, files, frozen,
     key_file::OperatorKeys,
+    output_options::OutputOptions,
     processing::{ProcessingMode, ProcessingSelection},
 };
 use crate::inspection::{Inspection, OutputFormat, TargetProtection};
@@ -55,12 +58,12 @@ pub fn read_saved(path: &Path) -> Result<SavedPlan, ConversionError> {
         return Err(INVALID);
     }
     match header.schema_version {
-        1 | 3 | 5 => {
+        1 | 3 | 5 | 7 => {
             let plan = serde_json::from_slice(&bytes).map_err(|_| INVALID)?;
             validate(&plan)?;
             Ok(SavedPlan::Single(plan))
         }
-        2 | 4 | 6 => {
+        2 | 4 | 6 | 8 => {
             let plan = serde_json::from_slice(&bytes).map_err(|_| INVALID)?;
             bundle::validate(&plan)?;
             Ok(SavedPlan::Bundle(plan))
@@ -105,6 +108,12 @@ pub struct ExecutionPlan {
         skip_serializing_if = "Option::is_none"
     )]
     pub processing: Option<ProcessingSelection>,
+    #[serde(
+        default,
+        deserialize_with = "present_options",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub output_options: Option<OutputOptions>,
 }
 impl ExecutionPlan {
     /// Legacy version-one plans retain their original complete-decode requirement.
@@ -121,6 +130,12 @@ fn present_processing<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Option<ProcessingSelection>, D::Error> {
     ProcessingSelection::deserialize(deserializer).map(Some)
+}
+
+fn present_options<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<OutputOptions>, D::Error> {
+    OutputOptions::deserialize(deserializer).map(Some)
 }
 
 pub(super) fn present_depth<'de, D: serde::Deserializer<'de>>(
@@ -181,12 +196,14 @@ impl Converter {
         source: VerificationSource<'_>,
     ) -> Result<InputAnalysis, ConversionError> {
         let frozen = self.capture_source(source.input)?;
+        self.check_downloaded_inventory_binding(frozen.inventory())?;
         let command = self.using_frozen_source(&frozen);
         let qualified = command.validate_source(
             rebound(source, &frozen),
             SourceValidationPurpose::Conversion,
         )?;
         frozen.check_original()?;
+        self.check_downloaded()?;
         Ok(InputAnalysis {
             kind: "input-analysis",
             schema_version: 2,
@@ -209,6 +226,7 @@ impl Converter {
         let output = super::destination(request.output).map_err(|_| UNSAFE)?;
         let destination = destination::OutputGuard::new(&output)?;
         let frozen = self.capture_source(request.input.input)?;
+        self.check_downloaded_inventory_binding(frozen.inventory())?;
         let command = self.using_frozen_source(&frozen);
         let qualified = command.validate_source(
             rebound(request.input, &frozen),
@@ -221,14 +239,24 @@ impl Converter {
                 qualified.input.format.into()
             }
         });
-        let processing =
-            ProcessingSelection::resolve(self.processing_mode, qualified.actual_format, format)?;
+        let processing = command.resolve_processing(
+            qualified.hls_timing,
+            self.processing_mode,
+            qualified.actual_format,
+            format,
+        )?;
         if !qualified.eligible_formats.contains(&format) || !supported(format, request.target) {
             return Err(UNSUPPORTED);
         }
+        let output_options = command.resolved_output_options(
+            frozen.entrypoint(),
+            &qualified,
+            format,
+            processing.resolved,
+        )?;
         let mut plan = ExecutionPlan {
             kind: KIND.into(),
-            schema_version: 5,
+            schema_version: 7,
             plan_id: String::new(),
             source: frozen.inventory().clone(),
             source_format: qualified.actual_format,
@@ -239,11 +267,13 @@ impl Converter {
             },
             required_depth: Some(self.backend.validation_depth),
             processing: Some(processing),
+            output_options: Some(output_options),
         };
         check_output_location(&plan)?;
         plan.plan_id = identity(&plan)?;
         validate(&plan)?;
         frozen.check_original().map_err(source_error)?;
+        self.check_downloaded()?;
         destination.check()?;
         Ok(plan)
     }
@@ -264,7 +294,8 @@ impl Converter {
         let frozen = self.reopen_source(&plan.source).map_err(source_error)?;
         let mut command = self
             .using_frozen_source(&frozen)
-            .with_processing(plan.processing_mode())
+            .with_plan_processing(plan.processing, plan.schema_version >= 7)
+            .using_output_options(plan.output_options.as_ref())
             .with_decode(
                 self.backend.validation_depth.max(plan.minimum_depth()) == ValidationDepth::Decoded,
             )
@@ -282,6 +313,14 @@ impl Converter {
         };
         let qualified = command.validate_source(source, SourceValidationPurpose::Conversion)?;
         check_qualification(plan, &qualified)?;
+        revalidate_options(
+            &command,
+            frozen.entrypoint(),
+            &qualified,
+            plan.intent.format,
+            plan.processing_mode(),
+            plan.output_options.as_ref(),
+        )?;
         command
             .convert(ConversionRequest {
                 input: frozen.entrypoint(),
@@ -310,7 +349,8 @@ impl Converter {
         let result = self.capture_source(&result_entrypoint(plan))?;
         let command = self
             .using_frozen_source(&original)
-            .with_processing(plan.processing_mode())
+            .with_plan_processing(plan.processing, plan.schema_version >= 7)
+            .using_output_options(plan.output_options.as_ref())
             .with_decode(
                 self.backend.validation_depth.max(plan.minimum_depth()) == ValidationDepth::Decoded,
             );
@@ -334,7 +374,14 @@ impl Converter {
                 .iter()
                 .all(|protection| protection.matches_target(plan.intent.target));
         let verification = command.verify(VerificationRequest { source, output })?;
-        if plan.schema_version == 5 || keys.signaling.is_some() {
+        if plan.output_options.is_some() {
+            command.verify_selected_output_options(
+                result.entrypoint(),
+                plan.intent.format,
+                plan.processing_mode(),
+            )?;
+        }
+        if plan.schema_version >= 5 || keys.signaling.is_some() {
             command.verify_output_signaling(
                 result.entrypoint(),
                 plan.intent.format,
@@ -420,6 +467,8 @@ struct Identity<'a> {
     required_depth: Option<ValidationDepth>,
     #[serde(skip_serializing_if = "Option::is_none")]
     processing: Option<ProcessingSelection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output_options: Option<&'a OutputOptions>,
 }
 fn identity(plan: &ExecutionPlan) -> Result<String, ConversionError> {
     let bytes = serde_json::to_vec(&Identity {
@@ -430,6 +479,7 @@ fn identity(plan: &ExecutionPlan) -> Result<String, ConversionError> {
         intent: &plan.intent,
         required_depth: plan.required_depth,
         processing: plan.processing,
+        output_options: plan.output_options.as_ref(),
     })
     .map_err(|_| INVALID)?;
     Ok(hex::encode(Sha256::digest(bytes)))
@@ -437,8 +487,16 @@ fn identity(plan: &ExecutionPlan) -> Result<String, ConversionError> {
 fn validate(plan: &ExecutionPlan) -> Result<(), ConversionError> {
     if plan.kind != KIND
         || !matches!(
-            (plan.schema_version, plan.required_depth, plan.processing),
-            (1, None, None) | (3, Some(_), None) | (5, Some(_), Some(_))
+            (
+                plan.schema_version,
+                plan.required_depth,
+                plan.processing.is_some(),
+                plan.output_options.is_some()
+            ),
+            (1, None, false, false)
+                | (3, Some(_), false, false)
+                | (5, Some(_), true, false)
+                | (7, Some(_), true, true)
         )
         || plan.plan_id.len() != 64
         || !plan
@@ -456,10 +514,62 @@ fn validate(plan: &ExecutionPlan) -> Result<(), ConversionError> {
             .validate(plan.source_format, plan.intent.format)
             .map_err(|_| INVALID)?;
     }
+    if let Some(options) = &plan.output_options {
+        validate_options(
+            options,
+            &plan.source,
+            plan.source_format,
+            plan.intent.format,
+            plan.processing_mode(),
+        )?;
+    }
     if identity(plan)? != plan.plan_id {
         return Err(INVALID);
     }
     check_output_location(plan)
+}
+
+pub(super) fn validate_options(
+    options: &OutputOptions,
+    inventory: &SourceInventory,
+    source_format: OutputFormat,
+    output: OutputFormat,
+    processing: ProcessingMode,
+) -> Result<(), ConversionError> {
+    options.validate(output, processing).map_err(|_| INVALID)?;
+    if let Some(layout) = &options.layout {
+        let base = inventory.entrypoint.parent().ok_or(INVALID)?;
+        for track in &layout.tracks {
+            let selected = base.join(&track.source);
+            if inventory
+                .files
+                .binary_search_by(|file| file.path.cmp(&selected))
+                .is_err()
+                || matches!(source_format, OutputFormat::Mp4 | OutputFormat::Dash)
+                    && selected != inventory.entrypoint
+            {
+                return Err(INVALID);
+            }
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn revalidate_options(
+    command: &Converter,
+    input: &Path,
+    qualified: &SourceQualification,
+    output: OutputFormat,
+    processing: ProcessingMode,
+    saved: Option<&OutputOptions>,
+) -> Result<(), ConversionError> {
+    if let Some(saved) = saved {
+        let actual = command.resolved_output_options(input, qualified, output, processing)?;
+        if &actual != saved {
+            return Err(ConversionError("execution-plan-output-options-changed"));
+        }
+    }
+    Ok(())
 }
 fn absolute(path: &Path) -> bool {
     path.is_absolute()

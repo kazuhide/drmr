@@ -45,8 +45,10 @@ fn maximum_dual_drm_uses_private_file_transport_without_large_arguments() {
         )
         .unwrap(),
     );
-    let source = root.path().join("source.mp4");
+    let input = super::super::files::Stage::new(Some(root.path())).unwrap();
+    let source = input.path().join("source.mp4");
     fs::write(&source, b"not reached before the expected tool failure").unwrap();
+    super::super::files::seal(input.path()).unwrap();
     let stage = super::super::files::Stage::new(Some(root.path())).unwrap();
     let tracks = [LocalTrack {
         source: source.clone(),
@@ -72,6 +74,8 @@ fn maximum_dual_drm_uses_private_file_transport_without_large_arguments() {
                 hls_key_uri: None,
                 hls_output_key: None,
             },
+            &input,
+            &stage,
         ),
         Err(ConversionError("media-tool-failed"))
     );

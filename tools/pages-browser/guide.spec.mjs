@@ -177,7 +177,7 @@ async function content(page, locale) {
     page.evaluate(guideFiguresObservation),
     timed(records.get(page).value, 'complete-body-aria', () => page.locator('body').ariaSnapshot()),
   ]);
-  expect(facts).toHaveLength(106);
+  expect(facts).toHaveLength(107);
   const groups = requireGuideFigures(facts, aria);
   const tables = [];
   const regions = await page.locator('.guide-table-scroll').all();
@@ -370,7 +370,7 @@ test('both guides retain all chapters, code and tables in print media', async ({
   for (const locale of guideLocales) {
     await ready(page, locale);
     const sourceCode = await page.locator('pre code').allTextContents();
-    expect(sourceCode).toHaveLength(106);
+    expect(sourceCode).toHaveLength(107);
     await page.emulateMedia({ media: 'print' });
     const layout = await page.evaluate(guideObservation); requireGuideLayout(layout);
     const styles = await page.locator('.guide-toc,.guide-chapter-switch,.language-switch,.guide-header-nav,.guide-toplink')

@@ -250,7 +250,7 @@ fn profile_lists_preserve_the_exact_pinned_uri_language_and_comma_ambiguity() {
 }
 
 #[test]
-fn range_patterns_preserve_the_schemas_loose_digit_and_hyphen_language() {
+fn range_lexical_language_and_bounded_semantic_extents_are_distinct() {
     for (element, attribute) in [
         ("SegmentTemplate", "indexRange"),
         ("Initialization", "range"),
@@ -258,7 +258,24 @@ fn range_patterns_preserve_the_schemas_loose_digit_and_hyphen_language() {
         ("BitstreamSwitching", "range"),
     ] {
         for value in ["", "-", "123", "123-", "-456", "0001-9999"] {
-            accepted(element, attribute, value);
+            let report = lint(&fixture(element, attribute, value), 1);
+            let lexical = report
+                .coverage
+                .iter()
+                .find(|item| item.rule_id == "DASH-ATTRIBUTE-LEXICAL")
+                .unwrap();
+            assert_eq!(lexical.status, CheckStatus::Passed, "{report:?}");
+            let requires_extent = element != "BitstreamSwitching" && value != "0001-9999";
+            assert_eq!(
+                report
+                    .coverage
+                    .iter()
+                    .any(|item| item.rule_id == "DASH-ADDRESSING-RANGES"
+                        && item.status == CheckStatus::Failed),
+                requires_extent,
+                "{report:?}"
+            );
+            assert_eq!(report.is_clean_for_scope(), !requires_extent, "{report:?}");
         }
         for value in [
             "1-2-3",

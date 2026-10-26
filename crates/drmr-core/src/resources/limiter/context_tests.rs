@@ -2,6 +2,46 @@ use super::*;
 use std::sync::mpsc;
 
 #[test]
+fn shrinking_retained_state_returns_memory_without_taking_cpu_or_increasing_a_claim() {
+    let limiter = Arc::new(Limiter::new(1, 512));
+    let stop = Stop::new();
+    let mut retained = limiter
+        .retain(256, 128, &stop, Duration::from_secs(1))
+        .unwrap();
+    let leaf = limiter
+        .acquire(
+            Claim {
+                cpu_threads: 1,
+                memory_bytes: 128,
+            },
+            None,
+            None,
+        )
+        .unwrap();
+    retained.shrink(64).unwrap();
+    assert_eq!(limiter.capacity(), (1, 448));
+    assert_eq!(
+        retained.shrink(65).unwrap_err(),
+        ReservationError::Insufficient
+    );
+    assert_eq!(limiter.capacity(), (1, 448));
+    drop(leaf);
+    let all_remaining = limiter
+        .acquire(
+            Claim {
+                cpu_threads: 1,
+                memory_bytes: 448,
+            },
+            None,
+            None,
+        )
+        .unwrap();
+    drop(all_remaining);
+    drop(retained);
+    assert_eq!(limiter.capacity(), (1, 512));
+}
+
+#[test]
 fn retained_context_leaves_cpu_one_and_reduces_only_the_leaf_memory_ceiling() {
     let limiter = Arc::new(Limiter::new(1, 512));
     let stop = Stop::new();

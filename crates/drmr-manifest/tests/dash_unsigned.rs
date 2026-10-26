@@ -75,43 +75,64 @@ fn template_presentation_offset_rejects_signed_lexical_forms() {
 }
 
 #[test]
-fn template_duration_and_segment_numbers_keep_unsigned_int_lexical_bounds() {
+fn template_duration_keeps_unsigned_int_lexical_bounds() {
     let base = VALID.replace(
         "<SegmentTimeline><S t=\"0\" d=\"2000\" r=\"3\" n=\"1\" k=\"1\"/></SegmentTimeline>",
         "",
     );
-    for attribute in ["duration", "startNumber", "endNumber"] {
-        let duration = if attribute == "duration" {
-            ""
-        } else {
-            "duration=\"2000\" "
-        };
-        let source = base.replace(
+    let source = base.replace("<SegmentTemplate ", "<SegmentTemplate duration=\"1\" ");
+    assert!(lint(&source).is_clean_for_scope());
+    reject_signs_on(
+        &source,
+        "duration=\"1\"",
+        "duration",
+        "DASH-TEMPLATE-INTEGERS",
+    );
+    assert!(
+        lint(&source.replace("duration=\"1\"", "duration=\"4294967295\"")).is_clean_for_scope()
+    );
+    assert!(lint(&source.replace("duration=\"1\"", "duration=\"4294967296\"")).errors > 0);
+}
+
+#[test]
+fn segment_numbers_use_sixth_edition_unsigned_long_and_exact_final_counts() {
+    let base = VALID
+        .replace(
+            "<SegmentTimeline><S t=\"0\" d=\"2000\" r=\"3\" n=\"1\" k=\"1\"/></SegmentTimeline>",
+            "",
+        )
+        .replace(
             "<SegmentTemplate ",
-            &format!("<SegmentTemplate {duration}{attribute}=\"1\" "),
+            "<SegmentTemplate duration=\"2000\" startNumber=\"1\" endNumber=\"4\" ",
         );
-        assert!(lint(&source).is_clean_for_scope());
+    assert!(lint(&base).is_clean_for_scope());
+    for (attribute, original) in [("startNumber", "1"), ("endNumber", "4")] {
         reject_signs_on(
-            &source,
-            &format!("{attribute}=\"1\""),
+            &base,
+            &format!("{attribute}=\"{original}\""),
             attribute,
             "DASH-TEMPLATE-INTEGERS",
         );
+        let invalid = lint(&base.replace(
+            &format!("{attribute}=\"{original}\""),
+            &format!("{attribute}=\"18446744073709551616\""),
+        ));
         assert!(
-            lint(&source.replace(
-                &format!("{attribute}=\"1\""),
-                &format!("{attribute}=\"4294967295\"")
-            ))
-            .is_clean_for_scope()
+            invalid
+                .coverage
+                .iter()
+                .any(|item| item.rule_id == "DASH-TEMPLATE-INTEGERS"
+                    && item.status == CheckStatus::Failed)
         );
-        assert!(
-            lint(&source.replace(
-                &format!("{attribute}=\"1\""),
-                &format!("{attribute}=\"4294967296\"")
-            ))
-            .errors
-                > 0
-        );
+    }
+    for (start, end) in [
+        (4_294_967_296_u64, 4_294_967_299_u64),
+        (u64::MAX - 3, u64::MAX),
+    ] {
+        let text = base
+            .replace("startNumber=\"1\"", &format!("startNumber=\"{start}\""))
+            .replace("endNumber=\"4\"", &format!("endNumber=\"{end}\""));
+        assert!(lint(&text).is_clean_for_scope());
     }
 }
 

@@ -3,10 +3,12 @@ use drmr_core::{
     concurrency::Stop,
     conversion::{
         FrozenSource, SourceInventory, ValidationDepth,
-        plan::bundle::{BundleOutputIntent, BundlePlan, OutputProcessing},
+        layout::{LayoutMode, SourceLayout, SourceTrack},
+        output_options::OutputOptions,
+        plan::bundle::{BundleOutputIntent, BundlePlan, OutputProcessing, OutputSettings},
         processing::{BoundaryHandling, ProcessingMode, ProcessingSelection},
     },
-    inspection::OutputFormat,
+    inspection::{OutputFormat, TrackKind},
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -111,6 +113,8 @@ struct BundleIdentity<'a> {
     required_depth: Option<ValidationDepth>,
     #[serde(skip_serializing_if = "Option::is_none")]
     processing: Option<&'a [OutputProcessing]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output_options: Option<&'a [OutputSettings]>,
 }
 
 fn returned_plan(
@@ -123,7 +127,7 @@ fn returned_plan(
     let input = Path::new(request["operation"]["input_file"].as_str().unwrap());
     let source = FrozenSource::capture(input, &Stop::default()).unwrap();
     let outputs: Vec<BundleOutputIntent> = serde_json::from_value(outputs).unwrap();
-    let processing = outputs
+    let processing: Vec<OutputProcessing> = outputs
         .iter()
         .zip(requested)
         .map(|(output, requested)| {
@@ -147,9 +151,34 @@ fn returned_plan(
             }
         })
         .collect();
+    let output_options = outputs
+        .iter()
+        .zip(&processing)
+        .map(|(output, choice)| OutputSettings {
+            id: output.id.clone(),
+            options: OutputOptions {
+                layout: Some(
+                    SourceLayout::resolve_for_processing(
+                        LayoutMode::Source,
+                        output.format,
+                        choice.selection.resolved,
+                        &[SourceTrack {
+                            source: source.inventory().entrypoint.clone(),
+                            selector: 0,
+                            kind: TrackKind::Video,
+                            playlist: Some(source.inventory().entrypoint.clone()),
+                            media: vec!["segment.ts".into()],
+                        }],
+                    )
+                    .unwrap(),
+                ),
+                dash_addressing: None,
+            },
+        })
+        .collect();
     let mut plan = BundlePlan {
         kind: "execution-plan".into(),
-        schema_version: 6,
+        schema_version: 8,
         plan_id: String::new(),
         source: source.inventory().clone(),
         source_format: OutputFormat::HlsTs,
@@ -157,6 +186,7 @@ fn returned_plan(
         outputs,
         required_depth: Some(ValidationDepth::Native),
         processing: Some(processing),
+        output_options: Some(output_options),
     };
     let identity = BundleIdentity {
         kind: &plan.kind,
@@ -167,6 +197,7 @@ fn returned_plan(
         outputs: &plan.outputs,
         required_depth: plan.required_depth,
         processing: plan.processing.as_deref(),
+        output_options: plan.output_options.as_deref(),
     };
     plan.plan_id = hex::encode(Sha256::digest(serde_json::to_vec(&identity).unwrap()));
     let path = Path::new(request["operation"]["save_file"].as_str().unwrap());

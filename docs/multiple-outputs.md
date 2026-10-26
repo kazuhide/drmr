@@ -9,7 +9,7 @@ transport-stream presentation can produce:
 - transport-stream HLS encrypted with `SAMPLE-AES`, with FairPlay information.
 
 Choose the outputs you need. The common `plan`, `convert`, and `verify` commands
-name every output explicitly. Native checks cover every selected sample, configuration, clock and supported playback window. Add `--decode` at saved planning to require complete decoding for every later execution and verification, or at runtime to strengthen the saved minimum. New named-output plans use schema 6; legacy schema 2 plans retain their decoded minimum and schema 4 plans retain their saved depth. See [verification depth](verification.md).
+name every output explicitly. Native checks cover every selected sample, configuration, clock and supported playback window. Add `--decode` at saved planning to require complete decoding for every later execution and verification, or at runtime to strengthen the saved minimum. New named-output plans use schema 8 and bind resource placement and DASH addressing for each output. Earlier plans retain their saved behavior: schema 2 keeps its decoded minimum, schema 4 its saved depth, and schema 6 its processing choices. See [verification depth](verification.md).
 
 ## Describe the outputs
 
@@ -83,6 +83,27 @@ membership and clocks; `stitch` joins when needed and packages the selected
 format. `auto` selects a qualified route. Omitted per-output values use the CLI
 default. Recipe schema 1 remains supported and refuses the new `processing`
 field. These recipe versions are separate from the private key-file versions.
+
+### Select DASH references for each output
+
+Use recipe schema 3 to select `dash_addressing` on a DASH output:
+
+```json
+{
+  "schema_version": 3,
+  "outputs": [
+    {"id":"dash","format":"dash","target":"cbcs","drms":["widevine","playready"],"processing":"stitch","dash_addressing":"template"},
+    {"id":"hls","format":"hls","target":"cbcs","drms":["fairplay"],"processing":"stitch"}
+  ]
+}
+```
+
+The four choices are `template` (default), `template-timeline`, `list` and `base`.
+The CLI's `--dash-addressing` supplies a default for DASH outputs; a value in the
+recipe takes precedence. Other formats refuse this field, and recipes 1/2 refuse
+it. Schema 3 also accepts per-output `processing`. See [DASH references](dash-addressing.md)
+for the generated structure and timing conditions. Directory placement follows
+the [source layout](source-layout.md); no layout selector is needed.
 
 ## Keep runtime keys separate
 

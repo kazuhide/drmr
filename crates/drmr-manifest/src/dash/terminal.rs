@@ -34,7 +34,7 @@ pub(super) fn check(
 
 /// Return the positive segment count and final sample-timeline end without
 /// expanding the run. A rational Period end can be crossed by its final segment.
-fn calculate(
+pub(super) fn calculate(
     start: u128,
     length: u64,
     duration: Duration,
@@ -77,7 +77,7 @@ fn calculate(
     Ok((count, end))
 }
 
-fn gcd(mut left: u128, mut right: u128) -> u128 {
+pub(super) fn gcd(mut left: u128, mut right: u128) -> u128 {
     while right != 0 {
         let remainder = left % right;
         left = right;

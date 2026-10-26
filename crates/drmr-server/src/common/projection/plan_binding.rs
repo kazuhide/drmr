@@ -21,12 +21,15 @@ pub(in crate::common) fn bind_plan(
             return Err(bad());
         }
         let saved: Value = serde_json::from_slice(&plan.read()?).map_err(|_| bad())?;
+        if saved.get("output_options") != report.get("output_options") {
+            return Err(bad());
+        }
         return (super::plan_view::project(&saved)?.0 == super::plan_view::project(report)?.0)
             .then_some(())
             .ok_or_else(bad);
     }
     let outputs = plan.outputs.as_array().ok_or_else(bad)?;
-    let bundle = matches!(plan.schema, 2 | 4 | 6);
+    let bundle = matches!(plan.schema, 2 | 4 | 6 | 8);
     let rows = if bundle {
         let rows = report["outputs"].as_array().ok_or_else(bad)?;
         if rows.len() != outputs.len()
@@ -89,10 +92,10 @@ fn bind_depth(proof: &Value, minimum: ValidationDepth) -> Result<()> {
 
 fn saved_selections(plan: &Plan, count: usize) -> Result<Vec<Option<ProcessingSelection>>> {
     match plan.schema {
-        5 => Ok(vec![Some(typed(
+        5 | 7 => Ok(vec![Some(typed(
             plan.processing.as_ref().ok_or_else(bad)?,
         )?)]),
-        6 => Ok(
+        6 | 8 => Ok(
             typed::<Vec<OutputProcessing>>(plan.processing.as_ref().ok_or_else(bad)?)?
                 .into_iter()
                 .map(|choice| Some(choice.selection))

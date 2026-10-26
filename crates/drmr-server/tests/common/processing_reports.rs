@@ -60,7 +60,7 @@ fn assert_result(h: &support::Harness, ended: &Value, expected: &Value, accepted
 }
 
 fn check_new_plan_report(mutate: impl FnOnce(&mut Value), mixed: bool, accepted: bool) {
-    check_new_plan_schema(6, mutate, mixed, accepted);
+    check_new_plan_schema(8, mutate, mixed, accepted);
 }
 
 fn check_new_plan_schema(
@@ -105,11 +105,14 @@ fn check_new_plan_minimum(
     let request = child_request(&h.cli, 1);
     assert_eq!(request["runtime"]["decode"], decode);
     let path = Path::new(request["operation"]["save_file"].as_str().unwrap());
-    if schema != 6 || minimum != ValidationDepth::Native {
+    if schema != 8 || minimum != ValidationDepth::Native {
         plan.schema_version = schema;
         plan.required_depth = (schema > 2).then_some(minimum);
-        if schema != 6 {
+        if schema < 6 {
             plan.processing = None;
+        }
+        if schema < 8 {
+            plan.output_options = None;
         }
         let identity = BundleIdentity {
             kind: &plan.kind,
@@ -120,6 +123,7 @@ fn check_new_plan_minimum(
             outputs: &plan.outputs,
             required_depth: plan.required_depth,
             processing: plan.processing.as_deref(),
+            output_options: plan.output_options.as_deref(),
         };
         plan.plan_id = hex::encode(Sha256::digest(serde_json::to_vec(&identity).unwrap()));
         support::write_private(path, serde_json::to_vec(&plan).unwrap()).unwrap();
@@ -213,6 +217,7 @@ fn saved_plan(
             },
             required_depth,
             processing: (schema == 5).then(|| choice(single_mode)),
+            output_options: None,
         };
         let identity = SingleIdentity {
             kind: &plan.kind,
@@ -250,6 +255,7 @@ fn saved_plan(
             outputs,
             required_depth,
             processing,
+            output_options: None,
         };
         let identity = BundleIdentity {
             kind: &plan.kind,
@@ -260,6 +266,7 @@ fn saved_plan(
             outputs: &plan.outputs,
             required_depth,
             processing: plan.processing.as_deref(),
+            output_options: None,
         };
         plan.plan_id = hex::encode(Sha256::digest(serde_json::to_vec(&identity).unwrap()));
         serde_json::to_value(plan).unwrap()

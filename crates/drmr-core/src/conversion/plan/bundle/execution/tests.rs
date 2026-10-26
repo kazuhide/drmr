@@ -55,6 +55,7 @@ fn converter(cpus: usize, memory: u64, stop: Stop) -> Converter {
 
 fn plan(outputs: usize) -> BundlePlan {
     BundlePlan {
+        output_options: None,
         kind: "execution-plan".into(),
         schema_version: 6,
         plan_id: "a".repeat(64),
@@ -71,6 +72,7 @@ fn plan(outputs: usize) -> BundlePlan {
         processing: None,
         outputs: (0..outputs)
             .map(|ordinal| BundleOutputIntent {
+                dash_addressing: None,
                 id: format!("output-{ordinal}"),
                 format: OutputFormat::Hls,
                 target: TargetProtection::Clear,
@@ -202,7 +204,8 @@ fn failures_drain_select_plan_order_and_release_context_without_poisoning_stop()
     let converter = converter(2, 4 * 1024 * 1024 * 1024, stop.clone());
     let original = converter.backend.runner.retained_capacity();
     let execution = observed(&converter);
-    let (failed, observed) = mpsc::sync_channel(1);
+    // Both closures must have started before either failure can close admission.
+    let (failed, observed) = mpsc::sync_channel(0);
     let observed = Mutex::new(observed);
     let drained = AtomicBool::new(false);
     let started = AtomicUsize::new(0);

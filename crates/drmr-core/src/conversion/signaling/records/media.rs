@@ -89,10 +89,27 @@ pub(super) fn check(
     selection: Selection<'_>,
     stop: &Stop,
 ) -> Result<(), ConversionError> {
+    check_range(path, None, selection, stop)
+}
+
+/// Repeated records are scoped to one addressed media subsegment, including indexed files.
+pub(super) fn check_range(
+    path: &Path,
+    range: Option<(u64, u64)>,
+    selection: Selection<'_>,
+    stop: &Stop,
+) -> Result<(), ConversionError> {
     super::super::cancelled(stop)?;
     let mut file = super::super::super::files::regular_input(path).map_err(|_| MISMATCH)?;
     let identity = FileIdentity::read(&file).map_err(|_| MISMATCH)?;
     let length = file.metadata().map_err(|_| MISMATCH)?.len();
+    let (start, end) = range.map_or(Ok((0, length)), |(start, end)| {
+        end.checked_add(1)
+            .filter(|end| start < *end && *end <= length)
+            .map(|end| (start, end))
+            .ok_or(MISMATCH)
+    })?;
+    file.seek(SeekFrom::Start(start)).map_err(|_| MISMATCH)?;
     let mut records = Records {
         selection,
         common: 0,
@@ -100,16 +117,16 @@ pub(super) fn check(
         widevine: false,
         playready: false,
     };
-    let mut at = 0_u64;
+    let mut at = start;
     let mut remaining = BOX_LIMIT;
-    while at < length {
+    while at < end {
         super::super::cancelled(stop)?;
         remaining = remaining.checked_sub(1).ok_or(MISMATCH)?;
         let mut header = [0; 8];
         file.read_exact(&mut header).map_err(|_| MISMATCH)?;
         let mut bytes = Zeroizing::new(header.to_vec());
         let size = match u32::from_be_bytes(header[..4].try_into().unwrap()) {
-            0 => length - at,
+            0 => end - at,
             1 => {
                 let mut wide = [0; 8];
                 file.read_exact(&mut wide).map_err(|_| MISMATCH)?;
@@ -118,7 +135,7 @@ pub(super) fn check(
             }
             value => u64::from(value),
         };
-        if size < bytes.len() as u64 || size > length - at {
+        if size < bytes.len() as u64 || size > end - at {
             return Err(MISMATCH);
         }
         if !matches!(
@@ -158,6 +175,39 @@ pub(super) fn check(
 mod tests {
     use super::*;
     use std::io::Write as _;
+
+    #[test]
+    fn indexed_subsegments_have_independent_exact_provider_record_scopes() {
+        let owner = crate::native::private_tempdir().unwrap();
+        let path = owner.path().join("indexed-media");
+        let key = OutputKey::from_hex(
+            "000102030405060708090a0b0c0d0e0f",
+            "101112131415161718191a1b1c1d1e1f",
+        )
+        .unwrap();
+        let objects = super::super::OutputSignaling::playready("https://example.invalid/license")
+            .unwrap()
+            .objects(&key)
+            .unwrap();
+        let selected = MultiObjects::legacy_playready(objects);
+        let record = &selected.playready.as_ref().unwrap().bytes;
+        std::fs::write(&path, [record.as_slice(), record.as_slice()].concat()).unwrap();
+        let width = record.len() as u64;
+        let stop = Stop::new();
+        assert_eq!(
+            check(&path, Selection::Providers(&selected), &stop),
+            Err(MISMATCH)
+        );
+        for range in [(0, width - 1), (width, width * 2 - 1)] {
+            check_range(&path, Some(range), Selection::Providers(&selected), &stop).unwrap();
+        }
+        for range in [(1, width - 1), (0, width - 2), (0, width * 2)] {
+            assert_eq!(
+                check_range(&path, Some(range), Selection::Providers(&selected), &stop),
+                Err(MISMATCH)
+            );
+        }
+    }
 
     #[test]
     fn large_sparse_mdat_is_skipped_but_trailing_records_are_checked() {

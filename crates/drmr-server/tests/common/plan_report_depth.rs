@@ -229,14 +229,14 @@ fn valid_legacy_v1_decoded_proof_satisfies_current_and_legacy_saved_minimums() {
 
 #[test]
 fn new_plan_minimum_must_honor_an_explicit_decode_request() {
-    for schema in [6, 4] {
+    for schema in [8, 6, 4] {
         check_new_plan_minimum(schema, ValidationDepth::Native, true, |_| {}, false, false);
     }
 }
 
 #[test]
-fn new_plans_accept_stronger_and_implicitly_decoded_legacy_minimums() {
-    for schema in [2, 4, 6] {
+fn new_plans_accept_stronger_minimums_only_in_the_current_schema() {
+    for schema in [2, 4, 6, 8] {
         for decode in [false, true] {
             check_new_plan_minimum(
                 schema,
@@ -244,7 +244,7 @@ fn new_plans_accept_stronger_and_implicitly_decoded_legacy_minimums() {
                 decode,
                 |_| {},
                 false,
-                true,
+                schema == 8,
             );
         }
     }

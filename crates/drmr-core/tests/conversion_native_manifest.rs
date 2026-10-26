@@ -464,6 +464,7 @@ fn named_dash_common_system_records_match_operator_and_actual_initialization_key
                 },
                 output_root: &root.path().join(target.as_str()),
                 outputs: &[BundleOutputIntent {
+                    dash_addressing: None,
                     processing: None,
                     id: "dash".into(),
                     format: OutputFormat::Dash,

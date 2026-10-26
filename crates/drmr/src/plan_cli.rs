@@ -3,6 +3,7 @@ use crate::convert_cli::{self, ConvertArgs, Progress, VerifyArgs};
 use crate::inspect_cli::PlanArgs;
 use drmr_core::conversion::{
     ConversionError, Converter, ProcessingMode, VerificationSource,
+    dash_addressing::DashAddressing,
     key_file::OperatorKeys,
     plan::{self, ExecutionPlanRequest},
 };
@@ -83,8 +84,13 @@ impl Session {
         convert_cli::error(command, cause, as_json, &self.progress, None)
     }
 
-    fn with_processing(mut self, processing: ProcessingMode) -> Self {
-        self.converter = self.converter.with_processing(processing);
+    fn with_new_intent(
+        mut self,
+        processing: ProcessingMode,
+        addressing: Option<DashAddressing>,
+    ) -> Self {
+        self.converter =
+            crate::output_cli::configure(self.converter, addressing).with_processing(processing);
         self
     }
 
@@ -123,7 +129,9 @@ pub fn save(args: &PlanArgs) -> ExitCode {
         args.decode,
         args.keys_file.as_ref(),
     ) {
-        Ok(value) => value.with_processing(args.processing.unwrap_or_default()),
+        Ok(value) => {
+            value.with_new_intent(args.processing.unwrap_or_default(), args.dash_addressing)
+        }
         Err(code) => return code,
     };
     let input = args.input.as_path();
@@ -133,6 +141,13 @@ pub fn save(args: &PlanArgs) -> ExitCode {
         .expect("clap requires the saved-plan output");
     let path = args.save.as_deref().expect("saved-plan mode was selected");
     let execute = |command: &Converter| {
+        if args.dash_addressing.is_some() {
+            let format = formats
+                .first()
+                .copied()
+                .map_or_else(|| command.default_output_format(input), Ok)?;
+            crate::output_cli::validate(args.dash_addressing, [format])?;
+        }
         session.progress.mark("input-preparation");
         let plan = command.create_execution_plan(ExecutionPlanRequest {
             input: VerificationSource {

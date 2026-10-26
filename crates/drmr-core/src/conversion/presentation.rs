@@ -17,7 +17,6 @@ use crate::inspection::{
 };
 use std::{
     fs,
-    io::Write,
     path::{Path, PathBuf},
 };
 use zeroize::Zeroizing;
@@ -53,6 +52,8 @@ struct Prepared {
     dash_reference: bool,
     audio_presentation: Option<super::audio_presentation::AudioPresentation>,
     clock: Option<super::native::ManifestAacClock>,
+    hls_target_seconds: Option<u64>,
+    hls_video_segment_ms: Option<u32>,
 }
 
 /// Binds the private clock context to the exact public local-track selection.
@@ -194,7 +195,12 @@ impl Converter {
         } else {
             stage.path()
         };
-        self.package_joint(&clears, package_root, &request)?;
+        let owner = if request.target == TargetProtection::HlsAes128 {
+            &work
+        } else {
+            stage
+        };
+        self.package_joint(&clears, package_root, &request, &work, owner)?;
         if request.format == OutputFormat::Hls
             && sources.len() == 1
             && sources[0].report.tracks[0].kind == TrackKind::Audio
@@ -203,6 +209,7 @@ impl Converter {
             ts_output::single_audio_variant(package_root)?;
         }
         self.finish_packaged_presentation(package_root, stage.path(), &sources, &request)?;
+        self.finish_output_options(stage, request.format)?;
         let (mut verification, output_tracks, input_tracks) =
             self.verify_joint(&sources, &request, stage.path(), work.path())?;
         secure_tree(stage.path())?;
@@ -289,7 +296,11 @@ impl Converter {
             request.output_key,
             request.hls_key_uri,
             request.hls_output_key,
-        )
+        )?;
+        if request.format == OutputFormat::Hls {
+            self.finish_hls_segment_target(output_root, sources.len())?;
+        }
+        Ok(())
     }
     fn convert_complete_mp4(
         &self,
@@ -337,80 +348,58 @@ impl Converter {
         ),
         ConversionError,
     > {
-        let mut output_tracks = Vec::new();
-        let mut input_tracks = Vec::new();
-        let verified_tracks = self.run_tracks(sources.len(), |ordinal| {
-            let source = &sources[ordinal];
-            let track_dir = stage.join(format!("track-{ordinal:04}"));
-            let combined = work.join(format!("result-{ordinal}.mp4"));
-            let actual = if let Some(key) = request.hls_output_key {
-                let keys = super::HlsInputKeys::new(vec![(
-                    key.key_uri().to_string(),
-                    super::Aes128Key(key.key.0.clone()),
-                )])?;
-                let localized_dir = work.join(format!("localized-{ordinal}"));
-                super::files::create_dir(&localized_dir)
-                    .map_err(|_| ConversionError("output-staging-failed"))?;
-                let localized = hls::localize(
-                    &track_dir.join("media.m3u8"),
-                    &localized_dir,
-                    &keys,
-                    &self.backend,
-                )?;
-                copy_private(&localized.combined, &combined)?;
-                inspection::inspect(&combined)
-                    .map_err(|_| ConversionError("invalid-output-media"))?
-            } else {
-                combine_generated(&track_dir, &combined)?;
-                inspection::inspect(&combined)
-                    .map_err(|_| ConversionError("invalid-output-media"))?
-            };
-            let expected = match request.target {
-                TargetProtection::Clear | TargetProtection::HlsAes128 => Protection::Clear,
-                TargetProtection::Cenc => Protection::Cenc,
-                TargetProtection::Cbcs => Protection::Cbcs,
-                TargetProtection::HlsSampleAes => {
-                    return Err(ConversionError("target-requires-ts-output"));
-                }
-            };
-            if actual.protection != expected
-                || actual.tracks.len() != 1
-                || actual.tracks[0].kind != source.report.tracks[0].kind
-            {
+        let (actual, keys) = self.prepare_generated_presentation(request, stage, work)?;
+        if actual.len() != sources.len() {
+            return Err(ConversionError("presentation-track-count-mismatch"));
+        }
+        let expected = match request.target {
+            TargetProtection::Clear | TargetProtection::HlsAes128 => Protection::Clear,
+            TargetProtection::Cenc => Protection::Cenc,
+            TargetProtection::Cbcs => Protection::Cbcs,
+            TargetProtection::HlsSampleAes => {
+                return Err(ConversionError("target-requires-ts-output"));
+            }
+        };
+        let mut output_tracks = Vec::with_capacity(actual.len());
+        for (ordinal, result) in actual.iter().enumerate() {
+            if result.report.protection != expected || result.report.tracks.len() != 1 {
                 return Err(ConversionError("output-protection-mismatch"));
             }
+            let mut track = result.report.tracks[0].clone();
             if let Some(key) = request.output_key
-                && actual.tracks[0].key_ids != [key.0.id_hex()]
+                && track.key_ids != [key.0.id_hex()]
             {
                 return Err(ConversionError("output-key-id-mismatch"));
             }
-            let mut output = actual.tracks[0].clone();
-            output.id = format!("track-{ordinal:04}");
+            track.id = format!("track-{ordinal:04}");
             if request.target == TargetProtection::HlsAes128 {
-                output.protection = Protection::HlsAes128;
+                track.protection = Protection::HlsAes128;
             }
-            let mut input = source.report.tracks[0].clone();
-            input.id = format!("track-{ordinal:04}");
-            Ok((input, output))
-        })?;
-        for (input, output) in verified_tracks {
-            input_tracks.push(input);
-            output_tracks.push(output);
+            output_tracks.push(track);
         }
-        let verification = self.verify_generated_presentation(sources, request, stage, work)?;
+        let input_tracks = sources
+            .iter()
+            .enumerate()
+            .map(|(ordinal, source)| {
+                let mut track = source.report.tracks[0].clone();
+                track.id = format!("track-{ordinal:04}");
+                track
+            })
+            .collect();
+        let verification =
+            self.compare_presentations(sources.to_vec(), actual, request.input_keys, &keys)?;
         if !verification.passed {
             return Err(ConversionError("round-trip-verification-failed"));
         }
         self.verify_signaled_output(&sources[0].source, request, stage)?;
         Ok((verification, output_tracks, input_tracks))
     }
-    fn verify_generated_presentation(
+    fn prepare_generated_presentation(
         &self,
-        sources: &[Prepared],
         request: &TrackConversionRequest<'_>,
         stage: &Path,
         work: &Path,
-    ) -> Result<VerificationReport, ConversionError> {
+    ) -> Result<(Vec<Prepared>, InputKeys), ConversionError> {
         let keys = request
             .output_key
             .map(|key| {
@@ -440,7 +429,7 @@ impl Converter {
             self.maximum_workers,
             SourceValidationPurpose::Verification,
         )?;
-        self.compare_presentations(sources.to_vec(), actual, request.input_keys, &keys)
+        Ok((actual, keys))
     }
     fn normalize_tracks(
         &self,
@@ -559,9 +548,17 @@ impl Converter {
         clear: &[PathBuf],
         root: &Path,
         request: &TrackConversionRequest<'_>,
+        input_owner: &super::files::Stage,
+        output_owner: &super::files::Stage,
     ) -> Result<(), ConversionError> {
         let _scope = self.backend.scope(super::measurement::Phase::Packaging);
-        let mut argv = joint_arguments(clear, root, request, &self.backend.packager)?;
+        let mut argv = joint_arguments(
+            clear,
+            root,
+            request,
+            &self.backend.packager,
+            &self.segment_target_argument()?,
+        )?;
         let secret = request.output_key.map(|k| k.0.key_hex());
         let signaling = self
             .output_signaling
@@ -627,20 +624,17 @@ impl Converter {
             .as_ref()
             .map(|value| value.hex.as_str())
             .or_else(|| multi_signaling.as_ref().map(|value| value.hex.as_str()));
+        let kinds: Vec<_> = request.tracks.iter().map(|track| track.kind).collect();
+        let audio =
+            super::packaging_clock::prepare(input_owner, clear, &kinds, &self.backend.stop)?;
         if let Some(pssh) = pssh {
             super::signaling::flagfile::run(&self.backend, &argv, pssh, &secrets)?;
         } else {
             self.backend.run(&argv, "packager", &secrets)?;
         }
-        for (index, source) in clear.iter().enumerate() {
-            super::finite::restore(
-                source,
-                0,
-                &root.join(format!("track-{index:04}/init.mp4")),
-                &self.backend.stop,
-            )?;
-        }
-        super::finite::manifest::finish(root, clear, request.format, &self.backend.stop)?;
+        super::files::seal(root)?;
+        audio.restore(output_owner, root, request.format, &self.backend.stop)?;
+        restore_packaged_windows(clear, root, request.format, &self.backend.stop)?;
         if let Some(signaling) = &signaling {
             signaling.finish(
                 root,
@@ -653,11 +647,28 @@ impl Converter {
         Ok(())
     }
 }
+fn restore_packaged_windows(
+    clear: &[PathBuf],
+    root: &Path,
+    format: OutputFormat,
+    stop: &crate::concurrency::Stop,
+) -> Result<(), ConversionError> {
+    for (index, source) in clear.iter().enumerate() {
+        super::finite::restore(
+            source,
+            0,
+            &root.join(format!("track-{index:04}/init.mp4")),
+            stop,
+        )?;
+    }
+    super::finite::manifest::finish(root, clear, format, stop)
+}
 fn joint_arguments(
     clear: &[PathBuf],
     root: &Path,
     request: &TrackConversionRequest<'_>,
     packager: &str,
+    segment_duration: &str,
 ) -> Result<Zeroizing<Vec<String>>, ConversionError> {
     let mut argv = Zeroizing::new(vec![
         packager.into(),
@@ -673,7 +684,7 @@ fn joint_arguments(
     }
     argv.extend([
         "--segment_duration".into(),
-        "2".into(),
+        segment_duration.into(),
         "--clear_lead".into(),
         "0".into(),
     ]);
@@ -840,6 +851,8 @@ fn prepare_for(
         dash_reference: false,
         audio_presentation: None,
         clock: None,
+        hls_target_seconds: None,
+        hls_video_segment_ms: None,
     })
 }
 fn key_for<'a>(source: &Prepared, keys: &'a InputKeys) -> Option<&'a ContentKey> {
@@ -867,53 +880,6 @@ fn playback_metadata(source: &Prepared) -> &Path {
     } else {
         &source.source
     }
-}
-fn combine_generated(directory: &Path, output: &Path) -> Result<(), ConversionError> {
-    let mut segments = Vec::new();
-    for entry in
-        fs::read_dir(directory).map_err(|_| ConversionError("packaged-segments-missing"))?
-    {
-        let entry = entry.map_err(|_| ConversionError("packaged-segments-missing"))?;
-        let name = entry.file_name();
-        let Some(name) = name.to_str() else {
-            return Err(ConversionError("invalid-packaged-resource"));
-        };
-        if let Some(number) = name
-            .strip_prefix("seg_")
-            .and_then(|n| n.strip_suffix(".m4s"))
-        {
-            let number = number
-                .parse::<u64>()
-                .map_err(|_| ConversionError("invalid-packaged-resource"))?;
-            segments.push((number, entry.path()));
-        }
-    }
-    segments.sort_by_key(|(n, _)| *n);
-    if segments.is_empty() || segments.len() > 100_000 {
-        return Err(ConversionError("packaged-segment-count-limit"));
-    }
-    let mut file = super::files::create_new(output)?;
-    let mut total = 0u64;
-    for path in
-        std::iter::once(directory.join("init.mp4")).chain(segments.into_iter().map(|(_, p)| p))
-    {
-        let metadata = fs::symlink_metadata(&path)
-            .map_err(|_| ConversionError("packaged-resource-unreadable"))?;
-        if !metadata.is_file() || metadata.file_type().is_symlink() {
-            return Err(ConversionError("invalid-packaged-resource"));
-        }
-        total = total
-            .checked_add(metadata.len())
-            .filter(|n| *n <= super::MAX_MEDIA_BYTES)
-            .ok_or(ConversionError("media-size-limit"))?;
-        let mut input =
-            fs::File::open(path).map_err(|_| ConversionError("packaged-resource-unreadable"))?;
-        std::io::copy(&mut input, &mut file)
-            .map_err(|_| ConversionError("output-staging-failed"))?;
-    }
-    file.flush()
-        .map_err(|_| ConversionError("output-staging-failed"))?;
-    Ok(())
 }
 fn secure_tree(root: &Path) -> Result<(), ConversionError> {
     super::files::seal(root)
@@ -995,6 +961,10 @@ impl SourceCompatibilityNote {
 /// Complete source admission facts. This receipt never authorizes future execution.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct SourceQualification {
+    #[serde(skip)]
+    pub(crate) layout_tracks: Vec<super::layout::QualifiedTrack>,
+    #[serde(skip)]
+    pub(in crate::conversion) hls_timing: Option<super::processing::segment_target::HlsTiming>,
     pub input: Inspection,
     pub actual_format: OutputFormat,
     pub track_protection: Vec<SourceProtection>,
@@ -1003,6 +973,19 @@ pub struct SourceQualification {
     pub verification: VerificationReport,
 }
 impl Converter {
+    fn qualified_hls_timing(
+        &self,
+        prepared: &[Prepared],
+        source: InputFormat,
+        purpose: SourceValidationPurpose,
+    ) -> Result<Option<super::processing::segment_target::HlsTiming>, ConversionError> {
+        if matches!(purpose, SourceValidationPurpose::Conversion) && self.inherits_hls_target() {
+            prepared_hls_timing(prepared, source, &self.backend.stop)
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Open and validate every local resource and execute complete media evidence checks.
     /// Conversion admission applies conversion's source policy; verification also permits
     /// supported existing DRM signaling. Output packaging and keys are revalidated later.
@@ -1102,6 +1085,8 @@ impl Converter {
         }
         self.backend.checkpoint(&[&work]);
         Ok(SourceQualification {
+            layout_tracks: qualified_layout_tracks(&prepared, original.format),
+            hls_timing: self.qualified_hls_timing(&prepared, original.format, purpose)?,
             input: original,
             actual_format,
             track_protection,
@@ -1200,6 +1185,53 @@ impl Converter {
         Ok(())
     }
 }
+fn prepared_hls_timing(
+    prepared: &[Prepared],
+    source: InputFormat,
+    stop: &crate::concurrency::Stop,
+) -> Result<Option<super::processing::segment_target::HlsTiming>, ConversionError> {
+    use super::processing::segment_target::{HlsTiming, cadence};
+    if source != InputFormat::Hls {
+        return Ok(None);
+    }
+    let seconds = prepared
+        .iter()
+        .map(|track| {
+            track
+                .hls_target_seconds
+                .ok_or(ConversionError("hls-invalid-target-duration"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let video = prepared
+        .iter()
+        .filter(|track| track.report.tracks[0].kind == TrackKind::Video)
+        .map(|track| {
+            track.transport_native.as_deref().map_or_else(
+                || Ok(track.hls_video_segment_ms),
+                |native| cadence::transport(native, stop),
+            )
+        })
+        .collect::<Result<Vec<_>, ConversionError>>()?;
+    HlsTiming::from_admitted(seconds, video).map(Some)
+}
+
+fn qualified_layout_tracks(
+    prepared: &[Prepared],
+    format: InputFormat,
+) -> Vec<super::layout::QualifiedTrack> {
+    prepared
+        .iter()
+        .enumerate()
+        .map(|(ordinal, track)| super::layout::QualifiedTrack {
+            kind: track.report.tracks[0].kind,
+            selector: if format == InputFormat::Dash {
+                ordinal
+            } else {
+                track.transport_index.unwrap_or(track.index)
+            },
+        })
+        .collect()
+}
 impl Converter {
     pub fn verify(
         &self,
@@ -1208,6 +1240,31 @@ impl Converter {
         if self.processing_mode == super::ProcessingMode::Segments {
             return super::segments::verify(self, request);
         }
+        self.verify_presentation(request, None)
+    }
+
+    /// Complete-track decoding is only an additional proof for admitted segments.
+    /// Keep their original output intent when checking the saved source placement.
+    pub(in crate::conversion) fn verify_admitted_segments(
+        &self,
+        request: VerificationRequest<'_>,
+        format: OutputFormat,
+        native: VerificationReport,
+    ) -> Result<VerificationReport, ConversionError> {
+        if self.backend.validation_depth == super::ValidationDepth::Native {
+            return Ok(native);
+        }
+        let mut decoded =
+            self.verify_presentation(request, Some((format, super::ProcessingMode::Segments)))?;
+        decoded.require_native(&native)?;
+        Ok(decoded)
+    }
+
+    fn verify_presentation(
+        &self,
+        request: VerificationRequest<'_>,
+        layout_intent: Option<(OutputFormat, super::ProcessingMode)>,
+    ) -> Result<VerificationReport, ConversionError> {
         let work = workspace()?;
         let source_dir = work.path().join("source");
         let result_dir = work.path().join("result");
@@ -1224,6 +1281,21 @@ impl Converter {
             &self.backend,
             self.maximum_workers,
             SourceValidationPurpose::Verification,
+        )?;
+        let source_format = self.inspect_input(request.source.input)?.format;
+        let (format, processing) = match layout_intent {
+            Some(intent) => intent,
+            None => (
+                self.default_output_format(request.output.input)?,
+                super::ProcessingMode::Stitch,
+            ),
+        };
+        self.check_admitted_output_options(
+            request.source.input,
+            source_format,
+            &qualified_layout_tracks(&source, source_format),
+            format,
+            processing,
         )?;
         let checked = self.checked_output_manifest(request.output.input)?;
         let result = prepare_presentation(
@@ -1825,6 +1897,7 @@ fn prepare_native_hls_transport(
         .ok_or(ConversionError("ts-original-evidence-required"))?;
     validate_transport_roles(media, admission, renditions)?;
     let mut prepared = native_preparation::transport_segments(&localized, admission, backend)?;
+    apply_hls_target(&mut prepared, localized.target_seconds);
     apply_transport_metadata_values(
         &mut prepared,
         media,
@@ -1834,6 +1907,11 @@ fn prepare_native_hls_transport(
         input.input_keys,
     )?;
     Ok(Some(prepared))
+}
+fn apply_hls_target(prepared: &mut [Prepared], seconds: u64) {
+    for track in prepared {
+        track.hls_target_seconds = Some(seconds);
+    }
 }
 fn validate_transport_roles(
     media: &MediaPath,
@@ -2389,6 +2467,20 @@ impl Converter {
         }
         self.convert_inner(request)
     }
+    fn using_prepared_target(
+        &self,
+        prepared: &[Prepared],
+        source: InputFormat,
+        output: OutputFormat,
+    ) -> Result<Self, ConversionError> {
+        let timing = if output == OutputFormat::Mp4 || !self.inherits_hls_target() {
+            None
+        } else {
+            prepared_hls_timing(prepared, source, &self.backend.stop)?
+        };
+        Ok(self.using_hls_timing(timing))
+    }
+
     fn convert_inner(
         &self,
         request: ConversionRequest<'_>,
@@ -2420,10 +2512,11 @@ impl Converter {
             SourceValidationPurpose::Conversion,
         )?;
         drop(preparation);
+        let command = self.using_prepared_output(&request, &prepared, input_report.format)?;
         let transport = prepared.iter().any(|p| p.transport_index.is_some());
         let sample_transport = prepared.iter().any(|p| p.transport_sample);
         if request.format == OutputFormat::HlsTs {
-            return self.convert_transport_output(&request, prepared, input_report, &work);
+            return command.convert_transport_output(&request, prepared, input_report, &work);
         }
         validate_prepared_output(&request, &prepared, transport)?;
         self.validate_complete_clock_output(&request, &prepared)?;
@@ -2438,7 +2531,7 @@ impl Converter {
             .map(|path| self.output_stage(path))
             .transpose()?;
         let candidate = stage.as_ref().map(|stage| stage.path().to_path_buf());
-        let mut report = self.convert_tracks_inner(
+        let mut report = command.convert_tracks_inner(
             TrackConversionRequest {
                 tracks: &tracks,
                 output: candidate.as_deref().unwrap_or(request.output),
@@ -2490,6 +2583,22 @@ impl Converter {
             });
         }
         Ok(report)
+    }
+
+    fn using_prepared_output(
+        &self,
+        request: &ConversionRequest<'_>,
+        prepared: &[Prepared],
+        source_format: InputFormat,
+    ) -> Result<Self, ConversionError> {
+        self.using_prepared_target(prepared, source_format, request.format)?
+            .using_admitted_output_options(
+                request.input,
+                source_format,
+                &qualified_layout_tracks(prepared, source_format),
+                request.format,
+                super::ProcessingMode::Stitch,
+            )
     }
 }
 

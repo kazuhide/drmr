@@ -317,7 +317,7 @@ fn verified(report: &Value) {
 }
 
 fn decoded_bundle_plan(plan: &Value, outputs: usize) {
-    assert_eq!(plan["schema_version"], 6);
+    assert_eq!(plan["schema_version"], 8);
     assert_eq!(plan["required_depth"], "decoded");
     assert_eq!(plan["outputs"].as_array().unwrap().len(), outputs);
 }
@@ -448,9 +448,8 @@ fn encrypted_url_roundtrip(profile: Profile) {
             assert!(raw.contains(&bytes));
         } else {
             assert!(
-                retained
-                    .iter()
-                    .any(|(name, actual)| name.starts_with("media") && actual == bytes)
+                retained.get(Path::new(name.strip_prefix('/').unwrap())) == Some(bytes),
+                "source resource path or bytes changed"
             );
         }
     }
@@ -471,7 +470,7 @@ fn encrypted_url_roundtrip(profile: Profile) {
 }
 
 fn refuse_ts_counter_mode(download: &Path, input: &Path, keys: &Path) {
-    let playlist = download.join("p000001.m3u8");
+    let playlist = download.join("media.m3u8");
     let original = std::fs::read_to_string(&playlist).unwrap();
     assert!(original.contains("METHOD=SAMPLE-AES,"));
     std::fs::write(

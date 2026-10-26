@@ -40,13 +40,19 @@
     }
     function planBinding(item, value, ref) { return same(value) && value.session_id === item.session.session_id && value.plan_ref === ref; }
     function outputKey(outputs) {
-      return JSON.stringify(outputs.map(function (output) { return [output.id, output.format, output.target, (output.drms || []).slice().sort(), output.conformance || 'none', output.processing == null ? null : output.processing]; }).sort(function (a, b) { return a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0; }));
+      return JSON.stringify(outputs.map(function (output) { return [output.id, output.format, output.target, (output.drms || []).slice().sort(), output.conformance || 'none', output.processing == null ? null : output.processing, output.format === 'dash' ? output.dash_addressing || 'template' : null]; }).sort(function (a, b) { return a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0; }));
+    }
+    function newPlanOptions(value, outputs) {
+      return value.plan_schema_version === 8 && Array.isArray(value.output_options) && value.output_options.length === outputs.length && outputs.every(function (output) {
+        var row = value.output_options.find(function (row) { return row.id === output.id; });
+        return row && row.options && row.options.layout === (output.format === 'mp4' ? 'not-applicable' : 'source') && row.options.dash_addressing === (output.format === 'dash' ? output.dash_addressing || 'template' : null);
+      });
     }
     function loadPlan(item, ref, planId, expectedOutputs) {
       var server = data.serverId;
       return api.plan(ref).then(function (value) {
         if (server !== data.serverId || data.sessions.get(item.session.session_id) !== item) return null;
-        if (!planBinding(item, value, ref) || planId && value.plan_id !== planId || expectedOutputs && outputKey(value.outputs) !== outputKey(expectedOutputs)) throw failure('response-binding-invalid');
+        if (!planBinding(item, value, ref) || planId && value.plan_id !== planId || expectedOutputs && (outputKey(value.outputs) !== outputKey(expectedOutputs) || !newPlanOptions(value, expectedOutputs))) throw failure('response-binding-invalid');
         item.plans.set(ref, value); return value;
       });
     }
@@ -156,7 +162,7 @@
       }));
       if (value.plan_ref) tasks.push(loadPlan(item, value.plan_ref, value.plan_id, owner.expectedOutputs).then(function (plan) {
         if (!current() || !plan) return;
-        if (plan.plan_id !== value.plan_id || (owner.kind === 'plan' && [2, 4, 6].indexOf(plan.plan_schema_version) === -1)) throw failure('response-binding-invalid');
+        if (plan.plan_id !== value.plan_id || (owner.kind === 'plan' && plan.plan_schema_version !== 8)) throw failure('response-binding-invalid');
         item.plan = plan;
       }));
       if (value.report_ref) tasks.push(api.report(value.report_ref).then(function (report) {

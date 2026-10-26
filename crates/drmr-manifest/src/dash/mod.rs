@@ -1,3 +1,4 @@
+mod addressing;
 mod attributes;
 mod facts;
 mod inheritance;
@@ -23,6 +24,11 @@ const SOURCE: RuleReference = RuleReference {
     section: "MPDtype, RepresentationBaseType, RepresentationType, SegmentTemplateType, SegmentTimelineType",
     revision: "DASH-IF v3.1.0 fifth-edition schema",
 };
+const ADDRESSING_SOURCE: RuleReference = RuleReference {
+    url: "https://github.com/MPEGGroup/DASHSchema/blob/6th-Ed/DASH-MPD.xsd",
+    section: "SegmentBaseType, MultipleSegmentBaseType, SegmentListType, SegmentURLType",
+    revision: "MPEG DASH sixth-edition schema",
+};
 fn rule(id: &'static str) -> Rule {
     let reference = match id {
         "DASH-XML-LIMIT" | "DASH-EXECUTION-LIMIT" => crate::model::RESOURCE_REFERENCE,
@@ -35,6 +41,18 @@ fn rule(id: &'static str) -> Rule {
             url: SOURCE.url,
             section: "Supported attribute declarations and simple types",
             revision: SOURCE.revision,
+        },
+        "DASH-TEMPLATE-INTEGERS"
+        | "DASH-ADDRESSING-TIMESCALE"
+        | "DASH-ADDRESSING-INTEGERS"
+        | "DASH-SEGMENT-NUMBERS"
+        | "DASH-LIST-SEGMENTS"
+        | "DASH-ADDRESSING-RANGES"
+        | "DASH-BASE-ADDRESSING" => ADDRESSING_SOURCE,
+        "DASH-NOMINAL-TIMING" => RuleReference {
+            url: "https://dashif.org/Guidelines-TimingModel/",
+            section: "18.4 Simple addressing; finite reference counts and nominal timing",
+            revision: "Commit Snapshot 2024-10-24",
         },
         "DASH-PERIOD-TIMING" | "DASH-TIMELINE-ARITHMETIC" => RuleReference {
             url: "https://dashif.org/Guidelines-TimingModel/",

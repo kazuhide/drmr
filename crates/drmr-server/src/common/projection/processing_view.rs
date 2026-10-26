@@ -38,10 +38,16 @@ pub(super) fn selection(
         ProcessingMode::Stitch if output == OutputFormat::Mp4 => {
             (BoundaryHandling::NotApplicable, None)
         }
-        ProcessingMode::Stitch => (BoundaryHandling::Resegment, Some(2000)),
+        ProcessingMode::Stitch => (
+            BoundaryHandling::Resegment,
+            choice.segment_duration_ms.filter(|value| *value > 0),
+        ),
         ProcessingMode::Auto => return Err(bad()),
     };
-    if choice.boundaries != boundaries || choice.segment_duration_ms != duration {
+    if choice.boundaries != boundaries
+        || choice.segment_duration_ms != duration
+        || boundaries == BoundaryHandling::Resegment && duration.is_none()
+    {
         return Err(bad());
     }
     serde_json::to_value(choice).map_err(|_| bad())

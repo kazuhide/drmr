@@ -76,22 +76,7 @@ pub(super) fn check(node: Node<'_, '_>, sink: &mut DiagnosticSink<'_>) {
             continue;
         }
         // The corresponding semantic handlers own these checks and rule IDs.
-        if name == "Representation" && matches!(attribute.name(), "id" | "bandwidth")
-            || name == "SegmentTemplate"
-                && matches!(
-                    attribute.name(),
-                    "timescale"
-                        | "presentationTimeOffset"
-                        | "duration"
-                        | "startNumber"
-                        | "endNumber"
-                        | "media"
-                        | "initialization"
-                        | "index"
-                        | "bitstreamSwitching"
-                )
-            || name == "S" && matches!(attribute.name(), "t" | "d" | "r")
-        {
+        if semantic(name, attribute.name()) {
             continue;
         }
         let value = attribute.value();
@@ -125,6 +110,42 @@ pub(super) fn check(node: Node<'_, '_>, sink: &mut DiagnosticSink<'_>) {
     descriptor(node, sink);
 }
 
+fn semantic(element: &str, name: &str) -> bool {
+    if name == "presentationDuration"
+        && matches!(element, "SegmentTemplate" | "SegmentList" | "SegmentBase")
+    {
+        return true;
+    }
+    match element {
+        "Representation" => matches!(name, "id" | "bandwidth"),
+        "SegmentTemplate" => matches!(
+            name,
+            "timescale"
+                | "presentationTimeOffset"
+                | "duration"
+                | "startNumber"
+                | "endNumber"
+                | "media"
+                | "initialization"
+                | "index"
+                | "bitstreamSwitching"
+                | "eptDelta"
+        ),
+        "SegmentList" => matches!(
+            name,
+            "timescale"
+                | "presentationTimeOffset"
+                | "duration"
+                | "startNumber"
+                | "endNumber"
+                | "eptDelta"
+        ),
+        "SegmentBase" => matches!(name, "timescale" | "presentationTimeOffset" | "eptDelta"),
+        "S" => matches!(name, "t" | "d" | "r"),
+        _ => false,
+    }
+}
+
 fn kind(element: &str, name: &str) -> Kind {
     if matches!(element, "Representation" | "AdaptationSet") {
         return representation_kind(element, name);
@@ -150,8 +171,10 @@ fn kind(element: &str, name: &str) -> Kind {
             Kind::String
         }
         ("MPD", "profiles") => Kind::Profiles,
+        ("SegmentURL", "media" | "index") => Kind::String,
         ("Label" | "ProgramInformation", "lang") => Kind::Language,
         ("Initialization" | "RepresentationIndex" | "BitstreamSwitching", "range")
+        | ("SegmentURL", "mediaRange" | "indexRange")
         | ("SegmentTemplate" | "SegmentList" | "SegmentBase", "indexRange") => Kind::ByteRange,
         ("Period", "bitstreamSwitching")
         | (
@@ -160,10 +183,9 @@ fn kind(element: &str, name: &str) -> Kind {
         )
         | ("SegmentTemplate" | "SegmentList" | "SegmentBase", "indexRangeExact") => Kind::Boolean,
         ("SegmentTemplate" | "SegmentList" | "SegmentBase", "timescale")
-        | ("SegmentTemplate" | "SegmentList", "duration" | "startNumber" | "endNumber") => {
-            Kind::UInt
-        }
-        ("SegmentTemplate" | "SegmentList" | "SegmentBase", "presentationTimeOffset")
+        | ("SegmentTemplate" | "SegmentList", "duration") => Kind::UInt,
+        ("SegmentTemplate" | "SegmentList", "startNumber" | "endNumber")
+        | ("SegmentTemplate" | "SegmentList" | "SegmentBase", "presentationTimeOffset")
         | ("S", "n" | "k") => Kind::ULong,
         _ => Kind::Unknown,
     }

@@ -46,7 +46,6 @@ pub fn is_supervised_cli() -> bool {
 mod paths;
 pub use paths::resolve_path;
 
-#[cfg(windows)]
 pub use paths::validate_windows_relative_path;
 
 mod workspace;
@@ -55,4 +54,8 @@ pub(crate) use workspace::open_media_update;
 pub use workspace::pin_media_directory;
 pub use workspace::{
     create_media_dir_all, create_media_new, create_media_or_truncate, seal_media_tree,
+};
+#[cfg(windows)]
+pub(crate) use workspace::{
+    create_media_dir_new, delete_media_handle, open_media_mutation, rename_media_handle_no_replace,
 };

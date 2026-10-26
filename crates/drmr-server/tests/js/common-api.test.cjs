@@ -105,3 +105,86 @@ test('saved schemas five and six require complete fixed processing selections', 
     }
   }
 });
+
+test('saved segment targets retain positive bounded milliseconds rather than a fixed two seconds', async () => {
+  for (const schema of [5, 6]) {
+    const selection = { requested: 'auto', resolved: 'stitch', boundaries: 'resegment', segment_duration_ms: 6000 };
+    const plan = envelope({ plan_ref: 'plan_1', session_id: 'session_1', plan_id: 'b'.repeat(64), plan_schema_version: schema,
+      required_depth: 'native', outputs: [{ id: schema === 5 ? null : 'hls', format: 'hls', target: 'clear', drms: [], conformance: 'none' }],
+      processing: schema === 5 ? selection : [{ id: 'hls', selection }],
+      destination_state: 'absent', export_url: '/api/common/plans/plan_1/export' });
+    for (const duration of [1, 2000, 6000, 4294967295]) {
+      selection.segment_duration_ms = duration;
+      await load(() => Promise.resolve(plan)).plan('plan_1');
+    }
+    for (const duration of [null, 0, -1, 1.5, 4294967296, '6000', Infinity, NaN]) {
+      selection.segment_duration_ms = duration;
+      await assert.rejects(load(() => Promise.resolve(plan)).plan('plan_1'), { code: 'request-response-invalid' });
+    }
+  }
+});
+
+function outputPlan(schema, mode = 'template', format = 'dash') {
+  const single = schema === 7;
+  const selection = { requested: 'auto', resolved: 'stitch', boundaries: format === 'mp4' ? 'not-applicable' : 'resegment', segment_duration_ms: format === 'mp4' ? null : 6000 };
+  const output = { id: single ? null : 'output', format, target: 'clear' };
+  if (!single) Object.assign(output, { drms: [], conformance: 'none', processing: 'auto', ...(format === 'dash' ? { dash_addressing: mode } : {}) });
+  const options = { layout: format === 'mp4' ? 'not-applicable' : 'source', dash_addressing: format === 'dash' ? mode : null };
+  return envelope({ plan_ref: 'plan_1', session_id: 'session_1', plan_id: 'b'.repeat(64), plan_schema_version: schema,
+    required_depth: 'native', outputs: [output], processing: single ? selection : [{ id: 'output', selection }],
+    output_options: single ? options : [{ id: 'output', options }], destination_state: 'absent', export_url: '/api/common/plans/plan_1/export' });
+}
+
+test('new saved plans expose closed path-free placement and four DASH addressing forms', async () => {
+  for (const schema of [7, 8]) {
+    for (const mode of ['template', 'template-timeline', 'list', 'base']) {
+      const response = outputPlan(schema, mode);
+      assert.equal((await load(() => Promise.resolve(response)).plan('plan_1')).plan_schema_version, schema);
+      const options = schema === 7 ? response.output_options : response.output_options[0].options;
+      options.layout = 'previous-saved';
+      await load(() => Promise.resolve(response)).plan('plan_1');
+    }
+    for (const format of ['mp4', 'hls', 'hls-ts']) {
+      const response = outputPlan(schema, 'template', format);
+      await load(() => Promise.resolve(response)).plan('plan_1');
+    }
+  }
+});
+
+test('new saved options reject paths, unknown fields, missing choices and foreign output bindings', async () => {
+  for (const schema of [7, 8]) {
+    for (const change of [
+      options => { options.layout = { mode: 'source', tracks: [{ source: '/private/media' }] }; },
+      options => { options.layout = 'normalized'; },
+      options => { options.layout = 'not-applicable'; },
+      options => { options.dash_addressing = 'template-duration'; },
+      options => { options.dash_addressing = 'https://private.invalid/key'; },
+      options => { options.dash_addressing = null; },
+      options => { delete options.dash_addressing; },
+      options => { options.tracks = [{ source: '/private/media' }]; },
+    ]) {
+      const response = outputPlan(schema);
+      change(schema === 7 ? response.output_options : response.output_options[0].options);
+      await assert.rejects(load(() => Promise.resolve(response)).plan('plan_1'), { code: 'request-response-invalid' });
+    }
+    for (const invalid of [null, {}, [], { layout: 'source' }]) {
+      const response = outputPlan(schema); response.output_options = invalid;
+      await assert.rejects(load(() => Promise.resolve(response)).plan('plan_1'), { code: 'request-response-invalid' });
+    }
+    const missing = outputPlan(schema); delete missing.output_options;
+    await assert.rejects(load(() => Promise.resolve(missing)).plan('plan_1'), { code: 'request-response-invalid' });
+  }
+  for (const change of [
+    response => { response.output_options[0].id = 'other'; },
+    response => { response.output_options.push(response.output_options[0]); },
+    response => { response.outputs[0].dash_addressing = 'list'; },
+  ]) {
+    const response = outputPlan(8); change(response);
+    await assert.rejects(load(() => Promise.resolve(response)).plan('plan_1'), { code: 'request-response-invalid' });
+  }
+  for (const format of ['mp4', 'hls']) {
+    const response = outputPlan(8, 'template', format);
+    response.output_options[0].options.dash_addressing = 'base';
+    await assert.rejects(load(() => Promise.resolve(response)).plan('plan_1'), { code: 'request-response-invalid' });
+  }
+});

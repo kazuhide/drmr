@@ -496,6 +496,27 @@ def source_verification(report):
             and all(checks.get(name) is True for name in CHECKS))
 
 
+def current_plan_output_options(planned):
+    source_format = planned.get("source_format")
+    if not isinstance(source_format, str):
+        return False
+    fixture = {
+        "dash": ("manifest.mpd", "video", "playlist-0000.m3u8"),
+        "hls-ts": ("media.m3u8", "audio", "media.m3u8"),
+    }.get(source_format)
+    if fixture is None:
+        return False
+    source, kind, playlist = fixture
+    expected = {"layout": {"mode": "source", "tracks": [{
+        "output_ordinal": 0, "source": source, "selector": 0, "kind": kind,
+        "media_directory": "", "playlist": playlist, "generated_stem": "track-0000-",
+    }]}, "dash_addressing": "template"}
+    options = planned.get("output_options")
+    return (options == expected
+            and type(options["layout"]["tracks"][0]["output_ordinal"]) is int
+            and type(options["layout"]["tracks"][0]["selector"]) is int)
+
+
 def plan_depth(planned):
     if not isinstance(planned, dict) or type(planned.get("schema_version")) is not int:
         return False
@@ -506,11 +527,13 @@ def plan_depth(planned):
     if planned["schema_version"] == 3:
         return True
     processing = planned.get("processing")
-    return (planned["schema_version"] == 5 and isinstance(processing, dict)
+    return (planned["schema_version"] in (5, 7) and isinstance(processing, dict)
             and set(processing) == {"requested", "resolved", "boundaries", "segment_duration_ms"}
             and processing["requested"] in ("auto", "stitch") and processing["resolved"] == "stitch"
             and processing["boundaries"] == "resegment"
-            and type(processing["segment_duration_ms"]) is int and processing["segment_duration_ms"] == 2000)
+            and type(processing["segment_duration_ms"]) is int and processing["segment_duration_ms"] == 2000
+            and (planned["schema_version"] == 5
+                 or processing["requested"] == "auto" and current_plan_output_options(planned)))
 
 
 def doctor(report):

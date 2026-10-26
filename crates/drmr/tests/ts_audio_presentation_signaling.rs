@@ -202,28 +202,44 @@ fn scale(bytes: &[u8]) -> u32 {
     u32::from_be_bytes(bytes[at..at + 4].try_into().unwrap())
 }
 
-fn fragments(output: &Path) -> Vec<PathBuf> {
-    let mut result: Vec<_> = std::fs::read_dir(output.join("track-0000"))
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .filter(|file| file.extension().is_some_and(|extension| extension == "m4s"))
+fn hls_playlist(output: &Path) -> PathBuf {
+    let master = std::fs::read_to_string(output.join("master.m3u8")).unwrap();
+    output.join(
+        master
+            .lines()
+            .find(|line| !line.is_empty() && !line.starts_with('#'))
+            .unwrap(),
+    )
+}
+
+fn output_resources(output: &Path) -> (PathBuf, Vec<PathBuf>) {
+    if output.join("manifest.mpd").is_file() {
+        return numbered_dash::resources(output, 0);
+    }
+    let playlist = hls_playlist(output);
+    let parent = playlist.parent().unwrap();
+    let text = std::fs::read_to_string(&playlist).unwrap();
+    let map = text
+        .lines()
+        .find_map(|line| line.strip_prefix("#EXT-X-MAP:"))
+        .unwrap();
+    let initialization = parent.join(map.split('"').nth(1).unwrap());
+    let segments = text
+        .lines()
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .map(|line| parent.join(line))
         .collect();
-    result.sort_by_key(|file| {
-        file.file_stem()
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .strip_prefix("seg_")
-            .unwrap()
-            .parse::<u64>()
-            .unwrap()
-    });
+    (initialization, segments)
+}
+
+fn fragments(output: &Path) -> Vec<PathBuf> {
+    let result = output_resources(output).1;
     assert!(result.len() > 1);
     result
 }
 
 fn assert_audio_init_and_count(output: &Path, origin: u64) -> Vec<u8> {
-    let init = std::fs::read(output.join("track-0000/init.mp4")).unwrap();
+    let init = std::fs::read(output_resources(output).0).unwrap();
     let nodes = mp4::parse_boxes(&init).unwrap();
     assert_eq!(scale(payload(&init, &nodes, *b"mvhd")), 4_410_000);
     assert_eq!(scale(payload(&init, &nodes, *b"mdhd")), 90_000);
@@ -303,7 +319,7 @@ fn assert_drm(output: &Path, origin: u64, pr: &drmr_core::playready::PlayReadyOb
     }
     let hls = output.join("hls");
     assert_audio_init_and_count(&hls, origin);
-    let playlist = std::fs::read_to_string(hls.join("track-0000/media.m3u8")).unwrap();
+    let playlist = std::fs::read_to_string(hls_playlist(&hls)).unwrap();
     let version = playlist
         .lines()
         .find_map(|line| line.strip_prefix("#EXT-X-VERSION:"))
@@ -415,7 +431,7 @@ fn saved_plan(
         ],
         secrets,
     );
-    assert_eq!(planned["schema_version"], 6);
+    assert_eq!(planned["schema_version"], 8);
     assert_eq!(planned["required_depth"], "decoded");
     assert_eq!(planned["kind"], "execution-plan");
     assert_eq!(planned["outputs"].as_array().unwrap().len(), 2);
@@ -527,3 +543,5 @@ fn decode_option(arguments: &[&str]) -> Option<&'static str> {
         && (arguments.first().copied() != Some("plan") || arguments.contains(&"--save")))
     .then_some("--decode")
 }
+#[path = "support/numbered_dash.rs"]
+mod numbered_dash;

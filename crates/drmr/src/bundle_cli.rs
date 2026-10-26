@@ -5,6 +5,7 @@ use crate::inspect_cli::PlanArgs;
 use drmr_core::conversion::{
     ConversionError, Converter, ProcessingMode, VerificationSource,
     conformance::ManifestValidationTools,
+    dash_addressing::DashAddressing,
     key_file::{self, BundleOperatorKeys},
     plan::{
         self,
@@ -20,7 +21,7 @@ use std::sync::Arc;
 pub(crate) fn error_hint(code: &str) -> Option<&'static str> {
     match code {
         "output-spec-invalid" => Some(
-            "Use a version-1 output recipe, or version 2 for per-output processing, with unique safe IDs and supported format, protection, DRM systems and manifest-check policy.",
+            "Use a version-1 output recipe, version 2 for per-output processing, or version 3 for DASH addressing, with unique safe IDs and supported format, protection, DRM systems and manifest-check policy.",
         ),
         "execution-plan-output-keys-mismatch" => Some(
             "Match schema-version-2 output key entries to the encrypted output IDs; omit clear outputs and unused entries.",
@@ -105,8 +106,13 @@ impl Session {
         convert_cli::error(command, error, json, &self.progress, None)
     }
 
-    fn with_processing(mut self, processing: ProcessingMode) -> Self {
-        self.converter = self.converter.with_processing(processing);
+    fn with_new_intent(
+        mut self,
+        processing: ProcessingMode,
+        addressing: Option<DashAddressing>,
+    ) -> Self {
+        self.converter =
+            crate::output_cli::configure(self.converter, addressing).with_processing(processing);
         self
     }
 
@@ -376,7 +382,9 @@ pub fn save(args: &PlanArgs) -> ExitCode {
         args.decode,
         args.keys_file.as_ref(),
     ) {
-        Ok(session) => session.with_processing(args.processing.unwrap_or_default()),
+        Ok(session) => {
+            session.with_new_intent(args.processing.unwrap_or_default(), args.dash_addressing)
+        }
         Err(code) => return code,
     };
     let outputs = match read_output_spec(
@@ -388,6 +396,10 @@ pub fn save(args: &PlanArgs) -> ExitCode {
         Err(error) => return session.failed("plan", error, args.json),
     };
     session.run("plan", args.json, args.measure, |converter| {
+        crate::output_cli::validate(
+            args.dash_addressing,
+            outputs.iter().map(|output| output.format),
+        )?;
         session.progress.mark("input-preparation");
         let plan = converter.create_bundle_plan(BundlePlanRequest {
             input: VerificationSource {
@@ -472,7 +484,7 @@ pub fn convert_direct(args: &ConvertArgs) -> ExitCode {
         args.keys_file.as_ref(),
         progress,
     ) {
-        Ok(session) => session,
+        Ok(session) => session.with_new_intent(ProcessingMode::Auto, args.dash_addressing),
         Err(code) => return code,
     };
     let mut outputs = match read_output_spec(
@@ -483,6 +495,7 @@ pub fn convert_direct(args: &ConvertArgs) -> ExitCode {
         Ok(outputs) => outputs,
         Err(error) => return session.failed("convert", error, args.json),
     };
+    // Freeze the CLI default into the output choices before executing the new plan.
     if let Some(default) = args.processing {
         for output in &mut outputs {
             output.processing.get_or_insert(default);
@@ -491,6 +504,10 @@ pub fn convert_direct(args: &ConvertArgs) -> ExitCode {
     let validators = tools(&args.hls_validator_bin, &args.dash_validator_bin);
     let output = args.output.as_deref().expect("clap requires the output");
     session.run("convert", args.json, args.measure, |converter| {
+        crate::output_cli::validate(
+            args.dash_addressing,
+            outputs.iter().map(|output| output.format),
+        )?;
         let report = match &input {
             Input::Local(input) => {
                 session.progress.mark("input-preparation");

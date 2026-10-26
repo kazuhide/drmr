@@ -2,10 +2,14 @@
 use super::*;
 use crate::conversion::{
     conformance::ManifestValidationTools,
+    dash_addressing::DashAddressing,
     key_file::{BundleOperatorKeys, OperatorKeys},
+    output_options::OutputOptions,
     plan::{
         self, SavedPlan,
-        bundle::{BundleOutputIntent, BundlePlan, BundlePlanRequest, ManifestValidation},
+        bundle::{
+            BundleOutputIntent, BundlePlan, BundlePlanRequest, ManifestValidation, OutputSettings,
+        },
     },
 };
 use std::fs;
@@ -17,6 +21,7 @@ fn intent(
     processing: ProcessingMode,
 ) -> BundleOutputIntent {
     BundleOutputIntent {
+        dash_addressing: None,
         id: id.into(),
         format,
         target,
@@ -24,6 +29,26 @@ fn intent(
         conformance: ManifestValidation::None,
         processing: Some(processing),
     }
+}
+
+fn assert_bound_output_options(saved: &BundlePlan) {
+    assert_eq!(saved.schema_version, 8);
+    assert_eq!(
+        saved.output_options,
+        Some(vec![
+            OutputSettings {
+                id: "dash".into(),
+                options: OutputOptions {
+                    layout: None,
+                    dash_addressing: Some(DashAddressing::Template),
+                },
+            },
+            OutputSettings {
+                id: "mp4".into(),
+                options: OutputOptions::default(),
+            },
+        ])
+    );
 }
 
 #[test]
@@ -72,12 +97,13 @@ fn review_mixed_single_video_bundle_keeps_mp4_stitch_eligibility_and_segment_ref
             outputs: &outputs,
         })
         .unwrap();
-    assert_eq!(saved.schema_version, 6);
+    assert_bound_output_options(&saved);
     let plan_path = fixture.directory.path().join("mixed.plan.json");
     plan::write_bundle(&plan_path, &saved).unwrap();
     let SavedPlan::Bundle(loaded) = plan::read_saved(&plan_path).unwrap() else {
         panic!("saved bundle must reopen");
     };
+    assert_eq!(loaded.output_options, saved.output_options);
     let keys = BundleOperatorKeys::default();
     let tools = ManifestValidationTools::default();
     let converted = command.execute_bundle_plan(&loaded, &keys, &tools).unwrap();

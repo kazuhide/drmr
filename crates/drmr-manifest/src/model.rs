@@ -110,7 +110,10 @@ impl Profile {
         }
     }
     pub fn revision(self) -> &'static str {
-        "2026-10-21.1"
+        match self {
+            Self::DashStaticManifest => "2026-10-26.1",
+            Self::HlsBaseManifest | Self::AppleVodManifest => "2026-10-21.1",
+        }
     }
 }
 

@@ -47,7 +47,11 @@ impl Conversion<'_> {
         let guard = destination::OutputGuard::for_bundle_child(&path, destination)?;
         let child = command
             .using_plan_destination(guard)
-            .with_processing(plan.processing_mode(&output.id))
+            .with_plan_processing(
+                plan.processing_selection(&output.id),
+                plan.schema_version >= 8,
+            )
+            .using_output_options(plan.output_options(&output.id))
             .with_output_signaling(output_keys.signaling.clone());
         let mut conversion = child
             .convert(ConversionRequest {
@@ -80,6 +84,13 @@ impl Conversion<'_> {
         };
         let (matches, verification) =
             child.bundle_media(source, bound.entrypoint(), output, output_keys)?;
+        if plan.output_options.is_some() {
+            child.verify_selected_output_options(
+                bound.entrypoint(),
+                output.format,
+                plan.processing_mode(&output.id),
+            )?;
+        }
         if !matches || !verification.passed {
             return Err(ConversionError("verification-mismatch"));
         }
@@ -179,7 +190,13 @@ impl Verification<'_> {
         let manifest = manifests.bind(command, &result, ordinal)?;
         let empty = OperatorKeys::default();
         let output_keys = keys.outputs.get(&intent.id).unwrap_or(&empty);
-        let child = command.with_processing_clone(plan.processing_mode(&intent.id));
+        let child = command
+            .with_processing_clone(command.processing_mode)
+            .with_plan_processing(
+                plan.processing_selection(&intent.id),
+                plan.schema_version >= 8,
+            );
+        let child = child.using_output_options(plan.output_options(&intent.id));
         let source = VerificationSource {
             input: original.entrypoint(),
             input_keys: &keys.input,
@@ -187,6 +204,13 @@ impl Verification<'_> {
         };
         let (output_matches_plan, verification) =
             child.bundle_media(source, result.entrypoint(), intent, output_keys)?;
+        if plan.output_options.is_some() {
+            child.verify_selected_output_options(
+                result.entrypoint(),
+                intent.format,
+                plan.processing_mode(&intent.id),
+            )?;
+        }
         let signaling = command.bundle_signaling(result.entrypoint(), intent, output_keys)?;
         let conformance = command.bundle_conformance(result.entrypoint(), intent, tools)?;
         original

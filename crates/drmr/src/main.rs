@@ -10,6 +10,7 @@ mod convert_cli;
 mod doctor;
 mod download_cli;
 mod inspect_cli;
+mod output_cli;
 mod plan_cli;
 mod progress;
 

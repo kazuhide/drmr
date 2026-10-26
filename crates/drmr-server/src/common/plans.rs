@@ -29,6 +29,7 @@ pub struct Plan {
     pub required_depth: drmr_core::conversion::ValidationDepth,
     pub outputs: Value,
     pub processing: Option<Value>,
+    pub output_options: Option<Value>,
     pub destination: PathBuf,
     pub destinations: Vec<PathBuf>,
     pub source_entrypoint: PathBuf,
@@ -47,6 +48,9 @@ impl Plan {
         let mut view = json!({"plan_ref":self.reference,"session_id":self.session,"plan_id":self.id,"plan_schema_version":self.schema,"required_depth":self.required_depth,"outputs":self.outputs,"destination_state":destination_state(&self.destination,&self.destinations),"export_url":format!("/api/common/plans/{}/export",self.reference)});
         if let Some(processing) = &self.processing {
             view["processing"] = processing.clone();
+        }
+        if let Some(options) = &self.output_options {
+            view["output_options"] = options.clone();
         }
         view
     }
@@ -84,6 +88,7 @@ pub fn load(path: &Path, files: &Files, session: &str, reference: String) -> Res
         SavedPlan::Single(plan) => plan.processing.map(|selection| json!(selection)),
         SavedPlan::Bundle(plan) => plan.processing.as_ref().map(|choices| json!(choices)),
     };
+    let output_options = super::projection::saved_output_options(&saved);
     let destinations = match &saved {
         SavedPlan::Single(p) => vec![p.intent.output.clone()],
         SavedPlan::Bundle(p) => p
@@ -111,6 +116,7 @@ pub fn load(path: &Path, files: &Files, session: &str, reference: String) -> Res
         required_depth,
         outputs,
         processing,
+        output_options,
         destination,
         destinations,
         source_entrypoint: source.root.join(&source.entrypoint),

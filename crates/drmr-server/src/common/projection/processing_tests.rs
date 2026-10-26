@@ -85,3 +85,28 @@ fn saved_processing_schemas_keep_frozen_choices_without_private_source_paths() {
     legacy["schema_version"] = json!(4);
     assert!(plan(&legacy).is_err());
 }
+
+#[test]
+fn saved_segment_targets_are_positive_bounded_milliseconds() {
+    let mut value = selection("stitch", "resegment");
+    for duration in [1, 2000, 6000, u32::MAX] {
+        value["segment_duration_ms"] = json!(duration);
+        assert_eq!(
+            processing_view::selection(&value, OutputFormat::HlsTs, OutputFormat::Dash).unwrap(),
+            value
+        );
+    }
+    for invalid in [
+        Value::Null,
+        json!(0),
+        json!(-1),
+        json!(1.5),
+        json!(u64::from(u32::MAX) + 1),
+        json!("6000"),
+    ] {
+        value["segment_duration_ms"] = invalid;
+        assert!(
+            processing_view::selection(&value, OutputFormat::HlsTs, OutputFormat::Dash).is_err()
+        );
+    }
+}

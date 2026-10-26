@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { assertVerification, decodeBadgeState, legacyPlan, planMinimumDepth } from './console-evidence.mjs';
+import { assertVerification, compatibilityPlan, decodeBadgeState, legacyPlan, planMinimumDepth } from './console-evidence.mjs';
 
 function native(scope = 'comparison') {
   return { schema_version: 2, required_depth: 'native', scope, passed: true,
@@ -66,5 +66,32 @@ test('console plan fixtures preserve legacy minimum decoding and hash the origin
   for (const changed of [{ ...single, required_depth: null }, { ...single, required_depth: 'unknown' },
     { ...single, schema_version: 1 }, { ...bundle, schema_version: 2 }, { ...single, schema_version: 5 }]) {
     assert.throws(() => planMinimumDepth(changed));
+  }
+});
+
+test('new saved options remain current while real older fixtures retain their original identity fields', () => {
+  const selection = { requested: 'auto', resolved: 'stitch', boundaries: 'not-applicable', segment_duration_ms: null };
+  const single = { kind: 'execution-plan', schema_version: 7, plan_id: 'a'.repeat(64), source: {}, source_format: 'mp4',
+    intent: { format: 'mp4', target: 'clear', output: 'result.mp4' }, required_depth: 'native', processing: selection, output_options: {} };
+  const bundle = { kind: 'execution-plan', schema_version: 8, plan_id: 'b'.repeat(64), source: {}, source_format: 'hls', output_root: 'result',
+    outputs: [{ id: 'dash', format: 'dash', target: 'clear', drms: [], conformance: 'none', processing: 'auto', dash_addressing: 'base' }],
+    required_depth: 'decoded', processing: [{ id: 'dash', selection: { ...selection, boundaries: 'resegment', segment_duration_ms: 6000 } }],
+    output_options: [{ id: 'dash', options: { dash_addressing: 'base' } }] };
+  for (const current of [single, bundle]) {
+    const before = structuredClone(current), single = current.schema_version === 7;
+    assert.equal(planMinimumDepth(current), current.required_depth);
+    for (const schema of single ? [1, 3, 5] : [2, 4, 6]) {
+      const old = compatibilityPlan(current, schema);
+      assert.equal(old.schema_version, schema);
+      assert.equal(Object.hasOwn(old, 'output_options'), false);
+      if (schema >= 5) assert.deepEqual(old.processing, current.processing);
+      else assert.equal(Object.hasOwn(old, 'processing'), false);
+      if (old.outputs) assert.ok(old.outputs.every(output => !Object.hasOwn(output, 'dash_addressing')));
+      const { plan_id: ignored, ...identity } = old;
+      assert.equal(old.plan_id, createHash('sha256').update(JSON.stringify(identity)).digest('hex'));
+    }
+    assert.deepEqual(current, before);
+    const missing = { ...current }; delete missing.output_options;
+    assert.throws(() => planMinimumDepth(missing));
   }
 });

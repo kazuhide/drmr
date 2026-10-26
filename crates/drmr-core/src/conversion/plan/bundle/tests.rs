@@ -3,6 +3,7 @@ use crate::conversion::plan::{self, SavedPlan};
 
 fn intent(id: &str) -> BundleOutputIntent {
     BundleOutputIntent {
+        dash_addressing: None,
         processing: None,
         id: id.into(),
         format: OutputFormat::Dash,
@@ -12,11 +13,12 @@ fn intent(id: &str) -> BundleOutputIntent {
     }
 }
 
-fn sample(root: &Path) -> BundlePlan {
+pub(super) fn sample(root: &Path) -> BundlePlan {
     let input = root.join("source.mp4");
     std::fs::write(&input, b"\0\0\0\x18ftypisom original data").unwrap();
     let frozen = FrozenSource::capture(&input, &crate::concurrency::Stop::new()).unwrap();
     let mut plan = BundlePlan {
+        output_options: None,
         processing: None,
         kind: KIND.into(),
         schema_version: 2,
@@ -62,6 +64,24 @@ fn version_six_binds_one_resolved_processing_choice_per_output() {
         plan::read_saved(&saved).unwrap(),
         SavedPlan::Bundle(plan.clone())
     );
+    let old_bytes = serde_json::to_vec(&plan).unwrap();
+    let old_id = plan.plan_id.clone();
+    let mut inherited = plan.clone();
+    inherited.processing.as_mut().unwrap()[0]
+        .selection
+        .segment_duration_ms = Some(6000);
+    assert_eq!(validate(&inherited).unwrap_err(), INVALID);
+    inherited.plan_id = identity(&inherited).unwrap();
+    validate(&inherited).unwrap();
+    assert_ne!(inherited.plan_id, old_id);
+    let inherited_path = root.path().join("inherited.bundle.json");
+    plan::write_bundle(&inherited_path, &inherited).unwrap();
+    assert_eq!(
+        plan::read_saved(&inherited_path).unwrap(),
+        SavedPlan::Bundle(inherited)
+    );
+    assert_eq!(serde_json::to_vec(&plan).unwrap(), old_bytes);
+    assert_eq!(identity(&plan).unwrap(), old_id);
     let mut missing = serde_json::to_value(&plan).unwrap();
     missing["processing"].as_array_mut().unwrap().pop();
     assert!(validate(&serde_json::from_value(missing).unwrap()).is_err());
@@ -133,6 +153,7 @@ fn strict_saved_dispatch_accepts_both_schemas_and_preserves_private_no_replace()
     assert_eq!(std::fs::read(&path).unwrap(), original);
     assert!(plan::read(&path).is_err());
     let mut legacy = plan::ExecutionPlan {
+        output_options: None,
         processing: None,
         kind: KIND.into(),
         schema_version: 1,

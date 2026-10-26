@@ -86,6 +86,10 @@ impl Converter {
             planned_destination: Some(Arc::new(guard)),
             output_signaling: self.output_signaling.clone(),
             processing_mode: self.processing_mode,
+            segment_duration_ms: self.segment_duration_ms,
+            output_options: self.output_options.clone(),
+            source_hls_target_ms: self.source_hls_target_ms,
+            hls_target_policy: self.hls_target_policy,
         }
     }
     pub(in crate::conversion) fn check_plan_destination(&self) -> Result<(), ConversionError> {

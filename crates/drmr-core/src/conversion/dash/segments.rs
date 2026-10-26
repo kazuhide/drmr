@@ -5,6 +5,7 @@ use super::{
 use crate::{concurrency::Stop, conversion::files, native::FileIdentity};
 use std::{
     fs,
+    io::{Seek, SeekFrom},
     path::{Path, PathBuf},
 };
 use zeroize::Zeroizing;
@@ -45,6 +46,15 @@ impl Budget {
         destination: &Path,
         stop: &Stop,
     ) -> Result<(), ConversionError> {
+        self.snapshot_range(source, destination, None, stop)
+    }
+    pub(super) fn snapshot_range(
+        &mut self,
+        source: &Path,
+        destination: &Path,
+        range: Option<super::addressing::ByteRange>,
+        stop: &Stop,
+    ) -> Result<(), ConversionError> {
         checkpoint(Some(stop))?;
         self.resources = self
             .resources
@@ -68,7 +78,23 @@ impl Budget {
         }
         let identity = FileIdentity::read(&input).map_err(|_| error("media-copy-failed"))?;
         let mut output = files::create_new(destination)?;
-        self.copy_chunks(&mut input, &mut output, stop)?;
+        if let Some(range) = range {
+            use std::io::Read as _;
+            if range.end >= before.len() {
+                return Err(error("dash-resource-range-outside-file"));
+            }
+            input
+                .seek(SeekFrom::Start(range.start))
+                .map_err(|_| error("media-copy-failed"))?;
+            let length = range.length()?;
+            let initial = self.bytes;
+            self.copy_chunks(&mut (&mut input).take(length), &mut output, stop)?;
+            if self.bytes - initial != length {
+                return Err(error("media-copy-failed"));
+            }
+        } else {
+            self.copy_chunks(&mut input, &mut output, stop)?;
+        }
         let after = input.metadata().map_err(|_| error("media-copy-failed"))?;
         if before.len() != after.len()
             || before.modified().map_err(|_| error("media-copy-failed"))?
@@ -117,6 +143,54 @@ pub(super) fn checkpoint(stop: Option<&Stop>) -> Result<(), ConversionError> {
     } else {
         Ok(())
     }
+}
+
+pub(super) fn check_clock(
+    resolved: &super::addressing::Representation,
+    segment: &super::addressing::Segment,
+    clock: &mut crate::conversion::timing::FragmentClock,
+    copied: &Path,
+    ordinal: usize,
+) -> Result<(u64, u64, u64), ConversionError> {
+    let (declared, presented) = clock.dash_clocks(copied)?;
+    if segment.resource.range.is_some() && !clock.relocatable() {
+        return Err(error("dash-ranged-absolute-fragment-offset-not-supported"));
+    }
+    if resolved.index.is_some() && !clock.starts_with_sync() {
+        return Err(error("dash-index-sap-mismatch"));
+    }
+    if let Some(nominal) = resolved.nominal {
+        super::addressing::check_nominal(
+            segment,
+            nominal,
+            resolved.offset,
+            resolved.timescale,
+            presented,
+            ordinal,
+            resolved.segments.len(),
+        )?;
+    } else {
+        let observed = if resolved.index.is_some() {
+            (
+                presented.0,
+                presented
+                    .1
+                    .checked_sub(presented.0)
+                    .ok_or(error("dash-invalid-index"))?,
+                presented.2,
+            )
+        } else {
+            declared
+        };
+        if u128::from(observed.0) * u128::from(resolved.timescale)
+            != u128::from(segment.time) * u128::from(observed.2)
+            || u128::from(observed.1) * u128::from(resolved.timescale)
+                != u128::from(segment.duration) * u128::from(observed.2)
+        {
+            return Err(error("manifest-fragment-timeline-mismatch"));
+        }
+    }
+    Ok(declared)
 }
 
 #[cfg(test)]

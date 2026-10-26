@@ -256,11 +256,15 @@ fn preserves_raw(download: &Path, responses: &BTreeMap<String, Vec<u8>>) {
         let mut actual: Vec<_> = saved
             .iter()
             .filter_map(|(path, bytes)| {
-                let original = section == "media"
-                    || path
-                        .extension()
-                        .is_some_and(|ext| ext.eq_ignore_ascii_case("m3u8"));
-                (path.starts_with(section) && original).then_some(bytes)
+                let manifest = path
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("m3u8"));
+                let original = if section == "raw" {
+                    path.starts_with("raw") && manifest
+                } else {
+                    !path.starts_with("raw") && !manifest
+                };
+                original.then_some(bytes)
             })
             .collect();
         expected.sort();
@@ -269,6 +273,15 @@ fn preserves_raw(download: &Path, responses: &BTreeMap<String, Vec<u8>>) {
             actual == expected,
             "original resource counts or bytes changed"
         );
+    }
+    for (name, bytes) in responses {
+        let name = Path::new(name.strip_prefix('/').unwrap());
+        if name.extension().is_none_or(|ext| ext != "m3u8") {
+            assert!(
+                saved.get(name) == Some(bytes),
+                "source resource path or bytes changed"
+            );
+        }
     }
     let timing = |bytes: &[u8]| {
         std::str::from_utf8(bytes)
@@ -504,7 +517,7 @@ fn url_analysis_saved_plan_execution_and_verification_use_the_retained_original_
     let on_disk: serde_json::Value = serde_json::from_slice(&saved).unwrap();
     assert_eq!(planned, on_disk);
     assert_eq!(planned["kind"], "execution-plan");
-    assert_eq!(planned["schema_version"], 5);
+    assert_eq!(planned["schema_version"], 7);
     assert_eq!(planned["required_depth"], "decoded");
     assert!(planned["plan_id"].as_str().is_some_and(|id| !id.is_empty()));
     let text = std::str::from_utf8(&saved).unwrap();

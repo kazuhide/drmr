@@ -79,7 +79,7 @@ for the distinct reads and limits.
 | URL input | Acquisition profile | Retained local entrypoint |
 | --- | --- | --- |
 | MP4 | One complete MP4 file within the local media profiles | `input.mp4` |
-| DASH | Static MPD with one `Period`, `SegmentTemplate` addressing and an explicit finite `SegmentTimeline`; all referenced initialization and media files are saved | `input.mpd` |
+| DASH | Static MPD with one `Period`; finite `SegmentTemplate` with nominal duration or timeline, `SegmentList`, or one indexed file per representation with `SegmentBase` | `input.mpd` |
 | HLS | Completed TS/fMP4 playlists within the profiles above | `input.m3u8` |
 
 HLS acquisition accepts clear TS/fMP4, AES-128 TS/fMP4, SAMPLE-AES TS, and CENC/CBCS
@@ -91,14 +91,16 @@ The acquisition step does not fetch key or license URLs.
 
 For DASH, drmr retains the original MPD and creates a local MPD whose media
 references point at the saved resources. Protection declarations, PSSH DRM
-initialization data and the explicit timeline are retained. Downloading the MPD
+initialization data and finite timing are retained. Referenced objects are saved
+in full, including indexed files used through byte ranges. Downloading the MPD
 alone is insufficient. The same origin, authentication and resource policies
 apply to every fetched format and to redirects.
 
-Live input, byte ranges, multiple DASH periods, `SegmentList`, `SegmentBase`,
-duration-only DASH templates and negative timeline repeats remain outside the
-current acquisition profile. These are implementation limits, rather than
-technical impossibilities of those formats.
+Live input, HLS byte ranges, multiple DASH periods, hierarchical or external DASH
+indexes, and negative timeline repeats remain outside the acquisition profile.
+See [DASH references](dash-addressing.md) for range and index conditions. Downloads
+and segmented outputs retain the [source-relative directories](source-layout.md).
+These are implementation limits, rather than technical impossibilities of the formats.
 
 The URL regressions use ten-second Big Buck Bunny fixtures. The HLS cases use
 240 H.264 video packets in five two-second segments; MP4 uses one video track,
@@ -215,7 +217,7 @@ Earlier clear-output finite-edit regressions also cover eight- and sixteen-byte 
 
 The backend also tests joint video/audio HLS with clear, `cbcs`, and AES-128 output. `cenc` HLS output is refused. HLS AES-128 applies to HLS resources, so it cannot be selected as a standalone MP4 or DASH protection scheme. `cens` and `cbc1` can be identified but are not conversion targets.
 
-Local manifests must stay inside the source directory tree. Key URI mappings come from the protected operator configuration; no key URI or remote media is retrieved. Live input, discontinuities, byte ranges, multiple DASH periods, unsupported addressing, and rendition metadata that cannot be retained are rejected. Local MPEG transport stream input has a separate, narrower profile described below. See [processing and verification](media-processing.md) for the exact source profile, resource limits, audio trimming, segmentation, and verification behavior.
+Local manifests must stay inside the source directory tree. Key URI mappings come from the protected operator configuration; no key URI or remote media is retrieved. Live input, discontinuities, HLS byte ranges, multiple DASH periods, unsupported addressing or index layouts, and rendition metadata that cannot be retained are rejected. Local MPEG transport stream input has a separate, narrower profile described below. See [DASH references](dash-addressing.md) and [processing and verification](media-processing.md) for the exact source profiles, resource limits, audio trimming, segmentation, and verification behavior.
 
 For example, to remove CBCS protection from a qualified local DASH source using keys in the input section of `source-keys.json`:
 

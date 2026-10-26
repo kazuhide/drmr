@@ -68,26 +68,41 @@ fn new_plan_report_refuses_payload_only_required_depth_changes() {
 }
 
 #[test]
-fn new_plan_report_keeps_current_and_legacy_visible_intent_bound_to_the_saved_file() {
-    for schema in [2, 4, 6] {
-        check_new_plan_schema(schema, |_| {}, false, true);
+fn new_plan_report_requires_current_schema_while_legacy_plans_remain_importable() {
+    for schema in [2, 4, 6, 8] {
+        check_new_plan_schema(schema, |_| {}, false, schema == 8);
     }
 }
 
 #[test]
-fn new_plan_report_ignores_runtime_measurements_and_hidden_paths_in_each_schema() {
-    for schema in [2, 4, 6] {
-        check_new_plan_schema(
-            schema,
-            |payload| {
-                payload["output_root"] =
-                    json!(Path::new(payload["output_root"].as_str().unwrap()).join("unexposed"));
-                payload["source"]["root"] =
-                    json!(Path::new(payload["source"]["root"].as_str().unwrap()).join("unexposed"));
-                payload["measurements"] = json!({"elapsed_ms":123});
-            },
-            false,
-            true,
-        );
-    }
+fn new_plan_report_ignores_runtime_measurements_and_unprojected_source_paths() {
+    check_new_plan_schema(
+        8,
+        |payload| {
+            payload["output_root"] =
+                json!(Path::new(payload["output_root"].as_str().unwrap()).join("unexposed"));
+            payload["source"]["root"] =
+                json!(Path::new(payload["source"]["root"].as_str().unwrap()).join("unexposed"));
+            payload["measurements"] = json!({"elapsed_ms":123});
+        },
+        false,
+        true,
+    );
+}
+
+#[test]
+fn new_plan_report_refuses_changed_private_output_paths_with_identical_public_labels() {
+    check_new_plan_report(
+        |payload| {
+            let options = &mut payload["output_options"][0]["options"];
+            options["layout"]["tracks"][0]["media_directory"] = json!("altered");
+            options["layout"]["tracks"][0]["playlist"] = json!("altered/media.m3u8");
+            let typed: OutputOptions = serde_json::from_value(options.clone()).unwrap();
+            typed
+                .validate(OutputFormat::HlsTs, ProcessingMode::Stitch)
+                .unwrap();
+        },
+        false,
+        false,
+    );
 }

@@ -75,7 +75,9 @@ impl Converter {
         input: Inspection,
         work: &super::super::files::Stage,
     ) -> Result<ConversionReport, ConversionError> {
-        sources.sort_by_key(|source| kind_order(source.report.tracks[0].kind));
+        if self.layout_mode() == crate::conversion::layout::LayoutMode::Normalized {
+            sources.sort_by_key(|source| kind_order(source.report.tracks[0].kind));
+        }
         require_transport_sources(&sources)?;
         let sample_input = sources.iter().any(|source| source.transport_sample);
         let destination = destination(request.output)?;
@@ -124,6 +126,8 @@ impl Converter {
             request.hls_key_uri,
             request.hls_output_key,
         )?;
+        self.finish_hls_segment_target(stage.path(), sources.len())?;
+        self.finish_output_options(&stage, request.format)?;
         let output_keys = super::output_hls_keys(request.hls_output_key)?;
         let verification_root = work.path().join("ts-output-verification");
         super::super::files::create_dir(&verification_root)?;
@@ -228,7 +232,7 @@ impl Converter {
         }
         argv.extend([
             "--segment_duration".into(),
-            "2".into(),
+            self.segment_target_argument()?,
             "--clear_lead".into(),
             "0".into(),
             "--transport_stream_timestamp_offset_ms".into(),

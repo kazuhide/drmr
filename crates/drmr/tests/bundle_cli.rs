@@ -271,7 +271,7 @@ fn common_commands_save_execute_and_freshly_verify_two_real_outputs() {
     );
     let value: Value = serde_json::from_slice(&planned.stdout).unwrap();
     assert_eq!(value["kind"], "execution-plan");
-    assert_eq!(value["schema_version"], 6);
+    assert_eq!(value["schema_version"], 8);
     assert_eq!(value["required_depth"], "decoded");
     assert_eq!(value["outputs"].as_array().unwrap().len(), 2);
     let plan_id = value["plan_id"].clone();

@@ -14,15 +14,25 @@ fn single(v: &Value, schema: u64, source: OutputFormat) -> Result<Value> {
             "measurements",
             "required_depth",
             "processing",
+            "output_options",
         ],
     )?;
     object(&v["intent"], &["format", "target", "output"])?;
     let intent: drmr_core::conversion::plan::OutputIntent = typed(&v["intent"])?;
     let mut out = select(v, &["kind", "schema_version", "plan_id", "source_format"]);
     out["intent"] = select(&v["intent"], &["format", "target"]);
-    if schema == 5 {
+    if matches!(schema, 5 | 7) {
         out["processing"] = processing_view::selection(&v["processing"], source, intent.format)?;
     } else if v.get("processing").is_some() {
+        return Err(bad());
+    }
+    if schema == 7 {
+        out["output_options"] = super::output_options_view::single(
+            &v["output_options"],
+            intent.format,
+            &out["processing"],
+        )?;
+    } else if v.get("output_options").is_some() {
         return Err(bad());
     }
     Ok(out)
@@ -42,6 +52,7 @@ fn bundle(v: &Value, schema: u64, source: OutputFormat) -> Result<Value> {
             "measurements",
             "required_depth",
             "processing",
+            "output_options",
         ],
     )?;
     let outputs: Vec<drmr_core::conversion::plan::bundle::BundleOutputIntent> =
@@ -56,9 +67,13 @@ fn bundle(v: &Value, schema: u64, source: OutputFormat) -> Result<Value> {
                 "drms",
                 "conformance",
                 "processing",
+                "dash_addressing",
             ],
         )?;
-        if schema != 6 && output.get("processing").is_some() {
+        if !matches!(schema, 6 | 8) && output.get("processing").is_some() {
+            return Err(bad());
+        }
+        if schema != 8 && output.get("dash_addressing").is_some() {
             return Err(bad());
         }
     }
@@ -72,9 +87,15 @@ fn bundle(v: &Value, schema: u64, source: OutputFormat) -> Result<Value> {
             "outputs",
         ],
     );
-    if schema == 6 {
+    if matches!(schema, 6 | 8) {
         out["processing"] = processing_view::bundle(&v["processing"], source, &outputs)?;
     } else if v.get("processing").is_some() {
+        return Err(bad());
+    }
+    if schema == 8 {
+        out["output_options"] =
+            super::output_options_view::bundle(&v["output_options"], &outputs, &out["processing"])?;
+    } else if v.get("output_options").is_some() {
         return Err(bad());
     }
     Ok(out)
@@ -87,8 +108,8 @@ pub(super) fn project(v: &Value) -> Result<(Value, &'static str, bool)> {
     let schema = integer(&v["schema_version"])?;
     let source = typed(&v["source_format"])?;
     let mut out = match schema {
-        1 | 3 | 5 => single(v, schema, source)?,
-        2 | 4 | 6 => bundle(v, schema, source)?,
+        1 | 3 | 5 | 7 => single(v, schema, source)?,
+        2 | 4 | 6 | 8 => bundle(v, schema, source)?,
         _ => return Err(bad()),
     };
     if schema >= 3 {

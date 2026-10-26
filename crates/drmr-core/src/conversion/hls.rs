@@ -26,6 +26,8 @@ pub(super) struct Localized {
     pub native: std::collections::BTreeMap<u16, std::sync::Arc<super::ts::NativeEvidence>>,
     pub sample_transport: bool,
     pub empty_cue_pair: bool,
+    pub target_seconds: u64,
+    pub maximum_segment_ms: Option<u32>,
 }
 /// Retained media resources before any whole-track concatenation. Sample-encrypted
 /// fMP4 remains encrypted; outer AES-128 and TS SAMPLE-AES are projected to clear.
@@ -39,6 +41,8 @@ pub(super) struct Segmented {
     pub native: std::collections::BTreeMap<u16, std::sync::Arc<super::ts::NativeEvidence>>,
     pub sample_transport: bool,
     pub empty_cue_pair: bool,
+    pub target_seconds: u64,
+    pub maximum_segment_ms: Option<u32>,
 }
 struct Completed {
     combined: Option<PathBuf>,
@@ -56,6 +60,7 @@ impl Localization {
     }
 }
 struct Playlist {
+    maximum_segment_ms: Option<u32>,
     combined: Option<File>,
     localization: Localization,
     initialization: Option<PathBuf>,
@@ -79,6 +84,7 @@ struct Playlist {
     timeout: std::time::Duration,
     clock: Option<super::timing::FragmentClock>,
     singleton_tags: std::collections::BTreeSet<String>,
+    target_seconds: Option<u64>,
 }
 #[derive(Default)]
 struct Cipher<'a> {
@@ -472,10 +478,20 @@ impl Playlist {
             self.clock = Some(super::timing::FragmentClock::read(&plaintext)?);
             self.initialization = Some(plaintext.clone());
         } else if self.clock.is_some() {
-            self.clock
+            let clock = self
+                .clock
                 .as_mut()
-                .ok_or(ConversionError("hls-map-required"))?
-                .check(&plaintext, self.declared_duration)?;
+                .ok_or(ConversionError("hls-map-required"))?;
+            clock.check(&plaintext, self.declared_duration)?;
+            if let Some((ticks, scale)) = clock.last_segment_interval()
+                && let Some(value) =
+                    super::processing::segment_target::cadence::milliseconds(ticks, scale)?
+            {
+                self.maximum_segment_ms = Some(
+                    self.maximum_segment_ms
+                        .map_or(value, |prior| prior.max(value)),
+                );
+            }
         } else {
             self.admit_transport(&plaintext, scanned)?;
             self.transport_segments
@@ -693,12 +709,10 @@ impl Localizer<'_> {
                 .expect("writing a string cannot fail");
             }
             "#EXT-X-TARGETDURATION" => {
-                let duration = value
-                    .parse::<u64>()
-                    .map_err(|_| ConversionError("hls-invalid-target-duration"))?;
-                if duration == 0 {
-                    return Err(ConversionError("hls-invalid-target-duration"));
-                }
+                let duration = self
+                    .playlist
+                    .target_seconds
+                    .ok_or(ConversionError("hls-invalid-target-duration"))?;
                 writeln!(self.playlist.reference, "#EXT-X-TARGETDURATION:{duration}")
                     .expect("writing a string cannot fail");
             }
@@ -748,6 +762,9 @@ impl Localizer<'_> {
         {
             return Err(ConversionError("hls-complete-vod-required"));
         }
+        let target_seconds = playlist
+            .target_seconds
+            .ok_or(ConversionError("hls-complete-vod-required"))?;
         if let Some(file) = playlist.combined.take() {
             file.sync_all()
                 .map_err(|_| ConversionError("media-copy-failed"))?;
@@ -827,6 +844,8 @@ impl Localizer<'_> {
                 native,
                 sample_transport,
                 empty_cue_pair: self.empty_cue.seen(),
+                target_seconds,
+                maximum_segment_ms: playlist.maximum_segment_ms,
             },
         })
     }
@@ -856,6 +875,8 @@ pub(super) fn localize(
         native: segmented.native,
         sample_transport: segmented.sample_transport,
         empty_cue_pair: segmented.empty_cue_pair,
+        target_seconds: segmented.target_seconds,
+        maximum_segment_ms: segmented.maximum_segment_ms,
     })
 }
 
@@ -929,8 +950,12 @@ fn localize_with(
     if lines.next() != Some("#EXTM3U") {
         return Err(ConversionError("hls-invalid-header"));
     }
+    // Bind target intent to the same bounded original bytes used for resources.
+    // Validate before copying, decrypting or normalizing any resource/header.
+    let target_seconds = super::processing::segment_target::declared_hls_seconds(text)?;
     let combined = localization.joined().then(|| stage.join("combined.mp4"));
     let playlist = Playlist {
+        maximum_segment_ms: None,
         combined: combined.as_deref().map(private_new).transpose()?,
         localization,
         initialization: None,
@@ -955,6 +980,7 @@ fn localize_with(
         timeout: backend.timeout,
         clock: None,
         singleton_tags: std::collections::BTreeSet::new(),
+        target_seconds,
     };
     let mut localizer = Localizer {
         root,
@@ -1002,9 +1028,11 @@ impl Converter {
         let clear_hls = workspace.path().join("clear-hls");
         super::files::create_dir(&clear_hls)
             .map_err(|_| ConversionError("temporary-file-unavailable"))?;
-        self.backend.package_hls(&clear, &clear_hls)?;
+        self.backend
+            .package_hls(&clear, &clear_hls, self.packaging_segment_duration_ms())?;
         let staged = self.output_stage(&destination)?;
         encrypt_presentation(&clear_hls, staged.path(), output_key)?;
+        self.finish_flat_hls_segment_target(staged.path())?;
         let verify_stage = workspace.path().join("verify");
         super::files::create_dir(&verify_stage)
             .map_err(|_| ConversionError("temporary-file-unavailable"))?;
@@ -1250,6 +1278,9 @@ pub(super) fn sample_reference(
         .map_err(|_| ConversionError("temporary-file-unavailable"))?;
     Ok(output)
 }
+
+#[cfg(test)]
+mod segment_target_tests;
 
 #[cfg(test)]
 mod resource_tests {

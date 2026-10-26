@@ -246,3 +246,47 @@ test('a report for a formerly selected plan cannot retain current-report binding
   for (const attr of ['job-id', 'request-id', 'operation', 'report-kind', 'plan-id', 'plan-ref']) assert.equal(report.getAttribute('data-common-' + attr), null, attr);
   assert.equal(h.descendants(report).some(node => node.getAttribute?.('data-common-check')), false);
 });
+
+
+test('DASH addressing is a per-output choice with a nominal default and no layout selector', () => {
+  const h = harness(false, true), format = h.find('common-output-1-format');
+  const select = h.find('common-output-1-dash-addressing');
+  assert.ok(select); assert.equal(select.value, 'template');
+  assert.deepEqual(select.children.map(option => option.value), ['template', 'template-timeline', 'list', 'base']);
+  assert.equal(select.hidden, true); assert.equal(select.disabled, true);
+  format.value = 'dash'; format.dispatch('change');
+  assert.equal(select.hidden, false); assert.equal(select.disabled, false);
+  assert.ok(select.getAttribute('aria-describedby'));
+  select.value = 'base'; select.focus(); select.dispatch('change');
+  h.view.update(); h.setLanguage('ja'); h.view.translate();
+  assert.equal(h.find('common-output-1-dash-addressing'), select);
+  assert.equal(select.value, 'base'); assert.equal(h.document.activeElement, select);
+  assert.ok(select.getAttribute('aria-label').includes('1'));
+  assert.ok(select.children.some(option => option.textContent === '索引付き MP4 ファイル'));
+  h.record.plan = { plan_ref: 'saved-choice' };
+  select.value = 'list'; select.dispatch('change');
+  assert.equal(h.record.plan, null);
+  format.value = 'hls'; format.dispatch('change');
+  assert.equal(select.hidden, true); assert.equal(select.disabled, true);
+  format.value = 'dash'; format.dispatch('change');
+  assert.equal(select.value, 'list');
+  assert.equal(h.descendants(h.host).some(node => node.dataset?.commonField === 'layout'), false);
+});
+
+test('saved source layout and DASH addressing are read-only and never sent as execution overrides', () => {
+  const h = harness(true, true);
+  Object.assign(h.record.plan, { plan_schema_version: 8, required_depth: 'native', destination_state: 'absent',
+    outputs: [{ id: 'dash', format: 'dash', target: 'cbcs', drms: ['widevine', 'playready'], conformance: 'none', processing: 'stitch', dash_addressing: 'list' }],
+    processing: [{ id: 'dash', selection: { requested: 'stitch', resolved: 'stitch', boundaries: 'resegment', segment_duration_ms: 6000 } }],
+    output_options: [{ id: 'dash', options: { layout: 'source', dash_addressing: 'list' } }] });
+  h.view.update();
+  let text = h.descendants(h.host).map(node => node.textContent).join(' ');
+  assert.ok(text.includes('Source directories')); assert.ok(text.includes('Explicit segment list'));
+  h.find('common-convert').dispatch('click');
+  assert.deepEqual(JSON.parse(JSON.stringify(h.sent[0].operation)), { kind: 'convert', plan_ref: 'plan_1' });
+  h.record.plan.destination_state = 'present'; h.setLanguage('ja'); h.view.translate();
+  text = h.descendants(h.host).map(node => node.textContent).join(' ');
+  assert.ok(text.includes('元のディレクトリ')); assert.ok(text.includes('セグメントの一覧'));
+  h.find('common-verify').dispatch('click');
+  assert.deepEqual(JSON.parse(JSON.stringify(h.sent[1].operation)), { kind: 'verify', plan_ref: 'plan_1' });
+});

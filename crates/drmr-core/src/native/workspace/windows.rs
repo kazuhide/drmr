@@ -119,22 +119,215 @@ fn ace_text(descriptor: &SecurityDescriptor) -> io::Result<(String, String)> {
 }
 
 fn open(path: &Path) -> io::Result<File> {
+    open_with_sharing(path, 1)
+}
+
+fn open_rename_parent(path: &Path) -> io::Result<File> {
+    // NT opens the rename destination relative to this handle with WRITE_DATA.
+    // Share writes while denying deletion; ancestor pins retain the same guard.
+    open_with_sharing(path, 3)
+}
+
+fn open_with_sharing(path: &Path, sharing: u32) -> io::Result<File> {
     // LIST_DIRECTORY (READ_DATA on a file) makes the handle participate in
     // Windows sharing checks. Metadata-only access cannot pin a directory.
     const READ_CONTROL_WRITE_DAC_READ_DATA_ATTRIBUTES: u32 = 0x0006_0081;
     const BACKUP_SEMANTICS_OPEN_REPARSE_POINT: u32 = 0x0220_0000;
     OpenOptions::new()
         .access_mode(READ_CONTROL_WRITE_DAC_READ_DATA_ATTRIBUTES)
-        .share_mode(1)
+        .share_mode(sharing)
         .security_qos_flags(0x0001_0000)
         .custom_flags(BACKUP_SEMANTICS_OPEN_REPARSE_POINT)
         .open(path)
+}
+
+fn at_stage<T>(stage: &'static str, result: io::Result<T>) -> io::Result<T> {
+    #[cfg(test)]
+    if let Err(error) = &result {
+        eprintln!(
+            "media workspace stage={stage}; kind={:?}; os={:?}",
+            error.kind(),
+            error.raw_os_error()
+        );
+    }
+    #[cfg(not(test))]
+    let _ = stage;
+    result
+}
+
+fn private_fs_error(stage: &'static str, error: &private_fs::Error) -> io::Error {
+    #[cfg(test)]
+    {
+        let class = match error {
+            private_fs::Error::UnsupportedPolicy { .. } => "unsupported-policy",
+            private_fs::Error::Removal { .. } => "removal",
+            private_fs::Error::UntrustedCreationParent => "untrusted-creation-parent",
+            private_fs::Error::UnexpectedLinkCount { .. } => "unexpected-link-count",
+            private_fs::Error::AtomicCommit { .. } => "atomic-commit",
+            private_fs::Error::WriterFailed => "writer-failed",
+            private_fs::Error::OwnerMismatch => "owner-mismatch",
+            private_fs::Error::InsecureAcl => "insecure-acl",
+            private_fs::Error::InsecurePermissions { .. } => "insecure-permissions",
+            private_fs::Error::WrongOwner { .. } => "wrong-owner",
+            private_fs::Error::MultipleHardLinks { .. } => "multiple-hard-links",
+            private_fs::Error::PathRedirect => "path-redirect",
+            private_fs::Error::WrongObjectKind => "wrong-object-kind",
+            private_fs::Error::IdentityChanged => "identity-changed",
+            private_fs::Error::UnsupportedFilesystem { .. } => "unsupported-filesystem",
+            private_fs::Error::InvalidRelativePath => "invalid-relative-path",
+            private_fs::Error::Io(_) => "io",
+        };
+        if let private_fs::Error::Io(error) = error {
+            eprintln!(
+                "media workspace stage={stage}; class={class}; kind={:?}; os={:?}",
+                error.kind(),
+                error.raw_os_error()
+            );
+        } else {
+            eprintln!("media workspace stage={stage}; class={class}");
+        }
+    }
+    #[cfg(not(test))]
+    let _ = (stage, error);
+    invalid()
 }
 
 pub(super) fn pin(path: &Path) -> io::Result<crate::native::PrivateDirectoryGuard> {
     let guard = crate::native::files::pin_directory_path(path)?;
     Policy::new()?.verify(&open(path)?, true, true)?;
     Ok(guard)
+}
+
+pub(super) fn create_dir_new(scratch: &Path, path: &Path) -> io::Result<File> {
+    create_dir_new_with_hooks(scratch, path, |_| {}, |_| {})
+}
+
+#[cfg(test)]
+fn create_dir_new_after_creation(
+    scratch: &Path,
+    path: &Path,
+    after_creation: impl FnOnce(&Path),
+) -> io::Result<File> {
+    create_dir_new_with_hooks(scratch, path, after_creation, |_| {})
+}
+
+fn create_dir_new_with_hooks(
+    scratch: &Path,
+    path: &Path,
+    after_creation: impl FnOnce(&Path),
+    before_move: impl FnOnce(&Path),
+) -> io::Result<File> {
+    use std::os::windows::io::AsHandle as _;
+    let absolute = std::path::absolute(path)?;
+    let parent = absolute.parent().ok_or_else(invalid)?;
+    let target_name = absolute.file_name().ok_or_else(invalid)?;
+    crate::native::validate_windows_relative_path(target_name.to_str().ok_or_else(invalid)?)?;
+    let _ancestors = crate::native::files::pin_directory_path(parent)?;
+    let scratch = std::path::absolute(scratch)?;
+    let _scratch_ancestors = crate::native::files::pin_directory_path(&scratch)?;
+    match std::fs::symlink_metadata(&absolute) {
+        Ok(_) => return Err(io::ErrorKind::AlreadyExists.into()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    let policy = Policy::new()?;
+    let parent_handle = at_stage("rename-parent-open", open_rename_parent(parent))?;
+    at_stage(
+        "rename-parent-policy",
+        policy.verify(&parent_handle, true, true),
+    )?;
+    let descriptor = GetSecurityInfo(
+        &parent_handle,
+        SeObjectType::SE_FILE_OBJECT,
+        SecurityInformation::Dacl,
+    )?;
+    if ace_text(&descriptor)?.1 != policy.media_ace {
+        return Err(invalid());
+    }
+    let mut random = [0; 16];
+    getrandom::fill(&mut random)
+        .map_err(|_| io::Error::other("secure random source unavailable"))?;
+    let name = format!(".drmr-media-dir-{}", hex::encode(random));
+    let creator = private_fs::PrivateDir::open(&scratch)
+        .map_err(|error| private_fs_error("scratch-open", &error))?;
+    // PrivateDir::create_dir returns the NT creation handle with an owner-only
+    // descriptor. Capture its identity before any pathname can be substituted.
+    let created = creator
+        .create_dir(&name)
+        .map_err(|error| private_fs_error("private-child-create", &error))?;
+    let mut child = File::from(created.as_handle().try_clone_to_owned()?);
+    let identity = crate::native::FileIdentity::read(&child)?;
+    let pending = scratch.join(name);
+    after_creation(&pending);
+    let current = OpenOptions::new()
+        .access_mode(0x81)
+        .share_mode(7)
+        .custom_flags(0x0220_0000)
+        .security_qos_flags(0x0001_0000)
+        .open(&pending)?;
+    if crate::native::FileIdentity::read(&current)? != identity {
+        return Err(invalid());
+    }
+    drop(current);
+    at_stage("created-child-policy", policy.verify(&child, true, true))?;
+    before_move(&pending);
+    // Rename the created object, even if another entry now has its old name.
+    // Keep the validated destination handle and all ancestor pins throughout.
+    rename_handle_no_replace(&child, &parent_handle, target_name, true)?;
+    at_stage("media-child-policy", policy.set(&mut child, true))?;
+    // Creation handles carry DELETE access; close every clone before acquiring
+    // the final no-delete pin. A replacement is never adopted or cleaned up.
+    drop(created);
+    drop(child);
+    let retained = at_stage("final-child-open", open(&absolute))?;
+    if crate::native::FileIdentity::read(&retained)? != identity {
+        return Err(invalid());
+    }
+    policy.verify(&retained, true, true)?;
+    Ok(retained)
+}
+
+pub(super) fn open_mutation(path: &Path, directory: bool) -> io::Result<File> {
+    let absolute = std::path::absolute(path)?;
+    let parent = absolute.parent().ok_or_else(invalid)?;
+    let name = absolute.file_name().ok_or_else(invalid)?;
+    crate::native::validate_windows_relative_path(name.to_str().ok_or_else(invalid)?)?;
+    let _ancestors = crate::native::files::pin_directory_path(parent)?;
+    let policy = Policy::new()?;
+    policy.verify(&open(parent)?, true, true)?;
+    // DELETE, READ_CONTROL, SYNCHRONIZE and attributes; no payload write access.
+    // Deny concurrent writers while permitting object-bound rename/delete.
+    let file = OpenOptions::new()
+        .access_mode(0x0013_0080)
+        .share_mode(5)
+        .security_qos_flags(0x0001_0000)
+        .custom_flags(0x0220_0000)
+        .open(absolute)?;
+    policy.verify(&file, directory, false)?;
+    Ok(file)
+}
+
+pub(super) fn rename_handle_no_replace(
+    source: &File,
+    parent: &File,
+    name: &std::ffi::OsStr,
+    directory: bool,
+) -> io::Result<()> {
+    crate::native::validate_windows_relative_path(name.to_str().ok_or_else(invalid)?)?;
+    let policy = Policy::new()?;
+    at_stage(
+        "rename-source-policy",
+        policy.verify(source, directory, false),
+    )?;
+    at_stage("rename-parent-policy", policy.verify(parent, true, true))?;
+    private_fs::rename_by_handle_no_replace(source, parent, name, directory)
+        .map_err(|error| private_fs_error("rename-by-handle", &error))
+}
+
+pub(super) fn delete_handle(source: &File, directory: bool) -> io::Result<()> {
+    Policy::new()?.verify(source, directory, false)?;
+    private_fs::delete_by_handle(source, directory)
+        .map_err(|error| private_fs_error("delete-by-handle", &error))
 }
 
 pub(super) fn create(path: &Path) -> io::Result<()> {
@@ -320,6 +513,206 @@ fn open_file_after_validation(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exclusive_media_child_creation_preserves_guards_and_existing_entries() {
+        use std::io::Write as _;
+        let root = crate::native::private_tempdir().unwrap();
+        let parent = root.path().join("media");
+        create(&parent).unwrap();
+        let held_parent = pin(&parent).unwrap();
+        let child_path = parent.join("video");
+        let child = create_dir_new(root.path(), &child_path).unwrap();
+        let identity = crate::native::FileIdentity::read(&child).unwrap();
+        assert!(std::fs::rename(&parent, root.path().join("moved")).is_err());
+        assert!(std::fs::rename(&child_path, parent.join("replaced")).is_err());
+        let media = child_path.join("segment.m4s");
+        let mut writer = create_new(&media).unwrap();
+        writer.write_all(b"owner-only media").unwrap();
+        private_fs::verify(&writer).unwrap();
+        drop(writer);
+        let failure = create_dir_new(root.path(), &child_path).unwrap_err();
+        assert_eq!(failure.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(std::fs::read(&media).unwrap(), b"owner-only media");
+        assert!(crate::native::create_private_new(&child_path.join("secret")).is_err());
+        assert!(!child_path.join("secret").exists());
+        assert!(
+            crate::native::FileIdentity::read(&open(&child_path).unwrap()).unwrap() == identity
+        );
+        replacement_after_media_child_creation_is_never_adopted(root.path(), &parent);
+        replacement_after_media_child_validation_is_never_moved(root.path(), &parent);
+        native_mutation_names_and_occupied_targets_are_refused(root.path());
+        rename_target_open_requires_write_sharing(root.path(), &parent);
+        drop(child);
+        drop(held_parent);
+        std::fs::rename(&parent, root.path().join("moved")).unwrap();
+    }
+
+    fn rename_target_open_requires_write_sharing(scratch: &Path, parent: &Path) {
+        use std::os::windows::io::AsHandle as _;
+        let creator = private_fs::PrivateDir::open(scratch).unwrap();
+        let source = creator.create_dir("sharing-source").unwrap();
+        let source_file = File::from(source.as_handle().try_clone_to_owned().unwrap());
+        let identity = crate::native::FileIdentity::read(&source_file).unwrap();
+        let destination = open_rename_parent(parent).unwrap();
+        let blocker = open(parent).unwrap();
+        let name = std::ffi::OsStr::new("sharing-destination");
+        let error =
+            private_fs::rename_by_handle_no_replace(&source, &destination, name, true).unwrap_err();
+        let raw_os_error = match &error {
+            private_fs::Error::Io(error) => error.raw_os_error(),
+            _ => None,
+        };
+        drop(private_fs_error("rename-sharing-blocker", &error));
+        assert_eq!(
+            raw_os_error,
+            Some(32),
+            "a read-only sharing guard did not block the NT target open"
+        );
+        assert!(scratch.join("sharing-source").is_dir());
+        assert!(!parent.join(name).exists());
+        drop(blocker);
+        rename_handle_no_replace(&source_file, &destination, name, true).unwrap();
+        assert!(!scratch.join("sharing-source").exists());
+        assert!(parent.join(name).is_dir());
+        assert!(
+            crate::native::FileIdentity::read(&source_file).unwrap() == identity,
+            "the renamed object identity changed"
+        );
+        private_fs::delete_by_handle(&source, true).unwrap();
+        drop(source_file);
+        drop(source);
+        assert!(!parent.join(name).exists());
+    }
+
+    fn replacement_after_media_child_creation_is_never_adopted(scratch: &Path, parent: &Path) {
+        use std::io::Write as _;
+        let target = parent.join("raced-child");
+        let original = scratch.join("retained-original");
+        let mut replaced = std::path::PathBuf::new();
+        let result = create_dir_new_after_creation(scratch, &target, |pending| {
+            std::fs::rename(pending, &original).unwrap();
+            crate::native::create_private_dir_new(pending).unwrap();
+            crate::native::create_private_new(&pending.join("foreign.txt"))
+                .unwrap()
+                .write_all(b"foreign sentinel")
+                .unwrap();
+            replaced = pending.to_path_buf();
+        });
+        assert!(result.is_err());
+        assert!(!target.exists());
+        assert_eq!(
+            std::fs::read(replaced.join("foreign.txt")).unwrap(),
+            b"foreign sentinel"
+        );
+        assert!(
+            private_fs::PrivateDir::open(&replaced).is_ok(),
+            "foreign ACL changed"
+        );
+        assert!(original.is_dir());
+    }
+
+    fn replacement_after_media_child_validation_is_never_moved(scratch: &Path, parent: &Path) {
+        use std::io::Write as _;
+        let target = parent.join("late-raced-child");
+        let original = scratch.join("late-retained-original");
+        let mut replacement = std::path::PathBuf::new();
+        let mut foreign_identity = None;
+        let mut created_identity = None;
+        let child = create_dir_new_with_hooks(
+            scratch,
+            &target,
+            |_| {},
+            |pending| {
+                let before = OpenOptions::new()
+                    .access_mode(0x80)
+                    .share_mode(7)
+                    .custom_flags(0x0220_0000)
+                    .open(pending)
+                    .unwrap();
+                created_identity = Some(crate::native::FileIdentity::read(&before).unwrap());
+                drop(before);
+                std::fs::rename(pending, &original).unwrap();
+                crate::native::create_private_dir_new(pending).unwrap();
+                crate::native::create_private_new(&pending.join("foreign.txt"))
+                    .unwrap()
+                    .write_all(b"late foreign sentinel")
+                    .unwrap();
+                foreign_identity =
+                    Some(crate::native::FileIdentity::read(&open(pending).unwrap()).unwrap());
+                replacement = pending.to_path_buf();
+            },
+        )
+        .unwrap();
+        assert!(!original.exists());
+        assert!(
+            Some(crate::native::FileIdentity::read(&child).unwrap()) == created_identity,
+            "the created directory identity changed"
+        );
+        assert!(target.is_dir());
+        assert_eq!(std::fs::read_dir(&target).unwrap().count(), 0);
+        assert_eq!(
+            std::fs::read(replacement.join("foreign.txt")).unwrap(),
+            b"late foreign sentinel"
+        );
+        assert!(
+            Some(crate::native::FileIdentity::read(&open(&replacement).unwrap()).unwrap())
+                == foreign_identity,
+            "the foreign directory identity changed"
+        );
+        assert!(
+            private_fs::PrivateDir::open(&replacement).is_ok(),
+            "foreign ACL changed"
+        );
+        drop(child);
+    }
+
+    fn native_mutation_names_and_occupied_targets_are_refused(root: &Path) {
+        use std::io::Write as _;
+        let parent = private_fs::PrivateDir::open(root).unwrap();
+        let source = parent.create_dir("bound-directory").unwrap();
+        let destination = parent.create_dir("occupied-directory").unwrap();
+        destination
+            .create("foreign.txt")
+            .unwrap()
+            .write_all(b"occupied foreign sentinel")
+            .unwrap();
+        for name in ["", ".", "..", "a/b", "a\\b", "a/", "a:"] {
+            assert!(matches!(
+                private_fs::rename_by_handle_no_replace(
+                    &source,
+                    &parent,
+                    std::ffi::OsStr::new(name),
+                    true
+                ),
+                Err(private_fs::Error::InvalidRelativePath)
+            ));
+        }
+        assert!(matches!(
+            private_fs::rename_by_handle_no_replace(
+                &source,
+                &parent,
+                std::ffi::OsStr::new(&"x".repeat(256)),
+                true
+            ),
+            Err(private_fs::Error::InvalidRelativePath)
+        ));
+        assert!(
+            private_fs::rename_by_handle_no_replace(
+                &source,
+                &parent,
+                "occupied-directory".as_ref(),
+                true
+            )
+            .is_err()
+        );
+        assert!(private_fs::delete_by_handle(&destination, true).is_err());
+        assert_eq!(
+            std::fs::read(root.join("occupied-directory/foreign.txt")).unwrap(),
+            b"occupied foreign sentinel"
+        );
+        assert!(root.join("bound-directory").is_dir());
+    }
 
     #[test]
     fn a_higher_media_ancestor_stays_pinned_through_writable_leaf_acquisition() {

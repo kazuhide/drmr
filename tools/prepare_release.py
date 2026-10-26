@@ -286,7 +286,7 @@ def aac44100(value):
             and value["output_format"] == "dash" and value["output_protection"] == "cbcs"
             and type(value["segment_target_seconds"]) is int and value["segment_target_seconds"] == 2
             and type(value["input_segments"]) is int and 2 <= value["input_segments"] <= 8
-            and type(value["plan_schema_version"]) is int and value["plan_schema_version"] in (1, 3, 5)
+            and type(value["plan_schema_version"]) is int and value["plan_schema_version"] in (1, 3, 5, 7)
             and all(hexadecimal(value[name]) for name in ("cli_source_graph_sha256", "plan_id", "plan_sha256"))
             and value["saved_original_and_plan_unchanged"] is True, "aac44100-proof-invalid")
     audio = value["source_audio"]
@@ -360,7 +360,7 @@ def reports(archive_proof, media, head, tree, target, version, archive_hash):
             and value["output_format"] == "dash" and value["output_protection"] == "cbcs"
             and type(value["segment_target_seconds"]) is int and value["segment_target_seconds"] == 2
             and type(value["input_segments"]) is int and value["input_segments"] == 5
-            and type(value["plan_schema_version"]) is int and value["plan_schema_version"] in (1, 3, 5)
+            and type(value["plan_schema_version"]) is int and value["plan_schema_version"] in (1, 3, 5, 7)
             and all(hexadecimal(value[name]) for name in ("cli_source_graph_sha256", "plan_id", "plan_sha256"))
             and value["saved_original_and_plan_unchanged"] is True, "media-proof-invalid")
     graph(value["source_graph"])
