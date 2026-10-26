@@ -253,6 +253,8 @@ impl<'a> StageRelocation<'a> {
             return Ok(());
         }
         let directory = self.directories.remove(path).ok_or(PUBLISH_ERROR)?;
+        #[cfg(windows)]
+        let identity = directory.identity;
         drop(directory);
         #[cfg(unix)]
         rustix::fs::unlinkat(
@@ -262,7 +264,7 @@ impl<'a> StageRelocation<'a> {
         )
         .map_err(|_| PUBLISH_ERROR)?;
         #[cfg(windows)]
-        std::fs::remove_dir(self.stage.path().join(path)).map_err(|_| PUBLISH_ERROR)?;
+        self.delete_directory_after_validation(path, identity, || {})?;
         self.check()
     }
 
@@ -276,7 +278,7 @@ impl<'a> StageRelocation<'a> {
         )
         .map_err(|_| PUBLISH_ERROR)?;
         #[cfg(windows)]
-        std::fs::remove_file(self.stage.path().join(path)).map_err(|_| PUBLISH_ERROR)?;
+        self.delete_file_after_validation(path, || {})?;
         self.files.remove(path).ok_or(PUBLISH_ERROR)?;
         Ok(())
     }
@@ -348,15 +350,169 @@ impl<'a> StageRelocation<'a> {
         }
         #[cfg(windows)]
         {
-            super::atomic_move(
-                &self.stage.path().join(source),
-                &self.stage.path().join(destination),
-            )
+            self.rename_after_validation(source, destination, || {})
         }
         #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
         {
             let _ = (source, destination);
             Err(PUBLISH_ERROR)
         }
+    }
+
+    #[cfg(windows)]
+    fn mutation_file(&self, path: &Path) -> Result<File, ConversionError> {
+        self.check_directory(path.parent().ok_or(PUBLISH_ERROR)?)?;
+        let held = native::open_media_mutation(&self.stage.path().join(path), false)
+            .map_err(|_| PUBLISH_ERROR)?;
+        if native::FileIdentity::read(&held).map_err(|_| PUBLISH_ERROR)?
+            != *self.files.get(path).ok_or(PUBLISH_ERROR)?
+        {
+            return Err(PUBLISH_ERROR);
+        }
+        Ok(held)
+    }
+
+    #[cfg(windows)]
+    fn rename_after_validation(
+        &self,
+        source: &Path,
+        destination: &Path,
+        before_move: impl FnOnce(),
+    ) -> Result<(), ConversionError> {
+        let held = self.mutation_file(source)?;
+        let parent = destination.parent().ok_or(PUBLISH_ERROR)?;
+        self.check_directory(parent)?;
+        before_move();
+        native::rename_media_handle_no_replace(
+            &held,
+            self.directory(parent)?,
+            destination.file_name().ok_or(PUBLISH_ERROR)?,
+            false,
+        )
+        .map_err(|_| PUBLISH_ERROR)
+    }
+
+    #[cfg(windows)]
+    fn delete_file_after_validation(
+        &self,
+        path: &Path,
+        before_delete: impl FnOnce(),
+    ) -> Result<(), ConversionError> {
+        let held = self.mutation_file(path)?;
+        before_delete();
+        native::delete_media_handle(&held, false).map_err(|_| PUBLISH_ERROR)
+    }
+
+    #[cfg(windows)]
+    fn delete_directory_after_validation(
+        &self,
+        path: &Path,
+        identity: native::FileIdentity,
+        before_delete: impl FnOnce(),
+    ) -> Result<(), ConversionError> {
+        self.check_directory(path.parent().ok_or(PUBLISH_ERROR)?)?;
+        let held = native::open_media_mutation(&self.stage.path().join(path), true)
+            .map_err(|_| PUBLISH_ERROR)?;
+        if native::FileIdentity::read(&held).map_err(|_| PUBLISH_ERROR)? != identity {
+            return Err(PUBLISH_ERROR);
+        }
+        before_delete();
+        native::delete_media_handle(&held, true).map_err(|_| PUBLISH_ERROR)
+    }
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+    use std::io::Write as _;
+    use std::os::windows::fs::OpenOptionsExt as _;
+    use windows_permissions::constants::{SeObjectType, SecurityInformation};
+    use windows_permissions::wrappers::{
+        ConvertSecurityDescriptorToStringSecurityDescriptor, GetSecurityInfo,
+    };
+
+    fn write(stage: &Stage, name: &str, bytes: &[u8]) {
+        let mut file = native::create_media_new(&stage.path().join(name)).unwrap();
+        file.write_all(bytes).unwrap();
+    }
+
+    fn snapshot(path: &Path) -> (native::FileIdentity, String) {
+        let file = std::fs::OpenOptions::new()
+            .access_mode(0x0002_0080)
+            .share_mode(7)
+            .custom_flags(0x0220_0000)
+            .open(path)
+            .unwrap();
+        let flags = SecurityInformation::Owner | SecurityInformation::Dacl;
+        let descriptor = GetSecurityInfo(&file, SeObjectType::SE_FILE_OBJECT, flags).unwrap();
+        let acl = ConvertSecurityDescriptorToStringSecurityDescriptor(&descriptor, flags)
+            .unwrap()
+            .into_string()
+            .unwrap();
+        (native::FileIdentity::read(&file).unwrap(), acl)
+    }
+
+    #[test]
+    fn late_replacements_are_not_moved_or_deleted_by_source_mutations() {
+        for rename in [true, false] {
+            let stage = Stage::new(None).unwrap();
+            write(&stage, "segment.m4s", b"registered original");
+            let mut tree = StageRelocation::new(&stage).unwrap();
+            tree.capture_file(Path::new("segment.m4s")).unwrap();
+            tree.prepare_parents(Path::new("video/segment.m4s"))
+                .unwrap();
+            let source = stage.path().join("segment.m4s");
+            let aside = stage.path().join("held-original.m4s");
+            let mut foreign = None;
+            let replace = || {
+                std::fs::rename(&source, &aside).unwrap();
+                write(&stage, "segment.m4s", b"foreign sentinel");
+                foreign = Some(snapshot(&source));
+            };
+            if rename {
+                tree.rename_after_validation(
+                    Path::new("segment.m4s"),
+                    Path::new("video/segment.m4s"),
+                    replace,
+                )
+                .unwrap();
+                assert_eq!(
+                    std::fs::read(stage.path().join("video/segment.m4s")).unwrap(),
+                    b"registered original"
+                );
+            } else {
+                tree.delete_file_after_validation(Path::new("segment.m4s"), replace)
+                    .unwrap();
+            }
+            assert!(!aside.exists());
+            assert_eq!(std::fs::read(&source).unwrap(), b"foreign sentinel");
+            assert!(
+                Some(snapshot(&source)) == foreign,
+                "foreign file metadata changed"
+            );
+        }
+
+        let stage = Stage::new(None).unwrap();
+        let mut tree = StageRelocation::new(&stage).unwrap();
+        tree.prepare_parents(Path::new("empty/unused.m4s")).unwrap();
+        let directory = tree.directories.remove(Path::new("empty")).unwrap();
+        let identity = directory.identity;
+        drop(directory);
+        let source = stage.path().join("empty");
+        let aside = stage.path().join("held-empty-original");
+        let mut foreign = None;
+        tree.delete_directory_after_validation(Path::new("empty"), identity, || {
+            std::fs::rename(&source, &aside).unwrap();
+            std::fs::create_dir(&source).unwrap();
+            foreign = Some(snapshot(&source));
+        })
+        .unwrap();
+        assert!(!aside.exists());
+        assert!(source.is_dir());
+        assert_eq!(std::fs::read_dir(&source).unwrap().count(), 0);
+        assert!(
+            Some(snapshot(&source)) == foreign,
+            "foreign directory metadata changed"
+        );
     }
 }

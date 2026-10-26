@@ -105,6 +105,7 @@ if ($coreExecutables.Count -ne 1) { throw 'The native core unit-test binary is a
 $coreExecutable = $coreExecutables[0]
 $layoutChecks = @(
     'native::workspace::windows::tests::exclusive_media_child_creation_preserves_guards_and_existing_entries',
+    'conversion::files::relocation::tests::late_replacements_are_not_moved_or_deleted_by_source_mutations',
     'conversion::layout::stage::tests::re_layout_moves_media_without_copying_and_rewrites_actual_hls_paths',
     'conversion::download::layout_tests::source_download_keeps_nested_paths_and_child_relative_uris',
     'conversion::download::owned::tests::entrypoint_publication_is_prepaid_before_moving_the_pending_original'
@@ -117,6 +118,24 @@ foreach ($check in $layoutChecks) {
     & $coreExecutable --exact $check --nocapture
     if ($LASTEXITCODE -ne 0) { throw 'An early ordinary-user layout test failed' }
 }
+$policyExecutables = @($executables | Where-Object {
+    [IO.Path]::GetFileName($_) -match '^conversion_saved_hls_policy-[0-9a-f]+\.exe$'
+})
+if ($policyExecutables.Count -ne 1) { throw 'The saved HLS policy test binary is ambiguous' }
+$policyExecutable = $policyExecutables[0]
+$policyChecks = @(
+    'new_single_plan_saves_the_actual_request_and_replays_the_source_bound_and_layout',
+    'single_schema_one_keeps_two_seconds',
+    'source_policy::legacy_segment_plans_keep_generated_seven_while_new_plans_inherit_six'
+)
+foreach ($check in $policyChecks) {
+    $listing = & $policyExecutable --list --exact $check
+    if ($LASTEXITCODE -ne 0 -or $listing -notcontains "${check}: test") {
+        throw 'A required saved HLS policy test is missing'
+    }
+}
+& $policyExecutable --nocapture
+if ($LASTEXITCODE -ne 0) { throw 'Early ordinary-user saved HLS policy checks failed' }
 $failed = $false
 foreach ($executable in $executables) {
     Write-Output "Running $executable"

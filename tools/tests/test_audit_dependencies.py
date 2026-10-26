@@ -68,6 +68,24 @@ class AdvisoryScope(unittest.TestCase):
         for invalid in [lock.replace(b'0.18.5', b'0.18.4'), lock + lock, changed]:
             with self.assertRaises(AUDIT.Failure): AUDIT.normalized_lock(invalid, {"source_sha256": "a" * 64})
 
+    def test_native_patch_registry_identity_is_restored_without_changing_other_packages(self):
+        lock = (b'[[package]]\nname = "glib"\nversion = "0.18.5"\n'
+                b'[[package]]\nname = "private-fs"\nversion = "0.2.1"\ndependencies = []\n'
+                b'[[package]]\nname = "other"\nversion = "1"\n')
+        pin = {"package": "private-fs", "version": "0.2.1", "source_sha256": "b" * 64}
+        glib = AUDIT.normalized_lock(lock, {"source_sha256": "a" * 64})
+        changed = AUDIT.normalized_private_fs_lock(glib, pin)
+        insertion = (b'\nsource = "registry+https://github.com/rust-lang/crates.io-index"\nchecksum = "'
+                     + b'b' * 64 + b'"')
+        self.assertEqual(changed.count(b'source = "registry+'), 2)
+        self.assertEqual(changed.replace(insertion, b'', 1), glib)
+        for invalid in [glib.replace(b'0.2.1', b'0.2.2'), glib + glib, changed]:
+            with self.assertRaises(AUDIT.Failure):
+                AUDIT.normalized_private_fs_lock(invalid, pin)
+        for invalid in [dict(pin, package="other"), dict(pin, version="0.2.2"), dict(pin, source_sha256="bad")]:
+            with self.assertRaises(AUDIT.Failure):
+                AUDIT.normalized_private_fs_lock(glib, invalid)
+
     def test_dispositions_bind_target_classification_and_full_dependency_ancestry(self):
         row = {"name": "proc-macro-error", "version": "1.0.4", "advisory": "RUSTSEC-2024-0370", "classification": "unmaintained", "finding_sha256": "c",
                "dependency_ancestry": {"sha256": "a" * 64, "build_time_only": True, "direct_parents": ["glib-macros@0.18.5", "gtk3-macros@0.18.2"]}}

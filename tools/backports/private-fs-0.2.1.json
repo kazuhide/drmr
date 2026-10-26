@@ -1,0 +1,70 @@
+{
+  "original_files": {
+    ".cargo_vcs_info.json": "bf102ae6e9cf9d235cff303432fa62c6edf3cb330da251507890a58f23df9bfb",
+    "CHANGELOG.md": "c7f524b5827d1b5bb115b540332393b5ad81c504da6f2379ec180b5a83f371ff",
+    "Cargo.lock": "cce48bf43b5d31e5fa438fde64af11d0d607c7434710c937724e04ebe3d8421b",
+    "Cargo.toml": "ea86f27ae595c5a1ec7b75a320ebdeb7d7860bf917d64089dda1a99df090c7ac",
+    "Cargo.toml.orig": "c2d8f5ca23594038a56b8e9e5c509ca38f7c756165b42f3846504764c3994a6b",
+    "LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+    "LICENSE-MIT": "713070ff9744b53e6ee232b01ee47b969813cc0bd209a36c2addbe8d359eaea6",
+    "README.md": "9bb837090130878b11fcee68a35525cf6dd30c099565ad5e5f0216084f7237f9",
+    "SECURITY.md": "adf4530827cc5768aad9ed5418464608ed75ef6f5ef0e2a794f1aa4d5a4f47c0",
+    "benches/README.md": "fcf8b52b85467e52261c67543c1c62f7f46e02a77b23bc330baabb9b2d041c8f",
+    "benches/filesystem.rs": "24481e61d06443cc8aa1e8b7e9edabc9c1c3c7e9f8697827bd70c1440ef9d2e5",
+    "src/atomic.rs": "894d402af8a2acc25611de1c134e0a9cb893c4c8c80e4d822c2a2969bd1f50e8",
+    "src/atomic/tests.rs": "4c0036965d8c14293cfd4ac84e26653c6d9c85f491afa633ad037656f85951d5",
+    "src/bsd.rs": "c740f02409a3799bf134939da925b97eeb2977631f38a672703402b4f13d73c4",
+    "src/bsd/tests.rs": "eeadf2918b17f7b0bf28d9be373f20e095f3d0894505e6758d4a5af58805cf6e",
+    "src/error.rs": "bfb143354620b971d508a609f1a5b57910a2708730528b24d29acad622996952",
+    "src/lib.rs": "9d645c99bfbdc065eb903e78cdc08e1687ee1f9b5e255cb8f17cce99ad0e396b",
+    "src/lifecycle_tests.rs": "f7dcba2c9cd35c83bafb23fb377fdb7eaed075078a3e9062987acd4664440f52",
+    "src/macos.rs": "af82454f50e77a3d196c365a4559797c32dbe0f8d9b6bf56d96e8079498302b1",
+    "src/macos/tests.rs": "85adcbbfb41e7f3828b88c52c42dc831bb8687ce8e0d5881bb997903aa08a46c",
+    "src/options.rs": "255e08840a4e8d70322fc6227cc858ef505233803bd5fb85e6bbe41e657d415f",
+    "src/path.rs": "3d1afa65194b447cc681091750e340c42e9d63ba4ac484161ba6ef0581c9f08a",
+    "src/stress.rs": "9688887c4922c7a3a0dc6232197c4ff89b67654ae1e7de5146ee5dfdb63d6243",
+    "src/unix.rs": "bbb57915e5a2bf9fbbe1e9f32babe3eda36dacf9a09b62e184a2fbaf4b1518f7",
+    "src/unix/tests.rs": "5539870d075bc8af05351f242067d26e2b654d3611e23c995e0a7a38d6f6b01d",
+    "src/unsupported.rs": "809f337393cdc301f2eb7f89d15a7da414205311621ca1a7cd0f16523b9b1790",
+    "src/windows/bindings.rs": "59f456316060d2899799fbc58d1697fb2e96e51531b5a2e9c95b0ecc51d17eee",
+    "src/windows/mod.rs": "d243ee9bda2fa5ff3ae2e84d5b8f92a3031bd1c298ab8ab8a500cc47f7e36a14",
+    "src/windows/nt.rs": "cde619df6e0ee712f52dff16c97cf560669ef6a7f288ee669df0c0dc6c038bfd",
+    "src/windows/security.rs": "44afd56acf6c0eae1e316064f5af5de75d9b7a863e33ec61641eb44477ef83f7",
+    "src/windows/tests.rs": "5fc739b5cdc3afe3248b69b75239c6ad7e3b32e58c722ec22f9f10da9bf2e100"
+  },
+  "package": "private-fs",
+  "patches": {
+    "src/lib.rs": {
+      "patched_sha256": "b56d209a15ff58f869fa392994f64bbe9bf71631e62964f446f046fea319c88f",
+      "replacements": [
+        {
+          "after": "dows)]\nmod windows;\n#[cfg(windows)]\npub use windows::{PrivateDir, PrivateFile};\n#[cfg(windows)]\npub use windows::{delete_by_handle, rename_by_handle_no_replace};\n\n/// Requested persistence, independently of private access and atomic visibilit",
+          "before": "dows)]\nmod windows;\n#[cfg(windows)]\npub use windows::{PrivateDir, PrivateFile};\n\n/// Requested persistence, independently of private access and atomic visibilit"
+        }
+      ]
+    },
+    "src/windows/mod.rs": {
+      "patched_sha256": "70191bcb6af6d431b205c8819a841f32aec87003c10b76e64fa842ba1fabdb96",
+      "replacements": [
+        {
+          "after": "Err(e),\n    }\n    nt::validate(handle, directory, Some(id), user).map(|_| ())\n}\n\n/// Rename an opened object into an opened directory without replacing an entry.\n///\n/// This is a low-level native capability operation. The caller verifies owners,\n/// access controls and recorded identities; it does not admit a private parent\n/// or change the stricter policies of `PrivateDir` and `PrivateFile`. `directory`\n/// specifies the source kind, and `name` must be exactly one normal component.\n/// The source is reopened by its handle for synchronous DELETE access and its\n/// identity is checked again. Neither parent nor source is reopened by pathname.\n/// Native cross-volume or occupied-target failures have no copy/unlink fallback.\npub fn rename_by_handle_no_replace(\n    source: impl AsHandle,\n    parent: impl AsHandle,\n    name: &OsStr,\n    directory: bool,\n) -> Result<()> {\n    use std::os::windows::ffi::OsStrExt as _;\n    if name.encode_wide().take(256).count() > 255\n        || name.encode_wide().any(|c| matches!(c, 0 | 47 | 92))\n    {\n        return Err(Error::InvalidRelativePath);\n    }\n    let parts = RelativePath::new(Path::new(name))?;\n    let [leaf] = parts.0.as_slice() else {\n        return Err(Error::InvalidRelativePath);\n    };\n    let parent = parent.as_handle().try_clone_to_owned()?;\n    nt::metadata(&parent, true, None)?;\n    let source = nt::mutation_handle(source, directory)?;\n    nt::rename_with_policy(&source, &parent, leaf, crate::Publication::CreateNew)\n}\n\n/// Mark an opened object for deletion without resolving its mutable pathname.\n///\n/// This low-level operation leaves owner, ACL and recorded-identity admission to\n/// the caller, as with `rename_by_handle_no_replace`. The object is reopened by\n/// handle for synchronous DELETE access and its identity is checked again.\n/// A directory must be empty; no recursive or pathname deletion is attempted.\npub fn delete_by_handle(source: impl AsHandle, directory: bool) -> Result<()> {\n    nt::delete(nt::mutation_handle(source, directory)?)\n}\n\nimpl PrivateDir {\n    /// Explicitly restore owner-only access through this reta",
+          "before": "Err(e),\n    }\n    nt::validate(handle, directory, Some(id), user).map(|_| ())\n}\nimpl PrivateDir {\n    /// Explicitly restore owner-only access through this reta"
+        }
+      ]
+    },
+    "src/windows/nt.rs": {
+      "patched_sha256": "718a1cd39e9da2bd764604975d4dc74a29f9abfd8d69218f3f81fe5e732d1cb3",
+      "replacements": [
+        {
+          "after": " {\n        return Err(Error::IdentityChanged);\n    }\n    Ok(())\n}\npub(super) fn mutation_handle(handle: impl AsHandle, directory: bool) -> Result<OwnedHandle> {\n    let owned = handle.as_handle().try_clone_to_owned()?;\n    let original = metadata(&owned, directory, None)?;\n    let access = (DELETE | FILE_READ_ATTRIBUTES | READ_CONTROL | SYNCHRONIZE) as u32;\n    let reopened = open_access(\n        Some(&owned),\n        OsStr::new(\"\"),\n        directory,\n        FILE_OPEN as u32,\n        None,\n        Some(access),\n    )?;\n    metadata(&reopened, directory, Some(original))?;\n    Ok(reopened)\n}\n\npub(super) fn security_handle(handle: impl AsHandle) -> Result<OwnedHandle> {\n    let owned = ",
+          "before": " {\n        return Err(Error::IdentityChanged);\n    }\n    Ok(())\n}\npub(super) fn security_handle(handle: impl AsHandle) -> Result<OwnedHandle> {\n    let owned = "
+        }
+      ]
+    }
+  },
+  "schema_version": 1,
+  "source_archive": "https://static.crates.io/crates/private-fs/private-fs-0.2.1.crate",
+  "source_sha256": "216836ac7881f1a6a3ef0a0d92e9e8892c8f5b4070c338b0a408ab996ba219ef",
+  "upstream_revision": "07d542518b76d4eef6200523b6a7a57dd401b0e7",
+  "version": "0.2.1"
+}

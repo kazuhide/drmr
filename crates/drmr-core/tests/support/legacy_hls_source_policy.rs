@@ -9,6 +9,7 @@ fn audio_source(root: &Path) -> PathBuf {
     fs::create_dir(root).unwrap();
     let input = root.join("media.m3u8");
     let output = std::process::Command::new("ffmpeg")
+        .current_dir(root)
         .args([
             "-v",
             "error",
@@ -29,8 +30,8 @@ fn audio_source(root: &Path) -> PathBuf {
             "vod",
             "-hls_segment_filename",
         ])
-        .arg(root.join("segment-%d.m4s"))
-        .arg(&input)
+        .arg("segment-%d.m4s")
+        .arg("media.m3u8")
         .output()
         .unwrap();
     assert!(
@@ -38,6 +39,13 @@ fn audio_source(root: &Path) -> PathBuf {
         "fractional AAC fixture generation failed"
     );
     let text = fs::read_to_string(&input).unwrap();
+    assert!(text.contains("#EXT-X-MAP:URI=\"init.mp4\""));
+    let initialization =
+        fs::symlink_metadata(root.join("init.mp4")).expect("fixture initialization is missing");
+    assert!(
+        initialization.is_file() && initialization.len() > 0,
+        "fixture initialization must be a nonempty regular file"
+    );
     assert!(text.contains("#EXT-X-TARGETDURATION:6\n"));
     assert!(
         text.lines()

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Audit selected CLI/Desktop target graphs without discarding known findings.
 
-A local GLib backport is verified separately. A second, explicitly identified
-lock input restores only its publisher identity for RustSec advisory discovery.
+Local source patches are verified separately. A second, explicitly identified
+lock input restores their publisher identities for RustSec advisory discovery.
 """
 import argparse
 import hashlib
@@ -14,6 +14,7 @@ import tempfile
 
 from verify_archive import Failure as ArchiveFailure, Source, dependency_graph, metadata, target_info, unique
 from verify_backports import Failure as BackportFailure, verify as verify_backport
+from verify_backports import verify_private_fs
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -118,6 +119,26 @@ def normalized_lock(original, pin):
     return "[[package]]".join(blocks).encode()
 
 
+def normalized_private_fs_lock(original, pin):
+    require(pin.get("package") == "private-fs" and pin.get("version") == "0.2.1"
+            and type(pin.get("source_sha256")) is str
+            and re.fullmatch(r"[0-9a-f]{64}", pin.get("source_sha256", "")) is not None,
+            "audit-native-patch-pin")
+    blocks = original.decode("utf-8").split("[[package]]")
+    matched = 0
+    inserted = '\nsource = "registry+https://github.com/rust-lang/crates.io-index"\nchecksum = "' + pin["source_sha256"] + '"'
+    for index, block in enumerate(blocks):
+        if re.search(r'^name = "private-fs"$', block, re.MULTILINE):
+            require('version = "0.2.1"' in block and not re.search(r'^(source|checksum) =', block, re.MULTILINE),
+                    "audit-native-patch-lock-shape")
+            changed = block.replace('version = "0.2.1"', 'version = "0.2.1"' + inserted, 1)
+            require(changed.replace(inserted, "", 1) == block, "audit-lock-normalization")
+            blocks[index] = changed
+            matched += 1
+    require(matched == 1, "audit-native-patch-lock-entry")
+    return "[[package]]".join(blocks).encode()
+
+
 def apply_policy(rows, kind, target, policy, backport):
     accepted = []
     for row in rows:
@@ -171,9 +192,11 @@ def run(args):
     require(re.fullmatch(r"[0-9a-f]{40}", revision), "audit-database-revision")
     require(not subprocess.run(["git", "-C", str(args.database), "status", "--porcelain", "--untracked-files=all"], capture_output=True, check=True).stdout.strip(), "audit-database-dirty")
     backport = verify_backport(source.path)
+    native_patch = verify_private_fs(source.path)
     pin = read_json(source.read("tools/backports/glib-0.18.5.json"))
+    native_pin = read_json(source.read("tools/backports/private-fs-0.2.1.json"))
     original = source.read("Cargo.lock")
-    normalized = normalized_lock(original, pin)
+    normalized = normalized_private_fs_lock(normalized_lock(original, pin), native_pin)
     policy = read_json(source.read("tools/advisory-policy.json"))
     require(policy["schema_version"] == 1, "audit-policy-schema")
     args.output.mkdir()
@@ -205,8 +228,8 @@ def run(args):
     report = {"schema_version": 1, "success": not failed, "source_head": source.head, "source_tree": source.tree,
               "database_revision": revision, "actual_lock_sha256": digest(original),
               "registry_identity_lock_sha256": digest(normalized),
-              "normalization": "Only the reviewed path-vendored glib 0.18.5 entry receives its official registry source and checksum for advisory discovery. Both raw audit results are retained.",
-              "backport": backport, "scopes": scopes,
+              "normalization": "Only the reviewed path-vendored glib 0.18.5 and private-fs 0.2.1 entries receive their official registry sources and checksums for advisory discovery. Both raw audit results are retained.",
+              "backport": backport, "native_handle_patch": native_patch, "scopes": scopes,
               "native_regression": regression}
     (args.output / "summary.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     for scope in scopes:

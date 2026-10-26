@@ -14,11 +14,35 @@ pub fn pin_media_directory(path: &Path) -> io::Result<super::PrivateDirectoryGua
     windows::pin(path)
 }
 
-/// Create beneath strict scratch, promote only the created object, then move it
-/// without replacing an existing media child. Retain it through identity capture.
+/// Create beneath strict scratch, move the held object without replacing an
+/// entry, then promote only that object. Retain it through identity capture.
 #[cfg(windows)]
 pub(crate) fn create_media_dir_new(scratch: &Path, path: &Path) -> io::Result<fs::File> {
     windows::create_dir_new(scratch, path)
+}
+
+/// Acquire deletion authority for existing owner-only media without changing it.
+/// The caller must compare the returned handle with its recorded identity.
+#[cfg(windows)]
+pub(crate) fn open_media_mutation(path: &Path, directory: bool) -> io::Result<fs::File> {
+    windows::open_mutation(path, directory)
+}
+
+/// Move an admitted media object through held source and destination handles.
+#[cfg(windows)]
+pub(crate) fn rename_media_handle_no_replace(
+    source: &fs::File,
+    parent: &fs::File,
+    name: &std::ffi::OsStr,
+    directory: bool,
+) -> io::Result<()> {
+    windows::rename_handle_no_replace(source, parent, name, directory)
+}
+
+/// Delete one admitted media object through its held handle, never by pathname.
+#[cfg(windows)]
+pub(crate) fn delete_media_handle(source: &fs::File, directory: bool) -> io::Result<()> {
+    windows::delete_handle(source, directory)
 }
 
 /// Prepare an owner-only media directory with inheritance for external outputs.

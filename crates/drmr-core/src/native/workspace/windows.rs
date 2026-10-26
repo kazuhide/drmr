@@ -138,19 +138,29 @@ pub(super) fn pin(path: &Path) -> io::Result<crate::native::PrivateDirectoryGuar
 }
 
 pub(super) fn create_dir_new(scratch: &Path, path: &Path) -> io::Result<File> {
-    create_dir_new_after_creation(scratch, path, |_| {})
+    create_dir_new_with_hooks(scratch, path, |_| {}, |_| {})
 }
 
+#[cfg(test)]
 fn create_dir_new_after_creation(
     scratch: &Path,
     path: &Path,
     after_creation: impl FnOnce(&Path),
 ) -> io::Result<File> {
+    create_dir_new_with_hooks(scratch, path, after_creation, |_| {})
+}
+
+fn create_dir_new_with_hooks(
+    scratch: &Path,
+    path: &Path,
+    after_creation: impl FnOnce(&Path),
+    before_move: impl FnOnce(&Path),
+) -> io::Result<File> {
     use std::os::windows::io::AsHandle as _;
     let absolute = std::path::absolute(path)?;
     let parent = absolute.parent().ok_or_else(invalid)?;
-    let name = absolute.file_name().ok_or_else(invalid)?;
-    crate::native::validate_windows_relative_path(name.to_str().ok_or_else(invalid)?)?;
+    let target_name = absolute.file_name().ok_or_else(invalid)?;
+    crate::native::validate_windows_relative_path(target_name.to_str().ok_or_else(invalid)?)?;
     let _ancestors = crate::native::files::pin_directory_path(parent)?;
     let scratch = std::path::absolute(scratch)?;
     let _scratch_ancestors = crate::native::files::pin_directory_path(&scratch)?;
@@ -193,16 +203,11 @@ fn create_dir_new_after_creation(
     }
     drop(current);
     policy.verify(&child, true, true)?;
+    before_move(&pending);
+    // Rename the created object, even if another entry now has its old name.
+    // Keep the validated destination handle and all ancestor pins throughout.
+    rename_handle_no_replace(&child, &parent_handle, target_name, true)?;
     policy.set(&mut child, true)?;
-    // MoveFileEx can open the parent for write access. Keep the no-delete
-    // ancestor guards, but release this read-only-sharing validation handle.
-    drop(parent_handle);
-    winsafe::MoveFileEx(
-        pending.to_str().ok_or_else(invalid)?,
-        Some(absolute.to_str().ok_or_else(invalid)?),
-        winsafe::co::MOVEFILE::default(),
-    )
-    .map_err(|error| io::Error::from_raw_os_error(error.raw().cast_signed()))?;
     // Creation handles carry DELETE access; close every clone before acquiring
     // the final no-delete pin. A replacement is never adopted or cleaned up.
     drop(created);
@@ -213,6 +218,44 @@ fn create_dir_new_after_creation(
     }
     policy.verify(&retained, true, true)?;
     Ok(retained)
+}
+
+pub(super) fn open_mutation(path: &Path, directory: bool) -> io::Result<File> {
+    let absolute = std::path::absolute(path)?;
+    let parent = absolute.parent().ok_or_else(invalid)?;
+    let name = absolute.file_name().ok_or_else(invalid)?;
+    crate::native::validate_windows_relative_path(name.to_str().ok_or_else(invalid)?)?;
+    let _ancestors = crate::native::files::pin_directory_path(parent)?;
+    let policy = Policy::new()?;
+    policy.verify(&open(parent)?, true, true)?;
+    // DELETE, READ_CONTROL, SYNCHRONIZE and attributes; no payload write access.
+    // Deny concurrent writers while permitting object-bound rename/delete.
+    let file = OpenOptions::new()
+        .access_mode(0x0013_0080)
+        .share_mode(5)
+        .security_qos_flags(0x0001_0000)
+        .custom_flags(0x0220_0000)
+        .open(absolute)?;
+    policy.verify(&file, directory, false)?;
+    Ok(file)
+}
+
+pub(super) fn rename_handle_no_replace(
+    source: &File,
+    parent: &File,
+    name: &std::ffi::OsStr,
+    directory: bool,
+) -> io::Result<()> {
+    crate::native::validate_windows_relative_path(name.to_str().ok_or_else(invalid)?)?;
+    let policy = Policy::new()?;
+    policy.verify(source, directory, false)?;
+    policy.verify(parent, true, true)?;
+    private_fs::rename_by_handle_no_replace(source, parent, name, directory).map_err(|_| invalid())
+}
+
+pub(super) fn delete_handle(source: &File, directory: bool) -> io::Result<()> {
+    Policy::new()?.verify(source, directory, false)?;
+    private_fs::delete_by_handle(source, directory).map_err(|_| invalid())
 }
 
 pub(super) fn create(path: &Path) -> io::Result<()> {
@@ -425,6 +468,8 @@ mod tests {
             crate::native::FileIdentity::read(&open(&child_path).unwrap()).unwrap() == identity
         );
         replacement_after_media_child_creation_is_never_adopted(root.path(), &parent);
+        replacement_after_media_child_validation_is_never_moved(root.path(), &parent);
+        native_mutation_names_and_occupied_targets_are_refused(root.path());
         drop(child);
         drop(held_parent);
         std::fs::rename(&parent, root.path().join("moved")).unwrap();
@@ -455,6 +500,108 @@ mod tests {
             "foreign ACL changed"
         );
         assert!(original.is_dir());
+    }
+
+    fn replacement_after_media_child_validation_is_never_moved(scratch: &Path, parent: &Path) {
+        use std::io::Write as _;
+        let target = parent.join("late-raced-child");
+        let original = scratch.join("late-retained-original");
+        let mut replacement = std::path::PathBuf::new();
+        let mut foreign_identity = None;
+        let mut created_identity = None;
+        let child = create_dir_new_with_hooks(
+            scratch,
+            &target,
+            |_| {},
+            |pending| {
+                let before = OpenOptions::new()
+                    .access_mode(0x80)
+                    .share_mode(7)
+                    .custom_flags(0x0220_0000)
+                    .open(pending)
+                    .unwrap();
+                created_identity = Some(crate::native::FileIdentity::read(&before).unwrap());
+                drop(before);
+                std::fs::rename(pending, &original).unwrap();
+                crate::native::create_private_dir_new(pending).unwrap();
+                crate::native::create_private_new(&pending.join("foreign.txt"))
+                    .unwrap()
+                    .write_all(b"late foreign sentinel")
+                    .unwrap();
+                foreign_identity =
+                    Some(crate::native::FileIdentity::read(&open(pending).unwrap()).unwrap());
+                replacement = pending.to_path_buf();
+            },
+        )
+        .unwrap();
+        assert!(!original.exists());
+        assert!(
+            Some(crate::native::FileIdentity::read(&child).unwrap()) == created_identity,
+            "the created directory identity changed"
+        );
+        assert!(target.is_dir());
+        assert_eq!(std::fs::read_dir(&target).unwrap().count(), 0);
+        assert_eq!(
+            std::fs::read(replacement.join("foreign.txt")).unwrap(),
+            b"late foreign sentinel"
+        );
+        assert!(
+            Some(crate::native::FileIdentity::read(&open(&replacement).unwrap()).unwrap())
+                == foreign_identity,
+            "the foreign directory identity changed"
+        );
+        assert!(
+            private_fs::PrivateDir::open(&replacement).is_ok(),
+            "foreign ACL changed"
+        );
+        drop(child);
+    }
+
+    fn native_mutation_names_and_occupied_targets_are_refused(root: &Path) {
+        use std::io::Write as _;
+        let parent = private_fs::PrivateDir::open(root).unwrap();
+        let source = parent.create_dir("bound-directory").unwrap();
+        let destination = parent.create_dir("occupied-directory").unwrap();
+        destination
+            .create("foreign.txt")
+            .unwrap()
+            .write_all(b"occupied foreign sentinel")
+            .unwrap();
+        for name in ["", ".", "..", "a/b", "a\\b", "a/", "a:"] {
+            assert!(matches!(
+                private_fs::rename_by_handle_no_replace(
+                    &source,
+                    &parent,
+                    std::ffi::OsStr::new(name),
+                    true
+                ),
+                Err(private_fs::Error::InvalidRelativePath)
+            ));
+        }
+        assert!(matches!(
+            private_fs::rename_by_handle_no_replace(
+                &source,
+                &parent,
+                std::ffi::OsStr::new(&"x".repeat(256)),
+                true
+            ),
+            Err(private_fs::Error::InvalidRelativePath)
+        ));
+        assert!(
+            private_fs::rename_by_handle_no_replace(
+                &source,
+                &parent,
+                "occupied-directory".as_ref(),
+                true
+            )
+            .is_err()
+        );
+        assert!(private_fs::delete_by_handle(&destination, true).is_err());
+        assert_eq!(
+            std::fs::read(root.join("occupied-directory/foreign.txt")).unwrap(),
+            b"occupied foreign sentinel"
+        );
+        assert!(root.join("bound-directory").is_dir());
     }
 
     #[test]
