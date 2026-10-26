@@ -164,7 +164,7 @@ fn nested_decoded_tools_share_one_ceiling_for_single_and_multiple_renditions() {
                 .with_limiter(Arc::new(Limiter::new(4, 4 * 1024 * 1024 * 1024)));
             let converter = Converter::new(Arc::new(runner), "packager", "ffmpeg")
                 .with_decode(true)
-                .with_timeout(Duration::from_secs(60));
+                .with_timeout(Duration::from_mins(1));
             let backend = preparation_backend(&converter.backend, Some(maximum));
             let first_wave = maximum.min(renditions) * maximum.min(2);
             let attempted = AtomicUsize::new(0);
