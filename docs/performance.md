@@ -1,13 +1,18 @@
-# Analysis performance
+# Processing performance
 
-These measurements show how complete analysis changed, then compare native
-optimizations at the same verification depth. Whole-presentation measurements use the same retained clear
-HLS input: about ten minutes, six video renditions, one audio track and
-708 referenced files totaling 857,417,309 bytes. Network acquisition is outside
-the timed command. Every recorded analysis passed source admission.
+These measurements cover analysis, multi-output conversion and independent
+verification. The analysis sections separate historical verification-depth
+changes from comparisons at the same depth. The conversion sections compare
+two builds at each requested verification depth.
 
-The [numeric results](benchmarks/native-analysis-2026-10-25.json) include
-source revisions, individual observations and measurement limits.
+Whole-presentation runs use the same retained clear HLS input: about ten
+minutes, six video renditions, one audio track and 708 referenced files
+totaling 857,417,309 bytes. An 18-second excerpt is identified separately.
+Network acquisition is outside the timed commands. Every recorded source
+admission passed.
+
+The [historical analysis data](benchmarks/native-analysis-2026-10-25.json)
+include source revisions, individual observations and measurement limits.
 
 ## When native validation became the default
 
@@ -232,10 +237,177 @@ three independent oracle tests recorded 17 reader instances, 6,533 Rust
 
 These counts describe that revision and test corpus; they do not quantify an I/O
 reduction. They are not operating-system syscall counts or whole-command I/O
-measurements. Buffer-reuse regressions check the owned scratch storage; no global
-allocation-count reduction is claimed. The numeric report identifies the measured
-revision and confirms that the relevant production source bytes are unchanged in
-the integrated candidate.
+measurements. Buffer-reuse regressions check the owned scratch storage; no
+whole-command allocation-count reduction is claimed. The numeric report identifies
+the measured revision and confirms that the relevant production source bytes are
+unchanged in the integrated candidate.
+
+### Selected allocation and input/output diagnostics
+
+Separate single-threaded diagnostics counted operations in selected parser
+and reader helpers over synthetic bytes. They used frozen public source,
+with ordinary and counted wrappers, after the timed experiments.
+All six diagnostic builds succeeded; 42 observations include empty and
+allocator controls. Source inventories remained unchanged. The
+[numeric report](https://github.com/kazuhide/drmr/blob/main/docs/benchmarks/bundle-processing-2026-10-26.json)
+records source, wrapper and binary hashes, all counters and their scope.
+
+For a 65,535-byte parser payload without escape bytes, the updated helper
+borrowed the payload instead of allocating a copy:
+
+| Parser build | Successful allocations | Logical copied bytes | Explicit wipe target bytes |
+| --- | ---: | ---: | ---: |
+| Baseline | 1 | 65,535 | 65,535 |
+| Updated | 0 | 0 | 0 |
+
+Sparse and dense escape-byte inputs still allocated once and wiped
+65,535 capacity bytes each. Wiping uses `zeroize`, which explicitly clears
+owned memory. Copy and wipe counts are logical operation targets, including
+repeated wipes and vector capacity on drop; they are not memory-bus traffic.
+
+A reader diagnostic consumed eight 512-byte samples using the updated
+helpers. Fresh creates a buffer per sample; cold reuses a buffer allocated
+inside the interval; warm preallocates before the interval. The window
+variant reads each small sample together before serving smaller reads.
+
+| Reader configuration | Successful allocations | Rust file reads / seeks | Unix call total |
+| --- | ---: | ---: | ---: |
+| Fresh, direct | 8 | 16 / 7 | 23 |
+| Cold reuse, direct | 1 | 16 / 7 | 23 |
+| Warm reuse, direct | 0 | 16 / 7 | 23 |
+| Warm reuse, sample window | 0 | 8 / 7 | 15 |
+
+The window adds 4,096 logical copied bytes and targets 12,288 bytes for
+wiping in this case. Warm-buffer allocation and destruction fall outside
+the interval; zero interval allocations do not mean zero retained storage.
+The 64 KiB boundary, larger direct-read path and short-read refusal were
+also checked.
+
+Unix and Mach totals are operating-system calls made by the diagnostic
+process, including observation overhead. The empty control recorded zero
+Unix calls and one Mach call; no fixed value was subtracted. These totals
+do not classify kernel reads and seeks separately. Allocator counters
+describe requested bytes and entries, excluding allocator rounding and
+internal reallocation work.
+
+The controls compare status, output length and a noncryptographic 64-bit
+checksum that traverses the complete output. This is separate from the
+actual-media correspondence checks below. These diagnostics cover selected
+helpers, without measuring a whole CLI allocation count, complete encrypted
+MP4 pipeline or maximum number of open files.
+
+## Multi-output conversion and verification
+
+The clear HLS MPEG-TS input was converted into HLS MPEG-TS encrypted with
+SAMPLE-AES and FairPlay signaling, and DASH fragmented MP4 encrypted with
+the `cbcs` scheme and Widevine/PlayReady signaling. Synthetic keys were
+used. Each saved plan was executed and its outputs were verified by a fresh CLI
+process against the retained original. Network download time is excluded.
+
+The [baseline](https://github.com/kazuhide/drmr/commit/3fa08d5f9bf5a507c240b2543b7eacfef1e9379b)
+and [updated build](https://github.com/kazuhide/drmr/commit/147a9e192e51b8999711ed8ac1a43519ba6d6e34)
+use Rust 1.95.0 release mode on the same macOS ARM64 host with ten logical
+CPUs and automatic worker selection. The [numeric results](https://github.com/kazuhide/drmr/blob/main/docs/benchmarks/bundle-processing-2026-10-26.json)
+include every observation, binary/tool hashes and measurement limits.
+
+Planning checks and binds the selected source. Conversion includes its
+required output verification; fresh verification repeats the comparison
+in a separate CLI process.
+
+| Recipe | HLS processing | DASH processing |
+| --- | --- | --- |
+| Mixed | Segments; preserve source boundaries | Stitch; segment again |
+| Stitch both | Stitch; segment again | Stitch; segment again |
+
+The recipes perform different boundary work. Each build comparison below
+keeps the same source, recipe and verification depth.
+
+### Full presentation with native verification
+
+This batch uses the full approximately ten-minute presentation, with
+six video renditions, one audio track and 717 retained files.
+
+| Recipe | Build | Plan, median (range), s | Convert, median (range), s | Fresh verify, median (range), s |
+| --- | --- | ---: | ---: | ---: |
+| Mixed | Baseline | 27.687 (22.970–33.278) | 146.888 (145.809–153.720) | 64.934 (63.637–66.084) |
+| Mixed | Updated | 19.468 (18.460–25.381) | 99.201 (98.627–117.564) | 52.931 (51.441–54.322) |
+| Stitch both | Baseline | 22.141 (20.406–22.429) | 174.342 (150.650–181.110) | 72.723 (66.026–83.683) |
+| Stitch both | Updated | 13.052 (12.805–13.789) | 80.598 (78.618–83.312) | 45.384 (39.142–48.737) |
+
+### 18-second excerpt with native verification
+
+The excerpt contains the same six video renditions and one audio track over
+approximately 18 seconds, in 29 retained files. The complete chosen asset was
+checked.
+
+| Recipe | Build | Plan, median (range), s | Convert, median (range), s | Fresh verify, median (range), s |
+| --- | --- | ---: | ---: | ---: |
+| Mixed | Baseline | 1.062 (1.059–1.064) | 6.217 (6.033–6.736) | 2.663 (2.376–2.687) |
+| Mixed | Updated | 0.825 (0.785–0.830) | 4.008 (3.696–4.021) | 2.112 (2.021–2.175) |
+| Stitch both | Baseline | 0.955 (0.916–0.981) | 6.380 (6.357–6.467) | 2.623 (2.596–2.684) |
+| Stitch both | Updated | 0.573 (0.549–0.576) | 3.166 (3.129–3.233) | 1.587 (1.472–1.642) |
+
+### The same excerpt with complete decoded-content verification
+
+This batch uses exactly the same 29-file excerpt as the native table.
+Complete decoded-content comparison covers the whole chosen excerpt.
+The native and decoded modes perform different verification work.
+
+| Recipe | Build | Plan, median (range), s | Convert, median (range), s | Fresh verify, median (range), s |
+| --- | --- | ---: | ---: | ---: |
+| Mixed | Baseline | 27.383 (26.630–29.286) | 215.623 (190.486–235.318) | 90.880 (60.587–101.819) |
+| Mixed | Updated | 20.535 (20.482–22.360) | 131.147 (118.422–136.242) | 41.133 (38.393–43.119) |
+| Stitch both | Baseline | 35.044 (30.031–35.619) | 227.158 (190.969–374.424) | 61.673 (59.468–68.953) |
+| Stitch both | Updated | 22.359 (20.097–33.014) | 144.352 (134.832–158.148) | 38.538 (37.970–41.420) |
+
+### Recorded host load for the excerpt
+
+A snapshot was taken before and after every measured command. Load
+averages describe operating-system load over one, five and fifteen
+minutes. Process observations can be partial when process-argument rows
+are unavailable; missing observations stay missing.
+
+| Verification depth | Snapshot status: complete / partial / unavailable | One-minute load, observed range | Process snapshots available |
+| --- | ---: | ---: | ---: |
+| Native | 0 / 72 / 0 | 3.66–7.20 | 72 / 72 |
+| Decoded | 0 / 72 / 0 | 4.06–48.78 | 72 / 72 |
+
+Each timing value summarizes three runs. The three experiments each have
+twelve complete plan/convert/fresh-verify cases. Compare builds within the
+same table; the full native input and the short decoded excerpt differ in
+duration and media size. Native checks compare complete encoded samples,
+stream configuration and timestamps. Decoded mode additionally compares
+all decoded content for the selected asset.
+
+All conversions and fresh verifications passed their requested checks.
+The native-depth cases launched neither FFmpeg nor ffprobe; conversion
+used Shaka Packager. Tool counts remain separate from verification depth.
+The native manifest linter reported no errors or incomplete work within
+its declared manifest profiles; delivery and media-evidence rules outside
+that linter scope remain separate from media correspondence checks.
+
+The full-input native batch stopped under an idle guard between cases.
+Nine complete cases were retained unchanged and the remaining three ran
+after a pause. The original interrupted summary remains preserved.
+The excerpt batches proceed while background work may be active. Host load is
+observed before and after each command, outside its measured elapsed time.
+Incomplete process observations remain labelled as partial or unavailable.
+Load averages include earlier benchmark work as well as other processing.
+They cover one, five and fifteen minutes; process-CPU percentage
+sums are observations from the process table, without a precise CPU peak
+or isolation claim. Filesystem caches and host load are uncontrolled.
+The timings describe these runs under recorded load; they do not isolate
+the effect of code changes from changes in other host work.
+
+Times surround each whole CLI command, including its cleanup. CPU and
+maximum resident-memory counters come from `wait4` for the command and
+its children. This resident-memory value is not a simultaneous sum across
+the process tree. The numeric report includes every observation, recomputed
+CPU/memory summaries and media-tool launch counts.
+Phase scope sums emitted by the CLI can overlap and are not command wall
+time. Random initialization vectors can change encrypted output bytes;
+each output was verified independently, with no byte-for-byte ciphertext
+equality claim. License-server and device playback were not qualified.
 
 ## Compare your own retained input
 
@@ -252,5 +424,6 @@ Record whole-command time separately from the overlapping phase sums emitted
 by `--measure`. See [resource limits and measurements](resources.md) for budgets,
 cancellation and measurement coverage.
 
-These observations describe this input and host. They do not qualify other
-media profiles, other operating systems, DRM license services or device playback.
+These observations describe the selected inputs and recorded host conditions.
+They do not qualify other media profiles, other operating systems, DRM license
+services or device playback.
