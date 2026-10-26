@@ -59,9 +59,10 @@ fn verify(root: &Path, expected: DashAddressing, stop: &Stop) -> Result<(), Conv
         return Err(MISMATCH);
     }
     let mut remaining = MAX_SEGMENTS;
+    let mut admission = addressing::Admission::local();
     for rep in representations {
         super::checkpoint(Some(stop))?;
-        let resolved = addressing::resolve(rep, remaining)?;
+        let resolved = addressing::resolve_admitted(rep, remaining, &mut admission)?;
         let matches = match expected {
             DashAddressing::Template => {
                 resolved.kind == Kind::Template && resolved.nominal.is_none()
@@ -78,7 +79,8 @@ fn verify(root: &Path, expected: DashAddressing, stop: &Stop) -> Result<(), Conv
         let count = if let Some(resource) = &resolved.index {
             let path = reference(&root, &resolved.base, &resource.uri)?;
             let range = resource.range.ok_or(MISMATCH)?;
-            let parsed = index::read(&path, range, &resource.uri, remaining, stop)?;
+            let parsed =
+                index::read_admitted(&path, range, &resource.uri, remaining, stop, &mut admission)?;
             if parsed.timescale != resolved.timescale {
                 return Err(MISMATCH);
             }

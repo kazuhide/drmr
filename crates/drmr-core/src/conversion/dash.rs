@@ -71,6 +71,16 @@ struct Completed {
 struct Capture<'a> {
     stop: Option<&'a crate::concurrency::Stop>,
     budget: &'a mut Budget,
+    admission: addressing::Admission<'static>,
+}
+impl<'a> Capture<'a> {
+    fn new(stop: Option<&'a crate::concurrency::Stop>, budget: &'a mut Budget) -> Self {
+        Self {
+            stop,
+            budget,
+            admission: addressing::Admission::local(),
+        }
+    }
 }
 
 fn error(code: &'static str) -> ConversionError {
@@ -501,7 +511,8 @@ fn snapshot_representation(
     ) {
         return Err(error("dash-protection-unresolved-or-not-supported"));
     }
-    let mut resolved = addressing::resolve(representation, remaining)?;
+    let mut resolved =
+        addressing::resolve_admitted(representation, remaining, &mut capture.admission)?;
     let fallback_stop = crate::concurrency::Stop::new();
     let stop = capture.stop.unwrap_or(&fallback_stop);
     let resource_directory = stage.join(format!("dash-representation-{index:04}"));
@@ -517,7 +528,14 @@ fn snapshot_representation(
         stop,
     )?;
     let mut clock = super::timing::FragmentClock::read(&copied_initialization)?;
-    self::index::resolve(directory, &mut resolved, clock.identity(), remaining, stop)?;
+    self::index::resolve(
+        directory,
+        &mut resolved,
+        clock.identity(),
+        remaining,
+        stop,
+        &mut capture.admission,
+    )?;
     let used = resolved.segments.len();
     let source = capture
         .stop
@@ -681,6 +699,7 @@ fn snapshot(
     let mut tracks = Vec::new();
     let mut segments = 0;
     let mut windows = window::Presentation::default();
+    let mut capture = Capture::new(stop, &mut budget);
     for (index, (representation, declared)) in representations
         .into_iter()
         .zip(&declared.tracks)
@@ -694,10 +713,7 @@ fn snapshot(
             stage,
             index,
             MAX_SEGMENTS - segments,
-            &mut Capture {
-                stop,
-                budget: &mut budget,
-            },
+            &mut capture,
         )?;
         tracks.push(track);
         segments += used;

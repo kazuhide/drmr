@@ -21,6 +21,22 @@ pub(in crate::conversion) fn check_acquired_limits(
     max_segments_per_track: usize,
     stop: &Stop,
 ) -> Result<(), ConversionError> {
+    check_acquired_limits_admitted(
+        root,
+        projection,
+        max_segments_per_track,
+        stop,
+        &mut addressing::Admission::local(),
+    )
+}
+
+fn check_acquired_limits_admitted(
+    root: &Path,
+    projection: &[u8],
+    max_segments_per_track: usize,
+    stop: &Stop,
+    admission: &mut addressing::Admission<'_>,
+) -> Result<(), ConversionError> {
     super::checkpoint(Some(stop))?;
     super::source_references(projection)?;
     let text = std::str::from_utf8(projection).map_err(|_| error("dash-invalid-xml"))?;
@@ -41,15 +57,17 @@ pub(in crate::conversion) fn check_acquired_limits(
         .filter(|node| node.is_element() && node.tag_name().name() == "Representation")
     {
         super::checkpoint(Some(stop))?;
-        let resolved = addressing::resolve(rep, remaining.min(max_segments_per_track))?;
+        let resolved =
+            addressing::resolve_admitted(rep, remaining.min(max_segments_per_track), admission)?;
         let count = if let Some(resource) = &resolved.index {
             let path = reference(&root, &resolved.base, &resource.uri)?;
-            index::read(
+            index::read_admitted(
                 &path,
                 resource.range.ok_or(error("dash-index-range-required"))?,
                 &resource.uri,
                 remaining.min(max_segments_per_track),
                 stop,
+                admission,
             )?
             .segments
             .len()
@@ -67,22 +85,19 @@ pub(in crate::conversion) fn record_resources(
     root: &Path,
     rep: Node<'_, '_>,
     stop: &Stop,
+    admission: &mut addressing::Admission<'_>,
 ) -> Result<(RecordResource, Vec<RecordResource>), ConversionError> {
     let root = root
         .canonicalize()
         .map_err(|_| error("dash-resource-unreadable"))?;
-    let resolved = addressing::resolve(rep, MAX_SEGMENTS)?;
-    let object = |resource: &addressing::Resource| -> Result<RecordResource, ConversionError> {
-        Ok(RecordResource {
-            path: reference(&root, &resolved.base, &resource.uri)?,
-            range: resource.range.map(|range| (range.start, range.end)),
-        })
-    };
-    let initialization = object(&resolved.initialization)?;
-    let segments = if let Some(resource) = &resolved.index {
+    let resolved = addressing::resolve_admitted(rep, MAX_SEGMENTS, admission)?;
+    admit_records(admission, 1)?;
+    let initialization = record_object(&root, &resolved.base, &resolved.initialization, admission)?;
+    let media = if let Some(resource) = &resolved.index {
         let path = reference(&root, &resolved.base, &resource.uri)?;
         let range = resource.range.ok_or(error("dash-index-range-required"))?;
-        let index = index::read(&path, range, &resource.uri, MAX_SEGMENTS, stop)?;
+        let index =
+            index::read_admitted(&path, range, &resource.uri, MAX_SEGMENTS, stop, admission)?;
         index::check_layout(
             &path,
             resolved
@@ -93,24 +108,77 @@ pub(in crate::conversion) fn record_resources(
             &index.segments,
             stop,
         )?;
-        index.segments
+        admit_records(admission, index.segments.len())?;
+        admit_path(admission, &path, index.segments.len())?;
+        index
+            .segments
+            .into_iter()
+            .map(|segment| RecordResource {
+                path: path.clone(),
+                range: segment.resource.range.map(|range| (range.start, range.end)),
+            })
+            .collect()
     } else {
-        resolved.segments.clone()
+        admit_records(admission, resolved.segments.len())?;
+        resolved
+            .segments
+            .iter()
+            .map(|segment| record_object(&root, &resolved.base, &segment.resource, admission))
+            .collect::<Result<Vec<_>, _>>()?
     };
-    let media = segments
-        .iter()
-        .map(|segment| object(&segment.resource))
-        .collect::<Result<Vec<_>, _>>()?;
     if resolved.index.is_none() {
-        check_list_ranges(&initialization, &media, stop)?;
+        check_list_ranges(&initialization, &media, stop, admission)?;
     }
     Ok((initialization, media))
+}
+
+fn admit_records(
+    admission: &mut addressing::Admission<'_>,
+    count: usize,
+) -> Result<(), ConversionError> {
+    // The ordered array and retained B-tree records may coexist during insertion.
+    admission.charge(
+        count
+            .checked_mul(std::mem::size_of::<RecordResource>())
+            .and_then(|bytes| bytes.checked_mul(4))
+            .ok_or(error("source-graph-limit"))?,
+    )
+}
+
+fn admit_path(
+    admission: &mut addressing::Admission<'_>,
+    path: &PathBuf,
+    count: usize,
+) -> Result<(), ConversionError> {
+    // Canonical roots can be much longer than the manifest URI. Pay their actual
+    // allocation before cloning, including a simultaneous resource lookup key.
+    admission.charge(
+        path.capacity()
+            .checked_mul(count)
+            .and_then(|bytes| bytes.checked_mul(2))
+            .ok_or(error("source-graph-limit"))?,
+    )
+}
+
+fn record_object(
+    root: &Path,
+    base: &Path,
+    resource: &addressing::Resource,
+    admission: &mut addressing::Admission<'_>,
+) -> Result<RecordResource, ConversionError> {
+    let path = reference(root, base, &resource.uri)?;
+    admit_path(admission, &path, 1)?;
+    Ok(RecordResource {
+        path,
+        range: resource.range.map(|range| (range.start, range.end)),
+    })
 }
 
 fn check_list_ranges(
     initialization: &RecordResource,
     media: &[RecordResource],
     stop: &Stop,
+    admission: &mut addressing::Admission<'_>,
 ) -> Result<(), ConversionError> {
     let mut files = BTreeMap::<PathBuf, Vec<(addressing::ByteRange, bool)>>::new();
     for (resource, init) in std::iter::once((initialization, true))
@@ -188,12 +256,13 @@ fn check_list_ranges(
                     return Err(bad);
                 }
                 if &header[4..] == b"sidx" {
-                    index::read(
+                    index::read_admitted(
                         &path,
                         addressing::ByteRange { start: at, end },
                         "media.mp4",
                         MAX_SEGMENTS,
                         stop,
+                        admission,
                     )?;
                 } else if !matches!(&header[4..], b"free" | b"skip" | b"mfra") {
                     return Err(bad);
@@ -211,4 +280,109 @@ fn check_list_ranges(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{cell::Cell, io::Write as _};
+
+    fn indexed_sources(owner: &crate::conversion::files::Stage) -> String {
+        let index = index::build(1, 1000, 0, &[(8, 1000, 1)]).unwrap();
+        let index_end = 7 + index.len();
+        let mut file = Vec::from(*b"\0\0\0\x08free");
+        file.extend(&index);
+        file.extend(b"\0\0\0\x08free");
+        for name in ["first.mp4", "second.mp4"] {
+            crate::conversion::files::create_new(&owner.path().join(name))
+                .unwrap()
+                .write_all(&file)
+                .unwrap();
+        }
+        let mut xml = String::from(
+            "<MPD type='static' mediaPresentationDuration='PT1S'><Period><AdaptationSet>",
+        );
+        for (id, name) in ["first.mp4", "second.mp4"].into_iter().enumerate() {
+            use std::fmt::Write as _;
+            write!(xml,"<Representation id='{id}'><BaseURL>{name}</BaseURL><SegmentBase timescale='1000' indexRange='8-{index_end}'><Initialization range='0-7'/></SegmentBase></Representation>").unwrap();
+        }
+        xml.push_str("</AdaptationSet></Period></MPD>");
+        xml
+    }
+
+    #[test]
+    fn post_acquisition_index_expansion_shares_the_manifest_admission() {
+        let owner = crate::conversion::files::Stage::new(None).unwrap();
+        let xml = indexed_sources(&owner);
+        check_acquired_limits(owner.path(), xml.as_bytes(), 10, &Stop::new()).unwrap();
+        let mut retained = 0_usize;
+        let mut charge = |bytes: usize| {
+            retained += bytes;
+            if retained > 4000 {
+                Err(error("source-graph-limit"))
+            } else {
+                Ok(())
+            }
+        };
+        assert_eq!(
+            check_acquired_limits_admitted(
+                owner.path(),
+                xml.as_bytes(),
+                10,
+                &Stop::new(),
+                &mut addressing::Admission::new(error("source-graph-limit"), &mut charge),
+            ),
+            Err(error("source-graph-limit"))
+        );
+    }
+
+    #[test]
+    fn retained_local_index_records_share_admission_across_representations() {
+        let owner = crate::conversion::files::Stage::new(None).unwrap();
+        let xml = indexed_sources(&owner);
+        let document = super::super::Document::parse(&xml).unwrap();
+        let reps: Vec<_> = document
+            .descendants()
+            .filter(|node| node.has_tag_name("Representation"))
+            .collect();
+        let retained = Cell::new(0_usize);
+        let limit = Cell::new(usize::MAX);
+        let mut charge = |bytes: usize| {
+            retained.set(retained.get() + bytes);
+            if retained.get() > limit.get() {
+                Err(error("source-graph-limit"))
+            } else {
+                Ok(())
+            }
+        };
+        let mut admission = addressing::Admission::new(error("source-graph-limit"), &mut charge);
+        let first = record_resources(owner.path(), reps[0], &Stop::new(), &mut admission).unwrap();
+        limit.set(retained.get() + 512);
+        assert_eq!(
+            record_resources(owner.path(), reps[1], &Stop::new(), &mut admission).err(),
+            Some(error("source-graph-limit"))
+        );
+        assert_eq!(first.1.len(), 1);
+        assert_eq!(first.1[0].range, Some((60, 67)));
+    }
+
+    #[test]
+    fn canonical_path_storage_is_admitted_before_record_cloning() {
+        let mut admission = addressing::Admission::local();
+        admission.index("media.mp4", 15_000).unwrap();
+        admit_records(&mut admission, 15_000).unwrap();
+        let path = PathBuf::from("a".repeat(5000));
+        assert_eq!(
+            admit_path(&mut admission, &path, 15_000),
+            Err(error("source-graph-limit"))
+        );
+        assert_eq!(
+            admit_path(&mut addressing::Admission::local(), &path, usize::MAX),
+            Err(error("source-graph-limit"))
+        );
+        assert_eq!(
+            admit_records(&mut addressing::Admission::local(), usize::MAX),
+            Err(error("source-graph-limit"))
+        );
+    }
 }

@@ -1,7 +1,7 @@
 //! Flat ISO BMFF segment indexes, with checked byte extents and exact rational clocks.
 use super::{
     ConversionError, MAX_BYTES, MAX_SEGMENTS, Path,
-    addressing::{ByteRange, Resource, Segment},
+    addressing::{Admission, ByteRange, Resource, Segment},
     error,
 };
 use crate::{concurrency::Stop, conversion::files, native::FileIdentity};
@@ -20,13 +20,14 @@ pub(super) fn resolve(
     track: (u32, u32),
     remaining: usize,
     stop: &Stop,
+    admission: &mut Admission<'_>,
 ) -> Result<(), ConversionError> {
     let Some(index) = &resolved.index else {
         return Ok(());
     };
     let path = super::reference(root, &resolved.base, &index.uri)?;
     let range = index.range.ok_or(error("dash-index-range-required"))?;
-    let parsed = read(&path, range, &index.uri, remaining, stop)?;
+    let parsed = read_admitted(&path, range, &index.uri, remaining, stop, admission)?;
     if parsed.reference_id != track.0 || parsed.timescale != resolved.timescale {
         return Err(error("dash-index-track-or-timescale-mismatch"));
     }
@@ -68,6 +69,24 @@ pub(super) fn parse(
     file_bytes: u64,
     uri: &str,
     remaining: usize,
+) -> Result<Index, ConversionError> {
+    parse_admitted(
+        bytes,
+        extent,
+        file_bytes,
+        uri,
+        remaining,
+        &mut Admission::local(),
+    )
+}
+
+fn parse_admitted(
+    bytes: &[u8],
+    extent: ByteRange,
+    file_bytes: u64,
+    uri: &str,
+    remaining: usize,
+    admission: &mut Admission<'_>,
 ) -> Result<Index, ConversionError> {
     let bad = error("dash-invalid-index");
     if bytes.len() < 32
@@ -120,6 +139,8 @@ pub(super) fn parse(
     if count == 0 || count > remaining.min(MAX_SEGMENTS) || bytes.len() != at + 4 + count * 12 {
         return Err(error("dash-index-entry-limit-or-size"));
     }
+    // Pay the complete array and repeated URI storage before either allocation.
+    admission.index(uri, count)?;
     let mut start = extent
         .end
         .checked_add(1)
@@ -165,12 +186,13 @@ pub(super) fn parse(
     })
 }
 
-pub(super) fn read(
+pub(super) fn read_admitted(
     path: &Path,
     extent: ByteRange,
     uri: &str,
     remaining: usize,
     stop: &Stop,
+    admission: &mut Admission<'_>,
 ) -> Result<Index, ConversionError> {
     super::checkpoint(Some(stop))?;
     let mut file = files::regular_input(path)?;
@@ -182,12 +204,13 @@ pub(super) fn read(
     if length > 16 * 1024 * 1024 || extent.end >= metadata.len() {
         return Err(error("dash-index-size-limit"));
     }
+    admission.charge(length)?;
     let mut bytes = Zeroizing::new(vec![0; length]);
     file.seek(SeekFrom::Start(extent.start))
         .map_err(|_| error("dash-index-unreadable"))?;
     file.read_exact(&mut bytes)
         .map_err(|_| error("dash-index-unreadable"))?;
-    let result = parse(&bytes, extent, metadata.len(), uri, remaining)?;
+    let result = parse_admitted(&bytes, extent, metadata.len(), uri, remaining, admission)?;
     if FileIdentity::read(&files::regular_input(path)?)
         .map_err(|_| error("dash-index-unreadable"))?
         != identity
@@ -323,6 +346,72 @@ pub(super) fn build(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn repeated_index_references_are_admitted_before_expansion() {
+        let count = usize::from(u16::MAX);
+        let bytes = build(1, 1000, 0, &vec![(8, 1, 1); count]).unwrap();
+        let extent = ByteRange {
+            start: 0,
+            end: bytes.len() as u64 - 1,
+        };
+        let file_bytes = bytes.len() as u64 + count as u64 * 8;
+        let uri = "a".repeat(2500);
+        let mut sentinel = bytes.clone();
+        // An invalid first entry keeps the pre-fix regression bounded: a late
+        // budget check would return this entry's error before cloning any URI.
+        sentinel[40..44].fill(0);
+        assert_eq!(
+            parse(&sentinel, extent, file_bytes, &uri, MAX_SEGMENTS)
+                .err()
+                .unwrap()
+                .0,
+            "source-graph-limit"
+        );
+        assert_eq!(
+            parse(&bytes, extent, file_bytes, &uri, MAX_SEGMENTS)
+                .err()
+                .unwrap()
+                .0,
+            "source-graph-limit"
+        );
+        let short = parse(&bytes, extent, file_bytes, "media.mp4", MAX_SEGMENTS).unwrap();
+        assert_eq!(short.segments.len(), count);
+        assert_eq!(
+            short.segments.last().unwrap().resource.range.unwrap().end,
+            file_bytes - 1
+        );
+    }
+
+    #[test]
+    fn shared_index_admission_rejects_the_next_index_before_inspecting_its_entries() {
+        let bytes = build(1, 1000, 0, &[(8, 1, 1)]).unwrap();
+        let extent = ByteRange {
+            start: 0,
+            end: bytes.len() as u64 - 1,
+        };
+        let mut retained = 0_usize;
+        let mut charge = |bytes: usize| {
+            retained = retained.checked_add(bytes).unwrap();
+            if retained > 1500 {
+                Err(error("source-graph-limit"))
+            } else {
+                Ok(())
+            }
+        };
+        let mut admission = Admission::new(error("source-graph-limit"), &mut charge);
+        let first = parse_admitted(&bytes, extent, 1000, "media.mp4", 10, &mut admission).unwrap();
+        let mut sentinel = bytes.clone();
+        sentinel[40..44].fill(0);
+        assert_eq!(
+            parse_admitted(&sentinel, extent, 1000, "media.mp4", 10, &mut admission)
+                .err()
+                .unwrap()
+                .0,
+            "source-graph-limit"
+        );
+        assert_eq!(first.segments.len(), 1);
+    }
+
     #[test]
     fn flat_index_round_trip_checks_large_timestamps_and_extents() {
         let bytes = build(

@@ -9,15 +9,26 @@ use std::collections::BTreeMap;
 const MAX_REFERENCE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_RESOLUTION_BYTES: usize = 128 * 1024 * 1024;
 
-struct Admission<'a> {
+pub(in crate::conversion) struct Admission<'a> {
     references: usize,
     retained: usize,
     limit: ConversionError,
-    charge: &'a mut dyn FnMut(usize) -> Result<(), ConversionError>,
+    charge: Option<&'a mut dyn FnMut(usize) -> Result<(), ConversionError>>,
+}
+
+impl Admission<'static> {
+    pub(in crate::conversion) fn local() -> Self {
+        Self {
+            references: 0,
+            retained: 0,
+            limit: error("source-graph-limit"),
+            charge: None,
+        }
+    }
 }
 
 impl<'a> Admission<'a> {
-    fn new(
+    pub(super) fn new(
         limit: ConversionError,
         charge: &'a mut dyn FnMut(usize) -> Result<(), ConversionError>,
     ) -> Self {
@@ -25,25 +36,31 @@ impl<'a> Admission<'a> {
             references: 0,
             retained: 0,
             limit,
-            charge,
+            charge: Some(charge),
         }
     }
 
-    fn charge(&mut self, bytes: usize) -> Result<(), ConversionError> {
+    pub(super) fn charge(&mut self, bytes: usize) -> Result<(), ConversionError> {
         let retained = self
             .retained
             .checked_add(bytes)
             .filter(|bytes| *bytes <= MAX_RESOLUTION_BYTES)
             .ok_or(self.limit)?;
-        (self.charge)(bytes)?;
+        if let Some(charge) = self.charge.as_mut() {
+            charge(bytes)?;
+        }
         self.retained = retained;
         Ok(())
     }
 
     fn resource(&mut self, uri: &str) -> Result<(), ConversionError> {
+        self.resources(uri, 1)
+    }
+
+    fn resources(&mut self, uri: &str, count: usize) -> Result<(), ConversionError> {
         let references = self
             .references
-            .checked_add(uri.len())
+            .checked_add(uri.len().checked_mul(count).ok_or(self.limit)?)
             .filter(|bytes| *bytes <= MAX_REFERENCE_BYTES)
             .ok_or(self.limit)?;
         // Resource and decoded Claims keys coexist; include B-tree nodes and ranges.
@@ -51,10 +68,20 @@ impl<'a> Admission<'a> {
             .len()
             .checked_mul(2)
             .and_then(|bytes| bytes.checked_add(1024))
+            .and_then(|bytes| bytes.checked_mul(count))
             .ok_or(self.limit)?;
         self.charge(retained)?;
         self.references = references;
         Ok(())
+    }
+
+    pub(super) fn index(&mut self, uri: &str, count: usize) -> Result<(), ConversionError> {
+        self.charge(
+            count
+                .checked_mul(std::mem::size_of::<Segment>())
+                .ok_or(self.limit)?,
+        )?;
+        self.resources(uri, count)
     }
 }
 
@@ -457,16 +484,16 @@ pub(super) fn resolve(
     rep: Node<'_, '_>,
     remaining: usize,
 ) -> Result<Representation, ConversionError> {
+    resolve_admitted(rep, remaining, &mut Admission::local())
+}
+
+pub(super) fn resolve_admitted(
+    rep: Node<'_, '_>,
+    remaining: usize,
+    admission: &mut Admission<'_>,
+) -> Result<Representation, ConversionError> {
     let (base, kind, nodes) = effective(rep)?;
-    resolve_parts(
-        rep,
-        remaining,
-        base,
-        kind,
-        &nodes,
-        None,
-        &mut Admission::new(error("source-graph-limit"), &mut |_| Ok(())),
-    )
+    resolve_parts(rep, remaining, base, kind, &nodes, None, admission)
 }
 
 /// Remote acquisition resolves the URL hierarchy separately and confines its local projection.
@@ -857,6 +884,19 @@ pub(super) fn check_nominal(
 mod expansion_tests {
     use super::*;
     use roxmltree::Document;
+
+    #[test]
+    fn shared_index_references_respect_the_exact_cumulative_byte_ceiling() {
+        let uri = "a".repeat(2048);
+        let mut admission = Admission::local();
+        admission.index(&uri, 4096).unwrap();
+        admission.index(&uri, 4096).unwrap();
+        assert_eq!(admission.index(&uri, 1), Err(error("source-graph-limit")));
+        assert_eq!(
+            Admission::local().index(&uri, usize::MAX),
+            Err(error("source-graph-limit"))
+        );
+    }
 
     #[test]
     fn local_resolution_bounds_cumulative_expanded_uri_storage() {

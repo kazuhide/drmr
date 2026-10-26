@@ -285,6 +285,7 @@ impl MultiObjects {
         let mut media = BTreeSet::new();
         let mut declarations = 0;
         let mut sets = 0;
+        let mut admission = super::super::dash::addressing::Admission::local();
         for set in document
             .descendants()
             .filter(|node| node.has_tag_name((DASH, "AdaptationSet")))
@@ -302,7 +303,8 @@ impl MultiObjects {
             for rep in reps {
                 super::cancelled(stop)?;
                 let (initialization, segments) =
-                    super::super::dash::record_resources(root, rep, stop).map_err(|_| MISMATCH)?;
+                    super::super::dash::record_resources(root, rep, stop, &mut admission)
+                        .map_err(|_| MISMATCH)?;
                 if !resources.insert(initialization.clone()) {
                     return Err(MISMATCH);
                 }
@@ -713,12 +715,13 @@ fn unrequested_at(
             let document = roxmltree::Document::parse(text).map_err(|_| MISMATCH)?;
             let parent = path.parent().ok_or(MISMATCH)?;
             let mut slices = BTreeSet::new();
+            let mut admission = super::super::dash::addressing::Admission::local();
             for rep in document
                 .descendants()
                 .filter(|node| node.has_tag_name((DASH, "Representation")))
             {
                 let (initialization, media) =
-                    super::super::dash::record_resources(parent, rep, stop)
+                    super::super::dash::record_resources(parent, rep, stop, &mut admission)
                         .map_err(|_| MISMATCH)?;
                 for resource in std::iter::once(initialization).chain(media) {
                     if slices.len() >= 100_064 {
