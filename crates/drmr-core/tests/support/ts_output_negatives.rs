@@ -5,6 +5,7 @@ use super::{
     all_checks, common, converter, sample_aes_fixture, shaka_source,
 };
 use drmr_core::conversion::{VerificationReport, VerificationRequest, VerificationSource};
+use drmr_core::events::{Collector, Record, Sink};
 use drmr_core::toolrun::{Secrets, ToolRunner};
 use std::{path::PathBuf, sync::Arc};
 
@@ -57,6 +58,61 @@ fn refused(result: Result<VerificationReport, drmr_core::conversion::ConversionE
         ),
     }
 }
+fn assert_no_tool_started(events: &Collector) {
+    for record in events.records() {
+        let expected = [
+            "ts",
+            "stage",
+            "level",
+            "message",
+            "workers",
+            "child_threads",
+            "cpu_tokens",
+            "memory_tokens_bytes",
+            "estimated_child_bytes",
+            "memory_source",
+        ];
+        assert!(
+            record.len() == expected.len()
+                && expected.iter().all(|key| record.contains_key(*key))
+                && record["ts"].as_str().is_some_and(|value| !value.is_empty())
+                && record["stage"] == "resources"
+                && record["level"] == "info"
+                && record["message"] == "resource-budget"
+                && [
+                    "workers",
+                    "child_threads",
+                    "cpu_tokens",
+                    "memory_tokens_bytes",
+                    "estimated_child_bytes",
+                ]
+                .iter()
+                .all(|key| record[*key].as_u64().is_some_and(|value| value > 0))
+                && matches!(
+                    record["memory_source"].as_str(),
+                    Some("host" | "process-cgroup" | "unknown")
+                ),
+            "unexpected activity before media refusal"
+        );
+    }
+}
+
+#[test]
+#[should_panic(expected = "unexpected activity before media refusal")]
+fn no_tool_started_guard_rejects_command_records() {
+    let events = Collector::default();
+    let record: Record = serde_json::from_value(serde_json::json!({
+        "level": "info",
+        "message": "command",
+        "event": "command",
+        "tool": "ffprobe",
+        "argv": ["fixture"],
+    }))
+    .unwrap();
+    events.emit(&record);
+    assert_no_tool_started(&events);
+}
+
 fn convert(
     c: &Converter,
     input: &Path,
@@ -334,7 +390,7 @@ fn wrong_source_key_and_noncontiguous_sample_aes_audio_cannot_publish_ts_output(
         .0,
         "ts-clock-wrap-or-discontinuity-not-supported"
     );
-    assert_eq!(events.records().len(), 0);
+    assert_no_tool_started(&events);
     assert!(!output.exists());
     assert_eq!(common::snapshot_tree(source), mutated);
 }
@@ -473,7 +529,7 @@ fn master_audio_video_aliases_are_reconciled_independently_of_declaration_order(
                     .0,
                 "hls-audio-association-not-supported"
             );
-            assert_eq!(events.records().len(), 0);
+            assert_no_tool_started(&events);
             assert!(!output.exists());
         }
     }
