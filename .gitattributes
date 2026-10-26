@@ -6,6 +6,7 @@ tools/desktop-licenses/** -text
 
 # Preserve the exact reviewed publisher source and backport on all checkouts.
 vendor/glib/** -text
+vendor/private-fs/** -text
 
 # Keep published HTML and guide generation inputs byte-stable on all platforms.
 site/index.html text eol=lf

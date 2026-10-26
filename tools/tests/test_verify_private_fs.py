@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import subprocess
 import tempfile
 import unittest
 
@@ -29,6 +30,49 @@ class PrivateFsSource(unittest.TestCase):
         self.assertEqual(result["version"], "0.2.1")
         self.assertEqual(result["files"], 31)
         self.assertEqual(result["patched_files"], 3)
+
+    def test_publisher_bytes_survive_an_autocrlf_checkout(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            root = self.copied(home / "checkout")
+            empty_config = home / "empty-config"
+            empty_config.touch()
+            empty_template = home / "empty-template"
+            empty_template.mkdir()
+            env = {key: value for key, value in os.environ.items()
+                   if not key.startswith("GIT_")}
+            env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=str(empty_config),
+                       GIT_ATTR_NOSYSTEM="1")
+
+            def git(*arguments):
+                return subprocess.run(
+                    ["git", "-c", "core.autocrlf=false", "-c", "core.safecrlf=false",
+                     "-c", "core.attributesFile=" + str(empty_config),
+                     "-c", "core.hooksPath=" + str(empty_template), *arguments],
+                    cwd=root, env=env, check=True, stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE, encoding="utf-8", timeout=10)
+
+            shutil.copyfile(ROOT / ".gitattributes", root / ".gitattributes")
+            git("init", "--quiet", "--template=" + str(empty_template))
+            git("add", ".gitattributes", "vendor/private-fs", "tools/backports/private-fs-0.2.1.json")
+            shutil.rmtree(root / "vendor/private-fs")
+            git("-c", "core.autocrlf=true", "checkout", "--", "vendor/private-fs")
+            self.assertEqual(VERIFY.verify_private_fs(root), VERIFY.verify_private_fs(ROOT))
+
+    def test_line_ending_changes_remain_source_modifications(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.copied(directory)
+            for name, failure in [("LICENSE-MIT", "native-patch-publisher-source"),
+                                  ("src/windows/mod.rs", "native-patch-modified-source")]:
+                with self.subTest(file=name):
+                    path = root / "vendor/private-fs" / name
+                    original = path.read_bytes()
+                    changed = original.replace(b"\n", b"\r\n")
+                    self.assertNotEqual(changed, original)
+                    path.write_bytes(changed)
+                    with self.assertRaisesRegex(VERIFY.Failure, failure):
+                        VERIFY.verify_private_fs(root)
+                    path.write_bytes(original)
 
     def test_missing_extension_and_unrelated_publisher_changes_are_refused(self):
         with tempfile.TemporaryDirectory() as directory:
