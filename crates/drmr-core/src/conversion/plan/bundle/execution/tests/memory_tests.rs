@@ -35,7 +35,10 @@ fn run_parent(
     entered: &mpsc::SyncSender<()>,
     allow_probe: &Stop,
 ) -> Result<(), ConversionError> {
-    let (retained, output) = observed(command).run(plan, |_| {
+    let Completed {
+        retained,
+        results: output,
+    } = observed(command).run(plan, |_| {
         entered.send(()).unwrap();
         if !allow_probe.wait(Some(Duration::from_secs(5))) {
             return Err(ConversionError("finite-parent-rescue"));

@@ -18,6 +18,36 @@ pub(super) struct Execution<'a> {
     hardware: Option<Hardware>,
 }
 
+pub(super) struct Prepared {
+    pub command: Converter,
+    budget: Budget,
+    workload: Workload,
+    #[cfg(test)]
+    hardware: Option<Hardware>,
+}
+
+impl Prepared {
+    pub fn run<T: Send>(
+        &self,
+        plan: &BundlePlan,
+        unit: impl Fn(usize) -> Result<T, ConversionError> + Sync,
+    ) -> Result<Vec<T>, ConversionError> {
+        let scheduler = super::super::super::execution::Scheduler::new(
+            &self.command.backend,
+            Some(self.budget.workers),
+        );
+        #[cfg(test)]
+        let scheduler = self.hardware.map_or(scheduler, |hardware| {
+            super::super::super::execution::Scheduler::observed(
+                &self.command.backend,
+                Some(self.budget.workers),
+                hardware,
+            )
+        });
+        scheduler.run(plan.outputs.len(), self.workload.tracks, 0, unit)
+    }
+}
+
 impl<'a> Execution<'a> {
     pub fn new(converter: &'a Converter) -> Self {
         Self {
@@ -27,11 +57,11 @@ impl<'a> Execution<'a> {
         }
     }
 
-    pub fn run<T: Send>(
+    pub fn prepare<T>(
         &self,
         plan: &BundlePlan,
-        unit: impl Fn(usize) -> Result<T, ConversionError> + Sync,
-    ) -> Result<(ContextPermit, Vec<T>), ConversionError> {
+        manifests: Option<&super::outputs::ManifestDemands>,
+    ) -> Result<(Prepared, ContextPermit), ConversionError> {
         let command = self.converter;
         command.backend.check_cancelled()?;
         let workload = command
@@ -39,7 +69,14 @@ impl<'a> Execution<'a> {
             .runner
             .registered_workload()
             .unwrap_or_default();
-        let contexts = retained::<T>(plan, workload, command.backend.validation_depth)?;
+        let mut contexts = retained::<T>(plan, workload, command.backend.validation_depth)?;
+        if let Some(manifests) = manifests {
+            contexts.shared = contexts
+                .shared
+                .checked_add(manifests.metadata_bytes())
+                .ok_or(ConversionError("resource-budget"))?;
+            contexts.leaf = contexts.leaf.max(manifests.minimum_bytes());
+        }
         let hardware = Hardware::detect();
         #[cfg(test)]
         let hardware = self.hardware.unwrap_or(hardware);
@@ -47,7 +84,7 @@ impl<'a> Execution<'a> {
             hardware,
             workload,
             command.maximum_workers,
-            command.backend.runner.context_capacity(),
+            command.backend.runner.native_capacity(),
             plan.outputs.len(),
             &contexts,
         )?;
@@ -59,34 +96,51 @@ impl<'a> Execution<'a> {
             )
             .and_then(|bytes| bytes.checked_add(contexts.shared))
             .ok_or(ConversionError("resource-budget"))?;
+        let ceiling = command
+            .backend
+            .runner
+            .native_capacity()
+            .1
+            .checked_sub(bytes)
+            .filter(|ceiling| *ceiling >= contexts.leaf)
+            .ok_or(ConversionError("resource-budget"))?;
+        // Generated manifests have no reliable byte count before packaging. A
+        // parent keeps all of its own remaining headroom for those dynamic claims;
+        // its output/media workers still run in parallel. Known verification
+        // graphs instead declare their actual minimum before context admission.
+        let floor = if manifests.is_none()
+            && plan
+                .outputs
+                .iter()
+                .any(|output| output.format != OutputFormat::Mp4)
+        {
+            ceiling
+        } else {
+            contexts.leaf
+        };
         let retained = command
             .backend
             .runner
-            .retain_context(
-                bytes,
-                contexts.leaf,
-                &command.backend.stop,
-                command.backend.timeout,
-            )
+            .retain_context(bytes, floor, &command.backend.stop, command.backend.timeout)
             .map_err(|error| match error {
                 ReservationError::Cancelled => ConversionError("cancelled"),
                 ReservationError::Insufficient | ReservationError::Timeout => {
                     ConversionError("resource-budget")
                 }
             })?;
-        let scheduler =
-            super::super::super::execution::Scheduler::new(&command.backend, Some(budget.workers));
-        #[cfg(test)]
-        let scheduler = self.hardware.map_or(scheduler, |hardware| {
-            super::super::super::execution::Scheduler::observed(
-                &command.backend,
-                Some(budget.workers),
-                hardware,
-            )
-        });
-        let results = scheduler.run(plan.outputs.len(), workload.tracks, 0, unit)?;
-        // The caller retains this lease through final guards and publication.
-        Ok((retained, results))
+        let mut scoped = command.with_processing_clone(command.processing_mode);
+        scoped.backend.runner =
+            std::sync::Arc::new(command.backend.runner.within_context(bytes, floor));
+        Ok((
+            Prepared {
+                command: scoped,
+                budget,
+                workload,
+                #[cfg(test)]
+                hardware: self.hardware,
+            },
+            retained,
+        ))
     }
 }
 

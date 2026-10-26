@@ -19,6 +19,19 @@ pub(super) const CHANGED: ConversionError = ConversionError("manifest-changed-du
 const FAILED: ConversionError = ConversionError("native-manifest-lint-failed");
 pub(super) const GRAPH: ConversionError = ConversionError("manifest-validation-graph-limit");
 
+fn manifest_format(path: &Path) -> Result<Option<Format>, ConversionError> {
+    use std::io::Read as _;
+    let mut prefix = [0; 64];
+    let count = super::files::regular_input(path)?
+        .read(&mut prefix)
+        .map_err(|_| ConversionError("manifest-unreadable"))?;
+    Ok(match crate::inspection::format_hint(&prefix[..count]) {
+        Some(crate::inspection::InputFormat::Hls) => Some(Format::Hls),
+        Some(crate::inspection::InputFormat::Dash) => Some(Format::Dash),
+        _ => None,
+    })
+}
+
 /// The baseline protocol rules or the additional manifest-level Apple VOD authoring rules.
 /// Choosing an authoring profile does not establish media or device conformance.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
@@ -70,6 +83,29 @@ pub(super) struct CheckedManifest {
     snapshot: snapshot::Snapshot,
 }
 
+/// Byte-bound discovery retained by a bundle before admitting its output checks.
+pub(super) struct ManifestSizing {
+    snapshot: snapshot::Snapshot,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct ManifestDemand {
+    pub minimum_bytes: u64,
+    pub metadata_bytes: u64,
+    seal: [u8; 32],
+    format: Format,
+}
+
+impl ManifestSizing {
+    fn retained_bytes(snapshot: &snapshot::Snapshot) -> u64 {
+        (snapshot.metadata_bytes() + 4 * std::mem::size_of::<Self>()) as u64
+    }
+
+    pub fn check(&self, converter: &Converter) -> Result<(), ConversionError> {
+        self.snapshot.check(converter)
+    }
+}
+
 impl CheckedManifest {
     pub fn require_clean(&self) -> Result<(), ConversionError> {
         if self.report.is_clean_for_scope() {
@@ -84,6 +120,87 @@ impl CheckedManifest {
 }
 
 impl Converter {
+    pub(super) fn manifest_demand(
+        &self,
+        entrypoint: &Path,
+    ) -> Result<Option<ManifestDemand>, ConversionError> {
+        let Some(native_format) = manifest_format(entrypoint)? else {
+            return Ok(None);
+        };
+        let captured = snapshot::Snapshot::capture_metadata(self, entrypoint, native_format)?;
+        let snapshot = &captured.snapshot;
+        let mut options = self.manifest_options(ManifestProfile::Base.select(native_format)?);
+        let metadata = snapshot.metadata_bytes();
+        let sizes: Vec<_> = snapshot
+            .nodes
+            .iter()
+            .map(|node| DocumentSize {
+                id: node.id,
+                format: native_format,
+                byte_count: node.bytes,
+            })
+            .collect();
+        options.workers = NonZeroUsize::new(1);
+        options.limits.max_references = snapshot.reference_bound();
+        options.limits.memory_budget_bytes = options
+            .limits
+            .memory_budget_bytes
+            .checked_sub(metadata)
+            .filter(|&bytes| bytes > 0)
+            .ok_or(ConversionError("resource-budget"))?;
+        let estimate =
+            drmr_manifest::estimate_document_sizes(&sizes, &options).map_err(|_| CONFIG)?;
+        if estimate.admitted_workers == 0 {
+            return Err(ConversionError("resource-budget"));
+        }
+        let minimum_bytes = u64::try_from(estimate.estimated_peak_bytes)
+            .ok()
+            .and_then(|bytes| bytes.checked_add(metadata as u64))
+            .ok_or(ConversionError("resource-budget"))?;
+        Ok(Some(ManifestDemand {
+            minimum_bytes,
+            metadata_bytes: ManifestSizing::retained_bytes(snapshot),
+            seal: snapshot.seal(),
+            format: native_format,
+        }))
+    }
+
+    pub(super) fn bind_manifest_demand(
+        &self,
+        source: &super::FrozenSource,
+        demand: Option<ManifestDemand>,
+    ) -> Result<Option<ManifestSizing>, ConversionError> {
+        let changed = ConversionError("verification-output-changed");
+        let format = manifest_format(source.entrypoint())?;
+        let Some(demand) = demand else {
+            return if format.is_none() {
+                Ok(None)
+            } else {
+                Err(changed)
+            };
+        };
+        if format != Some(demand.format) {
+            return Err(changed);
+        }
+        let captured =
+            snapshot::Snapshot::capture_metadata(self, source.entrypoint(), demand.format)
+                .map_err(|error| {
+                    if error.0 == "cancelled" {
+                        error
+                    } else {
+                        changed
+                    }
+                })?;
+        let metadata = ManifestSizing::retained_bytes(&captured.snapshot);
+        if captured.snapshot.seal() != demand.seal || metadata > demand.metadata_bytes {
+            return Err(changed);
+        }
+        let sizing = ManifestSizing {
+            snapshot: captured.into_snapshot(),
+        };
+        sizing.check(self)?;
+        Ok(Some(sizing))
+    }
     /// Lint the final HLS playlist graph or static DASH manifest without reading media,
     /// keys, licenses, or remote references. Findings contain only rule codes and locations.
     /// Incomplete and truncated reports never establish a clean manifest result.
@@ -261,7 +378,7 @@ impl Converter {
 
     fn manifest_options(&self, profile: Profile) -> Options {
         let (host_cpu, host_memory) = crate::resources::capacity(Hardware::detect(), 1);
-        let (runner_cpu, runner_memory) = self.backend.runner.native_capacity();
+        let (runner_cpu, runner_memory) = self.backend.runner.manifest_capacity();
         let mut options = Options::new(profile);
         options.workers = NonZeroUsize::new(
             host_cpu

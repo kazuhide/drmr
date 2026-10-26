@@ -40,7 +40,7 @@ fn retained_context_leaves_cpu_one_and_reduces_only_the_leaf_memory_ceiling() {
 }
 
 #[test]
-fn impossible_context_and_leaf_claims_refuse_without_waiting_for_the_parent() {
+fn impossible_context_and_claims_refuse_but_temporary_context_occupancy_waits() {
     let limiter = Arc::new(Limiter::new(1, 512));
     let stop = Stop::new();
     assert!(matches!(
@@ -62,10 +62,10 @@ fn impossible_context_and_leaf_claims_refuse_without_waiting_for_the_parent() {
                     memory_bytes: 385
                 },
                 None,
-                Some(Duration::from_secs(1))
+                Some(Duration::from_millis(30))
             )
             .unwrap_err(),
-        ReservationError::Insufficient
+        ReservationError::Timeout
     );
 }
 
@@ -133,4 +133,24 @@ fn concurrent_parents_preserve_the_greatest_leaf_floor() {
     drop(second);
     assert_eq!(limiter.capacity(), (1, 512));
     assert_eq!(lock(&limiter.used).leaf_floor, 0);
+}
+
+#[test]
+fn a_finished_parent_returns_its_leaf_promise_while_another_context_remains() {
+    let limiter = Arc::new(Limiter::new(1, 512));
+    let stop = Stop::new();
+    let large = limiter
+        .retain(128, 256, &stop, Duration::from_secs(1))
+        .unwrap();
+    let small = limiter
+        .retain(128, 128, &stop, Duration::from_secs(1))
+        .unwrap();
+    drop(large);
+    let next = limiter
+        .retain(200, 128, &stop, Duration::from_secs(1))
+        .unwrap();
+    assert_eq!(limiter.capacity(), (1, 184));
+    drop(next);
+    drop(small);
+    assert_eq!(limiter.capacity(), (1, 512));
 }

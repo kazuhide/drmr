@@ -4,7 +4,10 @@ use super::{
     ConversionError, Converter, ManifestValidationTools, OperatorKeys, OutputFormat,
     VerificationSource, child_output, destination, files, output_error, result_entrypoint,
 };
+use crate::conversion::manifest_lint::{ManifestDemand, ManifestSizing};
 use crate::conversion::{ConversionRequest, FrozenSource};
+
+type ManifestEntry = Result<Option<ManifestDemand>, ConversionError>;
 
 pub(super) struct Conversion<'a> {
     pub owner: &'a Converter,
@@ -69,7 +72,7 @@ impl Conversion<'_> {
             .check_original()
             .map_err(super::super::source_error)?;
         let entrypoint = result_entrypoint(stage.path(), output);
-        let bound = owner.capture_source(&entrypoint)?;
+        let bound = command.capture_source(&entrypoint)?;
         let source = VerificationSource {
             input: frozen.entrypoint(),
             input_keys: &keys.input,
@@ -97,12 +100,62 @@ impl Conversion<'_> {
 }
 
 pub(super) struct Verification<'a> {
-    pub owner: &'a Converter,
     pub command: &'a Converter,
     pub plan: &'a BundlePlan,
     pub keys: &'a BundleOperatorKeys,
     pub tools: &'a ManifestValidationTools,
     pub original: &'a FrozenSource,
+    pub manifests: &'a ManifestDemands,
+}
+
+pub(super) struct ManifestDemands {
+    manifests: Vec<ManifestEntry>,
+}
+
+impl ManifestDemands {
+    pub fn capture(command: &Converter, plan: &BundlePlan) -> Result<Self, ConversionError> {
+        let mut manifests = Vec::with_capacity(plan.outputs.len());
+        for output in &plan.outputs {
+            command.backend.check_cancelled()?;
+            // An output's preflight failure belongs to its ordered pipeline.
+            // It must not hide an earlier output's later media failure.
+            manifests.push(command.manifest_demand(&result_entrypoint(&plan.output_root, output)));
+        }
+        Ok(Self { manifests })
+    }
+
+    pub fn minimum_bytes(&self) -> u64 {
+        self.manifests
+            .iter()
+            .filter_map(|manifest| manifest.as_ref().ok())
+            .flatten()
+            .map(|manifest| manifest.minimum_bytes)
+            .max()
+            .unwrap_or(0)
+    }
+
+    pub fn metadata_bytes(&self) -> u64 {
+        self.manifests
+            .iter()
+            .filter_map(|manifest| manifest.as_ref().ok())
+            .flatten()
+            .map(|manifest| manifest.metadata_bytes)
+            .sum::<u64>()
+            + (self.manifests.capacity() * 4 * std::mem::size_of::<ManifestEntry>()) as u64
+    }
+
+    pub fn check_preflight(&self, ordinal: usize) -> Result<(), ConversionError> {
+        self.manifests[ordinal].map(|_| ())
+    }
+
+    pub fn bind(
+        &self,
+        command: &Converter,
+        source: &FrozenSource,
+        ordinal: usize,
+    ) -> Result<Option<ManifestSizing>, ConversionError> {
+        command.bind_manifest_demand(source, self.manifests[ordinal]?)
+    }
 }
 
 impl Verification<'_> {
@@ -111,16 +164,19 @@ impl Verification<'_> {
         ordinal: usize,
     ) -> Result<(FrozenSource, BundleVerificationOutput), ConversionError> {
         let Self {
-            owner,
             command,
             plan,
             keys,
             tools,
             original,
+            manifests,
         } = *self;
         let intent = &plan.outputs[ordinal];
-        owner.backend.check_cancelled()?;
-        let result = owner.capture_source(&result_entrypoint(&plan.output_root, intent))?;
+        command.backend.check_cancelled()?;
+        manifests.check_preflight(ordinal)?;
+        let result = command.capture_source(&result_entrypoint(&plan.output_root, intent))?;
+        result.check_original().map_err(output_error)?;
+        let manifest = manifests.bind(command, &result, ordinal)?;
         let empty = OperatorKeys::default();
         let output_keys = keys.outputs.get(&intent.id).unwrap_or(&empty);
         let child = command.with_processing_clone(plan.processing_mode(&intent.id));
@@ -137,6 +193,9 @@ impl Verification<'_> {
             .check_original()
             .map_err(super::super::source_error)?;
         result.check_original().map_err(output_error)?;
+        if let Some(manifest) = manifest {
+            manifest.check(command)?;
+        }
         Ok((
             result,
             BundleVerificationOutput {

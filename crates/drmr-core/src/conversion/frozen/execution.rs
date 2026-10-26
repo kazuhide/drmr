@@ -10,7 +10,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-const MEMORY_BYTES: u64 = 128 * 1024 * 1024;
+pub(in crate::conversion) const MEMORY_BYTES: u64 = 128 * 1024 * 1024;
 const WAIT_SLICE: Duration = Duration::from_millis(20);
 
 /// The standalone source API remains sequential and owns no runner.

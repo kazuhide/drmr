@@ -250,6 +250,9 @@ impl Converter {
         keys: &BundleOperatorKeys,
         tools: &ManifestValidationTools,
     ) -> Result<BundleConversionReport, ConversionError> {
+        // Declared before every owned source/stage so all cleanup, including
+        // failure and unwind, finishes before its retained bytes are returned.
+        let _retained;
         validate(plan)?;
         for output in &plan.outputs {
             self.check_saved_processing(plan.processing_mode(&output.id))?;
@@ -272,9 +275,12 @@ impl Converter {
         };
         command.validate_bundle_source(plan, source)?;
         let stage = files::UnpublishedStage::new(plan.output_root.parent())?;
+        let (execution, retained) = execution::Execution::new(&command)
+            .prepare::<(frozen::FrozenSource, BundleConversionOutput)>(plan, None)?;
+        _retained = retained;
         let pipeline = outputs::Conversion {
             owner: self,
-            command: &command,
+            command: &execution.command,
             plan,
             keys,
             tools,
@@ -282,13 +288,12 @@ impl Converter {
             frozen: &frozen,
             stage: &stage,
         };
-        let completed =
-            execution::Execution::new(&command).run(plan, |ordinal| pipeline.run(ordinal));
+        let completed = execution.run(plan, |ordinal| pipeline.run(ordinal));
         // The pool has drained here. A redirected parent can make several child
         // paths unreadable; retain the namespace refusal rather than whichever
         // media-read error happens to win the ordered child result.
         destination.check()?;
-        let (_retained, completed) = completed?;
+        let completed = completed?;
         let (completed, outputs): (Vec<_>, Vec<_>) = completed.into_iter().unzip();
         self.backend.check_cancelled()?;
         frozen.check_original().map_err(super::source_error)?;
@@ -356,6 +361,7 @@ impl Converter {
         keys: &BundleOperatorKeys,
         tools: &ManifestValidationTools,
     ) -> Result<BundleVerificationReport, ConversionError> {
+        let _retained;
         validate(plan)?;
         for output in &plan.outputs {
             self.check_saved_processing(plan.processing_mode(&output.id))?;
@@ -385,16 +391,23 @@ impl Converter {
             .with_decode(false)
             .validate_source(source, SourceValidationPurpose::Verification)?;
         command.register_bundle_tracks(qualified.track_protection.len());
+        let manifests = outputs::ManifestDemands::capture(&command, plan)?;
+        let (execution, retained) =
+            execution::Execution::new(&command)
+                .prepare::<(frozen::FrozenSource, BundleVerificationOutput)>(
+                    plan,
+                    Some(&manifests),
+                )?;
+        _retained = retained;
         let pipeline = outputs::Verification {
-            owner: self,
-            command: &command,
+            command: &execution.command,
             plan,
             keys,
             tools,
             original: &original,
+            manifests: &manifests,
         };
-        let (_retained, results) =
-            execution::Execution::new(&command).run(plan, |ordinal| pipeline.run(ordinal))?;
+        let results = execution.run(plan, |ordinal| pipeline.run(ordinal))?;
         let (frozen_results, results): (Vec<_>, Vec<_>) = results.into_iter().unzip();
         original.check_original().map_err(super::source_error)?;
         for result in &frozen_results {

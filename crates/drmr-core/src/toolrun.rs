@@ -489,8 +489,15 @@ pub struct ToolRunner {
     path: Option<OsString>,
     limiter: Arc<Limiter>,
     cpu_scope: Option<Arc<crate::resources::CpuScope>>,
+    memory_scope: Option<MemoryScope>,
     workload: Arc<RwLock<Option<Workload>>>,
     cleanup_owner: Option<Arc<CleanupOwner>>,
+}
+
+#[derive(Clone, Copy)]
+struct MemoryScope {
+    leaf_ceiling: u64,
+    manifest_ceiling: u64,
 }
 
 impl ToolRunner {
@@ -504,6 +511,7 @@ impl ToolRunner {
             path: None,
             limiter: process_limiter(),
             cpu_scope: None,
+            memory_scope: None,
             workload: Arc::new(RwLock::new(None)),
             cleanup_owner: None,
         }
@@ -518,6 +526,7 @@ impl ToolRunner {
             path: self.path.clone(),
             limiter: Arc::clone(&self.limiter),
             cpu_scope: self.cpu_scope.clone(),
+            memory_scope: self.memory_scope,
             workload: Arc::new(RwLock::new(self.registered_workload())),
             cleanup_owner: self.cleanup_owner.clone(),
         }
@@ -537,6 +546,7 @@ impl ToolRunner {
             path: self.path.clone(),
             limiter: Arc::clone(&self.limiter),
             cpu_scope: self.cpu_scope.clone(),
+            memory_scope: self.memory_scope,
             workload: Arc::new(RwLock::new(self.registered_workload())),
             cleanup_owner: Some(Arc::clone(&owner)),
         };
@@ -595,33 +605,51 @@ impl ToolRunner {
             path: self.path.clone(),
             limiter: Arc::clone(&self.limiter),
             cpu_scope: Some(scope),
+            memory_scope: self.memory_scope,
             // A CPU scope belongs to this command, including metadata observed
             // inside it. Independent observed/cleanup forks still take snapshots.
             workload: Arc::clone(&self.workload),
             cleanup_owner: self.cleanup_owner.clone(),
         }
     }
-    /// The enclosing allocation's ceiling for bounded in-process scheduling.
+    /// The enclosing allocation's configured ceiling. Other commands' retained
+    /// state affects queued admission, never permanent claim eligibility.
     pub(crate) fn native_capacity(&self) -> (usize, u64) {
-        let (cpu, memory) = self.limiter.capacity();
-        (
-            self.cpu_scope
-                .as_ref()
-                .map_or(cpu, |scope| cpu.min(scope.limit())),
-            memory,
-        )
-    }
-
-    /// Plan a new coordinator against its configured ceiling, then queue its
-    /// retained reservation. Other commands' live contexts are not a refusal.
-    pub(crate) fn context_capacity(&self) -> (usize, u64) {
         let (cpu, memory) = self.limiter.configured_capacity();
         (
             self.cpu_scope
                 .as_ref()
                 .map_or(cpu, |scope| cpu.min(scope.limit())),
-            memory,
+            self.memory_scope
+                .map_or(memory, |scope| memory.min(scope.leaf_ceiling)),
         )
+    }
+
+    /// Own retained state is permanent for this command's children. Other
+    /// commands keep the full configured ceiling and wait in shared admission.
+    pub(crate) fn within_context(&self, bytes: u64, manifest: u64) -> Self {
+        let mut scoped = self.cohort(self.native_capacity().0);
+        let ceiling = self.native_capacity().1.saturating_sub(bytes);
+        scoped.memory_scope = Some(MemoryScope {
+            leaf_ceiling: ceiling,
+            manifest_ceiling: ceiling.min(manifest),
+        });
+        scoped
+    }
+
+    pub(crate) fn manifest_capacity(&self) -> (usize, u64) {
+        let (cpu, memory) = self.native_capacity();
+        (
+            cpu,
+            self.memory_scope
+                .map_or(memory, |scope| memory.min(scope.manifest_ceiling)),
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn retained_capacity(&self) -> (usize, u64) {
+        let (cpu, memory) = self.limiter.capacity();
+        (self.native_capacity().0.min(cpu), memory)
     }
 
     /// Account for bounded in-process media work in this runner's admission pool.

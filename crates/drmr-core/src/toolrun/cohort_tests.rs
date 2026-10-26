@@ -157,6 +157,101 @@ fn a_shared_admission_timeout_does_not_retain_a_cohort_ticket() {
 }
 
 #[test]
+fn temporary_context_memory_waits_without_holding_shared_cpu_and_cancels_cleanly() {
+    let base = runner();
+    let scoped = base.cohort(1);
+    let stop = Stop::new();
+    let context = base
+        .retain_context(1024, 2048, &Stop::new(), Duration::from_secs(1))
+        .unwrap();
+    assert_eq!(scoped.native_capacity(), (1, 4096));
+    let (entered, observed) = mpsc::sync_channel(1);
+    let (finished, done) = mpsc::sync_channel(1);
+    std::thread::scope(|scope| {
+        let worker = scope.spawn(|| {
+            entered.send(()).unwrap();
+            let result = scoped.native_permit(
+                Claim {
+                    cpu_threads: 1,
+                    memory_bytes: 3073,
+                },
+                &stop,
+                Duration::from_secs(2),
+            );
+            finished.send(result).unwrap();
+        });
+        observed.recv_timeout(Duration::from_secs(1)).unwrap();
+        let premature = done.recv_timeout(Duration::from_millis(30));
+        let independent = base
+            .native_permit(claim(4), &Stop::new(), Duration::from_secs(1))
+            .unwrap();
+        stop.set();
+        worker.join().unwrap();
+        assert!(
+            premature.is_err(),
+            "temporary context occupancy was refused"
+        );
+        assert_eq!(
+            done.recv().unwrap().unwrap_err(),
+            ReservationError::Cancelled
+        );
+        drop(independent);
+    });
+    drop(context);
+    drop(
+        scoped
+            .native_permit(
+                Claim {
+                    cpu_threads: 1,
+                    memory_bytes: 4096,
+                },
+                &Stop::new(),
+                Duration::from_secs(1),
+            )
+            .unwrap(),
+    );
+}
+
+#[test]
+fn a_commands_own_memory_ceiling_refuses_impossible_children_and_survives_every_fork() {
+    let base = runner();
+    let scoped = base.cohort(2).within_context(1024, 2048);
+    let observed = scoped.observed(Arc::new(crate::events::NoSink));
+    let (cleanup, _owner) = scoped.ensuring_cleanup_owner();
+    let nested = scoped.cohort(1);
+    assert_eq!(base.native_capacity(), (4, 4096));
+    for runner in [&scoped, &observed, &cleanup, &nested] {
+        assert_eq!(runner.native_capacity().1, 3072);
+        assert_eq!(runner.manifest_capacity().1, 2048);
+        assert_eq!(
+            runner
+                .native_permit(
+                    Claim {
+                        cpu_threads: 1,
+                        memory_bytes: 3073
+                    },
+                    &Stop::new(),
+                    Duration::from_secs(1),
+                )
+                .unwrap_err(),
+            ReservationError::Insufficient
+        );
+        drop(
+            runner
+                .native_permit(
+                    Claim {
+                        cpu_threads: 1,
+                        memory_bytes: 3072,
+                    },
+                    &Stop::new(),
+                    Duration::from_secs(1),
+                )
+                .unwrap(),
+        );
+    }
+}
+
+#[test]
 fn cohort_workload_updates_reach_the_command_without_joining_independent_forks() {
     let base = runner();
     let initial = Workload {

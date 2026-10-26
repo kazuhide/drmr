@@ -20,6 +20,25 @@ use std::{
     time::Duration,
 };
 mod memory_tests;
+mod queued_jobs_tests;
+
+#[derive(Debug)]
+struct Completed<T> {
+    results: Vec<T>,
+    retained: ContextPermit,
+}
+
+impl Execution<'_> {
+    fn run<T: Send>(
+        &self,
+        plan: &BundlePlan,
+        unit: impl Fn(usize) -> Result<T, ConversionError> + Sync,
+    ) -> Result<Completed<T>, ConversionError> {
+        let (prepared, retained) = self.prepare::<T>(plan, None)?;
+        let results = prepared.run(plan, unit)?;
+        Ok(Completed { results, retained })
+    }
+}
 
 fn converter(cpus: usize, memory: u64, stop: Stop) -> Converter {
     Converter::new(
@@ -80,7 +99,10 @@ fn independent_output_pipelines_overlap_and_return_plan_order() {
     let execution = observed(&converter);
     let (entered, observed) = mpsc::sync_channel(1);
     let observed = Mutex::new(observed);
-    let (_retained, outputs) = execution
+    let Completed {
+        retained: _retained,
+        results: outputs,
+    } = execution
         .run(&plan(2), |ordinal| {
             if ordinal == 0 {
                 observed
@@ -143,11 +165,14 @@ fn two_gib_two_output_budget_keeps_metadata_charges_and_scales_workers() {
 fn capacity_one_linter_uses_leaf_ceiling_and_retained_results_keep_their_lease() {
     let stop = Stop::new();
     let converter = converter(1, 768 * 1024 * 1024, stop.clone());
-    let original = converter.backend.runner.native_capacity();
+    let original = converter.backend.runner.retained_capacity();
     let execution = observed(&converter);
-    let (retained, outputs) = execution
+    let Completed {
+        retained,
+        results: outputs,
+    } = execution
         .run(&plan(2), |ordinal| {
-            let ceiling = converter.backend.runner.native_capacity();
+            let ceiling = converter.backend.runner.retained_capacity();
             assert_eq!(ceiling.0, 1);
             assert!(ceiling.1 < original.1);
             let _linter = converter
@@ -166,16 +191,16 @@ fn capacity_one_linter_uses_leaf_ceiling_and_retained_results_keep_their_lease()
         })
         .unwrap();
     assert_eq!(outputs, vec![0, 1]);
-    assert!(converter.backend.runner.native_capacity().1 < original.1);
+    assert!(converter.backend.runner.retained_capacity().1 < original.1);
     drop(retained);
-    assert_eq!(converter.backend.runner.native_capacity(), original);
+    assert_eq!(converter.backend.runner.retained_capacity(), original);
 }
 
 #[test]
 fn failures_drain_select_plan_order_and_release_context_without_poisoning_stop() {
     let stop = Stop::new();
     let converter = converter(2, 4 * 1024 * 1024 * 1024, stop.clone());
-    let original = converter.backend.runner.native_capacity();
+    let original = converter.backend.runner.retained_capacity();
     let execution = observed(&converter);
     let (failed, observed) = mpsc::sync_channel(1);
     let observed = Mutex::new(observed);
@@ -200,8 +225,11 @@ fn failures_drain_select_plan_order_and_release_context_without_poisoning_stop()
     assert!(drained.load(Ordering::Acquire));
     assert_eq!(started.load(Ordering::Relaxed), 2);
     assert!(!stop.is_set());
-    assert_eq!(converter.backend.runner.native_capacity(), original);
-    let (_retained, outputs) = execution.run(&plan(2), Ok).unwrap();
+    assert_eq!(converter.backend.runner.retained_capacity(), original);
+    let Completed {
+        retained: _retained,
+        results: outputs,
+    } = execution.run(&plan(2), Ok).unwrap();
     assert_eq!(outputs, vec![0, 1]);
 }
 
@@ -209,7 +237,7 @@ fn failures_drain_select_plan_order_and_release_context_without_poisoning_stop()
 fn cancellation_or_insufficient_retained_capacity_never_starts_extra_outputs() {
     let stop = Stop::new();
     let converter = converter(1, 2 * 1024 * 1024 * 1024, stop.clone());
-    let original = converter.backend.runner.native_capacity();
+    let original = converter.backend.runner.retained_capacity();
     let execution = observed(&converter);
     let started = AtomicUsize::new(0);
     let result = execution.run(&plan(3), |ordinal| {
@@ -219,7 +247,7 @@ fn cancellation_or_insufficient_retained_capacity_never_starts_extra_outputs() {
     });
     assert_eq!(result.unwrap_err(), ConversionError("cancelled"));
     assert_eq!(started.load(Ordering::Relaxed), 1);
-    assert_eq!(converter.backend.runner.native_capacity(), original);
+    assert_eq!(converter.backend.runner.retained_capacity(), original);
     let small = self::converter(2, 256 * 1024 * 1024, Stop::new());
     assert_eq!(
         observed(&small)
@@ -237,7 +265,7 @@ fn cancellation_or_insufficient_retained_capacity_never_starts_extra_outputs() {
 fn panic_drains_siblings_before_returning_every_retained_byte() {
     let stop = Stop::new();
     let converter = converter(2, 4 * 1024 * 1024 * 1024, stop.clone());
-    let original = converter.backend.runner.native_capacity();
+    let original = converter.backend.runner.retained_capacity();
     let execution = observed(&converter);
     let (entered, observed) = mpsc::sync_channel(1);
     let observed = Mutex::new(observed);
@@ -261,7 +289,7 @@ fn panic_drains_siblings_before_returning_every_retained_byte() {
     assert!(result.is_err());
     assert!(drained.load(Ordering::Acquire));
     assert!(!stop.is_set());
-    assert_eq!(converter.backend.runner.native_capacity(), original);
+    assert_eq!(converter.backend.runner.retained_capacity(), original);
 }
 
 #[test]
@@ -306,7 +334,10 @@ fn nested_output_pools_share_the_commands_worker_upper_bound() {
         let second = observed.recv_timeout(Duration::from_secs(2));
         let extra = observed.recv_timeout(Duration::from_millis(30));
         release.set();
-        let (_retained, results) = worker.join().unwrap().unwrap();
+        let Completed {
+            retained: _retained,
+            results,
+        } = worker.join().unwrap().unwrap();
         assert!(first.is_ok() && second.is_ok());
         assert!(
             extra.is_err(),

@@ -29,7 +29,98 @@ pub(super) struct Snapshot {
     pub nodes: Vec<Node>,
 }
 
+/// Discovery retains its lease through the caller's scalar sizing/sealing work.
+/// Field order also keeps metadata charged if the caller returns or unwinds.
+pub(super) struct MetadataSnapshot {
+    pub snapshot: Snapshot,
+    _permit: crate::resources::Permit,
+}
+
+impl MetadataSnapshot {
+    /// Bundle callers already charged this retained metadata before discovery.
+    /// Release the discovery leaf before any separately admitted guard check.
+    pub fn into_snapshot(self) -> Snapshot {
+        self.snapshot
+    }
+}
+
 impl Snapshot {
+    pub fn capture_metadata(
+        converter: &Converter,
+        entrypoint: &Path,
+        format: Format,
+    ) -> Result<MetadataSnapshot, ConversionError> {
+        // This is the same finite graph walker and working-set contract used
+        // by FrozenSource capture. It discovers only manifests here; resource
+        // callbacks do not read media, key addresses or remote references.
+        let bytes =
+            usize::try_from(crate::conversion::frozen::DISCOVERY_BYTES).map_err(|_| GRAPH)?;
+        let permit = converter.manifest_permit(1, bytes)?;
+        if std::fs::symlink_metadata(entrypoint)
+            .map_err(|_| INVALID)?
+            .file_type()
+            .is_symlink()
+        {
+            return Err(INVALID);
+        }
+        let entrypoint = entrypoint.canonicalize().map_err(|_| INVALID)?;
+        let root = entrypoint.parent().ok_or(INVALID)?.to_path_buf();
+        if root.as_os_str().len() > 32768 {
+            return Err(GRAPH);
+        }
+        let first = entrypoint
+            .strip_prefix(&root)
+            .map_err(|_| INVALID)?
+            .to_path_buf();
+        let mut result = Self {
+            root: root.clone(),
+            format,
+            nodes: Vec::new(),
+        };
+        let mut seen = BTreeSet::new();
+        let mut total = 0_usize;
+        crate::conversion::frozen::walk_manifests(
+            &root,
+            &first,
+            &converter.backend.stop,
+            |relative| {
+                if !seen.insert(relative.to_path_buf()) {
+                    return Ok(());
+                }
+                let node = result.discover_admitted(converter, relative)?;
+                total = total
+                    .checked_add(node.bytes)
+                    .filter(|bytes| *bytes <= 64 * 1024 * 1024)
+                    .ok_or(GRAPH)?;
+                result.nodes.push(node);
+                Ok(())
+            },
+        )?;
+        result.check_admitted(converter)?;
+        Ok(MetadataSnapshot {
+            snapshot: result,
+            _permit: permit,
+        })
+    }
+
+    pub fn seal(&self) -> [u8; 32] {
+        let mut hash = Sha256::new();
+        hash.update(b"drmr-manifest-sizing-v1\0");
+        hash.update([u8::from(self.format != Format::Hls)]);
+        let nodes: BTreeMap<_, _> = self
+            .nodes
+            .iter()
+            .map(|node| (&node.relative, node))
+            .collect();
+        for (path, node) in nodes {
+            hash.update((path.as_os_str().len() as u64).to_be_bytes());
+            hash.update(path.as_os_str().as_encoded_bytes());
+            hash.update((node.bytes as u64).to_be_bytes());
+            hash.update(node.digest);
+        }
+        hash.finalize().into()
+    }
+
     pub fn capture(
         converter: &Converter,
         entrypoint: &Path,
@@ -120,9 +211,17 @@ impl Snapshot {
     }
 
     fn discover(&self, converter: &Converter, relative: &Path) -> Result<Node, ConversionError> {
-        self.path(relative)?;
         let _permit =
             converter.manifest_permit(1, self.metadata_bytes().saturating_add(BUFFER * 2))?;
+        self.discover_admitted(converter, relative)
+    }
+
+    fn discover_admitted(
+        &self,
+        converter: &Converter,
+        relative: &Path,
+    ) -> Result<Node, ConversionError> {
+        self.path(relative)?;
         let path = self.root.join(relative);
         let mut file = files::regular_input(&path).map_err(|_| INVALID)?;
         let length = file.metadata().map_err(|_| INVALID)?.len();
@@ -156,17 +255,24 @@ impl Snapshot {
     }
 
     pub fn metadata_bytes(&self) -> usize {
-        self.nodes
-            .iter()
-            .map(|node| {
-                node.relative
-                    .as_os_str()
-                    .len()
-                    .saturating_mul(4)
-                    .saturating_add(node.base_uri.len())
-                    .saturating_add(std::mem::size_of::<Node>() * 4)
-            })
-            .sum()
+        // The same bounded root charge applies before and after private copying;
+        // relative manifest paths and content, rather than temporary root names,
+        // determine a bundle's stable sizing promise.
+        (4 * 32768_usize)
+            .saturating_add(std::mem::size_of::<Self>() * 4)
+            .saturating_add(
+                self.nodes
+                    .iter()
+                    .map(|node| {
+                        node.relative
+                            .as_os_str()
+                            .len()
+                            .saturating_mul(4)
+                            .saturating_add(node.base_uri.len())
+                            .saturating_add(std::mem::size_of::<Node>() * 4)
+                    })
+                    .sum::<usize>(),
+            )
     }
 
     fn path(&self, relative: &Path) -> Result<(), ConversionError> {
