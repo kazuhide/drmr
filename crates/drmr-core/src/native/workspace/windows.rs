@@ -119,16 +119,77 @@ fn ace_text(descriptor: &SecurityDescriptor) -> io::Result<(String, String)> {
 }
 
 fn open(path: &Path) -> io::Result<File> {
+    open_with_sharing(path, 1)
+}
+
+fn open_rename_parent(path: &Path) -> io::Result<File> {
+    // NT opens the rename destination relative to this handle with WRITE_DATA.
+    // Share writes while denying deletion; ancestor pins retain the same guard.
+    open_with_sharing(path, 3)
+}
+
+fn open_with_sharing(path: &Path, sharing: u32) -> io::Result<File> {
     // LIST_DIRECTORY (READ_DATA on a file) makes the handle participate in
     // Windows sharing checks. Metadata-only access cannot pin a directory.
     const READ_CONTROL_WRITE_DAC_READ_DATA_ATTRIBUTES: u32 = 0x0006_0081;
     const BACKUP_SEMANTICS_OPEN_REPARSE_POINT: u32 = 0x0220_0000;
     OpenOptions::new()
         .access_mode(READ_CONTROL_WRITE_DAC_READ_DATA_ATTRIBUTES)
-        .share_mode(1)
+        .share_mode(sharing)
         .security_qos_flags(0x0001_0000)
         .custom_flags(BACKUP_SEMANTICS_OPEN_REPARSE_POINT)
         .open(path)
+}
+
+fn at_stage<T>(stage: &'static str, result: io::Result<T>) -> io::Result<T> {
+    #[cfg(test)]
+    if let Err(error) = &result {
+        eprintln!(
+            "media workspace stage={stage}; kind={:?}; os={:?}",
+            error.kind(),
+            error.raw_os_error()
+        );
+    }
+    #[cfg(not(test))]
+    let _ = stage;
+    result
+}
+
+fn private_fs_error(stage: &'static str, error: &private_fs::Error) -> io::Error {
+    #[cfg(test)]
+    {
+        let class = match error {
+            private_fs::Error::UnsupportedPolicy { .. } => "unsupported-policy",
+            private_fs::Error::Removal { .. } => "removal",
+            private_fs::Error::UntrustedCreationParent => "untrusted-creation-parent",
+            private_fs::Error::UnexpectedLinkCount { .. } => "unexpected-link-count",
+            private_fs::Error::AtomicCommit { .. } => "atomic-commit",
+            private_fs::Error::WriterFailed => "writer-failed",
+            private_fs::Error::OwnerMismatch => "owner-mismatch",
+            private_fs::Error::InsecureAcl => "insecure-acl",
+            private_fs::Error::InsecurePermissions { .. } => "insecure-permissions",
+            private_fs::Error::WrongOwner { .. } => "wrong-owner",
+            private_fs::Error::MultipleHardLinks { .. } => "multiple-hard-links",
+            private_fs::Error::PathRedirect => "path-redirect",
+            private_fs::Error::WrongObjectKind => "wrong-object-kind",
+            private_fs::Error::IdentityChanged => "identity-changed",
+            private_fs::Error::UnsupportedFilesystem { .. } => "unsupported-filesystem",
+            private_fs::Error::InvalidRelativePath => "invalid-relative-path",
+            private_fs::Error::Io(_) => "io",
+        };
+        if let private_fs::Error::Io(error) = error {
+            eprintln!(
+                "media workspace stage={stage}; class={class}; kind={:?}; os={:?}",
+                error.kind(),
+                error.raw_os_error()
+            );
+        } else {
+            eprintln!("media workspace stage={stage}; class={class}");
+        }
+    }
+    #[cfg(not(test))]
+    let _ = (stage, error);
+    invalid()
 }
 
 pub(super) fn pin(path: &Path) -> io::Result<crate::native::PrivateDirectoryGuard> {
@@ -170,8 +231,11 @@ fn create_dir_new_with_hooks(
         Err(error) => return Err(error),
     }
     let policy = Policy::new()?;
-    let parent_handle = open(parent)?;
-    policy.verify(&parent_handle, true, true)?;
+    let parent_handle = at_stage("rename-parent-open", open_rename_parent(parent))?;
+    at_stage(
+        "rename-parent-policy",
+        policy.verify(&parent_handle, true, true),
+    )?;
     let descriptor = GetSecurityInfo(
         &parent_handle,
         SeObjectType::SE_FILE_OBJECT,
@@ -184,10 +248,13 @@ fn create_dir_new_with_hooks(
     getrandom::fill(&mut random)
         .map_err(|_| io::Error::other("secure random source unavailable"))?;
     let name = format!(".drmr-media-dir-{}", hex::encode(random));
-    let creator = private_fs::PrivateDir::open(&scratch).map_err(|_| invalid())?;
+    let creator = private_fs::PrivateDir::open(&scratch)
+        .map_err(|error| private_fs_error("scratch-open", &error))?;
     // PrivateDir::create_dir returns the NT creation handle with an owner-only
     // descriptor. Capture its identity before any pathname can be substituted.
-    let created = creator.create_dir(&name).map_err(|_| invalid())?;
+    let created = creator
+        .create_dir(&name)
+        .map_err(|error| private_fs_error("private-child-create", &error))?;
     let mut child = File::from(created.as_handle().try_clone_to_owned()?);
     let identity = crate::native::FileIdentity::read(&child)?;
     let pending = scratch.join(name);
@@ -202,17 +269,17 @@ fn create_dir_new_with_hooks(
         return Err(invalid());
     }
     drop(current);
-    policy.verify(&child, true, true)?;
+    at_stage("created-child-policy", policy.verify(&child, true, true))?;
     before_move(&pending);
     // Rename the created object, even if another entry now has its old name.
     // Keep the validated destination handle and all ancestor pins throughout.
     rename_handle_no_replace(&child, &parent_handle, target_name, true)?;
-    policy.set(&mut child, true)?;
+    at_stage("media-child-policy", policy.set(&mut child, true))?;
     // Creation handles carry DELETE access; close every clone before acquiring
     // the final no-delete pin. A replacement is never adopted or cleaned up.
     drop(created);
     drop(child);
-    let retained = open(&absolute)?;
+    let retained = at_stage("final-child-open", open(&absolute))?;
     if crate::native::FileIdentity::read(&retained)? != identity {
         return Err(invalid());
     }
@@ -248,14 +315,19 @@ pub(super) fn rename_handle_no_replace(
 ) -> io::Result<()> {
     crate::native::validate_windows_relative_path(name.to_str().ok_or_else(invalid)?)?;
     let policy = Policy::new()?;
-    policy.verify(source, directory, false)?;
-    policy.verify(parent, true, true)?;
-    private_fs::rename_by_handle_no_replace(source, parent, name, directory).map_err(|_| invalid())
+    at_stage(
+        "rename-source-policy",
+        policy.verify(source, directory, false),
+    )?;
+    at_stage("rename-parent-policy", policy.verify(parent, true, true))?;
+    private_fs::rename_by_handle_no_replace(source, parent, name, directory)
+        .map_err(|error| private_fs_error("rename-by-handle", &error))
 }
 
 pub(super) fn delete_handle(source: &File, directory: bool) -> io::Result<()> {
     Policy::new()?.verify(source, directory, false)?;
-    private_fs::delete_by_handle(source, directory).map_err(|_| invalid())
+    private_fs::delete_by_handle(source, directory)
+        .map_err(|error| private_fs_error("delete-by-handle", &error))
 }
 
 pub(super) fn create(path: &Path) -> io::Result<()> {
@@ -470,9 +542,47 @@ mod tests {
         replacement_after_media_child_creation_is_never_adopted(root.path(), &parent);
         replacement_after_media_child_validation_is_never_moved(root.path(), &parent);
         native_mutation_names_and_occupied_targets_are_refused(root.path());
+        rename_target_open_requires_write_sharing(root.path(), &parent);
         drop(child);
         drop(held_parent);
         std::fs::rename(&parent, root.path().join("moved")).unwrap();
+    }
+
+    fn rename_target_open_requires_write_sharing(scratch: &Path, parent: &Path) {
+        use std::os::windows::io::AsHandle as _;
+        let creator = private_fs::PrivateDir::open(scratch).unwrap();
+        let source = creator.create_dir("sharing-source").unwrap();
+        let source_file = File::from(source.as_handle().try_clone_to_owned().unwrap());
+        let identity = crate::native::FileIdentity::read(&source_file).unwrap();
+        let destination = open_rename_parent(parent).unwrap();
+        let blocker = open(parent).unwrap();
+        let name = std::ffi::OsStr::new("sharing-destination");
+        let error =
+            private_fs::rename_by_handle_no_replace(&source, &destination, name, true).unwrap_err();
+        let raw_os_error = match &error {
+            private_fs::Error::Io(error) => error.raw_os_error(),
+            _ => None,
+        };
+        drop(private_fs_error("rename-sharing-blocker", &error));
+        assert_eq!(
+            raw_os_error,
+            Some(32),
+            "a read-only sharing guard did not block the NT target open"
+        );
+        assert!(scratch.join("sharing-source").is_dir());
+        assert!(!parent.join(name).exists());
+        drop(blocker);
+        rename_handle_no_replace(&source_file, &destination, name, true).unwrap();
+        assert!(!scratch.join("sharing-source").exists());
+        assert!(parent.join(name).is_dir());
+        assert!(
+            crate::native::FileIdentity::read(&source_file).unwrap() == identity,
+            "the renamed object identity changed"
+        );
+        private_fs::delete_by_handle(&source, true).unwrap();
+        drop(source_file);
+        drop(source);
+        assert!(!parent.join(name).exists());
     }
 
     fn replacement_after_media_child_creation_is_never_adopted(scratch: &Path, parent: &Path) {
