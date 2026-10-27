@@ -7,33 +7,33 @@ fn item(value: serde_json::Value) -> Record {
     record
 }
 
-fn phase(state: &mut State, scope: &str, status: &str, second: u64) {
+pub(super) fn phase(state: &mut State, scope: &str, status: &str, second: u64) {
     let _ = state.observe(
         &item(serde_json::json!({"scope":scope,"state":status})),
         Duration::from_secs(second),
     );
 }
 
-fn plan(state: &mut State, enabled: bool) {
+pub(super) fn plan(state: &mut State, enabled: bool) {
     let _ = state.observe(
         &item(serde_json::json!({"scope":"work-plan","state":"ready","planned_outputs":2,"estimates_enabled":enabled,"source_completed":2})),
         Duration::from_secs(1),
     );
 }
 
-fn output_record(index: usize, scope: &str, state: &str) -> Record {
+pub(super) fn output_record(index: usize, scope: &str, state: &str) -> Record {
     item(
         serde_json::json!({"scope":scope,"state":state,"output_index":index,"output_total":2,"output_format":if index==0 {"dash"} else {"hls"}}),
     )
 }
 
-fn step(state: &mut State, index: usize, value: &str, second: u64) {
+pub(super) fn step(state: &mut State, index: usize, value: &str, second: u64) {
     let mut record = output_record(index, "output-step", "started");
     record.insert("step".into(), value.into());
     let _ = state.observe(&record, Duration::from_secs(second));
 }
 
-fn active(enabled: bool) -> State {
+pub(super) fn active(enabled: bool) -> State {
     let mut state = State::default();
     phase(&mut state, "source", "started", 0);
     plan(&mut state, enabled);
@@ -49,7 +49,14 @@ fn active(enabled: bool) -> State {
     state
 }
 
-fn media(index: usize, task: &str, status: &str, id: u64, done: u64, total: u64) -> Record {
+pub(super) fn media(
+    index: usize,
+    task: &str,
+    status: &str,
+    id: u64,
+    done: u64,
+    total: u64,
+) -> Record {
     let mut record = output_record(index, "unused", "unused");
     record.remove("scope");
     record.extend(item(serde_json::json!({"stage":"media-progress","event":"progress","task":task,"state":status,"batch_id":id,"completed_bytes":done,"total_bytes":total,"estimated":task=="packaging","url":"private-sentinel","argv":["private-sentinel"]})));
@@ -65,7 +72,7 @@ fn media(index: usize, task: &str, status: &str, id: u64, done: u64, total: u64)
     record
 }
 
-fn observe(state: &mut State, record: &Record, second: u64) {
+pub(super) fn observe(state: &mut State, record: &Record, second: u64) {
     let _ = state.observe_nested(record, Duration::from_secs(second));
 }
 
@@ -104,7 +111,7 @@ fn generated_bytes_are_independent_estimated_work_and_never_a_success_claim() {
     assert_eq!(value["estimate"]["basis"], "logical-media-passes");
     assert_eq!(value["estimate"]["estimated"], true);
     assert!(value["estimate"]["percent"].as_u64().unwrap() < 100);
-    assert!(value["estimate"]["remaining_ms"].as_u64().unwrap() > 0);
+    assert!(value["estimate"]["remaining_ms"].is_null());
     assert_eq!(value["checked_outputs"], 0);
     assert!(!value.to_string().contains("private-sentinel"));
 }
@@ -247,7 +254,7 @@ fn disabled_or_aborted_work_never_has_a_deadline_or_false_completion() {
 }
 
 #[test]
-fn eta_requires_observed_work_and_grows_when_that_work_stalls() {
+fn a_partial_unknown_route_keeps_eta_in_learning_when_work_stalls() {
     let mut state = active(true);
     observe(
         &mut state,
@@ -268,10 +275,8 @@ fn eta_requires_observed_work_and_grows_when_that_work_stalls() {
     let early = state.json(Duration::from_secs(15));
     let stalled = state.json(Duration::from_secs(30));
     assert_eq!(early["estimate"]["percent"], stalled["estimate"]["percent"]);
-    assert!(
-        stalled["estimate"]["remaining_ms"].as_u64().unwrap()
-            > early["estimate"]["remaining_ms"].as_u64().unwrap()
-    );
+    assert!(early["estimate"]["remaining_ms"].is_null());
+    assert!(stalled["estimate"]["remaining_ms"].is_null());
     assert!(state.json(Duration::MAX)["estimate"]["remaining_ms"].is_null());
 }
 

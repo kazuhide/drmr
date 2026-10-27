@@ -276,7 +276,7 @@ impl Display {
             {
                 writeln!(out, "  {message}")?;
                 if source_units.is_none() && !snapshot.is_empty() {
-                    writeln!(out, "{snapshot}")?;
+                    writeln!(out, "{}", output_details(pipeline, now, true))?;
                 }
                 self.last_output = now;
                 self.last_printed = snapshot;
@@ -369,7 +369,12 @@ fn pipeline_message(
             .expect("string write");
         }
         write!(message, "elapsed {}", duration(now)).expect("string write");
-        if let Some(units) = source_units {
+        if let Some(media) = pipeline.source_media() {
+            if let Some([done, total]) = media.units {
+                let unit = media.unit.map_or("items", |unit| unit.label());
+                write!(message, "\n  {done}/{total} source {unit} prepared").expect("string write");
+            }
+        } else if let Some(units) = source_units {
             write!(message, "\n  {}", unit_details(units, now, false)).expect("string write");
         }
     } else {
@@ -425,15 +430,24 @@ fn output_details(pipeline: &super::pipeline::State, now: Duration, estimate: bo
         if pipeline.estimates_enabled() {
             write!(result, " | ~{}% work", output.estimated_percent()).expect("string write");
         }
-        if let Some(media) = output.media() {
+        if let Some(media) = output.media().filter(|media| media.active()) {
             use super::pipeline::Task;
             match media.task {
                 Task::Packaging => write!(
                     result,
                     "\n      {} / ~{} generated",
-                    size(media.completed),
-                    size(media.total)
+                    size(media.bytes.expect("packaging byte counters")[0]),
+                    size(media.bytes.expect("packaging byte counters")[1])
                 ),
+                Task::Preparation => {
+                    let [done, total] = media.units.expect("preparation unit counters");
+                    let unit = media.unit.expect("preparation unit label").label();
+                    write!(result, "\n      {done}/{total} {unit} prepared")
+                }
+                Task::Integrity => {
+                    let [done, total] = media.units.expect("integrity file counters");
+                    write!(result, "\n      {done}/{total} files checked")
+                }
                 Task::Comparison => {
                     if let Some([done, total]) = media.units {
                         write!(result, "\n      {done}/{total} tracks compared")
@@ -441,13 +455,24 @@ fn output_details(pipeline: &super::pipeline::State, now: Duration, estimate: bo
                         write!(
                             result,
                             "\n      {} / {} comparison work",
-                            size(media.completed),
-                            size(media.total)
+                            size(media.bytes.expect("comparison byte counters")[0]),
+                            size(media.bytes.expect("comparison byte counters")[1])
                         )
                     }
                 }
             }
             .expect("string write");
+            if estimate
+                && pipeline.estimates_enabled()
+                && let Some(remaining) = output.step_remaining(now)
+            {
+                write!(
+                    result,
+                    "\n      ~{} for current task (est.)",
+                    estimate_duration(remaining)
+                )
+                .expect("string write");
+            }
         } else if let Some(units) = output.units() {
             write!(result, " | {}", unit_details(units, now, estimate)).expect("string write");
         }

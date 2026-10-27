@@ -604,7 +604,15 @@ fn snapshot_representation(
 /// Snapshot only a finite, single-period `SegmentTemplate` presentation inside its local root.
 /// The returned role is observed from staged initialization metadata, never trusted XML.
 pub(crate) fn snapshot_dash(path: &Path, stage: &Path) -> Result<Vec<LocalTrack>, ConversionError> {
-    snapshot(path, stage, None)?
+    snapshot_dash_observed(path, stage, &mut |_, _| Ok(()))
+}
+
+pub(in crate::conversion) fn snapshot_dash_observed(
+    path: &Path,
+    stage: &Path,
+    observed: &mut impl FnMut(usize, usize) -> Result<(), ConversionError>,
+) -> Result<Vec<LocalTrack>, ConversionError> {
+    snapshot_observed(path, stage, None, observed)?
         .representations
         .into_iter()
         .map(|representation| match representation {
@@ -640,6 +648,15 @@ fn snapshot(
     path: &Path,
     stage: &Path,
     stop: Option<&crate::concurrency::Stop>,
+) -> Result<Completed, ConversionError> {
+    snapshot_observed(path, stage, stop, &mut |_, _| Ok(()))
+}
+
+fn snapshot_observed(
+    path: &Path,
+    stage: &Path,
+    stop: Option<&crate::concurrency::Stop>,
+    observed: &mut impl FnMut(usize, usize) -> Result<(), ConversionError>,
 ) -> Result<Completed, ConversionError> {
     checkpoint(stop)?;
     let metadata = fs::symlink_metadata(path).map_err(|_| error("input-unreadable"))?;
@@ -700,6 +717,8 @@ fn snapshot(
     let mut segments = 0;
     let mut windows = window::Presentation::default();
     let mut capture = Capture::new(stop, &mut budget);
+    let total = declared.tracks.len();
+    observed(0, total)?;
     for (index, (representation, declared)) in representations
         .into_iter()
         .zip(&declared.tracks)
@@ -718,7 +737,21 @@ fn snapshot(
         tracks.push(track);
         segments += used;
         windows.include(track_window)?;
+        observed(index + 1, total)?;
     }
+    check_presentation_window(root, period, &windows)?;
+    Ok(Completed {
+        manifest,
+        report: declared,
+        representations: tracks,
+    })
+}
+
+fn check_presentation_window(
+    root: Node<'_, '_>,
+    period: Node<'_, '_>,
+    windows: &window::Presentation,
+) -> Result<(), ConversionError> {
     windows.check_origin()?;
     if root.attribute("mediaPresentationDuration").is_none()
         && period.attribute("duration").is_none()
@@ -734,11 +767,7 @@ fn snapshot(
     {
         windows.check_duration(value)?;
     }
-    Ok(Completed {
-        manifest,
-        report: declared,
-        representations: tracks,
-    })
+    Ok(())
 }
 
 pub(super) fn decimal_duration(value: &str) -> Result<(u64, u64), ConversionError> {
@@ -867,6 +896,17 @@ mod tests {
         }
     }
 
+    fn snapshot_with_numeric_progress(manifest: &Path, stage: &Path) -> Vec<LocalTrack> {
+        let mut observed = Vec::new();
+        let tracks = snapshot_dash_observed(manifest, stage, &mut |done, total| {
+            observed.push((done, total));
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(observed, [(0, 2), (1, 2), (2, 2)]);
+        tracks
+    }
+
     #[test]
     fn generated_static_dash_becomes_two_private_observed_media_tracks() {
         let root = tempfile::tempdir().unwrap();
@@ -905,7 +945,7 @@ mod tests {
             String::from_utf8_lossy(&result.stderr)
         );
         let stage = super::super::files::Stage::new(None).unwrap();
-        let tracks = snapshot_dash(&manifest, stage.path()).unwrap();
+        let tracks = snapshot_with_numeric_progress(&manifest, stage.path());
         let segment_stage = super::super::files::Stage::new(None).unwrap();
         let segmented = snapshot_segments(
             &manifest,

@@ -607,12 +607,21 @@ mod monitoring_tests {
         let held = std::fs::OpenOptions::new()
             .read(true)
             .write(true)
-            .open(&lock)
-            .unwrap();
-        assert!(held.try_lock().is_err());
+            .open(&lock);
+        match held {
+            Ok(file) => assert!(file.try_lock().is_err()),
+            // The Windows fixture denies sharing in addition to holding a lock.
+            Err(error) if cfg!(windows) && error.raw_os_error() == Some(32) => {}
+            Err(error) => panic!("cannot check the retained writer: {error}"),
+        }
         receipt.retry_finish().unwrap();
         assert!(!receipt.has_pending());
-        held.try_lock().unwrap();
+        let released = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&lock)
+            .unwrap();
+        released.try_lock().unwrap();
     }
 }
 

@@ -544,3 +544,67 @@ fn live_fallback_details_are_active_scopes_and_tasks_not_the_last_closed_label()
         .unwrap();
     assert_eq!(state.live_task(), "");
 }
+
+#[test]
+fn typed_source_preparation_and_overlapping_integrity_survive_real_sink_routing() {
+    let (progress, bytes, _) = observed(Duration::from_mins(1));
+    let emit = |value: serde_json::Value| progress.emit(value.as_object().unwrap());
+    for value in [
+        serde_json::json!({"stage":"pipeline","event":"progress","scope":"source","state":"started"}),
+        serde_json::json!({"stage":"pipeline","event":"progress","scope":"work-plan","state":"ready","planned_outputs":1,"estimates_enabled":true,"source_completed":2}),
+    ] {
+        emit(value);
+    }
+    for (state, done) in [("started", 0), ("running", 2), ("finished", 4)] {
+        emit(
+            serde_json::json!({"stage":"media-progress","event":"progress","task":"preparation","subject":"source","purpose":"conversion","unit":"renditions","state":state,"batch_id":1,"completed_units":done,"total_units":4,"estimated":false,"url":"private-sentinel"}),
+        );
+    }
+    for value in [
+        serde_json::json!({"stage":"pipeline","event":"progress","scope":"source","state":"finished"}),
+        serde_json::json!({"stage":"pipeline","event":"progress","scope":"outputs","state":"started"}),
+        serde_json::json!({"stage":"pipeline","event":"progress","scope":"output","state":"started","output_index":0,"output_total":1,"output_format":"dash"}),
+        serde_json::json!({"stage":"pipeline","event":"progress","scope":"output-step","state":"started","step":"conversion","output_index":0,"output_total":1,"output_format":"dash"}),
+    ] {
+        emit(value);
+    }
+    emit(
+        serde_json::json!({"stage":"media-progress","event":"progress","task":"preparation","subject":"output","purpose":"conversion","unit":"tracks","state":"started","batch_id":2,"completed_units":0,"total_units":4,"estimated":false,"output_index":0,"output_total":1,"output_format":"dash"}),
+    );
+    for id in [3, 4] {
+        for (state, done) in [("started", 0), ("finished", 4)] {
+            emit(
+                serde_json::json!({"stage":"media-progress","event":"progress","task":"integrity","unit":"files","state":state,"batch_id":id,"completed_units":done,"total_units":4,"completed_bytes":done*250,"total_bytes":1000,"estimated":false,"path":"private-sentinel"}),
+            );
+        }
+    }
+    emit(
+        serde_json::json!({"stage":"media-progress","event":"progress","task":"preparation","subject":"output","purpose":"conversion","unit":"tracks","state":"running","batch_id":2,"completed_units":2,"total_units":4,"estimated":false,"output_index":0,"output_total":1,"output_format":"dash"}),
+    );
+    progress.mark("verification");
+    let values = records(&bytes);
+    let pipeline = &values.last().unwrap()["pipeline"];
+    assert_eq!(pipeline["source_media"]["state"], "finished");
+    assert_eq!(pipeline["outputs"][0]["media"]["task"], "preparation");
+    assert_eq!(pipeline["outputs"][0]["media"]["completed_units"], 2);
+    assert!(pipeline["outputs"][0]["media"].get("total_bytes").is_none());
+    assert!(pipeline["estimate"]["remaining_ms"].is_null());
+    assert_eq!(pipeline["checked_outputs"], 0);
+    assert_eq!(pipeline["integrity_batches"]["completed_batches"], 2);
+    assert_eq!(pipeline["integrity_batches"]["observed_bytes"], 2000);
+    assert_eq!(
+        pipeline["integrity_batches"]["last_terminal"]["unit"],
+        "files"
+    );
+    assert_eq!(
+        pipeline["integrity_batches"]["active"],
+        serde_json::json!([])
+    );
+    assert_eq!(pipeline["integrity_batches"]["calibrated"], false);
+    progress.fail("cancelled");
+    assert!(
+        !String::from_utf8(bytes.lock().unwrap().clone())
+            .unwrap()
+            .contains("private-sentinel")
+    );
+}

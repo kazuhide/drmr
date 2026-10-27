@@ -46,7 +46,7 @@ fn observed_output_work_and_remaining_time_fit_narrow_terminal_rows() {
     let header = pipeline_message(&pipeline, None, now);
     let detail = output_details(&pipeline, now, true);
     assert!(
-        header.contains("% overall work") && header.contains("remaining (est.)"),
+        header.contains("% overall work") && header.contains("estimating remaining time"),
         "{header}"
     );
     assert!(header.contains("0/2 checked | 2 active"), "{header}");
@@ -136,4 +136,58 @@ fn plain_output_uses_bounded_snapshots_and_failure_has_no_success_history() {
         text.ends_with("Failed convert in 1m 16s | cancelled\n"),
         "{text}"
     );
+}
+
+#[test]
+fn preparation_counts_and_current_task_eta_are_separate_from_an_unknown_global_eta() {
+    let mut pipeline = State::default();
+    for (value, second) in [
+        (serde_json::json!({"scope":"source","state":"started"}), 0),
+        (
+            serde_json::json!({"scope":"work-plan","state":"ready","planned_outputs":1,"estimates_enabled":true,"source_completed":2}),
+            1,
+        ),
+        (serde_json::json!({"scope":"source","state":"finished"}), 10),
+        (serde_json::json!({"scope":"outputs","state":"started"}), 10),
+        (
+            serde_json::json!({"scope":"output","state":"started","output_index":0,"output_total":1,"output_format":"dash"}),
+            10,
+        ),
+        (
+            serde_json::json!({"scope":"output-step","state":"started","step":"conversion","output_index":0,"output_total":1,"output_format":"dash"}),
+            10,
+        ),
+    ] {
+        assert!(pipeline.observe(&record(value), Duration::from_secs(second)));
+    }
+    for (state, done, second) in [("started", 0, 10), ("running", 1, 12), ("running", 2, 14)] {
+        assert!(pipeline.observe_nested(&record(serde_json::json!({"stage":"media-progress","event":"progress","task":"preparation","subject":"output","purpose":"conversion","unit":"tracks","state":state,"batch_id":1,"completed_units":done,"total_units":4,"estimated":false,"output_index":0,"output_total":1,"output_format":"dash","url":"private-sentinel"})),Duration::from_secs(second)));
+    }
+    let header = pipeline_message(&pipeline, None, Duration::from_secs(14));
+    let detail = output_details(&pipeline, Duration::from_secs(14), true);
+    assert!(header.contains("estimating remaining time"), "{header}");
+    assert!(
+        detail.contains("Preparing output tracks") && detail.contains("2/4 tracks prepared"),
+        "{detail}"
+    );
+    assert!(detail.contains("~4s for current task (est.)"), "{detail}");
+    assert!(!detail.contains("MiB") && !detail.contains("private-sentinel"));
+    for line in header.lines().chain(detail.lines()) {
+        assert!(line.chars().count() <= 78, "{line}");
+    }
+}
+
+#[test]
+fn finished_packaging_does_not_leave_a_stale_generated_size_tally() {
+    let mut pipeline = started();
+    assert!(pipeline.observe_nested(&record(serde_json::json!({"stage":"media-progress","event":"progress","task":"packaging","state":"finished","batch_id":1,"completed_bytes":410_000_000,"total_bytes":857_447_176_u64,"estimated":true,"output_index":0,"output_total":2,"output_format":"dash"})),Duration::from_secs(15)));
+    let detail = output_details(&pipeline, Duration::from_secs(16), true);
+    assert!(detail.contains("Checking converted media"), "{detail}");
+    assert!(
+        !detail.contains("generated") && !detail.contains("MiB"),
+        "{detail}"
+    );
+    let value = pipeline.json(Duration::from_secs(16));
+    assert_eq!(value["outputs"][0]["media"]["completed_bytes"], 410_000_000);
+    assert_eq!(value["outputs"][0]["media"]["state"], "finished");
 }

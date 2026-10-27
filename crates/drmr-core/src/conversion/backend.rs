@@ -22,8 +22,13 @@ pub(super) struct Backend {
     pub validation_depth: super::ValidationDepth,
     pub measurement: Option<Arc<super::measurement::Measurements>>,
     pub activity: Option<Arc<dyn crate::events::Sink>>,
+    pub preparation: Option<Arc<super::media_progress::PreparationContext>>,
 }
 impl Backend {
+    pub(super) fn preparation(&self) -> Option<&Arc<super::media_progress::PreparationContext>> {
+        self.activity.as_ref()?;
+        self.preparation.as_ref()
+    }
     pub fn processing(
         &self,
         route: crate::inspection::ProcessingRouteId,
@@ -881,6 +886,7 @@ mod packet_tests {
                 validation_depth: crate::conversion::ValidationDepth::Decoded,
                 measurement: None,
                 activity: None,
+                preparation: None,
             };
             assert_eq!(
                 backend.packets_stream(&input, 0, None).unwrap_err(),

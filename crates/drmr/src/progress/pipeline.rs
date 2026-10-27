@@ -3,6 +3,7 @@ use super::{Analysis, TASKS, display::Units};
 use drmr_core::events::Record;
 use std::time::Duration;
 
+mod integrity;
 mod work;
 pub(super) use work::{Estimate, Media, Task};
 
@@ -219,6 +220,9 @@ impl Output {
     pub(super) fn media(self) -> Option<Media> {
         self.work.media
     }
+    pub(super) fn step_remaining(self, now: Duration) -> Option<Duration> {
+        self.work.step_remaining(now)
+    }
     pub(super) fn estimated_percent(self) -> u32 {
         if self.lifetime.status == Status::Finished {
             100
@@ -260,6 +264,8 @@ pub(super) struct State {
     total: Option<usize>,
     plan: Option<work::Plan>,
     failed: bool,
+    source_work: work::Source,
+    integrity: integrity::Integrity,
 }
 impl State {
     pub(super) fn outputs(&self) -> &[Output] {
@@ -289,13 +295,25 @@ impl State {
         self.failed = true;
     }
 
+    pub(super) fn source_media(&self) -> Option<Media> {
+        self.source_work.media()
+    }
+
+    pub(super) fn observe_media(&mut self, record: &Record, now: Duration) -> bool {
+        if record.get("task").and_then(serde_json::Value::as_str) == Some("integrity") {
+            return self.integrity.observe(record, now);
+        }
+        self.lifetime(Phase::Source).status == Status::Running
+            && self.source_work.observe(record, now)
+    }
+
     pub(super) fn estimate(&self, now: Duration) -> Option<Estimate> {
         let plan = self.plan.filter(|plan| plan.enabled && !self.failed)?;
         let source = self.lifetime(Phase::Source);
         let source_work = if source.status == Status::Finished {
             work::SOURCE
         } else {
-            plan.source_completed
+            (plan.source_completed + 2 * self.source_work.fraction()).min(work::SOURCE - 1)
         };
         let output_work = self
             .outputs()
@@ -308,41 +326,39 @@ impl State {
                 }
             })
             .sum::<u32>();
-        let committed = source.status == Status::Finished
+        let aborted = self.source_work.aborted()
+            || self.integrity.aborted
+            || self
+                .phases
+                .iter()
+                .any(|life| life.status == Status::Aborted)
+            || self
+                .outputs()
+                .iter()
+                .any(|output| output.lifetime.status == Status::Aborted || output.work.aborted);
+        let committed = !aborted
+            && source.status == Status::Finished
             && self.outputs().len() == plan.outputs
             && self.checked_outputs() == plan.outputs
             && self.lifetime(Phase::Outputs).status == Status::Finished
             && self.lifetime(Phase::FinalCheck).status == Status::Finished
             && self.lifetime(Phase::Publication).status == Status::Finished;
-        let completed = source_work + output_work;
-        let total = plan.total();
-        let aborted = self
-            .phases
-            .iter()
-            .any(|life| life.status == Status::Aborted)
-            || self
-                .outputs()
-                .iter()
-                .any(|output| output.lifetime.status == Status::Aborted || output.work.aborted);
-        let committed = committed && !aborted;
-        let observations = self.outputs().iter().fold(0_u64, |count, output| {
-            count.saturating_add(output.work.observations)
-        });
+        let observations = self.outputs().iter().fold(
+            self.source_work
+                .observations()
+                .saturating_add(self.integrity.observations),
+            |count, output| count.saturating_add(output.work.observations()),
+        );
         let remaining = if committed {
             Some(Duration::ZERO)
-        } else if !aborted && observations >= 2 && completed > 0 && completed < total {
-            source.began.and_then(|began| {
-                let elapsed = now.saturating_sub(began);
-                if elapsed < Duration::from_secs(1) {
-                    return None;
-                }
-                let nanos = elapsed
-                    .as_nanos()
-                    .checked_mul(u128::from(total - completed))?
-                    / u128::from(completed);
-                let millis = u64::try_from(nanos.div_ceil(1_000_000)).ok()?;
-                (millis <= 7 * 86400 * 1000).then(|| Duration::from_millis(millis))
+        } else if !aborted
+            && !self.integrity.unknown
+            && observations >= 2
+            && source.elapsed(now).is_some_and(|elapsed| {
+                elapsed >= Duration::from_secs(1) && elapsed <= Duration::from_hours(168)
             })
+        {
+            self.remaining(plan, now)
         } else {
             None
         };
@@ -350,10 +366,42 @@ impl State {
             percent: if committed {
                 100
             } else {
-                (completed * 100 / total).min(99)
+                ((source_work + output_work) * 100 / plan.total()).min(99)
             },
             remaining,
         })
+    }
+
+    fn remaining(&self, plan: work::Plan, now: Duration) -> Option<Duration> {
+        if self.lifetime(Phase::Source).status != Status::Finished
+            || self.outputs().len() != plan.outputs
+            || self
+                .outputs()
+                .iter()
+                .any(|output| output.lifetime.status == Status::Pending)
+        {
+            return None;
+        }
+        let mut rates = self.integrity.rates();
+        for output in self.outputs() {
+            rates.merge(output.work.rates(now));
+        }
+        let mut longest = Duration::ZERO;
+        for output in self
+            .outputs()
+            .iter()
+            .filter(|output| output.lifetime.status == Status::Running)
+        {
+            longest = longest.max(output.work.remaining(&rates, now)?);
+        }
+        let passes = u32::try_from(plan.outputs + 1).ok()?;
+        let mut guards = rates
+            .duration(work::Class::Integrity)?
+            .checked_mul(passes)?;
+        if let Some(began) = self.lifetime(Phase::FinalCheck).began {
+            guards = guards.checked_sub(now.saturating_sub(began))?;
+        }
+        work::rates::bounded(longest.checked_add(guards)?.as_nanos())
     }
 
     pub(super) fn observe(&mut self, record: &Record, now: Duration) -> bool {
@@ -386,7 +434,7 @@ impl State {
                 return false;
             };
             let context = Context::parse(record).expect("validated output context");
-            return self.outputs[context.index].work.step(step);
+            return self.outputs[context.index].work.step(step, now);
         }
         if scope == "output" {
             let Some(context) = Context::parse(record) else {
@@ -445,9 +493,18 @@ impl State {
 
     pub(super) fn observe_nested(&mut self, record: &Record, now: Duration) -> bool {
         if !self.valid_context(record) {
-            return false;
+            return !has_context(record)
+                && record.get("stage").and_then(serde_json::Value::as_str)
+                    == Some("media-progress")
+                && record.get("event").and_then(serde_json::Value::as_str) == Some("progress")
+                && self.observe_media(record, now);
         }
         let context = Context::parse(record).expect("validated context");
+        if record.get("stage").and_then(serde_json::Value::as_str) == Some("media-progress")
+            && record.get("task").and_then(serde_json::Value::as_str) == Some("integrity")
+        {
+            return self.integrity.observe(record, now);
+        }
         let output = &mut self.outputs[context.index];
         let text = |key| record.get(key).and_then(serde_json::Value::as_str);
         match (text("stage"), text("event")) {
@@ -471,18 +528,14 @@ impl State {
                 observe_count(&mut output.tasks[index], text("state"))
             }
             (Some("analysis"), Some("progress")) => {
-                let previous = output.analysis.map_or(0, |analysis| analysis.completed);
                 let Some((analysis, _)) = super::parse_analysis(output.analysis, record, now)
                 else {
                     return false;
                 };
                 output.analysis = Some(analysis);
-                output
-                    .work
-                    .analysis(analysis.completed, analysis.total, previous);
                 true
             }
-            (Some("media-progress"), Some("progress")) => output.work.observe(record),
+            (Some("media-progress"), Some("progress")) => output.work.observe(record, now),
             _ => false,
         }
     }
@@ -519,10 +572,17 @@ impl State {
             }
             if self.estimates_enabled() {
                 value["estimated_work_percent"] = output.estimated_percent().into();
+                if let Some(remaining)=output.step_remaining(now) {value["estimated_task_remaining_ms"]=millis(remaining).into();}
             }
             value
         }).collect();
         let mut value = serde_json::json!({"phase":self.phase.map(Phase::token),"phases":phases,"outputs":outputs,"active_outputs":self.active_outputs(),"checked_outputs":self.checked_outputs()});
+        if let Some(sensor) = self.integrity.json(now) {
+            value["integrity_batches"] = sensor;
+        }
+        if let Some(media) = self.source_media() {
+            value["source_media"] = media.json();
+        }
         if let Some(estimate) = self.estimate(now) {
             value["estimate"] = estimate.json();
         }
@@ -544,6 +604,9 @@ fn millis(value: Duration) -> u64 {
 
 #[cfg(test)]
 mod estimate_tests;
+
+#[cfg(test)]
+mod rate_tests;
 
 #[cfg(test)]
 mod tests {

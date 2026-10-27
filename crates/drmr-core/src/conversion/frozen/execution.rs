@@ -20,6 +20,7 @@ pub(super) struct Execution {
     maximum_workers: Option<usize>,
     timeout: Duration,
     quiet: bool,
+    activity: Option<Arc<dyn crate::events::Sink>>,
     #[cfg(test)]
     hardware: Option<Hardware>,
 }
@@ -53,6 +54,7 @@ impl Execution {
             maximum_workers: converter.maximum_workers,
             timeout: converter.backend.timeout,
             quiet: false,
+            activity: converter.backend.activity.clone(),
             #[cfg(test)]
             hardware: None,
         }
@@ -102,7 +104,19 @@ impl Execution {
     pub fn without_observers(&self) -> Self {
         let mut execution = self.clone();
         execution.quiet = true;
+        execution.activity = None;
         execution
+    }
+
+    pub fn integrity(
+        &self,
+        bytes: u64,
+        files: usize,
+    ) -> Option<super::super::media_progress::Integrity> {
+        if self.quiet {
+            return None;
+        }
+        super::super::media_progress::Integrity::new(self.activity.clone(), bytes, files)
     }
 
     pub fn one<T>(
@@ -193,6 +207,7 @@ impl Execution {
             maximum_workers: workers,
             timeout: Duration::from_secs(5),
             quiet: false,
+            activity: None,
             hardware: Some(Hardware::from_observations(
                 8,
                 Some(8 * 1024 * 1024 * 1024),

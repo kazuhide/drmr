@@ -117,6 +117,54 @@ fn same_evidence(a: &Prepared, b: &Prepared) {
 }
 
 #[test]
+fn native_hls_preparation_reports_renditions_and_requires_the_owning_scope_to_finish() {
+    let owner = crate::native::private_tempdir().unwrap();
+    let path = source(owner.path());
+    let keys = InputKeys::default();
+    let hls_keys = super::super::super::HlsInputKeys::default();
+    let input = VerificationSource {
+        input: &path,
+        input_keys: &keys,
+        hls_keys: &hls_keys,
+    };
+    let sink = Arc::new(crate::events::Collector::default());
+    let runner = ToolRunner::new(Arc::new(Secrets::new()), Arc::new(crate::events::NoSink));
+    let command = Converter::new(Arc::new(runner), "missing-packager", "missing-ffmpeg")
+        .with_ffprobe("missing-ffprobe")
+        .with_activity_sink(sink.clone());
+    let (backend, scope) = super::super::super::media_progress::scoped(
+        &command.backend,
+        super::super::super::media_progress::Subject::Result,
+        super::super::super::media_progress::Purpose::Admission,
+    );
+    let stage = workspace().unwrap();
+    let prepared = prepare(
+        &input,
+        stage.path(),
+        &backend,
+        Some(2),
+        SourceValidationPurpose::Verification,
+        false,
+    )
+    .unwrap();
+    assert_eq!(prepared.len(), 2);
+    let records = sink.records();
+    let progress: Vec<_> = records
+        .iter()
+        .filter(|record| record.get("task").is_some_and(|task| task == "preparation"))
+        .collect();
+    assert_eq!(progress.len(), 3);
+    assert_eq!(progress[0]["completed_units"], 0);
+    assert_eq!(progress[1]["completed_units"], 1);
+    assert_eq!(progress[2]["completed_units"], 2);
+    assert_eq!(progress[2]["total_units"], 2);
+    assert_eq!(progress[2]["unit"], "renditions");
+    assert_eq!(progress[2]["state"], "running");
+    scope.finish();
+    assert_eq!(sink.records().last().unwrap()["state"], "finished");
+}
+
+#[test]
 fn decoded_renditions_keep_original_evidence_and_observations_after_the_scope_exits() {
     let owner = crate::native::private_tempdir().unwrap();
     let input = source(owner.path());

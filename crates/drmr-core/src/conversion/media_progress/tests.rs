@@ -173,6 +173,166 @@ fn sampling_is_bounded_independent_of_how_many_segments_exist() {
     assert!(Sampler::new(Path::new("unused"), 65).is_none());
 }
 
+#[test]
+fn a_sampler_time_budget_stops_before_consuming_its_probe_allowance() {
+    let mut sampler = Sampler::new(Path::new("unused"), 64).unwrap();
+    let mut calls = 0;
+    let mut ticks = 0;
+    sampler.sample_with_clock(
+        |path| {
+            calls += 1;
+            if path.extension().is_none() {
+                Entry::Directory
+            } else {
+                Entry::File(5)
+            }
+        },
+        || {
+            ticks += 1;
+            std::time::Duration::from_millis(ticks * 2)
+        },
+    );
+    assert!(calls > 0 && calls < MAX_PROBES);
+    assert!(calls <= 8);
+}
+
+#[test]
+fn three_probe_allowances_cover_seven_hundred_completed_segments_without_a_walk() {
+    let mut sampler = Sampler::new(Path::new("unused-staging"), 7).unwrap();
+    let mut calls = 0;
+    for _ in 0..3 {
+        sampler.sample_with_clock(
+            |path| {
+                calls += 1;
+                let name = path.file_name().unwrap().to_str().unwrap();
+                if name.starts_with("track-") {
+                    Entry::Directory
+                } else if name == "init.mp4" {
+                    Entry::File(3)
+                } else if name
+                    .strip_prefix("seg_")
+                    .and_then(|value| value.strip_suffix(".m4s"))
+                    .and_then(|value| value.parse::<u32>().ok())
+                    .is_some_and(|number| number <= 100)
+                {
+                    Entry::File(5)
+                } else {
+                    Entry::Missing
+                }
+            },
+            || Duration::ZERO,
+        );
+    }
+    assert!(calls <= 3 * MAX_PROBES);
+    assert_eq!(
+        sampler.tracks.iter().map(Cursor::bytes).sum::<u64>(),
+        7 * (3 + 100 * 5)
+    );
+}
+
+fn observed_backend(sink: Arc<dyn Sink>) -> super::super::backend::Backend {
+    super::super::Converter::new(
+        Arc::new(crate::toolrun::ToolRunner::new(
+            Arc::new(crate::toolrun::Secrets::new()),
+            Arc::new(crate::events::NoSink),
+        )),
+        "private-unused-tool",
+        "private-unused-decoder",
+    )
+    .with_activity_sink(sink)
+    .backend
+}
+
+#[test]
+fn preparation_counts_read_units_but_finishes_only_after_its_outer_native_tail() {
+    let sink = Arc::new(Collector::default());
+    let backend = observed_backend(sink.clone());
+    let (backend, scope) = scoped(&backend, Subject::Result, Purpose::Admission);
+    let context = backend.preparation().unwrap();
+    context.begin(2, Unit::Renditions);
+    context.completed(0);
+    context.completed(1);
+    context.completed(1);
+    let records = sink.records();
+    assert_eq!(records.len(), 3);
+    assert_eq!(records[2]["state"], "running");
+    assert_eq!(records[2]["completed_units"], 2);
+    assert_eq!(records[2]["total_units"], 2);
+    scope.finish();
+    assert_eq!(sink.records().last().unwrap()["state"], "finished");
+    for record in sink.records() {
+        assert_eq!(record["task"], "preparation");
+        assert_eq!(record["subject"], "result");
+        assert_eq!(record["purpose"], "admission");
+        assert_eq!(record["unit"], "renditions");
+        assert_eq!(record["estimated"], false);
+        assert!(!record.contains_key("completed_bytes"));
+        assert!(!record.contains_key("total_bytes"));
+    }
+}
+
+#[test]
+fn quiet_backend_clones_cannot_reuse_the_preparation_observer_authority() {
+    let sink = Arc::new(Collector::default());
+    let backend = observed_backend(sink.clone());
+    let (mut quiet, scope) = scoped(&backend, Subject::Source, Purpose::Conversion);
+    quiet.activity = None;
+    assert!(quiet.preparation().is_none());
+    scope.finish();
+    assert_eq!(sink.records().len(), 0);
+}
+
+#[test]
+fn finished_and_aborted_preparation_scopes_reject_late_retained_contexts() {
+    for finish in [true, false] {
+        let sink = Arc::new(Collector::default());
+        let backend = observed_backend(sink.clone());
+        let (backend, scope) = scoped(&backend, Subject::Output, Purpose::Conversion);
+        let context = backend.preparation().unwrap().clone();
+        context.begin(1, Unit::Tracks);
+        context.completed(0);
+        if finish {
+            scope.finish();
+        } else {
+            drop(scope);
+        }
+        let records = sink.records();
+        assert_eq!(
+            records.last().unwrap()["state"],
+            if finish { "finished" } else { "aborted" }
+        );
+        context.begin(2, Unit::Tracks);
+        context.completed(0);
+        context.completed(1);
+        assert_eq!(sink.records(), records);
+        let text = serde_json::to_string(&records).unwrap();
+        assert!(!text.contains("private-unused-tool") && !text.contains("private-unused-decoder"));
+    }
+}
+
+#[test]
+fn unwound_preparation_scopes_silence_started_and_unstarted_retained_contexts() {
+    for started in [false, true] {
+        let sink = Arc::new(Collector::default());
+        let backend = observed_backend(sink.clone());
+        let (backend, scope) = scoped(&backend, Subject::Result, Purpose::Verification);
+        let context = backend.preparation().unwrap().clone();
+        if started {
+            context.begin(1, Unit::Tracks);
+        }
+        let before = sink.records();
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _scope = scope;
+            panic!("synthetic native preparation unwind");
+        }));
+        assert!(panic.is_err());
+        assert_eq!(sink.records(), before);
+        context.begin(1, Unit::Tracks);
+        context.completed(0);
+        assert_eq!(sink.records(), before);
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn sampling_skips_symlinks_nonregular_files_and_unrelated_names() {

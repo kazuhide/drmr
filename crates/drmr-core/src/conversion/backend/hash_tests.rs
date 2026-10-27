@@ -24,6 +24,7 @@ fn backend(root: &Path, spec: &drmr_test_support::ToolSpec) -> Backend {
         validation_depth: crate::conversion::ValidationDepth::Decoded,
         measurement: None,
         activity: None,
+        preparation: None,
     }
 }
 

@@ -447,6 +447,11 @@ impl Converter {
         } else {
             "master.m3u8"
         });
+        let (backend, preparation) = super::media_progress::scoped(
+            &self.backend,
+            super::media_progress::Subject::Result,
+            super::media_progress::Purpose::Conversion,
+        );
         let actual = prepare_presentation(
             &VerificationSource {
                 input: &manifest,
@@ -454,10 +459,12 @@ impl Converter {
                 hls_keys: &hls_keys,
             },
             &directory,
-            &self.backend,
+            &backend,
             self.maximum_workers,
             SourceValidationPurpose::Verification,
         )?;
+        preparation.finish();
+        self.backend.check_cancelled()?;
         Ok((actual, keys))
     }
     fn normalize_tracks(
@@ -1076,6 +1083,25 @@ impl Converter {
         Ok(qualified)
     }
 
+    pub(in crate::conversion) fn validate_source_preparing(
+        &self,
+        input: VerificationSource<'_>,
+        purpose: SourceValidationPurpose,
+        subject: super::media_progress::Subject,
+    ) -> Result<SourceQualification, ConversionError> {
+        let (backend, preparation) = super::media_progress::scoped(
+            &self.backend,
+            subject,
+            super::media_progress::Purpose::Admission,
+        );
+        let mut command = self.with_processing_clone(self.processing_mode);
+        command.backend = backend;
+        let qualified = command.validate_source(input, purpose)?;
+        preparation.finish();
+        self.backend.check_cancelled()?;
+        Ok(qualified)
+    }
+
     fn validate_source_inner(
         &self,
         input: VerificationSource<'_>,
@@ -1362,13 +1388,20 @@ impl Converter {
         let preparation = self
             .backend
             .scope(super::measurement::Phase::InputPreparation);
+        let (source_backend, source_preparation) = super::media_progress::scoped(
+            &self.backend,
+            super::media_progress::Subject::Source,
+            super::media_progress::Purpose::Verification,
+        );
         let source = prepare_presentation(
             &request.source,
             &source_dir,
-            &self.backend,
+            &source_backend,
             self.maximum_workers,
             SourceValidationPurpose::Verification,
         )?;
+        source_preparation.finish();
+        self.backend.check_cancelled()?;
         let source_format = self.inspect_input(request.source.input)?.format;
         let (format, processing) = match layout_intent {
             Some(intent) => intent,
@@ -1385,13 +1418,20 @@ impl Converter {
             processing,
         )?;
         let checked = self.checked_output_manifest(request.output.input)?;
+        let (result_backend, result_preparation) = super::media_progress::scoped(
+            &self.backend,
+            super::media_progress::Subject::Result,
+            super::media_progress::Purpose::Verification,
+        );
         let result = prepare_presentation(
             &request.output,
             &result_dir,
-            &self.backend,
+            &result_backend,
             self.maximum_workers,
             SourceValidationPurpose::Verification,
         )?;
+        result_preparation.finish();
+        self.backend.check_cancelled()?;
         drop(preparation);
         let mut report = self.compare_presentations(
             source,
@@ -1940,12 +1980,23 @@ fn prepare_presentation_mode(
             if actual.tracks.is_empty() || actual.tracks.len() > 64 {
                 return Err(ConversionError("track-count-limit"));
             }
+            let progress = backend.preparation();
+            if let Some(progress) = progress {
+                progress.begin(actual.tracks.len(), super::media_progress::Unit::Tracks);
+            }
+            backend.check_cancelled()?;
             actual
                 .tracks
                 .iter()
                 .enumerate()
                 .map(|(index, track)| {
-                    prepare_for(&path, index, track.kind, input.input_keys, purpose)
+                    let prepared =
+                        prepare_for(&path, index, track.kind, input.input_keys, purpose)?;
+                    if let Some(progress) = progress {
+                        progress.completed(index);
+                    }
+                    backend.check_cancelled()?;
+                    Ok(prepared)
                 })
                 .collect()
         }
@@ -1953,7 +2004,21 @@ fn prepare_presentation_mode(
             prepare_hls_presentation(input, stage, backend, maximum_workers, purpose, normalize)
         }
         InputFormat::Dash => {
-            let tracks = super::dash::snapshot_dash(input.input, stage)?;
+            let progress = backend.preparation();
+            let tracks = if progress.is_none() {
+                super::dash::snapshot_dash(input.input, stage)?
+            } else {
+                super::dash::snapshot_dash_observed(input.input, stage, &mut |done, total| {
+                    if let Some(progress) = progress {
+                        if done == 0 {
+                            progress.begin(total, super::media_progress::Unit::Renditions);
+                        } else {
+                            progress.completed(done - 1);
+                        }
+                    }
+                    backend.check_cancelled()
+                })?
+            };
             let descriptions = metadata::read_dash(&stage.join("dash-manifest.mpd"))?;
             tracks
                 .iter()
@@ -2539,6 +2604,11 @@ impl Converter {
         let hls_keys = output_hls_keys(request.hls_output_key)?;
         let verification_root = work.join("final-verification");
         super::files::create_dir(&verification_root)?;
+        let (backend, preparation) = super::media_progress::scoped(
+            &self.backend,
+            super::media_progress::Subject::Result,
+            super::media_progress::Purpose::Conversion,
+        );
         let result = prepare_presentation(
             &VerificationSource {
                 input: &candidate.join(if request.format == OutputFormat::Dash {
@@ -2550,10 +2620,12 @@ impl Converter {
                 hls_keys: &hls_keys,
             },
             &verification_root,
-            &self.backend,
+            &backend,
             self.maximum_workers,
             SourceValidationPurpose::Verification,
         )?;
+        preparation.finish();
+        self.backend.check_cancelled()?;
         let verification =
             self.compare_presentations(prepared, result, request.input_keys, &output_keys)?;
         if !verification.passed {

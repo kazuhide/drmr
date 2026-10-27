@@ -766,7 +766,7 @@ impl Sink for Progress {
         if scoped && !state.pipeline.valid_context(record) {
             return;
         }
-        let nested = scoped && state.pipeline.observe_nested(record, now);
+        let nested = state.pipeline.observe_nested(record, now);
         match (record_stage, event) {
             (Some("resources"), _) => {
                 let Some(workers) = record.get("workers").and_then(serde_json::Value::as_u64)
@@ -798,7 +798,7 @@ impl Sink for Progress {
                 }
             }
             (Some("media-progress"), Some("progress")) => {
-                if !scoped || !nested {
+                if !nested {
                     return;
                 }
                 force = record.get("state").and_then(serde_json::Value::as_str) != Some("running");

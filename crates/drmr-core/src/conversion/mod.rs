@@ -152,6 +152,7 @@ impl Converter {
                 validation_depth: ValidationDepth::Native,
                 measurement: None,
                 activity: None,
+                preparation: None,
             },
         }
     }

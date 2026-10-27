@@ -164,6 +164,7 @@ impl BundlePrepared<'_> {
         &self,
         owner: &files::Stage,
         command: &Converter,
+        progress: Option<&super::super::media_progress::PreparationContext>,
     ) -> Result<Vec<PathBuf>, ConversionError> {
         self.work.directory_source()?;
         command.run_tracks(self.clears.len(), |index| {
@@ -174,6 +175,10 @@ impl BundlePrepared<'_> {
                 .ok_or(CHANGED)?;
             let path = owner.path().join(format!("packaging-{index:04}.mp4"));
             receipt.copy(owner, &path, &command.backend)?;
+            if let Some(progress) = progress {
+                progress.completed(index);
+            }
+            command.backend.check_cancelled()?;
             Ok(path)
         })
     }
@@ -191,10 +196,15 @@ impl Converter {
             .scope(super::super::measurement::Phase::InputPreparation);
         let source_dir = work.path().join("source");
         files::create_dir(&source_dir)?;
+        let (backend, preparation) = super::super::media_progress::scoped(
+            &self.backend,
+            super::super::media_progress::Subject::Source,
+            super::super::media_progress::Purpose::Conversion,
+        );
         let prepared = prepare_presentation(
             &source,
             &source_dir,
-            &self.backend,
+            &backend,
             self.maximum_workers,
             SourceValidationPurpose::Conversion,
         )?;
@@ -234,6 +244,8 @@ impl Converter {
         let receipts = self.run_tracks(paths.len(), |index| {
             Receipt::capture(&paths[index], &self.backend)
         })?;
+        preparation.finish();
+        self.backend.check_cancelled()?;
         work.directory_source()?;
         self.backend.checkpoint(&[&work]);
         drop(stage);
@@ -272,7 +284,20 @@ impl Converter {
         let stage = self.output_stage(&destination)?;
         let work = workspace()?;
         // Packaging temporarily rebases audio clocks. Each child owns those writable copies.
-        let clears = shared.copy_clears(&work, self)?;
+        let (backend, preparation) = super::super::media_progress::scoped(
+            &self.backend,
+            super::super::media_progress::Subject::Output,
+            super::super::media_progress::Purpose::Conversion,
+        );
+        let progress = backend.preparation();
+        if let Some(progress) = progress {
+            progress.begin(
+                shared.clears.len(),
+                super::super::media_progress::Unit::Tracks,
+            );
+        }
+        self.backend.check_cancelled()?;
+        let clears = shared.copy_clears(&work, self, progress.map(AsRef::as_ref))?;
         let track_request = TrackConversionRequest {
             tracks: &shared.tracks,
             output: stage.path(),
@@ -291,6 +316,8 @@ impl Converter {
                 .profile_stream_keys(&source.media, source.index, None)?;
             self.validate_signaling_codec(&profile, source.report.tracks[0].kind)?;
         }
+        preparation.finish();
+        self.backend.check_cancelled()?;
         let mut report = command.package_prepared_tracks(
             &track_request,
             Some(&stage),

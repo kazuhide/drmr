@@ -7,12 +7,68 @@ use std::{
         Arc, Mutex, PoisonError,
         atomic::{AtomicU64, Ordering},
     },
+    time::{Duration, Instant},
 };
 
 const MAX_TRACKS: usize = 64;
-const MAX_PROBES: usize = 64;
+const MAX_PROBES: usize = 1024;
+const SAMPLE_BUDGET: Duration = Duration::from_millis(5);
 const MAX_NUMBER: u32 = 100_130;
 static NEXT_BATCH: AtomicU64 = AtomicU64::new(1);
+
+mod preparation;
+pub(super) use preparation::{PreparationContext, scoped};
+mod integrity;
+pub(super) use integrity::Integrity;
+
+#[cfg(test)]
+mod integrity_tests;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Subject {
+    Source,
+    Result,
+    Output,
+}
+impl Subject {
+    fn token(self) -> &'static str {
+        match self {
+            Self::Source => "source",
+            Self::Result => "result",
+            Self::Output => "output",
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Purpose {
+    Conversion,
+    Verification,
+    Admission,
+}
+impl Purpose {
+    fn token(self) -> &'static str {
+        match self {
+            Self::Conversion => "conversion",
+            Self::Verification => "verification",
+            Self::Admission => "admission",
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Unit {
+    Renditions,
+    Tracks,
+}
+impl Unit {
+    fn token(self) -> &'static str {
+        match self {
+            Self::Renditions => "renditions",
+            Self::Tracks => "tracks",
+        }
+    }
+}
 
 fn next_batch() -> Option<u64> {
     let mut id = NEXT_BATCH.load(Ordering::Relaxed);
@@ -29,12 +85,14 @@ fn next_batch() -> Option<u64> {
 enum Task {
     Packaging,
     Comparison,
+    Preparation(Subject, Purpose, Unit),
 }
 impl Task {
     fn token(self) -> &'static str {
         match self {
             Self::Packaging => "packaging",
             Self::Comparison => "comparison",
+            Self::Preparation(..) => "preparation",
         }
     }
 }
@@ -88,6 +146,24 @@ impl Batch {
         Self::new(sink, Task::Comparison, total, weights)
     }
 
+    fn preparation(
+        sink: Arc<dyn Sink>,
+        subject: Subject,
+        purpose: Purpose,
+        unit: Unit,
+        total: usize,
+    ) -> Option<Self> {
+        if total == 0 || total > MAX_TRACKS {
+            return None;
+        }
+        Self::new(
+            Some(sink),
+            Task::Preparation(subject, purpose, unit),
+            u64::try_from(total).ok()?,
+            vec![1; total],
+        )
+    }
+
     pub(super) fn completed(&self, ordinal: usize) {
         let Some(weight) = self.weights.get(ordinal) else {
             return;
@@ -126,23 +202,47 @@ impl Batch {
 
     pub(super) fn finish(&self) {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        if state.terminal || (self.task == Task::Comparison && state.completed != self.total) {
+        if state.terminal || (self.task != Task::Packaging && state.completed != self.total) {
             return;
         }
         state.terminal = true;
         self.emit("finished", &state);
     }
 
+    fn abort(&self) {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        if !state.terminal {
+            state.terminal = true;
+            self.emit("aborted", &state);
+        }
+    }
+
+    fn silence(&self) {
+        self.state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .terminal = true;
+    }
+
     fn emit(&self, status: &'static str, state: &State) {
         let mut record: Record = serde_json::json!({
             "stage":"media-progress", "event":"progress", "task":self.task.token(),
-            "state":status, "batch_id":self.id, "completed_bytes":state.completed,
-            "total_bytes":self.total, "estimated":self.task == Task::Packaging,
+            "state":status, "batch_id":self.id, "estimated":self.task == Task::Packaging,
         })
         .as_object()
         .expect("fixed numeric progress record")
         .clone();
-        if self.task == Task::Comparison {
+        if let Task::Preparation(subject, purpose, unit) = self.task {
+            record.insert("subject".into(), subject.token().into());
+            record.insert("purpose".into(), purpose.token().into());
+            record.insert("unit".into(), unit.token().into());
+        } else {
+            record.insert("completed_bytes".into(), state.completed.into());
+            record.insert("total_bytes".into(), self.total.into());
+        }
+        if self.task == Task::Packaging {
+            record.insert("provisional".into(), true.into());
+        } else {
             record.insert("completed_units".into(), state.pairs.count_ones().into());
             record.insert("total_units".into(), self.weights.len().into());
         }
@@ -152,11 +252,7 @@ impl Batch {
 impl Drop for Batch {
     fn drop(&mut self) {
         if !std::thread::panicking() {
-            let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-            if !state.terminal {
-                state.terminal = true;
-                self.emit("aborted", &state);
-            }
+            self.abort();
         }
     }
 }
@@ -264,9 +360,17 @@ impl Sampler {
         self.sample_with(entry)
     }
     fn sample_with(&mut self, mut probe: impl FnMut(&Path) -> Entry) -> u64 {
+        let began = Instant::now();
+        self.sample_with_clock(&mut probe, || began.elapsed())
+    }
+    fn sample_with_clock(
+        &mut self,
+        mut probe: impl FnMut(&Path) -> Entry,
+        mut elapsed: impl FnMut() -> Duration,
+    ) -> u64 {
         let mut remaining = MAX_PROBES;
         let mut idle = 0;
-        while remaining >= 4 && idle < self.tracks.len() {
+        while remaining >= 4 && idle < self.tracks.len() && elapsed() < SAMPLE_BUDGET {
             let advanced = self.tracks[self.next].advance(&mut |path| {
                 remaining -= 1;
                 probe(path)

@@ -209,27 +209,48 @@ impl OriginalGuard {
         if directory_identity(&self.inventory.root)? != self.root_identity {
             return Err(CHANGED);
         }
+        let progress = self
+            .inventory
+            .files
+            .iter()
+            .try_fold(0_u64, |sum, file| sum.checked_add(file.bytes))
+            .and_then(|bytes| execution.integrity(bytes, self.inventory.files.len()));
         execution.run(&self.stop, self.inventory.files.len(), |index, control| {
             let expected = &self.inventory.files[index];
             let mut file = open_confined(&self.inventory.root, &expected.path)?;
             if FileIdentity::read(&file).map_err(|_| CHANGED)? != self.identities[&expected.path] {
                 return Err(CHANGED);
             }
+            let mut previous = 0;
             let (hash, bytes) = io::transfer(
                 &mut file,
                 &mut std::io::sink(),
                 control,
                 expected.bytes,
-                &mut |_| {},
+                &mut |bytes| {
+                    if let Some(progress) = &progress {
+                        progress.read(bytes - previous);
+                    }
+                    previous = bytes;
+                },
             )?;
             if bytes != expected.bytes || hash != expected.sha256 {
                 return Err(CHANGED);
             }
+            if let Some(progress) = &progress {
+                progress.completed_file();
+            }
+            control.check()?;
             Ok(())
         })?;
         if directory_identity(&self.inventory.root)? != self.root_identity {
             return Err(CHANGED);
         }
+        cancelled(&self.stop)?;
+        if let Some(progress) = &progress {
+            progress.finish();
+        }
+        cancelled(&self.stop)?;
         Ok(())
     }
 }
@@ -457,5 +478,7 @@ use io::copy_object;
 
 #[cfg(test)]
 mod parallel_tests;
+#[cfg(test)]
+mod telemetry_tests;
 #[cfg(test)]
 mod tests;
