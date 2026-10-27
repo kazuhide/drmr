@@ -77,8 +77,8 @@ test('new saved options remain current while real older fixtures retain their or
     outputs: [{ id: 'dash', format: 'dash', target: 'clear', drms: [], conformance: 'none', processing: 'auto', dash_addressing: 'base' }],
     required_depth: 'decoded', processing: [{ id: 'dash', selection: { ...selection, boundaries: 'resegment', segment_duration_ms: 6000 } }],
     output_options: [{ id: 'dash', options: { dash_addressing: 'base' } }] };
-  for (const current of [single, bundle]) {
-    const before = structuredClone(current), single = current.schema_version === 7;
+  for (const current of [single, bundle, { ...single, schema_version: 9 }, { ...bundle, schema_version: 10 }]) {
+    const before = structuredClone(current), single = current.schema_version % 2 === 1;
     assert.equal(planMinimumDepth(current), current.required_depth);
     for (const schema of single ? [1, 3, 5] : [2, 4, 6]) {
       const old = compatibilityPlan(current, schema);

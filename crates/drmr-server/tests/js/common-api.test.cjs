@@ -125,7 +125,7 @@ test('saved segment targets retain positive bounded milliseconds rather than a f
 });
 
 function outputPlan(schema, mode = 'template', format = 'dash') {
-  const single = schema === 7;
+  const single = schema === 7 || schema === 9;
   const selection = { requested: 'auto', resolved: 'stitch', boundaries: format === 'mp4' ? 'not-applicable' : 'resegment', segment_duration_ms: format === 'mp4' ? null : 6000 };
   const output = { id: single ? null : 'output', format, target: 'clear' };
   if (!single) Object.assign(output, { drms: [], conformance: 'none', processing: 'auto', ...(format === 'dash' ? { dash_addressing: mode } : {}) });
@@ -136,11 +136,11 @@ function outputPlan(schema, mode = 'template', format = 'dash') {
 }
 
 test('new saved plans expose closed path-free placement and four DASH addressing forms', async () => {
-  for (const schema of [7, 8]) {
+  for (const schema of [7, 8, 9, 10]) {
     for (const mode of ['template', 'template-timeline', 'list', 'base']) {
       const response = outputPlan(schema, mode);
       assert.equal((await load(() => Promise.resolve(response)).plan('plan_1')).plan_schema_version, schema);
-      const options = schema === 7 ? response.output_options : response.output_options[0].options;
+      const options = schema === 7 || schema === 9 ? response.output_options : response.output_options[0].options;
       options.layout = 'previous-saved';
       await load(() => Promise.resolve(response)).plan('plan_1');
     }
@@ -152,7 +152,7 @@ test('new saved plans expose closed path-free placement and four DASH addressing
 });
 
 test('new saved options reject paths, unknown fields, missing choices and foreign output bindings', async () => {
-  for (const schema of [7, 8]) {
+  for (const schema of [7, 8, 9, 10]) {
     for (const change of [
       options => { options.layout = { mode: 'source', tracks: [{ source: '/private/media' }] }; },
       options => { options.layout = 'normalized'; },
@@ -164,7 +164,7 @@ test('new saved options reject paths, unknown fields, missing choices and foreig
       options => { options.tracks = [{ source: '/private/media' }]; },
     ]) {
       const response = outputPlan(schema);
-      change(schema === 7 ? response.output_options : response.output_options[0].options);
+      change(schema === 7 || schema === 9 ? response.output_options : response.output_options[0].options);
       await assert.rejects(load(() => Promise.resolve(response)).plan('plan_1'), { code: 'request-response-invalid' });
     }
     for (const invalid of [null, {}, [], { layout: 'source' }]) {

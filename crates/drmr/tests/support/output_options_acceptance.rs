@@ -70,7 +70,7 @@ fn current_single_intent_keeps_source_layout_and_each_dash_choice_through_execut
             args.extend(["--dash-addressing", mode]);
         }
         let plan = report(&args);
-        assert_eq!(plan["schema_version"], 7);
+        assert_eq!(plan["schema_version"], 9);
         assert_eq!(plan["output_options"]["layout"]["mode"], "source");
         assert_eq!(
             plan["output_options"]["dash_addressing"],
@@ -129,7 +129,7 @@ fn bundle_dash_overrides_take_precedence_and_never_reach_other_formats() {
         saved.to_str().unwrap(),
         "--json",
     ]);
-    assert_eq!(plan["schema_version"], 8);
+    assert_eq!(plan["schema_version"], 10);
     assert_eq!(
         plan["output_options"][0]["options"]["dash_addressing"],
         "list"

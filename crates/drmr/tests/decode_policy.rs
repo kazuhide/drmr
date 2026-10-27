@@ -231,7 +231,7 @@ fn saved_single_and_named_output_minima_survive_runtime_defaults_and_can_be_stre
                 plan.push("--decode");
             }
             let saved = json_at(root.path(), &plan);
-            assert_eq!(saved["schema_version"], if named { 8 } else { 7 });
+            assert_eq!(saved["schema_version"], if named { 10 } else { 9 });
             assert_eq!(
                 saved["required_depth"],
                 if decoded { "decoded" } else { "native" }

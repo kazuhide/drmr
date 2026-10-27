@@ -228,7 +228,7 @@ async function retainedPlanBytes(planId, expectedBytes) {
       else if (metadata.isFile() && name.endsWith('.json') && metadata.size < 32 * 1024 * 1024) {
         const bytes = await readFile(path);
         let value; try { value = JSON.parse(bytes.toString('utf8')); } catch { continue; }
-        if (value.plan_id === planId && value.source && [1, 2, 3, 4, 5, 6, 7, 8].includes(value.schema_version)) {
+        if (value.plan_id === planId && value.source && [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].includes(value.schema_version)) {
           planMinimumDepth(value);
           expect(bytes.equals(expectedBytes)).toBe(true); matches.push(digest(bytes));
         }
@@ -243,35 +243,35 @@ test.beforeAll(async ({ request }, info) => {
   caps = await api(request, '/api/common/capabilities');
   expect(caps.schema_version).toBe(1); expect(caps.worker_policy).toEqual({ maximum: 4, automatic: true });
   const worker = 'worker-' + info.workerIndex;
-  importedPlans = Object.fromEntries([1, 2, 3, 4, 5, 6, 7, 8].map(version => ['v' + version, 'cli-v' + version + '-' + worker + '.plan.json']));
-  const saved = join(fixture.input, importedPlans.v7), destination = join(fixture.output, 'cli-v7-' + worker + '.mp4');
+  importedPlans = Object.fromEntries([1, 2, 3, 4, 5, 6, 9, 10].map(version => ['v' + version, 'cli-v' + version + '-' + worker + '.plan.json']));
+  const saved = join(fixture.input, importedPlans.v9), destination = join(fixture.output, 'cli-v9-' + worker + '.mp4');
   const planned = await cli(['plan', fixture.progressive, '--to', 'clear', '--format', 'mp4', '--output', destination, '--save', saved, '--json']);
-  expect(planned.report.schema_version).toBe(7); expect(planMinimumDepth(planned.report)).toBe('native');
+  expect(planned.report.schema_version).toBe(9); expect(planMinimumDepth(planned.report)).toBe('native');
   const legacySingle = legacyPlan(planned.report);
   await writeFile(join(fixture.input, importedPlans.v1), JSON.stringify(legacySingle), { flag: 'wx', mode: 0o600 });
   await writeFile(join(fixture.input, importedPlans.v3), JSON.stringify(compatibilityPlan(planned.report, 3)), { flag: 'wx', mode: 0o600 });
   await writeFile(join(fixture.input, importedPlans.v5), JSON.stringify(compatibilityPlan(planned.report, 5)), { flag: 'wx', mode: 0o600 });
   const converted = await cli(['convert', '--decode', '--plan', saved, '--json']); checks(converted.report.verification);
-  const named = join(fixture.root, 'cli-v8-' + worker + '.outputs.json'), savedV6 = join(fixture.input, importedPlans.v8);
+  const named = join(fixture.root, 'cli-v10-' + worker + '.outputs.json'), savedBundle = join(fixture.input, importedPlans.v10);
   await writeFile(named, JSON.stringify({ schema_version: 1, outputs: [
     { id: 'dash', format: 'dash', target: 'cbcs', drms: ['widevine', 'playready'], conformance: 'none' },
     { id: 'hls', format: 'hls', target: 'cbcs', drms: ['fairplay'], conformance: 'none' },
   ] }), { flag: 'wx', mode: 0o600 });
   const keys = join(fixture.config, 'keys.json');
-  const plannedV6 = await cli(['plan', '--decode', join(fixture.source, 'media.m3u8'), '--outputs', named,
-    '--output', join(fixture.output, 'cli-v8-' + worker), '--save', savedV6, '--keys-file', keys, '--json']);
-  expect(plannedV6.report.schema_version).toBe(8); expect(planMinimumDepth(plannedV6.report)).toBe('decoded');
-  const legacyBundle = legacyPlan(plannedV6.report);
+  const plannedBundle = await cli(['plan', '--decode', join(fixture.source, 'media.m3u8'), '--outputs', named,
+    '--output', join(fixture.output, 'cli-v10-' + worker), '--save', savedBundle, '--keys-file', keys, '--json']);
+  expect(plannedBundle.report.schema_version).toBe(10); expect(planMinimumDepth(plannedBundle.report)).toBe('decoded');
+  const legacyBundle = legacyPlan(plannedBundle.report);
   await writeFile(join(fixture.input, importedPlans.v2), JSON.stringify(legacyBundle), { flag: 'wx', mode: 0o600 });
-  await writeFile(join(fixture.input, importedPlans.v4), JSON.stringify(compatibilityPlan(plannedV6.report, 4)), { flag: 'wx', mode: 0o600 });
-  await writeFile(join(fixture.input, importedPlans.v6), JSON.stringify(compatibilityPlan(plannedV6.report, 6)), { flag: 'wx', mode: 0o600 });
-  const convertedV6 = await cli(['convert', '--plan', savedV6, '--keys-file', keys, '--json']);
-  for (const output of convertedV6.report.outputs) checks(output.conversion.verification);
+  await writeFile(join(fixture.input, importedPlans.v4), JSON.stringify(compatibilityPlan(plannedBundle.report, 4)), { flag: 'wx', mode: 0o600 });
+  await writeFile(join(fixture.input, importedPlans.v6), JSON.stringify(compatibilityPlan(plannedBundle.report, 6)), { flag: 'wx', mode: 0o600 });
+  const convertedBundle = await cli(['convert', '--plan', savedBundle, '--keys-file', keys, '--json']);
+  for (const output of convertedBundle.report.outputs) checks(output.conversion.verification);
   await writeFile(join(process.env.PW_REPORT_ROOT, 'cli-import-setup-' + worker + '.json'), JSON.stringify({
     sourceHead: fixture.sourceHead, binarySha256: fixture.binarySha256, planId: planned.report.plan_id,
     plannedSha256: planned.sha256, convertedSha256: converted.sha256, verification: converted.report.verification,
     legacySinglePlanId: legacySingle.plan_id, legacyBundlePlanId: legacyBundle.plan_id,
-    v8: { planId: plannedV6.report.plan_id, plannedSha256: plannedV6.sha256, convertedSha256: convertedV6.sha256 } }, null, 2));
+    v10: { planId: plannedBundle.report.plan_id, plannedSha256: plannedBundle.sha256, convertedSha256: convertedBundle.sha256 } }, null, 2));
 });
 test.beforeEach(async ({ page, context }) => {
   const record = { errors: [], console: [], assets: {}, responseErrors: [], privacyLeaks: [], jobs: [], submitted: [], selections: {} }, pending = [];
@@ -403,7 +403,7 @@ for (const language of ['en', 'ja']) {
     expect(analysis.observedReport.report.input_admitted).toBe(true);
     checks(analysis.observedReport.report.verification, { scope: 'source-admission' });
     await configure(page, 'browser-' + language, encrypted);
-    const planned = await plan(page); expect(planned.value.plan_schema_version).toBe(8);
+    const planned = await plan(page); expect(planned.value.plan_schema_version).toBe(10);
     expect(planned.value.required_depth).toBe('decoded');
     expect(planned.value.outputs).toHaveLength(2);
     expect(planned.value.processing).toHaveLength(2);
@@ -420,7 +420,7 @@ for (const language of ['en', 'ja']) {
     const saved = join(fixture.input, 'browser-' + language + '.plan.json');
     await writeFile(saved, bytes, { flag: 'wx', mode: 0o600 });
     const parsed = JSON.parse(bytes.toString('utf8')); expect(parsed.plan_id).toBe(planned.value.plan_id);
-    expect(parsed.schema_version).toBe(8); expect(planMinimumDepth(parsed)).toBe('decoded');
+    expect(parsed.schema_version).toBe(10); expect(planMinimumDepth(parsed)).toBe('decoded');
     const retainedHashes = await retainedPlanBytes(planned.value.plan_id, bytes);
     const converted = await observedJob(page, '#common-convert', 'convert');
     const verified = await observedJob(page, '#common-verify', 'verify');
@@ -448,7 +448,7 @@ test('CLI version-one saved plan can be independently verified without conversio
   expect(pages.get(page).submitted.map(item => item.operation)).toEqual(['verify']);
 });
 
-for (const version of [3, 5]) test('a native version-' + version + ' saved plan keeps unrequested decoding distinct and permits strengthening', async ({ page }) => {
+for (const version of [3, 5, 9]) test('a native version-' + version + ' saved plan keeps unrequested decoding distinct and permits strengthening', async ({ page }) => {
   await openSession(page, 'saved-plan', importedPlans['v' + version]);
   const native = await observedJob(page, '#common-verify', 'verify');
   checks(native.observedReport.report.verification, { depth: 'native' });
@@ -459,7 +459,7 @@ for (const version of [3, 5]) test('a native version-' + version + ' saved plan 
   expect(pages.get(page).submitted.map(item => item.operation)).toEqual(['verify', 'verify']);
 });
 
-for (const version of [4, 6]) test('a version-' + version + ' saved decode minimum survives an unchecked runtime option', async ({ page }) => {
+for (const version of [4, 6, 10]) test('a version-' + version + ' saved decode minimum survives an unchecked runtime option', async ({ page }) => {
   await openSession(page, 'saved-plan', importedPlans['v' + version]);
   await pick(page, 'keys', 'keys.json');
   const verified = await observedJob(page, '#common-verify', 'verify');

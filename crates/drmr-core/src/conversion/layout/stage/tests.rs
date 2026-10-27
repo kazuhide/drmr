@@ -46,7 +46,8 @@ fn fixture() -> (Stage, SourceLayout) {
         },
     ];
     let layout =
-        SourceLayout::resolve_from_tracks(LayoutMode::Source, OutputFormat::Hls, &tracks).unwrap();
+        SourceLayout::resolve_legacy_from_tracks(LayoutMode::Source, OutputFormat::Hls, &tracks)
+            .unwrap();
     (stage, layout)
 }
 
@@ -58,7 +59,12 @@ fn re_layout_moves_media_without_copying_and_rewrites_actual_hls_paths() {
     )
     .unwrap();
     let output = layout
-        .apply_to_stage(&stage, OutputFormat::Hls, &Stop::new())
+        .apply_to_stage(
+            &stage,
+            OutputFormat::Hls,
+            DashAddressing::Template,
+            &Stop::new(),
+        )
         .unwrap();
     assert_eq!(
         output.tracks[0].media,
@@ -75,7 +81,12 @@ fn re_layout_moves_media_without_copying_and_rewrites_actual_hls_paths() {
     assert!(audio.contains("\nshared/audio/track-0000-seg_1.m4s\n"));
     assert!(audio.contains("skd://operator-value"));
     layout
-        .verify_actual_output(stage.path(), OutputFormat::Hls, &Stop::new())
+        .verify_actual_output(
+            stage.path(),
+            OutputFormat::Hls,
+            DashAddressing::Template,
+            &Stop::new(),
+        )
         .unwrap();
     assert!(!stage.path().join("track-0000").exists());
     assert!(!stage.path().join("track-0001").exists());
@@ -85,7 +96,12 @@ fn re_layout_moves_media_without_copying_and_rewrites_actual_hls_paths() {
 fn final_layout_check_detects_cross_track_media_references() {
     let (stage, layout) = fixture();
     layout
-        .apply_to_stage(&stage, OutputFormat::Hls, &Stop::new())
+        .apply_to_stage(
+            &stage,
+            OutputFormat::Hls,
+            DashAddressing::Template,
+            &Stop::new(),
+        )
         .unwrap();
     let path = stage.path().join("audio.m3u8");
     let text = fs::read_to_string(&path).unwrap().replace(
@@ -95,7 +111,12 @@ fn final_layout_check_detects_cross_track_media_references() {
     fs::write(path, text).unwrap();
     assert!(
         layout
-            .verify_actual_output(stage.path(), OutputFormat::Hls, &Stop::new())
+            .verify_actual_output(
+                stage.path(),
+                OutputFormat::Hls,
+                DashAddressing::Template,
+                &Stop::new()
+            )
             .is_err()
     );
 }
@@ -107,7 +128,12 @@ fn shared_parent_keeps_tracks_separate_with_explicit_media_lists() {
         placement.media_directory = "shared".into();
     }
     let output = layout
-        .apply_to_stage(&stage, OutputFormat::Hls, &Stop::new())
+        .apply_to_stage(
+            &stage,
+            OutputFormat::Hls,
+            DashAddressing::Template,
+            &Stop::new(),
+        )
         .unwrap();
     assert_eq!(
         output.tracks[0].media,
@@ -131,7 +157,12 @@ fn source_paths_may_overlap_the_original_generated_directories() {
     layout.tracks[1].playlist = "track-0000/media.m3u8".into();
     layout.tracks[1].media_directory = "track-0000/video".into();
     let output = layout
-        .apply_to_stage(&stage, OutputFormat::Hls, &Stop::new())
+        .apply_to_stage(
+            &stage,
+            OutputFormat::Hls,
+            DashAddressing::Template,
+            &Stop::new(),
+        )
         .unwrap();
     assert_eq!(
         fs::read(stage.path().join(&output.tracks[0].media[0])).unwrap(),
@@ -149,7 +180,7 @@ fn cancellation_precedes_any_output_move() {
     let stop = Stop::new();
     stop.set();
     assert!(matches!(
-        layout.apply_to_stage(&stage, OutputFormat::Hls, &stop),
+        layout.apply_to_stage(&stage, OutputFormat::Hls, DashAddressing::Template, &stop),
         Err(ConversionError("cancelled"))
     ));
     assert!(stage.path().join("track-0000/seg_1.m4s").is_file());
@@ -186,7 +217,7 @@ fn segment_transport_keeps_a_multiplexed_rendition_in_one_physical_location() {
             media: vec!["media/segment.ts".into()],
         },
     ];
-    let layout = SourceLayout::resolve_for_processing(
+    let layout = SourceLayout::resolve_legacy_for_processing(
         LayoutMode::Source,
         OutputFormat::HlsTs,
         crate::conversion::ProcessingMode::Segments,
@@ -194,7 +225,12 @@ fn segment_transport_keeps_a_multiplexed_rendition_in_one_physical_location() {
     )
     .unwrap();
     let output = layout
-        .apply_to_stage(&stage, OutputFormat::HlsTs, &Stop::new())
+        .apply_to_stage(
+            &stage,
+            OutputFormat::HlsTs,
+            DashAddressing::Template,
+            &Stop::new(),
+        )
         .unwrap();
     assert_eq!(output.tracks.len(), 2);
     assert_eq!(output.tracks[0].media, output.tracks[1].media);
@@ -205,7 +241,12 @@ fn segment_transport_keeps_a_multiplexed_rendition_in_one_physical_location() {
         b"unchanged multiplexed resource"
     );
     layout
-        .verify_actual_output(stage.path(), OutputFormat::HlsTs, &Stop::new())
+        .verify_actual_output(
+            stage.path(),
+            OutputFormat::HlsTs,
+            DashAddressing::Template,
+            &Stop::new(),
+        )
         .unwrap();
 }
 
@@ -224,17 +265,27 @@ fn dash_references_are_rewritten_before_the_relocated_stage_is_returned() {
         media: vec!["video/1080p high/source.ts".into()],
     };
     let layout =
-        SourceLayout::resolve_from_tracks(LayoutMode::Source, OutputFormat::Dash, &[track])
+        SourceLayout::resolve_legacy_from_tracks(LayoutMode::Source, OutputFormat::Dash, &[track])
             .unwrap();
     layout
-        .apply_to_stage(&stage, OutputFormat::Dash, &Stop::new())
+        .apply_to_stage(
+            &stage,
+            OutputFormat::Dash,
+            DashAddressing::Template,
+            &Stop::new(),
+        )
         .unwrap();
     let manifest = fs::read_to_string(stage.path().join("manifest.mpd")).unwrap();
     assert!(manifest.contains("initialization=\"video/1080p%20high/track-0000-init.mp4\""));
     assert!(manifest.contains("media=\"video/1080p%20high/track-0000-seg_$Number$.m4s\""));
     assert!(!manifest.contains("track-0000/"));
     layout
-        .verify_actual_output(stage.path(), OutputFormat::Dash, &Stop::new())
+        .verify_actual_output(
+            stage.path(),
+            OutputFormat::Dash,
+            DashAddressing::Template,
+            &Stop::new(),
+        )
         .unwrap();
 }
 
@@ -300,7 +351,12 @@ fn an_unregistered_symlink_target_is_rejected_before_moving_media() {
     std::os::unix::fs::symlink(external.path(), stage.path().join("shared")).unwrap();
     assert!(
         layout
-            .apply_to_stage(&stage, OutputFormat::Hls, &Stop::new())
+            .apply_to_stage(
+                &stage,
+                OutputFormat::Hls,
+                DashAddressing::Template,
+                &Stop::new()
+            )
             .is_err()
     );
     assert_eq!(

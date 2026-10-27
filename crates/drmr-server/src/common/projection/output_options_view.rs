@@ -14,9 +14,29 @@ fn view(options: &OutputOptions, format: OutputFormat) -> Value {
         "dash_addressing":options.dash_addressing})
 }
 
-pub(super) fn single(value: &Value, format: OutputFormat, processing: &Value) -> Result<Value> {
+fn filename_schema(options: &OutputOptions, current: bool) -> Result<()> {
+    if let Some(layout) = &options.layout {
+        let supported = if current {
+            layout.has_source_names()
+        } else {
+            layout.has_legacy_names()
+        };
+        if !supported {
+            return Err(bad());
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn single(
+    value: &Value,
+    format: OutputFormat,
+    processing: &Value,
+    current: bool,
+) -> Result<Value> {
     let options: OutputOptions = typed(value)?;
     let processing: ProcessingSelection = typed(processing)?;
+    filename_schema(&options, current)?;
     options
         .validate(format, processing.resolved)
         .map_err(|_| bad())?;
@@ -27,6 +47,7 @@ pub(super) fn bundle(
     value: &Value,
     outputs: &[BundleOutputIntent],
     processing: &Value,
+    current: bool,
 ) -> Result<Value> {
     let settings: Vec<OutputSettings> = typed(value)?;
     let processing: Vec<OutputProcessing> = typed(processing)?;
@@ -38,6 +59,7 @@ pub(super) fn bundle(
         .zip(outputs)
         .zip(processing)
         .map(|((setting, output), choice)| {
+            filename_schema(&setting.options, current)?;
             if setting.id != output.id
                 || choice.id != output.id
                 || output

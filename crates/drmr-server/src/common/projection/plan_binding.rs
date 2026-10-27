@@ -29,7 +29,7 @@ pub(in crate::common) fn bind_plan(
             .ok_or_else(bad);
     }
     let outputs = plan.outputs.as_array().ok_or_else(bad)?;
-    let bundle = matches!(plan.schema, 2 | 4 | 6 | 8);
+    let bundle = matches!(plan.schema, 2 | 4 | 6 | 8 | 10);
     let rows = if bundle {
         let rows = report["outputs"].as_array().ok_or_else(bad)?;
         if rows.len() != outputs.len()
@@ -92,15 +92,15 @@ fn bind_depth(proof: &Value, minimum: ValidationDepth) -> Result<()> {
 
 fn saved_selections(plan: &Plan, count: usize) -> Result<Vec<Option<ProcessingSelection>>> {
     match plan.schema {
-        5 | 7 => Ok(vec![Some(typed(
+        5 | 7 | 9 => Ok(vec![Some(typed(
             plan.processing.as_ref().ok_or_else(bad)?,
         )?)]),
-        6 | 8 => Ok(
-            typed::<Vec<OutputProcessing>>(plan.processing.as_ref().ok_or_else(bad)?)?
-                .into_iter()
-                .map(|choice| Some(choice.selection))
-                .collect(),
-        ),
+        6 | 8 | 10 => Ok(typed::<Vec<OutputProcessing>>(
+            plan.processing.as_ref().ok_or_else(bad)?,
+        )?
+        .into_iter()
+        .map(|choice| Some(choice.selection))
+        .collect()),
         1..=4 => Ok(vec![None; count]),
         _ => Err(bad()),
     }

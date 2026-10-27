@@ -387,7 +387,7 @@ pub(in crate::conversion) fn rewrite_output(
     for rep in reps {
         super::checkpoint(Some(stop))?;
         let resolved = addressing::resolve(rep, remaining)?;
-        if resolved.kind != Kind::Template
+        if !matches!(resolved.kind, Kind::Template | Kind::List)
             || resolved.nominal.is_some()
             || resolved.index.is_some()
             || resolved.segments.is_empty()

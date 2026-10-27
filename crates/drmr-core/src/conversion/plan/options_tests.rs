@@ -7,24 +7,99 @@ use crate::conversion::{
 use crate::inspection::TrackKind;
 
 pub(super) fn options(source: &SourceInventory) -> OutputOptions {
+    selected_options(source, false)
+}
+
+pub(super) fn current_options(source: &SourceInventory) -> OutputOptions {
+    selected_options(source, true)
+}
+
+fn selected_options(source: &SourceInventory, current: bool) -> OutputOptions {
+    let tracks = [SourceTrack {
+        source: source.entrypoint.file_name().unwrap().into(),
+        selector: 0,
+        kind: TrackKind::Video,
+        playlist: None,
+        media: vec![source.entrypoint.file_name().unwrap().into()],
+    }];
+    let layout = if current {
+        SourceLayout::resolve_for_processing(
+            LayoutMode::Source,
+            OutputFormat::Dash,
+            ProcessingMode::Stitch,
+            &tracks,
+        )
+    } else {
+        SourceLayout::resolve_legacy_for_processing(
+            LayoutMode::Source,
+            OutputFormat::Dash,
+            ProcessingMode::Stitch,
+            &tracks,
+        )
+    }
+    .unwrap();
     OutputOptions {
-        layout: Some(
-            SourceLayout::resolve_for_processing(
-                LayoutMode::Source,
-                OutputFormat::Dash,
-                ProcessingMode::Stitch,
-                &[SourceTrack {
-                    source: source.entrypoint.file_name().unwrap().into(),
-                    selector: 0,
-                    kind: TrackKind::Video,
-                    playlist: None,
-                    media: vec![source.entrypoint.file_name().unwrap().into()],
-                }],
-            )
-            .unwrap(),
-        ),
+        layout: Some(layout),
         dash_addressing: Some(crate::conversion::dash_addressing::DashAddressing::TemplateDuration),
     }
+}
+
+#[test]
+fn filename_intent_is_required_only_by_version_nine_and_bound_to_its_identity() {
+    let root = crate::native::private_tempdir().unwrap();
+    for schema in [7, 9] {
+        for current in [false, true] {
+            let mut plan: ExecutionPlan = serde_json::from_value(value(root.path())).unwrap();
+            plan.schema_version = schema;
+            plan.output_options = Some(selected_options(&plan.source, current));
+            plan.plan_id = identity(&plan).unwrap();
+            if current != (schema == 9) {
+                assert_eq!(validate(&plan).unwrap_err(), INVALID);
+                continue;
+            }
+            validate(&plan).unwrap();
+            let bytes = serde_json::to_vec(&plan).unwrap();
+            assert_eq!(
+                bytes
+                    .windows(b"media_names".len())
+                    .any(|w| w == b"media_names"),
+                current
+            );
+            let reopened: ExecutionPlan = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(serde_json::to_vec(&reopened).unwrap(), bytes);
+            let file = root.path().join(format!("schema-{schema}.json"));
+            write_new(&file, &plan).unwrap();
+            assert_eq!(read_saved(&file).unwrap(), SavedPlan::Single(plan));
+        }
+    }
+}
+
+#[test]
+fn version_nine_keeps_required_fields_strict_and_checks_filename_edits() {
+    let root = crate::native::private_tempdir().unwrap();
+    let mut plan: ExecutionPlan = serde_json::from_value(value(root.path())).unwrap();
+    plan.schema_version = 9;
+    plan.output_options = Some(current_options(&plan.source));
+    plan.plan_id = identity(&plan).unwrap();
+    validate(&plan).unwrap();
+    for field in ["required_depth", "processing", "output_options"] {
+        for replacement in [None, Some(serde_json::Value::Null)] {
+            let mut edited = serde_json::to_value(&plan).unwrap();
+            if let Some(value) = replacement {
+                edited[field] = value;
+            } else {
+                edited.as_object_mut().unwrap().remove(field);
+            }
+            let parsed = serde_json::from_value::<ExecutionPlan>(edited);
+            assert!(parsed.is_err() || validate(&parsed.unwrap()).is_err());
+        }
+    }
+    let mut edited = serde_json::to_value(&plan).unwrap();
+    edited["output_options"]["layout"]["tracks"][0]["media_names"]["initialization"] =
+        serde_json::json!("different.mp4");
+    let edited: ExecutionPlan = serde_json::from_value(edited).unwrap();
+    assert_eq!(validate(&edited).unwrap_err(), INVALID);
+    assert!(!plan.intent.output.exists());
 }
 
 fn value(root: &Path) -> serde_json::Value {
@@ -196,7 +271,7 @@ fn native_source_rejects_a_rehashed_output_map_before_packaging() {
     let output = root.path().join("result");
     let (command, events) = native_command();
     let mut plan = native_plan(&command, &input, &output);
-    assert_eq!(plan.schema_version, 7);
+    assert_eq!(plan.schema_version, 9);
     assert_eq!(plan.minimum_depth(), ValidationDepth::Native);
     let map = plan
         .output_options
@@ -205,8 +280,11 @@ fn native_source_rejects_a_rehashed_output_map_before_packaging() {
         .layout
         .as_mut()
         .unwrap();
-    map.tracks[0].media_directory = "different-directory".into();
-    map.tracks[0].playlist = "different-directory/playlist.m3u8".into();
+    for track in &mut map.tracks {
+        let playlist = track.playlist.file_name().unwrap().to_os_string();
+        track.media_directory = "different-directory".into();
+        track.playlist = track.media_directory.join(playlist);
+    }
     plan.plan_id = identity(&plan).unwrap();
     validate(&plan).unwrap();
     assert_eq!(

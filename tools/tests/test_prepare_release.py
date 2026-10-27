@@ -281,13 +281,13 @@ class ReleasePacket(unittest.TestCase):
         archive = json.loads(entries["cli-archive-verification.json"])
         media = json.loads(entries["cli-media-qualification.json"])
         for field in ("media", "aac_44100"):
-            for version in (1, 3, 5, 7):
+            for version in (1, 3, 5, 7, 9):
                 altered = copy.deepcopy(media)
                 altered[field]["plan_schema_version"] = version
                 with self.subTest(route=field, version=version):
                     PREPARE.reports(archive, altered, self.head, self.tree,
                                     "x86_64-unknown-linux-gnu", "1.0.0", archive["archive_sha256"])
-            for version in (0, 2, 4, 6, 8, 9, True, 7.0):
+            for version in (0, 2, 4, 6, 8, 10, 11, True, 9.0):
                 altered = copy.deepcopy(media)
                 altered[field]["plan_schema_version"] = version
                 code = "media-proof-invalid" if field == "media" else "aac44100-proof-invalid"

@@ -65,6 +65,54 @@ class EvidenceTests(unittest.TestCase):
             with self.subTest(source_format=source_format):
                 self.assertTrue(module.plan_depth(self.schema_seven_plan(source_format)))
 
+    def schema_nine_plan(self, source_format):
+        planned = self.schema_seven_plan(source_format)
+        planned["schema_version"] = 9
+        track = planned["output_options"]["layout"]["tracks"][0]
+        if source_format == "dash":
+            names = [f"seg_{index}.m4s" for index in range(1, 6)]
+            prefix, start, width = "seg_", 1, 0
+        else:
+            names = [f"segment-{index:03d}.ts" for index in range(6)]
+            prefix, start, width = "segment-", 0, 3
+        track["generated_stem"] = ""
+        track["media_names"] = {"initialization": "init.mp4", "segments": {
+            "kind": "sequence", "prefix": prefix, "suffix": "", "start": start,
+            "width": width, "count": len(names)}}
+        return planned, names
+
+    def test_schema_nine_binds_original_resource_names_without_accepting_legacy_names(self):
+        for source_format in ("dash", "hls-ts"):
+            planned, names = self.schema_nine_plan(source_format)
+            self.assertTrue(module.plan_depth(planned, names))
+            old = copy.deepcopy(planned)
+            old["schema_version"] = 7
+            self.assertFalse(module.plan_depth(old, names))
+            if source_format == "hls-ts":
+                self.assertFalse(module.plan_depth(planned))
+            for changed_names in (names[::-1], names[:-1], ["other.ts"]):
+                self.assertFalse(module.plan_depth(planned, changed_names))
+
+    def test_schema_nine_refuses_changed_or_ambiguous_filename_intent(self):
+        changes = [
+            lambda p: p.update(schema_version=11),
+            lambda p: p["output_options"]["layout"]["tracks"][0].update(generated_stem="track-0000-"),
+            lambda p: p["output_options"]["layout"]["tracks"][0].pop("media_names"),
+            lambda p: p["output_options"]["layout"]["tracks"][0].update(media_names=None),
+            lambda p: p["output_options"]["layout"]["tracks"][0]["media_names"].update(initialization="other.mp4"),
+            lambda p: p["output_options"]["layout"]["tracks"][0]["media_names"].update(unrecognized=True),
+        ]
+        for field, value in (("kind", "generated"), ("prefix", "other_"), ("suffix", ".m4s"),
+                             ("start", True), ("width", 3.0), ("count", False), ("unrecognized", 1)):
+            changes.append(lambda p, field=field, value=value:
+                p["output_options"]["layout"]["tracks"][0]["media_names"]["segments"].update({field: value}))
+        for source_format in ("dash", "hls-ts"):
+            for index, change in enumerate(changes):
+                planned, names = self.schema_nine_plan(source_format)
+                change(planned)
+                with self.subTest(source_format=source_format, mutation=index):
+                    self.assertFalse(module.plan_depth(planned, names))
+
     def test_schema_seven_refuses_changed_depth_processing_or_output_options(self):
         changes = [
             lambda p: p.update(schema_version=9),

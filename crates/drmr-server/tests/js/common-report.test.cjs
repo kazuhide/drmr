@@ -24,7 +24,7 @@ test('native evidence never pretends to establish decoded equality', () => {
 });
 test('current reports and plans reach the overall evidence predicate with their actual scope', () => {
   const r = load();
-  for (const schema of [1, 2, 3, 4]) {
+  for (const schema of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) {
     const report = { schema_version: schema, plan_id: 'a'.repeat(64) };
     if (schema >= 3) report.required_depth = 'native';
     assert.equal(r.evidencePassed({ report_kind: 'plan', report }), true);

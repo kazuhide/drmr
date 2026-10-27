@@ -4,9 +4,14 @@ use drmr_core::{
     inspection::TrackKind,
 };
 
-fn source_layout() -> Value {
+fn source_layout(current: bool) -> Value {
+    let resolve = if current {
+        SourceLayout::resolve_from_tracks
+    } else {
+        SourceLayout::resolve_legacy_from_tracks
+    };
     serde_json::to_value(
-        SourceLayout::resolve_from_tracks(
+        resolve(
             LayoutMode::Source,
             OutputFormat::Dash,
             &[SourceTrack {
@@ -24,10 +29,10 @@ fn source_layout() -> Value {
 
 fn saved(schema: u64, mode: &str) -> Value {
     let selection = json!({"requested":"stitch","resolved":"stitch","boundaries":"resegment","segment_duration_ms":6000});
-    let options = json!({"layout":source_layout(),"dash_addressing":mode});
+    let options = json!({"layout":source_layout(schema >= 9),"dash_addressing":mode});
     let mut value = json!({"kind":"execution-plan","schema_version":schema,"plan_id":"a".repeat(64),
         "source_format":"hls","source":{"root":"PRIVATE_ROOT"},"required_depth":"native"});
-    if schema == 7 {
+    if matches!(schema, 7 | 9) {
         value["intent"] = json!({"format":"dash","target":"clear","output":"PRIVATE_OUTPUT"});
         value["processing"] = selection;
         value["output_options"] = options;
@@ -42,11 +47,11 @@ fn saved(schema: u64, mode: &str) -> Value {
 
 #[test]
 fn saved_output_options_are_closed_path_free_and_bound_to_each_new_output() {
-    for schema in [7, 8] {
+    for schema in [7, 8, 9, 10] {
         for mode in ["template", "template-timeline", "list", "base"] {
             let value = saved(schema, mode);
             let out = plan(&value).unwrap().0;
-            let options = if schema == 7 {
+            let options = if matches!(schema, 7 | 9) {
                 &out["output_options"]
             } else {
                 &out["output_options"][0]["options"]
@@ -67,7 +72,7 @@ fn saved_output_options_are_closed_path_free_and_bound_to_each_new_output() {
 
 #[test]
 fn saved_output_options_refuse_unknown_fields_nulls_and_foreign_bindings() {
-    for schema in [7, 8] {
+    for schema in [7, 8, 9, 10] {
         for (field, malformed) in [
             ("layout", Value::Null),
             ("layout", json!({"mode":"normalized","tracks":[]})),
@@ -76,7 +81,7 @@ fn saved_output_options_refuse_unknown_fields_nulls_and_foreign_bindings() {
             ("private", json!("PRIVATE_SOURCE")),
         ] {
             let mut value = saved(schema, "list");
-            let options = if schema == 7 {
+            let options = if matches!(schema, 7 | 9) {
                 &mut value["output_options"]
             } else {
                 &mut value["output_options"][0]["options"]
@@ -97,6 +102,31 @@ fn saved_output_options_refuse_unknown_fields_nulls_and_foreign_bindings() {
         let mut value = saved(schema + 2, "list");
         value["schema_version"] = json!(schema);
         assert!(plan(&value).is_err());
+    }
+}
+
+#[test]
+fn filename_intent_cannot_be_substituted_between_saved_schema_versions() {
+    for (old, current) in [(7, 9), (8, 10)] {
+        for (from, to) in [(old, current), (current, old)] {
+            let mut value = saved(from, "list");
+            value["schema_version"] = json!(to);
+            assert!(plan(&value).is_err());
+        }
+        for malformed in [
+            Value::Null,
+            json!({"initialization":"PRIVATE_NAME"}),
+            json!({"unknown":true}),
+        ] {
+            let mut value = saved(current, "list");
+            let options = if current == 9 {
+                &mut value["output_options"]
+            } else {
+                &mut value["output_options"][0]["options"]
+            };
+            options["layout"]["tracks"][0]["media_names"] = malformed;
+            assert!(plan(&value).is_err());
+        }
     }
 }
 

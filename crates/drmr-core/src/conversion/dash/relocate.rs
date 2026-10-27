@@ -5,7 +5,10 @@ use super::{
 };
 use crate::{
     concurrency::Stop,
-    conversion::{files, layout::path_uri},
+    conversion::{
+        files,
+        layout::{RelocatedTemplate, path_uri},
+    },
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -15,7 +18,7 @@ use std::{
 pub(in crate::conversion) fn relocate_output(
     root: &Path,
     files: &BTreeMap<PathBuf, PathBuf>,
-    templates: &BTreeMap<PathBuf, String>,
+    templates: &BTreeMap<PathBuf, RelocatedTemplate>,
     stop: &Stop,
 ) -> Result<(), ConversionError> {
     super::checkpoint(Some(stop))?;
@@ -44,7 +47,7 @@ pub(in crate::conversion) fn relocate_output(
     let mut removals = BTreeSet::new();
     for rep in reps {
         super::checkpoint(Some(stop))?;
-        let resolved = addressing::resolve(rep, remaining)?;
+        let mut resolved = addressing::resolve(rep, remaining)?;
         remaining = remaining
             .checked_sub(resolved.segments.len())
             .ok_or(error("dash-segment-limit"))?;
@@ -54,42 +57,13 @@ pub(in crate::conversion) fn relocate_output(
         {
             return Err(error("source-layout-addressing-not-supported"));
         }
-        let mapped = |resource: &addressing::Resource| -> Result<&PathBuf, ConversionError> {
-            let relative = resolved.base.join(super::relative(&resource.uri)?);
-            files
-                .get(&relative)
-                .ok_or(error("source-layout-resource-missing"))
-        };
-        let init = mapped(&resolved.initialization)?;
         let old_initialization = resolved
             .base
             .join(super::relative(&resolved.initialization.uri)?);
-        let media = templates
+        let template = templates
             .get(&old_initialization)
             .ok_or(error("source-layout-resource-missing"))?;
-        for segment in &resolved.segments {
-            let expanded = super::expand(
-                media,
-                rep.attribute("id").unwrap_or(""),
-                rep.attribute("bandwidth").unwrap_or(""),
-                segment.number,
-                segment.time,
-            )?;
-            if &super::relative(&expanded)? != mapped(&segment.resource)? {
-                return Err(error("source-layout-template-mismatch"));
-            }
-        }
-        let prefix = policy::prefix(rep)?;
-        let mut node = policy::common("SegmentTemplate", &resolved, &prefix);
-        write!(
-            node,
-            " initialization=\"{}\" media=\"{}\">",
-            policy::xml(&path_uri(init)?),
-            policy::xml(media)
-        )
-        .map_err(|_| error("output-staging-failed"))?;
-        policy::timeline(&mut node, &prefix, &resolved.segments)?;
-        write!(node, "</{prefix}SegmentTemplate>").map_err(|_| error("output-staging-failed"))?;
+        let node = addressing_node(rep, &mut resolved, files, template)?;
         policy::replace_addressing(text, rep, node, &mut edits, &mut removals)?;
     }
     edits.extend(
@@ -112,4 +86,78 @@ pub(in crate::conversion) fn relocate_output(
         return Err(error("source-layout-resource-mismatch"));
     }
     policy::write_manifest(&manifest, &output)
+}
+
+fn addressing_node(
+    rep: super::Node<'_, '_>,
+    resolved: &mut addressing::Representation,
+    files: &BTreeMap<PathBuf, PathBuf>,
+    template: &RelocatedTemplate,
+) -> Result<String, ConversionError> {
+    let mapped = |resource: &addressing::Resource| -> Result<&PathBuf, ConversionError> {
+        let relative = resolved.base.join(super::relative(&resource.uri)?);
+        files
+            .get(&relative)
+            .ok_or(error("source-layout-resource-missing"))
+    };
+    let init = mapped(&resolved.initialization)?;
+    for (index, segment) in resolved.segments.iter().enumerate() {
+        let Some(media) = template.media.as_deref() else {
+            break;
+        };
+        let number = template
+            .start_number
+            .checked_add(index as u64)
+            .ok_or(error("source-layout-template-mismatch"))?;
+        let expanded = super::expand(
+            media,
+            rep.attribute("id").unwrap_or(""),
+            rep.attribute("bandwidth").unwrap_or(""),
+            number,
+            segment.time,
+        )?;
+        if &super::relative(&expanded)? != mapped(&segment.resource)? {
+            return Err(error("source-layout-template-mismatch"));
+        }
+    }
+    let prefix = policy::prefix(rep)?;
+    let node = if let Some(media) = &template.media {
+        for (index, segment) in resolved.segments.iter_mut().enumerate() {
+            segment.number = template
+                .start_number
+                .checked_add(index as u64)
+                .ok_or(error("source-layout-template-mismatch"))?;
+        }
+        let mut node = policy::common("SegmentTemplate", resolved, &prefix);
+        write!(
+            node,
+            " initialization=\"{}\" media=\"{}\">",
+            policy::xml(&path_uri(init)?.replace('$', "$$")),
+            policy::xml(media)
+        )
+        .map_err(|_| error("output-staging-failed"))?;
+        policy::timeline(&mut node, &prefix, &resolved.segments)?;
+        write!(node, "</{prefix}SegmentTemplate>").map_err(|_| error("output-staging-failed"))?;
+        node
+    } else {
+        let mut node = policy::common("SegmentList", resolved, &prefix);
+        write!(
+            node,
+            "><{prefix}Initialization sourceURL=\"{}\"/>",
+            policy::xml(&path_uri(init)?)
+        )
+        .map_err(|_| error("output-staging-failed"))?;
+        policy::timeline(&mut node, &prefix, &resolved.segments)?;
+        for segment in &resolved.segments {
+            write!(
+                node,
+                "<{prefix}SegmentURL media=\"{}\"/>",
+                policy::xml(&path_uri(mapped(&segment.resource)?)?)
+            )
+            .map_err(|_| error("output-staging-failed"))?;
+        }
+        write!(node, "</{prefix}SegmentList>").map_err(|_| error("output-staging-failed"))?;
+        node
+    };
+    Ok(node)
 }

@@ -219,7 +219,7 @@ fn all_four_handlers_share_one_saved_bundle_plan_and_fresh_media_evidence() {
         json!({"kind":"plan","input_file":source,"output_root":destination,"save_file":plan,"output_spec_file":specification}),
         0,
     );
-    assert_eq!(planned["schema_version"], 8);
+    assert_eq!(planned["schema_version"], 10);
     assert_eq!(planned["required_depth"], "decoded");
     assert_eq!(planned["outputs"].as_array().unwrap().len(), 2);
     let saved_bytes = std::fs::read(&plan).unwrap();

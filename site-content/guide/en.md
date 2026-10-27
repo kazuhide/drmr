@@ -358,7 +358,7 @@ For a FairPlay TS output named `hls-ts`, replace the HLS entry with this member 
 
 TS SAMPLE-AES requires the associated IV in the runtime key configuration and uses no MP4 KID. Its playlist may omit the `IV` attribute when the associated IV is supplied separately; an explicitly declared conflicting IV is refused. For fMP4 FairPlay, a playlist IV can also be absent when the initialization segment's track-encryption metadata (`tenc`) supplies the required constant IV. The actual media and IV declarations are checked, rather than assuming that an omitted playlist attribute means unencrypted media.
 
-File versions differ: output recipes use 1–3, key files 1/2, and new saved plans 7 (single) or 8 (named outputs). Recipes 2/3 accept per-output processing; recipe 3 also accepts DASH references. Earlier plans remain readable with their original processing and verification minimum.
+Recipes use versions 1–3, key files 1/2, and new saved plans 9 (single) or 10 (named outputs). Recipes 2/3 allow per-output processing; 3 also allows DASH references. Existing plans keep their saved processing and verification minimum.
 
 ## Logs, memory and temporary files
 
@@ -424,11 +424,11 @@ drmr convert --plan conversion.plan.json --keys-file config/keys.json --json
 drmr verify --plan conversion.plan.json --keys-file config/keys.json --json
 ```
 
-New single-output plans use schema 7 and named-output plans use schema 8. Both freeze the requested/resolved processing mode, boundary behavior, source-relative output directories and DASH reference form. Earlier schemas retain their saved choices and previous directory layout. Both bind `required_depth` to the plan ID: native by default, decoded with `plan --save --decode`. Later `convert --decode` or `verify --decode` can strengthen the minimum, never lower it. Legacy single version 1 and named-output version 2 retain a decoded minimum. Plans 3/4 retain their saved depth and complete-track packaging.
+New single-output plans use schema 9 and named-output plans use schema 10. They bind processing, boundary behavior, output paths, segment names, DASH references and `required_depth` to the plan ID. The minimum is native by default, decoded with `plan --save --decode`; later `convert --decode` or `verify --decode` can strengthen it. Schemas 1–8 retain their saved choices, including track prefixes in 7/8. Versions 1/2 require decoding; 3/4 retain complete-track packaging and saved depth.
 
-The saved plan records the local playlist/media files used by conversion, their sizes and SHA-256 content fingerprints, the output format/protection and an absolute destination. Paths are tied to that machine and location; keep the plan private and outside source/output trees. Unknown versions or fields, inconsistent plan identifiers, changed source bytes and unsafe destinations are refused. The identifier detects inconsistency; it is not a signature or authorization from another party.
+The plan records local playlists/media, sizes, SHA-256 content hashes, output format/protection and an absolute destination. Keep it private and outside source/output trees; paths belong to the saved machine and location. Unknown versions/fields, inconsistent IDs, changed source bytes and unsafe destinations fail. The ID checks consistency, not a third-party signature or authorization.
 
-Keys, signed source URLs, authentication headers, license URLs, HLS key URIs and executable arguments are not stored in the plan. Supply keys at execution and verification with `--keys-file`. In a version-1/3/5/7 single-output plan, DRM signaling selections also remain runtime configuration. Version-2/4/6/8 plans fix each requested DRM system and manifest-check policy while leaving their secret values and addresses separate. `verify --plan` checks source fingerprints, actual output format/protection and independent complete media correspondence. It does not acquire a license or prove device playback.
+Keys, signed source URLs, authentication headers, license URLs, HLS key URIs and executable arguments are not stored in the plan. Supply keys at execution and verification with `--keys-file`. In a version-1/3/5/7/9 single-output plan, DRM signaling selections also remain runtime configuration. Version-2/4/6/8/10 plans fix each requested DRM system and manifest-check policy while leaving their secret values and addresses separate. `verify --plan` checks source fingerprints, actual output format/protection and independent complete media correspondence. It does not acquire a license or prove device playback.
 
 On Unix, use trusted output and plan parent directories owned by your user that other users cannot modify. Saving a plan refuses an unsafe output parent before media admission. See [workspace permissions](https://github.com/kazuhide/drmr/blob/main/docs/security.md#temporary-files-and-cleanup) for the supported shared temporary-directory rule and cleanup boundaries.
 
@@ -436,9 +436,11 @@ Saving a plan creates no converted media. Encrypted source checks can decrypt wi
 
 ## Source directories and DASH references
 
-New downloads and segmented outputs keep the source-relative directories. For example, media referenced from `video/1080p/` stays there. Child HLS playlists retain their paths where possible. Output filenames can change: distinct prefixes keep tracks separate when several renditions share one directory. The local entrypoints remain `input.m3u8` or `input.mpd` for retained manifests, and `master.m3u8` or `manifest.mpd` for results. Old saved plans keep their recorded placement. Earlier downloads use the local paths already on disk. Acquire the URL again into a new directory to retain the remote hierarchy.
+Downloads keep source-relative media and child-playlist paths, such as `video/1080p/`. The `input.m3u8` or `input.mpd` entrypoint is a localized manifest. `raw/` retains the original manifests and private `raw/index.json` (source URLs, sizes and hashes). Media is stored once; `raw/` adds no media copy. Keep it with the saved source. Keys are not downloaded.
 
-Each source rendition currently needs one media parent directory. Unsafe paths, colliding resource names and paths outside the source-relative root are refused. The fetch policy still controls additional origins; an allowed additional origin can supply a distinct path under the same root. New conversions preserve directories with every `--processing` choice; joining and segmenting again can change boundaries. See [source directories](https://github.com/kazuhide/drmr/blob/main/docs/source-layout.md).
+Output media stays in the source directories; manifests use `master.m3u8` or `manifest.mpd`. Separate media directories need no track prefix: `r000600.ts` becomes `init.mp4` plus `r000600.m4s`, or keeps `.ts` for HLS TS. Only physical tracks sharing a directory need a source-playlist/kind prefix. Numeric starts and zero-padding remain; stitching can extend or shorten the sequence without preserving boundaries. HLS and DASH `list` retain arbitrary stems only when counts match; otherwise, names start at `seg_1`. DASH templates use `seg_1.m4s` when no numeric pattern fits; choose `--dash-addressing list` for arbitrary names. MP4 inputs have no segment names and start at `seg_1` in the source directory.
+
+Each rendition needs one media parent. Unsafe/colliding paths and references outside the source root fail; additional origins still need fetch-policy permission. Old downloads use existing local paths; reacquire into a new directory for the remote hierarchy. Saved plans keep their placement. See [source directories](https://github.com/kazuhide/drmr/blob/main/docs/source-layout.md).
 
 Use `--dash-addressing` with direct conversion or a saved plan:
 
@@ -493,7 +495,7 @@ drmr plan clear-ts/master.m3u8 --outputs outputs.json \
   --output result --save multi.plan.json --json
 ```
 
-Output-recipe schemas 2/3 accept per-output `processing`; schema 1 has no such field. Schema 3 also accepts `dash_addressing` for DASH outputs. The saved version-8 plan binds one original file graph to every output's format, protection, DRM selection and external manifest-check policy. The result root and source fingerprints are fixed. `--outputs` requires `--save` for `plan` and replaces `--to` and `--format`; a comma-separated `--format` in the older metadata-only mode still describes alternatives.
+Output-recipe schemas 2/3 accept per-output `processing`; schema 1 has no such field. Schema 3 also accepts `dash_addressing` for DASH outputs. The saved version-10 plan binds one original file graph to every output's format, protection, DRM selection and external manifest-check policy. The result root and source fingerprints are fixed. `--outputs` requires `--save` for `plan` and replaces `--to` and `--format`; a comma-separated `--format` in the older metadata-only mode still describes alternatives.
 
 `conformance: "required"` makes the external manifest check mandatory during both conversion and independent plan verification. `"none"`, the default when omitted, requests no external check. Native manifest linting and complete media verification run in both cases. Prepare the tools described in chapter 9 before executing a required check; planning itself does not establish that those tools are available.
 
@@ -1172,7 +1174,7 @@ The private configuration picker replaces file and folder names with numbered la
 4. Use **Download original plan** to retain a private copy, then **Convert**. Existing destinations are refused. Editing output settings requires saving a new plan.
 5. Choose **Verify again** to compare the saved plan with existing output without reconverting it. Later, open the same file as a **Saved CLI plan** to verify without repeating analysis or conversion.
 
-New console plans use named-output v8, even with one output. Select processing when saving a plan; DASH outputs also have **DASH segment references**, with the same four forms as the CLI. The additional-decoding checkbox has the same meaning as CLI `--decode`; the saved minimum still applies if the checkbox is clear. Result badges distinguish native checks, actual decoding and unrequested decoding. When supplying a key file, analysis accepts v1 or v2; new console plans and named-output v2/v4/v6/v8 plans use v2 keys. Single-output v1/v3/v5/v7 plans use v1 keys. Chapter 17 documents the file formats.
+New console plans use named-output v10, even with one output. Select processing when saving a plan; DASH outputs also have **DASH segment references**, with the same four forms as the CLI. The additional-decoding checkbox has the same meaning as CLI `--decode`; the saved minimum still applies if the checkbox is clear. Result badges distinguish native checks, actual decoding and unrequested decoding. When supplying a key file, analysis accepts v1 or v2; new console plans and named-output v2/v4/v6/v8/v10 plans use v2 keys. Single-output v1/v3/v5/v7/v9 plans use v1 keys. Chapter 17 documents the file formats.
 
 Plan downloads preserve the original bytes and absolute paths. Keep them private because they identify local files and output locations. Do not rewrite paths to move a plan between environments. The page sends references rather than raw keys, configuration contents or executable paths, and never retrieves key-file contents.
 
@@ -1513,7 +1515,7 @@ All public commands accept `-h` / `--help`; `drmr help COMMAND` also displays he
 
 `FILE` is a local filename supplied after the option, not inline JSON. `PATH` can name a file or directory as the row specifies. Relative option paths are resolved from the directory where you run the command. `NEW_FILE`, `NEW_PATH` and `NEW_DIR` name destinations that must be new; the workflow determines when they are written. Replace these placeholders with your paths; a `.json` extension does not make different configuration schemas interchangeable.
 
-For example, `--fetch-policy config/fetch.json` reads the [Fetch policy JSON in chapter 8](https://kazuhide.github.io/drmr/guide/#url-input). `--keys-file config/keys.json` reads the [private key JSON examples in chapter 5](https://kazuhide.github.io/drmr/guide/#key-configuration): version 1 uses `input` and one `output`, while version 2 shares `input` and names each result under `outputs`. Full `analyze` validates either schema and uses only its source keys; `--metadata-only` refuses key files. `--outputs` and named-output version-2/4/6/8 saved plans require version-2 key JSON even when the output list has one entry; the older single-result mode uses version 1.
+For example, `--fetch-policy config/fetch.json` reads the [Fetch policy JSON in chapter 8](https://kazuhide.github.io/drmr/guide/#url-input). `--keys-file config/keys.json` reads the [private key JSON examples in chapter 5](https://kazuhide.github.io/drmr/guide/#key-configuration): version 1 uses `input` and one `output`, while version 2 shares `input` and names each result under `outputs`. Full `analyze` validates either schema and uses only its source keys; `--metadata-only` refuses key files. `--outputs` and named-output version-2/4/6/8/10 saved plans require version-2 key JSON even when the output list has one entry; the older single-result mode uses version 1.
 
 For common commands, `--packager-bin "./tools/packager"` selects one installed executable. A Windows example is `--packager-bin "C:\Media Tools\packager.exe"`. Quote paths containing spaces and supply only the program name/path, without a shell command or appended arguments. The default `packager` is found on the launch environment's PATH; CLI archives and Desktop bundles do not include it. See [Media tools in chapter 4](https://kazuhide.github.io/drmr/guide/#installation).
 
@@ -1562,7 +1564,7 @@ Local input refuses download/fetch options. URL metadata-only analysis needs no 
 | `--format FORMAT` | mp4, dash, hls, hls-ts; alternatives without --save, one resolved format in a single-output plan; omitted follows MP4/DASH/HLS, with HLS meaning fMP4; conflicts with --outputs |
 | `--processing MODE` | auto, segments or stitch; requires --save; [processing behavior](https://kazuhide.github.io/drmr/guide/#verification) |
 | `--dash-addressing MODE` | template (default), template-timeline, list or base; DASH outputs only; saved planning or direct conversion; fixed by a saved plan; [DASH reference forms](https://kazuhide.github.io/drmr/guide/#inspect-plan) |
-| `--outputs FILE` | Schema-version-1/2/3 output recipe JSON, e.g. outputs.json; requires --save and replaces --to/--format; produces a version-8 execution plan; [output recipe example](https://kazuhide.github.io/drmr/guide/#inspect-plan) |
+| `--outputs FILE` | Schema-version-1/2/3 output recipe JSON, e.g. outputs.json; requires --save and replaces --to/--format; produces a version-10 execution plan; [output recipe example](https://kazuhide.github.io/drmr/guide/#inspect-plan) |
 | `--decode` | Save a decoded minimum; requires --save |
 | `--json` | Versioned plan without execution |
 | `--save NEW_FILE` | New execution-plan JSON written by drmr, e.g. conversion.plan.json; requires INPUT, --output and either --to or --outputs; [saving and reusing a plan](https://kazuhide.github.io/drmr/guide/#inspect-plan) |
@@ -1583,8 +1585,8 @@ Local input refuses download/fetch options. URL metadata-only analysis needs no 
 | `--dash-addressing MODE` | template (default), template-timeline, list or base; DASH outputs only; saved planning or direct conversion; fixed by a saved plan; [DASH reference forms](https://kazuhide.github.io/drmr/guide/#inspect-plan) |
 | `--outputs FILE` | Schema-version-1/2/3 output recipe JSON; all listed results use one new result root; conflicts with --to/--format/--plan; [output recipe example](https://kazuhide.github.io/drmr/guide/#inspect-plan) |
 | `--output NEW_PATH` | Required new result file/directory without --plan; [destination rules and examples](https://kazuhide.github.io/drmr/guide/#local-conversion) |
-| `--plan FILE` | Execution-plan JSON generated by plan --save, versions 1/2/3/4/5/6/7/8; refuse source/output-intent overrides; [saved-plan workflow](https://kazuhide.github.io/drmr/guide/#inspect-plan) |
-| `--keys-file FILE` | Owner-only key JSON; version 2 with --outputs or a named-output version-2/4/6/8 plan, otherwise version 1; [complete key JSON examples](https://kazuhide.github.io/drmr/guide/#key-configuration) |
+| `--plan FILE` | Execution-plan JSON generated by plan --save, versions 1–10; refuse source/output-intent overrides; [saved-plan workflow](https://kazuhide.github.io/drmr/guide/#inspect-plan) |
+| `--keys-file FILE` | Owner-only key JSON; version 2 with --outputs or a named-output version-2/4/6/8/10 plan, otherwise version 1; [complete key JSON examples](https://kazuhide.github.io/drmr/guide/#key-configuration) |
 | `--download-dir NEW_DIR` | Mandatory new directory for URL input; retained original; [acquisition example](https://kazuhide.github.io/drmr/guide/#url-input) |
 | `--fetch-policy FILE` | Owner-only URL fetch policy JSON, e.g. config/fetch.json; [origin/header/limit fields and example](https://kazuhide.github.io/drmr/guide/#url-input) |
 | `--packager-bin FILE` | Shaka Packager executable name/path; default packager on PATH; [installation and discovery](https://kazuhide.github.io/drmr/guide/#installation) |
@@ -1605,11 +1607,11 @@ There are no generic `ffmpeg-bin` or `ffprobe-bin` options. Those tools are foun
 | --- | --- |
 | `OUTPUT` | Candidate MP4, MPD or M3U8; omitted with --plan |
 | `--source INPUT` | Required original media/manifest file without --plan or --manifest-only; never inferred from the result; [complete comparisons](https://kazuhide.github.io/drmr/guide/#verification) |
-| `--plan FILE` | Generated execution-plan JSON, versions 1/2/3/4/5/6/7/8; check recorded source, output format/protection and independent media correspondence; conflicts with OUTPUT and --source; [saved-plan workflow](https://kazuhide.github.io/drmr/guide/#inspect-plan) |
+| `--plan FILE` | Generated execution-plan JSON, versions 1–10; check recorded source, output format/protection and independent media correspondence; conflicts with OUTPUT and --source; [saved-plan workflow](https://kazuhide.github.io/drmr/guide/#inspect-plan) |
 | `--manifest-only` | Native HLS/DASH manifest linting with media_verified false; conflicts with --plan/--source/--keys-file |
 | `--external-validator` | Add Apple/DASH-IF checks; requires --manifest-only |
 | `--manifest-profile PROFILE` | Native manifest profile; requires --manifest-only. Default base; apple-vod accepts HLS only |
-| `--keys-file FILE` | Owner-only original/result key JSON; version 2 for a named-output version-2/4/6/8 plan, otherwise version 1; [input/output key roles and examples](https://kazuhide.github.io/drmr/guide/#key-configuration) |
+| `--keys-file FILE` | Owner-only original/result key JSON; version 2 for a named-output version-2/4/6/8/10 plan, otherwise version 1; [input/output key roles and examples](https://kazuhide.github.io/drmr/guide/#key-configuration) |
 | `--packager-bin FILE` | Shaka Packager executable name/path; default packager on PATH; [installation and discovery](https://kazuhide.github.io/drmr/guide/#installation) |
 | `--hls-validator-bin FILE` | Apple executable name/path; default mediastreamvalidator; [external validator setup](https://kazuhide.github.io/drmr/guide/#verification) |
 | `--dash-validator-bin FILE` | PHP executable name/path for the local DASH-IF adapter; default php; [external validator setup](https://kazuhide.github.io/drmr/guide/#verification) |

@@ -270,7 +270,7 @@ impl Converter {
         )?;
         let mut plan = BundlePlan {
             kind: KIND.into(),
-            schema_version: 8,
+            schema_version: 10,
             plan_id: String::new(),
             source: frozen.inventory().clone(),
             source_format: qualified.actual_format,
@@ -845,7 +845,7 @@ pub(super) fn validate(plan: &BundlePlan) -> Result<(), ConversionError> {
             (2, None, false, false)
                 | (4, Some(_), false, false)
                 | (6, Some(_), true, false)
-                | (8, Some(_), true, true)
+                | (8 | 10, Some(_), true, true)
         )
         || plan.plan_id.len() != 64
         || !plan
@@ -895,6 +895,7 @@ pub(super) fn validate(plan: &BundlePlan) -> Result<(), ConversionError> {
             return Err(INVALID);
         }
         for (setting, output) in settings.iter().zip(&plan.outputs) {
+            super::validate_filename_schema(&setting.options, plan.schema_version >= 10)?;
             if setting.id != output.id
                 || output
                     .dash_addressing

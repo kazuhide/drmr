@@ -363,7 +363,7 @@ fn new_single_plan_saves_the_actual_request_and_replays_the_source_bound_and_lay
             target: TargetProtection::Clear,
         })
         .unwrap();
-    assert_eq!(saved.schema_version, 7);
+    assert_eq!(saved.schema_version, 9);
     assert_eq!(saved.processing.unwrap().segment_duration_ms, Some(1000));
     assert!(saved.output_options.as_ref().unwrap().layout.is_some());
     let file = root.path().join("new.plan.json");
@@ -438,7 +438,7 @@ fn a_mixed_new_bundle_uses_segment_admission_facts_for_its_stitch_request() {
             outputs: &outputs,
         })
         .unwrap();
-    assert_eq!(saved.schema_version, 8);
+    assert_eq!(saved.schema_version, 10);
     assert_eq!(
         saved.processing.as_ref().unwrap()[0]
             .selection
