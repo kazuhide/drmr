@@ -410,6 +410,9 @@ mod tests {
         let second = files::regular_input(&copies[1]).unwrap();
         assert!(FileIdentity::read(&first).unwrap() != FileIdentity::read(&second).unwrap());
         assert!(FileIdentity::read(&first).unwrap() != receipt.identity);
+        // Windows read handles deny writes; release them before the simulated packager edit.
+        drop(first);
+        drop(second);
         std::fs::write(&copies[0], b"same-length clear datb").unwrap();
         receipt.check(&command.backend).unwrap();
         assert_eq!(
