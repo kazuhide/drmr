@@ -76,11 +76,17 @@ corresponding Apple or DASH-IF adapter. The JSON result separates
 Apple's adapter uses parse-only mode. It does not have the same authoring-rule
 coverage as the native Apple profile; a successful parse is separate evidence.
 
-For conversion and full verification together, choose `conformance: "required"`
-for each applicable output in the [output list](multiple-outputs.md), then save
-and execute its plan. Every required check must pass before the result directory
-is published. A separate `verify --plan` runs the required checks again, together
-with complete source/result media comparison and the plan's DRM selections.
+Conversion already performs complete native source/result media comparison,
+native manifest checks and the requested DRM declaration checks. No additional
+flag or `verify` command is needed to perform those checks during conversion.
+
+To additionally require external manifest validation during conversion, choose
+`conformance: "required"` for each applicable output in the
+[output list](multiple-outputs.md). This applies both to direct
+`convert --outputs` and to saved plans. Every required check must pass before the
+result directory is published. A separate `verify --plan` reads the current
+originals and results again and repeats the required checks, complete source/result
+media comparison and the plan's DRM selections.
 `conformance: "none"` leaves the external check unrequested; it does not mark it
 as passed or disable native manifest or complete media verification. Saved
 version-2 plans retain this external-engine requirement: a native result does
@@ -90,6 +96,12 @@ not substitute for `conformance: "required"`.
 `mediastreamvalidator`) and `--dash-validator-bin` (default `php`). These options
 select executables for requested checks; they do not enable a check on their
 own. Runtime executable locations are not saved in a plan.
+
+Human-readable multi-output results name the completed media comparison, native
+manifest checks and DRM declaration checks. An external result is shown only when
+requested. In JSON, an unrequested external check remains `conformance: null`;
+it is separate from `conversion.verification.native_manifest` in a conversion or
+`verification.native_manifest` in independent verification.
 
 ## HLS
 

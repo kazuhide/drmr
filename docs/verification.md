@@ -5,6 +5,14 @@ They read all admitted samples; they do not sample only the first segment or
 trust a previous success report. Add `--decode` to perform complete decoding as
 an additional check.
 
+`convert` includes source/result comparison and the applicable native manifest
+and DRM declaration checks before publishing the result. This also applies to
+direct URL conversion and multiple outputs; there is no separate verification
+flag to enable. Use standalone `verify` when the saved files should be read and
+checked again after conversion. `verify --plan` additionally checks the saved
+source fingerprints and output selections. A direct conversion does not save a
+plan automatically.
+
 ```sh
 drmr analyze source/input.m3u8 --json
 drmr analyze source/input.m3u8 --decode --json
