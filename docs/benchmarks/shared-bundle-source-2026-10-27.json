@@ -1,0 +1,356 @@
+{
+  "schema_version": 1,
+  "benchmark": "offline-clear-hls-ts-to-two-cbcs-fmp4-outputs",
+  "measurement_date": "2026-10-27",
+  "source_commit": "1d6321d7f5b43d87785d09364a2ed42f374192c8",
+  "baseline_commit": "af861071e0736d8fdd1d9ef6fdfbfeef94f4693c",
+  "build": {
+    "product_version": "1.0.1",
+    "compiler": "rustc 1.99.0 (b940084d7 2026-09-28)",
+    "profile": "release",
+    "locked_dependencies": true,
+    "packager": "packager version v3.8.0-75b2faf-release"
+  },
+  "host": {
+    "system": "Darwin",
+    "architecture": "arm64",
+    "cpu": "Apple M5",
+    "logical_cores": 10,
+    "physical_cores": 10,
+    "memory_bytes": 34359738368
+  },
+  "input": {
+    "source_bytes": 857447176,
+    "referenced_files": 708,
+    "video_tracks": 6,
+    "audio_tracks": 1,
+    "video_duration_seconds": 596.4583333333334,
+    "audio_duration_seconds": 596.5260770975057,
+    "segments_per_track": 100,
+    "target_duration_seconds": 6,
+    "codecs": [
+      "H.264",
+      "AAC"
+    ]
+  },
+  "outputs": [
+    {
+      "format": "DASH fMP4",
+      "protection": "cbcs",
+      "drm": [
+        "Widevine",
+        "PlayReady"
+      ]
+    },
+    {
+      "format": "HLS fMP4",
+      "protection": "cbcs",
+      "drm": [
+        "FairPlay"
+      ]
+    }
+  ],
+  "options": {
+    "processing": "auto",
+    "resolved_processing": "stitch",
+    "max_workers": "automatic",
+    "decode": false,
+    "external_manifest_validators": false,
+    "network_download_included": false,
+    "progress": "json",
+    "measure": true,
+    "dash_addressing": "duration-based-SegmentTemplate"
+  },
+  "runs": [
+    {
+      "variant": "baseline",
+      "source_commit": "af861071e0736d8fdd1d9ef6fdfbfeef94f4693c",
+      "executable_sha256": "a6e2f6ada7f8283f0ff1e0861562f22382d31537876faa42c64d48666fe44e08",
+      "wall_seconds": 85.8838018339593,
+      "cpu_user_seconds": 96.941963,
+      "cpu_system_seconds": 71.174144,
+      "cpu_total_seconds": 168.116107,
+      "wait4_maxrss_bytes": 119357440,
+      "sampled_parent_peak_rss_bytes": 31883264,
+      "sampled_descendant_peak_rss_bytes": 155762688,
+      "sampled_parent_plus_descendants_peak_rss_bytes": 175210496,
+      "sample_count": 263,
+      "failed_samples": 0,
+      "observed_peak_descendant_count": 3,
+      "load_average_1_5_15_before": [
+        7.59326171875,
+        9.18408203125,
+        12.14453125
+      ],
+      "load_average_1_5_15_after": [
+        8.75537109375,
+        9.11669921875,
+        11.83203125
+      ],
+      "other_host_cpu_percent_mean": 383.23307984790875,
+      "other_host_cpu_percent_peak": 869.8000000000001,
+      "measurement_report_status": "observed",
+      "phases": [
+        {
+          "phase": "input-preparation",
+          "scopes": 4,
+          "scope_elapsed_sum_seconds": 19.340211793
+        },
+        {
+          "phase": "inspection",
+          "scopes": 14,
+          "scope_elapsed_sum_seconds": 0.013881541
+        },
+        {
+          "phase": "normalization",
+          "scopes": 14,
+          "scope_elapsed_sum_seconds": 3.717468125
+        },
+        {
+          "phase": "packaging",
+          "scopes": 2,
+          "scope_elapsed_sum_seconds": 3.760704917
+        },
+        {
+          "phase": "verification",
+          "scopes": 88,
+          "scope_elapsed_sum_seconds": 14.524999079999997
+        },
+        {
+          "phase": "publication",
+          "scopes": 3,
+          "scope_elapsed_sum_seconds": 1.8986837909999998
+        }
+      ],
+      "tools": [
+        {
+          "tool": "ffmpeg",
+          "calls": 0,
+          "unsuccessful_calls": 0,
+          "reported_duration_sum_seconds": 0.0
+        },
+        {
+          "tool": "ffprobe",
+          "calls": 0,
+          "unsuccessful_calls": 0,
+          "reported_duration_sum_seconds": 0.0
+        },
+        {
+          "tool": "packager",
+          "calls": 28,
+          "unsuccessful_calls": 0,
+          "reported_duration_sum_seconds": 11.38
+        }
+      ],
+      "workspace_measurement": {
+        "status": "observed-checkpoints",
+        "checkpoints": 18,
+        "incomplete_checkpoints": 0,
+        "checkpoint_regular_file_bytes_max": 5873551442,
+        "reason": null
+      },
+      "output_file_count": 1423,
+      "output_bytes": 1649142636,
+      "source_unchanged": true,
+      "hls_media_playlists": 7,
+      "hls_segments_per_playlist": 100,
+      "hls_target_duration_seconds": 6,
+      "dash_representations": 7,
+      "dash_resources_per_representation": 100,
+      "dash_nominal_segment_duration_seconds": 6,
+      "dash_segment_timeline_used": false,
+      "dash_media_presentation_duration_seconds": 596.526077098,
+      "dash_explicit_period_durations_seconds": [
+        596.526077098
+      ],
+      "quality": [
+        {
+          "id": "dash",
+          "packet_payloads_equal": true,
+          "packet_timing_equal": true,
+          "stream_metadata_passed": true,
+          "drm_signaling_verified": true,
+          "native_manifest_errors": 0,
+          "native_manifest_warnings": 0,
+          "native_manifest_documents": 1,
+          "independent_verify_exit_code": 0,
+          "independent_verify_wall_seconds": 14.136950916959904,
+          "decode_requested": false,
+          "license_playback_verified": false
+        },
+        {
+          "id": "hls",
+          "packet_payloads_equal": true,
+          "packet_timing_equal": true,
+          "stream_metadata_passed": true,
+          "drm_signaling_verified": true,
+          "native_manifest_errors": 0,
+          "native_manifest_warnings": 0,
+          "native_manifest_documents": 8,
+          "independent_verify_exit_code": 0,
+          "independent_verify_wall_seconds": 13.180998665979132,
+          "decode_requested": false,
+          "license_playback_verified": false
+        }
+      ],
+      "rss_sample_mean_interval_seconds": 0.32715930264107246
+    },
+    {
+      "variant": "optimized",
+      "source_commit": "1d6321d7f5b43d87785d09364a2ed42f374192c8",
+      "executable_sha256": "1d30dbbeb22b2544c60dc53ac80cd88e0e91c78f998f6e0971cbd61b7bfd67a6",
+      "wall_seconds": 62.507413000101224,
+      "cpu_user_seconds": 69.613544,
+      "cpu_system_seconds": 52.041396,
+      "cpu_total_seconds": 121.65494000000001,
+      "wait4_maxrss_bytes": 117424128,
+      "sampled_parent_peak_rss_bytes": 31260672,
+      "sampled_descendant_peak_rss_bytes": 219103232,
+      "sampled_parent_plus_descendants_peak_rss_bytes": 235225088,
+      "sample_count": 192,
+      "failed_samples": 0,
+      "observed_peak_descendant_count": 2,
+      "load_average_1_5_15_before": [
+        8.49951171875,
+        9.0107421875,
+        11.69873046875
+      ],
+      "load_average_1_5_15_after": [
+        8.26123046875,
+        8.890625,
+        11.47119140625
+      ],
+      "other_host_cpu_percent_mean": 338.5463541666667,
+      "other_host_cpu_percent_peak": 604.6999999999999,
+      "measurement_report_status": "partial",
+      "phases": [
+        {
+          "phase": "input-preparation",
+          "scopes": 3,
+          "scope_elapsed_sum_seconds": 16.3310495
+        },
+        {
+          "phase": "inspection",
+          "scopes": 6,
+          "scope_elapsed_sum_seconds": 0.195630961
+        },
+        {
+          "phase": "normalization",
+          "scopes": 7,
+          "scope_elapsed_sum_seconds": 1.2072837509999998
+        },
+        {
+          "phase": "packaging",
+          "scopes": 2,
+          "scope_elapsed_sum_seconds": 2.3388599169999997
+        },
+        {
+          "phase": "verification",
+          "scopes": 25,
+          "scope_elapsed_sum_seconds": 6.559793376
+        },
+        {
+          "phase": "publication",
+          "scopes": 3,
+          "scope_elapsed_sum_seconds": 2.4348609580000002
+        }
+      ],
+      "tools": [
+        {
+          "tool": "ffmpeg",
+          "calls": 0,
+          "unsuccessful_calls": 0,
+          "reported_duration_sum_seconds": 0.0
+        },
+        {
+          "tool": "ffprobe",
+          "calls": 0,
+          "unsuccessful_calls": 0,
+          "reported_duration_sum_seconds": 0.0
+        },
+        {
+          "tool": "packager",
+          "calls": 15,
+          "unsuccessful_calls": 0,
+          "reported_duration_sum_seconds": 4.469
+        }
+      ],
+      "workspace_measurement": {
+        "status": "partial",
+        "checkpoints": 8,
+        "incomplete_checkpoints": 2,
+        "checkpoint_regular_file_bytes_max": 5042493490,
+        "reason": "checkpoint-metadata-unavailable"
+      },
+      "output_file_count": 1423,
+      "output_bytes": 1649142636,
+      "source_unchanged": true,
+      "hls_media_playlists": 7,
+      "hls_segments_per_playlist": 100,
+      "hls_target_duration_seconds": 6,
+      "dash_representations": 7,
+      "dash_resources_per_representation": 100,
+      "dash_nominal_segment_duration_seconds": 6,
+      "dash_segment_timeline_used": false,
+      "dash_media_presentation_duration_seconds": 596.526077098,
+      "dash_explicit_period_durations_seconds": [
+        596.526077098
+      ],
+      "quality": [
+        {
+          "id": "dash",
+          "packet_payloads_equal": true,
+          "packet_timing_equal": true,
+          "stream_metadata_passed": true,
+          "drm_signaling_verified": true,
+          "native_manifest_errors": 0,
+          "native_manifest_warnings": 0,
+          "native_manifest_documents": 1,
+          "independent_verify_exit_code": 0,
+          "independent_verify_wall_seconds": 13.74231083295308,
+          "decode_requested": false,
+          "license_playback_verified": false
+        },
+        {
+          "id": "hls",
+          "packet_payloads_equal": true,
+          "packet_timing_equal": true,
+          "stream_metadata_passed": true,
+          "drm_signaling_verified": true,
+          "native_manifest_errors": 0,
+          "native_manifest_warnings": 0,
+          "native_manifest_documents": 8,
+          "independent_verify_exit_code": 0,
+          "independent_verify_wall_seconds": 14.342373000108637,
+          "decode_requested": false,
+          "license_playback_verified": false
+        }
+      ],
+      "rss_sample_mean_interval_seconds": 0.32618413372782024
+    }
+  ],
+  "observed_pair": {
+    "wall_difference_seconds": 23.376388833858073,
+    "optimized_to_baseline_wall_ratio": 0.7278137630766268,
+    "cpu_difference_seconds": 46.46116699999999
+  },
+  "evidence_limits": [
+    "One sequential pair; background load is recorded, not excluded.",
+    "Source fingerprinting precedes each command; physical cold-cache behavior is not measured.",
+    "Phase values are overlapping scope sums, not an exclusive command-wall breakdown.",
+    "Tool duration sums include admission, capture and cleanup.",
+    "Darwin wait4 maximum RSS is distinct from the sampled parent-plus-descendant RSS sum.",
+    "Process-table RSS samples are not atomic and may miss short-lived descendants.",
+    "Workspace bytes are selected file-size checkpoints, not memory or total process I/O.",
+    "Native packet/timing and manifest checks do not establish decoding or DRM license/device playback.",
+    "Whole-command wall and wait4 user/system CPU cover the command and its children; separate verification commands are outside the timed conversion.",
+    "Other-host CPU percentages sum process-table moving averages, not instantaneous whole-host utilization."
+  ],
+  "measurement_intervals": {
+    "wall": "perf_counter before spawn to wait4 exit; excludes fingerprints and separate verification",
+    "cpu": "Darwin wait4 user+system for command and waited children",
+    "rss": "ps snapshot followed by 0.25s wait; actual intervals include query cost",
+    "rss_wait_seconds": 0.25,
+    "other_host_cpu": "ps OS moving-average observations, not instantaneous utilization"
+  }
+}

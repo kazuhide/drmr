@@ -1335,6 +1335,8 @@ drmr analyze original.mp4 --metadata-only --progress off
 
 Terminal progress retains completed stages and updates the current task with elapsed time and readable byte counts. Named-output conversion shows the stages below and a status for each output. `Checked` means that output passed its checks, before the complete result is published. Internal tool names are omitted. Redirected text records milestones and occasional updates, including during unchanged work.
 
+Final checks are part of publication, so their durations overlap and completion is reported after the result is committed.
+
 A download can show its completed count and percentage once resource discovery has finished. TS preparation counts all segments in the media playlist currently being processed. Approximate time remaining appears only after at least one second and two further resources or segments have completed since the total became known. It estimates the rest of that download or playlist's preparation, not the entire command. Once all TS segments have been read, `checking segment boundaries` replaces the percentage and estimate until the ordered checks finish.
 
 Discovery and other work with an unknown total show the task and elapsed time. A single MP4 URL shows received bytes during transfer, without a running percentage or remaining-time estimate. Its resource count becomes `1/1` after transfer completes.
