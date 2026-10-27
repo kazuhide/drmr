@@ -192,7 +192,7 @@ Stages include configuration, acquisition, inspection, input preparation, normal
 
 Progress contains no source URLs, keys, authentication headers, operator paths, raw media metadata or raw tool output. For a valid parsed operational command, explicit `--progress json` keeps operational stderr in JSON Lines, including a fixed error code on failure or cancellation. Argument parsing errors occur before that contract; existing `serve` startup diagnostics and its loopback address notice can also be separate text. The final result remains on stdout; progress records alone do not prove success.
 
-`convert` already compares the original and final media and runs the applicable native manifest and requested DRM declaration checks before publication. Its human-readable result names these checks. External manifest results appear only when requested, while JSON retains `conformance: null` for an unrequested external check. A separate `verify` rereads the saved files for fresh evidence; it is not required to enable conversion-time verification.
+`convert` already compares the original and final media and runs the applicable native manifest and requested DRM declaration checks before publication. For named-output conversion (`--outputs` or a corresponding saved plan), human-readable results name these checks; external manifest results appear only when requested, and each output's JSON retains `conformance: null` for an unrequested external check. A separate `verify` rereads the saved files for fresh evidence; it is not required to enable conversion-time verification.
 
 ## Convert a URL
 

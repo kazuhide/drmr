@@ -1345,7 +1345,7 @@ Unknown totals show task/elapsed. Single MP4 URL transfers show bytes, then `1/1
 
 JSON keeps activity/resource/scope fields; `pipeline` adds phases, output states/counts and optional estimates. Scopes can overlap or fail. Help/version emit no progress; `--measure` is separate and may overlap.
 
-`convert` already compares media and checks applicable native manifests/requested DRM declarations. Results name executed checks; external ones appear only if requested. Standalone `verify` rereads saved files.
+`convert` already compares media and checks applicable native manifests/requested DRM declarations. Named-output conversion results name these checks; external ones appear only if requested. Standalone `verify` rereads saved files.
 
 Progress omits URLs, keys, headers, paths and raw metadata/tool output. Explicit `--progress json` sends parsed operational stderr as JSON Lines with fixed failure/cancellation codes. Parsing errors and `serve` startup/address notices may be text. Final results and exit values determine success.
 

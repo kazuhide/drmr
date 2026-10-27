@@ -97,10 +97,11 @@ not substitute for `conformance: "required"`.
 select executables for requested checks; they do not enable a check on their
 own. Runtime executable locations are not saved in a plan.
 
-Human-readable multi-output results name the completed media comparison, native
-manifest checks and DRM declaration checks. An external result is shown only when
-requested. In JSON, an unrequested external check remains `conformance: null`;
-it is separate from `conversion.verification.native_manifest` in a conversion or
+Human-readable named-output conversion and verification results name the media
+comparison, applicable native manifest checks and DRM declaration status. An
+external result is shown only when requested. In each named output's JSON, an
+unrequested external check remains `conformance: null`; it is separate from
+`conversion.verification.native_manifest` in a conversion or
 `verification.native_manifest` in independent verification.
 
 ## HLS
