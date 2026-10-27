@@ -432,34 +432,52 @@ impl Converter {
         let completed = completed?;
         outputs_phase.finish();
         let (completed, outputs): (Vec<_>, Vec<_>) = completed.into_iter().unzip();
-        self.backend.check_cancelled()?;
-        let final_check = self.pipeline_phase(crate::conversion::pipeline::Phase::FinalCheck);
-        frozen.check_original().map_err(super::source_error)?;
-        let mut publication = None;
-        command
-            .using_plan_destination(destination)
-            .publish_directory_checked(&stage, &plan.output_root, || {
-                if let Some(shared) = &shared {
-                    shared.check(&execution.command)?;
-                }
-                for result in &completed {
-                    result.check_original().map_err(output_error)?;
-                }
-                final_check.finish();
-                publication =
-                    Some(self.pipeline_phase(crate::conversion::pipeline::Phase::Publication));
-                Ok(())
-            })?;
-        stage.finish_publication();
-        if let Some(phase) = publication {
-            phase.finish();
-        }
+        execution.command.publish_bundle(
+            stage,
+            destination,
+            &plan.output_root,
+            &frozen,
+            &completed,
+            shared.as_ref(),
+        )?;
         Ok(BundleConversionReport {
             kind: "bundle-conversion",
             schema_version: 2,
             plan_id: plan.plan_id.clone(),
             outputs,
         })
+    }
+
+    pub(in crate::conversion) fn publish_bundle(
+        &self,
+        stage: files::UnpublishedStage,
+        destination: destination::OutputGuard,
+        output_root: &Path,
+        frozen: &FrozenSource,
+        completed: &[FrozenSource],
+        shared: Option<&crate::conversion::presentation::BundlePrepared<'_>>,
+    ) -> Result<(), ConversionError> {
+        self.backend.check_cancelled()?;
+        let final_check = self.pipeline_phase(crate::conversion::pipeline::Phase::FinalCheck);
+        // Publication includes its last guards. No observer may run between those guards
+        // and commit; completion records follow the actual atomic publication.
+        let publication = self.pipeline_phase(crate::conversion::pipeline::Phase::Publication);
+        self.using_plan_destination(destination)
+            .publish_directory_checked_quiet(&stage, output_root, || {
+                frozen.check_original_quiet().map_err(super::source_error)?;
+                if let Some(shared) = shared {
+                    shared.check(self)?;
+                }
+                for result in completed {
+                    result.check_original_quiet().map_err(output_error)?;
+                }
+                self.backend.check_cancelled()
+            })
+            .map_err(super::source_error)?;
+        stage.finish_publication();
+        final_check.finish();
+        publication.finish();
+        Ok(())
     }
 
     fn validate_bundle_source(

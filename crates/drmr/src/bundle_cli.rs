@@ -154,6 +154,7 @@ impl Session {
             report["measurements"] =
                 serde_json::to_value(measurement).expect("measurements serialize");
         }
+        self.progress.begin_result();
         let result = if json {
             convert_cli::json(&report)
         } else {

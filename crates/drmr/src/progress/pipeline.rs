@@ -299,16 +299,22 @@ impl State {
         let Some(phase) = Phase::parse(scope) else {
             return false;
         };
-        if self
-            .phase
-            .is_some_and(|current| phase.index() < current.index())
+        if state == "started"
+            && self
+                .phase
+                .is_some_and(|current| phase.index() < current.index())
         {
             return false;
         }
         if !self.phases[phase.index()].update(state, now) {
             return false;
         }
-        self.phase = Some(phase);
+        if self
+            .phase
+            .is_none_or(|current| phase.index() >= current.index())
+        {
+            self.phase = Some(phase);
+        }
         true
     }
 
@@ -531,5 +537,23 @@ mod tests {
         assert!(state.clear_finished_analysis());
         assert!(state.outputs()[0].units().is_none());
         assert!(state.outputs()[1].units().is_some());
+    }
+
+    #[test]
+    fn final_check_can_finish_after_publication_starts_without_rewinding_the_phase() {
+        let mut state = State::default();
+        let phase = |scope, status| record(serde_json::json!({"scope":scope,"state":status}));
+        assert!(state.observe(&phase("final-check", "started"), Duration::from_secs(1)));
+        assert!(state.observe(&phase("publication", "started"), Duration::from_secs(2)));
+        assert_eq!(state.phase, Some(Phase::Publication));
+        assert!(state.observe(&phase("final-check", "finished"), Duration::from_secs(3)));
+        assert_eq!(state.phase, Some(Phase::Publication));
+        assert_eq!(state.lifetime(Phase::FinalCheck).status, Status::Finished);
+        assert_eq!(state.lifetime(Phase::Publication).status, Status::Running);
+        assert!(!state.observe(&phase("source", "started"), Duration::from_secs(4)));
+        assert!(!state.observe(&phase("final-check", "finished"), Duration::from_secs(4)));
+        assert!(state.observe(&phase("publication", "finished"), Duration::from_secs(5)));
+        assert_eq!(state.phase, Some(Phase::Publication));
+        assert_eq!(state.lifetime(Phase::Publication).status, Status::Finished);
     }
 }

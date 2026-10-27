@@ -104,6 +104,7 @@ pub(super) struct Scheduler<'a> {
     backend: &'a super::backend::Backend,
     maximum_workers: Option<usize>,
     hardware: Hardware,
+    quiet: bool,
 }
 impl<'a> Scheduler<'a> {
     pub fn new(backend: &'a super::backend::Backend, maximum_workers: Option<usize>) -> Self {
@@ -111,6 +112,7 @@ impl<'a> Scheduler<'a> {
             backend,
             maximum_workers,
             hardware: Hardware::detect(),
+            quiet: false,
         }
     }
     #[cfg(test)]
@@ -123,7 +125,12 @@ impl<'a> Scheduler<'a> {
             backend,
             maximum_workers,
             hardware,
+            quiet: false,
         }
+    }
+    pub fn without_observers(mut self) -> Self {
+        self.quiet = true;
+        self
     }
     pub fn run<T: Send>(
         &self,
@@ -150,10 +157,12 @@ impl<'a> Scheduler<'a> {
             self.maximum_workers,
             self.backend.runner.native_capacity(),
         )?;
-        self.backend.runner.note_resource_budget(&budget);
+        if !self.quiet {
+            self.backend.runner.note_resource_budget(&budget);
+        }
         let execute = |ordinal| {
             let result = unit(ordinal);
-            if result.is_ok() {
+            if result.is_ok() && !self.quiet {
                 self.backend.completed_work_unit(ordinal, units);
             }
             result

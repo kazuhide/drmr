@@ -178,6 +178,7 @@ pub fn save(args: &PlanArgs) -> ExitCode {
     if let Err(code) = session.check_cancelled("plan", args.json) {
         return code;
     }
+    session.progress.begin_result();
     let result = if args.json {
         let mut value = serde_json::to_value(&plan).expect("execution plan serializes");
         if let Some(measurement) = measurement {
@@ -237,6 +238,7 @@ pub fn convert(args: &ConvertArgs, path: &Path) -> ExitCode {
     if let Err(code) = session.check_cancelled("convert", args.json) {
         return code;
     }
+    session.progress.begin_result();
     let result = if args.json {
         let mut value = serde_json::to_value(&report).expect("conversion report serializes");
         value["plan_id"] = plan.plan_id.clone().into();
@@ -299,6 +301,7 @@ pub fn verify(args: &VerifyArgs, path: &Path) -> ExitCode {
             .progress
             .diagnostic("verify", "verification-mismatch");
     }
+    session.progress.begin_result();
     let result = if args.json {
         let mut value = serde_json::to_value(report).expect("plan verification serializes");
         if !passed {

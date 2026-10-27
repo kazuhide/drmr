@@ -151,6 +151,7 @@ pub fn plan(args: &PlanArgs) -> ExitCode {
     };
     let plan = inspection::plan(report, target, args.format.clone());
     progress.mark("publication");
+    progress.begin_result();
     let success = if args.json {
         write_json(&serde_json::to_value(&plan).expect("conversion plan serializes"))
     } else {

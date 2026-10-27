@@ -679,6 +679,7 @@ pub fn convert(args: &ConvertArgs) -> ExitCode {
             None,
         );
     }
+    progress.begin_result();
     let result = if args.json {
         let mut value = serde_json::to_value(&report).expect("conversion report serializes");
         if let Some(download) = download {
@@ -824,6 +825,7 @@ fn verification_result(
     if !report.passed {
         progress.diagnostic("verify", "verification-mismatch");
     }
+    progress.begin_result();
     let result = if as_json {
         let mut value = serde_json::to_value(report).expect("verification report serializes");
         if !report.passed {

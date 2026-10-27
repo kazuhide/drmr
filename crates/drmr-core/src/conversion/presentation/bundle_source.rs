@@ -151,9 +151,11 @@ pub(in crate::conversion) struct BundlePrepared<'a> {
 impl BundlePrepared<'_> {
     pub(in crate::conversion) fn check(&self, command: &Converter) -> Result<(), ConversionError> {
         self.work.directory_source()?;
-        command.run_tracks(self.receipts.len(), |index| {
-            self.receipts[index].check(&command.backend)
-        })?;
+        super::super::execution::Scheduler::new(&command.backend, command.maximum_workers)
+            .without_observers()
+            .run(self.receipts.len(), self.receipts.len(), 0, |index| {
+                self.receipts[index].check(&command.backend)
+            })?;
         self.work.directory_source()?;
         Ok(())
     }
@@ -519,5 +521,145 @@ mod tests {
                 .0,
             "source-admission-mismatch"
         );
+    }
+    struct PublicationMutation {
+        destination: PathBuf,
+        shared: PathBuf,
+        mutate_at_start: bool,
+        armed: std::sync::atomic::AtomicBool,
+        fired: std::sync::atomic::AtomicBool,
+        late_callbacks: std::sync::atomic::AtomicUsize,
+    }
+    impl crate::events::Sink for PublicationMutation {
+        fn emit(&self, record: &crate::events::Record) {
+            use std::sync::atomic::Ordering::SeqCst;
+            let text = |key| record.get(key).and_then(serde_json::Value::as_str);
+            let starting = text("stage") == Some("pipeline")
+                && text("scope") == Some("publication")
+                && text("state") == Some("started");
+            if starting {
+                self.armed.store(true, SeqCst);
+            }
+            let late = self.armed.load(SeqCst)
+                && !self.destination.exists()
+                && (text("stage") == Some("resources")
+                    || text("event") == Some("work-unit-completed"));
+            if late {
+                self.late_callbacks.fetch_add(1, SeqCst);
+            }
+            let mutate = (starting && self.mutate_at_start)
+                || (text("event") == Some("work-unit-completed") && !self.mutate_at_start);
+            if mutate && !self.destination.exists() && !self.fired.swap(true, SeqCst) {
+                let mut bytes = std::fs::read(&self.shared).unwrap();
+                let last = bytes.len() - 1;
+                bytes[last] ^= 1;
+                std::fs::write(&self.shared, bytes).unwrap();
+            }
+        }
+    }
+
+    fn observe_shared_publication(mutate_at_start: bool) {
+        use std::sync::atomic::Ordering::SeqCst;
+        let root = crate::native::private_tempdir().unwrap();
+        let input = root.path().join("source.mp4");
+        let clip =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../drmr/tests/fixtures/bbb/clip.mp4");
+        let bytes = std::fs::read(clip).unwrap();
+        crate::native::create_private_new(&input)
+            .unwrap()
+            .write_all(&bytes)
+            .unwrap();
+        let shared_owner = workspace().unwrap();
+        let clear = shared_owner.path().join("clear.mp4");
+        shared_owner
+            .create_file(&clear)
+            .unwrap()
+            .write_all(&bytes)
+            .unwrap();
+        let destination = root.path().canonicalize().unwrap().join("result");
+        let observed = Arc::new(PublicationMutation {
+            destination: destination.clone(),
+            shared: clear.clone(),
+            mutate_at_start,
+            armed: std::sync::atomic::AtomicBool::new(false),
+            fired: std::sync::atomic::AtomicBool::new(false),
+            late_callbacks: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let command = Converter::new(
+            Arc::new(ToolRunner::new(Arc::new(Secrets::new()), observed.clone())),
+            "must-not-start-packager",
+            "must-not-start-decoder",
+        )
+        .with_activity_sink(observed.clone());
+        let keys = InputKeys::default();
+        let hls = HlsInputKeys::default();
+        let source = VerificationSource {
+            input: &input,
+            input_keys: &keys,
+            hls_keys: &hls,
+        };
+        // Isolate the final shared-file guard; full media comparisons have integration coverage.
+        let receipt = Receipt::capture(&clear, &command.backend).unwrap();
+        let shared = BundlePrepared {
+            source,
+            work: shared_owner,
+            input: crate::inspection::inspect(&input).unwrap(),
+            prepared: vec![],
+            sources: vec![],
+            tracks: vec![],
+            clears: vec![clear.clone()],
+            receipts: vec![receipt],
+        };
+        let frozen = command.capture_source(&input).unwrap();
+        let stage = crate::conversion::files::UnpublishedStage::new(Some(root.path())).unwrap();
+        let media = stage.path().join("media.mp4");
+        stage
+            .create_file(&media)
+            .unwrap()
+            .write_all(&bytes)
+            .unwrap();
+        let completed = command.capture_source(&media).unwrap();
+        let guard = crate::conversion::plan::destination::OutputGuard::new(&destination).unwrap();
+        let result = command.using_frozen_source(&frozen).publish_bundle(
+            stage,
+            guard,
+            &destination,
+            &frozen,
+            &[completed],
+            Some(&shared),
+        );
+        if mutate_at_start {
+            assert!(observed.fired.load(SeqCst));
+            assert!(
+                result.is_err(),
+                "shared bytes changed by publication callback must not commit"
+            );
+            assert_eq!(result.unwrap_err().0, "shared-preparation-changed");
+            assert!(!destination.exists());
+        } else {
+            result.unwrap();
+            assert_eq!(
+                observed.late_callbacks.load(SeqCst),
+                0,
+                "final guards must not invoke observers"
+            );
+            assert!(
+                !observed.fired.load(SeqCst),
+                "a receipt completion callback must not mutate already-checked bytes"
+            );
+            assert_eq!(std::fs::read(clear).unwrap(), bytes);
+            assert!(destination.is_dir());
+        }
+        assert_eq!(std::fs::read(input).unwrap(), bytes);
+    }
+
+    #[test]
+    fn publication_started_shared_receipt_mutation_cannot_commit() {
+        observe_shared_publication(true);
+    }
+
+    #[test]
+    fn final_shared_receipt_guards_invoke_no_callbacks() {
+        observe_shared_publication(false);
     }
 }

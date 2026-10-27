@@ -258,6 +258,23 @@ impl Converter {
         destination: &Path,
         check_output: impl FnOnce() -> Result<(), ConversionError>,
     ) -> Result<(), ConversionError> {
+        self.publish_directory_transaction(stage, destination, check_output, false)
+    }
+    fn publish_directory_checked_quiet(
+        &self,
+        stage: &files::Stage,
+        destination: &Path,
+        check_output: impl FnOnce() -> Result<(), ConversionError>,
+    ) -> Result<(), ConversionError> {
+        self.publish_directory_transaction(stage, destination, check_output, true)
+    }
+    fn publish_directory_transaction(
+        &self,
+        stage: &files::Stage,
+        destination: &Path,
+        check_output: impl FnOnce() -> Result<(), ConversionError>,
+        quiet_guards: bool,
+    ) -> Result<(), ConversionError> {
         let _scope = self.backend.scope(measurement::Phase::Publication);
         self.backend.check_cancelled()?;
         self.check_plan_destination()?;
@@ -268,7 +285,11 @@ impl Converter {
             Some(&self.backend.stop),
             || {
                 self.check_downloaded()?;
-                self.check_frozen_source()?;
+                if quiet_guards {
+                    self.check_frozen_source_quiet()?;
+                } else {
+                    self.check_frozen_source()?;
+                }
                 check_output()
             },
             |source, destination| self.commit_publication(source, destination),

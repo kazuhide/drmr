@@ -234,6 +234,7 @@ fn metadata_analysis(
         }
     };
     progress.mark("publication");
+    progress.begin_result();
     let written = if args.json {
         convert_cli::json(&serde_json::to_value(&report).expect("metadata report serializes"))
     } else {
@@ -305,6 +306,7 @@ pub fn analyze(args: &AnalyzeArgs) -> ExitCode {
         );
     }
     progress.mark("publication");
+    progress.begin_result();
     let result = if args.json {
         let mut value = serde_json::to_value(&report).expect("source analysis serializes");
         if let Some(download) = download {

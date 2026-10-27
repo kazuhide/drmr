@@ -32,6 +32,13 @@ struct Configuration {
 }
 static CONFIGURATION: OnceLock<Configuration> = OnceLock::new();
 
+#[derive(Default)]
+enum Rendering {
+    #[default]
+    Live,
+    Result,
+}
+
 fn resolved(mode: Mode, human_result: bool, terminal: bool) -> Mode {
     match mode {
         Mode::Auto if human_result || terminal => Mode::Text,
@@ -66,6 +73,7 @@ struct State {
     work_completed: u64,
     pipeline: pipeline::State,
     source_retained: bool,
+    rendering: Rendering,
     display: display::Display,
 }
 
@@ -269,7 +277,7 @@ impl Progress {
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if state.finished || state.source_retained {
+        if state.finished || state.source_retained || matches!(state.rendering, Rendering::Result) {
             return;
         }
         state.source_retained = true;
@@ -302,6 +310,22 @@ impl Progress {
 
     pub(crate) fn structured(&self) -> bool {
         matches!(self.inner.mode, Mode::Json)
+    }
+
+    /// Drain live drawing before a result changes the terminal cursor.
+    /// Command success or failure remains pending until the result is written.
+    pub(crate) fn begin_result(&self) {
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.rendering = Rendering::Result;
+        if let Some(bar) = &self.inner.terminal {
+            bar.disable_steady_tick();
+            bar.finish_and_clear();
+            bar.set_draw_target(ProgressDrawTarget::hidden());
+        }
     }
 
     pub(crate) fn finish(&self) {
@@ -381,6 +405,12 @@ impl Inner {
         error: Option<&'static str>,
         force: bool,
     ) {
+        if matches!(self.mode, Mode::Text)
+            && matches!(state.rendering, Rendering::Result)
+            && !matches!(event, "finished" | "failed" | "cancelled")
+        {
+            return;
+        }
         let observe = force
             || state
                 .last_line
@@ -407,16 +437,7 @@ impl Inner {
             .zip(state.tools)
             .filter_map(|(name, count)| (count > 0).then_some(*name))
             .collect();
-        let tasks: Vec<_> = TASKS
-            .iter()
-            .zip(state.tasks)
-            .filter_map(|((_, label), count)| (count > 0).then_some(*label))
-            .collect();
-        let task = if tasks.is_empty() {
-            description(state.last_activity.unwrap_or("")).to_string()
-        } else {
-            tasks.join("; ")
-        };
+        let task = state.machine_task();
         let mut out = self
             .out
             .lock()
@@ -471,7 +492,9 @@ impl Inner {
             };
             state.display.render(
                 &mut *out,
-                self.terminal.as_ref(),
+                self.terminal
+                    .as_ref()
+                    .filter(|_| matches!(state.rendering, Rendering::Live)),
                 self.command,
                 &view,
                 self.began.elapsed(),
@@ -485,6 +508,19 @@ impl Inner {
 }
 
 impl State {
+    fn machine_task(&self) -> String {
+        let tasks: Vec<_> = TASKS
+            .iter()
+            .zip(self.tasks)
+            .filter_map(|((_, label), count)| (count > 0).then_some(*label))
+            .collect();
+        if tasks.is_empty() {
+            description(self.last_activity.unwrap_or("")).to_string()
+        } else {
+            tasks.join("; ")
+        }
+    }
+
     fn live_task(&self) -> String {
         let labels: Vec<_> = TASKS
             .iter()
@@ -781,5 +817,7 @@ impl Sink for Progress {
     }
 }
 
+#[cfg(test)]
+mod result_tests;
 #[cfg(test)]
 mod tests;
