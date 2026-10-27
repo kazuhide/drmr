@@ -220,11 +220,20 @@ impl Samples {
             // Lengths make [ab,c] distinct from [a,bc] without retaining the asset.
             self.raw.update(b"raw-sample");
             self.raw.update(u64::from(info.size).to_be_bytes());
-            if usize::try_from(info.size).map_err(|_| BAD)? > MAX_CANONICAL_BYTES {
+            let size = usize::try_from(info.size).map_err(|_| BAD)?;
+            if size > MAX_CANONICAL_BYTES {
                 if self.avc.is_some() {
                     return Err(ConversionError("native-avc-access-unit-size-limit"));
                 }
                 self.canonical = None;
+            }
+            if bytes.len() == size {
+                self.raw.update(bytes);
+                if !info.is_last_chunk {
+                    return Err(BAD);
+                }
+                // Complete callback bytes remain borrowed throughout these synchronous checks.
+                return self.record_sample(info, bytes);
             }
             self.pending = Some(Pending {
                 info: info.clone(),
@@ -258,9 +267,12 @@ impl Samples {
             return Ok(());
         }
         let pending = self.pending.take().ok_or(BAD)?;
+        self.record_sample(info, &pending.canonical_bytes)
+    }
+    fn record_sample(&mut self, info: &SampleInfo, bytes: &[u8]) -> Result<(), ConversionError> {
         if let Some((config, width, hash)) = &mut self.canonical {
             if let Some(avc) = &self.avc {
-                let unit = avc.length_prefixed_access_unit(&pending.canonical_bytes, *width)?;
+                let unit = avc.length_prefixed_access_unit(bytes, *width)?;
                 let independent = unit.is_idr
                     || unit.recovery_point.is_some_and(|recovery| {
                         recovery.frame_count == 0
@@ -273,7 +285,7 @@ impl Samples {
                 }
             }
             hash.update(b"access-unit");
-            config.units_with_width(&pending.canonical_bytes, false, *width, hash)?;
+            config.units_with_width(bytes, false, *width, hash)?;
         }
         self.record_clock(info)
     }
@@ -401,6 +413,9 @@ fn same_sample(a: &SampleInfo, b: &SampleInfo) -> bool {
         && a.preroll_distance == b.preroll_distance
         && a.protection == b.protection
 }
+
+#[cfg(test)]
+mod borrowing_tests;
 
 #[cfg(test)]
 mod tests {
