@@ -44,6 +44,14 @@ impl<'a> Window<'a> {
         // touched its output without reporting any additional valid prefix.
         self.bytes.bytes[self.available..].zeroize();
     }
+    fn complete(&mut self, input: &mut impl Read) -> Option<&mut [u8]> {
+        if !self.loaded {
+            self.fill(input);
+        }
+        // An incomplete fill must retain its prefix and deferred error for Read.
+        (self.at == 0 && self.available == self.bytes.bytes.len() && self.pending.is_none())
+            .then_some(&mut *self.bytes.bytes)
+    }
     fn read(&mut self, input: &mut impl Read, output: &mut [u8]) -> io::Result<usize> {
         if output.is_empty() {
             return Ok(0);
@@ -86,6 +94,12 @@ impl<'a> SampleInput<'a> {
             Source::Direct(input)
         };
         Ok(Self { source })
+    }
+    pub fn complete(&mut self) -> Option<&mut [u8]> {
+        match &mut self.source {
+            Source::Direct(_) => None,
+            Source::Window { input, window } => window.complete(input),
+        }
     }
 }
 impl Read for SampleInput<'_> {
@@ -144,6 +158,109 @@ mod tests {
             std::array::from_fn(|index| u8::try_from(index + 32).unwrap())
         );
         assert_eq!(file.position, Some(64));
+    }
+
+    #[test]
+    fn complete_window_borrows_only_the_current_sample_without_consuming_a_prefix() {
+        let (_owner, mut file) = input(96);
+        let mut storage = PayloadBuffer::default();
+        {
+            let mut sample = SampleInput::new(&mut file, &mut storage, 32, true).unwrap();
+            let complete = sample.complete().unwrap();
+            assert_eq!(complete, &(0_u8..32).collect::<Vec<_>>());
+            let mut prefix = [0; 3];
+            sample.read_exact(&mut prefix).unwrap();
+            assert_eq!(prefix, [0, 1, 2]);
+            assert!(sample.complete().is_none());
+            let Source::Window { input, window } = &sample.source else {
+                panic!("window required")
+            };
+            assert_eq!(input.reads, 1);
+            assert_eq!(input.position, Some(32));
+            assert_eq!(window.at, 3);
+            assert!(window.bytes.bytes[..3].iter().all(|byte| *byte == 0));
+        }
+        assert!(storage.bytes.iter().all(|byte| *byte == 0));
+        let mut next = [0; 1];
+        file.read_exact(&mut next).unwrap();
+        assert_eq!(next, [32]);
+    }
+
+    #[test]
+    fn complete_probe_does_not_read_direct_sources_or_allocate_storage() {
+        let (_owner, mut file) = input(CHUNK_BYTES + 16);
+        let mut storage = PayloadBuffer::default();
+        for (size, fragmented) in [(17, false), (CHUNK_BYTES + 16, true)] {
+            let mut sample = SampleInput::new(&mut file, &mut storage, size, fragmented).unwrap();
+            assert!(sample.complete().is_none());
+        }
+        assert_eq!(file.reads, 0);
+        assert_eq!(file.position, Some(0));
+        assert!(storage.bytes.is_empty());
+    }
+
+    #[test]
+    fn complete_window_plaintext_is_wiped_on_success_error_panic_and_cancellation() {
+        let (_owner, mut file) = input(96);
+        let mut storage = PayloadBuffer::default();
+        for action in ["success", "error", "panic", "cancel"] {
+            file.seek(std::io::SeekFrom::Start(0)).unwrap();
+            let stop = crate::concurrency::Stop::new();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let mut sample = SampleInput::new(&mut file, &mut storage, 32, true).unwrap();
+                // Model in-place plaintext held throughout a synchronous visitor.
+                sample.complete().unwrap().fill(0xab);
+                match action {
+                    "success" => Ok(()),
+                    "error" => Err(super::super::BAD),
+                    "panic" => panic!("sample visitor failed"),
+                    "cancel" => {
+                        stop.set();
+                        super::super::check_stop(&stop)
+                    }
+                    _ => unreachable!(),
+                }
+            }));
+            match action {
+                "success" => assert_eq!(result.unwrap(), Ok(())),
+                "error" => assert_eq!(result.unwrap(), Err(super::super::BAD)),
+                "panic" => assert!(result.is_err()),
+                "cancel" => assert_eq!(
+                    result.unwrap(),
+                    Err(super::super::ConversionError("cancelled"))
+                ),
+                _ => unreachable!(),
+            }
+            assert!(storage.bytes.iter().all(|byte| *byte == 0), "{action}");
+        }
+    }
+
+    #[test]
+    fn incomplete_complete_probe_retains_the_available_prefix_before_eof() {
+        let (_owner, mut file) = input(8);
+        let mut storage = PayloadBuffer::default();
+        {
+            let mut sample = SampleInput::new(&mut file, &mut storage, 17, true).unwrap();
+            assert!(sample.complete().is_none());
+            let Source::Window { window, .. } = &sample.source else {
+                panic!("window required")
+            };
+            assert_eq!(window.at, 0);
+            assert_eq!(window.available, 8);
+            assert_eq!(&window.bytes.bytes[..8], &[0, 1, 2, 3, 4, 5, 6, 7]);
+            let mut prefix = [0; 3];
+            sample.read_exact(&mut prefix).unwrap();
+            assert_eq!(prefix, [0, 1, 2]);
+            let mut tail = [0; 5];
+            sample.read_exact(&mut tail).unwrap();
+            assert_eq!(tail, [3, 4, 5, 6, 7]);
+            assert_eq!(
+                sample.read_exact(&mut [0; 1]).unwrap_err().kind(),
+                io::ErrorKind::UnexpectedEof
+            );
+            assert!(sample.complete().is_none());
+        }
+        assert!(storage.bytes.iter().all(|byte| *byte == 0));
     }
 
     #[test]
@@ -252,6 +369,11 @@ mod tests {
             let mut window = Window::new(storage.chunk(17).unwrap());
             assert_eq!(window.read(&mut input, &mut []).unwrap(), 0);
             assert_eq!(input.calls, 0);
+            assert!(window.complete(&mut input).is_none());
+            assert_eq!(window.at, 0);
+            assert_eq!(window.available, 8);
+            assert_eq!(&window.bytes.bytes[..8], &[0, 1, 2, 3, 4, 5, 6, 7]);
+            assert_eq!(input.calls, 3);
             assert_eq!(window.read(&mut input, &mut output[..3]).unwrap(), 3);
             assert_eq!(input.calls, 3);
             assert!(window.bytes.bytes[..3].iter().all(|byte| *byte == 0));
