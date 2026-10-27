@@ -2,8 +2,8 @@
 
 These measurements cover analysis, multi-output conversion and independent
 verification. The analysis sections separate historical verification-depth
-changes from comparisons at the same depth. The conversion sections compare
-two builds at each requested verification depth.
+changes from comparisons at the same depth. The conversion sections keep the
+requested verification depth fixed within each comparison.
 
 The earlier whole-presentation analysis runs use the same retained clear HLS input: about ten
 minutes, six video renditions, one audio track and 708 referenced files
@@ -464,6 +464,92 @@ Darwin `wait4` reported a different maximum-resident metric of 113.8 and
 successful checkpoints and two incomplete attempts. Those file-size checkpoints are separate from
 media verification and do not establish peak disk use. Memory and worker
 admission limits remain in effect.
+
+## Reducing copies during native conversion
+
+A later experiment uses the same retained clear HLS TS source and two CBCS
+fMP4 outputs as the shared-preparation comparison above. Each command performs
+source analysis, planning, conversion and native output checks. Network transfer,
+complete decoding and external manifest validators are outside the timed work.
+
+The builds make these changes in sequence:
+
+- **a: borrow complete samples.** When the native verifier receives a complete
+  sample at once, it checks those bytes directly instead of copying them into
+  a temporary sample buffer. Fragmented samples retain the bounded buffer path.
+- **b: reuse the output copy.** Final DRM-declaration checks read the private
+  output copy already made after conversion instead of copying every file
+  again. Fresh post-conversion capture, complete media comparisons and final
+  checks of the original files remain in place. A separately invoked `verify`
+  still captures and checks the saved files again.
+- **c: reuse encrypted-sample buffers.** For encrypted samples of at most 64 KiB
+  that are already buffered in full, the reader can decrypt the existing buffer
+  in place and pass the complete payload to the verifier. This also enables the
+  borrowing path in **a**. Large samples, incomplete reads and cases that could
+  exceed an encryption counter's range retain streaming. Temporary plaintext
+  is erased when the sample buffer is released. The sample, timestamp and DRM
+  checks remain required.
+
+All builds use Rust 1.99.0 release builds, Shaka Packager 3.8.0, synthetic test
+keys and `--max-workers 7` on the same Apple M5 host with ten logical CPUs,
+32 GiB of memory and macOS on ARM64. The fixed worker limit keeps this comparison
+consistent; normal commands can still select their resources automatically.
+
+### Complete-sample borrowing and output-copy reuse
+
+Each build ran three times, rotating the order between rounds.
+
+| Build | Median wall, s | Wall range, s | Median CPU, s |
+| --- | ---: | ---: | ---: |
+| Baseline | 57.689 | 57.072–60.680 | 117.366 |
+| a: complete-sample borrowing | 57.735 | 56.785–59.174 | 117.563 |
+| a + b: output-copy reuse | 51.976 | 51.922–56.561 | 112.386 |
+
+Complete-sample borrowing alone did not improve whole-command time in this
+batch. With output-copy reuse, all three paired comparisons used less wall
+and CPU time than the baseline. The median paired reductions were 8.93% for
+wall time, ranging from 6.79% to 10.00%, and 4.09% for CPU time, ranging from
+3.81% to 4.74%. A paired reduction compares builds within one round; it differs
+from a ratio of the separate medians in the table.
+
+Separate sample-accumulator tests measured median paired CPU reductions of
+23.33% for complete 512-byte synthetic audio payloads and 27.13% for a complete
+7,509-byte AVC sample from the licensed
+[fixture](../crates/drmr/tests/fixtures/bbb/README.md). Each case used five
+pairs after warmup. Fragmented controls were essentially unchanged. These tests
+measure sample accumulation, not codec decoding or whole-command performance.
+
+### Encrypted-sample buffer reuse
+
+The next comparison uses three pairs, alternating their order, with **a + b**
+as the baseline. It is a separate batch using the same input and settings;
+the first table's baseline and this table's final build are not paired runs.
+
+| Build | Median wall, s | Wall range, s | Median CPU, s |
+| --- | ---: | ---: | ---: |
+| a + b | 53.019 | 52.738–56.201 | 112.312 |
+| a + b + c | 51.903 | 51.175–53.363 | 106.431 |
+
+All three pairs used less wall and CPU time with encrypted-sample buffer reuse.
+The median paired reductions were 3.48% for wall time, ranging from 1.58% to
+5.05%, and 5.13% for CPU time, ranging from 5.10% to 5.39%. The small number of
+pairs and overlapping wall-time ranges limit broader performance claims.
+
+All fifteen conversions across the two batches passed the requested native
+media, timing, manifest and DRM-declaration checks, and the original source hash
+stayed unchanged. Their media and manifest structure matched. Encrypted output
+hashes are not compared between runs because initialization vectors can differ.
+Every command launched 15 Packager processes and no FFmpeg or ffprobe processes.
+These runs do not qualify license acquisition or device playback.
+
+The [numeric report](benchmarks/conversion-copy-reuse-2026-10-28.json) records
+individual runs, binary hashes, measured source identities and host load.
+CPU time includes user and system time for the command and its children.
+Other host work continued and filesystem caches were uncontrolled. The sampled
+process-family memory ranges overlap, so these batches do not establish a
+memory reduction. Sampled resident-memory sums can double-count shared pages
+and miss short-lived processes; they remain separate from the maximum-resident
+counters reported by `wait4`.
 
 ## Compare your own retained input
 

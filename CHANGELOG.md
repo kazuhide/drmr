@@ -7,6 +7,10 @@ for installation, stable interfaces and versioning.
 
 ### Changed
 
+- Reduce temporary sample copying and reuse the independently captured output
+  for final DRM-declaration checks. Keep complete media comparisons, final
+  original-file checks and bounded streaming fallbacks; record repeated
+  conversion measurements at the same verification depth.
 - Show preparation counts and media-comparison progress for named outputs.
   Qualified shared-source conversions include approximate work and remaining
   time from this operation's observed stages. Parallel output durations are
