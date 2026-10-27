@@ -600,7 +600,7 @@ fn typed_source_preparation_and_overlapping_integrity_survive_real_sink_routing(
         pipeline["integrity_batches"]["active"],
         serde_json::json!([])
     );
-    assert_eq!(pipeline["integrity_batches"]["calibrated"], false);
+    assert_eq!(pipeline["integrity_batches"]["calibrated"], true);
     progress.fail("cancelled");
     assert!(
         !String::from_utf8(bytes.lock().unwrap().clone())

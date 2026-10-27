@@ -97,7 +97,7 @@ fn repeated_preparation_and_comparison_cycles_each_advance_planned_work() {
     prepared(&mut state, 0, "source", "verification", 8, 44, 48);
     prepared(&mut state, 0, "result", "verification", 9, 48, 58);
     compared(&mut state, 0, 10, 58, 60);
-    let verified = state.json(Duration::from_secs(60));
+    let verified = state.json(Duration::from_mins(1));
     assert!(
         verified["outputs"][0]["estimated_work_percent"]
             .as_u64()
@@ -173,13 +173,16 @@ fn integrity_record(status: &str, id: u64, done: u64) -> Record {
     serde_json::from_value(serde_json::json!({"stage":"media-progress","event":"progress","task":"integrity","state":status,"batch_id":id,"completed_bytes":done*250,"total_bytes":1000,"completed_units":done,"total_units":4,"unit":"files","estimated":false,"path":"private-sentinel"})).unwrap()
 }
 fn calibrated_integrity(state: &mut State) {
-    for (status, done, second) in [("started", 0, 0), ("running", 2, 1), ("finished", 4, 2)] {
-        assert!(state.observe_media(
-            &integrity_record(status, 100, done),
-            Duration::from_secs(second)
-        ));
+    for (id, offset) in [(99, 0), (100, 2)] {
+        for (status, done, second) in [("started", 0, 0), ("running", 2, 1), ("finished", 4, 2)] {
+            assert!(state.observe_media(
+                &integrity_record(status, id, done),
+                Duration::from_secs(offset + second)
+            ));
+        }
     }
 }
+
 fn converted_pair() -> State {
     let mut state = active(true);
     calibrated_integrity(&mut state);
@@ -368,10 +371,10 @@ fn integrity_sensor_exposes_only_bounded_fixed_observations_and_calibration() {
     let value = state.json(Duration::from_secs(47));
     let sensor = &value["integrity_batches"];
     assert_eq!(sensor["active"].as_array().unwrap().len(), 16);
-    assert_eq!(sensor["completed_batches"], 1);
+    assert_eq!(sensor["completed_batches"], 2);
     assert_eq!(sensor["reference_bytes"], 1000);
-    assert_eq!(sensor["observed_bytes"], 1000);
-    assert_eq!(sensor["observed_batch_ms"], 2000);
+    assert_eq!(sensor["observed_bytes"], 2000);
+    assert_eq!(sensor["observed_batch_ms"], 4000);
     assert_eq!(sensor["calibrated"], true);
     assert_eq!(sensor["overflow"], false);
     assert_eq!(sensor["last_terminal"]["state"], "finished");
@@ -383,7 +386,7 @@ fn integrity_sensor_exposes_only_bounded_fixed_observations_and_calibration() {
 #[test]
 fn completed_integrity_replay_memory_is_bounded_without_forgetting_live_batches() {
     let mut state = converted_pair();
-    for id in 101..355 {
+    for id in 101..354 {
         assert!(state.observe_media(&integrity_record("started", id, 0), Duration::from_secs(46)));
         assert!(state.observe_media(
             &integrity_record("finished", id, 4),
@@ -419,4 +422,55 @@ fn completed_integrity_replay_memory_is_bounded_without_forgetting_live_batches(
         &integrity_record("started", 100, 0),
         Duration::from_secs(51)
     ));
+}
+
+fn hash_interval(
+    sensor: &mut super::integrity::Integrity,
+    id: u64,
+    began: Duration,
+    ended: Duration,
+) {
+    assert!(sensor.observe(&integrity_record("started", id, 0), began));
+    assert!(sensor.observe(&integrity_record("finished", id, 4), ended));
+}
+
+#[test]
+fn integrity_short_hash_batches_need_two_completed_observations() {
+    let mut sensor = super::integrity::Integrity::default();
+    hash_interval(&mut sensor, 1, Duration::ZERO, Duration::from_millis(17));
+    assert!(sensor.rates().duration(work::Class::Integrity).is_none());
+    assert_eq!(
+        sensor.json(Duration::from_millis(17)).unwrap()["calibrated"],
+        false
+    );
+    hash_interval(
+        &mut sensor,
+        2,
+        Duration::from_millis(20),
+        Duration::from_millis(43),
+    );
+    assert_eq!(
+        sensor.rates().duration(work::Class::Integrity),
+        Some(Duration::from_millis(20))
+    );
+    let value = sensor.json(Duration::from_millis(43)).unwrap();
+    assert_eq!(value["completed_batches"], 2);
+    assert_eq!(value["observed_batch_ms"], 40);
+    assert_eq!(value["calibrated"], true);
+}
+
+#[test]
+fn integrity_single_or_zero_duration_batches_do_not_calibrate() {
+    let mut single = super::integrity::Integrity::default();
+    hash_interval(&mut single, 1, Duration::ZERO, Duration::from_secs(2));
+    assert!(
+        single.rates().duration(work::Class::Integrity).is_none(),
+        "one completed hash is insufficient even if it took more than one second"
+    );
+    let mut zero = super::integrity::Integrity::default();
+    for id in [1, 2] {
+        hash_interval(&mut zero, id, Duration::ZERO, Duration::ZERO);
+    }
+    assert!(zero.rates().duration(work::Class::Integrity).is_none());
+    assert_eq!(zero.json(Duration::ZERO).unwrap()["calibrated"], false);
 }

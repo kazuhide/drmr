@@ -127,9 +127,13 @@ impl FrozenSource {
     pub fn inventory(&self) -> &SourceInventory {
         &self.original.inventory
     }
-    /// Revalidate the retained originals; this never grants permission to delete them.
+    /// Revalidate the retained originals without user callbacks; this grants no cleanup rights.
     pub fn check_original(&self) -> Result<(), ConversionError> {
         self.original.check()
+    }
+    /// Provisional bundle work only: a final callback-free guard must follow before success.
+    pub(super) fn check_original_observed(&self) -> Result<(), ConversionError> {
+        self.original.check_observed()
     }
     pub(super) fn check_original_quiet(&self) -> Result<(), ConversionError> {
         self.original.check_quiet()
@@ -199,6 +203,9 @@ pub(super) struct OriginalGuard {
 }
 impl OriginalGuard {
     pub(super) fn check(&self) -> Result<(), ConversionError> {
+        self.check_quiet()
+    }
+    fn check_observed(&self) -> Result<(), ConversionError> {
         self.check_with(&self.execution)
     }
     fn check_quiet(&self) -> Result<(), ConversionError> {

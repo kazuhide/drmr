@@ -105,7 +105,7 @@ impl Conversion<'_> {
         destination.check()?;
         command.check_downloaded()?;
         frozen
-            .check_original()
+            .check_original_observed()
             .map_err(super::super::source_error)?;
         let entrypoint = result_entrypoint(stage.path(), output);
         let bound = command.capture_source(&entrypoint)?;
@@ -131,7 +131,7 @@ impl Conversion<'_> {
         owner.backend.check_cancelled()?;
         let signaling = command.bundle_signaling(bound.entrypoint(), output, output_keys)?;
         let conformance = command.bundle_conformance(bound.entrypoint(), output, tools)?;
-        bound.check_original().map_err(output_error)?;
+        bound.check_original_observed().map_err(output_error)?;
         output_scope.finish();
         Ok((
             bound,
@@ -221,7 +221,7 @@ impl Verification<'_> {
         command.backend.check_cancelled()?;
         manifests.check_preflight(ordinal)?;
         let result = command.capture_source(&result_entrypoint(&plan.output_root, intent))?;
-        result.check_original().map_err(output_error)?;
+        result.check_original_observed().map_err(output_error)?;
         let manifest = manifests.bind(command, &result, ordinal)?;
         let empty = OperatorKeys::default();
         let output_keys = keys.outputs.get(&intent.id).unwrap_or(&empty);
@@ -249,9 +249,9 @@ impl Verification<'_> {
         let signaling = command.bundle_signaling(result.entrypoint(), intent, output_keys)?;
         let conformance = command.bundle_conformance(result.entrypoint(), intent, tools)?;
         original
-            .check_original()
+            .check_original_observed()
             .map_err(super::super::source_error)?;
-        result.check_original().map_err(output_error)?;
+        result.check_original_observed().map_err(output_error)?;
         if let Some(manifest) = manifest {
             manifest.check(command)?;
         }

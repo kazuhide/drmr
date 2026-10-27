@@ -113,7 +113,8 @@ impl Integrity {
         let mut rates = Rates::default();
         if self.unknown
             || self.aborted
-            || self.observed_nanos < Duration::from_secs(1).as_nanos()
+            || self.completed_batches < 2
+            || self.observed_nanos == 0
             || self.observed_bytes == 0
         {
             return rates;
