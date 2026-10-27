@@ -91,9 +91,14 @@ fn bundle_stage(root: &Path) -> Option<PathBuf> {
     if root.join("dash/manifest.mpd").is_file() {
         return Some(root.into());
     }
-    for entry in std::fs::read_dir(root).unwrap() {
-        let path = entry.unwrap().path();
-        let metadata = path.symlink_metadata().unwrap();
+    for entry in present_candidate(std::fs::read_dir(root))? {
+        let Some(entry) = present_candidate(entry) else {
+            continue;
+        };
+        let path = entry.path();
+        let Some(metadata) = present_candidate(path.symlink_metadata()) else {
+            continue;
+        };
         assert!(!metadata.is_symlink());
         if metadata.is_dir()
             && let Some(path) = bundle_stage(&path)
@@ -102,6 +107,69 @@ fn bundle_stage(root: &Path) -> Option<PathBuf> {
         }
     }
     None
+}
+
+fn present_candidate<T>(result: std::io::Result<T>) -> Option<T> {
+    match result {
+        Ok(value) => Some(value),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => panic!("bundle stage discovery failed: {error}"),
+    }
+}
+
+#[test]
+fn bundle_stage_discovery_skips_a_candidate_removed_before_descent() {
+    let root = drmr_core::native::private_tempdir().unwrap();
+    let candidate = root.path().join("volatile");
+    drmr_core::native::create_private_dir_new(&candidate).unwrap();
+    let discovered = std::fs::read_dir(root.path())
+        .unwrap()
+        .map(Result::unwrap)
+        .find(|entry| entry.path() == candidate)
+        .unwrap()
+        .path();
+    let metadata = discovered.symlink_metadata().unwrap();
+    assert!(metadata.is_dir());
+    assert!(!metadata.is_symlink());
+    std::fs::remove_dir(&discovered).unwrap();
+    // This is the recursive descent after a candidate's metadata was inspected.
+    assert_eq!(bundle_stage(&discovered), None);
+    assert!(!discovered.exists());
+}
+
+#[test]
+fn bundle_stage_discovery_finds_stable_bundles_and_refuses_other_io_errors() {
+    use std::io::Write as _;
+    let root = drmr_core::native::private_tempdir().unwrap();
+    let stable = root.path().join("stable");
+    drmr_core::native::create_private_dir_all(&stable.join("dash")).unwrap();
+    drmr_core::native::create_private_new(&stable.join("dash/manifest.mpd"))
+        .unwrap()
+        .write_all(b"stable publication fixture")
+        .unwrap();
+    assert_eq!(bundle_stage(root.path()), Some(stable.clone()));
+    let invalid = root.path().join("invalid\0candidate");
+    let error = std::fs::read_dir(&invalid).unwrap_err();
+    assert_ne!(error.kind(), std::io::ErrorKind::NotFound);
+    assert!(std::panic::catch_unwind(|| bundle_stage(&invalid)).is_err());
+    assert_eq!(
+        std::fs::read(stable.join("dash/manifest.mpd")).unwrap(),
+        b"stable publication fixture"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn bundle_stage_discovery_refuses_symbolic_links() {
+    let root = drmr_core::native::private_tempdir().unwrap();
+    let target = root.path().join("target");
+    let search = root.path().join("search");
+    drmr_core::native::create_private_dir_new(&target).unwrap();
+    drmr_core::native::create_private_dir_new(&search).unwrap();
+    std::os::unix::fs::symlink(&target, search.join("link")).unwrap();
+    assert!(std::panic::catch_unwind(|| bundle_stage(&search)).is_err());
+    assert!(search.join("link").symlink_metadata().unwrap().is_symlink());
+    assert!(target.is_dir());
 }
 
 impl Sink for CorruptOutput {

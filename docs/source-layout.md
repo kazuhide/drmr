@@ -47,23 +47,28 @@ output file.
 Separate source media directories need no `track-0000-` prefix. For example,
 `video/1080p-high/r000600.ts` becomes `video/1080p-high/r000600.m4s` plus
 `video/1080p-high/init.mp4` for fMP4 output. HLS TS output keeps `.ts`.
-Numbered sequences retain their starting number and zero-padding. If joining
+Supported numbered sequences retain their starting number and zero-padding. If joining
 and segmenting again changes the segment count, the sequence extends or ends
 earlier; preserving names does not promise the original boundaries.
 For the example above, numbered DASH references use `r$Number%06d$.m4s` with
 `startNumber="600"` and `init.mp4` as the initialization resource.
 
-Only physical output tracks sharing a media directory need a distinguishing
-prefix derived from the source playlist name and track kind. This prevents
+Physical output tracks sharing a media directory use a distinguishing prefix
+derived from the source playlist name and track kind. This prevents
 initialization and media files from colliding, including when stitching separates
 a multiplexed TS rendition into video and audio.
 
 HLS and DASH `list` output retain arbitrary segment stems when the output count
 matches the source count, changing the extension for the output container.
 Otherwise, they use generated names such as `seg_1.m4s` or `seg_1.ts`.
-DASH `template` and `template-timeline` require a numeric filename pattern and
-use `seg_1.m4s` when the source names cannot express one. Choose
-`--dash-addressing list` to retain arbitrary names. `base` still writes one
+DASH `template` and `template-timeline` retain names that match drmr's supported
+single-counter pattern: one contiguous run of decimal digits increasing by one
+between segments, with a fixed prefix and suffix. The fixed parts can contain
+other digits, such as codec or version numbers. Zero-padding widths up to 12
+are supported for DASH templates. Other names, including those with multiple changing
+counters or wider padding, use generated names such as `seg_1.m4s`. Choose
+`--dash-addressing list` to retain those original names when the output count
+matches. `base` still writes one
 indexed fragmented MP4 per representation. MP4 inputs have no source segment
 names, so segmentation starts with `seg_1` in the source directory; the shared
 directory collision rule still applies.
