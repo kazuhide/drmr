@@ -3,6 +3,9 @@ use super::{Analysis, TASKS, display::Units};
 use drmr_core::events::Record;
 use std::time::Duration;
 
+mod work;
+pub(super) use work::{Estimate, Media, Task};
+
 const MAX_OUTPUTS: usize = 8;
 const ACTIVITIES: [&str; 6] = [
     "input-preparation",
@@ -165,6 +168,7 @@ pub(super) struct Output {
     activities: [u64; 6],
     tasks: [u64; 4],
     analysis: Option<Analysis>,
+    work: work::Work,
 }
 impl Output {
     fn activity(&self) -> Option<&'static str> {
@@ -190,14 +194,14 @@ impl Output {
             Status::Pending => "Waiting",
             Status::Finished => "Checked",
             Status::Aborted => "Stopped",
-            Status::Running => match self.activity() {
+            Status::Running => self.work.detail().unwrap_or_else(|| match self.activity() {
                 Some("verification") => "Checking output",
                 Some("publication") => "Finalizing output",
                 Some("packaging") => "Converting media",
                 Some("input-preparation") => "Preparing media",
                 Some("inspection") => "Reading metadata",
                 _ => "Working",
-            },
+            }),
         }
     }
     pub(super) fn units(self) -> Option<Units> {
@@ -211,6 +215,16 @@ impl Output {
                 segments: true,
                 checking: a.completed == a.total && a.state != "finished",
             })
+    }
+    pub(super) fn media(self) -> Option<Media> {
+        self.work.media
+    }
+    pub(super) fn estimated_percent(self) -> u32 {
+        if self.lifetime.status == Status::Finished {
+            100
+        } else {
+            self.work.completed() * 100 / work::OUTPUT
+        }
     }
 }
 
@@ -244,6 +258,8 @@ pub(super) struct State {
     phases: [Lifetime; 4],
     outputs: [Output; MAX_OUTPUTS],
     total: Option<usize>,
+    plan: Option<work::Plan>,
+    failed: bool,
 }
 impl State {
     pub(super) fn outputs(&self) -> &[Output] {
@@ -265,6 +281,81 @@ impl State {
             .count()
     }
 
+    pub(super) fn estimates_enabled(&self) -> bool {
+        self.plan.is_some_and(|plan| plan.enabled)
+    }
+
+    pub(super) fn stop_estimates(&mut self) {
+        self.failed = true;
+    }
+
+    pub(super) fn estimate(&self, now: Duration) -> Option<Estimate> {
+        let plan = self.plan.filter(|plan| plan.enabled && !self.failed)?;
+        let source = self.lifetime(Phase::Source);
+        let source_work = if source.status == Status::Finished {
+            work::SOURCE
+        } else {
+            plan.source_completed
+        };
+        let output_work = self
+            .outputs()
+            .iter()
+            .map(|output| {
+                if output.lifetime.status == Status::Finished {
+                    work::OUTPUT
+                } else {
+                    output.work.completed()
+                }
+            })
+            .sum::<u32>();
+        let committed = source.status == Status::Finished
+            && self.outputs().len() == plan.outputs
+            && self.checked_outputs() == plan.outputs
+            && self.lifetime(Phase::Outputs).status == Status::Finished
+            && self.lifetime(Phase::FinalCheck).status == Status::Finished
+            && self.lifetime(Phase::Publication).status == Status::Finished;
+        let completed = source_work + output_work;
+        let total = plan.total();
+        let aborted = self
+            .phases
+            .iter()
+            .any(|life| life.status == Status::Aborted)
+            || self
+                .outputs()
+                .iter()
+                .any(|output| output.lifetime.status == Status::Aborted || output.work.aborted);
+        let committed = committed && !aborted;
+        let observations = self.outputs().iter().fold(0_u64, |count, output| {
+            count.saturating_add(output.work.observations)
+        });
+        let remaining = if committed {
+            Some(Duration::ZERO)
+        } else if !aborted && observations >= 2 && completed > 0 && completed < total {
+            source.began.and_then(|began| {
+                let elapsed = now.saturating_sub(began);
+                if elapsed < Duration::from_secs(1) {
+                    return None;
+                }
+                let nanos = elapsed
+                    .as_nanos()
+                    .checked_mul(u128::from(total - completed))?
+                    / u128::from(completed);
+                let millis = u64::try_from(nanos.div_ceil(1_000_000)).ok()?;
+                (millis <= 7 * 86400 * 1000).then(|| Duration::from_millis(millis))
+            })
+        } else {
+            None
+        };
+        Some(Estimate {
+            percent: if committed {
+                100
+            } else {
+                (completed * 100 / total).min(99)
+            },
+            remaining,
+        })
+    }
+
     pub(super) fn observe(&mut self, record: &Record, now: Duration) -> bool {
         let (Some(scope), Some(state)) = (
             record.get("scope").and_then(serde_json::Value::as_str),
@@ -272,11 +363,37 @@ impl State {
         ) else {
             return false;
         };
+        if scope == "work-plan" {
+            let Some(plan) = work::Plan::parse(record) else {
+                return false;
+            };
+            if state != "ready"
+                || self.phase != Some(Phase::Source)
+                || self.lifetime(Phase::Source).status != Status::Running
+                || self.plan.is_some()
+                || self.total.is_some_and(|total| total != plan.outputs)
+            {
+                return false;
+            }
+            self.plan = Some(plan);
+            return true;
+        }
+        if scope == "output-step" {
+            if state != "started" || !self.valid_context(record) {
+                return false;
+            }
+            let Some(step) = record.get("step").and_then(serde_json::Value::as_str) else {
+                return false;
+            };
+            let context = Context::parse(record).expect("validated output context");
+            return self.outputs[context.index].work.step(step);
+        }
         if scope == "output" {
             let Some(context) = Context::parse(record) else {
                 return false;
             };
             if self.total.is_some_and(|total| total != context.total)
+                || self.plan.is_some_and(|plan| plan.outputs != context.total)
                 || self.phase != Some(Phase::Outputs)
             {
                 return false;
@@ -354,13 +471,18 @@ impl State {
                 observe_count(&mut output.tasks[index], text("state"))
             }
             (Some("analysis"), Some("progress")) => {
+                let previous = output.analysis.map_or(0, |analysis| analysis.completed);
                 let Some((analysis, _)) = super::parse_analysis(output.analysis, record, now)
                 else {
                     return false;
                 };
                 output.analysis = Some(analysis);
+                output
+                    .work
+                    .analysis(analysis.completed, analysis.total, previous);
                 true
             }
+            (Some("media-progress"), Some("progress")) => output.work.observe(record),
             _ => false,
         }
     }
@@ -389,9 +511,22 @@ impl State {
             if let Some(units) = output.units() {
                 value["analysis"] = serde_json::json!({"task":"ts-preparation","completed":units.completed,"total":units.total,"checking":units.checking});
             }
+            if let Some(step) = output.work.step {
+                value["step"] = step.token().into();
+            }
+            if let Some(media) = output.media() {
+                value["media"] = media.json();
+            }
+            if self.estimates_enabled() {
+                value["estimated_work_percent"] = output.estimated_percent().into();
+            }
             value
         }).collect();
-        serde_json::json!({"phase":self.phase.map(Phase::token),"phases":phases,"outputs":outputs,"active_outputs":self.active_outputs(),"checked_outputs":self.checked_outputs()})
+        let mut value = serde_json::json!({"phase":self.phase.map(Phase::token),"phases":phases,"outputs":outputs,"active_outputs":self.active_outputs(),"checked_outputs":self.checked_outputs()});
+        if let Some(estimate) = self.estimate(now) {
+            value["estimate"] = estimate.json();
+        }
+        value
     }
 }
 
@@ -406,6 +541,9 @@ fn observe_count(count: &mut u64, state: Option<&str>) -> bool {
 fn millis(value: Duration) -> u64 {
     u64::try_from(value.as_millis()).unwrap_or(u64::MAX)
 }
+
+#[cfg(test)]
+mod estimate_tests;
 
 #[cfg(test)]
 mod tests {

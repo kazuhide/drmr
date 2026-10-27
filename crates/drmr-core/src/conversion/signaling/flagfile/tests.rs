@@ -27,6 +27,43 @@ fn assert_cleaned(path: &Path) {
 }
 
 #[test]
+fn monitored_flagfile_calls_preserve_cleanup_and_redaction_on_success_or_failure() {
+    for exit_code in [0, 7] {
+        let temp = native::private_tempdir().unwrap();
+        let program = drmr_test_support::install(
+            &temp.path().join("response"),
+            &drmr_test_support::ToolSpec {
+                sleep_ms: 550,
+                exit_code,
+                stderr: b"synthetic-private-value".to_vec(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let records = Arc::new(Collector::default());
+        let runner = ToolRunner::new(Arc::new(Secrets::new()), records.clone());
+        let (runner, owner) = runner.ensuring_cleanup_owner();
+        let mut backend = backend(&program);
+        backend.runner = Arc::new(runner);
+        let mut observations = 0;
+        let result = run_monitored(
+            &backend,
+            &[program.to_str().unwrap().into()],
+            "00aaff",
+            &["synthetic-private-value"],
+            &mut || observations += 1,
+        );
+        assert_eq!(result.is_ok(), exit_code == 0);
+        assert!(observations >= 2);
+        assert!(!owner.has_pending());
+        let text = serde_json::to_string(&records.records()).unwrap();
+        assert!(!text.contains("00aaff"));
+        assert!(!text.contains("synthetic-private-value"));
+        assert!(!text.contains("protection.flags"));
+    }
+}
+
+#[test]
 fn private_flags_are_exact_bounded_and_cleaned_after_success_or_failure() {
     let temp = native::private_tempdir().unwrap();
     let program = temp.path().join("unused");

@@ -61,6 +61,7 @@ impl Conversion<'_> {
         let output = &plan.outputs[ordinal];
         let (command, output_scope) =
             command.pipeline_output(ordinal, plan.outputs.len(), output.format);
+        command.pipeline_step(crate::conversion::pipeline::Step::Conversion);
         owner.backend.check_cancelled()?;
         destination.check()?;
         if output.format == OutputFormat::Mp4 {
@@ -99,6 +100,7 @@ impl Conversion<'_> {
                 shared,
             )
             .map_err(super::super::source_error)?;
+        command.pipeline_step(crate::conversion::pipeline::Step::Verification);
         owner.backend.check_cancelled()?;
         destination.check()?;
         command.check_downloaded()?;
@@ -125,6 +127,8 @@ impl Conversion<'_> {
             return Err(ConversionError("verification-mismatch"));
         }
         conversion.verification = verification;
+        command.pipeline_step(crate::conversion::pipeline::Step::Finalization);
+        owner.backend.check_cancelled()?;
         let signaling = command.bundle_signaling(bound.entrypoint(), output, output_keys)?;
         let conformance = command.bundle_conformance(bound.entrypoint(), output, tools)?;
         bound.check_original().map_err(output_error)?;

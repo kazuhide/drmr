@@ -121,6 +121,88 @@ fn automatic_progress_covers_interactive_json_and_preserves_redirected_json() {
 }
 
 #[test]
+fn numeric_bundle_progress_reaches_json_and_result_failure_removes_its_estimate() {
+    let bytes = Arc::new(Mutex::new(Vec::new()));
+    let (sent, _received) = mpsc::channel();
+    let progress = Progress::with_writer(
+        Mode::Json,
+        "convert",
+        Box::new(Captured {
+            bytes: bytes.clone(),
+            flushed: sent,
+        }),
+        Duration::from_mins(1),
+    );
+    let emit = |value: serde_json::Value| progress.emit(value.as_object().unwrap());
+    emit(
+        serde_json::json!({"stage":"pipeline","event":"progress","scope":"source","state":"started"}),
+    );
+    emit(
+        serde_json::json!({"stage":"pipeline","event":"progress","scope":"work-plan","state":"ready","planned_outputs":1,"estimates_enabled":true,"source_completed":2,"url":"private-sentinel"}),
+    );
+    emit(
+        serde_json::json!({"stage":"pipeline","event":"progress","scope":"source","state":"finished"}),
+    );
+    emit(
+        serde_json::json!({"stage":"pipeline","event":"progress","scope":"outputs","state":"started"}),
+    );
+    emit(
+        serde_json::json!({"stage":"pipeline","event":"progress","scope":"output","state":"started","output_index":0,"output_total":1,"output_format":"dash"}),
+    );
+    emit(
+        serde_json::json!({"stage":"pipeline","event":"progress","scope":"output-step","state":"started","step":"conversion","output_index":0,"output_total":1,"output_format":"dash"}),
+    );
+    for (state, done) in [("started", 0), ("running", 300), ("running", 600)] {
+        emit(
+            serde_json::json!({"stage":"media-progress","event":"progress","task":"packaging","state":state,"batch_id":1,"completed_bytes":done,"total_bytes":1000,"estimated":true,"output_index":0,"output_total":1,"output_format":"dash","path":"private-sentinel"}),
+        );
+    }
+    progress.mark("verification");
+    let values = records(&bytes);
+    assert_eq!(
+        values.last().unwrap()["pipeline"]["outputs"][0]["media"]["completed_bytes"],
+        600
+    );
+    assert_eq!(
+        values.last().unwrap()["pipeline"]["outputs"][0]["step"],
+        "conversion"
+    );
+    assert!(
+        values.last().unwrap()["pipeline"]["estimate"]["percent"]
+            .as_u64()
+            .unwrap()
+            < 100
+    );
+    emit(
+        serde_json::json!({"stage":"pipeline","event":"progress","scope":"output","state":"finished","output_index":0,"output_total":1,"output_format":"dash"}),
+    );
+    for (scope, state) in [
+        ("outputs", "finished"),
+        ("final-check", "started"),
+        ("publication", "started"),
+        ("final-check", "finished"),
+        ("publication", "finished"),
+    ] {
+        emit(
+            serde_json::json!({"stage":"pipeline","event":"progress","scope":scope,"state":state}),
+        );
+    }
+    assert_eq!(
+        records(&bytes).last().unwrap()["pipeline"]["estimate"]["percent"],
+        100
+    );
+    progress.begin_result();
+    progress.fail("result-output-unavailable");
+    let values = records(&bytes);
+    let last = values.last().unwrap();
+    assert_eq!(last["event"], "failed");
+    assert!(last["pipeline"].get("estimate").is_none());
+    let text = String::from_utf8(bytes.lock().unwrap().clone()).unwrap();
+    assert!(!text.contains("private-sentinel"));
+    assert!(!values.iter().any(|value| value["event"] == "finished"));
+}
+
+#[test]
 fn repeated_short_tools_do_not_flood_plain_progress() {
     let bytes = Arc::new(Mutex::new(Vec::new()));
     let (sent, _received) = mpsc::channel();

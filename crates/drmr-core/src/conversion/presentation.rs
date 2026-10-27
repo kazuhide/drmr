@@ -656,10 +656,11 @@ impl Converter {
         let kinds: Vec<_> = request.tracks.iter().map(|track| track.kind).collect();
         let audio =
             super::packaging_clock::prepare(input_owner, clear, &kinds, &self.backend.stop)?;
-        if let Some(pssh) = pssh {
-            super::signaling::flagfile::run(&self.backend, &argv, pssh, &secrets)?;
-        } else {
-            self.backend.run(&argv, "packager", &secrets)?;
+        let mut progress =
+            super::media_progress::Packaging::new(self.backend.activity.clone(), root, clear);
+        self.run_joint_packager(&argv, pssh, &secrets, output_owner, progress.as_mut())?;
+        if let Some(progress) = &progress {
+            progress.finish();
         }
         super::files::seal(root)?;
         audio.restore(output_owner, root, request.format, &self.backend.stop)?;
@@ -672,6 +673,40 @@ impl Converter {
                     .output_key
                     .ok_or(ConversionError("output-key-required"))?,
             )?;
+        }
+        Ok(())
+    }
+
+    fn run_joint_packager(
+        &self,
+        argv: &[String],
+        pssh: Option<&str>,
+        secrets: &[&str],
+        owner: &super::files::Stage,
+        progress: Option<&mut super::media_progress::Packaging>,
+    ) -> Result<(), ConversionError> {
+        if let Some(progress) = progress {
+            let mut monitor = || {
+                if owner.directory_source().is_ok() {
+                    progress.poll();
+                }
+            };
+            if let Some(pssh) = pssh {
+                super::signaling::flagfile::run_monitored(
+                    &self.backend,
+                    argv,
+                    pssh,
+                    secrets,
+                    &mut monitor,
+                )?;
+            } else {
+                self.backend
+                    .run_monitored(argv, "packager", secrets, &mut monitor)?;
+            }
+        } else if let Some(pssh) = pssh {
+            super::signaling::flagfile::run(&self.backend, argv, pssh, secrets)?;
+        } else {
+            self.backend.run(argv, "packager", secrets)?;
         }
         Ok(())
     }
@@ -1648,9 +1683,36 @@ impl Converter {
         for (a, b) in source.iter().zip(&result) {
             metadata::pair(&a.metadata, &b.metadata)?;
         }
+        let weights: Option<Vec<_>> = self.backend.activity.as_ref().and_then(|_| {
+            source
+                .iter()
+                .zip(&result)
+                .map(|(a, b)| {
+                    super::media_progress::file_bytes(&a.media)?
+                        .checked_add(super::media_progress::file_bytes(&b.media)?)
+                })
+                .collect()
+        });
+        let progress = weights.and_then(|weights| {
+            super::media_progress::Batch::comparison(self.backend.activity.clone(), weights)
+        });
         let verified_tracks = self.run_tracks(source.len(), |ordinal| {
-            self.verify_prepared_pair(&source[ordinal], &result[ordinal], source_keys, result_keys)
+            let report = self.verify_prepared_pair(
+                &source[ordinal],
+                &result[ordinal],
+                source_keys,
+                result_keys,
+            )?;
+            if let Some(progress) = &progress {
+                progress.completed(ordinal);
+            }
+            Ok(report)
         })?;
+        if let Some(progress) = &progress {
+            // Completion counts finished comparisons; their reports still
+            // determine whether the media actually satisfies every check.
+            progress.finish();
+        }
         Ok(combine_verification(
             self.backend.validation_depth,
             super::VerificationScope::Comparison,

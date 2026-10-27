@@ -204,6 +204,71 @@ fn direct_sample_bundle() -> (
 }
 
 #[test]
+fn direct_bundle_progress_declares_planned_work_and_each_checked_output_stage() {
+    let (observed, _) = direct_sample_bundle();
+    let records = observed.records();
+    let plans = records
+        .iter()
+        .filter(|record| record["stage"] == "pipeline" && record["scope"] == "work-plan")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        plans.len(),
+        1,
+        "the operation declares one stable work estimate"
+    );
+    assert_eq!(plans[0]["planned_outputs"], 2);
+    assert_eq!(plans[0]["source_completed"], 2);
+    assert_eq!(plans[0]["estimates_enabled"], true);
+    for index in 0..2 {
+        let steps = records
+            .iter()
+            .filter(|record| {
+                record["stage"] == "pipeline"
+                    && record["scope"] == "output-step"
+                    && record["output_index"] == index
+            })
+            .map(|record| record["step"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(steps, ["conversion", "verification", "finalization"]);
+        let checked = records
+            .iter()
+            .position(|record| {
+                record["stage"] == "pipeline"
+                    && record["scope"] == "output"
+                    && record["output_index"] == index
+                    && record["state"] == "finished"
+            })
+            .unwrap();
+        let finalized = records
+            .iter()
+            .position(|record| {
+                record["stage"] == "pipeline"
+                    && record["scope"] == "output-step"
+                    && record["output_index"] == index
+                    && record["step"] == "finalization"
+            })
+            .unwrap();
+        assert!(finalized < checked);
+    }
+    let committed = records
+        .iter()
+        .rposition(|record| {
+            record["stage"] == "pipeline"
+                && record["scope"] == "publication"
+                && record["state"] == "finished"
+        })
+        .unwrap();
+    for index in 0..2 {
+        assert!(records[..committed].iter().any(|record| {
+            record["stage"] == "pipeline"
+                && record["scope"] == "output"
+                && record["output_index"] == index
+                && record["state"] == "finished"
+        }));
+    }
+}
+
+#[test]
 fn direct_sample_bundle_qualifies_one_common_source() {
     let (records, _) = direct_sample_bundle();
     let admitted = records

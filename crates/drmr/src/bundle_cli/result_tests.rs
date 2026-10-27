@@ -30,7 +30,7 @@ fn output(command: &str, verification: Value) -> Value {
     value
 }
 
-fn render(command: &str, output: Value) -> String {
+fn render(command: &str, output: &Value) -> String {
     let mut bytes = Vec::new();
     write_text(&mut bytes, command, &json!({"outputs":[output]}), true).unwrap();
     String::from_utf8(bytes).unwrap()
@@ -39,7 +39,7 @@ fn render(command: &str, output: Value) -> String {
 #[test]
 fn successful_convert_and_verify_show_executed_native_checks_without_optional_noise() {
     for command in ["convert", "verify"] {
-        let text = render(command, output(command, verification()));
+        let text = render(command, &output(command, verification()));
         assert!(
             text.contains(
                 "Media comparison passed; native manifest checks passed; DRM declarations passed."
@@ -65,7 +65,7 @@ fn absent_failed_or_incomplete_media_evidence_cannot_claim_a_comparison_pass() {
         for replacement in [Value::Null, json!(false)] {
             let mut proof = verification();
             *proof.pointer_mut(pointer).unwrap() = replacement;
-            let text = render("convert", output("convert", proof));
+            let text = render("convert", &output("convert", proof));
             assert!(
                 !text.contains("Media comparison passed"),
                 "{pointer}: {text}"
@@ -86,7 +86,7 @@ fn absent_failed_or_incomplete_media_evidence_cannot_claim_a_comparison_pass() {
             proof
         },
     ] {
-        let text = render("verify", output("verify", proof));
+        let text = render("verify", &output("verify", proof));
         assert!(!text.contains("Media comparison passed"), "{text}");
     }
 }
@@ -105,7 +105,7 @@ fn manifest_errors_truncation_incompleteness_or_missing_fields_cannot_claim_a_pa
     ] {
         let mut proof = verification();
         proof["native_manifest"][field] = replacement;
-        let text = render("convert", output("convert", proof));
+        let text = render("convert", &output("convert", proof));
         assert!(
             !text.contains("native manifest checks passed"),
             "{field}: {text}"
@@ -120,7 +120,7 @@ fn mp4_comparison_does_not_claim_manifest_decoding_or_playback_checks() {
     let mut item = output("convert", proof);
     item["conversion"]["output"]["format"] = "mp4".into();
     item["signaling"] = json!({"systems":[], "verified":false});
-    let text = render("convert", item);
+    let text = render("convert", &item);
     assert!(
         text.contains("Media comparison passed; DRM declarations not requested."),
         "{text}"
@@ -142,7 +142,7 @@ fn external() -> Value {
 fn requested_external_checks_show_only_an_explicit_complete_manifest_pass() {
     let mut item = output("convert", verification());
     item["conformance"] = external();
-    let text = render("convert", item.clone());
+    let text = render("convert", &item);
     assert!(
         text.contains("external manifest checks passed (manifest only)"),
         "{text}"
@@ -159,7 +159,7 @@ fn requested_external_checks_show_only_an_explicit_complete_manifest_pass() {
     ] {
         item["conformance"] = external();
         *item["conformance"].pointer_mut(pointer).unwrap() = replacement;
-        let text = render("convert", item.clone());
+        let text = render("convert", &item);
         assert!(
             !text.contains("external manifest checks passed"),
             "{pointer}: {text}"
@@ -178,7 +178,7 @@ fn only_complete_equal_decoded_comparison_can_claim_a_decode_pass() {
         let mut proof = verification();
         proof["required_depth"] = "decoded".into();
         proof["decode_evidence"] = json!({"status":status, "equal":equal});
-        let text = render("verify", output("verify", proof));
+        let text = render("verify", &output("verify", proof));
         assert_eq!(
             text.contains("decoded media comparison passed"),
             expected,
@@ -192,7 +192,7 @@ fn requested_drm_with_failed_or_missing_evidence_is_not_reported_as_unrequested(
     for verified in [json!(false), Value::Null] {
         let mut item = output("verify", verification());
         item["signaling"]["verified"] = verified;
-        let text = render("verify", item);
+        let text = render("verify", &item);
         assert!(
             !text.contains("DRM declarations passed")
                 && !text.contains("DRM declarations not requested"),
@@ -217,7 +217,7 @@ fn manifest_only_and_plan_text_keep_their_existing_scope() {
     );
     let text = render(
         "plan",
-        json!({"id":"dash", "format":"dash", "target":"cbcs"}),
+        &json!({"id":"dash", "format":"dash", "target":"cbcs"}),
     );
     assert!(
         text.contains("Execution plan saved with 1 outputs."),

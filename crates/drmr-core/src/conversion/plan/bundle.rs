@@ -401,6 +401,16 @@ impl Converter {
         };
         let stage = files::UnpublishedStage::new(plan.output_root.parent())?;
         let share = shares_preparation(plan, &qualified);
+        command.pipeline_work_plan(
+            plan.outputs.len(),
+            share
+                && command.backend.validation_depth == ValidationDepth::Native
+                && plan
+                    .outputs
+                    .iter()
+                    .all(|output| output.conformance == ManifestValidation::None),
+        );
+        command.backend.check_cancelled()?;
         let (execution, retained) =
             execution::Execution::new(&command)
                 .prepare_shared::<(frozen::FrozenSource, BundleConversionOutput)>(

@@ -23,6 +23,23 @@ impl Phase {
     }
 }
 
+/// Explicit output stages distinguish repeated internal comparison batches.
+#[derive(Clone, Copy)]
+pub(super) enum Step {
+    Conversion,
+    Verification,
+    Finalization,
+}
+impl Step {
+    const fn token(self) -> &'static str {
+        match self {
+            Self::Conversion => "conversion",
+            Self::Verification => "verification",
+            Self::Finalization => "finalization",
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 struct Output {
     index: usize,
@@ -106,6 +123,38 @@ impl Sink for OutputSink {
 }
 
 impl Converter {
+    /// Describe only bounded logical work, without filenames or operator labels.
+    pub(super) fn pipeline_work_plan(&self, outputs: usize, estimates_enabled: bool) {
+        if !(1..=8).contains(&outputs) {
+            return;
+        }
+        if let Some(sink) = &self.backend.activity {
+            sink.emit(
+                serde_json::json!({
+                    "stage":"pipeline", "event":"progress", "scope":"work-plan",
+                    "state":"ready", "planned_outputs":outputs,
+                    "estimates_enabled":estimates_enabled, "source_completed":2,
+                })
+                .as_object()
+                .expect("fixed work-plan record"),
+            );
+        }
+    }
+
+    pub(super) fn pipeline_step(&self, step: Step) {
+        if let Some(sink) = &self.backend.activity {
+            // The child OutputSink supplies its fixed ordinal and format.
+            sink.emit(
+                serde_json::json!({
+                    "stage":"pipeline", "event":"progress", "scope":"output-step",
+                    "state":"started", "step":step.token(),
+                })
+                .as_object()
+                .expect("fixed output-step record"),
+            );
+        }
+    }
+
     pub(super) fn pipeline_phase(&self, phase: Phase) -> Scope {
         Scope::new(self.backend.activity.clone(), Target::Phase(phase))
     }
