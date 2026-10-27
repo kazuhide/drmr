@@ -187,6 +187,45 @@ pub(super) fn profile(
 }
 
 impl crate::conversion::Converter {
+    pub(in crate::conversion) fn validate_qualified_drm_source(
+        &self,
+        source: &std::path::Path,
+        admitted: &crate::conversion::SourceQualification,
+        systems: &[DrmSystem],
+        format: OutputFormat,
+        target: TargetProtection,
+    ) -> Result<(), ConversionError> {
+        profile(systems, format, target)?;
+        self.backend.check_cancelled()?;
+        if !admitted.verification.passed {
+            return Err(super::UNSUPPORTED);
+        }
+        if self.processing_mode == crate::conversion::ProcessingMode::Segments {
+            crate::conversion::processing::ProcessingSelection::resolve(
+                crate::conversion::ProcessingMode::Segments,
+                admitted.actual_format,
+                format,
+            )?;
+        } else {
+            match admitted.input.format {
+                InputFormat::Mp4 => super::clear_mp4(source, &self.backend.stop)?,
+                InputFormat::Hls if admitted.actual_format == OutputFormat::HlsTs => {}
+                _ => return Err(super::UNSUPPORTED),
+            }
+            if admitted
+                .track_protection
+                .iter()
+                .any(|value| *value != crate::conversion::SourceProtection::Clear)
+            {
+                return Err(super::UNSUPPORTED);
+            }
+        }
+        if admitted.track_protection.is_empty() || !admitted.eligible_formats.contains(&format) {
+            return Err(super::UNSUPPORTED);
+        }
+        Ok(())
+    }
+
     /// Admit the source and public DRM selection without requiring output secrets.
     /// This does not assert license service behavior or device playback compatibility.
     pub fn validate_drm_source(

@@ -233,6 +233,14 @@ URL input uses the same output list and still requires `--download-dir`. Use a
 saved plan when you want a later `verify --plan` to check the exact original
 fingerprints and output selections.
 
+Direct `convert` qualifies and plans the source within the same operation, then
+creates and verifies the outputs with bounded parallel workers. For clear HLS TS
+with two or more `stitch` fMP4 HLS/DASH outputs, it also shares joining,
+track separation and clear-media preparation. Each output receives its own
+working copy for encryption. Final source-to-result comparisons and publication
+guards still run; input checking is not a persistent cache. A separately executed
+saved plan or `verify` reads and checks the current files again.
+
 ## Publication and verification
 
 All outputs are built in a private working directory. The complete new result

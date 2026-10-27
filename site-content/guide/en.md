@@ -531,6 +531,8 @@ drmr convert clear-ts/master.m3u8 --outputs outputs.json \
 
 Use a saved plan when a later `verify --plan` must also enforce the original fingerprints and the complete output list. The single-output examples below remain supported.
 
+Direct `convert` shares source qualification and planning, then creates and checks outputs with bounded parallel workers. Clear HLS TS to two or more `stitch` fMP4 HLS/DASH outputs also shares joining and clear-track preparation. Each output gets its own working copy; final source comparisons and publication checks remain. Separate saved-plan execution and `verify` check the current files again.
+
 ## MP4 to MP4 or DASH
 
 ```sh
@@ -1331,7 +1333,7 @@ drmr analyze original.mp4 --metadata-only --json --progress json \
 drmr analyze original.mp4 --metadata-only --progress off
 ```
 
-On an interactive terminal, the current task updates in one status line. Finished stages remain above it with their durations, so completed downloads stay visible while inspection continues. Byte counts use readable units. Redirected text, or a terminal without live-display support, records stage starts and ends with occasional updates rather than every tool call or counter change. Unchanged work still produces an occasional elapsed-time notice.
+Terminal progress retains completed stages and updates the current task with elapsed time and readable byte counts. Named-output conversion shows the stages below and a status for each output. `Checked` means that output passed its checks, before the complete result is published. Internal tool names are omitted. Redirected text records milestones and occasional updates, including during unchanged work.
 
 A download can show its completed count and percentage once resource discovery has finished. TS preparation counts all segments in the media playlist currently being processed. Approximate time remaining appears only after at least one second and two further resources or segments have completed since the total became known. It estimates the rest of that download or playlist's preparation, not the entire command. Once all TS segments have been read, `checking segment boundaries` replaces the percentage and estimate until the ordered checks finish.
 
@@ -1339,20 +1341,14 @@ Discovery and other work with an unknown total show the task and elapsed time. A
 
 Resource totals include completed discovery requests and distinct media resources. Received bytes include retry traffic and can differ from retained file size. Worker selection applies to bounded independent jobs, not every stage of analysis.
 
-| Stage | Observed work |
+| Pipeline phase | Work |
 | --- | --- |
-| `configuration` | Read and validate operation settings |
-| `acquisition` | Receive source resources |
-| `inspection` | Read metadata or check source structure |
-| `input-preparation` | Prepare tracks for processing |
-| `normalization` | Prepare the supported media layout |
-| `packaging` | Write the requested media and encryption |
-| `verification` | Compare content, timing and output conditions |
-| `publication` | Publish checked output to its destination |
-| `tool-check` | Discover or probe external tools for doctor |
-| `server-startup` | Start the local console and wait for it |
+| `source` | Check and prepare the common source |
+| `outputs` | Create and check each output |
+| `final-check` | Check all files before publication |
+| `publication` | Save the complete result |
 
-Use `--progress json` for detailed numeric observations, including resource and scope counters. Scopes can overlap or nest; a closed scope may have failed. A completed work unit is not a completed conversion. The last activity is not a diagnosis. Help and version output do not invent progress. These observations do not require `--measure`; measured phase durations remain separate and may overlap.
+`--progress json` retains activity, resource and scope counters. Named-output conversion adds a `pipeline` object with these phases, per-output states and counts. Scopes can overlap or end in failure; closing one does not establish success. Help and version produce no progress. `--measure` is separate; its durations may overlap.
 
 Progress excludes URLs, keys, authentication headers, operator paths, raw metadata and raw tool output. For valid parsed operational commands, explicit `--progress json` keeps operational stderr in JSON Lines, including a fixed error code on failure or cancellation. Argument parsing errors and existing `serve` startup diagnostics/address notices can be separate text. The final result and exit value determine success, not progress records alone.
 

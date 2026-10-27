@@ -1,5 +1,7 @@
 //! Joint, codec-preserving presentations with independent evidence for every source stream.
+mod bundle_source;
 mod hls_preparation;
+pub(in crate::conversion) use bundle_source::BundlePrepared;
 pub(in crate::conversion) mod metadata;
 mod native_preparation;
 #[cfg(test)]
@@ -54,6 +56,14 @@ struct Prepared {
     clock: Option<super::native::ManifestAacClock>,
     hls_target_seconds: Option<u64>,
     hls_video_segment_ms: Option<u32>,
+}
+
+pub(in crate::conversion) struct BundleAdmission<'a> {
+    pub source: VerificationSource<'a>,
+    pub inventory: &'a super::SourceInventory,
+    pub qualified: &'a SourceQualification,
+    pub processing: super::ProcessingMode,
+    pub depth: super::ValidationDepth,
 }
 
 /// Binds the private clock context to the exact public local-track selection.
@@ -180,6 +190,25 @@ impl Converter {
         }
         metadata::apply(&mut sources, metadata)?;
         metadata::materialize(&mut sources, &self.backend, request.input_keys)?;
+        self.package_prepared_tracks(
+            &request,
+            transport_stage,
+            destination,
+            &sources,
+            &clears,
+            &work,
+        )
+    }
+
+    fn package_prepared_tracks(
+        &self,
+        request: &TrackConversionRequest<'_>,
+        transport_stage: Option<&super::files::Stage>,
+        destination: Option<PathBuf>,
+        sources: &[Prepared],
+        clears: &[PathBuf],
+        work: &super::files::Stage,
+    ) -> Result<ConversionReport, ConversionError> {
         let owned_stage = destination
             .as_deref()
             .map(|path| self.output_stage(path))
@@ -196,11 +225,11 @@ impl Converter {
             stage.path()
         };
         let owner = if request.target == TargetProtection::HlsAes128 {
-            &work
+            work
         } else {
             stage
         };
-        self.package_joint(&clears, package_root, &request, &work, owner)?;
+        self.package_joint(clears, package_root, request, work, owner)?;
         if request.format == OutputFormat::Hls
             && sources.len() == 1
             && sources[0].report.tracks[0].kind == TrackKind::Audio
@@ -208,10 +237,10 @@ impl Converter {
         {
             ts_output::single_audio_variant(package_root)?;
         }
-        self.finish_packaged_presentation(package_root, stage.path(), &sources, &request)?;
+        self.finish_packaged_presentation(package_root, stage.path(), sources, request)?;
         self.finish_output_options(stage, request.format)?;
         let (mut verification, output_tracks, input_tracks) =
-            self.verify_joint(&sources, &request, stage.path(), work.path())?;
+            self.verify_joint(sources, request, stage.path(), work.path())?;
         secure_tree(stage.path())?;
         let format = if request.format == OutputFormat::Dash {
             InputFormat::Dash
@@ -239,7 +268,7 @@ impl Converter {
             Vec::new(),
             Vec::new(),
         );
-        self.backend.checkpoint(&[&work, stage]);
+        self.backend.checkpoint(&[work, stage]);
         let native_manifest = if let Some(destination) = destination {
             Some(self.publish_manifest_output(stage, &destination, &manifest, request.format)?)
         } else {
@@ -990,6 +1019,29 @@ impl Converter {
     /// Conversion admission applies conversion's source policy; verification also permits
     /// supported existing DRM signaling. Output packaging and keys are revalidated later.
     pub fn validate_source(
+        &self,
+        input: VerificationSource<'_>,
+        purpose: SourceValidationPurpose,
+    ) -> Result<SourceQualification, ConversionError> {
+        let qualified = self.validate_source_inner(input, purpose)?;
+        if let Some(sink) = &self.backend.activity {
+            sink.emit(
+                serde_json::json!({
+                    "stage": "conversion",
+                    "event": "source-qualified",
+                    "purpose": match purpose {
+                        SourceValidationPurpose::Conversion => "conversion",
+                        SourceValidationPurpose::Verification => "verification",
+                    },
+                })
+                .as_object()
+                .unwrap(),
+            );
+        }
+        Ok(qualified)
+    }
+
+    fn validate_source_inner(
         &self,
         input: VerificationSource<'_>,
         purpose: SourceValidationPurpose,
@@ -2467,6 +2519,51 @@ impl Converter {
         }
         self.convert_inner(request)
     }
+
+    pub(in crate::conversion) fn convert_bundle_admitted(
+        &self,
+        request: ConversionRequest<'_>,
+        admitted: &BundleAdmission<'_>,
+        shared: Option<&BundlePrepared<'_>>,
+    ) -> Result<ConversionReport, ConversionError> {
+        if self.processing_mode != admitted.processing {
+            return self.convert(request);
+        }
+        if request.input != admitted.source.input
+            || !std::ptr::eq(request.input_keys, admitted.source.input_keys)
+            || !std::ptr::eq(request.hls_input_keys, admitted.source.hls_keys)
+            || self.backend.validation_depth != admitted.depth
+        {
+            return Err(ConversionError("source-admission-mismatch"));
+        }
+        self.backend.check_cancelled()?;
+        if self
+            .output_signaling
+            .as_ref()
+            .is_some_and(|value| value.is_multi())
+        {
+            let frozen = self.capture_source(request.input)?;
+            if frozen.inventory().files != admitted.inventory.files
+                || frozen.inventory().entrypoint != admitted.inventory.entrypoint
+            {
+                return Err(ConversionError("planned-source-changed"));
+            }
+            let command = self.using_frozen_source(&frozen);
+            let request = ConversionRequest {
+                input: frozen.entrypoint(),
+                ..request
+            };
+            if let Some(shared) = shared {
+                command.convert_prepared_bundle(request, admitted, shared)
+            } else {
+                command.convert_inner_admitted(request, Some(admitted.qualified))
+            }
+        } else if let Some(shared) = shared {
+            self.convert_prepared_bundle(request, admitted, shared)
+        } else {
+            self.convert_inner_admitted(request, Some(admitted.qualified))
+        }
+    }
     fn using_prepared_target(
         &self,
         prepared: &[Prepared],
@@ -2485,11 +2582,19 @@ impl Converter {
         &self,
         request: ConversionRequest<'_>,
     ) -> Result<ConversionReport, ConversionError> {
+        self.convert_inner_admitted(request, None)
+    }
+
+    fn convert_inner_admitted(
+        &self,
+        request: ConversionRequest<'_>,
+        admitted: Option<&SourceQualification>,
+    ) -> Result<ConversionReport, ConversionError> {
         if self.processing_mode == super::ProcessingMode::Segments {
             validate_output(&request)?;
             return super::segments::convert(self, request);
         }
-        self.validate_signaling_input(&request)?;
+        self.validate_signaling_input(&request, admitted)?;
         validate_output(&request)?;
         let work = workspace()?;
         let input = VerificationSource {

@@ -239,9 +239,10 @@ fn metadata_analysis(
     } else {
         crate::inspect_cli::summary(&report, &mut std::io::stdout().lock())
     };
-    progress.finish();
     if written.is_err() {
         progress.diagnostic("analyze", "result-output-unavailable");
+    } else {
+        progress.finish();
     }
     ExitCode::from(u8::from(written.is_err()))
 }
@@ -317,9 +318,10 @@ pub fn analyze(args: &AnalyzeArgs) -> ExitCode {
     } else {
         text_report(&report)
     };
-    progress.finish();
     if result.is_err() {
         progress.diagnostic("analyze", "result-output-unavailable");
+    } else {
+        progress.finish();
     }
     ExitCode::from(u8::from(result.is_err()))
 }

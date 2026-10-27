@@ -156,8 +156,9 @@ pub fn plan(args: &PlanArgs) -> ExitCode {
     } else {
         text_plan(&plan).is_ok()
     };
-    progress.finish();
-    if !success {
+    if success {
+        progress.finish();
+    } else {
         progress.diagnostic("plan", "result-output-unavailable");
     }
     ExitCode::from(u8::from(!success || !plan.compatible))

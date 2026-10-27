@@ -47,11 +47,11 @@ pub fn run(as_json: bool, probe: bool, decode: bool, route: &str) -> ExitCode {
         // actual cleanup state at publication rather than its historical state.
         report.cleanup_status = "confirmed";
     }
-    progress.finish();
     if print_report(&report, as_json, probe, &mut std::io::stdout().lock()).is_err() {
         progress.diagnostic("doctor", "result-output-unavailable");
         return ExitCode::from(1);
     }
+    progress.finish();
     ExitCode::from(u8::from(!report.ready))
 }
 

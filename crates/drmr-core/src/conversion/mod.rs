@@ -25,6 +25,7 @@ mod observation;
 pub mod output_options;
 mod packaging_clock;
 mod packets;
+mod pipeline;
 pub mod processing;
 pub use processing::ProcessingMode;
 pub mod plan;

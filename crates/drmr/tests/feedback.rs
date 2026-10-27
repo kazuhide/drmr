@@ -157,7 +157,15 @@ fn redirected_text_reports_steps_and_elapsed_without_internal_counters_or_fake_p
         String::from_utf8_lossy(&result.stderr)
     );
     let progress = String::from_utf8(result.stderr).unwrap();
-    assert!(progress.contains("Verifying media"), "{progress}");
+    assert!(progress.contains("Converting media"), "{progress}");
+    assert!(
+        progress.matches("Converting media").count() <= 2,
+        "{progress}"
+    );
+    assert!(
+        !progress.contains("packager") && !progress.contains("ffprobe"),
+        "{progress}"
+    );
     assert!(
         progress.contains("elapsed") && progress.contains("Finished convert in"),
         "{progress}"
@@ -372,4 +380,102 @@ fn missing_real_source_keys_have_fixed_json_and_leave_source_and_destination_unc
             }
         }
     }
+}
+
+#[test]
+fn a_closed_conversion_result_stream_never_reports_finished_first() {
+    use std::process::Stdio;
+    let root = tempfile::tempdir().unwrap();
+    let output = root.path().join("result.mp4");
+    let (reader, writer) = std::io::pipe().unwrap();
+    drop(reader);
+    let result = Command::new(env!("CARGO_BIN_EXE_drmr"))
+        .arg("convert")
+        .arg(clip())
+        .args(["--to", "clear", "--format", "mp4", "--output"])
+        .arg(&output)
+        .args(["--progress", "json", "--json"])
+        .stdout(Stdio::from(writer))
+        .output()
+        .unwrap();
+    assert_eq!(result.status.code(), Some(1));
+    let text = String::from_utf8(result.stderr).unwrap();
+    let records: Vec<Value> = text
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert!(
+        output.is_file(),
+        "the media completed before the result writer failed: {text}"
+    );
+    assert_eq!(
+        records.last().unwrap()["error_code"],
+        "result-output-unavailable"
+    );
+    assert!(
+        records.iter().all(|record| record["event"] != "finished"),
+        "{text}"
+    );
+}
+
+#[test]
+fn saved_plan_result_streams_never_report_finished_before_a_write_failure() {
+    use std::ffi::OsString;
+    use std::process::Stdio;
+    let root = tempfile::tempdir().unwrap();
+    let output = root.path().join("result.mp4");
+    let plan = root.path().join("conversion.plan.json");
+    let cases: Vec<Vec<OsString>> = vec![
+        vec!["analyze".into(), clip().as_os_str().into()],
+        vec![
+            "plan".into(),
+            clip().as_os_str().into(),
+            "--to".into(),
+            "clear".into(),
+            "--format".into(),
+            "mp4".into(),
+            "--output".into(),
+            output.as_os_str().into(),
+            "--save".into(),
+            plan.as_os_str().into(),
+        ],
+        vec!["convert".into(), "--plan".into(), plan.as_os_str().into()],
+        vec!["verify".into(), "--plan".into(), plan.as_os_str().into()],
+        vec![
+            "verify".into(),
+            output.as_os_str().into(),
+            "--source".into(),
+            clip().as_os_str().into(),
+        ],
+    ];
+    let mut premature = Vec::new();
+    for args in cases {
+        let (reader, writer) = std::io::pipe().unwrap();
+        drop(reader);
+        let result = Command::new(env!("CARGO_BIN_EXE_drmr"))
+            .args(&args)
+            .args(["--progress", "json", "--json"])
+            .stdout(Stdio::from(writer))
+            .output()
+            .unwrap();
+        assert_eq!(result.status.code(), Some(1));
+        let text = String::from_utf8(result.stderr).unwrap();
+        let records: Vec<Value> = text
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(
+            records.last().unwrap()["error_code"],
+            "result-output-unavailable",
+            "{text}"
+        );
+        if records.iter().any(|record| record["event"] == "finished") {
+            premature.push(args[0].to_string_lossy().to_string());
+        }
+    }
+    assert!(plan.is_file() && output.is_file());
+    assert!(
+        premature.is_empty(),
+        "premature success before result write: {premature:?}"
+    );
 }

@@ -2,7 +2,6 @@
 mod execution;
 mod outputs;
 use super::{EXISTS, INVALID, KIND, LIMIT, UNSAFE, UNSUPPORTED, absolute, destination};
-#[cfg(test)]
 use crate::conversion::FrozenSource;
 use crate::{
     conversion::{
@@ -29,6 +28,12 @@ use std::{
 const MAX_OUTPUTS: usize = 8;
 const KEYS: ConversionError = ConversionError("execution-plan-output-keys-mismatch");
 const DRM: ConversionError = ConversionError("execution-plan-drm-mismatch");
+
+struct PreparedPlan {
+    plan: BundlePlan,
+    frozen: FrozenSource,
+    qualified: SourceQualification,
+}
 
 /// A required external check validates the final manifest, without a decrypted shadow copy.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -217,10 +222,46 @@ pub struct BundleVerificationReport {
 }
 
 impl Converter {
+    /// Convert one local source into independently verified named outputs.
+    pub fn convert_bundle(
+        &self,
+        input: &Path,
+        outputs: &[BundleOutputIntent],
+        output_root: &Path,
+        keys: &BundleOperatorKeys,
+        tools: &ManifestValidationTools,
+    ) -> Result<BundleConversionReport, ConversionError> {
+        let command = self.bundle_cohort();
+        let phase = command.pipeline_phase(crate::conversion::pipeline::Phase::Source);
+        let PreparedPlan {
+            plan,
+            frozen,
+            qualified,
+        } = command.prepare_bundle_plan(BundlePlanRequest {
+            input: VerificationSource {
+                input,
+                input_keys: &keys.input,
+                hls_keys: &keys.hls_input,
+            },
+            output_root,
+            outputs,
+        })?;
+        command
+            .with_processing_clone(ProcessingMode::Auto)
+            .execute_bundle_plan_inner(&plan, keys, tools, Some((frozen, qualified)), Some(phase))
+    }
+
     pub fn create_bundle_plan(
         &self,
         request: BundlePlanRequest<'_>,
     ) -> Result<BundlePlan, ConversionError> {
+        Ok(self.prepare_bundle_plan(request)?.plan)
+    }
+
+    fn prepare_bundle_plan(
+        &self,
+        request: BundlePlanRequest<'_>,
+    ) -> Result<PreparedPlan, ConversionError> {
         self.backend.check_cancelled()?;
         let outputs = normalized(request.outputs)?;
         let output_root = super::super::destination(request.output_root).map_err(|_| UNSAFE)?;
@@ -256,9 +297,23 @@ impl Converter {
                 return Err(UNSUPPORTED);
             }
             if !output.drms.is_empty() {
-                command
-                    .with_processing_clone(processing.selection.resolved)
-                    .validate_drm_source(source, &output.drms, output.format, output.target)?;
+                let child = command.with_processing_clone(processing.selection.resolved);
+                if child.processing_mode == command.processing_mode {
+                    child.validate_qualified_drm_source(
+                        source.input,
+                        &qualified,
+                        &output.drms,
+                        output.format,
+                        output.target,
+                    )?;
+                } else {
+                    child.validate_drm_source(
+                        source,
+                        &output.drms,
+                        output.format,
+                        output.target,
+                    )?;
+                }
             }
         }
         let output_options = resolve_output_settings(
@@ -284,7 +339,11 @@ impl Converter {
         validate(&plan)?;
         frozen.check_original().map_err(super::source_error)?;
         destination.check()?;
-        Ok(plan)
+        Ok(PreparedPlan {
+            plan,
+            frozen,
+            qualified,
+        })
     }
 
     /// Stage and check every child before publishing one new result directory.
@@ -295,7 +354,7 @@ impl Converter {
         tools: &ManifestValidationTools,
     ) -> Result<BundleConversionReport, ConversionError> {
         self.bundle_cohort()
-            .execute_bundle_plan_inner(plan, keys, tools)
+            .execute_bundle_plan_inner(plan, keys, tools, None, None)
     }
 
     fn execute_bundle_plan_inner(
@@ -303,10 +362,14 @@ impl Converter {
         plan: &BundlePlan,
         keys: &BundleOperatorKeys,
         tools: &ManifestValidationTools,
+        admitted: Option<(FrozenSource, SourceQualification)>,
+        source_phase: Option<crate::conversion::pipeline::Scope>,
     ) -> Result<BundleConversionReport, ConversionError> {
         // Declared before every owned source/stage so all cleanup, including
         // failure and unwind, finishes before its retained bytes are returned.
         let _retained;
+        let source_phase = source_phase
+            .unwrap_or_else(|| self.pipeline_phase(crate::conversion::pipeline::Phase::Source));
         validate(plan)?;
         for output in &plan.outputs {
             self.check_saved_processing(plan.processing_mode(&output.id))?;
@@ -315,9 +378,14 @@ impl Converter {
         self.backend.check_cancelled()?;
         self.refuse_bundle_signaling()?;
         let destination = destination::OutputGuard::new(&plan.output_root)?;
-        let frozen = self
-            .reopen_source(&plan.source)
-            .map_err(super::source_error)?;
+        let (frozen, qualified) = match admitted {
+            Some((frozen, qualified)) => (frozen, Some(qualified)),
+            None => (
+                self.reopen_source(&plan.source)
+                    .map_err(super::source_error)?,
+                None,
+            ),
+        };
         self.check_downloaded_inventory(frozen.inventory())?;
         let command = self.using_frozen_source(&frozen).with_decode(
             self.backend.validation_depth.max(plan.minimum_depth()) == ValidationDepth::Decoded,
@@ -327,11 +395,22 @@ impl Converter {
             input_keys: &keys.input,
             hls_keys: &keys.hls_input,
         };
-        command.validate_bundle_source(plan, source)?;
+        let qualified = match qualified {
+            Some(qualified) => qualified,
+            None => command.validate_bundle_source(plan, source)?,
+        };
         let stage = files::UnpublishedStage::new(plan.output_root.parent())?;
-        let (execution, retained) = execution::Execution::new(&command)
-            .prepare::<(frozen::FrozenSource, BundleConversionOutput)>(plan, None)?;
+        let share = shares_preparation(plan, &qualified);
+        let (execution, retained) =
+            execution::Execution::new(&command)
+                .prepare_shared::<(frozen::FrozenSource, BundleConversionOutput)>(
+                    plan, None, share,
+                )?;
         _retained = retained;
+        let shared = share
+            .then(|| execution.command.prepare_bundle_presentation(source))
+            .transpose()?;
+        source_phase.finish();
         let pipeline = outputs::Conversion {
             owner: self,
             command: &execution.command,
@@ -340,26 +419,41 @@ impl Converter {
             tools,
             destination: &destination,
             frozen: &frozen,
+            qualified: &qualified,
+            shared: shared.as_ref(),
             stage: &stage,
         };
+        let outputs_phase = self.pipeline_phase(crate::conversion::pipeline::Phase::Outputs);
         let completed = execution.run(plan, |ordinal| pipeline.run(ordinal));
         // The pool has drained here. A redirected parent can make several child
         // paths unreadable; retain the namespace refusal rather than whichever
         // media-read error happens to win the ordered child result.
         destination.check()?;
         let completed = completed?;
+        outputs_phase.finish();
         let (completed, outputs): (Vec<_>, Vec<_>) = completed.into_iter().unzip();
         self.backend.check_cancelled()?;
+        let final_check = self.pipeline_phase(crate::conversion::pipeline::Phase::FinalCheck);
         frozen.check_original().map_err(super::source_error)?;
+        let mut publication = None;
         command
             .using_plan_destination(destination)
             .publish_directory_checked(&stage, &plan.output_root, || {
+                if let Some(shared) = &shared {
+                    shared.check(&execution.command)?;
+                }
                 for result in &completed {
                     result.check_original().map_err(output_error)?;
                 }
+                final_check.finish();
+                publication =
+                    Some(self.pipeline_phase(crate::conversion::pipeline::Phase::Publication));
                 Ok(())
             })?;
         stage.finish_publication();
+        if let Some(phase) = publication {
+            phase.finish();
+        }
         Ok(BundleConversionReport {
             kind: "bundle-conversion",
             schema_version: 2,
@@ -372,7 +466,7 @@ impl Converter {
         &self,
         plan: &BundlePlan,
         source: VerificationSource<'_>,
-    ) -> Result<(), ConversionError> {
+    ) -> Result<SourceQualification, ConversionError> {
         let mut command = self.with_processing_clone(source_processing(
             plan.outputs
                 .iter()
@@ -398,12 +492,26 @@ impl Converter {
         revalidate_output_settings(&command, plan, source.input, &qualified)?;
         for output in &plan.outputs {
             if !output.drms.is_empty() {
-                command
-                    .with_processing_clone(plan.processing_mode(&output.id))
-                    .validate_drm_source(source, &output.drms, output.format, output.target)?;
+                let child = command.with_processing_clone(plan.processing_mode(&output.id));
+                if child.processing_mode == command.processing_mode {
+                    child.validate_qualified_drm_source(
+                        source.input,
+                        &qualified,
+                        &output.drms,
+                        output.format,
+                        output.target,
+                    )?;
+                } else {
+                    child.validate_drm_source(
+                        source,
+                        &output.drms,
+                        output.format,
+                        output.target,
+                    )?;
+                }
             }
         }
-        Ok(())
+        Ok(qualified)
     }
 
     /// Reopen every current output and compare it with one freshly byte-bound original graph.
@@ -650,6 +758,20 @@ fn source_processing(modes: impl Iterator<Item = ProcessingMode>) -> ProcessingM
     } else {
         ProcessingMode::Stitch
     }
+}
+
+fn shares_preparation(plan: &BundlePlan, qualified: &SourceQualification) -> bool {
+    plan.outputs.len() > 1
+        && qualified.actual_format == OutputFormat::HlsTs
+        && !qualified.track_protection.is_empty()
+        && qualified
+            .track_protection
+            .iter()
+            .all(|protection| *protection == crate::conversion::SourceProtection::Clear)
+        && plan.outputs.iter().all(|output| {
+            matches!(output.format, OutputFormat::Dash | OutputFormat::Hls)
+                && plan.processing_mode(&output.id) == ProcessingMode::Stitch
+        })
 }
 
 fn resolve_output_settings(

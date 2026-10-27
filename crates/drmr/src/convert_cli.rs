@@ -460,9 +460,7 @@ fn execute_conversion(
                     .expect("clap requires a direct output"),
                 fetch_policy.expect("URL fetch policy was checked"),
             )?;
-            if !progress.structured() {
-                eprintln!("Downloaded source retained in the requested download directory.");
-            }
+            progress.source_retained();
             Some(source)
         }
         crate::download_cli::Input::Local(_) => None,
@@ -681,7 +679,6 @@ pub fn convert(args: &ConvertArgs) -> ExitCode {
             None,
         );
     }
-    progress.finish();
     let result = if args.json {
         let mut value = serde_json::to_value(&report).expect("conversion report serializes");
         if let Some(download) = download {
@@ -697,6 +694,8 @@ pub fn convert(args: &ConvertArgs) -> ExitCode {
     };
     if result.is_err() {
         progress.diagnostic("convert", "result-output-unavailable");
+    } else {
+        progress.finish();
     }
     ExitCode::from(u8::from(result.is_err()))
 }
@@ -752,7 +751,6 @@ pub fn verify(args: &VerifyArgs) -> ExitCode {
             None,
         );
     }
-    progress.finish();
     verification_result(&report, args.json, measurement, &progress)
 }
 
@@ -848,6 +846,8 @@ fn verification_result(
     };
     if result.is_err() {
         progress.diagnostic("verify", "result-output-unavailable");
+    } else if report.passed {
+        progress.finish();
     }
     ExitCode::from(u8::from(result.is_err() || !report.passed))
 }
