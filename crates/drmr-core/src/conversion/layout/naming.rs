@@ -607,7 +607,10 @@ mod tests {
             "a\0.ts",
         ] {
             assert!(
-                SegmentNames::infer(&[PathBuf::from(name)]).is_err(),
+                serde_json::from_value::<SegmentNames>(
+                    serde_json::json!({"kind":"listed","names":[name]})
+                )
+                .is_err(),
                 "{name:?}"
             );
         }
@@ -621,6 +624,30 @@ mod tests {
                 COLLISION
             );
         }
+    }
+
+    #[test]
+    fn native_nested_paths_keep_basenames_and_refuse_unsafe_components() {
+        for parent in [PathBuf::from("a"), Path::new("video").join("720p")] {
+            let names = SegmentNames::infer(&[parent.join("b.ts")]).unwrap();
+            assert_eq!(names.file_name(0, 1, "m4s").unwrap(), "b.m4s");
+        }
+        for path in [
+            "../a.ts",
+            "/a.ts",
+            "nul.ts",
+            "COM1.ts",
+            "a:stream.ts",
+            "a\0.ts",
+        ] {
+            assert!(
+                SegmentNames::infer(&[PathBuf::from(path)]).is_err(),
+                "{path:?}"
+            );
+        }
+        // A backslash is a native directory separator only on Windows.
+        #[cfg(not(windows))]
+        assert!(SegmentNames::infer(&[PathBuf::from("a\\b.ts")]).is_err());
     }
 
     #[test]
