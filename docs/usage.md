@@ -172,7 +172,9 @@ drmr analyze media.mp4 --metadata-only --json --progress json \
 drmr analyze media.mp4 --metadata-only --progress off
 ```
 
-On an interactive terminal, one status line updates in place with the current task and elapsed time. Finished stages remain above it with their durations, so the download history stays visible while inspection continues. Received bytes use readable units. Redirected text, or a terminal without live-display support, records stage starts and ends with occasional updates rather than every tool call or counter change. Unchanged work still produces an occasional elapsed-time notice.
+On an interactive terminal, the current task updates in place with elapsed time and readable byte counts. Finished stages remain visible. Named-output conversion shows four stages: checking the source, creating and checking outputs, checking the final result, and saving it. Each output has its own format and status, so concurrent work does not appear as repeated completed stages. An output marked `Checked` still awaits publication of the complete result. Internal tool names are omitted from normal text. Redirected text records these milestones and occasional updates rather than every tool call. Unchanged work still produces an occasional elapsed-time notice.
+
+Final checks are part of publication, so their durations overlap and completion is reported after the result is committed.
 
 When resource discovery has finished, the download can show its completed count and percentage. TS preparation counts segments across the entire media playlist currently being processed. Approximate time remaining appears only after at least one second and two more completed resources or segments have been observed since the total became known. The estimate covers that download or playlist's preparation, not the entire command. After all TS segments have been read, `checking segment boundaries` replaces the percentage and estimate until the ordered checks finish.
 
@@ -180,7 +182,7 @@ Discovery and other work with an unknown total show the task and elapsed time. A
 
 Download resource totals include completed discovery requests and the distinct media resources. Received bytes include data received again during retries and can differ from the retained file size. Worker selection applies to bounded independent jobs and does not mean every analysis stage runs with that many workers.
 
-Use `--progress json` when a script needs the detailed numeric observations, including resource and scope counters. A closed scope is not a successful conversion: scopes can overlap, nest or end with failure. The last activity is not a diagnosis. Progress works without `--measure`; measured phase durations remain separate and can overlap.
+Use `--progress json` when a script needs the detailed numeric observations, including resource and scope counters. Named-output conversion also includes a `pipeline` object with the overall phase, per-output states and counts. Its phases are `source`, `outputs`, `final-check` and `publication`; output rows use fixed format labels and numeric ordinals. Existing activity and scope fields remain available. A closed scope is not a successful conversion: scopes can overlap, nest or end with failure. The last activity is not a diagnosis. Progress works without `--measure`; measured phase durations remain separate and can overlap.
 
 Stages include configuration, acquisition, inspection, input preparation, normalization, packaging, verification and publication. `doctor` reports tool checks; `serve` reports startup and waiting. Quick metadata reads and plans can finish before a heartbeat. Help and version output do not invent work records.
 

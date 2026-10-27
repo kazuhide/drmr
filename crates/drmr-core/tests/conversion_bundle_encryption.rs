@@ -11,7 +11,7 @@ use drmr_core::{
             bundle::{BundleOutputIntent, BundlePlanRequest, ManifestValidation},
         },
     },
-    events::NoSink,
+    events::{Collector, NoSink, Record, Sink},
     inspection::{OutputFormat, TargetProtection},
     toolrun::{Secrets, ToolRunner},
 };
@@ -19,7 +19,10 @@ use serde_json::json;
 use std::{
     io::Write as _,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 const KID: &str = "000102030405060708090a0b0c0d0e0f";
@@ -142,6 +145,96 @@ fn outputs() -> Vec<BundleOutputIntent> {
         conformance: ManifestValidation::None,
     })
     .collect()
+}
+
+fn direct_sample_bundle() -> (
+    Arc<Collector>,
+    Vec<drmr_core::conversion::plan::bundle::BundleConversionOutput>,
+) {
+    let root = drmr_core::native::private_tempdir().unwrap();
+    let source = root.path().join("source");
+    let input = transport(&source);
+    let original = common::snapshot_tree(&source);
+    let mut keys = keys(root.path());
+    keys.outputs
+        .retain(|id, _| matches!(id.as_str(), "dash" | "hls"));
+    let outputs = outputs().into_iter().take(2).collect::<Vec<_>>();
+    let records = Arc::new(Collector::default());
+    let command = Converter::new(
+        Arc::new(ToolRunner::new(Arc::new(Secrets::new()), records.clone())),
+        "packager",
+        "missing-decoder",
+    )
+    .with_activity_sink(records.clone());
+    let result = command
+        .convert_bundle(
+            &input,
+            &outputs,
+            &root.path().join("result"),
+            &keys,
+            &ManifestValidationTools::default(),
+        )
+        .unwrap();
+    assert_eq!(result.outputs.len(), 2);
+    for output in &result.outputs {
+        assert!(output.conversion.verification.passed);
+        assert!(output.conversion.verification.checks.is_pass());
+        assert!(output.signaling.verified);
+        assert!(
+            output
+                .conversion
+                .verification
+                .native_manifest
+                .as_ref()
+                .unwrap()
+                .is_clean_for_scope()
+        );
+        assert!(!output.conversion.verification.license_playback_verified);
+    }
+    assert_eq!(common::snapshot_tree(&source), original);
+    assert_eq!(
+        common::names_with_prefix(root.path(), ".drmr-convert-"),
+        Vec::<String>::new()
+    );
+    assert!(!records.records().iter().any(|record| matches!(
+        record.get("tool").and_then(serde_json::Value::as_str),
+        Some("ffmpeg" | "ffprobe")
+    )));
+    (records, result.outputs)
+}
+
+#[test]
+fn direct_sample_bundle_qualifies_one_common_source() {
+    let (records, _) = direct_sample_bundle();
+    let admitted = records
+        .records()
+        .iter()
+        .filter(|record| {
+            record.get("event").and_then(serde_json::Value::as_str) == Some("source-qualified")
+                && record.get("purpose").and_then(serde_json::Value::as_str) == Some("conversion")
+        })
+        .count();
+    assert_eq!(
+        admitted, 1,
+        "common source admission must not repeat per DRM output or plan replay"
+    );
+}
+
+#[test]
+fn direct_sample_bundle_normalizes_clear_tracks_once() {
+    let (records, _) = direct_sample_bundle();
+    let invocations = records
+        .records()
+        .iter()
+        .filter(|record| {
+            record.get("event").and_then(serde_json::Value::as_str) == Some("command")
+                && record.get("tool").and_then(serde_json::Value::as_str) == Some("packager")
+        })
+        .count();
+    assert_eq!(
+        invocations, 6,
+        "two input tracks demux and normalize once, then package independently for each of two outputs"
+    );
 }
 
 #[test]
@@ -267,4 +360,253 @@ fn single_sample_aes_transport_plan_uses_the_hls_key_domain() {
 #[test]
 fn single_aes128_transport_plan_uses_the_hls_key_domain() {
     single_transport_plan("aes-ts", TargetProtection::HlsAes128);
+}
+
+struct DirectInterruption {
+    fired: AtomicBool,
+    stop: drmr_core::concurrency::Stop,
+    source: Option<PathBuf>,
+}
+
+impl Sink for DirectInterruption {
+    fn emit(&self, record: &Record) {
+        let text = |key| record.get(key).and_then(serde_json::Value::as_str);
+        if text("stage") == Some("pipeline")
+            && text("scope") == Some("output")
+            && text("state") == Some("finished")
+            && !self.fired.swap(true, Ordering::SeqCst)
+        {
+            if let Some(source) = &self.source {
+                let mut bytes = std::fs::read(source).unwrap();
+                let last = bytes.len() - 1;
+                bytes[last] ^= 1;
+                std::fs::write(source, bytes).unwrap();
+            } else {
+                self.stop.set();
+            }
+        }
+    }
+}
+
+fn interrupt_direct_bundle(change_source: bool) {
+    let root = drmr_core::native::private_tempdir().unwrap();
+    let source = root.path().join("source");
+    let input = transport(&source);
+    let segment = std::fs::read_dir(&source)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| path.extension().is_some_and(|extension| extension == "ts"))
+        .unwrap();
+    let original = std::fs::read(&segment).unwrap();
+    let mut keys = keys(root.path());
+    keys.outputs
+        .retain(|id, _| matches!(id.as_str(), "dash" | "hls"));
+    let outputs = outputs().into_iter().take(2).collect::<Vec<_>>();
+    let observed = Arc::new(DirectInterruption {
+        fired: AtomicBool::new(false),
+        stop: drmr_core::concurrency::Stop::new(),
+        source: change_source.then(|| segment.clone()),
+    });
+    let foreign = root.path().join("foreign");
+    std::fs::write(&foreign, b"must remain").unwrap();
+    let output = root.path().join("result");
+    let error = Converter::new(
+        Arc::new(ToolRunner::new(Arc::new(Secrets::new()), Arc::new(NoSink))),
+        "packager",
+        "missing-decoder",
+    )
+    .with_stop(observed.stop.clone())
+    .with_activity_sink(observed.clone())
+    .convert_bundle(
+        &input,
+        &outputs,
+        &output,
+        &keys,
+        &ManifestValidationTools::default(),
+    )
+    .unwrap_err();
+    assert!(observed.fired.load(Ordering::SeqCst));
+    assert_eq!(
+        error.0,
+        if change_source {
+            "execution-plan-source-changed"
+        } else {
+            "cancelled"
+        }
+    );
+    assert!(!output.exists());
+    assert!(input.exists() && segment.exists());
+    assert_eq!(std::fs::read(&foreign).unwrap(), b"must remain");
+    assert_eq!(
+        common::names_with_prefix(root.path(), ".drmr-convert-"),
+        Vec::<String>::new()
+    );
+    if change_source {
+        assert_ne!(std::fs::read(segment).unwrap(), original);
+    } else {
+        assert_eq!(std::fs::read(segment).unwrap(), original);
+    }
+}
+
+#[test]
+fn direct_shared_preparation_cannot_publish_after_a_completed_child_changes_the_source() {
+    interrupt_direct_bundle(true);
+}
+
+#[test]
+fn direct_shared_preparation_cancellation_after_a_completed_child_publishes_nothing() {
+    interrupt_direct_bundle(false);
+}
+
+#[test]
+fn reused_drm_admission_keeps_the_complete_mp4_opaque_box_refusal() {
+    let root = drmr_core::native::private_tempdir().unwrap();
+    let input = root.path().join("source.mp4");
+    let clip = Path::new(env!("CARGO_MANIFEST_DIR")).join("../drmr/tests/fixtures/bbb/clip.mp4");
+    let mut bytes = std::fs::read(clip).unwrap();
+    bytes.extend_from_slice(b"\0\0\0\x08skip");
+    drmr_core::native::create_private_new(&input)
+        .unwrap()
+        .write_all(&bytes)
+        .unwrap();
+    let command = Converter::new(
+        Arc::new(ToolRunner::new(Arc::new(Secrets::new()), Arc::new(NoSink))),
+        "must-not-start-packager",
+        "must-not-start-decoder",
+    );
+    let keys = keys(root.path());
+    // Native sample validity does not grant permission for opaque DRM metadata.
+    assert!(
+        command
+            .validate_source(
+                VerificationSource {
+                    input: &input,
+                    input_keys: &keys.input,
+                    hls_keys: &keys.hls_input
+                },
+                drmr_core::conversion::SourceValidationPurpose::Conversion
+            )
+            .unwrap()
+            .verification
+            .passed
+    );
+    let mut keys = keys;
+    keys.outputs.retain(|id, _| id == "dash");
+    let error = command
+        .convert_bundle(
+            &input,
+            &outputs()[..1],
+            &root.path().join("result"),
+            &keys,
+            &ManifestValidationTools::default(),
+        )
+        .unwrap_err();
+    assert_eq!(error.0, "output-signaling-profile-not-supported");
+    assert!(!root.path().join("result").exists());
+    assert_eq!(std::fs::read(input).unwrap(), bytes);
+}
+
+#[test]
+fn shared_bundle_preparation_leaves_one_cpu_and_releases_retained_memory() {
+    use drmr_core::resources::{Claim, Limiter};
+    use std::time::Duration;
+    let root = drmr_core::native::private_tempdir().unwrap();
+    let source = root.path().join("source");
+    let input = transport(&source);
+    let original = common::snapshot_tree(&source);
+    let mut keys = keys(root.path());
+    keys.outputs
+        .retain(|id, _| matches!(id.as_str(), "dash" | "hls"));
+    let outputs = outputs().into_iter().take(2).collect::<Vec<_>>();
+    let memory = 1024 * 1024 * 1024;
+    let limiter = Arc::new(Limiter::new(1, memory));
+    let runner =
+        ToolRunner::new(Arc::new(Secrets::new()), Arc::new(NoSink)).with_limiter(limiter.clone());
+    let command = Converter::new(Arc::new(runner), "packager", "missing-decoder")
+        .with_max_workers(Some(4))
+        .unwrap()
+        .with_timeout(Duration::from_secs(5));
+    let result = command
+        .convert_bundle(
+            &input,
+            &outputs,
+            &root.path().join("result"),
+            &keys,
+            &ManifestValidationTools::default(),
+        )
+        .unwrap();
+    assert_eq!(result.outputs.len(), 2);
+    assert!(
+        result
+            .outputs
+            .iter()
+            .all(|output| output.conversion.verification.passed
+                && output.conversion.verification.checks.is_pass())
+    );
+    assert_eq!(common::snapshot_tree(&source), original);
+    assert_eq!(
+        common::names_with_prefix(root.path(), ".drmr-convert-"),
+        Vec::<String>::new()
+    );
+    drop(command);
+    drop(
+        limiter
+            .acquire(
+                Claim {
+                    cpu_threads: 1,
+                    memory_bytes: memory,
+                },
+                None,
+                Some(Duration::from_secs(1)),
+            )
+            .unwrap(),
+    );
+}
+
+#[test]
+fn shared_bundle_preparation_keeps_native_and_complete_decode_evidence() {
+    let root = drmr_core::native::private_tempdir().unwrap();
+    let source = root.path().join("source");
+    let input = transport(&source);
+    let original = common::snapshot_tree(&source);
+    let mut keys = keys(root.path());
+    keys.outputs
+        .retain(|id, _| matches!(id.as_str(), "dash" | "hls"));
+    let outputs = outputs().into_iter().take(2).collect::<Vec<_>>();
+    let result = converter()
+        .convert_bundle(
+            &input,
+            &outputs,
+            &root.path().join("result"),
+            &keys,
+            &ManifestValidationTools::default(),
+        )
+        .unwrap();
+    assert_eq!(result.outputs.len(), 2);
+    for output in &result.outputs {
+        let verification = &output.conversion.verification;
+        assert!(verification.passed && verification.checks.is_pass());
+        assert_eq!(
+            verification.required_depth,
+            drmr_core::conversion::ValidationDepth::Decoded
+        );
+        assert!(
+            verification
+                .decode_evidence
+                .satisfies(verification.required_depth, verification.scope)
+        );
+        assert!(
+            verification
+                .native_manifest
+                .as_ref()
+                .unwrap()
+                .is_clean_for_scope()
+        );
+        assert!(output.signaling.verified);
+    }
+    assert_eq!(common::snapshot_tree(&source), original);
+    assert_eq!(
+        common::names_with_prefix(root.path(), ".drmr-convert-"),
+        Vec::<String>::new()
+    );
 }

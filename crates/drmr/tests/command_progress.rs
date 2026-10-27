@@ -182,6 +182,7 @@ fn doctor_reports_a_closed_result_stream_without_panicking_into_json_logs() {
             "result-output-unavailable"
         );
         assert!(!text.contains("panicked"));
+        assert!(rows.iter().all(|row| row["event"] != "finished"), "{text}");
     }
 }
 

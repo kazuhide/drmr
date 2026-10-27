@@ -547,20 +547,31 @@ impl super::Converter {
     pub(super) fn validate_signaling_input(
         &self,
         request: &super::ConversionRequest<'_>,
+        admitted: Option<&super::SourceQualification>,
     ) -> Result<(), ConversionError> {
         if let Some(signaling) = &self.output_signaling {
             signaling.validate_profile(request.format, request.target)?;
             if signaling.is_multi() {
-                self.validate_drm_source_inner(
-                    super::VerificationSource {
-                        input: request.input,
-                        input_keys: request.input_keys,
-                        hls_keys: request.hls_input_keys,
-                    },
-                    &signaling.systems(),
-                    request.format,
-                    request.target,
-                )?;
+                if let Some(admitted) = admitted {
+                    self.validate_qualified_drm_source(
+                        request.input,
+                        admitted,
+                        &signaling.systems(),
+                        request.format,
+                        request.target,
+                    )?;
+                } else {
+                    self.validate_drm_source_inner(
+                        super::VerificationSource {
+                            input: request.input,
+                            input_keys: request.input_keys,
+                            hls_keys: request.hls_input_keys,
+                        },
+                        &signaling.systems(),
+                        request.format,
+                        request.target,
+                    )?;
+                }
                 if request.format != OutputFormat::Dash
                     && !records::valid_fairplay_uri(
                         request

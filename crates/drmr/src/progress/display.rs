@@ -2,6 +2,7 @@
 use std::io::Write;
 use std::time::Duration;
 
+use super::pipeline::{Phase, Status};
 use indicatif::{HumanBytes, ProgressBar};
 
 #[derive(Clone, Copy, Debug)]
@@ -17,23 +18,24 @@ pub(super) struct Units {
 pub(super) struct View<'a> {
     pub activity: &'static str,
     pub task: &'a str,
-    pub tools: &'a [&'static str],
     pub downloads: Option<[u64; 3]>,
     pub units: Option<Units>,
+    pub pipeline: Option<&'a super::pipeline::State>,
 }
 
 impl View<'_> {
-    fn label(&self) -> &'static str {
-        if self.units.is_some_and(|u| u.segments) {
-            return "Preparing TS segments";
-        }
+    fn label(&self, command: &str) -> &'static str {
         match self.activity {
             "configuration" => "Checking settings",
             "acquisition" => "Downloading source",
-            "input-preparation" => "Preparing source",
-            "inspection" => "Reading metadata",
-            "normalization" | "packaging" => "Converting media",
-            "verification" => "Verifying media",
+            "input-preparation" | "inspection" | "normalization" | "packaging" | "verification" => {
+                match command {
+                    "convert" => "Converting media",
+                    "verify" => "Verifying media",
+                    "analyze" | "plan" => "Analyzing source",
+                    _ => "Working",
+                }
+            }
             "publication" => "Saving result",
             "tool-check" => "Checking tools",
             "server-startup" => "Starting web console",
@@ -44,18 +46,11 @@ impl View<'_> {
 
     fn details(&self, now: Duration, estimate: bool) -> String {
         let mut parts = Vec::new();
+        if self.activity != "acquisition" && !self.task.is_empty() {
+            parts.push(self.task.to_owned());
+        }
         if let Some(units) = self.units {
-            let name = if units.segments { "segments" } else { "files" };
-            parts.push(format!("{}/{} {name}", units.completed, units.total));
-            if units.checking {
-                parts.push("checking segment boundaries".to_owned());
-            } else if units.total > 0 && estimate {
-                let percent = (u128::from(units.completed) * 100) / u128::from(units.total);
-                parts.push(format!("{percent}%"));
-                if let Some(remaining) = remaining(units, now) {
-                    parts.push(format!("~{} remaining in this step", duration(remaining)));
-                }
-            }
+            parts.push(unit_details(units, now, estimate));
         }
         if self.activity == "acquisition" {
             if let Some([_, completed, bytes]) = self.downloads {
@@ -66,16 +61,26 @@ impl View<'_> {
             } else {
                 parts.push("discovering resources".to_owned());
             }
-        } else if self.units.is_none() {
-            if !self.task.is_empty() {
-                parts.push(self.task.to_owned());
-            }
-            if !self.tools.is_empty() {
-                parts.push(self.tools.join(", "));
-            }
         }
         parts.join(" | ")
     }
+}
+
+fn unit_details(units: Units, now: Duration, estimate: bool) -> String {
+    let name = if units.segments { "segments" } else { "files" };
+    let mut value = format!("{}/{} {name}", units.completed, units.total);
+    if units.checking {
+        value.push_str(" | checking segment boundaries");
+    } else if units.total > 0 && estimate {
+        use std::fmt::Write as _;
+        let percent = (u128::from(units.completed) * 100) / u128::from(units.total);
+        write!(value, " | {percent}%").expect("string write");
+        if let Some(remaining) = remaining(units, now) {
+            write!(value, " | ~{} remaining in this step", duration(remaining))
+                .expect("string write");
+        }
+    }
+    value
 }
 
 fn remaining(units: Units, now: Duration) -> Option<Duration> {
@@ -119,6 +124,9 @@ pub(super) struct Display {
     last_output: Duration,
     last_details: String,
     last_printed: String,
+    pipeline_phase: Option<Phase>,
+    pipeline_phases_printed: [bool; 4],
+    pipeline_outputs_printed: [bool; 8],
 }
 
 impl Display {
@@ -131,11 +139,17 @@ impl Display {
         now: Duration,
         outcome: Option<(&str, Option<&str>)>,
     ) -> std::io::Result<()> {
-        let label = view.label();
+        if view.pipeline.is_some() {
+            return self.render_pipeline(out, terminal, command, view, now, outcome);
+        }
+        let label = view.label(command);
         let changed = self.label != Some(label);
         let latest_details = view.details(now, false);
         if changed || outcome.is_some() {
-            if let Some(previous) = self.label {
+            if let Some(previous) = self
+                .label
+                .filter(|_| outcome.is_none_or(|(event, _)| event == "finished"))
+            {
                 let details = if changed {
                     &self.last_details
                 } else {
@@ -189,7 +203,11 @@ impl Display {
             let since = now.saturating_sub(self.last_output);
             // Tool starts and scope closures never override the human log cadence.
             let useful = self.last_printed != self.last_details;
+            let complete = view.units.is_some_and(|units| {
+                units.total > 0 && units.completed == units.total && !units.checking
+            });
             if changed
+                || (useful && complete)
                 || (useful && since >= Duration::from_secs(5))
                 || since >= Duration::from_secs(15)
             {
@@ -200,6 +218,177 @@ impl Display {
         }
         Ok(())
     }
+}
+
+impl Display {
+    fn render_pipeline(
+        &mut self,
+        out: &mut dyn Write,
+        terminal: Option<&ProgressBar>,
+        command: &str,
+        view: &View<'_>,
+        now: Duration,
+        outcome: Option<(&str, Option<&str>)>,
+    ) -> std::io::Result<()> {
+        let pipeline = view
+            .pipeline
+            .expect("pipeline view requires observed stages");
+        let phase = pipeline
+            .phase
+            .expect("pipeline view requires an observed phase");
+        self.pipeline_history(out, terminal, pipeline, now)?;
+        if let Some((event, error)) = outcome {
+            if let Some(bar) = terminal {
+                bar.disable_steady_tick();
+                bar.finish_and_clear();
+            }
+            let status = match event {
+                "finished" => "Finished",
+                "cancelled" => "Cancelled",
+                _ => "Failed",
+            };
+            return writeln!(
+                out,
+                "{status} {command} in {}{}",
+                duration(now),
+                error.map_or_else(String::new, |code| format!(" | {code}"))
+            );
+        }
+        let mut message = phase.label().to_owned();
+        let source_units = view.units.filter(|_| phase == Phase::Source);
+        if let Some(units) = source_units {
+            message.push_str(" | ");
+            message.push_str(&unit_details(units, now, true));
+        }
+        if phase == Phase::Outputs && !pipeline.outputs().is_empty() {
+            use std::fmt::Write as _;
+            write!(
+                message,
+                " | {}/{} checked | {} in progress",
+                pipeline.checked_outputs(),
+                pipeline.outputs().len(),
+                pipeline.active_outputs()
+            )
+            .expect("string write");
+        }
+        {
+            use std::fmt::Write as _;
+            write!(message, " | elapsed {}", duration(now)).expect("string write");
+        }
+        let snapshot = source_units.map_or_else(
+            || output_details(pipeline, now, false),
+            |units| unit_details(units, now, false),
+        );
+        if let Some(bar) = terminal {
+            let details = output_details(pipeline, now, true);
+            if !details.is_empty() {
+                message.push('\n');
+                message.push_str(&details);
+            }
+            bar.set_message(message);
+        } else {
+            let changed = self.pipeline_phase != Some(phase);
+            let since = now.saturating_sub(self.last_output);
+            if changed
+                || (snapshot != self.last_printed && since >= Duration::from_secs(5))
+                || since >= Duration::from_secs(15)
+            {
+                writeln!(out, "  {message}")?;
+                if source_units.is_none() && !snapshot.is_empty() {
+                    writeln!(out, "{snapshot}")?;
+                }
+                self.last_output = now;
+                self.last_printed = snapshot;
+            }
+        }
+        self.pipeline_phase = Some(phase);
+        Ok(())
+    }
+
+    fn pipeline_history(
+        &mut self,
+        out: &mut dyn Write,
+        terminal: Option<&ProgressBar>,
+        pipeline: &super::pipeline::State,
+        now: Duration,
+    ) -> std::io::Result<()> {
+        for phase in Phase::ALL {
+            let life = pipeline.lifetime(phase);
+            let printed = &mut self.pipeline_phases_printed[phase.index()];
+            if !*printed && life.status.terminal() {
+                if phase != Phase::Outputs || pipeline.outputs().is_empty() {
+                    let label = if life.status == Status::Finished {
+                        phase.completed().to_owned()
+                    } else {
+                        format!("{} stopped", phase.label())
+                    };
+                    line(
+                        out,
+                        terminal,
+                        &format!(
+                            "  {label:<22} {:>7}",
+                            duration(life.elapsed(now).unwrap_or_default())
+                        ),
+                    )?;
+                }
+                *printed = true;
+            }
+        }
+        for (index, output) in pipeline.outputs().iter().enumerate() {
+            if !self.pipeline_outputs_printed[index] && output.lifetime.status.terminal() {
+                let format = output
+                    .format
+                    .map_or("Media", super::pipeline::Format::label);
+                line(
+                    out,
+                    terminal,
+                    &format!(
+                        "  Output {} · {format}: {} | {}",
+                        index + 1,
+                        output.detail(),
+                        duration(output.lifetime.elapsed(now).unwrap_or_default())
+                    ),
+                )?;
+                self.pipeline_outputs_printed[index] = true;
+            }
+        }
+        Ok(())
+    }
+}
+
+fn output_details(pipeline: &super::pipeline::State, now: Duration, estimate: bool) -> String {
+    use std::fmt::Write as _;
+    let mut result = String::new();
+    for (index, output) in pipeline.outputs().iter().enumerate() {
+        if output.lifetime.status.terminal() {
+            continue;
+        }
+        if !result.is_empty() {
+            result.push('\n');
+        }
+        let format = output
+            .format
+            .map_or("Media", super::pipeline::Format::label);
+        write!(
+            result,
+            "    Output {} · {format}: {}",
+            index + 1,
+            output.detail()
+        )
+        .expect("string write");
+        if let Some(units) = output.units() {
+            write!(result, " | {}", unit_details(units, now, estimate)).expect("string write");
+        }
+    }
+    result
+}
+
+pub(super) fn notice(
+    out: &mut dyn Write,
+    terminal: Option<&ProgressBar>,
+    value: &'static str,
+) -> std::io::Result<()> {
+    line(out, terminal, value)
 }
 
 fn line(out: &mut dyn Write, terminal: Option<&ProgressBar>, value: &str) -> std::io::Result<()> {
@@ -268,7 +457,7 @@ mod tests {
         let mut view = View {
             activity: "inspection",
             task: "Reading track metadata",
-            tools: &["ffprobe"],
+            pipeline: None,
             downloads: None,
             units: None,
         };
@@ -306,7 +495,7 @@ mod tests {
         let view = View {
             activity: "input-preparation",
             task: "",
-            tools: &[],
+            pipeline: None,
             downloads: None,
             units: Some(Units {
                 completed: 10,
@@ -329,7 +518,7 @@ mod tests {
         let mut view = View {
             activity: "acquisition",
             task: "",
-            tools: &[],
+            pipeline: None,
             downloads: Some([10, 1, 100]),
             units: Some(Units {
                 completed: 1,
@@ -358,5 +547,257 @@ mod tests {
         let text = String::from_utf8(out).unwrap();
         assert!(text.contains("10/10 files"), "{text}");
         assert!(text.ends_with("Finished analyze in 1.0s\n"));
+    }
+
+    fn pipeline_event(
+        pipeline: &mut super::super::pipeline::State,
+        value: serde_json::Value,
+        second: u64,
+    ) {
+        let serde_json::Value::Object(record) = value else {
+            panic!("expected a pipeline event object");
+        };
+        assert!(pipeline.observe(&record, Duration::from_secs(second)));
+    }
+
+    #[test]
+    fn source_units_remain_visible_only_during_the_source_phase() {
+        let mut pipeline = super::super::pipeline::State::default();
+        pipeline_event(
+            &mut pipeline,
+            serde_json::json!({"scope":"source","state":"started"}),
+            0,
+        );
+        let mut display = Display::default();
+        let mut out = Vec::new();
+        let units = Units {
+            completed: 2,
+            total: 10,
+            initial: 0,
+            began: Duration::ZERO,
+            segments: true,
+            checking: false,
+        };
+        let render = |display: &mut Display,
+                      out: &mut Vec<u8>,
+                      pipeline: &super::super::pipeline::State,
+                      second| {
+            display
+                .render(
+                    out,
+                    None,
+                    "convert",
+                    &View {
+                        activity: "input-preparation",
+                        task: "",
+                        downloads: None,
+                        units: Some(units),
+                        pipeline: Some(pipeline),
+                    },
+                    Duration::from_secs(second),
+                    None,
+                )
+                .unwrap();
+        };
+        render(&mut display, &mut out, &pipeline, 2);
+        let source = String::from_utf8_lossy(&out);
+        assert!(
+            source.contains("Checking source | 2/10 segments | 20% | ~8.0s remaining in this step"),
+            "{source}"
+        );
+        let prior = out.len();
+        pipeline_event(
+            &mut pipeline,
+            serde_json::json!({"scope":"source","state":"finished"}),
+            3,
+        );
+        pipeline_event(
+            &mut pipeline,
+            serde_json::json!({"scope":"outputs","state":"started"}),
+            3,
+        );
+        render(&mut display, &mut out, &pipeline, 3);
+        let later = String::from_utf8_lossy(&out[prior..]);
+        assert!(
+            later.contains("Source checked") && later.contains("Creating outputs"),
+            "{later}"
+        );
+        assert!(
+            !later.contains("2/10") && !later.contains("remaining"),
+            "{later}"
+        );
+    }
+
+    #[test]
+    fn parallel_outputs_have_distinct_rows_and_aborted_work_is_never_checked() {
+        let mut pipeline = super::super::pipeline::State::default();
+        pipeline_event(
+            &mut pipeline,
+            serde_json::json!({"scope":"outputs","state":"started"}),
+            0,
+        );
+        for index in 0..2 {
+            pipeline_event(
+                &mut pipeline,
+                serde_json::json!({"scope":"output","state":"started","output_index":index,"output_total":2,"output_format":"hls"}),
+                1,
+            );
+        }
+        let mut display = Display::default();
+        let mut out = Vec::new();
+        let render = |display: &mut Display,
+                      out: &mut Vec<u8>,
+                      pipeline: &super::super::pipeline::State,
+                      second,
+                      outcome| {
+            display
+                .render(
+                    out,
+                    None,
+                    "convert",
+                    &View {
+                        activity: "input-preparation",
+                        task: "",
+                        downloads: None,
+                        units: None,
+                        pipeline: Some(pipeline),
+                    },
+                    Duration::from_secs(second),
+                    outcome,
+                )
+                .unwrap();
+        };
+        render(&mut display, &mut out, &pipeline, 2, None);
+        let active = String::from_utf8_lossy(&out);
+        assert!(active.contains("0/2 checked | 2 in progress"), "{active}");
+        assert!(
+            active.contains("Output 1 · HLS fMP4: Working")
+                && active.contains("Output 2 · HLS fMP4: Working"),
+            "{active}"
+        );
+        assert!(
+            !active.contains('%') && !active.contains("remaining"),
+            "{active}"
+        );
+        pipeline_event(
+            &mut pipeline,
+            serde_json::json!({"scope":"output","state":"finished","output_index":0,"output_total":2,"output_format":"hls"}),
+            3,
+        );
+        pipeline_event(
+            &mut pipeline,
+            serde_json::json!({"scope":"output","state":"aborted","output_index":1,"output_total":2,"output_format":"hls"}),
+            4,
+        );
+        pipeline_event(
+            &mut pipeline,
+            serde_json::json!({"scope":"outputs","state":"aborted"}),
+            4,
+        );
+        for _ in 0..2 {
+            render(&mut display, &mut out, &pipeline, 4, None);
+        }
+        render(
+            &mut display,
+            &mut out,
+            &pipeline,
+            5,
+            Some(("failed", Some("source-invalid"))),
+        );
+        let text = String::from_utf8(out).unwrap();
+        assert_eq!(
+            text.matches("Output 1 · HLS fMP4: Checked").count(),
+            1,
+            "{text}"
+        );
+        assert_eq!(
+            text.matches("Output 2 · HLS fMP4: Stopped").count(),
+            1,
+            "{text}"
+        );
+        assert!(
+            !text.contains("Output 2 · HLS fMP4: Checked")
+                && !text.contains("Outputs checked")
+                && !text.contains("Finished"),
+            "{text}"
+        );
+        assert!(
+            text.ends_with("Failed convert in 5.0s | source-invalid\n"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn fallback_keeps_a_command_header_and_live_detail_without_microstage_history() {
+        for (command, label) in [
+            ("convert", "Converting media"),
+            ("verify", "Verifying media"),
+            ("analyze", "Analyzing source"),
+            ("plan", "Analyzing source"),
+        ] {
+            let mut display = Display::default();
+            let mut out = Vec::new();
+            let mut view = View {
+                activity: "input-preparation",
+                task: "Reading metadata",
+                downloads: None,
+                units: None,
+                pipeline: None,
+            };
+            display
+                .render(&mut out, None, command, &view, Duration::ZERO, None)
+                .unwrap();
+            for iteration in 0..100 {
+                view.task = if iteration % 2 == 0 {
+                    "Reading metadata"
+                } else {
+                    "Checking media"
+                };
+                display
+                    .render(
+                        &mut out,
+                        None,
+                        command,
+                        &view,
+                        Duration::from_millis(iteration),
+                        None,
+                    )
+                    .unwrap();
+            }
+            display
+                .render(&mut out, None, command, &view, Duration::from_secs(5), None)
+                .unwrap();
+            display
+                .render(
+                    &mut out,
+                    None,
+                    command,
+                    &view,
+                    Duration::from_secs(6),
+                    Some(("finished", None)),
+                )
+                .unwrap();
+            let text = String::from_utf8(out).unwrap();
+            assert!(
+                text.starts_with(&format!("  {label} | Reading metadata")),
+                "{text}"
+            );
+            assert!(
+                text.contains(&format!("  {label} | Checking media")),
+                "{text}"
+            );
+            assert!(text.lines().count() <= 4, "{text}");
+            assert!(
+                !text.contains("Preparing source")
+                    && !text.contains('%')
+                    && !text.contains("remaining"),
+                "{text}"
+            );
+            assert!(
+                !text.contains("Reading metadata        0.0s")
+                    && !text.contains("Checking media         0.0s"),
+                "{text}"
+            );
+        }
     }
 }

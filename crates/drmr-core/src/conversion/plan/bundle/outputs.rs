@@ -17,10 +17,31 @@ pub(super) struct Conversion<'a> {
     pub tools: &'a ManifestValidationTools,
     pub destination: &'a destination::OutputGuard,
     pub frozen: &'a FrozenSource,
+    pub qualified: &'a super::SourceQualification,
+    pub shared: Option<&'a crate::conversion::presentation::BundlePrepared<'a>>,
     pub stage: &'a files::UnpublishedStage,
 }
 
 impl Conversion<'_> {
+    fn admission(&self) -> crate::conversion::presentation::BundleAdmission<'_> {
+        crate::conversion::presentation::BundleAdmission {
+            source: VerificationSource {
+                input: self.frozen.entrypoint(),
+                input_keys: &self.keys.input,
+                hls_keys: &self.keys.hls_input,
+            },
+            inventory: self.frozen.inventory(),
+            qualified: self.qualified,
+            processing: super::source_processing(
+                self.plan
+                    .outputs
+                    .iter()
+                    .map(|output| self.plan.processing_mode(&output.id)),
+            ),
+            depth: self.command.backend.validation_depth,
+        }
+    }
+
     pub fn run(
         &self,
         ordinal: usize,
@@ -33,9 +54,13 @@ impl Conversion<'_> {
             tools,
             destination,
             frozen,
+            qualified: _,
+            shared,
             stage,
         } = *self;
         let output = &plan.outputs[ordinal];
+        let (command, output_scope) =
+            command.pipeline_output(ordinal, plan.outputs.len(), output.format);
         owner.backend.check_cancelled()?;
         destination.check()?;
         if output.format == OutputFormat::Mp4 {
@@ -53,21 +78,26 @@ impl Conversion<'_> {
             )
             .using_output_options(plan.output_options(&output.id))
             .with_output_signaling(output_keys.signaling.clone());
+        let admitted = self.admission();
         let mut conversion = child
-            .convert(ConversionRequest {
-                input: frozen.entrypoint(),
-                output: &path,
-                format: output.format,
-                target: output.target,
-                input_keys: &keys.input,
-                hls_input_keys: &keys.hls_input,
-                output_key: output_keys.output.as_ref(),
-                hls_key_uri: output_keys
-                    .output
-                    .as_ref()
-                    .and_then(|_| output_keys.hls_output_uri()),
-                hls_output_key: output_keys.hls_output.as_ref(),
-            })
+            .convert_bundle_admitted(
+                ConversionRequest {
+                    input: frozen.entrypoint(),
+                    output: &path,
+                    format: output.format,
+                    target: output.target,
+                    input_keys: &keys.input,
+                    hls_input_keys: &keys.hls_input,
+                    output_key: output_keys.output.as_ref(),
+                    hls_key_uri: output_keys
+                        .output
+                        .as_ref()
+                        .and_then(|_| output_keys.hls_output_uri()),
+                    hls_output_key: output_keys.hls_output.as_ref(),
+                },
+                &admitted,
+                shared,
+            )
             .map_err(super::super::source_error)?;
         owner.backend.check_cancelled()?;
         destination.check()?;
@@ -98,6 +128,7 @@ impl Conversion<'_> {
         let signaling = command.bundle_signaling(bound.entrypoint(), output, output_keys)?;
         let conformance = command.bundle_conformance(bound.entrypoint(), output, tools)?;
         bound.check_original().map_err(output_error)?;
+        output_scope.finish();
         Ok((
             bound,
             BundleConversionOutput {

@@ -62,6 +62,15 @@ impl<'a> Execution<'a> {
         plan: &BundlePlan,
         manifests: Option<&super::outputs::ManifestDemands>,
     ) -> Result<(Prepared, ContextPermit), ConversionError> {
+        self.prepare_shared::<T>(plan, manifests, false)
+    }
+
+    pub fn prepare_shared<T>(
+        &self,
+        plan: &BundlePlan,
+        manifests: Option<&super::outputs::ManifestDemands>,
+        shared_preparation: bool,
+    ) -> Result<(Prepared, ContextPermit), ConversionError> {
         let command = self.converter;
         command.backend.check_cancelled()?;
         let workload = command
@@ -70,6 +79,26 @@ impl<'a> Execution<'a> {
             .registered_workload()
             .unwrap_or_default();
         let mut contexts = retained::<T>(plan, workload, command.backend.validation_depth)?;
+        if shared_preparation {
+            // The joined originals, normalized sources and private clear tracks
+            // outlive every output. Their metadata must not use a worker's budget.
+            let tracks = u64::try_from(workload.tracks.max(1))
+                .map_err(|_| ConversionError("resource-budget"))?;
+            let extra = tracks
+                .checked_mul(2 * TRACK_RESIDENCY_BYTES)
+                .and_then(|bytes| {
+                    bytes.checked_add(
+                        frozen::retained_inventory_bytes(&plan.source)
+                            .ok()?
+                            .checked_mul(2)?,
+                    )
+                })
+                .ok_or(ConversionError("resource-budget"))?;
+            contexts.shared = contexts
+                .shared
+                .checked_add(extra)
+                .ok_or(ConversionError("resource-budget"))?;
+        }
         if let Some(manifests) = manifests {
             contexts.shared = contexts
                 .shared

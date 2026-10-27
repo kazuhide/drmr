@@ -7,6 +7,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 mod display;
+mod pipeline;
 
 #[derive(Clone, Copy)]
 struct Analysis {
@@ -31,6 +32,13 @@ struct Configuration {
 }
 static CONFIGURATION: OnceLock<Configuration> = OnceLock::new();
 
+#[derive(Default)]
+enum Rendering {
+    #[default]
+    Live,
+    Result,
+}
+
 fn resolved(mode: Mode, human_result: bool, terminal: bool) -> Mode {
     match mode {
         Mode::Auto if human_result || terminal => Mode::Text,
@@ -46,7 +54,7 @@ pub(crate) fn configure(mode: Mode, command: &'static str) {
 #[derive(Default)]
 struct State {
     last_activity: Option<&'static str>,
-    acquiring: bool,
+    display_activity: Option<&'static str>,
     started: u64,
     closed: u64,
     workers: Option<u64>,
@@ -57,11 +65,15 @@ struct State {
     tools_started: u64,
     tools_closed: u64,
     tasks: [u64; 4],
+    activities: [u64; 6],
     downloads: Option<[u64; 3]>,
     resources_total: Option<u64>,
     resources_began: Option<(Duration, u64)>,
     analysis: Option<Analysis>,
     work_completed: u64,
+    pipeline: pipeline::State,
+    source_retained: bool,
+    rendering: Rendering,
     display: display::Display,
 }
 
@@ -131,6 +143,14 @@ const TASKS: [(&str, &str); 4] = [
         "Checking final manifest syntax and signaling",
     ),
 ];
+const ACTIVITIES: [(&str, &str); 6] = [
+    ("input-preparation", "Preparing media"),
+    ("inspection", "Reading metadata"),
+    ("normalization", "Preparing media for conversion"),
+    ("packaging", "Writing media and encryption signaling"),
+    ("verification", "Checking media"),
+    ("publication", "Finalizing media"),
+];
 
 impl Progress {
     pub(crate) fn new(human_result: bool) -> Self {
@@ -145,7 +165,7 @@ impl Progress {
                 None
             } else {
                 bar.set_style(
-                    ProgressStyle::with_template("{spinner:.cyan} {wide_msg}")
+                    ProgressStyle::with_template("{spinner:.cyan} {msg}")
                         .unwrap_or_else(|_| ProgressStyle::default_spinner()),
                 );
                 bar.enable_steady_tick(Duration::from_millis(100));
@@ -243,12 +263,41 @@ impl Progress {
             return;
         }
         let changed = state.last_activity != Some(value);
-        state.acquiring = value == "acquisition";
         if value != "input-preparation" {
             state.analysis = None;
         }
         state.last_activity = Some(value);
+        state.display_activity = Some(value);
         self.inner.line(&mut state, "activity", None, changed);
+    }
+
+    pub(crate) fn source_retained(&self) {
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.finished || state.source_retained || matches!(state.rendering, Rendering::Result) {
+            return;
+        }
+        state.source_retained = true;
+        if matches!(self.inner.mode, Mode::Text) && !state.output_failed {
+            let mut out = self
+                .inner
+                .out
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if display::notice(
+                &mut *out,
+                self.inner.terminal.as_ref(),
+                "Downloaded source retained for offline use.",
+            )
+            .and_then(|()| out.flush())
+            .is_err()
+            {
+                state.output_failed = true;
+            }
+        }
     }
 
     pub(crate) fn last_activity(&self) -> Option<&'static str> {
@@ -261,6 +310,22 @@ impl Progress {
 
     pub(crate) fn structured(&self) -> bool {
         matches!(self.inner.mode, Mode::Json)
+    }
+
+    /// Drain live drawing before a result changes the terminal cursor.
+    /// Command success or failure remains pending until the result is written.
+    pub(crate) fn begin_result(&self) {
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.rendering = Rendering::Result;
+        if let Some(bar) = &self.inner.terminal {
+            bar.disable_steady_tick();
+            bar.finish_and_clear();
+            bar.set_draw_target(ProgressDrawTarget::hidden());
+        }
     }
 
     pub(crate) fn finish(&self) {
@@ -298,6 +363,10 @@ impl Progress {
                 self.inner.wake.notify_all();
             }
         }
+        self.close_worker();
+    }
+
+    fn close_worker(&self) {
         if let Some(worker) = self
             .heartbeat
             .lock()
@@ -315,7 +384,16 @@ impl Progress {
 
 impl Drop for Progress {
     fn drop(&mut self) {
-        self.finish();
+        {
+            let mut state = self
+                .inner
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            state.finished = true;
+            self.inner.wake.notify_all();
+        }
+        self.close_worker();
     }
 }
 
@@ -327,6 +405,12 @@ impl Inner {
         error: Option<&'static str>,
         force: bool,
     ) {
+        if matches!(self.mode, Mode::Text)
+            && matches!(state.rendering, Rendering::Result)
+            && !matches!(event, "finished" | "failed" | "cancelled")
+        {
+            return;
+        }
         let observe = force
             || state
                 .last_line
@@ -353,16 +437,7 @@ impl Inner {
             .zip(state.tools)
             .filter_map(|(name, count)| (count > 0).then_some(*name))
             .collect();
-        let tasks: Vec<_> = TASKS
-            .iter()
-            .zip(state.tasks)
-            .filter_map(|((_, label), count)| (count > 0).then_some(*label))
-            .collect();
-        let task = if tasks.is_empty() {
-            description(state.last_activity.unwrap_or("")).to_string()
-        } else {
-            tasks.join("; ")
-        };
+        let task = state.machine_task();
         let mut out = self
             .out
             .lock()
@@ -398,22 +473,28 @@ impl Inner {
             if let Some(code) = error {
                 value["error_code"] = code.into();
             }
+            if state.pipeline.phase.is_some() {
+                value["pipeline"] = state.pipeline.json(self.began.elapsed());
+            }
             serde_json::to_writer(&mut *out, &value)
                 .map_err(std::io::Error::other)
                 .and_then(|()| writeln!(out))
         } else {
-            let activity = state.last_activity.unwrap_or("configuration");
+            let activity = state.display_activity.unwrap_or("configuration");
             let units = state.units(activity);
+            let live_task = state.live_task();
             let view = display::View {
                 activity,
-                task: if tasks.is_empty() { "" } else { &task },
-                tools: &active,
+                task: &live_task,
                 downloads: state.downloads,
                 units,
+                pipeline: state.pipeline.phase.is_some().then_some(&state.pipeline),
             };
             state.display.render(
                 &mut *out,
-                self.terminal.as_ref(),
+                self.terminal
+                    .as_ref()
+                    .filter(|_| matches!(state.rendering, Rendering::Live)),
                 self.command,
                 &view,
                 self.began.elapsed(),
@@ -427,6 +508,37 @@ impl Inner {
 }
 
 impl State {
+    fn machine_task(&self) -> String {
+        let tasks: Vec<_> = TASKS
+            .iter()
+            .zip(self.tasks)
+            .filter_map(|((_, label), count)| (count > 0).then_some(*label))
+            .collect();
+        if tasks.is_empty() {
+            description(self.last_activity.unwrap_or("")).to_string()
+        } else {
+            tasks.join("; ")
+        }
+    }
+
+    fn live_task(&self) -> String {
+        let labels: Vec<_> = TASKS
+            .iter()
+            .zip(self.tasks)
+            .filter_map(|((_, label), count)| (count > 0).then_some(*label))
+            .collect();
+        if labels.is_empty() {
+            ACTIVITIES
+                .iter()
+                .zip(self.activities)
+                .filter_map(|((_, label), count)| (count > 0).then_some(*label))
+                .collect::<Vec<_>>()
+                .join("; ")
+        } else {
+            labels.join("; ")
+        }
+    }
+
     fn units(&self, activity: &str) -> Option<display::Units> {
         if let Some(analysis) = self.analysis.filter(|a| a.state != "aborted") {
             Some(display::Units {
@@ -479,6 +591,7 @@ impl State {
         self.resources_total = parsed;
         self.downloads = Some([started, completed, bytes]);
         self.last_activity = Some("acquisition");
+        self.display_activity.get_or_insert("acquisition");
         Some(())
     }
 
@@ -490,54 +603,55 @@ impl State {
         match record.get("state").and_then(serde_json::Value::as_str) {
             Some("started") => {
                 self.started = self.started.saturating_add(1);
+                if let Some(index) = ACTIVITIES.iter().position(|(name, _)| *name == value) {
+                    self.activities[index] = self.activities[index].saturating_add(1);
+                }
+                self.display_activity.get_or_insert(value);
                 if value != "input-preparation" {
                     self.analysis = None;
                 }
             }
-            Some("closed") => self.closed = self.closed.saturating_add(1),
+            Some("closed") => {
+                self.closed = self.closed.saturating_add(1);
+                if let Some(index) = ACTIVITIES.iter().position(|(name, _)| *name == value) {
+                    self.activities[index] = self.activities[index].saturating_sub(1);
+                }
+            }
             _ => return None,
         }
-        self.last_activity = Some(if self.acquiring { "acquisition" } else { value });
+        self.last_activity = Some(if self.display_activity == Some("acquisition") {
+            "acquisition"
+        } else {
+            value
+        });
         Some(())
     }
 
-    fn observe_analysis(&mut self, record: &Record, now: Duration) -> Option<bool> {
-        if record.get("task").and_then(serde_json::Value::as_str) != Some("ts-preparation") {
-            return None;
-        }
-        let (Some(completed), Some(total)) = (
-            record.get("completed").and_then(serde_json::Value::as_u64),
-            record.get("total").and_then(serde_json::Value::as_u64),
-        ) else {
-            return None;
-        };
-        let status = match record.get("state").and_then(serde_json::Value::as_str) {
-            Some("started") if completed == 0 => "started",
-            Some("running") => "running",
-            Some("finished") if completed == total => "finished",
-            Some("aborted") => "aborted",
-            _ => return None,
-        };
-        if completed > total {
-            return None;
-        }
-        let began = if status == "started" {
-            now
-        } else {
-            let prior = self.analysis?;
-            if prior.total != total || prior.completed > completed {
-                return None;
+    fn observe_task(&mut self, record: &Record) -> Option<bool> {
+        let index = record
+            .get("task")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|value| TASKS.iter().position(|(name, _)| *name == value))?;
+        match record.get("state").and_then(serde_json::Value::as_str) {
+            Some("started") => {
+                let changed = self.tasks[index] == 0;
+                self.tasks[index] = self.tasks[index].saturating_add(1);
+                Some(changed)
             }
-            prior.began
-        };
-        self.analysis = Some(Analysis {
-            completed,
-            total,
-            began,
-            state: status,
-        });
+            Some("closed") => {
+                self.tasks[index] = self.tasks[index].saturating_sub(1);
+                Some(false)
+            }
+            _ => None,
+        }
+    }
+
+    fn observe_analysis(&mut self, record: &Record, now: Duration) -> Option<bool> {
+        let (analysis, changed) = parse_analysis(self.analysis, record, now)?;
+        self.analysis = Some(analysis);
         self.last_activity = Some("input-preparation");
-        Some(status != "running")
+        self.display_activity.get_or_insert("input-preparation");
+        Some(changed)
     }
 
     fn tool(&mut self, record: &Record, started: bool) -> Option<bool> {
@@ -557,6 +671,50 @@ impl State {
     }
 }
 
+fn parse_analysis(
+    previous: Option<Analysis>,
+    record: &Record,
+    now: Duration,
+) -> Option<(Analysis, bool)> {
+    if record.get("task").and_then(serde_json::Value::as_str) != Some("ts-preparation") {
+        return None;
+    }
+    let (Some(completed), Some(total)) = (
+        record.get("completed").and_then(serde_json::Value::as_u64),
+        record.get("total").and_then(serde_json::Value::as_u64),
+    ) else {
+        return None;
+    };
+    let status = match record.get("state").and_then(serde_json::Value::as_str) {
+        Some("started") if completed == 0 => "started",
+        Some("running") => "running",
+        Some("finished") if completed == total => "finished",
+        Some("aborted") => "aborted",
+        _ => return None,
+    };
+    if completed > total {
+        return None;
+    }
+    let began = if status == "started" {
+        now
+    } else {
+        let prior = previous?;
+        if prior.total != total || prior.completed > completed {
+            return None;
+        }
+        prior.began
+    };
+    Some((
+        Analysis {
+            completed,
+            total,
+            began,
+            state: status,
+        },
+        status != "running",
+    ))
+}
+
 impl Sink for Progress {
     fn emit(&self, record: &Record) {
         let record_stage = record.get("stage").and_then(serde_json::Value::as_str);
@@ -571,6 +729,18 @@ impl Sink for Progress {
         }
         let previous = state.last_activity;
         let mut force = false;
+        let now = self.inner.began.elapsed();
+        if record_stage == Some("pipeline") && event == Some("progress") {
+            if state.pipeline.observe(record, now) {
+                self.inner.line(&mut state, "progress", None, true);
+            }
+            return;
+        }
+        let scoped = pipeline::has_context(record);
+        if scoped && !state.pipeline.valid_context(record) {
+            return;
+        }
+        let nested = scoped && state.pipeline.observe_nested(record, now);
         match (record_stage, event) {
             (Some("resources"), _) => {
                 let Some(workers) = record.get("workers").and_then(serde_json::Value::as_u64)
@@ -589,11 +759,17 @@ impl Sink for Progress {
                 }
             }
             (Some("analysis"), Some("progress")) => {
-                let Some(changed) = state.observe_analysis(record, self.inner.began.elapsed())
-                else {
-                    return;
-                };
-                force = changed;
+                if scoped {
+                    if !nested {
+                        return;
+                    }
+                    force = true;
+                } else {
+                    let Some(changed) = state.observe_analysis(record, now) else {
+                        return;
+                    };
+                    force = changed;
+                }
             }
             (Some("tool"), Some("command" | "tool-output")) => {
                 let Some(changed) = state.tool(record, event == Some("command")) else {
@@ -607,23 +783,10 @@ impl Sink for Progress {
                 }
             }
             (Some("conversion"), Some("task")) => {
-                let Some(index) = record
-                    .get("task")
-                    .and_then(serde_json::Value::as_str)
-                    .and_then(|v| TASKS.iter().position(|(name, _)| *name == v))
-                else {
+                let Some(changed) = state.observe_task(record) else {
                     return;
                 };
-                match record.get("state").and_then(serde_json::Value::as_str) {
-                    Some("started") => {
-                        force = state.tasks[index] == 0;
-                        state.tasks[index] = state.tasks[index].saturating_add(1);
-                    }
-                    Some("closed") => {
-                        state.tasks[index] = state.tasks[index].saturating_sub(1);
-                    }
-                    _ => return,
-                }
+                force = changed;
             }
             (Some("conversion"), Some("work-unit-completed")) => {
                 let (Some(ordinal), Some(total)) = (
@@ -641,273 +804,20 @@ impl Sink for Progress {
         }
         force |= previous != state.last_activity;
         self.inner.line(&mut state, "progress", None, force);
+        let mut cleared = state.pipeline.clear_finished_analysis();
         if state.analysis.is_some_and(|a| a.state == "finished") {
             // Preserve the final count in history, then reveal the remaining
             // whole-track preparation rather than leaving a stale 100% visible.
             state.analysis = None;
+            cleared = true;
+        }
+        if cleared {
             self.inner.line(&mut state, "progress", None, true);
         }
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::mpsc;
-
-    struct Captured {
-        bytes: Arc<Mutex<Vec<u8>>>,
-        flushed: mpsc::Sender<()>,
-    }
-    impl Write for Captured {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.bytes.lock().unwrap().extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            let _ = self.flushed.send(());
-            Ok(())
-        }
-    }
-    fn records(bytes: &Arc<Mutex<Vec<u8>>>) -> Vec<serde_json::Value> {
-        String::from_utf8(bytes.lock().unwrap().clone())
-            .unwrap()
-            .lines()
-            .map(|line| serde_json::from_str(line).unwrap())
-            .collect()
-    }
-    fn observed(interval: Duration) -> (Progress, Arc<Mutex<Vec<u8>>>, mpsc::Receiver<()>) {
-        let bytes = Arc::new(Mutex::new(Vec::new()));
-        let (sent, received) = mpsc::channel();
-        let progress = Progress::with_writer(
-            Mode::Json,
-            "analyze",
-            Box::new(Captured {
-                bytes: bytes.clone(),
-                flushed: sent,
-            }),
-            interval,
-        );
-        (progress, bytes, received)
-    }
-    #[test]
-    fn heartbeat_observes_idle_work_and_drop_joins_its_worker() {
-        // Use the production throttle interval; receiving a flush bounds this test.
-        let (progress, bytes, updates) = observed(Duration::from_millis(300));
-        progress.mark("verification");
-        updates.recv_timeout(Duration::from_secs(5)).unwrap();
-        updates.recv_timeout(Duration::from_secs(5)).unwrap();
-        let values = records(&bytes);
-        assert!(
-            values
-                .iter()
-                .any(|v| v["event"] == "heartbeat" && v["activity"] == "verification")
-        );
-        drop(progress);
-        assert_eq!(records(&bytes).last().unwrap()["event"], "finished");
-        assert_eq!(
-            Arc::strong_count(&bytes),
-            1,
-            "worker and writer have been dropped"
-        );
-    }
-    #[test]
-    fn only_fixed_tool_labels_and_numeric_observations_reach_output() {
-        let (progress, bytes, _) = observed(Duration::from_mins(1));
-        progress.mark("verification");
-        for value in [
-            serde_json::json!({"stage":"tool","event":"command","tool":"ffmpeg","argv":["secret-sentinel"],"rendition_id":"private-sentinel"}),
-            serde_json::json!({"stage":"tool","event":"tool-output","tool":"ffmpeg","stdout":"secret-sentinel","stderr":"secret-sentinel"}),
-            serde_json::json!({"stage":"conversion","event":"activity","activity":"secret-sentinel","state":"started"}),
-            serde_json::json!({"stage":"tool","event":"command","tool":"secret-sentinel"}),
-            serde_json::json!({"stage":"acquisition","event":"progress","resources_started":3,"resources_completed":2,"bytes_received":1024,"url":"secret-sentinel"}),
-        ] {
-            progress.emit(value.as_object().unwrap());
-        }
-        progress.finish();
-        let before = bytes.lock().unwrap().clone();
-        progress.mark("publication");
-        assert_eq!(*bytes.lock().unwrap(), before);
-        let text = String::from_utf8(before).unwrap();
-        assert!(!text.contains("sentinel") && !text.contains("argv") && !text.contains("stdout"));
-        let values = records(&bytes);
-        let last = values.last().unwrap();
-        assert_eq!(last["resources_started"], 3);
-        assert_eq!(last["resources_completed"], 2);
-        assert_eq!(last["bytes_received"], 1024);
-        assert_eq!(last["tools_started"], 1);
-        assert_eq!(last["tools_closed"], 1);
-        assert_eq!(last["active_tools"], serde_json::json!([]));
-    }
-
-    #[test]
-    fn a_result_write_failure_after_work_finishes_remains_structured() {
-        let (progress, bytes, _) = observed(Duration::from_mins(1));
-        progress.mark("publication");
-        progress.finish();
-        progress.diagnostic("analyze", "result-output-unavailable");
-        drop(progress);
-        let values = records(&bytes);
-        assert_eq!(values.len(), 3);
-        assert_eq!(values.last().unwrap()["event"], "failed");
-        assert_eq!(
-            values.last().unwrap()["error_code"],
-            "result-output-unavailable"
-        );
-        assert_eq!(Arc::strong_count(&bytes), 1);
-    }
-
-    #[test]
-    fn automatic_progress_covers_interactive_json_and_preserves_redirected_json() {
-        assert_eq!(resolved(Mode::Auto, false, true), Mode::Text);
-        assert_eq!(resolved(Mode::Auto, false, false), Mode::Off);
-        for terminal in [false, true] {
-            assert_eq!(resolved(Mode::Auto, true, terminal), Mode::Text);
-            for mode in [Mode::Text, Mode::Json, Mode::Off] {
-                assert_eq!(resolved(mode, false, terminal), mode);
-                assert_eq!(resolved(mode, true, terminal), mode);
-            }
-        }
-    }
-
-    #[test]
-    fn repeated_short_tools_do_not_flood_plain_progress() {
-        let bytes = Arc::new(Mutex::new(Vec::new()));
-        let (sent, _received) = mpsc::channel();
-        let progress = Progress::with_writer(
-            Mode::Text,
-            "analyze",
-            Box::new(Captured {
-                bytes: bytes.clone(),
-                flushed: sent,
-            }),
-            Duration::from_mins(1),
-        );
-        progress.mark("inspection");
-        for _ in 0..100 {
-            for event in ["command", "tool-output"] {
-                progress.emit(
-                    serde_json::json!({
-                        "stage":"tool", "event":event, "tool":"ffprobe",
-                        "argv":["secret-sentinel"], "stderr":"secret-sentinel"
-                    })
-                    .as_object()
-                    .unwrap(),
-                );
-            }
-        }
-        progress.finish();
-        let output = String::from_utf8(bytes.lock().unwrap().clone()).unwrap();
-        assert!(output.lines().count() <= 4, "{output}");
-        assert!(!output.contains("scopes") && !output.contains("sentinel"));
-        assert!(!output.contains('\u{1b}') && !output.contains('\r'));
-    }
-
-    #[test]
-    fn analysis_progress_accepts_only_valid_monotonic_numeric_evidence() {
-        let (progress, bytes, _) = observed(Duration::from_mins(1));
-        progress.mark("input-preparation");
-        for value in [
-            serde_json::json!({"stage":"analysis","event":"progress","task":"ts-preparation","state":"started","completed":0,"total":5}),
-            serde_json::json!({"stage":"analysis","event":"progress","task":"ts-preparation","state":"running","completed":3,"total":5,"url":"secret-sentinel"}),
-            serde_json::json!({"stage":"analysis","event":"progress","task":"ts-preparation","state":"running","completed":2,"total":5}),
-            serde_json::json!({"stage":"analysis","event":"progress","task":"ts-preparation","state":"finished","completed":4,"total":5}),
-            serde_json::json!({"stage":"analysis","event":"progress","task":"ts-preparation","state":"running","completed":4,"total":6}),
-            serde_json::json!({"stage":"analysis","event":"progress","task":"secret-sentinel","state":"running","completed":4,"total":5}),
-            serde_json::json!({"stage":"analysis","event":"progress","task":"ts-preparation","state":"secret-sentinel","completed":4,"total":5}),
-        ] {
-            progress.emit(value.as_object().unwrap());
-        }
-        progress.finish();
-        let values = records(&bytes);
-        let last = values.last().unwrap();
-        assert_eq!(last["analysis_task"], "ts-preparation");
-        assert_eq!(last["analysis_state"], "running");
-        assert_eq!(last["analysis_completed"], 3);
-        assert_eq!(last["analysis_total"], 5);
-        assert!(
-            !String::from_utf8(bytes.lock().unwrap().clone())
-                .unwrap()
-                .contains("sentinel")
-        );
-    }
-
-    #[test]
-    fn finished_ts_collection_yields_to_the_remaining_source_checks() {
-        let bytes = Arc::new(Mutex::new(Vec::new()));
-        let (sent, _) = mpsc::channel();
-        let progress = Progress::with_writer(
-            Mode::Text,
-            "analyze",
-            Box::new(Captured {
-                bytes: bytes.clone(),
-                flushed: sent,
-            }),
-            Duration::from_mins(1),
-        );
-        for (state, completed) in [("started", 0), ("running", 5), ("finished", 5)] {
-            progress.emit(
-                serde_json::json!({
-                    "stage":"analysis", "event":"progress", "task":"ts-preparation",
-                    "state":state, "completed":completed, "total":5
-                })
-                .as_object()
-                .unwrap(),
-            );
-        }
-        progress.emit(
-            serde_json::json!({
-                "stage":"tool", "event":"command", "tool":"ffprobe"
-            })
-            .as_object()
-            .unwrap(),
-        );
-        progress.finish();
-        let text = String::from_utf8(bytes.lock().unwrap().clone()).unwrap();
-        let source = text.find("Preparing source").expect(&text);
-        assert!(text[..source].contains("5/5 segments"), "{text}");
-        assert!(!text[source..].contains("Preparing TS segments"), "{text}");
-    }
-
-    #[test]
-    fn phase_history_retains_completion_received_inside_the_observer_interval() {
-        let bytes = Arc::new(Mutex::new(Vec::new()));
-        let (sent, _) = mpsc::channel();
-        let progress = Progress::with_writer(
-            Mode::Text,
-            "analyze",
-            Box::new(Captured {
-                bytes: bytes.clone(),
-                flushed: sent,
-            }),
-            Duration::from_mins(1),
-        );
-        for completed in [1, 6] {
-            progress.emit(serde_json::json!({
-                "stage":"acquisition", "event":"progress", "resources_started":6,
-                "resources_completed":completed, "resources_total":6, "bytes_received":completed*100
-            }).as_object().unwrap());
-        }
-        progress.mark("input-preparation");
-        progress.finish();
-        let text = String::from_utf8(bytes.lock().unwrap().clone()).unwrap();
-        assert!(text.contains("6/6 files"), "{text}");
-    }
-
-    #[test]
-    fn acquisition_keeps_one_label_while_its_internal_preparation_scope_is_open() {
-        let (progress, bytes, _) = observed(Duration::from_mins(1));
-        progress.mark("acquisition");
-        for state in ["started", "closed"] {
-            progress.emit(serde_json::json!({
-                "stage":"conversion", "event":"activity", "activity":"input-preparation", "state":state
-            }).as_object().unwrap());
-        }
-        progress.finish();
-        let values = records(&bytes);
-        let last = values.last().unwrap();
-        assert_eq!(last["activity"], "acquisition");
-        assert_eq!(last["scopes_started"], 1);
-        assert_eq!(last["scopes_closed"], 1);
-    }
-}
+mod result_tests;
+#[cfg(test)]
+mod tests;

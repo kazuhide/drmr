@@ -151,13 +151,15 @@ pub fn plan(args: &PlanArgs) -> ExitCode {
     };
     let plan = inspection::plan(report, target, args.format.clone());
     progress.mark("publication");
+    progress.begin_result();
     let success = if args.json {
         write_json(&serde_json::to_value(&plan).expect("conversion plan serializes"))
     } else {
         text_plan(&plan).is_ok()
     };
-    progress.finish();
-    if !success {
+    if success {
+        progress.finish();
+    } else {
         progress.diagnostic("plan", "result-output-unavailable");
     }
     ExitCode::from(u8::from(!success || !plan.compatible))

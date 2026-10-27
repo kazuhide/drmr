@@ -139,6 +139,10 @@ fn metadata_and_light_plan_output_failures_keep_structured_stderr_and_originals(
         let last = records.last().unwrap();
         assert_eq!(last["event"], "failed");
         assert_eq!(last["error_code"], "result-output-unavailable");
+        assert!(
+            records.iter().all(|record| record["event"] != "finished"),
+            "{text}"
+        );
         assert_eq!(std::fs::read(&source).unwrap(), original);
         no_secrets(&output);
     }

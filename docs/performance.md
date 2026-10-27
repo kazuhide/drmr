@@ -5,7 +5,7 @@ verification. The analysis sections separate historical verification-depth
 changes from comparisons at the same depth. The conversion sections compare
 two builds at each requested verification depth.
 
-Whole-presentation runs use the same retained clear HLS input: about ten
+The earlier whole-presentation analysis runs use the same retained clear HLS input: about ten
 minutes, six video renditions, one audio track and 708 referenced files
 totaling 857,417,309 bytes. An 18-second excerpt is identified separately.
 Network acquisition is outside the timed commands. Every recorded source
@@ -408,6 +408,62 @@ Phase scope sums emitted by the CLI can overlap and are not command wall
 time. Random initialization vectors can change encrypted output bytes;
 each output was verified independently, with no byte-for-byte ciphertext
 equality claim. License-server and device playback were not qualified.
+
+## Shared source preparation in direct conversion
+
+A later comparison uses one `convert --outputs` command to analyze, plan,
+convert and check two outputs. The retained clear HLS TS input has six video
+renditions, one audio rendition and 708 referenced files totaling 857,447,176
+bytes. It is a separate retained copy from the earlier experiments above.
+The outputs are CBCS-encrypted fMP4: DASH with Widevine/PlayReady information
+and HLS with FairPlay information.
+
+The [baseline](https://github.com/kazuhide/drmr/commit/af861071e0736d8fdd1d9ef6fdfbfeef94f4693c)
+and [shared-preparation build](https://github.com/kazuhide/drmr/commit/1d6321d7f5b43d87785d09364a2ed42f374192c8)
+used Rust 1.99.0 release builds, Shaka Packager 3.8.0, automatic workers and
+the same input, recipe and synthetic keys. The host was an Apple M5 with ten
+logical CPUs and 32 GiB of memory, running macOS on ARM64. Downloading,
+decoding and external manifest validators are outside this comparison.
+
+| Build | Command wall, s | CPU, s | Packager calls |
+| --- | ---: | ---: | ---: |
+| Baseline | 85.88 | 168.12 | 28 |
+| Shared preparation | 62.51 | 121.65 | 15 |
+
+This is one sequential pair, with the baseline first. Background work continued;
+one-minute load ranged from 7.59 to 8.76. Filesystem caches were uncontrolled.
+CPU time is user plus system time for the command and its children.
+The [numeric report](benchmarks/shared-bundle-source-2026-10-27.json) includes
+binary hashes, individual observations and limits. This pair does not measure
+repeat-run variance or establish a guaranteed speedup. Neither conversion
+started FFmpeg or ffprobe.
+
+The updated command keeps source qualification and planning within the same
+operation and shares joining and clear-track preparation between these outputs.
+Each output still has its own encryption working files, complete media
+comparisons, DRM/manifest checks and final publication checks. Separately
+executed plans and independent verification check current files again.
+Short-fixture regressions count one common source qualification instead of
+eight, and six Packager calls instead of ten, while requiring the same media
+proofs. The full-input run above reduced normalization scopes from 14 to seven;
+scope elapsed-time sums overlap and are not command wall time.
+
+Both conversions passed content, timing, metadata and DRM checks. Four fresh
+verification commands checked both outputs from both builds against the
+unchanged original; native manifests reported no errors or warnings within
+their declared profiles. All seven HLS playlists retained target duration 6
+and 100 segments. DASH used duration-based `SegmentTemplate` references,
+seven representations, a nominal six-second duration and 100 media resources
+per representation. Its explicit period duration was 596.526077098 seconds.
+These checks do not establish DRM license acquisition or device playback.
+
+Peak sampled process-family RSS rose from 167.1 to 224.3 MiB. This sampled sum
+can include shared pages more than once and can miss short-lived processes.
+Darwin `wait4` reported a different maximum-resident metric of 113.8 and
+112.0 MiB. The updated workspace-size observations were partial: eight
+successful checkpoints and two incomplete attempts. Those file-size checkpoints are separate from
+media verification and do not establish peak disk use. Memory and worker
+admission limits remain in effect.
 
 ## Compare your own retained input
 

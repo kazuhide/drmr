@@ -556,19 +556,7 @@ impl Converter {
     ) -> Result<super::plan::bundle::BundleConversionReport, ConversionError> {
         let converter = self.using_downloaded_source(source)?;
         source.seal.owned.check_output(output_root)?;
-        let plan = converter.create_bundle_plan(super::plan::bundle::BundlePlanRequest {
-            input: super::VerificationSource {
-                input: source.entrypoint(),
-                input_keys: &keys.input,
-                hls_keys: &keys.hls_input,
-            },
-            output_root,
-            outputs,
-        })?;
-        // The resolved child choices now own the intent; the creation default is not an override.
-        converter
-            .with_processing_clone(super::ProcessingMode::Auto)
-            .execute_bundle_plan(&plan, keys, tools)
+        converter.convert_bundle(source.entrypoint(), outputs, output_root, keys, tools)
     }
 }
 fn write_private(path: &Path, bytes: &[u8]) -> Result<std::fs::File, ConversionError> {

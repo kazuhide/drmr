@@ -136,7 +136,6 @@ impl Session {
         if self.cancellation.stop.is_set() {
             return self.failed(command, ConversionError("cancelled"), json);
         }
-        self.progress.finish();
         let passed = command != "verify" || report["passed"] == true;
         if !passed {
             self.progress.diagnostic(command, "verification-mismatch");
@@ -155,6 +154,7 @@ impl Session {
             report["measurements"] =
                 serde_json::to_value(measurement).expect("measurements serialize");
         }
+        self.progress.begin_result();
         let result = if json {
             convert_cli::json(&report)
         } else {
@@ -163,6 +163,8 @@ impl Session {
         if result.is_err() {
             self.progress
                 .diagnostic(command, "result-output-unavailable");
+        } else if passed {
+            self.progress.finish();
         }
         ExitCode::from(u8::from(!passed || result.is_err()))
     }
@@ -511,16 +513,7 @@ pub fn convert_direct(args: &ConvertArgs) -> ExitCode {
         let report = match &input {
             Input::Local(input) => {
                 session.progress.mark("input-preparation");
-                let plan = converter.create_bundle_plan(BundlePlanRequest {
-                    input: VerificationSource {
-                        input,
-                        input_keys: &session.keys.input,
-                        hls_keys: &session.keys.hls_input,
-                    },
-                    output_root: output,
-                    outputs: &outputs,
-                })?;
-                converter.execute_bundle_plan(&plan, &session.keys, &validators)?
+                converter.convert_bundle(input, &outputs, output, &session.keys, &validators)?
             }
             Input::Url(url) => {
                 session.progress.mark("acquisition");
@@ -533,9 +526,7 @@ pub fn convert_direct(args: &ConvertArgs) -> ExitCode {
                     policy.as_ref().expect("fetch policy checked"),
                 )?;
                 session.progress.mark("input-preparation");
-                if !session.progress.structured() {
-                    eprintln!("Downloaded source retained in the requested download directory.");
-                }
+                session.progress.source_retained();
                 converter.convert_bundle_downloaded(
                     &downloaded,
                     &outputs,

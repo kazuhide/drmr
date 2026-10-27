@@ -19,6 +19,7 @@ pub(super) struct Execution {
     runner: Option<Arc<ToolRunner>>,
     maximum_workers: Option<usize>,
     timeout: Duration,
+    quiet: bool,
     #[cfg(test)]
     hardware: Option<Hardware>,
 }
@@ -51,6 +52,7 @@ impl Execution {
             runner: Some(converter.backend.runner.clone()),
             maximum_workers: converter.maximum_workers,
             timeout: converter.backend.timeout,
+            quiet: false,
             #[cfg(test)]
             hardware: None,
         }
@@ -87,12 +89,20 @@ impl Execution {
         if budget.workers == 0 {
             return Err(ConversionError("resource-budget"));
         }
-        runner.note_resource_budget(&budget);
+        if !self.quiet {
+            runner.note_resource_budget(&budget);
+        }
         Ok(budget.workers)
     }
 
     pub fn check_budget(&self) -> Result<(), ConversionError> {
         self.workers(1).map(|_| ())
+    }
+
+    pub fn without_observers(&self) -> Self {
+        let mut execution = self.clone();
+        execution.quiet = true;
+        execution
     }
 
     pub fn one<T>(
@@ -182,6 +192,7 @@ impl Execution {
             )),
             maximum_workers: workers,
             timeout: Duration::from_secs(5),
+            quiet: false,
             hardware: Some(Hardware::from_observations(
                 8,
                 Some(8 * 1024 * 1024 * 1024),

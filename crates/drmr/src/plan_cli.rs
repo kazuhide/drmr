@@ -94,11 +94,10 @@ impl Session {
         self
     }
 
-    fn finish(&self, command: &str, as_json: bool) -> Result<(), ExitCode> {
+    fn check_cancelled(&self, command: &str, as_json: bool) -> Result<(), ExitCode> {
         if self.cancellation.stop.is_set() {
             return Err(self.failed(command, ConversionError("cancelled"), as_json));
         }
-        self.progress.finish();
         Ok(())
     }
 }
@@ -176,9 +175,10 @@ pub fn save(args: &PlanArgs) -> ExitCode {
         Ok(value) => value,
         Err(cause) => return session.failed("plan", cause, args.json),
     };
-    if let Err(code) = session.finish("plan", args.json) {
+    if let Err(code) = session.check_cancelled("plan", args.json) {
         return code;
     }
+    session.progress.begin_result();
     let result = if args.json {
         let mut value = serde_json::to_value(&plan).expect("execution plan serializes");
         if let Some(measurement) = measurement {
@@ -198,6 +198,8 @@ pub fn save(args: &PlanArgs) -> ExitCode {
         session
             .progress
             .diagnostic("plan", "result-output-unavailable");
+    } else {
+        session.progress.finish();
     }
     ExitCode::from(u8::from(result.is_err()))
 }
@@ -233,9 +235,10 @@ pub fn convert(args: &ConvertArgs, path: &Path) -> ExitCode {
         Ok(value) => value,
         Err(cause) => return session.failed("convert", cause, args.json),
     };
-    if let Err(code) = session.finish("convert", args.json) {
+    if let Err(code) = session.check_cancelled("convert", args.json) {
         return code;
     }
+    session.progress.begin_result();
     let result = if args.json {
         let mut value = serde_json::to_value(&report).expect("conversion report serializes");
         value["plan_id"] = plan.plan_id.clone().into();
@@ -251,6 +254,8 @@ pub fn convert(args: &ConvertArgs, path: &Path) -> ExitCode {
         session
             .progress
             .diagnostic("convert", "result-output-unavailable");
+    } else {
+        session.progress.finish();
     }
     ExitCode::from(u8::from(result.is_err()))
 }
@@ -286,7 +291,7 @@ pub fn verify(args: &VerifyArgs, path: &Path) -> ExitCode {
         Ok(value) => value,
         Err(cause) => return session.failed("verify", cause, args.json),
     };
-    if let Err(code) = session.finish("verify", args.json) {
+    if let Err(code) = session.check_cancelled("verify", args.json) {
         return code;
     }
     let passed =
@@ -296,6 +301,7 @@ pub fn verify(args: &VerifyArgs, path: &Path) -> ExitCode {
             .progress
             .diagnostic("verify", "verification-mismatch");
     }
+    session.progress.begin_result();
     let result = if args.json {
         let mut value = serde_json::to_value(report).expect("plan verification serializes");
         if !passed {
@@ -324,6 +330,8 @@ pub fn verify(args: &VerifyArgs, path: &Path) -> ExitCode {
         session
             .progress
             .diagnostic("verify", "result-output-unavailable");
+    } else if passed {
+        session.progress.finish();
     }
     ExitCode::from(u8::from(result.is_err() || !passed))
 }

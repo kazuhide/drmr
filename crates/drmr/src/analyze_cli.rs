@@ -234,14 +234,16 @@ fn metadata_analysis(
         }
     };
     progress.mark("publication");
+    progress.begin_result();
     let written = if args.json {
         convert_cli::json(&serde_json::to_value(&report).expect("metadata report serializes"))
     } else {
         crate::inspect_cli::summary(&report, &mut std::io::stdout().lock())
     };
-    progress.finish();
     if written.is_err() {
         progress.diagnostic("analyze", "result-output-unavailable");
+    } else {
+        progress.finish();
     }
     ExitCode::from(u8::from(written.is_err()))
 }
@@ -304,6 +306,7 @@ pub fn analyze(args: &AnalyzeArgs) -> ExitCode {
         );
     }
     progress.mark("publication");
+    progress.begin_result();
     let result = if args.json {
         let mut value = serde_json::to_value(&report).expect("source analysis serializes");
         if let Some(download) = download {
@@ -317,9 +320,10 @@ pub fn analyze(args: &AnalyzeArgs) -> ExitCode {
     } else {
         text_report(&report)
     };
-    progress.finish();
     if result.is_err() {
         progress.diagnostic("analyze", "result-output-unavailable");
+    } else {
+        progress.finish();
     }
     ExitCode::from(u8::from(result.is_err()))
 }

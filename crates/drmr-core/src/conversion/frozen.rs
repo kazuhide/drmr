@@ -131,6 +131,9 @@ impl FrozenSource {
     pub fn check_original(&self) -> Result<(), ConversionError> {
         self.original.check()
     }
+    pub(super) fn check_original_quiet(&self) -> Result<(), ConversionError> {
+        self.original.check_quiet()
+    }
     pub(super) fn guard(&self) -> Arc<OriginalGuard> {
         self.original.clone()
     }
@@ -180,6 +183,11 @@ impl super::Converter {
             .iter()
             .try_for_each(|guard| guard.check())
     }
+    pub(super) fn check_frozen_source_quiet(&self) -> Result<(), ConversionError> {
+        self.frozen_source
+            .iter()
+            .try_for_each(|guard| guard.check_quiet())
+    }
 }
 
 pub(super) struct OriginalGuard {
@@ -191,31 +199,34 @@ pub(super) struct OriginalGuard {
 }
 impl OriginalGuard {
     pub(super) fn check(&self) -> Result<(), ConversionError> {
+        self.check_with(&self.execution)
+    }
+    fn check_quiet(&self) -> Result<(), ConversionError> {
+        self.check_with(&self.execution.without_observers())
+    }
+    fn check_with(&self, execution: &execution::Execution) -> Result<(), ConversionError> {
         cancelled(&self.stop)?;
         if directory_identity(&self.inventory.root)? != self.root_identity {
             return Err(CHANGED);
         }
-        self.execution
-            .run(&self.stop, self.inventory.files.len(), |index, control| {
-                let expected = &self.inventory.files[index];
-                let mut file = open_confined(&self.inventory.root, &expected.path)?;
-                if FileIdentity::read(&file).map_err(|_| CHANGED)?
-                    != self.identities[&expected.path]
-                {
-                    return Err(CHANGED);
-                }
-                let (hash, bytes) = io::transfer(
-                    &mut file,
-                    &mut std::io::sink(),
-                    control,
-                    expected.bytes,
-                    &mut |_| {},
-                )?;
-                if bytes != expected.bytes || hash != expected.sha256 {
-                    return Err(CHANGED);
-                }
-                Ok(())
-            })?;
+        execution.run(&self.stop, self.inventory.files.len(), |index, control| {
+            let expected = &self.inventory.files[index];
+            let mut file = open_confined(&self.inventory.root, &expected.path)?;
+            if FileIdentity::read(&file).map_err(|_| CHANGED)? != self.identities[&expected.path] {
+                return Err(CHANGED);
+            }
+            let (hash, bytes) = io::transfer(
+                &mut file,
+                &mut std::io::sink(),
+                control,
+                expected.bytes,
+                &mut |_| {},
+            )?;
+            if bytes != expected.bytes || hash != expected.sha256 {
+                return Err(CHANGED);
+            }
+            Ok(())
+        })?;
         if directory_identity(&self.inventory.root)? != self.root_identity {
             return Err(CHANGED);
         }
