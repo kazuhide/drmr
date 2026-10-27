@@ -482,8 +482,8 @@ The builds make these changes in sequence:
   again. Fresh post-conversion capture, complete media comparisons and final
   checks of the original files remain in place. A separately invoked `verify`
   still captures and checks the saved files again.
-- **c: reuse encrypted-sample buffers.** For encrypted samples of at most 64 KiB
-  that are already buffered in full, the reader can decrypt the existing buffer
+- **c: reuse encrypted-sample buffers.** For encrypted samples of at most
+  64 KiB (65,536 bytes) that are already buffered in full, the reader can decrypt the existing buffer
   in place and pass the complete payload to the verifier. This also enables the
   borrowing path in **a**. Large samples, incomplete reads and cases that could
   exceed an encryption counter's range retain streaming. Temporary plaintext
@@ -544,6 +544,12 @@ These runs do not qualify license acquisition or device playback.
 
 The [numeric report](benchmarks/conversion-copy-reuse-2026-10-28.json) records
 individual runs, binary hashes, measured source identities and host load.
+Measured commit IDs identify the builds used, rather than release tags or later
+rebased builds. The Rust/Cargo source digest covers tracked Rust files, all
+`Cargo.toml` files and the root `Cargo.lock`. It hashes UTF-8 paths in byte order,
+each followed by a zero byte, the lowercase file SHA-256 and a newline. This
+digest excludes other assets and compiler binaries; the microbenchmark records
+only its two preserved source-file hashes.
 CPU time includes user and system time for the command and its children.
 Other host work continued and filesystem caches were uncontrolled. The sampled
 process-family memory ranges overlap, so these batches do not establish a
