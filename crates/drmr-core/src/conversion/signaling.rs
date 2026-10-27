@@ -489,10 +489,20 @@ impl super::Converter {
                 MISMATCH
             }
         })?;
+        self.verify_bound_output_signaling(&frozen, format, target, keys)
+    }
+    /// Reuse this operation's bound output while retaining every record and original check.
+    pub(in crate::conversion) fn verify_bound_output_signaling(
+        &self,
+        frozen: &super::FrozenSource,
+        format: OutputFormat,
+        target: TargetProtection,
+        keys: &super::key_file::OperatorKeys,
+    ) -> Result<(), ConversionError> {
         let mut command = self.with_processing_clone(self.processing_mode);
         command.output_signaling = keys.signaling.clone().map(std::sync::Arc::new);
         command.verify_segment_signaling(
-            &frozen,
+            frozen,
             format,
             target,
             keys.output.as_ref(),
@@ -649,6 +659,10 @@ impl super::Converter {
         self.verify_segment_signaling(&frozen, format, target, key, uri, hls)
     }
 }
+
+#[cfg(test)]
+#[path = "signaling/bound_tests.rs"]
+mod bound_tests;
 
 #[cfg(test)]
 mod tests {
