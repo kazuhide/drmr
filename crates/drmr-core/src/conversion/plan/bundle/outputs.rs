@@ -129,7 +129,7 @@ impl Conversion<'_> {
         conversion.verification = verification;
         command.pipeline_step(crate::conversion::pipeline::Step::Finalization);
         owner.backend.check_cancelled()?;
-        let signaling = command.bundle_signaling(bound.entrypoint(), output, output_keys)?;
+        let signaling = command.bundle_signaling(&bound, output, output_keys)?;
         let conformance = command.bundle_conformance(bound.entrypoint(), output, tools)?;
         bound.check_original_observed().map_err(output_error)?;
         output_scope.finish();
@@ -246,7 +246,7 @@ impl Verification<'_> {
                 plan.processing_mode(&intent.id),
             )?;
         }
-        let signaling = command.bundle_signaling(result.entrypoint(), intent, output_keys)?;
+        let signaling = command.bundle_signaling(&result, intent, output_keys)?;
         let conformance = command.bundle_conformance(result.entrypoint(), intent, tools)?;
         original
             .check_original_observed()

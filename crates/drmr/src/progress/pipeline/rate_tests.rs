@@ -232,11 +232,11 @@ fn converted_pair() -> State {
 fn nonuniform_observed_rates_use_the_parallel_critical_path_and_slow_down_on_stalls() {
     let state = converted_pair();
     let value = state.json(Duration::from_secs(46));
-    // Five seconds of result preparation, two comparison, one signaling capture,
-    // two child integrity, and six final guard seconds remain. Concurrent outputs do not double it.
-    assert_eq!(value["estimate"]["remaining_ms"], 16_000);
+    // Five seconds of result preparation, two comparison, two child integrity,
+    // and six final guard seconds remain. Signaling reuses the verified output binding.
+    assert_eq!(value["estimate"]["remaining_ms"], 15_000);
     let stalled = state.json(Duration::from_secs(47));
-    assert_eq!(stalled["estimate"]["remaining_ms"], 17_000);
+    assert_eq!(stalled["estimate"]["remaining_ms"], 16_000);
     assert_eq!(stalled["estimate"]["percent"], value["estimate"]["percent"]);
     assert_eq!(value["estimate"]["eta_basis"], "observed-step-rates");
     assert!(!value.to_string().contains("private-sentinel"));
@@ -490,7 +490,7 @@ fn finalizing_pair() -> State {
 }
 
 #[test]
-fn finalization_includes_the_measured_signaling_capture_and_integrity_check() {
+fn finalization_reuses_bound_signaling_without_charging_another_capture() {
     let state = finalizing_pair();
     let mut rates = work::Rates::default();
     rates.sample(
@@ -506,23 +506,32 @@ fn finalization_includes_the_measured_signaling_capture_and_integrity_check() {
     for output in state.outputs() {
         assert_eq!(
             output.work.remaining(&rates, Duration::from_secs(53)),
-            Some(Duration::from_secs(6))
+            Some(Duration::from_secs(1))
         );
-        assert_eq!(
-            output.work.remaining(&rates, Duration::from_secs(54)),
-            Some(Duration::from_secs(5))
-        );
+        assert_eq!(output.work.remaining(&rates, Duration::from_secs(54)), None);
     }
+    let mut guard_only = work::Rates::default();
+    guard_only.sample(
+        work::Class::Integrity,
+        Duration::from_secs(1),
+        Duration::from_secs(53),
+    );
+    assert_eq!(
+        state.outputs()[0]
+            .work
+            .remaining(&guard_only, Duration::from_secs(53)),
+        Some(Duration::from_secs(1))
+    );
     assert_eq!(state.checked_outputs(), 0);
 }
 
 #[test]
 fn finalization_uses_parallel_remaining_paths_then_the_distinct_quiet_guards() {
     let mut state = finalizing_pair();
-    // Each output has a measured one-second capture and two-second integrity pass.
-    // Two concurrent three-second paths precede three sequential two-second guards.
+    // Signaling reuses each output binding; only its two-second integrity pass remains.
+    // Two concurrent two-second paths precede three sequential two-second guards.
     let running = state.json(Duration::from_secs(53));
-    assert_eq!(running["estimate"]["remaining_ms"], 9000);
+    assert_eq!(running["estimate"]["remaining_ms"], 8000);
     assert!(running["estimate"]["percent"].as_u64().unwrap() < 100);
     for index in 0..2 {
         assert!(state.observe(

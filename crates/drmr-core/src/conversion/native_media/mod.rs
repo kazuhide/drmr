@@ -24,11 +24,14 @@ mod progressive;
 mod progressive_copy;
 pub(in crate::conversion) use progressive_copy::copy_progressive;
 mod read;
+mod sample_window;
 mod segment;
 mod write;
 pub(in crate::conversion) use segment::{
     SegmentEvidence, SegmentInput, SegmentReceipt, SegmentTrackEvidence, SegmentTransformer,
 };
+#[cfg(test)]
+mod payload_window_tests;
 #[cfg(test)]
 mod segment_tests;
 #[cfg(test)]
@@ -377,16 +380,24 @@ fn payload(
         .map_or(std::slice::from_ref(&clear), |encryption| {
             encryption.subsamples.as_slice()
         });
-    let buffer = reader.scratch.chunk(
-        usize::try_from(sample.info.size)
-            .map_err(|_| BAD)?
-            .min(CHUNK_BYTES),
-    )?;
     let mut input = read::SampleInput::new(
         &mut reader.file,
         &mut reader.sample_window,
         usize::try_from(sample.info.size).map_err(|_| BAD)?,
         sample.encryption.is_some() && buffered_sample(&sample.info, reader.length, subsamples),
+    )?;
+    if sample_window::eligible(&sample)
+        && let Some(bytes) = input.complete()
+    {
+        sample_window::decrypt(bytes, subsamples, cipher.as_mut().ok_or(BAD)?, reader.stop)?;
+        sample.info.chunk_offset = 0;
+        sample.info.is_last_chunk = true;
+        return visitor(&sample.track.descriptor, &sample.info, bytes);
+    }
+    let buffer = reader.scratch.chunk(
+        usize::try_from(sample.info.size)
+            .map_err(|_| BAD)?
+            .min(CHUNK_BYTES),
     )?;
     let mut position = 0_u32;
     for span in subsamples {

@@ -151,7 +151,9 @@ fn buffered_encrypted_samples_preserve_callback_failure_and_cancellation() {
         let result = scan(&source, &keys(), &stop, &mut |_, info, bytes| {
             calls += 1;
             assert_eq!(info.chunk_offset, 0);
-            assert!(bytes.len() < usize::try_from(info.size).unwrap());
+            assert!(bytes.len() <= CHUNK_BYTES);
+            assert_eq!(bytes.len(), usize::try_from(info.size).unwrap());
+            assert!(info.is_last_chunk);
             if cancel {
                 stop.set();
                 Ok(())

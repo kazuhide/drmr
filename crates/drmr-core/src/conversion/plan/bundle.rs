@@ -696,11 +696,11 @@ impl Converter {
 
     fn bundle_signaling(
         &self,
-        entrypoint: &Path,
+        output: &FrozenSource,
         intent: &BundleOutputIntent,
         keys: &OperatorKeys,
     ) -> Result<DrmSignalingReport, ConversionError> {
-        self.verify_output_signaling(entrypoint, intent.format, intent.target, keys)?;
+        self.verify_bound_output_signaling(output, intent.format, intent.target, keys)?;
         Ok(DrmSignalingReport {
             systems: intent.drms.clone(),
             verified: !intent.drms.is_empty(),

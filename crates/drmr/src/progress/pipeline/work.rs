@@ -9,7 +9,7 @@ use std::time::Duration;
 
 pub(super) const SCALE: u32 = 1000;
 pub(super) const SOURCE: u32 = 4 * SCALE;
-pub(super) const OUTPUT: u32 = 16 * SCALE;
+pub(super) const OUTPUT: u32 = 15 * SCALE;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Step {
@@ -237,11 +237,9 @@ impl Work {
         if !self.covered || self.aborted || self.step.is_none() {
             return None;
         }
-        // bundle_signaling verifies declarations against a fresh output capture before
-        // the final integrity check. Native record parsing remains approximate overhead.
-        let finalization = rates
-            .duration(Class::Capture)?
-            .checked_add(rates.duration(Class::Integrity)?)?;
+        // Signaling reuses the output captured by independent verification. Only its
+        // final integrity pass remains; native record parsing is approximate overhead.
+        let finalization = rates.duration(Class::Integrity)?;
         if self.step == Some(Step::Finalization) {
             return finalization
                 .checked_sub(now.saturating_sub(self.began))

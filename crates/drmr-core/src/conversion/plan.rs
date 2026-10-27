@@ -382,8 +382,8 @@ impl Converter {
             )?;
         }
         if plan.schema_version >= 5 || keys.signaling.is_some() {
-            command.verify_output_signaling(
-                result.entrypoint(),
+            command.verify_bound_output_signaling(
+                &result,
                 plan.intent.format,
                 plan.intent.target,
                 keys,
