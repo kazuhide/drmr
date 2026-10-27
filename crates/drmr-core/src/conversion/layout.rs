@@ -4,10 +4,13 @@ use serde::{Deserialize, Serialize};
 mod paths;
 pub use paths::{UrlPathMapper, path_text, path_uri};
 mod selection;
-pub use selection::{SourceLayout, SourceTrack, TrackPlacement};
+pub use selection::{SourceLayout, SourceNames, SourceTrack, TrackPlacement};
+mod naming;
+pub use naming::SegmentNames;
 mod grouping;
 mod source;
 mod stage;
+pub(in crate::conversion) use stage::RelocatedTemplate;
 
 /// Native admission's ordered selection; excluded from public reports.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

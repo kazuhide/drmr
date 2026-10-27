@@ -4,7 +4,9 @@ use super::{
 };
 use crate::{
     concurrency::Stop,
-    conversion::{SourceQualification, dash, files, hls, presentation},
+    conversion::{
+        SourceQualification, dash, dash_addressing::DashAddressing, files, hls, presentation,
+    },
     inspection::{InputFormat, OutputFormat},
 };
 use std::{
@@ -23,16 +25,41 @@ impl SourceLayout {
         processing: crate::conversion::ProcessingMode,
         stop: &Stop,
     ) -> Result<Self, ConversionError> {
+        Self::resolve_from_qualified_source_with_names(
+            input, qualified, mode, output, processing, stop, true,
+        )
+    }
+
+    pub(in crate::conversion) fn resolve_from_qualified_source_with_names(
+        input: &Path,
+        qualified: &SourceQualification,
+        mode: LayoutMode,
+        output: OutputFormat,
+        processing: crate::conversion::ProcessingMode,
+        stop: &Stop,
+        preserve_names: bool,
+    ) -> Result<Self, ConversionError> {
         if !qualified.verification.passed
             || qualified.layout_tracks.len() != qualified.track_protection.len()
         {
             return Err(UNSUPPORTED);
         }
-        Self::resolve_from_admitted_tracks(
+        if preserve_names {
+            return Self::resolve_from_admitted_tracks(
+                input,
+                qualified.input.format,
+                &qualified.layout_tracks,
+                mode,
+                output,
+                processing,
+                stop,
+            );
+        }
+        Self::resolve_from_admitted_tracks_with_names(
             input,
             qualified.input.format,
             &qualified.layout_tracks,
-            mode,
+            (mode, preserve_names),
             output,
             processing,
             stop,
@@ -50,8 +77,28 @@ impl SourceLayout {
         processing: crate::conversion::ProcessingMode,
         stop: &Stop,
     ) -> Result<Self, ConversionError> {
+        Self::resolve_from_admitted_tracks_with_names(
+            input,
+            source_format,
+            facts,
+            (mode, true),
+            output,
+            processing,
+            stop,
+        )
+    }
+
+    pub(in crate::conversion) fn resolve_from_admitted_tracks_with_names(
+        input: &Path,
+        source_format: InputFormat,
+        facts: &[QualifiedTrack],
+        naming: (LayoutMode, bool),
+        output: OutputFormat,
+        processing: crate::conversion::ProcessingMode,
+        stop: &Stop,
+    ) -> Result<Self, ConversionError> {
         let tracks = source_tracks(input, source_format, facts, stop)?;
-        let layout = Self::resolve_for_processing(mode, output, processing, &tracks)?;
+        let layout = Self::resolve_with_names(naming.0, output, processing, &tracks, naming.1)?;
         check(stop)?;
         Ok(layout)
     }
@@ -62,6 +109,7 @@ impl SourceLayout {
         &self,
         root: &Path,
         format: OutputFormat,
+        addressing: DashAddressing,
         stop: &Stop,
     ) -> Result<(), ConversionError> {
         check(stop)?;
@@ -79,7 +127,9 @@ impl SourceLayout {
                 let matches = groups
                     .first
                     .iter()
-                    .filter(|ordinal| placement_matches(&self.tracks[**ordinal], &media))
+                    .filter(|ordinal| {
+                        placement_matches(&self.tracks[**ordinal], &media, format, addressing)
+                    })
                     .copied()
                     .collect::<Vec<_>>();
                 if matches.len() != 1 || !selected.insert(matches[0]) {
@@ -105,6 +155,8 @@ impl SourceLayout {
                     || !placement_matches(
                         track,
                         &hls_resources(&declaration.path, &root, stop, true)?,
+                        format,
+                        addressing,
                     )
                 {
                     return Err(INVALID);
@@ -118,14 +170,64 @@ impl SourceLayout {
     }
 }
 
-fn placement_matches(track: &super::TrackPlacement, media: &[PathBuf]) -> bool {
-    !media.is_empty()
-        && media.iter().all(|path| {
-            path.parent() == Some(track.media_directory.as_path())
-                && path
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .is_some_and(|name| name.starts_with(&track.generated_stem))
+fn placement_matches(
+    track: &super::TrackPlacement,
+    media: &[PathBuf],
+    format: OutputFormat,
+    addressing: DashAddressing,
+) -> bool {
+    if media.is_empty()
+        || !media
+            .iter()
+            .all(|path| path.parent() == Some(track.media_directory.as_path()))
+    {
+        return false;
+    }
+    let Some(names) = &track.media_names else {
+        return media.iter().all(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(&track.generated_stem))
+        });
+    };
+    if format == OutputFormat::Dash && addressing == DashAddressing::Base {
+        let stem = Path::new(&names.initialization)
+            .file_stem()
+            .and_then(|stem| stem.to_str());
+        let indexed = match stem {
+            Some("init") => "indexed.mp4".to_owned(),
+            Some(stem) => format!("{stem}-indexed.mp4"),
+            None => return false,
+        };
+        return media.len() == 1
+            && media[0].file_name().and_then(|name| name.to_str()) == Some(indexed.as_str());
+    }
+    let segments = if format == OutputFormat::HlsTs {
+        media
+    } else {
+        if media[0].file_name().and_then(|name| name.to_str())
+            != Some(names.initialization.as_str())
+        {
+            return false;
+        }
+        &media[1..]
+    };
+    let Ok(selected) = names.for_output(format, addressing, segments.len()) else {
+        return false;
+    };
+    let extension = if format == OutputFormat::HlsTs {
+        "ts"
+    } else {
+        "m4s"
+    };
+    !segments.is_empty()
+        && segments.iter().enumerate().all(|(index, path)| {
+            selected
+                .file_name(index, segments.len(), extension)
+                .is_ok_and(|name| {
+                    path.file_name().and_then(|name| name.to_str())
+                        == Some(format!("{}{name}", track.generated_stem).as_str())
+                })
         })
 }
 

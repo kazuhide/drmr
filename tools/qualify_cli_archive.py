@@ -496,7 +496,7 @@ def source_verification(report):
             and all(checks.get(name) is True for name in CHECKS))
 
 
-def current_plan_output_options(planned):
+def current_plan_output_options(planned, media_names=None):
     source_format = planned.get("source_format")
     if not isinstance(source_format, str):
         return False
@@ -511,13 +511,33 @@ def current_plan_output_options(planned):
         "output_ordinal": 0, "source": source, "selector": 0, "kind": kind,
         "media_directory": "", "playlist": playlist, "generated_stem": "track-0000-",
     }]}, "dash_addressing": "template"}
+    if planned["schema_version"] == 9:
+        if source_format == "dash":
+            names = [f"seg_{index}.m4s" for index in range(1, 6)]
+            if media_names is not None and media_names != names:
+                return False
+            prefix, start, width = "seg_", 1, 0
+        else:
+            if (not isinstance(media_names, list) or not 2 <= len(media_names) <= 8
+                    or media_names != [f"segment-{index:03d}.ts" for index in range(len(media_names))]):
+                return False
+            names = media_names
+            prefix, start, width = "segment-", 0, 3
+        track = expected["layout"]["tracks"][0]
+        track["generated_stem"] = ""
+        track["media_names"] = {"initialization": "init.mp4", "segments": {
+            "kind": "sequence", "prefix": prefix, "suffix": "", "start": start,
+            "width": width, "count": len(names)}}
     options = planned.get("output_options")
     return (options == expected
             and type(options["layout"]["tracks"][0]["output_ordinal"]) is int
-            and type(options["layout"]["tracks"][0]["selector"]) is int)
+            and type(options["layout"]["tracks"][0]["selector"]) is int
+            and (planned["schema_version"] != 9 or all(
+                type(options["layout"]["tracks"][0]["media_names"]["segments"][field]) is int
+                for field in ("start", "width", "count"))))
 
 
-def plan_depth(planned):
+def plan_depth(planned, media_names=None):
     if not isinstance(planned, dict) or type(planned.get("schema_version")) is not int:
         return False
     if planned["schema_version"] == 1:
@@ -527,13 +547,13 @@ def plan_depth(planned):
     if planned["schema_version"] == 3:
         return True
     processing = planned.get("processing")
-    return (planned["schema_version"] in (5, 7) and isinstance(processing, dict)
+    return (planned["schema_version"] in (5, 7, 9) and isinstance(processing, dict)
             and set(processing) == {"requested", "resolved", "boundaries", "segment_duration_ms"}
             and processing["requested"] in ("auto", "stitch") and processing["resolved"] == "stitch"
             and processing["boundaries"] == "resegment"
             and type(processing["segment_duration_ms"]) is int and processing["segment_duration_ms"] == 2000
             and (planned["schema_version"] == 5
-                 or processing["requested"] == "auto" and current_plan_output_options(planned)))
+                  or processing["requested"] == "auto" and current_plan_output_options(planned, media_names)))
 
 
 def doctor(report):
@@ -725,7 +745,7 @@ def audio_media(cli, runner, source):
                            "--save", plan_path, "--max-workers", "1", "--json"], "aac44100-plan")
     plan_bytes = read_regular(plan_path, 1024 * 1024)
     require(isinstance(planned, dict) and planned == load_json(plan_bytes)
-            and type(planned.get("schema_version")) is int and plan_depth(planned)
+            and type(planned.get("schema_version")) is int and plan_depth(planned, resources)
             and planned.get("kind") == "execution-plan"
             and re.fullmatch(r"[0-9a-f]{64}", planned.get("plan_id", "")) is not None
             and planned.get("source") == source_inventory and planned.get("source_format") == "hls-ts",

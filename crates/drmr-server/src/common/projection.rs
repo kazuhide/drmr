@@ -833,11 +833,17 @@ pub fn project(
     let (mut value, kind, success) = match operation {
         OperationName::Analyze => analysis(v)?,
         OperationName::Plan => plan(v)?,
-        OperationName::Convert if matches!(schema, Some(1 | 3 | 5 | 7)) => single_conversion(v)?,
-        OperationName::Convert | OperationName::Verify if matches!(schema, Some(2 | 4 | 6 | 8)) => {
+        OperationName::Convert if matches!(schema, Some(1 | 3 | 5 | 7 | 9)) => {
+            single_conversion(v)?
+        }
+        OperationName::Convert | OperationName::Verify
+            if matches!(schema, Some(2 | 4 | 6 | 8 | 10)) =>
+        {
             bundle(operation, v)?
         }
-        OperationName::Verify if matches!(schema, Some(1 | 3 | 5 | 7)) => single_verification(v)?,
+        OperationName::Verify if matches!(schema, Some(1 | 3 | 5 | 7 | 9)) => {
+            single_verification(v)?
+        }
         _ => return Err(bad()),
     };
     if operation != OperationName::Analyze {

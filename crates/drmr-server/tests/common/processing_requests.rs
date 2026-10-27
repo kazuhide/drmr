@@ -117,6 +117,27 @@ struct BundleIdentity<'a> {
     output_options: Option<&'a [OutputSettings]>,
 }
 
+fn fixture_layout(
+    source: &SourceInventory,
+    format: OutputFormat,
+    processing: ProcessingMode,
+    current: bool,
+) -> SourceLayout {
+    let tracks = [SourceTrack {
+        source: source.entrypoint.clone(),
+        selector: 0,
+        kind: TrackKind::Video,
+        playlist: Some(source.entrypoint.clone()),
+        media: vec!["segment.ts".into()],
+    }];
+    if current {
+        SourceLayout::resolve_for_processing(LayoutMode::Source, format, processing, &tracks)
+    } else {
+        SourceLayout::resolve_legacy_for_processing(LayoutMode::Source, format, processing, &tracks)
+    }
+    .unwrap()
+}
+
 fn returned_plan(
     h: &support::Harness,
     outputs: Value,
@@ -157,28 +178,19 @@ fn returned_plan(
         .map(|(output, choice)| OutputSettings {
             id: output.id.clone(),
             options: OutputOptions {
-                layout: Some(
-                    SourceLayout::resolve_for_processing(
-                        LayoutMode::Source,
-                        output.format,
-                        choice.selection.resolved,
-                        &[SourceTrack {
-                            source: source.inventory().entrypoint.clone(),
-                            selector: 0,
-                            kind: TrackKind::Video,
-                            playlist: Some(source.inventory().entrypoint.clone()),
-                            media: vec!["segment.ts".into()],
-                        }],
-                    )
-                    .unwrap(),
-                ),
+                layout: Some(fixture_layout(
+                    source.inventory(),
+                    output.format,
+                    choice.selection.resolved,
+                    true,
+                )),
                 dash_addressing: None,
             },
         })
         .collect();
     let mut plan = BundlePlan {
         kind: "execution-plan".into(),
-        schema_version: 8,
+        schema_version: 10,
         plan_id: String::new(),
         source: source.inventory().clone(),
         source_format: OutputFormat::HlsTs,

@@ -105,11 +105,17 @@ impl Converter {
     ) -> Result<Self, ConversionError> {
         let mut command = self.with_processing_clone(self.processing_mode);
         if self.layout_mode() == LayoutMode::Source && format != OutputFormat::Mp4 {
-            let layout = SourceLayout::resolve_from_admitted_tracks(
+            let layout = SourceLayout::resolve_from_admitted_tracks_with_names(
                 input,
                 source_format,
                 facts,
-                LayoutMode::Source,
+                (
+                    LayoutMode::Source,
+                    self.output_options
+                        .selected
+                        .as_deref()
+                        .is_none_or(SourceLayout::has_source_names),
+                ),
                 format,
                 processing,
                 &self.backend.stop,
@@ -147,7 +153,12 @@ impl Converter {
         format: OutputFormat,
     ) -> Result<(), ConversionError> {
         if let Some(layout) = &self.output_options.selected {
-            layout.apply_to_stage(stage, format, &self.backend.stop)?;
+            layout.apply_to_stage(
+                stage,
+                format,
+                self.output_options.addressing,
+                &self.backend.stop,
+            )?;
         }
         if format == OutputFormat::Dash {
             super::dash::rewrite_output(
@@ -158,7 +169,12 @@ impl Converter {
             )?;
         }
         if let Some(layout) = &self.output_options.selected {
-            layout.verify_actual_output(stage.path(), format, &self.backend.stop)?;
+            layout.verify_actual_output(
+                stage.path(),
+                format,
+                self.output_options.addressing,
+                &self.backend.stop,
+            )?;
         }
         Ok(())
     }
@@ -184,13 +200,17 @@ impl Converter {
         processing: ProcessingMode,
     ) -> Result<OutputOptions, ConversionError> {
         let layout = if self.layout_mode() == LayoutMode::Source && format != OutputFormat::Mp4 {
-            Some(SourceLayout::resolve_from_qualified_source(
+            Some(SourceLayout::resolve_from_qualified_source_with_names(
                 input,
                 qualified,
                 LayoutMode::Source,
                 format,
                 processing,
                 &self.backend.stop,
+                self.output_options
+                    .selected
+                    .as_deref()
+                    .is_none_or(SourceLayout::has_source_names),
             )?)
         } else {
             None
@@ -207,6 +227,18 @@ impl Converter {
             return Err(ConversionError("execution-plan-output-options-changed"));
         }
         Ok(options)
+    }
+
+    pub(super) fn resolved_output_options_for_saved(
+        &self,
+        input: &Path,
+        qualified: &SourceQualification,
+        format: OutputFormat,
+        processing: ProcessingMode,
+        saved: &OutputOptions,
+    ) -> Result<OutputOptions, ConversionError> {
+        self.using_output_options(Some(saved))
+            .resolved_output_options(input, qualified, format, processing)
     }
 
     pub(super) fn verify_selected_output_options(
@@ -227,6 +259,7 @@ impl Converter {
                     .parent()
                     .ok_or(ConversionError("output-options-invalid"))?,
                 format,
+                self.output_options.addressing,
                 &self.backend.stop,
             )?;
         }

@@ -60,7 +60,7 @@ fn assert_result(h: &support::Harness, ended: &Value, expected: &Value, accepted
 }
 
 fn check_new_plan_report(mutate: impl FnOnce(&mut Value), mixed: bool, accepted: bool) {
-    check_new_plan_schema(8, mutate, mixed, accepted);
+    check_new_plan_schema(10, mutate, mixed, accepted);
 }
 
 fn check_new_plan_schema(
@@ -105,7 +105,7 @@ fn check_new_plan_minimum(
     let request = child_request(&h.cli, 1);
     assert_eq!(request["runtime"]["decode"], decode);
     let path = Path::new(request["operation"]["save_file"].as_str().unwrap());
-    if schema != 8 || minimum != ValidationDepth::Native {
+    if schema != 10 || minimum != ValidationDepth::Native {
         plan.schema_version = schema;
         plan.required_depth = (schema > 2).then_some(minimum);
         if schema < 6 {
@@ -113,6 +113,22 @@ fn check_new_plan_minimum(
         }
         if schema < 8 {
             plan.output_options = None;
+        } else if schema == 8 {
+            for ((setting, output), choice) in plan
+                .output_options
+                .as_mut()
+                .unwrap()
+                .iter_mut()
+                .zip(&plan.outputs)
+                .zip(plan.processing.as_ref().unwrap())
+            {
+                setting.options.layout = Some(fixture_layout(
+                    &plan.source,
+                    output.format,
+                    choice.selection.resolved,
+                    false,
+                ));
+            }
         }
         let identity = BundleIdentity {
             kind: &plan.kind,
@@ -193,6 +209,20 @@ struct SingleIdentity<'a> {
     required_depth: Option<ValidationDepth>,
     #[serde(skip_serializing_if = "Option::is_none")]
     processing: Option<ProcessingSelection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output_options: Option<&'a OutputOptions>,
+}
+
+fn fixture_output_options(
+    source: &SourceInventory,
+    format: OutputFormat,
+    processing: ProcessingMode,
+    current: bool,
+) -> OutputOptions {
+    OutputOptions {
+        layout: Some(fixture_layout(source, format, processing, current)),
+        dash_addressing: None,
+    }
 }
 
 fn saved_plan(
@@ -216,8 +246,15 @@ fn saved_plan(
                 output: h.output.canonicalize().unwrap().join("master.m3u8"),
             },
             required_depth,
-            processing: (schema == 5).then(|| choice(single_mode)),
-            output_options: None,
+            processing: (schema >= 5).then(|| choice(single_mode)),
+            output_options: (schema >= 7).then(|| {
+                fixture_output_options(
+                    source.inventory(),
+                    OutputFormat::HlsTs,
+                    choice(single_mode).resolved,
+                    schema >= 9,
+                )
+            }),
         };
         let identity = SingleIdentity {
             kind: &plan.kind,
@@ -227,6 +264,7 @@ fn saved_plan(
             intent: &plan.intent,
             required_depth,
             processing: plan.processing,
+            output_options: plan.output_options.as_ref(),
         };
         plan.plan_id = hex::encode(Sha256::digest(serde_json::to_vec(&identity).unwrap()));
         serde_json::to_value(plan).unwrap()
@@ -235,13 +273,28 @@ fn saved_plan(
             {"id":"first","format":"hls-ts","target":"clear","drms":[]},
             {"id":"second","format":"hls-ts","target":"clear","drms":[]}]))
         .unwrap();
-        let processing = (schema == 6).then(|| {
+        let processing: Option<Vec<OutputProcessing>> = (schema >= 6).then(|| {
             outputs
                 .iter()
                 .zip([ProcessingMode::Auto, ProcessingMode::Segments])
                 .map(|(output, requested)| OutputProcessing {
                     id: output.id.clone(),
                     selection: choice(requested),
+                })
+                .collect()
+        });
+        let output_options = (schema >= 8).then(|| {
+            outputs
+                .iter()
+                .zip(processing.as_ref().unwrap())
+                .map(|(output, choice)| OutputSettings {
+                    id: output.id.clone(),
+                    options: fixture_output_options(
+                        source.inventory(),
+                        output.format,
+                        choice.selection.resolved,
+                        schema >= 10,
+                    ),
                 })
                 .collect()
         });
@@ -255,7 +308,7 @@ fn saved_plan(
             outputs,
             required_depth,
             processing,
-            output_options: None,
+            output_options,
         };
         let identity = BundleIdentity {
             kind: &plan.kind,
@@ -266,7 +319,7 @@ fn saved_plan(
             outputs: &plan.outputs,
             required_depth,
             processing: plan.processing.as_deref(),
-            output_options: None,
+            output_options: plan.output_options.as_deref(),
         };
         plan.plan_id = hex::encode(Sha256::digest(serde_json::to_vec(&identity).unwrap()));
         serde_json::to_value(plan).unwrap()
@@ -372,10 +425,17 @@ fn conversion_report(h: &support::Harness, plan: &Value, depth: ValidationDepth)
         report["plan_id"] = plan["plan_id"].clone();
         report
     } else {
-        let outputs: Vec<Value> = plan["outputs"].as_array().unwrap().iter().enumerate().map(|(index, output)| {
-            json!({"id":output["id"],"conversion":conversion(h, schema == 6 && index == 1, depth, schema == 2),
+        let outputs: Vec<Value> = plan["outputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .enumerate()
+            .map(|(index, output)| {
+                let segments = plan["processing"][index]["selection"]["resolved"] == "segments";
+                json!({"id":output["id"],"conversion":conversion(h, segments, depth, schema == 2),
                 "signaling":{"systems":[],"verified":true},"conformance":null})
-        }).collect();
+            })
+            .collect();
         json!({"kind":"bundle-conversion","schema_version":if schema == 2 {1} else {2},
             "plan_id":plan["plan_id"],"outputs":outputs})
     }
@@ -514,7 +574,7 @@ fn saved_bundle_conversion_requires_actual_mode_and_boundary_guarantees() {
 
 #[test]
 fn saved_conversion_accepts_resolved_auto_stitch_and_explicit_segments_at_each_depth() {
-    for schema in [5, 6] {
+    for schema in [5, 6, 7, 8, 9, 10] {
         for depth in [ValidationDepth::Native, ValidationDepth::Decoded] {
             check_saved_report(schema, depth, |_| {}, true);
         }
@@ -546,7 +606,7 @@ fn legacy_saved_conversion_refuses_present_modes_that_contradict_frozen_stitch_b
 
 #[test]
 fn saved_verification_keeps_absent_processing_and_the_closed_report_schema() {
-    for schema in [5, 6] {
+    for schema in [5, 6, 7, 8, 9, 10] {
         for unexpected_processing in [false, true] {
             let h = support::Harness::new();
             analyze_source(&h);

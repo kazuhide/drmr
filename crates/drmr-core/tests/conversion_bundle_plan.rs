@@ -158,7 +158,7 @@ fn one_private_plan_publishes_and_independently_verifies_both_presentations() {
             outputs: &outputs(),
         })
         .unwrap();
-    assert_eq!(plan.schema_version, 8);
+    assert_eq!(plan.schema_version, 10);
     assert!(
         plan.outputs
             .iter()

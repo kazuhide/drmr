@@ -108,7 +108,7 @@ fn saved_single_preserves_nested_source_directories_without_running_media_tools(
             target: TargetProtection::Clear,
         })
         .unwrap();
-    assert_eq!(saved.schema_version, 7);
+    assert_eq!(saved.schema_version, 9);
     let placements = &saved
         .output_options
         .as_ref()
@@ -233,7 +233,7 @@ fn saved_bundle_keeps_each_dash_form_and_source_directory_through_conversion_and
             outputs: &outputs,
         })
         .unwrap();
-    assert_eq!(saved.schema_version, 8);
+    assert_eq!(saved.schema_version, 10);
     let file = root.path().join("bundle.plan.json");
     plan::write_bundle(&file, &saved).unwrap();
     let SavedPlan::Bundle(loaded) = plan::read_saved(&file).unwrap() else {

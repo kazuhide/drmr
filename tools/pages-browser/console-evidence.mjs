@@ -37,7 +37,7 @@ export function decodeBadgeState(report) {
 
 export function planMinimumDepth(plan) {
   assert.equal(plan.kind, 'execution-plan');
-  assert.ok([1, 2, 3, 4, 5, 6, 7, 8].includes(plan.schema_version));
+  assert.ok([1, 2, 3, 4, 5, 6, 7, 8, 9, 10].includes(plan.schema_version));
   if (plan.schema_version < 3) {
     assert.equal(Object.hasOwn(plan, 'required_depth'), false);
     return 'decoded';
@@ -54,7 +54,7 @@ export function planMinimumDepth(plan) {
     }
   }
   if (plan.schema_version >= 7) {
-    const single = plan.schema_version === 7, options = single ? [plan.output_options] : plan.output_options?.map(row => row.options);
+    const single = plan.schema_version % 2 === 1, options = single ? [plan.output_options] : plan.output_options?.map(row => row.options);
     assert.ok(Array.isArray(options) && options.length === (single ? 1 : plan.outputs.length));
     for (const [index, option] of options.entries()) {
       assert.ok(option && typeof option === 'object' && !Array.isArray(option));
@@ -75,7 +75,7 @@ export function legacyPlan(current) {
 }
 export function compatibilityPlan(current, schemaVersion) {
   planMinimumDepth(current);
-  assert.ok([3, 4, 5, 6, 7, 8].includes(current.schema_version));
+  assert.ok([3, 4, 5, 6, 7, 8, 9, 10].includes(current.schema_version));
   const single = current.schema_version % 2 === 1;
   assert.ok((single ? [1, 3, 5] : [2, 4, 6]).includes(schemaVersion) && schemaVersion <= current.schema_version);
   const plan = { kind: current.kind, schema_version: schemaVersion, plan_id: '',

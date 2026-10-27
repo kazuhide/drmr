@@ -199,6 +199,7 @@ fn indexed_source_layout_keeps_unique_stems_for_representations_in_the_same_dire
             .base
             .join(relative(&resolved.initialization.uri).unwrap());
         files.insert(init.clone(), PathBuf::from(format!("{prefix}-init.mp4")));
+        let start_number = resolved.segments[0].number;
         for segment in resolved.segments {
             let old = resolved.base.join(relative(&segment.resource.uri).unwrap());
             files.insert(
@@ -206,7 +207,13 @@ fn indexed_source_layout_keeps_unique_stems_for_representations_in_the_same_dire
                 PathBuf::from(format!("{prefix}-{}.m4s", segment.number)),
             );
         }
-        templates.insert(init, format!("{prefix}-$Number$.m4s"));
+        templates.insert(
+            init,
+            crate::conversion::layout::RelocatedTemplate {
+                media: Some(format!("{prefix}-$Number$.m4s")),
+                start_number: Some(start_number),
+            },
+        );
     }
     for (old, new) in &files {
         fs::rename(owner.path().join(old), owner.path().join(new)).unwrap();
@@ -369,7 +376,13 @@ fn source_relocation_proves_every_template_expansion_before_rewriting_the_manife
             let old = resolved.base.join(relative(&segment.resource.uri).unwrap());
             files.insert(old, directory.join(format!("part-{}.m4s", segment.number)));
         }
-        templates.insert(init, format!("{}/part-$Number$.m4s", directory.display()));
+        templates.insert(
+            init,
+            crate::conversion::layout::RelocatedTemplate {
+                media: Some(format!("{}/part-$Number$.m4s", directory.display())),
+                start_number: Some(1),
+            },
+        );
     }
     for (old, new) in &files {
         fs::rename(owner.path().join(old), owner.path().join(new)).unwrap();
@@ -377,7 +390,10 @@ fn source_relocation_proves_every_template_expansion_before_rewriting_the_manife
     let mut wrong = templates.clone();
     wrong.insert(
         PathBuf::from("video/init.mp4"),
-        "video/1080p/other-$Number$.m4s".into(),
+        crate::conversion::layout::RelocatedTemplate {
+            media: Some("video/1080p/other-$Number$.m4s".into()),
+            start_number: Some(1),
+        },
     );
     assert_eq!(
         relocate_output(owner.path(), &files, &wrong, &Stop::new()),

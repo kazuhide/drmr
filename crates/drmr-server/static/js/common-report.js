@@ -45,7 +45,7 @@
     if (report.error || report.status === 'failed' || report.status === 'cancelled') return false;
     if (envelope.report_kind === 'plan') {
       var legacy = (report.schema_version === 1 || report.schema_version === 2) && !Object.prototype.hasOwnProperty.call(report, 'required_depth');
-      var current = [3, 4, 5, 6, 7, 8].indexOf(report.schema_version) !== -1 && ['native', 'decoded'].indexOf(report.required_depth) !== -1;
+      var current = [3, 4, 5, 6, 7, 8, 9, 10].indexOf(report.schema_version) !== -1 && ['native', 'decoded'].indexOf(report.required_depth) !== -1;
       return (legacy || current) && typeof report.plan_id === 'string' && /^[a-f0-9]{64}$/.test(report.plan_id);
     }
     if (report.schema_version !== 1 && report.schema_version !== 2) return false;

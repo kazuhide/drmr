@@ -68,7 +68,7 @@ All selected audio/video media playlists must agree, as required by
 Missing, invalid or overflowing values, and conflicting declarations, are
 refused. MP4 and DASH sources retain a two-second fallback because this route
 does not infer a nominal packaging target from their sample or timeline lengths.
-New saved plans, versions 7/8, store the exact packaging request in
+New saved plans, versions 9/10, store the exact packaging request in
 `segment_duration_ms`. Execution passes that value unchanged and derives the
 separate HLS bound from the same byte-bound source. Versions 1–6 retain their
 original behavior: two seconds for implicit selections, or the exact explicitly

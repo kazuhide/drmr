@@ -88,7 +88,7 @@ fn saved_segments_with_omitted_format_retains_ts_and_executes_under_default_auto
         OutputFormat::HlsTs
     );
     let saved = saved_segments(&planner, &input, &destination);
-    assert_eq!(saved.schema_version, 7);
+    assert_eq!(saved.schema_version, 9);
     assert_eq!(saved.source_format, OutputFormat::HlsTs);
     assert_eq!(saved.intent.format, OutputFormat::HlsTs);
     let choice = saved.processing.unwrap();
@@ -236,7 +236,7 @@ fn native_clear_and_aes_bundle_reopens_and_preserves_every_original_segment() {
             outputs: &outputs,
         })
         .unwrap();
-    assert_eq!(saved.schema_version, 8);
+    assert_eq!(saved.schema_version, 10);
     assert!(
         saved
             .outputs
@@ -303,7 +303,7 @@ fn mixed_drm_plan_keeps_sibling_source_admission_and_saved_modes_separate() {
             outputs: &outputs,
         })
         .unwrap();
-    assert_eq!(saved.schema_version, 8);
+    assert_eq!(saved.schema_version, 10);
     assert_eq!(saved.processing_mode("ts"), ProcessingMode::Segments);
     assert_eq!(saved.processing_mode("dash"), ProcessingMode::Stitch);
     for choice in saved.processing.as_ref().unwrap() {
@@ -344,7 +344,7 @@ fn mixed_bundle_fresh_verification_uses_each_saved_mode_and_saved_decode_floor()
             outputs: &outputs,
         })
         .unwrap();
-    assert_eq!(saved.schema_version, 8);
+    assert_eq!(saved.schema_version, 10);
     assert_eq!(saved.minimum_depth(), ValidationDepth::Decoded);
     assert_eq!(saved.processing_mode("ts"), ProcessingMode::Segments);
     assert_eq!(saved.processing_mode("dash"), ProcessingMode::Stitch);

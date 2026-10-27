@@ -7,7 +7,7 @@ supported HLS, static DASH and MP4 URLs within the documented acquisition profil
 
 For several outputs with separate DRM systems and final-manifest checks, use
 the [multiple-output workflow](multiple-outputs.md). The single-output examples
-below create schema-version-7 plans. Legacy version-one and version-three plans
+below create schema-version-9 plans. Legacy version-one and version-three plans
 remain readable with their recorded validation and packaging behavior.
 
 ## 1. Analyze and retain the input
@@ -70,7 +70,7 @@ origins, authentication, and transfer limits; the same options apply to `analyze
 drmr plan ./source/input.m3u8 --to cbcs --format dash --output ./result --save ./conversion.plan.json --json
 ```
 
-The saved plan has `kind: "execution-plan"` and `schema_version: 7`. It records
+The saved plan has `kind: "execution-plan"` and `schema_version: 9`. It records
 one output format and protection scheme, the new output location, and a SHA-256
 fingerprint and size for every referenced source file. `required_depth` is
 `native` by default; `--decode` saves `decoded`. This minimum is included in

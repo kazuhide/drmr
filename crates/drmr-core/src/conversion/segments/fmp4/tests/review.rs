@@ -32,7 +32,7 @@ fn intent(
 }
 
 fn assert_bound_output_options(saved: &BundlePlan) {
-    assert_eq!(saved.schema_version, 8);
+    assert_eq!(saved.schema_version, 10);
     assert_eq!(
         saved.output_options,
         Some(vec![

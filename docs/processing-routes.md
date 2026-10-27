@@ -21,7 +21,7 @@ timestamps and boundaries. `stitch` prepares complete tracks and packages the
 requested output; HLS/DASH output is segmented again, while MP4 output is a file.
 `auto` resolves a qualified route for the input and requested output. An explicitly requested mode never silently changes to another mode.
 
-New single-output plans use schema 7 and named-output plans use schema 8. Both
+New single-output plans use schema 9 and named-output plans use schema 10. Both
 fix the requested and resolved modes, boundary guarantee, source-relative
 placement and DASH reference form. Earlier schemas 1–6 keep their exact saved
 packaging requests and previous placement. `convert --plan`

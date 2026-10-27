@@ -1,5 +1,5 @@
 //! A saved directory choice binds each output ordinal to its qualified source selector.
-use super::{COLLISION, ConversionError, INVALID, LayoutMode, UNSUPPORTED, paths};
+use super::{COLLISION, ConversionError, INVALID, LayoutMode, SegmentNames, UNSUPPORTED, paths};
 use crate::inspection::{OutputFormat, TrackKind};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -28,6 +28,48 @@ pub struct TrackPlacement {
     pub media_directory: PathBuf,
     pub playlist: PathBuf,
     pub generated_stem: String,
+    #[serde(
+        default,
+        deserialize_with = "present_names",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub media_names: Option<SourceNames>,
+}
+
+/// Source-derived media names, fixed when a new plan is saved.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceNames {
+    pub initialization: String,
+    pub segments: SegmentNames,
+}
+
+impl SourceNames {
+    pub(super) fn for_output(
+        &self,
+        format: OutputFormat,
+        addressing: crate::conversion::dash_addressing::DashAddressing,
+        count: usize,
+    ) -> Result<&SegmentNames, ConversionError> {
+        use crate::conversion::dash_addressing::DashAddressing;
+        if format == OutputFormat::Dash
+            && matches!(
+                addressing,
+                DashAddressing::Template | DashAddressing::TemplateDuration
+            )
+            && self.segments.template("m4s", count)?.is_none()
+        {
+            Ok(&SegmentNames::Generated)
+        } else {
+            Ok(&self.segments)
+        }
+    }
+}
+
+fn present_names<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<SourceNames>, D::Error> {
+    SourceNames::deserialize(deserializer).map(Some)
 }
 
 /// The complete, ordered placement selected while saving a plan.
@@ -54,6 +96,40 @@ impl std::fmt::Debug for TrackPlacement {
     }
 }
 impl SourceLayout {
+    /// Identify source filename intent without accepting a partially upgraded layout.
+    pub fn has_source_names(&self) -> bool {
+        !self.tracks.is_empty() && self.tracks.iter().all(|track| track.media_names.is_some())
+    }
+
+    /// Older plans retain their recorded generated filenames and serialization.
+    pub fn has_legacy_names(&self) -> bool {
+        !self.tracks.is_empty() && self.tracks.iter().all(|track| track.media_names.is_none())
+    }
+
+    /// Reconstruct a pre-source-filename layout for an existing saved plan.
+    pub fn resolve_legacy_from_tracks(
+        mode: LayoutMode,
+        format: OutputFormat,
+        tracks: &[SourceTrack],
+    ) -> Result<Self, ConversionError> {
+        Self::resolve_legacy_for_processing(
+            mode,
+            format,
+            crate::conversion::ProcessingMode::Stitch,
+            tracks,
+        )
+    }
+
+    /// Preserve the exact naming and grouping used by older saved plans.
+    pub fn resolve_legacy_for_processing(
+        mode: LayoutMode,
+        format: OutputFormat,
+        processing: crate::conversion::ProcessingMode,
+        tracks: &[SourceTrack],
+    ) -> Result<Self, ConversionError> {
+        Self::resolve_with_names(mode, format, processing, tracks, false)
+    }
+
     /// Resolve directories from actual referenced media, preserving logical track order.
     pub fn resolve_from_tracks(
         mode: LayoutMode,
@@ -75,6 +151,16 @@ impl SourceLayout {
         processing: crate::conversion::ProcessingMode,
         tracks: &[SourceTrack],
     ) -> Result<Self, ConversionError> {
+        Self::resolve_with_names(mode, format, processing, tracks, true)
+    }
+
+    pub(super) fn resolve_with_names(
+        mode: LayoutMode,
+        format: OutputFormat,
+        processing: crate::conversion::ProcessingMode,
+        tracks: &[SourceTrack],
+        preserve_names: bool,
+    ) -> Result<Self, ConversionError> {
         if tracks.is_empty() || tracks.len() > 64 {
             return Err(UNSUPPORTED);
         }
@@ -94,6 +180,7 @@ impl SourceLayout {
             .collect::<Result<Vec<_>, ConversionError>>()?;
         let mut placements: Vec<TrackPlacement> = Vec::with_capacity(tracks.len());
         let mut playlists = BTreeSet::new();
+        let mut retained_name_bytes = 0usize;
         for (ordinal, track) in tracks.iter().enumerate() {
             paths::relative_components(&track.source)?;
             if track.selector >= 64 || !matches!(track.kind, TrackKind::Video | TrackKind::Audio) {
@@ -111,27 +198,27 @@ impl SourceLayout {
                 placements.push(placement);
                 continue;
             }
-            let (media_directory, mut playlist, generated_stem) = if mode == LayoutMode::Normalized
-            {
-                let directory = PathBuf::from(format!("track-{physical:04}"));
-                (
-                    directory.clone(),
-                    directory.join("media.m3u8"),
-                    String::new(),
-                )
-            } else {
-                let directory = directories[physical].clone();
-                let playlist = track
-                    .playlist
-                    .clone()
-                    .unwrap_or_else(|| directory.join(format!("playlist-{physical:04}.m3u8")));
-                (directory, playlist, format!("track-{physical:04}-"))
-            };
+            let (media_directory, mut playlist, generated_stem) = initial_paths(
+                mode,
+                physical,
+                &groups.first,
+                &directories,
+                tracks,
+                preserve_names,
+            )?;
             let parent = playlist.parent().ok_or(INVALID)?.to_path_buf();
             let mut suffix = 0;
             while top_level_manifest(&playlist)?
                 || playlists.contains(&paths::alias(&playlist)?)
-                || mode == LayoutMode::Source && generated_name(&playlist, &directories)?
+                || mode == LayoutMode::Source
+                    && if preserve_names {
+                        !playlist
+                            .extension()
+                            .and_then(|name| name.to_str())
+                            .is_some_and(|name| name.eq_ignore_ascii_case("m3u8"))
+                    } else {
+                        generated_name(&playlist, &directories)?
+                    }
             {
                 if mode == LayoutMode::Normalized || suffix > 64 {
                     return Err(COLLISION);
@@ -140,6 +227,22 @@ impl SourceLayout {
                 suffix += 1;
             }
             playlists.insert(paths::alias(&playlist)?);
+            let media_names = if mode == LayoutMode::Source && preserve_names {
+                let segments = if track.playlist.is_none()
+                    && track.media.as_slice() == [track.source.clone()]
+                {
+                    SegmentNames::Generated
+                } else {
+                    SegmentNames::infer(&track.media)?
+                };
+                retained_name_bytes = name_budget(retained_name_bytes, segments.stored_bytes()?)?;
+                Some(SourceNames {
+                    initialization: format!("{generated_stem}init.mp4"),
+                    segments,
+                })
+            } else {
+                None
+            };
             placements.push(TrackPlacement {
                 output_ordinal: physical,
                 source: track.source.clone(),
@@ -147,6 +250,7 @@ impl SourceLayout {
                 kind: track.kind,
                 media_directory,
                 playlist,
+                media_names,
                 generated_stem,
             });
         }
@@ -174,11 +278,15 @@ impl SourceLayout {
             return Err(UNSUPPORTED);
         }
         let mut claims = paths::PathClaims::default();
+        if !self.has_source_names() && !self.has_legacy_names() {
+            return Err(INVALID);
+        }
         claims.reserve_file(Path::new("master.m3u8"))?;
         claims.reserve_file(Path::new("manifest.mpd"))?;
         let mut selectors = BTreeSet::new();
         let groups = self.physical_groups()?;
         let mut group_kinds = BTreeSet::new();
+        let mut retained_name_bytes = 0usize;
         let directories = groups
             .first
             .iter()
@@ -207,6 +315,7 @@ impl SourceLayout {
                     || track.media_directory != original.media_directory
                     || track.playlist != original.playlist
                     || track.generated_stem != original.generated_stem
+                    || track.media_names != original.media_names
                 {
                     return Err(INVALID);
                 }
@@ -216,16 +325,34 @@ impl SourceLayout {
                 LayoutMode::Normalized
                     if track.media_directory != Path::new(&format!("track-{physical:04}"))
                         || track.playlist != track.media_directory.join("media.m3u8")
-                        || !track.generated_stem.is_empty() =>
+                        || !track.generated_stem.is_empty()
+                        || track.media_names.is_some() =>
                 {
                     return Err(INVALID);
                 }
-                LayoutMode::Source if track.generated_stem != format!("track-{physical:04}-") => {
+                LayoutMode::Source
+                    if track.media_names.is_none()
+                        && track.generated_stem != format!("track-{physical:04}-") =>
+                {
                     return Err(INVALID);
                 }
                 _ => {}
             }
-            if self.mode == LayoutMode::Source && generated_name(&track.playlist, &directories)? {
+            if track.media_names.is_some() {
+                let expected = source_stem(physical, &groups.first, &directories, |index| {
+                    (
+                        &self.tracks[index].source,
+                        self.tracks[index].selector,
+                        self.tracks[index].kind,
+                    )
+                })?;
+                retained_name_bytes =
+                    name_budget(retained_name_bytes, validate_names(track, &expected)?)?;
+            }
+            if self.mode == LayoutMode::Source
+                && self.has_legacy_names()
+                && generated_name(&track.playlist, &directories)?
+            {
                 return Err(COLLISION);
             }
             claims.reserve_file(&track.playlist)?;
@@ -260,6 +387,114 @@ impl SourceLayout {
     pub(super) fn physical_groups(&self) -> Result<super::grouping::Groups, ConversionError> {
         super::grouping::Groups::from_saved(self.tracks.iter().map(|track| track.output_ordinal))
     }
+}
+
+fn initial_paths(
+    mode: LayoutMode,
+    physical: usize,
+    first: &[usize],
+    directories: &[PathBuf],
+    tracks: &[SourceTrack],
+    preserve_names: bool,
+) -> Result<(PathBuf, PathBuf, String), ConversionError> {
+    let track = &tracks[first[physical]];
+    let result = if mode == LayoutMode::Normalized {
+        let directory = PathBuf::from(format!("track-{physical:04}"));
+        (
+            directory.clone(),
+            directory.join("media.m3u8"),
+            String::new(),
+        )
+    } else {
+        let directory = directories[physical].clone();
+        let playlist = track
+            .playlist
+            .clone()
+            .unwrap_or_else(|| directory.join(format!("playlist-{physical:04}.m3u8")));
+        let stem = if preserve_names {
+            source_stem(physical, first, directories, |index| {
+                (
+                    &tracks[index].source,
+                    tracks[index].selector,
+                    tracks[index].kind,
+                )
+            })?
+        } else {
+            format!("track-{physical:04}-")
+        };
+        (directory, playlist, stem)
+    };
+    Ok(result)
+}
+
+fn validate_names(track: &TrackPlacement, expected: &str) -> Result<usize, ConversionError> {
+    let names = track.media_names.as_ref().ok_or(INVALID)?;
+    if track.generated_stem != expected || names.initialization != format!("{expected}init.mp4") {
+        return Err(INVALID);
+    }
+    names.segments.validate()?;
+    paths::relative_components(Path::new(&names.initialization))?;
+    names.segments.stored_bytes()
+}
+
+fn name_budget(current: usize, additional: usize) -> Result<usize, ConversionError> {
+    current
+        .checked_add(additional)
+        .filter(|bytes| *bytes <= 16 * 1024 * 1024)
+        .ok_or(ConversionError("resource-budget"))
+}
+
+fn source_stem<'a>(
+    physical: usize,
+    first: &[usize],
+    directories: &[PathBuf],
+    track: impl Fn(usize) -> (&'a PathBuf, usize, TrackKind),
+) -> Result<String, ConversionError> {
+    let directory_alias = |path: &Path| {
+        if path.as_os_str().is_empty() {
+            Ok(String::new())
+        } else {
+            paths::alias(path)
+        }
+    };
+    let directory = directory_alias(&directories[physical])?;
+    let neighbors = first
+        .iter()
+        .enumerate()
+        .filter_map(
+            |(ordinal, index)| match directory_alias(&directories[ordinal]) {
+                Ok(alias) if alias == directory => Some(Ok((ordinal, *index))),
+                Ok(_) => None,
+                Err(error) => Some(Err(error)),
+            },
+        )
+        .collect::<Result<Vec<_>, ConversionError>>()?;
+    if neighbors.len() == 1 {
+        return Ok(String::new());
+    }
+    let candidate = |index: usize| -> Result<String, ConversionError> {
+        let (source, _, kind) = track(index);
+        let stem = source
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .ok_or(INVALID)?;
+        Ok(format!("{stem}-{}-", kind.as_str()))
+    };
+    let base = candidate(first[physical])?;
+    let key = paths::alias(Path::new(&format!("{base}init.mp4")))?;
+    let mut collisions = 0;
+    for (_, index) in neighbors {
+        if paths::alias(Path::new(&format!("{}init.mp4", candidate(index)?)))? == key {
+            collisions += 1;
+        }
+    }
+    let result = if collisions > 1 {
+        format!("{base}{physical}-")
+    } else {
+        base
+    };
+    paths::relative_components(Path::new(&format!("{result}init.mp4")))?;
+    Ok(result)
 }
 
 fn top_level_manifest(path: &Path) -> Result<bool, ConversionError> {
@@ -324,6 +559,22 @@ mod tests {
             playlist: Some(source.into()),
             media: vec![media.into()],
         }
+    }
+
+    #[test]
+    fn isolated_source_directory_does_not_need_a_track_prefix() {
+        let layout = SourceLayout::resolve_from_tracks(
+            LayoutMode::Source,
+            OutputFormat::Hls,
+            &[track(
+                "audio.m3u8",
+                "audio/64000/r000600.ts",
+                TrackKind::Audio,
+            )],
+        )
+        .unwrap();
+        assert_eq!(layout.tracks[0].generated_stem, "");
+        assert_eq!(layout.tracks[0].media_directory, Path::new("audio/64000"));
     }
 
     #[test]

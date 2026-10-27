@@ -1,4 +1,4 @@
-# Retain source directories
+# Retain source directories and segment names
 
 The CLI workflow keeps source-relative directories when downloading HLS or DASH
 and when writing a segmented output. Directory placement is independent of
@@ -14,11 +14,14 @@ from actual media references rather than inferred from the resolution.
 ## Downloaded originals
 
 The retained local entrypoint remains `input.m3u8`, `input.mpd`, or `input.mp4`.
-HLS child playlist paths and HLS/DASH media paths retain their relative names in
-source mode. Original manifest bytes and acquisition records remain in the
-private `raw/` directory; local manifests refer to the retained local files.
-Only the local projection changes. Acquisition does not retrieve keys from
-manifest key URIs.
+HLS child playlist paths and HLS/DASH media paths retain their relative names.
+The entrypoint and child playlists are localized manifests: their references
+point to the downloaded files so they work offline. The private `raw/` directory
+separately retains the manifest bytes received from the server and
+`raw/index.json`, an acquisition index containing source URLs, sizes and hashes.
+Media is stored once; `raw/` does not contain a second media copy. Keep it with
+the retained source and protect the index because its URLs may be confidential.
+Acquisition does not download keys from manifest key URIs.
 
 For downloads made by earlier versions, conversion uses the local paths already
 on disk. Acquire the URL again into a new download directory to retain the
@@ -41,27 +44,50 @@ shared by several output tracks, drmr chooses a distinct generated playlist name
 in the same parent directory. Every rewritten reference points to the actual
 output file.
 
-Media filenames can change. Each generated track uses a distinct filename prefix
-such as `track-0000-` within its source media directory. This also permits several
-tracks to share a directory without mixing their files. A TS-to-fMP4 conversion,
-for example, can create `video/1080p-high/track-0000-init.mp4` and
-`video/1080p-high/track-0000-seg_1.m4s`. Source layout does not promise identical
-filenames or segment boundaries after repackaging.
+Separate source media directories need no `track-0000-` prefix. For example,
+`video/1080p-high/r000600.ts` becomes `video/1080p-high/r000600.m4s` plus
+`video/1080p-high/init.mp4` for fMP4 output. HLS TS output keeps `.ts`.
+Supported numbered sequences retain their starting number and zero-padding. If joining
+and segmenting again changes the segment count, the sequence extends or ends
+earlier; preserving names does not promise the original boundaries.
+For the example above, numbered DASH references use `r$Number%06d$.m4s` with
+`startNumber="600"` and `init.mp4` as the initialization resource.
+
+Physical output tracks sharing a media directory use a distinguishing prefix
+derived from the source playlist name and track kind. This prevents
+initialization and media files from colliding, including when stitching separates
+a multiplexed TS rendition into video and audio.
+
+HLS and DASH `list` output retain arbitrary segment stems when the output count
+matches the source count, changing the extension for the output container.
+Otherwise, they use generated names such as `seg_1.m4s` or `seg_1.ts`.
+DASH `template` and `template-timeline` retain names that match drmr's supported
+single-counter pattern: one contiguous run of decimal digits increasing by one
+between segments, with a fixed prefix and suffix. The fixed parts can contain
+other digits, such as codec or version numbers. Zero-padding widths up to 12
+are supported for DASH templates. Other names, including those with multiple changing
+counters or wider padding, use generated names such as `seg_1.m4s`. Choose
+`--dash-addressing list` to retain those original names when the output count
+matches. `base` still writes one
+indexed fragmented MP4 per representation. MP4 inputs have no source segment
+names, so segmentation starts with `seg_1` in the source directory; the shared
+directory collision rule still applies.
 
 Conversion currently requires one media parent directory per source rendition.
 It refuses a rendition whose media is spread across several directories instead
 of silently flattening those directories. With `--processing segments`, a TS
 playlist containing video and audio continues to refer to one shared set of media
-files. With `--processing stitch`, the existing packaging route writes separate
-video and audio playlists with distinct generated filename prefixes in the
-original media directory. Local resource references remain confined to the
+files. With `--processing stitch`, separate video and audio tracks share the
+original media directory and use the distinguishing prefixes described above.
+Local resource references remain confined to the
 selected source or output root; a layout requiring an upward `..` reference is
 refused.
 
-Saved source-layout plans bind the resolved source selectors, output directories,
-playlist paths and generated filename prefixes. Execution revalidates the source
-graph and the saved placement. Earlier plan schemas 1–6 and the Rust API's omitted layout choice retain their
-previous generated placement.
+New single-output plans use schema 9 and named-output plans use schema 10. They
+bind source selectors, directories, playlist paths and segment naming rules.
+Execution revalidates the source graph and saved placement. Schemas 1–8 retain
+their saved choices; schemas 7/8 keep their recorded `track-0000-` prefixes.
+The Rust API's omitted layout choice retains its previous generated placement.
 
 Re-layout moves files inside the unpublished private stage without copying media
 bytes. Native media comparison, DRM signaling checks and manifest linting run

@@ -19,6 +19,74 @@ fn value(root: &Path) -> serde_json::Value {
 }
 
 #[test]
+fn version_ten_requires_filename_intent_for_every_output_and_keeps_old_bytes() {
+    let root = crate::native::private_tempdir().unwrap();
+    for schema in [8, 10] {
+        for current in [false, true] {
+            let mut plan: BundlePlan = serde_json::from_value(value(root.path())).unwrap();
+            plan.schema_version = schema;
+            if current {
+                let options = plan::options_tests::current_options(&plan.source);
+                for setting in plan.output_options.as_mut().unwrap() {
+                    setting.options = options.clone();
+                }
+            }
+            plan.plan_id = identity(&plan).unwrap();
+            if current != (schema == 10) {
+                assert_eq!(validate(&plan).unwrap_err(), INVALID);
+                continue;
+            }
+            validate(&plan).unwrap();
+            let bytes = serde_json::to_vec(&plan).unwrap();
+            let reopened: BundlePlan = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(serde_json::to_vec(&reopened).unwrap(), bytes);
+            let file = root.path().join(format!("schema-{schema}.bundle.json"));
+            plan::write_bundle(&file, &plan).unwrap();
+            assert_eq!(plan::read_saved(&file).unwrap(), SavedPlan::Bundle(plan));
+        }
+    }
+    let mut mixed: BundlePlan = serde_json::from_value(value(root.path())).unwrap();
+    mixed.schema_version = 10;
+    mixed.output_options.as_mut().unwrap()[0].options =
+        plan::options_tests::current_options(&mixed.source);
+    mixed.plan_id = identity(&mixed).unwrap();
+    assert_eq!(validate(&mixed).unwrap_err(), INVALID);
+}
+
+#[test]
+fn version_ten_keeps_required_fields_and_output_settings_strict() {
+    let root = crate::native::private_tempdir().unwrap();
+    let mut plan: BundlePlan = serde_json::from_value(value(root.path())).unwrap();
+    plan.schema_version = 10;
+    let options = plan::options_tests::current_options(&plan.source);
+    for setting in plan.output_options.as_mut().unwrap() {
+        setting.options = options.clone();
+    }
+    plan.plan_id = identity(&plan).unwrap();
+    validate(&plan).unwrap();
+    for field in ["required_depth", "processing", "output_options"] {
+        for replacement in [None, Some(serde_json::Value::Null)] {
+            let mut edited = serde_json::to_value(&plan).unwrap();
+            if let Some(value) = replacement {
+                edited[field] = value;
+            } else {
+                edited.as_object_mut().unwrap().remove(field);
+            }
+            let parsed = serde_json::from_value::<BundlePlan>(edited);
+            assert!(parsed.is_err() || validate(&parsed.unwrap()).is_err());
+        }
+    }
+    let mut edited = serde_json::to_value(&plan).unwrap();
+    edited["output_options"][1]["options"]["layout"]["tracks"][0]["media_names"]["initialization"] =
+        serde_json::json!("different.mp4");
+    assert_eq!(
+        validate(&serde_json::from_value(edited).unwrap()).unwrap_err(),
+        INVALID
+    );
+    assert!(!plan.output_root.exists());
+}
+
+#[test]
 fn version_eight_requires_one_identity_bound_setting_per_named_output() {
     let root = crate::native::private_tempdir().unwrap();
     let parsed = serde_json::from_value::<BundlePlan>(value(root.path()));
@@ -185,7 +253,7 @@ fn native_bundle_resolves_each_override_once_and_restores_saved_defaults() {
     let output_root = root.path().join("result");
     let (command, events) = plan::options_tests::native_command();
     let saved = native_plan(&command, &input, &output_root);
-    assert_eq!(saved.schema_version, 8);
+    assert_eq!(saved.schema_version, 10);
     for (id, expected) in [
         ("explicit-list", DashAddressing::List),
         ("default-template", DashAddressing::TemplateDuration),
@@ -222,8 +290,11 @@ fn native_bundle_rejects_rehashed_paths_before_creating_any_output_stage() {
     let mut saved = native_plan(&command, &input, &output_root);
     let setting = &mut saved.output_options.as_mut().unwrap()[0];
     let map = setting.options.layout.as_mut().unwrap();
-    map.tracks[0].media_directory = "different-directory".into();
-    map.tracks[0].playlist = "different-directory/playlist.m3u8".into();
+    for track in &mut map.tracks {
+        let playlist = track.playlist.file_name().unwrap().to_os_string();
+        track.media_directory = "different-directory".into();
+        track.playlist = track.media_directory.join(playlist);
+    }
     saved.plan_id = identity(&saved).unwrap();
     validate(&saved).unwrap();
     assert_eq!(

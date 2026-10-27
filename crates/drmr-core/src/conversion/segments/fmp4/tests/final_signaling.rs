@@ -72,7 +72,7 @@ fn final_single_default_selection_checks_initialization_and_middle_and_final_med
                     target,
                 })
                 .unwrap();
-            assert_eq!(plan.schema_version, 7);
+            assert_eq!(plan.schema_version, 9);
             assert_eq!(
                 plan.output_options,
                 Some(OutputOptions {

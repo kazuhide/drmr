@@ -717,7 +717,7 @@ impl CommonService {
             .origin_analysis
             .as_ref()
             .and_then(|id| self.lock().analyses.get(id).map(|a| a.source_ref.clone()));
-        if payload["plan_id"] != plan.id || plan.schema != 8 {
+        if payload["plan_id"] != plan.id || plan.schema != 10 {
             return Err(Error::new(503, "result-invalid"));
         }
         projection::bind_plan(&plan, c.operation, self.requested_depth(c)?, payload)?;
@@ -751,7 +751,7 @@ impl CommonService {
             return Err(Error::new(503, "result-invalid"));
         }
         // Common jobs set no global mode, so an omitted output mode requests Auto.
-        if plan.schema == 8 {
+        if plan.schema == 10 {
             let choices: Vec<OutputProcessing> = serde_json::from_value(
                 plan.processing
                     .clone()

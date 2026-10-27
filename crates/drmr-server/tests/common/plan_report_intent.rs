@@ -69,15 +69,15 @@ fn new_plan_report_refuses_payload_only_required_depth_changes() {
 
 #[test]
 fn new_plan_report_requires_current_schema_while_legacy_plans_remain_importable() {
-    for schema in [2, 4, 6, 8] {
-        check_new_plan_schema(schema, |_| {}, false, schema == 8);
+    for schema in [2, 4, 6, 8, 10] {
+        check_new_plan_schema(schema, |_| {}, false, schema == 10);
     }
 }
 
 #[test]
 fn new_plan_report_ignores_runtime_measurements_and_unprojected_source_paths() {
     check_new_plan_schema(
-        8,
+        10,
         |payload| {
             payload["output_root"] =
                 json!(Path::new(payload["output_root"].as_str().unwrap()).join("unexposed"));

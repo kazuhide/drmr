@@ -267,7 +267,7 @@ fn real_http_flow_saves_exports_executes_and_independently_verifies_the_same_cli
     ]})), "succeeded");
     let plan_ref = planned["plan_ref"].clone();
     let plan = client.get(&format!("/api/common/plans/{}", plan_ref.as_str().unwrap()));
-    assert_eq!(plan["plan_schema_version"], 8);
+    assert_eq!(plan["plan_schema_version"], 10);
     assert_eq!(plan["required_depth"], "decoded");
     assert_eq!(plan["outputs"].as_array().unwrap().len(), 2);
     assert_eq!(plan["outputs"][0]["processing"], "auto");

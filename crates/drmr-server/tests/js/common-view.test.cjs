@@ -274,19 +274,24 @@ test('DASH addressing is a per-output choice with a nominal default and no layou
 });
 
 test('saved source layout and DASH addressing are read-only and never sent as execution overrides', () => {
-  const h = harness(true, true);
-  Object.assign(h.record.plan, { plan_schema_version: 8, required_depth: 'native', destination_state: 'absent',
-    outputs: [{ id: 'dash', format: 'dash', target: 'cbcs', drms: ['widevine', 'playready'], conformance: 'none', processing: 'stitch', dash_addressing: 'list' }],
-    processing: [{ id: 'dash', selection: { requested: 'stitch', resolved: 'stitch', boundaries: 'resegment', segment_duration_ms: 6000 } }],
-    output_options: [{ id: 'dash', options: { layout: 'source', dash_addressing: 'list' } }] });
-  h.view.update();
-  let text = h.descendants(h.host).map(node => node.textContent).join(' ');
-  assert.ok(text.includes('Source directories')); assert.ok(text.includes('Explicit segment list'));
-  h.find('common-convert').dispatch('click');
-  assert.deepEqual(JSON.parse(JSON.stringify(h.sent[0].operation)), { kind: 'convert', plan_ref: 'plan_1' });
-  h.record.plan.destination_state = 'present'; h.setLanguage('ja'); h.view.translate();
-  text = h.descendants(h.host).map(node => node.textContent).join(' ');
-  assert.ok(text.includes('元のディレクトリ')); assert.ok(text.includes('セグメントの一覧'));
-  h.find('common-verify').dispatch('click');
-  assert.deepEqual(JSON.parse(JSON.stringify(h.sent[1].operation)), { kind: 'verify', plan_ref: 'plan_1' });
+  for (const schema of [7, 8, 9, 10]) {
+    const h = harness(true, true), single = schema === 7 || schema === 9;
+    const selection = { requested: 'stitch', resolved: 'stitch', boundaries: 'resegment', segment_duration_ms: 6000 };
+    const options = { layout: 'source', dash_addressing: 'list' };
+    Object.assign(h.record.plan, { plan_schema_version: schema, required_depth: 'native', destination_state: 'absent',
+      outputs: [{ id: single ? null : 'dash', format: 'dash', target: 'cbcs', drms: ['widevine', 'playready'], conformance: 'none', processing: 'stitch', dash_addressing: 'list' }],
+      processing: single ? selection : [{ id: 'dash', selection }],
+      output_options: single ? options : [{ id: 'dash', options }] });
+    h.view.update();
+    let text = h.descendants(h.host).map(node => node.textContent).join(' ');
+    assert.ok(text.includes('Source directories')); assert.ok(text.includes('Explicit segment list'));
+    assert.ok(h.descendants(h.host).some(node => node.getAttribute?.('data-common-plan-processing') === 'stitch'));
+    h.find('common-convert').dispatch('click');
+    assert.deepEqual(JSON.parse(JSON.stringify(h.sent[0].operation)), { kind: 'convert', plan_ref: 'plan_1' });
+    h.record.plan.destination_state = 'present'; h.setLanguage('ja'); h.view.translate();
+    text = h.descendants(h.host).map(node => node.textContent).join(' ');
+    assert.ok(text.includes('元のディレクトリ')); assert.ok(text.includes('セグメントの一覧'));
+    h.find('common-verify').dispatch('click');
+    assert.deepEqual(JSON.parse(JSON.stringify(h.sent[1].operation)), { kind: 'verify', plan_ref: 'plan_1' });
+  }
 });

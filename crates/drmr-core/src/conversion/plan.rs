@@ -58,12 +58,12 @@ pub fn read_saved(path: &Path) -> Result<SavedPlan, ConversionError> {
         return Err(INVALID);
     }
     match header.schema_version {
-        1 | 3 | 5 | 7 => {
+        1 | 3 | 5 | 7 | 9 => {
             let plan = serde_json::from_slice(&bytes).map_err(|_| INVALID)?;
             validate(&plan)?;
             Ok(SavedPlan::Single(plan))
         }
-        2 | 4 | 6 | 8 => {
+        2 | 4 | 6 | 8 | 10 => {
             let plan = serde_json::from_slice(&bytes).map_err(|_| INVALID)?;
             bundle::validate(&plan)?;
             Ok(SavedPlan::Bundle(plan))
@@ -256,7 +256,7 @@ impl Converter {
         )?;
         let mut plan = ExecutionPlan {
             kind: KIND.into(),
-            schema_version: 7,
+            schema_version: 9,
             plan_id: String::new(),
             source: frozen.inventory().clone(),
             source_format: qualified.actual_format,
@@ -496,7 +496,7 @@ fn validate(plan: &ExecutionPlan) -> Result<(), ConversionError> {
             (1, None, false, false)
                 | (3, Some(_), false, false)
                 | (5, Some(_), true, false)
-                | (7, Some(_), true, true)
+                | (7 | 9, Some(_), true, true)
         )
         || plan.plan_id.len() != 64
         || !plan
@@ -515,6 +515,7 @@ fn validate(plan: &ExecutionPlan) -> Result<(), ConversionError> {
             .map_err(|_| INVALID)?;
     }
     if let Some(options) = &plan.output_options {
+        validate_filename_schema(options, plan.schema_version >= 9)?;
         validate_options(
             options,
             &plan.source,
@@ -527,6 +528,23 @@ fn validate(plan: &ExecutionPlan) -> Result<(), ConversionError> {
         return Err(INVALID);
     }
     check_output_location(plan)
+}
+
+pub(super) fn validate_filename_schema(
+    options: &OutputOptions,
+    current: bool,
+) -> Result<(), ConversionError> {
+    if let Some(layout) = &options.layout {
+        let supported = if current {
+            layout.has_source_names()
+        } else {
+            layout.has_legacy_names()
+        };
+        if !supported {
+            return Err(INVALID);
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn validate_options(
@@ -564,7 +582,8 @@ pub(super) fn revalidate_options(
     saved: Option<&OutputOptions>,
 ) -> Result<(), ConversionError> {
     if let Some(saved) = saved {
-        let actual = command.resolved_output_options(input, qualified, output, processing)?;
+        let actual = command
+            .resolved_output_options_for_saved(input, qualified, output, processing, saved)?;
         if &actual != saved {
             return Err(ConversionError("execution-plan-output-options-changed"));
         }

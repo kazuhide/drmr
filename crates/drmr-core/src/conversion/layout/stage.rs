@@ -2,7 +2,10 @@
 use super::{ConversionError, INVALID, LayoutMode, SourceLayout, path_uri, paths};
 use crate::{
     concurrency::Stop,
-    conversion::files::{Stage, StageRelocation},
+    conversion::{
+        dash_addressing::DashAddressing,
+        files::{Stage, StageRelocation},
+    },
     inspection::OutputFormat,
 };
 use std::{
@@ -19,7 +22,12 @@ pub(in crate::conversion) struct RelocatedTrack {
 pub(in crate::conversion) struct RelocatedOutput {
     pub tracks: Vec<RelocatedTrack>,
     pub files: BTreeMap<PathBuf, PathBuf>,
-    pub templates: BTreeMap<PathBuf, String>,
+    pub templates: BTreeMap<PathBuf, RelocatedTemplate>,
+}
+#[derive(Clone)]
+pub(in crate::conversion) struct RelocatedTemplate {
+    pub media: Option<String>,
+    pub start_number: Option<u64>,
 }
 
 impl SourceLayout {
@@ -30,12 +38,13 @@ impl SourceLayout {
         &self,
         stage: &Stage,
         format: OutputFormat,
+        addressing: DashAddressing,
         stop: &Stop,
     ) -> Result<RelocatedOutput, ConversionError> {
         check(stop)?;
         self.validate(format, self.tracks.len())?;
         let mut tree = StageRelocation::new(stage)?;
-        let output = self.capture_stage(format, &mut tree, stop)?;
+        let output = self.capture_stage(format, addressing, &mut tree, stop)?;
         let physical_count = self.physical_groups()?.first.len();
         if self.mode == LayoutMode::Normalized {
             return Ok(output);
@@ -101,6 +110,7 @@ impl SourceLayout {
     fn capture_stage(
         &self,
         format: OutputFormat,
+        addressing: DashAddressing,
         tree: &mut StageRelocation<'_>,
         stop: &Stop,
     ) -> Result<RelocatedOutput, ConversionError> {
@@ -123,83 +133,196 @@ impl SourceLayout {
             return Err(INVALID);
         }
         tree.capture_file(Path::new(manifest))?;
-        let mut output = RelocatedOutput {
-            tracks: Vec::with_capacity(self.tracks.len()),
-            files: BTreeMap::new(),
-            templates: BTreeMap::new(),
+        let mut state = CaptureState {
+            output: RelocatedOutput {
+                tracks: Vec::new(),
+                files: BTreeMap::new(),
+                templates: BTreeMap::new(),
+            },
+            claims: paths::PathClaims::default(),
+            retained_bytes: 0,
         };
-        let mut claims = paths::PathClaims::default();
-        claims.reserve_file(Path::new(manifest))?;
-        let mut retained_bytes = 0usize;
+        state.claims.reserve_file(Path::new(manifest))?;
         let mut physical_tracks = Vec::with_capacity(groups.first.len());
         for (ordinal, first) in groups.first.iter().enumerate() {
-            let placement = &self.tracks[*first];
-            check(stop)?;
-            let directory = PathBuf::from(format!("track-{ordinal:04}"));
-            tree.capture_directory(&directory)?;
-            let mut actual = RelocatedTrack {
-                playlist: placement.playlist.clone(),
-                initialization: None,
-                media: Vec::new(),
-            };
-            for name in tree.entries(&directory, 100_000 - output.files.len())? {
-                check(stop)?;
-                let name = name.to_str().ok_or(INVALID)?;
-                let source = directory.join(name);
-                if output.files.len() == 100_000 {
-                    return Err(INVALID);
-                }
-                tree.capture_file(&source)?;
-                let destination = if name == "media.m3u8" {
-                    if format == OutputFormat::Dash {
-                        return Err(INVALID);
-                    }
-                    actual.playlist.clone()
-                } else {
-                    placement
-                        .media_directory
-                        .join(format!("{}{name}", placement.generated_stem))
-                };
-                claims.reserve_file(&destination)?;
-                retained_bytes = path_budget(retained_bytes, &source, &destination)?;
-                if name == "init.mp4" {
-                    actual.initialization = Some(destination.clone());
-                } else if name != "media.m3u8" {
-                    segment_number(name)?;
-                    actual.media.push(destination.clone());
-                }
-                output.files.insert(source, destination);
-            }
-            actual.media = ordered_media(actual.media, &placement.generated_stem)?;
-            if actual.media.is_empty()
-                || (format == OutputFormat::HlsTs) == actual.initialization.is_some()
-            {
-                return Err(INVALID);
-            }
-            if format != OutputFormat::Dash
-                && !output.files.contains_key(&directory.join("media.m3u8"))
-            {
-                return Err(INVALID);
-            }
-            let prefix = if placement.media_directory.as_os_str().is_empty() {
-                String::new()
-            } else {
-                format!("{}/", path_uri(&placement.media_directory)?)
-            };
-            output.templates.insert(
-                directory.join("init.mp4"),
-                format!("{prefix}{}seg_$Number$.m4s", placement.generated_stem),
-            );
-            physical_tracks.push(actual);
+            physical_tracks.push(capture_track(
+                ordinal,
+                &self.tracks[*first],
+                format,
+                addressing,
+                tree,
+                stop,
+                &mut state,
+            )?);
         }
-        output.tracks = groups
+        state.output.tracks = groups
             .ordinals
             .into_iter()
             .map(|ordinal| physical_tracks[ordinal].clone())
             .collect();
         tree.check()?;
-        Ok(output)
+        Ok(state.output)
     }
+}
+
+struct CaptureState {
+    output: RelocatedOutput,
+    claims: paths::PathClaims,
+    retained_bytes: usize,
+}
+
+fn capture_track(
+    ordinal: usize,
+    placement: &super::TrackPlacement,
+    format: OutputFormat,
+    addressing: DashAddressing,
+    tree: &mut StageRelocation<'_>,
+    stop: &Stop,
+    state: &mut CaptureState,
+) -> Result<RelocatedTrack, ConversionError> {
+    check(stop)?;
+    let directory = PathBuf::from(format!("track-{ordinal:04}"));
+    tree.capture_directory(&directory)?;
+    let mut actual = RelocatedTrack {
+        playlist: placement.playlist.clone(),
+        initialization: None,
+        media: Vec::new(),
+    };
+    let entries = tree.entries(&directory, 100_000 - state.output.files.len())?;
+    let indices = segment_indices(&entries)?;
+    let count = indices.len();
+    let extension = if format == OutputFormat::HlsTs {
+        "ts"
+    } else {
+        "m4s"
+    };
+    let selected_names = placement
+        .media_names
+        .as_ref()
+        .map(|names| names.for_output(format, addressing, count))
+        .transpose()?;
+    let mut media = Vec::with_capacity(count);
+    for name in &entries {
+        check(stop)?;
+        let name = name.to_str().ok_or(INVALID)?;
+        let source = directory.join(name);
+        if state.output.files.len() == 100_000 {
+            return Err(INVALID);
+        }
+        tree.capture_file(&source)?;
+        let destination = if name == "media.m3u8" {
+            if format == OutputFormat::Dash {
+                return Err(INVALID);
+            }
+            actual.playlist.clone()
+        } else if let Some(names) = &placement.media_names {
+            let name = if name == "init.mp4" {
+                names.initialization.clone()
+            } else {
+                let index = *indices.get(name).ok_or(INVALID)?;
+                format!(
+                    "{}{}",
+                    placement.generated_stem,
+                    selected_names
+                        .ok_or(INVALID)?
+                        .file_name(index, count, extension)?
+                )
+            };
+            placement.media_directory.join(name)
+        } else {
+            placement
+                .media_directory
+                .join(format!("{}{name}", placement.generated_stem))
+        };
+        state.claims.reserve_file(&destination)?;
+        state.retained_bytes = path_budget(state.retained_bytes, &source, &destination)?;
+        if name == "init.mp4" {
+            actual.initialization = Some(destination.clone());
+        } else if name != "media.m3u8" {
+            media.push((*indices.get(name).ok_or(INVALID)?, destination.clone()));
+        }
+        state.output.files.insert(source, destination);
+    }
+    media.sort_by_key(|(index, _)| *index);
+    actual.media = media.into_iter().map(|(_, path)| path).collect();
+    if actual.media.is_empty() || (format == OutputFormat::HlsTs) == actual.initialization.is_some()
+    {
+        return Err(INVALID);
+    }
+    if format != OutputFormat::Dash
+        && !state
+            .output
+            .files
+            .contains_key(&directory.join("media.m3u8"))
+    {
+        return Err(INVALID);
+    }
+    state.output.templates.insert(
+        directory.join("init.mp4"),
+        media_template(placement, selected_names, extension, count)?,
+    );
+    Ok(actual)
+}
+
+fn segment_indices(entries: &[PathBuf]) -> Result<BTreeMap<&str, usize>, ConversionError> {
+    let mut numbered = entries
+        .iter()
+        .filter_map(|name| match name.to_str() {
+            Some("init.mp4" | "media.m3u8") => None,
+            Some(name) => Some(segment_number(name).map(|number| (number, name))),
+            None => Some(Err(INVALID)),
+        })
+        .collect::<Result<Vec<_>, ConversionError>>()?;
+    numbered.sort_by_key(|(number, _)| *number);
+    if numbered.is_empty() || numbered.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+        return Err(INVALID);
+    }
+    let indices = numbered
+        .iter()
+        .enumerate()
+        .map(|(index, (_, name))| (*name, index))
+        .collect::<BTreeMap<_, _>>();
+    Ok(indices)
+}
+
+fn media_template(
+    placement: &super::TrackPlacement,
+    names: Option<&super::SegmentNames>,
+    extension: &str,
+    count: usize,
+) -> Result<RelocatedTemplate, ConversionError> {
+    let prefix = if placement.media_directory.as_os_str().is_empty() {
+        String::new()
+    } else {
+        format!("{}/", path_uri(&placement.media_directory)?)
+    };
+    let template = match names {
+        Some(names) => names.template(extension, count)?,
+        None => None,
+    };
+    let stem_uri = if placement.generated_stem.is_empty() {
+        String::new()
+    } else {
+        path_uri(Path::new(&placement.generated_stem))?.replace('$', "$$")
+    };
+    let (media, start_number) = match template {
+        Some((name, start)) => (
+            Some(format!("{}{stem_uri}{name}", prefix.replace('$', "$$"))),
+            Some(start),
+        ),
+        None if names.is_none() => (
+            Some(format!(
+                "{}{stem_uri}seg_$Number$.m4s",
+                prefix.replace('$', "$$")
+            )),
+            None,
+        ),
+        None => (None, None),
+    };
+    Ok(RelocatedTemplate {
+        media,
+        start_number,
+    })
 }
 
 fn path_budget(
@@ -242,25 +365,6 @@ fn relocate_files(
         directory,
         files: pending,
     })
-}
-
-fn ordered_media(media: Vec<PathBuf>, prefix: &str) -> Result<Vec<PathBuf>, ConversionError> {
-    let mut media = media
-        .into_iter()
-        .map(|path| {
-            let name = path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .and_then(|name| name.strip_prefix(prefix))
-                .ok_or(INVALID)?;
-            Ok((segment_number(name)?, path))
-        })
-        .collect::<Result<Vec<_>, ConversionError>>()?;
-    media.sort_by_key(|(number, _)| *number);
-    if media.windows(2).any(|pair| pair[0].0 == pair[1].0) {
-        return Err(INVALID);
-    }
-    Ok(media.into_iter().map(|(_, path)| path).collect())
 }
 
 fn segment_number(name: &str) -> Result<u64, ConversionError> {
@@ -334,5 +438,7 @@ fn check(stop: &Stop) -> Result<(), ConversionError> {
     }
 }
 
+#[cfg(test)]
+mod source_names_tests;
 #[cfg(test)]
 mod tests;
