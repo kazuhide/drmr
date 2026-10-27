@@ -27,6 +27,11 @@ pub(super) fn prepare(
 ) -> Result<Vec<Prepared>, ConversionError> {
     let backend = preparation_backend(backend, maximum_workers);
     let paths = hls_media_paths(input.input)?;
+    let progress = backend.preparation();
+    if let Some(progress) = progress {
+        progress.begin(paths.len(), super::super::media_progress::Unit::Renditions);
+    }
+    backend.check_cancelled()?;
     let preparation = Preparation {
         input,
         stage,
@@ -38,7 +43,12 @@ pub(super) fn prepare(
     };
     let scheduler = super::super::execution::Scheduler::new(&backend, maximum_workers);
     let tracks = collect(&scheduler, &paths, |ordinal| {
-        preparation.rendition(ordinal, &paths[ordinal])
+        let tracks = preparation.rendition(ordinal, &paths[ordinal])?;
+        if let Some(progress) = progress {
+            progress.completed(ordinal);
+        }
+        backend.check_cancelled()?;
+        Ok(tracks)
     })?;
     if tracks.len() > 64
         || tracks

@@ -40,6 +40,7 @@ pub mod manifest_lint;
 pub use frozen::{FrozenSource, SourceFile, SourceInventory};
 mod hls;
 mod keys;
+mod media_progress;
 mod native;
 mod native_media;
 mod segments;
@@ -151,6 +152,7 @@ impl Converter {
                 validation_depth: ValidationDepth::Native,
                 measurement: None,
                 activity: None,
+                preparation: None,
             },
         }
     }

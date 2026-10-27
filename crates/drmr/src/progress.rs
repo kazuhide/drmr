@@ -405,6 +405,9 @@ impl Inner {
         error: Option<&'static str>,
         force: bool,
     ) {
+        if matches!(event, "failed" | "cancelled") {
+            state.pipeline.stop_estimates();
+        }
         if matches!(self.mode, Mode::Text)
             && matches!(state.rendering, Rendering::Result)
             && !matches!(event, "finished" | "failed" | "cancelled")
@@ -432,50 +435,12 @@ impl Inner {
         if state.output_failed || matches!(self.mode, Mode::Off | Mode::Auto) {
             return;
         }
-        let active: Vec<_> = TOOLS
-            .iter()
-            .zip(state.tools)
-            .filter_map(|(name, count)| (count > 0).then_some(*name))
-            .collect();
-        let task = state.machine_task();
         let mut out = self
             .out
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let result = if matches!(self.mode, Mode::Json) {
-            let mut value = serde_json::json!({
-                "schema_version": 1, "entry_point": "cli", "command": self.command,
-                "run_id": self.run_id, "event": event, "elapsed_ms": elapsed_ms,
-                "activity": state.last_activity, "task": task,
-                "scopes_started": state.started, "scopes_closed": state.closed,
-                "active_scopes": state.started.saturating_sub(state.closed),
-                "tools_started": state.tools_started, "tools_closed": state.tools_closed,
-                "active_tool_count": state.tools.iter().copied().sum::<u64>(),
-                "active_tools": active, "work_units_completed": state.work_completed,
-            });
-            if let Some(workers) = state.workers {
-                value["workers"] = workers.into();
-            }
-            if let Some([started, completed, bytes]) = state.downloads {
-                value["resources_started"] = started.into();
-                value["resources_completed"] = completed.into();
-                value["bytes_received"] = bytes.into();
-            }
-            if let Some(total) = state.resources_total {
-                value["resources_total"] = total.into();
-            }
-            if let Some(analysis) = state.analysis {
-                value["analysis_task"] = "ts-preparation".into();
-                value["analysis_state"] = analysis.state.into();
-                value["analysis_completed"] = analysis.completed.into();
-                value["analysis_total"] = analysis.total.into();
-            }
-            if let Some(code) = error {
-                value["error_code"] = code.into();
-            }
-            if state.pipeline.phase.is_some() {
-                value["pipeline"] = state.pipeline.json(self.began.elapsed());
-            }
+            let value = self.progress_record(state, event, error, elapsed_ms);
             serde_json::to_writer(&mut *out, &value)
                 .map_err(std::io::Error::other)
                 .and_then(|()| writeln!(out))
@@ -505,9 +470,70 @@ impl Inner {
             state.output_failed = true;
         }
     }
+
+    fn progress_record(
+        &self,
+        state: &State,
+        event: &'static str,
+        error: Option<&'static str>,
+        elapsed_ms: u64,
+    ) -> serde_json::Value {
+        let active: Vec<_> = TOOLS
+            .iter()
+            .zip(state.tools)
+            .filter_map(|(name, count)| (count > 0).then_some(*name))
+            .collect();
+        let mut value = serde_json::json!({
+            "schema_version": 1, "entry_point": "cli", "command": self.command,
+            "run_id": self.run_id, "event": event, "elapsed_ms": elapsed_ms,
+            "activity": state.last_activity, "task": state.machine_task(),
+            "scopes_started": state.started, "scopes_closed": state.closed,
+            "active_scopes": state.started.saturating_sub(state.closed),
+            "tools_started": state.tools_started, "tools_closed": state.tools_closed,
+            "active_tool_count": state.tools.iter().copied().sum::<u64>(),
+            "active_tools": active, "work_units_completed": state.work_completed,
+        });
+        if let Some(workers) = state.workers {
+            value["workers"] = workers.into();
+        }
+        if let Some([started, completed, bytes]) = state.downloads {
+            value["resources_started"] = started.into();
+            value["resources_completed"] = completed.into();
+            value["bytes_received"] = bytes.into();
+        }
+        if let Some(total) = state.resources_total {
+            value["resources_total"] = total.into();
+        }
+        if let Some(analysis) = state.analysis {
+            value["analysis_task"] = "ts-preparation".into();
+            value["analysis_state"] = analysis.state.into();
+            value["analysis_completed"] = analysis.completed.into();
+            value["analysis_total"] = analysis.total.into();
+        }
+        if let Some(code) = error {
+            value["error_code"] = code.into();
+        }
+        if state.pipeline.phase.is_some() {
+            value["pipeline"] = state.pipeline.json(self.began.elapsed());
+        }
+        value
+    }
 }
 
 impl State {
+    fn clear_finished_analysis(&mut self) -> bool {
+        let mut cleared = self.pipeline.clear_finished_analysis();
+        if self
+            .analysis
+            .is_some_and(|analysis| analysis.state == "finished")
+        {
+            // Collection completion does not complete whole-track checks.
+            self.analysis = None;
+            cleared = true;
+        }
+        cleared
+    }
+
     fn machine_task(&self) -> String {
         let tasks: Vec<_> = TASKS
             .iter()
@@ -740,7 +766,7 @@ impl Sink for Progress {
         if scoped && !state.pipeline.valid_context(record) {
             return;
         }
-        let nested = scoped && state.pipeline.observe_nested(record, now);
+        let nested = state.pipeline.observe_nested(record, now);
         match (record_stage, event) {
             (Some("resources"), _) => {
                 let Some(workers) = record.get("workers").and_then(serde_json::Value::as_u64)
@@ -770,6 +796,12 @@ impl Sink for Progress {
                     };
                     force = changed;
                 }
+            }
+            (Some("media-progress"), Some("progress")) => {
+                if !nested {
+                    return;
+                }
+                force = record.get("state").and_then(serde_json::Value::as_str) != Some("running");
             }
             (Some("tool"), Some("command" | "tool-output")) => {
                 let Some(changed) = state.tool(record, event == Some("command")) else {
@@ -804,14 +836,7 @@ impl Sink for Progress {
         }
         force |= previous != state.last_activity;
         self.inner.line(&mut state, "progress", None, force);
-        let mut cleared = state.pipeline.clear_finished_analysis();
-        if state.analysis.is_some_and(|a| a.state == "finished") {
-            // Preserve the final count in history, then reveal the remaining
-            // whole-track preparation rather than leaving a stale 100% visible.
-            state.analysis = None;
-            cleared = true;
-        }
-        if cleared {
+        if state.clear_finished_analysis() {
             self.inner.line(&mut state, "progress", None, true);
         }
     }

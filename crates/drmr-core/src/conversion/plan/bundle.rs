@@ -401,6 +401,21 @@ impl Converter {
         };
         let stage = files::UnpublishedStage::new(plan.output_root.parent())?;
         let share = shares_preparation(plan, &qualified);
+        command.pipeline_work_plan(
+            plan.outputs.len(),
+            share
+                && command.backend.validation_depth == ValidationDepth::Native
+                && plan.outputs.iter().all(|output| {
+                    output.conformance == ManifestValidation::None
+                        && matches!(
+                            output.target,
+                            TargetProtection::Clear
+                                | TargetProtection::Cenc
+                                | TargetProtection::Cbcs
+                        )
+                }),
+        );
+        command.backend.check_cancelled()?;
         let (execution, retained) =
             execution::Execution::new(&command)
                 .prepare_shared::<(frozen::FrozenSource, BundleConversionOutput)>(
@@ -664,7 +679,11 @@ impl Converter {
             input_keys: &media_keys,
             hls_keys: &hls_keys,
         };
-        let qualified = self.validate_source(output, SourceValidationPurpose::Verification)?;
+        let qualified = self.validate_source_preparing(
+            output,
+            SourceValidationPurpose::Verification,
+            crate::conversion::media_progress::Subject::Result,
+        )?;
         let matches = qualified.actual_format == intent.format
             && !qualified.track_protection.is_empty()
             && qualified

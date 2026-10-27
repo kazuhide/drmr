@@ -254,27 +254,8 @@ impl Display {
                 error.map_or_else(String::new, |code| format!(" | {code}"))
             );
         }
-        let mut message = phase.label().to_owned();
         let source_units = view.units.filter(|_| phase == Phase::Source);
-        if let Some(units) = source_units {
-            message.push_str(" | ");
-            message.push_str(&unit_details(units, now, true));
-        }
-        if phase == Phase::Outputs && !pipeline.outputs().is_empty() {
-            use std::fmt::Write as _;
-            write!(
-                message,
-                " | {}/{} checked | {} in progress",
-                pipeline.checked_outputs(),
-                pipeline.outputs().len(),
-                pipeline.active_outputs()
-            )
-            .expect("string write");
-        }
-        {
-            use std::fmt::Write as _;
-            write!(message, " | elapsed {}", duration(now)).expect("string write");
-        }
+        let mut message = pipeline_message(pipeline, source_units, now);
         let snapshot = source_units.map_or_else(
             || output_details(pipeline, now, false),
             |units| unit_details(units, now, false),
@@ -295,7 +276,7 @@ impl Display {
             {
                 writeln!(out, "  {message}")?;
                 if source_units.is_none() && !snapshot.is_empty() {
-                    writeln!(out, "{snapshot}")?;
+                    writeln!(out, "{}", output_details(pipeline, now, true))?;
                 }
                 self.last_output = now;
                 self.last_printed = snapshot;
@@ -356,6 +337,76 @@ impl Display {
     }
 }
 
+fn pipeline_message(
+    pipeline: &super::pipeline::State,
+    source_units: Option<Units>,
+    now: Duration,
+) -> String {
+    use std::fmt::Write as _;
+    let phase = pipeline.phase.expect("pipeline message requires a phase");
+    let mut message = phase.label().to_owned();
+    if let Some(estimate) = pipeline.estimate(now) {
+        write!(message, " | ~{}% overall work", estimate.percent).expect("string write");
+        if let Some(remaining) = estimate.remaining {
+            write!(
+                message,
+                " | ~{} remaining (est.)",
+                estimate_duration(remaining)
+            )
+            .expect("string write");
+        } else if estimate.percent < 100 {
+            message.push_str(" | estimating remaining time");
+        }
+        message.push_str("\n  ");
+        if phase == Phase::Outputs && !pipeline.outputs().is_empty() {
+            write!(
+                message,
+                "{}/{} checked | {} active | ",
+                pipeline.checked_outputs(),
+                pipeline.outputs().len(),
+                pipeline.active_outputs()
+            )
+            .expect("string write");
+        }
+        write!(message, "elapsed {}", duration(now)).expect("string write");
+        if let Some(media) = pipeline.source_media() {
+            if let Some([done, total]) = media.units {
+                let unit = media.unit.map_or("items", |unit| unit.label());
+                write!(message, "\n  {done}/{total} source {unit} prepared").expect("string write");
+            }
+        } else if let Some(units) = source_units {
+            write!(message, "\n  {}", unit_details(units, now, false)).expect("string write");
+        }
+    } else {
+        if let Some(units) = source_units {
+            write!(message, " | {}", unit_details(units, now, true)).expect("string write");
+        }
+        if phase == Phase::Outputs && !pipeline.outputs().is_empty() {
+            write!(
+                message,
+                " | {}/{} checked | {} in progress",
+                pipeline.checked_outputs(),
+                pipeline.outputs().len(),
+                pipeline.active_outputs()
+            )
+            .expect("string write");
+        }
+        write!(message, " | elapsed {}", duration(now)).expect("string write");
+    }
+    message
+}
+
+fn estimate_duration(value: Duration) -> String {
+    let seconds = value
+        .as_secs()
+        .saturating_add(u64::from(value.subsec_nanos() > 0));
+    if seconds < 60 {
+        format!("{seconds}s")
+    } else {
+        duration(Duration::from_secs(seconds))
+    }
+}
+
 fn output_details(pipeline: &super::pipeline::State, now: Duration, estimate: bool) -> String {
     use std::fmt::Write as _;
     let mut result = String::new();
@@ -376,7 +427,53 @@ fn output_details(pipeline: &super::pipeline::State, now: Duration, estimate: bo
             output.detail()
         )
         .expect("string write");
-        if let Some(units) = output.units() {
+        if pipeline.estimates_enabled() {
+            write!(result, " | ~{}% work", output.estimated_percent()).expect("string write");
+        }
+        if let Some(media) = output.media().filter(|media| media.active()) {
+            use super::pipeline::Task;
+            match media.task {
+                Task::Packaging => write!(
+                    result,
+                    "\n      {} / ~{} generated",
+                    size(media.bytes.expect("packaging byte counters")[0]),
+                    size(media.bytes.expect("packaging byte counters")[1])
+                ),
+                Task::Preparation => {
+                    let [done, total] = media.units.expect("preparation unit counters");
+                    let unit = media.unit.expect("preparation unit label").label();
+                    write!(result, "\n      {done}/{total} {unit} prepared")
+                }
+                Task::Integrity => {
+                    let [done, total] = media.units.expect("integrity file counters");
+                    write!(result, "\n      {done}/{total} files checked")
+                }
+                Task::Comparison => {
+                    if let Some([done, total]) = media.units {
+                        write!(result, "\n      {done}/{total} tracks compared")
+                    } else {
+                        write!(
+                            result,
+                            "\n      {} / {} comparison work",
+                            size(media.bytes.expect("comparison byte counters")[0]),
+                            size(media.bytes.expect("comparison byte counters")[1])
+                        )
+                    }
+                }
+            }
+            .expect("string write");
+            if estimate
+                && pipeline.estimates_enabled()
+                && let Some(remaining) = output.step_remaining(now)
+            {
+                write!(
+                    result,
+                    "\n      ~{} for current task (est.)",
+                    estimate_duration(remaining)
+                )
+                .expect("string write");
+            }
+        } else if let Some(units) = output.units() {
             write!(result, " | {}", unit_details(units, now, estimate)).expect("string write");
         }
     }
@@ -399,6 +496,9 @@ fn line(out: &mut dyn Write, terminal: Option<&ProgressBar>, value: &str) -> std
         writeln!(out, "{value}")
     }
 }
+
+#[cfg(test)]
+mod estimate_tests;
 
 #[cfg(test)]
 mod tests {

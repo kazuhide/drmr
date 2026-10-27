@@ -22,8 +22,13 @@ pub(super) struct Backend {
     pub validation_depth: super::ValidationDepth,
     pub measurement: Option<Arc<super::measurement::Measurements>>,
     pub activity: Option<Arc<dyn crate::events::Sink>>,
+    pub preparation: Option<Arc<super::media_progress::PreparationContext>>,
 }
 impl Backend {
+    pub(super) fn preparation(&self) -> Option<&Arc<super::media_progress::PreparationContext>> {
+        self.activity.as_ref()?;
+        self.preparation.as_ref()
+    }
     pub fn processing(
         &self,
         route: crate::inspection::ProcessingRouteId,
@@ -92,6 +97,35 @@ impl Backend {
         secrets: &[&str],
         receipt: &mut Option<crate::toolrun::CleanupReceipt>,
     ) -> Result<Vec<u8>, ConversionError> {
+        self.run_observed(argv, tool, secrets, receipt, None)
+    }
+    pub(super) fn run_monitored(
+        &self,
+        argv: &[String],
+        tool: &str,
+        secrets: &[&str],
+        monitor: &mut dyn FnMut(),
+    ) -> Result<Vec<u8>, ConversionError> {
+        self.run_monitored_with_cleanup_receipt(argv, tool, secrets, &mut None, monitor)
+    }
+    pub(super) fn run_monitored_with_cleanup_receipt(
+        &self,
+        argv: &[String],
+        tool: &str,
+        secrets: &[&str],
+        receipt: &mut Option<crate::toolrun::CleanupReceipt>,
+        monitor: &mut dyn FnMut(),
+    ) -> Result<Vec<u8>, ConversionError> {
+        self.run_observed(argv, tool, secrets, receipt, Some(monitor))
+    }
+    fn run_observed(
+        &self,
+        argv: &[String],
+        tool: &str,
+        secrets: &[&str],
+        receipt: &mut Option<crate::toolrun::CleanupReceipt>,
+        monitor: Option<&mut dyn FnMut()>,
+    ) -> Result<Vec<u8>, ConversionError> {
         self.check_cancelled()?;
         if matches!(tool, "ffmpeg" | "ffprobe") {
             self.require_decode()?;
@@ -107,10 +141,15 @@ impl Backend {
             log_stdout: false,
             ..RunOptions::default()
         };
-        let completed = self
-            .runner
-            .run_tool_with_cleanup_receipt(&effective, tool, &options, receipt)
-            .map_err(|error| tool_error(&error))?;
+        let completed = match monitor {
+            Some(monitor) => self
+                .runner
+                .run_tool_monitored(&effective, tool, &options, receipt, monitor),
+            None => self
+                .runner
+                .run_tool_with_cleanup_receipt(&effective, tool, &options, receipt),
+        }
+        .map_err(|error| tool_error(&error))?;
         self.check_cancelled()?;
         if completed.returncode != Some(0) {
             return Err(ConversionError("media-tool-failed"));
@@ -847,6 +886,7 @@ mod packet_tests {
                 validation_depth: crate::conversion::ValidationDepth::Decoded,
                 measurement: None,
                 activity: None,
+                preparation: None,
             };
             assert_eq!(
                 backend.packets_stream(&input, 0, None).unwrap_err(),

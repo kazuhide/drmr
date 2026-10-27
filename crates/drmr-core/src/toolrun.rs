@@ -818,6 +818,33 @@ impl ToolRunner {
         )
     }
 
+    /// Observe bounded numeric progress while retaining the usual admission and cleanup owner.
+    pub(crate) fn run_tool_monitored(
+        &self,
+        argv: &[String],
+        tool: &str,
+        options: &RunOptions<'_>,
+        receipt: &mut Option<CleanupReceipt>,
+        monitor: &mut dyn FnMut(),
+    ) -> Result<Completed, ToolError> {
+        if receipt.is_some() {
+            return Err(ToolError {
+                tool: tool.to_owned(),
+                kind: "cleanup-unconfirmed",
+            });
+        }
+        self.run_tool_with(
+            argv,
+            tool,
+            options,
+            false,
+            Some(receipt),
+            |bounded, lease| {
+                capture::execute_monitored(argv, bounded, self.path.as_deref(), lease, monitor)
+            },
+        )
+    }
+
     #[cfg(test)]
     pub(crate) fn run_tool_injected_cleanup(
         &self,

@@ -7,6 +7,13 @@ for installation, stable interfaces and versioning.
 
 ### Changed
 
+- Show preparation counts and media-comparison progress for named outputs.
+  Qualified shared-source conversions include approximate work and remaining
+  time from this operation's observed stages. Parallel output durations are
+  not added together, and whole-result completion follows publication.
+- Name the media, native manifest and DRM checks in named-output conversion
+  results. Optional external validator results appear only when requested;
+  independent `verify` continues to read and check the saved files again.
 - Keep source-relative media directories in new URL downloads and segmented
   outputs, including shared directories with distinct filenames. Existing saved
   plans retain their recorded placement.

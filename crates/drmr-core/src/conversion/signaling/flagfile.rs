@@ -152,6 +152,17 @@ pub(in crate::conversion) fn run(
         backend.run_with_cleanup_receipt(arguments, "packager", secrets, receipt)
     })
 }
+pub(in crate::conversion) fn run_monitored(
+    backend: &Backend,
+    argv: &[String],
+    hex: &str,
+    secrets: &[&str],
+    monitor: &mut dyn FnMut(),
+) -> Result<Vec<u8>, ConversionError> {
+    run_with(backend, argv, hex, |backend, arguments, receipt| {
+        backend.run_monitored_with_cleanup_receipt(arguments, "packager", secrets, receipt, monitor)
+    })
+}
 fn run_with(
     backend: &Backend,
     argv: &[String],

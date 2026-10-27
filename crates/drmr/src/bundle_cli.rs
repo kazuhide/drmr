@@ -13,10 +13,12 @@ use drmr_core::conversion::{
     },
 };
 use serde_json::Value;
-use std::io::{Read as _, Write as _};
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
+
+mod result_text;
 
 pub(crate) fn error_hint(code: &str) -> Option<&'static str> {
     match code {
@@ -221,7 +223,15 @@ fn incomplete_native_rules(out: &mut impl std::io::Write, native: &Value) -> std
 }
 
 fn text(command: &str, value: &Value, passed: bool) -> std::io::Result<()> {
-    let mut out = std::io::stdout().lock();
+    write_text(&mut std::io::stdout().lock(), command, value, passed)
+}
+
+fn write_text(
+    mut out: impl std::io::Write,
+    command: &str,
+    value: &Value,
+    passed: bool,
+) -> std::io::Result<()> {
     if value["scope"] == "manifest-only" {
         writeln!(
             out,
@@ -272,25 +282,15 @@ fn text(command: &str, value: &Value, passed: bool) -> std::io::Result<()> {
                     output["target"].as_str().unwrap_or("unknown")
                 )?;
             } else {
-                let checked = if output["conformance"].is_null() {
-                    "not requested"
-                } else {
-                    "passed (manifest only)"
-                };
-                let drm = if output["signaling"]["verified"] == true {
-                    "passed"
-                } else {
-                    "not requested"
-                };
-                writeln!(
-                    out,
-                    "  {id}: DRM declarations {drm}; external manifest checks {checked}."
-                )?;
+                result_text::output(&mut out, command, output)?;
             }
         }
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod result_tests;
 
 pub fn verify_manifest(args: &VerifyArgs) -> ExitCode {
     let session = match Session::start(

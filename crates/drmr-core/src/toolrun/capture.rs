@@ -15,6 +15,7 @@ const EXCEEDED: u8 = 4;
 const READ_ERROR: u8 = 8;
 const STREAM_ERROR: u8 = 16;
 const POLL: Duration = Duration::from_millis(1);
+const MONITOR_POLL: Duration = Duration::from_millis(250);
 const PIPE_GRACE: Duration = Duration::from_secs(2);
 
 #[derive(Default)]
@@ -137,10 +138,12 @@ fn control(
     state: &State,
     timeout: Option<Duration>,
     stop: Option<&crate::concurrency::Stop>,
+    mut monitor: Option<&mut dyn FnMut()>,
 ) -> Result<ExitStatus, Failure> {
     let deadline = timeout.map(|limit| Instant::now() + limit);
     let mut pipe_deadline = None;
     let mut status = None;
+    let mut next_monitor = Instant::now();
     loop {
         if stop.is_some_and(crate::concurrency::Stop::is_set) {
             return Err(failure("cancelled", "tool execution cancelled"));
@@ -183,6 +186,13 @@ fn control(
                 "output pipes remained open after the tool exited",
             ));
         }
+        if status.is_none()
+            && let Some(monitor) = &mut monitor
+            && Instant::now() >= next_monitor
+        {
+            monitor();
+            next_monitor = Instant::now() + MONITOR_POLL;
+        }
         std::thread::sleep(POLL);
     }
 }
@@ -200,6 +210,24 @@ pub(super) fn execute(
         lease,
         ManagedChild::finish,
         |stdout, limit, state| read_bounded(stdout, limit, state, OUT_DONE),
+    )
+}
+
+pub(super) fn execute_monitored(
+    argv: &[String],
+    options: &RunOptions<'_>,
+    path: Option<&OsStr>,
+    lease: Option<&super::cleanup::Lease<'_>>,
+    monitor: &mut dyn FnMut(),
+) -> Result<Completed, Failure> {
+    execute_owned_with_reader_monitored(
+        argv,
+        options,
+        path,
+        lease,
+        ManagedChild::finish,
+        |stdout, limit, state| read_bounded(stdout, limit, state, OUT_DONE),
+        Some(monitor),
     )
 }
 
@@ -269,6 +297,18 @@ fn execute_owned_with_reader(
     cleanup: impl FnMut(&mut ManagedChild) -> io::Result<()>,
     read_stdout: impl FnOnce(CapturedStdout, usize, &State) -> Vec<u8> + Send,
 ) -> Result<Completed, Failure> {
+    execute_owned_with_reader_monitored(argv, options, path, lease, cleanup, read_stdout, None)
+}
+
+fn execute_owned_with_reader_monitored(
+    argv: &[String],
+    options: &RunOptions<'_>,
+    path: Option<&OsStr>,
+    lease: Option<&super::cleanup::Lease<'_>>,
+    cleanup: impl FnMut(&mut ManagedChild) -> io::Result<()>,
+    read_stdout: impl FnOnce(CapturedStdout, usize, &State) -> Vec<u8> + Send,
+    monitor: Option<&mut dyn FnMut()>,
+) -> Result<Completed, Failure> {
     if options.stop.is_some_and(crate::concurrency::Stop::is_set) {
         return Err(failure("cancelled", "tool execution cancelled"));
     }
@@ -297,7 +337,15 @@ fn execute_owned_with_reader(
     .map_err(|error| failure("unavailable", format!("could not run: {error}")))?;
     let stdout = child.stdout.take().expect("stdout is piped");
     let stderr = child.stderr.take().expect("stderr is piped");
-    let result = capture_pipes(&mut child, stdout, stderr, options, cleanup, read_stdout);
+    let result = capture_pipes(
+        &mut child,
+        stdout,
+        stderr,
+        options,
+        cleanup,
+        read_stdout,
+        monitor,
+    );
     if result
         .as_ref()
         .is_err_and(|error| error.kind == "cleanup-unconfirmed")
@@ -316,6 +364,7 @@ fn capture_pipes(
     options: &RunOptions<'_>,
     mut cleanup: impl FnMut(&mut ManagedChild) -> io::Result<()>,
     read_stdout: impl FnOnce(CapturedStdout, usize, &State) -> Vec<u8> + Send,
+    monitor: Option<&mut dyn FnMut()>,
 ) -> Result<Completed, Failure> {
     let pipes = crate::native::prepare_stdout(stdout)
         .and_then(|stdout| crate::native::prepare_stderr(stderr).map(|stderr| (stdout, stderr)));
@@ -329,7 +378,15 @@ fn capture_pipes(
             ));
         }
     };
-    capture_child(child, stdout, stderr, options, cleanup, read_stdout)
+    capture_child(
+        child,
+        stdout,
+        stderr,
+        options,
+        cleanup,
+        read_stdout,
+        monitor,
+    )
 }
 
 fn capture_child(
@@ -339,6 +396,7 @@ fn capture_child(
     options: &RunOptions<'_>,
     mut cleanup: impl FnMut(&mut ManagedChild) -> io::Result<()>,
     read_stdout: impl FnOnce(CapturedStdout, usize, &State) -> Vec<u8> + Send,
+    monitor: Option<&mut dyn FnMut()>,
 ) -> Result<Completed, Failure> {
     let state = Arc::new(State::default());
     std::thread::scope(|scope| {
@@ -376,7 +434,11 @@ fn capture_child(
                 ));
             }
         };
-        let result = control(child, &state, options.timeout, options.stop);
+        // Monitoring may invoke an operator observer. Always drain the actual
+        // process tree and pipe readers before propagating its panic.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            control(child, &state, options.timeout, options.stop, monitor)
+        }));
         let confirmed = confirm_cleanup(child, &mut cleanup);
         state.stop.store(true, Ordering::Release);
         let stdout = output
@@ -386,7 +448,10 @@ fn capture_child(
             .join()
             .map_err(|_| failure("unavailable", "captured-output reader panicked"));
         confirmed?;
-        let status = result?;
+        let status = match result {
+            Ok(result) => result?,
+            Err(panic) => std::panic::resume_unwind(panic),
+        };
         Ok(Completed {
             returncode: exit_code(status),
             stdout: stdout?,
@@ -405,6 +470,159 @@ fn confirm_cleanup(
             "process tree cleanup could not be confirmed",
         )
     })
+}
+
+#[cfg(test)]
+mod monitoring_tests {
+    use super::*;
+
+    fn bounded_harness(name: &str) -> bool {
+        const HARNESS: &str = "DRMR_TEST_MONITOR_CHILD";
+        if std::env::var_os(HARNESS).as_deref() != Some(std::ffi::OsStr::new(name)) {
+            let mut command = Command::new(std::env::current_exe().unwrap());
+            command
+                .args(["--exact", name, "--nocapture"])
+                .env(HARNESS, name)
+                .stdin(Stdio::null());
+            crate::test_harness::run(command, name, Duration::from_secs(20));
+            return true;
+        }
+        false
+    }
+
+    fn locked_writer(root: &std::path::Path) -> (Vec<String>, std::path::PathBuf) {
+        let ready = root.join("ready");
+        let lock = root.join("writer.lock");
+        let tool = drmr_test_support::install(
+            &root.join("response"),
+            &drmr_test_support::ToolSpec::default(),
+        )
+        .unwrap();
+        (
+            vec![
+                tool.to_str().unwrap().into(),
+                "--fixture-lock".into(),
+                lock.to_str().unwrap().into(),
+                ready.to_str().unwrap().into(),
+            ],
+            lock,
+        )
+    }
+
+    #[test]
+    fn monitored_waits_are_rate_limited_and_cancel_the_actual_writer() {
+        let root = tempfile::tempdir().unwrap();
+        let (argv, lock) = locked_writer(root.path());
+        let stop = crate::concurrency::Stop::new();
+        let options = RunOptions {
+            stop: Some(&stop),
+            timeout: Some(Duration::from_secs(10)),
+            ..RunOptions::default()
+        };
+        let mut observed = Vec::new();
+        let result = execute_monitored(&argv, &options, None, None, &mut || {
+            observed.push(Instant::now());
+            if observed.len() >= 3 && root.path().join("ready").is_file() {
+                stop.set();
+            }
+        });
+        assert_eq!(result.unwrap_err().kind, "cancelled");
+        assert!(observed.len() >= 3);
+        for pair in observed.windows(2) {
+            assert!(pair[1].duration_since(pair[0]) >= Duration::from_millis(250));
+        }
+        let released = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(lock)
+            .unwrap();
+        released.try_lock().unwrap();
+    }
+
+    #[test]
+    fn a_monitor_panic_releases_the_writer_before_it_propagates() {
+        if bounded_harness(
+            "toolrun::capture::monitoring_tests::a_monitor_panic_releases_the_writer_before_it_propagates",
+        ) {
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        let (argv, lock) = locked_writer(root.path());
+        let options = RunOptions {
+            timeout: Some(Duration::from_secs(5)),
+            ..RunOptions::default()
+        };
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            execute_monitored(&argv, &options, None, None, &mut || {
+                assert!(
+                    !root.path().join("ready").is_file(),
+                    "synthetic monitor panic"
+                );
+            })
+        }));
+        assert!(result.is_err());
+        let released = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(lock)
+            .unwrap();
+        released.try_lock().unwrap();
+    }
+
+    #[test]
+    fn uncertain_cleanup_retains_a_panicking_monitor_child_for_its_receipt() {
+        if bounded_harness(
+            "toolrun::capture::monitoring_tests::uncertain_cleanup_retains_a_panicking_monitor_child_for_its_receipt",
+        ) {
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        let (argv, lock) = locked_writer(root.path());
+        let owner = Arc::new(super::super::cleanup::CleanupOwner::new());
+        let lease = owner.claim().unwrap();
+        let receipt = lease.receipt(&owner);
+        let options = RunOptions {
+            timeout: Some(Duration::from_secs(5)),
+            ..RunOptions::default()
+        };
+        let mut monitor = || {
+            assert!(
+                !root.path().join("ready").is_file(),
+                "synthetic monitor panic"
+            );
+        };
+        let error = execute_owned_with_reader_monitored(
+            &argv,
+            &options,
+            None,
+            Some(&lease),
+            |_| Err(io::Error::other("synthetic unconfirmed cleanup")),
+            |stdout, limit, state| read_bounded(stdout, limit, state, OUT_DONE),
+            Some(&mut monitor),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind, "cleanup-unconfirmed");
+        drop(lease);
+        assert!(receipt.has_pending());
+        let held = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&lock);
+        match held {
+            Ok(file) => assert!(file.try_lock().is_err()),
+            // The Windows fixture denies sharing in addition to holding a lock.
+            Err(error) if cfg!(windows) && error.raw_os_error() == Some(32) => {}
+            Err(error) => panic!("cannot check the retained writer: {error}"),
+        }
+        receipt.retry_finish().unwrap();
+        assert!(!receipt.has_pending());
+        let released = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&lock)
+            .unwrap();
+        released.try_lock().unwrap();
+    }
 }
 
 #[cfg(test)]
@@ -663,6 +881,7 @@ mod lifecycle_tests {
                     }
                 },
                 |stdout, limit, state| read_bounded(stdout, limit, state, OUT_DONE),
+                None,
             )
             .unwrap_err();
             // The reader scopes have joined before capture_child returns. These
@@ -741,6 +960,7 @@ mod lifecycle_tests {
                     Err(io::Error::other("injected termination failure"))
                 },
                 |stdout, limit, state| read_bounded(stdout, limit, state, OUT_DONE),
+                None,
             );
             let elapsed = started.elapsed();
             // The actual process and BOTH actual Stdio::piped writers still exist
@@ -794,6 +1014,7 @@ mod lifecycle_tests {
                     }
                 },
                 |_, _, _| panic!("a reader started after pipe preparation failed"),
+                None,
             );
             assert_eq!(attempts, 1);
             assert!(child.try_wait().unwrap().is_some());
