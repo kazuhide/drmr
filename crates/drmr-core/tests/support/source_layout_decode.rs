@@ -322,8 +322,8 @@ fn decoded_equality_does_not_hide_changed_muxed_resource_membership() {
     assert_decoded(&executor.execute_plan(&saved, &keys).unwrap().verification);
     merge_first_two_resources(&output);
     let (whole, _) = command(ProcessingMode::Stitch, LayoutMode::Normalized, true);
-    assert_decoded(
-        &whole
+    let compare = |converter: &Converter| {
+        converter
             .verify(VerificationRequest {
                 source: VerificationSource {
                     input: &input,
@@ -336,17 +336,24 @@ fn decoded_equality_does_not_hide_changed_muxed_resource_membership() {
                     hls_keys: &keys.hls_input,
                 },
             })
-            .unwrap(),
-    );
-    let result = executor.verify_plan(&saved, &keys).unwrap();
-    assert!(result.source_unchanged && result.output_matches_plan);
-    assert!(!result.verification.passed);
-    assert!(!result.verification.checks.packet_payloads_equal);
-    assert!(!result.verification.checks.packet_timing_equal);
-    assert_eq!(result.verification.required_depth, ValidationDepth::Decoded);
+            .unwrap()
+    };
+    assert_decoded(&compare(&whole));
+    let (segments, _) = command(ProcessingMode::Segments, LayoutMode::Normalized, true);
+    let result = compare(&segments);
+    assert!(!result.passed);
+    assert!(!result.checks.packet_payloads_equal);
+    assert!(!result.checks.packet_timing_equal);
+    assert_eq!(result.required_depth, ValidationDepth::Decoded);
     assert_eq!(
-        result.verification.decode_evidence,
+        result.decode_evidence,
         DecodeEvidence::ContentCompared { equal: true }
+    );
+    // The new plan also binds source filenames. Removing one named resource
+    // invalidates that placement before the saved-plan media comparison begins.
+    assert_eq!(
+        executor.verify_plan(&saved, &keys).unwrap_err().0,
+        "source-layout-path-unsafe"
     );
     assert_eq!(common::snapshot_tree(input.parent().unwrap()), before);
 }
