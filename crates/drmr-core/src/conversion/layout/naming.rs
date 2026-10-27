@@ -322,40 +322,52 @@ fn validate_sequence(
     }
     Ok(())
 }
-fn number_parts(name: &str) -> Option<(&str, &str, &str, u64)> {
-    let stem = Path::new(name).file_stem()?.to_str()?;
-    let end = stem.as_bytes().iter().rposition(u8::is_ascii_digit)? + 1;
-    let begin = stem.as_bytes()[..end]
-        .iter()
-        .rposition(|b| !b.is_ascii_digit())
-        .map_or(0, |i| i + 1);
-    let digits = &stem[begin..end];
-    Some((&stem[..begin], &stem[end..], digits, digits.parse().ok()?))
+fn number_parts(stem: &str) -> impl Iterator<Item = (&str, &str, &str)> {
+    let mut before = stem.len();
+    std::iter::from_fn(move || {
+        let end = stem.as_bytes()[..before]
+            .iter()
+            .rposition(u8::is_ascii_digit)?
+            + 1;
+        let begin = stem.as_bytes()[..end]
+            .iter()
+            .rposition(|b| !b.is_ascii_digit())
+            .map_or(0, |i| i + 1);
+        before = begin;
+        Some((&stem[..begin], &stem[end..], &stem[begin..end]))
+    })
 }
 fn infer_sequence(names: &[String]) -> Option<SegmentNames> {
-    let (prefix, suffix, first, start) = number_parts(names.first()?)?;
-    let width = if first.len() > 1 && first.starts_with('0') {
-        first.len()
-    } else {
-        0
-    };
-    for (index, name) in names.iter().enumerate() {
-        let (p, s, digits, number) = number_parts(name)?;
-        if p != prefix
-            || s != suffix
-            || number != start.checked_add(u64::try_from(index).ok()?)?
-            || digits != format!("{number:0width$}")
-        {
-            return None;
-        }
-    }
-    Some(SegmentNames::Sequence {
-        prefix: prefix.into(),
-        suffix: suffix.into(),
-        start,
-        width,
-        count: names.len(),
-    })
+    let stem = Path::new(names.first()?).file_stem()?.to_str()?;
+    // A singleton retains the previous rightmost-run interpretation.
+    let candidates = if names.len() == 1 { 1 } else { stem.len() };
+    number_parts(stem)
+        .take(candidates)
+        .find_map(|(prefix, suffix, first)| {
+            let start = first.parse::<u64>().ok()?;
+            let width = if first.len() > 1 && first.starts_with('0') {
+                first.len()
+            } else {
+                0
+            };
+            let matches = |(index, name): (usize, &String)| {
+                let number = start.checked_add(u64::try_from(index).ok()?)?;
+                let stem = Path::new(name).file_stem()?.to_str()?;
+                let digits = stem.strip_prefix(prefix)?.strip_suffix(suffix)?;
+                (digits == format!("{number:0width$}")).then_some(())
+            };
+            // At most one run can advance while all other bytes stay fixed
+            // between the first two names. Only that candidate scans the rest.
+            names.iter().take(2).enumerate().try_for_each(matches)?;
+            names.iter().enumerate().skip(2).try_for_each(matches)?;
+            Some(SegmentNames::Sequence {
+                prefix: prefix.into(),
+                suffix: suffix.into(),
+                start,
+                width,
+                count: names.len(),
+            })
+        })
 }
 fn literal_uri(text: &str) -> String {
     crate::source::pyurl::quote_from_bytes(text.as_bytes()).replace("%24", "$$")
@@ -450,6 +462,69 @@ mod tests {
         assert_eq!(
             names.template("m4s", 2).unwrap(),
             Some(("v2_seg$Number%04d$_audio.m4s".into(), 7))
+        );
+    }
+
+    #[test]
+    fn counter_before_fixed_codec_digits_preserves_sequence_and_resegmentation() {
+        let names = infer(&["segment_000_h264.ts", "segment_001_h264.ts"]);
+        assert_eq!(
+            names,
+            SegmentNames::Sequence {
+                prefix: "segment_".into(),
+                suffix: "_h264".into(),
+                start: 0,
+                width: 3,
+                count: 2,
+            }
+        );
+        assert_eq!(
+            names.file_name(2, 3, "m4s").unwrap(),
+            "segment_002_h264.m4s"
+        );
+        assert_eq!(names.file_name(0, 1, "ts").unwrap(), "segment_000_h264.ts");
+        assert_eq!(
+            names.template("m4s", 3).unwrap(),
+            Some(("segment_$Number%03d$_h264.m4s".into(), 0))
+        );
+    }
+
+    #[test]
+    fn varying_counter_ignores_multiple_fixed_numbers_and_numeric_extension() {
+        let names = infer(&[
+            "v2_seg007_h264_level51_v1.m4s",
+            "v2_seg008_h264_level51_v1.m4s",
+        ]);
+        assert_eq!(
+            names.file_name(2, 3, "ts").unwrap(),
+            "v2_seg009_h264_level51_v1.ts"
+        );
+        assert_eq!(
+            names.template("m4s", 2).unwrap(),
+            Some(("v2_seg$Number%03d$_h264_level51_v1.m4s".into(), 7))
+        );
+        let noncontiguous = infer(&["segment_000_h264.ts", "segment_002_h264.ts"]);
+        assert!(matches!(noncontiguous, SegmentNames::Listed { .. }));
+        assert_eq!(noncontiguous.template("m4s", 2).unwrap(), None);
+        // One name keeps the existing rightmost-run priority because no second
+        // name identifies which of its numbers is the advancing counter.
+        let singleton = infer(&["segment_000_h264.ts"]);
+        assert_eq!(
+            singleton.file_name(1, 2, "m4s").unwrap(),
+            "segment_000_h265.m4s"
+        );
+    }
+
+    #[test]
+    fn counter_before_codec_digits_keeps_uri_literals_and_padding() {
+        let names = infer(&["音 $%_009_h264_v2.ts", "音 $%_010_h264_v2.ts"]);
+        assert_eq!(
+            names.file_name(2, 3, "m4s").unwrap(),
+            "音 $%_011_h264_v2.m4s"
+        );
+        assert_eq!(
+            names.template("m4s", 3).unwrap(),
+            Some(("%E9%9F%B3%20$$%25_$Number%03d$_h264_v2.m4s".into(), 9))
         );
     }
 

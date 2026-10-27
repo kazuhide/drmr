@@ -211,7 +211,7 @@ fn indexed_source_layout_keeps_unique_stems_for_representations_in_the_same_dire
             init,
             crate::conversion::layout::RelocatedTemplate {
                 media: Some(format!("{prefix}-$Number$.m4s")),
-                start_number,
+                start_number: Some(start_number),
             },
         );
     }
@@ -380,7 +380,7 @@ fn source_relocation_proves_every_template_expansion_before_rewriting_the_manife
             init,
             crate::conversion::layout::RelocatedTemplate {
                 media: Some(format!("{}/part-$Number$.m4s", directory.display())),
-                start_number: 1,
+                start_number: Some(1),
             },
         );
     }
@@ -392,7 +392,7 @@ fn source_relocation_proves_every_template_expansion_before_rewriting_the_manife
         PathBuf::from("video/init.mp4"),
         crate::conversion::layout::RelocatedTemplate {
             media: Some("video/1080p/other-$Number$.m4s".into()),
-            start_number: 1,
+            start_number: Some(1),
         },
     );
     assert_eq!(

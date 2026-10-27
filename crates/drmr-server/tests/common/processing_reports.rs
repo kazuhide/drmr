@@ -425,10 +425,17 @@ fn conversion_report(h: &support::Harness, plan: &Value, depth: ValidationDepth)
         report["plan_id"] = plan["plan_id"].clone();
         report
     } else {
-        let outputs: Vec<Value> = plan["outputs"].as_array().unwrap().iter().enumerate().map(|(index, output)| {
-            json!({"id":output["id"],"conversion":conversion(h, schema == 6 && index == 1, depth, schema == 2),
+        let outputs: Vec<Value> = plan["outputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .enumerate()
+            .map(|(index, output)| {
+                let segments = plan["processing"][index]["selection"]["resolved"] == "segments";
+                json!({"id":output["id"],"conversion":conversion(h, segments, depth, schema == 2),
                 "signaling":{"systems":[],"verified":true},"conformance":null})
-        }).collect();
+            })
+            .collect();
         json!({"kind":"bundle-conversion","schema_version":if schema == 2 {1} else {2},
             "plan_id":plan["plan_id"],"outputs":outputs})
     }

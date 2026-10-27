@@ -105,10 +105,12 @@ fn addressing_node(
         let Some(media) = template.media.as_deref() else {
             break;
         };
-        let number = template
-            .start_number
-            .checked_add(index as u64)
-            .ok_or(error("source-layout-template-mismatch"))?;
+        let number = match template.start_number {
+            Some(start) => start
+                .checked_add(index as u64)
+                .ok_or(error("source-layout-template-mismatch"))?,
+            None => segment.number,
+        };
         let expanded = super::expand(
             media,
             rep.attribute("id").unwrap_or(""),
@@ -122,11 +124,12 @@ fn addressing_node(
     }
     let prefix = policy::prefix(rep)?;
     let node = if let Some(media) = &template.media {
-        for (index, segment) in resolved.segments.iter_mut().enumerate() {
-            segment.number = template
-                .start_number
-                .checked_add(index as u64)
-                .ok_or(error("source-layout-template-mismatch"))?;
+        if let Some(start) = template.start_number {
+            for (index, segment) in resolved.segments.iter_mut().enumerate() {
+                segment.number = start
+                    .checked_add(index as u64)
+                    .ok_or(error("source-layout-template-mismatch"))?;
+            }
         }
         let mut node = policy::common("SegmentTemplate", resolved, &prefix);
         write!(

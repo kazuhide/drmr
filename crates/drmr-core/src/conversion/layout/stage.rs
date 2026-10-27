@@ -27,7 +27,7 @@ pub(in crate::conversion) struct RelocatedOutput {
 #[derive(Clone)]
 pub(in crate::conversion) struct RelocatedTemplate {
     pub media: Option<String>,
-    pub start_number: u64,
+    pub start_number: Option<u64>,
 }
 
 impl SourceLayout {
@@ -298,7 +298,7 @@ fn media_template(
     };
     let template = match names {
         Some(names) => names.template(extension, count)?,
-        None => Some(("seg_$Number$.m4s".into(), 1)),
+        None => None,
     };
     let stem_uri = if placement.generated_stem.is_empty() {
         String::new()
@@ -308,9 +308,16 @@ fn media_template(
     let (media, start_number) = match template {
         Some((name, start)) => (
             Some(format!("{}{stem_uri}{name}", prefix.replace('$', "$$"))),
-            start,
+            Some(start),
         ),
-        None => (None, 1),
+        None if names.is_none() => (
+            Some(format!(
+                "{}{stem_uri}seg_$Number$.m4s",
+                prefix.replace('$', "$$")
+            )),
+            None,
+        ),
+        None => (None, None),
     };
     Ok(RelocatedTemplate {
         media,

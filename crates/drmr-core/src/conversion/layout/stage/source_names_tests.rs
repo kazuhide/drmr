@@ -74,6 +74,53 @@ fn internal_name(index: usize, extension: &str) -> String {
 }
 
 #[test]
+fn legacy_source_placement_keeps_non_one_dash_start_numbers() {
+    let (stage, mut layout) = fixture(OutputFormat::Dash, &["r000600.m4s", "r000601.m4s"]);
+    for index in 1..=2 {
+        fs::rename(
+            stage.path().join(format!("track-0000/seg_{index}.m4s")),
+            stage
+                .path()
+                .join(format!("track-0000/seg_{}.m4s", 599 + index)),
+        )
+        .unwrap();
+    }
+    let manifest = stage.path().join("manifest.mpd");
+    let text = fs::read_to_string(&manifest)
+        .unwrap()
+        .replace("startNumber=\"1\"", "startNumber=\"600\"");
+    fs::write(&manifest, text).unwrap();
+    layout.tracks[0].media_names = None;
+    layout.tracks[0].generated_stem = "track-0000-".into();
+    let output = layout
+        .apply_to_stage(
+            &stage,
+            OutputFormat::Dash,
+            DashAddressing::Template,
+            &Stop::new(),
+        )
+        .unwrap();
+    assert_eq!(
+        output.tracks[0].media,
+        [
+            PathBuf::from("video/720p/track-0000-seg_600.m4s"),
+            PathBuf::from("video/720p/track-0000-seg_601.m4s")
+        ]
+    );
+    let text = fs::read_to_string(manifest).unwrap();
+    assert!(text.contains("startNumber=\"600\""));
+    assert!(text.contains("track-0000-seg_$Number$.m4s"));
+    layout
+        .verify_actual_output(
+            stage.path(),
+            OutputFormat::Dash,
+            DashAddressing::Template,
+            &Stop::new(),
+        )
+        .unwrap();
+}
+
+#[test]
 fn hls_retains_original_sequence_start_padding_and_media_bytes() {
     for format in [OutputFormat::Hls, OutputFormat::HlsTs] {
         let (stage, layout) = fixture(format, &["r000600.ts", "r000601.ts"]);
