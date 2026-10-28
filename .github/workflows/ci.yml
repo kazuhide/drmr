@@ -1,323 +1,76 @@
-name: CI
+name: SAMPLE-AES bounded diagnostic
 
 on:
-  pull_request:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: sample-aes-diagnostic-${{ github.ref }}
+  cancel-in-progress: false
 
 defaults:
   run:
     shell: bash
 
 env:
-  CARGO_TERM_COLOR: always
+  CARGO_TERM_COLOR: never
+  CARGO_BUILD_JOBS: 2
 
 jobs:
-  verify:
-    name: Rust / ${{ matrix.os }} / ${{ matrix.rust }}
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-24.04, macos-15]
-        rust: [minimum, stable]
-    steps:
-      - name: Check out source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-
-      - name: Install media test tools
-        uses: ./.github/actions/media-tools
-
-      - name: Install the qualification Python runtime
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: '3.13.12'
-
-      - name: Install the supported Rust toolchain
-        run: |
-          rust_channel="${{ matrix.rust }}"
-          if [[ "$rust_channel" == minimum ]]; then
-            rust_channel="$(python3 .github/scripts/minimum-rust.py)"
-          fi
-          rustup toolchain install "$rust_channel" --profile minimal --component clippy,rustfmt --no-self-update
-          printf 'RUSTUP_TOOLCHAIN=%s\n' "$rust_channel" >> "$GITHUB_ENV"
-          rustup run "$rust_channel" cargo --version
-          rustup run "$rust_channel" rustc --version
-
-      - name: Check product version and changelog consistency
-        run: python3 tools/check_release.py
-
-      - name: Check formatting
-        run: cargo fmt --all -- --check
-
-      - name: Check Clippy warnings
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
-
-      - name: Run workspace Rust tests
-        id: rust-tests
-        env:
-          DRMR_MEDIA_REPORT: ${{ runner.temp }}/bbb-media-report.json
-          DRMR_CONVERSION_REPORT: ${{ runner.temp }}/bbb-conversion-report.json
-        run: |
-          set -euo pipefail
-          cargo test --workspace --exclude drmr-core --locked -- --nocapture 2>&1 | tee "$RUNNER_TEMP/rust-tests.log"
-
-      - name: Reject unexpected test skips
-        if: ${{ !cancelled() && steps.rust-tests.outcome != 'skipped' }}
-        run: |
-          python3 .github/scripts/check-rust-test-skips.py --scope workspace --log "$RUNNER_TEMP/rust-tests.log"
-
-      - name: Run browser unit tests
-        run: node --test crates/drmr-server/tests/js/*.test.cjs
-
-      - name: Test measurement helpers
-        run: python3 -W error::ResourceWarning -m unittest discover -s tools/tests -v
-
-      - name: Upload Rust test log
-        if: always()
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
-        with:
-          name: rust-tests-${{ runner.os }}-${{ runner.arch }}-${{ matrix.rust }}
-          path: ${{ runner.temp }}/rust-tests.log
-          if-no-files-found: warn
-          retention-days: 14
-
-      - name: Upload real-media test results
-        if: always()
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
-        with:
-          name: bbb-media-${{ runner.os }}-${{ runner.arch }}-${{ matrix.rust }}
-          path: |
-            ${{ runner.temp }}/bbb-media-report.json
-            ${{ runner.temp }}/bbb-conversion-report.json
-          if-no-files-found: error
-          retention-days: 14
-
-  core-tests:
-    name: Rust core / ${{ matrix.os }} / ${{ matrix.rust }}
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-24.04, macos-15]
-        rust: [minimum, stable]
-    steps:
-      - name: Check out source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-
-      - name: Install media test tools
-        uses: ./.github/actions/media-tools
-
-      - name: Install the qualification Python runtime
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: '3.13.12'
-
-      - name: Install the supported Rust toolchain
-        run: |
-          rust_channel="${{ matrix.rust }}"
-          if [[ "$rust_channel" == minimum ]]; then
-            rust_channel="$(python3 .github/scripts/minimum-rust.py)"
-          fi
-          rustup toolchain install "$rust_channel" --profile minimal --component clippy,rustfmt --no-self-update
-          printf 'RUSTUP_TOOLCHAIN=%s\n' "$rust_channel" >> "$GITHUB_ENV"
-          rustup run "$rust_channel" cargo --version
-          rustup run "$rust_channel" rustc --version
-
-      - name: Run core Rust tests
-        id: rust-tests
-        run: |
-          set -euo pipefail
-          cargo test -p drmr-core --locked -- --nocapture 2>&1 | tee "$RUNNER_TEMP/rust-core-tests.log"
-
-      - name: Reject unexpected test skips
-        if: ${{ !cancelled() && steps.rust-tests.outcome != 'skipped' }}
-        run: |
-          python3 .github/scripts/check-rust-test-skips.py --scope core --log "$RUNNER_TEMP/rust-core-tests.log"
-
-      - name: Upload core Rust test log
-        if: always()
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
-        with:
-          name: rust-core-tests-${{ runner.os }}-${{ runner.arch }}-${{ matrix.rust }}
-          path: ${{ runner.temp }}/rust-core-tests.log
-          if-no-files-found: warn
-          retention-days: 14
-
-  console-browser:
-    name: Console / Chromium / common CLI workflow
+  sample-aes:
+    name: SAMPLE-AES / Linux x86_64 / Rust minimum
     runs-on: ubuntu-24.04
-    # Include pinned media and browser setup without changing test deadlines.
-    timeout-minutes: 35
+    timeout-minutes: 20
     steps:
-      - name: Check out source
+      - name: Check out diagnostic source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+          fetch-depth: 0
 
-      - name: Install media test tools
-        uses: ./.github/actions/media-tools
-
-      - name: Install the supported stable Rust toolchain
-        run: |
-          rustup toolchain install stable --profile minimal --no-self-update
-          printf 'RUSTUP_TOOLCHAIN=stable\n' >> "$GITHUB_ENV"
-          rustup run stable rustc --version
-
-      - name: Build the actual CLI and embedded console from this source
-        run: cargo build --locked -p drmr --message-format=json > "$RUNNER_TEMP/console-build.jsonl"
-
-      - name: Keep test caches and evidence in this runner's temporary directory
-        run: |
-          printf '%s\n' \
-            "NPM_CONFIG_CACHE=$RUNNER_TEMP/console-npm-cache" \
-            "PLAYWRIGHT_BROWSERS_PATH=$RUNNER_TEMP/console-browser-binaries" \
-            "PW_REPORT_ROOT=$RUNNER_TEMP/console-browser-evidence" \
-            "TERMINAL_REPORT_ROOT=$RUNNER_TEMP/terminal-progress-evidence" \
-            "DRMR_CONSOLE_BINARY=$GITHUB_WORKSPACE/target/debug/drmr" \
-            "DRMR_CONSOLE_BUILD=$RUNNER_TEMP/console-build.jsonl" >> "$GITHUB_ENV"
-
-      - name: Install the test-only Node runtime
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: '24.22.0'
-          package-manager-cache: false
-
-      - name: Install and audit the locked browser dependencies
-        working-directory: tools/pages-browser
-        run: |
-          npm ci --ignore-scripts
-          npm audit --audit-level=low
-          npm run test:controls
-
-      - name: Install the pinned Playwright Chromium and system dependencies
-        working-directory: tools/pages-browser
-        run: ./node_modules/.bin/playwright install --with-deps chromium
-
-      - name: Install and audit the locked terminal emulator dependencies
-        working-directory: tools/terminal-tests
-        run: |
-          npm ci --ignore-scripts
-          npm audit --audit-level=low
-          npm run test:controls
-
-      - name: Require actual terminal resize, restoration and media checks
-        working-directory: tools/terminal-tests
-        run: npm run test:terminal
-
-      - name: Require actual console media, layout, keyboard and accessibility checks
-        working-directory: tools/pages-browser
+      - name: Initialize evidence and enforce unchanged product source
         run: |
           set -euo pipefail
-          npm run test:console
-          node console-lifecycle.mjs
+          mkdir -p "$RUNNER_TEMP/sample-aes-evidence"
+          test "$(uname -m)" = x86_64
+          test "$(git rev-parse 72726c8a4c40249aafeb31ab08bf1875dd7542ff^{tree})" = 2de209b0748cd985ab297bc56322d87a067f14ae
+          git diff --exit-code 72726c8a4c40249aafeb31ab08bf1875dd7542ff HEAD -- crates Cargo.toml Cargo.lock .cargo .github/actions .github/scripts/minimum-rust.py vendor tools
+          python3 -c 'import json,os,pathlib; pathlib.Path(os.environ["RUNNER_TEMP"], "sample-aes-evidence", "setup.json").write_text(json.dumps({"runtime_started":False}))'
 
-      - name: Retain separate console browser and build evidence
-        if: always()
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
-        with:
-          name: console-chromium-evidence
-          path: |
-            ${{ runner.temp }}/console-browser-evidence
-            ${{ runner.temp }}/console-build.jsonl
-          retention-days: 3
-          if-no-files-found: error
+      - name: Install unchanged pinned media test tools
+        uses: ./.github/actions/media-tools
 
-      - name: Retain terminal progress evidence
-        if: always()
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
-        with:
-          name: terminal-progress-evidence
-          path: ${{ runner.temp }}/terminal-progress-evidence
-          retention-days: 3
-          if-no-files-found: error
-
-  release:
-    name: CLI release / ${{ matrix.os }} / ${{ matrix.rust }}
-    needs: [verify, core-tests]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-24.04, macos-15]
-        rust: [minimum, stable]
-    steps:
-      - name: Check out source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-
-      - name: Install the qualification Python runtime
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: '3.13.12'
-
-      - name: Install the supported Rust toolchain
+      - name: Install the declared minimum Rust and diagnostic tools
         run: |
-          rust_channel="${{ matrix.rust }}"
-          if [[ "$rust_channel" == minimum ]]; then
-            rust_channel="$(python3 .github/scripts/minimum-rust.py)"
-          fi
-          rustup toolchain install "$rust_channel" --profile minimal --component clippy,rustfmt --no-self-update
+          set -euo pipefail
+          rust_channel="$(python3 .github/scripts/minimum-rust.py)"
+          test "$rust_channel" = 1.95.0
+          rustup toolchain install "$rust_channel" --profile minimal --no-self-update
           printf 'RUSTUP_TOOLCHAIN=%s\n' "$rust_channel" >> "$GITHUB_ENV"
-          rustup run "$rust_channel" cargo --version
-          rustup run "$rust_channel" rustc --version
+          sudo apt-get install -y --no-install-recommends gdb
+          sudo sysctl -w kernel.yama.ptrace_scope=0
 
-      - name: Install media tools for extracted CLI qualification
-        if: matrix.rust == 'stable'
-        uses: ./.github/actions/media-tools
-
-      - name: Build release CLI
-        run: cargo build --release --locked -p drmr
-
-      - name: Package CLI and user documentation
-        if: matrix.rust == 'stable'
+      - name: Build only the unchanged SAMPLE-AES integration target
         run: |
           set -euo pipefail
-          python3 tools/check_release.py --cli target/release/drmr > "$RUNNER_TEMP/release-identity.json"
-          version="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$RUNNER_TEMP/release-identity.json")"
-          target="$(rustc -vV | sed -n 's/^host: //p')"
-          package="drmr-${version}-${target}"
-          mkdir -p "$RUNNER_TEMP/$package/docs"
-          cp target/release/drmr README.md CHANGELOG.md LICENSE "$RUNNER_TEMP/$package/"
-          cp docs/*.md "$RUNNER_TEMP/$package/docs/"
-          python3 tools/collect_notices.py --output "$RUNNER_TEMP/$package/licenses"
-          python3 tools/verify_archive.py manifest --kind cli --target "$target" --directory "$RUNNER_TEMP/$package"
-          tar -czf "$RUNNER_TEMP/$package.tar.gz" -C "$RUNNER_TEMP" "$package"
-          python3 tools/verify_archive.py verify --kind cli --target "$target" \
-            --archive "$RUNNER_TEMP/$package.tar.gz" --report "$RUNNER_TEMP/cli-archive-verification.json"
-          printf 'CLI_ARCHIVE=%s\nCLI_TARGET=%s\nCLI_VERSION=%s\n' \
-            "$RUNNER_TEMP/$package.tar.gz" "$target" "$version" >> "$GITHUB_ENV"
+          cargo test -p drmr-core --locked --test conversion_sample_aes --no-run --message-format=json > "$RUNNER_TEMP/sample-aes-build.jsonl"
 
-      - name: Qualify the extracted CLI with real media
-        if: matrix.rust == 'stable'
+      - name: Run two isolated cases and one four-thread full target
+        timeout-minutes: 10
         run: |
-          python3 tools/qualify_cli_archive.py --archive "$CLI_ARCHIVE" --target "$CLI_TARGET" \
-            --expected-version "$CLI_VERSION" --report "$RUNNER_TEMP/cli-media-qualification.json"
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=8s 590s \
+            python3 .github/scripts/diagnose-sample-aes-hang.py \
+              --build-log "$RUNNER_TEMP/sample-aes-build.jsonl" \
+              --output "$RUNNER_TEMP/sample-aes-evidence"
 
-      - name: Upload CLI archive
-        if: matrix.rust == 'stable'
+      - name: Preserve only allowlisted diagnostic evidence
+        if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
-          name: drmr-${{ runner.os }}-${{ runner.arch }}
-          path: |
-            ${{ env.CLI_ARCHIVE }}
-            ${{ runner.temp }}/cli-archive-verification.json
-            ${{ runner.temp }}/cli-media-qualification.json
-          if-no-files-found: error
-          retention-days: 14
+          name: sample-aes-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/sample-aes-evidence/
+          if-no-files-found: warn
+          retention-days: 7
