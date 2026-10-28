@@ -8,7 +8,7 @@
       "classification": "unsound",
       "kind": "desktop",
       "target": "x86_64-unknown-linux-gnu",
-      "ancestry_sha256": "3e80ad37803d5215e9c9f0174ddee19884e5a6df19f63ea5a32170d8ec72ba4d",
+      "ancestry_sha256": "d4addb94ed74738b3ba9543622fc7a45bf7b2170fda46d9fef962c09d2816607",
       "direct_parents": [
         "atk@0.18.2",
         "cairo-rs@0.18.5",
@@ -33,7 +33,7 @@
       "classification": "unmaintained",
       "kind": "desktop",
       "target": "x86_64-unknown-linux-gnu",
-      "ancestry_sha256": "9e3ff3aeac7ca484773c27efa5465959e08d58183432bdd6a4beda884c1c725c",
+      "ancestry_sha256": "10ca1ab92ddfd6285f8265577f2792c5dd3215441acb79278fbf8804b9ec991f",
       "direct_parents": [
         "glib-macros@0.18.5",
         "gtk3-macros@0.18.2"
