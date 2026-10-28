@@ -3,7 +3,8 @@ use std::io::Write;
 use std::time::Duration;
 
 use super::pipeline::{Phase, Status, renditions::Work};
-use indicatif::{HumanBytes, ProgressBar};
+use super::terminal::LiveTerminal;
+use indicatif::HumanBytes;
 
 mod dashboard;
 
@@ -153,7 +154,7 @@ impl Display {
     pub(super) fn render(
         &mut self,
         out: &mut dyn Write,
-        terminal: Option<&ProgressBar>,
+        terminal: Option<&LiveTerminal>,
         command: &str,
         view: &View<'_>,
         now: Duration,
@@ -237,19 +238,21 @@ impl Display {
     fn render_dashboard(
         &mut self,
         out: &mut dyn Write,
-        terminal: Option<&ProgressBar>,
+        terminal: Option<&LiveTerminal>,
         command: &str,
         view: &View<'_>,
         now: Duration,
         outcome: Option<(&str, Option<&str>)>,
     ) -> std::io::Result<()> {
-        let first = !self.terminal_active;
+        let painted = self.terminal_active;
         self.terminal_active = true;
         if let Some((event, error)) = outcome {
-            if let Some(bar) = terminal {
-                bar.finish_and_clear();
-                bar.set_draw_target(indicatif::ProgressDrawTarget::hidden());
+            if let Some(terminal) = terminal {
+                terminal.close(out)?;
             }
+            // A result can end in LF without the terminal driver mapping it to
+            // CRLF. Start the footer at column zero without erasing that result.
+            out.write_all(if painted { b"\r" } else { b"\r\n" })?;
             let status = match event {
                 "finished" => "Finished",
                 "cancelled" => "Cancelled",
@@ -268,7 +271,9 @@ impl Display {
             }
             return Ok(());
         }
-        let Some(bar) = terminal else { return Ok(()) };
+        let Some(terminal) = terminal else {
+            return Ok(());
+        };
         let label = view.label(command);
         let phase = view.pipeline.and_then(|pipeline| pipeline.phase);
         let mut changed = self.label != Some(label) || self.pipeline_phase != phase;
@@ -285,18 +290,14 @@ impl Display {
         self.label = Some(label);
         self.pipeline_phase = phase;
         if self.paint_due(now, changed) {
-            if first {
-                // Preserve a preceding partial log line without querying stdin.
-                writeln!(out, "\r")?;
-                out.flush()?;
-            }
-            let (height, columns) = console::Term::stderr().size();
+            let (height, columns) = terminal.size();
             let columns = usize::from(columns.saturating_sub(1));
             let height = usize::from(height.saturating_sub(1));
             // A complete frame has one writer and one draw, including all outputs.
-            bar.set_message(dashboard::frame_with_height(
-                command, view, now, columns, height,
-            ));
+            terminal.draw(
+                out,
+                &dashboard::frame_with_height(command, view, now, columns, height),
+            )?;
         }
         Ok(())
     }

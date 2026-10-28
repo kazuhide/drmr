@@ -187,6 +187,7 @@ jobs:
             "NPM_CONFIG_CACHE=$RUNNER_TEMP/console-npm-cache" \
             "PLAYWRIGHT_BROWSERS_PATH=$RUNNER_TEMP/console-browser-binaries" \
             "PW_REPORT_ROOT=$RUNNER_TEMP/console-browser-evidence" \
+            "TERMINAL_REPORT_ROOT=$RUNNER_TEMP/terminal-progress-evidence" \
             "DRMR_CONSOLE_BINARY=$GITHUB_WORKSPACE/target/debug/drmr" \
             "DRMR_CONSOLE_BUILD=$RUNNER_TEMP/console-build.jsonl" >> "$GITHUB_ENV"
 
@@ -207,6 +208,17 @@ jobs:
         working-directory: tools/pages-browser
         run: ./node_modules/.bin/playwright install --with-deps chromium
 
+      - name: Install and audit the locked terminal emulator dependencies
+        working-directory: tools/terminal-tests
+        run: |
+          npm ci --ignore-scripts
+          npm audit --audit-level=low
+          npm run test:controls
+
+      - name: Require actual terminal resize, restoration and media checks
+        working-directory: tools/terminal-tests
+        run: npm run test:terminal
+
       - name: Require actual console media, layout, keyboard and accessibility checks
         working-directory: tools/pages-browser
         run: |
@@ -222,6 +234,15 @@ jobs:
           path: |
             ${{ runner.temp }}/console-browser-evidence
             ${{ runner.temp }}/console-build.jsonl
+          retention-days: 3
+          if-no-files-found: error
+
+      - name: Retain terminal progress evidence
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: terminal-progress-evidence
+          path: ${{ runner.temp }}/terminal-progress-evidence
           retention-days: 3
           if-no-files-found: error
 

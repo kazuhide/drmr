@@ -1,5 +1,6 @@
 use super::*;
 use crate::progress::pipeline::State;
+use crate::progress::terminal::LiveTerminal;
 
 fn record(value: serde_json::Value) -> drmr_core::events::Record {
     let serde_json::Value::Object(record) = value else {
@@ -253,7 +254,7 @@ fn terminal_coalesces_bursts_until_the_next_readable_snapshot() {
     }
     let mut pipeline = started();
     let mut display = Display::default();
-    let bar = ProgressBar::hidden();
+    let bar = LiveTerminal::for_test(120, 24);
     let mut out = Vec::new();
     let render = |display: &mut Display, pipeline: &State, now: Duration| {
         display
@@ -350,7 +351,7 @@ fn terminal_coalesces_bursts_until_the_next_readable_snapshot() {
 #[test]
 fn terminal_download_bursts_keep_latest_counters_for_the_next_snapshot() {
     let mut display = Display::default();
-    let bar = ProgressBar::hidden();
+    let bar = LiveTerminal::for_test(120, 24);
     let mut out = Vec::new();
     for tick in 0..=1000 {
         let view = View {
@@ -453,7 +454,7 @@ fn terminal_outcomes_bypass_the_readable_snapshot_interval() {
         ("finished", None, "Finished"),
     ] {
         let mut display = Display::default();
-        let bar = ProgressBar::hidden();
+        let bar = LiveTerminal::for_test(120, 24);
         let mut out = Vec::new();
         let view = View {
             activity: "verification",
@@ -477,6 +478,10 @@ fn terminal_outcomes_bypass_the_readable_snapshot_interval() {
             .unwrap();
         let text = String::from_utf8(out).unwrap();
         assert!(text.contains(&format!("{status} verify")), "{text}");
+        assert!(
+            text.rfind("\x1b[?1049l").unwrap() < text.find(&format!("{status} verify")).unwrap(),
+            "terminal must restore before the final status: {text:?}"
+        );
         assert_eq!(
             text.contains("Finished verify"),
             event == "finished",
@@ -487,18 +492,14 @@ fn terminal_outcomes_bypass_the_readable_snapshot_interval() {
 
 #[test]
 fn dashboard_has_one_nonempty_row_per_output_and_no_orphan_stage_history() {
-    use crate::progress::result_tests::{Step, Terminal};
+    use crate::progress::result_tests::Terminal;
     let pipeline = started();
     let mut display = Display::default();
     let terminal = Terminal::default();
-    let bar = ProgressBar::with_draw_target(
-        None,
-        indicatif::ProgressDrawTarget::term_like(Box::new(terminal.clone())),
-    );
-    bar.set_style(indicatif::ProgressStyle::with_template("{msg}").unwrap());
+    let bar = LiveTerminal::for_test(120, 24);
     display
         .render(
-            &mut Vec::new(),
+            &mut terminal.clone(),
             Some(&bar),
             "convert",
             &View {
@@ -526,14 +527,8 @@ fn dashboard_has_one_nonempty_row_per_output_and_no_orphan_stage_history() {
             "{message}"
         );
     }
-    let writes: String = terminal
-        .snapshot()
-        .into_iter()
-        .filter_map(|step| match step {
-            Step::Write(s) => Some(s),
-            _ => None,
-        })
-        .collect();
+    let writes = terminal.text();
+    assert!(writes.contains("drmr convert"), "{writes:?}");
     assert!(
         !writes.contains("Source checked"),
         "orphan history: {writes}"
@@ -544,7 +539,7 @@ fn dashboard_has_one_nonempty_row_per_output_and_no_orphan_stage_history() {
 fn dashboard_keeps_a_checked_output_in_its_original_row() {
     let mut pipeline = started();
     let mut display = Display::default();
-    let bar = ProgressBar::hidden();
+    let bar = LiveTerminal::for_test(120, 24);
     let render = |display: &mut Display, pipeline: &State, now| {
         display
             .render(
