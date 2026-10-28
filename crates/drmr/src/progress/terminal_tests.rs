@@ -347,3 +347,46 @@ fn resize_during_a_partial_frame_restores_history_before_every_result_outcome() 
         }
     }
 }
+
+#[test]
+fn stopped_output_summaries_start_at_column_zero_without_newline_translation() {
+    let terminal = Terminal::new(120, 17, false);
+    let progress = progress(&terminal, 120);
+    {
+        let mut state = progress.inner.state.lock().unwrap();
+        for value in [
+            serde_json::json!({"scope":"source","state":"started"}),
+            serde_json::json!({"scope":"source","state":"finished"}),
+            serde_json::json!({"scope":"outputs","state":"started"}),
+            serde_json::json!({"scope":"output","state":"started","output_index":0,"output_total":2,"output_format":"dash"}),
+            serde_json::json!({"scope":"output","state":"finished","output_index":0,"output_total":2,"output_format":"dash"}),
+            serde_json::json!({"scope":"output","state":"started","output_index":1,"output_total":2,"output_format":"hls"}),
+            serde_json::json!({"scope":"output","state":"aborted","output_index":1,"output_total":2,"output_format":"hls"}),
+        ] {
+            let serde_json::Value::Object(record) = value else {
+                unreachable!();
+            };
+            assert!(state.pipeline.observe(&record, Duration::ZERO));
+        }
+    }
+    progress.mark("packaging");
+    progress.diagnostic("convert", "fixture-stopped");
+    drop(progress);
+    let rows = terminal.primary();
+    assert_eq!(rows[0], PRIOR_LOG);
+    assert!(rows[1].starts_with("Failed convert"), "{rows:?}");
+    let summary: Vec<Vec<_>> = rows[2..]
+        .iter()
+        .map(|line| line.split_whitespace().collect())
+        .collect();
+    assert_eq!(
+        summary,
+        [
+            vec!["Source", "Checked"],
+            vec!["1", "DASH", "fMP4", "Checked"],
+            vec!["2", "HLS", "fMP4", "Stopped"],
+        ]
+    );
+    assert!(rows[2..].iter().all(|line| !line.starts_with(' ')));
+    assert!(terminal.restored());
+}

@@ -1,6 +1,41 @@
 use super::*;
 
 #[test]
+fn screen_switching_requires_a_known_terminal_family() {
+    for term in [
+        "xterm",
+        "xterm-256color",
+        "screen",
+        "screen-256color",
+        "tmux-256color",
+        "rxvt-unicode-256color",
+        "alacritty",
+        "foot-extra",
+        "wezterm",
+        "ghostty",
+        "xterm-kitty",
+        "vte-256color",
+        "st-256color",
+    ] {
+        assert!(supports_screen_switching(Some(term)), "{term}");
+    }
+    for term in [
+        None,
+        Some(""),
+        Some("dumb"),
+        Some("linux"),
+        Some("vt100"),
+        Some("vt220"),
+        Some("ansi"),
+        Some("unknown"),
+        Some("xterminal"),
+        Some("screenly"),
+    ] {
+        assert!(!supports_screen_switching(term), "{term:?}");
+    }
+}
+
+#[test]
 fn screen_entry_paints_and_restore_have_one_ordered_owner() {
     let terminal = LiveTerminal::for_test(120, 24);
     let mut out = b"preceding partial line".to_vec();
@@ -123,6 +158,8 @@ fn a_flush_error_does_not_discard_cleanup_authority() {
     out.fail_flush = false;
     terminal.close(&mut out).unwrap();
     assert!(out.bytes.ends_with(LEAVE.as_bytes()));
+    let text = String::from_utf8(out.bytes).unwrap();
+    assert_eq!(text.matches(LEAVE).count(), 1);
 }
 
 #[test]
@@ -132,7 +169,11 @@ fn panic_restore_precedes_the_existing_diagnostic_hook() {
         "progress::terminal::tests::panic_restore_precedes_the_existing_diagnostic_hook";
     if std::env::var_os(CHILD).is_some() {
         install_panic_restore();
-        SCREEN_ACTIVE.store(true, Ordering::Release);
+        let mut terminal = LiveTerminal::for_test(80, 12);
+        terminal.real = true;
+        terminal
+            .draw(&mut io::sink(), "panic fixture dashboard")
+            .unwrap();
         panic!("terminal panic diagnostic fixture");
     }
     let root = tempfile::tempdir().unwrap();
@@ -164,4 +205,9 @@ fn panic_restore_precedes_the_existing_diagnostic_hook() {
     assert!(bytes.len() < 64 * 1024);
     let text = String::from_utf8(bytes).unwrap();
     assert!(text.find(LEAVE).unwrap() < text.find("terminal panic diagnostic fixture").unwrap());
+    assert_eq!(
+        text.matches(LEAVE).count(),
+        1,
+        "panic cleanup must not restore the saved cursor twice"
+    );
 }

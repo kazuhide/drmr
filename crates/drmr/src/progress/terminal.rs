@@ -29,14 +29,19 @@ pub(super) struct LiveTerminal {
 
 impl LiveTerminal {
     pub(super) fn for_stderr() -> Option<Self> {
-        if !std::io::stderr().is_terminal()
-            || std::env::var_os("TERM").is_some_and(|term| term == "dumb")
-            || PANICKED.load(Ordering::Acquire)
-        {
+        if !std::io::stderr().is_terminal() || PANICKED.load(Ordering::Acquire) {
+            return None;
+        }
+        let term = std::env::var("TERM").ok();
+        if term.as_deref() == Some("dumb") {
+            return None;
+        }
+        #[cfg(not(windows))]
+        if !supports_screen_switching(term.as_deref()) {
             return None;
         }
         #[cfg(windows)]
-        let mode = OutputMode::enable()?;
+        let mode = OutputMode::enable(term.as_deref())?;
         install_panic_restore();
         Some(Self {
             session: Mutex::new(Session {
@@ -126,18 +131,23 @@ impl LiveTerminal {
         if session.closed {
             return Ok(());
         }
-        if session.entered {
-            if self.real {
-                let mut stderr = std::io::stderr().lock();
+        if self.real {
+            let mut stderr = std::io::stderr().lock();
+            if session.entered && SCREEN_ACTIVE.load(Ordering::Acquire) {
                 stderr.write_all(LEAVE.as_bytes())?;
-                stderr.flush()?;
                 SCREEN_ACTIVE.store(false, Ordering::Release);
-            } else {
-                out.write_all(LEAVE.as_bytes())?;
-                out.flush()?;
             }
+            // The panic hook may already have restored the primary screen.
+            // Repeating 1049l can restore its saved cursor over that diagnostic.
+            session.entered = false;
+            stderr.flush()?;
+        } else {
+            if session.entered {
+                out.write_all(LEAVE.as_bytes())?;
+            }
+            session.entered = false;
+            out.flush()?;
         }
-        session.entered = false;
         session.closed = true;
         // Leave while VT processing is still enabled, then restore its prior mode.
         #[cfg(windows)]
@@ -163,8 +173,10 @@ fn install_panic_restore() {
             PANICKED.store(true, Ordering::Release);
             {
                 let mut stderr = std::io::stderr().lock();
-                if SCREEN_ACTIVE.swap(false, Ordering::AcqRel) {
-                    let _ = stderr.write_all(LEAVE.as_bytes());
+                if SCREEN_ACTIVE.load(Ordering::Acquire) {
+                    if stderr.write_all(LEAVE.as_bytes()).is_ok() {
+                        SCREEN_ACTIVE.store(false, Ordering::Release);
+                    }
                     let _ = stderr.flush();
                 }
             }
@@ -173,14 +185,41 @@ fn install_panic_restore() {
     });
 }
 
+fn supports_screen_switching(term: Option<&str>) -> bool {
+    // Basic ANSI cursor controls do not imply an alternate screen (for example,
+    // the Linux virtual console). Unknown terminal declarations use plain lines.
+    term.is_some_and(|term| {
+        [
+            "xterm",
+            "screen",
+            "tmux",
+            "rxvt",
+            "alacritty",
+            "foot",
+            "wezterm",
+            "ghostty",
+            "kitty",
+            "vte",
+            "st",
+        ]
+        .iter()
+        .any(|family| {
+            term == *family
+                || term
+                    .strip_prefix(family)
+                    .is_some_and(|suffix| suffix.starts_with('-'))
+        })
+    })
+}
+
 #[cfg(windows)]
 struct OutputMode(Option<u32>);
 
 #[cfg(windows)]
 impl OutputMode {
-    fn enable() -> Option<Self> {
+    fn enable(term: Option<&str>) -> Option<Self> {
         if console::Term::stderr().features().is_msys_tty() {
-            return Some(Self(None));
+            return supports_screen_switching(term).then_some(Self(None));
         }
         let old = winapi_util::console::mode(std::io::stderr()).ok()?;
         winapi_util::console::Console::stderr()

@@ -258,15 +258,15 @@ impl Display {
                 "cancelled" => "Cancelled",
                 _ => "Failed",
             };
-            writeln!(
+            write!(
                 out,
-                "{status} {command} in {}{}",
+                "{status} {command} in {}{}\r\n",
                 duration(now),
                 error.map_or_else(String::new, |code| format!(" | {code}"))
             )?;
             if event != "finished" {
                 for line in dashboard::stopped_summary(view) {
-                    writeln!(out, "{line}")?;
+                    write!(out, "{line}\r\n")?;
                 }
             }
             return Ok(());
