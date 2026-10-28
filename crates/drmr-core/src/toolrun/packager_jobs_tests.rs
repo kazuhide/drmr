@@ -118,12 +118,12 @@ fn concurrent_retained_coordinators_keep_their_guaranteed_leaf_headroom() {
     assert_eq!(first.native_capacity().1, 3 * child_bytes());
     let (started, ready) = mpsc::sync_channel(2);
     std::thread::scope(|scope| {
-        let mut releases = Vec::new();
+        let mut completion_senders = Vec::new();
         let mut workers = Vec::new();
         for output in [first, second] {
             let started = started.clone();
             let (release, released) = mpsc::sync_channel(1);
-            releases.push(release);
+            completion_senders.push(release);
             workers.push(scope.spawn(move || {
                 let permit = output
                     .reserve(
@@ -143,7 +143,7 @@ fn concurrent_retained_coordinators_keep_their_guaranteed_leaf_headroom() {
         for _ in 0..2 {
             ready.recv_timeout(Duration::from_secs(1)).unwrap();
         }
-        for release in releases {
+        for release in completion_senders {
             release.send(()).unwrap();
         }
         for worker in workers {
