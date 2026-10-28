@@ -50,7 +50,7 @@ pub fn run(as_json: bool, probe: bool, decode: bool, route: &str) -> ExitCode {
         progress.mark("tool-check");
         // A closed diagnostic stream must not panic and discard the owner.
         if !progress.structured() {
-            let _ = writeln!(std::io::stderr().lock(), "doctor: cleanup is unconfirmed; retaining the tool owner and retrying. Ctrl+C requests Stop but does not abandon cleanup.");
+            let _ = progress.write_result(|| writeln!(std::io::stderr().lock(), "doctor: cleanup is unconfirmed; retaining the tool owner and retrying. Ctrl+C requests Stop but does not abandon cleanup."));
         }
     });
     if probe {

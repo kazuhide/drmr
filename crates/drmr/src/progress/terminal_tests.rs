@@ -313,7 +313,7 @@ fn resize_during_a_partial_frame_restores_history_before_every_result_outcome() 
             let progress = progress(&terminal, 120);
             progress.mark("configuration");
             assert_eq!(terminal.0.lock().unwrap().resize_count, 1);
-            progress.begin_result();
+            progress.begin_result().unwrap();
             assert!(terminal.restored());
             writeln!(terminal.clone(), "Command result is visible.").unwrap();
             if let Some(code) = code {

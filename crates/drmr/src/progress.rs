@@ -297,11 +297,12 @@ impl Progress {
         matches!(self.inner.mode, Mode::Json)
     }
 
-    pub(crate) fn server_handoff(&self) {
+    pub(crate) fn server_handoff(&self) -> std::io::Result<()> {
         // Startup diagnostics and ongoing request logs own the terminal afterward.
         if self.inner.terminal.is_some() {
-            self.begin_result();
+            self.begin_result()?;
         }
+        Ok(())
     }
 
     pub(crate) fn server_address(&self, address: std::net::SocketAddr) {
@@ -319,7 +320,7 @@ impl Progress {
 
     /// Drain live drawing before a result changes the terminal cursor.
     /// Command success or failure remains pending until the result is written.
-    pub(crate) fn begin_result(&self) {
+    fn begin_result(&self) -> std::io::Result<()> {
         let mut state = self
             .inner
             .state
@@ -332,10 +333,22 @@ impl Progress {
                 .out
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if terminal.close(&mut *out).is_err() {
+            if let Err(error) = terminal.close(&mut *out) {
                 state.output_failed = true;
+                return Err(error);
             }
         }
+        Ok(())
+    }
+
+    /// Write only after live drawing has relinquished the terminal.
+    pub(crate) fn write_result(
+        &self,
+        write: impl FnOnce() -> std::io::Result<()>,
+    ) -> std::io::Result<()> {
+        self.begin_result()?;
+        // Result writers can read progress after its state/output locks drop.
+        write()
     }
 
     pub(crate) fn finish(&self) {

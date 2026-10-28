@@ -684,27 +684,35 @@ pub fn convert(args: &ConvertArgs) -> ExitCode {
             None,
         );
     }
-    let result = progress.write_result(|| {
-        if args.json {
-            let mut value = serde_json::to_value(&report).expect("conversion report serializes");
-            if let Some(download) = download {
-                value["download"] = download;
-            }
-            if let Some(measurement) = measurement {
-                value["measurements"] =
-                    serde_json::to_value(measurement).expect("measurement serializes");
-            }
-            json(&value)
-        } else {
-            conversion_text(&report)
-        }
-    });
+    let result = progress
+        .write_result(|| write_conversion_result(&report, download, measurement, args.json));
     if result.is_err() {
         progress.diagnostic("convert", "result-output-unavailable");
     } else {
         progress.finish();
     }
     ExitCode::from(u8::from(result.is_err()))
+}
+
+fn write_conversion_result(
+    report: &ConversionReport,
+    download: Option<serde_json::Value>,
+    measurement: Option<MeasurementReport>,
+    as_json: bool,
+) -> std::io::Result<()> {
+    if as_json {
+        let mut value = serde_json::to_value(report).expect("conversion report serializes");
+        if let Some(download) = download {
+            value["download"] = download;
+        }
+        if let Some(measurement) = measurement {
+            value["measurements"] =
+                serde_json::to_value(measurement).expect("measurement serializes");
+        }
+        json(&value)
+    } else {
+        conversion_text(report)
+    }
 }
 
 pub fn verify(args: &VerifyArgs) -> ExitCode {
