@@ -38,14 +38,56 @@ fn screen_switching_requires_a_known_terminal_family() {
 #[cfg(windows)]
 #[test]
 fn native_console_without_term_enables_vt_and_restores_output_mode() {
+    fn run(command: std::process::Command, seconds: u64) -> std::process::ExitStatus {
+        let mut child = drmr_core::native::ManagedChild::spawn(command, true).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break status;
+            }
+            if std::time::Instant::now() >= deadline {
+                child.finish().unwrap();
+                panic!("native console fixture exceeded its deadline");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        };
+        child.finish().unwrap();
+        status
+    }
+
     const CHILD: &str = "DRMR_TEST_NATIVE_CONSOLE_CHILD";
     const RECEIPT: &str = "DRMR_TEST_NATIVE_CONSOLE_RECEIPT";
+    const REBOUND: &str = "DRMR_TEST_NATIVE_CONSOLE_REBOUND";
     const NAME: &str = "progress::terminal::tests::native_console_without_term_enables_vt_and_restores_output_mode";
     if std::env::var_os(CHILD).is_some() {
         assert!(std::env::var_os("TERM").is_none());
         assert_eq!(std::env::var("NO_COLOR").as_deref(), Ok("1"));
-        let original = winapi_util::console::mode(std::io::stderr())
-            .expect("fixture stderr must be a native console");
+        let original = match winapi_util::console::mode(std::io::stderr()) {
+            Ok(mode) => mode,
+            Err(error) => {
+                assert!(
+                    std::env::var_os(REBOUND).is_none(),
+                    "rebound fixture stderr must be a native console: {error}"
+                );
+                // Older PowerShell versions inherit redirected stderr even
+                // with CREATE_NEW_CONSOLE. Bind its console handle explicitly.
+                let stderr = std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open("CONOUT$")
+                    .expect("fixture must own a native console");
+                winapi_util::console::mode(&stderr).expect("CONOUT$ must be a native console");
+                let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+                command
+                    .args(["--exact", NAME, "--nocapture"])
+                    .env(REBOUND, "1")
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(stderr);
+                assert!(run(command, 10).success(), "native console probe failed");
+                return;
+            }
+        };
         let _restore = OutputMode(Some(original));
         const VT: u32 = 0x0004;
         // Check both pre-enabled VT (also reported as MSYS by console) and
@@ -76,30 +118,19 @@ fn native_console_without_term_enables_vt_and_restores_output_mode() {
     command
         .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command"])
         // Explicit false selects direct CreateProcess, keeps the environment
-        // and nested job ownership, and creates a console without redirection.
+        // and nested job ownership, and creates a new console.
         .arg("$ErrorActionPreference = 'Stop'; $child = Start-Process -FilePath $env:DRMR_TEST_NATIVE_CONSOLE_EXE -ArgumentList @('--exact', $env:DRMR_TEST_NATIVE_CONSOLE_NAME, '--nocapture') -UseNewEnvironment:$false -WindowStyle Hidden -Wait -PassThru; exit $child.ExitCode")
         .env(CHILD, "1")
         .env(RECEIPT, &receipt)
         .env("DRMR_TEST_NATIVE_CONSOLE_EXE", std::env::current_exe().unwrap())
         .env("DRMR_TEST_NATIVE_CONSOLE_NAME", NAME)
+        .env_remove(REBOUND)
         .env_remove("TERM")
         .env("NO_COLOR", "1")
         .stdin(std::process::Stdio::null())
         .stdout(std::fs::File::create(root.path().join("stdout")).unwrap())
         .stderr(std::fs::File::create(&stderr).unwrap());
-    let mut child = drmr_core::native::ManagedChild::spawn(command, true).unwrap();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    let status = loop {
-        if let Some(status) = child.try_wait().unwrap() {
-            break status;
-        }
-        if std::time::Instant::now() >= deadline {
-            child.finish().unwrap();
-            panic!("native console fixture exceeded its deadline");
-        }
-        std::thread::sleep(std::time::Duration::from_millis(2));
-    };
-    child.finish().unwrap();
+    let status = run(command, 30);
     assert!(
         status.success(),
         "{}",
