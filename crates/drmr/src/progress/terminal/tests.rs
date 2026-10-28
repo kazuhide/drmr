@@ -59,6 +59,8 @@ fn native_console_without_term_enables_vt_and_restores_output_mode() {
     const RECEIPT: &str = "DRMR_TEST_NATIVE_CONSOLE_RECEIPT";
     const REBOUND: &str = "DRMR_TEST_NATIVE_CONSOLE_REBOUND";
     const NAME: &str = "progress::terminal::tests::native_console_without_term_enables_vt_and_restores_output_mode";
+    const VT: u32 = 0x0004;
+    const PROCESSED: u32 = 0x0001;
     if std::env::var_os(CHILD).is_some() {
         assert!(std::env::var_os("TERM").is_none());
         assert_eq!(std::env::var("NO_COLOR").as_deref(), Ok("1"));
@@ -89,8 +91,6 @@ fn native_console_without_term_enables_vt_and_restores_output_mode() {
             }
         };
         let _restore = OutputMode(Some(original));
-        const VT: u32 = 0x0004;
-        const PROCESSED: u32 = 0x0001;
         // Exercise every initial VT/processed-output combination and restore
         // all flags, including the modes intentionally disabled by the caller.
         for flags in [0, VT, PROCESSED, VT | PROCESSED] {
