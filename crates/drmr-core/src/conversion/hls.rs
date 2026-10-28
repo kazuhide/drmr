@@ -1374,6 +1374,7 @@ mod resource_tests {
             fixture_tool(
                 "packager",
                 vec![
+                    "--single_threaded".into(),
                     format!(
                         "input={},stream=video,init_segment={},segment_template={},playlist_name=media.m3u8",
                         super::super::files::tool_path(&input).unwrap(),

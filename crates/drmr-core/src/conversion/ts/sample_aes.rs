@@ -670,6 +670,9 @@ mod tests {
             Arc::new(NoSink),
         );
         let mut argv = vec![tool.to_string()];
+        if tool == "packager" {
+            argv.push("--single_threaded".into());
+        }
         argv.extend(arguments);
         let shown = [tool.to_string(), "[arguments redacted]".into()];
         let result = runner

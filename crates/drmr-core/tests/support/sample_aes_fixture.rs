@@ -611,6 +611,7 @@ mod tests {
     fn shaka(root: &Path, input: &Path, role: &str, encrypted: bool) {
         drmr_core::native::create_media_dir_all(root).unwrap();
         let mut args = vec![
+            "--single_threaded".into(),
             format!(
                 "input={},stream={role},segment_template={},playlist_name=media.m3u8",
                 path(input),

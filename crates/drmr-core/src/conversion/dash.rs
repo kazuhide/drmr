@@ -917,6 +917,7 @@ mod tests {
         let clip =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../drmr/tests/fixtures/bbb/clip.mp4");
         let mut command = Command::new("packager");
+        command.arg("--single_threaded");
         for role in ["video", "audio"] {
             command.arg(format!(
                 "in={},stream={role},init_segment={}/init.mp4,segment_template={}/seg_$Number$.m4s",

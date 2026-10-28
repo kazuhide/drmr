@@ -40,6 +40,7 @@ fn shaka_video(root: &Path, encrypted: bool) -> PathBuf {
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../drmr/tests/fixtures/bbb/clip.mp4");
     let mut argv = vec![
         "packager".into(),
+        "--single_threaded".into(),
         format!(
             "input={},stream=video,segment_template={},playlist_name=media.m3u8",
             tool_path(&source),

@@ -171,6 +171,7 @@ fn shaka_source(root: &Path, kind: &str, encrypted: bool) -> std::path::PathBuf 
     let path = |p: &Path| drmr_core::manifest_support::path::fspath(p).unwrap();
     let mut argv = vec![
         "packager".into(),
+        "--single_threaded".into(),
         format!(
             "input={},stream={kind},segment_template={},playlist_name=media.m3u8",
             path(&source),

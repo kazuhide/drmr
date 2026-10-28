@@ -295,6 +295,7 @@ fn independently_decrypted_track(output: &Path, index: usize) -> std::path::Path
     drop(joined);
     let clear = root.join(format!("independent-clear-{index}.mp4"));
     let result = Command::new("packager")
+        .arg("--single_threaded")
         .arg(format!(
             "in={},stream=0,output={}",
             path(&encrypted),

@@ -262,6 +262,7 @@ fn bridge_url_fixture(root: &Path, dash: bool) -> BTreeMap<String, Vec<u8>> {
     native::create_private_dir_new(&packaged).unwrap();
     let manifest = packaged.join("manifest.mpd");
     let prepared = Command::new("packager")
+        .arg("--single_threaded")
         .arg(format!(
             "in={},stream=video,init_segment={},segment_template={}",
             source.display(),

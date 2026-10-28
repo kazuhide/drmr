@@ -106,6 +106,7 @@ fn fixture(directory: &Path, protection: &str) -> PathBuf {
             "0".into(),
         ]);
     }
+    argv.push("--single_threaded".into());
     tool("packager", argv);
     dash::finish_transport(&manifest).unwrap();
     manifest

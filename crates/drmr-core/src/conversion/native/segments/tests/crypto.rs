@@ -54,6 +54,7 @@ fn packaged(source: &Fixture, track: &str, scheme: &str) -> (PathBuf, Vec<PathBu
     let init_string = crate::manifest_support::path::fspath(&init).unwrap();
     let template_string = crate::manifest_support::path::fspath(&template).unwrap();
     let mut command = Command::new("packager");
+    command.arg("--single_threaded");
     command.arg(format!("input={input},stream={track},init_segment={init_string},segment_template={template_string},drm_label=V"))
         .args(["--segment_duration", "2", "--mp4_reset_initial_composition_offset_to_zero=false"]);
     if scheme != "clear" {
