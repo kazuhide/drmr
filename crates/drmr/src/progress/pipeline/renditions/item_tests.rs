@@ -155,7 +155,7 @@ fn malformed_unit_descriptions_do_not_change_the_current_snapshot() {
         serde_json::json!([{"kind":"video","resolution":[1920,0]}, null]),
         serde_json::json!([{"kind":"video","resolution":[1920,1080,1]}, null]),
         serde_json::json!([{"kind":"video","resolution":[1920,1.5]}, null]),
-        serde_json::json!([{"kind":"video","resolution":[1920,4294967296_u64]}, null]),
+        serde_json::json!([{"kind":"video","resolution":[1920,4_294_967_296_u64]}, null]),
         serde_json::json!([{"kind":"audio","resolution":[1920,1080]}, null]),
     ] {
         let mut input = original.clone();

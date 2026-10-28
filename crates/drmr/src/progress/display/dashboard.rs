@@ -9,7 +9,23 @@ const BAR_WIDTH: usize = 18;
 #[cfg(test)]
 mod tests;
 
+mod items;
+
+#[cfg(test)]
 pub(super) fn frame(command: &str, view: &View<'_>, now: Duration, columns: usize) -> String {
+    frame_with_height(command, view, now, columns, 24)
+}
+
+pub(super) fn frame_with_height(
+    command: &str,
+    view: &View<'_>,
+    now: Duration,
+    columns: usize,
+    height: usize,
+) -> String {
+    if height == 0 {
+        return String::new();
+    }
     let columns = columns.clamp(1, 120);
     let title = format!("drmr {command}");
     let elapsed = format!("elapsed {}", duration(now));
@@ -55,7 +71,7 @@ pub(super) fn frame(command: &str, view: &View<'_>, now: Duration, columns: usiz
             rows.push(row("Task", &task(command, view, now, columns), columns));
         }
     }
-    rows.join("\n")
+    items::finish(rows, view.pipeline, columns, height).join("\n")
 }
 
 fn overall(pipeline: &crate::progress::pipeline::State, now: Duration, columns: usize) -> String {
@@ -117,7 +133,7 @@ fn output_row(
     let progress = (estimates && output.lifetime.status != Status::Aborted)
         .then(|| bar(output.estimated_percent(), true, columns));
     let mut value = if let Some(work) = work {
-        rendition_value(work, label_text, columns, budget)
+        rendition_value(&work, label_text, columns, budget)
     } else {
         label_text.to_owned()
     };
@@ -172,7 +188,7 @@ fn source(view: &View<'_>, now: Duration, columns: usize) -> String {
         .pipeline
         .map(|pipeline| pipeline.lifetime(Phase::Source).status);
     let mut value = if let Some(work) = work {
-        rendition_value(work, work.label(false), columns, budget)
+        rendition_value(&work, work.label(false), columns, budget)
     } else {
         match status {
             Some(Status::Finished) => "Ready".to_owned(),
@@ -253,7 +269,7 @@ fn source(view: &View<'_>, now: Duration, columns: usize) -> String {
 }
 
 fn rendition_value(
-    work: crate::progress::pipeline::renditions::Work,
+    work: &crate::progress::pipeline::renditions::Work,
     label: &str,
     columns: usize,
     budget: usize,

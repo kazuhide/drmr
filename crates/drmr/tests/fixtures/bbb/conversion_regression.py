@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import sys
 import time
 
 from regression import FIXTURE, measured_run, private_json, require_media_verification, run, verify_fixture
@@ -18,6 +19,15 @@ RESULT_KEY = "40404040404040404040404040404040"
 SOURCE_URI = "https://keys.example.test/bbb/source"
 RESULT_URI = "https://keys.example.test/bbb/result"
 PROTECTIONS = ("clear", "cenc", "cbcs", "hls-aes128")
+
+
+def milestone(stage, source=None, target=None):
+    message = f"BBB protection routes: {stage}"
+    if source is not None:
+        message += f" | input={source}"
+    if target is not None:
+        message += f" | output={target}"
+    print(message, file=sys.stderr, flush=True)
 
 
 def prepare_source(destination):
@@ -64,15 +74,18 @@ def convert(binary, source, protection, destination, keys, environment):
 
 
 def regression(binary, destination):
+    milestone("checking fixture")
     metadata = verify_fixture()
     destination.mkdir(parents=True, exist_ok=True)
     environment = {name: value for name, value in os.environ.items() if not (name.upper() if os.name == "nt" else name).startswith("DRM_")}
+    milestone("preparing source", target="clear")
     clear = prepare_source(destination / "clear-source")
     sources = {"clear": clear}
     for protection in PROTECTIONS[1:]:
         config = {"schema_version": 1,
                   "output": output_options(protection, SOURCE_KID, SOURCE_KEY, SOURCE_URI)}
         keys = private_json(destination / f"prepare-{protection}.json", config)
+        milestone("preparing source", target=protection)
         sources[protection], _, _, _ = convert(binary, clear, protection,
                                            destination / f"source-{protection}", keys, environment)
     rows = []
@@ -88,16 +101,20 @@ def regression(binary, destination):
                 config["output"] = output
             name = f"{source_protection}-to-{target}"
             keys = private_json(destination / f"{name}.json", config)
+            milestone("converting", source_protection, target)
             result, elapsed, memory, processing = convert(binary, source, target,
                                                destination / name, keys, environment)
             started = time.perf_counter()
+            milestone("independent verification", source_protection, target)
             verification = json.loads(run([binary, "verify", "--decode", result, "--source", source,
                                             "--keys-file", keys, "--json"], environment))
             verification_seconds = time.perf_counter() - started
             require_media_verification(verification)
+            milestone("route passed", source_protection, target)
             rows.append({"input": source_protection, "output": target, "passed": True,
                          "conversion_seconds": elapsed, "verification_seconds": verification_seconds,
                          "memory": memory, "verification": verification, "processing": processing})
+    milestone("checking tool versions")
     return {"schema_version": 1, "success": True, "routes": rows,
             "fixture_sha256": metadata["clip"]["sha256"], "video_duration_seconds": 10,
             "source_video_segments": 5, "source_video_segment_seconds": 2,
@@ -121,7 +138,12 @@ def main():
     if os.environ.get("DRMR_CONVERSION_REPORT"):
         Path(os.environ["DRMR_CONVERSION_REPORT"]).write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(report, sort_keys=True))
+    milestone("passed")
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        milestone("failed")
+        raise SystemExit(1) from None

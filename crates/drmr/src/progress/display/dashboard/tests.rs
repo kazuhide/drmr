@@ -1,3 +1,5 @@
+mod items;
+
 use super::*;
 use drmr_core::events::Record;
 use serde_json::{Value, json};

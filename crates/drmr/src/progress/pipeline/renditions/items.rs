@@ -40,11 +40,8 @@ impl ItemState {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) struct Items([ItemState; 64]);
 impl Items {
-    pub(super) fn parse(record: &Record, total: u64, expected: [u64; 4]) -> Option<Option<Self>> {
-        let Some(value) = record.get("unit_states") else {
-            return Some(None);
-        };
-        let values = value.as_array()?;
+    pub(super) fn parse(record: &Record, total: u64, expected: [u64; 4]) -> Option<Self> {
+        let values = record.get("unit_states")?.as_array()?;
         if values.len() != usize::try_from(total).ok()? || values.len() > 64 {
             return None;
         }
@@ -60,7 +57,7 @@ impl Items {
                 ItemState::Stopped => 3,
             }] += 1;
         }
-        (counts == expected).then_some(Some(Self(states)))
+        (counts == expected).then_some(Self(states))
     }
 
     pub(super) fn states(&self, total: u64) -> &[ItemState] {

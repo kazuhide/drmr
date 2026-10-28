@@ -45,11 +45,8 @@ impl Description {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) struct Descriptions([Option<Description>; 64]);
 impl Descriptions {
-    pub(super) fn parse(record: &Record, total: u64, actual_states: bool) -> Option<Option<Self>> {
-        let Some(value) = record.get("unit_descriptions") else {
-            return Some(None);
-        };
-        let values = value.as_array()?;
+    pub(super) fn parse(record: &Record, total: u64, actual_states: bool) -> Option<Self> {
+        let values = record.get("unit_descriptions")?.as_array()?;
         if !actual_states || values.len() != usize::try_from(total).ok()? || values.len() > 64 {
             return None;
         }
@@ -59,7 +56,7 @@ impl Descriptions {
                 descriptions[ordinal] = Some(Description::parse(value)?);
             }
         }
-        Some(Some(Self(descriptions)))
+        Some(Self(descriptions))
     }
 
     pub(super) fn get(&self, ordinal: usize, total: u64) -> Option<Description> {

@@ -142,13 +142,20 @@ impl Work {
         {
             return None;
         }
-        work.items = items::Items::parse(
-            record,
-            work.total,
-            [work.active, work.waiting, work.completed, work.stopped],
-        )?;
-        work.descriptions =
-            descriptions::Descriptions::parse(record, work.total, work.items.is_some())?;
+        if record.contains_key("unit_states") {
+            work.items = Some(items::Items::parse(
+                record,
+                work.total,
+                [work.active, work.waiting, work.completed, work.stopped],
+            )?);
+        }
+        if record.contains_key("unit_descriptions") {
+            work.descriptions = Some(descriptions::Descriptions::parse(
+                record,
+                work.total,
+                work.items.is_some(),
+            )?);
+        }
         Some(work)
     }
     pub(in crate::progress) fn items(&self) -> Option<&[ItemState]> {

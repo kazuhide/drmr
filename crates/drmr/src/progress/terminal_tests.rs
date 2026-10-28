@@ -155,7 +155,7 @@ fn terminal_frame_starts_each_row_at_column_zero_after_a_partial_log_line() {
             bar.force_draw();
             let labels = terminal.labels();
             progress.finish();
-            assert!(!labels.is_empty());
+            assert_ne!(labels.len(), 0);
             assert!(labels[0].2 > 0, "the preceding log line must remain intact");
             assert!(
                 labels.iter().all(|(_, x, _)| *x == 0),
