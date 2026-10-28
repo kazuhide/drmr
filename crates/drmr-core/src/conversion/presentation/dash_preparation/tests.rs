@@ -209,6 +209,10 @@ fn native_dash_preparation_reports_actual_tasks_and_preserves_media_for_worker_c
         assert_eq!(terminal["completed_units"], 2);
         assert_eq!(terminal["active_units"], 0);
         assert_eq!(terminal["stopped_units"], 0);
+        assert_eq!(
+            terminal.get("unit_descriptions"),
+            Some(&serde_json::json!([{"kind":"video"}, {"kind":"audio"}]))
+        );
         assert!(observed.iter().all(|record| !matches!(
             record.get("tool").and_then(serde_json::Value::as_str),
             Some("ffmpeg" | "ffprobe")

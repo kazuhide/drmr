@@ -243,6 +243,7 @@ impl Display {
         now: Duration,
         outcome: Option<(&str, Option<&str>)>,
     ) -> std::io::Result<()> {
+        let first = !self.terminal_active;
         self.terminal_active = true;
         if let Some((event, error)) = outcome {
             if let Some(bar) = terminal {
@@ -284,6 +285,11 @@ impl Display {
         self.label = Some(label);
         self.pipeline_phase = phase;
         if self.paint_due(now, changed) {
+            if first {
+                // Preserve a preceding partial log line without querying stdin.
+                writeln!(out, "\r")?;
+                out.flush()?;
+            }
             let columns = usize::from(console::Term::stderr().size().1.saturating_sub(1));
             // A complete frame has one writer and one draw, including all outputs.
             bar.set_message(dashboard::frame(command, view, now, columns));

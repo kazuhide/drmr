@@ -3,6 +3,14 @@ use super::work::media::{Media, Purpose, Subject, Task, Unit};
 use drmr_core::events::Record;
 use std::fmt::Write as _;
 
+mod items;
+pub(in crate::progress) use items::ItemState;
+mod descriptions;
+pub(in crate::progress) use descriptions::Description;
+
+#[cfg(test)]
+mod item_tests;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Operation {
     Preparation,
@@ -76,12 +84,14 @@ pub(in crate::progress) struct Work {
     waiting: u64,
     completed: u64,
     stopped: u64,
+    items: Option<items::Items>,
+    descriptions: Option<descriptions::Descriptions>,
 }
 impl Work {
     fn parse(record: &Record) -> Option<Self> {
         let text = |key| record.get(key)?.as_str();
         let number = |key| record.get(key)?.as_u64();
-        let work = Self {
+        let mut work = Self {
             id: number("batch_id")?,
             operation: Operation::parse(text("operation")?)?,
             status: Status::parse(text("state")?)?,
@@ -94,6 +104,8 @@ impl Work {
             waiting: number("waiting_units")?,
             completed: number("completed_units")?,
             stopped: number("stopped_units")?,
+            items: None,
+            descriptions: None,
         };
         if work.id == 0
             || work.total == 0
@@ -130,7 +142,20 @@ impl Work {
         {
             return None;
         }
+        work.items = items::Items::parse(
+            record,
+            work.total,
+            [work.active, work.waiting, work.completed, work.stopped],
+        )?;
+        work.descriptions =
+            descriptions::Descriptions::parse(record, work.total, work.items.is_some())?;
         Some(work)
+    }
+    pub(in crate::progress) fn items(&self) -> Option<&[ItemState]> {
+        self.items.as_ref().map(|items| items.states(self.total))
+    }
+    pub(in crate::progress) fn description(&self, ordinal: usize) -> Option<Description> {
+        self.descriptions.as_ref()?.get(ordinal, self.total)
     }
     pub(in crate::progress) fn active(self) -> bool {
         !self.status.terminal()
@@ -191,14 +216,21 @@ impl Work {
         value
     }
     pub(super) fn json(self) -> serde_json::Value {
-        serde_json::json!({
+        let mut value = serde_json::json!({
             "batch_id":self.id, "operation":self.operation.token(),
             "state":self.status.token(), "subject":self.subject.token(),
             "purpose":self.purpose.token(), "unit":self.unit.token(),
             "total_units":self.total, "started_units":self.started,
             "active_units":self.active, "waiting_units":self.waiting,
             "completed_units":self.completed, "stopped_units":self.stopped,
-        })
+        });
+        if let Some(items) = &self.items {
+            value["unit_states"] = items.json(self.total);
+        }
+        if let Some(descriptions) = &self.descriptions {
+            value["unit_descriptions"] = descriptions.json(self.total);
+        }
+        value
     }
 }
 
@@ -229,6 +261,18 @@ impl Tracker {
                 || next.started < old.started
                 || next.completed < old.completed
                 || next.stopped < old.stopped
+                || match (old.items, next.items) {
+                    (Some(previous), Some(next)) => !next.follows(previous, old.total),
+                    (Some(_), None) => true,
+                    _ => false,
+                }
+                || match (&old.descriptions, &next.descriptions) {
+                    (Some(_), None) => true,
+                    (previous, Some(next)) => {
+                        !next.follows(previous.as_ref(), old.items(), old.total)
+                    }
+                    _ => false,
+                }
                 || next == old
             {
                 return false;

@@ -110,6 +110,9 @@ fn prepare_track(
 ) -> Result<Prepared, ConversionError> {
     let progress = backend.preparation();
     let task = progress.and_then(|progress| progress.start(ordinal));
+    if let Some(task) = &task {
+        task.describe(track.kind, metadata.resolution);
+    }
     let directory = stage.join(format!("dash-metadata-{ordinal:04}"));
     let mut prepared = {
         let claim = crate::resources::Claim::for_workload(

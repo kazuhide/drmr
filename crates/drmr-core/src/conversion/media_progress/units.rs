@@ -1,5 +1,6 @@
 //! Actual task starts and exits, independent of CPU admission and media validity.
 use super::{Arc, MAX_TRACKS, Mutex, PoisonError, Purpose, Record, Sink, Subject, Unit};
+use crate::inspection::TrackKind;
 
 #[derive(Clone, Copy)]
 pub(in crate::conversion) enum Operation {
@@ -21,13 +22,49 @@ impl Operation {
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Copy, serde::Serialize)]
+struct Description {
+    kind: TrackKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    resolution: Option<[u32; 2]>,
+}
+impl Description {
+    fn new(kind: TrackKind, resolution: Option<(u64, u64)>) -> Option<Self> {
+        if kind == TrackKind::Unknown {
+            return None;
+        }
+        let resolution = if kind == TrackKind::Video {
+            resolution.and_then(|(width, height)| {
+                let width = u32::try_from(width).ok()?;
+                let height = u32::try_from(height).ok()?;
+                (width > 0 && height > 0).then_some([width, height])
+            })
+        } else {
+            None
+        };
+        Some(Self { kind, resolution })
+    }
+}
+
 struct State {
     started: u64,
     active: u64,
     completed: u64,
     stopped: u64,
     terminal: bool,
+    descriptions: [Option<Description>; MAX_TRACKS],
+}
+impl Default for State {
+    fn default() -> Self {
+        Self {
+            started: 0,
+            active: 0,
+            completed: 0,
+            stopped: 0,
+            terminal: false,
+            descriptions: [None; MAX_TRACKS],
+        }
+    }
 }
 struct Inner {
     sink: Arc<dyn Sink>,
@@ -41,6 +78,20 @@ struct Inner {
 }
 impl Inner {
     fn emit(&self, status: &'static str, state: &mut State) {
+        let unit_states: Vec<_> = (0..self.total)
+            .map(|ordinal| {
+                let bit = 1_u64 << ordinal;
+                if state.completed & bit != 0 {
+                    "completed"
+                } else if state.stopped & bit != 0 {
+                    "stopped"
+                } else if state.active & bit != 0 {
+                    "active"
+                } else {
+                    "waiting"
+                }
+            })
+            .collect();
         let record: Record = serde_json::json!({
             "stage":"rendition-progress", "event":"progress", "state":status,
             "batch_id":self.id, "operation":self.operation.token(),
@@ -51,6 +102,8 @@ impl Inner {
             "waiting_units":self.total - state.started.count_ones() as usize,
             "completed_units":state.completed.count_ones(),
             "stopped_units":state.stopped.count_ones(),
+            "unit_states":unit_states,
+            "unit_descriptions":&state.descriptions[..self.total],
         })
         .as_object()
         .expect("fixed typed rendition progress")
@@ -66,6 +119,26 @@ impl Inner {
                 std::panic::resume_unwind(panic);
             }
         }
+    }
+
+    fn describe(&self, ordinal: usize, kind: TrackKind, resolution: Option<(u64, u64)>) -> bool {
+        if ordinal >= self.total {
+            return false;
+        }
+        let Some(description) = Description::new(kind, resolution) else {
+            return false;
+        };
+        let bit = 1_u64 << ordinal;
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        if state.terminal
+            || (state.completed | state.stopped) & bit != 0
+            || state.descriptions[ordinal].is_some()
+        {
+            return false;
+        }
+        state.descriptions[ordinal] = Some(description);
+        self.emit("running", &mut state);
+        true
     }
 
     fn complete(&self, bit: u64, success: bool) {
@@ -141,6 +214,14 @@ impl Units {
             complete: false,
         })
     }
+    pub(in crate::conversion) fn describe(
+        &self,
+        ordinal: usize,
+        kind: TrackKind,
+        resolution: Option<(u64, u64)>,
+    ) -> bool {
+        self.0.describe(ordinal, kind, resolution)
+    }
     pub(in crate::conversion) fn finish(&self) {
         self.0.close(true);
     }
@@ -157,6 +238,14 @@ pub(in crate::conversion) struct UnitTask {
     complete: bool,
 }
 impl UnitTask {
+    pub(in crate::conversion) fn describe(
+        &self,
+        kind: TrackKind,
+        resolution: Option<(u64, u64)>,
+    ) -> bool {
+        self.inner
+            .describe(self.bit.trailing_zeros() as usize, kind, resolution)
+    }
     pub(in crate::conversion) fn finish(mut self) {
         self.complete = true;
         self.inner.complete(self.bit, true);
