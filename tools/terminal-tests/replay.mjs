@@ -9,7 +9,44 @@ const engine = require('@xterm/headless/package.json');
 if (engine.version !== '6.0.0') throw new Error('terminal-engine-version');
 const history = 'Output before conversion';
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
-const dashboard = /^(?:drmr convert\b|Source\b|Overall\b|Renditions\b|[SO] #\d)/;
+const dashboard = /^\s*(?:drmr convert\b|Source\b|Overall\b|Renditions\b|(?:S|[1-9]\d*) (?:#\d+|(?:Video|Audio|Text) \d+|Output\b|DASH\b|HLS\b|MP4\b))/;
+const expectedFormats = ['DASH fMP4', 'HLS fMP4'];
+const outputRow = /^([12]) (Output|DASH fMP4|HLS fMP4) +(.+)$/;
+const childRow = /^(?:S|[12]) (?:#[12]|(?:Video|Audio|Text) [12]) +(?:Waiting|Active|Done \(step\)|Stopped)(?: +.*)?$/;
+const hiddenRow = /^\d+ hidden: \d+ active, \d+ waiting$/;
+
+function paintLayout(text) {
+  const lines = text.filter(line => line.trim());
+  const parents = lines.slice(3, 5).map(line => line.match(outputRow));
+  const introduced = parents.some(Boolean);
+  const ordered = introduced && parents.every((match, index) => match && Number(match[1]) === index + 1 &&
+    (match[2] === 'Output' || match[2] === expectedFormats[index]));
+  const tail = lines.slice(introduced ? 5 : 3);
+  return { output_parents: ordered ? parents.map(match => match[2]) : [],
+    source_ready: /^Source +Ready\b/.test(lines[1] || ''),
+    valid_layout: /^drmr convert\b/.test(lines[0] || '') && /^Source +\S/.test(lines[1] || '') &&
+      /^Overall +\S/.test(lines[2] || '') && (!introduced || ordered) &&
+      tail.every(line => line === 'Renditions' || childRow.test(line) || hiddenRow.test(line)) };
+}
+
+function primaryGrammar(normal, snapshots, capture) {
+  const label = { success: 'Finished', cancel: 'Cancelled', failure: 'Failed' }[capture.outcome];
+  const code = capture.outcome === 'success' ? '' : capture.error_code;
+  if (!label || (capture.outcome !== 'success' && !/^[a-z0-9-]+$/.test(code || ''))) return false;
+  const footer = normal.filter(line => new RegExp('^' + label + ' convert in \\d+\\.\\ds' +
+    (code ? ' \\| ' + code : '') + '$').test(line));
+  if (footer.length !== 1) return false;
+  const expected = [history, footer[0]];
+  if (capture.outcome !== 'success') {
+    if (capture.stop_phase === 'source') expected.push('Source       Stopped');
+    else expected.push('Source       Checked', '1 DASH fMP4  Stopped', '2 Output     Not started');
+  }
+  if (normal.length !== expected.length || normal.some((line, index) => line !== expected[index])) return false;
+  // Every visible primary-screen prefix must belong to the final transcript. This
+  // also rejects stale rows which a later cursor move or erase happens to hide.
+  return snapshots.every(lines => lines[0] === history && lines.length <= expected.length && lines.every((line, index) =>
+    index === lines.length - 1 ? expected[index].startsWith(line) : expected[index] === line));
+}
 
 export async function replayCapture(capture) {
   const raw = Buffer.from(capture.raw, 'base64');
@@ -47,12 +84,15 @@ export async function replayCapture(capture) {
       overall_count: text.filter(line => /^Overall\b/.test(line)).length,
       dashboard_rows: text.filter(line => dashboard.test(line)).length,
       bar_columns: bars.map(bar => bar.column), ascii_bars: bars.every(bar => bar.ascii),
-      buffer: terminal.buffer.active.type };
+      buffer: terminal.buffer.active.type, ...paintLayout(text) };
   };
   // Observe complete paint transactions, including a delimiter split across reads.
   const ends = new Set([...raw.toString('latin1').matchAll(/\x1b\[\?2026l/g)]
     .map(match => match.index + match[0].length));
+  const controls = [...raw.toString('latin1').matchAll(/\x1b\[[0-?]*[ -/]*[@-~]|[\r\n\b\t]/g)];
+  const cuts = new Set([...ends, ...controls.flatMap(match => [match.index, match.index + match[0].length])]);
   const frames = [];
+  const primarySnapshots = [];
   let consumed = 0, resizedDuringPaint = false;
   try {
     await write(history + '\r\n');
@@ -64,11 +104,15 @@ export async function replayCapture(capture) {
       } else if (event.kind === 'write') {
         const end = consumed + event.length;
         if (end > raw.length) throw new Error('capture-byte-length');
-        const boundaries = [...ends].filter(offset => offset > consumed && offset <= end).sort((a, b) => a - b);
+        const boundaries = [...cuts].filter(offset => offset > consumed && offset <= end).sort((a, b) => a - b);
         if (!boundaries.includes(end)) boundaries.push(end);
         for (const boundary of boundaries) {
           await write(raw.subarray(consumed, boundary));
           consumed = boundary;
+          if (terminal.buffer.active.type === 'normal') {
+            primarySnapshots.push(allNormalRows().filter(line => line.trim()));
+            if (primarySnapshots.length > 1024) throw new Error('primary-observation-limit');
+          }
           if (ends.has(boundary) && terminal.buffer.active.type === 'alternate') {
             frames.push({ offset: boundary, elapsed_seconds: event.elapsed_seconds, ...frame() });
           }
@@ -77,16 +121,33 @@ export async function replayCapture(capture) {
     }
     if (consumed !== raw.length) throw new Error('capture-byte-total');
     const final = frame();
-    const normal = allNormalRows();
+    const normal = allNormalRows().filter(line => line.trim());
     const summary = capture.outcome === 'success' ? /^Finished convert in / :
       capture.outcome === 'cancel' ? /^Cancelled convert in / : /^Failed convert in /;
+    let introduced = false;
+    const formats = [null, null];
+    const orderedParents = frames.every(value => {
+      if (value.output_parents.length === 0) return !introduced;
+      introduced = true;
+      return value.output_parents.every((format, index) => {
+        if (formats[index] && format !== formats[index]) return false;
+        if (format !== 'Output') formats[index] = format;
+        return true;
+      }) && (value.output_parents.every(format => format === 'Output') || value.source_ready);
+    });
+    const transcriptValid = primaryGrammar(normal, primarySnapshots, capture);
+    const sourceStop = capture.outcome !== 'success' && capture.stop_phase === 'source';
     const assertions = {
       completed_dashboard_frames: frames.length >= 3,
       no_duplicate_headers: frames.every(value => value.header_count === 1),
       parents_visible: frames.every(value => value.source_count === 1 && value.overall_count === 1),
+      fixture_output_parents: (sourceStop ? !introduced && frames.every(value => !value.source_ready) : introduced) &&
+        orderedParents && frames.every(value => value.valid_layout) &&
+        (capture.outcome !== 'success' || formats.every((format, index) => format === expectedFormats[index])),
       fixed_bar_column: frames.every(value => value.columns < 80 || value.bar_columns.every(column => column === 13)),
       observed_ascii_bars: frames.some(value => value.bar_columns.length) && frames.every(value => value.ascii_bars),
-      final_dashboard_clear: final.dashboard_rows === 0,
+      final_dashboard_clear: transcriptValid,
+      primary_transcript_valid: transcriptValid,
       original_history_preserved: normal.filter(line => line === history).length === 1,
       final_summary_present: rows().some(line => summary.test(line)),
       final_normal_buffer: final.buffer === 'normal' && alternateEntered && alternateLeft,

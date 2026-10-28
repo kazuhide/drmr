@@ -1,23 +1,26 @@
 #!/usr/bin/env python3
-"""Pause one processing call, then execute the real media tool unchanged."""
+"""Register each native tool before exec; delay only the controlled packaging call."""
 
 import json
 import os
 from pathlib import Path
-import subprocess
 import sys
 import time
+from process_owner import birth
 
 control_path = Path(os.environ["TERMINAL_TEST_CONTROL"])
 control = json.loads(control_path.read_text())
-if "--version" not in sys.argv[1:]:
-    started = subprocess.check_output(
-        ["ps", "-p", str(os.getpid()), "-o", "lstart="], text=True).strip()
-    receipt = control_path.parent / f"tool-{os.getpid()}.json"
-    pending = receipt.with_suffix(".pending")
-    pending.write_text(json.dumps({"pid": os.getpid(), "started": started}))
-    pending.chmod(0o600)
-    pending.replace(receipt)
+name = Path(sys.argv[0]).name
+registry = Path(control["registry"])
+receipt = registry / f"tool-{os.getpid()}.json"
+pending = receipt.with_suffix(".pending")
+with os.fdopen(os.open(pending, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as file:
+    json.dump({"pid": os.getpid(), "birth": birth(os.getpid()), "tool": name}, file)
+pending.replace(receipt)
+if (registry / "closing").exists():
+    raise SystemExit(125)
+delayed_call = control["outcome"] == "success" or "--enable_raw_key_encryption" in sys.argv[1:]
+if name == "packager" and "--version" not in sys.argv[1:] and control["outcome"] != "normal" and delayed_call:
     try:
         descriptor = os.open(control_path.parent / "delay-claimed", os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     except FileExistsError:
@@ -27,4 +30,5 @@ if "--version" not in sys.argv[1:]:
         time.sleep(6)
         if control["outcome"] == "failure":
             raise SystemExit(79)
-os.execv(control["packager"], [control["packager"], *sys.argv[1:]])
+os.environ["TERMINAL_TEST_TOOL"] = name
+os.execv(control["tools"][name], [control["tools"][name], *sys.argv[1:]])

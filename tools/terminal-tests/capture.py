@@ -26,28 +26,28 @@ FIXTURE = REPOSITORY / "crates/drmr/tests/fixtures/bbb"
 sys.path.insert(0, str(FIXTURE))
 from regression import (prepare_source, private_json, require_media_verification,
                         source_fingerprints, verify_fixture)
+import regression as media
+from process_owner import ProcessOwner, CleanupUnconfirmed
 
 
 def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 
-def execute(arguments, environment=None, timeout=30):
-    result = subprocess.run([str(value) for value in arguments], env=environment,
-                            stdin=subprocess.DEVNULL, capture_output=True, timeout=timeout)
-    if result.returncode:
-        raise RuntimeError("media-command-failed")
-    return result.stdout
+def execute(arguments, environment=None, timeout=30, owner=None, input=None):
+    if owner is None:
+        raise RuntimeError("process-owner-required")
+    return owner.execute(arguments, environment, timeout, input)
 
 
-def identity(binary):
+def identity(binary, owner):
     result = {"binary_sha256": digest(binary.read_bytes()),
               "fixture_sha256": digest((FIXTURE / "clip.mp4").read_bytes()),
               "harness_sha256": {name: digest((HERE / name).read_bytes()) for name in
-                  ["capture.py", "packager.py", "replay.mjs", "package.json", "package-lock.json"]}}
+                  ["capture.py", "packager.py", "process_owner.py", "replay.mjs", "package.json", "package-lock.json"]}}
     if os.environ.get("CI") == "true":
-        head = execute(["git", "rev-parse", "HEAD"]).decode().strip()
-        if head != os.environ.get("GITHUB_SHA") or execute(["git", "status", "--porcelain", "--untracked-files=all"]):
+        head = execute(["git", "rev-parse", "HEAD"], owner=owner).decode().strip()
+        if head != os.environ.get("GITHUB_SHA") or execute(["git", "status", "--porcelain", "--untracked-files=all"], owner=owner):
             raise RuntimeError("source-checkout-changed")
         build = Path(os.environ["DRMR_CONSOLE_BUILD"]).read_bytes()
         artifacts = [row for line in build.splitlines() if (row := json.loads(line)).get("reason") == "compiler-artifact"
@@ -55,46 +55,25 @@ def identity(binary):
                      and row.get("executable") and not row["profile"]["test"]]
         if len(artifacts) != 1 or Path(artifacts[0]["executable"]).resolve() != binary:
             raise RuntimeError("binary-build-artifact-mismatch")
-        result.update(source_head=head, source_tree=execute(["git", "rev-parse", "HEAD^{tree}"]).decode().strip(),
+        result.update(source_head=head, source_tree=execute(["git", "rev-parse", "HEAD^{tree}"], owner=owner).decode().strip(),
                       build_sha256=digest(build))
     return result
 
 
-def reap_tools(directory):
-    reaped = True
-    for path in directory.glob("tool-*.json"):
-        receipt = json.loads(path.read_text())
-        pid = receipt["pid"]
-        actual = subprocess.run(["ps", "-p", str(pid), "-o", "lstart="], capture_output=True, text=True)
-        if actual.stdout.strip() != receipt["started"]:
-            continue
-        reaped = False
-        try:
-            os.kill(pid, signal.SIGTERM)
-            time.sleep(0.1)
-            actual = subprocess.run(["ps", "-p", str(pid), "-o", "lstart="], capture_output=True, text=True)
-            if actual.stdout.strip() == receipt["started"]:
-                os.kill(pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-    return reaped
-
-
-def capture(binary, source, keys, outputs, directory, environment, outcome, no_color, tty_input):
+def capture(owner, binary, source, keys, outputs, directory, environment, outcome, no_color, tty_input):
+    workers = 2 if outcome == "success" else 1
     output = directory / "output"
     plan = directory / "plan.json"
+    planning_environment = owner.environment(environment, directory / "planning")
     execute([binary, "plan", source, "--outputs", outputs, "--output", output, "--save", plan,
-             "--json", "--progress", "off"], environment)
+             "--json", "--progress", "off"], planning_environment, owner=owner)
     plan_before = plan.read_bytes()
-    control = private_json(directory / "control.json", {"packager": shutil.which("packager"), "outcome": outcome})
-    wrapper = directory / "packager"
-    wrapper.write_bytes((HERE / "packager.py").read_bytes())
-    wrapper.chmod(0o700)
-    environment = dict(environment, TERMINAL_TEST_CONTROL=str(control), TERM="xterm-256color")
+    conversion_environment = owner.environment(environment, directory / "conversion", outcome)
+    conversion_environment["TERM"] = "xterm-256color"
     if no_color:
-        environment["NO_COLOR"] = "1"
+        conversion_environment["NO_COLOR"] = "1"
     else:
-        environment.pop("NO_COLOR", None)
+        conversion_environment.pop("NO_COLOR", None)
     master, slave = pty.openpty()
     attributes = termios.tcgetattr(slave)
     attributes[1] &= ~termios.OPOST
@@ -122,10 +101,10 @@ def capture(binary, source, keys, outputs, directory, environment, outcome, no_c
     started = time.monotonic()
     try:
         with tempfile.TemporaryFile() as stdout:
-            process = subprocess.Popen([str(binary), "convert", "--plan", str(plan),
-                "--keys-file", str(keys), "--max-workers", "2", "--json",
-                "--progress", "text", "--packager-bin", str(wrapper)], env=environment,
-                stdin=stdin, stdout=stdout, stderr=slave, start_new_session=True)
+            process = owner.spawn([str(binary), "convert", "--plan", str(plan),
+                "--keys-file", str(keys), "--max-workers", str(workers), "--json",
+                "--progress", "text", "--packager-bin", str(owner.proxies / "packager")], env=conversion_environment,
+                stdin=stdin, stdout=stdout, stderr=slave)
 
             def resize(columns, rows):
                 fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", rows, columns, 0, 0))
@@ -177,8 +156,9 @@ def capture(binary, source, keys, outputs, directory, environment, outcome, no_c
         if outcome == "success":
             processing["bundle_result_valid"] = (result.get("kind") == "bundle-conversion"
                 and {row["id"] for row in result.get("outputs", [])} == {"dash", "hls"})
+            verification_environment = owner.environment(environment, directory / "verification")
             verified = json.loads(execute([binary, "verify", "--decode", "--plan", plan,
-                                         "--keys-file", keys, "--max-workers", "2", "--json"], environment))
+                                         "--keys-file", keys, "--max-workers", "2", "--json"], verification_environment, owner=owner))
             for row in verified["outputs"]:
                 require_media_verification(row["verification"])
             processing["native_media_verification"] = (verified["passed"] is True and verified["source_unchanged"] is True
@@ -191,26 +171,65 @@ def capture(binary, source, keys, outputs, directory, environment, outcome, no_c
                 processing["cancelled_result"] = result.get("error", {}).get("code") == "cancelled"
         key = json.loads(keys.read_text())["outputs"]["dash"]["key"].encode()
         processing["sensitive_values_absent"] = key not in raw and key not in result_bytes and str(directory).encode() not in raw
-        replay = subprocess.run(["node", str(HERE / "replay.mjs")], input=json.dumps({"columns": 120, "rows": 24,
+        replay = execute(["node", str(HERE / "replay.mjs")], input=json.dumps({"columns": 120, "rows": 24,
             "outcome": outcome, "no_color": no_color, "require_mid_draw": True,
-            "raw": base64.b64encode(raw).decode(), "events": events}).encode(),
-            capture_output=True, timeout=20)
-        if replay.returncode:
-            raise RuntimeError("terminal-replay-failed")
-        screen = json.loads(replay.stdout)
-        processing["owned_tools_reaped"] = reap_tools(directory)
+            "error_code": result.get("error", {}).get("code"),
+            "stop_phase": "outputs",
+            "raw": base64.b64encode(raw).decode(), "events": events}).encode(), owner=owner, timeout=20)
+        screen = json.loads(replay)
+        processing["owned_tools_reaped"] = owner.idle()
         return {"passed": screen["passed"] and all(processing.values()), "outcome": outcome,
                 "no_color": no_color, "tty_input": tty_input, "processing": processing,
+                "workers": workers, "delay_phase": "source" if outcome == "success" else "cenc-output",
                 "conversion_decode_requested": False, "independent_verification_decode_requested": outcome == "success",
                 "stdout_sha256": digest(result_bytes), "terminal": screen}
     finally:
-        if process is not None and process.poll() is None:
-            os.killpg(process.pid, signal.SIGKILL)
-            process.wait(timeout=5)
-        reap_tools(directory)
-        for descriptor in [master, slave, pipe]:
-            if descriptor is not None:
-                os.close(descriptor)
+        try:
+            if not owner.idle() and not owner.close():
+                raise CleanupUnconfirmed("terminal-cleanup-unconfirmed")
+        finally:
+            for descriptor in [master, slave, pipe]:
+                if descriptor is not None:
+                    os.close(descriptor)
+
+
+def plain_fallback(owner, binary, directory, environment):
+    environment = owner.environment(environment, directory)
+    environment["TERM"] = "linux"
+    master, slave = pty.openpty()
+    process = None
+    raw = bytearray()
+    try:
+        with tempfile.TemporaryFile() as stdout:
+            process = owner.spawn([binary, "analyze", FIXTURE / "clip.mp4", "--metadata-only", "--json", "--progress", "text"],
+                env=environment, stdin=subprocess.DEVNULL, stdout=stdout, stderr=slave)
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                readable, _, _ = select.select([master], [], [], 0.025)
+                if readable:
+                    raw.extend(os.read(master, 4096))
+                    if len(raw) > 16384:
+                        raise RuntimeError("fallback-byte-limit")
+                elif process.poll() is not None:
+                    break
+            else:
+                raise TimeoutError("fallback-deadline")
+            process.wait(timeout=1)
+            stdout.seek(0)
+            result_bytes = stdout.read(1048576)
+        result = json.loads(result_bytes)
+        assertions = {"expected_exit": process.returncode == 0, "no_alternate_screen": b"\x1b[?1049" not in raw,
+            "no_owned_clear": b"\x1b[2J" not in raw, "plain_progress": b"Finished analyze" in raw,
+            "json_metadata_result": result.get("format") == "mp4"}
+        return {"passed": all(assertions.values()), "assertions": assertions,
+                "stdout_sha256": digest(result_bytes), "stderr_sha256": digest(raw)}
+    finally:
+        try:
+            if not owner.idle() and not owner.close():
+                raise CleanupUnconfirmed("fallback-cleanup-unconfirmed")
+        finally:
+            os.close(master)
+            os.close(slave)
 
 
 def main():
@@ -224,39 +243,58 @@ def main():
     evidence.mkdir(parents=True, exist_ok=True)
     report = {"schema_version": 1, "engine": "@xterm/headless@6.0.0", "cases": [], "passed": False,
               "platform": {"system": platform.system(), "machine": platform.machine(), "python": platform.python_version()}}
+    root = Path(tempfile.mkdtemp(prefix="drmr-terminal-"))
+    owner = None
+    previous_run = media.run
     try:
         binary = arguments.binary.resolve()
-        report.update(identity(binary))
-        verify_fixture()
+        owner = ProcessOwner(root)
+        report.update(identity(binary, owner))
         environment = {key: value for key, value in os.environ.items() if not key.startswith(("DRM_", "DRMR_"))}
-        with tempfile.TemporaryDirectory(prefix="drmr-terminal-") as temporary:
-            root = Path(temporary)
-            source = prepare_source(root / "source")
-            before = source_fingerprints(source.parent)
-            outputs = private_json(root / "outputs.json", {"schema_version": 2, "outputs": [
-                {"id": "dash", "format": "dash", "target": "cenc", "drms": [], "processing": "stitch"},
-                {"id": "hls", "format": "hls", "target": "clear", "drms": [], "processing": "stitch"}]})
-            keys = private_json(root / "keys.json", {"schema_version": 2, "outputs": {"dash": {
-                "kid": "000102030405060708090a0b0c0d0e0f", "key": "10101010101010101010101010101010"}}})
-            for name, outcome, no_color, tty_input in [("success", "success", False, True),
-                ("no-color", "success", True, False), ("cancel", "cancel", False, False),
-                ("failure", "failure", False, False)]:
-                directory = root / name
-                directory.mkdir(mode=0o700)
-                try:
-                    result = capture(binary, source, keys, outputs, directory, environment, outcome, no_color, tty_input)
-                except Exception as error:
-                    result = {"passed": False, "error": "terminal-case-failed",
-                              "error_sha256": digest((type(error).__name__ + str(error)).encode())}
-                report["cases"].append({"name": name, **result})
-                (evidence / "report.json").write_text(json.dumps(report, indent=2) + "\n")
-            report["source_unchanged"] = before == source_fingerprints(source.parent)
+        fixture_environment = owner.environment(environment, root / "fixture-tools")
+        # Existing fixture checks keep their assertions; every subprocess they
+        # request uses the same bounded owner and registered real-tool proxies.
+        media.run = lambda arguments, env=None: execute(arguments, env or fixture_environment, owner=owner).decode()
+        verify_fixture()
+        source = prepare_source(root / "source")
+        before = source_fingerprints(source.parent)
+        outputs = private_json(root / "outputs.json", {"schema_version": 2, "outputs": [
+            {"id": "dash", "format": "dash", "target": "cenc", "drms": [], "processing": "stitch"},
+            {"id": "hls", "format": "hls", "target": "clear", "drms": [], "processing": "stitch"}]})
+        keys = private_json(root / "keys.json", {"schema_version": 2, "outputs": {"dash": {
+            "kid": "000102030405060708090a0b0c0d0e0f", "key": "10101010101010101010101010101010"}}})
+        for name, outcome, no_color, tty_input in [("success", "success", False, True),
+            ("no-color", "success", True, False), ("cancel", "cancel", False, False),
+            ("failure", "failure", False, False)]:
+            directory = root / name
+            directory.mkdir(mode=0o700)
+            try:
+                result = capture(owner, binary, source, keys, outputs, directory, environment, outcome, no_color, tty_input)
+            except Exception as error:
+                result = {"passed": False, "error": "terminal-case-failed",
+                          "error_sha256": digest((type(error).__name__ + str(error)).encode())}
+            report["cases"].append({"name": name, **result})
+            (evidence / "report.json").write_text(json.dumps(report, indent=2) + "\n")
+            if owner.closing:
+                break
+        report["plain_fallback"] = plain_fallback(owner, binary, root / "plain-fallback", environment)
+        report["source_unchanged"] = before == source_fingerprints(source.parent)
         report["binary_unchanged"] = report["binary_sha256"] == digest(binary.read_bytes())
         report["fixture_unchanged"] = report["fixture_sha256"] == digest((FIXTURE / "clip.mp4").read_bytes())
-        report["passed"] = (len(report["cases"]) == 4 and all(row["passed"] for row in report["cases"])
-                            and report["source_unchanged"] and report["binary_unchanged"] and report["fixture_unchanged"])
+        report["tracked_tools"] = {name: sum(row["tool"] == name for row in owner.receipts())
+                                   for name in ("ffmpeg", "ffprobe", "packager")}
     except Exception as error:
         report.update(error="terminal-qualification-failed", error_sha256=digest((type(error).__name__ + str(error)).encode()))
+    finally:
+        media.run = previous_run
+        report["owned_temporary_removed"] = owner.remove_temporary() if owner else False
+        report["retained_owned_temporary"] = not report["owned_temporary_removed"]
+        if report["retained_owned_temporary"]:
+            report["retained_temporary_sha256"] = digest(str(root).encode())
+    report["passed"] = (len(report["cases"]) == 4 and all(row["passed"] for row in report["cases"])
+        and all(report.get(name) is True for name in ("source_unchanged", "binary_unchanged", "fixture_unchanged", "owned_temporary_removed"))
+        and report.get("plain_fallback", {}).get("passed") is True and all(report.get("tracked_tools", {}).values())
+        and "error" not in report)
     (evidence / "report.json").write_text(json.dumps(report, indent=2) + "\n")
     print(f"Terminal progress: {sum(row['passed'] for row in report['cases'])}/4 cases passed")
     return 0 if report["passed"] else 1
