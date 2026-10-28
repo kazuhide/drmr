@@ -22,6 +22,8 @@ pub(super) struct Backend {
     pub measurement: Option<Arc<super::measurement::Measurements>>,
     pub activity: Option<Arc<dyn crate::events::Sink>>,
     pub preparation: Option<Arc<super::media_progress::PreparationContext>>,
+    #[cfg(test)]
+    pub scheduling_hardware: Option<crate::resources::Hardware>,
 }
 impl Backend {
     pub(super) fn preparation(&self) -> Option<&Arc<super::media_progress::PreparationContext>> {
@@ -904,6 +906,7 @@ mod packet_tests {
                 measurement: None,
                 activity: None,
                 preparation: None,
+                scheduling_hardware: None,
             };
             assert_eq!(
                 backend.packets_stream(&input, 0, None).unwrap_err(),

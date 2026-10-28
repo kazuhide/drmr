@@ -557,6 +557,79 @@ memory reduction. Sampled resident-memory sums can double-count shared pages
 and miss short-lived processes; they remain separate from the maximum-resident
 counters reported by `wait4`.
 
+## Bounded rendition preparation and packaging
+
+A later comparison uses the same retained clear HLS MPEG-TS source: six video
+renditions, one audio rendition, approximately 597 seconds and 708 referenced
+files totaling 857,447,176 bytes. The segment target is six seconds. Each direct
+conversion produces HLS fMP4 with FairPlay declarations and DASH fMP4 with
+Widevine/PlayReady declarations, both encrypted with `cbcs`. All builds require
+the same native output checks.
+
+The measured builds add these changes in sequence:
+
+- **a: bounded preparation and checks.** Independent source snapshots, stream
+  profiles and source-to-intermediate checks share the command's worker and
+  memory limits.
+- **b: conditional final packaging concurrency.** Shaka Packager can process
+  distinct input jobs concurrently when the shared CPU and memory budget can
+  admit them together. Otherwise, final packaging remains single-threaded.
+- **c: bounded DASH metadata preparation.** Metadata checks run concurrently
+  after complete DASH capture. Capture itself retains its ordered processing.
+
+The Apple M5 host has ten logical CPUs and 32 GiB of memory. Rust 1.99.0 release
+builds use Shaka Packager 3.8.0 and `--max-workers 7`. Three rounds rotate the
+build order; preliminary and profiled diagnostic runs are excluded.
+
+| Build | Median command wall, s | Wall range, s |
+| --- | ---: | ---: |
+| Baseline | 66.486 | 64.693–68.879 |
+| a: preparation and checks | 58.423 | 57.744–65.983 |
+| a + b: final packaging concurrency | 66.314 | 56.778–75.360 |
+| a + b + c: DASH metadata preparation | 64.686 | 63.841–69.460 |
+
+The preparation build has the lowest median in this batch. The ranges overlap,
+and the later packaging and DASH changes do not establish a consistent
+whole-command speedup. Other host work and filesystem caches were uncontrolled;
+these observations do not predict the gain on another input or machine.
+
+All twelve conversions passed native encoded-media payload, timing, stream
+metadata, manifest and DRM-declaration checks. Every original source hash stayed
+unchanged. Each command started 15 Packager processes and no FFmpeg or ffprobe
+processes. Complete decoding, external manifest validators, DRM license
+acquisition and device playback were outside this comparison. Native
+manifest-profile checks remain distinct from media correspondence checks.
+
+The [numeric report](benchmarks/rendition-pipeline-2026-10-28.json) records each
+binary's SHA-256, the baseline's published source tree and Rust/Cargo
+input-manifest digests for **a–c**. Build labels refer to those measurements,
+rather than release tags or a later source revision.
+Wall time includes the launcher, publication and CLI cleanup; source hashing,
+result inventories and removal of benchmark outputs are outside the timer.
+RSS observations sample the sum of launcher, CLI and descendant resident memory
+approximately every 0.5 seconds. They can double-count shared pages and miss
+short-lived processes, so they do not establish an exact peak or memory bound.
+Instrumented scope sums overlap and are not additive command phases. CPU time
+and input/output byte counts were not measured.
+
+### Final candidate validation
+
+A rebuilt candidate, **c2**, completed three consecutive follow-up conversions
+with the same source, settings and native verification depth. Its binary differs
+from measured build **c** after a test-configuration portability change. The
+numeric report keeps its binary and input-manifest digests in a separate
+`final_candidate_validation` record.
+
+| Build | Median command wall, s | Wall range, s |
+| --- | ---: | ---: |
+| c2: separate validation | 72.575 | 66.600–75.356 |
+
+All three runs passed the same native checks, retained the source bytes and
+started 15 Packager processes with no FFmpeg or ffprobe processes. These
+consecutive runs are separate from the rotated four-build comparison; their
+timing difference cannot be attributed to the test-only configuration change.
+The measurement definitions and evidence limits above also apply here.
+
 ## Compare your own retained input
 
 Use the same local original to separate processing from network transfer:

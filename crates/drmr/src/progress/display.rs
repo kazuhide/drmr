@@ -2,7 +2,7 @@
 use std::io::Write;
 use std::time::Duration;
 
-use super::pipeline::{Phase, Status};
+use super::pipeline::{Phase, Status, renditions::Work};
 use indicatif::{HumanBytes, ProgressBar};
 
 mod dashboard;
@@ -131,6 +131,7 @@ pub(super) struct Display {
     terminal_outputs: [Status; 8],
     terminal_source: Status,
     pipeline_phase: Option<Phase>,
+    source_renditions_printed: bool,
     pipeline_phases_printed: [bool; 4],
     pipeline_outputs_printed: [bool; 8],
 }
@@ -322,21 +323,37 @@ impl Display {
         }
         let changed = self.pipeline_phase != Some(phase);
         self.pipeline_phase = Some(phase);
-        let source_units = view.units.filter(|_| phase == Phase::Source);
+        if changed && phase == Phase::Source {
+            self.source_renditions_printed = false;
+        }
+        let source_units = view
+            .units
+            .filter(|_| pipeline.source_running() && !pipeline.has_source_context());
         let message = pipeline_message(pipeline, source_units, now);
-        let snapshot = source_units.map_or_else(
-            || output_details(pipeline, now, false),
-            |units| unit_details(units, now, false),
-        );
+        let snapshot = if phase == Phase::Source {
+            let details = source_details(pipeline);
+            if details.is_empty() {
+                source_units.map_or_else(String::new, |units| unit_details(units, now, false))
+            } else {
+                details
+            }
+        } else {
+            output_details(pipeline, now, false)
+        };
+        let source_started = pipeline.source_running()
+            && pipeline.source_renditions().is_some_and(Work::has_started);
+        let first_source = !self.source_renditions_printed && source_started;
         let since = now.saturating_sub(self.last_output);
         if changed
+            || first_source
             || (snapshot != self.last_printed && since >= Duration::from_secs(5))
             || since >= Duration::from_secs(15)
         {
             writeln!(out, "  {message}")?;
-            if source_units.is_none() && !snapshot.is_empty() {
+            if phase != Phase::Source && !snapshot.is_empty() {
                 writeln!(out, "{}", output_details(pipeline, now, true))?;
             }
+            self.source_renditions_printed |= source_started;
             self.last_output = now;
             self.last_printed = snapshot;
         }
@@ -394,8 +411,12 @@ fn pipeline_message(
 ) -> String {
     use std::fmt::Write as _;
     let phase = pipeline.phase.expect("pipeline message requires a phase");
+    let source_units =
+        source_units.filter(|_| pipeline.source_running() && !pipeline.has_source_context());
     let mut message = phase.label().to_owned();
-    if let Some(estimate) = pipeline.estimate(now) {
+    let estimate = pipeline.estimate(now);
+    let source = source_details(pipeline);
+    if let Some(estimate) = estimate {
         write!(message, " | ~{}% overall work", estimate.percent).expect("string write");
         if let Some(remaining) = estimate.remaining {
             write!(
@@ -419,16 +440,8 @@ fn pipeline_message(
             .expect("string write");
         }
         write!(message, "elapsed {}", duration(now)).expect("string write");
-        if let Some(media) = pipeline.source_media() {
-            if let Some([done, total]) = media.units {
-                let unit = media.unit.map_or("items", |unit| unit.label());
-                write!(message, "\n  {done}/{total} source {unit} prepared").expect("string write");
-            }
-        } else if let Some(units) = source_units {
-            write!(message, "\n  {}", unit_details(units, now, false)).expect("string write");
-        }
     } else {
-        if let Some(units) = source_units {
+        if let Some(units) = source_units.filter(|_| source.is_empty()) {
             write!(message, " | {}", unit_details(units, now, true)).expect("string write");
         }
         if phase == Phase::Outputs && !pipeline.outputs().is_empty() {
@@ -443,7 +456,35 @@ fn pipeline_message(
         }
         write!(message, " | elapsed {}", duration(now)).expect("string write");
     }
+    if !source.is_empty() {
+        write!(message, "\n  {source}").expect("string write");
+    } else if estimate.is_some()
+        && let Some(units) = source_units
+    {
+        write!(message, "\n  {}", unit_details(units, now, false)).expect("string write");
+    }
     message
+}
+
+fn source_details(pipeline: &super::pipeline::State) -> String {
+    use std::fmt::Write as _;
+    if !pipeline.source_running() {
+        return String::new();
+    }
+    let work = pipeline.source_renditions();
+    let mut details = work.map_or_else(String::new, |work| {
+        format!("{} | {}", work.label(false), work.counts(true))
+    });
+    if let Some(media) = pipeline.source_media()
+        && let Some([done, total]) = media.units
+    {
+        if !details.is_empty() {
+            details.push_str("\n  ");
+        }
+        let unit = media.unit.map_or("items", |unit| unit.label());
+        write!(details, "{done}/{total} source {unit} prepared").expect("string write");
+    }
+    details
 }
 
 fn estimate_duration(value: Duration) -> String {
@@ -479,6 +520,10 @@ fn output_details(pipeline: &super::pipeline::State, now: Duration, estimate: bo
         .expect("string write");
         if pipeline.estimates_enabled() {
             write!(result, " | ~{}% work", output.estimated_percent()).expect("string write");
+        }
+        let work = output.renditions();
+        if let Some(work) = work {
+            write!(result, "\n      {}", work.counts(false)).expect("string write");
         }
         if let Some(media) = output.media().filter(|media| media.active()) {
             use super::pipeline::Task;
@@ -523,7 +568,7 @@ fn output_details(pipeline: &super::pipeline::State, now: Duration, estimate: bo
                 )
                 .expect("string write");
             }
-        } else if let Some(units) = output.units() {
+        } else if let Some(units) = output.units().filter(|_| work.is_none()) {
             write!(result, "\n      {}", unit_details(units, now, estimate)).expect("string write");
         }
     }

@@ -396,12 +396,10 @@ fn qualified_cbcs_audio_converts_but_still_requires_its_original_key() {
         );
         assert!(!proof.license_playback_verified);
         verification(&c, &source, &output, &InputKeys::default());
-        assert!(
-            events
-                .records()
-                .iter()
-                .any(|record| record["event"] == "command")
-        );
+        assert!(events.records().iter().any(|record| {
+            record.get("stage").and_then(serde_json::Value::as_str) == Some("tool")
+                && record.get("event").and_then(serde_json::Value::as_str) == Some("command")
+        }));
         assert_eq!(std::fs::read(&source).unwrap(), before);
     }
     let (c, events) = converter();

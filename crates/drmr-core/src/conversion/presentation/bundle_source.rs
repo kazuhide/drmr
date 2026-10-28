@@ -168,6 +168,7 @@ impl BundlePrepared<'_> {
     ) -> Result<Vec<PathBuf>, ConversionError> {
         self.work.directory_source()?;
         command.run_tracks(self.clears.len(), |index| {
+            let task = progress.and_then(|progress| progress.start(index));
             let receipt = self
                 .receipts
                 .iter()
@@ -177,6 +178,9 @@ impl BundlePrepared<'_> {
             receipt.copy(owner, &path, &command.backend)?;
             if let Some(progress) = progress {
                 progress.completed(index);
+            }
+            if let Some(task) = task {
+                task.finish();
             }
             command.backend.check_cancelled()?;
             Ok(path)

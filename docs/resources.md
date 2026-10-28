@@ -314,8 +314,12 @@ atomically prevent path replacement or impose a hard filesystem I/O deadline.
 Full `analyze`, `plan --save`, `convert` and `verify` accept `--max-workers 1`
 through `64` as an upper bound. Metadata-only analysis refuses this option.
 With no option, independent tracks share the CPU and memory admission described above.
-Snapshots and stream metadata are checked before parallel normalization. Results retain
-presentation order, and a failed track prevents publication. All content checks still run.
+Before normalization, private track snapshots and stream metadata use bounded workers.
+Original-to-intermediate comparisons and metadata checks after DASH capture also use
+track workers. DASH resource capture and presentation-window aggregation remain ordered;
+their shared byte, path and segment limits still apply. Every snapshot and profile is
+checked before normalization begins. Results retain presentation order, and a failed
+track prevents publication. All content checks still run.
 
 Whole-track inputs are streamed: the estimate includes up to a 32 MiB input window,
 not the entire file size. Segment-based pipelines include their largest retained input

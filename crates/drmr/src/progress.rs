@@ -810,7 +810,7 @@ impl Sink for Progress {
                     force = changed;
                 }
             }
-            (Some("media-progress"), Some("progress")) => {
+            (Some("media-progress" | "rendition-progress"), Some("progress")) => {
                 if !nested {
                     return;
                 }

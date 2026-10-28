@@ -304,31 +304,41 @@ impl Work {
 #[derive(Clone, Copy, Default)]
 pub(super) struct Source {
     preparation: Tracker,
+    observed: Tracker,
 }
 impl Source {
     pub(super) fn observe(&mut self, record: &Record, now: Duration) -> bool {
         let Some(media) = Media::parse(record) else {
             return false;
         };
-        if (media.task, media.subject, media.purpose)
-            != (
-                Task::Preparation,
-                Some(Subject::Source),
-                Some(Purpose::Conversion),
+        if media.task != Task::Preparation
+            || media.subject != Some(Subject::Source)
+            || !matches!(
+                media.purpose,
+                Some(Purpose::Conversion | Purpose::Admission)
             )
         {
             return false;
         }
-        self.preparation.observe(media, now)
+        let mut observed = self.observed;
+        if !observed.observe(media, now) {
+            return false;
+        }
+        // The plan already includes admission; only conversion preparation calibrates modeled work.
+        if media.purpose == Some(Purpose::Conversion) && !self.preparation.observe(media, now) {
+            return false;
+        }
+        self.observed = observed;
+        true
     }
     pub(super) fn media(self) -> Option<Media> {
-        self.preparation.media
+        self.observed.media
     }
     pub(super) fn fraction(self) -> u32 {
         self.preparation.media.map_or(0, Media::fraction)
     }
     pub(super) fn aborted(self) -> bool {
-        self.preparation.aborted
+        self.observed.aborted
     }
     pub(super) fn observations(self) -> u64 {
         self.preparation.observations

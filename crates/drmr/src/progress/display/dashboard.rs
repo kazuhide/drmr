@@ -1,6 +1,6 @@
 //! One complete terminal frame, containing current state rather than an event history.
 use super::{Units, View, duration, estimate_duration, remaining, size};
-use crate::progress::pipeline::{Phase, Status};
+use crate::progress::pipeline::{Phase, State, Status};
 use std::time::Duration;
 
 const LABEL_WIDTH: usize = 12;
@@ -99,9 +99,12 @@ fn output_row(
             .format
             .map_or("Output", crate::progress::pipeline::Format::label)
     );
-    let units = output.units();
+    let work = output.renditions();
+    let units = output.units().filter(|_| work.is_none());
     let label_text = step_label(units, output.progress_label());
-    let mut value = if estimates && output.lifetime.status != Status::Aborted {
+    let mut value = if let Some(work) = work {
+        rendition_value(work, label_text, columns)
+    } else if estimates && output.lifetime.status != Status::Aborted {
         format!(
             "{} {}",
             bar(output.estimated_percent(), true, columns),
@@ -121,9 +124,10 @@ fn output_row(
         }
         if let Some(media) = output.media().filter(|media| media.active()) {
             let counter = if let Some([done, total]) = media.units {
+                // Comparison progress counts tracks without an explicit unit field.
                 format!(
                     "{done}/{total} {}",
-                    media.unit.map_or("items", |unit| unit.label())
+                    media.unit.map_or("tracks", |unit| unit.label())
                 )
             } else if let Some([done, total]) = media.bytes {
                 format!("{}/{}", size(done), size(total))
@@ -133,6 +137,14 @@ fn output_row(
             append(&mut value, &counter, budget);
         } else if let Some(units) = units {
             append_units(&mut value, units, now, budget);
+        }
+    }
+    if work.is_some() && estimates {
+        let percent = output.estimated_percent();
+        let before = value.len();
+        append(&mut value, &bar(percent, true, columns), budget);
+        if before == value.len() {
+            append(&mut value, &format!("~{percent}%"), budget);
         }
     }
     row(&label, &value, columns)
@@ -158,29 +170,35 @@ fn task(command: &str, view: &View<'_>, now: Duration, columns: usize) -> String
 }
 
 fn source(view: &View<'_>, now: Duration, columns: usize) -> String {
+    let work = view.pipeline.and_then(State::source_renditions);
+    let context = view.pipeline.is_some_and(State::has_source_context);
     let status = view
         .pipeline
         .map(|pipeline| pipeline.lifetime(Phase::Source).status);
-    let mut value = match status {
-        Some(Status::Finished) => "Ready".to_owned(),
-        Some(Status::Aborted) => "Stopped".to_owned(),
-        Some(Status::Running) => "Checking".to_owned(),
-        _ if view.activity == "configuration" => "Waiting".to_owned(),
-        _ if view.activity == "acquisition" => {
-            let mut text = "Downloading".to_owned();
-            if let Some(units) = view
-                .units
-                .filter(|units| units.total > 0 && !units.checking)
-            {
-                let percent =
-                    u32::try_from(u128::from(units.completed) * 100 / u128::from(units.total))
-                        .unwrap_or(100)
-                        .min(100);
-                text = format!("{} Downloading", bar(percent, false, columns));
+    let mut value = if let Some(work) = work {
+        rendition_value(work, work.label(false), columns)
+    } else {
+        match status {
+            Some(Status::Finished) => "Ready".to_owned(),
+            Some(Status::Aborted) => "Stopped".to_owned(),
+            Some(Status::Running) => "Checking".to_owned(),
+            _ if view.activity == "configuration" => "Waiting".to_owned(),
+            _ if view.activity == "acquisition" => {
+                let mut text = "Downloading".to_owned();
+                if let Some(units) = view
+                    .units
+                    .filter(|units| units.total > 0 && !units.checking)
+                {
+                    let percent =
+                        u32::try_from(u128::from(units.completed) * 100 / u128::from(units.total))
+                            .unwrap_or(100)
+                            .min(100);
+                    text = format!("{} Downloading", bar(percent, false, columns));
+                }
+                text
             }
-            text
+            _ => "Checking".to_owned(),
         }
-        _ => "Checking".to_owned(),
     };
     let budget = columns.saturating_sub(LABEL_WIDTH + 1);
     if view.activity == "acquisition"
@@ -225,11 +243,29 @@ fn source(view: &View<'_>, now: Duration, columns: usize) -> String {
                 ),
                 budget,
             );
-        } else if let Some(units) = view.units.filter(|_| view.activity != "acquisition") {
+        } else if let Some(units) = view.units.filter(|_| {
+            !context
+                && view.pipeline.is_none_or(State::source_running)
+                && view.activity != "acquisition"
+        }) {
             value = step_label(Some(units), &value).to_owned();
             append_units(&mut value, units, now, budget);
         }
     }
+    value
+}
+
+fn rendition_value(
+    work: crate::progress::pipeline::renditions::Work,
+    label: &str,
+    columns: usize,
+) -> String {
+    if columns < 60 {
+        return format!("{} {}", work.compact_label(), work.counts(true));
+    }
+    let budget = columns.saturating_sub(LABEL_WIDTH + 1);
+    let mut value = label.to_owned();
+    append(&mut value, &work.counts(columns < 100), budget);
     value
 }
 

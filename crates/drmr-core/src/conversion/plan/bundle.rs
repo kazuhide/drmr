@@ -276,7 +276,11 @@ impl Converter {
                     .map(|output| output.processing.unwrap_or(self.processing_mode)),
             ));
         let source = super::rebound(request.input, &frozen);
-        let qualified = command.validate_source(source, SourceValidationPurpose::Conversion)?;
+        let qualified = command.validate_source_preparing(
+            source,
+            SourceValidationPurpose::Conversion,
+            crate::conversion::media_progress::Subject::Source,
+        )?;
         self.register_bundle_tracks(qualified.track_protection.len());
         let processing = outputs
             .iter()
@@ -512,7 +516,11 @@ impl Converter {
             HlsTargetPolicy::Legacy
         };
         command.source_hls_target_ms = None;
-        let qualified = command.validate_source(source, SourceValidationPurpose::Conversion)?;
+        let qualified = command.validate_source_preparing(
+            source,
+            SourceValidationPurpose::Conversion,
+            crate::conversion::media_progress::Subject::Source,
+        )?;
         self.register_bundle_tracks(qualified.track_protection.len());
         if qualified.actual_format != plan.source_format
             || plan
@@ -1133,5 +1141,7 @@ pub(super) fn write_new(path: &Path, plan: &BundlePlan) -> Result<(), Conversion
 
 #[cfg(test)]
 mod options_tests;
+#[cfg(test)]
+mod source_progress_tests;
 #[cfg(test)]
 mod tests;

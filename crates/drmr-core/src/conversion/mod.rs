@@ -153,6 +153,8 @@ impl Converter {
                 measurement: None,
                 activity: None,
                 preparation: None,
+                #[cfg(test)]
+                scheduling_hardware: None,
             },
         }
     }

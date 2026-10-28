@@ -162,16 +162,64 @@ fn preparation_counts_and_current_task_eta_are_separate_from_an_unknown_global_e
     }
     for (state, done, second) in [("started", 0, 10), ("running", 1, 12), ("running", 2, 14)] {
         assert!(pipeline.observe_nested(&record(serde_json::json!({"stage":"media-progress","event":"progress","task":"preparation","subject":"output","purpose":"conversion","unit":"tracks","state":state,"batch_id":1,"completed_units":done,"total_units":4,"estimated":false,"output_index":0,"output_total":1,"output_format":"dash","url":"private-sentinel"})),Duration::from_secs(second)));
+        assert!(pipeline.observe_nested(
+            &record(serde_json::json!({
+                "stage":"rendition-progress", "event":"progress", "operation":"preparation",
+                "subject":"output", "purpose":"conversion", "unit":"tracks", "state":state,
+                "batch_id":2, "total_units":4, "started_units":done * 2,
+                "active_units":done, "waiting_units":4 - done * 2,
+                "completed_units":done, "stopped_units":0,
+                "output_index":0, "output_total":1, "output_format":"dash",
+                "url":"private-sentinel"
+            })),
+            Duration::from_secs(second)
+        ));
     }
     let header = pipeline_message(&pipeline, None, Duration::from_secs(14));
     let detail = output_details(&pipeline, Duration::from_secs(14), true);
     assert!(header.contains("estimating remaining time"), "{header}");
     assert!(
-        detail.contains("Preparing output tracks") && detail.contains("2/4 tracks prepared"),
+        detail.contains("Copying prepared tracks")
+            && detail.contains("2 active, 0 waiting, 2/4 done")
+            && detail.contains("2/4 tracks prepared"),
         "{detail}"
     );
     assert!(detail.contains("~4s for current task (est.)"), "{detail}");
     assert!(!detail.contains("MiB") && !detail.contains("private-sentinel"));
+    for columns in [40, 80, 120, 300] {
+        let frame = dashboard::frame(
+            "convert",
+            &View {
+                activity: "input-preparation",
+                task: "",
+                downloads: None,
+                units: None,
+                pipeline: Some(&pipeline),
+            },
+            Duration::from_secs(14),
+            columns,
+        );
+        assert_eq!(frame.lines().count(), 4, "{frame}");
+        assert!(
+            frame.lines().all(|line| line.len() <= columns.min(120)),
+            "{frame}"
+        );
+        let row = frame
+            .lines()
+            .find(|line| line.starts_with("1 DASH"))
+            .unwrap();
+        assert!(
+            row.contains("2 active") && row.contains("0 wait"),
+            "{frame}"
+        );
+        if columns >= 120 {
+            assert!(
+                row.contains("2/4 tracks") && row.contains("step ~4s"),
+                "{frame}"
+            );
+        }
+        assert!(!frame.contains("private-sentinel"), "{frame}");
+    }
     for line in header.lines().chain(detail.lines()) {
         assert!(line.chars().count() <= 78, "{line}");
     }
@@ -716,3 +764,139 @@ fn dashboard_output_preparation_keeps_step_estimates_and_boundary_status() {
         }
     }
 }
+
+#[test]
+fn dashboard_shows_task_concurrency_without_adding_rows_or_equating_it_with_cpus() {
+    let mut state = State::default();
+    assert!(state.observe(
+        &record(serde_json::json!({"scope":"source","state":"started"})),
+        Duration::ZERO
+    ));
+    for (status, started, active, done) in [("started", 0, 0, 0), ("running", 3, 2, 1)] {
+        assert!(state.observe_nested(
+            &record(serde_json::json!({
+                "stage":"rendition-progress","event":"progress","batch_id":20,
+                "state":status,"operation":"snapshot","subject":"source",
+                "purpose":"conversion","unit":"tracks","total_units":7,
+                "started_units":started,"active_units":active,"waiting_units":7-started,
+                "completed_units":done,"stopped_units":0,"url":"private-sentinel",
+            })),
+            Duration::from_secs(1)
+        ));
+    }
+    let view = View {
+        activity: "input-preparation",
+        task: "",
+        downloads: None,
+        units: None,
+        pipeline: Some(&state),
+    };
+    for columns in [40, 80, 120, 300] {
+        let frame = dashboard::frame("convert", &view, Duration::from_secs(1), columns);
+        assert_eq!(frame.lines().count(), 3, "{frame}");
+        assert!(
+            frame
+                .lines()
+                .all(|line| !line.trim().is_empty() && line.len() <= columns.min(120))
+        );
+        assert!(
+            frame.contains("2 active") && frame.contains("4 wait"),
+            "{frame}"
+        );
+        assert!(frame.contains("1/7"), "{frame}");
+        assert!(!frame.contains("CPU") && !frame.contains("private-sentinel"));
+    }
+}
+
+#[test]
+fn rendition_comparison_keeps_current_media_counts_and_task_eta() {
+    for tracks in [false, true] {
+        let mut pipeline = started();
+        assert!(pipeline.observe_nested(
+            &record(serde_json::json!({
+                "stage":"media-progress", "event":"progress", "task":"packaging",
+                "state":"finished", "batch_id":1, "completed_bytes":857_447_176_u64,
+                "total_bytes":857_447_176_u64, "estimated":true,
+                "output_index":0, "output_total":2, "output_format":"dash"
+            })),
+            Duration::from_secs(15)
+        ));
+        for (state, done, second) in [("started", 0, 16), ("running", 1, 18), ("running", 2, 20)] {
+            let mut media = serde_json::json!({
+                "stage":"media-progress", "event":"progress", "task":"comparison",
+                "state":state, "batch_id":2, "completed_bytes":done * 1024,
+                "total_bytes":4096, "estimated":false,
+                "output_index":0, "output_total":2, "output_format":"dash",
+                "url":"private-sentinel"
+            });
+            if tracks {
+                media["completed_units"] = done.into();
+                media["total_units"] = 4.into();
+            }
+            assert!(pipeline.observe_nested(&record(media), Duration::from_secs(second)));
+            assert!(pipeline.observe_nested(
+                &record(serde_json::json!({
+                    "stage":"rendition-progress", "event":"progress", "operation":"comparison",
+                    "subject":"result", "purpose":"verification", "unit":"tracks", "state":state,
+                    "batch_id":3, "total_units":4, "started_units":done * 2,
+                    "active_units":done, "waiting_units":4 - done * 2,
+                    "completed_units":done, "stopped_units":0,
+                    "output_index":0, "output_total":2, "output_format":"dash"
+                })),
+                Duration::from_secs(second)
+            ));
+        }
+        let now = Duration::from_secs(20);
+        let detail = output_details(&pipeline, now, true);
+        assert!(detail.contains("2 active, 0 waiting, 2/4 done"), "{detail}");
+        assert!(detail.contains("~4s for current task (est.)"), "{detail}");
+        let plain_count = if tracks {
+            "2/4 tracks compared"
+        } else {
+            "2.00 KiB / 4.00 KiB comparison work"
+        };
+        assert!(detail.contains(plain_count), "{detail}");
+        assert!(
+            !detail.contains("generated") && !detail.contains("private-sentinel"),
+            "{detail}"
+        );
+        for columns in [40, 80, 120, 300] {
+            let frame = dashboard::frame(
+                "convert",
+                &View {
+                    activity: "verification",
+                    task: "",
+                    downloads: None,
+                    units: None,
+                    pipeline: Some(&pipeline),
+                },
+                now,
+                columns,
+            );
+            assert_eq!(frame.lines().count(), 5, "{frame}");
+            assert!(
+                frame.lines().all(|line| line.len() <= columns.min(120)),
+                "{frame}"
+            );
+            let row = frame
+                .lines()
+                .find(|line| line.starts_with("1 DASH"))
+                .unwrap();
+            assert!(
+                row.contains("2 active") && row.contains("0 wait"),
+                "{frame}"
+            );
+            if columns >= 120 {
+                let count = if tracks {
+                    "2/4 tracks"
+                } else {
+                    "2.00 KiB/4.00 KiB"
+                };
+                assert!(row.contains(count) && row.contains("step ~4s"), "{frame}");
+            }
+            assert!(!frame.contains("private-sentinel"), "{frame}");
+        }
+    }
+}
+
+mod source_visibility;
