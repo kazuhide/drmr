@@ -275,19 +275,18 @@ impl Progress {
             return;
         }
         state.source_retained = true;
-        if matches!(self.inner.mode, Mode::Text) && !state.output_failed {
+        if matches!(self.inner.mode, Mode::Text)
+            && self.inner.terminal.is_none()
+            && !state.output_failed
+        {
             let mut out = self
                 .inner
                 .out
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if display::notice(
-                &mut *out,
-                self.inner.terminal.as_ref(),
-                "Downloaded source retained for offline use.",
-            )
-            .and_then(|()| out.flush())
-            .is_err()
+            if display::notice(&mut *out, "Downloaded source retained for offline use.")
+                .and_then(|()| out.flush())
+                .is_err()
             {
                 state.output_failed = true;
             }
@@ -304,6 +303,26 @@ impl Progress {
 
     pub(crate) fn structured(&self) -> bool {
         matches!(self.inner.mode, Mode::Json)
+    }
+
+    pub(crate) fn server_handoff(&self) {
+        // Startup diagnostics and ongoing request logs own the terminal afterward.
+        if self.inner.terminal.is_some() {
+            self.begin_result();
+        }
+    }
+
+    pub(crate) fn server_address(&self, address: std::net::SocketAddr) {
+        if self.structured() {
+            return;
+        }
+        let message = format!(" * Running on http://{address}");
+        let mut out = self
+            .inner
+            .out
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _ = writeln!(out, "{message}").and_then(|()| out.flush());
     }
 
     /// Drain live drawing before a result changes the terminal cursor.

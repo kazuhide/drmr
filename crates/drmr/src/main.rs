@@ -136,15 +136,14 @@ fn main() -> ExitCode {
 fn serve(args: &ServeArgs) -> ExitCode {
     let progress = progress::Progress::new(true);
     progress.mark("server-startup");
+    progress.server_handoff();
     let code = drmr_server::run_server_with_ready(
         args,
         JobCli::this_executable(),
         "drmr serve",
         |address| {
             progress.mark("serving");
-            if !progress.structured() {
-                eprintln!(" * Running on http://{address}");
-            }
+            progress.server_address(address);
         },
     );
     if code == ExitCode::SUCCESS {

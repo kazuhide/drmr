@@ -1,20 +1,20 @@
 use super::*;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum Step {
+pub(super) enum Step {
     Write(String),
     Clear,
     Move(usize),
 }
 
 #[derive(Clone, Debug, Default)]
-struct Terminal(Arc<Mutex<Vec<Step>>>);
+pub(super) struct Terminal(Arc<Mutex<Vec<Step>>>);
 impl Terminal {
     fn note(&self, step: Step) {
         self.0.lock().unwrap().push(step);
     }
 
-    fn snapshot(&self) -> Vec<Step> {
+    pub(super) fn snapshot(&self) -> Vec<Step> {
         self.0.lock().unwrap().clone()
     }
 }
@@ -130,4 +130,78 @@ fn result_handoff_drains_drawing_without_success_and_never_erases_the_result() {
             assert!(written.find("Command result").unwrap() < written.find("Finished").unwrap());
         }
     }
+}
+
+#[test]
+fn dashboard_retained_source_notice_does_not_append_a_second_log_stream() {
+    let terminal = Terminal::default();
+    let bar = ProgressBar::with_draw_target(
+        None,
+        ProgressDrawTarget::term_like(Box::new(terminal.clone())),
+    );
+    bar.set_style(ProgressStyle::with_template("{msg}").unwrap());
+    let progress = Progress::with_terminal(
+        Mode::Text,
+        "convert",
+        Box::new(terminal.clone()),
+        Duration::from_mins(1),
+        Some(bar),
+    );
+    progress.mark("acquisition");
+    progress.source_retained();
+    let text: String = terminal
+        .snapshot()
+        .into_iter()
+        .filter_map(|step| match step {
+            Step::Write(s) => Some(s),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        !text.contains("Downloaded source retained for offline use."),
+        "{text}"
+    );
+}
+
+#[test]
+fn server_handoff_keeps_address_and_access_logs_without_redrawing() {
+    let terminal = Terminal::default();
+    let bar = ProgressBar::with_draw_target(
+        None,
+        ProgressDrawTarget::term_like(Box::new(terminal.clone())),
+    );
+    bar.set_style(ProgressStyle::with_template("{msg}").unwrap());
+    let progress = Progress::with_terminal(
+        Mode::Text,
+        "serve",
+        Box::new(terminal.clone()),
+        Duration::from_mins(1),
+        Some(bar.clone()),
+    );
+    progress.mark("server-startup");
+    progress.server_handoff();
+    progress.mark("serving");
+    progress.server_address("127.0.0.1:3030".parse().unwrap());
+    writeln!(terminal.clone(), "Access log remains readable.").unwrap();
+    let log_end = terminal.snapshot().len();
+    {
+        let mut state = progress.inner.state.lock().unwrap();
+        progress.inner.line(&mut state, "heartbeat", None, true);
+    }
+    bar.force_draw();
+    assert_eq!(terminal.snapshot().len(), log_end);
+    let text: String = terminal
+        .snapshot()
+        .into_iter()
+        .filter_map(|step| match step {
+            Step::Write(s) => Some(s),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        text.matches(" * Running on http://127.0.0.1:3030").count(),
+        1,
+        "{text}"
+    );
+    assert!(text.contains("Access log remains readable."));
 }

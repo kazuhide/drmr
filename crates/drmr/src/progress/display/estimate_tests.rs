@@ -194,6 +194,15 @@ fn finished_packaging_does_not_leave_a_stale_generated_size_tally() {
 
 #[test]
 fn terminal_coalesces_bursts_until_the_next_readable_snapshot() {
+    fn wide_view(pipeline: &State) -> View<'_> {
+        View {
+            activity: "packaging",
+            task: "",
+            downloads: None,
+            units: None,
+            pipeline: Some(pipeline),
+        }
+    }
     let mut pipeline = started();
     let mut display = Display::default();
     let bar = ProgressBar::hidden();
@@ -219,7 +228,9 @@ fn terminal_coalesces_bursts_until_the_next_readable_snapshot() {
     let began = Duration::from_secs(15);
     render(&mut display, &pipeline, began);
     let first = bar.message();
-    assert!(first.contains("381.47 MiB"), "{first}");
+    assert!(first.contains("~9%"), "{first}");
+
+    assert!(dashboard::frame("convert", &wide_view(&pipeline), began, 120).contains("381.47 MiB"));
     for tick in 1..1000 {
         let now = began + Duration::from_millis(tick);
         assert!(pipeline.observe_nested(
@@ -236,7 +247,21 @@ fn terminal_coalesces_bursts_until_the_next_readable_snapshot() {
     }
     render(&mut display, &pipeline, began + Duration::from_secs(1));
     assert_ne!(bar.message(), first);
-    assert!(bar.message().contains("762.56 MiB"), "{}", bar.message());
+    assert!(
+        bar.message()
+            .contains(&format!("~{}%", pipeline.outputs()[0].estimated_percent())),
+        "{}",
+        bar.message()
+    );
+    assert!(
+        dashboard::frame(
+            "convert",
+            &wide_view(&pipeline),
+            began + Duration::from_secs(1),
+            120
+        )
+        .contains("762.56 MiB")
+    );
     // Ending a task may not momentarily expose the fallback label or shrink its rows.
     let latest = bar.message();
     assert!(pipeline.observe_nested(
@@ -317,7 +342,7 @@ fn terminal_download_bursts_keep_latest_counters_for_the_next_snapshot() {
 }
 
 #[test]
-fn terminal_eight_outputs_keep_two_rows_each_when_task_estimates_change() {
+fn dashboard_eight_outputs_keep_one_row_each_when_task_estimates_change() {
     let mut pipeline = State::default();
     for value in [
         serde_json::json!({"scope":"source","state":"started"}),
@@ -346,13 +371,28 @@ fn terminal_eight_outputs_keep_two_rows_each_when_task_estimates_change() {
                 "output_index":index, "output_total":8, "output_format":"dash"
             })), now));
         }
-        let detail = output_details(&pipeline, now, true);
-        assert_eq!(detail.lines().count(), 16, "{detail}");
-        assert!(
-            pipeline_message(&pipeline, None, now).lines().count() + detail.lines().count() <= 24
-        );
-        for line in detail.lines() {
-            assert!(line.chars().count() <= 78, "{line}");
+        let view = View {
+            activity: "packaging",
+            task: "",
+            downloads: None,
+            units: None,
+            pipeline: Some(&pipeline),
+        };
+        for columns in [40, 78, 120, 300] {
+            let frame = dashboard::frame("convert", &view, now, columns);
+            assert_eq!(frame.lines().count(), 11, "{frame}");
+            for (index, line) in frame.lines().enumerate() {
+                assert!(
+                    !line.trim().is_empty() && line.chars().count() <= columns.min(120),
+                    "{line}"
+                );
+                if index >= 3 {
+                    assert!(
+                        line.starts_with(&format!("{} DASH fMP4", index - 2)),
+                        "{line}"
+                    );
+                }
+            }
         }
     }
 }
@@ -394,5 +434,285 @@ fn terminal_outcomes_bypass_the_readable_snapshot_interval() {
             event == "finished",
             "{text}"
         );
+    }
+}
+
+#[test]
+fn dashboard_has_one_nonempty_row_per_output_and_no_orphan_stage_history() {
+    use crate::progress::result_tests::{Step, Terminal};
+    let pipeline = started();
+    let mut display = Display::default();
+    let terminal = Terminal::default();
+    let bar = ProgressBar::with_draw_target(
+        None,
+        indicatif::ProgressDrawTarget::term_like(Box::new(terminal.clone())),
+    );
+    bar.set_style(indicatif::ProgressStyle::with_template("{msg}").unwrap());
+    display
+        .render(
+            &mut Vec::new(),
+            Some(&bar),
+            "convert",
+            &View {
+                activity: "packaging",
+                task: "",
+                downloads: None,
+                units: None,
+                pipeline: Some(&pipeline),
+            },
+            Duration::from_secs(15),
+            None,
+        )
+        .unwrap();
+    let message = bar.message();
+    assert!(
+        message.lines().all(|line| !line.trim().is_empty()),
+        "blank rows: {message:?}"
+    );
+    assert!(message.starts_with("drmr convert"), "{message}");
+    assert_eq!(message.lines().count(), 5, "{message}");
+    for format in ["DASH fMP4", "HLS fMP4"] {
+        assert_eq!(
+            message.lines().filter(|line| line.contains(format)).count(),
+            1,
+            "{message}"
+        );
+    }
+    let writes: String = terminal
+        .snapshot()
+        .into_iter()
+        .filter_map(|step| match step {
+            Step::Write(s) => Some(s),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        !writes.contains("Source checked"),
+        "orphan history: {writes}"
+    );
+}
+
+#[test]
+fn dashboard_keeps_a_checked_output_in_its_original_row() {
+    let mut pipeline = started();
+    let mut display = Display::default();
+    let bar = ProgressBar::hidden();
+    let render = |display: &mut Display, pipeline: &State, now| {
+        display
+            .render(
+                &mut Vec::new(),
+                Some(&bar),
+                "convert",
+                &View {
+                    activity: "packaging",
+                    task: "",
+                    downloads: None,
+                    units: None,
+                    pipeline: Some(pipeline),
+                },
+                now,
+                None,
+            )
+            .unwrap();
+    };
+    render(&mut display, &pipeline, Duration::from_secs(15));
+    let first = bar.message();
+    let row = first
+        .lines()
+        .position(|line| line.contains("DASH fMP4"))
+        .unwrap();
+    assert!(pipeline.observe(&record(serde_json::json!({"scope":"output","state":"finished","output_index":0,"output_total":2,"output_format":"dash"})),Duration::from_millis(15_001)));
+    render(&mut display, &pipeline, Duration::from_millis(15_001));
+    let latest = bar.message();
+    let line = latest.lines().nth(row).unwrap();
+    assert!(
+        line.contains("DASH fMP4") && line.contains("Checked"),
+        "{latest}"
+    );
+    assert_eq!(latest.lines().count(), first.lines().count(), "{latest}");
+}
+
+#[test]
+fn dashboard_downloads_and_source_ready_are_different_states_at_narrow_widths() {
+    let pipeline = started();
+    let downloads = Some([708, 708, 857_447_176]);
+    for columns in [1, 2, 3, 20, 40, 78, 120, 300] {
+        for active in [false, true] {
+            let view = View {
+                activity: if active { "acquisition" } else { "packaging" },
+                task: "",
+                downloads,
+                units: None,
+                pipeline: (!active).then_some(&pipeline),
+            };
+            let frame = dashboard::frame("convert", &view, Duration::MAX, columns);
+            for line in frame.lines() {
+                assert!(
+                    line.chars().count() <= columns.min(120),
+                    "{columns}: {line}"
+                );
+            }
+            if columns >= 40 {
+                assert_eq!(frame.matches("Source").count(), 1, "{frame}");
+                assert_eq!(frame.matches("Overall").count(), 1, "{frame}");
+                assert_eq!(frame.contains("Ready"), !active, "{frame}");
+                assert_eq!(frame.contains("Waiting for source"), active, "{frame}");
+            }
+        }
+    }
+}
+
+#[test]
+fn dashboard_unknown_transfer_sizes_do_not_invent_a_percentage_or_file_total() {
+    let view = View {
+        activity: "acquisition",
+        task: "",
+        downloads: Some([1, 0, 1234]),
+        units: None,
+        pipeline: None,
+    };
+    let frame = dashboard::frame("convert", &view, Duration::from_secs(1), 78);
+    assert!(frame.contains("1.21 KiB"), "{frame}");
+    assert!(
+        !frame.contains('%') && !frame.contains("0 files") && !frame.contains("ETA"),
+        "{frame}"
+    );
+}
+
+#[test]
+fn dashboard_global_saved_requires_publication_after_checked_outputs() {
+    let mut pipeline = started();
+    for (index, format) in [(0, "dash"), (1, "hls")] {
+        assert!(pipeline.observe(&record(serde_json::json!({"scope":"output","state":"finished","output_index":index,"output_total":2,"output_format":format})),Duration::from_secs(16)));
+    }
+    let frame = dashboard::frame(
+        "convert",
+        &View {
+            activity: "packaging",
+            task: "",
+            downloads: None,
+            units: None,
+            pipeline: Some(&pipeline),
+        },
+        Duration::from_secs(16),
+        78,
+    );
+    let overall = frame
+        .lines()
+        .find(|line| line.starts_with("Overall"))
+        .unwrap();
+    assert!(
+        !overall.contains("100%") && !overall.contains("Saved"),
+        "{frame}"
+    );
+    for (scope, state) in [
+        ("outputs", "finished"),
+        ("final-check", "started"),
+        ("final-check", "finished"),
+        ("publication", "started"),
+        ("publication", "finished"),
+    ] {
+        assert!(pipeline.observe(
+            &record(serde_json::json!({"scope":scope,"state":state,"output_total":2})),
+            Duration::from_secs(17)
+        ));
+    }
+    let frame = dashboard::frame(
+        "convert",
+        &View {
+            activity: "publication",
+            task: "",
+            downloads: None,
+            units: None,
+            pipeline: Some(&pipeline),
+        },
+        Duration::from_secs(17),
+        78,
+    );
+    let overall = frame
+        .lines()
+        .find(|line| line.starts_with("Overall"))
+        .unwrap();
+    assert!(
+        overall.contains("100%") && overall.contains("Saved"),
+        "{frame}"
+    );
+}
+
+#[test]
+fn dashboard_known_preparation_keeps_current_step_progress_without_an_overall_estimate() {
+    for command in ["analyze", "plan", "convert"] {
+        let view = View {
+            activity: "input-preparation",
+            task: "Preparing media",
+            downloads: None,
+            units: Some(Units {
+                completed: 2,
+                total: 10,
+                initial: 0,
+                began: Duration::ZERO,
+                segments: true,
+                checking: false,
+            }),
+            pipeline: None,
+        };
+        let frame = dashboard::frame(command, &view, Duration::from_secs(2), 120);
+        assert!(frame.contains("2/10 segments"), "{frame}");
+        assert!(frame.contains("20%"), "{frame}");
+        assert!(frame.contains("step ~8s"), "{frame}");
+        assert!(!frame.contains("ETA"), "{frame}");
+        let mut checking = view;
+        checking.units.as_mut().unwrap().completed = 10;
+        checking.units.as_mut().unwrap().checking = true;
+        let frame = dashboard::frame(command, &checking, Duration::from_secs(3), 120);
+        assert!(frame.contains("Checking boundaries"), "{frame}");
+        assert!(!frame.contains('%') && !frame.contains("step ~"), "{frame}");
+    }
+}
+
+#[test]
+fn dashboard_output_preparation_keeps_step_estimates_and_boundary_status() {
+    let mut pipeline = State::default();
+    for value in [
+        serde_json::json!({"scope":"source","state":"started"}),
+        serde_json::json!({"scope":"source","state":"finished"}),
+        serde_json::json!({"scope":"outputs","state":"started"}),
+        serde_json::json!({"scope":"output","state":"started","output_index":0,"output_total":1,"output_format":"hls"}),
+    ] {
+        assert!(pipeline.observe(&record(value), Duration::ZERO));
+    }
+    for (state, completed, second) in [("started", 0, 0), ("running", 2, 2), ("running", 10, 3)] {
+        assert!(pipeline.observe_nested(&record(serde_json::json!({"stage":"analysis","event":"progress","task":"ts-preparation","state":state,"completed":completed,"total":10,"output_index":0,"output_total":1,"output_format":"hls"})),Duration::from_secs(second)));
+        let frame = dashboard::frame(
+            "convert",
+            &View {
+                activity: "input-preparation",
+                task: "",
+                downloads: None,
+                units: None,
+                pipeline: Some(&pipeline),
+            },
+            Duration::from_secs(second),
+            120,
+        );
+        let output = frame
+            .lines()
+            .find(|line| line.starts_with("1 HLS"))
+            .unwrap();
+        match completed {
+            0 => assert!(!output.contains("step ~"), "{frame}"),
+            2 => assert!(
+                output.contains("20%")
+                    && output.contains("step ~8s")
+                    && output.contains("2/10 segments"),
+                "{frame}"
+            ),
+            _ => assert!(
+                output.contains("Checking boundaries")
+                    && !output.contains('%')
+                    && !output.contains("step ~"),
+                "{frame}"
+            ),
+        }
     }
 }
