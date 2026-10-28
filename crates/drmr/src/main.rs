@@ -142,9 +142,7 @@ fn serve(args: &ServeArgs) -> ExitCode {
         "drmr serve",
         |address| {
             progress.mark("serving");
-            if !progress.structured() {
-                eprintln!(" * Running on http://{address}");
-            }
+            progress.server_address(address);
         },
     );
     if code == ExitCode::SUCCESS {

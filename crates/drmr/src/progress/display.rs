@@ -5,6 +5,8 @@ use std::time::Duration;
 use super::pipeline::{Phase, Status};
 use indicatif::{HumanBytes, ProgressBar};
 
+mod dashboard;
+
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Units {
     pub completed: u64,
@@ -125,6 +127,9 @@ pub(super) struct Display {
     last_details: String,
     last_printed: String,
     last_paint: Option<Duration>,
+    terminal_active: bool,
+    terminal_outputs: [Status; 8],
+    terminal_source: Status,
     pipeline_phase: Option<Phase>,
     pipeline_phases_printed: [bool; 4],
     pipeline_outputs_printed: [bool; 8],
@@ -153,8 +158,11 @@ impl Display {
         now: Duration,
         outcome: Option<(&str, Option<&str>)>,
     ) -> std::io::Result<()> {
+        if terminal.is_some() || self.terminal_active {
+            return self.render_dashboard(out, terminal, command, view, now, outcome);
+        }
         if view.pipeline.is_some() {
-            return self.render_pipeline(out, terminal, command, view, now, outcome);
+            return self.render_pipeline(out, command, view, now, outcome);
         }
         let label = view.label(command);
         let changed = self.label != Some(label);
@@ -178,16 +186,12 @@ impl Display {
                         format!("  {details}")
                     }
                 );
-                line(out, terminal, &summary)?;
+                writeln!(out, "{summary}")?;
             }
             self.label = Some(label);
             self.began = now;
         }
         if let Some((event, error)) = outcome {
-            if let Some(bar) = terminal {
-                bar.disable_steady_tick();
-                bar.finish_and_clear();
-            }
             let status = match event {
                 "finished" => "Finished",
                 "cancelled" => "Cancelled",
@@ -201,11 +205,6 @@ impl Display {
             );
         }
         self.last_details = latest_details;
-        // Observer events stay frequent; only the human snapshot is coalesced.
-        // Indicatif's draw-target rate limit alone permits a burst of redraws.
-        if terminal.is_some() && !self.paint_due(now, changed) {
-            return Ok(());
-        }
         let details = view.details(now, true);
         let message = format!(
             "{label}{} | elapsed {}",
@@ -216,24 +215,77 @@ impl Display {
             },
             duration(now)
         );
-        if let Some(bar) = terminal {
-            bar.set_message(message);
-        } else {
-            let since = now.saturating_sub(self.last_output);
-            // Tool starts and scope closures never override the human log cadence.
-            let useful = self.last_printed != self.last_details;
-            let complete = view.units.is_some_and(|units| {
-                units.total > 0 && units.completed == units.total && !units.checking
-            });
-            if changed
-                || (useful && complete)
-                || (useful && since >= Duration::from_secs(5))
-                || since >= Duration::from_secs(15)
-            {
-                writeln!(out, "  {message}")?;
-                self.last_output = now;
-                self.last_printed.clone_from(&self.last_details);
+        let since = now.saturating_sub(self.last_output);
+        // Tool starts and scope closures never override the human log cadence.
+        let useful = self.last_printed != self.last_details;
+        let complete = view.units.is_some_and(|units| {
+            units.total > 0 && units.completed == units.total && !units.checking
+        });
+        if changed
+            || (useful && complete)
+            || (useful && since >= Duration::from_secs(5))
+            || since >= Duration::from_secs(15)
+        {
+            writeln!(out, "  {message}")?;
+            self.last_output = now;
+            self.last_printed.clone_from(&self.last_details);
+        }
+        Ok(())
+    }
+
+    fn render_dashboard(
+        &mut self,
+        out: &mut dyn Write,
+        terminal: Option<&ProgressBar>,
+        command: &str,
+        view: &View<'_>,
+        now: Duration,
+        outcome: Option<(&str, Option<&str>)>,
+    ) -> std::io::Result<()> {
+        self.terminal_active = true;
+        if let Some((event, error)) = outcome {
+            if let Some(bar) = terminal {
+                bar.finish_and_clear();
+                bar.set_draw_target(indicatif::ProgressDrawTarget::hidden());
             }
+            let status = match event {
+                "finished" => "Finished",
+                "cancelled" => "Cancelled",
+                _ => "Failed",
+            };
+            writeln!(
+                out,
+                "{status} {command} in {}{}",
+                duration(now),
+                error.map_or_else(String::new, |code| format!(" | {code}"))
+            )?;
+            if event != "finished" {
+                for line in dashboard::stopped_summary(view) {
+                    writeln!(out, "{line}")?;
+                }
+            }
+            return Ok(());
+        }
+        let Some(bar) = terminal else { return Ok(()) };
+        let label = view.label(command);
+        let phase = view.pipeline.and_then(|pipeline| pipeline.phase);
+        let mut changed = self.label != Some(label) || self.pipeline_phase != phase;
+        if let Some(pipeline) = view.pipeline {
+            let source = pipeline.lifetime(Phase::Source).status;
+            changed |= source.terminal() && source != self.terminal_source;
+            self.terminal_source = source;
+            for (index, output) in pipeline.outputs().iter().enumerate() {
+                let status = output.lifetime.status;
+                changed |= status.terminal() && self.terminal_outputs[index] != status;
+                self.terminal_outputs[index] = status;
+            }
+        }
+        self.label = Some(label);
+        self.pipeline_phase = phase;
+        if self.paint_due(now, changed) {
+            let columns = usize::from(console::Term::stderr().size().1.saturating_sub(1));
+            // A complete frame has one writer and one draw, including all outputs.
+            bar.set_message(dashboard::frame(command, view, now, columns));
         }
         Ok(())
     }
@@ -243,7 +295,6 @@ impl Display {
     fn render_pipeline(
         &mut self,
         out: &mut dyn Write,
-        terminal: Option<&ProgressBar>,
         command: &str,
         view: &View<'_>,
         now: Duration,
@@ -255,13 +306,8 @@ impl Display {
         let phase = pipeline
             .phase
             .expect("pipeline view requires an observed phase");
-        let previous_history = (self.pipeline_phases_printed, self.pipeline_outputs_printed);
-        self.pipeline_history(out, terminal, pipeline, now)?;
+        self.pipeline_history(out, pipeline, now)?;
         if let Some((event, error)) = outcome {
-            if let Some(bar) = terminal {
-                bar.disable_steady_tick();
-                bar.finish_and_clear();
-            }
             let status = match event {
                 "finished" => "Finished",
                 "cancelled" => "Cancelled",
@@ -275,38 +321,24 @@ impl Display {
             );
         }
         let changed = self.pipeline_phase != Some(phase);
-        let history_changed =
-            previous_history != (self.pipeline_phases_printed, self.pipeline_outputs_printed);
         self.pipeline_phase = Some(phase);
-        if terminal.is_some() && !self.paint_due(now, changed || history_changed) {
-            return Ok(());
-        }
         let source_units = view.units.filter(|_| phase == Phase::Source);
-        let mut message = pipeline_message(pipeline, source_units, now);
+        let message = pipeline_message(pipeline, source_units, now);
         let snapshot = source_units.map_or_else(
             || output_details(pipeline, now, false),
             |units| unit_details(units, now, false),
         );
-        if let Some(bar) = terminal {
-            let details = output_details(pipeline, now, true);
-            if !details.is_empty() {
-                message.push('\n');
-                message.push_str(&details);
+        let since = now.saturating_sub(self.last_output);
+        if changed
+            || (snapshot != self.last_printed && since >= Duration::from_secs(5))
+            || since >= Duration::from_secs(15)
+        {
+            writeln!(out, "  {message}")?;
+            if source_units.is_none() && !snapshot.is_empty() {
+                writeln!(out, "{}", output_details(pipeline, now, true))?;
             }
-            bar.set_message(message);
-        } else {
-            let since = now.saturating_sub(self.last_output);
-            if changed
-                || (snapshot != self.last_printed && since >= Duration::from_secs(5))
-                || since >= Duration::from_secs(15)
-            {
-                writeln!(out, "  {message}")?;
-                if source_units.is_none() && !snapshot.is_empty() {
-                    writeln!(out, "{}", output_details(pipeline, now, true))?;
-                }
-                self.last_output = now;
-                self.last_printed = snapshot;
-            }
+            self.last_output = now;
+            self.last_printed = snapshot;
         }
         Ok(())
     }
@@ -314,7 +346,6 @@ impl Display {
     fn pipeline_history(
         &mut self,
         out: &mut dyn Write,
-        terminal: Option<&ProgressBar>,
         pipeline: &super::pipeline::State,
         now: Duration,
     ) -> std::io::Result<()> {
@@ -328,13 +359,10 @@ impl Display {
                     } else {
                         format!("{} stopped", phase.label())
                     };
-                    line(
+                    writeln!(
                         out,
-                        terminal,
-                        &format!(
-                            "  {label:<22} {:>7}",
-                            duration(life.elapsed(now).unwrap_or_default())
-                        ),
+                        "  {label:<22} {:>7}",
+                        duration(life.elapsed(now).unwrap_or_default())
                     )?;
                 }
                 *printed = true;
@@ -345,15 +373,12 @@ impl Display {
                 let format = output
                     .format
                     .map_or("Media", super::pipeline::Format::label);
-                line(
+                writeln!(
                     out,
-                    terminal,
-                    &format!(
-                        "  Output {} · {format}: {} | {}",
-                        index + 1,
-                        output.detail(),
-                        duration(output.lifetime.elapsed(now).unwrap_or_default())
-                    ),
+                    "  Output {} · {format}: {} | {}",
+                    index + 1,
+                    output.detail(),
+                    duration(output.lifetime.elapsed(now).unwrap_or_default())
                 )?;
                 self.pipeline_outputs_printed[index] = true;
             }
@@ -455,34 +480,31 @@ fn output_details(pipeline: &super::pipeline::State, now: Duration, estimate: bo
         if pipeline.estimates_enabled() {
             write!(result, " | ~{}% work", output.estimated_percent()).expect("string write");
         }
-        // Reserve one detail row for each output, including between tasks.
-        // Counters and task estimates share it so eight outputs fit 24 rows.
-        result.push_str("\n      ");
         if let Some(media) = output.media().filter(|media| media.active()) {
             use super::pipeline::Task;
             match media.task {
                 Task::Packaging => write!(
                     result,
-                    "{} / ~{} generated",
+                    "\n      {} / ~{} generated",
                     size(media.bytes.expect("packaging byte counters")[0]),
                     size(media.bytes.expect("packaging byte counters")[1])
                 ),
                 Task::Preparation => {
                     let [done, total] = media.units.expect("preparation unit counters");
                     let unit = media.unit.expect("preparation unit label").label();
-                    write!(result, "{done}/{total} {unit} prepared")
+                    write!(result, "\n      {done}/{total} {unit} prepared")
                 }
                 Task::Integrity => {
                     let [done, total] = media.units.expect("integrity file counters");
-                    write!(result, "{done}/{total} files checked")
+                    write!(result, "\n      {done}/{total} files checked")
                 }
                 Task::Comparison => {
                     if let Some([done, total]) = media.units {
-                        write!(result, "{done}/{total} tracks compared")
+                        write!(result, "\n      {done}/{total} tracks compared")
                     } else {
                         write!(
                             result,
-                            "{} / {} comparison work",
+                            "\n      {} / {} comparison work",
                             size(media.bytes.expect("comparison byte counters")[0]),
                             size(media.bytes.expect("comparison byte counters")[1])
                         )
@@ -502,27 +524,14 @@ fn output_details(pipeline: &super::pipeline::State, now: Duration, estimate: bo
                 .expect("string write");
             }
         } else if let Some(units) = output.units() {
-            write!(result, "{}", unit_details(units, now, estimate)).expect("string write");
+            write!(result, "\n      {}", unit_details(units, now, estimate)).expect("string write");
         }
     }
     result
 }
 
-pub(super) fn notice(
-    out: &mut dyn Write,
-    terminal: Option<&ProgressBar>,
-    value: &'static str,
-) -> std::io::Result<()> {
-    line(out, terminal, value)
-}
-
-fn line(out: &mut dyn Write, terminal: Option<&ProgressBar>, value: &str) -> std::io::Result<()> {
-    if let Some(bar) = terminal {
-        bar.println(value);
-        Ok(())
-    } else {
-        writeln!(out, "{value}")
-    }
+pub(super) fn notice(out: &mut dyn Write, value: &'static str) -> std::io::Result<()> {
+    writeln!(out, "{value}")
 }
 
 #[cfg(test)]

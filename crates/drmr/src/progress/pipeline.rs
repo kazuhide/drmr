@@ -217,6 +217,36 @@ impl Output {
                 checking: a.completed == a.total && a.state != "finished",
             })
     }
+    pub(super) fn progress_label(&self) -> &'static str {
+        match self.lifetime.status {
+            Status::Pending => return "Waiting",
+            Status::Finished => return "Checked",
+            Status::Aborted => return "Stopped",
+            Status::Running => {}
+        }
+        if let Some(media) = self.media().filter(|media| media.active()) {
+            return match media.task {
+                Task::Preparation => "Preparing media",
+                Task::Packaging => "Writing media",
+                Task::Comparison => "Comparing media",
+                Task::Integrity => "Checking files",
+            };
+        }
+        if self.tasks[3] > 0 {
+            return "Checking manifests";
+        }
+        match self.activity() {
+            Some("input-preparation" | "normalization") => "Preparing media",
+            Some("inspection") => "Reading metadata",
+            Some("verification") => "Checking media",
+            Some("publication") => "Saving result",
+            _ => match self.work.step {
+                Some(work::Step::Verification) => "Checking media",
+                Some(work::Step::Finalization) => "Checking result",
+                _ => "Converting media",
+            },
+        }
+    }
     pub(super) fn media(self) -> Option<Media> {
         self.work.media
     }

@@ -14,6 +14,7 @@ path = "src/main.rs"
 
 [dependencies]
 clap.workspace = true
+console = { version = "0.16.4", default-features = false, features = ["std"] }
 drmr-core = { path = "../drmr-core" }
 # `drmr serve`: the console server (axum on tokio) lives in drmr-server; drmr-core stays free
 # of both.
