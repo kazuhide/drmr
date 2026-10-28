@@ -305,16 +305,24 @@ impl Progress {
         matches!(self.inner.mode, Mode::Json)
     }
 
+    pub(crate) fn server_handoff(&self) {
+        // Startup diagnostics and ongoing request logs own the terminal afterward.
+        if self.inner.terminal.is_some() {
+            self.begin_result();
+        }
+    }
+
     pub(crate) fn server_address(&self, address: std::net::SocketAddr) {
         if self.structured() {
             return;
         }
         let message = format!(" * Running on http://{address}");
-        if let Some(bar) = &self.inner.terminal {
-            bar.println(message);
-        } else {
-            eprintln!("{message}");
-        }
+        let mut out = self
+            .inner
+            .out
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _ = writeln!(out, "{message}").and_then(|()| out.flush());
     }
 
     /// Drain live drawing before a result changes the terminal cursor.

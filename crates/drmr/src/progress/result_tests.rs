@@ -164,7 +164,7 @@ fn dashboard_retained_source_notice_does_not_append_a_second_log_stream() {
 }
 
 #[test]
-fn dashboard_server_address_is_coordinated_with_the_live_terminal_writer() {
+fn server_handoff_keeps_address_and_access_logs_without_redrawing() {
     let terminal = Terminal::default();
     let bar = ProgressBar::with_draw_target(
         None,
@@ -178,8 +178,18 @@ fn dashboard_server_address_is_coordinated_with_the_live_terminal_writer() {
         Duration::from_mins(1),
         Some(bar.clone()),
     );
+    progress.mark("server-startup");
+    progress.server_handoff();
     progress.mark("serving");
     progress.server_address("127.0.0.1:3030".parse().unwrap());
+    writeln!(terminal.clone(), "Access log remains readable.").unwrap();
+    let log_end = terminal.snapshot().len();
+    {
+        let mut state = progress.inner.state.lock().unwrap();
+        progress.inner.line(&mut state, "heartbeat", None, true);
+    }
+    bar.force_draw();
+    assert_eq!(terminal.snapshot().len(), log_end);
     let text: String = terminal
         .snapshot()
         .into_iter()
@@ -193,5 +203,5 @@ fn dashboard_server_address_is_coordinated_with_the_live_terminal_writer() {
         1,
         "{text}"
     );
-    assert!(bar.message().contains("Running web console"));
+    assert!(text.contains("Access log remains readable."));
 }
