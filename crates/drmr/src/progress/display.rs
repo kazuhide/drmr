@@ -124,12 +124,26 @@ pub(super) struct Display {
     last_output: Duration,
     last_details: String,
     last_printed: String,
+    last_paint: Option<Duration>,
     pipeline_phase: Option<Phase>,
     pipeline_phases_printed: [bool; 4],
     pipeline_outputs_printed: [bool; 8],
 }
 
 impl Display {
+    fn paint_due(&mut self, now: Duration, changed: bool) -> bool {
+        if changed
+            || self
+                .last_paint
+                .is_none_or(|last| now.saturating_sub(last) >= Duration::from_secs(1))
+        {
+            self.last_paint = Some(now);
+            true
+        } else {
+            false
+        }
+    }
+
     pub(super) fn render(
         &mut self,
         out: &mut dyn Write,
@@ -186,8 +200,13 @@ impl Display {
                 error.map_or_else(String::new, |code| format!(" | {code}"))
             );
         }
-        let details = view.details(now, true);
         self.last_details = latest_details;
+        // Observer events stay frequent; only the human snapshot is coalesced.
+        // Indicatif's draw-target rate limit alone permits a burst of redraws.
+        if terminal.is_some() && !self.paint_due(now, changed) {
+            return Ok(());
+        }
+        let details = view.details(now, true);
         let message = format!(
             "{label}{} | elapsed {}",
             if details.is_empty() {
@@ -236,6 +255,7 @@ impl Display {
         let phase = pipeline
             .phase
             .expect("pipeline view requires an observed phase");
+        let previous_history = (self.pipeline_phases_printed, self.pipeline_outputs_printed);
         self.pipeline_history(out, terminal, pipeline, now)?;
         if let Some((event, error)) = outcome {
             if let Some(bar) = terminal {
@@ -254,6 +274,13 @@ impl Display {
                 error.map_or_else(String::new, |code| format!(" | {code}"))
             );
         }
+        let changed = self.pipeline_phase != Some(phase);
+        let history_changed =
+            previous_history != (self.pipeline_phases_printed, self.pipeline_outputs_printed);
+        self.pipeline_phase = Some(phase);
+        if terminal.is_some() && !self.paint_due(now, changed || history_changed) {
+            return Ok(());
+        }
         let source_units = view.units.filter(|_| phase == Phase::Source);
         let mut message = pipeline_message(pipeline, source_units, now);
         let snapshot = source_units.map_or_else(
@@ -268,7 +295,6 @@ impl Display {
             }
             bar.set_message(message);
         } else {
-            let changed = self.pipeline_phase != Some(phase);
             let since = now.saturating_sub(self.last_output);
             if changed
                 || (snapshot != self.last_printed && since >= Duration::from_secs(5))
@@ -282,7 +308,6 @@ impl Display {
                 self.last_printed = snapshot;
             }
         }
-        self.pipeline_phase = Some(phase);
         Ok(())
     }
 
@@ -430,31 +455,34 @@ fn output_details(pipeline: &super::pipeline::State, now: Duration, estimate: bo
         if pipeline.estimates_enabled() {
             write!(result, " | ~{}% work", output.estimated_percent()).expect("string write");
         }
+        // Reserve one detail row for each output, including between tasks.
+        // Counters and task estimates share it so eight outputs fit 24 rows.
+        result.push_str("\n      ");
         if let Some(media) = output.media().filter(|media| media.active()) {
             use super::pipeline::Task;
             match media.task {
                 Task::Packaging => write!(
                     result,
-                    "\n      {} / ~{} generated",
+                    "{} / ~{} generated",
                     size(media.bytes.expect("packaging byte counters")[0]),
                     size(media.bytes.expect("packaging byte counters")[1])
                 ),
                 Task::Preparation => {
                     let [done, total] = media.units.expect("preparation unit counters");
                     let unit = media.unit.expect("preparation unit label").label();
-                    write!(result, "\n      {done}/{total} {unit} prepared")
+                    write!(result, "{done}/{total} {unit} prepared")
                 }
                 Task::Integrity => {
                     let [done, total] = media.units.expect("integrity file counters");
-                    write!(result, "\n      {done}/{total} files checked")
+                    write!(result, "{done}/{total} files checked")
                 }
                 Task::Comparison => {
                     if let Some([done, total]) = media.units {
-                        write!(result, "\n      {done}/{total} tracks compared")
+                        write!(result, "{done}/{total} tracks compared")
                     } else {
                         write!(
                             result,
-                            "\n      {} / {} comparison work",
+                            "{} / {} comparison work",
                             size(media.bytes.expect("comparison byte counters")[0]),
                             size(media.bytes.expect("comparison byte counters")[1])
                         )
@@ -468,13 +496,13 @@ fn output_details(pipeline: &super::pipeline::State, now: Duration, estimate: bo
             {
                 write!(
                     result,
-                    "\n      ~{} for current task (est.)",
+                    " | ~{} for current task (est.)",
                     estimate_duration(remaining)
                 )
                 .expect("string write");
             }
         } else if let Some(units) = output.units() {
-            write!(result, " | {}", unit_details(units, now, estimate)).expect("string write");
+            write!(result, "{}", unit_details(units, now, estimate)).expect("string write");
         }
     }
     result

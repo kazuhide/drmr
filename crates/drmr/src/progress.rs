@@ -165,22 +165,16 @@ impl Progress {
                 None
             } else {
                 bar.set_style(
-                    ProgressStyle::with_template("{spinner:.cyan} {msg}")
+                    ProgressStyle::with_template("{msg}")
                         .unwrap_or_else(|_| ProgressStyle::default_spinner()),
                 );
-                bar.enable_steady_tick(Duration::from_millis(100));
                 Some(bar)
             }
         } else {
             None
         };
-        Self::with_terminal(
-            mode,
-            command,
-            Box::new(std::io::stderr()),
-            Duration::from_secs(2),
-            bar,
-        )
+        let interval = Duration::from_secs(if bar.is_some() { 1 } else { 2 });
+        Self::with_terminal(mode, command, Box::new(std::io::stderr()), interval, bar)
     }
 
     #[cfg(test)]
