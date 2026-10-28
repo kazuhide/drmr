@@ -858,4 +858,6 @@ impl Sink for Progress {
 #[cfg(test)]
 mod result_tests;
 #[cfg(test)]
+mod terminal_tests;
+#[cfg(test)]
 mod tests;

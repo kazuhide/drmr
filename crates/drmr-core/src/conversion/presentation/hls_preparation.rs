@@ -44,7 +44,18 @@ pub(super) fn prepare(
     let scheduler = super::super::execution::Scheduler::new(&backend, maximum_workers);
     let tracks = collect(&scheduler, &paths, |ordinal| {
         let task = progress.and_then(|progress| progress.start(ordinal));
+        if let Some(task) = &task {
+            task.describe(
+                paths[ordinal].role.unwrap_or(TrackKind::Unknown),
+                paths[ordinal].metadata.resolution,
+            );
+        }
         let tracks = preparation.rendition(ordinal, &paths[ordinal])?;
+        if tracks.len() == 1
+            && let (Some(task), Some(track)) = (&task, tracks[0].report.tracks.first())
+        {
+            task.describe(track.kind, tracks[0].metadata.resolution);
+        }
         if let Some(progress) = progress {
             progress.completed(ordinal);
         }

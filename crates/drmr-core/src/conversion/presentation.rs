@@ -1657,6 +1657,13 @@ impl Converter {
             super::media_progress::Unit::Tracks,
             source.len(),
         );
+        if let Some(tasks) = &tasks {
+            for (ordinal, source) in source.iter().enumerate() {
+                if let Some(track) = source.report.tracks.first() {
+                    tasks.describe(ordinal, track.kind, source.metadata.resolution);
+                }
+            }
+        }
         let verified_tracks = self.run_tracks(source.len(), |ordinal| {
             let task = tasks.as_ref().and_then(|tasks| tasks.start(ordinal));
             let report = self.verify_prepared_pair(
@@ -1939,6 +1946,9 @@ fn prepare_presentation_mode(
                 .enumerate()
                 .map(|(index, track)| {
                     let task = progress.and_then(|progress| progress.start(index));
+                    if let Some(task) = &task {
+                        task.describe(track.kind, None);
+                    }
                     let prepared =
                         prepare_for(&path, index, track.kind, input.input_keys, purpose)?;
                     if let Some(progress) = progress {
@@ -2414,6 +2424,13 @@ impl Converter {
             super::media_progress::Unit::Tracks,
             prepared.len(),
         );
+        if let Some(progress) = &progress {
+            for (ordinal, source) in prepared.iter().enumerate() {
+                if let Some(track) = source.report.tracks.first() {
+                    progress.describe(ordinal, track.kind, source.metadata.resolution);
+                }
+            }
+        }
         let verified = self.run_tracks(prepared.len(), |ordinal| {
             let task = progress
                 .as_ref()

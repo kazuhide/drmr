@@ -169,6 +169,14 @@ impl BundlePrepared<'_> {
         self.work.directory_source()?;
         command.run_tracks(self.clears.len(), |index| {
             let task = progress.and_then(|progress| progress.start(index));
+            if let (Some(task), Some(track)) = (&task, self.tracks.get(index)) {
+                task.describe(
+                    track.kind,
+                    self.sources
+                        .get(index)
+                        .and_then(|source| source.metadata.resolution),
+                );
+            }
             let receipt = self
                 .receipts
                 .iter()

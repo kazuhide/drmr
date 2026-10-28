@@ -6,15 +6,21 @@ maturity is separate: check the **Pre-release** label on each
 version. A 1.x version number alone does not establish complete media or platform
 qualification. The local Web console and Desktop host remain experimental.
 
-The 1.0.1 source includes 44.1 kHz AAC support and preservation of supported final
-AAC playback ranges from HLS/TS. See [AAC processing and playback boundaries](media-processing.md#aac-sample-rates-and-transport-clocks)
-for the conditions. Check each release's status, requirements and verification
-reports before choosing an archive; these corrections do not qualify arbitrary
-codecs, broadcast streams or playback devices.
+Version 1.0.2 groups the [changelog](../CHANGELOG.md) changes since the pre-release
+updates. It uses native media checks by default, keeps source-relative output
+paths and supports processing and DASH-addressing choices. Fixed progress
+columns and observed rendition task states describe bounded parallel work;
+the [measurements](performance.md) do not establish a consistent whole-command
+speedup for every added concurrency stage.
 
-The published v1.0.0 remains a pre-release. Its immutable archives retain the
-original 48 kHz-only TS audio profile and do not include these corrections.
-Its release tag, archives and original verification reports remain unchanged.
+The 44.1 kHz AAC support and supported final AAC playback ranges from 1.0.1
+are retained. See [AAC processing and playback boundaries](media-processing.md#aac-sample-rates-and-transport-clocks).
+Check each release's status, requirements and verification reports; these
+conditions do not qualify arbitrary codecs, broadcast streams or devices.
+
+Published v1.0.0 and v1.0.1 remain immutable pre-releases. The v1.0.0 archives
+retain the original 48 kHz-only TS audio profile. Both releases' tags, archives
+and original verification reports remain unchanged.
 
 ## Install a released CLI
 
@@ -28,10 +34,10 @@ system and processor in the release notes:
 | macOS | Apple Silicon | `aarch64-apple-darwin` |
 | Windows | x86-64 | `x86_64-pc-windows-msvc` |
 
-CLI archive names include the version and target. For 1.0.1, they are
-`drmr-1.0.1-x86_64-unknown-linux-gnu.tar.gz`,
-`drmr-1.0.1-aarch64-apple-darwin.tar.gz` and
-`drmr-1.0.1-x86_64-pc-windows-msvc.zip`, respectively. Choose an archive actually
+CLI archive names include the version and target. For 1.0.2, they are
+`drmr-1.0.2-x86_64-unknown-linux-gnu.tar.gz`,
+`drmr-1.0.2-aarch64-apple-darwin.tar.gz` and
+`drmr-1.0.2-x86_64-pc-windows-msvc.zip`, respectively. Choose an archive actually
 listed on GitHub Releases, and download its documentation and verification
 reports from that same release. Current repository documentation can describe
 changes absent from an older archive.

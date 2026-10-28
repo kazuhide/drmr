@@ -4,8 +4,28 @@ use crate::progress::pipeline::{Phase, State, Status};
 use std::time::Duration;
 
 const LABEL_WIDTH: usize = 12;
+const BAR_WIDTH: usize = 18;
 
+#[cfg(test)]
+mod tests;
+
+mod items;
+
+#[cfg(test)]
 pub(super) fn frame(command: &str, view: &View<'_>, now: Duration, columns: usize) -> String {
+    frame_with_height(command, view, now, columns, 24)
+}
+
+pub(super) fn frame_with_height(
+    command: &str,
+    view: &View<'_>,
+    now: Duration,
+    columns: usize,
+    height: usize,
+) -> String {
+    if height == 0 {
+        return String::new();
+    }
     let columns = columns.clamp(1, 120);
     let title = format!("drmr {command}");
     let elapsed = format!("elapsed {}", duration(now));
@@ -32,11 +52,15 @@ pub(super) fn frame(command: &str, view: &View<'_>, now: Duration, columns: usiz
         rows.push(row("Source", &source(view, now, columns), columns));
         rows.push(row(
             "Overall",
-            if view.activity == "acquisition" {
-                "Waiting for source"
-            } else {
-                view.label(command)
-            },
+            &progress_value(
+                None,
+                if view.activity == "acquisition" {
+                    "Waiting for source"
+                } else {
+                    view.label(command)
+                },
+                overall_progress_width(columns),
+            ),
             columns,
         ));
     } else {
@@ -47,17 +71,19 @@ pub(super) fn frame(command: &str, view: &View<'_>, now: Duration, columns: usiz
             rows.push(row("Task", &task(command, view, now, columns), columns));
         }
     }
-    rows.join("\n")
+    items::finish(rows, view.pipeline, columns, height).join("\n")
 }
 
 fn overall(pipeline: &crate::progress::pipeline::State, now: Duration, columns: usize) -> String {
     let phase = pipeline.phase.expect("dashboard pipeline phase");
-    let budget = columns.saturating_sub(LABEL_WIDTH + 1);
+    let width = overall_progress_width(columns);
+    let budget = detail_budget(columns, width);
     if let Some(estimate) = pipeline.estimate(now) {
-        let mut value = format!("{} work", bar(estimate.percent, true, columns));
+        let progress = Some(bar(estimate.percent, true, columns));
+        let mut value = "work".to_owned();
         if estimate.percent == 100 {
             append(&mut value, "Saved", budget);
-            return value;
+            return progress_value(progress, &value, width);
         }
         if matches!(phase, Phase::FinalCheck | Phase::Publication) {
             append(&mut value, phase.label(), budget);
@@ -67,7 +93,7 @@ fn overall(pipeline: &crate::progress::pipeline::State, now: Duration, columns: 
             |left| format!("ETA ~{}", estimate_duration(left)),
         );
         append(&mut value, &eta, budget);
-        value
+        progress_value(progress, &value, width)
     } else {
         let mut value = phase.label().to_owned();
         if phase == Phase::Outputs {
@@ -81,7 +107,7 @@ fn overall(pipeline: &crate::progress::pipeline::State, now: Duration, columns: 
                 budget,
             );
         }
-        value
+        progress_value(None, &value, width)
     }
 }
 
@@ -102,18 +128,15 @@ fn output_row(
     let work = output.renditions();
     let units = output.units().filter(|_| work.is_none());
     let label_text = step_label(units, output.progress_label());
+    let width = progress_width(columns);
+    let budget = detail_budget(columns, width);
+    let progress = (estimates && output.lifetime.status != Status::Aborted)
+        .then(|| bar(output.estimated_percent(), true, columns));
     let mut value = if let Some(work) = work {
-        rendition_value(work, label_text, columns)
-    } else if estimates && output.lifetime.status != Status::Aborted {
-        format!(
-            "{} {}",
-            bar(output.estimated_percent(), true, columns),
-            label_text
-        )
+        rendition_value(&work, label_text, columns, budget)
     } else {
         label_text.to_owned()
     };
-    let budget = columns.saturating_sub(LABEL_WIDTH + 1);
     if output.lifetime.status == Status::Running {
         if estimates && let Some(left) = output.step_remaining(now) {
             append(
@@ -139,15 +162,7 @@ fn output_row(
             append_units(&mut value, units, now, budget);
         }
     }
-    if work.is_some() && estimates {
-        let percent = output.estimated_percent();
-        let before = value.len();
-        append(&mut value, &bar(percent, true, columns), budget);
-        if before == value.len() {
-            append(&mut value, &format!("~{percent}%"), budget);
-        }
-    }
-    row(&label, &value, columns)
+    row(&label, &progress_value(progress, &value, width), columns)
 }
 
 fn task(command: &str, view: &View<'_>, now: Duration, columns: usize) -> String {
@@ -159,57 +174,31 @@ fn task(command: &str, view: &View<'_>, now: Duration, columns: usize) -> String
     };
     let mut value = step_label(units, label).to_owned();
     if let Some(units) = units {
-        append_units(
-            &mut value,
-            units,
-            now,
-            columns.saturating_sub(LABEL_WIDTH + 1),
-        );
+        append_units(&mut value, units, now, detail_budget(columns, 0));
     }
     value
 }
 
 fn source(view: &View<'_>, now: Duration, columns: usize) -> String {
+    let width = progress_width(columns);
+    let budget = detail_budget(columns, width);
     let work = view.pipeline.and_then(State::source_renditions);
     let context = view.pipeline.is_some_and(State::has_source_context);
     let status = view
         .pipeline
         .map(|pipeline| pipeline.lifetime(Phase::Source).status);
     let mut value = if let Some(work) = work {
-        rendition_value(work, work.label(false), columns)
+        rendition_value(&work, work.label(false), columns, budget)
     } else {
         match status {
             Some(Status::Finished) => "Ready".to_owned(),
             Some(Status::Aborted) => "Stopped".to_owned(),
             Some(Status::Running) => "Checking".to_owned(),
             _ if view.activity == "configuration" => "Waiting".to_owned(),
-            _ if view.activity == "acquisition" => {
-                let mut text = "Downloading".to_owned();
-                if let Some(units) = view
-                    .units
-                    .filter(|units| units.total > 0 && !units.checking)
-                {
-                    let percent =
-                        u32::try_from(u128::from(units.completed) * 100 / u128::from(units.total))
-                            .unwrap_or(100)
-                            .min(100);
-                    text = format!("{} Downloading", bar(percent, false, columns));
-                }
-                text
-            }
+            _ if view.activity == "acquisition" => "Downloading".to_owned(),
             _ => "Checking".to_owned(),
         }
     };
-    let budget = columns.saturating_sub(LABEL_WIDTH + 1);
-    if view.activity == "acquisition"
-        && let Some(left) = view.units.and_then(|units| remaining(units, now))
-    {
-        append(
-            &mut value,
-            &format!("ETA ~{}", estimate_duration(left)),
-            budget,
-        );
-    }
     if let Some([_, completed, bytes]) = view.downloads {
         if view.activity != "acquisition" || view.units.is_some() {
             let files = view
@@ -227,6 +216,15 @@ fn source(view: &View<'_>, now: Duration, columns: usize) -> String {
             append(&mut value, &files, budget);
         }
         append(&mut value, &size(bytes), budget);
+    }
+    if view.activity == "acquisition"
+        && let Some(left) = view.units.and_then(|units| remaining(units, now))
+    {
+        append(
+            &mut value,
+            &format!("ETA ~{}", estimate_duration(left)),
+            budget,
+        );
     }
     if status == Some(Status::Running) || view.downloads.is_none() {
         let media = view
@@ -252,21 +250,36 @@ fn source(view: &View<'_>, now: Duration, columns: usize) -> String {
             append_units(&mut value, units, now, budget);
         }
     }
-    value
+    let progress = view
+        .units
+        .filter(|units| {
+            view.activity == "acquisition"
+                && matches!(status, None | Some(Status::Pending))
+                && units.total > 0
+                && !units.checking
+        })
+        .map(|units| {
+            let percent =
+                u32::try_from(u128::from(units.completed) * 100 / u128::from(units.total))
+                    .unwrap_or(100)
+                    .min(100);
+            bar(percent, false, columns)
+        });
+    progress_value(progress, &value, width)
 }
 
 fn rendition_value(
-    work: crate::progress::pipeline::renditions::Work,
+    work: &crate::progress::pipeline::renditions::Work,
     label: &str,
     columns: usize,
+    budget: usize,
 ) -> String {
-    if columns < 60 {
-        return format!("{} {}", work.compact_label(), work.counts(true));
+    let counts = work.counts(true);
+    if columns < 60 || label.len() + counts.len() + 3 > budget {
+        format!("{} {counts}", work.compact_label())
+    } else {
+        format!("{label} | {counts}")
     }
-    let budget = columns.saturating_sub(LABEL_WIDTH + 1);
-    let mut value = label.to_owned();
-    append(&mut value, &work.counts(columns < 100), budget);
-    value
 }
 
 fn step_label(units: Option<Units>, fallback: &str) -> &str {
@@ -298,7 +311,7 @@ fn bar(percent: u32, approximate: bool, columns: usize) -> String {
     if columns < 60 {
         return number;
     }
-    let cells = if columns >= 100 { 20 } else { 10 };
+    let cells = 10;
     let filled = usize::try_from(percent.min(100)).unwrap_or(100) * cells / 100;
     format!(
         "[{}{}] {number:>5}",
@@ -315,7 +328,38 @@ fn append(value: &mut String, part: &str, budget: usize) {
 }
 
 fn row(label: &str, value: &str, columns: usize) -> String {
-    fit(&format!("{label:<LABEL_WIDTH$} {value}"), columns)
+    let label = console::pad_str(
+        label,
+        label_width(columns),
+        console::Alignment::Left,
+        Some("..."),
+    );
+    fit(&format!("{label} {value}"), columns)
+}
+
+fn label_width(columns: usize) -> usize {
+    if columns < 60 { 11 } else { LABEL_WIDTH }
+}
+
+fn progress_width(columns: usize) -> usize {
+    if columns < 60 { 0 } else { BAR_WIDTH }
+}
+
+fn overall_progress_width(columns: usize) -> usize {
+    if columns < 60 { 5 } else { BAR_WIDTH }
+}
+
+fn detail_budget(columns: usize, progress_width: usize) -> usize {
+    columns
+        .saturating_sub(label_width(columns) + 1 + progress_width + usize::from(progress_width > 0))
+}
+
+fn progress_value(progress: Option<String>, details: &str, width: usize) -> String {
+    if width == 0 {
+        details.to_owned()
+    } else {
+        format!("{:width$} {details}", progress.unwrap_or_default())
+    }
 }
 
 fn fit(value: &str, columns: usize) -> String {

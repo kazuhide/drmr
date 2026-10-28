@@ -5,8 +5,29 @@ for installation, stable interfaces and versioning.
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-10-29
+
+CLI release for the supported media profiles, with native validation,
+bounded parallel processing and clearer rendition progress. The Web console
+and Desktop host remain experimental. Published v1.0.0 and v1.0.1 archives
+remain unchanged pre-releases.
+
+### Fixed
+
+- Keep progress bars in fixed columns when task descriptions, counts,
+  estimates or log lines change. Show observed per-batch rendition/track
+  states in stable numbered rows, retain hidden rows in structured progress,
+  and avoid estimated per-track percentages for opaque work.
+
 ### Changed
 
+- Parallelize source snapshots, profile checks, original-to-intermediate
+  comparisons and post-capture DASH metadata work within shared CPU/memory
+  limits. Allow final multi-input packaging to use parallel media jobs only
+  when every job fits the same budget; retain serial execution otherwise.
+  Preserve ordered results, full checks and failure/cancellation cleanup.
+- Record staged conversion measurements without claiming a consistent
+  whole-command speedup for every added concurrency stage.
 - Reduce temporary sample copying and reuse the independently captured output
   for final DRM-declaration checks. Keep complete media comparisons, final
   original-file checks and bounded streaming fallbacks; record repeated
@@ -49,12 +70,12 @@ for installation, stable interfaces and versioning.
   TS and fragmented-MP4 routes can re-encrypt original resources while retaining
   every sample's segment membership and clocks. `stitch` prepares complete
   tracks and packages the requested output; HLS and DASH are segmented again.
-- Save resolved processing, boundary guarantees, source directories and DASH
-  references in new single-output plan schema 7 and named-output schema 8.
-  Existing plan schemas 1–6 retain their identities, processing settings and
-  verification minimums. Output recipe schema 3 adds per-output DASH references
-  alongside processing choices; recipe schemas 1/2 and operator key-file schemas
-  remain unchanged.
+- Bind processing, boundary guarantees, source-relative directories, media
+  filenames and DASH references in new single-output plan schema 9 and
+  named-output schema 10. Existing plan schemas 1–8 retain their identities,
+  recorded settings and verification minimums. Output recipe schema 3 adds
+  per-output DASH references and processing choices; recipe schemas 1/2 and
+  operator key-file schemas remain unchanged.
 - Use native Rust media validation by default for complete analysis, saved
   planning, conversion and independent verification. Check every admitted
   sample, codec configuration, clock and supported playback window; refuse
@@ -88,6 +109,21 @@ for installation, stable interfaces and versioning.
 
 - Remove the unused subprocess media adapter and its engine interface. Current
   CLI, Web and Desktop processing uses the common native conversion workflow.
+
+### Requirements and verification
+
+CLI archives target Linux x86-64, Apple Silicon macOS and Windows x86-64.
+Native analysis, planning and verification need no external media tools.
+Packaging routes use Shaka Packager; optional complete decoding also needs
+FFmpeg and ffprobe. Progressive MP4 copying and decryption run in Rust. See
+[installation and compatibility](https://github.com/kazuhide/drmr/blob/v1.0.2/docs/releases.md)
+and [requirements](https://github.com/kazuhide/drmr/blob/v1.0.2/docs/requirements.md).
+
+Each native archive includes source/build identity and dependency notices,
+with separate archive-content and extracted-CLI media qualification reports.
+These checks cover the documented fixtures and profiles; they do not qualify
+arbitrary media, DRM license services or device playback. Web and Desktop
+remain experimental.
 
 ## [1.0.1] - 2026-10-23
 

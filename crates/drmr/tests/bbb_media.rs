@@ -93,6 +93,7 @@ fn the_real_cli_verifies_all_sixteen_bbb_protection_routes() {
         .arg(env!("CARGO_BIN_EXE_drmr"))
         .arg("--output")
         .arg(root.path())
+        .stderr(std::process::Stdio::inherit())
         .output()
         .unwrap();
     assert!(

@@ -30,6 +30,11 @@ impl Converter {
             media_progress::Unit::Tracks,
             request.tracks.len(),
         );
+        if let Some(snapshots) = &snapshots {
+            for (ordinal, track) in request.tracks.iter().enumerate() {
+                snapshots.describe(ordinal, track.kind, None);
+            }
+        }
         // Unknown profiles use conservative admission until every private snapshot is inspected.
         let sources = self.run_tracks(request.tracks.len(), |ordinal| {
             let task = snapshots
@@ -58,6 +63,11 @@ impl Converter {
             media_progress::Unit::Tracks,
             sources.len(),
         );
+        if let Some(normalization) = &normalization {
+            for (ordinal, (track, source)) in request.tracks.iter().zip(&sources).enumerate() {
+                normalization.describe(ordinal, track.kind, source.metadata.resolution);
+            }
+        }
         let clears = self.run_tracks(sources.len(), |ordinal| {
             let task = normalization
                 .as_ref()
