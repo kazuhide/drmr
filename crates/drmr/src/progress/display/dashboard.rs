@@ -1,5 +1,5 @@
 //! One complete terminal frame, containing current state rather than an event history.
-use super::{View, duration, estimate_duration, remaining, size};
+use super::{Units, View, duration, estimate_duration, remaining, size};
 use crate::progress::pipeline::{Phase, Status};
 use std::time::Duration;
 
@@ -44,7 +44,7 @@ pub(super) fn frame(command: &str, view: &View<'_>, now: Duration, columns: usiz
             rows.push(row("Source", &source(view, now, columns), columns));
         }
         if view.activity != "acquisition" || view.downloads.is_none() {
-            rows.push(row("Task", &task(command, view, columns), columns));
+            rows.push(row("Task", &task(command, view, now, columns), columns));
         }
     }
     rows.join("\n")
@@ -99,14 +99,16 @@ fn output_row(
             .format
             .map_or("Output", crate::progress::pipeline::Format::label)
     );
+    let units = output.units();
+    let label_text = step_label(units, output.progress_label());
     let mut value = if estimates && output.lifetime.status != Status::Aborted {
         format!(
             "{} {}",
             bar(output.estimated_percent(), true, columns),
-            output.progress_label()
+            label_text
         )
     } else {
-        output.progress_label().to_owned()
+        label_text.to_owned()
     };
     let budget = columns.saturating_sub(LABEL_WIDTH + 1);
     if output.lifetime.status == Status::Running {
@@ -129,33 +131,26 @@ fn output_row(
                 String::new()
             };
             append(&mut value, &counter, budget);
-        } else if let Some(units) = output.units() {
-            append(
-                &mut value,
-                &format!("{}/{} segments", units.completed, units.total),
-                budget,
-            );
+        } else if let Some(units) = units {
+            append_units(&mut value, units, now, budget);
         }
     }
     row(&label, &value, columns)
 }
 
-fn task(command: &str, view: &View<'_>, columns: usize) -> String {
-    let mut value = if view.task.is_empty() {
+fn task(command: &str, view: &View<'_>, now: Duration, columns: usize) -> String {
+    let units = view.units.filter(|_| view.activity != "acquisition");
+    let label = if view.task.is_empty() {
         view.label(command)
     } else {
         view.task
-    }
-    .to_owned();
-    if let Some(units) = view.units.filter(|_| view.activity != "acquisition") {
-        let counter = if units.checking {
-            "checking boundaries".to_owned()
-        } else {
-            format!("{}/{} segments", units.completed, units.total)
-        };
-        append(
+    };
+    let mut value = step_label(units, label).to_owned();
+    if let Some(units) = units {
+        append_units(
             &mut value,
-            &counter,
+            units,
+            now,
             columns.saturating_sub(LABEL_WIDTH + 1),
         );
     }
@@ -231,15 +226,35 @@ fn source(view: &View<'_>, now: Duration, columns: usize) -> String {
                 budget,
             );
         } else if let Some(units) = view.units.filter(|_| view.activity != "acquisition") {
-            let note = if units.checking {
-                "checking boundaries".to_owned()
-            } else {
-                format!("{}/{} segments", units.completed, units.total)
-            };
-            append(&mut value, &note, budget);
+            value = step_label(Some(units), &value).to_owned();
+            append_units(&mut value, units, now, budget);
         }
     }
     value
+}
+
+fn step_label(units: Option<Units>, fallback: &str) -> &str {
+    if units.is_some_and(|units| units.checking) {
+        "Checking boundaries"
+    } else {
+        fallback
+    }
+}
+
+fn append_units(value: &mut String, units: Units, now: Duration, budget: usize) {
+    let name = if units.segments { "segments" } else { "files" };
+    append(
+        value,
+        &format!("{}/{} {name}", units.completed, units.total),
+        budget,
+    );
+    if !units.checking && units.total > 0 {
+        let percent = (u128::from(units.completed) * 100 / u128::from(units.total)).min(100);
+        append(value, &format!("step {percent}%"), budget);
+        if let Some(left) = remaining(units, now) {
+            append(value, &format!("step ~{}", estimate_duration(left)), budget);
+        }
+    }
 }
 
 fn bar(percent: u32, approximate: bool, columns: usize) -> String {

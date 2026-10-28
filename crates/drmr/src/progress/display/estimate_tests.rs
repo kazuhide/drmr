@@ -638,3 +638,81 @@ fn dashboard_global_saved_requires_publication_after_checked_outputs() {
         "{frame}"
     );
 }
+
+#[test]
+fn dashboard_known_preparation_keeps_current_step_progress_without_an_overall_estimate() {
+    for command in ["analyze", "plan", "convert"] {
+        let view = View {
+            activity: "input-preparation",
+            task: "Preparing media",
+            downloads: None,
+            units: Some(Units {
+                completed: 2,
+                total: 10,
+                initial: 0,
+                began: Duration::ZERO,
+                segments: true,
+                checking: false,
+            }),
+            pipeline: None,
+        };
+        let frame = dashboard::frame(command, &view, Duration::from_secs(2), 120);
+        assert!(frame.contains("2/10 segments"), "{frame}");
+        assert!(frame.contains("20%"), "{frame}");
+        assert!(frame.contains("step ~8s"), "{frame}");
+        assert!(!frame.contains("ETA"), "{frame}");
+        let mut checking = view;
+        checking.units.as_mut().unwrap().completed = 10;
+        checking.units.as_mut().unwrap().checking = true;
+        let frame = dashboard::frame(command, &checking, Duration::from_secs(3), 120);
+        assert!(frame.contains("Checking boundaries"), "{frame}");
+        assert!(!frame.contains('%') && !frame.contains("step ~"), "{frame}");
+    }
+}
+
+#[test]
+fn dashboard_output_preparation_keeps_step_estimates_and_boundary_status() {
+    let mut pipeline = State::default();
+    for value in [
+        serde_json::json!({"scope":"source","state":"started"}),
+        serde_json::json!({"scope":"source","state":"finished"}),
+        serde_json::json!({"scope":"outputs","state":"started"}),
+        serde_json::json!({"scope":"output","state":"started","output_index":0,"output_total":1,"output_format":"hls"}),
+    ] {
+        assert!(pipeline.observe(&record(value), Duration::ZERO));
+    }
+    for (state, completed, second) in [("started", 0, 0), ("running", 2, 2), ("running", 10, 3)] {
+        assert!(pipeline.observe_nested(&record(serde_json::json!({"stage":"analysis","event":"progress","task":"ts-preparation","state":state,"completed":completed,"total":10,"output_index":0,"output_total":1,"output_format":"hls"})),Duration::from_secs(second)));
+        let frame = dashboard::frame(
+            "convert",
+            &View {
+                activity: "input-preparation",
+                task: "",
+                downloads: None,
+                units: None,
+                pipeline: Some(&pipeline),
+            },
+            Duration::from_secs(second),
+            120,
+        );
+        let output = frame
+            .lines()
+            .find(|line| line.starts_with("1 HLS"))
+            .unwrap();
+        match completed {
+            0 => assert!(!output.contains("step ~"), "{frame}"),
+            2 => assert!(
+                output.contains("20%")
+                    && output.contains("step ~8s")
+                    && output.contains("2/10 segments"),
+                "{frame}"
+            ),
+            _ => assert!(
+                output.contains("Checking boundaries")
+                    && !output.contains('%')
+                    && !output.contains("step ~"),
+                "{frame}"
+            ),
+        }
+    }
+}
