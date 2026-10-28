@@ -218,15 +218,18 @@ struct OutputMode(Option<u32>);
 #[cfg(windows)]
 impl OutputMode {
     fn enable(term: Option<&str>) -> Option<Self> {
-        if console::Term::stderr().features().is_msys_tty() {
-            return supports_screen_switching(term).then_some(Self(None));
+        // console also reports native consoles with VT already enabled as MSYS.
+        // Check the native handle first, independently of TERM, and retain every
+        // original output flag for restoration after leaving the owned screen.
+        if let Ok(old) = winapi_util::console::mode(std::io::stderr()) {
+            winapi_util::console::Console::stderr()
+                .ok()?
+                .set_virtual_terminal_processing(true)
+                .ok()?;
+            return Some(Self(Some(old)));
         }
-        let old = winapi_util::console::mode(std::io::stderr()).ok()?;
-        winapi_util::console::Console::stderr()
-            .ok()?
-            .set_virtual_terminal_processing(true)
-            .ok()?;
-        Some(Self(Some(old)))
+        (console::Term::stderr().features().is_msys_tty() && supports_screen_switching(term))
+            .then_some(Self(None))
     }
 }
 

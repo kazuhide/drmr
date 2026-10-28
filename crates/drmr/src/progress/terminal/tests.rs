@@ -35,6 +35,79 @@ fn screen_switching_requires_a_known_terminal_family() {
     }
 }
 
+#[cfg(windows)]
+#[test]
+fn native_console_without_term_enables_vt_and_restores_output_mode() {
+    const CHILD: &str = "DRMR_TEST_NATIVE_CONSOLE_CHILD";
+    const RECEIPT: &str = "DRMR_TEST_NATIVE_CONSOLE_RECEIPT";
+    const NAME: &str = "progress::terminal::tests::native_console_without_term_enables_vt_and_restores_output_mode";
+    if std::env::var_os(CHILD).is_some() {
+        assert!(std::env::var_os("TERM").is_none());
+        assert_eq!(std::env::var("NO_COLOR").as_deref(), Ok("1"));
+        let original = winapi_util::console::mode(std::io::stderr())
+            .expect("fixture stderr must be a native console");
+        let _restore = OutputMode(Some(original));
+        const VT: u32 = 0x0004;
+        // Check both pre-enabled VT (also reported as MSYS by console) and
+        // enabling VT ourselves, including exact restoration of all other flags.
+        for old in [original | VT, original & !VT] {
+            winapi_util::console::set_mode(std::io::stderr(), old).unwrap();
+            let terminal = LiveTerminal::for_stderr()
+                .expect("native dashboard must not require TERM or color");
+            assert_eq!(
+                winapi_util::console::mode(std::io::stderr()).unwrap(),
+                old | VT
+            );
+            terminal.close(&mut io::sink()).unwrap();
+            assert_eq!(winapi_util::console::mode(std::io::stderr()).unwrap(), old);
+        }
+        std::fs::write(
+            std::env::var_os(RECEIPT).unwrap(),
+            b"native modes restored\n",
+        )
+        .unwrap();
+        return;
+    }
+
+    let root = tempfile::tempdir().unwrap();
+    let receipt = root.path().join("receipt");
+    let stderr = root.path().join("stderr");
+    let mut command = std::process::Command::new("pwsh");
+    command
+        .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command"])
+        // Explicit false selects direct CreateProcess, keeps the environment
+        // and nested job ownership, and creates a console without redirection.
+        .arg("$ErrorActionPreference = 'Stop'; $child = Start-Process -FilePath $env:DRMR_TEST_NATIVE_CONSOLE_EXE -ArgumentList @('--exact', $env:DRMR_TEST_NATIVE_CONSOLE_NAME, '--nocapture') -UseNewEnvironment:$false -WindowStyle Hidden -Wait -PassThru; exit $child.ExitCode")
+        .env(CHILD, "1")
+        .env(RECEIPT, &receipt)
+        .env("DRMR_TEST_NATIVE_CONSOLE_EXE", std::env::current_exe().unwrap())
+        .env("DRMR_TEST_NATIVE_CONSOLE_NAME", NAME)
+        .env_remove("TERM")
+        .env("NO_COLOR", "1")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::fs::File::create(root.path().join("stdout")).unwrap())
+        .stderr(std::fs::File::create(&stderr).unwrap());
+    let mut child = drmr_core::native::ManagedChild::spawn(command, true).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if std::time::Instant::now() >= deadline {
+            child.finish().unwrap();
+            panic!("native console fixture exceeded its deadline");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    };
+    child.finish().unwrap();
+    assert!(
+        status.success(),
+        "{}",
+        std::fs::read_to_string(stderr).unwrap()
+    );
+    assert_eq!(std::fs::read(receipt).unwrap(), b"native modes restored\n");
+}
+
 #[test]
 fn screen_entry_paints_and_restore_have_one_ordered_owner() {
     let terminal = LiveTerminal::for_test(120, 24);
