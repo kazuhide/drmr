@@ -222,10 +222,9 @@ impl OutputMode {
         // Check the native handle first, independently of TERM, and retain every
         // original output flag for restoration after leaving the owned screen.
         if let Ok(old) = winapi_util::console::mode(std::io::stderr()) {
-            winapi_util::console::Console::stderr()
-                .ok()?
-                .set_virtual_terminal_processing(true)
-                .ok()?;
+            // ENABLE_PROCESSED_OUTPUT is required alongside VT processing.
+            const REQUIRED_OUTPUT: u32 = 0x0001 | 0x0004;
+            winapi_util::console::set_mode(std::io::stderr(), old | REQUIRED_OUTPUT).ok()?;
             return Some(Self(Some(old)));
         }
         (console::Term::stderr().features().is_msys_tty() && supports_screen_switching(term))

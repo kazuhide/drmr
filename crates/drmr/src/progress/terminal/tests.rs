@@ -90,15 +90,18 @@ fn native_console_without_term_enables_vt_and_restores_output_mode() {
         };
         let _restore = OutputMode(Some(original));
         const VT: u32 = 0x0004;
-        // Check both pre-enabled VT (also reported as MSYS by console) and
-        // enabling VT ourselves, including exact restoration of all other flags.
-        for old in [original | VT, original & !VT] {
+        const PROCESSED: u32 = 0x0001;
+        // Exercise every initial VT/processed-output combination and restore
+        // all flags, including the modes intentionally disabled by the caller.
+        for flags in [0, VT, PROCESSED, VT | PROCESSED] {
+            let old = (original & !(VT | PROCESSED)) | flags;
             winapi_util::console::set_mode(std::io::stderr(), old).unwrap();
+            assert_eq!(winapi_util::console::mode(std::io::stderr()).unwrap(), old);
             let terminal = LiveTerminal::for_stderr()
                 .expect("native dashboard must not require TERM or color");
             assert_eq!(
                 winapi_util::console::mode(std::io::stderr()).unwrap(),
-                old | VT
+                old | VT | PROCESSED
             );
             terminal.close(&mut io::sink()).unwrap();
             assert_eq!(winapi_util::console::mode(std::io::stderr()).unwrap(), old);
