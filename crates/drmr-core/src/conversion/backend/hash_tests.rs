@@ -25,6 +25,7 @@ fn backend(root: &Path, spec: &drmr_test_support::ToolSpec) -> Backend {
         measurement: None,
         activity: None,
         preparation: None,
+        scheduling_hardware: None,
     }
 }
 

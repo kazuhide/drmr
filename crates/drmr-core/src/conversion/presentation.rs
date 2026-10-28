@@ -1,13 +1,17 @@
 //! Joint, codec-preserving presentations with independent evidence for every source stream.
 mod bundle_source;
+mod dash_preparation;
 mod hls_preparation;
 pub(in crate::conversion) use bundle_source::BundlePrepared;
 pub(in crate::conversion) mod metadata;
 mod native_preparation;
+mod normalization;
 #[cfg(test)]
 mod packager_jobs_tests;
 #[cfg(test)]
 mod signaling_tests;
+#[cfg(test)]
+mod source_work_tests;
 #[cfg(test)]
 mod staging_tests;
 mod ts_output;
@@ -468,118 +472,6 @@ impl Converter {
         preparation.finish();
         self.backend.check_cancelled()?;
         Ok((actual, keys))
-    }
-    fn normalize_tracks(
-        &self,
-        request: &TrackConversionRequest<'_>,
-        work: &Path,
-        clocks: Option<&[TrackClock]>,
-    ) -> Result<(Vec<Prepared>, Vec<PathBuf>), ConversionError> {
-        if clocks.is_some_and(|clocks| clocks.len() != request.tracks.len()) {
-            return Err(ConversionError("native-clock-profile-mismatch"));
-        }
-        // Inspect all private snapshots before selecting a content-aware worker count.
-        let mut sources = Vec::new();
-        for (ordinal, track) in request.tracks.iter().enumerate() {
-            // A completed tool seals only its own track directory, while sibling tools
-            // may still have writable output handles open on Windows.
-            let directory = work.join(format!("normalize-{ordinal:04}"));
-            super::files::create_dir(&directory)?;
-            let source = directory.join("source.mp4");
-            copy_private(&track.source, &source)?;
-            if self
-                .output_signaling
-                .as_ref()
-                .is_some_and(|value| !value.is_multi())
-            {
-                super::signaling::clear_mp4(&source, &self.backend.stop)?;
-            }
-            let mut prepared = prepare(&source, track.index, track.kind, request.input_keys)?;
-            if let Some(clocks) = clocks {
-                clocks[ordinal].bind(track, &mut prepared)?;
-            }
-            if super::finite::has_audio(&source)? && !audio::movie(&source)?.fragmented {
-                let report = inspection::inspect(&source)
-                    .map_err(|_| ConversionError("invalid-input-media"))?;
-                if !super::progressive::validate_input(&source, &report, request.input_keys)? {
-                    return Err(ConversionError("progressive-mp4-profile-not-supported"));
-                }
-                self.progressive_codecs(
-                    &source,
-                    &report,
-                    (report.protection != Protection::Clear)
-                        .then_some(super::keys::ProbeKeys::All(request.input_keys)),
-                )?;
-            }
-
-            let profile = self.backend.profile_stream_keys(
-                &source,
-                track.index,
-                if prepared.source_dictionary {
-                    Some(super::keys::ProbeKeys::All(request.input_keys))
-                } else {
-                    key_for(&prepared, request.input_keys).map(super::keys::ProbeKeys::One)
-                },
-            )?;
-            self.validate_signaling_codec(&profile, track.kind)?;
-            if profile["codec_type"].as_str()
-                != Some(if track.kind == TrackKind::Audio {
-                    "audio"
-                } else {
-                    "video"
-                })
-            {
-                return Err(ConversionError("track-role-mismatch"));
-            }
-            sources.push(prepared);
-        }
-        let clears = self.run_tracks(sources.len(), |ordinal| {
-            let source = &sources[ordinal];
-            let clear = source
-                .media
-                .parent()
-                .ok_or(ConversionError("temporary-workspace-unavailable"))?
-                .join("clear.mp4");
-            let normalization_scope = self.backend.scope(super::measurement::Phase::Normalization);
-            let whole_clear = source
-                .media
-                .parent()
-                .ok_or(ConversionError("temporary-workspace-unavailable"))?
-                .join("whole-clear.mp4");
-            let packaging_source = if source.source_dictionary {
-                let report = inspection::inspect(&source.source)
-                    .map_err(|_| ConversionError("invalid-input-media"))?;
-                self.clear_finite(&source.source, &whole_clear, &report, request.input_keys)?;
-                &whole_clear
-            } else {
-                &source.media
-            };
-
-            self.backend.package_stream(
-                packaging_source,
-                source.index,
-                &clear,
-                (source.key_id.is_some() && !source.source_dictionary)
-                    .then_some(request.input_keys),
-                None,
-            )?;
-            drop(normalization_scope);
-            let a = StreamView::new(
-                &source.source,
-                source.index,
-                key_for(source, request.input_keys),
-            )
-            .with_clock(source.clock);
-            let normalization = self.backend.verify_views(
-                a.with_all_keys(request.input_keys),
-                StreamView::new(&clear, 0, None).with_clock(source.clock),
-            )?;
-            if !normalization.passed {
-                return Err(ConversionError("source-normalization-verification-failed"));
-            }
-            Ok(clear)
-        })?;
-        Ok((sources, clears))
     }
     fn package_joint(
         &self,
@@ -1757,7 +1649,16 @@ impl Converter {
         let progress = weights.and_then(|weights| {
             super::media_progress::Batch::comparison(self.backend.activity.clone(), weights)
         });
+        let tasks = super::media_progress::Batch::units(
+            self.backend.activity.clone(),
+            super::media_progress::Operation::Comparison,
+            super::media_progress::Subject::Result,
+            super::media_progress::Purpose::Verification,
+            super::media_progress::Unit::Tracks,
+            source.len(),
+        );
         let verified_tracks = self.run_tracks(source.len(), |ordinal| {
+            let task = tasks.as_ref().and_then(|tasks| tasks.start(ordinal));
             let report = self.verify_prepared_pair(
                 &source[ordinal],
                 &result[ordinal],
@@ -1767,8 +1668,14 @@ impl Converter {
             if let Some(progress) = &progress {
                 progress.completed(ordinal);
             }
+            if let Some(task) = task {
+                task.finish();
+            }
             Ok(report)
         })?;
+        if let Some(tasks) = &tasks {
+            tasks.finish();
+        }
         if let Some(progress) = &progress {
             // Completion counts finished comparisons; their reports still
             // determine whether the media actually satisfies every check.
@@ -1934,14 +1841,34 @@ fn bind_audio_presentation(
     keys: &InputKeys,
     directory: &Path,
 ) -> Result<(), ConversionError> {
-    let Some(claim) = super::audio_presentation::read_claim(&track.media)? else {
-        return Ok(());
+    let (view, claim) = {
+        let resource_claim = crate::resources::Claim::for_workload(
+            backend.runner.registered_workload().unwrap_or_default(),
+            crate::toolrun::DEFAULT_STDOUT_BYTES,
+            crate::toolrun::DEFAULT_STDERR_BYTES,
+        );
+        let _permit = backend
+            .runner
+            .native_permit(resource_claim, &backend.stop, backend.timeout)
+            .map_err(|error| match error {
+                crate::resources::ReservationError::Cancelled => ConversionError("cancelled"),
+                crate::resources::ReservationError::Insufficient => {
+                    ConversionError("resource-budget")
+                }
+                crate::resources::ReservationError::Timeout => {
+                    ConversionError("media-tool-timeout")
+                }
+            })?;
+        let Some(claim) = super::audio_presentation::read_claim(&track.media)? else {
+            return Ok(());
+        };
+        let view = directory.join(format!("raw-audio-{}.mp4", track.index));
+        copy_private(&track.media, &view)?;
+        // Inspect all coded frames separately from the declared final AAC selection.
+        super::audio_presentation::strip_claim(&view, claim, &backend.stop)?;
+        (view, claim)
     };
-    let view = directory.join(format!("raw-audio-{}.mp4", track.index));
-    copy_private(&track.media, &view)?;
-    // The canonical two-edit declaration selects part of the final AAC frame.
-    // Inspect all coded frames in an owned raw copy before binding that selection.
-    super::audio_presentation::strip_claim(&view, claim, &backend.stop)?;
+    // Evidence readers acquire their own permit; retaining the prefix permit would deadlock at one CPU.
     let evidence = backend.audio_evidence_with_clock(
         super::ts::View {
             input: &view,
@@ -2011,10 +1938,14 @@ fn prepare_presentation_mode(
                 .iter()
                 .enumerate()
                 .map(|(index, track)| {
+                    let task = progress.and_then(|progress| progress.start(index));
                     let prepared =
                         prepare_for(&path, index, track.kind, input.input_keys, purpose)?;
                     if let Some(progress) = progress {
                         progress.completed(index);
+                    }
+                    if let Some(task) = task {
+                        task.finish();
                     }
                     backend.check_cancelled()?;
                     Ok(prepared)
@@ -2025,43 +1956,7 @@ fn prepare_presentation_mode(
             prepare_hls_presentation(input, stage, backend, maximum_workers, purpose, normalize)
         }
         InputFormat::Dash => {
-            let progress = backend.preparation();
-            let tracks = if progress.is_none() {
-                super::dash::snapshot_dash(input.input, stage)?
-            } else {
-                super::dash::snapshot_dash_observed(input.input, stage, &mut |done, total| {
-                    if let Some(progress) = progress {
-                        if done == 0 {
-                            progress.begin(total, super::media_progress::Unit::Renditions);
-                        } else {
-                            progress.completed(done - 1);
-                        }
-                    }
-                    backend.check_cancelled()
-                })?
-            };
-            let descriptions = metadata::read_dash(&stage.join("dash-manifest.mpd"))?;
-            tracks
-                .iter()
-                .zip(descriptions)
-                .map(|(track, metadata)| {
-                    let mut prepared = prepare_for(
-                        &track.source,
-                        track.index,
-                        track.kind,
-                        input.input_keys,
-                        purpose,
-                    )?;
-                    prepared.clock = manifested_clock(&prepared.media, backend)?;
-                    bind_audio_presentation(&mut prepared, backend, input.input_keys, stage)?;
-                    prepared.metadata = metadata;
-                    if prepared.metadata.audio.is_some() && track.kind != TrackKind::Audio {
-                        return Err(ConversionError("track-role-mismatch"));
-                    }
-                    prepared.dash_reference = true;
-                    Ok(prepared)
-                })
-                .collect()
+            dash_preparation::prepare(input, stage, backend, maximum_workers, purpose)
         }
     }
 }
@@ -2511,7 +2406,19 @@ impl Converter {
         tracks: &mut Vec<LocalTrack>,
         input_keys: &InputKeys,
     ) -> Result<(), ConversionError> {
-        for source in prepared {
+        let progress = super::media_progress::Batch::units(
+            self.backend.activity.clone(),
+            super::media_progress::Operation::SourceComparison,
+            super::media_progress::Subject::Source,
+            super::media_progress::Purpose::Conversion,
+            super::media_progress::Unit::Tracks,
+            prepared.len(),
+        );
+        let verified = self.run_tracks(prepared.len(), |ordinal| {
+            let task = progress
+                .as_ref()
+                .and_then(|progress| progress.start(ordinal));
+            let source = &prepared[ordinal];
             if source.source != source.media {
                 let verified = if source.audio_presentation.is_some() {
                     self.verify_audio_projection(source, input_keys)?
@@ -2553,12 +2460,20 @@ impl Converter {
                     return Err(ConversionError("source-decryption-verification-failed"));
                 }
             }
-            tracks.push(LocalTrack {
+            self.backend.check_cancelled()?;
+            if let Some(task) = task {
+                task.finish();
+            }
+            Ok(LocalTrack {
                 source: source.media.clone(),
                 kind: source.report.tracks[0].kind,
                 index: source.index,
-            });
+            })
+        })?;
+        if let Some(progress) = &progress {
+            progress.finish();
         }
+        tracks.extend(verified);
         Ok(())
     }
 

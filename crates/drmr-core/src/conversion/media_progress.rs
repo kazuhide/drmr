@@ -18,11 +18,15 @@ static NEXT_BATCH: AtomicU64 = AtomicU64::new(1);
 
 mod preparation;
 pub(super) use preparation::{PreparationContext, scoped};
+mod units;
+pub(super) use units::{Operation, UnitTask, Units};
 mod integrity;
 pub(super) use integrity::Integrity;
 
 #[cfg(test)]
 mod integrity_tests;
+#[cfg(test)]
+mod units_tests;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Subject {
@@ -113,6 +117,17 @@ pub(super) struct Batch {
     state: Mutex<State>,
 }
 impl Batch {
+    pub(super) fn units(
+        sink: Option<Arc<dyn Sink>>,
+        operation: Operation,
+        subject: Subject,
+        purpose: Purpose,
+        unit: Unit,
+        total: usize,
+    ) -> Option<Units> {
+        Units::new(sink?, operation, subject, purpose, unit, total)
+    }
+
     fn new(sink: Option<Arc<dyn Sink>>, task: Task, total: u64, weights: Vec<u64>) -> Option<Self> {
         let sink = sink?;
         if total == 0 {

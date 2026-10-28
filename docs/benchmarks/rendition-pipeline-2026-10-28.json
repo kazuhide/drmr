@@ -1,0 +1,1456 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-28",
+  "scope": "Local retained clear HLS MPEG-TS to HLS fMP4 FairPlay and DASH fMP4 Widevine/PlayReady using cbcs",
+  "environment": {
+    "cpu": "Apple M5",
+    "logical_cpus": 10,
+    "physical_memory_bytes": 34359738368,
+    "rust": "rustc 1.99.0 (b940084d7 2026-09-28)",
+    "packager": "packager version v3.8.0-75b2faf-release",
+    "tools_hashes": {
+      "packager": "c8a26c3639cf2ebfa542dd9b638a2ea3299090ed9b9485d47179d4aa1fdb96b7",
+      "ffmpeg": "7f6028378534aa10a2dfa07d807ddcc0d18c869bf5c2f64c89efcc18ee88c4ee",
+      "ffprobe": "bfe676bfc3a889bebe63af07c71a926a6167f568c7a932a79c2f1fe51ae6d5a1"
+    }
+  },
+  "workers_upper_bound": 7,
+  "required_depth": "native",
+  "network_acquisition_timed": false,
+  "condition": "Source graph fully hashed immediately before each timed command; filesystem caches and other host work uncontrolled",
+  "order": [
+    [
+      "c",
+      "baseline",
+      "a",
+      "b"
+    ],
+    [
+      "a",
+      "b",
+      "c",
+      "baseline"
+    ],
+    [
+      "b",
+      "c",
+      "baseline",
+      "a"
+    ]
+  ],
+  "builds": {
+    "baseline": {
+      "change": "Baseline with serial snapshot/profile and source-to-intermediate checks; single-threaded final packaging",
+      "binary_sha256": "f66b0a4ae44c29baa4c64e480a6efd7dd2c169f8f7dd4dafe2d1ed4d4f08cbd6",
+      "published_tree": "5f2b85705a10ae74f9dd4d7bc4d08322010e3da8"
+    },
+    "a": {
+      "change": "Bounded snapshot/profile and source-to-intermediate checks",
+      "binary_sha256": "8bdecf72c8a9ecd4dc7e8f01aa596c513ca1f475b96cd07c44c9a9092938fe0b",
+      "rust_cargo_input_manifest_sha256": "2d71ca956569d6a36e5a1e581fabfcc4a8ebe763bf8f9924cf2d5313687e338a"
+    },
+    "b": {
+      "change": "a plus conditional final Shaka input-job concurrency with one shared CPU/memory reservation",
+      "binary_sha256": "cca33570e72d84e3a19751f22730747099fa63ae1762a603434f5026b32479bf",
+      "rust_cargo_input_manifest_sha256": "7d7dd76cf478e146bd0aa22ef211e98cddc96caad2423c9ea0d4389df9390abb"
+    },
+    "c": {
+      "change": "b plus bounded post-capture DASH metadata preparation; DASH capture remains ordered",
+      "binary_sha256": "33cbcf27d69dfd1f866fd940146722c9ae77724a16b01101dd7c8d36ea90af6b",
+      "rust_cargo_input_manifest_sha256": "e2214ce8d688655d4623a8859e2f8a6b711b4d60b95acc6100e395496482fd5a"
+    }
+  },
+  "observations": [
+    {
+      "round": 1,
+      "position": 1,
+      "build": "c",
+      "elapsed_seconds": 64.6860160419019,
+      "sampled_tree_rss_max_bytes": 157122560,
+      "other_top8_process_cpu_percent_sum_median": 340.6,
+      "source_unchanged": true,
+      "native_evidence": [
+        {
+          "format": "dash",
+          "media_checks": {
+            "stream_metadata": "pass",
+            "packet_payloads_equal": true,
+            "packet_timing_equal": true
+          },
+          "drm_systems": [
+            "widevine",
+            "playready"
+          ],
+          "drm_declarations_verified": true,
+          "native_manifest": {
+            "profile": "dash-static-manifest",
+            "errors": 0,
+            "warnings": 0,
+            "document_count": 1,
+            "incomplete": false,
+            "truncated": false
+          }
+        },
+        {
+          "format": "hls",
+          "media_checks": {
+            "stream_metadata": "pass",
+            "packet_payloads_equal": true,
+            "packet_timing_equal": true
+          },
+          "drm_systems": [
+            "fairplay"
+          ],
+          "drm_declarations_verified": true,
+          "native_manifest": {
+            "profile": "hls-base-manifest",
+            "errors": 0,
+            "warnings": 0,
+            "document_count": 8,
+            "incomplete": false,
+            "truncated": false
+          }
+        }
+      ],
+      "tool_calls": {
+        "ffmpeg": 0,
+        "ffprobe": 0,
+        "packager": 15
+      },
+      "packager_call_duration_sum_seconds": 4.375,
+      "phase_scope_sums": [
+        {
+          "phase": "input-preparation",
+          "status": "observed-scopes",
+          "scopes": 3,
+          "scope_elapsed_sum_seconds": 16.871700999
+        },
+        {
+          "phase": "inspection",
+          "status": "observed-scopes",
+          "scopes": 6,
+          "scope_elapsed_sum_seconds": 0.0071160830000000005
+        },
+        {
+          "phase": "normalization",
+          "status": "observed-scopes",
+          "scopes": 7,
+          "scope_elapsed_sum_seconds": 1.577188418
+        },
+        {
+          "phase": "packaging",
+          "status": "observed-scopes",
+          "scopes": 2,
+          "scope_elapsed_sum_seconds": 1.803859084
+        },
+        {
+          "phase": "verification",
+          "status": "observed-scopes",
+          "scopes": 25,
+          "scope_elapsed_sum_seconds": 6.143634377
+        },
+        {
+          "phase": "publication",
+          "status": "observed-scopes",
+          "scopes": 3,
+          "scope_elapsed_sum_seconds": 4.637217667
+        }
+      ]
+    },
+    {
+      "round": 1,
+      "position": 2,
+      "build": "baseline",
+      "elapsed_seconds": 64.69340899994131,
+      "sampled_tree_rss_max_bytes": 233308160,
+      "other_top8_process_cpu_percent_sum_median": 311.4,
+      "source_unchanged": true,
+      "native_evidence": [
+        {
+          "format": "dash",
+          "media_checks": {
+            "stream_metadata": "pass",
+            "packet_payloads_equal": true,
+            "packet_timing_equal": true
+          },
+          "drm_systems": [
+            "widevine",
+            "playready"
+          ],
+          "drm_declarations_verified": true,
+          "native_manifest": {
+            "profile": "dash-static-manifest",
+            "errors": 0,
+            "warnings": 0,
+            "document_count": 1,
+            "incomplete": false,
+            "truncated": false
+          }
+        },
+        {
+          "format": "hls",
+          "media_checks": {
+            "stream_metadata": "pass",
+            "packet_payloads_equal": true,
+            "packet_timing_equal": true
+          },
+          "drm_systems": [
+            "fairplay"
+          ],
+          "drm_declarations_verified": true,
+          "native_manifest": {
+            "profile": "hls-base-manifest",
+            "errors": 0,
+            "warnings": 0,
+            "document_count": 8,
+            "incomplete": false,
+            "truncated": false
+          }
+        }
+      ],
+      "tool_calls": {
+        "ffmpeg": 0,
+        "ffprobe": 0,
+        "packager": 15
+      },
+      "packager_call_duration_sum_seconds": 6.423000000000001,
+      "phase_scope_sums": [
+        {
+          "phase": "input-preparation",
+          "status": "observed-scopes",
+          "scopes": 3,
+          "scope_elapsed_sum_seconds": 18.770291876
+        },
+        {
+          "phase": "inspection",
+          "status": "observed-scopes",
+          "scopes": 6,
+          "scope_elapsed_sum_seconds": 0.00559354
+        },
+        {
+          "phase": "normalization",
+          "status": "observed-scopes",
+          "scopes": 7,
+          "scope_elapsed_sum_seconds": 2.65826375
+        },
+        {
+          "phase": "packaging",
+          "status": "observed-scopes",
+          "scopes": 2,
+          "scope_elapsed_sum_seconds": 2.3268910839999997
+        },
+        {
+          "phase": "verification",
+          "status": "observed-scopes",
+          "scopes": 25,
+          "scope_elapsed_sum_seconds": 6.043947084
+        },
+        {
+          "phase": "publication",
+          "status": "observed-scopes",
+          "scopes": 3,
+          "scope_elapsed_sum_seconds": 3.2082654579999996
+        }
+      ]
+    },
+    {
+      "round": 1,
+      "position": 3,
+      "build": "a",
+      "elapsed_seconds": 57.74355670902878,
+      "sampled_tree_rss_max_bytes": 220381184,
+      "other_top8_process_cpu_percent_sum_median": 307.25,
+      "source_unchanged": true,
+      "native_evidence": [
+        {
+          "format": "dash",
+          "media_checks": {
+            "stream_metadata": "pass",
+            "packet_payloads_equal": true,
+            "packet_timing_equal": true
+          },
+          "drm_systems": [
+            "widevine",
+            "playready"
+          ],
+          "drm_declarations_verified": true,
+          "native_manifest": {
+            "profile": "dash-static-manifest",
+            "errors": 0,
+            "warnings": 0,
+            "document_count": 1,
+            "incomplete": false,
+            "truncated": false
+          }
+        },
+        {
+          "format": "hls",
+          "media_checks": {
+            "stream_metadata": "pass",
+            "packet_payloads_equal": true,
+            "packet_timing_equal": true
+          },
+          "drm_systems": [
+            "fairplay"
+          ],
+          "drm_declarations_verified": true,
+          "native_manifest": {
+            "profile": "hls-base-manifest",
+            "errors": 0,
+            "warnings": 0,
+            "document_count": 8,
+            "incomplete": false,
+            "truncated": false
+          }
+        }
+      ],
+      "tool_calls": {
+        "ffmpeg": 0,
+        "ffprobe": 0,
+        "packager": 15
+      },
+      "packager_call_duration_sum_seconds": 4.681,
+      "phase_scope_sums": [
+        {
+          "phase": "input-preparation",
+          "status": "observed-scopes",
+          "scopes": 3,
+          "scope_elapsed_sum_seconds": 16.208403042
+        },
+        {
+          "phase": "inspection",
+          "status": "observed-scopes",
+          "scopes": 6,
+          "scope_elapsed_sum_seconds": 0.007897125
+        },
+        {
+          "phase": "normalization",
+          "status": "observed-scopes",
+          "scopes": 7,
+          "scope_elapsed_sum_seconds": 1.394002751
+        },
+        {
+          "phase": "packaging",
+          "status": "observed-scopes",
+          "scopes": 2,
+          "scope_elapsed_sum_seconds": 2.797550791
+        },
+        {
+          "phase": "verification",
+          "status": "observed-scopes",
+          "scopes": 25,
+          "scope_elapsed_sum_seconds": 6.3625241699999995
+        },
+        {
+          "phase": "publication",
+          "status": "observed-scopes",
+          "scopes": 3,
+          "scope_elapsed_sum_seconds": 2.545342333
+        }
+      ]
+    },
+    {
+      "round": 1,
+      "position": 4,
+      "build": "b",
+      "elapsed_seconds": 56.777951000025496,
+      "sampled_tree_rss_max_bytes": 160202752,
+      "other_top8_process_cpu_percent_sum_median": 290.79999999999995,
+      "source_unchanged": true,
+      "native_evidence": [
+        {
+          "format": "dash",
+          "media_checks": {
+            "stream_metadata": "pass",
+            "packet_payloads_equal": true,
+            "packet_timing_equal": true
+          },
+          "drm_systems": [
+            "widevine",
+            "playready"
+          ],
+          "drm_declarations_verified": true,
+          "native_manifest": {
+            "profile": "dash-static-manifest",
+            "errors": 0,
+            "warnings": 0,
+            "document_count": 1,
+            "incomplete": false,
+            "truncated": false
+          }
+        },
+        {
+          "format": "hls",
+          "media_checks": {
+            "stream_metadata": "pass",
+            "packet_payloads_equal": true,
+            "packet_timing_equal": true
+          },
+          "drm_systems": [
+            "fairplay"
+          ],
+          "drm_declarations_verified": true,
+          "native_manifest": {
+            "profile": "hls-base-manifest",
+            "errors": 0,
+            "warnings": 0,
+            "document_count": 8,
+            "incomplete": false,
+            "truncated": false
+          }
+        }
+      ],
+      "tool_calls": {
+        "ffmpeg": 0,
+        "ffprobe": 0,
+        "packager": 15
+      },
+      "packager_call_duration_sum_seconds": 4.297000000000001,
+      "phase_scope_sums": [
+        {
+          "phase": "input-preparation",
+          "status": "observed-scopes",
+          "scopes": 3,
+          "scope_elapsed_sum_seconds": 14.303152707999999
+        },
+        {
+          "phase": "inspection",
+          "status": "observed-scopes",
+          "scopes": 6,
+          "scope_elapsed_sum_seconds": 0.0034520849999999997
+        },
+        {
+          "phase": "normalization",
+          "status": "observed-scopes",
+          "scopes": 7,
+          "scope_elapsed_sum_seconds": 1.588043916
+        },
+        {
+          "phase": "packaging",
+          "status": "observed-scopes",
+          "scopes": 2,
+          "scope_elapsed_sum_seconds": 1.880245542
+        },
+        {
+          "phase": "verification",
+          "status": "observed-scopes",
+          "scopes": 25,
+          "scope_elapsed_sum_seconds": 5.682698418
+        },
+        {
+          "phase": "publication",
+          "status": "observed-scopes",
+          "scopes": 3,
+          "scope_elapsed_sum_seconds": 2.3235386670000002
+        }
+      ]
+    },
+    {
+      "round": 2,
+      "position": 1,
+      "build": "a",
+      "elapsed_seconds": 65.98289041698445,
+      "sampled_tree_rss_max_bytes": 248414208,
+      "other_top8_process_cpu_percent_sum_median": 339.1,
+      "source_unchanged": true,
+      "native_evidence": [
+        {
+          "format": "dash",
+          "media_checks": {
+            "stream_metadata": "pass",
+            "packet_payloads_equal": true,
+            "packet_timing_equal": true
+          },
+          "drm_systems": [
+            "widevine",
+            "playready"
+          ],
+          "drm_declarations_verified": true,
+          "native_manifest": {
+            "profile": "dash-static-manifest",
+            "errors": 0,
+            "warnings": 0,
+            "document_count": 1,
+            "incomplete": false,
+            "truncated": false
+          }
+        },
+        {
+          "format": "hls",
+          "media_checks": {
+            "stream_metadata": "pass",
+            "packet_payloads_equal": true,
+            "packet_timing_equal": true
+          },
+          "drm_systems": [
+            "fairplay"
+          ],
+          "drm_declarations_verified": true,
+          "native_manifest": {
+            "profile": "hls-base-manifest",
+            "errors": 0,
+            "warnings": 0,
+            "document_count": 8,
+            "incomplete": false,
+            "truncated": false
+          }
+        }
+      ],
+      "tool_calls": {
+        "ffmpeg": 0,
+        "ffprobe": 0,
+        "packager": 15
+      },
+      "packager_call_duration_sum_seconds": 5.66,
+      "phase_scope_sums": [
+        {
+          "phase": "input-preparation",
+          "status": "observed-scopes",
+          "scopes": 3,
+          "scope_elapsed_sum_seconds": 16.737537083
+        },
+        {
+          "phase": "inspection",
+          "status": "observed-scopes",
+          "scopes": 6,
+          "scope_elapsed_sum_seconds": 0.008789291
+        },
+        {
+          "phase": "normalization",
+          "status": "observed-scopes",
+          "scopes": 7,
+          "scope_elapsed_sum_seconds": 1.8222777090000002
+        },
+        {
+          "phase": "packaging",
+          "status": "observed-scopes",
+          "scopes": 2,
+          "scope_elapsed_sum_seconds": 2.681770417
+        },
+        {
+          "phase": "verification",
+          "status": "observed-scopes",
+          "scopes": 25,
+          "scope_elapsed_sum_seconds": 5.712398749000001
+        },
+        {
+          "phase": "publication",
+          "status": "observed-scopes",
+          "scopes": 3,
+          "scope_elapsed_sum_seconds": 3.599351291
+        }
+      ]
+    },
+    {
+      "round": 2,
+      "position": 2,
+      "build": "b",
+      "elapsed_seconds": 66.31391862500459,
+      "sampled_tree_rss_max_bytes": 178569216,
+      "other_top8_process_cpu_percent_sum_median": 305.9,
+      "source_unchanged": true,
+      "native_evidence": [
+        {
+          "format": "dash",
+          "media_checks": {
+            "stream_metadata": "pass",
+            "packet_payloads_equal": true,
+            "packet_timing_equal": true
+          },
+          "drm_systems": [
+            "widevine",
+            "playready"
+          ],
+          "drm_declarations_verified": true,
+          "native_manifest": {
+            "profile": "dash-static-manifest",
+            "errors": 0,
+            "warnings": 0,
+            "document_count": 1,
+            "incomplete": false,
+            "truncated": false
+          }
+        },
+        {
+          "format": "hls",
+          "media_checks": {
+            "stream_metadata": "pass",
+            "packet_payloads_equal": true,
+            "packet_timing_equal": true
+          },
+          "drm_systems": [
+            "fairplay"
+          ],
+          "drm_declarations_verified": true,
+          "native_manifest": {
+            "profile": "hls-base-manifest",
+            "errors": 0,
+            "warnings": 0,
+            "document_count": 8,
+            "incomplete": false,
+            "truncated": false
+          }
+        }
+      ],
+      "tool_calls": {
+        "ffmpeg": 0,
+        "ffprobe": 0,
+        "packager": 15
+      },
+      "packager_call_duration_sum_seconds": 5.847999999999999,
+      "phase_scope_sums": [
+        {
+          "phase": "input-preparation",
+          "status": "observed-scopes",
+          "scopes": 3,
+          "scope_elapsed_sum_seconds": 20.053919209
+        },
+        {
+          "phase": "inspection",
+          "status": "observed-scopes",
+          "scopes": 6,
+          "scope_elapsed_sum_seconds": 0.014255292
+        },
+        {
+          "phase": "normalization",
+          "status": "observed-scopes",
+          "scopes": 7,
+          "scope_elapsed_sum_seconds": 2.164187333
+        },
+        {
+          "phase": "packaging",
+          "status": "observed-scopes",
+          "scopes": 2,
+          "scope_elapsed_sum_seconds": 1.723994459
+        },
+        {
+          "phase": "verification",
+          "status": "observed-scopes",
+          "scopes": 25,
+          "scope_elapsed_sum_seconds": 5.966532792
+        },
+        {
+          "phase": "publication",
+          "status": "observed-scopes",
+          "scopes": 3,
+          "scope_elapsed_sum_seconds": 3.0905602500000002
+        }
+      ]
+    },
+    {
+      "round": 2,
+      "position": 3,
+      "build": "c",
+      "elapsed_seconds": 69.46048570796847,
+      "sampled_tree_rss_max_bytes": 155435008,
+      "other_top8_process_cpu_percent_sum_median": 319.6,
+      "source_unchanged": true,
+      "native_evidence": [
+        {
+          "format": "dash",
+          "media_checks": {
+            "stream_metadata": "pass",
+            "packet_payloads_equal": true,
+            "packet_timing_equal": true
+          },
+          "drm_systems": [
+            "widevine",
+            "playready"
+          ],
+          "drm_declarations_verified": true,
+          "native_manifest": {
+            "profile": "dash-static-manifest",
+            "errors": 0,
+            "warnings": 0,
+            "document_count": 1,
+            "incomplete": false,
+            "truncated": false
+          }
+        },
+        {
+          "format": "hls",
+          "media_checks": {
+            "stream_metadata": "pass",
+            "packet_payloads_equal": true,
+            "packet_timing_equal": true
+          },
+          "drm_systems": [
+            "fairplay"
+          ],
+          "drm_declarations_verified": true,
+          "native_manifest": {
+            "profile": "hls-base-manifest",
+            "errors": 0,
+            "warnings": 0,
+            "document_count": 8,
+            "incomplete": false,
+            "truncated": false
+          }
+        }
+      ],
+      "tool_calls": {
+        "ffmpeg": 0,
+        "ffprobe": 0,
+        "packager": 15
+      },
+      "packager_call_duration_sum_seconds": 14.663,
+      "phase_scope_sums": [
+        {
+          "phase": "input-preparation",
+          "status": "observed-scopes",
+          "scopes": 3,
+          "scope_elapsed_sum_seconds": 22.992724708999997
+        },
+        {
+          "phase": "inspection",
+          "status": "observed-scopes",
+          "scopes": 6,
+          "scope_elapsed_sum_seconds": 0.013475293000000001
+        },
+        {
+          "phase": "normalization",
+          "status": "observed-scopes",
+          "scopes": 7,
+          "scope_elapsed_sum_seconds": 11.721918877
+        },
+        {
+          "phase": "packaging",
+          "status": "observed-scopes",
+          "scopes": 2,
+          "scope_elapsed_sum_seconds": 2.186400459
+        },
+        {
+          "phase": "verification",
+          "status": "observed-scopes",
+          "scopes": 25,
+          "scope_elapsed_sum_seconds": 6.428475830999998
+        },
+        {
+          "phase": "publication",
+          "status": "observed-scopes",
+          "scopes": 3,
+          "scope_elapsed_sum_seconds": 3.2061545419999997
+        }
+      ]
+    },
+    {
+      "round": 2,
+      "position": 4,
+      "build": "baseline",
+      "elapsed_seconds": 68.87878875003662,
+      "sampled_tree_rss_max_bytes": 214351872,
+      "other_top8_process_cpu_percent_sum_median": 357.79999999999995,
+      "source_unchanged": true,
+      "native_evidence": [
+        {
+          "format": "dash",
+          "media_checks": {
+            "stream_metadata": "pass",
+            "packet_payloads_equal": true,
+            "packet_timing_equal": true
+          },
+          "drm_systems": [
+            "widevine",
+            "playready"
+          ],
+          "drm_declarations_verified": true,
+          "native_manifest": {
+            "profile": "dash-static-manifest",
+            "errors": 0,
+            "warnings": 0,
+            "document_count": 1,
+            "incomplete": false,
+            "truncated": false
+          }
+        },
+        {
+          "format": "hls",
+          "media_checks": {
+            "stream_metadata": "pass",
+            "packet_payloads_equal": true,
+            "packet_timing_equal": true
+          },
+          "drm_systems": [
+            "fairplay"
+          ],
+          "drm_declarations_verified": true,
+          "native_manifest": {
+            "profile": "hls-base-manifest",
+            "errors": 0,
+            "warnings": 0,
+            "document_count": 8,
+            "incomplete": false,
+            "truncated": false
+          }
+        }
+      ],
+      "tool_calls": {
+        "ffmpeg": 0,
+        "ffprobe": 0,
+        "packager": 15
+      },
+      "packager_call_duration_sum_seconds": 5.606,
+      "phase_scope_sums": [
+        {
+          "phase": "input-preparation",
+          "status": "observed-scopes",
+          "scopes": 3,
+          "scope_elapsed_sum_seconds": 19.537871834
+        },
+        {
+          "phase": "inspection",
+          "status": "observed-scopes",
+          "scopes": 6,
+          "scope_elapsed_sum_seconds": 0.004846417
+        },
+        {
+          "phase": "normalization",
+          "status": "observed-scopes",
+          "scopes": 7,
+          "scope_elapsed_sum_seconds": 1.8151512079999998
+        },
+        {
+          "phase": "packaging",
+          "status": "observed-scopes",
+          "scopes": 2,
+          "scope_elapsed_sum_seconds": 2.584144625
+        },
+        {
+          "phase": "verification",
+          "status": "observed-scopes",
+          "scopes": 25,
+          "scope_elapsed_sum_seconds": 6.659492503999999
+        },
+        {
+          "phase": "publication",
+          "status": "observed-scopes",
+          "scopes": 3,
+          "scope_elapsed_sum_seconds": 4.082601791
+        }
+      ]
+    },
+    {
+      "round": 3,
+      "position": 1,
+      "build": "b",
+      "elapsed_seconds": 75.3600032919785,
+      "sampled_tree_rss_max_bytes": 188547072,
+      "other_top8_process_cpu_percent_sum_median": 424.8,
+      "source_unchanged": true,
+      "native_evidence": [
+        {
+          "format": "dash",
+          "media_checks": {
+            "stream_metadata": "pass",
+            "packet_payloads_equal": true,
+            "packet_timing_equal": true
+          },
+          "drm_systems": [
+            "widevine",
+            "playready"
+          ],
+          "drm_declarations_verified": true,
+          "native_manifest": {
+            "profile": "dash-static-manifest",
+            "errors": 0,
+            "warnings": 0,
+            "document_count": 1,
+            "incomplete": false,
+            "truncated": false
+          }
+        },
+        {
+          "format": "hls",
+          "media_checks": {
+            "stream_metadata": "pass",
+            "packet_payloads_equal": true,
+            "packet_timing_equal": true
+          },
+          "drm_systems": [
+            "fairplay"
+          ],
+          "drm_declarations_verified": true,
+          "native_manifest": {
+            "profile": "hls-base-manifest",
+            "errors": 0,
+            "warnings": 0,
+            "document_count": 8,
+            "incomplete": false,
+            "truncated": false
+          }
+        }
+      ],
+      "tool_calls": {
+        "ffmpeg": 0,
+        "ffprobe": 0,
+        "packager": 15
+      },
+      "packager_call_duration_sum_seconds": 6.292,
+      "phase_scope_sums": [
+        {
+          "phase": "input-preparation",
+          "status": "observed-scopes",
+          "scopes": 3,
+          "scope_elapsed_sum_seconds": 23.267193709
+        },
+        {
+          "phase": "inspection",
+          "status": "observed-scopes",
+          "scopes": 6,
+          "scope_elapsed_sum_seconds": 0.002906625
+        },
+        {
+          "phase": "normalization",
+          "status": "observed-scopes",
+          "scopes": 7,
+          "scope_elapsed_sum_seconds": 1.94284275
+        },
+        {
+          "phase": "packaging",
+          "status": "observed-scopes",
+          "scopes": 2,
+          "scope_elapsed_sum_seconds": 2.8971421250000002
+        },
+        {
+          "phase": "verification",
+          "status": "observed-scopes",
+          "scopes": 25,
+          "scope_elapsed_sum_seconds": 9.54555454
+        },
+        {
+          "phase": "publication",
+          "status": "observed-scopes",
+          "scopes": 3,
+          "scope_elapsed_sum_seconds": 3.4716273749999997
+        }
+      ]
+    },
+    {
+      "round": 3,
+      "position": 2,
+      "build": "c",
+      "elapsed_seconds": 63.84057804197073,
+      "sampled_tree_rss_max_bytes": 164282368,
+      "other_top8_process_cpu_percent_sum_median": 356.8,
+      "source_unchanged": true,
+      "native_evidence": [
+        {
+          "format": "dash",
+          "media_checks": {
+            "stream_metadata": "pass",
+            "packet_payloads_equal": true,
+            "packet_timing_equal": true
+          },
+          "drm_systems": [
+            "widevine",
+            "playready"
+          ],
+          "drm_declarations_verified": true,
+          "native_manifest": {
+            "profile": "dash-static-manifest",
+            "errors": 0,
+            "warnings": 0,
+            "document_count": 1,
+            "incomplete": false,
+            "truncated": false
+          }
+        },
+        {
+          "format": "hls",
+          "media_checks": {
+            "stream_metadata": "pass",
+            "packet_payloads_equal": true,
+            "packet_timing_equal": true
+          },
+          "drm_systems": [
+            "fairplay"
+          ],
+          "drm_declarations_verified": true,
+          "native_manifest": {
+            "profile": "hls-base-manifest",
+            "errors": 0,
+            "warnings": 0,
+            "document_count": 8,
+            "incomplete": false,
+            "truncated": false
+          }
+        }
+      ],
+      "tool_calls": {
+        "ffmpeg": 0,
+        "ffprobe": 0,
+        "packager": 15
+      },
+      "packager_call_duration_sum_seconds": 4.96,
+      "phase_scope_sums": [
+        {
+          "phase": "input-preparation",
+          "status": "observed-scopes",
+          "scopes": 3,
+          "scope_elapsed_sum_seconds": 21.435657542999998
+        },
+        {
+          "phase": "inspection",
+          "status": "observed-scopes",
+          "scopes": 6,
+          "scope_elapsed_sum_seconds": 0.003640125
+        },
+        {
+          "phase": "normalization",
+          "status": "observed-scopes",
+          "scopes": 7,
+          "scope_elapsed_sum_seconds": 1.9642140829999999
+        },
+        {
+          "phase": "packaging",
+          "status": "observed-scopes",
+          "scopes": 2,
+          "scope_elapsed_sum_seconds": 2.025047625
+        },
+        {
+          "phase": "verification",
+          "status": "observed-scopes",
+          "scopes": 25,
+          "scope_elapsed_sum_seconds": 6.272632125
+        },
+        {
+          "phase": "publication",
+          "status": "observed-scopes",
+          "scopes": 3,
+          "scope_elapsed_sum_seconds": 3.2351843750000002
+        }
+      ]
+    },
+    {
+      "round": 3,
+      "position": 3,
+      "build": "baseline",
+      "elapsed_seconds": 66.48603291600011,
+      "sampled_tree_rss_max_bytes": 153305088,
+      "other_top8_process_cpu_percent_sum_median": 401.4,
+      "source_unchanged": true,
+      "native_evidence": [
+        {
+          "format": "dash",
+          "media_checks": {
+            "stream_metadata": "pass",
+            "packet_payloads_equal": true,
+            "packet_timing_equal": true
+          },
+          "drm_systems": [
+            "widevine",
+            "playready"
+          ],
+          "drm_declarations_verified": true,
+          "native_manifest": {
+            "profile": "dash-static-manifest",
+            "errors": 0,
+            "warnings": 0,
+            "document_count": 1,
+            "incomplete": false,
+            "truncated": false
+          }
+        },
+        {
+          "format": "hls",
+          "media_checks": {
+            "stream_metadata": "pass",
+            "packet_payloads_equal": true,
+            "packet_timing_equal": true
+          },
+          "drm_systems": [
+            "fairplay"
+          ],
+          "drm_declarations_verified": true,
+          "native_manifest": {
+            "profile": "hls-base-manifest",
+            "errors": 0,
+            "warnings": 0,
+            "document_count": 8,
+            "incomplete": false,
+            "truncated": false
+          }
+        }
+      ],
+      "tool_calls": {
+        "ffmpeg": 0,
+        "ffprobe": 0,
+        "packager": 15
+      },
+      "packager_call_duration_sum_seconds": 5.589,
+      "phase_scope_sums": [
+        {
+          "phase": "input-preparation",
+          "status": "observed-scopes",
+          "scopes": 3,
+          "scope_elapsed_sum_seconds": 17.951573916
+        },
+        {
+          "phase": "inspection",
+          "status": "observed-scopes",
+          "scopes": 6,
+          "scope_elapsed_sum_seconds": 0.005444
+        },
+        {
+          "phase": "normalization",
+          "status": "observed-scopes",
+          "scopes": 7,
+          "scope_elapsed_sum_seconds": 2.15321975
+        },
+        {
+          "phase": "packaging",
+          "status": "observed-scopes",
+          "scopes": 2,
+          "scope_elapsed_sum_seconds": 2.252209875
+        },
+        {
+          "phase": "verification",
+          "status": "observed-scopes",
+          "scopes": 25,
+          "scope_elapsed_sum_seconds": 5.701992334
+        },
+        {
+          "phase": "publication",
+          "status": "observed-scopes",
+          "scopes": 3,
+          "scope_elapsed_sum_seconds": 5.621927584
+        }
+      ]
+    },
+    {
+      "round": 3,
+      "position": 4,
+      "build": "a",
+      "elapsed_seconds": 58.42268800002057,
+      "sampled_tree_rss_max_bytes": 168247296,
+      "other_top8_process_cpu_percent_sum_median": 304.7,
+      "source_unchanged": true,
+      "native_evidence": [
+        {
+          "format": "dash",
+          "media_checks": {
+            "stream_metadata": "pass",
+            "packet_payloads_equal": true,
+            "packet_timing_equal": true
+          },
+          "drm_systems": [
+            "widevine",
+            "playready"
+          ],
+          "drm_declarations_verified": true,
+          "native_manifest": {
+            "profile": "dash-static-manifest",
+            "errors": 0,
+            "warnings": 0,
+            "document_count": 1,
+            "incomplete": false,
+            "truncated": false
+          }
+        },
+        {
+          "format": "hls",
+          "media_checks": {
+            "stream_metadata": "pass",
+            "packet_payloads_equal": true,
+            "packet_timing_equal": true
+          },
+          "drm_systems": [
+            "fairplay"
+          ],
+          "drm_declarations_verified": true,
+          "native_manifest": {
+            "profile": "hls-base-manifest",
+            "errors": 0,
+            "warnings": 0,
+            "document_count": 8,
+            "incomplete": false,
+            "truncated": false
+          }
+        }
+      ],
+      "tool_calls": {
+        "ffmpeg": 0,
+        "ffprobe": 0,
+        "packager": 15
+      },
+      "packager_call_duration_sum_seconds": 5.859999999999999,
+      "phase_scope_sums": [
+        {
+          "phase": "input-preparation",
+          "status": "observed-scopes",
+          "scopes": 3,
+          "scope_elapsed_sum_seconds": 20.668529374000002
+        },
+        {
+          "phase": "inspection",
+          "status": "observed-scopes",
+          "scopes": 6,
+          "scope_elapsed_sum_seconds": 0.003747541
+        },
+        {
+          "phase": "normalization",
+          "status": "observed-scopes",
+          "scopes": 7,
+          "scope_elapsed_sum_seconds": 2.13708675
+        },
+        {
+          "phase": "packaging",
+          "status": "observed-scopes",
+          "scopes": 2,
+          "scope_elapsed_sum_seconds": 2.5190793339999997
+        },
+        {
+          "phase": "verification",
+          "status": "observed-scopes",
+          "scopes": 25,
+          "scope_elapsed_sum_seconds": 5.72703504
+        },
+        {
+          "phase": "publication",
+          "status": "observed-scopes",
+          "scopes": 3,
+          "scope_elapsed_sum_seconds": 2.6614637500000002
+        }
+      ]
+    }
+  ],
+  "source": {
+    "referenced_files": 708,
+    "video_renditions": 6,
+    "audio_renditions": 1,
+    "bytes": 857447176,
+    "graph_sha256": "62182f3975023352f6bf567d57cd0a59f42a853017b92027074aff765c31432e",
+    "duration_seconds_approximately": 597,
+    "segment_target_seconds": 6
+  },
+  "timing_semantics": "Whole child command including launcher, publication and cleanup; source hashing, result inventories and output cleanup outside the timed command",
+  "memory_semantics": "Maximum sampled sum of command-launcher, CLI and descendant RSS from process-table snapshots approximately every 0.5 s; shared pages can be counted more than once and short-lived processes can be missed; not an exact peak or a hard bound",
+  "phase_semantics": "Elapsed scope sums overlap and include only explicitly instrumented work; not CPU time or additive command phases",
+  "evidence_limits": [
+    "No complete decoding requested",
+    "No DRM device or license-server playback qualification",
+    "No external manifest-validator execution",
+    "Native manifest-only rule scope is separate from encoded media checks",
+    "No CPU-time or exact I/O-byte measurement",
+    "Intermediate builds identified by binary and input manifests rather than release tags"
+  ],
+  "summary": {
+    "baseline": {
+      "median_seconds": 66.48603291600011,
+      "minimum_seconds": 64.69340899994131,
+      "maximum_seconds": 68.87878875003662,
+      "maximum_sampled_tree_rss_bytes": 233308160,
+      "successful_runs": 3
+    },
+    "a": {
+      "median_seconds": 58.42268800002057,
+      "minimum_seconds": 57.74355670902878,
+      "maximum_seconds": 65.98289041698445,
+      "maximum_sampled_tree_rss_bytes": 248414208,
+      "successful_runs": 3
+    },
+    "b": {
+      "median_seconds": 66.31391862500459,
+      "minimum_seconds": 56.777951000025496,
+      "maximum_seconds": 75.3600032919785,
+      "maximum_sampled_tree_rss_bytes": 188547072,
+      "successful_runs": 3
+    },
+    "c": {
+      "median_seconds": 64.6860160419019,
+      "minimum_seconds": 63.84057804197073,
+      "maximum_seconds": 69.46048570796847,
+      "maximum_sampled_tree_rss_bytes": 164282368,
+      "successful_runs": 3
+    }
+  },
+  "measurement_selection": "Three rotated rounds per build; preliminary and profiled diagnostic runs excluded",
+  "final_candidate_validation": {
+    "schema_version": 1,
+    "scope": "Separate final candidate validation after test-only scheduling portability changes",
+    "binary_sha256": "5c10577395170737ae8ed7d63ea7006b367b4e60967890d4af93ee8c0c60a54d",
+    "rust_cargo_input_manifest_sha256": "bebc36f18906b23d0e93f958e5729f7a0f4c5d2178fd6868c94ab81403fe6bec",
+    "source_graph_sha256": "62182f3975023352f6bf567d57cd0a59f42a853017b92027074aff765c31432e",
+    "workers_upper_bound": 7,
+    "required_depth": "native",
+    "network_acquisition_timed": false,
+    "observations": [
+      {
+        "sequence": 1,
+        "elapsed_seconds": 75.35621933406219,
+        "source_unchanged": true,
+        "native_evidence": [
+          {
+            "format": "dash",
+            "media_checks": {
+              "stream_metadata": "pass",
+              "packet_payloads_equal": true,
+              "packet_timing_equal": true
+            },
+            "drm_systems": [
+              "widevine",
+              "playready"
+            ],
+            "drm_declarations_verified": true,
+            "native_manifest": {
+              "profile": "dash-static-manifest",
+              "errors": 0,
+              "warnings": 0,
+              "document_count": 1,
+              "incomplete": false,
+              "truncated": false
+            }
+          },
+          {
+            "format": "hls",
+            "media_checks": {
+              "stream_metadata": "pass",
+              "packet_payloads_equal": true,
+              "packet_timing_equal": true
+            },
+            "drm_systems": [
+              "fairplay"
+            ],
+            "drm_declarations_verified": true,
+            "native_manifest": {
+              "profile": "hls-base-manifest",
+              "errors": 0,
+              "warnings": 0,
+              "document_count": 8,
+              "incomplete": false,
+              "truncated": false
+            }
+          }
+        ],
+        "tool_calls": {
+          "ffmpeg": 0,
+          "ffprobe": 0,
+          "packager": 15
+        },
+        "output_bytes": 1649142636,
+        "sampled_tree_rss_max_bytes": 162971648,
+        "other_top8_process_cpu_percent_sum_median": 450.8
+      },
+      {
+        "sequence": 2,
+        "elapsed_seconds": 66.60007816704456,
+        "source_unchanged": true,
+        "native_evidence": [
+          {
+            "format": "dash",
+            "media_checks": {
+              "stream_metadata": "pass",
+              "packet_payloads_equal": true,
+              "packet_timing_equal": true
+            },
+            "drm_systems": [
+              "widevine",
+              "playready"
+            ],
+            "drm_declarations_verified": true,
+            "native_manifest": {
+              "profile": "dash-static-manifest",
+              "errors": 0,
+              "warnings": 0,
+              "document_count": 1,
+              "incomplete": false,
+              "truncated": false
+            }
+          },
+          {
+            "format": "hls",
+            "media_checks": {
+              "stream_metadata": "pass",
+              "packet_payloads_equal": true,
+              "packet_timing_equal": true
+            },
+            "drm_systems": [
+              "fairplay"
+            ],
+            "drm_declarations_verified": true,
+            "native_manifest": {
+              "profile": "hls-base-manifest",
+              "errors": 0,
+              "warnings": 0,
+              "document_count": 8,
+              "incomplete": false,
+              "truncated": false
+            }
+          }
+        ],
+        "tool_calls": {
+          "ffmpeg": 0,
+          "ffprobe": 0,
+          "packager": 15
+        },
+        "output_bytes": 1649142636,
+        "sampled_tree_rss_max_bytes": 186466304,
+        "other_top8_process_cpu_percent_sum_median": 330.7
+      },
+      {
+        "sequence": 3,
+        "elapsed_seconds": 72.57537570805289,
+        "source_unchanged": true,
+        "native_evidence": [
+          {
+            "format": "dash",
+            "media_checks": {
+              "stream_metadata": "pass",
+              "packet_payloads_equal": true,
+              "packet_timing_equal": true
+            },
+            "drm_systems": [
+              "widevine",
+              "playready"
+            ],
+            "drm_declarations_verified": true,
+            "native_manifest": {
+              "profile": "dash-static-manifest",
+              "errors": 0,
+              "warnings": 0,
+              "document_count": 1,
+              "incomplete": false,
+              "truncated": false
+            }
+          },
+          {
+            "format": "hls",
+            "media_checks": {
+              "stream_metadata": "pass",
+              "packet_payloads_equal": true,
+              "packet_timing_equal": true
+            },
+            "drm_systems": [
+              "fairplay"
+            ],
+            "drm_declarations_verified": true,
+            "native_manifest": {
+              "profile": "hls-base-manifest",
+              "errors": 0,
+              "warnings": 0,
+              "document_count": 8,
+              "incomplete": false,
+              "truncated": false
+            }
+          }
+        ],
+        "tool_calls": {
+          "ffmpeg": 0,
+          "ffprobe": 0,
+          "packager": 15
+        },
+        "output_bytes": 1649142636,
+        "sampled_tree_rss_max_bytes": 162283520,
+        "other_top8_process_cpu_percent_sum_median": 473.6
+      }
+    ],
+    "summary": {
+      "successful_runs": 3,
+      "median_seconds": 72.57537570805289,
+      "minimum_seconds": 66.60007816704456,
+      "maximum_seconds": 75.35621933406219,
+      "maximum_sampled_tree_rss_bytes": 186466304
+    },
+    "comparison_semantics": "Consecutive follow-up runs, separate from the rotated four-build comparison. Do not attribute their timing difference to the test-only change. Same measurement definitions and evidence limits as the original comparison."
+  }
+}

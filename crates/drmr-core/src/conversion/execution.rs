@@ -111,6 +111,9 @@ impl<'a> Scheduler<'a> {
         Self {
             backend,
             maximum_workers,
+            #[cfg(test)]
+            hardware: backend.scheduling_hardware.unwrap_or_else(Hardware::detect),
+            #[cfg(not(test))]
             hardware: Hardware::detect(),
             quiet: false,
         }

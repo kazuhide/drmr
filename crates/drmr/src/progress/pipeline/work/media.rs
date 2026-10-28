@@ -36,7 +36,7 @@ pub(in crate::progress::pipeline) enum Subject {
     Output,
 }
 impl Subject {
-    fn parse(value: &str) -> Option<Self> {
+    pub(in crate::progress::pipeline) fn parse(value: &str) -> Option<Self> {
         match value {
             "source" => Some(Self::Source),
             "result" => Some(Self::Result),
@@ -44,7 +44,7 @@ impl Subject {
             _ => None,
         }
     }
-    fn token(self) -> &'static str {
+    pub(in crate::progress::pipeline) fn token(self) -> &'static str {
         match self {
             Self::Source => "source",
             Self::Result => "result",
@@ -59,7 +59,7 @@ pub(in crate::progress::pipeline) enum Purpose {
     Admission,
 }
 impl Purpose {
-    fn parse(value: &str) -> Option<Self> {
+    pub(in crate::progress::pipeline) fn parse(value: &str) -> Option<Self> {
         match value {
             "conversion" => Some(Self::Conversion),
             "verification" => Some(Self::Verification),
@@ -67,7 +67,7 @@ impl Purpose {
             _ => None,
         }
     }
-    fn token(self) -> &'static str {
+    pub(in crate::progress::pipeline) fn token(self) -> &'static str {
         match self {
             Self::Conversion => "conversion",
             Self::Verification => "verification",
@@ -82,7 +82,7 @@ pub(in crate::progress) enum Unit {
     Files,
 }
 impl Unit {
-    fn parse(value: &str) -> Option<Self> {
+    pub(in crate::progress::pipeline) fn parse(value: &str) -> Option<Self> {
         match value {
             "tracks" => Some(Self::Tracks),
             "renditions" => Some(Self::Renditions),
@@ -90,7 +90,7 @@ impl Unit {
             _ => None,
         }
     }
-    fn token(self) -> &'static str {
+    pub(in crate::progress::pipeline) fn token(self) -> &'static str {
         match self {
             Self::Tracks => "tracks",
             Self::Renditions => "renditions",

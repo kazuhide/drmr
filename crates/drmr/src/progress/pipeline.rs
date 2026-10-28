@@ -4,6 +4,9 @@ use drmr_core::events::Record;
 use std::time::Duration;
 
 mod integrity;
+#[cfg(test)]
+mod rendition_tests;
+pub(super) mod renditions;
 mod work;
 pub(super) use work::{Estimate, Media, Task};
 
@@ -170,6 +173,7 @@ pub(super) struct Output {
     tasks: [u64; 4],
     analysis: Option<Analysis>,
     work: work::Work,
+    renditions: renditions::Tracker,
 }
 impl Output {
     fn activity(&self) -> Option<&'static str> {
@@ -195,14 +199,18 @@ impl Output {
             Status::Pending => "Waiting",
             Status::Finished => "Checked",
             Status::Aborted => "Stopped",
-            Status::Running => self.work.detail().unwrap_or_else(|| match self.activity() {
-                Some("verification") => "Checking output",
-                Some("publication") => "Finalizing output",
-                Some("packaging") => "Converting media",
-                Some("input-preparation") => "Preparing media",
-                Some("inspection") => "Reading metadata",
-                _ => "Working",
-            }),
+            Status::Running => self
+                .renditions()
+                .map(|work| work.label(self.independent_check()))
+                .or_else(|| self.work.detail())
+                .unwrap_or_else(|| match self.activity() {
+                    Some("verification") => "Checking output",
+                    Some("publication") => "Finalizing output",
+                    Some("packaging") => "Converting media",
+                    Some("input-preparation") => "Preparing media",
+                    Some("inspection") => "Reading metadata",
+                    _ => "Working",
+                }),
         }
     }
     pub(super) fn units(self) -> Option<Units> {
@@ -223,6 +231,9 @@ impl Output {
             Status::Finished => return "Checked",
             Status::Aborted => return "Stopped",
             Status::Running => {}
+        }
+        if let Some(work) = self.renditions() {
+            return work.label(self.independent_check());
         }
         if let Some(media) = self.media().filter(|media| media.active()) {
             return match media.task {
@@ -249,6 +260,14 @@ impl Output {
     }
     pub(super) fn media(self) -> Option<Media> {
         self.work.media
+    }
+    pub(super) fn renditions(self) -> Option<renditions::Work> {
+        (self.lifetime.status == Status::Running)
+            .then(|| self.renditions.current().filter(|work| work.active()))
+            .flatten()
+    }
+    fn independent_check(self) -> bool {
+        self.work.step == Some(work::Step::Verification)
     }
     pub(super) fn step_remaining(self, now: Duration) -> Option<Duration> {
         self.work.step_remaining(now)
@@ -295,6 +314,7 @@ pub(super) struct State {
     plan: Option<work::Plan>,
     failed: bool,
     source_work: work::Source,
+    source_renditions: renditions::Tracker,
     integrity: integrity::Integrity,
 }
 impl State {
@@ -323,10 +343,38 @@ impl State {
 
     pub(super) fn stop_estimates(&mut self) {
         self.failed = true;
+        self.source_renditions.clear();
+        for output in &mut self.outputs {
+            output.renditions.clear();
+        }
     }
 
+    pub(super) fn source_running(&self) -> bool {
+        !self.failed
+            && self.phase == Some(Phase::Source)
+            && self.lifetime(Phase::Source).status == Status::Running
+    }
+    pub(super) fn has_source_context(&self) -> bool {
+        self.source_renditions.current().is_some() || self.source_work.media().is_some()
+    }
     pub(super) fn source_media(&self) -> Option<Media> {
-        self.source_work.media()
+        self.source_work.media().filter(|media| {
+            self.source_running()
+                && media.active()
+                && self
+                    .source_renditions
+                    .current()
+                    .is_none_or(|work| work.matches_media(*media))
+        })
+    }
+    pub(super) fn source_renditions(&self) -> Option<renditions::Work> {
+        self.source_running()
+            .then(|| {
+                self.source_renditions
+                    .current()
+                    .filter(|work| work.active())
+            })
+            .flatten()
     }
 
     pub(super) fn observe_media(&mut self, record: &Record, now: Duration) -> bool {
@@ -464,7 +512,12 @@ impl State {
                 return false;
             };
             let context = Context::parse(record).expect("validated output context");
-            return self.outputs[context.index].work.step(step, now);
+            let output = &mut self.outputs[context.index];
+            let changed = output.work.step(step, now);
+            if changed {
+                output.renditions.clear();
+            }
+            return changed;
         }
         if scope == "output" {
             let Some(context) = Context::parse(record) else {
@@ -488,6 +541,7 @@ impl State {
                 output.activities = [0; 6];
                 output.tasks = [0; 4];
                 output.analysis = None;
+                output.renditions.clear();
             }
             return true;
         }
@@ -503,6 +557,9 @@ impl State {
         }
         if !self.phases[phase.index()].update(state, now) {
             return false;
+        }
+        if phase == Phase::Source && self.phases[phase.index()].status.terminal() {
+            self.source_renditions.clear();
         }
         if self
             .phase
@@ -522,7 +579,20 @@ impl State {
     }
 
     pub(super) fn observe_nested(&mut self, record: &Record, now: Duration) -> bool {
+        if self.failed
+            && record.get("stage").and_then(serde_json::Value::as_str) == Some("rendition-progress")
+        {
+            return false;
+        }
         if !self.valid_context(record) {
+            if !has_context(record)
+                && record.get("stage").and_then(serde_json::Value::as_str)
+                    == Some("rendition-progress")
+                && record.get("event").and_then(serde_json::Value::as_str) == Some("progress")
+            {
+                return self.lifetime(Phase::Source).status == Status::Running
+                    && self.source_renditions.observe(record);
+            }
             return !has_context(record)
                 && record.get("stage").and_then(serde_json::Value::as_str)
                     == Some("media-progress")
@@ -566,6 +636,7 @@ impl State {
                 true
             }
             (Some("media-progress"), Some("progress")) => output.work.observe(record, now),
+            (Some("rendition-progress"), Some("progress")) => output.renditions.observe(record),
             _ => false,
         }
     }
@@ -600,6 +671,9 @@ impl State {
             if let Some(media) = output.media() {
                 value["media"] = media.json();
             }
+            if let Some(work) = output.renditions.current() {
+                value["renditions"] = work.json();
+            }
             if self.estimates_enabled() {
                 value["estimated_work_percent"] = output.estimated_percent().into();
                 if let Some(remaining)=output.step_remaining(now) {value["estimated_task_remaining_ms"]=millis(remaining).into();}
@@ -610,8 +684,11 @@ impl State {
         if let Some(sensor) = self.integrity.json(now) {
             value["integrity_batches"] = sensor;
         }
-        if let Some(media) = self.source_media() {
+        if let Some(media) = self.source_work.media() {
             value["source_media"] = media.json();
+        }
+        if let Some(work) = self.source_renditions.current() {
+            value["source_renditions"] = work.json();
         }
         if let Some(estimate) = self.estimate(now) {
             value["estimate"] = estimate.json();
@@ -788,3 +865,6 @@ mod tests {
         assert_eq!(state.lifetime(Phase::Publication).status, Status::Finished);
     }
 }
+
+#[cfg(test)]
+mod source_admission_tests;

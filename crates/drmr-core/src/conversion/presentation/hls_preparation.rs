@@ -43,9 +43,13 @@ pub(super) fn prepare(
     };
     let scheduler = super::super::execution::Scheduler::new(&backend, maximum_workers);
     let tracks = collect(&scheduler, &paths, |ordinal| {
+        let task = progress.and_then(|progress| progress.start(ordinal));
         let tracks = preparation.rendition(ordinal, &paths[ordinal])?;
         if let Some(progress) = progress {
             progress.completed(ordinal);
+        }
+        if let Some(task) = task {
+            task.finish();
         }
         backend.check_cancelled()?;
         Ok(tracks)
