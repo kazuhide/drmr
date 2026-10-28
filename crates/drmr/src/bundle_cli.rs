@@ -156,12 +156,13 @@ impl Session {
             report["measurements"] =
                 serde_json::to_value(measurement).expect("measurements serialize");
         }
-        self.progress.begin_result();
-        let result = if json {
-            convert_cli::json(&report)
-        } else {
-            text(command, &report, passed)
-        };
+        let result = self.progress.write_result(|| {
+            if json {
+                convert_cli::json(&report)
+            } else {
+                text(command, &report, passed)
+            }
+        });
         if result.is_err() {
             self.progress
                 .diagnostic(command, "result-output-unavailable");

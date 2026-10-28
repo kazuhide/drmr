@@ -178,22 +178,23 @@ pub fn save(args: &PlanArgs) -> ExitCode {
     if let Err(code) = session.check_cancelled("plan", args.json) {
         return code;
     }
-    session.progress.begin_result();
-    let result = if args.json {
-        let mut value = serde_json::to_value(&plan).expect("execution plan serializes");
-        if let Some(measurement) = measurement {
-            value["measurements"] =
-                serde_json::to_value(measurement).expect("measurement serializes");
+    let result = session.progress.write_result(|| {
+        if args.json {
+            let mut value = serde_json::to_value(&plan).expect("execution plan serializes");
+            if let Some(measurement) = measurement {
+                value["measurements"] =
+                    serde_json::to_value(measurement).expect("measurement serializes");
+            }
+            convert_cli::json(&value)
+        } else {
+            writeln!(
+                std::io::stdout().lock(),
+                "Execution plan saved.\nTarget: {} ({})\nSource fingerprints and output intent are fixed.\nSupply runtime keys separately with convert --plan.",
+                plan.intent.target.as_str(),
+                plan.intent.format.as_str(),
+            )
         }
-        convert_cli::json(&value)
-    } else {
-        writeln!(
-            std::io::stdout().lock(),
-            "Execution plan saved.\nTarget: {} ({})\nSource fingerprints and output intent are fixed.\nSupply runtime keys separately with convert --plan.",
-            plan.intent.target.as_str(),
-            plan.intent.format.as_str(),
-        )
-    };
+    });
     if result.is_err() {
         session
             .progress
@@ -238,18 +239,19 @@ pub fn convert(args: &ConvertArgs, path: &Path) -> ExitCode {
     if let Err(code) = session.check_cancelled("convert", args.json) {
         return code;
     }
-    session.progress.begin_result();
-    let result = if args.json {
-        let mut value = serde_json::to_value(&report).expect("conversion report serializes");
-        value["plan_id"] = plan.plan_id.clone().into();
-        if let Some(measurement) = measurement {
-            value["measurements"] =
-                serde_json::to_value(measurement).expect("measurement serializes");
+    let result = session.progress.write_result(|| {
+        if args.json {
+            let mut value = serde_json::to_value(&report).expect("conversion report serializes");
+            value["plan_id"] = plan.plan_id.clone().into();
+            if let Some(measurement) = measurement {
+                value["measurements"] =
+                    serde_json::to_value(measurement).expect("measurement serializes");
+            }
+            convert_cli::json(&value)
+        } else {
+            convert_cli::conversion_text(&report)
         }
-        convert_cli::json(&value)
-    } else {
-        convert_cli::conversion_text(&report)
-    };
+    });
     if result.is_err() {
         session
             .progress
@@ -301,31 +303,32 @@ pub fn verify(args: &VerifyArgs, path: &Path) -> ExitCode {
             .progress
             .diagnostic("verify", "verification-mismatch");
     }
-    session.progress.begin_result();
-    let result = if args.json {
-        let mut value = serde_json::to_value(report).expect("plan verification serializes");
-        if !passed {
-            let failure = convert_cli::error_value(
-                "verify",
-                ConversionError("verification-mismatch"),
-                &session.progress,
-            );
-            for key in ["command", "status", "error"] {
-                value[key] = failure[key].clone();
+    let result = session.progress.write_result(|| {
+        if args.json {
+            let mut value = serde_json::to_value(report).expect("plan verification serializes");
+            if !passed {
+                let failure = convert_cli::error_value(
+                    "verify",
+                    ConversionError("verification-mismatch"),
+                    &session.progress,
+                );
+                for key in ["command", "status", "error"] {
+                    value[key] = failure[key].clone();
+                }
             }
+            if let Some(measurement) = measurement {
+                value["measurements"] =
+                    serde_json::to_value(measurement).expect("measurement serializes");
+            }
+            convert_cli::json(&value)
+        } else {
+            writeln!(
+                std::io::stdout().lock(),
+                "Plan verification: {} (source fingerprints, output intent, and media correspondence).",
+                if passed { "passed" } else { "failed" }
+            )
         }
-        if let Some(measurement) = measurement {
-            value["measurements"] =
-                serde_json::to_value(measurement).expect("measurement serializes");
-        }
-        convert_cli::json(&value)
-    } else {
-        writeln!(
-            std::io::stdout().lock(),
-            "Plan verification: {} (source fingerprints, output intent, and media correspondence).",
-            if passed { "passed" } else { "failed" }
-        )
-    };
+    });
     if result.is_err() {
         session
             .progress

@@ -9,8 +9,19 @@ pub fn run(as_json: bool, probe: bool, decode: bool, route: &str) -> ExitCode {
     let cancellation = if probe {
         let Ok(cancellation) = crate::cancellation::Cancellation::install() else {
             progress.fail("signal-monitor-unavailable");
-            if !progress.structured() {
-                eprintln!("doctor: signal-monitor-unavailable");
+            if progress
+                .write_result(|| {
+                    if !progress.structured() {
+                        writeln!(
+                            std::io::stderr().lock(),
+                            "doctor: signal-monitor-unavailable"
+                        )?;
+                    }
+                    Ok(())
+                })
+                .is_err()
+            {
+                progress.diagnostic("doctor", "result-output-unavailable");
             }
             return ExitCode::from(1);
         };
@@ -47,8 +58,10 @@ pub fn run(as_json: bool, probe: bool, decode: bool, route: &str) -> ExitCode {
         // actual cleanup state at publication rather than its historical state.
         report.cleanup_status = "confirmed";
     }
-    progress.begin_result();
-    if print_report(&report, as_json, probe, &mut std::io::stdout().lock()).is_err() {
+    if progress
+        .write_result(|| print_report(&report, as_json, probe, &mut std::io::stdout().lock()))
+        .is_err()
+    {
         progress.diagnostic("doctor", "result-output-unavailable");
         return ExitCode::from(1);
     }

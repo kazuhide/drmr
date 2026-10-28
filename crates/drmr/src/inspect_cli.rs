@@ -54,9 +54,10 @@ pub struct PlanArgs {
     pub measure: bool,
 }
 
-fn write_json(value: &serde_json::Value) -> bool {
+fn write_json(value: &serde_json::Value) -> std::io::Result<()> {
     let mut out = std::io::stdout().lock();
-    serde_json::to_writer_pretty(&mut out, value).is_ok() && writeln!(out).is_ok()
+    serde_json::to_writer_pretty(&mut out, value)?;
+    writeln!(out)
 }
 
 fn inspect_input(path: &Path) -> Result<Inspection, ConversionError> {
@@ -151,12 +152,15 @@ pub fn plan(args: &PlanArgs) -> ExitCode {
     };
     let plan = inspection::plan(report, target, args.format.clone());
     progress.mark("publication");
-    progress.begin_result();
-    let success = if args.json {
-        write_json(&serde_json::to_value(&plan).expect("conversion plan serializes"))
-    } else {
-        text_plan(&plan).is_ok()
-    };
+    let success = progress
+        .write_result(|| {
+            if args.json {
+                write_json(&serde_json::to_value(&plan).expect("conversion plan serializes"))
+            } else {
+                text_plan(&plan)
+            }
+        })
+        .is_ok();
     if success {
         progress.finish();
     } else {
