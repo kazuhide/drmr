@@ -5,14 +5,16 @@ pub(in crate::conversion) use bundle_source::BundlePrepared;
 pub(in crate::conversion) mod metadata;
 mod native_preparation;
 #[cfg(test)]
+mod packager_jobs_tests;
+#[cfg(test)]
 mod signaling_tests;
 #[cfg(test)]
 mod staging_tests;
 mod ts_output;
 use super::{
     ContentKey, ConversionError, ConversionReport, Converter, HlsOutputKey, InputKeys, LocalTrack,
-    OutputKey, VerificationReport, audio, copy_private, destination, hls, verify::StreamView,
-    workspace,
+    OutputKey, VerificationReport, audio, copy_private, destination, hls, signaling::Objects,
+    verify::StreamView, workspace,
 };
 use crate::inspection::{
     self, Evidence, InputFormat, Inspection, OutputFormat, Protection, TargetProtection, TrackKind,
@@ -645,17 +647,13 @@ impl Converter {
                 ]);
             }
         }
-        let mut secrets: Vec<&str> = secret
+        let secrets: Vec<&str> = secret
             .iter()
             .map(|s| s.as_str())
             .chain(request.hls_key_uri)
+            .chain(signaling.iter().flat_map(Objects::secrets))
+            .chain(multi_signaling.iter().flat_map(|value| value.secrets()))
             .collect();
-        if let Some(signaling) = &signaling {
-            secrets.extend(signaling.secrets());
-        }
-        if let Some(signaling) = &multi_signaling {
-            secrets.extend(signaling.secrets());
-        }
         let pssh = signaling
             .as_ref()
             .map(|value| value.hex.as_str())
@@ -665,7 +663,14 @@ impl Converter {
             super::packaging_clock::prepare(input_owner, clear, &kinds, &self.backend.stop)?;
         let mut progress =
             super::media_progress::Packaging::new(self.backend.activity.clone(), root, clear);
-        self.run_joint_packager(&argv, pssh, &secrets, output_owner, progress.as_mut())?;
+        self.run_joint_packager(
+            clear,
+            &argv,
+            pssh,
+            &secrets,
+            output_owner,
+            progress.as_mut(),
+        )?;
         if let Some(progress) = &progress {
             progress.finish();
         }
@@ -686,12 +691,29 @@ impl Converter {
 
     fn run_joint_packager(
         &self,
+        clear: &[PathBuf],
         argv: &[String],
         pssh: Option<&str>,
         secrets: &[&str],
         owner: &super::files::Stage,
         progress: Option<&mut super::media_progress::Packaging>,
     ) -> Result<(), ConversionError> {
+        // Shaka keys media jobs by the exact input strings in the stream descriptors.
+        let jobs = clear
+            .iter()
+            .map(|path| descriptor_path(path))
+            .collect::<Result<std::collections::BTreeSet<_>, _>>()?
+            .len();
+        let mut backend = self.backend.clone();
+        backend.runner = std::sync::Arc::new(
+            self.backend
+                .runner
+                .cohort(
+                    self.maximum_workers
+                        .unwrap_or(crate::concurrency::DEFAULT_WORKERS_CAP),
+                )
+                .for_packager_jobs(jobs),
+        );
         if let Some(progress) = progress {
             let mut monitor = || {
                 if owner.directory_source().is_ok() {
@@ -700,20 +722,19 @@ impl Converter {
             };
             if let Some(pssh) = pssh {
                 super::signaling::flagfile::run_monitored(
-                    &self.backend,
+                    &backend,
                     argv,
                     pssh,
                     secrets,
                     &mut monitor,
                 )?;
             } else {
-                self.backend
-                    .run_monitored(argv, "packager", secrets, &mut monitor)?;
+                backend.run_monitored(argv, "packager", secrets, &mut monitor)?;
             }
         } else if let Some(pssh) = pssh {
-            super::signaling::flagfile::run(&self.backend, argv, pssh, secrets)?;
+            super::signaling::flagfile::run(&backend, argv, pssh, secrets)?;
         } else {
-            self.backend.run(argv, "packager", secrets)?;
+            backend.run(argv, "packager", secrets)?;
         }
         Ok(())
     }

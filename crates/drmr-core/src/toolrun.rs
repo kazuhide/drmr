@@ -79,6 +79,8 @@ mod capture;
 mod cleanup;
 #[cfg(test)]
 mod cohort_tests;
+#[cfg(test)]
+mod packager_jobs_tests;
 pub use cleanup::CleanupOwner;
 pub(crate) use cleanup::CleanupReceipt;
 /// Shorter strings would redact unrelated text; keys and IVs are 32 hex characters.
@@ -491,6 +493,7 @@ pub struct ToolRunner {
     cpu_scope: Option<Arc<crate::resources::CpuScope>>,
     memory_scope: Option<MemoryScope>,
     workload: Arc<RwLock<Option<Workload>>>,
+    packager_jobs: usize,
     cleanup_owner: Option<Arc<CleanupOwner>>,
 }
 
@@ -513,6 +516,7 @@ impl ToolRunner {
             cpu_scope: None,
             memory_scope: None,
             workload: Arc::new(RwLock::new(None)),
+            packager_jobs: 1,
             cleanup_owner: None,
         }
     }
@@ -528,6 +532,7 @@ impl ToolRunner {
             cpu_scope: self.cpu_scope.clone(),
             memory_scope: self.memory_scope,
             workload: Arc::new(RwLock::new(self.registered_workload())),
+            packager_jobs: self.packager_jobs,
             cleanup_owner: self.cleanup_owner.clone(),
         }
     }
@@ -548,6 +553,7 @@ impl ToolRunner {
             cpu_scope: self.cpu_scope.clone(),
             memory_scope: self.memory_scope,
             workload: Arc::new(RwLock::new(self.registered_workload())),
+            packager_jobs: self.packager_jobs,
             cleanup_owner: Some(Arc::clone(&owner)),
         };
         (runner, owner)
@@ -609,8 +615,45 @@ impl ToolRunner {
             // A CPU scope belongs to this command, including metadata observed
             // inside it. Independent observed/cleanup forks still take snapshots.
             workload: Arc::clone(&self.workload),
+            packager_jobs: self.packager_jobs,
             cleanup_owner: self.cleanup_owner.clone(),
         }
+    }
+
+    /// A private final-packaging fork; no reservation is held until the child is admitted.
+    /// Shaka creates one media job for each distinct local input, without a job-pool limit.
+    pub(crate) fn for_packager_jobs(&self, requested: usize) -> Self {
+        let workload = self.registered_workload();
+        let child = Claim::for_workload(
+            workload.unwrap_or_default(),
+            DEFAULT_STDOUT_BYTES,
+            DEFAULT_STDERR_BYTES,
+        );
+        let (cpus, memory) = self.native_capacity();
+        // A retained coordinator guarantees this much headroom for a complete leaf.
+        // A parallel child must fit that guarantee, regardless of temporary occupancy.
+        let guaranteed = memory.min(self.manifest_capacity().1);
+        let bytes = u64::try_from(requested)
+            .ok()
+            .and_then(|jobs| child.memory_bytes.checked_mul(jobs));
+        let jobs = if (2..=64).contains(&requested)
+            && requested <= cpus
+            && bytes.is_some_and(|bytes| bytes <= guaranteed)
+        {
+            requested
+        } else {
+            1
+        };
+        let mut scoped = self.cohort(cpus);
+        // Keep selection and admission on the same conservative observation. Sibling
+        // profile updates must not change this private child's chosen resource claim.
+        scoped.workload = Arc::new(RwLock::new(workload));
+        scoped.packager_jobs = jobs;
+        scoped
+    }
+
+    pub(crate) fn packager_jobs(&self) -> usize {
+        self.packager_jobs
     }
     /// The enclosing allocation's configured ceiling. Other commands' retained
     /// state affects queued admission, never permanent claim eligibility.
@@ -751,17 +794,33 @@ impl ToolRunner {
         self.emit(&record);
     }
 
-    /// Reserve exactly once for a child that streams its output outside `run_tool`.
-    /// The caller keeps this guard through child cleanup and never calls `run_tool` inside it.
-    pub fn reserve(&self, tool: &str, options: &RunOptions<'_>) -> Result<Permit, ToolError> {
+    fn call_claim(&self, tool: &str, options: &RunOptions<'_>) -> Result<Claim, ToolError> {
         let current = *self.workload.read().unwrap_or_else(PoisonError::into_inner);
         let workload = match (current, options.workload) {
             (Some(current), Some(call)) => current.merge(call),
             (Some(current), None) => current,
             (None, call) => call.unwrap_or_default(),
         };
+        let mut claim =
+            Claim::for_workload(workload, options.max_stdout_bytes, options.max_stderr_bytes);
+        if tool == "packager" {
+            claim.cpu_threads = self.packager_jobs;
+            claim.memory_bytes = u64::try_from(self.packager_jobs)
+                .ok()
+                .and_then(|jobs| claim.memory_bytes.checked_mul(jobs))
+                .ok_or_else(|| ToolError {
+                    tool: tool.to_owned(),
+                    kind: "resource-budget",
+                })?;
+        }
+        Ok(claim)
+    }
+
+    /// Reserve exactly once for a child that streams its output outside `run_tool`.
+    /// The caller keeps this guard through child cleanup and never calls `run_tool` inside it.
+    pub fn reserve(&self, tool: &str, options: &RunOptions<'_>) -> Result<Permit, ToolError> {
         self.reserve_claim(
-            Claim::for_workload(workload, options.max_stdout_bytes, options.max_stderr_bytes),
+            self.call_claim(tool, options)?,
             options.stop,
             options.timeout,
         )

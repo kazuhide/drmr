@@ -324,9 +324,14 @@ Unknown media uses the conservative fallback until observed stream metadata is a
 This estimate does not enforce an absolute resident-memory limit on third-party tools.
 
 FFmpeg and ffprobe use one decoder thread; FFmpeg output encoders and filters also use
-one thread. Shaka Packager uses `--single_threaded` and `--io_cache_size=0`, disabling its
-otherwise separate per-file threaded I/O caches. Parallel work is coordinated outside
-these tools. The tradeoff is measured with the same complete verification in both modes.
+one thread. Final joint packaging can run one Shaka Packager media job per distinct
+input file. All jobs must fit the command's CPU ceiling, `--max-workers` and memory
+allowance: the call reserves one CPU token and one conservative child-memory estimate
+per job, once, through the shared limiter. Otherwise it uses `--single_threaded`.
+Other Packager calls remain single-threaded. `--io_cache_size=0` always disables
+separate per-file threaded I/O caches. Multiple outputs share these limits; they do
+not each receive an independent allocation. These are admission estimates, not a
+hard limit on an external binary's operating-system threads or resident memory.
 
 The optional benchmark scripts are in the source checkout; run them from the repository
 root with Python 3.9 or later. Python is not required for the CLI itself.

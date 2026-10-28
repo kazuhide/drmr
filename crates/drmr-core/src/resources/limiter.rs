@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 /// Estimated resources held while a media subprocess is running and its output is consumed.
 #[derive(Clone, Copy, Debug)]
 pub struct Claim {
-    /// Participating tools use an explicit single-threaded codec configuration.
+    /// Estimated concurrent media job threads; single-threaded calls reserve one.
     pub cpu_threads: usize,
     /// Input, codec, and configured capture working-set estimate in bytes.
     pub memory_bytes: u64,
