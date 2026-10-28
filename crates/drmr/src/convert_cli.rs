@@ -331,15 +331,20 @@ pub(crate) fn error(
     exit_override: Option<u8>,
 ) -> ExitCode {
     progress.diagnostic(command, error.0);
-    if as_json {
-        if json(&error_value(command, error, progress)).is_err() {
-            progress.diagnostic(command, "result-output-unavailable");
-            return ExitCode::from(1);
+    let result = progress.write_result(|| {
+        if as_json {
+            json(&error_value(command, error, progress))
+        } else if !progress.structured()
+            && let Some(hint) = error_hint(error.0)
+        {
+            writeln!(std::io::stderr().lock(), "{hint}")
+        } else {
+            Ok(())
         }
-    } else if !progress.structured()
-        && let Some(hint) = error_hint(error.0)
-    {
-        eprintln!("{hint}");
+    });
+    if result.is_err() {
+        progress.diagnostic(command, "result-output-unavailable");
+        return ExitCode::from(1);
     }
     if error.0 == "cancelled" {
         return ExitCode::from(130);
@@ -679,9 +684,24 @@ pub fn convert(args: &ConvertArgs) -> ExitCode {
             None,
         );
     }
-    progress.begin_result();
-    let result = if args.json {
-        let mut value = serde_json::to_value(&report).expect("conversion report serializes");
+    let result = progress
+        .write_result(|| write_conversion_result(&report, download, measurement, args.json));
+    if result.is_err() {
+        progress.diagnostic("convert", "result-output-unavailable");
+    } else {
+        progress.finish();
+    }
+    ExitCode::from(u8::from(result.is_err()))
+}
+
+fn write_conversion_result(
+    report: &ConversionReport,
+    download: Option<serde_json::Value>,
+    measurement: Option<MeasurementReport>,
+    as_json: bool,
+) -> std::io::Result<()> {
+    if as_json {
+        let mut value = serde_json::to_value(report).expect("conversion report serializes");
         if let Some(download) = download {
             value["download"] = download;
         }
@@ -691,14 +711,8 @@ pub fn convert(args: &ConvertArgs) -> ExitCode {
         }
         json(&value)
     } else {
-        conversion_text(&report)
-    };
-    if result.is_err() {
-        progress.diagnostic("convert", "result-output-unavailable");
-    } else {
-        progress.finish();
+        conversion_text(report)
     }
-    ExitCode::from(u8::from(result.is_err()))
 }
 
 pub fn verify(args: &VerifyArgs) -> ExitCode {
@@ -825,27 +839,29 @@ fn verification_result(
     if !report.passed {
         progress.diagnostic("verify", "verification-mismatch");
     }
-    progress.begin_result();
-    let result = if as_json {
-        let mut value = serde_json::to_value(report).expect("verification report serializes");
-        if !report.passed {
-            let failure = error_value("verify", ConversionError("verification-mismatch"), progress);
-            for key in ["command", "status", "error"] {
-                value[key] = failure[key].clone();
+    let result = progress.write_result(|| {
+        if as_json {
+            let mut value = serde_json::to_value(report).expect("verification report serializes");
+            if !report.passed {
+                let failure =
+                    error_value("verify", ConversionError("verification-mismatch"), progress);
+                for key in ["command", "status", "error"] {
+                    value[key] = failure[key].clone();
+                }
             }
+            if let Some(measurement) = measurement {
+                value["measurements"] =
+                    serde_json::to_value(measurement).expect("measurement serializes");
+            }
+            json(&value)
+        } else {
+            writeln!(
+                std::io::stdout().lock(),
+                "Verification: {}",
+                if report.passed { "passed" } else { "failed" }
+            )
         }
-        if let Some(measurement) = measurement {
-            value["measurements"] =
-                serde_json::to_value(measurement).expect("measurement serializes");
-        }
-        json(&value)
-    } else {
-        writeln!(
-            std::io::stdout().lock(),
-            "Verification: {}",
-            if report.passed { "passed" } else { "failed" }
-        )
-    };
+    });
     if result.is_err() {
         progress.diagnostic("verify", "result-output-unavailable");
     } else if report.passed {

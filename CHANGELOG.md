@@ -18,6 +18,9 @@ remain unchanged pre-releases.
   estimates or log lines change. Show observed per-batch rendition/track
   states in stable numbered rows, retain hidden rows in structured progress,
   and avoid estimated per-track percentages for opaque work.
+- Redraw progress in a temporary screen on terminals with known screen-switch
+  support to fix stale rows after resizing. Restore the prior screen/history
+  before final output; use plain milestones otherwise.
 
 ### Changed
 

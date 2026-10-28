@@ -1320,7 +1320,7 @@ Argument parsing errors occur before this JSON contract and retain stderr/help w
 | Mode | Behavior |
 | --- | --- |
 | `auto` | Default: text; with --json, text only if stderr is a terminal, otherwise off |
-| `text` | One terminal dashboard; concise redirected logs, also with --json |
+| `text` | Dashboard where supported; plain logs otherwise, also with --json |
 | `json` | JSON Lines: one object per line, also with --json |
 | `off` | No progress; results/errors unchanged |
 
@@ -1333,7 +1333,7 @@ drmr analyze original.mp4 --metadata-only --json --progress json \
 drmr analyze original.mp4 --metadata-only --progress off
 ```
 
-Rows show command/time, `Source` acquisition/checks, `Overall` phase/ETA and outputs in fixed label/bar/detail columns. Track rows keep current-batch number order with a fixed screen subset and hidden count. `Checked` stays until publication; results replace the view. Updates are at most once a second except phase changes/completion/errors/cancellation. Below 60 columns bars are omitted; details need space. No internal notices/tool names. Redirected logs keep milestones/time. Final checks overlap publication; completion follows commit.
+Terminals with known screen-switch support use a temporary screen, redrawn on resize; prior screen/history is hidden, then restored before final output. Command/time, `Source` acquisition/checks, `Overall` phase/ETA and outputs use fixed label/bar/detail columns. Current-batch tracks keep number order, a fixed subset and hidden count; `Checked` stays until publication. Updates run at most once a second except phase changes/completion/errors/cancellation. Bars need 60 columns; details need space. No internal notices/tool names. Other terminals/redirection use plain milestones/time. Final checks overlap publication; completion follows commit.
 
 Labels identify source copies/checks, clear preparation, output comparison and independent checks. Batch-local Rust task counts show `active` (started/unfinished, including CPU/memory waits), `waiting` (not started), completed/total and `stopped` (unsuccessful exit, not corrupt media). They are not CPU usage, Shaka jobs or track percentages.
 

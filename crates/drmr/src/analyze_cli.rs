@@ -234,12 +234,13 @@ fn metadata_analysis(
         }
     };
     progress.mark("publication");
-    progress.begin_result();
-    let written = if args.json {
-        convert_cli::json(&serde_json::to_value(&report).expect("metadata report serializes"))
-    } else {
-        crate::inspect_cli::summary(&report, &mut std::io::stdout().lock())
-    };
+    let written = progress.write_result(|| {
+        if args.json {
+            convert_cli::json(&serde_json::to_value(&report).expect("metadata report serializes"))
+        } else {
+            crate::inspect_cli::summary(&report, &mut std::io::stdout().lock())
+        }
+    });
     if written.is_err() {
         progress.diagnostic("analyze", "result-output-unavailable");
     } else {
@@ -306,20 +307,21 @@ pub fn analyze(args: &AnalyzeArgs) -> ExitCode {
         );
     }
     progress.mark("publication");
-    progress.begin_result();
-    let result = if args.json {
-        let mut value = serde_json::to_value(&report).expect("source analysis serializes");
-        if let Some(download) = download {
-            value["download"] = download;
+    let result = progress.write_result(|| {
+        if args.json {
+            let mut value = serde_json::to_value(&report).expect("source analysis serializes");
+            if let Some(download) = download {
+                value["download"] = download;
+            }
+            if let Some(measurement) = measurement {
+                value["measurements"] =
+                    serde_json::to_value(measurement).expect("measurement serializes");
+            }
+            convert_cli::json(&value)
+        } else {
+            text_report(&report)
         }
-        if let Some(measurement) = measurement {
-            value["measurements"] =
-                serde_json::to_value(measurement).expect("measurement serializes");
-        }
-        convert_cli::json(&value)
-    } else {
-        text_report(&report)
-    };
+    });
     if result.is_err() {
         progress.diagnostic("analyze", "result-output-unavailable");
     } else {

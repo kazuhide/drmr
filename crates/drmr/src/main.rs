@@ -136,7 +136,10 @@ fn main() -> ExitCode {
 fn serve(args: &ServeArgs) -> ExitCode {
     let progress = progress::Progress::new(true);
     progress.mark("server-startup");
-    progress.server_handoff();
+    if progress.server_handoff().is_err() {
+        progress.diagnostic("serve", "result-output-unavailable");
+        return ExitCode::from(1);
+    }
     let code = drmr_server::run_server_with_ready(
         args,
         JobCli::this_executable(),

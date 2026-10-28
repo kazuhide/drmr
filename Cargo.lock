@@ -987,6 +987,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "ureq",
+ "winapi-util",
 ]
 
 [[package]]

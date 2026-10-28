@@ -191,7 +191,7 @@ fn numeric_bundle_progress_reaches_json_and_result_failure_removes_its_estimate(
         records(&bytes).last().unwrap()["pipeline"]["estimate"]["percent"],
         100
     );
-    progress.begin_result();
+    progress.begin_result().unwrap();
     progress.fail("result-output-unavailable");
     let values = records(&bytes);
     let last = values.last().unwrap();

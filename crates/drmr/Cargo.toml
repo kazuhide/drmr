@@ -34,5 +34,8 @@ rustix.workspace = true
 [target.'cfg(windows)'.dev-dependencies]
 private-fs = "0.2.1"
 
+[target.'cfg(windows)'.dependencies]
+winapi-util = "0.1.11"
+
 [lints]
 workspace = true

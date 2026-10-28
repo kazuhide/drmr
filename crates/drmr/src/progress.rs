@@ -1,6 +1,5 @@
 //! Bounded command observations built from fixed labels and numeric counters only.
 use drmr_core::events::{Record, Sink};
-use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use std::io::{IsTerminal as _, Write};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread::JoinHandle;
@@ -8,6 +7,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 mod display;
 mod pipeline;
+mod terminal;
+use terminal::LiveTerminal;
 
 #[derive(Clone, Copy)]
 struct Analysis {
@@ -85,7 +86,7 @@ struct Inner {
     state: Mutex<State>,
     wake: Condvar,
     out: Mutex<Box<dyn Write + Send>>,
-    terminal: Option<ProgressBar>,
+    terminal: Option<LiveTerminal>,
 }
 
 pub(crate) struct Progress {
@@ -160,16 +161,7 @@ impl Progress {
         let terminal = std::io::stderr().is_terminal();
         let mode = resolved(mode, human_result, terminal);
         let bar = if terminal && matches!(mode, Mode::Text) {
-            let bar = ProgressBar::with_draw_target(None, ProgressDrawTarget::stderr_with_hz(10));
-            if bar.is_hidden() {
-                None
-            } else {
-                bar.set_style(
-                    ProgressStyle::with_template("{msg}")
-                        .unwrap_or_else(|_| ProgressStyle::default_spinner()),
-                );
-                Some(bar)
-            }
+            LiveTerminal::for_stderr()
         } else {
             None
         };
@@ -192,7 +184,7 @@ impl Progress {
         command: &'static str,
         out: Box<dyn Write + Send>,
         interval: Duration,
-        terminal: Option<ProgressBar>,
+        terminal: Option<LiveTerminal>,
     ) -> Self {
         let inner = Arc::new(Inner {
             mode,
@@ -305,11 +297,12 @@ impl Progress {
         matches!(self.inner.mode, Mode::Json)
     }
 
-    pub(crate) fn server_handoff(&self) {
+    pub(crate) fn server_handoff(&self) -> std::io::Result<()> {
         // Startup diagnostics and ongoing request logs own the terminal afterward.
         if self.inner.terminal.is_some() {
-            self.begin_result();
+            self.begin_result()?;
         }
+        Ok(())
     }
 
     pub(crate) fn server_address(&self, address: std::net::SocketAddr) {
@@ -327,18 +320,35 @@ impl Progress {
 
     /// Drain live drawing before a result changes the terminal cursor.
     /// Command success or failure remains pending until the result is written.
-    pub(crate) fn begin_result(&self) {
+    fn begin_result(&self) -> std::io::Result<()> {
         let mut state = self
             .inner
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         state.rendering = Rendering::Result;
-        if let Some(bar) = &self.inner.terminal {
-            bar.disable_steady_tick();
-            bar.finish_and_clear();
-            bar.set_draw_target(ProgressDrawTarget::hidden());
+        if let Some(terminal) = &self.inner.terminal {
+            let mut out = self
+                .inner
+                .out
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Err(error) = terminal.close(&mut *out) {
+                state.output_failed = true;
+                return Err(error);
+            }
         }
+        Ok(())
+    }
+
+    /// Write only after live drawing has relinquished the terminal.
+    pub(crate) fn write_result(
+        &self,
+        write: impl FnOnce() -> std::io::Result<()>,
+    ) -> std::io::Result<()> {
+        self.begin_result()?;
+        // Result writers can read progress after its state/output locks drop.
+        write()
     }
 
     pub(crate) fn finish(&self) {
@@ -388,9 +398,13 @@ impl Progress {
         {
             let _ = worker.join();
         }
-        if let Some(bar) = &self.inner.terminal {
-            bar.disable_steady_tick();
-            bar.finish_and_clear();
+        if let Some(terminal) = &self.inner.terminal {
+            let mut out = self
+                .inner
+                .out
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let _ = terminal.close(&mut *out);
         }
     }
 }

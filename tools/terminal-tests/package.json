@@ -1,0 +1,13 @@
+{
+  "name": "drmr-terminal-regression-tests",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=24.0.0" },
+  "scripts": {
+    "test:controls": "node --test replay.test.mjs && python3 -W error::ResourceWarning -m unittest test_process_owner -v",
+    "test:terminal": "python3 capture.py",
+    "test": "npm run test:controls && npm run test:terminal"
+  },
+  "devDependencies": { "@xterm/headless": "6.0.0" }
+}
