@@ -555,14 +555,7 @@ impl Converter {
             super::packaging_clock::prepare(input_owner, clear, &kinds, &self.backend.stop)?;
         let mut progress =
             super::media_progress::Packaging::new(self.backend.activity.clone(), root, clear);
-        self.run_joint_packager(
-            clear,
-            &argv,
-            pssh,
-            &secrets,
-            output_owner,
-            progress.as_mut(),
-        )?;
+        self.run_joint_packager(&argv, pssh, &secrets, output_owner, progress.as_mut())?;
         if let Some(progress) = &progress {
             progress.finish();
         }
@@ -583,19 +576,12 @@ impl Converter {
 
     fn run_joint_packager(
         &self,
-        clear: &[PathBuf],
         argv: &[String],
         pssh: Option<&str>,
         secrets: &[&str],
         owner: &super::files::Stage,
         progress: Option<&mut super::media_progress::Packaging>,
     ) -> Result<(), ConversionError> {
-        // Shaka keys media jobs by the exact input strings in the stream descriptors.
-        let jobs = clear
-            .iter()
-            .map(|path| descriptor_path(path))
-            .collect::<Result<std::collections::BTreeSet<_>, _>>()?
-            .len();
         let mut backend = self.backend.clone();
         backend.runner = std::sync::Arc::new(
             self.backend
@@ -604,7 +590,7 @@ impl Converter {
                     self.maximum_workers
                         .unwrap_or(crate::concurrency::DEFAULT_WORKERS_CAP),
                 )
-                .for_packager_jobs(jobs),
+                .for_packaging(),
         );
         if let Some(progress) = progress {
             let mut monitor = || {

@@ -131,8 +131,7 @@ impl Backend {
         if matches!(tool, "ffmpeg" | "ffprobe") {
             self.require_decode()?;
         }
-        let effective =
-            Self::effective_argv_with_packager_jobs(argv, tool, self.runner.packager_jobs());
+        let effective = Self::effective_argv(argv, tool);
         let shown = vec![tool.to_string(), "[arguments redacted]".into()];
         let options = RunOptions {
             stop: Some(&self.stop),
@@ -159,13 +158,6 @@ impl Backend {
         Ok(completed.stdout)
     }
     pub(super) fn effective_argv(argv: &[String], tool: &str) -> Zeroizing<Vec<String>> {
-        Self::effective_argv_with_packager_jobs(argv, tool, 1)
-    }
-    fn effective_argv_with_packager_jobs(
-        argv: &[String],
-        tool: &str,
-        packager_jobs: usize,
-    ) -> Zeroizing<Vec<String>> {
         let mut effective = Zeroizing::new(argv.to_vec());
         if tool == "ffprobe" {
             effective.splice(1..1, ["-threads".into(), "1".into()]);
@@ -185,17 +177,7 @@ impl Backend {
             }
         }
         if tool == "packager" {
-            effective.extend(
-                [
-                    if packager_jobs > 1 {
-                        "--single_threaded=false"
-                    } else {
-                        "--single_threaded"
-                    },
-                    "--io_cache_size=0",
-                ]
-                .map(String::from),
-            );
+            effective.extend(["--single_threaded", "--io_cache_size=0"].map(String::from));
         }
         effective
     }
