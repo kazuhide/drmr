@@ -180,7 +180,7 @@ def capture(owner, binary, source, keys, outputs, directory, environment, outcom
         processing["owned_tools_reaped"] = owner.idle()
         return {"passed": screen["passed"] and all(processing.values()), "outcome": outcome,
                 "no_color": no_color, "tty_input": tty_input, "processing": processing,
-                "workers": workers, "delay_phase": "source" if outcome == "success" else "cenc-output",
+                "workers": workers, "delay_phase": "cenc-output",
                 "conversion_decode_requested": False, "independent_verification_decode_requested": outcome == "success",
                 "stdout_sha256": digest(result_bytes), "terminal": screen}
     finally:

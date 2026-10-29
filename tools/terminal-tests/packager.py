@@ -19,7 +19,7 @@ with os.fdopen(os.open(pending, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w
 pending.replace(receipt)
 if (registry / "closing").exists():
     raise SystemExit(125)
-delayed_call = control["outcome"] == "success" or "--enable_raw_key_encryption" in sys.argv[1:]
+delayed_call = "--enable_raw_key_encryption" in sys.argv[1:]
 if name == "packager" and "--version" not in sys.argv[1:] and control["outcome"] != "normal" and delayed_call:
     try:
         descriptor = os.open(control_path.parent / "delay-claimed", os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
