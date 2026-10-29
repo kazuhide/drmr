@@ -181,6 +181,13 @@ then analyze it, save a plan, convert it to CBCS DASH, and independently verify 
 and a metadata-only analysis of the retained clear DASH source. The metadata
 stage uses `analyze --metadata-only --json` without keys and does not replace
 any of the previous 17 stages.
+Windows release checks retain minimum and stable Rust builds, native platform
+guards, and the extracted archive qualification as an ordinary user. The
+complete Windows test suite runs separately after updates to main and on manual
+request, without delaying archive builds or publication. Its results are
+reported separately from the release archive checks; a qualified archive does
+not imply that every Windows regression test has completed.
+
 The existing v1.0.0 assets and their original 11-stage reports are unchanged.
 These additional checks apply to newly built CI archives; they do not qualify the
 old release archives for 44.1 kHz input.
