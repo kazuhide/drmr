@@ -498,6 +498,7 @@ pub fn encrypt_segment_with_audio_config(
     assert_eq!(std::fs::read(source).unwrap(), original);
 }
 
+sample_aes_fixture_checks! {
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -704,4 +705,5 @@ mod tests {
         }
         assert_eq!(std::fs::read(original).unwrap(), original_bytes);
     }
+}
 }

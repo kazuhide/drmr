@@ -10,6 +10,10 @@ mod common;
 mod lifecycle;
 #[path = "support/ts_output_negatives.rs"]
 mod negatives;
+// The SAMPLE-AES test binary owns the shared encryption oracle's checks.
+macro_rules! sample_aes_fixture_checks {
+    ($checks:item) => {};
+}
 #[path = "support/sample_aes_fixture.rs"]
 mod sample_aes_fixture;
 use drmr_core::{
@@ -521,7 +525,11 @@ fn matrix_row(
             result.output.tracks.len(),
             if layout == "joint-av" { 2 } else { 1 }
         );
-        for (original, keys) in [(source, input_keys), (clear, &empty_hls)] {
+        // Clear input already is the independent clear reference.
+        for (original, keys) in [(source, input_keys), (clear, &empty_hls)]
+            .into_iter()
+            .take(if source == clear { 1 } else { 2 })
+        {
             let proof = c
                 .verify(VerificationRequest {
                     source: VerificationSource {
@@ -677,7 +685,11 @@ fn dash_row(
         } else {
             InputKeys::default()
         };
-        for (original, keys) in [(source, input_keys), (clear, &empty_hls)] {
+        // Clear input already is the independent clear reference.
+        for (original, keys) in [(source, input_keys), (clear, &empty_hls)]
+            .into_iter()
+            .take(if source == clear { 1 } else { 2 })
+        {
             all_checks(
                 &c.verify(VerificationRequest {
                     source: VerificationSource {

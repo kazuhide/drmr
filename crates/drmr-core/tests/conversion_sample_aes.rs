@@ -1,5 +1,11 @@
 //! Original encrypted transport samples remain the authority for every output proof.
 mod common;
+// Register the shared encryption oracle's checks in this test binary only.
+macro_rules! sample_aes_fixture_checks {
+    ($checks:item) => {
+        $checks
+    };
+}
 #[path = "support/sample_aes_fixture.rs"]
 mod sample_aes_fixture;
 use drmr_core::{
