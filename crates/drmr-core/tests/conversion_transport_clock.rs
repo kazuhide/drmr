@@ -65,6 +65,7 @@ fn source(directory: &Path, partial: bool, duration: &str) -> PathBuf {
     let master = directory.join("master.m3u8");
     run_fixture(
         Command::new("packager")
+            .arg("--single_threaded")
             .arg(format!(
                 "in={},stream=audio,segment_template={},playlist_name=media.m3u8",
                 transport.display(),

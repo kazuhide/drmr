@@ -15,6 +15,7 @@ fn fixture(root: &Path) {
     drmr_core::native::create_media_dir_all(root).unwrap();
     let clip = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bbb/clip.mp4");
     let result = Command::new("packager")
+        .arg("--single_threaded")
         .current_dir(root)
         .arg(format!(
             "in={},stream=video,segment_template=segment-$Number$.ts,playlist_name=media.m3u8",

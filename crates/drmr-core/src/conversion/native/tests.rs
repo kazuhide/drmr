@@ -39,6 +39,7 @@ pub(super) fn short_audio_transport(root: &Path) -> PathBuf {
         "short licensed AAC fixture generation failed"
     );
     let packaged = std::process::Command::new("packager")
+        .arg("--single_threaded")
         .arg(format!(
             "input={},stream=audio,segment_template={}/part-$Number$.ts,playlist_name=media.m3u8",
             encoded.display(),

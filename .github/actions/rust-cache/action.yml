@@ -1,0 +1,67 @@
+name: Cache Rust dependencies
+description: Reuse public dependencies and compiled libraries without retaining test workspaces
+inputs:
+  profile:
+    description: Cargo profile whose compiled dependencies are retained
+    default: debug
+  target-directory:
+    description: Relative Cargo target directory
+    default: target
+runs:
+  using: composite
+  steps:
+    - name: Identify the compiler and safe cache paths
+      id: identity
+      shell: bash
+      env:
+        CACHE_PROFILE: ${{ inputs.profile }}
+        CACHE_TARGET_DIRECTORY: ${{ inputs.target-directory }}
+      run: |
+        python - <<'PYTHON'
+        import hashlib, json, os, re, subprocess
+        from pathlib import Path
+        profile = os.environ['CACHE_PROFILE']
+        directory = os.environ['CACHE_TARGET_DIRECTORY']
+        if profile not in ('debug', 'release') or not re.fullmatch(r'[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*', directory):
+            raise SystemExit('Unsupported Cargo cache location')
+        compiler = subprocess.check_output(['rustc', '-vV'])
+        cargo = subprocess.check_output(['cargo', '-V'])
+        host = next(line[6:] for line in compiler.decode().splitlines() if line.startswith('host: '))
+        if not re.fullmatch(r'[A-Za-z0-9_.-]+', host):
+            raise SystemExit('Unsupported Cargo host target')
+        flags = {key.upper(): value for key, value in os.environ.items()
+                 if key.upper() in ('RUSTFLAGS', 'CARGO_ENCODED_RUSTFLAGS', 'CARGO_BUILD_TARGET', 'IMAGEOS', 'IMAGEVERSION')
+                 or key.upper().startswith('CARGO_PROFILE_')}
+        digest = hashlib.sha256(compiler + cargo + json.dumps(flags, sort_keys=True).encode()).hexdigest()
+        home = Path(os.environ.get('CARGO_HOME', str(Path.home() / '.cargo')))
+        paths = [(home / 'registry' / part).as_posix() for part in ('index', 'cache', 'src')]
+        root = Path(os.environ['GITHUB_WORKSPACE']) / directory
+        for base in (root / profile, root / host / profile):
+            paths.extend((base / part).as_posix() for part in ('build', '.fingerprint'))
+            # Exclude test executables, debug symbols, incremental state and all
+            # runtime directories, including Cargo's target/tmp fixture cache.
+            paths.extend((base / 'deps' / pattern).as_posix() for pattern in
+                         ('*.rlib', '*.rmeta', '*.d', '*.so', '*.dylib', '*.dll', '*.lib'))
+        with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
+            output.write('compiler=' + digest + '\n')
+            output.write('location=' + directory.replace('/', '-') + '-' + profile + '\n')
+            output.write('paths<<CACHE_PATHS\n' + '\n'.join(paths) + '\nCACHE_PATHS\n')
+        PYTHON
+
+    - name: Restore and retain compiled dependencies
+      if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.identity.outputs.paths }}
+        key: cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.identity.outputs.compiler }}-${{ steps.identity.outputs.location }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/**/Cargo.toml', 'tools/regressions/**/Cargo.toml', 'vendor/**', '.cargo/config*') }}-${{ hashFiles('crates/**/src/**', 'crates/**/build.rs', '.github/actions/rust-cache/action.yml') }}
+        restore-keys: |
+          cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.identity.outputs.compiler }}-${{ steps.identity.outputs.location }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/**/Cargo.toml', 'tools/regressions/**/Cargo.toml', 'vendor/**', '.cargo/config*') }}-
+
+    - name: Restore dependencies without writing from a fork
+      if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.identity.outputs.paths }}
+        key: cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.identity.outputs.compiler }}-${{ steps.identity.outputs.location }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/**/Cargo.toml', 'tools/regressions/**/Cargo.toml', 'vendor/**', '.cargo/config*') }}-${{ hashFiles('crates/**/src/**', 'crates/**/build.rs', '.github/actions/rust-cache/action.yml') }}
+        restore-keys: |
+          cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.identity.outputs.compiler }}-${{ steps.identity.outputs.location }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/**/Cargo.toml', 'tools/regressions/**/Cargo.toml', 'vendor/**', '.cargo/config*') }}-

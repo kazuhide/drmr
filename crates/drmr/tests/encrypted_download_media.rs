@@ -73,6 +73,7 @@ fn package_fixture(root: &Path, profile: Profile) {
         .display()
     );
     let mut command = Command::new("packager");
+    command.arg("--single_threaded");
     command
         .arg(descriptor)
         .args(["--hls_master_playlist_output"])

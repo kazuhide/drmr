@@ -328,11 +328,13 @@ Unknown media uses the conservative fallback until observed stream metadata is a
 This estimate does not enforce an absolute resident-memory limit on third-party tools.
 
 FFmpeg and ffprobe use one decoder thread; FFmpeg output encoders and filters also use
-one thread. Final joint packaging can run one Shaka Packager media job per distinct
-input file. All jobs must fit the command's CPU ceiling, `--max-workers` and memory
-allowance: the call reserves one CPU token and one conservative child-memory estimate
-per job, once, through the shared limiter. Otherwise it uses `--single_threaded`.
-Other Packager calls remain single-threaded. `--io_cache_size=0` always disables
+one thread. Every Shaka Packager process uses `--single_threaded` and reserves one
+CPU token and one conservative child-memory estimate through the shared limiter.
+Rust worker pools and independent output conversions can still run concurrently.
+Shaka's threaded job manager can miss a completion notification when short jobs
+finish before its first wait; see the
+[supported implementation](https://github.com/shaka-project/shaka-packager/blob/75b2faf6b5b30a74f512cab0edde73fa86c1083f/packager/app/job_manager.cc#L71-L119).
+Serial jobs avoid that wait. `--io_cache_size=0` always disables
 separate per-file threaded I/O caches. Multiple outputs share these limits; they do
 not each receive an independent allocation. These are admission estimates, not a
 hard limit on an external binary's operating-system threads or resident memory.

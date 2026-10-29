@@ -14,7 +14,7 @@ use std::fmt::Write as _;
 use std::{
     path::{Path, PathBuf},
     process::Command,
-    sync::Arc,
+    sync::{Arc, OnceLock},
 };
 const KID: &str = "000102030405060708090a0b0c0d0e0f";
 const KEY: &str = "42424242424242424242424242424242";
@@ -63,6 +63,28 @@ fn run(command: &mut Command) {
     );
 }
 fn fixture(root: &Path) -> PathBuf {
+    static FILES: OnceLock<Vec<(String, Vec<u8>)>> = OnceLock::new();
+    let files = FILES.get_or_init(|| {
+        let owner = common::private_tempdir().unwrap();
+        generate_fixture(owner.path());
+        let files = common::snapshot_tree(owner.path());
+        assert!(files.len() <= 64, "the fixture must remain small");
+        assert!(
+            files.iter().map(|(_, bytes)| bytes.len()).sum::<usize>() <= 16 * 1024 * 1024,
+            "the shared clear fixture must fit within its memory bound"
+        );
+        owner.close().unwrap();
+        files
+    });
+    // Only immutable clear bytes are shared; every test owns its mutable files.
+    for (relative, bytes) in files {
+        let path = root.join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, bytes).unwrap();
+    }
+    root.join("master.m3u8")
+}
+fn generate_fixture(root: &Path) {
     let clip = Path::new(env!("CARGO_MANIFEST_DIR")).join("../drmr/tests/fixtures/bbb/clip.mp4");
     let mut master = String::from(
         "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"aac\",NAME=\"English\",LANGUAGE=\"en\",DEFAULT=YES,AUTOSELECT=YES,CHANNELS=\"2\",URI=\"audio/media.m3u8\"\n",
@@ -127,7 +149,40 @@ fn fixture(root: &Path) -> PathBuf {
         .arg(audio.join("media.m3u8")));
     let path = root.join("master.m3u8");
     std::fs::write(&path, master).unwrap();
-    path
+}
+#[test]
+fn reused_fixture_copies_remain_isolated_after_concurrent_mutation_and_deletion() {
+    let reference = common::private_tempdir().unwrap();
+    fixture(reference.path());
+    let original = common::snapshot_tree(reference.path());
+    println!(
+        "DRMR_ABR_FIXTURE {}",
+        serde_json::json!({
+            "files": original.len(),
+            "bytes": original.iter().map(|(_, bytes)| bytes.len()).sum::<usize>(),
+            "independent_copies": 4
+        })
+    );
+    std::thread::scope(|scope| {
+        for _ in 0..4 {
+            let original = &original;
+            scope.spawn(move || {
+                let copy = common::private_tempdir().unwrap();
+                let manifest = fixture(copy.path());
+                assert_eq!(&common::snapshot_tree(copy.path()), original);
+                std::fs::write(manifest, "#EXTM3U\n").unwrap();
+                std::fs::remove_dir_all(copy.path().join("video-0")).unwrap();
+                assert_ne!(&common::snapshot_tree(copy.path()), original);
+                copy.close().unwrap();
+            });
+        }
+    });
+    let fresh = common::private_tempdir().unwrap();
+    fixture(fresh.path());
+    assert_eq!(common::snapshot_tree(fresh.path()), original);
+    assert_eq!(common::snapshot_tree(reference.path()), original);
+    fresh.close().unwrap();
+    reference.close().unwrap();
 }
 fn proof(result: &drmr_core::conversion::VerificationReport) {
     assert!(

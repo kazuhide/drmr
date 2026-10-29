@@ -227,6 +227,7 @@ fn separate_source(root: &Path) -> PathBuf {
     fs::create_dir(&dash).unwrap();
     let clip = Path::new(env!("CARGO_MANIFEST_DIR")).join("../drmr/tests/fixtures/bbb/clip.mp4");
     let mut packager = std::process::Command::new("packager");
+    packager.arg("--single_threaded");
     for role in ["video", "audio"] {
         let directory = dash.join(role);
         fs::create_dir(&directory).unwrap();

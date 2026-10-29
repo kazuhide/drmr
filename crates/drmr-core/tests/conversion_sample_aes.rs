@@ -1,5 +1,11 @@
 //! Original encrypted transport samples remain the authority for every output proof.
 mod common;
+// Register the shared encryption oracle's checks in this test binary only.
+macro_rules! sample_aes_fixture_checks {
+    ($checks:item) => {
+        $checks
+    };
+}
 #[path = "support/sample_aes_fixture.rs"]
 mod sample_aes_fixture;
 use drmr_core::{
@@ -40,6 +46,7 @@ fn shaka_video(root: &Path, encrypted: bool) -> PathBuf {
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../drmr/tests/fixtures/bbb/clip.mp4");
     let mut argv = vec![
         "packager".into(),
+        "--single_threaded".into(),
         format!(
             "input={},stream=video,segment_template={},playlist_name=media.m3u8",
             tool_path(&source),

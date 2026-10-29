@@ -1,0 +1,24 @@
+name: Install cached Windows media tools
+description: Restore upstream archives and verify every digest before installing executable tools
+runs:
+  using: composite
+  steps:
+    - name: Reuse verified upstream downloads
+      if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.tool_cache }}/drmr-media-downloads
+        key: media-downloads-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.github/scripts/install-windows-media-tools.ps1') }}
+
+    - name: Restore upstream downloads without writing from a fork
+      if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.tool_cache }}/drmr-media-downloads
+        key: media-downloads-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.github/scripts/install-windows-media-tools.ps1') }}
+
+    - name: Check digests and install tools
+      shell: pwsh
+      env:
+        DRMR_MEDIA_DOWNLOAD_CACHE: ${{ runner.tool_cache }}/drmr-media-downloads
+      run: ./.github/scripts/install-windows-media-tools.ps1

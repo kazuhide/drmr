@@ -498,6 +498,7 @@ pub fn encrypt_segment_with_audio_config(
     assert_eq!(std::fs::read(source).unwrap(), original);
 }
 
+sample_aes_fixture_checks! {
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -611,6 +612,7 @@ mod tests {
     fn shaka(root: &Path, input: &Path, role: &str, encrypted: bool) {
         drmr_core::native::create_media_dir_all(root).unwrap();
         let mut args = vec![
+            "--single_threaded".into(),
             format!(
                 "input={},stream={role},segment_template={},playlist_name=media.m3u8",
                 path(input),
@@ -703,4 +705,5 @@ mod tests {
         }
         assert_eq!(std::fs::read(original).unwrap(), original_bytes);
     }
+}
 }

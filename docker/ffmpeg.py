@@ -1,14 +1,10 @@
 """Build the pinned ffmpeg component without runtime network installation."""
 from native import PREFIX, WORK, RECIPE, collect_notices, digest, fetch_archive, git_archive, record, run, unpack, verify_file
 import json
-import urllib.request
 import shutil
 def ffmpeg(pin, jobs):
     source = unpack(fetch_archive(pin), WORK / "ffmpeg")
-    signature = PREFIX / "sources" / pin["signature"]["archive"]
-    with urllib.request.urlopen(pin["signature"]["url"], timeout=60) as response:
-        signature.write_bytes(response.read(65536))
-    verify_file(signature, pin["signature"]["sha256"])
+    signature = fetch_archive(pin["signature"], read_limit=65536)
     key = RECIPE / "ffmpeg-release.asc"
     verify_file(key, pin["key_sha256"])
     keyring = WORK / "ffmpeg-keyring.gpg"

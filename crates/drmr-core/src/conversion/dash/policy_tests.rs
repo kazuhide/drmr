@@ -9,6 +9,7 @@ fn package(root: &Path, protection: &str, roles: &[&str]) {
 
 fn package_source(root: &Path, source: &Path, protection: &str, roles: &[&str], seconds: &str) {
     let mut command = Command::new("packager");
+    command.arg("--single_threaded");
     for role in roles {
         let directory = root.join(role);
         crate::native::create_media_dir_all(&directory).unwrap();

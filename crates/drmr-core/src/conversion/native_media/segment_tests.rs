@@ -581,6 +581,7 @@ fn muxed_avc_aac_all_encryption_pairs_preserve_uneven_resources_and_independent_
 fn shaka_source(fixture: &Path, output: &Path, scheme: &str, stream: &str) {
     run_tool(
         Command::new("packager")
+            .arg("--single_threaded")
             .arg(format!(
                 "input={},stream={stream},output={},drm_label=MEDIA",
                 crate::manifest_support::path::fspath(fixture).unwrap(),

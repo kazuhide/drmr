@@ -367,6 +367,7 @@ def media(image, root):
         destination = root / "work" / kind
         destination.mkdir(mode=0o700)
         image.checked([
+            "--single_threaded",
             f"in=/work/video.mp4,stream=video,init_segment=/work/{kind}/init.mp4,segment_template=/work/{kind}/seg_$Number$.m4s,playlist_name=video.m3u8",
             "--segment_duration", "2", "--fragment_duration", "2",
             "--mp4_reset_initial_composition_offset_to_zero=false",

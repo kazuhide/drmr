@@ -21,13 +21,14 @@ remain unchanged pre-releases.
 - Redraw progress in a temporary screen on terminals with known screen-switch
   support to fix stale rows after resizing. Restore the prior screen/history
   before final output; use plain milestones otherwise.
+- Use Shaka's serial job manager to avoid lost completion notifications.
+  Keep Rust worker pools and independent output conversions concurrent.
 
 ### Changed
 
 - Parallelize source snapshots, profile checks, original-to-intermediate
   comparisons and post-capture DASH metadata work within shared CPU/memory
-  limits. Allow final multi-input packaging to use parallel media jobs only
-  when every job fits the same budget; retain serial execution otherwise.
+  limits. Run media jobs serially inside each Shaka process.
   Preserve ordered results, full checks and failure/cancellation cleanup.
 - Record staged conversion measurements without claiming a consistent
   whole-command speedup for every added concurrency stage.

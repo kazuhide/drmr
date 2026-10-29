@@ -21,38 +21,32 @@ fn runner(cpus: usize, children: u64) -> ToolRunner {
 }
 
 #[test]
-fn parallel_packager_requires_every_input_job_to_fit_cpu_memory_and_cohort_limits() {
-    for (cpus, children, maximum, jobs, expected) in [
-        (4, 4, 4, 3, 3),
-        (4, 3, 4, 3, 3),
-        (4, 2, 4, 3, 1),
-        (2, 4, 4, 3, 1),
-        (4, 4, 2, 3, 1),
-        (4, 4, 1, 3, 1),
-        (4, 4, 4, 1, 1),
-        (4, 4, 4, 0, 1),
-        (64, 64, 64, 65, 1),
-    ] {
-        let scoped = runner(cpus, children)
-            .cohort(maximum)
-            .for_packager_jobs(jobs);
-        assert_eq!(scoped.packager_jobs(), expected);
+fn independent_packaging_calls_claim_one_cpu_and_one_child_without_shrinking_the_cohort() {
+    for (cpus, children, maximum) in [(4, 4, 4), (2, 4, 4), (4, 1, 4), (4, 4, 1), (64, 64, 64)] {
+        let base = runner(cpus, children).cohort(maximum);
+        let scoped = base.for_packaging();
+        let claim = scoped.call_claim(&RunOptions::default());
+        assert_eq!(claim.cpu_threads, 1);
+        assert_eq!(claim.memory_bytes, child_bytes());
+        assert_eq!(scoped.native_capacity(), base.native_capacity());
+        drop(scoped.reserve("packager", &RunOptions::default()).unwrap());
     }
 }
 
 #[test]
-fn job_choice_uses_configured_capacity_and_its_own_context_not_temporary_occupancy() {
+fn retained_contexts_leave_one_actual_leaf_without_changing_configured_capacity() {
     let base = runner(4, 4).cohort(4);
     let context = base
         .retain_context(
-            2 * child_bytes(),
+            3 * child_bytes(),
             child_bytes(),
             &Stop::new(),
             Duration::from_secs(1),
         )
         .unwrap();
-    let scoped = base.for_packager_jobs(3);
-    assert_eq!(scoped.packager_jobs(), 3);
+    let scoped = base.for_packaging();
+    assert_eq!(scoped.native_capacity(), (4, 4 * child_bytes()));
+    let leaf = scoped.reserve("packager", &RunOptions::default()).unwrap();
     let waiting = scoped.reserve(
         "packager",
         &RunOptions {
@@ -61,64 +55,44 @@ fn job_choice_uses_configured_capacity_and_its_own_context_not_temporary_occupan
         },
     );
     assert_eq!(waiting.unwrap_err().kind, "timeout");
+    drop(leaf);
     drop(context);
     drop(scoped.reserve("packager", &RunOptions::default()).unwrap());
+    let bounded = base
+        .within_context(3 * child_bytes(), child_bytes())
+        .for_packaging();
+    drop(bounded.reserve("packager", &RunOptions::default()).unwrap());
+    let insufficient = base
+        .within_context(3 * child_bytes() + 1, child_bytes())
+        .for_packaging();
     assert_eq!(
-        base.within_context(2 * child_bytes(), child_bytes())
-            .for_packager_jobs(3)
-            .packager_jobs(),
-        1
-    );
-    assert_eq!(
-        runner(8, 8)
-            .within_context(child_bytes(), 2 * child_bytes())
-            .for_packager_jobs(3)
-            .packager_jobs(),
-        1,
-        "a retained coordinator must leave enough guaranteed leaf headroom for every job"
+        insufficient
+            .reserve("packager", &RunOptions::default())
+            .unwrap_err()
+            .kind,
+        "resource-budget"
     );
 }
 
 #[test]
-fn a_private_joint_scope_charges_all_jobs_only_to_packager_and_survives_cleanup_forks() {
+fn private_packaging_workload_survives_sibling_mutations_and_observed_cleanup_forks() {
     let base = runner(4, 4).cohort(4);
-    let scoped = base.for_packager_jobs(3);
+    let scoped = base.for_packaging();
     let options = RunOptions::default();
-    for tool in ["ffmpeg", "ffprobe", "fixture"] {
-        let claim = scoped.call_claim(tool, &options).unwrap();
-        assert_eq!(claim.cpu_threads, 1);
-        assert_eq!(claim.memory_bytes, child_bytes());
-    }
-    let claim = scoped.call_claim("packager", &options).unwrap();
-    assert_eq!(claim.cpu_threads, 3);
-    assert_eq!(claim.memory_bytes, 3 * child_bytes());
-    assert_eq!(base.packager_jobs(), 1);
-    assert_eq!(
-        base.call_claim("packager", &options).unwrap().cpu_threads,
-        1
-    );
     let observed = scoped.observed(Arc::new(crate::events::NoSink));
     let (cleanup, _) = scoped.ensuring_cleanup_owner();
-    for fork in [&observed, &cleanup] {
-        assert_eq!(fork.packager_jobs(), 3);
-        assert_eq!(
-            fork.call_claim("packager", &options).unwrap().cpu_threads,
-            3
-        );
-    }
     base.register_workload(Workload {
         max_pixels: Some(3840 * 2160),
         input_buffer_bytes: Some(32 * 1024 * 1024),
         tracks: 4,
     });
-    assert_eq!(
-        scoped
-            .call_claim("packager", &options)
-            .unwrap()
-            .memory_bytes,
-        3 * child_bytes(),
-        "the private call must retain the workload used for its admission choice"
-    );
+    assert!(base.call_claim(&options).memory_bytes > child_bytes());
+    for fork in [&scoped, &observed, &cleanup] {
+        let claim = fork.call_claim(&options);
+        assert_eq!(claim.cpu_threads, 1);
+        assert_eq!(claim.memory_bytes, child_bytes());
+        assert_eq!(fork.native_capacity(), (4, 4 * child_bytes()));
+    }
 }
 
 #[test]
@@ -137,20 +111,45 @@ fn concurrent_retained_coordinators_keep_their_guaranteed_leaf_headroom() {
         .collect();
     let first = base
         .within_context(child_bytes(), child_bytes())
-        .for_packager_jobs(2);
+        .for_packaging();
     let second = base
         .within_context(child_bytes(), child_bytes())
-        .for_packager_jobs(2);
+        .for_packaging();
     assert_eq!(first.native_capacity().1, 3 * child_bytes());
-    assert_eq!(first.packager_jobs(), 1);
-    assert_eq!(second.packager_jobs(), 1);
-    let options = RunOptions {
-        timeout: Some(Duration::from_secs(1)),
-        ..RunOptions::default()
-    };
-    let left = first.reserve("packager", &options).unwrap();
-    let right = second.reserve("packager", &options).unwrap();
-    drop((left, right));
+    let (started, ready) = mpsc::sync_channel(2);
+    std::thread::scope(|scope| {
+        let mut completion_senders = Vec::new();
+        let mut workers = Vec::new();
+        for output in [first, second] {
+            let started = started.clone();
+            let (release, released) = mpsc::sync_channel(1);
+            completion_senders.push(release);
+            workers.push(scope.spawn(move || {
+                let permit = output
+                    .reserve(
+                        "packager",
+                        &RunOptions {
+                            timeout: Some(Duration::from_secs(1)),
+                            ..RunOptions::default()
+                        },
+                    )
+                    .unwrap();
+                started.send(()).unwrap();
+                released.recv_timeout(Duration::from_secs(2)).unwrap();
+                drop(permit);
+            }));
+        }
+        // Both outputs must enter while the other's permit and both contexts remain held.
+        for _ in 0..2 {
+            ready.recv_timeout(Duration::from_secs(1)).unwrap();
+        }
+        for release in completion_senders {
+            release.send(()).unwrap();
+        }
+        for worker in workers {
+            worker.join().unwrap();
+        }
+    });
     drop(contexts);
     drop(
         base.native_permit(
@@ -166,25 +165,37 @@ fn concurrent_retained_coordinators_keep_their_guaranteed_leaf_headroom() {
 }
 
 #[test]
-fn parallel_child_memory_overflow_cannot_enable_threading() {
-    let base = ToolRunner::new(Arc::new(Secrets::new()), Arc::new(crate::events::NoSink))
-        .with_limiter(Arc::new(Limiter::new(64, u64::MAX)));
-    base.register_workload(Workload {
-        max_pixels: Some(u64::MAX),
-        input_buffer_bytes: Some(u64::MAX),
-        tracks: 1,
-    });
-    assert_eq!(base.for_packager_jobs(2).packager_jobs(), 1);
+fn overflowing_or_insufficient_child_workloads_are_refused() {
+    for (pixels, buffered) in [(u64::MAX, u64::MAX), (1, 0)] {
+        let base = runner(64, 1);
+        base.register_workload(Workload {
+            max_pixels: Some(pixels),
+            input_buffer_bytes: Some(buffered),
+            tracks: 1,
+        });
+        let scoped = base.for_packaging();
+        let claim = scoped.call_claim(&RunOptions::default());
+        assert_eq!(claim.cpu_threads, 1);
+        assert!(claim.memory_bytes > child_bytes());
+        if pixels == u64::MAX {
+            assert_eq!(claim.memory_bytes, u64::MAX);
+        }
+        assert_eq!(
+            scoped
+                .reserve("packager", &RunOptions::default())
+                .unwrap_err()
+                .kind,
+            "resource-budget"
+        );
+    }
 }
 
 #[test]
 fn two_joint_outputs_cannot_overbook_cpu_cohort_or_memory_and_release_after_failure() {
-    for (cpus, children, maximum) in [(4, 8, 8), (8, 8, 4), (8, 4, 8)] {
+    for (cpus, children, maximum) in [(1, 8, 8), (8, 8, 1), (8, 1, 8)] {
         let base = runner(cpus, children).cohort(maximum);
-        let first = base.for_packager_jobs(3);
-        let second = base.for_packager_jobs(2);
-        assert_eq!(first.packager_jobs(), 3);
-        assert_eq!(second.packager_jobs(), 2);
+        let first = base.for_packaging();
+        let second = base.for_packaging();
         let (started, ready) = mpsc::sync_channel(1);
         let (release, released) = mpsc::sync_channel(1);
         std::thread::scope(|scope| {
@@ -215,7 +226,7 @@ fn two_joint_outputs_cannot_overbook_cpu_cohort_or_memory_and_release_after_fail
             );
             let stopped = Stop::new();
             let queued_stop = stopped.clone();
-            let queued = second.for_packager_jobs(2);
+            let queued = second.for_packaging();
             let (attempting, attempted) = mpsc::sync_channel(1);
             let waiter = std::thread::spawn(move || {
                 attempting.send(()).unwrap();

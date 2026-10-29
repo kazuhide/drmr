@@ -559,6 +559,12 @@ counters reported by `wait4`.
 
 ## Bounded rendition preparation and packaging
 
+The measurements in this section include an earlier Shaka threading mode.
+Current builds run jobs serially inside each Shaka process to avoid a completion
+notification race; Rust workers and independent outputs remain concurrent.
+The historical **b** results below do not describe the current packaging mode.
+See [resource scheduling](resources.md) for the current behavior.
+
 A later comparison uses the same retained clear HLS MPEG-TS source: six video
 renditions, one audio rendition, approximately 597 seconds and 708 referenced
 files totaling 857,447,176 bytes. The segment target is six seconds. Each direct

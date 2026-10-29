@@ -1,11 +1,18 @@
 """Build pinned native tools and retain their pristine sources and notices."""
 import argparse
+import errno
 import hashlib
+import http.client
 import json
+import os
 from pathlib import Path, PurePosixPath
 import shutil
+import ssl
 import subprocess
 import tarfile
+import tempfile
+import time
+import urllib.error
 import urllib.request
 
 RECIPE = Path(__file__).resolve().parent
@@ -55,13 +62,41 @@ def collect_notices(source, destination, license_files=None):
         records.append({"path": relative.as_posix(), "sha256": digest(target), "bytes": target.stat().st_size})
     return records
 
-def fetch_archive(pin):
+def fetch_archive(pin, read_limit=None):
     archive = PREFIX / "sources" / pin["archive"]
     archive.parent.mkdir(parents=True, exist_ok=True)
-    with urllib.request.urlopen(pin["url"], timeout=60) as source, archive.open("xb") as target:
-        shutil.copyfileobj(source, target)
-    verify_file(archive, pin["sha256"])
-    return archive
+    if archive.exists() or archive.is_symlink():
+        raise FileExistsError(archive)
+    for attempt in range(3):
+        pending = None
+        try:
+            with tempfile.NamedTemporaryFile(mode="wb", dir=archive.parent,
+                                             prefix="." + archive.name + ".", suffix=".pending", delete=False) as target:
+                pending = Path(target.name)
+                with urllib.request.urlopen(pin["url"], timeout=20) as source:
+                    if read_limit is None:
+                        shutil.copyfileobj(source, target)
+                    else:
+                        target.write(source.read(read_limit))
+            verify_file(pending, pin["sha256"])
+            pending.chmod(0o644)
+            # Linking publishes atomically and refuses an existing destination.
+            os.link(pending, archive)
+            return archive
+        except (OSError, urllib.error.URLError, http.client.IncompleteRead) as error:
+            reason = error.reason if isinstance(error, urllib.error.URLError) else error
+            if isinstance(error, urllib.error.HTTPError):
+                transient = error.code in (408, 429) or 500 <= error.code < 600
+            else:
+                transient = isinstance(reason, (TimeoutError, ConnectionError, http.client.IncompleteRead, ssl.SSLEOFError))
+                transient = transient or (isinstance(reason, OSError) and reason.errno in
+                                          (errno.ETIMEDOUT, errno.ENETUNREACH, errno.EHOSTUNREACH))
+            if not transient or attempt == 2:
+                raise
+        finally:
+            if pending is not None:
+                pending.unlink(missing_ok=True)
+        time.sleep(attempt + 1)
 
 def unpack(archive, destination):
     destination.mkdir(parents=True)

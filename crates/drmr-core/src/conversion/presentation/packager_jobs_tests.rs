@@ -32,10 +32,10 @@ fn fixture(parent: &Path, maximum: usize) -> (Converter, PathBuf, PathBuf) {
 }
 
 #[test]
-fn final_joint_call_uses_unique_input_jobs_and_keeps_other_packager_calls_serial() {
+fn final_joint_call_uses_the_serial_job_manager_at_every_worker_limit() {
     for (maximum, paths, parallel) in [
-        (4, vec!["video.mp4", "audio.mp4"], true),
-        (4, vec!["video.mp4", "./video.mp4"], true),
+        (4, vec!["video.mp4", "audio.mp4"], false),
+        (4, vec!["video.mp4", "./video.mp4"], false),
         (4, vec!["video.mp4", "video.mp4"], false),
         (1, vec!["video.mp4", "audio.mp4"], false),
         (1, vec!["video.mp4"], false),
@@ -43,13 +43,14 @@ fn final_joint_call_uses_unique_input_jobs_and_keeps_other_packager_calls_serial
         let parent = crate::native::private_tempdir().unwrap();
         let (converter, tool, arguments) = fixture(parent.path(), maximum);
         let owner = super::super::files::Stage::new(Some(parent.path())).unwrap();
-        let clear: Vec<_> = paths
-            .into_iter()
-            .map(|path| parent.path().join(path))
-            .collect();
-        let argv = [tool.to_str().unwrap().into()];
+        let mut argv = vec![tool.to_str().unwrap().into()];
+        argv.extend(
+            paths
+                .into_iter()
+                .map(|path| format!("input={},stream=0", parent.path().join(path).display())),
+        );
         converter
-            .run_joint_packager(&clear, &argv, None, &[], &owner, None)
+            .run_joint_packager(&argv, None, &[], &owner, None)
             .unwrap();
         let actual = fs::read_to_string(&arguments).unwrap();
         assert!(actual.lines().any(|value| value == "--io_cache_size=0"));
@@ -75,17 +76,12 @@ fn final_joint_call_uses_unique_input_jobs_and_keeps_other_packager_calls_serial
 }
 
 #[test]
-fn private_pssh_call_keeps_the_same_parallel_resource_scope() {
+fn private_pssh_call_uses_the_serial_job_manager() {
     let parent = crate::native::private_tempdir().unwrap();
     let (converter, tool, arguments) = fixture(parent.path(), 4);
     let owner = super::super::files::Stage::new(Some(parent.path())).unwrap();
-    let clear = [
-        parent.path().join("video.mp4"),
-        parent.path().join("audio.mp4"),
-    ];
     converter
         .run_joint_packager(
-            &clear,
             &[tool.to_str().unwrap().into()],
             Some("0000000870737368"),
             &[],
@@ -94,10 +90,6 @@ fn private_pssh_call_keeps_the_same_parallel_resource_scope() {
         )
         .unwrap();
     let actual = fs::read_to_string(arguments).unwrap();
-    assert!(
-        actual
-            .lines()
-            .any(|value| value == "--single_threaded=false")
-    );
+    assert!(actual.lines().any(|value| value == "--single_threaded"));
     assert!(actual.lines().any(|value| value.starts_with("--flagfile=")));
 }

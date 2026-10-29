@@ -102,6 +102,7 @@ fn package_audio(clear: &Path, output: &files::Stage, format: OutputFormat, sche
 
 fn package_tracks(clears: &[PathBuf], output: &files::Stage, format: OutputFormat, scheme: &str) {
     let mut command = Command::new("packager");
+    command.arg("--single_threaded");
     for (ordinal, clear) in clears.iter().enumerate() {
         let directory = output.path().join(format!("track-{ordinal:04}"));
         files::create_dir(&directory).unwrap();

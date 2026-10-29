@@ -625,7 +625,7 @@ def media(cli, runner, source):
             "prepared-video-changed")
     presentation = root / "dash"
     presentation.mkdir(mode=0o700)
-    runner.run(["packager", "in=video.mp4,stream=video,init_segment=dash/init.mp4,segment_template=dash/seg_$Number$.m4s",
+    runner.run(["packager", "--single_threaded", "in=video.mp4,stream=video,init_segment=dash/init.mp4,segment_template=dash/seg_$Number$.m4s",
                 "--segment_duration", "2", "--fragment_duration", "2",
                 "--mp4_reset_initial_composition_offset_to_zero=false", "--generate_static_live_mpd",
                 "--mpd_output", "dash/manifest.mpd"], "fixture-segments")

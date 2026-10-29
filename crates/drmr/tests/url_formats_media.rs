@@ -43,6 +43,7 @@ fn fixture(root: &Path, format: &str, scheme: &str) -> PathBuf {
     drmr_core::native::create_media_dir_all(root).unwrap();
     let clip = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bbb/clip.mp4");
     let mut command = Command::new("packager");
+    command.arg("--single_threaded");
     command.current_dir(root);
     if format == "mp4" {
         command.arg(format!(

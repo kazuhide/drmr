@@ -39,7 +39,7 @@ def prepare_source(destination):
             f"in={(FIXTURE / 'clip.mp4').as_posix()},stream={role},"
             f"init_segment={(destination / role).as_posix()}/init.mp4,"
             f"segment_template={(destination / role).as_posix()}/seg_$Number$.m4s")
-    run(["packager", *streams, "--segment_duration", "2", "--fragment_duration", "2",
+    run(["packager", "--single_threaded", *streams, "--segment_duration", "2", "--fragment_duration", "2",
          "--mp4_reset_initial_composition_offset_to_zero=false", "--generate_static_live_mpd",
          "--mpd_output", destination / "manifest.mpd"])
     assert len(list((destination / "video").glob("seg_*.m4s"))) == 5

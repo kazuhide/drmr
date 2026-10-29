@@ -268,7 +268,7 @@ fn shaka_cenc_and_cbcs_video_audio_with_distinct_keys_match_independent_decrypti
         let video = root.path().join(format!("{scheme}-video.mp4"));
         let audio = root.path().join(format!("{scheme}-audio.mp4"));
         let input = crate::manifest_support::path::fspath(&fixture()).unwrap();
-        run(Command::new("packager").arg(format!("input={input},stream=video,output={},drm_label=V",crate::manifest_support::path::fspath(&video).unwrap()))
+        run(Command::new("packager").arg("--single_threaded").arg(format!("input={input},stream=video,output={},drm_label=V",crate::manifest_support::path::fspath(&video).unwrap()))
             .arg(format!("input={input},stream=audio,output={},drm_label=A",crate::manifest_support::path::fspath(&audio).unwrap()))
             .args(["--enable_raw_key_encryption","--keys"]).arg(format!("label=V:key_id={KID_VIDEO}:key={KEY_VIDEO},label=A:key_id={KID_AUDIO}:key={KEY_AUDIO}"))
             .args(["--protection_scheme",scheme,"--clear_lead","0","--segment_duration","2","--mp4_reset_initial_composition_offset_to_zero=false"]));

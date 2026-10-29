@@ -30,6 +30,7 @@ fn source(root: &Path) -> PathBuf {
     fs::create_dir(root).unwrap();
     let clip = Path::new(env!("CARGO_MANIFEST_DIR")).join("../drmr/tests/fixtures/bbb/clip.mp4");
     let mut command = std::process::Command::new("packager");
+    command.arg("--single_threaded");
     for role in ["video", "audio"] {
         let directory = root.join(role);
         fs::create_dir(&directory).unwrap();

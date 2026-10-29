@@ -77,6 +77,7 @@ fn source(root: &Path) -> PathBuf {
     );
     let manifest = root.join("master.m3u8");
     let result = Command::new("packager")
+        .arg("--single_threaded")
         .arg(format!(
             "in={},stream=video,segment_template={},playlist_name=media.m3u8",
             transport.display(),

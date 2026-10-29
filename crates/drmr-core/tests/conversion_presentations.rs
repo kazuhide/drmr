@@ -165,6 +165,7 @@ fn unified_dash_to_aes_hls_verifies_actual_joint_media_and_refuses_false_timelin
     std::fs::create_dir(&initial).unwrap();
     let clip = Path::new(env!("CARGO_MANIFEST_DIR")).join("../drmr/tests/fixtures/bbb/clip.mp4");
     let mut cmd = std::process::Command::new("packager");
+    cmd.arg("--single_threaded");
     for role in ["video", "audio"] {
         let dir = initial.join(role);
         std::fs::create_dir(&dir).unwrap();
