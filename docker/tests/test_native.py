@@ -38,6 +38,7 @@ class SourceEvidence(unittest.TestCase):
                 patch("time.sleep") as sleep:
             archive = native.fetch_archive(self.fetch_pin(body))
             self.assertEqual(archive.read_bytes(), body)
+            self.assertEqual(archive.stat().st_mode & 0o777, 0o644)
             self.assertEqual(list(archive.parent.iterdir()), [archive])
             self.assertEqual(fetch.call_args_list, [call(self.fetch_pin()["url"], timeout=20)] * 2)
             sleep.assert_called_once_with(1)

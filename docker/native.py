@@ -79,6 +79,7 @@ def fetch_archive(pin, read_limit=None):
                     else:
                         target.write(source.read(read_limit))
             verify_file(pending, pin["sha256"])
+            pending.chmod(0o644)
             # Linking publishes atomically and refuses an existing destination.
             os.link(pending, archive)
             return archive
