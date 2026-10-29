@@ -29,8 +29,9 @@ runs:
         host = next(line[6:] for line in compiler.decode().splitlines() if line.startswith('host: '))
         if not re.fullmatch(r'[A-Za-z0-9_.-]+', host):
             raise SystemExit('Unsupported Cargo host target')
-        flags = {key: value for key, value in os.environ.items()
-                 if key in ('RUSTFLAGS', 'CARGO_ENCODED_RUSTFLAGS', 'CARGO_BUILD_TARGET', 'ImageOS', 'ImageVersion') or key.startswith('CARGO_PROFILE_')}
+        flags = {key.upper(): value for key, value in os.environ.items()
+                 if key.upper() in ('RUSTFLAGS', 'CARGO_ENCODED_RUSTFLAGS', 'CARGO_BUILD_TARGET', 'IMAGEOS', 'IMAGEVERSION')
+                 or key.upper().startswith('CARGO_PROFILE_')}
         digest = hashlib.sha256(compiler + cargo + json.dumps(flags, sort_keys=True).encode()).hexdigest()
         home = Path(os.environ.get('CARGO_HOME', str(Path.home() / '.cargo')))
         paths = [(home / 'registry' / part).as_posix() for part in ('index', 'cache', 'src')]
