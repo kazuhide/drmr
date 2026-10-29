@@ -566,6 +566,12 @@ fn dashboard_keeps_a_checked_output_in_its_original_row() {
         .unwrap();
     assert!(pipeline.observe(&record(serde_json::json!({"scope":"output","state":"finished","output_index":0,"output_total":2,"output_format":"dash"})),Duration::from_millis(15_001)));
     render(&mut display, &pipeline, Duration::from_millis(15_001));
+    assert_eq!(
+        bar.message(),
+        first,
+        "output completion must not repaint a short-lived intermediate frame"
+    );
+    render(&mut display, &pipeline, Duration::from_secs(16));
     let latest = bar.message();
     let line = latest.lines().nth(row).unwrap();
     assert!(

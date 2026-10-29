@@ -280,11 +280,32 @@ fn terminal_frame_starts_each_row_at_column_zero_after_a_partial_log_line() {
 #[test]
 fn terminal_rows_keep_their_origin_after_a_log_and_redraw() {
     let terminal = Terminal::new(120, 0, false);
-    let progress = progress(&terminal, 120);
-    progress.mark("acquisition");
+    let bar = LiveTerminal::for_test(120, 24);
+    let mut display = display::Display::default();
+    let render = |display: &mut display::Display, activity, now, outcome| {
+        display
+            .render(
+                &mut terminal.clone(),
+                Some(&bar),
+                "convert",
+                &display::View {
+                    activity,
+                    task: "",
+                    downloads: None,
+                    units: None,
+                    pipeline: None,
+                },
+                now,
+                outcome,
+            )
+            .unwrap();
+    };
+    render(&mut display, "acquisition", Duration::ZERO, None);
     let before = terminal.labels().len();
     writeln!(terminal.clone(), "A completed step.").unwrap();
-    progress.mark("verification");
+    render(&mut display, "verification", Duration::from_millis(1), None);
+    assert_eq!(terminal.labels().len(), before);
+    render(&mut display, "verification", Duration::from_secs(1), None);
     let labels = terminal.labels();
     assert!(labels.len() > before);
     assert!(
@@ -293,8 +314,12 @@ fn terminal_rows_keep_their_origin_after_a_log_and_redraw() {
             .all(|(_, x, _, alternate)| *x == 0 && *alternate),
         "{labels:?}"
     );
-    progress.finish();
-    drop(progress);
+    render(
+        &mut display,
+        "verification",
+        Duration::from_millis(1001),
+        Some(("finished", None)),
+    );
     assert!(terminal.restored());
 }
 

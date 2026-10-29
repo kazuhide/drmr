@@ -129,8 +129,6 @@ pub(super) struct Display {
     last_printed: String,
     last_paint: Option<Duration>,
     terminal_active: bool,
-    terminal_outputs: [Status; 8],
-    terminal_source: Status,
     pipeline_phase: Option<Phase>,
     source_renditions_printed: bool,
     pipeline_phases_printed: [bool; 4],
@@ -138,11 +136,10 @@ pub(super) struct Display {
 }
 
 impl Display {
-    fn paint_due(&mut self, now: Duration, changed: bool) -> bool {
-        if changed
-            || self
-                .last_paint
-                .is_none_or(|last| now.saturating_sub(last) >= Duration::from_secs(1))
+    fn paint_due(&mut self, now: Duration) -> bool {
+        if self
+            .last_paint
+            .is_none_or(|last| now.saturating_sub(last) >= Duration::from_secs(1))
         {
             self.last_paint = Some(now);
             true
@@ -274,22 +271,8 @@ impl Display {
         let Some(terminal) = terminal else {
             return Ok(());
         };
-        let label = view.label(command);
-        let phase = view.pipeline.and_then(|pipeline| pipeline.phase);
-        let mut changed = self.label != Some(label) || self.pipeline_phase != phase;
-        if let Some(pipeline) = view.pipeline {
-            let source = pipeline.lifetime(Phase::Source).status;
-            changed |= source.terminal() && source != self.terminal_source;
-            self.terminal_source = source;
-            for (index, output) in pipeline.outputs().iter().enumerate() {
-                let status = output.lifetime.status;
-                changed |= status.terminal() && self.terminal_outputs[index] != status;
-                self.terminal_outputs[index] = status;
-            }
-        }
-        self.label = Some(label);
-        self.pipeline_phase = phase;
-        if self.paint_due(now, changed) {
+        // Sample the latest state, including phase changes, at a readable cadence.
+        if self.paint_due(now) {
             let (height, columns) = terminal.size();
             let columns = usize::from(columns.saturating_sub(1));
             let height = usize::from(height.saturating_sub(1));

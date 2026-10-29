@@ -9,8 +9,6 @@ const BAR_WIDTH: usize = 18;
 #[cfg(test)]
 mod tests;
 
-mod items;
-
 #[cfg(test)]
 pub(super) fn frame(command: &str, view: &View<'_>, now: Duration, columns: usize) -> String {
     frame_with_height(command, view, now, columns, 24)
@@ -71,7 +69,12 @@ pub(super) fn frame_with_height(
             rows.push(row("Task", &task(command, view, now, columns), columns));
         }
     }
-    items::finish(rows, view.pipeline, columns, height).join("\n")
+    if rows.len() > height {
+        let hidden = rows.len() - height + 1;
+        rows.truncate(height - 1);
+        rows.push(fit(&format!("{hidden} rows hidden"), columns));
+    }
+    rows.join("\n")
 }
 
 fn overall(pipeline: &crate::progress::pipeline::State, now: Duration, columns: usize) -> String {

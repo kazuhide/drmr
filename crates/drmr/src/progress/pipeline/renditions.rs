@@ -6,7 +6,6 @@ use std::fmt::Write as _;
 mod items;
 pub(in crate::progress) use items::ItemState;
 mod descriptions;
-pub(in crate::progress) use descriptions::Description;
 
 #[cfg(test)]
 mod item_tests;
@@ -160,9 +159,6 @@ impl Work {
     }
     pub(in crate::progress) fn items(&self) -> Option<&[ItemState]> {
         self.items.as_ref().map(|items| items.states(self.total))
-    }
-    pub(in crate::progress) fn description(&self, ordinal: usize) -> Option<Description> {
-        self.descriptions.as_ref()?.get(ordinal, self.total)
     }
     pub(in crate::progress) fn active(self) -> bool {
         !self.status.terminal()
