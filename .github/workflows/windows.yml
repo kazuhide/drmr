@@ -21,8 +21,8 @@ jobs:
       matrix:
         rust: [minimum, stable]
     runs-on: windows-2022
-    # Keep platform guards on the required path. The separate full regression
-    # workflow runs the complete ordinary-user matrix after main changes.
+    # Retain both complete ordinary-user regression profiles as required
+    # checks; their bounded parallel groups are independent of archive builds.
     timeout-minutes: 75
     env:
       CARGO_TERM_COLOR: always
@@ -89,12 +89,21 @@ jobs:
       - name: Check elevated media execution is refused before payload creation
         run: cargo test -p drmr-core --test native media_workspace_checks_default_ownership_before_generating_payloads --locked -- --nocapture
 
+      - name: Test native access controls, descendants and the common CLI as a regular user
+        run: ./.github/scripts/windows-native-tests.ps1
+
       - name: Preserve native test results
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v4
         with:
           name: windows-native-results-${{ matrix.rust }}
-          path: ${{ runner.temp }}/manifest-lint-tests.log
+          path: |
+            ${{ runner.temp }}/manifest-lint-tests.log
+            ${{ runner.temp }}/drmr-native-user/bbb-media-report.json
+            ${{ runner.temp }}/drmr-native-user/conversion-report.json
+            ${{ runner.temp }}/drmr-native-user/stdout.log
+            ${{ runner.temp }}/drmr-native-user/stderr.log
+            ${{ runner.temp }}/drmr-native-user/groups/progress.log
           if-no-files-found: warn
 
   release:
