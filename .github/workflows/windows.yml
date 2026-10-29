@@ -37,6 +37,12 @@ jobs:
         with:
           python-version: '3.13.12'
 
+      - name: Check bounded native scheduling and verified download reuse
+        if: matrix.rust == 'stable'
+        run: |
+          ./.github/scripts/test-windows-native-parallel.ps1
+          ./.github/scripts/test-windows-media-cache.ps1
+
       - name: Check vendored source bytes before native compilation
         run: python -W error::ResourceWarning -m unittest discover -s tools/tests -p test_verify_private_fs.py -v
 
@@ -44,7 +50,7 @@ jobs:
         run: ./.github/scripts/test-windows-cli-archive-cleanup.ps1
 
       - name: Install checksummed Windows media tools
-        run: ./.github/scripts/install-windows-media-tools.ps1
+        uses: ./.github/actions/windows-media-tools
 
       - name: Install the supported Rust toolchain
         run: |
@@ -60,6 +66,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Cargo version check failed' }
           & rustup run $rustChannel rustc --version
           if ($LASTEXITCODE -ne 0) { throw 'Rust compiler version check failed' }
+
+      - name: Restore compiled Rust dependencies
+        uses: ./.github/actions/rust-cache
 
       - name: Check product version and changelog consistency
         run: python tools/check_release.py
@@ -90,9 +99,8 @@ jobs:
 
   release:
     name: Windows CLI release / ${{ matrix.rust }}
-    # Both platform-guard profiles must pass; the extracted archive below
-    # has its own ordinary-user qualification, independent of full regression.
-    needs: native
+    # Build and qualify concurrently with platform guards. Merge/publication
+    # still require the complete workflow, including both guard profiles.
     strategy:
       fail-fast: false
       matrix:
@@ -113,7 +121,7 @@ jobs:
           python-version: '3.13.12'
 
       - name: Install checksummed Windows media tools
-        run: ./.github/scripts/install-windows-media-tools.ps1
+        uses: ./.github/actions/windows-media-tools
 
       - name: Install the supported Rust toolchain
         run: |
@@ -129,6 +137,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Cargo version check failed' }
           & rustup run $rustChannel rustc --version
           if ($LASTEXITCODE -ne 0) { throw 'Rust compiler version check failed' }
+
+      - name: Restore compiled Rust dependencies
+        uses: ./.github/actions/rust-cache
+        with:
+          profile: release
 
       - name: Build native CLI
         run: cargo build --release --locked -p drmr

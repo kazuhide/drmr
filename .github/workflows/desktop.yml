@@ -13,6 +13,7 @@ on:
       - 'LICENSE'
       - 'docs/**'
       - '.github/scripts/minimum-rust.py'
+      - '.github/actions/rust-cache/**'
       - 'tools/build_desktop.py'
       - 'tools/collect_notices.py'
       - 'tools/desktop-licenses/**'
@@ -75,6 +76,22 @@ jobs:
           printf 'RUSTUP_TOOLCHAIN=%s\n' "$rust_channel" >> "$GITHUB_ENV"
           rustup run "$rust_channel" cargo --version
           rustup run "$rust_channel" rustc --version
+
+      - name: Use the same native target for validation and packaging
+        run: |
+          target="$(rustc -vV | sed -n 's/^host: //p')"
+          printf 'CARGO_BUILD_TARGET=%s\n' "$target" >> "$GITHUB_ENV"
+
+      - name: Restore compiled Rust dependencies
+        uses: ./.github/actions/rust-cache
+        with:
+          target-directory: target/desktop
+
+      - name: Restore optimized native dependencies
+        uses: ./.github/actions/rust-cache
+        with:
+          target-directory: target/desktop
+          profile: release
 
       - name: Check headless host policy and packaging
         run: |

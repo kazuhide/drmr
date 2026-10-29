@@ -55,6 +55,9 @@ jobs:
           rustup run "$rust_channel" cargo --version
           rustup run "$rust_channel" rustc --version
 
+      - name: Restore compiled Rust dependencies
+        uses: ./.github/actions/rust-cache
+
       - name: Check product version and changelog consistency
         run: python3 tools/check_release.py
 
@@ -138,6 +141,9 @@ jobs:
           rustup run "$rust_channel" cargo --version
           rustup run "$rust_channel" rustc --version
 
+      - name: Restore compiled Rust dependencies
+        uses: ./.github/actions/rust-cache
+
       - name: Run core Rust tests
         id: rust-tests
         run: |
@@ -177,6 +183,9 @@ jobs:
           rustup toolchain install stable --profile minimal --no-self-update
           printf 'RUSTUP_TOOLCHAIN=stable\n' >> "$GITHUB_ENV"
           rustup run stable rustc --version
+
+      - name: Restore compiled Rust dependencies
+        uses: ./.github/actions/rust-cache
 
       - name: Build the actual CLI and embedded console from this source
         run: cargo build --locked -p drmr --message-format=json > "$RUNNER_TEMP/console-build.jsonl"
@@ -248,7 +257,8 @@ jobs:
 
   release:
     name: CLI release / ${{ matrix.os }} / ${{ matrix.rust }}
-    needs: [verify, core-tests]
+    # Build and qualify concurrently; merge and publication still require every
+    # verification job in this workflow to succeed for the same source.
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -281,6 +291,11 @@ jobs:
       - name: Install media tools for extracted CLI qualification
         if: matrix.rust == 'stable'
         uses: ./.github/actions/media-tools
+
+      - name: Restore compiled Rust dependencies
+        uses: ./.github/actions/rust-cache
+        with:
+          profile: release
 
       - name: Build release CLI
         run: cargo build --release --locked -p drmr

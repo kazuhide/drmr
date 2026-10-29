@@ -1,6 +1,17 @@
 name: Windows full regression
 
 on:
+  pull_request:
+    paths:
+      - '.github/scripts/windows-native-*.ps1'
+      - '.github/scripts/*windows*parallel*.ps1'
+      - '.github/scripts/*media*.ps1'
+      - '.github/actions/rust-cache/**'
+      - '.github/actions/windows-media-tools/**'
+      - '.github/workflows/windows*.yml'
+      - 'crates/drmr-core/tests/**'
+      - 'crates/drmr/tests/**'
+      - 'crates/drmr-test-support/**'
   push:
     branches: [main]
   workflow_dispatch:
@@ -18,10 +29,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        rust: [minimum, stable]
+        rust: ${{ fromJSON(github.event_name == 'pull_request' && '["stable"]' || '["minimum","stable"]') }}
     runs-on: windows-2022
-    # Run every native protection route and round trip as an ordinary user,
-    # with room for complete media comparisons before release compilation.
+    # Qualify harness/test changes once on PRs; retain both compiler profiles
+    # on main and manual runs, independently of CLI archive builds.
     timeout-minutes: 75
     env:
       CARGO_TERM_COLOR: always
@@ -43,7 +54,7 @@ jobs:
         run: ./.github/scripts/test-windows-cli-archive-cleanup.ps1
 
       - name: Install checksummed Windows media tools
-        run: ./.github/scripts/install-windows-media-tools.ps1
+        uses: ./.github/actions/windows-media-tools
 
       - name: Install the supported Rust toolchain
         run: |
@@ -59,6 +70,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Cargo version check failed' }
           & rustup run $rustChannel rustc --version
           if ($LASTEXITCODE -ne 0) { throw 'Rust compiler version check failed' }
+
+      - name: Restore compiled Rust dependencies
+        uses: ./.github/actions/rust-cache
 
       - name: Check product version and changelog consistency
         run: python tools/check_release.py
