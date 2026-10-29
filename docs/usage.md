@@ -174,7 +174,7 @@ drmr analyze media.mp4 --metadata-only --progress off
 
 An interactive terminal updates one dashboard in place. Named-output conversion shows a command and elapsed-time header, a `Source` row for acquisition and checks, an `Overall` row for the phase or available work estimates, and one row per output. Completed outputs remain in their row as `Checked` until the complete result is published. Internal milestones and retained-download notices do not accumulate. The dashboard clears before final results appear. Normal text omits internal tool names. Redirected text retains milestones and spaced updates, including elapsed-time notices during unchanged work.
 
-Ordinary terminal snapshots update at most once per second. Phase changes, completion, errors and cancellation can update immediately. Below 60 columns, text bars are omitted while state and available percentages remain. Counts and current-step estimates appear only when they fit. These display limits do not throttle media processing or reduce JSON progress observations.
+Terminal refreshes, including phase and output-state changes, run at most once per second. Final success/failure/cancellation appears immediately. Below 60 columns, bars are omitted while state and available percentages remain. Counts and step estimates appear only when they fit. These display limits do not throttle media processing or reduce JSON progress observations.
 
 Named-output task labels distinguish copying source tracks, checking source conversion,
 preparing clear tracks, comparing converted media and independently comparing

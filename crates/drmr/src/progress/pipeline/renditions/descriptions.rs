@@ -59,12 +59,6 @@ impl Descriptions {
         Some(Self(descriptions))
     }
 
-    pub(super) fn get(&self, ordinal: usize, total: u64) -> Option<Description> {
-        (ordinal < usize::try_from(total).expect("validated task count"))
-            .then(|| self.0[ordinal])
-            .flatten()
-    }
-
     pub(super) fn follows(
         &self,
         previous: Option<&Self>,
