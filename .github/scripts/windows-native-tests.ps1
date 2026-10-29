@@ -3,21 +3,14 @@ $ErrorActionPreference = 'Stop'
 # Build with the hosted runner's toolchain, then run the same native binaries as
 # an ordinary user. Elevated tokens can assign Administrators as a new file's
 # owner, which is deliberately outside the media workspace security profile.
-$builds = @(
-    @('-p', 'drmr-core', '--lib', '--tests'),
-    @('-p', 'drmr', '--tests'),
-    @('-p', 'drmr-server', '--lib', '--tests'),
-    @('-p', 'drmr-test-support', '--tests')
-)
+# Select the same library, binary and integration test targets in one Cargo graph.
+$messages = & cargo test -p drmr-core -p drmr -p drmr-server -p drmr-test-support --tests --locked --no-run --message-format=json
+if ($LASTEXITCODE -ne 0) { throw 'Native test compilation failed' }
 $executables = @()
-foreach ($build in $builds) {
-    $messages = & cargo test @build --locked --no-run --message-format=json
-    if ($LASTEXITCODE -ne 0) { throw 'Native test compilation failed' }
-    foreach ($line in $messages) {
-        $message = $line | ConvertFrom-Json
-        if ($message.reason -eq 'compiler-artifact' -and $message.profile.test -and $message.executable) {
-            $executables += $message.executable
-        }
+foreach ($line in $messages) {
+    $message = $line | ConvertFrom-Json
+    if ($message.reason -eq 'compiler-artifact' -and $message.profile.test -and $message.executable) {
+        $executables += $message.executable
     }
 }
 if ($executables.Count -lt 4) { throw 'Native test binaries are missing' }
@@ -90,14 +83,8 @@ if ($LASTEXITCODE -ne 0) { throw 'The selected Cargo could not run as a regular 
 if ($LASTEXITCODE -ne 0) { throw 'The selected Rust compiler could not run as a regular user' }
 New-Item -ItemType Directory -Path $env:TEMP | Out-Null
 New-Item -ItemType Directory -Path $env:CARGO_HOME | Out-Null
-# Check release identity and real private-file ACLs before long native media runs.
-foreach ($pattern in @('test_check_release.py', 'test_prepare_release.py', 'test_qualify_cli_archive.py')) {
-    & python -W error::ResourceWarning -m unittest discover -s tools/tests -p $pattern -v
-    if ($LASTEXITCODE -ne 0) { throw 'Ordinary-user release helper checks failed' }
-}
 $executables = Get-Content (Join-Path $PSScriptRoot 'executables.json') | ConvertFrom-Json
-# Catch directory-layout regressions before the longer real-media matrix. These
-# run with the same ordinary user, native binary and ACL policy as the full suite.
+# Require critical protection cases to be present, then run each complete binary once.
 $coreExecutables = @($executables | Where-Object {
     [IO.Path]::GetFileName($_) -match '^drmr_core-[0-9a-f]+\.exe$'
 })
@@ -115,8 +102,6 @@ foreach ($check in $layoutChecks) {
     if ($LASTEXITCODE -ne 0 -or $listing -notcontains "${check}: test") {
         throw 'A required early layout test is missing'
     }
-    & $coreExecutable --exact $check --nocapture
-    if ($LASTEXITCODE -ne 0) { throw 'An early ordinary-user layout test failed' }
 }
 $policyExecutables = @($executables | Where-Object {
     [IO.Path]::GetFileName($_) -match '^conversion_saved_hls_policy-[0-9a-f]+\.exe$'
@@ -134,13 +119,30 @@ foreach ($check in $policyChecks) {
         throw 'A required saved HLS policy test is missing'
     }
 }
-& $policyExecutable --nocapture
-if ($LASTEXITCODE -ne 0) { throw 'Early ordinary-user saved HLS policy checks failed' }
+. (Join-Path (Get-Location).Path '.github/scripts/windows-native-parallel.ps1')
+$budget = Get-DrmrNativeTestBudget
+# Start the two longest presentations first so shorter groups can fill free slots.
+$ordered = @($executables | Sort-Object @{ Expression = {
+    if ([IO.Path]::GetFileName($_) -match '^conversion_ts_output-') { 0 }
+    elseif ([IO.Path]::GetFileName($_) -match '^conversion_abr_hls-') { 1 }
+    else { 2 }
+} }, @{ Expression = { $_ } })
+$groups = @($ordered | ForEach-Object {
+    @{ executable = $_; arguments = @('--test-threads', [string]$budget.threads, '--nocapture') }
+})
+$results = @(Invoke-DrmrNativeTestGroups -Groups $groups -Directory (Join-Path $PSScriptRoot 'groups') -Workers $budget.workers)
+if ($results.Count -ne $executables.Count) { throw 'A native test group result is missing' }
 $failed = $false
-foreach ($executable in $executables) {
-    Write-Output "Running $executable"
-    & $executable --nocapture
-    if ($LASTEXITCODE -ne 0) { $failed = $true }
+foreach ($result in @($results | Sort-Object index)) {
+    Write-Output ('Native group {0}/{1} output' -f ($result.index + 1), $executables.Count)
+    Get-Content -LiteralPath (Join-Path $result.directory 'stdout.log')
+    Get-Content -LiteralPath (Join-Path $result.directory 'stderr.log')
+    if ($result.exit_code -ne 0) { $failed = $true }
+}
+foreach ($name in @('bbb-media-report.json', 'conversion-report.json')) {
+    $reports = @($results | ForEach-Object { Join-Path $_.directory $name } | Where-Object { Test-Path -LiteralPath $_ })
+    if ($reports.Count -ne 1) { throw 'A native media report is missing or ambiguous' }
+    [IO.File]::WriteAllText((Join-Path $PSScriptRoot $name), [IO.File]::ReadAllText($reports[0]), [Text.UTF8Encoding]::new($false))
 }
 & python -W error::ResourceWarning -m unittest discover -s tools/tests -v
 if ($LASTEXITCODE -ne 0) { $failed = $true }
@@ -149,8 +151,36 @@ exit 0
 '@ | Set-Content $script
 $stdout = Join-Path $directory 'stdout.log'
 $stderr = Join-Path $directory 'stderr.log'
+$progressJob = $null
+$process = $null
+$started = @()
+$executionExited = $false
 try {
-    $process = Start-Process -FilePath (Get-Command pwsh).Source -Credential $credential -LoadUserProfile -WorkingDirectory (Get-Location).Path -ArgumentList @('-NoLogo', '-NoProfile', '-File', $script) -RedirectStandardOutput $stdout -RedirectStandardError $stderr -Wait -PassThru
+    # Only numeric progress crosses into the live Actions log. The ordinary
+    # owner's complete output stays in separate files until its tree exits.
+    $progressJob = Start-ThreadJob -StreamingHost $Host -ArgumentList (Join-Path $directory 'groups/progress.log') -ScriptBlock {
+        param($Path)
+        $shown = 0
+        while ($true) {
+            try {
+                if (Test-Path -LiteralPath $Path) {
+                    $lines = [IO.File]::ReadAllText($Path).Split("`n")
+                    while ($shown -lt $lines.Count - 1) {
+                        $line = $lines[$shown++].TrimEnd("`r")
+                        if ($line -notmatch '^Native group [1-9][0-9]*/[1-9][0-9]* (started|finished; exit -?[0-9]+; elapsed [0-9]+s)$') {
+                            throw 'Invalid native group progress'
+                        }
+                        Write-Host $line
+                    }
+                }
+            } catch [IO.IOException] { }
+            Start-Sleep -Milliseconds 200
+        }
+    }
+    $process = Start-Process -FilePath (Get-Command pwsh).Source -Credential $credential -LoadUserProfile -WorkingDirectory (Get-Location).Path -ArgumentList @('-NoLogo', '-NoProfile', '-File', "`"$script`"") -RedirectStandardOutput $stdout -RedirectStandardError $stderr -Wait -PassThru -OutVariable started
+    if (-not $process.HasExited) { throw 'The native test process tree exit is unconfirmed' }
+    $executionExited = $true
+    if ($progressJob.State -eq 'Failed') { throw 'Native group progress failed' }
     Get-Content $stdout
     Get-Content $stderr
     $text = (Get-Content $stdout -Raw) + (Get-Content $stderr -Raw)
@@ -164,5 +194,23 @@ try {
     }
     if ($process.ExitCode -ne 0) { throw "Native tests failed with exit code $($process.ExitCode)" }
 } finally {
-    Remove-LocalUser -Name $username
+    try {
+        if ($null -ne $progressJob) {
+            try { Stop-Job -Job $progressJob }
+            finally { Remove-Job -Job $progressJob -Force }
+        }
+    } finally {
+        try {
+            # PassThru publishes the process before Start-Process waits. Keep that
+            # owned handle available if pipeline cancellation interrupts the wait.
+            if ($null -eq $process -and $started.Count -gt 0) { $process = $started[0] }
+            if ($null -ne $process) {
+                if (-not $executionExited) {
+                    if (-not $process.HasExited) { $process.Kill($true) }
+                    if (-not $process.WaitForExit(10000)) { throw 'Native test cancellation cleanup is unconfirmed' }
+                }
+                $process.Dispose()
+            }
+        } finally { Remove-LocalUser -Name $username }
+    }
 }
