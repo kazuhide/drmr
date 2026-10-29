@@ -1,17 +1,129 @@
 import hashlib
+import http.client
 import io
+import ssl
+import sys
 import tarfile
-from unittest.mock import patch
+from unittest.mock import call, patch
 import importlib.util
 from pathlib import Path
 import tempfile
 import unittest
+import urllib.error
 
 spec = importlib.util.spec_from_file_location("native", Path(__file__).parents[1] / "native.py")
 native = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(native)
+ffmpeg_spec = importlib.util.spec_from_file_location("ffmpeg_build", Path(__file__).parents[1] / "ffmpeg.py")
+ffmpeg = importlib.util.module_from_spec(ffmpeg_spec)
+with patch.dict(sys.modules, {"native": native}):
+    ffmpeg_spec.loader.exec_module(ffmpeg)
+
+class InterruptedResponse(io.BytesIO):
+    def read(self, size=-1):
+        if self.tell():
+            raise http.client.IncompleteRead(b"interrupted")
+        return super().read(3)
+
 
 class SourceEvidence(unittest.TestCase):
+    def fetch_pin(self, body=b"publisher source"):
+        return {"archive": "source.tar.xz", "url": "https://publisher.invalid/source.tar.xz",
+                "sha256": hashlib.sha256(body).hexdigest()}
+
+    def test_partial_download_is_discarded_before_retry(self):
+        body = b"publisher source"
+        with tempfile.TemporaryDirectory() as temp, patch.object(native, "PREFIX", Path(temp)), \
+                patch.object(native.urllib.request, "urlopen", side_effect=[InterruptedResponse(body), io.BytesIO(body)]) as fetch, \
+                patch("time.sleep") as sleep:
+            archive = native.fetch_archive(self.fetch_pin(body))
+            self.assertEqual(archive.read_bytes(), body)
+            self.assertEqual(list(archive.parent.iterdir()), [archive])
+            self.assertEqual(fetch.call_args_list, [call(self.fetch_pin()["url"], timeout=20)] * 2)
+            sleep.assert_called_once_with(1)
+
+    def test_transient_connection_and_http_errors_are_retried(self):
+        errors = [urllib.error.URLError(TimeoutError("TLS handshake timeout")),
+                  ConnectionResetError("connection reset"), ssl.SSLEOFError("broken TLS read")]
+        errors += [urllib.error.HTTPError("https://publisher.invalid", code, "temporary", {}, None)
+                   for code in (408, 429, 500, 503, 599)]
+        for error in errors:
+            with self.subTest(error=error), tempfile.TemporaryDirectory() as temp, \
+                    patch.object(native, "PREFIX", Path(temp)), patch("time.sleep"), \
+                    patch.object(native.urllib.request, "urlopen", side_effect=[error, io.BytesIO(b"publisher source")]) as fetch:
+                self.assertEqual(native.fetch_archive(self.fetch_pin()).read_bytes(), b"publisher source")
+                self.assertEqual(fetch.call_count, 2)
+
+    def test_retry_exhaustion_removes_only_owned_pending_files(self):
+        with tempfile.TemporaryDirectory() as temp, patch.object(native, "PREFIX", Path(temp)), \
+                patch.object(native.urllib.request, "urlopen", side_effect=[InterruptedResponse(b"source") for _ in range(3)]) as fetch, \
+                patch("time.sleep") as sleep:
+            sources = Path(temp) / "sources"
+            sources.mkdir()
+            retained = sources / "other.pending"
+            retained.write_bytes(b"retain")
+            with self.assertRaises(http.client.IncompleteRead):
+                native.fetch_archive(self.fetch_pin())
+            self.assertEqual(fetch.call_count, 3)
+            self.assertEqual(sleep.call_args_list, [call(1), call(2)])
+            self.assertEqual(list(sources.iterdir()), [retained])
+            self.assertEqual(retained.read_bytes(), b"retain")
+
+    def test_permanent_fetch_errors_and_checksum_mismatch_are_not_retried(self):
+        errors = [urllib.error.HTTPError("https://publisher.invalid", 404, "missing", {}, None),
+                  PermissionError("denied"), ssl.SSLCertVerificationError("untrusted certificate")]
+        for error in errors:
+            with self.subTest(error=error), tempfile.TemporaryDirectory() as temp, \
+                    patch.object(native, "PREFIX", Path(temp)), patch("time.sleep") as sleep, \
+                    patch.object(native.urllib.request, "urlopen", side_effect=error) as fetch:
+                with self.assertRaises(type(error)):
+                    native.fetch_archive(self.fetch_pin())
+                self.assertEqual(fetch.call_count, 1)
+                sleep.assert_not_called()
+                self.assertEqual(list((Path(temp) / "sources").iterdir()), [])
+        with tempfile.TemporaryDirectory() as temp, patch.object(native, "PREFIX", Path(temp)), \
+                patch("time.sleep") as sleep, \
+                patch.object(native.urllib.request, "urlopen", return_value=io.BytesIO(b"modified")) as fetch:
+            with self.assertRaisesRegex(ValueError, "source-checksum-mismatch"):
+                native.fetch_archive(self.fetch_pin())
+            self.assertEqual(fetch.call_count, 1)
+            sleep.assert_not_called()
+            self.assertEqual(list((Path(temp) / "sources").iterdir()), [])
+
+    def test_existing_archive_is_preserved_including_publication_race(self):
+        for race in (False, True):
+            with self.subTest(race=race), tempfile.TemporaryDirectory() as temp, \
+                    patch.object(native, "PREFIX", Path(temp)), patch("time.sleep") as sleep:
+                archive = Path(temp) / "sources/source.tar.xz"
+                archive.parent.mkdir()
+                def response(*args, **kwargs):
+                    archive.write_bytes(b"existing")
+                    return io.BytesIO(b"publisher source")
+                if not race:
+                    archive.write_bytes(b"existing")
+                with patch.object(native.urllib.request, "urlopen", side_effect=response) as fetch:
+                    with self.assertRaises(FileExistsError):
+                        native.fetch_archive(self.fetch_pin())
+                self.assertEqual(archive.read_bytes(), b"existing")
+                self.assertEqual(list(archive.parent.iterdir()), [archive])
+                self.assertEqual(fetch.call_count, int(race))
+                sleep.assert_not_called()
+
+    def test_ffmpeg_archive_and_signature_use_the_same_verified_fetch(self):
+        pin = self.fetch_pin()
+        pin["signature"] = {**self.fetch_pin(b"signature"), "archive": "source.tar.xz.asc"}
+        pin["key_sha256"] = "0" * 64
+        archive, signature = Path("source.tar.xz"), Path("source.tar.xz.asc")
+        with patch.object(ffmpeg, "fetch_archive", side_effect=[archive, signature]) as fetch, \
+                patch.object(ffmpeg, "unpack", return_value=Path("source")), \
+                patch.object(ffmpeg, "verify_file"), patch.object(ffmpeg, "record"), \
+                patch.object(ffmpeg, "run") as run, \
+                patch.object(native.urllib.request, "urlopen", side_effect=AssertionError("unverified direct fetch")):
+            ffmpeg.ffmpeg(pin, 2)
+        self.assertEqual(fetch.call_args_list, [call(pin), call(pin["signature"], read_limit=65536)])
+        self.assertIn(call("gpgv", "--keyring", str(ffmpeg.WORK / "ffmpeg-keyring.gpg"),
+                           str(signature), str(ffmpeg.PREFIX / "sources" / pin["archive"])), run.call_args_list)
+
     def test_raw_source_checksum_rejects_line_ending_changes(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "source"
