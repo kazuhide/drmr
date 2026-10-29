@@ -158,13 +158,17 @@ $executionExited = $false
 try {
     # Only numeric progress crosses into the live Actions log. The ordinary
     # owner's complete output stays in separate files until its tree exits.
-    $progressJob = Start-ThreadJob -StreamingHost $Host -ArgumentList (Join-Path $directory 'groups/progress.log') -ScriptBlock {
-        param($Path)
+    $progressJob = Start-ThreadJob -StreamingHost $Host -ArgumentList @(
+        (Join-Path $directory 'groups/progress.log'),
+        (Join-Path (Get-Location).Path '.github/scripts/windows-native-parallel.ps1')
+    ) -ScriptBlock {
+        param($Path, $Helper)
+        . $Helper
         $shown = 0
         while ($true) {
             try {
                 if (Test-Path -LiteralPath $Path) {
-                    $lines = [IO.File]::ReadAllText($Path).Split("`n")
+                    $lines = (Read-DrmrNativeProgress -Path $Path).Split("`n")
                     while ($shown -lt $lines.Count - 1) {
                         $line = $lines[$shown++].TrimEnd("`r")
                         if ($line -notmatch '^Native group [1-9][0-9]*/[1-9][0-9]* (started|finished; exit -?[0-9]+; elapsed [0-9]+s)$') {

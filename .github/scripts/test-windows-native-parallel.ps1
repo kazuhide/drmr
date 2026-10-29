@@ -24,6 +24,19 @@ elif mode == 'failure':
 print('temp-' + os.environ['TEMP'], flush=True)
 '@ | Set-Content -Encoding utf8 $fixture
 try {
+    $progressPath = Join-Path $root 'shared-progress.log'
+    $progressLine = "Native group 1/1 started`n"
+    $bytes = [Text.Encoding]::UTF8.GetBytes($progressLine)
+    $writer = [IO.FileStream]::new($progressPath, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::Read)
+    try {
+        $writer.Write($bytes, 0, $bytes.Length)
+        $writer.Flush()
+        if ((Read-DrmrNativeProgress -Path $progressPath) -ne $progressLine) { throw 'Native progress could not be read alongside its writer' }
+    } finally { $writer.Dispose() }
+    $exclusive = [IO.FileStream]::new($progressPath, [IO.FileMode]::Open, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+    try {
+        if ($exclusive.Length -ne $bytes.Length) { throw 'Native progress content changed while reading' }
+    } finally { $exclusive.Dispose() }
     foreach ($processors in @(1, 2, 4, 16)) {
         $budget = Get-DrmrNativeTestBudget -Processors $processors -AvailableBytes 16GB
         if ($budget.workers -gt 2 -or $budget.workers * $budget.threads -gt $processors) { throw 'Native CPU budget was exceeded' }
@@ -85,7 +98,7 @@ try {
             Start-Sleep -Milliseconds 20
         }
     }
-    Write-Output 'Native parallel controls passed: overlap, budgets, isolation, failure and cancellation'
+    Write-Output 'Native parallel controls passed: progress sharing, overlap, budgets, isolation, failure and cancellation'
 } finally {
     Remove-Item -LiteralPath $root -Recurse -Force
 }

@@ -1,5 +1,15 @@
 $ErrorActionPreference = 'Stop'
 
+function Read-DrmrNativeProgress {
+    param([Parameter(Mandatory)][string]$Path)
+    $stream = [IO.FileStream]::new($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+    try {
+        $reader = [IO.StreamReader]::new($stream)
+        try { return $reader.ReadToEnd() }
+        finally { $reader.Dispose() }
+    } finally { $stream.Dispose() }
+}
+
 function Get-DrmrNativeTestBudget {
     param([int]$Processors = [Environment]::ProcessorCount, [long]$AvailableBytes = -1)
     if ($AvailableBytes -lt 0) {
