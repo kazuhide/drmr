@@ -389,7 +389,7 @@ fn parse_output(raw: Option<&RawOutput>) -> Result<OperatorKeys, ConversionError
         && value.is_multi()
     {
         if let Some(key) = &output {
-            value.multi_objects(key).map_err(|_| INVALID)?;
+            value.validate_output_key(key).map_err(|_| INVALID)?;
         }
         value
             .validate_uri(

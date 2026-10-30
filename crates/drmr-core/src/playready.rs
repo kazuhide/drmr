@@ -4,7 +4,8 @@
 //! segment PSSH, keeping their bytes consistent. Key identifiers use little-endian
 //! GUID encoding: `00010203-0405-0607-0809-0a0b0c0d0e0f` becomes
 //! `AwIBAAUEBwYICQoLDA0ODw==`. CBCS headers use version 4.3.0.0, `ALGID="AESCBC"`,
-//! and no checksum. Generation accepts no content key. Existing license addresses
+//! and no checksum. CTR headers use version 4.1.0.0, `ALGID="AESCTR"`, and a checksum
+//! derived from the content key. Existing license addresses
 //! are carried forward from the manifest rather than substituted from encoder settings.
 //!
 //! Payload bytes and license addresses never appear in errors or debug output.
@@ -18,6 +19,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use std::borrow::Cow;
 use std::fmt;
+use zeroize::Zeroizing;
 
 /// The `PlayReady` DRM system id (`9a04f079-9840-4286-ab92-e65be0885f95`), as the 16 big-endian
 /// bytes of the `pssh` box's `SystemID` field.
@@ -109,7 +111,7 @@ impl fmt::Debug for ParsedPro {
 /// The single source ( decision 3): every downstream consumer reads from one of these.
 #[derive(Clone, PartialEq, Eq)]
 pub struct PlayReadyObjects {
-    /// The v4.3.0.0 WRMHEADER.
+    /// The generated AESCTR (v4.1) or AESCBC (v4.3) WRMHEADER.
     pub wrmheader_xml: String,
     /// `build_pro(wrmheader_xml)`.
     pub pro_bytes: Vec<u8>,
@@ -228,6 +230,10 @@ fn coerce_uuid(kid: Kid<'_>) -> Result<[u8; 16], PlayReadyError> {
 
 /// KID (a UUID) → base64 of the little-endian GUID: the PRO `KID VALUE`.
 pub fn kid_uuid_to_playready_b64<'a>(kid: impl Into<Kid<'a>>) -> Result<String, PlayReadyError> {
+    Ok(STANDARD.encode(kid_playready_bytes(kid)?))
+}
+
+fn kid_playready_bytes<'a>(kid: impl Into<Kid<'a>>) -> Result<[u8; 16], PlayReadyError> {
     let be = coerce_uuid(kid.into())?;
     // GUID encoding reverses the first three fields (4/2/2 bytes) and preserves
     // the final eight bytes, matching uuid.UUID.bytes_le. The synthetic UUID
@@ -236,7 +242,7 @@ pub fn kid_uuid_to_playready_b64<'a>(kid: impl Into<Kid<'a>>) -> Result<String, 
     le[0..4].reverse();
     le[4..6].reverse();
     le[6..8].reverse();
-    Ok(STANDARD.encode(le))
+    Ok(le)
 }
 
 // ------------------------------------------------------------------------------------------
@@ -273,6 +279,31 @@ pub fn build_wrmheader_43<'a>(
     Ok(format!(
         "<WRMHEADER xmlns=\"{WRM_NS}\" version=\"4.3.0.0\"><DATA><PROTECTINFO><KIDS>\
          <KID ALGID=\"AESCBC\" VALUE=\"{value}\"></KID></KIDS></PROTECTINFO>\
+         <LA_URL>{}</LA_URL></DATA></WRMHEADER>",
+        xml_escape(la_url)
+    ))
+}
+
+/// Generate a single-key AESCTR header with the checksum from specification §5.
+/// The key identifier is encrypted in `PlayReady` GUID byte order; only the first
+/// eight encrypted bytes are published. The content key is never serialized.
+pub fn build_wrmheader_41<'a>(
+    kid: impl Into<Kid<'a>>,
+    la_url: &str,
+    content_key: &[u8; 16],
+) -> Result<String, PlayReadyError> {
+    use aes::cipher::{BlockCipherEncrypt as _, KeyInit as _};
+    if la_url.is_empty() {
+        return Err(PlayReadyError::new("LA_URL must be non-empty"));
+    }
+    let kid = kid_playready_bytes(kid)?;
+    let value = STANDARD.encode(kid);
+    let mut block = Zeroizing::new(aes::Block::from(kid));
+    aes::Aes128::new(content_key.into()).encrypt_block(&mut block);
+    let checksum = STANDARD.encode(&block[..8]);
+    Ok(format!(
+        "<WRMHEADER xmlns=\"{WRM_NS}\" version=\"4.1.0.0\"><DATA><PROTECTINFO>\
+         <KID ALGID=\"AESCTR\" CHECKSUM=\"{checksum}\" VALUE=\"{value}\"></KID></PROTECTINFO>\
          <LA_URL>{}</LA_URL></DATA></WRMHEADER>",
         xml_escape(la_url)
     ))
@@ -358,7 +389,19 @@ pub fn build_playready_v43<'a>(
     kid: impl Into<Kid<'a>>,
     la_url: &str,
 ) -> Result<PlayReadyObjects, PlayReadyError> {
-    let wrmheader_xml = build_wrmheader_43(kid, la_url)?;
+    bundle(build_wrmheader_43(kid, la_url)?)
+}
+
+/// Generate internally consistent CENC/CTR PRO and PSSH records.
+pub fn build_playready_v41<'a>(
+    kid: impl Into<Kid<'a>>,
+    la_url: &str,
+    content_key: &[u8; 16],
+) -> Result<PlayReadyObjects, PlayReadyError> {
+    bundle(build_wrmheader_41(kid, la_url, content_key)?)
+}
+
+fn bundle(wrmheader_xml: String) -> Result<PlayReadyObjects, PlayReadyError> {
     let pro_bytes = build_pro(wrmheader_xml.as_str())?;
     let pssh_box = build_pssh_box(&PLAYREADY_SYSTEM_ID, &pro_bytes)?;
     Ok(PlayReadyObjects {

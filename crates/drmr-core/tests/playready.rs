@@ -368,6 +368,48 @@ fn build_playready_v43_bundle_is_internally_consistent() {
 }
 
 #[test]
+fn ctr_header_checksum_uses_guid_byte_order_and_the_content_key() {
+    // FIPS 197 AES-128 example: plaintext 001122...eeff encrypts to
+    // 69c4e0d86a7b0430d8cdb78070b4c55a with key 000102...0f.
+    let kid = "33221100-5544-7766-8899-aabbccddeeff";
+    let key: [u8; 16] = std::array::from_fn(|index| u8::try_from(index).unwrap());
+    let objects = drmr_core::playready::build_playready_v41(kid, LA_URL, &key).unwrap();
+    let document = roxmltree::Document::parse(&objects.wrmheader_xml).unwrap();
+    assert_eq!(
+        document.root_element().attribute("version"),
+        Some("4.1.0.0")
+    );
+    let node = document
+        .descendants()
+        .find(|node| {
+            node.has_tag_name((
+                "http://schemas.microsoft.com/DRM/2007/03/PlayReadyHeader",
+                "KID",
+            ))
+        })
+        .unwrap();
+    assert_eq!(node.attribute("ALGID"), Some("AESCTR"));
+    assert_eq!(node.attribute("CHECKSUM"), Some("acTg2Gp7BDA="));
+    assert_eq!(node.attribute("VALUE"), Some("ABEiM0RVZneImaq7zN3u/w=="));
+    assert_eq!(node.parent().unwrap().tag_name().name(), "PROTECTINFO");
+    let parsed = parse_pro(&objects.pro_b64).unwrap();
+    assert_eq!(parsed.version, "4.1.0.0");
+    assert_eq!(parsed.algid.as_deref(), Some("AESCTR"));
+    assert_eq!(parsed.la_url.as_deref(), Some(LA_URL));
+    assert_eq!(
+        objects.pro_bytes,
+        build_pro(objects.wrmheader_xml.as_str()).unwrap()
+    );
+    assert_eq!(
+        objects.pssh_box,
+        build_pssh_box(&PLAYREADY_SYSTEM_ID, &objects.pro_bytes).unwrap()
+    );
+    let changed = drmr_core::playready::build_playready_v41(kid, LA_URL, &[0; 16]).unwrap();
+    assert_ne!(objects.wrmheader_xml, changed.wrmheader_xml);
+    assert!(drmr_core::playready::build_playready_v41(kid, "", &key).is_err());
+}
+
+#[test]
 fn build_playready_v43_matches_python_byte_for_byte() {
     // One generation supplies identical signaling bytes to every representation.
     let oracle = oracle();
@@ -516,7 +558,7 @@ fn parse_pro_errors_carry_python_messages() {
 // ---  ------------------------------------------------------------------------
 
 #[test]
-fn generation_functions_have_no_key_input_path() {
+fn cbcs_generation_functions_have_no_key_input_path() {
     // Python inspects the parameter names; here the signatures themselves are pinned: the
     // generators take a KID and an LA_URL (or framed bytes), never a content key. Adding a
     // parameter breaks this test at compile time.

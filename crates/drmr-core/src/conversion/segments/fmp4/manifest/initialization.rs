@@ -20,6 +20,7 @@ pub(super) fn finish(
                     request
                         .output_key
                         .ok_or(ConversionError("output-key-required"))?,
+                    request.target,
                 )?
                 .initialization,
         )

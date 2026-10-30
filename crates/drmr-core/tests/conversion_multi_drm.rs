@@ -163,7 +163,17 @@ fn reject_mutations(
     if format == OutputFormat::Dash {
         let original = std::fs::read_to_string(entrypoint).unwrap();
         for changed in [
-            original.replace("value=\"cbcs\"", "value=\"cenc\""),
+            original.replace(
+                &format!("value=\"{}\"", target.as_str()),
+                &format!(
+                    "value=\"{}\"",
+                    if target == TargetProtection::Cenc {
+                        "cbcs"
+                    } else {
+                        "cenc"
+                    }
+                ),
+            ),
             original.replace(
                 "00010203-0405-0607-0809-0a0b0c0d0e0f",
                 "10010203-0405-0607-0809-0a0b0c0d0e0f",
@@ -180,8 +190,8 @@ fn reject_mutations(
             );
         }
         std::fs::write(entrypoint, original).unwrap();
-        reject_provider_bytes(events, output, entrypoint, keys);
-        verify_referenced_initializations(events, output, entrypoint, keys);
+        reject_provider_bytes(events, output, entrypoint, target, keys);
+        verify_referenced_initializations(events, output, entrypoint, target, keys);
     } else {
         let playlist = output.join("track-0000/media.m3u8");
         let original = std::fs::read_to_string(&playlist).unwrap();
@@ -235,6 +245,7 @@ fn verify_referenced_initializations(
     events: &Arc<Collector>,
     output: &Path,
     entrypoint: &Path,
+    target: TargetProtection,
     keys: &key_file::OperatorKeys,
 ) {
     let original = std::fs::read_to_string(entrypoint).unwrap();
@@ -270,7 +281,7 @@ fn verify_referenced_initializations(
     std::fs::write(entrypoint, &changed).unwrap();
     let mut checks = vec![
         converter(events)
-            .verify_output_signaling(entrypoint, OutputFormat::Dash, TargetProtection::Cbcs, keys)
+            .verify_output_signaling(entrypoint, OutputFormat::Dash, target, keys)
             .is_ok(),
     ];
     let boxes = drmr_core::mp4::parse_boxes(&init).unwrap();
@@ -283,7 +294,7 @@ fn verify_referenced_initializations(
     std::fs::write(actual.join("good.mp4"), wrong).unwrap();
     checks.push(
         converter(events)
-            .verify_output_signaling(entrypoint, OutputFormat::Dash, TargetProtection::Cbcs, keys)
+            .verify_output_signaling(entrypoint, OutputFormat::Dash, target, keys)
             .is_err(),
     );
     std::fs::write(actual.join("good.mp4"), &init).unwrap();
@@ -299,7 +310,7 @@ fn verify_referenced_initializations(
     std::fs::write(entrypoint, changed).unwrap();
     checks.push(
         converter(events)
-            .verify_output_signaling(entrypoint, OutputFormat::Dash, TargetProtection::Cbcs, keys)
+            .verify_output_signaling(entrypoint, OutputFormat::Dash, target, keys)
             .is_ok(),
     );
     std::fs::write(entrypoint, original).unwrap();
@@ -353,6 +364,7 @@ fn reject_provider_bytes(
     events: &Arc<Collector>,
     output: &Path,
     entrypoint: &Path,
+    target: TargetProtection,
     keys: &key_file::OperatorKeys,
 ) {
     let original = std::fs::read_to_string(entrypoint).unwrap();
@@ -374,12 +386,7 @@ fn reject_provider_bytes(
         std::fs::write(entrypoint, changed).unwrap();
         assert!(
             converter(events)
-                .verify_output_signaling(
-                    entrypoint,
-                    OutputFormat::Dash,
-                    TargetProtection::Cbcs,
-                    keys
-                )
+                .verify_output_signaling(entrypoint, OutputFormat::Dash, target, keys)
                 .is_err()
         );
     }
@@ -396,12 +403,7 @@ fn reject_provider_bytes(
         std::fs::write(&path, changed).unwrap();
         assert!(
             converter(events)
-                .verify_output_signaling(
-                    entrypoint,
-                    OutputFormat::Dash,
-                    TargetProtection::Cbcs,
-                    keys
-                )
+                .verify_output_signaling(entrypoint, OutputFormat::Dash, target, keys)
                 .is_err()
         );
     }
@@ -520,13 +522,31 @@ fn output_cases() -> [(
     OutputFormat,
     TargetProtection,
     serde_json::Value,
-); 5] {
+); 8] {
     [
         (
             "dash",
             OutputFormat::Dash,
             TargetProtection::Cbcs,
             serde_json::json!({"kid":KID,"key":KEY,"signaling":{"system":"multi-drm","widevine_pssh":pssh(),"playready_license_url":LICENSE}}),
+        ),
+        (
+            "dash-cenc",
+            OutputFormat::Dash,
+            TargetProtection::Cenc,
+            serde_json::json!({"kid":KID,"key":KEY,"signaling":{"system":"multi-drm","widevine_pssh":pssh(),"playready_license_url":LICENSE}}),
+        ),
+        (
+            "widevine-cenc",
+            OutputFormat::Dash,
+            TargetProtection::Cenc,
+            serde_json::json!({"kid":KID,"key":KEY,"signaling":{"system":"multi-drm","widevine_pssh":pssh()}}),
+        ),
+        (
+            "playready-cenc",
+            OutputFormat::Dash,
+            TargetProtection::Cenc,
+            serde_json::json!({"kid":KID,"key":KEY,"signaling":{"system":"multi-drm","playready_license_url":LICENSE}}),
         ),
         (
             "fmp4",
@@ -558,9 +578,9 @@ fn assert_report(report: &ConversionReport, name: &str) {
     assert!(report.verification.passed);
     assert!(!report.verification.license_playback_verified);
     let expected = match name {
-        "dash" => vec!["playready", "widevine"],
-        "widevine" => vec!["widevine"],
-        "playready" => vec!["playready"],
+        "dash" | "dash-cenc" => vec!["playready", "widevine"],
+        "widevine" | "widevine-cenc" => vec!["widevine"],
+        "playready" | "playready-cenc" => vec!["playready"],
         _ => vec!["fairplay"],
     };
     assert_eq!(

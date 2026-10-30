@@ -22,12 +22,12 @@ mandatory; recognizing an input DRM system alone does not qualify its media.
 
 | Output | Encryption | Explicit DRM selection |
 | --- | --- | --- |
-| DASH with fragmented MP4 | `cbcs` | Widevine, PlayReady, or both |
+| DASH with fragmented MP4 | `cenc`, `cbcs` | Widevine, PlayReady, or both |
 | HLS with fragmented MP4 | `cbcs` | FairPlay |
 | HLS with MPEG-TS | `hls-sample-aes` | FairPlay |
 
-`cbcs` uses AES cipher block chaining with a defined encryption pattern inside
-media samples. HLS `SAMPLE-AES` protects codec samples in MPEG-TS; its signaling is
+`cenc` uses AES counter mode. `cbcs` uses AES cipher block chaining with a defined
+encryption pattern inside media samples. HLS `SAMPLE-AES` protects codec samples in MPEG-TS; its signaling is
 different from the fragmented-MP4 representation.
 
 MPEG-TS output requires an admitted MPEG-TS source with original transport timing
@@ -75,11 +75,16 @@ Protection System Specific Header (PSSH) boxes carry initialization data for a D
 system. Widevine data must be a complete version-0 or version-1 box with the
 Widevine system identifier, valid lengths, and at least one 16-byte key identifier.
 Every identifier must match `kid`. If the payload declares an encryption scheme,
-it must declare `cbcs`. Raw payloads without the PSSH box are not accepted here.
+it must match the selected `cenc` or `cbcs` output. A box declaring the other scheme
+is refused before packaging. Raw payloads without the PSSH box are not accepted here.
 
-The supplied Widevine box is preserved byte for byte. PlayReady version-4.3 records
-are generated from `kid` and the license URL. The same generated PSSH and PlayReady
-Object (PRO) data are used in initialization files and the MPD. These operations do
+The supplied Widevine box is preserved byte for byte. PlayReady records use a
+version-4.1 header with `ALGID="AESCTR"` and a content-key checksum for `cenc`, or
+a version-4.3 header with `ALGID="AESCBC"` and no checksum for `cbcs`. The checksum
+uses the key identifier in PlayReady GUID byte order, as defined by the
+[PlayReady Header Specification](https://learn.microsoft.com/en-us/playready/specifications/playready-header-specification#5-key-checksum-algorithm).
+The same generated PSSH and PlayReady Object (PRO) data are used in initialization
+files and the MPD. These operations do
 not generate provider-specific Widevine policy data or validate license responses.
 
 On `stitch` routes, explicit DASH PSSH data is passed to Shaka Packager through its
@@ -101,6 +106,23 @@ one must remain. Do not select FairPlay for the DASH output.
 drmr convert ./source/media.m3u8 --to cbcs --format dash \
   --output ./dash --keys-file ./dash.keys.json
 ```
+
+Select `--to cenc` for counter-mode DASH with the same DRM selection. Use a
+matching Widevine box if its payload specifies the encryption scheme:
+
+```sh
+drmr convert ./source/media.m3u8 --to cenc --format dash \
+  --output ./dash-ctr --keys-file ./dash-ctr.keys.json
+```
+
+For a qualified encrypted fMP4 DASH or HLS source, use `--processing segments`
+and supply the input keys separately. This replaces the DRM initialization
+records with the selected output records while preserving the input samples,
+segment membership and packet clocks. For example, CENC DASH can be converted to
+CBCS DASH with new Widevine and PlayReady records using
+`--to cbcs --format dash --processing segments`. Output verification checks the selected scheme and key
+identifier in the MPD and every referenced initialization file, as well as the
+exact provider records. A valid PSSH alone does not prove a working DRM license.
 
 ### HLS with fragmented MP4: FairPlay
 
@@ -173,8 +195,9 @@ Higher compatible values are accepted. Missing, duplicate, malformed, and lower
 versions are rejected. An unspecified audio language is omitted from the HLS
 `LANGUAGE` attribute; a supplied language such as `en` is retained.
 
-These signaling checks accompany complete encoded-content, timing, decoded-content,
-and supported selection-metadata comparisons. They do not replace those checks.
+These signaling checks accompany complete encoded-content, timing, and supported
+selection-metadata comparisons. Add `--decode` for decoded-content comparison.
+Signaling checks do not replace media comparison.
 
 CENC or CBCS output without selected provider signaling can still contain the
 [W3C Common SystemID initialization record](https://www.w3.org/TR/eme-initdata-cenc/).
@@ -198,6 +221,19 @@ retain their original behavior when no signaling profile is supplied. It checks 
 output as its complete media comparison. A [multiple-output saved plan](multiple-outputs.md)
 also fixes the selected DRM systems and reports each output's media, DRM,
 native manifest linting, and optional external manifest checks separately.
+
+The ten-second Big Buck Bunny regression starts with two-second clear TS HLS,
+then saves and executes three plans: CENC DASH with Widevine/PlayReady, CBCS DASH
+with Widevine/PlayReady, and clear fMP4 HLS. Each output is independently verified
+against the preceding input, and the final clear result is compared with the
+original TS. The default native checks require no decode. The separate multi-DRM
+regression also compares complete decoded content and rejects altered provider
+records, key identifiers, manifest schemes, and initialization-file references.
+
+```sh
+cargo test --locked -p drmr --test conversion_cenc_drm -- --nocapture
+cargo test --locked -p drmr-core --test conversion_multi_drm -- --nocapture
+```
 
 Whole-file AES-128 encryption can make resource bytes opaque. The native metadata
 check examines the final manifest and readable initialization and provider records;

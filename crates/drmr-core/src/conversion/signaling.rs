@@ -47,7 +47,7 @@ impl std::fmt::Debug for OutputSignaling {
     }
 }
 impl OutputSignaling {
-    /// Select `PlayReady` v4.3 metadata for CBCS DASH. The URL is metadata, never fetched.
+    /// Select `PlayReady` metadata for encrypted DASH. The URL is metadata, never fetched.
     pub fn playready(license_url: &str) -> Result<Self, ConversionError> {
         if license_url.is_empty()
             || license_url.len() > 4096
@@ -127,7 +127,9 @@ impl OutputSignaling {
         format: OutputFormat,
         target: TargetProtection,
     ) -> Result<(), ConversionError> {
-        if format != OutputFormat::Dash || target != TargetProtection::Cbcs {
+        if format != OutputFormat::Dash
+            || !matches!(target, TargetProtection::Cenc | TargetProtection::Cbcs)
+        {
             return Err(UNSUPPORTED);
         }
         Ok(())
@@ -144,17 +146,31 @@ impl OutputSignaling {
         }
         value
     }
-    pub(super) fn objects(&self, key: &OutputKey) -> Result<Objects, ConversionError> {
+    pub(super) fn objects(
+        &self,
+        key: &OutputKey,
+        target: TargetProtection,
+    ) -> Result<Objects, ConversionError> {
         if self.multi.is_some() {
             return Err(UNSUPPORTED);
         }
-        let mut generated =
-            playready::build_playready_v43(key.0.id_hex().as_str(), &self.license_url)
-                .map_err(|_| INVALID)?;
+        let mut generated = match target {
+            TargetProtection::Cbcs => {
+                playready::build_playready_v43(key.0.id_hex().as_str(), &self.license_url)
+            }
+            TargetProtection::Cenc => playready::build_playready_v41(
+                key.0.id_hex().as_str(),
+                &self.license_url,
+                &key.0.bytes,
+            ),
+            _ => return Err(UNSUPPORTED),
+        }
+        .map_err(|_| INVALID)?;
         let xml = Zeroizing::new(std::mem::take(&mut generated.wrmheader_xml));
         let pro_hex = Zeroizing::new(hex::encode(&generated.pro_bytes));
         generated.pro_bytes.zeroize();
         Ok(Objects {
+            target,
             url: self.license_url.clone(),
             pro: Zeroizing::new(generated.pro_b64),
             pssh: Zeroizing::new(generated.pssh_b64),
@@ -168,6 +184,7 @@ impl OutputSignaling {
 }
 
 pub(super) struct Objects {
+    target: TargetProtection,
     url: Zeroizing<String>,
     pro: Zeroizing<String>,
     pssh: Zeroizing<String>,
@@ -242,7 +259,8 @@ impl Objects {
                 .attribute((CENC, "default_KID"))
                 .ok_or(MISMATCH)?
                 .replace('-', "");
-            if common.attribute("value") != Some("cbcs") || !kid.eq_ignore_ascii_case(&expected_kid)
+            if common.attribute("value") != Some(self.target.as_str())
+                || !kid.eq_ignore_ascii_case(&expected_kid)
             {
                 return Err(MISMATCH);
             }
@@ -447,9 +465,9 @@ impl super::Converter {
             if format == OutputFormat::Dash {
                 let key = key.ok_or(INVALID)?;
                 let records = if signaling.is_multi() {
-                    signaling.multi_objects(key)?
+                    signaling.multi_objects(key, target)?
                 } else {
-                    records::MultiObjects::legacy_playready(signaling.objects(key)?)
+                    records::MultiObjects::legacy_playready(signaling.objects(key, target)?)
                 };
                 records.finish(frozen, key, &self.backend.stop)?;
             } else {
@@ -699,7 +717,7 @@ mod tests {
         }
         let object = OutputSignaling::playready(URL)
             .unwrap()
-            .objects(&key())
+            .objects(&key(), TargetProtection::Cbcs)
             .unwrap();
         for bytes in [
             object.bytes.to_vec(),
@@ -739,7 +757,7 @@ mod tests {
         );
         let value = OutputSignaling::playready(URL).unwrap();
         assert!(!format!("{value:?}").contains(URL));
-        let objects = value.objects(&key()).unwrap();
+        let objects = value.objects(&key(), TargetProtection::Cbcs).unwrap();
         let parsed = playready::parse_pro(&objects.pro).unwrap();
         assert_eq!(parsed.la_url.as_deref(), Some(URL));
         let secrets = crate::toolrun::Secrets::with(objects.secrets());
@@ -797,7 +815,7 @@ mod tests {
         let key = key();
         let objects = OutputSignaling::playready(URL)
             .unwrap()
-            .objects(&key)
+            .objects(&key, TargetProtection::Cbcs)
             .unwrap();
         let init = root.join("track-0000/init.mp4");
         std::fs::write(&init, &*objects.bytes).unwrap();

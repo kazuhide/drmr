@@ -414,7 +414,9 @@ fn protection(
         return Ok(Zeroizing::new(String::new()));
     };
     if let Some(signaling) = &converter.output_signaling {
-        return Ok(signaling.segment_records(key)?.content_protection);
+        return Ok(signaling
+            .segment_records(key, request.target)?
+            .content_protection);
     }
     let kid = key.0.id_hex();
     Ok(Zeroizing::new(format!(
